@@ -216,3 +216,19 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- Node / TypeScript (ADR-0001: TypeScript core) ---
+node_modules/
+dist/
+*.tsbuildinfo
+npm-debug.log*
+.npm/
+coverage/
+
+# Shared SQLite state store (local dev data, never committed)
+*.sqlite
+*.sqlite3
+*.db
+
+# macOS
+.DS_Store

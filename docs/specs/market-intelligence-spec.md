@@ -6,9 +6,9 @@
 
 ## Problem Statement
 
-Samurai's trading decisions require comprehensive market context — not just price data, but news, social sentiment, and fundamental analysis. Without a unified intelligence layer that aggregates and validates multiple sources, individual analysts operate on incomplete or conflicting information, leading to poor trading decisions.
+Samurai's trading decisions require comprehensive market context beyond raw price — news, social sentiment, and fundamental signals. Without a unified intelligence layer that aggregates and validates multiple sources, individual analysts operate on incomplete or conflicting information, leading to poor trading decisions.
 
-The Market Intelligence layer exists to provide real-time, validated market context through specialized agents. It aggregates data from professional news sources and social media, resolves conflicts with clear priority rules, and delivers structured intelligence to downstream analysts.
+The Market Intelligence layer exists to provide real-time, validated market context through specialized agents. It aggregates data from professional news sources and social media, resolves conflicts with clear priority rules, and delivers structured intelligence to downstream analysts. It deliberately does **not** cover price/OHLCV or technical indicators — that is a separate Stage 0 concern (the Market Data Service; see Out of Scope). Market Intelligence is the news/sentiment half of Stage 0.
 
 ## Solution
 
@@ -72,7 +72,7 @@ The Market Intelligence layer runs two specialized agents that operate continuou
 
 23. As the Market Intelligence system, I want to validate agent outputs (schema, required fields, value ranges), so that downstream analysts receive well-formed intelligence
 24. As the Market Intelligence system, I want to track source failures and success rates, so that I can monitor system health
-25. As the Market Intelligence system, I want to support replay for backtesting (replay historical feeds to agents), so that I can test strategies against past market conditions
+25. As the Market Intelligence system, I want my agents to read time from an injected clock, so that a separate backtesting replay service can drive them with historical feeds through the same live code path — without this layer owning historical storage (the store is a separate concern; see Out of Scope)
 
 ## Implementation Decisions
 
@@ -147,8 +147,8 @@ interface ConflictResolution {
 
 **Delivery Patterns**
 
-- **Pull mode**: Analyst calls `marketIntelligence.getContext(assetClass, timeWindow)` and receives current MarketContext
-- **Push mode**: Analyst subscribes to `marketIntelligence.subscribe(assetClass, callback)` and receives MarketContext updates when new intelligence arrives (throttled to max 1 update per minute to avoid flooding)
+- **Pull mode**: Analyst calls `marketIntelligence.getContext(assetClass, timeWindow, trace_id)` and receives current MarketContext (`trace_id` is the cross-cutting correlation ID threaded from the Orchestrator's tick — not business data — so MI's own log lines can be joined back to the calling tick)
+- **Push mode**: Analyst subscribes to `marketIntelligence.subscribe(assetClass, callback)` and receives MarketContext updates when new intelligence arrives (throttled to max 1 update per minute to avoid flooding); push updates are not scoped to a single tick's trace_id since they fire asynchronously outside any one tick's call
 
 **Health Tracking**
 
@@ -300,7 +300,8 @@ function resolveConflict(
 **Key Operations**
 
 **Pull Interface**
-- Analyst calls: `marketIntelligence.getContext(assetClass: 'crypto' | 'stocks', timeWindow: Duration)`
+- Analyst calls: `marketIntelligence.getContext(assetClass: 'crypto' | 'stocks', timeWindow: Duration, trace_id: string)`
+- `trace_id`: cross-cutting correlation ID, threaded from the Orchestrator's tick — not business data; not part of the query key, used only so MI's own log lines can be correlated back to the calling tick
 - Returns: MarketContext with all intelligence from `now - timeWindow` to `now`
 - Internally: query in-memory store (no database persistence)
 - Latency target: < 10ms (in-memory query)
@@ -421,6 +422,10 @@ The Debate Engine stage consumes analyst outputs and runs structured debates. Ho
 
 This spec covers live intelligence delivery. Backtesting requires replaying historical market data through agents. A separate backtesting service (with historical data storage and replay logic) is out of scope for this spec.
 
+**Price & Market Data**
+
+This spec covers news and social sentiment only (`IntelligenceItem.type` is `'news' | 'sentiment'`). Price/OHLCV data and technical indicators (moving averages, RSI, etc.) are **not** provided by Market Intelligence. They are owned by a separate Stage 0-level component, the **Market Data Service**, which runs parallel to this layer and needs its own wayfinder map. Analysts read price/indicators from the Market Data Service and news/sentiment from Market Intelligence.
+
 **Data Source Management**
 
 This spec assumes data sources are configured externally (API keys, endpoints, rate limits). How to manage source credentials, rotate keys, or negotiate API access is out of scope.
@@ -449,11 +454,12 @@ Market Intelligence operates at Stage 0 (data collection), feeding into Stage 1 
 ### Domain Glossary Alignment
 
 Per CONTEXT.md:
-- **Market Intelligence**: "The data collection layer that feeds all downstream components. Collects real-time market news and trends."
+- **Market Intelligence**: "The news/sentiment half of the Stage 0 data layer. Runs specialized agents (professional news + social sentiment), resolves cross-source conflicts by priority, and delivers structured intelligence to analysts. Does not cover price/OHLCV — that is the Market Data Service."
+- **Market Data Service**: "A dedicated Stage 0-level data layer, parallel to Market Intelligence, that serves price OHLCV plus precomputed technical indicators to analysts."
 - **Analyst**: "An agent persona that examines market data through a specific lens (technical, fundamental, sentiment, etc.)."
 - **Debate Engine**: "Mediates between conflicting analyst views before the Trader consolidates."
 
-Market Intelligence is foundational — it provides the data that analysts reason about. Without quality intelligence, analysts operate on incomplete or conflicting information.
+Market Intelligence is foundational — it provides the news/sentiment data that analysts reason about, alongside price/indicators from the Market Data Service. Without quality intelligence, analysts operate on incomplete or conflicting information.
 
 ### Latency Budget Trade-offs
 
@@ -503,17 +509,18 @@ Potential enhancements (not in this spec):
 
 ## Resolved Issues (Sources)
 
-This spec synthesizes the following resolved wayfinder tickets:
+Wayfinder decisions for this stage live in [docs/wayfinder/market-intelligence-map.md](../wayfinder/market-intelligence-map.md) (migrated from GitHub issue #12). Decisions synthesized here:
 
-- [#12 Map issue](https://github.com/s77sbbbwmg-prog/samurai-trading-system/issues/12) — destination and overview
-- [#13 Data sources](https://github.com/s77sbbbwmg-prog/samurai-trading-system/issues/13) — Bloomberg, Reuters, SEC, Twitter/X, Reddit
-- [#14 Data format](https://github.com/s77sbbbwmg-prog/samurai-trading-system/issues/14) — IntelligenceItem and MarketContext schemas
-- [#15 Update frequency](https://github.com/s77sbbbwmg-prog/samurai-trading-system/issues/15) — 5s crypto, 30s stocks
-- [#16 Storage strategy](https://github.com/s77sbbbwmg-prog/samurai-trading-system/issues/16) — no persistence, restart cleanly
-- [#17 API contracts](https://github.com/s77sbbbwmg-prog/samurai-trading-system/issues/17) — pull (on-demand) and push (subscription) patterns
-- [#18 Error handling](https://github.com/s77sbbbwmg-prog/samurai-trading-system/issues/18) — agent failures handled gracefully, system doesn't block
-- [#19 Data validation](https://github.com/s77sbbbwmg-prog/samurai-trading-system/issues/19) — schema validation, required fields, value ranges
-- [#20 Backtesting](https://github.com/s77sbbbwmg-prog/samurai-trading-system/issues/20) — separate replay service, not in live system
-- [#21 Conflict resolution](https://github.com/s77sbbbwmg-prog/samurai-trading-system/issues/21) — DeepResearch wins on high-impact news, Grok wins on viral narratives
+- **Data sources** — Bloomberg, Reuters, SEC, Twitter/X, Reddit.
+- **Agent output / data contract** — `AgentIntelligence` / `IntelligenceItem` upstream; `MarketContext` / `ConflictResolution` downstream.
+- **Data format & schema** — normalized UTC timestamps, asset-class tagging, entity extraction.
+- **Update frequency & cadence** — 5s crypto, 30s stocks (market hours), per-source cadence.
+- **Storage strategy & retention** — no persistence, restart cleanly, raw feeds ephemeral.
+- **API contracts with analysts** — pull (`getContext`) and push (`subscribe`) delivery patterns.
+- **Error handling & failure modes** — agent failures handled gracefully (retry/backoff/degrade), system never blocks.
+- **Data quality & validation** — schema validation, required fields, value ranges.
+- **Conflict resolution** (map-level decision) — DeepResearch wins on high-impact news; Grok wins on viral narratives > 2σ.
 
-All tickets resolved. Map is complete. Ready for implementation.
+**Still open (deferred):** Backtesting data requirements — the live layer is only made replay-*compatible* (injected clock); the historical news/sentiment store + replay service are a separate concern (see Out of Scope), and that store is also what the Analysts layer's backtest replay depends on. Tracked as an open frontier item in the wayfinder map.
+
+The parallel **Market Data Service** (price/OHLCV + indicators) is a separate Stage 0 component with its own map.
