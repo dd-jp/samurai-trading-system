@@ -1,0 +1,25 @@
+{
+  "name": "samurai-trading-system",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Samurai — live-money multi-agent trading system (crypto + stocks). See CLAUDE.md and docs/specs/.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "orchestrator": "node --experimental-strip-types src/orchestrator/index.ts",
+    "cli": "node --experimental-strip-types src/cli/index.ts"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.3",
+    "@types/node": "^26.1.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}
