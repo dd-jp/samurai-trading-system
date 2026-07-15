@@ -1,12 +1,9 @@
 /**
  * Domain types for the Verdict (Stage 5) core gate sequence.
- * See docs/specs/verdict-spec.md ("Key Interfaces", "Module: Gate Sequence")
- * and docs/specs/cross-spec-contracts.md. Implementation ticket #79 — the
- * gate sequence only. The per-asset-class HITL automation dial + flag
- * routing (`VerdictConfig.automation_level`/`flag_thresholds`, and
- * `would_require_approval`'s real computation) is #80 — this ticket engages
- * the HITL gate unconditionally once reached and just handles the
- * approve/reject/timeout outcome.
+ * See docs/specs/verdict-spec.md ("Key Interfaces", "Module: Gate Sequence",
+ * "Module: Human-in-the-Loop") and docs/specs/cross-spec-contracts.md.
+ * Implementation tickets #79 (gate sequence) and #80 (HITL automation dial
+ * + flag routing).
  */
 
 import type { TradingCalendar } from '../market-data-service/trading-calendar.js';
@@ -50,11 +47,15 @@ export interface ApprovalChannel {
 /**
  * Static, config-driven thresholds the gate sequence checks against. Exact
  * values are tuned in paper trading (verdict-spec.md "Out of Scope: Exact
- * thresholds") — this is the shape, not the numbers. `automation_level` /
- * `flag_thresholds` from the full spec interface are deliberately omitted —
- * they belong to the HITL automation dial (#80).
+ * thresholds") — this is the shape, not the numbers.
  */
 export interface VerdictConfig {
+  /**
+   * HITL automation dial, per asset class (verdict-spec.md "Module:
+   * Human-in-the-Loop"). `manual` engages HITL for every trade, `auto`
+   * never engages it, `semi_auto` engages it only for flagged trades.
+   */
+  automation_level: Record<'crypto' | 'stocks', 'manual' | 'semi_auto' | 'auto'>;
   /** Staleness bound: max signal age before no-go, per asset class. */
   max_signal_age: Record<'crypto' | 'stocks', number>;
   /** Max tolerated |current price - entry| before no-go. */
@@ -63,6 +64,15 @@ export interface VerdictConfig {
   human_timeout: number;
   /** Stocks-only: closed session still passes the market-open gate. */
   allow_extended_hours: boolean;
+  /**
+   * What "flagged" means under `semi_auto` (verdict-spec.md "Module:
+   * Human-in-the-Loop"). Non-converged, no-precedent, and near-limit flags
+   * are read directly from `order.metadata` / `risk_decision.modifications`
+   * and need no threshold.
+   */
+  flag_thresholds: {
+    size_over: number;
+  };
 }
 
 export interface VerdictInput {

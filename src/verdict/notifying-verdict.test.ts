@@ -72,10 +72,12 @@ function makeBreakers(overrides: Partial<BreakerState> = {}): BreakerState {
 
 function makeConfig(overrides: Partial<VerdictConfig> = {}): VerdictConfig {
   return {
+    automation_level: { crypto: 'manual', stocks: 'manual' },
     max_signal_age: { crypto: 5 * 60_000, stocks: 30 * 60_000 },
     drift_tolerance: 1,
     human_timeout: 5 * 60_000,
     allow_extended_hours: false,
+    flag_thresholds: { size_over: 10_000 },
     ...overrides,
   };
 }
