@@ -2,10 +2,9 @@
  * Domain types & contracts for the Market Data Service (Stage 0).
  * See docs/specs/market-data-service-spec.md ("Key Interfaces") and
  * docs/specs/cross-spec-contracts.md (§3 MarketDataService).
- * Implementation ticket #64 — bar/mark serving only. `getIndicator` /
- * `IndicatorSpec` / `IndicatorValue` are ticket #65's scope and are not
- * declared here yet. Ticket #67 adds the best-effort spread estimate and
- * ADV helper consumed by the cost model's `MarketState`.
+ * Bar/mark serving landed in ticket #64. `getIndicator` / `IndicatorSpec` /
+ * `IndicatorValue` are ticket #65's scope. Ticket #67 adds the best-effort
+ * spread estimate and ADV helper consumed by the cost model's `MarketState`.
  */
 
 /**
@@ -53,6 +52,28 @@ export interface Mark {
 }
 
 /**
+ * A request for a service-computed technical indicator. The `lookback` is
+ * the PINNED warm-up length: how many bars a recursive indicator (EMA, RSI,
+ * ATR) is seeded over before producing `asOf`'s value. It is part of the
+ * cache key (see `buildIndicatorCacheKey`) because the same `asOf` seeded
+ * from a different history length is a different value under one key.
+ */
+export interface IndicatorSpec {
+  /** 'sma' | 'ema' | 'rsi' | 'atr' ... */
+  indicator: string;
+  params: Record<string, number>;
+  lookback: number;
+}
+
+/** A computed indicator value, pinned to the bar it was last updated from. */
+export interface IndicatorValue {
+  indicator: string;
+  value: number;
+  /** close_time of the last bar used to compute this value. */
+  as_of_bar_close: Date;
+}
+
+/**
  * A best-effort bid/ask observation. Only sources that quote a live order
  * book (e.g. crypto ccxt) can produce one; `DataSource.fetchQuote` is
  * therefore optional, and its absence (or a `null` return) is how MDS
@@ -81,7 +102,7 @@ export interface DataSource {
 /**
  * The single test seam consumers inject. Deterministic given inputs +
  * clock; source is injected. Subset of the full spec interface — `getBars`,
- * `getMark`, and the #67 spread/ADV helpers; `getIndicator` lands in #65.
+ * `getMark`, `getIndicator` (#65), and the #67 spread/ADV helpers.
  *
  * `asOf` is explicit here (the deterministic wiring/test form); the
  * implementation resolves it from the injected Clock in normal use so
@@ -89,6 +110,7 @@ export interface DataSource {
  */
 export interface MarketDataService {
   getBars(instrument: string, window: BarWindow, asOf: Date): Promise<Bar[]>;
+  getIndicator(instrument: string, spec: IndicatorSpec, asOf: Date): Promise<IndicatorValue>;
   getMark(instrument: string, asOf: Date): Promise<Mark>;
   /**
    * Best-effort bid/ask spread (ask - bid) where the source provides a
