@@ -6,4 +6,4 @@
 export type { FixtureLiveMark } from './fixture-data-source.js';
 export { FixtureDataSource } from './fixture-data-source.js';
 export { MarketDataServiceImpl } from './service.js';
-export type { Bar, BarWindow, DataSource, Mark, MarketDataService } from './types.js';
+export type { Bar, BarWindow, DataSource, Mark, MarketDataService, Quote } from './types.js';
