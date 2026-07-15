@@ -5,6 +5,7 @@ import type {
   ConflictResolution,
   IntelligenceItem,
   MarketContext,
+  MarketContextCallback,
 } from './types.js';
 
 describe('AssetClass', () => {
@@ -78,12 +79,39 @@ describe('MarketContext', () => {
       news: [],
       social: [],
       conflicts: [],
+      stale: true,
+      last_updated: null,
     };
 
     expectTypeOf(context).toMatchTypeOf<MarketContext>();
     expect(Object.keys(context).sort()).toEqual(
-      ['timestamp', 'asset_class', 'news', 'social', 'conflicts'].sort(),
+      ['timestamp', 'asset_class', 'news', 'social', 'conflicts', 'stale', 'last_updated'].sort(),
     );
+  });
+
+  it('allows a non-null last_updated when not stale', () => {
+    const context: MarketContext = {
+      timestamp: new Date('2026-07-14T09:10:00Z'),
+      asset_class: 'crypto',
+      news: [],
+      social: [],
+      conflicts: [],
+      stale: false,
+      last_updated: new Date('2026-07-14T09:09:58Z'),
+    };
+
+    expectTypeOf(context).toMatchTypeOf<MarketContext>();
+    expect(context.last_updated).toBeInstanceOf(Date);
+  });
+});
+
+describe('MarketContextCallback', () => {
+  it('accepts a callback shaped (ctx: MarketContext) => void', () => {
+    const callback: MarketContextCallback = (ctx) => {
+      expect(ctx.asset_class).toBeDefined();
+    };
+
+    expectTypeOf(callback).toMatchTypeOf<MarketContextCallback>();
   });
 });
 
