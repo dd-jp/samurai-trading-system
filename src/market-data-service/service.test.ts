@@ -168,6 +168,8 @@ describe('MarketDataServiceImpl.getADV', () => {
     );
     const service = new MarketDataServiceImpl(dataSource, new ManualClock(ASOF), 'backtest');
 
-    await expect(service.getADV(INSTRUMENT, { timeframe: TIMEFRAME, lookback: 10 }, ASOF)).rejects.toThrow();
+    await expect(
+      service.getADV(INSTRUMENT, { timeframe: TIMEFRAME, lookback: 10 }, ASOF),
+    ).rejects.toThrow();
   });
 });
