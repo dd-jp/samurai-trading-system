@@ -109,3 +109,62 @@ export interface SetupStore {
   /** Persists the new setup for later outcome labelling by the Feedback Loop. */
   writeSetup(debateId: string, vector: SetupVector, decidedAt: Date): void;
 }
+
+/**
+ * Lifecycle of a bracket's entry order. See docs/specs/execution-spec.md
+ * ("Module: Order State Machine & Partial Fills"). Every transition is
+ * persisted, so the state is always durable and inspectable. Ticket #82
+ * only produces `pending` (write-ahead) and `submitted` (post-ack); the
+ * fill/close transitions are driven by #83's `ingestFills()`.
+ */
+export type OrderState =
+  | 'pending'
+  | 'submitted'
+  | 'partially_filled'
+  | 'filled'
+  | 'closed'
+  | 'cancelled'
+  | 'rejected'
+  | 'expired';
+
+/**
+ * A live open lot — Trader position-awareness + Risk exposure. Defined here
+ * (not in src/execution) because it is a cross-spec registry type: Execution
+ * is its SOLE writer, but Risk and the Trader read it
+ * (docs/specs/cross-spec-contracts.md §4).
+ *
+ * `Fill` and `ClosedTrade` — the registry's other two Execution records —
+ * are deliberately NOT defined yet: #83 (`ingestFills()`/`ClosedTrade`
+ * emission) is their writer, and #82 neither writes nor reads them.
+ *
+ * Per-lot by design (v1): each `entry`/`scale_in` is its own record with its
+ * own bracket and `debate_id`, which is what keeps the Feedback Loop's
+ * single-entry-bracket R assumption true. Blended-average accounting is v2.
+ */
+export interface OpenPosition {
+  idempotency_key: string;
+  debate_id: string;
+  instrument: string;
+  asset_class: 'crypto' | 'stocks';
+  side: 'buy' | 'sell';
+  /** Exits close a lot; they never create one — hence no 'exit' here. */
+  intent_type: 'entry' | 'scale_in';
+  requested_size: number;
+  /**
+   * Cumulative filled quantity — downstream (Risk exposure, FL's R) reads
+   * THIS, never `requested_size` (cross-spec §4). Zero on the write-ahead
+   * record: nothing has filled at `pending`, so the lot carries no exposure
+   * yet. #83 advances it as fills arrive.
+   */
+  filled_size: number;
+  /** Zero until the first fill lands, for the same reason as `filled_size`. */
+  avg_entry_price: number;
+  /** Live protective legs; #83 resizes them to filled qty on partial fill. */
+  stop: number;
+  target: number;
+  order_state: OrderState;
+  broker_order_ids: string[];
+  opened_at: Date;
+  /** The bar/decision time, carried from the OrderIntent. */
+  decision_timestamp: Date;
+}
