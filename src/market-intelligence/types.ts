@@ -48,6 +48,11 @@ export interface IntelligenceItem {
  * DeepResearch and Grok signals is not ticketed under epic #52 (only #68
  * core serving and #69 subscribe/staleness exist), so no resolution logic
  * is invented here.
+ *
+ * `stale`/`last_updated` (#69): staleness of the asset's intelligence as of
+ * `timestamp`. `last_updated` is the timestamp of the most recent item ever
+ * ingested for this asset class (not scoped to the query's timeWindow);
+ * `null` if nothing has been ingested yet, which is always stale.
  */
 export interface MarketContext {
   timestamp: Date;
@@ -55,7 +60,12 @@ export interface MarketContext {
   news: IntelligenceItem[];
   social: IntelligenceItem[];
   conflicts: ConflictResolution[];
+  stale: boolean;
+  last_updated: Date | null;
 }
+
+/** Push-delivery callback passed to `MarketIntelligenceStore.subscribe`. */
+export type MarketContextCallback = (ctx: MarketContext) => void;
 
 export interface ConflictResolution {
   entity: string;
