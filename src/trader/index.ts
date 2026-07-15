@@ -1,5 +1,18 @@
 /**
  * Trader (Stage 3) — see docs/specs/trader-spec.md, epic #54.
- * Placeholder: implemented ticket-by-ticket starting with #73.
+ * Ticket #73: core decision, DebateResult -> OrderIntent entry bracket.
+ * Ticket #74: position-aware branching (scale_in / exit / hold).
+ * Cosine precedent retrieval is #75 — not implemented here.
  */
-export {};
+
+export { decide } from './decide.js';
+export { computeIdempotencyKey } from './idempotency-key.js';
+export type {
+  AssetClass,
+  HeldPosition,
+  PositionStore,
+  Trader,
+  TraderConfig,
+  TraderInput,
+} from './types.js';
+export { DEFAULT_TRADER_CONFIG } from './types.js';

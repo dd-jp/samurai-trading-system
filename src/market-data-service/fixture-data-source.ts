@@ -4,7 +4,7 @@
  * last-bar behaviour is genuine shipped code. Ticket #66 replaces this with
  * ccxt/IBKR/Alpaca-backed sources against the same `DataSource` port.
  */
-import type { Bar, BarWindow, DataSource, Mark } from './types.js';
+import type { Bar, BarWindow, DataSource, Mark, Quote } from './types.js';
 
 /** The live latest-mark seed this fixture serves in 'live' mode. */
 export interface FixtureLiveMark {
@@ -18,6 +18,8 @@ export class FixtureDataSource implements DataSource {
     private readonly bars: Bar[],
     private readonly liveMark: FixtureLiveMark,
     private readonly assetClass: 'crypto' | 'stocks',
+    /** Omitted entirely to model a source with no bid/ask (e.g. historical stock bars). */
+    private readonly quote?: Quote,
   ) {}
 
   async fetchBars(instrument: string, window: BarWindow, asOf: Date): Promise<Bar[]> {
@@ -53,5 +55,9 @@ export class FixtureDataSource implements DataSource {
       source: lastCompletedBar.source,
       asset_class: this.assetClass,
     };
+  }
+
+  async fetchQuote(_instrument: string, _asOf: Date): Promise<Quote | null> {
+    return this.quote ?? null;
   }
 }

@@ -5,6 +5,8 @@
 
 export type { FixtureLiveMark } from './fixture-data-source.js';
 export { FixtureDataSource } from './fixture-data-source.js';
+export { buildIndicatorCacheKey, IndicatorCache } from './indicator-cache.js';
+export { computeIndicator } from './indicators.js';
 export type { NormalizeContext, RawCandle } from './ingestion.js';
 export { completedBars, deriveBacktestMark, normalizeBars } from './ingestion.js';
 export { MarketDataServiceImpl } from './service.js';
@@ -36,4 +38,13 @@ export { NormalizingDataSource } from './sources/normalizing-data-source.js';
 export { closeTimeOf, isDailyTimeframe, timeframeToMs } from './timeframe.js';
 export type { TradingCalendar } from './trading-calendar.js';
 export { AlwaysOpenCalendar, UsEquityRegularHoursCalendar } from './trading-calendar.js';
-export type { Bar, BarWindow, DataSource, Mark, MarketDataService } from './types.js';
+export type {
+  Bar,
+  BarWindow,
+  DataSource,
+  IndicatorSpec,
+  IndicatorValue,
+  Mark,
+  MarketDataService,
+  Quote,
+} from './types.js';
