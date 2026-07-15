@@ -69,3 +69,43 @@ export interface OrderIntentMetadata {
     no_precedent: boolean;
   };
 }
+
+/**
+ * The setup vector the Trader embeds for cosine-similarity retrieval. See
+ * docs/specs/trader-spec.md ("Key Interfaces", "Module: Cosine Precedent
+ * Retrieval"). Combined debate + market-regime features so retrieval
+ * matches "this kind of debate in this kind of market."
+ */
+export interface SetupVector {
+  /** conviction, direction, converged, disagreement magnitude. */
+  debate_features: number[];
+  /** volatility bucket, trend, key indicators at decision time. */
+  market_features: number[];
+}
+
+/**
+ * A past setup returned by the store: its vector plus its realized
+ * R-multiple outcome (realized PnL / initial risk) and when the trade
+ * closed. `SetupStore` implementations only return neighbors already
+ * closed as of the query's `asOf` — a still-open setup has no R label yet
+ * (point-in-time, no lookahead; docs/specs/trader-spec.md story 13).
+ */
+export interface SetupNeighbor {
+  vector: SetupVector;
+  r_multiple: number;
+  closed_at: Date;
+}
+
+/**
+ * Owned by the Feedback Loop (Stage 6, `docs/wayfinder/feedback-loop-map.md`
+ * "Setup store & outcome labelling"); the Trader reads neighbors and writes
+ * new setups but does not build or label the store. Part of the shared
+ * SQLite store family (docs/specs/trader-spec.md "Module: Cosine Precedent
+ * Retrieval").
+ */
+export interface SetupStore {
+  /** Only setups closed with a known outcome as of `asOf` are returned. */
+  findNeighbors(vector: SetupVector, asOf: Date): SetupNeighbor[];
+  /** Persists the new setup for later outcome labelling by the Feedback Loop. */
+  writeSetup(debateId: string, vector: SetupVector, decidedAt: Date): void;
+}
