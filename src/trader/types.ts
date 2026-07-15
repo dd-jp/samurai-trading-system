@@ -67,6 +67,19 @@ export interface TraderConfig {
    */
   min_viable_notional: number;
   time_in_force: string;
+  /**
+   * Conviction floor for a same-direction `scale_in` on a held position
+   * (trader-spec.md Module: Position Awareness — "if conviction rose
+   * materially"). Stricter than `conviction_floor` so scale-ins require
+   * more than a bare-minimum entry signal, guarding against churn /
+   * over-concentration (ticket #74 acceptance: "never an unbounded add").
+   *
+   * The position record carries no memory of the conviction its entry was
+   * opened at (`HeldPosition` is deliberately minimal — see types below),
+   * so "rose materially" is approximated by a fixed, stricter-than-entry
+   * bar rather than a delta against the original decision.
+   */
+  scale_in_conviction_threshold: number;
 }
 
 export const DEFAULT_TRADER_CONFIG: TraderConfig = {
@@ -84,15 +97,41 @@ export const DEFAULT_TRADER_CONFIG: TraderConfig = {
   reward_risk_multiple: 2.0,
   min_viable_notional: 10,
   time_in_force: 'day',
+  scale_in_conviction_threshold: 0.75,
 };
+
+/**
+ * The Trader's read-only view of a currently-held position for an
+ * instrument (trader-spec.md Module: Position Awareness). Deliberately NOT
+ * the full `OpenPosition` record execution-spec.md defines (idempotency
+ * key, order state, broker order ids, ...) — those fields belong to
+ * Execution (epic #57, starting #82), which hasn't been built yet, and
+ * routing here reads only which side is held and how much of it is filled.
+ * A distinct name avoids colliding with Execution's eventual canonical
+ * `OpenPosition` type in src/shared/types.ts.
+ */
+export interface HeldPosition {
+  side: 'buy' | 'sell';
+  /** Cumulative filled size — never requested size (cross-spec-contracts.md §4). */
+  filled_size: number;
+}
+
+/**
+ * Read surface onto the shared position store (trader-spec.md's
+ * `positionState: PositionStore`). Execution (epic #57) is the eventual
+ * writer; this ticket (#74) only needs a point-in-time read, clock-scoped
+ * like `MarketDataService`, mirroring that injection pattern.
+ */
+export interface PositionStore {
+  getOpenPosition(instrument: string, asOf: Date): Promise<HeldPosition | null>;
+}
 
 /**
  * Fully deterministic given its inputs + the clock-scoped market data.
  *
- * Narrower than trader-spec.md's `TraderInput`: `positionState` (#74,
- * position-aware branching) and `setupStore` (#75, cosine precedent) are
- * absent because #73 is the no-position entry path and consults neither.
- * They are added additively by those tickets.
+ * Narrower than trader-spec.md's `TraderInput`: `setupStore` (#75, cosine
+ * precedent) is absent because that ticket hasn't landed yet. It is added
+ * additively by that ticket.
  */
 export interface TraderInput {
   /** Cross-cutting correlation ID, threaded from the Orchestrator's tick — not business data. */
@@ -108,6 +147,7 @@ export interface TraderInput {
   /** Wall-clock live, simulated T in replay. */
   clock: Clock;
   marketData: MarketDataService;
+  positionState: PositionStore;
   equity: number;
   config: TraderConfig;
 }
