@@ -7,7 +7,37 @@ export type { FixtureLiveMark } from './fixture-data-source.js';
 export { FixtureDataSource } from './fixture-data-source.js';
 export { buildIndicatorCacheKey, IndicatorCache } from './indicator-cache.js';
 export { computeIndicator } from './indicators.js';
+export type { NormalizeContext, RawCandle } from './ingestion.js';
+export { completedBars, deriveBacktestMark, normalizeBars } from './ingestion.js';
 export { MarketDataServiceImpl } from './service.js';
+export type { DataSourceConfig } from './source-factory.js';
+export { createDataSource } from './source-factory.js';
+export type {
+  AlpacaBar,
+  AlpacaClient,
+  AlpacaQuote,
+  AlpacaSourceOptions,
+} from './sources/alpaca-source.js';
+export { AlpacaDataSource } from './sources/alpaca-source.js';
+export type {
+  CcxtClient,
+  CcxtOhlcv,
+  CcxtSourceOptions,
+  CcxtTicker,
+} from './sources/ccxt-source.js';
+export { CcxtDataSource } from './sources/ccxt-source.js';
+export type {
+  IbkrClient,
+  IbkrHistoricalBar,
+  IbkrLastTrade,
+  IbkrSourceOptions,
+} from './sources/ibkr-source.js';
+export { IbkrDataSource } from './sources/ibkr-source.js';
+export type { LiveObservation, SourceConfig } from './sources/normalizing-data-source.js';
+export { NormalizingDataSource } from './sources/normalizing-data-source.js';
+export { closeTimeOf, isDailyTimeframe, timeframeToMs } from './timeframe.js';
+export type { TradingCalendar } from './trading-calendar.js';
+export { AlwaysOpenCalendar, UsEquityRegularHoursCalendar } from './trading-calendar.js';
 export type {
   Bar,
   BarWindow,
