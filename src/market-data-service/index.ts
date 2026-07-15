@@ -16,4 +16,5 @@ export type {
   IndicatorValue,
   Mark,
   MarketDataService,
+  Quote,
 } from './types.js';
