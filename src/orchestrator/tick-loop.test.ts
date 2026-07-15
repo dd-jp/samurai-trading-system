@@ -1,0 +1,256 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { Signal } from '../analysts/types.js';
+import type { Clock } from '../shared/clock.js';
+import { runTickPlan } from './tick-loop.js';
+import type {
+  TickContext,
+  TickOutcome,
+  TickPlan,
+  TickRunner,
+  UniverseInstrument,
+} from './types.js';
+
+const NOW = new Date('2026-07-15T14:00:00Z');
+const CLOCK: Clock = { now: () => NOW };
+
+function makePlan(...assets: string[]): TickPlan {
+  const instruments: UniverseInstrument[] = assets.map((asset) => ({
+    asset,
+    asset_class: asset.endsWith('-USD') ? 'crypto' : 'stocks',
+  }));
+  return { instruments, tick_time: NOW };
+}
+
+/** Sequential trace IDs — replay needs a deterministic sequence, not UUIDs. */
+function countingTraceIds(): () => string {
+  let n = 0;
+  return () => `trace-${++n}`;
+}
+
+/**
+ * A runner whose passes block until released, so in-flight instruments can be
+ * counted at a known point rather than raced against.
+ */
+function gatedRunner(): {
+  runner: TickRunner;
+  releaseAll: () => void;
+  peakInFlight: () => number;
+  started: () => string[];
+} {
+  const gates: Array<() => void> = [];
+  let inFlight = 0;
+  let peak = 0;
+  const started: string[] = [];
+
+  const runner: TickRunner = {
+    async runInstrument(signal: Signal, ctx: TickContext): Promise<TickOutcome> {
+      started.push(signal.asset);
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise<void>((resolve) => gates.push(resolve));
+      inFlight--;
+      return { trace_id: ctx.trace_id, final_stage: 'analysts' };
+    },
+  };
+
+  return {
+    runner,
+    releaseAll: () => {
+      for (const release of gates.splice(0)) release();
+    },
+    peakInFlight: () => peak,
+    started: () => started,
+  };
+}
+
+/** Yields long enough for every pending microtask to settle. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+describe('runTickPlan', () => {
+  it('bounds simultaneous instrument passes to the cap', async () => {
+    const { runner, releaseAll, peakInFlight, started } = gatedRunner();
+    const plan = makePlan('SPY', 'QQQ', 'AAPL', 'TSLA', 'BTC-USD', 'ETH-USD');
+
+    const pending = runTickPlan(plan, runner, CLOCK, {
+      max_concurrent_instruments: 2,
+      newTraceId: countingTraceIds(),
+    });
+    await settle();
+
+    // Only the cap has started; the rest are still queued behind them.
+    expect(started()).toEqual(['SPY', 'QQQ']);
+    expect(peakInFlight()).toBe(2);
+
+    releaseAll();
+    await settle();
+    releaseAll();
+    await settle();
+    releaseAll();
+    await pending;
+
+    expect(peakInFlight()).toBe(2);
+  });
+
+  it('runs every instrument in the plan', async () => {
+    const runner: TickRunner = {
+      runInstrument: vi.fn(async (_signal, ctx) => ({
+        trace_id: ctx.trace_id,
+        final_stage: 'analysts' as const,
+      })),
+    };
+    const plan = makePlan('SPY', 'QQQ', 'AAPL', 'TSLA', 'BTC-USD', 'ETH-USD');
+
+    const outcomes = await runTickPlan(plan, runner, CLOCK, {
+      max_concurrent_instruments: 3,
+      newTraceId: countingTraceIds(),
+    });
+
+    expect(runner.runInstrument).toHaveBeenCalledTimes(6);
+    expect(outcomes).toHaveLength(6);
+  });
+
+  it('returns outcomes in plan order, not completion order', async () => {
+    // First instrument finishes last: completion order is the reverse of the plan.
+    const delays: Record<string, number> = { SPY: 20, QQQ: 10, AAPL: 0 };
+    const runner: TickRunner = {
+      async runInstrument(signal, ctx) {
+        await new Promise((resolve) => setTimeout(resolve, delays[signal.asset]));
+        return { trace_id: `${ctx.trace_id}:${signal.asset}`, final_stage: 'analysts' };
+      },
+    };
+
+    const outcomes = await runTickPlan(makePlan('SPY', 'QQQ', 'AAPL'), runner, CLOCK, {
+      max_concurrent_instruments: 3,
+      newTraceId: countingTraceIds(),
+    });
+
+    expect(outcomes.map((outcome) => outcome.trace_id)).toEqual([
+      'trace-1:SPY',
+      'trace-2:QQQ',
+      'trace-3:AAPL',
+    ]);
+  });
+
+  it('runs one instrument at a time at a cap of 1 (backtest determinism)', async () => {
+    const { runner, releaseAll, peakInFlight, started } = gatedRunner();
+
+    const pending = runTickPlan(makePlan('SPY', 'BTC-USD'), runner, CLOCK, {
+      max_concurrent_instruments: 1,
+      newTraceId: countingTraceIds(),
+    });
+    await settle();
+
+    expect(started()).toEqual(['SPY']);
+
+    releaseAll();
+    await settle();
+    releaseAll();
+    await pending;
+
+    expect(peakInFlight()).toBe(1);
+    expect(started()).toEqual(['SPY', 'BTC-USD']);
+  });
+
+  it('emits one Signal per instrument, carrying its asset class', async () => {
+    const signals: Signal[] = [];
+    const runner: TickRunner = {
+      async runInstrument(signal, ctx) {
+        signals.push(signal);
+        return { trace_id: ctx.trace_id, final_stage: 'analysts' };
+      },
+    };
+
+    await runTickPlan(makePlan('SPY', 'BTC-USD'), runner, CLOCK, {
+      max_concurrent_instruments: 2,
+      newTraceId: countingTraceIds(),
+    });
+
+    expect(signals).toEqual([
+      { asset: 'SPY', asset_class: 'stocks' },
+      { asset: 'BTC-USD', asset_class: 'crypto' },
+    ]);
+  });
+
+  it('generates a distinct trace_id per instrument and injects the clock', async () => {
+    const contexts: TickContext[] = [];
+    const runner: TickRunner = {
+      async runInstrument(_signal, ctx) {
+        contexts.push(ctx);
+        return { trace_id: ctx.trace_id, final_stage: 'analysts' };
+      },
+    };
+
+    await runTickPlan(makePlan('SPY', 'QQQ', 'AAPL'), runner, CLOCK, {
+      max_concurrent_instruments: 2,
+      newTraceId: countingTraceIds(),
+    });
+
+    expect(contexts.map((ctx) => ctx.trace_id)).toEqual(['trace-1', 'trace-2', 'trace-3']);
+    expect(contexts.every((ctx) => ctx.clock === CLOCK)).toBe(true);
+  });
+
+  it('defaults to a unique trace_id per instrument when none is injected', async () => {
+    const runner: TickRunner = {
+      async runInstrument(_signal, ctx) {
+        return { trace_id: ctx.trace_id, final_stage: 'analysts' };
+      },
+    };
+
+    const outcomes = await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+      max_concurrent_instruments: 2,
+    });
+
+    const traceIds = outcomes.map((outcome) => outcome.trace_id);
+    expect(new Set(traceIds).size).toBe(2);
+    expect(traceIds.every((id) => id.length > 0)).toBe(true);
+  });
+
+  it('clamps a cap below 1 rather than stalling the tick', async () => {
+    const runner: TickRunner = {
+      runInstrument: vi.fn(async (_signal, ctx) => ({
+        trace_id: ctx.trace_id,
+        final_stage: 'analysts' as const,
+      })),
+    };
+
+    const outcomes = await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+      max_concurrent_instruments: 0,
+      newTraceId: countingTraceIds(),
+    });
+
+    // A literal 0-worker pool would run nothing and resolve empty.
+    expect(outcomes).toHaveLength(2);
+  });
+
+  it('does not stall a fast instrument behind a slow one', async () => {
+    // Cap 1 would serialize these; cap 2 lets AAPL finish while SPY blocks.
+    const finished: string[] = [];
+    const runner: TickRunner = {
+      async runInstrument(signal, ctx) {
+        await new Promise((resolve) => setTimeout(resolve, signal.asset === 'SPY' ? 20 : 0));
+        finished.push(signal.asset);
+        return { trace_id: ctx.trace_id, final_stage: 'analysts' };
+      },
+    };
+
+    await runTickPlan(makePlan('SPY', 'QQQ', 'AAPL'), runner, CLOCK, {
+      max_concurrent_instruments: 2,
+      newTraceId: countingTraceIds(),
+    });
+
+    // QQQ and AAPL both complete before the slow SPY pass.
+    expect(finished).toEqual(['QQQ', 'AAPL', 'SPY']);
+  });
+
+  it('handles an empty plan (stocks closed, no crypto configured)', async () => {
+    const runner: TickRunner = { runInstrument: vi.fn() };
+
+    const outcomes = await runTickPlan({ instruments: [], tick_time: NOW }, runner, CLOCK, {
+      max_concurrent_instruments: 4,
+      newTraceId: countingTraceIds(),
+    });
+
+    expect(outcomes).toEqual([]);
+    expect(runner.runInstrument).not.toHaveBeenCalled();
+  });
+});
