@@ -1,22 +1,15 @@
 /**
- * Trader core decision tests (ticket #73: the no-position entry path;
- * ticket #74: position-aware branching). Tested at the `decide(input)`
- * seam per docs/specs/trader-spec.md (Testing Decisions): a DebateResult +
- * fixture MarketDataService/PositionStore + a mock clock, asserting on the
- * returned OrderIntent (or null). There is no LLM to mock.
+ * Trader core decision tests (ticket #73) — the no-position entry path.
+ * Tested at the `decide(input)` seam per docs/specs/trader-spec.md (Testing
+ * Decisions): a DebateResult + a fixture MarketDataService + a mock clock,
+ * asserting on the returned OrderIntent (or null). There is no LLM to mock.
  */
 import { describe, expect, it } from 'vitest';
 import type { DebateResult } from '../debate-engine/index.js';
 import type { Bar, BarWindow, Mark, MarketDataService } from '../market-data-service/index.js';
 import type { Clock } from '../shared/clock.js';
 import { decide } from './decide.js';
-import type {
-  AssetClass,
-  HeldPosition,
-  PositionStore,
-  TraderConfig,
-  TraderInput,
-} from './types.js';
+import type { AssetClass, TraderConfig, TraderInput } from './types.js';
 import { DEFAULT_TRADER_CONFIG } from './types.js';
 
 class ManualClock implements Clock {
@@ -82,17 +75,6 @@ class FixtureMarketData implements MarketDataService {
   }
 }
 
-/** Serves a fixed (or absent) held position — the Trader's position-awareness dependency. */
-class FixturePositionStore implements PositionStore {
-  constructor(private readonly position: HeldPosition | null) {}
-
-  async getOpenPosition(_instrument: string, _asOf: Date): Promise<HeldPosition | null> {
-    return this.position;
-  }
-}
-
-const NO_POSITION = new FixturePositionStore(null);
-
 function debateResult(overrides: Partial<DebateResult> = {}): DebateResult {
   return {
     synthesis: 'Analysts converge on upside momentum.',
@@ -117,7 +99,6 @@ function traderInput(overrides: Partial<TraderInput> = {}): TraderInput {
     debate: debateResult(),
     clock: new ManualClock(DECISION_BAR),
     marketData: new FixtureMarketData(bars(15, 2)),
-    positionState: NO_POSITION,
     equity: EQUITY,
     config: DEFAULT_TRADER_CONFIG,
     ...overrides,
@@ -367,131 +348,5 @@ describe('decide — config injection', () => {
     const intent = await decide(traderInput({ config: configWith({ reward_risk_multiple: 3 }) }));
 
     expect(intent?.target).toBe(ENTRY_PRICE + 3 * EXPECTED_STOP_DISTANCE);
-  });
-});
-
-describe('decide — position-aware branching (#74)', () => {
-  const HELD_LONG: HeldPosition = { side: 'buy', filled_size: 50 };
-  const HELD_SHORT: HeldPosition = { side: 'sell', filled_size: 50 };
-  // Above DEFAULT_TRADER_CONFIG.scale_in_conviction_threshold (0.75).
-  const HIGH_CONVICTION = 0.9;
-
-  it('branch 1 — no position: emits a fresh entry (the #73 path)', async () => {
-    const intent = await decide(traderInput({ positionState: NO_POSITION }));
-
-    expect(intent?.intent_type).toBe('entry');
-    expect(intent?.side).toBe('buy');
-  });
-
-  it('branch 2a — same direction, held position, conviction at/above the scale-in threshold: bounded scale_in', async () => {
-    const intent = await decide(
-      traderInput({
-        positionState: new FixturePositionStore(HELD_LONG),
-        debate: debateResult({ direction: 'bullish', confidence: HIGH_CONVICTION }),
-      }),
-    );
-    if (!intent) throw new Error('expected a scale_in intent');
-
-    expect(intent.intent_type).toBe('scale_in');
-    expect(intent.side).toBe('buy');
-
-    // "never an unbounded add" — the scale-in lot is sized by the same
-    // per-trade risk formula as an entry, so it never exceeds the
-    // configured max_risk_per_trade on its own.
-    const riskedFraction = (intent.size * Math.abs(intent.entry - intent.stop)) / EQUITY;
-    expect(riskedFraction).toBeLessThanOrEqual(DEFAULT_TRADER_CONFIG.max_risk_per_trade);
-  });
-
-  it('branch 2b — same direction, held position, conviction below the scale-in threshold: hold (null)', async () => {
-    const intent = await decide(
-      traderInput({
-        positionState: new FixturePositionStore(HELD_LONG),
-        // Above conviction_floor (qualifies for a fresh entry) but below
-        // scale_in_conviction_threshold — proves the scale-in gate is
-        // stricter than the entry gate, not the same one.
-        debate: debateResult({ direction: 'bullish', confidence: 0.7 }),
-      }),
-    );
-
-    expect(intent).toBeNull();
-  });
-
-  it('branch 3 — opposite direction, held position: flattens the full held size, not a blended flip', async () => {
-    const intent = await decide(
-      traderInput({
-        positionState: new FixturePositionStore(HELD_LONG),
-        debate: debateResult({ direction: 'bearish', confidence: HIGH_CONVICTION }),
-      }),
-    );
-    if (!intent) throw new Error('expected an exit intent');
-
-    expect(intent.intent_type).toBe('exit');
-    expect(intent.side).toBe('sell'); // closes a held long
-    expect(intent.size).toBe(HELD_LONG.filled_size);
-  });
-
-  it('branch 3 — mirrors for a held short flattened by a bullish debate', async () => {
-    const intent = await decide(
-      traderInput({
-        positionState: new FixturePositionStore(HELD_SHORT),
-        debate: debateResult({ direction: 'bullish', confidence: HIGH_CONVICTION }),
-      }),
-    );
-    if (!intent) throw new Error('expected an exit intent');
-
-    expect(intent.intent_type).toBe('exit');
-    expect(intent.side).toBe('buy'); // closes a held short
-    expect(intent.size).toBe(HELD_SHORT.filled_size);
-  });
-
-  it('branch 3 — exit bypasses the min-viable-notional dust skip: a tiny held position still flattens', async () => {
-    const tiny: HeldPosition = { side: 'buy', filled_size: 0.001 };
-
-    const intent = await decide(
-      traderInput({
-        positionState: new FixturePositionStore(tiny),
-        debate: debateResult({ direction: 'bearish', confidence: HIGH_CONVICTION }),
-      }),
-    );
-
-    expect(intent?.intent_type).toBe('exit');
-    expect(intent?.size).toBe(tiny.filled_size);
-  });
-
-  it('branch 4 — non-converged debate on a held position: hold (null), regardless of direction or conviction', async () => {
-    const sameDirection = await decide(
-      traderInput({
-        positionState: new FixturePositionStore(HELD_LONG),
-        debate: debateResult({
-          direction: 'bullish',
-          confidence: HIGH_CONVICTION,
-          converged: false,
-        }),
-      }),
-    );
-    const oppositeDirection = await decide(
-      traderInput({
-        positionState: new FixturePositionStore(HELD_LONG),
-        debate: debateResult({
-          direction: 'bearish',
-          confidence: HIGH_CONVICTION,
-          converged: false,
-        }),
-      }),
-    );
-
-    expect(sameDirection).toBeNull();
-    expect(oppositeDirection).toBeNull();
-  });
-
-  it('a neutral debate on a held position holds (null), same as the no-position case', async () => {
-    const intent = await decide(
-      traderInput({
-        positionState: new FixturePositionStore(HELD_LONG),
-        debate: debateResult({ direction: 'neutral' }),
-      }),
-    );
-
-    expect(intent).toBeNull();
   });
 });

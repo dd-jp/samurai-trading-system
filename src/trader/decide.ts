@@ -1,20 +1,20 @@
 /**
- * Trader core decision — DebateResult -> OrderIntent bracket (ticket #73),
- * extended with position-aware branching (ticket #74). See
- * docs/specs/trader-spec.md (Module: Trader Core, Module: Position Sizing,
- * Module: Side Derivation, Module: Non-Convergence & Skip Policy, Module:
- * Position Awareness).
+ * Trader core decision — DebateResult -> OrderIntent bracket (ticket #73).
+ * See docs/specs/trader-spec.md (Module: Trader Core, Module: Position
+ * Sizing, Module: Side Derivation, Module: Non-Convergence & Skip Policy).
  *
  * Mechanical and deterministic: no LLM, no hidden state. The same code path
  * runs live and in replay; only the injected Clock and the data behind
- * MarketDataService/PositionStore differ.
+ * MarketDataService differ.
  *
+ * Scope: the no-position entry path. Position-aware routing (scale_in /
+ * exit / hold) is #74, so every intent this emits is `intent_type: 'entry'`.
  * Cosine precedent retrieval is #75 — see NO_PRECEDENT_COSINE_MULTIPLIER.
  */
-import type { Bar, Mark } from '../market-data-service/index.js';
+import type { Bar } from '../market-data-service/index.js';
 import type { OrderIntent } from '../shared/types.js';
 import { computeIdempotencyKey } from './idempotency-key.js';
-import type { AssetClass, HeldPosition, TraderConfig, TraderInput } from './types.js';
+import type { AssetClass, TraderConfig, TraderInput } from './types.js';
 
 /**
  * trader-spec.md's "no close neighbor" default (Module: Cosine Precedent
@@ -93,32 +93,29 @@ function maxRiskFor(assetClass: AssetClass, config: TraderConfig): number {
   return config.max_risk_per_trade * config.asset_class_risk_multiplier[assetClass];
 }
 
-interface BracketSizing {
-  entry: number;
-  stopDistance: number;
-  size: number;
-  convictionMult: number;
-  baseRiskFraction: number;
-  nonConvergedHaircut: number;
-  atr: number;
-  effectiveVol: number;
-}
-
 /**
- * The risk-based sizing formula shared by fresh entries and same-direction
- * scale-ins (trader-spec.md Module: Position Sizing) — conviction scaling ->
- * ATR/vol-floor stop -> non-converged haircut -> cosine multiplier. Returns
- * null when ATR can't be computed or the result is below the minimum
- * viable notional; both are skip conditions, not just entry-skip
- * conditions, so scale-in shares this gate too.
+ * Returns a full entry bracket, or null to skip. Skips when: the debate is
+ * directionless, conviction is below the floor, ATR cannot be computed, or
+ * the resulting position is below the minimum viable notional.
  */
-function sizeBracket(
-  debate: TraderInput['debate'],
-  config: TraderConfig,
-  mark: Mark,
-  bars: Bar[],
-  equity: number,
-): BracketSizing | null {
+export async function decide(input: TraderInput): Promise<OrderIntent | null> {
+  const { clock, config, debate, equity, instrument, marketData } = input;
+
+  if (debate.direction === 'neutral') return null;
+  if (debate.confidence < config.conviction_floor) return null;
+
+  const asOf = clock.now();
+  const [mark, bars] = await Promise.all([
+    marketData.getMark(instrument, asOf),
+    marketData.getBars(
+      instrument,
+      // lookback + 1 bars yield `lookback` true ranges: each needs its
+      // predecessor's close.
+      { timeframe: config.atr_timeframe, lookback: config.atr_lookback + 1 },
+      asOf,
+    ),
+  ]);
+
   const atr = computeAtr(bars, config.atr_lookback);
   if (atr === null) return null;
 
@@ -139,39 +136,8 @@ function sizeBracket(
 
   if (size * entry < config.min_viable_notional) return null;
 
-  return {
-    entry,
-    stopDistance,
-    size,
-    convictionMult,
-    baseRiskFraction,
-    nonConvergedHaircut,
-    atr,
-    effectiveVol,
-  };
-}
-
-/** Assembles the OrderIntent common to `entry` and `scale_in` — both are sized brackets on the debate's side. */
-function buildBracket(
-  intentType: 'entry' | 'scale_in',
-  side: 'buy' | 'sell',
-  instrument: string,
-  mark: Mark,
-  sizing: BracketSizing,
-  debate: TraderInput['debate'],
-  config: TraderConfig,
-): OrderIntent {
+  const side = sideFor(debate.direction);
   const direction = side === 'buy' ? 1 : -1;
-  const {
-    entry,
-    stopDistance,
-    size,
-    convictionMult,
-    baseRiskFraction,
-    nonConvergedHaircut,
-    atr,
-    effectiveVol,
-  } = sizing;
 
   // The mark's OBSERVATION time is the decision bar coordinate — not
   // clock.now(), which differs across a crash-restart re-run of the same bar
@@ -183,7 +149,7 @@ function buildBracket(
     instrument,
     asset_class: mark.asset_class,
     side,
-    intent_type: intentType,
+    intent_type: 'entry',
     size,
     entry,
     stop: entry - direction * stopDistance,
@@ -211,131 +177,4 @@ function buildBracket(
       },
     },
   };
-}
-
-/**
- * Flattens a held position (trader-spec.md Module: Position Awareness): a
- * reversal is exit-then-fresh-entry, not a blended flip, so this closes the
- * full `filled_size` and nothing more — the opposite-direction re-entry, if
- * still warranted, opens as a fresh `entry` on a later decision cycle once
- * flat. Bypasses the entry sizing pipeline entirely (no ATR/conviction
- * sizing, no min-viable-notional dust skip): the size to close is whatever
- * is actually held, not a computed risk fraction, and a small held position
- * must still be flattenable.
- *
- * `stop`/`target` have no meaning for a flatten (Execution's
- * `submitFlatten` doesn't consume them — execution-spec.md Module: Broker
- * Abstraction); collapsed to the exit price rather than left as leftover
- * bracket math. Sizing-decomposition metadata is similarly not applicable:
- * recorded as identity/zero values rather than a risk-based decomposition
- * that didn't happen.
- */
-function buildExit(
-  instrument: string,
-  mark: Mark,
-  position: HeldPosition,
-  debate: TraderInput['debate'],
-): OrderIntent {
-  const side = position.side === 'buy' ? 'sell' : 'buy';
-  const decisionBar = mark.observed_at;
-
-  return {
-    idempotency_key: computeIdempotencyKey(instrument, decisionBar),
-    instrument,
-    asset_class: mark.asset_class,
-    side,
-    intent_type: 'exit',
-    size: position.filled_size,
-    entry: mark.price,
-    stop: mark.price,
-    target: mark.price,
-    time_in_force: 'day',
-    decision_timestamp: decisionBar,
-    metadata: {
-      debate_id: debate.debate_id,
-      conviction: debate.confidence,
-      converged: debate.converged,
-      sizing: {
-        base_risk_fraction: 0,
-        conviction_multiplier: 0,
-        vol_floor_factor: 1,
-        non_converged_haircut: 1,
-        cosine_multiplier: 1,
-      },
-      cosine_precedent: {
-        neighbor_count: 0,
-        weighted_mean_r: null,
-        no_precedent: true,
-      },
-    },
-  };
-}
-
-/**
- * Returns an order intent, or null to hold / skip. Position-aware routing
- * (trader-spec.md Module: Position Awareness):
- * - No held position -> the #73 entry path (floor -> ATR/sizing -> dust skip).
- * - Held position, debate didn't converge -> hold, regardless of direction
- *   or conviction (spec: "holding + neutral/converged:false -> hold").
- * - Held position, opposite direction -> `exit` (flatten), even below the
- *   conviction floor: exits aren't gated by entry conviction (risk-manager-
- *   spec.md: "exits always pass through verbatim").
- * - Held position, same direction, conviction >= the (stricter) scale-in
- *   threshold -> bounded `scale_in` lot via the same sizing pipeline as an
- *   entry (so it's bounded by the same per-trade `max_risk_per_trade` cap —
- *   never an unbounded add).
- * - Held position, same direction, conviction below the scale-in threshold
- *   -> hold.
- */
-export async function decide(input: TraderInput): Promise<OrderIntent | null> {
-  const { clock, config, debate, equity, instrument, marketData, positionState } = input;
-
-  if (debate.direction === 'neutral') return null;
-
-  const asOf = clock.now();
-  const position = await positionState.getOpenPosition(instrument, asOf);
-
-  if (position !== null) {
-    if (!debate.converged) return null;
-
-    const newSide = sideFor(debate.direction);
-    if (newSide !== position.side) {
-      const mark = await marketData.getMark(instrument, asOf);
-      return buildExit(instrument, mark, position, debate);
-    }
-
-    if (debate.confidence < config.scale_in_conviction_threshold) return null;
-
-    const [mark, bars] = await Promise.all([
-      marketData.getMark(instrument, asOf),
-      marketData.getBars(
-        instrument,
-        { timeframe: config.atr_timeframe, lookback: config.atr_lookback + 1 },
-        asOf,
-      ),
-    ]);
-
-    const sizing = sizeBracket(debate, config, mark, bars, equity);
-    if (sizing === null) return null;
-
-    return buildBracket('scale_in', newSide, instrument, mark, sizing, debate, config);
-  }
-
-  if (debate.confidence < config.conviction_floor) return null;
-
-  const [mark, bars] = await Promise.all([
-    marketData.getMark(instrument, asOf),
-    marketData.getBars(
-      instrument,
-      // lookback + 1 bars yield `lookback` true ranges: each needs its
-      // predecessor's close.
-      { timeframe: config.atr_timeframe, lookback: config.atr_lookback + 1 },
-      asOf,
-    ),
-  ]);
-
-  const sizing = sizeBracket(debate, config, mark, bars, equity);
-  if (sizing === null) return null;
-
-  return buildBracket('entry', sideFor(debate.direction), instrument, mark, sizing, debate, config);
 }
