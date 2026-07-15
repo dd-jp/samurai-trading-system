@@ -95,12 +95,12 @@ interface DebateResult {
   converged: boolean;          // true if mediator signaled convergence
   rounds_completed: number;    // actual rounds run
   latency_ms: number;          // actual wall-clock time
-  // PENDING CROSS-SPEC ADDITIONS (required by the Trader, Stage 3 — reconcile into
-  // impl ticket #24 Domain Types & Contracts):
-  //   direction: 'bullish' | 'bearish' | 'neutral';  // structured signal; the mechanical
-  //     Trader maps this to order side and cannot parse the free-text `position`.
-  //   debate_id: string;  // deterministic = hash(instrument + bar + AnalystView set),
-  //     stable across the no-persistence re-run-from-scratch; provenance / setup-store join.
+  direction: Direction;        // structured signal, distinct from the free-text `position`;
+                                //   the mechanical Trader maps this straight to order side
+  debate_id: string;           // deterministic = hash(instrument + bar + AnalystView set),
+                                //   stable across the no-persistence re-run-from-scratch;
+                                //   provenance / setup-store join (cross-spec-contracts.md
+                                //   registry #1/#2, reconciled in impl ticket #62)
 }
 
 interface AnalystContribution {
