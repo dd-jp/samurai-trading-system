@@ -1,12 +1,34 @@
 /**
- * Market Data Service — bar/mark serving core (ticket #64).
+ * Market Data Service — bar/mark serving (ticket #64) + deterministic
+ * indicator computation and two-tier caching (ticket #65).
  * See docs/specs/market-data-service-spec.md (Module: Point-in-Time
- * Enforcement, Module: Marks) and docs/specs/cross-spec-contracts.md §3.
+ * Enforcement, Module: Marks, Module: Indicators, Module: Caching) and
+ * docs/specs/cross-spec-contracts.md §3.
  */
 import type { Clock } from '../shared/clock.js';
-import type { Bar, BarWindow, DataSource, Mark, MarketDataService } from './types.js';
+import { buildIndicatorCacheKey, IndicatorCache } from './indicator-cache.js';
+import { computeIndicator } from './indicators.js';
+import type {
+  Bar,
+  BarWindow,
+  DataSource,
+  IndicatorSpec,
+  IndicatorValue,
+  Mark,
+  MarketDataService,
+} from './types.js';
+
+/**
+ * `IndicatorSpec` (per spec) pins `indicator`/`params`/`lookback` but not a
+ * timeframe — timeframes are explicitly config, tuned in paper trading (spec
+ * "Out of Scope: Exact parameters"). One default is used until that config
+ * lands.
+ */
+const DEFAULT_INDICATOR_TIMEFRAME = '1h';
 
 export class MarketDataServiceImpl implements MarketDataService {
+  private readonly indicatorCache = new IndicatorCache();
+
   constructor(
     private readonly dataSource: DataSource,
     private readonly clock: Clock,
@@ -34,5 +56,42 @@ export class MarketDataServiceImpl implements MarketDataService {
    */
   async getMark(instrument: string, asOf: Date = this.clock.now()): Promise<Mark> {
     return this.dataSource.fetchMark(instrument, asOf, this.mode);
+  }
+
+  /**
+   * Deterministic pure function of (instrument, indicator+params, lookback,
+   * asOf). `spec.lookback` is pinned into the Tier-1 cache key so a
+   * recursive indicator (EMA/RSI/ATR) seeded from a different history
+   * length can never collide with another value under the same key.
+   * Tier-2 (bulk) reads the persisted bar cache once per call via
+   * `dataSource.fetchBars`, not per-bar, regardless of window size.
+   */
+  async getIndicator(
+    instrument: string,
+    spec: IndicatorSpec,
+    asOf: Date = this.clock.now(),
+  ): Promise<IndicatorValue> {
+    const cacheKey = buildIndicatorCacheKey(instrument, spec, asOf);
+    const cached = this.indicatorCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const window: BarWindow = { timeframe: DEFAULT_INDICATOR_TIMEFRAME, lookback: spec.lookback };
+    const bars = await this.getBars(instrument, window, asOf);
+
+    const lastBar = bars.at(-1);
+    if (!lastBar) {
+      throw new Error(`No bars for ${instrument} at or before ${asOf.toISOString()}`);
+    }
+
+    const value: IndicatorValue = {
+      indicator: spec.indicator,
+      value: computeIndicator(bars, spec),
+      as_of_bar_close: lastBar.close_time,
+    };
+
+    this.indicatorCache.set(cacheKey, value);
+    return value;
   }
 }

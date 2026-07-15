@@ -5,5 +5,15 @@
 
 export type { FixtureLiveMark } from './fixture-data-source.js';
 export { FixtureDataSource } from './fixture-data-source.js';
+export { buildIndicatorCacheKey, IndicatorCache } from './indicator-cache.js';
+export { computeIndicator } from './indicators.js';
 export { MarketDataServiceImpl } from './service.js';
-export type { Bar, BarWindow, DataSource, Mark, MarketDataService } from './types.js';
+export type {
+  Bar,
+  BarWindow,
+  DataSource,
+  IndicatorSpec,
+  IndicatorValue,
+  Mark,
+  MarketDataService,
+} from './types.js';

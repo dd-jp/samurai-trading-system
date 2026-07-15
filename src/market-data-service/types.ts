@@ -2,9 +2,8 @@
  * Domain types & contracts for the Market Data Service (Stage 0).
  * See docs/specs/market-data-service-spec.md ("Key Interfaces") and
  * docs/specs/cross-spec-contracts.md (§3 MarketDataService).
- * Implementation ticket #64 — bar/mark serving only. `getIndicator` /
- * `IndicatorSpec` / `IndicatorValue` are ticket #65's scope and are not
- * declared here yet.
+ * Bar/mark serving landed in ticket #64. `getIndicator` / `IndicatorSpec` /
+ * `IndicatorValue` are ticket #65's scope.
  */
 
 /**
@@ -52,6 +51,28 @@ export interface Mark {
 }
 
 /**
+ * A request for a service-computed technical indicator. The `lookback` is
+ * the PINNED warm-up length: how many bars a recursive indicator (EMA, RSI,
+ * ATR) is seeded over before producing `asOf`'s value. It is part of the
+ * cache key (see `buildIndicatorCacheKey`) because the same `asOf` seeded
+ * from a different history length is a different value under one key.
+ */
+export interface IndicatorSpec {
+  /** 'sma' | 'ema' | 'rsi' | 'atr' ... */
+  indicator: string;
+  params: Record<string, number>;
+  lookback: number;
+}
+
+/** A computed indicator value, pinned to the bar it was last updated from. */
+export interface IndicatorValue {
+  indicator: string;
+  value: number;
+  /** close_time of the last bar used to compute this value. */
+  as_of_bar_close: Date;
+}
+
+/**
  * Source abstraction — the ONLY place that knows ccxt/IBKR/Alpaca specifics,
  * and the ONLY place that branches live vs backtest for marks. The serving
  * layer and all consumers stay source-blind; #66 supplies the real
@@ -64,8 +85,7 @@ export interface DataSource {
 
 /**
  * The single test seam consumers inject. Deterministic given inputs +
- * clock; source is injected. Subset of the full spec interface — `getBars`
- * and `getMark` only; `getIndicator` lands in #65.
+ * clock; source is injected.
  *
  * `asOf` is explicit here (the deterministic wiring/test form); the
  * implementation resolves it from the injected Clock in normal use so
@@ -73,5 +93,6 @@ export interface DataSource {
  */
 export interface MarketDataService {
   getBars(instrument: string, window: BarWindow, asOf: Date): Promise<Bar[]>;
+  getIndicator(instrument: string, spec: IndicatorSpec, asOf: Date): Promise<IndicatorValue>;
   getMark(instrument: string, asOf: Date): Promise<Mark>;
 }
