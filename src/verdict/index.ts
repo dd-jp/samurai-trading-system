@@ -1,16 +1,53 @@
 /**
- * Verdict (Stage 5) — core gate sequence (ticket #79).
- * See docs/specs/verdict-spec.md (Module: Gate Sequence).
+ * Verdict (Stage 5) — core gate sequence (#79) plus the HITL automation
+ * dial and flag-based routing (#80).
+ * See docs/specs/verdict-spec.md (Module: Gate Sequence, Module:
+ * Human-in-the-Loop).
  *
  * Deterministic decision gate: staleness -> drift -> dedup -> market-open ->
  * breaker re-check -> HITL. First failing gate short-circuits to `no_go`
  * with its reason; a full pass (auto or human-approved) produces `go`.
  *
- * The HITL automation dial (manual/semi_auto/auto per asset class) and its
- * flag-based routing are #80 — here the gate always engages once reached;
- * `would_require_approval` is simply recorded `true` whenever it does.
+ * HITL only engages per the per-asset-class automation dial: `manual`
+ * always engages it, `auto` never does, `semi_auto` engages it only when a
+ * flag is set (non-converged, no-precedent, size-over, or near-limit —
+ * `risk_decision.modifications != null`).
  */
-import type { ApprovalOutcome, Verdict, VerdictDecision, VerdictInput } from './types.js';
+import type { RiskDecision } from '../risk-manager/types.js';
+import type { OrderIntent } from '../shared/types.js';
+import type {
+  ApprovalOutcome,
+  Verdict,
+  VerdictConfig,
+  VerdictDecision,
+  VerdictInput,
+} from './types.js';
+
+/** True if any semi_auto flag is set (verdict-spec.md "Module: Human-in-the-Loop"). */
+function isFlagged(
+  orderIntent: OrderIntent,
+  riskDecision: RiskDecision,
+  flagThresholds: VerdictConfig['flag_thresholds'],
+): boolean {
+  return (
+    orderIntent.metadata.converged === false ||
+    orderIntent.metadata.cosine_precedent.no_precedent ||
+    orderIntent.size > flagThresholds.size_over ||
+    riskDecision.modifications != null
+  );
+}
+
+/** Whether the HITL gate engages, per the per-asset-class automation dial. */
+function shouldEngageHitl(
+  orderIntent: OrderIntent,
+  riskDecision: RiskDecision,
+  config: VerdictConfig,
+): boolean {
+  const level = config.automation_level[orderIntent.asset_class];
+  if (level === 'manual') return true;
+  if (level === 'auto') return false;
+  return isFlagged(orderIntent, riskDecision, config.flag_thresholds);
+}
 
 function noGo(
   reason: NonNullable<VerdictDecision['no_go_reason']>,
@@ -88,7 +125,19 @@ export class VerdictImpl implements Verdict {
       return noGo('breaker', idempotencyKey, now);
     }
 
-    // Gate 6: HITL — engaged unconditionally once every automated gate has passed.
+    // Gate 6: HITL — engaged per the automation dial + flags, else automated go.
+    if (!shouldEngageHitl(orderIntent, risk_decision, config)) {
+      return {
+        status: 'go',
+        order: orderIntent,
+        no_go_reason: null,
+        approval_path: 'automated',
+        would_require_approval: false,
+        idempotency_key: idempotencyKey,
+        timestamp: now,
+      };
+    }
+
     const outcome: ApprovalOutcome = await approvals.requestApproval({
       order_intent: orderIntent,
       risk_decision,

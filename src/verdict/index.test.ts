@@ -74,10 +74,12 @@ function makeBreakers(overrides: Partial<BreakerState> = {}): BreakerState {
 
 function makeConfig(overrides: Partial<VerdictConfig> = {}): VerdictConfig {
   return {
+    automation_level: { crypto: 'manual', stocks: 'manual' },
     max_signal_age: { crypto: 5 * 60_000, stocks: 30 * 60_000 },
     drift_tolerance: 1,
     human_timeout: 5 * 60_000,
     allow_extended_hours: false,
+    flag_thresholds: { size_over: 10_000 },
     ...overrides,
   };
 }
@@ -274,6 +276,185 @@ describe('VerdictImpl.decide — HITL gate', () => {
     expect(decision.status).toBe('no_go');
     expect(decision.no_go_reason).toBe('timeout');
     expect(decision.approval_path).toBe('human_timeout');
+  });
+});
+
+describe('VerdictImpl.decide — automation dial', () => {
+  it('auto mode never engages HITL, even for a near-limit (flagged) trade', async () => {
+    const verdict = new VerdictImpl();
+    const approvals = makeApprovals('rejected'); // would fail if ever called
+    const input = makeInput({
+      config: makeConfig({ automation_level: { crypto: 'manual', stocks: 'auto' } }),
+      risk_decision: makeRiskDecision({
+        modifications: { original_size: 200, final_size: 100, stop_tightened: true },
+      }),
+      approvals,
+    });
+
+    const decision = await verdict.decide(input);
+
+    expect(approvals.requestApproval).not.toHaveBeenCalled();
+    expect(decision.status).toBe('go');
+    expect(decision.approval_path).toBe('automated');
+    expect(decision.would_require_approval).toBe(false);
+  });
+
+  it('manual mode always engages HITL, even with no flags set', async () => {
+    const verdict = new VerdictImpl();
+    const approvals = makeApprovals('approved');
+    const input = makeInput({
+      config: makeConfig({ automation_level: { crypto: 'manual', stocks: 'manual' } }),
+      risk_decision: makeRiskDecision({ modifications: null }),
+      approvals,
+    });
+
+    const decision = await verdict.decide(input);
+
+    expect(approvals.requestApproval).toHaveBeenCalledTimes(1);
+    expect(decision.approval_path).toBe('human');
+    expect(decision.would_require_approval).toBe(true);
+  });
+
+  it('semi_auto skips HITL for an unflagged trade', async () => {
+    const verdict = new VerdictImpl();
+    const approvals = makeApprovals('rejected'); // would fail if ever called
+    const input = makeInput({
+      config: makeConfig({ automation_level: { crypto: 'manual', stocks: 'semi_auto' } }),
+      risk_decision: makeRiskDecision({ modifications: null }),
+      approvals,
+    });
+
+    const decision = await verdict.decide(input);
+
+    expect(approvals.requestApproval).not.toHaveBeenCalled();
+    expect(decision.status).toBe('go');
+    expect(decision.approval_path).toBe('automated');
+    expect(decision.would_require_approval).toBe(false);
+  });
+
+  it('semi_auto engages HITL for a near-limit trade (risk_decision.modifications != null)', async () => {
+    const verdict = new VerdictImpl();
+    const approvals = makeApprovals('approved');
+    const input = makeInput({
+      config: makeConfig({ automation_level: { crypto: 'manual', stocks: 'semi_auto' } }),
+      risk_decision: makeRiskDecision({
+        modifications: { original_size: 200, final_size: 100, stop_tightened: true },
+      }),
+      approvals,
+    });
+
+    const decision = await verdict.decide(input);
+
+    expect(approvals.requestApproval).toHaveBeenCalledTimes(1);
+    expect(decision.approval_path).toBe('human');
+  });
+
+  it('semi_auto engages HITL for a non-converged trade', async () => {
+    const verdict = new VerdictImpl();
+    const approvals = makeApprovals('approved');
+    const input = makeInput({
+      config: makeConfig({ automation_level: { crypto: 'manual', stocks: 'semi_auto' } }),
+      risk_decision: makeRiskDecision({
+        modifications: null,
+        order_intent: makeIntent({ metadata: { ...makeIntent().metadata, converged: false } }),
+      }),
+      approvals,
+    });
+
+    const decision = await verdict.decide(input);
+
+    expect(approvals.requestApproval).toHaveBeenCalledTimes(1);
+    expect(decision.approval_path).toBe('human');
+  });
+
+  it('semi_auto engages HITL for a no-precedent trade', async () => {
+    const verdict = new VerdictImpl();
+    const approvals = makeApprovals('approved');
+    const input = makeInput({
+      config: makeConfig({ automation_level: { crypto: 'manual', stocks: 'semi_auto' } }),
+      risk_decision: makeRiskDecision({
+        modifications: null,
+        order_intent: makeIntent({
+          metadata: {
+            ...makeIntent().metadata,
+            cosine_precedent: { neighbor_count: 0, weighted_mean_r: null, no_precedent: true },
+          },
+        }),
+      }),
+      approvals,
+    });
+
+    const decision = await verdict.decide(input);
+
+    expect(approvals.requestApproval).toHaveBeenCalledTimes(1);
+    expect(decision.approval_path).toBe('human');
+  });
+
+  it('semi_auto engages HITL for a size-over trade', async () => {
+    const verdict = new VerdictImpl();
+    const approvals = makeApprovals('approved');
+    const input = makeInput({
+      config: makeConfig({
+        automation_level: { crypto: 'manual', stocks: 'semi_auto' },
+        flag_thresholds: { size_over: 50 },
+      }),
+      risk_decision: makeRiskDecision({
+        modifications: null,
+        order_intent: makeIntent({ size: 100 }),
+      }),
+      approvals,
+    });
+
+    const decision = await verdict.decide(input);
+
+    expect(approvals.requestApproval).toHaveBeenCalledTimes(1);
+    expect(decision.approval_path).toBe('human');
+  });
+
+  it('the same OrderIntent produces different routing under each dial setting', async () => {
+    const verdict = new VerdictImpl();
+    const riskDecision = makeRiskDecision({
+      modifications: { original_size: 200, final_size: 100, stop_tightened: true }, // near-limit
+    });
+
+    const manualApprovals = makeApprovals('approved');
+    const manualDecision = await verdict.decide(
+      makeInput({
+        config: makeConfig({ automation_level: { crypto: 'manual', stocks: 'manual' } }),
+        risk_decision: riskDecision,
+        approvals: manualApprovals,
+      }),
+    );
+
+    const semiAutoApprovals = makeApprovals('approved');
+    const semiAutoDecision = await verdict.decide(
+      makeInput({
+        config: makeConfig({ automation_level: { crypto: 'manual', stocks: 'semi_auto' } }),
+        risk_decision: riskDecision,
+        approvals: semiAutoApprovals,
+      }),
+    );
+
+    const autoApprovals = makeApprovals('approved');
+    const autoDecision = await verdict.decide(
+      makeInput({
+        config: makeConfig({ automation_level: { crypto: 'manual', stocks: 'auto' } }),
+        risk_decision: riskDecision,
+        approvals: autoApprovals,
+      }),
+    );
+
+    expect(manualApprovals.requestApproval).toHaveBeenCalledTimes(1);
+    expect(semiAutoApprovals.requestApproval).toHaveBeenCalledTimes(1);
+    expect(autoApprovals.requestApproval).not.toHaveBeenCalled();
+
+    expect(manualDecision.approval_path).toBe('human');
+    expect(semiAutoDecision.approval_path).toBe('human');
+    expect(autoDecision.approval_path).toBe('automated');
+
+    expect(manualDecision.would_require_approval).toBe(true);
+    expect(semiAutoDecision.would_require_approval).toBe(true);
+    expect(autoDecision.would_require_approval).toBe(false);
   });
 });
 
