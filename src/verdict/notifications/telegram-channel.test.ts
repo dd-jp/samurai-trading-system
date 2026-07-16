@@ -104,3 +104,19 @@ describe('TelegramChannel.requestApproval', () => {
     );
   });
 });
+
+describe('TelegramChannel.postHeartbeat', () => {
+  it('posts the formatted heartbeat message to the configured chat', async () => {
+    const client = makeClient();
+    const channel = new TelegramChannel(client, 'chat-123');
+    const timestamp = new Date('2026-07-15T14:00:00Z');
+
+    await channel.postHeartbeat(timestamp);
+
+    expect(client.sendMessage).toHaveBeenCalledTimes(1);
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      'chat-123',
+      expect.stringContaining('2026-07-15T14:00:00.000Z'),
+    );
+  });
+});

@@ -8,7 +8,7 @@ import type {
   VerdictDecision,
 } from '../types.js';
 import { TradeChannel } from './composite-channel.js';
-import type { TradeChannelNotifier } from './types.js';
+import type { HeartbeatNotifier, TradeChannelNotifier } from './types.js';
 
 function makeIntent(): OrderIntent {
   return {
@@ -62,17 +62,21 @@ function makeDecision(): VerdictDecision {
   };
 }
 
-type TelegramLike = TradeChannelNotifier & ApprovalChannel;
+type TelegramLike = TradeChannelNotifier & ApprovalChannel & HeartbeatNotifier;
 
 function makeTelegram(outcome: ApprovalOutcome = 'approved'): TelegramLike {
   return {
     notify: vi.fn().mockResolvedValue(undefined),
     requestApproval: vi.fn().mockResolvedValue(outcome),
+    postHeartbeat: vi.fn().mockResolvedValue(undefined),
   };
 }
 
-function makeDiscord(): TradeChannelNotifier {
-  return { notify: vi.fn().mockResolvedValue(undefined) };
+function makeDiscord(): TradeChannelNotifier & HeartbeatNotifier {
+  return {
+    notify: vi.fn().mockResolvedValue(undefined),
+    postHeartbeat: vi.fn().mockResolvedValue(undefined),
+  };
 }
 
 describe('TradeChannel.notify', () => {
@@ -113,5 +117,27 @@ describe('TradeChannel.requestApproval', () => {
 
     expect(outcome).toBe('rejected');
     expect(telegram.requestApproval).toHaveBeenCalledWith(request);
+  });
+});
+
+describe('TradeChannel.postHeartbeat', () => {
+  it('fans out a single heartbeat post to both Telegram and Discord', async () => {
+    const telegram = makeTelegram();
+    const discord = makeDiscord();
+    const channel = new TradeChannel(telegram, discord);
+    const timestamp = new Date('2026-07-15T14:00:00Z');
+
+    await channel.postHeartbeat(timestamp);
+
+    expect(telegram.postHeartbeat).toHaveBeenCalledWith(timestamp);
+    expect(discord.postHeartbeat).toHaveBeenCalledWith(timestamp);
+  });
+
+  it('works with no Discord channel configured', async () => {
+    const telegram = makeTelegram();
+    const channel = new TradeChannel(telegram);
+
+    await expect(channel.postHeartbeat(new Date('2026-07-15T14:00:00Z'))).resolves.toBeUndefined();
+    expect(telegram.postHeartbeat).toHaveBeenCalledTimes(1);
   });
 });

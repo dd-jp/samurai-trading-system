@@ -19,6 +19,16 @@ export interface TradeChannelNotifier {
   notify(decision: VerdictDecision, riskDecision: RiskDecision, traceId: string): Promise<void>;
 }
 
+/**
+ * Posts the Orchestrator's dead-man's-switch heartbeat (#96) to a trade
+ * channel — a different message type on the same channel as
+ * `TradeChannelNotifier`, not a new integration (orchestrator-spec.md
+ * "Module: Heartbeat").
+ */
+export interface HeartbeatNotifier {
+  postHeartbeat(timestamp: Date): Promise<void>;
+}
+
 /** Minimal transport surface for posting a message to a Telegram chat. */
 export interface TelegramClient {
   sendMessage(chatId: string, text: string): Promise<void>;

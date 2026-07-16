@@ -49,3 +49,8 @@ export function formatApprovalRequest(request: ApprovalRequest): string {
   ];
   return lines.join('\n');
 }
+
+/** Formats the Orchestrator's dead-man's-switch heartbeat (#96). */
+export function formatHeartbeatMessage(timestamp: Date): string {
+  return `Heartbeat: ${timestamp.toISOString()}`;
+}

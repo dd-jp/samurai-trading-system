@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { RiskDecision } from '../../risk-manager/types.js';
 import type { OrderIntent } from '../../shared/types.js';
 import type { ApprovalRequest, VerdictDecision } from '../types.js';
-import { formatApprovalRequest, formatDecisionMessage } from './format.js';
+import { formatApprovalRequest, formatDecisionMessage, formatHeartbeatMessage } from './format.js';
 
 function makeIntent(overrides: Partial<OrderIntent> = {}): OrderIntent {
   return {
@@ -99,5 +99,12 @@ describe('formatApprovalRequest', () => {
     expect(message).toContain('Approval requested');
     expect(message).toContain('AAPL');
     expect(message).toContain('Timeout: 300000ms');
+  });
+});
+
+describe('formatHeartbeatMessage', () => {
+  it('includes the ISO timestamp', () => {
+    const message = formatHeartbeatMessage(new Date('2026-07-15T14:00:00Z'));
+    expect(message).toContain('2026-07-15T14:00:00.000Z');
   });
 });

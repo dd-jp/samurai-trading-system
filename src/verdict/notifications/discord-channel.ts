@@ -8,10 +8,10 @@
  */
 import type { RiskDecision } from '../../risk-manager/types.js';
 import type { VerdictDecision } from '../types.js';
-import { formatDecisionMessage } from './format.js';
-import type { DiscordClient, TradeChannelNotifier } from './types.js';
+import { formatDecisionMessage, formatHeartbeatMessage } from './format.js';
+import type { DiscordClient, HeartbeatNotifier, TradeChannelNotifier } from './types.js';
 
-export class DiscordChannel implements TradeChannelNotifier {
+export class DiscordChannel implements TradeChannelNotifier, HeartbeatNotifier {
   readonly #client: DiscordClient;
   readonly #channelId: string;
 
@@ -22,5 +22,9 @@ export class DiscordChannel implements TradeChannelNotifier {
 
   async notify(decision: VerdictDecision, riskDecision: RiskDecision): Promise<void> {
     await this.#client.sendMessage(this.#channelId, formatDecisionMessage(decision, riskDecision));
+  }
+
+  async postHeartbeat(timestamp: Date): Promise<void> {
+    await this.#client.sendMessage(this.#channelId, formatHeartbeatMessage(timestamp));
   }
 }

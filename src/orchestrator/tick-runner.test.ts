@@ -7,7 +7,7 @@ import type { Clock } from '../shared/clock.js';
 import type { OrderIntent } from '../shared/types.js';
 import type { VerdictDecision } from '../verdict/types.js';
 import { SequentialTickRunner } from './tick-runner.js';
-import type { TickContext, TickSteps } from './types.js';
+import type { CurrentTick, CurrentTickStore, TickContext, TickSteps } from './types.js';
 
 const NOW = new Date('2026-07-15T14:00:00Z');
 const CLOCK: Clock = { now: () => NOW };
@@ -296,5 +296,82 @@ describe('SequentialTickRunner.runInstrument', () => {
     expect(steps.verdict).toHaveBeenCalledWith(
       expect.objectContaining({ risk_decision: riskDecision }),
     );
+  });
+});
+
+/** Records every upsert/delete call in order for lifecycle assertions. */
+function makeCurrentTickStore(): CurrentTickStore & { calls: string[]; rows: CurrentTick[] } {
+  const rows: CurrentTick[] = [];
+  const calls: string[] = [];
+  return {
+    calls,
+    rows,
+    async upsert(row) {
+      calls.push(`upsert:${row.stage}`);
+      rows.push(row);
+    },
+    async delete() {
+      calls.push('delete');
+    },
+  };
+}
+
+describe('SequentialTickRunner.runInstrument — current_tick lifecycle', () => {
+  it('upserts a row per stage in order, then deletes it on happy-path completion', async () => {
+    const store = makeCurrentTickStore();
+    const ctx: TickContext = { ...CTX, currentTickStore: store };
+    const steps = makeSteps();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    expect(store.calls).toEqual([
+      'upsert:analysts',
+      'upsert:debate',
+      'upsert:trader',
+      'upsert:risk',
+      'upsert:verdict',
+      'upsert:execution',
+      'delete',
+    ]);
+  });
+
+  it('upserts rows carrying instrument, asset_class, trace_id and updated_at', async () => {
+    const store = makeCurrentTickStore();
+    const ctx: TickContext = { ...CTX, currentTickStore: store };
+
+    await new SequentialTickRunner(makeSteps()).runInstrument(SIGNAL, ctx);
+
+    for (const row of store.rows) {
+      expect(row).toEqual(
+        expect.objectContaining({
+          instrument: 'AAPL',
+          asset_class: 'stocks',
+          trace_id: TRACE_ID,
+          updated_at: NOW,
+        }),
+      );
+    }
+  });
+
+  it('deletes the row on a short-circuit exit without reaching later stages', async () => {
+    const store = makeCurrentTickStore();
+    const ctx: TickContext = { ...CTX, currentTickStore: store };
+    const steps = makeSteps({ risk: vi.fn(async () => rejectedRisk()) });
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    expect(store.calls).toEqual([
+      'upsert:analysts',
+      'upsert:debate',
+      'upsert:trader',
+      'upsert:risk',
+      'delete',
+    ]);
+  });
+
+  it('is a no-op when no store is injected', async () => {
+    await expect(
+      new SequentialTickRunner(makeSteps()).runInstrument(SIGNAL, CTX),
+    ).resolves.toBeDefined();
   });
 });

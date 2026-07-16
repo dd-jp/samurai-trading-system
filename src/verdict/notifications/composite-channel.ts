@@ -12,13 +12,13 @@ import type {
   ApprovalRequest,
   VerdictDecision,
 } from '../types.js';
-import type { TradeChannelNotifier } from './types.js';
+import type { HeartbeatNotifier, TradeChannelNotifier } from './types.js';
 
-export class TradeChannel implements TradeChannelNotifier, ApprovalChannel {
+export class TradeChannel implements TradeChannelNotifier, ApprovalChannel, HeartbeatNotifier {
   readonly #telegram: TelegramChannelLike;
-  readonly #discord: TradeChannelNotifier | undefined;
+  readonly #discord: DiscordChannelLike | undefined;
 
-  constructor(telegram: TelegramChannelLike, discord?: TradeChannelNotifier) {
+  constructor(telegram: TelegramChannelLike, discord?: DiscordChannelLike) {
     this.#telegram = telegram;
     this.#discord = discord;
   }
@@ -37,6 +37,14 @@ export class TradeChannel implements TradeChannelNotifier, ApprovalChannel {
   async requestApproval(request: ApprovalRequest): Promise<ApprovalOutcome> {
     return this.#telegram.requestApproval(request);
   }
+
+  async postHeartbeat(timestamp: Date): Promise<void> {
+    await Promise.all([
+      this.#telegram.postHeartbeat(timestamp),
+      this.#discord?.postHeartbeat(timestamp),
+    ]);
+  }
 }
 
-type TelegramChannelLike = TradeChannelNotifier & ApprovalChannel;
+type TelegramChannelLike = TradeChannelNotifier & ApprovalChannel & HeartbeatNotifier;
+type DiscordChannelLike = TradeChannelNotifier & HeartbeatNotifier;

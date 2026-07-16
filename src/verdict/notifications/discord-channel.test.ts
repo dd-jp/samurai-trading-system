@@ -72,3 +72,19 @@ describe('DiscordChannel.notify', () => {
     );
   });
 });
+
+describe('DiscordChannel.postHeartbeat', () => {
+  it('posts the formatted heartbeat message to the configured channel', async () => {
+    const client: DiscordClient = { sendMessage: vi.fn().mockResolvedValue(undefined) };
+    const channel = new DiscordChannel(client, 'channel-456');
+    const timestamp = new Date('2026-07-15T14:00:00Z');
+
+    await channel.postHeartbeat(timestamp);
+
+    expect(client.sendMessage).toHaveBeenCalledTimes(1);
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      'channel-456',
+      expect.stringContaining('2026-07-15T14:00:00.000Z'),
+    );
+  });
+});

@@ -12,10 +12,10 @@ import type {
   ApprovalRequest,
   VerdictDecision,
 } from '../types.js';
-import { formatApprovalRequest, formatDecisionMessage } from './format.js';
-import type { TelegramClient, TradeChannelNotifier } from './types.js';
+import { formatApprovalRequest, formatDecisionMessage, formatHeartbeatMessage } from './format.js';
+import type { HeartbeatNotifier, TelegramClient, TradeChannelNotifier } from './types.js';
 
-export class TelegramChannel implements TradeChannelNotifier, ApprovalChannel {
+export class TelegramChannel implements TradeChannelNotifier, ApprovalChannel, HeartbeatNotifier {
   readonly #client: TelegramClient;
   readonly #chatId: string;
 
@@ -34,5 +34,9 @@ export class TelegramChannel implements TradeChannelNotifier, ApprovalChannel {
       formatApprovalRequest(request),
       request.timeout_ms,
     );
+  }
+
+  async postHeartbeat(timestamp: Date): Promise<void> {
+    await this.#client.sendMessage(this.#chatId, formatHeartbeatMessage(timestamp));
   }
 }

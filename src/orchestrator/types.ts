@@ -66,6 +66,32 @@ export interface AuditLog {
 /** The stage a tick reached before terminating (successfully or by short-circuit). */
 export type TickStage = 'analysts' | 'debate' | 'trader' | 'risk' | 'verdict' | 'execution';
 
+/**
+ * The one piece of persisted-but-transient state the Orchestrator owns (#96,
+ * orchestrator-spec.md "Module: Tick Runner"). Disposable/best-effort progress
+ * indicator, not a system-of-record — resolves cross-spec-contracts.md GAP-K
+ * (cli-spec.md's `TickStatus` reads this row; it cannot see the Orchestrator's
+ * in-memory state, a separate process).
+ */
+export interface CurrentTick {
+  instrument: string;
+  asset_class: AssetClass;
+  stage: TickStage;
+  trace_id: string;
+  updated_at: Date;
+}
+
+/**
+ * The Tick Runner's writer seam over the shared store's `current_tick` table
+ * (#96). A crash mid-tick just leaves a stale row; the next tick for that
+ * instrument overwrites it via `upsert`, so there is no data-integrity
+ * concern to recover from (orchestrator-spec.md story 15's carve-out).
+ */
+export interface CurrentTickStore {
+  upsert(row: CurrentTick): Promise<void>;
+  delete(instrument: string): Promise<void>;
+}
+
 export interface TickContext {
   /** Wall-clock live; the harness's simulated clock in replay. */
   clock: Clock;
@@ -75,6 +101,22 @@ export interface TickContext {
   logger?: Logger;
   /** #95's AuditLog — injected by the test harness; not wired by #94. */
   auditLog?: AuditLog;
+  /** #96's CurrentTickStore — optional so pre-#96 callers/tests are unaffected. */
+  currentTickStore?: CurrentTickStore;
+}
+
+/**
+ * Emits a liveness signal over Verdict's already-provisioned trade channel
+ * (#96, orchestrator-spec.md "Module: Heartbeat"). The alert signal is
+ * silence, not content — the caller is responsible for invoking `emit` on a
+ * fixed interval; an external, unspecced watchdog alerts on staleness.
+ *
+ * The spec's pseudocode signature is `emit(clock: Clock): void`, but posting
+ * a message is I/O; every other I/O seam in this codebase returns a Promise,
+ * so this returns `Promise<void>` rather than the literal snippet.
+ */
+export interface Heartbeat {
+  emit(clock: Clock): Promise<void>;
 }
 
 export interface TickOutcome {
