@@ -1,16 +1,16 @@
 /**
- * Orchestrator domain types & seams (ticket #94).
- * See docs/specs/orchestrator-spec.md (Module: Scheduler, Module: Tick Runner).
+ * Orchestrator domain types & seams — see docs/specs/orchestrator-spec.md
+ * (Module: Scheduler, Module: Tick Runner), epic #60.
  *
- * Scope: #94 is pure wiring — scheduling, the sequential stage chain, and
- * bounded concurrency. It owns no stage logic.
+ * Ticket #94 shipped the core wiring (TickSteps, TickRunner, TickStage).
+ * Ticket #88 (backtest harness) needs the seam to drive replay; the harness
+ * calls the Orchestrator's tick loop with a different injected clock
+ * (cost-model-backtest-spec.md's "same code path" guarantee).
  *
- * Deliberately NOT here: `Logger`, `AuditLog`, and the `audit_log` /
- * `current_tick` tables. The spec's `TickContext` sketch lists a logger and
- * an audit writer, but those are #95's acceptance surface, and no stage input
- * in this repo accepts a logger — threading one through now would build #95
- * early. #94 generates the `trace_id` and passes it on each stage input's
- * mandatory `trace_id` field, which is all the chain mechanically needs.
+ * `Logger` / `AuditLog` and the `audit_log` / `current_tick` tables are
+ * #95's surface — declared here so the backtest harness can inject fake
+ * implementations in its tests, but #94's TickContext does not wire them
+ * (threading them through would build #95 early).
  */
 import type { Signal } from '../analysts/types.js';
 import type { AnalystView, DebateResult } from '../debate-engine/types.js';
@@ -40,6 +40,29 @@ export interface Scheduler {
   nextTick(clock: Clock): TickPlan;
 }
 
+/** Shared structured-logging interface; trace_id threads every line (#95). */
+export interface Logger {
+  log(entry: {
+    trace_id: string;
+    stage: string;
+    level: 'info' | 'warn' | 'error';
+    message: string;
+    payload?: unknown;
+  }): void;
+}
+
+/** shared_store.audit_log writer (#95). */
+export interface AuditLog {
+  record(entry: {
+    trace_id: string;
+    stage: string;
+    decision: string;
+    input_digest: string;
+    output_digest: string;
+    timestamp: Date;
+  }): void;
+}
+
 /** The stage a tick reached before terminating (successfully or by short-circuit). */
 export type TickStage = 'analysts' | 'debate' | 'trader' | 'risk' | 'verdict' | 'execution';
 
@@ -48,6 +71,10 @@ export interface TickContext {
   clock: Clock;
   /** Generated at Signal emission, threaded through every stage call in this pass. */
   trace_id: string;
+  /** #95's Logger — injected by the test harness; not wired by #94. */
+  logger?: Logger;
+  /** #95's AuditLog — injected by the test harness; not wired by #94. */
+  auditLog?: AuditLog;
 }
 
 export interface TickOutcome {
@@ -63,37 +90,18 @@ export interface TickOutcome {
  * dependency, and the primary test seam.
  *
  * Why callables rather than the stage objects themselves: the stages are
- * inconsistent about how they take dependencies (`ExecutionImpl` takes them
- * via constructor, `Verdict` takes everything through `VerdictInput`, `Risk`
- * splits config/constructor from per-call input), and each needs ancillary
- * deps the tick chain never touches (marketData, portfolio, breakers, equity,
- * approvals, positionStore, broker, costModel). Closing those over at
- * composition time keeps this module to sequencing — orchestrator-spec.md's
+ * inconsistent about how they take dependencies, and each needs ancillary
+ * deps the tick chain never touches. Closing those over at composition
+ * time keeps this module to sequencing — orchestrator-spec.md's
  * "assert wiring, not stage logic" — and keeps the short-circuit test to
  * faking six functions.
  *
  * `analysts` and `debate` have no implementation to bind yet: the multi-persona
  * fan-out/quorum is #71/#72 (#70 shipped a single `technicalAnalyst`) and the
- * Debate Engine's core is unimplemented under epic #40. The other four bind to
- * `Trader.decide`, `RiskManager.evaluate`, `Verdict.decide`, `Execution.execute`.
+ * Debate Engine's core is unimplemented under epic #40.
  */
 export interface TickSteps {
-  /**
-   * The `AnalystView[]` the Debate Engine consumes. An empty array means the
-   * tick is skipped — analysts-spec.md story 21: a mandatory analyst failing
-   * after retry skips the whole tick. The quorum rule itself is #71's; this
-   * chain only honours the skip.
-   */
   analysts(input: { trace_id: string; signal: Signal; clock: Clock }): Promise<AnalystView[]>;
-  /**
-   * No `bar` is passed in. `debate_id` = hash(instrument + bar + AnalystView
-   * set), but `bar` must be the decision bar's coordinate (the mark's
-   * `observed_at`) and never `clock.now()` — see computeIdempotencyKey's
-   * contract in src/trader/idempotency-key.ts. The Trader derives it from its
-   * own MarketDataService (`decisionBar = mark.observed_at`); the Debate
-   * Engine derives it the same way from the market data closed over at
-   * composition. The Orchestrator has no business inventing that coordinate.
-   */
   debate(input: {
     trace_id: string;
     instrument: string;
@@ -107,11 +115,6 @@ export interface TickSteps {
     debate: DebateResult;
     clock: Clock;
   }): Promise<OrderIntent | null>;
-  /**
-   * `RiskManager.evaluate` is synchronous, but building its `PortfolioView`
-   * input is not (`computePortfolioView` marks to market via the MDS), so the
-   * bound step is async.
-   */
   risk(input: { trace_id: string; intent: OrderIntent; clock: Clock }): Promise<RiskDecision>;
   verdict(input: {
     trace_id: string;
