@@ -1,33 +1,46 @@
 /**
- * Orchestrator seams — see docs/specs/orchestrator-spec.md ("Module:
- * Scheduler", "Module: Tick Runner"), epic #60.
+ * Orchestrator domain types & seams — see docs/specs/orchestrator-spec.md
+ * (Module: Scheduler, Module: Tick Runner), epic #60.
  *
- * These interfaces are transcribed from the spec, which already fixes their
- * shape. They are declared here (their owning component) rather than in the
- * backtest harness because the harness must *drive* them, not define them:
- * cost-model-backtest-spec.md's "same code path" guarantee is precisely that
- * replay calls the Orchestrator's tick loop with a different injected clock.
+ * Ticket #94 shipped the core wiring (TickSteps, TickRunner, TickStage).
+ * Ticket #88 (backtest harness) needs the seam to drive replay; the harness
+ * calls the Orchestrator's tick loop with a different injected clock
+ * (cost-model-backtest-spec.md's "same code path" guarantee).
  *
- * The implementations are ticket #94 (core tick loop / scheduler wiring) and
- * are NOT provided here — #88 only needs the seam to drive. Until #94 lands,
- * the harness's only callers are fakes in tests.
+ * `Logger` / `AuditLog` and the `audit_log` / `current_tick` tables are
+ * #95's surface — declared here so the backtest harness can inject fake
+ * implementations in its tests, but #94's TickContext does not wire them
+ * (threading them through would build #95 early).
  */
-import type { AssetClass, Signal } from '../analysts/types.js';
+import type { Signal } from '../analysts/types.js';
+import type { AnalystView, DebateResult } from '../debate-engine/types.js';
 import type { ExecutionResult } from '../execution/types.js';
+import type { RiskDecision } from '../risk-manager/types.js';
 import type { Clock } from '../shared/clock.js';
+import type { OrderIntent } from '../shared/types.js';
+import type { VerdictDecision } from '../verdict/types.js';
 
-/** Given a clock and a universe, decide what fires this tick. */
+export type AssetClass = 'crypto' | 'stocks';
+
+/** One entry in the configured universe (orchestrator-spec.md story 3). */
+export interface UniverseInstrument {
+  asset: string;
+  asset_class: AssetClass;
+}
+
+/** What fires this tick, decided by the Scheduler against the injected clock. */
+export interface TickPlan {
+  instruments: UniverseInstrument[];
+  /** = clock.now() */
+  tick_time: Date;
+}
+
+/** The Scheduler seam: given a clock and a universe, decide what fires. */
 export interface Scheduler {
   nextTick(clock: Clock): TickPlan;
 }
 
-export interface TickPlan {
-  instruments: { asset: string; asset_class: AssetClass }[];
-  /** = clock.now(). */
-  tick_time: Date;
-}
-
-/** Shared structured-logging interface; trace_id threads every line. */
+/** Shared structured-logging interface; trace_id threads every line (#95). */
 export interface Logger {
   log(entry: {
     trace_id: string;
@@ -38,7 +51,7 @@ export interface Logger {
   }): void;
 }
 
-/** shared_store.audit_log writer. */
+/** shared_store.audit_log writer (#95). */
 export interface AuditLog {
   record(entry: {
     trace_id: string;
@@ -50,29 +63,69 @@ export interface AuditLog {
   }): void;
 }
 
-/**
- * Stage dependencies (marketData, store, broker, costModel, ...) are each
- * stage's own concern per its spec; the Orchestrator wires the concrete
- * instances into each stage call, it does not redefine them.
- */
+/** The stage a tick reached before terminating (successfully or by short-circuit). */
+export type TickStage = 'analysts' | 'debate' | 'trader' | 'risk' | 'verdict' | 'execution';
+
 export interface TickContext {
-  /** Wall-clock live; the harness's `SimulatedClock` in replay. */
+  /** Wall-clock live; the harness's simulated clock in replay. */
   clock: Clock;
-  /** Generated at Signal emission. */
+  /** Generated at Signal emission, threaded through every stage call in this pass. */
   trace_id: string;
-  logger: Logger;
-  auditLog: AuditLog;
+  /** #95's Logger — injected by the test harness; not wired by #94. */
+  logger?: Logger;
+  /** #95's AuditLog — injected by the test harness; not wired by #94. */
+  auditLog?: AuditLog;
 }
 
 export interface TickOutcome {
   trace_id: string;
-  final_stage: 'analysts' | 'debate' | 'trader' | 'risk' | 'verdict' | 'execution';
+  final_stage: TickStage;
   verdict_status?: 'go' | 'no_go';
-  /** From execution-spec; only present on a Verdict `go`. */
+  /** Only present on a Verdict `go` — Execution is not called otherwise. */
   execution_result?: ExecutionResult;
 }
 
-/** Primary seam. One call per instrument per tick. */
+/**
+ * The six pipeline steps as bound callables — the TickRunner's only
+ * dependency, and the primary test seam.
+ *
+ * Why callables rather than the stage objects themselves: the stages are
+ * inconsistent about how they take dependencies, and each needs ancillary
+ * deps the tick chain never touches. Closing those over at composition
+ * time keeps this module to sequencing — orchestrator-spec.md's
+ * "assert wiring, not stage logic" — and keeps the short-circuit test to
+ * faking six functions.
+ *
+ * `analysts` and `debate` have no implementation to bind yet: the multi-persona
+ * fan-out/quorum is #71/#72 (#70 shipped a single `technicalAnalyst`) and the
+ * Debate Engine's core is unimplemented under epic #40.
+ */
+export interface TickSteps {
+  analysts(input: { trace_id: string; signal: Signal; clock: Clock }): Promise<AnalystView[]>;
+  debate(input: {
+    trace_id: string;
+    instrument: string;
+    views: AnalystView[];
+    clock: Clock;
+  }): Promise<DebateResult>;
+  /** null = skip / no-trade; short-circuits before Risk. */
+  trader(input: {
+    trace_id: string;
+    instrument: string;
+    debate: DebateResult;
+    clock: Clock;
+  }): Promise<OrderIntent | null>;
+  risk(input: { trace_id: string; intent: OrderIntent; clock: Clock }): Promise<RiskDecision>;
+  verdict(input: {
+    trace_id: string;
+    risk_decision: RiskDecision;
+    clock: Clock;
+  }): Promise<VerdictDecision>;
+  /** Called only on a Verdict `go` (orchestrator-spec.md story 7). */
+  execution(verdict: VerdictDecision): Promise<ExecutionResult>;
+}
+
+/** The Tick Runner seam. One call per instrument per tick. */
 export interface TickRunner {
   runInstrument(signal: Signal, ctx: TickContext): Promise<TickOutcome>;
 }
