@@ -17,7 +17,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Signal } from '../analysts/types.js';
 import type { Clock } from '../shared/clock.js';
-import type { TickOutcome, TickPlan, TickRunner } from './types.js';
+import type { AuditLog, Logger, TickOutcome, TickPlan, TickRunner } from './types.js';
 
 export interface TickLoopConfig {
   /** Simultaneous instrument passes. Values < 1 are clamped to 1. */
@@ -29,6 +29,10 @@ export interface TickLoopConfig {
    * byte-identical outcomes across two runs, which random UUIDs cannot give.
    */
   newTraceId?: () => string;
+  /** Shared structured-logging interface, forwarded into every instrument's TickContext (#95). */
+  logger: Logger;
+  /** shared_store.audit_log writer, forwarded into every instrument's TickContext (#95). */
+  auditLog: AuditLog;
 }
 
 /**
@@ -67,6 +71,8 @@ export async function runTickPlan(
       outcomes[index] = await runner.runInstrument(signal, {
         clock,
         trace_id: newTraceId(),
+        logger: config.logger,
+        auditLog: config.auditLog,
       });
     }
   }

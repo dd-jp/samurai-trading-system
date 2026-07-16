@@ -6,14 +6,24 @@ import type { RiskDecision } from '../risk-manager/types.js';
 import type { Clock } from '../shared/clock.js';
 import type { OrderIntent } from '../shared/types.js';
 import type { VerdictDecision } from '../verdict/types.js';
+import { InMemoryAuditLog } from './audit-log.js';
 import { SequentialTickRunner } from './tick-runner.js';
 import type { TickContext, TickSteps } from './types.js';
 
 const NOW = new Date('2026-07-15T14:00:00Z');
 const CLOCK: Clock = { now: () => NOW };
 const TRACE_ID = 'trace-aapl-1400';
-const CTX: TickContext = { clock: CLOCK, trace_id: TRACE_ID };
 const SIGNAL: Signal = { asset: 'AAPL', asset_class: 'stocks' };
+
+/** A fresh no-op logger + real in-memory audit log per test, so audit rows never leak across tests. */
+function makeCtx(): TickContext {
+  return {
+    clock: CLOCK,
+    trace_id: TRACE_ID,
+    logger: { log: vi.fn() },
+    auditLog: new InMemoryAuditLog(),
+  };
+}
 
 function makeView(overrides: Partial<AnalystView> = {}): AnalystView {
   return {
@@ -181,7 +191,7 @@ describe('SequentialTickRunner.runInstrument', () => {
       },
     });
 
-    const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, CTX);
+    const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, makeCtx());
 
     expect(order).toEqual(['analysts', 'debate', 'trader', 'risk', 'verdict', 'execution']);
     expect(outcome).toEqual({
@@ -195,7 +205,7 @@ describe('SequentialTickRunner.runInstrument', () => {
   it('calls Execution with the go verdict', async () => {
     const steps = makeSteps();
 
-    await new SequentialTickRunner(steps).runInstrument(SIGNAL, CTX);
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, makeCtx());
 
     expect(steps.execution).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'go', order: makeIntent() }),
@@ -205,7 +215,7 @@ describe('SequentialTickRunner.runInstrument', () => {
   it('short-circuits before Execution on a Risk reject', async () => {
     const steps = makeSteps({ risk: vi.fn(async () => rejectedRisk()) });
 
-    const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, CTX);
+    const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, makeCtx());
 
     expect(steps.verdict).not.toHaveBeenCalled();
     expect(steps.execution).not.toHaveBeenCalled();
@@ -215,7 +225,7 @@ describe('SequentialTickRunner.runInstrument', () => {
   it('short-circuits before Execution on a Verdict no-go', async () => {
     const steps = makeSteps({ verdict: vi.fn(async () => noGoVerdict()) });
 
-    const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, CTX);
+    const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, makeCtx());
 
     expect(steps.execution).not.toHaveBeenCalled();
     expect(outcome).toEqual({
@@ -228,7 +238,7 @@ describe('SequentialTickRunner.runInstrument', () => {
   it('short-circuits at Analysts when the view set is empty (quorum skip)', async () => {
     const steps = makeSteps({ analysts: vi.fn(async () => []) });
 
-    const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, CTX);
+    const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, makeCtx());
 
     expect(steps.debate).not.toHaveBeenCalled();
     expect(steps.trader).not.toHaveBeenCalled();
@@ -239,7 +249,7 @@ describe('SequentialTickRunner.runInstrument', () => {
   it('short-circuits at the Trader on a null intent (no-trade)', async () => {
     const steps = makeSteps({ trader: vi.fn(async () => null) });
 
-    const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, CTX);
+    const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, makeCtx());
 
     expect(steps.risk).not.toHaveBeenCalled();
     expect(steps.execution).not.toHaveBeenCalled();
@@ -249,7 +259,7 @@ describe('SequentialTickRunner.runInstrument', () => {
   it('threads the trace_id and clock into every stage call', async () => {
     const steps = makeSteps();
 
-    await new SequentialTickRunner(steps).runInstrument(SIGNAL, CTX);
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, makeCtx());
 
     for (const step of [steps.analysts, steps.debate, steps.trader, steps.risk, steps.verdict]) {
       expect(step).toHaveBeenCalledWith(
@@ -261,7 +271,7 @@ describe('SequentialTickRunner.runInstrument', () => {
   it('emits the Signal to Analysts and the instrument onward', async () => {
     const steps = makeSteps();
 
-    await new SequentialTickRunner(steps).runInstrument(SIGNAL, CTX);
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, makeCtx());
 
     expect(steps.analysts).toHaveBeenCalledWith(expect.objectContaining({ signal: SIGNAL }));
     expect(steps.debate).toHaveBeenCalledWith(expect.objectContaining({ instrument: 'AAPL' }));
@@ -276,7 +286,7 @@ describe('SequentialTickRunner.runInstrument', () => {
       debate: vi.fn(async () => debate),
     });
 
-    await new SequentialTickRunner(steps).runInstrument(SIGNAL, CTX);
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, makeCtx());
 
     expect(steps.debate).toHaveBeenCalledWith(expect.objectContaining({ views }));
     expect(steps.trader).toHaveBeenCalledWith(expect.objectContaining({ debate }));
@@ -291,10 +301,60 @@ describe('SequentialTickRunner.runInstrument', () => {
     };
     const steps = makeSteps({ risk: vi.fn(async () => riskDecision) });
 
-    await new SequentialTickRunner(steps).runInstrument(SIGNAL, CTX);
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, makeCtx());
 
     expect(steps.verdict).toHaveBeenCalledWith(
       expect.objectContaining({ risk_decision: riskDecision }),
     );
+  });
+
+  it('produces a complete, correctly-ordered audit_log trail for a full pass', async () => {
+    const steps = makeSteps();
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const rows = (ctx.auditLog as InMemoryAuditLog).getByTraceId(TRACE_ID);
+    expect(rows.map((row) => row.stage)).toEqual([
+      'analysts',
+      'debate',
+      'trader',
+      'risk',
+      'verdict',
+      'execution',
+    ]);
+    expect(rows.every((row) => row.trace_id === TRACE_ID)).toBe(true);
+    expect(rows).toHaveLength(new Set(rows.map((row) => row.stage)).size);
+  });
+
+  it('records only the stages reached before a short-circuit', async () => {
+    const steps = makeSteps({ risk: vi.fn(async () => rejectedRisk()) });
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const rows = (ctx.auditLog as InMemoryAuditLog).getByTraceId(TRACE_ID);
+    expect(rows.map((row) => row.stage)).toEqual(['analysts', 'debate', 'trader', 'risk']);
+  });
+
+  it('logs every stage call with the same trace_id', async () => {
+    const steps = makeSteps();
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const log = ctx.logger.log as ReturnType<typeof vi.fn>;
+    expect(log).toHaveBeenCalledTimes(6);
+    for (const call of log.mock.calls) {
+      expect(call[0]).toMatchObject({ trace_id: TRACE_ID });
+    }
+    expect(log.mock.calls.map((call) => call[0].stage)).toEqual([
+      'analysts',
+      'debate',
+      'trader',
+      'risk',
+      'verdict',
+      'execution',
+    ]);
   });
 });

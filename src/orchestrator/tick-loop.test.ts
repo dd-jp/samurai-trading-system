@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Signal } from '../analysts/types.js';
 import type { Clock } from '../shared/clock.js';
+import { InMemoryAuditLog } from './audit-log.js';
 import { runTickPlan } from './tick-loop.js';
 import type {
+  AuditLog,
+  Logger,
   TickContext,
   TickOutcome,
   TickPlan,
@@ -12,6 +15,8 @@ import type {
 
 const NOW = new Date('2026-07-15T14:00:00Z');
 const CLOCK: Clock = { now: () => NOW };
+const LOGGER: Logger = { log: vi.fn() };
+const makeAuditLog = (): AuditLog => new InMemoryAuditLog();
 
 function makePlan(...assets: string[]): TickPlan {
   const instruments: UniverseInstrument[] = assets.map((asset) => ({
@@ -74,6 +79,8 @@ describe('runTickPlan', () => {
     const pending = runTickPlan(plan, runner, CLOCK, {
       max_concurrent_instruments: 2,
       newTraceId: countingTraceIds(),
+      logger: LOGGER,
+      auditLog: makeAuditLog(),
     });
     await settle();
 
@@ -103,6 +110,8 @@ describe('runTickPlan', () => {
     const outcomes = await runTickPlan(plan, runner, CLOCK, {
       max_concurrent_instruments: 3,
       newTraceId: countingTraceIds(),
+      logger: LOGGER,
+      auditLog: makeAuditLog(),
     });
 
     expect(runner.runInstrument).toHaveBeenCalledTimes(6);
@@ -122,6 +131,8 @@ describe('runTickPlan', () => {
     const outcomes = await runTickPlan(makePlan('SPY', 'QQQ', 'AAPL'), runner, CLOCK, {
       max_concurrent_instruments: 3,
       newTraceId: countingTraceIds(),
+      logger: LOGGER,
+      auditLog: makeAuditLog(),
     });
 
     expect(outcomes.map((outcome) => outcome.trace_id)).toEqual([
@@ -137,6 +148,8 @@ describe('runTickPlan', () => {
     const pending = runTickPlan(makePlan('SPY', 'BTC-USD'), runner, CLOCK, {
       max_concurrent_instruments: 1,
       newTraceId: countingTraceIds(),
+      logger: LOGGER,
+      auditLog: makeAuditLog(),
     });
     await settle();
 
@@ -163,6 +176,8 @@ describe('runTickPlan', () => {
     await runTickPlan(makePlan('SPY', 'BTC-USD'), runner, CLOCK, {
       max_concurrent_instruments: 2,
       newTraceId: countingTraceIds(),
+      logger: LOGGER,
+      auditLog: makeAuditLog(),
     });
 
     expect(signals).toEqual([
@@ -183,6 +198,8 @@ describe('runTickPlan', () => {
     await runTickPlan(makePlan('SPY', 'QQQ', 'AAPL'), runner, CLOCK, {
       max_concurrent_instruments: 2,
       newTraceId: countingTraceIds(),
+      logger: LOGGER,
+      auditLog: makeAuditLog(),
     });
 
     expect(contexts.map((ctx) => ctx.trace_id)).toEqual(['trace-1', 'trace-2', 'trace-3']);
@@ -198,6 +215,8 @@ describe('runTickPlan', () => {
 
     const outcomes = await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
       max_concurrent_instruments: 2,
+      logger: LOGGER,
+      auditLog: makeAuditLog(),
     });
 
     const traceIds = outcomes.map((outcome) => outcome.trace_id);
@@ -216,6 +235,8 @@ describe('runTickPlan', () => {
     const outcomes = await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
       max_concurrent_instruments: 0,
       newTraceId: countingTraceIds(),
+      logger: LOGGER,
+      auditLog: makeAuditLog(),
     });
 
     // A literal 0-worker pool would run nothing and resolve empty.
@@ -236,6 +257,8 @@ describe('runTickPlan', () => {
     await runTickPlan(makePlan('SPY', 'QQQ', 'AAPL'), runner, CLOCK, {
       max_concurrent_instruments: 2,
       newTraceId: countingTraceIds(),
+      logger: LOGGER,
+      auditLog: makeAuditLog(),
     });
 
     // QQQ and AAPL both complete before the slow SPY pass.
@@ -248,6 +271,8 @@ describe('runTickPlan', () => {
     const outcomes = await runTickPlan({ instruments: [], tick_time: NOW }, runner, CLOCK, {
       max_concurrent_instruments: 4,
       newTraceId: countingTraceIds(),
+      logger: LOGGER,
+      auditLog: makeAuditLog(),
     });
 
     expect(outcomes).toEqual([]);
