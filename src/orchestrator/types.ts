@@ -7,10 +7,10 @@
  * calls the Orchestrator's tick loop with a different injected clock
  * (cost-model-backtest-spec.md's "same code path" guarantee).
  *
- * `Logger` / `AuditLog` and the `audit_log` / `current_tick` tables are
- * #95's surface — declared here so the backtest harness can inject fake
- * implementations in its tests, but #94's TickContext does not wire them
- * (threading them through would build #95 early).
+ * Ticket #95 wires `Logger` / `AuditLog` through `TickContext` (both
+ * required — every stage call in a pass must log and audit-record). The
+ * `current_tick` progress row and the dead-man's-switch heartbeat remain
+ * #96's.
  */
 import type { Signal } from '../analysts/types.js';
 import type { AnalystView, DebateResult } from '../debate-engine/types.js';
@@ -71,10 +71,10 @@ export interface TickContext {
   clock: Clock;
   /** Generated at Signal emission, threaded through every stage call in this pass. */
   trace_id: string;
-  /** #95's Logger — injected by the test harness; not wired by #94. */
-  logger?: Logger;
-  /** #95's AuditLog — injected by the test harness; not wired by #94. */
-  auditLog?: AuditLog;
+  /** Shared structured-logging interface (#95); every stage call logs through it. */
+  logger: Logger;
+  /** shared_store.audit_log writer (#95); one record per stage reached in this pass. */
+  auditLog: AuditLog;
 }
 
 export interface TickOutcome {
