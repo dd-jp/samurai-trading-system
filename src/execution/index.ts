@@ -2,9 +2,17 @@
  * Execution — see docs/specs/execution-spec.md, epic #57.
  * Implemented ticket-by-ticket starting with #82 (core `execute()`, bracket
  * expansion + idempotent submit, Simulated adapter), then #85 (the long-term
- * ccxt + IBKR adapters).
+ * ccxt + IBKR adapters), then #84 (Alpaca adapter, MVP live path).
  */
 
+export type { AlpacaBrokerAdapterInput } from './adapters/alpaca-adapter.js';
+export { AlpacaBrokerAdapter } from './adapters/alpaca-adapter.js';
+export type {
+  AlpacaBracketOrderRequest,
+  AlpacaClient,
+  AlpacaOrder,
+  AlpacaOrderLeg,
+} from './adapters/alpaca-client.js';
 export type {
   CcxtBrokerClient,
   CcxtOrder,
