@@ -7,8 +7,14 @@
  * plus the Simulated adapter. The interfaces here are deliberately narrower
  * than the spec's full shapes, in the same staged style as `TraderInput`
  * (#73) and `CostModel` (#87): fill ingestion / reconciliation (#83, #86)
- * and the real Alpaca/ccxt/IBKR adapters (#84, #85) add their surfaces
- * additively rather than being declared here unimplemented.
+ * and the real Alpaca adapter (#84) add their surfaces additively rather than
+ * being declared here unimplemented.
+ *
+ * #85 added the ccxt + IBKR adapters against these shapes without widening
+ * them: each exposes its fill feed (`fetchNewFills`) and, for ccxt, its OCO
+ * emulation (`syncBrackets`) as adapter-local methods, exactly as the
+ * Simulated adapter does. `BrokerAdapter` stays the one method `execute()`
+ * calls until the ticket that drives the rest of the lifecycle (#83) arrives.
  *
  * `OpenPosition` / `OrderState` are NOT redefined here — they are cross-spec
  * types owned by src/shared/types.ts (registry §4).
