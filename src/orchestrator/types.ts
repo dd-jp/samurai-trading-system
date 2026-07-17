@@ -8,9 +8,9 @@
  * (cost-model-backtest-spec.md's "same code path" guarantee).
  *
  * Ticket #95 wires `Logger` / `AuditLog` through `TickContext` (both
- * required — every stage call in a pass must log and audit-record). The
- * `current_tick` progress row and the dead-man's-switch heartbeat remain
- * #96's.
+ * required — every stage call in a pass must log and audit-record). Ticket
+ * #96 adds `CurrentTickStore` to `TickContext` (the disposable per-instrument
+ * progress row) and the dead-man's-switch heartbeat (heartbeat.ts).
  */
 import type { Signal } from '../analysts/types.js';
 import type { AnalystView, DebateResult } from '../debate-engine/types.js';
@@ -66,6 +66,32 @@ export interface AuditLog {
 /** The stage a tick reached before terminating (successfully or by short-circuit). */
 export type TickStage = 'analysts' | 'debate' | 'trader' | 'risk' | 'verdict' | 'execution';
 
+/**
+ * The disposable per-instrument progress row (#96, resolves
+ * cross-spec-contracts.md GAP-K). Not a system-of-record: losing it on crash
+ * costs nothing but a stale progress indicator, since the row is re-upserted
+ * next tick (orchestrator-spec.md story 15).
+ */
+export interface CurrentTick {
+  instrument: string;
+  asset_class: AssetClass;
+  stage: TickStage;
+  trace_id: string;
+  updated_at: Date;
+}
+
+/**
+ * shared_store.current_tick port (#96). One row per instrument: `upsert`
+ * overwrites any existing row for that instrument (a stale row from a
+ * crashed prior tick is safely clobbered, per orchestrator-spec.md's
+ * "disposable, best-effort" framing), `delete` clears it on tick completion.
+ */
+export interface CurrentTickStore {
+  upsert(row: CurrentTick): void;
+  delete(instrument: string): void;
+  get(instrument: string): CurrentTick | undefined;
+}
+
 export interface TickContext {
   /** Wall-clock live; the harness's simulated clock in replay. */
   clock: Clock;
@@ -75,6 +101,8 @@ export interface TickContext {
   logger: Logger;
   /** shared_store.audit_log writer (#95); one record per stage reached in this pass. */
   auditLog: AuditLog;
+  /** shared_store.current_tick writer (#96); upserted before each stage, deleted on completion. */
+  currentTickStore: CurrentTickStore;
 }
 
 export interface TickOutcome {

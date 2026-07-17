@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Signal } from '../analysts/types.js';
 import type { Clock } from '../shared/clock.js';
 import { InMemoryAuditLog } from './audit-log.js';
+import { InMemoryCurrentTickStore } from './current-tick-store.js';
 import { runTickPlan } from './tick-loop.js';
 import type {
   AuditLog,
+  CurrentTickStore,
   Logger,
   TickContext,
   TickOutcome,
@@ -17,6 +19,7 @@ const NOW = new Date('2026-07-15T14:00:00Z');
 const CLOCK: Clock = { now: () => NOW };
 const LOGGER: Logger = { log: vi.fn() };
 const makeAuditLog = (): AuditLog => new InMemoryAuditLog();
+const makeCurrentTickStore = (): CurrentTickStore => new InMemoryCurrentTickStore();
 
 function makePlan(...assets: string[]): TickPlan {
   const instruments: UniverseInstrument[] = assets.map((asset) => ({
@@ -81,6 +84,7 @@ describe('runTickPlan', () => {
       newTraceId: countingTraceIds(),
       logger: LOGGER,
       auditLog: makeAuditLog(),
+      currentTickStore: makeCurrentTickStore(),
     });
     await settle();
 
@@ -112,6 +116,7 @@ describe('runTickPlan', () => {
       newTraceId: countingTraceIds(),
       logger: LOGGER,
       auditLog: makeAuditLog(),
+      currentTickStore: makeCurrentTickStore(),
     });
 
     expect(runner.runInstrument).toHaveBeenCalledTimes(6);
@@ -133,6 +138,7 @@ describe('runTickPlan', () => {
       newTraceId: countingTraceIds(),
       logger: LOGGER,
       auditLog: makeAuditLog(),
+      currentTickStore: makeCurrentTickStore(),
     });
 
     expect(outcomes.map((outcome) => outcome.trace_id)).toEqual([
@@ -150,6 +156,7 @@ describe('runTickPlan', () => {
       newTraceId: countingTraceIds(),
       logger: LOGGER,
       auditLog: makeAuditLog(),
+      currentTickStore: makeCurrentTickStore(),
     });
     await settle();
 
@@ -178,6 +185,7 @@ describe('runTickPlan', () => {
       newTraceId: countingTraceIds(),
       logger: LOGGER,
       auditLog: makeAuditLog(),
+      currentTickStore: makeCurrentTickStore(),
     });
 
     expect(signals).toEqual([
@@ -200,10 +208,32 @@ describe('runTickPlan', () => {
       newTraceId: countingTraceIds(),
       logger: LOGGER,
       auditLog: makeAuditLog(),
+      currentTickStore: makeCurrentTickStore(),
     });
 
     expect(contexts.map((ctx) => ctx.trace_id)).toEqual(['trace-1', 'trace-2', 'trace-3']);
     expect(contexts.every((ctx) => ctx.clock === CLOCK)).toBe(true);
+  });
+
+  it('forwards the currentTickStore into every instrument TickContext', async () => {
+    const contexts: TickContext[] = [];
+    const runner: TickRunner = {
+      async runInstrument(_signal, ctx) {
+        contexts.push(ctx);
+        return { trace_id: ctx.trace_id, final_stage: 'analysts' };
+      },
+    };
+    const currentTickStore = makeCurrentTickStore();
+
+    await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+      max_concurrent_instruments: 2,
+      newTraceId: countingTraceIds(),
+      logger: LOGGER,
+      auditLog: makeAuditLog(),
+      currentTickStore,
+    });
+
+    expect(contexts.every((ctx) => ctx.currentTickStore === currentTickStore)).toBe(true);
   });
 
   it('defaults to a unique trace_id per instrument when none is injected', async () => {
@@ -217,6 +247,7 @@ describe('runTickPlan', () => {
       max_concurrent_instruments: 2,
       logger: LOGGER,
       auditLog: makeAuditLog(),
+      currentTickStore: makeCurrentTickStore(),
     });
 
     const traceIds = outcomes.map((outcome) => outcome.trace_id);
@@ -237,6 +268,7 @@ describe('runTickPlan', () => {
       newTraceId: countingTraceIds(),
       logger: LOGGER,
       auditLog: makeAuditLog(),
+      currentTickStore: makeCurrentTickStore(),
     });
 
     // A literal 0-worker pool would run nothing and resolve empty.
@@ -259,6 +291,7 @@ describe('runTickPlan', () => {
       newTraceId: countingTraceIds(),
       logger: LOGGER,
       auditLog: makeAuditLog(),
+      currentTickStore: makeCurrentTickStore(),
     });
 
     // QQQ and AAPL both complete before the slow SPY pass.
@@ -273,6 +306,7 @@ describe('runTickPlan', () => {
       newTraceId: countingTraceIds(),
       logger: LOGGER,
       auditLog: makeAuditLog(),
+      currentTickStore: makeCurrentTickStore(),
     });
 
     expect(outcomes).toEqual([]);
