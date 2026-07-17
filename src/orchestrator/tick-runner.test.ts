@@ -7,6 +7,7 @@ import type { Clock } from '../shared/clock.js';
 import type { OrderIntent } from '../shared/types.js';
 import type { VerdictDecision } from '../verdict/types.js';
 import { InMemoryAuditLog } from './audit-log.js';
+import { InMemoryCurrentTickStore } from './current-tick-store.js';
 import { SequentialTickRunner } from './tick-runner.js';
 import type { TickContext, TickSteps } from './types.js';
 
@@ -15,13 +16,17 @@ const CLOCK: Clock = { now: () => NOW };
 const TRACE_ID = 'trace-aapl-1400';
 const SIGNAL: Signal = { asset: 'AAPL', asset_class: 'stocks' };
 
-/** A fresh no-op logger + real in-memory audit log per test, so audit rows never leak across tests. */
+/**
+ * A fresh no-op logger + real in-memory audit log + real in-memory
+ * current_tick store per test, so rows never leak across tests.
+ */
 function makeCtx(): TickContext {
   return {
     clock: CLOCK,
     trace_id: TRACE_ID,
     logger: { log: vi.fn() },
     auditLog: new InMemoryAuditLog(),
+    currentTickStore: new InMemoryCurrentTickStore(),
   };
 }
 
@@ -356,5 +361,95 @@ describe('SequentialTickRunner.runInstrument', () => {
       'verdict',
       'execution',
     ]);
+  });
+
+  it('upserts the current_tick row per stage and deletes it on completion', async () => {
+    const seen: string[] = [];
+    const intent = makeIntent();
+    const ctx = makeCtx();
+    const store = ctx.currentTickStore as InMemoryCurrentTickStore;
+    const steps = makeSteps({
+      analysts: async () => {
+        seen.push(store.get('AAPL')?.stage ?? 'none');
+        return [makeView()];
+      },
+      debate: async () => {
+        seen.push(store.get('AAPL')?.stage ?? 'none');
+        return makeDebate();
+      },
+      trader: async () => {
+        seen.push(store.get('AAPL')?.stage ?? 'none');
+        return intent;
+      },
+      risk: async () => {
+        seen.push(store.get('AAPL')?.stage ?? 'none');
+        return approvedRisk(intent);
+      },
+      verdict: async () => {
+        seen.push(store.get('AAPL')?.stage ?? 'none');
+        return goVerdict(intent);
+      },
+      execution: async () => {
+        seen.push(store.get('AAPL')?.stage ?? 'none');
+        return makeExecutionResult();
+      },
+    });
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    // Each stage observes the row already marked with its own name, upserted
+    // just before that stage was called.
+    expect(seen).toEqual(['analysts', 'debate', 'trader', 'risk', 'verdict', 'execution']);
+    expect(store.get('AAPL')).toBeUndefined();
+  });
+
+  it('current_tick row carries the instrument, asset_class, and trace_id', async () => {
+    const ctx = makeCtx();
+    const store = ctx.currentTickStore as InMemoryCurrentTickStore;
+    let sawDuringDebate: ReturnType<InMemoryCurrentTickStore['get']>;
+    const steps = makeSteps({
+      debate: async () => {
+        sawDuringDebate = store.get('AAPL');
+        return makeDebate();
+      },
+    });
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    expect(sawDuringDebate).toEqual({
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+      stage: 'debate',
+      trace_id: TRACE_ID,
+      updated_at: NOW,
+    });
+  });
+
+  it('deletes the current_tick row on a short-circuit, not just the happy path', async () => {
+    const ctx = makeCtx();
+    const store = ctx.currentTickStore as InMemoryCurrentTickStore;
+    const steps = makeSteps({ risk: vi.fn(async () => rejectedRisk()) });
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    expect(store.get('AAPL')).toBeUndefined();
+  });
+
+  it('leaves a stale current_tick row in place if a stage throws (crash mid-tick)', async () => {
+    const ctx = makeCtx();
+    const store = ctx.currentTickStore as InMemoryCurrentTickStore;
+    const steps = makeSteps({
+      debate: vi.fn(async () => {
+        throw new Error('boom');
+      }),
+    });
+
+    await expect(new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx)).rejects.toThrow(
+      'boom',
+    );
+
+    // The row is left exactly as it was before the throw — a stale progress
+    // indicator, safely overwritten by the next tick's upsert, not cleared.
+    expect(store.get('AAPL')).toMatchObject({ stage: 'debate', instrument: 'AAPL' });
   });
 });

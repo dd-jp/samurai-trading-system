@@ -17,7 +17,14 @@
 import { randomUUID } from 'node:crypto';
 import type { Signal } from '../analysts/types.js';
 import type { Clock } from '../shared/clock.js';
-import type { AuditLog, Logger, TickOutcome, TickPlan, TickRunner } from './types.js';
+import type {
+  AuditLog,
+  CurrentTickStore,
+  Logger,
+  TickOutcome,
+  TickPlan,
+  TickRunner,
+} from './types.js';
 
 export interface TickLoopConfig {
   /** Simultaneous instrument passes. Values < 1 are clamped to 1. */
@@ -33,6 +40,8 @@ export interface TickLoopConfig {
   logger: Logger;
   /** shared_store.audit_log writer, forwarded into every instrument's TickContext (#95). */
   auditLog: AuditLog;
+  /** shared_store.current_tick writer, forwarded into every instrument's TickContext (#96). */
+  currentTickStore: CurrentTickStore;
 }
 
 /**
@@ -73,6 +82,7 @@ export async function runTickPlan(
         trace_id: newTraceId(),
         logger: config.logger,
         auditLog: config.auditLog,
+        currentTickStore: config.currentTickStore,
       });
     }
   }
