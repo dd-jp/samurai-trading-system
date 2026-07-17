@@ -5,11 +5,12 @@
  * "Module: Backtest Harness" — Key Interfaces) and cross-spec-contracts.md.
  *
  * The Validation Library (MetricsSuite, splits, DSR/PBO/MinBTL, the
- * config-trial log) is a later ticket in epic #58 and is not declared here;
- * `CostModel.capacityCeiling` likewise (out of scope for #87 — only `fill()`
- * is required by the issue). `BacktestReport` therefore lands here in its
- * #88-fillable subset only: the metrics/walk-forward/capacity-ceiling fields
- * the spec lists arrive with the ticket that can honestly populate them.
+ * config-trial log) is ticket #89 and is declared in `validation-types.ts`;
+ * `CostModel.capacityCeiling` is still undeclared (out of scope for #87 —
+ * only `fill()` is required by that issue). `BacktestReport` therefore lands
+ * here in its #88-fillable subset only: the metrics/walk-forward/
+ * capacity-ceiling fields the spec lists arrive with the ticket that can
+ * honestly populate them — see the note in `index.ts` on why #89 is not it.
  */
 
 import type { TickOutcome } from '../orchestrator/types.js';
