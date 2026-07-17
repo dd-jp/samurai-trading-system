@@ -107,6 +107,20 @@ describe('technicalAnalyst', () => {
     expect(view.timestamp).toEqual(ASOF);
   });
 
+  it('produces a valid AnalystView given no weight information (AnalystInput carries no weight field)', async () => {
+    const input = buildInput(signal, 'trace-1');
+    expect(input).not.toHaveProperty('weight');
+
+    const view = await technicalAnalyst.run(input);
+
+    expect(view.analyst_type).toBe('technical');
+    expect(['bullish', 'bearish', 'neutral']).toContain(view.direction);
+    expect(view.confidence).toBeGreaterThanOrEqual(0);
+    expect(view.confidence).toBeLessThanOrEqual(1);
+    expect(Array.isArray(view.key_points)).toBe(true);
+    expect(view.timestamp).toEqual(ASOF);
+  });
+
   it('holds no state across calls: an intervening call with different inputs does not affect a repeat call', async () => {
     const baseline = await technicalAnalyst.run(buildInput(signal, 'trace-1'));
 
