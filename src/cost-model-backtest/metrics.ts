@@ -102,7 +102,7 @@ function autocorrelation(r: readonly number[], lag: number): number {
 
   let covariance = 0;
   for (let t = 0; t < deviations.length - lag; t++) {
-    covariance += deviations[t] * deviations[t + lag];
+    covariance += deviations[t]! * deviations[t + lag]!;
   }
 
   let variance = 0;
