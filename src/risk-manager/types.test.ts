@@ -2,7 +2,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { OrderIntent } from '../shared/types.js';
 import type {
   BreakerState,
-  ConcentrationBucket,
+  CorrelationEstimate,
   PortfolioView,
   RiskConfig,
   RiskDecision,
@@ -74,21 +74,26 @@ describe('BreakerState', () => {
 
 describe('RiskConfig', () => {
   it('matches the config-driven threshold shape', () => {
-    const bucket: ConcentrationBucket = {
-      name: 'us-tech',
-      instruments: ['AAPL', 'MSFT'],
-      cap: 30_000,
-    };
     const config: RiskConfig = {
       max_position_size: 20_000,
       per_asset_cap: 25_000,
       per_asset_class_cap: { crypto: 40_000, stocks: 60_000 },
       portfolio_gross_cap: 90_000,
-      concentration_buckets: [bucket],
+      concentration: { cap: 30_000, threshold: 0.7 },
       min_viable_size: 500,
     };
 
     expectTypeOf(config).toMatchTypeOf<RiskConfig>();
+  });
+});
+
+describe('CorrelationEstimate', () => {
+  it('matches the pairwise-correlation shape, keyed by the other instrument', () => {
+    const estimate: CorrelationEstimate = {
+      correlations: { MSFT: 0.82, 'BTC-USD': -0.05 },
+    };
+
+    expectTypeOf(estimate).toMatchTypeOf<CorrelationEstimate>();
   });
 });
 
@@ -113,6 +118,7 @@ describe('RiskInput', () => {
         asset_class_tripped: { crypto: false, stocks: false },
         armed_breakers: [],
       },
+      correlation: { correlations: {} },
       mode: 'live',
     };
 

@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest';
 import type { Clock } from '../shared/clock.js';
 import type { OrderIntent } from '../shared/types.js';
 import { RiskManagerImpl } from './index.js';
-import type { BreakerState, PortfolioView, RiskConfig, RiskInput } from './types.js';
+import type {
+  BreakerState,
+  CorrelationEstimate,
+  PortfolioView,
+  RiskConfig,
+  RiskInput,
+} from './types.js';
 
 const fixedClock: Clock = { now: () => new Date('2026-07-15T09:30:00Z') };
 
@@ -63,6 +69,13 @@ function makeBreakers(overrides: Partial<BreakerState> = {}): BreakerState {
   };
 }
 
+function makeCorrelation(overrides: Partial<CorrelationEstimate> = {}): CorrelationEstimate {
+  return {
+    correlations: {},
+    ...overrides,
+  };
+}
+
 // Caps set high enough by default that no step trims unless a test lowers one.
 function makeConfig(overrides: Partial<RiskConfig> = {}): RiskConfig {
   return {
@@ -70,7 +83,7 @@ function makeConfig(overrides: Partial<RiskConfig> = {}): RiskConfig {
     per_asset_cap: 1_000_000,
     per_asset_class_cap: { crypto: 1_000_000, stocks: 1_000_000 },
     portfolio_gross_cap: 1_000_000,
-    concentration_buckets: [],
+    concentration: { cap: 1_000_000, threshold: 0.7 },
     min_viable_size: 100,
     ...overrides,
   };
@@ -83,6 +96,7 @@ function makeInput(overrides: Partial<RiskInput> = {}): RiskInput {
     clock: fixedClock,
     portfolio: makePortfolio(),
     breakers: makeBreakers(),
+    correlation: makeCorrelation(),
     mode: 'live',
     ...overrides,
   };
@@ -211,22 +225,56 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
     expect(decision.binding_constraint).toBe('portfolio_gross_exposure_cap');
   });
 
-  it('trims to a concentration bucket cap when the instrument belongs to one', () => {
+  it('trims to the concentration cap when the instrument is correlated with a held one', () => {
     const manager = new RiskManagerImpl(
-      makeConfig({
-        concentration_buckets: [{ name: 'us-tech', instruments: ['AAPL', 'MSFT'], cap: 9_000 }],
-      }),
+      makeConfig({ concentration: { cap: 9_000, threshold: 0.7 } }),
     );
     const input = makeInput({
       intent: makeIntent({ size: 100, entry: 100, instrument: 'AAPL' }),
       portfolio: makePortfolio({ exposure_by_instrument: { MSFT: 4_000 } }),
+      correlation: makeCorrelation({ correlations: { MSFT: 0.82 } }),
     });
 
     const decision = manager.evaluate(input);
 
     // Allowed additional = 9,000 - 4,000 (existing MSFT, AAPL has none) = 5,000 -> size 50
     expect(decision.order_intent?.size).toBe(50);
-    expect(decision.binding_constraint).toBe('concentration_bucket:us-tech');
+    expect(decision.binding_constraint).toBe('concentration_correlation_cap');
+  });
+
+  it('does not trim on a held instrument whose correlation is below the threshold', () => {
+    const manager = new RiskManagerImpl(
+      makeConfig({ concentration: { cap: 9_000, threshold: 0.7 } }),
+    );
+    const input = makeInput({
+      intent: makeIntent({ size: 100, entry: 100, instrument: 'AAPL' }),
+      portfolio: makePortfolio({ exposure_by_instrument: { MSFT: 4_000 } }),
+      correlation: makeCorrelation({ correlations: { MSFT: 0.3 } }),
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.status).toBe('approved');
+    expect(decision.order_intent?.size).toBe(100);
+    expect(decision.binding_constraint).toBeNull();
+  });
+
+  it('falls back gracefully (no trim) when correlation history is insufficient (warm-up)', () => {
+    const manager = new RiskManagerImpl(
+      makeConfig({ concentration: { cap: 9_000, threshold: 0.7 } }),
+    );
+    const input = makeInput({
+      intent: makeIntent({ size: 100, entry: 100, instrument: 'AAPL' }),
+      portfolio: makePortfolio({ exposure_by_instrument: { MSFT: 4_000 } }),
+      // MSFT omitted entirely — insufficient overlapping return history.
+      correlation: makeCorrelation({ correlations: {} }),
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.status).toBe('approved');
+    expect(decision.order_intent?.size).toBe(100);
+    expect(decision.binding_constraint).toBeNull();
   });
 
   it('never trims below zero when existing exposure already exceeds a cap', () => {

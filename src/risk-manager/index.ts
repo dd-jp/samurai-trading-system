@@ -7,9 +7,10 @@
  * trims notional exposure or hard-rejects; nothing ever increases size or
  * loosens a stop. Exits skip every entry gate and pass through verbatim.
  *
- * `PortfolioView` (#78) and `BreakerState` (#77) are consumed as pre-built
- * inputs — this pipeline does not compute exposure, drawdown, or breaker
- * trips itself.
+ * `PortfolioView` (#78), `BreakerState` (#77), and `CorrelationEstimate`
+ * (#50, correlation.ts) are consumed as pre-built inputs — this pipeline
+ * does not compute exposure, drawdown, breaker trips, or correlations
+ * itself.
  */
 import type {
   BreakerState,
@@ -54,7 +55,7 @@ export class RiskManagerImpl implements RiskManager {
   constructor(private readonly config: RiskConfig) {}
 
   evaluate(input: RiskInput): RiskDecision {
-    const { intent, portfolio, breakers } = input;
+    const { intent, portfolio, breakers, correlation } = input;
 
     if (intent.intent_type === 'exit') {
       return {
@@ -148,21 +149,26 @@ export class RiskManagerImpl implements RiskManager {
       if (changed) bindingConstraint = 'portfolio_gross_exposure_cap';
     }
 
-    // Step 6: concentration check (v1 static buckets).
-    for (const bucket of this.config.concentration_buckets) {
-      if (!bucket.instruments.includes(intent.instrument)) continue;
-      const existingBucketExposure = bucket.instruments.reduce(
+    // Step 6: concentration check (v2 dynamic correlation matrix, #50).
+    // Instruments absent from `correlation.correlations` are treated as not
+    // correlated — that's the warm-up fallback, not a special case here.
+    const correlatedInstruments = Object.entries(correlation.correlations)
+      .filter(([, corr]) => Math.abs(corr) >= this.config.concentration.threshold)
+      .map(([instrument]) => instrument);
+    if (correlatedInstruments.length > 0) {
+      const correlatedSet = [intent.instrument, ...correlatedInstruments];
+      const existingCorrelatedExposure = correlatedSet.reduce(
         (sum, instrument) => sum + (portfolio.exposure_by_instrument[instrument] ?? 0),
         0,
       );
       const { notional: trimmed, changed } = trimToAllowed(
         notional,
-        bucket.cap - existingBucketExposure,
-        `concentration_bucket:${bucket.name}`,
+        this.config.concentration.cap - existingCorrelatedExposure,
+        'concentration_correlation_cap',
         reasons,
       );
       notional = trimmed;
-      if (changed) bindingConstraint = `concentration_bucket:${bucket.name}`;
+      if (changed) bindingConstraint = 'concentration_correlation_cap';
     }
 
     const finalSize = notional / intent.entry;
