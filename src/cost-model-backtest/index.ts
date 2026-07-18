@@ -30,6 +30,28 @@
  * flattering lie this component exists to prevent, so the report keeps its #88
  * subset and the wiring lands with the ticket that can fill it honestly.
  * `capacity_ceiling` likewise stays with `CostModel.capacityCeiling` (#87).
+ *
+ * Ticket #90 adds the **mined eval executor** (`eval-types.ts`,
+ * `trade-derivation.ts`, `eval-executor.ts`) — pybroker's walk-forward/CPCV
+ * split + eval-metric executor shape, in TypeScript per ADR-0001's
+ * "mine for patterns, no hard dependency" posture. It is the join #89 could
+ * not make: `ReplayTradeSource` reads the `ClosedTrade`s Execution now emits
+ * (#83), `trade-derivation.ts` turns them into the `TradeSeries`/`ReturnSeries`
+ * the validation library takes, and the executor cuts the splits and scores
+ * each test slice. It computes no metric and generates no split of its own —
+ * `CostModel.fill` stays the single fill authority and `computeMetrics` the
+ * single metric implementation, which is what makes live == backtest.
+ *
+ * `BacktestReport.metrics` / `walk_forward` still stand empty. Scoring a
+ * replay needs the deployed capital and the bar cadence (`EvalOptions`), and
+ * `BacktestConfig` carries neither; adding them is a contract change #90 was
+ * not asked to make, so the caller runs the executor over the report's window
+ * rather than the harness inventing the inputs. `capacity_ceiling` remains
+ * with `CostModel.capacityCeiling` (#87).
+ *
+ * CPCV *generation* works (#89); CPCV *scoring* deliberately throws — see
+ * `testRangeOf` in eval-executor.ts for why a disjoint test side cannot be
+ * given an honest exposure denominator without changing `TradeSeries`.
  */
 
 export type { BacktestDeps } from './backtest.js';
@@ -37,12 +59,23 @@ export { BacktestHarness } from './backtest.js';
 export type { ConfigTrialLog } from './config-trial-log.js';
 export { InMemoryConfigTrialLog } from './config-trial-log.js';
 export { CostModelImpl } from './cost-model.js';
+export type { EvalExecutorDeps } from './eval-executor.js';
+export { EvalExecutorImpl } from './eval-executor.js';
+export type {
+  EvalExecutor,
+  EvalOptions,
+  EvalReport,
+  ReplayTradeSource,
+  SplitEval,
+} from './eval-types.js';
+export type { LookaheadViolation } from './lookahead.js';
+export { LookaheadAuditor, LookaheadViolationError } from './lookahead.js';
 export { computeMetrics } from './metrics.js';
 export { deflatedSharpe, minbtl, minbtlGuard, pbo } from './overfitting.js';
 export type { SplitOptions } from './splits.js';
 export { generateSplits } from './splits.js';
-export type { LookaheadViolation } from './lookahead.js';
-export { LookaheadAuditor, LookaheadViolationError } from './lookahead.js';
+export type { SeriesOptions } from './trade-derivation.js';
+export { assertCostModelPriced, toReturnSeries, toTradeSeries } from './trade-derivation.js';
 export type {
   AssetClassCostConfig,
   Backtest,
