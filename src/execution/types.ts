@@ -23,7 +23,7 @@
 import type { CostModel } from '../cost-model-backtest/types.js';
 import type { BarWindow, IndicatorSpec, MarketDataService } from '../market-data-service/types.js';
 import type { Clock } from '../shared/clock.js';
-import type { OpenPosition, OrderState } from '../shared/types.js';
+import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../shared/types.js';
 import type { VerdictDecision } from '../verdict/types.js';
 
 /**
@@ -90,12 +90,30 @@ export interface NormalizedFill {
 
 /**
  * The broker boundary — nothing above it knows which venue, or whether the
- * mode is live, paper or backtest. #82 declares only `submitBracket`, the
- * one method `execute()` calls; `submitFlatten`/`cancel`/`getOrder`/
- * `getOpenPositions`/`fetchNewFills` arrive with the tickets that call them.
+ * mode is live, paper or backtest. #83 adds the two methods its lifecycle
+ * calls; `submitFlatten`/`cancel`/`getOrder`/`getOpenPositions` still arrive
+ * with the tickets that call them (#86 reconciliation, the exit path).
  */
 export interface BrokerAdapter {
   submitBracket(order: NativeBracketRequest): Promise<BrokerAck>;
+  /**
+   * The venue's fill feed. Inclusive of `since` and never dated before it,
+   * so a backtest cannot see a fill ahead of simulated T. Re-offering an
+   * already-returned fill is expected — `ingestFills()` dedups on
+   * `broker_fill_id`.
+   */
+  fetchNewFills(since: Date): Promise<NormalizedFill[]>;
+  /**
+   * Size the protective legs to the entry's CUMULATIVE filled quantity — an
+   * over-sized stop protects phantom quantity, an under-sized one leaves part
+   * of the lot naked (execution-spec.md story 13).
+   *
+   * On this seam because `OpenPosition` carries no leg-quantity field:
+   * resizing is a venue-side act, not a persistence one. Adapters whose venue
+   * keeps attached legs in step with the entry itself (Alpaca/IBKR native
+   * brackets) satisfy it by doing nothing.
+   */
+  resizeProtectiveLegs(clientOrderId: string, filledQty: number): Promise<void>;
 }
 
 /**
@@ -121,6 +139,35 @@ export interface SharedStore {
     idempotency_key: string,
     update: { order_state: OrderState; broker_order_ids: string[] },
   ): Promise<void>;
+  /**
+   * Lots whose lifecycle is still running — what `ingestFills()` advances.
+   * Terminal records (`closed`/`cancelled`/`rejected`/`expired`) are excluded:
+   * a fill against a closed lot is not ours to act on, and this is what makes
+   * a re-poll after close a no-op.
+   */
+  getOpenPositions(): Promise<OpenPosition[]>;
+  /**
+   * True if this `broker_fill_id` was already ingested. The fill feed is
+   * inclusive of `since`, so every poll re-offers the fills it already
+   * delivered; without this the same fill is counted twice and the lot's
+   * `filled_size` runs away from the broker's.
+   */
+  hasFill(broker_fill_id: string): Promise<boolean>;
+  /** One row per (partial) fill — CONTEXT.md invariant #4. */
+  writeFill(fill: Fill): Promise<void>;
+  /**
+   * Every `Fill` recorded against a lot, in ingestion order. Realized size,
+   * avg price and PnL are reconstructed from these rather than a running
+   * total, so a re-poll converges instead of drifting.
+   */
+  getFills(idempotency_key: string): Promise<Fill[]>;
+  /** Persist a fill-driven advance of the lot (partial or complete). */
+  updatePositionFill(
+    idempotency_key: string,
+    update: { filled_size: number; avg_entry_price: number; order_state: OrderState },
+  ): Promise<void>;
+  /** The realized record, written once on round-trip-to-flat. */
+  writeClosedTrade(trade: ClosedTrade): Promise<void>;
 }
 
 /**
@@ -182,10 +229,21 @@ export interface ExecutionResult {
 
 /**
  * The primary test seam. Deterministic given the injected adapter + clock +
- * store. `ingestFills()`/`reconcile()` — the spec's secondary surface — are
- * #83/#86 and are not declared until they exist.
+ * store.
+ *
+ * `reconcile()` — the other half of the spec's secondary surface — is #86's
+ * (store ↔ broker, broker as source of truth) and is not declared until it
+ * exists. #83 is `ingestFills()` only: it advances lots from the venue's own
+ * fill feed and never second-guesses the store against the broker.
  */
 export interface Execution {
   /** Acts only on a `go`; records the submission, does not block until filled. */
   execute(verdict: VerdictDecision): Promise<ExecutionResult>;
+  /**
+   * Advance every live lot on the fills that have landed since it opened:
+   * persist each new `Fill`, resize the protective legs to cumulative filled
+   * quantity, and emit a `ClosedTrade` on round-trip-to-flat. Idempotent —
+   * polling it twice ingests each fill once and closes each lot once.
+   */
+  ingestFills(): Promise<void>;
 }

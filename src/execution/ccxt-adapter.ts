@@ -67,6 +67,16 @@ interface EmulatedBracket {
   entryOrderId: string;
   stopOrderId: string | null;
   targetOrderId: string | null;
+  /**
+   * The quantity the live legs currently protect, so a resize can tell a
+   * no-op from real work. Null until they are armed.
+   */
+  armedQty: number | null;
+  /**
+   * How many times the legs have been placed — keeps a re-armed leg's client
+   * order id unique against the venue, which rejects a repeated one.
+   */
+  armAttempt: number;
 }
 
 export class CcxtBrokerAdapter implements BrokerAdapter {
@@ -107,6 +117,8 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
       entryOrderId: entry.id,
       stopOrderId: null,
       targetOrderId: null,
+      armedQty: null,
+      armAttempt: 0,
     };
     this.brackets.set(order.client_order_id, bracket);
 
@@ -172,18 +184,31 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
     bracket.phase = 'arming';
     this.fills.push(entryFill);
 
-    // Protective legs cover what actually filled, never the requested size —
-    // an over-sized stop protects phantom quantity.
-    const filledSize = entry.filled;
+    await this.armLegs(bracket, entry.filled);
+  }
+
+  /**
+   * Places the protective pair sized to `filledSize` — never the requested
+   * size, because an over-sized stop protects phantom quantity. The caller
+   * owns claiming the phase (`arming`); this owns the placement and lands the
+   * bracket back on `armed`.
+   */
+  private async armLegs(bracket: EmulatedBracket, filledSize: number): Promise<void> {
+    const { request } = bracket;
     const exitSide = request.side === 'buy' ? 'sell' : 'buy';
+    // A re-arm cannot reuse the cancelled legs' client order ids — the venue
+    // rejects a repeated one, which would leave the lot with no legs at all.
+    const suffix = bracket.armAttempt === 0 ? '' : `:r${bracket.armAttempt}`;
+    bracket.armAttempt += 1;
+
     const [stop, target] = await Promise.all([
       this.client.createOrder(request.instrument, 'limit', exitSide, filledSize, request.stop, {
-        clientOrderId: `${request.client_order_id}:stop`,
+        clientOrderId: `${request.client_order_id}:stop${suffix}`,
         stopLossPrice: request.stop,
         timeInForce: request.time_in_force,
       }),
       this.client.createOrder(request.instrument, 'limit', exitSide, filledSize, request.target, {
-        clientOrderId: `${request.client_order_id}:target`,
+        clientOrderId: `${request.client_order_id}:target${suffix}`,
         takeProfitPrice: request.target,
         timeInForce: request.time_in_force,
       }),
@@ -191,7 +216,45 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
 
     bracket.stopOrderId = stop.id;
     bracket.targetOrderId = target.id;
+    bracket.armedQty = filledSize;
     bracket.phase = 'armed';
+  }
+
+  /**
+   * Re-size the live legs to the entry's cumulative filled quantity — the
+   * emulation's half of execution-spec.md story 13. First placement is NOT
+   * done here: `advanceEntry` already arms at `entry.filled`, and two owners
+   * of leg placement is how a lot gets two stops. This only corrects legs
+   * already armed against a quantity that has since grown.
+   *
+   * Cancel-then-replace, because the injected client slice exposes no amend:
+   * the lot is briefly unprotected in the gap. That is a real (and venue-
+   * inherent) exposure, narrower than leaving the stop sized to a quantity
+   * that no longer exists.
+   */
+  async resizeProtectiveLegs(clientOrderId: string, filledQty: number): Promise<void> {
+    const bracket = this.brackets.get(clientOrderId);
+    if (bracket === undefined) return;
+
+    // `pending_entry`/`arming` → another transition owns this bracket;
+    // `resolved` → the lot is done and its legs are already dead.
+    if (bracket.phase !== 'armed') return;
+    if (bracket.armedQty === filledQty) return;
+
+    // Claim before the first await, exactly as `advanceEntry`/`advanceExits`
+    // do: while re-arming, this bracket is not a candidate for the OCO edge,
+    // so a concurrent poll cannot cancel a sibling out from under the replace.
+    const { request, stopOrderId, targetOrderId } = bracket;
+    bracket.phase = 'arming';
+
+    await Promise.all([
+      stopOrderId === null ? undefined : this.client.cancelOrder(stopOrderId, request.instrument),
+      targetOrderId === null
+        ? undefined
+        : this.client.cancelOrder(targetOrderId, request.instrument),
+    ]);
+
+    await this.armLegs(bracket, filledQty);
   }
 
   /**

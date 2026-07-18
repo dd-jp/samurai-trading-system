@@ -114,8 +114,9 @@ export interface SetupStore {
  * Lifecycle of a bracket's entry order. See docs/specs/execution-spec.md
  * ("Module: Order State Machine & Partial Fills"). Every transition is
  * persisted, so the state is always durable and inspectable. Ticket #82
- * only produces `pending` (write-ahead) and `submitted` (post-ack); the
- * fill/close transitions are driven by #83's `ingestFills()`.
+ * only produces `pending` (write-ahead) and `submitted` (post-ack); #83's
+ * `ingestFills()` drives `partially_filled` → `filled` → `closed` as fills
+ * arrive.
  */
 export type OrderState =
   | 'pending'
@@ -134,8 +135,8 @@ export type OrderState =
  * (docs/specs/cross-spec-contracts.md §4).
  *
  * `Fill` and `ClosedTrade` — the registry's other two Execution records —
- * are deliberately NOT defined yet: #83 (`ingestFills()`/`ClosedTrade`
- * emission) is their writer, and #82 neither writes nor reads them.
+ * are defined below: #83 (`ingestFills()`/`ClosedTrade` emission) is their
+ * writer.
  *
  * Per-lot by design (v1): each `entry`/`scale_in` is its own record with its
  * own bracket and `debate_id`, which is what keeps the Feedback Loop's
@@ -167,4 +168,70 @@ export interface OpenPosition {
   opened_at: Date;
   /** The bar/decision time, carried from the OrderIntent. */
   decision_timestamp: Date;
+}
+
+/**
+ * One row per (partial) fill — every fill logged (CONTEXT.md invariant #4),
+ * so the accounting view can reconstruct realized PnL from the raw record
+ * rather than trusting a running total. Written by #83's `ingestFills()`.
+ *
+ * `broker_fill_id` is the ingestion dedup key: the adapters' fill feed is
+ * inclusive of `since`, so the same fill is re-offered on the next poll and
+ * must land at most once.
+ */
+export interface Fill {
+  idempotency_key: string;
+  broker_fill_id: string;
+  leg: 'entry' | 'stop' | 'target' | 'exit';
+  price: number;
+  qty: number;
+  fee: number;
+  timestamp: Date;
+  /**
+   * Populated only for fills produced by the Simulated adapter, mapped from
+   * `CostModel.fill`'s `CostModelResult`. Absent on real broker fills, where
+   * no modeled breakdown exists — which is what powers FL's live-vs-modeled
+   * cost divergence check (cross-spec §4, GAP-F).
+   */
+  cost_breakdown?: {
+    spread_cost: number;
+    commission: number;
+    slippage: number;
+    market_impact: number;
+  };
+}
+
+/**
+ * Emitted on round-trip-to-flat — the realized record the Feedback Loop and
+ * Risk consume. Defined here rather than in src/execution because it is a
+ * cross-spec registry type (§4): Execution is its sole writer, FL and Risk
+ * read it. feedback-loop-spec references `ClosedTrade` but never defines it;
+ * this is that definition (execution-spec.md cross-spec addition #1).
+ *
+ * Per-lot, like `OpenPosition`: a scale-in closes as its own `ClosedTrade`
+ * with its own `debate_id`, which is what keeps FL's single-entry-bracket R
+ * assumption true.
+ */
+export interface ClosedTrade {
+  idempotency_key: string;
+  /** Attribution + setup-store join key. */
+  debate_id: string;
+  instrument: string;
+  asset_class: 'crypto' | 'stocks';
+  side: 'buy' | 'sell';
+  /** Avg entry, derived from the entry fills. */
+  entry: number;
+  /**
+   * The INITIAL protective stop — the denominator of R, so it must be the
+   * risk the trade was opened against, not a later trailed level.
+   */
+  stop: number;
+  /** → initial risk = |entry − stop| × filled_size. */
+  filled_size: number;
+  /** Net of fees across every leg. */
+  realized_pnl_net: number;
+  fees_total: number;
+  opened_at: Date;
+  closed_at: Date;
+  close_reason: 'stop' | 'target' | 'exit';
 }

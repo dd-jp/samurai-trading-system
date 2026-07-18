@@ -40,6 +40,8 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
   private readonly fills: NormalizedFill[] = [];
   /** Client order ids already accepted — the venue-side half of the dedup. */
   private readonly accepted = new Set<string>();
+  /** Quantity each lot's protective legs cover, as `ingestFills()` sizes them. */
+  private readonly protectedQty = new Map<string, number>();
 
   constructor(private readonly input: SimulatedBrokerAdapterInput) {}
 
@@ -93,12 +95,27 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
   }
 
   /**
-   * The fill feed #83's `ingestFills()` drains. Deterministic and
-   * point-in-time: never returns a fill dated before `since`, so a backtest
-   * cannot see a fill ahead of simulated T.
+   * The fill feed `ingestFills()` drains. Deterministic and point-in-time:
+   * never returns a fill dated before `since`, so a backtest cannot see a
+   * fill ahead of simulated T.
    */
   async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
     return this.fills.filter((fill) => fill.timestamp.getTime() >= since.getTime());
+  }
+
+  /**
+   * Models the venue's leg book: there are no live orders to amend here, so
+   * the protected quantity IS the state. Recording it keeps the simulation
+   * honest about what a stop-out would fill, and makes the resize observable —
+   * which on a real native-bracket venue only the venue could confirm.
+   */
+  async resizeProtectiveLegs(clientOrderId: string, filledQty: number): Promise<void> {
+    this.protectedQty.set(clientOrderId, filledQty);
+  }
+
+  /** The quantity this lot's protective legs currently cover; null if unarmed. */
+  getProtectedQty(clientOrderId: string): number | null {
+    return this.protectedQty.get(clientOrderId) ?? null;
   }
 
   /**

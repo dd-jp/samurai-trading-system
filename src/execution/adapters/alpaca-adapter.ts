@@ -60,7 +60,18 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   }
 
   /**
-   * The fill feed #83's `ingestFills()` will drain, in the same shape
+   * A no-op: Alpaca's native bracket attaches the protective legs to the
+   * parent entry, so the venue keeps their quantity in step as the parent
+   * fills. Re-sizing from here would fight the venue over leg quantity — the
+   * same reason this adapter does no OCO emulation of its own. The seam is
+   * still honoured; a native bracket meets it by having already met it.
+   */
+  async resizeProtectiveLegs(): Promise<void> {
+    // Intentionally empty — see above.
+  }
+
+  /**
+   * The fill feed `ingestFills()` drains, in the same shape
    * `SimulatedBrokerAdapter.fetchNewFills` already produces. Point-in-time:
    * never returns a fill dated before `since`.
    */

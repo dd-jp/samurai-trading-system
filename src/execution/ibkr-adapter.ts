@@ -96,7 +96,22 @@ export class IbkrBrokerAdapter implements BrokerAdapter {
   }
 
   /**
-   * The fill feed #83's `ingestFills()` drains — same contract as the ccxt and
+   * A no-op, and deliberately so: the protective children are attached to the
+   * parent entry, so IBKR itself keeps their quantity in step as the parent
+   * fills. Re-sizing them from here would be this adapter growing exactly the
+   * duplicate-the-venue state machine the file header refuses — and racing
+   * TWS over leg quantity is how a lot ends up unprotected.
+   *
+   * The seam is still honoured: `ingestFills()` states the requirement and
+   * each venue meets it however it can, which for a native bracket is by
+   * having already met it.
+   */
+  async resizeProtectiveLegs(): Promise<void> {
+    // Intentionally empty — see above.
+  }
+
+  /**
+   * The fill feed `ingestFills()` drains — same contract as the ccxt and
    * Simulated adapters', so the lifecycle above is exercised identically
    * whichever venue is wired in. Never returns a fill dated before `since`.
    */
