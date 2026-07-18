@@ -1,18 +1,29 @@
 /**
- * Execution core — `execute()` (ticket #82). See docs/specs/execution-spec.md
- * ("Module: Execution Core").
+ * Execution core — `execute()` (ticket #82) and the `ingestFills()` entry
+ * point (#83). See docs/specs/execution-spec.md ("Module: Execution Core").
  *
  * The thin, mechanical tail of the pipeline: Verdict has already decided, so
  * this re-decides nothing. Dedupe → expand the abstract bracket → write-ahead
  * → submit → persist the ack → return. It records a submission; it does not
- * block until filled (that lifecycle is #83's `ingestFills()`).
+ * block until filled — the lot's lifecycle is advanced separately by
+ * `ingestFills()`, which lives in its own module.
  */
 import type { OpenPosition } from '../shared/types.js';
 import type { VerdictDecision } from '../verdict/types.js';
+import { ingestFills } from './ingest-fills.js';
 import type { Execution, ExecutionInput, ExecutionResult, NativeBracketRequest } from './types.js';
 
 export class ExecutionImpl implements Execution {
   constructor(private readonly input: ExecutionInput) {}
+
+  /**
+   * The second surface, delegated whole: the fill lifecycle shares only the
+   * injected dependencies with `execute()`, so keeping it out of this class's
+   * body keeps the two surfaces independently readable.
+   */
+  async ingestFills(): Promise<void> {
+    return ingestFills(this.input);
+  }
 
   async execute(verdict: VerdictDecision): Promise<ExecutionResult> {
     const { clock, broker, store } = this.input;

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { CostModel } from '../cost-model-backtest/types.js';
 import type { MarketDataService } from '../market-data-service/types.js';
 import type { Clock } from '../shared/clock.js';
-import type { OpenPosition, OrderIntent, OrderState } from '../shared/types.js';
+import type { Fill, OpenPosition, OrderIntent, OrderState } from '../shared/types.js';
 import type { VerdictDecision } from '../verdict/types.js';
 import { ExecutionImpl } from './execute.js';
 import type {
@@ -11,6 +11,7 @@ import type {
   ExecutionConfig,
   ExecutionInput,
   NativeBracketRequest,
+  NormalizedFill,
   SharedStore,
 } from './types.js';
 
@@ -89,6 +90,33 @@ class InMemoryStore implements SharedStore {
     this.writeLog.push(`update:${idempotency_key}:${update.order_state}`);
     this.positions.set(idempotency_key, { ...existing, ...update });
   }
+
+  // Fill-lifecycle surface (#83). execute() never calls these; they exist so
+  // this store still satisfies the widened SharedStore.
+  async getOpenPositions(): Promise<OpenPosition[]> {
+    return [...this.positions.values()];
+  }
+
+  async hasFill(): Promise<boolean> {
+    return false;
+  }
+
+  async writeFill(): Promise<void> {}
+
+  async getFills(): Promise<Fill[]> {
+    return [];
+  }
+
+  async updatePositionFill(
+    idempotency_key: string,
+    update: { filled_size: number; avg_entry_price: number; order_state: OrderState },
+  ): Promise<void> {
+    const existing = this.positions.get(idempotency_key);
+    if (!existing) return;
+    this.positions.set(idempotency_key, { ...existing, ...update });
+  }
+
+  async writeClosedTrade(): Promise<void> {}
 }
 
 /** Accepts everything and records what it was handed. */
@@ -107,6 +135,12 @@ function makeBroker(
         order_state: 'submitted',
       };
     },
+    // execute() never drives the fill lifecycle; these satisfy the widened
+    // interface (#83) without behaviour these tests exercise.
+    async fetchNewFills(): Promise<NormalizedFill[]> {
+      return [];
+    },
+    async resizeProtectiveLegs(): Promise<void> {},
   };
 }
 
@@ -287,6 +321,8 @@ describe('ExecutionImpl.execute', () => {
     const store = new InMemoryStore();
     const broker: BrokerAdapter = {
       submitBracket: vi.fn().mockRejectedValue(new Error('connection reset')),
+      fetchNewFills: vi.fn().mockResolvedValue([]),
+      resizeProtectiveLegs: vi.fn().mockResolvedValue(undefined),
     };
 
     const result = await new ExecutionImpl(makeInput({ store, broker })).execute(makeGo());
