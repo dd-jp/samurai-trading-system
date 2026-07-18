@@ -39,12 +39,21 @@ export interface PortfolioView {
   consecutive_losses: number;
 }
 
-/** A predefined correlated-asset group for the v1 static concentration check. */
-export interface ConcentrationBucket {
-  name: string;
-  instruments: string[];
-  /** Max combined notional exposure across every instrument in this bucket. */
-  cap: number;
+/**
+ * Point-in-time pairwise correlation of one instrument against every other
+ * held instrument with sufficient return history (ticket #50, v2 of the
+ * concentration check — replaces the v1 static `ConcentrationBucket` list).
+ * Computed outside `evaluate()` by `computeCorrelationEstimate` (correlation.ts)
+ * and consumed here as pre-built data, mirroring `PortfolioView`/`BreakerState`.
+ *
+ * An instrument pair with insufficient overlapping history is simply absent
+ * from `correlations` rather than assigned a value — that omission IS the
+ * warm-up fallback: the pipeline treats an absent entry as "not correlated"
+ * rather than guessing.
+ */
+export interface CorrelationEstimate {
+  /** Keyed by the OTHER instrument; value is its correlation with the intent's instrument. */
+  correlations: Record<string, number>;
 }
 
 /**
@@ -61,7 +70,13 @@ export interface RiskConfig {
   per_asset_class_cap: { crypto: number; stocks: number };
   /** Max total gross notional exposure across the portfolio. */
   portfolio_gross_cap: number;
-  concentration_buckets: ConcentrationBucket[];
+  /** v2 dynamic concentration check (#50) — caps combined exposure across the intent's instrument and every instrument correlated with it. */
+  concentration: {
+    /** Max combined notional exposure across the intent's instrument and everything correlated with it. */
+    cap: number;
+    /** |correlation| at/above which another instrument counts as concentrated risk with this one. */
+    threshold: number;
+  };
   /** Below this notional, a trimmed intent is dust and must be rejected. */
   min_viable_size: number;
 }
@@ -73,6 +88,8 @@ export interface RiskInput {
   clock: Clock;
   portfolio: PortfolioView;
   breakers: BreakerState;
+  /** Pairwise correlation of the intent's instrument vs held instruments (#50); pre-computed by correlation.ts. */
+  correlation: CorrelationEstimate;
   /** Selects manual vs auto re-arm for the hard breaker (consumed by #77, not this pipeline). */
   mode: 'live' | 'backtest';
 }
