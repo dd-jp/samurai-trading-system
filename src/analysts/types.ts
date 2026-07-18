@@ -1,9 +1,13 @@
 /**
  * Domain types & contracts for the Analysts layer (Stage 1).
  * See docs/specs/analysts-spec.md ("Key Interfaces") and
- * docs/specs/cross-spec-contracts.md. Ticket #70 — one stateless persona
- * (Technical) end-to-end; the full AnalystOrchestrator (applicability
- * filtering, retry, quorum, alerting) is not built here.
+ * docs/specs/cross-spec-contracts.md. Ticket #70 shipped one stateless
+ * persona (Technical) end-to-end. Ticket #71 adds Fundamental/Sentiment and
+ * the `AnalystOrchestrator` (applicability filtering + role-dependent
+ * quorum). Retry-on-failure and the 2-consecutive-skip alert
+ * (analysts-spec.md "Module: Failure Handling") are not built here — no
+ * ticket covers them yet, so a persona failure is reported after a single
+ * attempt rather than a retried one.
  *
  * `AnalystView`/`Direction` are NOT redefined here: analysts-spec.md keeps
  * them in lockstep with the Debate Engine's copy (cross-spec-contracts.md
@@ -58,4 +62,28 @@ export interface Analyst {
   applies_to(asset_class: AssetClass): boolean;
   role: 'mandatory' | 'optional';
   run(input: AnalystInput): Promise<AnalystView>;
+}
+
+/** One persona's failure this tick, reason-tagged (analysts-spec.md "Module: Failure Handling"). */
+export interface AnalystFailure {
+  analyst_type: string;
+  role: 'mandatory' | 'optional';
+  reason: string;
+}
+
+/**
+ * What `AnalystOrchestrator.runAnalysts` returns (analysts-spec.md "Key
+ * Interfaces"). No `weights` field here — the shared SQLite weight store is
+ * owned by the Feedback Loop and not built yet; adding it is a follow-up,
+ * not invented here.
+ */
+export interface AnalystRunResult {
+  /** One per successful applicable analyst; empty if the tick was skipped. */
+  views: AnalystView[];
+  /** 2 for crypto, 3 for stocks — the applicable count before failures. */
+  analyst_count: number;
+  /** True if a mandatory analyst failed, blocking the handoff downstream. */
+  skipped: boolean;
+  /** Every persona failure this tick, reason-tagged. */
+  failures: AnalystFailure[];
 }
