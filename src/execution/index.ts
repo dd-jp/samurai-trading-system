@@ -38,6 +38,9 @@ export type {
   ExecutionResult,
   NativeBracketRequest,
   NormalizedFill,
+  NormalizedOrder,
+  ReconcileDivergence,
+  ReconcileReport,
   SharedStore,
   SimulatedAdapterConfig,
 } from './types.js';

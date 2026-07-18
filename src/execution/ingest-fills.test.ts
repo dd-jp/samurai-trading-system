@@ -18,6 +18,7 @@ import type {
   ExecutionInput,
   NativeBracketRequest,
   NormalizedFill,
+  NormalizedOrder,
 } from './types.js';
 
 const NOW = new Date('2026-07-20T16:00:00Z');
@@ -122,6 +123,10 @@ class ScriptedBroker implements BrokerAdapter {
   }
   async resizeProtectiveLegs(clientOrderId: string, filledQty: number): Promise<void> {
     this.resizeCalls.push({ clientOrderId, filledQty });
+  }
+  /** #86's surface. `ingestFills()` never reconciles, so it is never called. */
+  async getOrder(): Promise<NormalizedOrder | null> {
+    return null;
   }
 }
 

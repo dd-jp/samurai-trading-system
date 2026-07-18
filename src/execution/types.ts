@@ -16,6 +16,15 @@
  * Simulated adapter does. `BrokerAdapter` stays the one method `execute()`
  * calls until the ticket that drives the rest of the lifecycle (#83) arrives.
  *
+ * #86 adds `getOrder` (the reconciliation lookup) and `reconcile()`, in the
+ * same additive style. `submitFlatten`/`cancel`/`getOpenPositions` still
+ * wait for their callers: Execution is the store's sole writer and the
+ * write-ahead precedes the broker call, so no broker order can exist without
+ * a store record preceding it — the only reachable divergence direction is
+ * store→broker, which `getOrder` alone answers. A broker-side order with no
+ * store record implies an order placed outside this system, which is out of
+ * scope.
+ *
  * `OpenPosition` / `OrderState` are NOT redefined here — they are cross-spec
  * types owned by src/shared/types.ts (registry §4).
  */
@@ -89,13 +98,47 @@ export interface NormalizedFill {
 }
 
 /**
+ * The venue's own account of an order, normalized — reconciliation's unit of
+ * truth (#86). Deliberately thinner than `NormalizedFill`: reconcile settles
+ * whether the bracket LANDED and in what state, never what it paid. Prices
+ * and fees stay `ingestFills()`'s business, reconstructed from `Fill` rows.
+ */
+export interface NormalizedOrder {
+  client_order_id: string;
+  /** Entry + attached legs, as the venue reports them now. */
+  broker_order_ids: string[];
+  order_state: OrderState;
+  /** Cumulative filled quantity per the venue. */
+  filled_qty: number;
+}
+
+/**
  * The broker boundary — nothing above it knows which venue, or whether the
  * mode is live, paper or backtest. #83 adds the two methods its lifecycle
- * calls; `submitFlatten`/`cancel`/`getOrder`/`getOpenPositions` still arrive
- * with the tickets that call them (#86 reconciliation, the exit path).
+ * calls, #86 the reconciliation lookup; `submitFlatten`/`cancel`/
+ * `getOpenPositions` still arrive with the tickets that call them.
  */
 export interface BrokerAdapter {
   submitBracket(order: NativeBracketRequest): Promise<BrokerAck>;
+  /**
+   * The venue's current account of a prior order, or `null` if the venue
+   * AUTHORITATIVELY has no such order — which is what lets `reconcile()`
+   * settle a write-ahead record whose broker call never landed.
+   *
+   * The null contract is load-bearing and narrow. An adapter that merely
+   * cannot determine the answer MUST throw, never return null: reconcile
+   * reads null as "never placed" and marks the lot `rejected`, so an adapter
+   * that returns null on ignorance would bury a live position — the exact
+   * divergence this surface exists to catch, inverted.
+   *
+   * `instrument` is passed because a symbol-keyed venue (ccxt) cannot look an
+   * order up without it, and after a restart the adapter's in-memory state is
+   * gone while the store record — which reconcile reads — still carries it.
+   * The spec sketches this as `getOrder(clientOrderId)`; the instrument is a
+   * refinement of that shape, in the same way the rest of this file narrows
+   * the spec's.
+   */
+  getOrder(clientOrderId: string, instrument: string): Promise<NormalizedOrder | null>;
   /**
    * The venue's fill feed. Inclusive of `since` and never dated before it,
    * so a backtest cannot see a fill ahead of simulated T. Re-offering an
@@ -228,13 +271,50 @@ export interface ExecutionResult {
 }
 
 /**
+ * What reconcile did about one in-flight lot whose store state did not match
+ * the broker's — the structured record of the spec's "log/alert the
+ * divergence" (#86). Emitted only on divergence: a lot the broker agrees
+ * with produces no entry.
+ */
+export interface ReconcileDivergence {
+  idempotency_key: string;
+  instrument: string;
+  /** What the store believed before reconcile ran. */
+  store_state: OrderState;
+  /**
+   * What the venue says. Null in the two cases where the venue named no
+   * state: `rejected` (the venue has no such order) and `undetermined` (the
+   * adapter could not answer).
+   */
+  broker_state: OrderState | null;
+  /**
+   * - `adopted` — the venue has the order in a different state; the store now
+   *   matches it.
+   * - `rejected` — the venue authoritatively has no such order, so the
+   *   write-ahead never landed and the lot is marked `rejected`.
+   * - `undetermined` — the adapter could not answer. The record is left
+   *   EXACTLY as it was and reported for operator attention: guessing here
+   *   either buries a live position or resurrects a dead one.
+   */
+  action: 'adopted' | 'rejected' | 'undetermined';
+  /** Operator-facing detail — the adapter's error on `undetermined`. */
+  reason: string;
+}
+
+/** What one `reconcile()` pass examined and corrected. */
+export interface ReconcileReport {
+  /** In-flight (`pending`/`submitted`) lots examined this pass. */
+  checked: number;
+  /** Lots whose store record reconcile wrote to. */
+  corrected: number;
+  /** One entry per lot where store and broker disagreed. */
+  divergences: ReconcileDivergence[];
+  timestamp: Date;
+}
+
+/**
  * The primary test seam. Deterministic given the injected adapter + clock +
  * store.
- *
- * `reconcile()` — the other half of the spec's secondary surface — is #86's
- * (store ↔ broker, broker as source of truth) and is not declared until it
- * exists. #83 is `ingestFills()` only: it advances lots from the venue's own
- * fill feed and never second-guesses the store against the broker.
  */
 export interface Execution {
   /** Acts only on a `go`; records the submission, does not block until filled. */
@@ -246,4 +326,14 @@ export interface Execution {
    * polling it twice ingests each fill once and closes each lot once.
    */
   ingestFills(): Promise<void>;
+  /**
+   * Settle every in-flight (`pending`/`submitted`) lot against the venue,
+   * which is the tie-break authority: adopt its state, or mark the lot
+   * `rejected` where it authoritatively never received the order. This is
+   * what makes a crash between write-ahead and broker-ack recoverable.
+   *
+   * Run on startup. Idempotent — a second pass over a store reconcile has
+   * already corrected finds nothing left to disagree about.
+   */
+  reconcile(): Promise<ReconcileReport>;
 }

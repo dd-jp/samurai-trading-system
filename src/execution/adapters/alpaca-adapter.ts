@@ -22,7 +22,13 @@
  * updates/activities stream, which is out of scope for this ticket.
  */
 import type { OrderState } from '../../shared/types.js';
-import type { BrokerAck, BrokerAdapter, NativeBracketRequest, NormalizedFill } from '../types.js';
+import type {
+  BrokerAck,
+  BrokerAdapter,
+  NativeBracketRequest,
+  NormalizedFill,
+  NormalizedOrder,
+} from '../types.js';
 import type { AlpacaClient, AlpacaOrder, AlpacaOrderLeg } from './alpaca-client.js';
 
 export interface AlpacaBrokerAdapterInput {
@@ -56,6 +62,37 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       client_order_id: order.client_order_id,
       broker_order_ids: [response.id, ...legIds],
       order_state: mapOrderState(response.status),
+    };
+  }
+
+  /**
+   * The reconciliation lookup (#86), by OUR client order id — deliberately
+   * NOT via the `brackets` map. That map is populated only by `submitBracket`
+   * in this process, so after the crash-restart this method exists to serve
+   * it is empty; answering from it would report every live order as absent
+   * and let `reconcile()` mark real positions `rejected`. The venue is asked
+   * directly instead.
+   *
+   * A null here is therefore Alpaca's own answer, not this adapter's
+   * ignorance, which is what the `BrokerAdapter.getOrder` contract requires
+   * before reconcile may treat it as "never placed". A transport failure
+   * throws out of the client and is left to propagate, exactly as that
+   * contract wants.
+   */
+  async getOrder(clientOrderId: string): Promise<NormalizedOrder | null> {
+    const order = await this.input.client.getOrderByClientOrderId(clientOrderId);
+    if (order === null) return null;
+
+    // Re-populating the map lets a post-restart `fetchNewFills` find this
+    // bracket again — the reconciliation sweep is the only thing that knows
+    // these orders still exist.
+    this.brackets.set(clientOrderId, order.id);
+
+    return {
+      client_order_id: clientOrderId,
+      broker_order_ids: [order.id, ...(order.legs ?? []).map((leg) => leg.id)],
+      order_state: mapOrderState(order.status),
+      filled_qty: Number.parseFloat(order.filled_qty),
     };
   }
 

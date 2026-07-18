@@ -11,7 +11,14 @@
 import type { OpenPosition } from '../shared/types.js';
 import type { VerdictDecision } from '../verdict/types.js';
 import { ingestFills } from './ingest-fills.js';
-import type { Execution, ExecutionInput, ExecutionResult, NativeBracketRequest } from './types.js';
+import { reconcile } from './reconcile.js';
+import type {
+  Execution,
+  ExecutionInput,
+  ExecutionResult,
+  NativeBracketRequest,
+  ReconcileReport,
+} from './types.js';
 
 export class ExecutionImpl implements Execution {
   constructor(private readonly input: ExecutionInput) {}
@@ -23,6 +30,17 @@ export class ExecutionImpl implements Execution {
    */
   async ingestFills(): Promise<void> {
     return ingestFills(this.input);
+  }
+
+  /**
+   * Delegated whole for the same reason as `ingestFills()`. Note what this
+   * class does NOT do: nothing here calls `reconcile()` on construction. A
+   * restart is the caller's event to recognise, not something a constructor
+   * can infer, and reconciling implicitly would fire a broker sweep every
+   * time anything built an Execution.
+   */
+  async reconcile(): Promise<ReconcileReport> {
+    return reconcile(this.input);
   }
 
   async execute(verdict: VerdictDecision): Promise<ExecutionResult> {

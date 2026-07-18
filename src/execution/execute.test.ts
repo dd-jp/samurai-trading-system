@@ -12,6 +12,7 @@ import type {
   ExecutionInput,
   NativeBracketRequest,
   NormalizedFill,
+  NormalizedOrder,
   SharedStore,
 } from './types.js';
 

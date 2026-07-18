@@ -17,11 +17,13 @@
 import type { CostModel, FillRequest, MarketState } from '../cost-model-backtest/types.js';
 import type { MarketDataService } from '../market-data-service/types.js';
 import type { Clock } from '../shared/clock.js';
+import type { OrderState } from '../shared/types.js';
 import type {
   BrokerAck,
   BrokerAdapter,
   NativeBracketRequest,
   NormalizedFill,
+  NormalizedOrder,
   SimulatedAdapterConfig,
 } from './types.js';
 
@@ -38,8 +40,13 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
    * the venue's fill feed that live adapters poll or subscribe to.
    */
   private readonly fills: NormalizedFill[] = [];
-  /** Client order ids already accepted — the venue-side half of the dedup. */
-  private readonly accepted = new Set<string>();
+  /**
+   * Brackets the venue has accepted, by client order id — the venue-side half
+   * of the dedup, and the book `getOrder` answers reconciliation from. The
+   * whole request is kept, not just the id: reporting `partially_filled`
+   * apart from `filled` needs the size that was asked for.
+   */
+  private readonly accepted = new Map<string, NativeBracketRequest>();
   /** Quantity each lot's protective legs cover, as `ingestFills()` sizes them. */
   private readonly protectedQty = new Map<string, number>();
 
@@ -73,7 +80,7 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
 
     const result = costModel.fill(request, marketState);
 
-    this.accepted.add(order.client_order_id);
+    this.accepted.set(order.client_order_id, order);
     this.fills.push({
       client_order_id: order.client_order_id,
       broker_fill_id: `${order.client_order_id}:entry`,
@@ -91,6 +98,36 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
       client_order_id: order.client_order_id,
       broker_order_ids: this.brokerOrderIdsFor(order.client_order_id),
       order_state: 'submitted',
+    };
+  }
+
+  /**
+   * The reconciliation lookup (#86). This adapter IS the venue, so its book
+   * is authoritative in both directions: an id absent from `accepted` was
+   * genuinely never submitted, and returning null for it is a fact rather
+   * than an admission of ignorance. That is what lets `reconcile()` settle a
+   * crashed write-ahead here — and it is why this adapter never throws from
+   * `getOrder` while a real one must when it cannot answer.
+   *
+   * `instrument` is unused: a simulated venue keys on the client order id
+   * alone, so the parameter is simply not declared (as the no-op
+   * `resizeProtectiveLegs` overrides elsewhere do).
+   */
+  async getOrder(clientOrderId: string): Promise<NormalizedOrder | null> {
+    const order = this.accepted.get(clientOrderId);
+    if (order === undefined) return null;
+
+    // Summed from the modelled fills, so the report tracks the same events
+    // `fetchNewFills` publishes rather than a second, drifting tally.
+    const filledQty = this.fills
+      .filter((fill) => fill.client_order_id === clientOrderId && fill.leg === 'entry')
+      .reduce((sum, fill) => sum + fill.qty, 0);
+
+    return {
+      client_order_id: clientOrderId,
+      broker_order_ids: this.brokerOrderIdsFor(clientOrderId),
+      order_state: entryState(filledQty, order.size),
+      filled_qty: filledQty,
     };
   }
 
@@ -151,4 +188,14 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
   private brokerOrderIdsFor(clientOrderId: string): string[] {
     return [`${clientOrderId}:entry`, `${clientOrderId}:stop`, `${clientOrderId}:target`];
   }
+}
+
+/**
+ * The ENTRY leg's state, which is what a venue reports for the bracket. Never
+ * `closed`: round-trip-to-flat is our accounting concept, derived from the
+ * `Fill` rows by `ingestFills()`, not something a venue says about an order.
+ */
+function entryState(filledQty: number, requestedSize: number): OrderState {
+  if (filledQty <= 0) return 'submitted';
+  return filledQty >= requestedSize ? 'filled' : 'partially_filled';
 }

@@ -56,4 +56,16 @@ export interface AlpacaClient {
   submitOrder(request: AlpacaBracketOrderRequest): Promise<AlpacaOrder>;
   /** Reconciliation/poll lookup — current broker-side state of a prior order. */
   getOrder(alpacaOrderId: string): Promise<AlpacaOrder>;
+  /**
+   * Lookup by OUR id rather than Alpaca's (`GET /v2/orders:by_client_order_id`),
+   * returning null where Alpaca knows no such order.
+   *
+   * This is what makes crash-restart reconciliation (#86) possible at all.
+   * After a restart the adapter's `client_order_id -> Alpaca order id` map is
+   * empty — it is only ever populated by `submitOrder` in this process — so
+   * `getOrder` above has no id to look up, and the one identifier that
+   * survives a crash is the one we chose ourselves and wrote ahead to the
+   * store.
+   */
+  getOrderByClientOrderId(clientOrderId: string): Promise<AlpacaOrder | null>;
 }

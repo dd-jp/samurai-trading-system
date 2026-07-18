@@ -18,7 +18,14 @@
  * `CcxtClient` is OHLCV/ticker only), so a real ccxt Exchange satisfies it
  * structurally.
  */
-import type { BrokerAck, BrokerAdapter, NativeBracketRequest, NormalizedFill } from './types.js';
+import type { OrderState } from '../shared/types.js';
+import type {
+  BrokerAck,
+  BrokerAdapter,
+  NativeBracketRequest,
+  NormalizedFill,
+  NormalizedOrder,
+} from './types.js';
 
 /** The subset of ccxt's unified order status this adapter reasons about. */
 export type CcxtOrderStatus = 'open' | 'closed' | 'canceled' | 'expired' | 'rejected';
@@ -144,6 +151,48 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
         await this.advanceExits(bracket);
       }
     }
+  }
+
+  /**
+   * The reconciliation lookup (#86), to the extent this venue can serve it.
+   *
+   * ccxt fetches an order by the VENUE's id and symbol, so the client order
+   * id has to be resolved through `brackets` — and `brackets` is this
+   * adapter's live emulation state, built only by `submitBracket` in this
+   * process. After the crash-restart reconcile exists to handle, it is empty,
+   * along with every leg id and phase the emulation depends on.
+   *
+   * So this THROWS rather than returning null for an unknown bracket. Null is
+   * reserved by the `BrokerAdapter.getOrder` contract for "the venue
+   * authoritatively has no such order"; an empty map is ignorance, and
+   * reporting it as absence would have `reconcile()` mark live Kraken/
+   * Coinbase positions `rejected`. Reconcile reads the throw as
+   * `undetermined` and leaves the record untouched for an operator.
+   *
+   * Rehydrating the emulation across a restart is real work this ticket does
+   * not scope: it means rebuilding phases and leg ids from the venue's open
+   * orders, and inventing it here would go beyond what #86 asks for.
+   */
+  async getOrder(clientOrderId: string, instrument: string): Promise<NormalizedOrder | null> {
+    const bracket = this.brackets.get(clientOrderId);
+    if (bracket === undefined) {
+      throw new Error(
+        `ccxt adapter cannot resolve client_order_id '${clientOrderId}' (${instrument}) to a venue ` +
+          'order id: the bracket is not in this process\'s emulation state. Cross-restart ' +
+          'reconciliation needs the emulation rehydrated from the venue first.',
+      );
+    }
+
+    const entry = await this.client.fetchOrder(bracket.entryOrderId, instrument);
+
+    return {
+      client_order_id: clientOrderId,
+      broker_order_ids: [bracket.entryOrderId, bracket.stopOrderId, bracket.targetOrderId].filter(
+        (id): id is string => id !== null,
+      ),
+      order_state: mapOrderState(entry),
+      filled_qty: entry.filled,
+    };
   }
 
   /**
@@ -346,4 +395,27 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
 
 function isFilled(order: CcxtOrder): boolean {
   return order.status === 'closed' && order.filled > 0;
+}
+
+/**
+ * ccxt's unified order status → our `OrderState`, for the reconciliation
+ * lookup. Never `closed`: that is our round-trip-to-flat accounting concept
+ * derived from `Fill` rows, not a thing a venue says about an order — ccxt's
+ * confusingly-named `'closed'` means the order finished filling.
+ */
+function mapOrderState(order: CcxtOrder): OrderState {
+  switch (order.status) {
+    case 'closed':
+      return 'filled';
+    case 'canceled':
+      return 'cancelled';
+    case 'expired':
+      return 'expired';
+    case 'rejected':
+      return 'rejected';
+    // Still working: whether anything has filled is what separates an
+    // acknowledged order from a partially filled one.
+    default:
+      return order.filled > 0 ? 'partially_filled' : 'submitted';
+  }
 }

@@ -96,6 +96,32 @@ export class IbkrBrokerAdapter implements BrokerAdapter {
   }
 
   /**
+   * The reconciliation lookup (#86) — which this adapter cannot serve, and
+   * says so rather than guessing.
+   *
+   * `IbkrBrokerClient` is the narrow slice this file declared for #85: native
+   * bracket placement plus the execution feed. It carries no order-status
+   * query, so there is nothing here to ask IBKR what became of a given client
+   * order id, and `brackets` is only this process's own placements — empty
+   * after exactly the restart reconcile exists to handle.
+   *
+   * Throwing is the honest answer under the `BrokerAdapter.getOrder`
+   * contract: null means the venue authoritatively has no such order, and
+   * claiming that from a cold map would have `reconcile()` mark live IBKR
+   * positions `rejected`. Reconcile records the throw as `undetermined` and
+   * leaves the store untouched. Serving this properly needs an order-status /
+   * open-orders call added to the client slice and a TWS implementation
+   * behind it — ops wiring beyond what this ticket scopes.
+   */
+  async getOrder(clientOrderId: string): Promise<never> {
+    throw new Error(
+      `IBKR adapter cannot report order state for client_order_id '${clientOrderId}': ` +
+        'the injected client exposes no order-status query. Reconciliation against IBKR ' +
+        'requires that surface first.',
+    );
+  }
+
+  /**
    * A no-op, and deliberately so: the protective children are attached to the
    * parent entry, so IBKR itself keeps their quantity in step as the parent
    * fills. Re-sizing them from here would be this adapter growing exactly the
