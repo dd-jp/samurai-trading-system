@@ -4,6 +4,8 @@
  */
 
 export type { DebateLog, DebateLogStore } from '../shared/types.js';
+export type { AnalystCollectionResult, ExpectedAnalyst } from './analyst-response-collector.js';
+export { collectAnalystViews, validateAnalystView } from './analyst-response-collector.js';
 export { computeDebateId } from './debate-id.js';
 export { buildDebateLog, InMemoryDebateLogStore } from './debate-log-store.js';
 export type {
