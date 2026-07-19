@@ -1,18 +1,22 @@
 /**
- * Domain types for the Feedback Loop (Stage 6) daily batch cycle — ticket #91
- * — and metrics/revalidation breach alerting — ticket #93. See
- * docs/specs/feedback-loop-spec.md ("Key Interfaces", "Module: Weight
- * Attribution", "Module: Guardrailed Tuning", "Module: Metrics &
- * Revalidation").
+ * Domain types for the Feedback Loop (Stage 6) — daily batch cycle (#91),
+ * setup-store R-labelling on trade close (#92), and metrics/revalidation
+ * breach alerting (#93). See docs/specs/feedback-loop-spec.md ("Key
+ * Interfaces", "Module: Weight Attribution", "Module: Guardrailed Tuning",
+ * "Module: Metrics & Revalidation", "Module: Setup Store Labelling").
  *
- * Scope note: #91 is `runDailyCycle`, #93 is `computeMetrics`. `onTradeClose`
- * (setup-store R-labelling, #92) is a separate ticket and is deliberately
- * absent here rather than stubbed — the repo populates its interfaces
- * ticket-by-ticket.
+ * Scope note: the repo populates its interfaces ticket-by-ticket — #91 is
+ * `runDailyCycle`, #92 is `onTradeClose`, #93 is `computeMetrics`.
  */
 import type { MetricsSuite } from '../cost-model-backtest/validation-types.js';
 import type { Clock } from '../shared/clock.js';
-import type { ClosedTradeStore, DebateLogStore, TuningStore } from '../shared/types.js';
+import type {
+  ClosedTrade,
+  ClosedTradeStore,
+  DebateLogStore,
+  SetupStore,
+  TuningStore,
+} from '../shared/types.js';
 
 /**
  * A human-set bound on one tunable dial. Every dial has all four: the spec's
@@ -176,9 +180,28 @@ export interface DailyCycleResult {
   applied: boolean;
 }
 
+/**
+ * The subset of the spec's `FeedbackInput` that `onTradeClose` actually
+ * consumes: just the setup store it labels. Narrower than `DailyCycleInput`
+ * for the same reason that one is narrower than the spec's `FeedbackInput` —
+ * this event-driven path touches none of the daily cycle's dials/log/config.
+ */
+export interface OnTradeCloseInput {
+  /** The cosine setup store FL owns and labels on trade close. */
+  setup_store: SetupStore;
+}
+
 /** Single test seam. Deterministic given its clock-scoped inputs. */
 export interface FeedbackLoop {
   runDailyCycle(input: DailyCycleInput): DailyCycleResult;
+  /**
+   * Event-driven R-labelling of the setup store (#92). `trace_id` is the
+   * correlation id of the tick that produced this trade close (spec's Key
+   * Interfaces note: this is the one FL entry point tied to a single trace,
+   * unlike the daily-batch methods) — threaded for future audit-log wiring,
+   * not consumed by the labelling logic itself.
+   */
+  onTradeClose(trade: ClosedTrade, trace_id: string, input: OnTradeCloseInput): void;
 }
 
 /**

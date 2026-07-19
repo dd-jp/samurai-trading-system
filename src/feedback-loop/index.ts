@@ -1,9 +1,8 @@
 /**
  * Feedback Loop (Stage 6) — see docs/specs/feedback-loop-spec.md, epic #59.
  * Implemented ticket-by-ticket: #91 is the daily batch cycle (attribution +
- * bounded/guardrailed tuning); #93 is metrics recomposition + kill-threshold
- * breach alerting. Setup-store R-labelling on trade close (#92) is not built
- * yet.
+ * bounded/guardrailed tuning); #92 is event-driven setup-store R-labelling
+ * on trade close. #93 is metrics recomposition + kill-threshold breach alerting.
  */
 export {
   type AnalystCredit,
@@ -22,6 +21,7 @@ export {
 } from './fixture-stores.js';
 export { applyGuardrail, boundedStep, type GuardrailOutcome, moveDirection } from './guardrails.js';
 export { computeMetrics } from './metrics.js';
+export { onTradeClose } from './on-trade-close.js';
 export type {
   Adjustment,
   AdjustmentLog,
@@ -36,6 +36,7 @@ export type {
   LoosenApprovalRequest,
   MetricsInput,
   MetricsReport,
+  OnTradeCloseInput,
   RevalidationSnapshot,
   TunableDial,
   TuningProposal,
