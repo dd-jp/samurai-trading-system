@@ -109,6 +109,17 @@ export interface SetupStore {
   findNeighbors(vector: SetupVector, asOf: Date): SetupNeighbor[];
   /** Persists the new setup for later outcome labelling by the Feedback Loop. */
   writeSetup(debateId: string, vector: SetupVector, decidedAt: Date): void;
+  /**
+   * Labels a previously-written setup with its realized outcome on trade
+   * close (Feedback Loop, #92), joined by `debate_id` — the same key
+   * `writeSetup` was called with. Per-lot `ClosedTrade`/`debate_id` design
+   * (see `ClosedTrade`) means this is exactly once per setup: a second label
+   * on the same `debate_id` is a bug (double-close or replay), not a valid
+   * state, and implementations should reject it rather than overwrite
+   * silently. Point-in-time: the setup is only visible to `findNeighbors`
+   * once labelled.
+   */
+  labelSetup(debate_id: string, r_multiple: number, closed_at: Date): void;
 }
 
 /**
