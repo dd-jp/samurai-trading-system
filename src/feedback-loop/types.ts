@@ -1,13 +1,16 @@
 /**
- * Domain types for the Feedback Loop (Stage 6) daily batch cycle — ticket #91.
- * See docs/specs/feedback-loop-spec.md ("Key Interfaces", "Module: Weight
- * Attribution", "Module: Guardrailed Tuning").
+ * Domain types for the Feedback Loop (Stage 6) daily batch cycle — ticket #91
+ * — and metrics/revalidation breach alerting — ticket #93. See
+ * docs/specs/feedback-loop-spec.md ("Key Interfaces", "Module: Weight
+ * Attribution", "Module: Guardrailed Tuning", "Module: Metrics &
+ * Revalidation").
  *
- * Scope note: #91 is `runDailyCycle` only. `onTradeClose` (setup-store
- * R-labelling, #92) and `computeMetrics` (metrics + revalidation, #93) are
- * separate tickets and are deliberately absent here rather than stubbed —
- * the repo populates its interfaces ticket-by-ticket.
+ * Scope note: #91 is `runDailyCycle`, #93 is `computeMetrics`. `onTradeClose`
+ * (setup-store R-labelling, #92) is a separate ticket and is deliberately
+ * absent here rather than stubbed — the repo populates its interfaces
+ * ticket-by-ticket.
  */
+import type { MetricsSuite } from '../cost-model-backtest/validation-types.js';
 import type { Clock } from '../shared/clock.js';
 import type { ClosedTradeStore, DebateLogStore, TuningStore } from '../shared/types.js';
 
@@ -59,6 +62,8 @@ export interface FeedbackConfig {
   strategy_params: Record<string, TunableDial>;
   /** Per risk-threshold bounds, keyed by threshold name. Loosening is gated. */
   risk_thresholds: Record<string, TunableDial>;
+  /** Kill-line config for `computeMetrics`'s breach detection (#93). */
+  kill_thresholds: KillThresholds;
 }
 
 /**
@@ -174,4 +179,90 @@ export interface DailyCycleResult {
 /** Single test seam. Deterministic given its clock-scoped inputs. */
 export interface FeedbackLoop {
   runDailyCycle(input: DailyCycleInput): DailyCycleResult;
+}
+
+/**
+ * Kill-line config for `computeMetrics` (#93) — feedback-loop-spec.md
+ * ("Module: Metrics & Revalidation", story 13): "PBO > 0.05, OOS/paper Sharpe
+ * < 0.5, DSR insignificant, live-vs-backtest divergence". Config, not
+ * hardcoded, for the same reason `TunableDial`'s bounds are: the spec lists
+ * "kill thresholds" alongside step caps and cadences as `FeedbackConfig`
+ * fields the operator sets, not values this module bakes in.
+ */
+export interface KillThresholds {
+  /** PBO's own reject line is 0.05 (validation-types.ts `PboVerdict`); this is FL's copy of it. */
+  max_pbo: number;
+  /** Below this, the mean out-of-sample/paper Sharpe across the walk-forward distribution breaches. */
+  min_oos_sharpe: number;
+  /** Below this Deflated Sharpe (a probability), the edge is statistically insignificant. */
+  min_deflated_sharpe: number;
+  /** Fractional drop of live Sharpe below the frozen backtest reference before it counts as divergence. */
+  max_live_backtest_divergence: number;
+}
+
+/**
+ * The validation library's periodic (weekly/monthly) walk-forward/DSR/PBO
+ * OUTPUT, computed elsewhere (offline research / the eval executor, using
+ * `generateSplits`/`deflatedSharpe`/`pbo` from cost-model-backtest) and handed
+ * to `computeMetrics` to recompose and evaluate — never reimplemented here.
+ * Absent outside the periodic cadence; the daily call has no revalidation to
+ * recompose.
+ */
+export interface RevalidationSnapshot {
+  walk_forward_sharpe_distribution: number[];
+  deflated_sharpe: number;
+  pbo: number;
+}
+
+/**
+ * Fire-and-forget human alert on a kill-threshold breach (spec story 13, "the
+ * trade channel"). Deliberately NOT `LoosenApprovalChannel`: a breach alert
+ * expects no response — the kill/rework call is the human's to make later,
+ * out of band — whereas a loosening is a request this module waits on.
+ */
+export interface BreachAlertChannel {
+  postBreachAlert(alert: BreachAlert): void;
+}
+
+export interface BreachAlert {
+  /** The breach identifiers also written to `MetricsReport.breaches`. */
+  breaches: string[];
+  reported_at: Date;
+}
+
+/**
+ * Narrow seam `computeMetrics` (#93) actually consumes — the spec's
+ * `FeedbackInput` minus the fields `runDailyCycle` alone needs (`trades`,
+ * `debate_log`, `proposals`), same split rationale as `DailyCycleInput`.
+ */
+export interface MetricsInput {
+  /** Wall-clock live, simulated T in replay — read only through this. */
+  clock: Clock;
+  /**
+   * = the validation library's `MetricsSuite`, already computed by its
+   * `computeMetrics` (cost-model-backtest/metrics.ts) over the day's returns
+   * and trades. This module recomposes it into the report; it does not
+   * derive it from raw returns itself (acceptance criterion #1).
+   */
+  daily: MetricsSuite;
+  /** The frozen selected config's backtest Sharpe — the divergence check's baseline. */
+  backtest_reference_sharpe: number;
+  /** Present only on the weekly/monthly revalidation cadence. */
+  revalidation?: RevalidationSnapshot;
+  /** The three dials, read and written — auto-tighten writes here on breach. */
+  tuning: TuningStore;
+  /** Where every auto-tighten move is recorded, same log `runDailyCycle` appends to. */
+  adjustments: AdjustmentLog;
+  config: FeedbackConfig;
+  alerts: BreachAlertChannel;
+}
+
+/** Shape frozen by feedback-loop-spec.md ("Key Interfaces"). */
+export interface MetricsReport {
+  /** = the library's `MetricsSuite`, recomposed — no reimplemented math (acceptance criterion #1). */
+  daily: MetricsSuite;
+  /** The library's DSR/PBO/walk-forward output, recomposed — present only on the periodic cadence. */
+  revalidation?: RevalidationSnapshot;
+  /** FL-only. e.g. 'pbo_over_max', 'oos_sharpe_under_min'. Never triggers a kill — alert + auto-tighten only. */
+  breaches: string[];
 }
