@@ -37,4 +37,11 @@ export type {
   LlmResponse,
   LlmRetryConfig,
 } from './llm/types.js';
+export { RateLimiter } from './rate-limiter.js';
+export type {
+  AssetClass,
+  RateLimitConfig,
+  RateLimiterConfig,
+  ReserveResult,
+} from './rate-limiter.js';
 export type { AnalystContribution, AnalystView, DebateResult, Direction } from './types.js';
