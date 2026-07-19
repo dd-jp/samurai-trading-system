@@ -270,3 +270,41 @@ export interface ClosedTrade {
   closed_at: Date;
   close_reason: 'stop' | 'target' | 'exit';
 }
+
+/**
+ * Windowed read over the shared store's `ClosedTrade` rows — the Feedback
+ * Loop's daily-cycle input (#91). Execution's own store port
+ * (src/execution/types.ts `ExecutionStore`) only *writes* closed trades; FL
+ * is their reader, the same ownership split as `SetupStore`/`DebateLogStore`.
+ * Synchronous like those two ports, so `runDailyCycle` keeps the synchronous
+ * signature feedback-loop-spec.md gives it.
+ */
+export interface ClosedTradeStore {
+  /**
+   * Every trade whose `closed_at` falls in `(from, to]`. Half-open at the
+   * start so consecutive cycles partition the timeline: a trade sitting
+   * exactly on a boundary is attributed once, by the later cycle.
+   */
+  getClosedTradesBetween(from: Date, to: Date): ClosedTrade[];
+}
+
+/**
+ * The three dials CONTEXT.md lets the Feedback Loop turn — analyst weights,
+ * strategy params, risk thresholds. FL is the SOLE writer; the Debate Engine
+ * (weights), Trader (params) and Risk Manager (thresholds) read them live at
+ * decision time rather than from startup config, per feedback-loop-spec.md
+ * ("Consumers must read live from the store"). Those consumer wirings are
+ * separate tickets — this port is only the storage seam.
+ *
+ * Deliberately NOT a home for the market model: FL tunes dials, never the
+ * model (CONTEXT.md invariant).
+ */
+export interface TuningStore {
+  /** Keyed by `analyst_id`, matching `AnalystContribution.analyst_id`. */
+  getAnalystWeights(): Record<string, number>;
+  setAnalystWeight(analyst_id: string, weight: number): void;
+  getStrategyParams(): Record<string, number>;
+  setStrategyParam(name: string, value: number): void;
+  getRiskThresholds(): Record<string, number>;
+  setRiskThreshold(name: string, value: number): void;
+}
