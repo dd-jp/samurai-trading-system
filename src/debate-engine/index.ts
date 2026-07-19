@@ -2,7 +2,10 @@
  * Debate Engine (Stage 2) — see docs/specs/debate-engine-spec.md, epic #40.
  * Implemented ticket-by-ticket starting with #24.
  */
+
+export type { DebateLog, DebateLogStore } from '../shared/types.js';
 export { computeDebateId } from './debate-id.js';
+export { buildDebateLog, InMemoryDebateLogStore } from './debate-log-store.js';
 export type {
   DebateAnalystFailure,
   DebateLogger,
