@@ -5,6 +5,7 @@
  * (starting with #24 Domain Types & Contracts); do not hand-roll competing
  * shapes in individual component files once a type is defined here.
  */
+import type { AnalystContribution, Direction } from '../debate-engine/types.js';
 
 /**
  * The bracket handed from the Trader to the Risk Manager. See
@@ -108,6 +109,40 @@ export interface SetupStore {
   findNeighbors(vector: SetupVector, asOf: Date): SetupNeighbor[];
   /** Persists the new setup for later outcome labelling by the Feedback Loop. */
   writeSetup(debateId: string, vector: SetupVector, decidedAt: Date): void;
+}
+
+/**
+ * Persisted analytics/audit record (debate-engine-spec.md story 20). Written
+ * ONCE per completed debate to the shared store (append-only), AFTER the
+ * debate resolves — distinct from the ephemeral round-by-round operational
+ * state, which is discarded/re-run on crash (decision #10, unchanged; see
+ * debate-engine-spec.md "Module: State Persistence"). This is the Feedback
+ * Loop's system-of-record for per-analyst attribution, joined by `debate_id`
+ * (cross-spec-contracts.md registry #1).
+ */
+export interface DebateLog {
+  /** Same deterministic hash Trader/Verdict/FL join on. */
+  debate_id: string;
+  instrument: string;
+  bar_timestamp: Date;
+  /** influence_score, stance, per analyst — read by FL's weight attribution. */
+  contributions: AnalystContribution[];
+  direction: Direction;
+  rounds: number;
+  created_at: Date;
+}
+
+/**
+ * shared_store `DebateLog` port. Owned by the Feedback Loop (the reader/
+ * attribution consumer, docs/wayfinder/feedback-loop-map.md), written by the
+ * Debate Engine — same ownership split as `SetupStore` above. Append-only:
+ * no update/delete, one row per `debate_id`.
+ */
+export interface DebateLogStore {
+  /** Persists the completed debate's log row; called once, after resolution. */
+  writeLog(entry: DebateLog): void;
+  /** FL's attribution join point — absent for a debate never completed. */
+  getByDebateId(debate_id: string): DebateLog | undefined;
 }
 
 /**
