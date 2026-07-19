@@ -7,7 +7,7 @@
  * codebase yet.
  */
 import type { ClosedTrade, ClosedTradeStore, TuningStore } from '../shared/types.js';
-import type { Adjustment, AdjustmentLog } from './types.js';
+import type { Adjustment, AdjustmentLog, BreachAlert, BreachAlertChannel } from './types.js';
 
 export class InMemoryClosedTradeStore implements ClosedTradeStore {
   private readonly trades: ClosedTrade[];
@@ -80,5 +80,18 @@ export class InMemoryAdjustmentLog implements AdjustmentLog {
   /** Append-only: the log is read back in write order, never edited. */
   getEntries(): readonly Adjustment[] {
     return this.entries;
+  }
+}
+
+/** Records posted breach alerts (#93) — a concrete trade-channel fixture, not a mock. */
+export class InMemoryBreachAlertChannel implements BreachAlertChannel {
+  private readonly alerts: BreachAlert[] = [];
+
+  postBreachAlert(alert: BreachAlert): void {
+    this.alerts.push(alert);
+  }
+
+  getAlerts(): readonly BreachAlert[] {
+    return this.alerts;
   }
 }

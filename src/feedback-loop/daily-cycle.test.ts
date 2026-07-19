@@ -44,6 +44,12 @@ function makeConfig(overrides: Partial<FeedbackConfig> = {}): FeedbackConfig {
     shadow_influence_ceiling: 0.2,
     strategy_params: {},
     risk_thresholds: {},
+    kill_thresholds: {
+      max_pbo: 0.05,
+      min_oos_sharpe: 0.5,
+      min_deflated_sharpe: 0.95,
+      max_live_backtest_divergence: 0.5,
+    },
     ...overrides,
   };
 }
