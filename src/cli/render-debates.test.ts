@@ -42,6 +42,16 @@ function fakeStore(overrides: Partial<QueryStore> = {}): QueryStore {
   return {
     getRecentDebates: () => [],
     getTickStatus: () => null,
+    getOpenPositions: () => [],
+    getVerdictHistory: () => [],
+    getAnalystWeights: () => ({}),
+    getAttribution: () => ({}),
+    getDailyMetrics: () => {
+      throw new Error('not used in these tests');
+    },
+    getMark: () => {
+      throw new Error('not used in these tests');
+    },
     ...overrides,
   };
 }
