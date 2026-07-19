@@ -1,0 +1,58 @@
+/**
+ * `LlmClient` — the abstraction layer between debate logic (mediator
+ * synthesis, semantic disagreement detection) and a specific LLM provider
+ * (ticket #31, debate-engine-spec.md "LLM Selection & Prompt Engineering":
+ * "This spec assumes LLMs... implementation details out of scope for this
+ * spec" — this file is that implementation detail).
+ *
+ * The response shape is caller-defined (`parseResponse`) rather than fixed,
+ * because #26 (personas) and #32 (disagreement detection) each need their
+ * own structured output — this layer owns provider mechanics (calling out,
+ * retrying, classifying failures), not prompt-specific schemas.
+ */
+import type { AnalystView } from '../types.js';
+
+/**
+ * Context threaded alongside the prompt (issue #31: "prompt + context
+ * (analyst views, debate state)"). `debate_state` is intentionally loose —
+ * the Debate Engine's round/persona state shape isn't defined yet (#26/#34
+ * are unimplemented) and this layer doesn't need to interpret it, only pass
+ * it through to whatever renders the prompt.
+ */
+export interface LlmRequestContext {
+  analyst_views: AnalystView[];
+  debate_state?: Record<string, unknown>;
+}
+
+/**
+ * `parseResponse` validates and narrows the provider's raw text into the
+ * caller's expected shape `T`, mirroring the `{valid, ...} | {valid: false,
+ * reason}` discriminated-union pattern used by
+ * `analyst-response-collector.ts`'s `validateAnalystView`. A `valid: false`
+ * result becomes an `LlmMalformedResponseError` — the caller decides what
+ * "malformed" means for its own schema, this layer just enforces it.
+ */
+export interface LlmRequest<T> {
+  prompt: string;
+  context: LlmRequestContext;
+  parseResponse: (rawText: string) => { valid: true; data: T } | { valid: false; reason: string };
+}
+
+export interface LlmResponse<T> {
+  data: T;
+  raw_text: string;
+  latency_ms: number;
+}
+
+export interface LlmClient {
+  complete<T>(request: LlmRequest<T>): Promise<LlmResponse<T>>;
+}
+
+/** Retry knobs (issue #31 AC: "Retry logic with exponential backoff (configurable)"). */
+export interface LlmRetryConfig {
+  /** Total attempts including the first, e.g. 3 = up to 2 retries. */
+  maxAttempts: number;
+  baseDelayMs: number;
+  /** Backoff is capped here so a long-running provider outage doesn't blow the debate's latency budget. */
+  maxDelayMs: number;
+}
