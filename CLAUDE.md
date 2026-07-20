@@ -49,6 +49,7 @@ This rule is NON-NEGOTIABLE. Never fill the gap with your own code.
 ## Research Artifacts to Preserve
 
 Existing research (DON'T overwrite, reference) — all live under `docs/research/`:
+
 - `docs/research/00-summary.md` — Strategy eval summary
 - `docs/research/01-full-report-with-sources.md` — Full strategy eval research
 - `docs/research/02-staged-deployment-plan.md` — Stage-gated deployment plan

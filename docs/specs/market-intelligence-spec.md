@@ -74,6 +74,18 @@ The Market Intelligence layer runs two specialized agents that operate continuou
 24. As the Market Intelligence system, I want to track source failures and success rates, so that I can monitor system health
 25. As the Market Intelligence system, I want my agents to read time from an injected clock, so that a separate backtesting replay service can drive them with historical feeds through the same live code path — without this layer owning historical storage (the store is a separate concern; see Out of Scope)
 
+### Backtesting Replay Store
+
+26. As the replay store, I want to capture both raw agent outputs and normalized IntelligenceItems from the live MI layer via a push sidecar write, so that historical intelligence is available for backtest replay without the MI layer owning persistence
+27. As the replay store, I want to store raw and normalized data in SQLite, so that the historical store is consistent with the rest of the architecture and requires no new dependencies
+28. As the replay store, I want to expose a cursor/iterator interface that pulls IntelligenceItems sequentially as the simulated clock advances, so that long backtests are memory-efficient
+29. As the replay store, I want to provide a `ReplayContext` that implements the same `getContext()` contract as the live MI layer, so that the Analysts layer consumes replayed intelligence through the same code path without knowing whether it is live or backtest
+30. As the replay store, I want to re-assemble `MarketContext` on replay by running the same conflict-resolution and assembly logic as the live path, so that the full MI code path — including conflict resolution — is exercised during backtest
+31. As the replay store, I want to enforce the no-lookahead invariant at the cursor boundary (`timestamp <= clock.now()`), so that backtests never see future intelligence
+32. As the replay store, I want to auto-purge records older than 90 days, so that the SQLite store remains small and predictable on a single-machine deployment
+33. As the replay store, I want sidecar writes to fail silently (logged at WARN) if the store is unavailable, so that the live MI system never blocks on the replay store
+34. As the replay store, I want conflict resolution to be deterministic given the same IntelligenceItems and clock, so that re-assembled `MarketContext` on replay matches what the live system would have produced
+
 ## Implementation Decisions
 
 ### Module: Market Intelligence Core
@@ -341,6 +353,79 @@ delivery_errors_total{analyst_id}
 - Latency breach: `agent_latency_seconds{quantile="0.99"}` > budget (5s crypto, 30s stocks)
 - Analyst delivery failure: `delivery_errors_total` > 0 for any analyst
 
+### Module: Backtesting Replay Store
+
+**Responsibilities**
+- Record live MI outputs (both raw agent outputs and normalized IntelligenceItems) during normal operation
+- Serve historical IntelligenceItems to the backtest replay engine on demand via a cursor/iterator interface
+- Auto-purge records older than 90 days
+- Provide a `ReplayContext` that implements the same `getContext()` contract as the live MI layer, backed by the historical store instead of live agents
+
+**What Gets Stored**
+
+Both layers of MI output are persisted:
+
+1. **Raw agent outputs** — the unstructured text and raw API responses from DeepResearch and Grok agents, before normalization. Enables re-normalization if the schema or normalization logic evolves between backtest runs.
+2. **Normalized IntelligenceItems** — the structured `IntelligenceItem` objects the MI layer produces after normalization. Enables fast replay without re-running the normalization pipeline.
+
+`MarketContext` and `ConflictResolution` are **not** stored. They are re-assembled on replay by running the same conflict-resolution and assembly logic the live layer uses, exercised against historical IntelligenceItems. This ensures the full MI code path — including conflict resolution — runs during backtest, so bugs in resolution logic surface in replay.
+
+**Storage Technology**
+
+SQLite. Consistent with existing architecture (analyst weights, tuning store, closed-trade store). Single-file, zero new dependencies, handles the read pattern (point queries by timestamp range for cursor advancement).
+
+**Capture Mechanism: Push (Sidecar Write)**
+
+After the MI core normalizes each batch of IntelligenceItems, it pushes a copy to the replay store. This is a fire-and-forget sidecar write — the live system's operation does not depend on the write succeeding. If the store is unavailable, the write fails silently (logged at WARN) and the live system continues uninterrupted.
+
+The MI layer gains a write dependency to the external store, but does not own the store. The store is a separate component the MI layer pushes to, not one it manages.
+
+**Replay Query Interface: Cursor/Iterator**
+
+The replay service exposes a cursor that pulls IntelligenceItems sequentially as the simulated clock advances:
+
+```typescript
+interface ReplayCursor {
+  // Advance the cursor to the simulated clock time, returning all items
+  // with timestamp <= clock.now() that haven't been returned yet.
+  // Items are returned in timestamp order.
+  next(currentTime: Date): IntelligenceItem[];
+  // Check if more items exist before a given time
+  hasNext(untilTime: Date): boolean;
+}
+```
+
+The cursor is memory-efficient for long backtests — only items within the active lookback window are held in memory at any time.
+
+**Cursor Bridging: ReplayContext**
+
+The `ReplayContext` wraps the cursor and implements the same `getContext()` contract the live MI layer exposes. The Orchestrator swaps the live MI backing for a `ReplayContext` instance when `mode='backtest'`:
+
+```typescript
+// Implements the same interface as the live MI layer's getContext()
+class ReplayContext {
+  private cursor: ReplayCursor;
+
+  getContext(assetClass: 'crypto' | 'stocks', timeWindow: Duration, trace_id: string): MarketContext {
+    // Advance cursor to clock.now(), collect items within lookback window
+    const items = this.cursor.next(this.clock.now());
+    // Re-assemble MarketContext using the same conflict-resolution + assembly
+    // logic as the live path (same code, not a separate implementation)
+    return assembleMarketContext(items, assetClass, timeWindow);
+  }
+}
+```
+
+The Analysts layer is unaware whether it is consuming live or replayed intelligence — same `getContext()` call, same `MarketContext` return, same code path. The no-lookahead audit (`timestamp <= clock.now()`) is enforced at the cursor boundary.
+
+**Retention**
+
+Fixed 90-day window. Records older than 90 days are auto-purged. This keeps the SQLite store small and predictable on the single-Mac deployment target. The backtest horizon is limited to accumulated history — acceptable because the system accumulates over time, and older market regimes that predate the store's operation were never recorded.
+
+**Determinism Requirement**
+
+Conflict resolution must be deterministic given the same IntelligenceItems and clock — it is a pure function of items + clock, with no external state. This invariant is what makes re-assembling `MarketContext` on replay safe: the same historical items produce the same `MarketContext` the live system would have produced.
+
 ### Implementation Constraint: No Persistence
 
 **Decision: No state persistence — restart cleanly after crashes.**
@@ -357,8 +442,7 @@ The Market Intelligence layer does not persist state (no database, no checkpoint
 - The trade-off: losing recent intelligence is acceptable; system complexity is not
 
 **Caveat**
-- If backtesting requires replaying historical data, implement a separate replay service that stores historical feeds in a database (out of scope for this spec)
-- The live system operates without persistence; replay is a separate concern
+- The live system itself operates without persistence; historical data storage for backtest replay is owned by a separate replay service (see **Module: Backtesting Replay Store** below).
 
 ## Testing Decisions
 
@@ -401,6 +485,13 @@ The Market Intelligence layer does not persist state (no database, no checkpoint
 - Push interface (delivers updates when new intelligence arrives, throttles correctly)
 - Failure handling (removes subscriptions on repeated failures, doesn't block other subscribers)
 
+**Backtesting Replay Store**
+- Sidecar capture (raw + normalized items written to SQLite on push; live system unaffected if store is unavailable)
+- Cursor interface (returns items in timestamp order, respects `timestamp <= clock.now()` no-lookahead boundary, memory-efficient over long sequences)
+- ReplayContext (implements same `getContext()` contract as live MI; returns correct `MarketContext` from historical items)
+- Re-assembly (conflict resolution runs on replay; deterministic given same items + clock)
+- Retention (records older than 90 days are purged; backtest fails cleanly if requesting data beyond retention)
+
 ### Prior Art
 
 - Existing test infrastructure (none yet — this is pre-implementation)
@@ -418,9 +509,9 @@ This spec covers the Market Intelligence layer, not the upstream Analyst stage. 
 
 The Debate Engine stage consumes analyst outputs and runs structured debates. How the Debate Engine coordinates with Market Intelligence is out of scope. Market Intelligence delivers intelligence to analysts; what happens after is not this layer's concern.
 
-**Backtesting Data Service**
+**Live System Persistence Only**
 
-This spec covers live intelligence delivery. Backtesting requires replaying historical market data through agents. A separate backtesting service (with historical data storage and replay logic) is out of scope for this spec.
+This spec covers the live intelligence delivery system, which deliberately does not persist state (restart cleanly after crashes). The backtesting replay store — a separate component that captures live MI outputs and serves them for backtest replay — is documented above in **Module: Backtesting Replay Store**. It is its own component, not part of the live MI layer's persistence model.
 
 **Price & Market Data**
 
@@ -433,10 +524,6 @@ This spec assumes data sources are configured externally (API keys, endpoints, r
 **Sentiment Model Training**
 
 This spec assumes sentiment analysis is provided by external models (Grok or similar). Training or fine-tuning sentiment models is out of scope. If custom sentiment models are needed, that's a separate effort.
-
-**Persistence for Backtesting**
-
-This spec deliberately excludes persistence (live system restarts cleanly after crashes). If backtesting requires historical data storage, that's a separate service with its own storage strategy.
 
 ## Further Notes
 
@@ -521,6 +608,6 @@ Wayfinder decisions for this stage live in [docs/wayfinder/market-intelligence-m
 - **Data quality & validation** — schema validation, required fields, value ranges.
 - **Conflict resolution** (map-level decision) — DeepResearch wins on high-impact news; Grok wins on viral narratives > 2σ.
 
-**Still open (deferred):** Backtesting data requirements — the live layer is only made replay-*compatible* (injected clock); the historical news/sentiment store + replay service are a separate concern (see Out of Scope), and that store is also what the Analysts layer's backtest replay depends on. Tracked as an open frontier item in the wayfinder map.
+- **Backtesting data requirements** (resolved 2026-07-20) — see "Backtesting replay store" section in Implementation Decisions above. Historical store persists both raw agent outputs + normalized IntelligenceItems in SQLite; new standalone replay service owns the store; push sidecar capture; cursor/iterator query interface; `ReplayContext` wraps cursor to implement same `getContext()` contract; 90-day retention; IntelligenceItems only stored (MarketContext re-assembled on replay to exercise full MI code path).
 
 The parallel **Market Data Service** (price/OHLCV + indicators) is a separate Stage 0 component with its own map.

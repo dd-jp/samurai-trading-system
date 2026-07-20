@@ -19,10 +19,22 @@ Design the Market Intelligence stage — the **news/sentiment half** of the Stag
 - **Error handling & failure modes** — agent failures handled gracefully (retry/backoff/degrade), system never blocks.
 - **Data quality & validation** — schema validation, required fields, value ranges.
 - **Conflict resolution** (map-level decision, no dedicated ticket) — DeepResearch wins on high-impact news; Grok wins on viral narratives > 2σ.
+- **Backtesting data requirements** (resolved 2026-07-20) — see "Backtesting replay store" decisions below.
+
+## Backtesting replay store (frontier resolution — 2026-07-20)
+
+1. **What gets stored** — both raw agent outputs AND normalized `IntelligenceItem`s. Raw enables re-normalization if the schema evolves; normalized enables fast replay without re-running the normalization pipeline.
+2. **Who owns the store** — a new standalone replay service. Records live MI outputs during normal operation; serves historical IntelligenceItems on demand during backtest. Clean separation from the MI layer (which remains persistence-free per its spec).
+3. **Capture mechanism** — push. MI writes to the replay store as a sidecar after normalizing each batch. Simple, no gaps. MI gains a write dependency to the external store (acceptable — the store is a separate component MI pushes to, not one it owns).
+4. **Storage technology** — SQLite. Consistent with existing architecture (analyst weights, tuning store), single-file, zero new deps, handles the read pattern (point queries by timestamp range).
+5. **Replay query interface** — cursor/iterator. The replay service exposes a cursor that pulls IntelligenceItems sequentially as the simulated clock advances. Memory-efficient for long backtests.
+6. **Cursor bridging to getContext()** — `ReplayContext` wraps the cursor and implements the same `getContext()` contract the live MI layer exposes. The Orchestrator swaps the live MI backing for a `ReplayContext` when `mode='backtest'`. Same code path preserved — the Analysts layer is unaware whether it's live or replay.
+7. **Retention** — fixed 90-day window. Auto-purge old records. Keeps the store small and predictable. Limits backtest horizon to accumulated history (acceptable — the system accumulates over time; older regimes weren't recorded).
+8. **What's replayed** — IntelligenceItems only. `MarketContext` is re-assembled on replay, exercising the full MI code path including conflict resolution. A bug in conflict resolution surfaces in backtest. Requires conflict resolution to be deterministic given the same inputs (it is — a function of items + clock).
 
 ## Frontier — still open
 
-- **Backtesting data requirements** — historical news/sentiment store + replay service. The live layer is made replay-*compatible* (injected clock) only; the store is a separate concern. This owns the historical store that the Analysts layer's backtest replay depends on. **Not yet resolved.**
+All frontier decisions resolved. Map complete.
 
 ## Out of scope
 

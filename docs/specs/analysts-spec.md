@@ -242,7 +242,7 @@ How Market Intelligence and the Market Data Service fetch, normalize, and store 
 
 **Historical Data Storage for Replay**
 
-The historical store that feeds replayed data is owned by the data services, not analysts. Market Intelligence's historical news/sentiment store is the still-open ticket #21.
+The historical store that feeds replayed data is owned by the data services, not analysts. Market Intelligence's backtesting replay store is specced in market-intelligence-spec.md (**Module: Backtesting Replay Store**) — a standalone replay service that captures live MI outputs (raw + normalized IntelligenceItems) via push sidecar writes to SQLite, and serves them through a `ReplayContext` that implements the same `getContext()` contract the Analysts layer already consumes. The Orchestrator swaps the live MI backing for a `ReplayContext` when `mode='backtest'`; analysts are unaware of the swap (story 29: clock-blind, same code path).
 
 **Debate Engine**
 

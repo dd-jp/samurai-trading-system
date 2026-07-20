@@ -232,3 +232,5 @@ coverage/
 
 # macOS
 .DS_Store
+.orchestrator-state/
+.hermes/
