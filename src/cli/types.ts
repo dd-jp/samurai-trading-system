@@ -74,3 +74,31 @@ export interface QueryStore {
   /** Current mark for `instrument`, for unrealized-PnL computation (Market Data Service). */
   getMark(instrument: string, asOf: Date): Mark;
 }
+
+/**
+ * The four render functions (cli-spec.md "Module: Views"), grouped as the
+ * dependency `runOnce`/`runWatch` (#99, "Module: Run Modes") compose over —
+ * matches the render functions' own `(store, asOf)` signature.
+ */
+export interface CLIViews {
+  renderPositions(store: QueryStore, asOf: Date): string;
+  renderDebates(store: QueryStore, asOf: Date): string;
+  renderVerdicts(store: QueryStore, asOf: Date): string;
+  renderPerformance(store: QueryStore, asOf: Date): string;
+}
+
+/**
+ * `CLIRunner` — CLI Run Modes (#99, cli-spec.md "Module: Run Modes"):
+ * one-shot snapshot vs periodic-refresh live view.
+ */
+export interface CLIRunner {
+  /** `samurai status` — calls all four render functions once, prints, exits. */
+  runOnce(views: CLIViews, store: QueryStore): void;
+  /**
+   * `samurai watch [--interval]` — calls all four on an interval,
+   * clears/redraws the terminal. No push subscriptions (cli-spec.md
+   * "Module: Run Modes") — a few seconds of staleness is acceptable for an
+   * operator view.
+   */
+  runWatch(views: CLIViews, store: QueryStore, intervalMs: number): void;
+}
