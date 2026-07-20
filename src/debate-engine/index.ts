@@ -41,6 +41,8 @@ export type {
   LlmResponse,
   LlmRetryConfig,
 } from './llm/types.js';
+export type { MediatorInput, MediatorResponse, PersonaInput, PersonaResponse } from './personas.js';
+export { runBearPersona, runBullPersona, runMediatorPersona } from './personas.js';
 export type {
   AssetClass,
   RateLimitConfig,
