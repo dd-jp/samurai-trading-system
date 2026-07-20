@@ -1,0 +1,133 @@
+/**
+ * Latency budget enforcement (#33) — see docs/specs/debate-engine-spec.md
+ * "Module: Latency Budget". Asset-class-specific hard timeout: crypto 15s,
+ * stocks 60s. If the debate hasn't produced a result within budget, it is
+ * force-terminated using whatever partial state is available.
+ *
+ * Blocked-by #34 (Round Structure & Termination Orchestrator) does not yet
+ * exist, so this races an arbitrary `produceResult` promise rather than
+ * reaching into round-orchestration internals — same ahead-of-#34 pattern
+ * as `analyst-contribution.ts` (#36) and `debate-log-store.ts`. Once #34
+ * lands, it calls `enforceLatencyBudget` around its own round loop.
+ *
+ * Uses real `setTimeout` (not the injected `Clock`), matching
+ * `analyst-response-collector.ts`'s timeout race — `Clock` is stepped
+ * manually by the backtest harness and never fires on its own, so it cannot
+ * drive a race against real elapsed time. Tests use `vi.useFakeTimers()`.
+ */
+import type { DebateLogger } from './debate-logger.js';
+import type { AssetClass } from './rate-limiter.js';
+import type { DebateResult, Direction } from './types.js';
+
+export type { AssetClass };
+
+/** Budget by asset class, in milliseconds (spec's "Budget by Asset Class"). */
+export const LATENCY_BUDGET_MS: Record<AssetClass, number> = {
+  crypto: 15_000,
+  stocks: 60_000,
+};
+
+/**
+ * The mediator's synthesis-in-progress at the moment the budget fires, if
+ * the round orchestrator has one. When absent, `enforceLatencyBudget` falls
+ * back to a default low-confidence result (spec's "otherwise default to
+ * low-confidence result").
+ */
+export interface PartialDebateState {
+  synthesis: string;
+  position: string;
+  confidence: number;
+  contributions: DebateResult['contributions'];
+  disagreement_summary: string;
+  open_items: string[];
+  rounds_completed: number;
+  direction: Direction;
+  debate_id: string;
+}
+
+const LOW_CONFIDENCE_FALLBACK = {
+  synthesis: 'Debate terminated before any round completed; no synthesis available.',
+  position: 'No position — insufficient debate to recommend action.',
+  confidence: 0,
+  direction: 'neutral' as Direction,
+} as const;
+
+/**
+ * Races `produceResult` against the asset class's hard budget. On timeout,
+ * builds a `DebateResult` from `getCurrentState()` (or the low-confidence
+ * fallback if no partial state exists), flags `converged: false`, attaches
+ * `timed_out` metadata, and logs the event via `logger.logTimeout`.
+ */
+export async function enforceLatencyBudget(params: {
+  assetClass: AssetClass;
+  trace_id: string;
+  debate_id: string;
+  produceResult: () => Promise<DebateResult>;
+  getCurrentState: () => PartialDebateState | undefined;
+  logger: DebateLogger;
+}): Promise<DebateResult> {
+  const { assetClass, trace_id, debate_id, produceResult, getCurrentState, logger } = params;
+  const budget_ms = LATENCY_BUDGET_MS[assetClass];
+  const started_at = Date.now();
+
+  const result = await Promise.race([
+    produceResult().then((result): { status: 'completed'; result: DebateResult } => ({
+      status: 'completed',
+      result,
+    })),
+    new Promise<{ status: 'timed_out' }>((resolve) => {
+      setTimeout(() => resolve({ status: 'timed_out' }), budget_ms);
+    }),
+  ]);
+
+  if (result.status === 'completed') {
+    return result.result;
+  }
+
+  const elapsed_ms = Date.now() - started_at;
+  const partial = getCurrentState();
+
+  logger.logTimeout({
+    trace_id,
+    debate_id,
+    elapsed_ms,
+    budget_ms,
+    reason: partial
+      ? 'latency budget exceeded: using mediator synthesis in progress'
+      : 'latency budget exceeded: no partial synthesis available, using low-confidence fallback',
+  });
+
+  const timed_out = { budget_ms, elapsed_ms };
+
+  if (partial) {
+    return {
+      synthesis: partial.synthesis,
+      position: partial.position,
+      confidence: partial.confidence,
+      contributions: partial.contributions,
+      disagreement_summary: partial.disagreement_summary,
+      open_items: partial.open_items,
+      converged: false,
+      rounds_completed: partial.rounds_completed,
+      latency_ms: elapsed_ms,
+      direction: partial.direction,
+      debate_id: partial.debate_id,
+      timed_out,
+    };
+  }
+
+  return {
+    synthesis: LOW_CONFIDENCE_FALLBACK.synthesis,
+    position: LOW_CONFIDENCE_FALLBACK.position,
+    confidence: LOW_CONFIDENCE_FALLBACK.confidence,
+    contributions: [],
+    disagreement_summary: 'Debate terminated before disagreement could be assessed.',
+    open_items: ['debate did not complete within latency budget'],
+    converged: false,
+    rounds_completed: 0,
+    latency_ms: elapsed_ms,
+    direction: LOW_CONFIDENCE_FALLBACK.direction,
+    debate_id,
+    timed_out,
+  };
+}
