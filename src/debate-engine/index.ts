@@ -8,6 +8,7 @@ export type { AnalystRoundStance } from './analyst-contribution.js';
 export { buildAnalystContributions } from './analyst-contribution.js';
 export type { AnalystCollectionResult, ExpectedAnalyst } from './analyst-response-collector.js';
 export { collectAnalystViews, validateAnalystView } from './analyst-response-collector.js';
+export { computeConvictionScore } from './conviction-score.js';
 export { computeDebateId } from './debate-id.js';
 export { buildDebateLog, InMemoryDebateLogStore } from './debate-log-store.js';
 export type {
