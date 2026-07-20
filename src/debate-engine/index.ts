@@ -52,4 +52,16 @@ export type {
   ReserveResult,
 } from './rate-limiter.js';
 export { RateLimiter } from './rate-limiter.js';
+export type {
+  DebateArgument,
+  DebateInput,
+  DebatePersonas,
+  DebaterPersona,
+  MediatorAssessment,
+  MediatorPersona,
+  MediatorSynthesis,
+  RoundContext,
+  RoundStance,
+} from './round-orchestrator.js';
+export { MAX_ROUNDS, runDebate } from './round-orchestrator.js';
 export type { AnalystContribution, AnalystView, DebateResult, Direction } from './types.js';
