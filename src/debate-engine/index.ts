@@ -4,10 +4,10 @@
  */
 
 export type { DebateLog, DebateLogStore } from '../shared/types.js';
-export type { AnalystCollectionResult, ExpectedAnalyst } from './analyst-response-collector.js';
-export { collectAnalystViews, validateAnalystView } from './analyst-response-collector.js';
 export type { AnalystRoundStance } from './analyst-contribution.js';
 export { buildAnalystContributions } from './analyst-contribution.js';
+export type { AnalystCollectionResult, ExpectedAnalyst } from './analyst-response-collector.js';
+export { collectAnalystViews, validateAnalystView } from './analyst-response-collector.js';
 export { computeDebateId } from './debate-id.js';
 export { buildDebateLog, InMemoryDebateLogStore } from './debate-log-store.js';
 export type {
@@ -17,6 +17,8 @@ export type {
   LogSink,
 } from './debate-logger.js';
 export { JsonDebateLogger } from './debate-logger.js';
+export type { PartialDebateState } from './latency-budget.js';
+export { enforceLatencyBudget, LATENCY_BUDGET_MS } from './latency-budget.js';
 export type {
   AnthropicLlmClientConfig,
   AnthropicMessageRequest,
@@ -39,11 +41,11 @@ export type {
   LlmResponse,
   LlmRetryConfig,
 } from './llm/types.js';
-export { RateLimiter } from './rate-limiter.js';
 export type {
   AssetClass,
   RateLimitConfig,
   RateLimiterConfig,
   ReserveResult,
 } from './rate-limiter.js';
+export { RateLimiter } from './rate-limiter.js';
 export type { AnalystContribution, AnalystView, DebateResult, Direction } from './types.js';
