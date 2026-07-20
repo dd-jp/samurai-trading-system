@@ -1,0 +1,159 @@
+/**
+ * Semantic disagreement detection (#32) — see docs/specs/debate-engine-spec.md
+ * "Module: Disagreement Detection" and story 11 ("detect semantic conflicts
+ * in analyst rationale... not just directional divergence"). Runs once per
+ * debate, not per round (spec's "Cost Justification").
+ *
+ * Blocked-by #24 (types) and #31 (LLM Integration Layer) — both implemented.
+ * Feeds `DebateResult.disagreement_summary`/`open_items` once the round
+ * orchestrator (#34, unimplemented) wires it in; this is a pure function
+ * over `AnalystView[]`, same "builder ahead of orchestration" posture as
+ * `analyst-contribution.ts`.
+ */
+import type { LlmClient } from './llm/types.js';
+import type { AnalystView, Direction } from './types.js';
+
+/** One detected conflict: which analysts disagree and why, in free text. */
+export interface DisagreementConflict {
+  analysts: string[];
+  nature: string;
+}
+
+/**
+ * `method` records which path produced the result — semantic (LLM succeeded)
+ * or directional_fallback (LLM unavailable/malformed, or too few views to
+ * bother calling it) — so callers/logs can distinguish a "no disagreement"
+ * finding from "we couldn't check properly".
+ */
+export interface DisagreementAnalysis {
+  summary: string;
+  conflicts: DisagreementConflict[];
+  method: 'semantic' | 'directional_fallback';
+}
+
+interface RawDisagreementResponse {
+  summary: string;
+  conflicts: Array<{ analysts: string[]; nature: string }>;
+}
+
+const PROMPT = [
+  'You are analyzing market analyst views for disagreements. Given the',
+  'analyst views below (each with a direction, confidence, and free-text',
+  'key_points rationale), identify semantic conflicts in their reasoning —',
+  'including cases where two analysts share the same direction but for',
+  'contradictory reasons. Do not just compare directions.',
+  '',
+  'Respond with JSON only, matching this shape:',
+  '{"summary": string, "conflicts": [{"analysts": string[], "nature": string}]}',
+  '',
+  'If there are no conflicts, respond with an empty "conflicts" array and a',
+  'summary noting agreement.',
+].join('\n');
+
+function isConflict(value: unknown): value is { analysts: string[]; nature: string } {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    Array.isArray(candidate.analysts) &&
+    candidate.analysts.every((a) => typeof a === 'string') &&
+    typeof candidate.nature === 'string'
+  );
+}
+
+function parseDisagreementResponse(
+  rawText: string,
+): { valid: true; data: RawDisagreementResponse } | { valid: false; reason: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawText);
+  } catch {
+    return { valid: false, reason: 'response is not valid JSON' };
+  }
+
+  if (typeof parsed !== 'object' || parsed === null) {
+    return { valid: false, reason: 'response is not a JSON object' };
+  }
+  const candidate = parsed as Record<string, unknown>;
+
+  if (typeof candidate.summary !== 'string') {
+    return { valid: false, reason: 'missing or invalid "summary"' };
+  }
+  if (!Array.isArray(candidate.conflicts) || !candidate.conflicts.every(isConflict)) {
+    return { valid: false, reason: 'missing or invalid "conflicts"' };
+  }
+
+  return {
+    valid: true,
+    data: { summary: candidate.summary, conflicts: candidate.conflicts },
+  };
+}
+
+/**
+ * Mechanical fallback: groups views by `direction` and flags a conflict per
+ * group of directions once more than one distinct direction is present.
+ * This is exactly the "simple directional comparison" the spec says
+ * semantic detection must improve on — used only when the LLM path is
+ * unavailable, or skipped entirely for <2 views (nothing to disagree about).
+ */
+function directionalFallback(views: AnalystView[]): DisagreementAnalysis {
+  const byDirection = new Map<Direction, string[]>();
+  for (const view of views) {
+    const group = byDirection.get(view.direction) ?? [];
+    group.push(view.analyst_id);
+    byDirection.set(view.direction, group);
+  }
+
+  if (byDirection.size <= 1) {
+    return {
+      summary: 'No directional disagreement among analysts.',
+      conflicts: [],
+      method: 'directional_fallback',
+    };
+  }
+
+  const directions = [...byDirection.keys()].sort();
+  const conflicts: DisagreementConflict[] = directions.map((direction) => ({
+    analysts: byDirection.get(direction) as string[],
+    nature: `Directional disagreement: analysts hold a "${direction}" view.`,
+  }));
+
+  return {
+    summary: `Analysts diverge directionally: ${directions.join(' vs ')}.`,
+    conflicts,
+    method: 'directional_fallback',
+  };
+}
+
+/**
+ * Detects semantic disagreements across `views` via `llmClient`. Never
+ * throws — any LLM failure (timeout, rate limit, malformed response; the
+ * injected client is responsible for its own retries, per `LlmClient`'s
+ * contract) falls back to `directionalFallback` per the spec's "Handle LLM
+ * errors gracefully" requirement.
+ */
+export async function detectDisagreements(
+  views: AnalystView[],
+  llmClient: LlmClient,
+): Promise<DisagreementAnalysis> {
+  if (views.length < 2) {
+    return directionalFallback(views);
+  }
+
+  try {
+    const response = await llmClient.complete({
+      prompt: PROMPT,
+      context: { analyst_views: views },
+      parseResponse: parseDisagreementResponse,
+    });
+
+    return {
+      summary: response.data.summary,
+      conflicts: response.data.conflicts,
+      method: 'semantic',
+    };
+  } catch {
+    return directionalFallback(views);
+  }
+}

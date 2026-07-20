@@ -17,6 +17,8 @@ export type {
   LogSink,
 } from './debate-logger.js';
 export { JsonDebateLogger } from './debate-logger.js';
+export type { DisagreementAnalysis, DisagreementConflict } from './disagreement-detector.js';
+export { detectDisagreements } from './disagreement-detector.js';
 export type {
   AnthropicLlmClientConfig,
   AnthropicMessageRequest,
