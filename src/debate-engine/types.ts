@@ -92,4 +92,15 @@ export interface DebateResult {
    * registry #1/#2.
    */
   debate_id: string;
+  /**
+   * Present only when the debate was force-terminated by the latency budget
+   * (docs/specs/debate-engine-spec.md "Module: Latency Budget", ticket #33).
+   * Absent on a normal (converged or round-cap) completion.
+   */
+  timed_out?: {
+    /** The asset-class budget that was exceeded, in milliseconds. */
+    budget_ms: number;
+    /** Actual elapsed wall-clock time when termination fired, in milliseconds. */
+    elapsed_ms: number;
+  };
 }

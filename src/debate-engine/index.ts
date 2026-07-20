@@ -17,6 +17,10 @@ export type {
   LogSink,
 } from './debate-logger.js';
 export { JsonDebateLogger } from './debate-logger.js';
+export type { PartialDebateState } from './latency-budget.js';
+export { enforceLatencyBudget, LATENCY_BUDGET_MS } from './latency-budget.js';
+export type { DisagreementAnalysis, DisagreementConflict } from './disagreement-detector.js';
+export { detectDisagreements } from './disagreement-detector.js';
 export type {
   AnthropicLlmClientConfig,
   AnthropicMessageRequest,
@@ -39,6 +43,8 @@ export type {
   LlmResponse,
   LlmRetryConfig,
 } from './llm/types.js';
+export type { MediatorInput, MediatorResponse, PersonaInput, PersonaResponse } from './personas.js';
+export { runBearPersona, runBullPersona, runMediatorPersona } from './personas.js';
 export type {
   AssetClass,
   RateLimitConfig,
