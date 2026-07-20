@@ -17,6 +17,8 @@ export type {
   LogSink,
 } from './debate-logger.js';
 export { JsonDebateLogger } from './debate-logger.js';
+export type { PartialDebateState } from './latency-budget.js';
+export { enforceLatencyBudget, LATENCY_BUDGET_MS } from './latency-budget.js';
 export type { DisagreementAnalysis, DisagreementConflict } from './disagreement-detector.js';
 export { detectDisagreements } from './disagreement-detector.js';
 export type {
