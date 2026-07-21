@@ -46,7 +46,10 @@ export function computeMetrics(returns: ReturnSeries, trades: TradeSeries): Metr
   return {
     sharpe: (mean / stdev) * annualization,
     sortino: downside === 0 ? Number.POSITIVE_INFINITY : (mean / downside) * annualization,
-    calmar: max_drawdown === 0 ? Number.POSITIVE_INFINITY : annualizedReturn(r, periodsPerYear) / max_drawdown,
+    calmar:
+      max_drawdown === 0
+        ? Number.POSITIVE_INFINITY
+        : annualizedReturn(r, periodsPerYear) / max_drawdown,
     max_drawdown,
     profit_factor: profitFactor(trades),
     expectancy: expectancy(trades),
@@ -102,7 +105,12 @@ function autocorrelation(r: readonly number[], lag: number): number {
 
   let covariance = 0;
   for (let t = 0; t < deviations.length - lag; t++) {
-    covariance += deviations[t]! * deviations[t + lag]!;
+    const leading = deviations[t];
+    const lagged = deviations[t + lag];
+    if (leading === undefined || lagged === undefined) {
+      continue;
+    }
+    covariance += leading * lagged;
   }
 
   let variance = 0;
