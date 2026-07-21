@@ -14,7 +14,8 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "orchestrator": "node --experimental-strip-types src/orchestrator/index.ts",
-    "cli": "node --experimental-strip-types src/cli/index.ts"
+    "cli": "node --experimental-strip-types src/cli/index.ts",
+    "dashboard": "npm run build && node dist/dashboard/index.js"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.3",

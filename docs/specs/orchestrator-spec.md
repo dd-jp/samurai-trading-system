@@ -53,8 +53,8 @@ Key architectural decisions:
 ### Audit Spine
 
 12. As the Orchestrator, I want an `audit_log` table in the shared SQLite store (one row per stage-decision per trace_id: stage, decision, input digest, output digest, timestamp), so that the full per-trade decision history is queryable (DoD #5) without a separate audit database.
-13. As the CLI (cli-spec.md, closes OPEN-GAP-B), I want the `audit_log` table to already contain everything a positions/debates/verdicts/per-analyst-performance view would need, so that building that surface is a read-only consumer, not a new write path.
-13b. As the CLI, I want a `current_tick` row per in-progress instrument (instrument, stage, trace_id), so that a separate process can show "tick in progress for {instrument}" without reading the Orchestrator's memory.
+13. As the Dashboard (dashboard-spec.md, closes OPEN-GAP-B), I want the `audit_log` table to already contain everything a positions/debates/verdicts/per-analyst-performance view would need, so that building that surface is a read-only consumer, not a new write path.
+13b. As the Dashboard, I want a `current_tick` row per in-progress instrument (instrument, stage, trace_id), so that a separate process can show "tick in progress for {instrument}" without reading the Orchestrator's memory.
 
 ### Reliability
 

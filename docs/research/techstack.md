@@ -56,12 +56,16 @@ Locked-in choices, versions, and rationale. Update as stack crystallizes.
 | MinBTL check | Cap independent trials by data length |
 | Custom cost model (ours, not pybroker's) | pybroker's built-in fill model isn't pessimistic enough for the √-law market-impact requirement; injected into pybroker's eval path instead. |
 
-## CLI (operator view)
+## Dashboard (operator view)
+
+**Supersedes the CLI decision below** — OPEN-GAP-B reversed 2026-07-21; dashboard-spec.md (formerly cli-spec.md) is now canonical.
 
 | Component | Choice | Why |
 |-----------|--------|-----|
-| Rendering | Simple structured tables (no full TUI framework) | Lower build cost; output stays pipeable/grep-able. Library TBD at implementation time (e.g. a lightweight TS table/prompt package) — not load-bearing enough to lock now. |
-| Read path | Direct SQLite queries via `QueryStore` | No new message bus; CLI is a pure read-only consumer of the shared store (cli-spec.md). |
+| Rendering | Single static HTML page, no framework/bundler | Lower build cost; zero new runtime dependencies (Node 22's built-in `http`), matches ADR-0001's dependency-light TS core. |
+| Transport | One `http` server, two `GET` routes (`/`, `/api/snapshot`) | One process, one command (`npm run dashboard`) starts everything — no separate frontend build/serve step. |
+| Refresh | Client-side polling | No real-time push needed at single-operator scale; matches the original CLI decision's "a few seconds of staleness is fine" reasoning. |
+| Read path | Direct SQLite queries via `QueryStore` | No new message bus; Dashboard is a pure read-only consumer of the shared store (dashboard-spec.md), reusing the CLI's original `QueryStore` port unchanged. |
 
 ---
 
@@ -76,4 +80,4 @@ Locked-in choices, versions, and rationale. Update as stack crystallizes.
 - [ ] Analyst persona registry (static config vs dynamic LLM-generated)
 - [ ] Monitoring / observability stack beyond structured logs + Telegram (Grafana/Prometheus, or logs+Telegram is sufficient for v1?)
 - [ ] Multi-strategy support: shared broker abstraction per-strategy, or unified? (post-MVP question)
-- [ ] Terminal UI library for the CLI (see CLI row above)
+- [ ] Framework/library, if any, if the dashboard ever grows past one static page (see Dashboard row above)
