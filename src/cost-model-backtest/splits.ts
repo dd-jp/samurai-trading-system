@@ -129,7 +129,10 @@ function purge(group: DateRange, test: DateRange[], embargoMs: number): DateRang
       const kept: DateRange[] = [];
 
       if (range.start.getTime() < blockedStart) {
-        kept.push({ start: range.start, end: new Date(Math.min(range.end.getTime(), blockedStart)) });
+        kept.push({
+          start: range.start,
+          end: new Date(Math.min(range.end.getTime(), blockedStart)),
+        });
       }
       if (range.end.getTime() > blockedEnd) {
         kept.push({ start: new Date(Math.max(range.start.getTime(), blockedEnd)), end: range.end });

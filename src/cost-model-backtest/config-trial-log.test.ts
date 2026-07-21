@@ -83,7 +83,9 @@ describe('InMemoryConfigTrialLog', () => {
     it('throws when the report is logged under a mismatched key', () => {
       const log = new InMemoryConfigTrialLog();
 
-      expect(() => log.recordTrial('config-a', report('config-b'))).toThrow(/does not match the key/);
+      expect(() => log.recordTrial('config-a', report('config-b'))).toThrow(
+        /does not match the key/,
+      );
       expect(log.distinctTrialCount()).toBe(0);
     });
 

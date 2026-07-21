@@ -72,9 +72,7 @@ class InMemoryStore {
 
   async getOpenPositions(): Promise<OpenPosition[]> {
     // Mirrors the real store's contract: terminal lots are not returned.
-    return [...this.positions.values()].filter(
-      (position) => !isTerminal(position.order_state),
-    );
+    return [...this.positions.values()].filter((position) => !isTerminal(position.order_state));
   }
   async hasFill(broker_fill_id: string): Promise<boolean> {
     return this.fills.some((fill) => fill.broker_fill_id === broker_fill_id);

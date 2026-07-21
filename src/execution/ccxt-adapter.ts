@@ -178,7 +178,7 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
     if (bracket === undefined) {
       throw new Error(
         `ccxt adapter cannot resolve client_order_id '${clientOrderId}' (${instrument}) to a venue ` +
-          'order id: the bracket is not in this process\'s emulation state. Cross-restart ' +
+          "order id: the bracket is not in this process's emulation state. Cross-restart " +
           'reconciliation needs the emulation rehydrated from the venue first.',
       );
     }

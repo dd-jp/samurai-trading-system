@@ -117,7 +117,12 @@ describe('computeMetrics', () => {
   it('computes expectancy as (P_win x AvgWin) - (P_loss x AvgLoss)', () => {
     const { expectancy } = computeMetrics(
       series(FLAT_ISH),
-      trades([trade({ pnl: 300 }), trade({ pnl: 100 }), trade({ pnl: -200 }), trade({ pnl: -100 })]),
+      trades([
+        trade({ pnl: 300 }),
+        trade({ pnl: 100 }),
+        trade({ pnl: -200 }),
+        trade({ pnl: -100 }),
+      ]),
     );
 
     // 0.5 * 200 - 0.5 * 150 = 25
@@ -215,7 +220,7 @@ function arOne(phi: number, length: number): number[] {
   };
 
   for (let t = 0; t < length; t++) {
-    const noise = 0.004 * (rand() - 0.5);  // zero-mean, bounded
+    const noise = 0.004 * (rand() - 0.5); // zero-mean, bounded
     const value = phi * previous + noise;
     returns.push(value);
     previous = value;

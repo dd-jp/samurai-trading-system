@@ -77,8 +77,7 @@ export function deflatedSharpe(
   const kurtosis = excessKurtosis + 3;
   const expectedMaxSharpe = expectedMaxOfNSharpes(nDistinctConfigs, sampleLen);
 
-  const variance =
-    1 - skew * perPeriodSharpe + ((kurtosis - 1) / 4) * perPeriodSharpe ** 2;
+  const variance = 1 - skew * perPeriodSharpe + ((kurtosis - 1) / 4) * perPeriodSharpe ** 2;
 
   if (variance <= 0) {
     throw new Error(
@@ -87,7 +86,8 @@ export function deflatedSharpe(
     );
   }
 
-  const z = ((perPeriodSharpe - expectedMaxSharpe) * Math.sqrt(sampleLen - 1)) / Math.sqrt(variance);
+  const z =
+    ((perPeriodSharpe - expectedMaxSharpe) * Math.sqrt(sampleLen - 1)) / Math.sqrt(variance);
 
   return normalCdf(z);
 }
