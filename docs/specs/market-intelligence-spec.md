@@ -8,26 +8,29 @@
 
 Samurai's trading decisions require comprehensive market context beyond raw price — news, social sentiment, and fundamental signals. Without a unified intelligence layer that aggregates and validates multiple sources, individual analysts operate on incomplete or conflicting information, leading to poor trading decisions.
 
-The Market Intelligence layer exists to provide real-time, validated market context through specialized agents. It aggregates data from professional news sources and social media, resolves conflicts with clear priority rules, and delivers structured intelligence to downstream analysts. It deliberately does **not** cover price/OHLCV or technical indicators — that is a separate Stage 0 concern (the Market Data Service; see Out of Scope). Market Intelligence is the news/sentiment half of Stage 0.
+The Market Intelligence layer exists to provide real-time, validated market context through specialized agents. It aggregates data from professional news sources, social media, and geopolitical/macro intelligence, detects convergence and disagreement across sources via an N-source convergence engine, and delivers structured intelligence to downstream analysts. It deliberately does **not** cover price/OHLCV or technical indicators — that is a separate Stage 0 concern (the Market Data Service; see Out of Scope). Market Intelligence is the news/sentiment half of Stage 0.
 
 ## Solution
 
-The Market Intelligence layer runs two specialized agents that operate continuously:
+The Market Intelligence layer runs three specialized agents that operate continuously:
 
-**DeepResearch Agent** — Professional news aggregation (Bloomberg, Reuters, SEC filings, earnings reports). High credibility, regulatory compliance, fact-checked sources. Primary source for decision-making.
+**DeepResearch Agent** — Professional news aggregation (Bloomberg, Reuters, SEC filings, earnings reports). High credibility, regulatory compliance, fact-checked sources.
 
-**Grok Agent** — Social media sentiment analysis (Twitter/X, Reddit). Real-time retail sentiment, viral narratives, market psychology. Secondary source that supplements but never overrides professional news.
+**Grok Agent** — Social media sentiment analysis (Twitter/X, Reddit). Real-time retail sentiment, viral narratives, market psychology.
 
-**Conflict Resolution Rule:** When DeepResearch and Grok report conflicting signals, DeepResearch wins. Professional sources have priority on high-impact events. Social sentiment is supplementary context.
+**WorldMonitor Agent** — Geopolitical/macro intelligence (news convergence detection, prediction-market tracking, regional signals) via the WorldMonitor MIT-licensed SDK. Adopted per [ADR-0002](../adr/0002-worldmonitor-mi-source.md); embeds only the MIT SDK/API, never WorldMonitor's AGPL platform code, never self-hosted. Also the source of the **Country Instability Index (CII)**, consumed separately as a Risk Manager soft signal (see `docs/specs/risk-manager-spec.md`), not by this layer's conflict resolution.
+
+**Conflict Resolution:** the prior 2-agent DeepResearch-vs-Grok priority rule is **replaced wholesale** by an **N-source convergence engine** (per ADR-0002 §7), generalized to detect agreement, disagreement, and absence across all three agents rather than a binary DeepResearch/Grok override. See **Module: Convergence Engine** below.
 
 **Key architectural decisions:**
-- **Dual-agent specialization** — each agent has domain expertise and data sources optimized for its purpose
-- **Clear source priority** — professional news > social sentiment for conflicting signals
+- **Three-agent specialization** — each agent has domain expertise and data sources optimized for its purpose; WorldMonitor adds geopolitical/regional coverage the other two don't provide
+- **N-source convergence, not static priority** — confidence scales with how many independent source types agree; absence of expected corroboration (a market or prediction move with no news) is itself a signal, which a binary priority rule cannot express
 - **Real-time continuous operation** — agents run in background, not on-demand
 - **Structured data output** — all intelligence is normalized to consistent schemas before delivery to analysts
 - **Asset-class awareness** — different cadence and retention for crypto (24/7) vs stocks (market hours)
 - **No persistence of raw data** — only structured intelligence is stored; raw feeds are ephemeral
-- **Graceful degradation** — if one agent fails, the other continues operating; system doesn't block
+- **Graceful degradation** — if one agent fails, the others continue operating; system doesn't block
+- **WorldMonitor polls on its own decoupled 5–15 min cadence** (not per-tick) — its data doesn't change on a trading-tick clock, and per-tick polling would exceed API quota (ADR-0002 §2)
 
 ## User Stories
 
@@ -35,24 +38,26 @@ The Market Intelligence layer runs two specialized agents that operate continuou
 
 1. As the Market Intelligence system, I want the DeepResearch agent to continuously monitor professional news sources, so that I have validated, high-credibility market context
 2. As the Market Intelligence system, I want the Grok agent to continuously monitor social media sentiment, so that I have real-time retail sentiment and viral narratives
-3. As the Market Intelligence system, I want both agents to run in parallel without blocking each other, so that one agent's delays don't impact the other
-4. As the Market Intelligence system, I want to detect when agents have conflicting signals and apply priority rules automatically, so that downstream analysts receive consistent intelligence
+2a. As the Market Intelligence system, I want the WorldMonitor agent to continuously poll geopolitical/macro intelligence on its own decoupled cadence, so that I have regional and prediction-market context the other two agents don't cover
+3. As the Market Intelligence system, I want all three agents to run in parallel without blocking each other, so that one agent's delays don't impact the others
+4. As the Market Intelligence system, I want to detect convergence, triangulation, and absence signals across all three agents' outputs, so that downstream analysts receive confidence-scored, cross-verified intelligence instead of a single binary priority call
 5. As the Market Intelligence system, I want agents to handle source failures gracefully (retry, fallback, degrade), so that temporary outages don't crash the pipeline
 
 ### Data Ingestion
 
 6. As the Market Intelligence system, I want to ingest news from multiple sources (Bloomberg, Reuters, SEC, earnings), so that I have comprehensive professional coverage
 7. As the Market Intelligence system, I want to ingest social data from Twitter/X and Reddit, so that I capture retail sentiment and viral narratives
+7a. As the Market Intelligence system, I want to ingest geopolitical/macro intelligence from WorldMonitor, so that I capture regional risk and prediction-market signals
 8. As the Market Intelligence system, I want to normalize all sources to a consistent timestamp format (UTC), so that cross-source correlation works correctly
 9. As the Market Intelligence system, I want to tag data with asset class (crypto/stocks), so that downstream systems can filter appropriately
 10. As the Market Intelligence system, I want to extract structured entities (tickers, companies, events), so that analysts can query by asset
 
-### Conflict Resolution
+### Convergence Detection
 
-11. As the Market Intelligence system, I want to detect when DeepResearch and Grok report conflicting signals on the same event, so that I can apply priority rules
-12. As the Market Intelligence system, I want DeepResearch to take priority on conflicting signals, so that professional sources guide decisions
-13. As the Market Intelligence system, I want to log all conflict resolutions for transparency, so that I can audit decisions and tune priority rules
-14. As the Market Intelligence system, I want to pass both signals (with resolved winner) when conflicts occur, so that analysts can see the full context
+11. As the Market Intelligence system, I want to detect when ≥3 distinct source types report the same clustered event, so that I can surface a high-confidence convergence signal
+12. As the Market Intelligence system, I want to detect triangulation when wire, gov, and intel sources all align on one event, so that analysts see the strongest possible cross-verification
+13. As the Market Intelligence system, I want to log all detected signals for transparency, so that I can audit decisions and tune thresholds
+14. As the Market Intelligence system, I want to pass the raw per-source signals alongside any detected convergence/absence signal, so that analysts can see the full context, not just the resolved signal
 
 ### Data Delivery
 
@@ -80,20 +85,20 @@ The Market Intelligence layer runs two specialized agents that operate continuou
 27. As the replay store, I want to store raw and normalized data in SQLite, so that the historical store is consistent with the rest of the architecture and requires no new dependencies
 28. As the replay store, I want to expose a cursor/iterator interface that pulls IntelligenceItems sequentially as the simulated clock advances, so that long backtests are memory-efficient
 29. As the replay store, I want to provide a `ReplayContext` that implements the same `getContext()` contract as the live MI layer, so that the Analysts layer consumes replayed intelligence through the same code path without knowing whether it is live or backtest
-30. As the replay store, I want to re-assemble `MarketContext` on replay by running the same conflict-resolution and assembly logic as the live path, so that the full MI code path — including conflict resolution — is exercised during backtest
+30. As the replay store, I want to re-assemble `MarketContext` on replay by running the same convergence-engine and assembly logic as the live path, so that the full MI code path — including convergence detection — is exercised during backtest
 31. As the replay store, I want to enforce the no-lookahead invariant at the cursor boundary (`timestamp <= clock.now()`), so that backtests never see future intelligence
 32. As the replay store, I want to auto-purge records older than 90 days, so that the SQLite store remains small and predictable on a single-machine deployment
 33. As the replay store, I want sidecar writes to fail silently (logged at WARN) if the store is unavailable, so that the live MI system never blocks on the replay store
-34. As the replay store, I want conflict resolution to be deterministic given the same IntelligenceItems and clock, so that re-assembled `MarketContext` on replay matches what the live system would have produced
+34. As the replay store, I want convergence-signal detection to be deterministic given the same IntelligenceItems and clock, so that re-assembled `MarketContext` on replay matches what the live system would have produced
 
 ## Implementation Decisions
 
 ### Module: Market Intelligence Core
 
 **Responsibilities**
-- Orchestrate DeepResearch and Grok agents (start, stop, monitor)
+- Orchestrate DeepResearch, Grok, and WorldMonitor agents (start, stop, monitor)
 - Deliver structured intelligence to analysts (pull/push interfaces)
-- Apply conflict resolution rules when agents disagree
+- Invoke the Convergence Engine to detect signals when agents' outputs converge, diverge, or a source is unexpectedly silent
 - Handle analyst delivery failures
 - Track system health and metrics
 
@@ -102,7 +107,7 @@ The Market Intelligence layer runs two specialized agents that operate continuou
 ```typescript
 // Upstream contract (what agents produce)
 interface AgentIntelligence {
-  agent_id: 'deepresearch' | 'grok';
+  agent_id: 'deepresearch' | 'grok' | 'worldmonitor';   // widened per ADR-0002 §5
   timestamp: Date;
   asset_class: 'crypto' | 'stocks';
   items: IntelligenceItem[];
@@ -110,12 +115,12 @@ interface AgentIntelligence {
 
 interface IntelligenceItem {
   id: string;                    // unique (agent_id + source + timestamp + entity)
-  source: string;                // 'bloomberg', 'reuters', 'twitter', etc.
+  source: string;                // 'bloomberg', 'reuters', 'twitter', 'worldmonitor:<feed>', etc.
   type: 'news' | 'sentiment';
   timestamp: Date;
   entity: string;                // ticker, company name, event
   headline: string;              // brief summary
-  sentiment: 1 | 0 | -1;         // bullish | neutral | bearish
+  sentiment: 1 | 0 | -1;         // bullish | neutral | bearish; WorldMonitor items default to 0 (no per-item classification — see ADR-0002 §5)
   confidence: number;            // 0.0 - 1.0
   summary?: string;              // longer description (optional)
   url?: string;                  // source link (optional)
@@ -125,37 +130,24 @@ interface IntelligenceItem {
 interface MarketContext {
   timestamp: Date;
   asset_class: 'crypto' | 'stocks';
-  news: IntelligenceItem[];      // professional news (DeepResearch)
-  social: IntelligenceItem[];    // social sentiment (Grok)
-  conflicts: ConflictResolution[]; // where agents disagreed
-}
-
-interface ConflictResolution {
-  entity: string;
-  deepresearch_signal: { sentiment: 1 | 0 | -1; confidence: number };
-  grok_signal: { sentiment: 1 | 0 | -1; confidence: number };
-  resolved_winner: 'deepresearch' | 'grok';
-  reason: string;               // 'high_impact_news', 'regulatory_event', etc.
+  news: IntelligenceItem[];        // professional news (DeepResearch)
+  social: IntelligenceItem[];      // social sentiment (Grok)
+  intel: IntelligenceItem[];       // geopolitical/regional (WorldMonitor)
+  signals: ConvergenceSignal[];    // convergence/triangulation/absence signals across all sources — replaces `conflicts`
 }
 ```
+
+The prior `ConflictResolution` (binary DeepResearch-vs-Grok winner) is replaced by `ConvergenceSignal` — see **Module: Convergence Engine** below for its shape and the full signal taxonomy.
 
 **Agent Orchestration**
 
 - Each agent runs as an independent background process
-- Agents are started at system boot and run continuously
+- Agents are started at system boot and run continuously (WorldMonitor on its own decoupled 5–15 min poll cadence, not per-tick — ADR-0002 §2)
 - If an agent crashes, it's restarted automatically (retry with exponential backoff)
 - If an agent fails repeatedly (e.g., 3 consecutive failures), it's disabled and an alert is raised
 - The core system continues operating with whichever agents are healthy
 
-**Conflict Resolution**
-
-- Detect conflicts by comparing `entity` + `timestamp` (within 5min window) across agents
-- Apply priority rules:
-  - **High-impact events** (regulatory, earnings, major news): DeepResearch always wins
-  - **General market sentiment**: DeepResearch wins if confidence > 0.7, otherwise Grok wins
-  - **Viral social narratives** (rapid sentiment shift on social media): Grok wins if shift is > 2 standard deviations from baseline
-- When conflict detected, log resolution with reason for auditability
-- Pass both signals to analysts (with resolved winner marked) so they see full context
+**Convergence Detection** — see **Module: Convergence Engine** below for the full data structures, signal types, confidence formulas, and taxonomy. Summary: signals are detected across all three agents' outputs per tick (convergence, triangulation, absence signals), logged for auditability, and passed to analysts alongside the raw per-source items — not resolved down to a single winner.
 
 **Delivery Patterns**
 
@@ -240,66 +232,97 @@ interface ConflictResolution {
 - If all sources fail, emit empty intelligence (don't block the pipeline)
 - Log all failures for monitoring
 
-### Module: Conflict Resolution Engine
+### Module: WorldMonitor Agent
+
+Adopted per [ADR-0002](../adr/0002-worldmonitor-mi-source.md). Location: `src/market-intelligence/worldmonitor-adapter/` (`client.ts`, `normalizer.ts`, `adapter.ts`, `cii-consumer.ts` + matching `*.test.ts` files).
 
 **Responsibilities**
-- Detect conflicts between DeepResearch and Grok signals
-- Apply priority rules to resolve conflicts
-- Log all resolutions with reasons for auditability
-- Return resolved intelligence with both signals (winner marked)
+- Poll WorldMonitor's MIT-licensed `worldmonitor` npm SDK (REST API as fallback) on its own decoupled cadence — **not** per-tick.
+- Normalize WorldMonitor items into `IntelligenceItem` (`agent_id: 'worldmonitor'`, `sentiment` defaults to `0`).
+- Separately pull CII scores and emit them to the Risk Manager (not through this layer's `MarketContext` — CII is a Risk Manager soft signal, not MI conflict-resolution input; see `docs/specs/risk-manager-spec.md`).
+- Handle source failures gracefully (emit empty intelligence, never block the pipeline — same contract as DeepResearch/Grok).
 
 **Key Operations**
 
-**Conflict Detection**
-- Group IntelligenceItems by `entity` + `timestamp` (within 5min window)
-- If DeepResearch and Grok both have items for same entity/time with different sentiment → conflict detected
-- Trigger resolution logic
+**Access**
+- Primary: `worldmonitor` npm SDK (MIT), e.g. `wm.news({ region, window })`, `wm.risk(countryCode)`.
+- Fallback: REST API (`api.worldmonitor.app`) if the SDK lacks a needed endpoint.
+- **Not used:** WorldMonitor's MCP transport — it's designed for agent-driven tool discovery; this is a deterministic pipeline consumer, not an agent.
 
-**Priority Rules**
+**Ingestion Cadence**
+- **Decoupled from the trading tick loop**: poll every 5–15 minutes, cache, serve stale-tolerant to analysts between polls (One-Shot Hydration compliance, ADR-0002 §2 / §8). WorldMonitor's own data (geopolitical/macro) doesn't change on a 5s/30s trading clock.
+- **Tier:** Pro ($39.99/mo) — covers this cadence comfortably (60 req/60s per-key MCP limit is far above a call every 5–15 min).
+
+**Processing**
+- Fetch news/risk data from WorldMonitor.
+- Normalize into `IntelligenceItem`: `primaryTitle → headline`, `primarySource → source` (prefixed `worldmonitor:`), `pubDate → timestamp`, `primaryLink → url`, `sentiment = 0` (no per-item classification exists in WorldMonitor's schema).
+- Tag with `type: 'news'` and `agent_id: 'worldmonitor'`.
+- Emit `AgentIntelligence` to core, feeding into the Convergence Engine's `intel`/`regional` source types.
+
+**Failure Handling**
+- If polling fails (API down, rate-limited, key expired), emit empty intelligence — WorldMonitor is supplementary macro context, never a blocking dependency (same posture as DeepResearch/Grok).
+- Respect 429s with exponential backoff.
+- Log failures; alert on sustained outage (> 5 min).
+
+### Module: Convergence Engine
+
+Replaces the prior 2-agent Conflict Resolution Engine wholesale, per [ADR-0002 §7](../adr/0002-worldmonitor-mi-source.md#7-conflict-resolution-engine--n-source-convergence-engine-full-replacement). Location: `src/market-intelligence/convergence-engine/` (`snapshot.ts`, `signals.ts`, `clustering.ts`, `taxonomy.ts` + matching `*.test.ts` files). Reimplemented from WorldMonitor's documented design (research doc §2) — no code copied from WorldMonitor's AGPL `analysis-core.ts`.
+
+**Responsibilities**
+- Assemble a per-tick `StreamSnapshot` from the current cycle's DeepResearch + Grok + WorldMonitor `IntelligenceItem`s.
+- Detect convergence, triangulation, and absence signals across all three sources.
+- Spatially cluster geo-tagged signals.
+- Log every signal for auditability.
+- Return signals alongside the raw per-source `IntelligenceItem`s in `MarketContext` (replaces the old `conflicts` field with `signals`).
+
+**v1 scope note:** stateless, per-cycle detection only. Cross-cycle trend detection (escalating/de-escalating/stable) is explicitly deferred — it needs new persisted, replay-reconstructable state not designed here (tracked as a future ticket once this engine ships and is proven out).
+
+**Key Data Structures**
 
 ```typescript
-function resolveConflict(
-  deepresearch: IntelligenceItem,
-  grok: IntelligenceItem
-): ConflictResolution {
-  const reason = determineConflictReason(deepresearch, grok);
-  
-  switch (reason) {
-    case 'high_impact_news':
-      // Regulatory, earnings, Fed → DeepResearch always wins
-      return {
-        entity: deepresearch.entity,
-        deepresearch_signal: { sentiment: deepresearch.sentiment, confidence: deepresearch.confidence },
-        grok_signal: { sentiment: grok.sentiment, confidence: grok.confidence },
-        resolved_winner: 'deepresearch',
-        reason: 'high_impact_news',
-      };
-    
-    case 'general_sentiment':
-      // DeepResearch wins if confidence > 0.7, otherwise Grok wins
-      if (deepresearch.confidence > 0.7) {
-        return { /* deepresearch wins */ };
-      } else {
-        return { /* grok wins */ };
-      }
-    
-    case 'viral_social_narrative':
-      // Grok wins if sentiment shift > 2σ from baseline
-      // (Need to track 1h rolling baseline for sentiment)
-      // For now, implement as: if grok.confidence > 0.8 and sentiment shift detected → grok wins
-      return { /* grok wins */ };
-    
-    default:
-      // Fallback: DeepResearch wins
-      return { /* deepresearch wins */ };
-  }
+// Assembled fresh each tick from the current cycle's IntelligenceItems — no cross-cycle carry.
+interface StreamSnapshot {
+  newsVelocity: Map<string, number>;         // topic -> items-per-window
+  marketChanges: Map<string, number>;        // symbol -> price change %
+  predictionChanges: Map<string, number>;    // prediction-market title -> yesPrice
+  topicVelocityHistory: Map<string, TopicVelocityPoint[]>;
+  timestamp: number;
+}
+
+type SourceType = 'wire' | 'gov' | 'intel' | 'social' | 'regional' | 'other';
+// DeepResearch -> 'wire' + 'gov'; Grok -> 'social'; WorldMonitor -> 'intel' + 'regional'
+
+interface ConvergenceSignal {
+  type: 'convergence' | 'triangulation' | 'prediction_leads_news' | 'silent_divergence'
+      | 'flow_price_divergence' | 'explained_market_move';
+  entity: string;
+  confidence: number;          // see formulas below
+  sourceTypes: SourceType[];   // which source types contributed
+  timestamp: Date;
 }
 ```
 
+**Signal Types and Confidence Formulas**
+
+| Signal type | Trigger | Confidence |
+|---|---|---|
+| `convergence` | ≥3 distinct `SourceType`s report the same clustered event within a 60-min window | `min(0.95, 0.6 + sourceTypes × 0.1)` |
+| `triangulation` | `wire` + `gov` + `intel` all align on one event | fixed `0.9` |
+| `prediction_leads_news` | Prediction-market shift ≥ threshold with no corresponding news velocity on related topics | per-shift (see below) |
+| `silent_divergence` | Market moves without any news | per-shift (see below) |
+| `flow_price_divergence` | Market move cross-referenced against news + prediction snapshots, diverging | per-shift (see below) |
+| `explained_market_move` | Market move cross-referenced and explained by news + predictions | per-shift (see below) |
+
+The four "per-shift" thresholds (what counts as a qualifying prediction-market shift / market move) are **unpinned config values, tuned in paper trading** — same convention as every other threshold in this stack.
+
+**Source-Type Taxonomy** (adopted verbatim from WorldMonitor): `wire | gov | intel | social | regional | other`.
+
+**Spatial Clustering** (geo-tagged signals only): grid-indexed union-find, O(n·k) proximity clustering, haversine distance, configurable radius (unpinned config value). Per cluster: aggregate max severity per signal type → weighted sum of per-type maxima → diversity bonus `min(30, max(0, (uniqueTypes - 2)) × 12)` → final score `min(100, weightedSum + diversityBonus)`.
+
+**How this generalizes the old priority rules:** the previous "DeepResearch always wins on high-impact events" behavior is the `triangulation`/`convergence` case degenerating to N=2 with DeepResearch's `wire`+`gov` weighting; "Grok wins on viral narratives" maps to a `social`-sourced signal with no corroborating `wire`/`gov`/`intel` — which the new engine can express directly as its own signal type rather than a special-cased override.
+
 **Auditability**
-- Log every conflict resolution to `/conflicts` endpoint (or log file)
-- Include: entity, timestamp, Both signals, winner, reason
-- This enables tuning priority rules based on historical outcomes
+- Log every detected signal (type, entity, sourceTypes, confidence, timestamp) for auditability and future threshold tuning.
 
 ### Module: Data Delivery
 
@@ -342,7 +365,7 @@ function resolveConflict(
 agent_messages_processed_total{agent_id, source}
 agent_errors_total{agent_id, source, error_type}
 agent_latency_seconds{agent_id, source, quantile="0.5|0.99"}
-conflict_resolutions_total{reason}
+convergence_signals_total{type}
 analyst_subscriptions_active{asset_class}
 delivery_errors_total{analyst_id}
 ```
@@ -365,10 +388,10 @@ delivery_errors_total{analyst_id}
 
 Both layers of MI output are persisted:
 
-1. **Raw agent outputs** — the unstructured text and raw API responses from DeepResearch and Grok agents, before normalization. Enables re-normalization if the schema or normalization logic evolves between backtest runs.
+1. **Raw agent outputs** — the unstructured text and raw API responses from DeepResearch, Grok, and WorldMonitor agents, before normalization. Enables re-normalization if the schema or normalization logic evolves between backtest runs.
 2. **Normalized IntelligenceItems** — the structured `IntelligenceItem` objects the MI layer produces after normalization. Enables fast replay without re-running the normalization pipeline.
 
-`MarketContext` and `ConflictResolution` are **not** stored. They are re-assembled on replay by running the same conflict-resolution and assembly logic the live layer uses, exercised against historical IntelligenceItems. This ensures the full MI code path — including conflict resolution — runs during backtest, so bugs in resolution logic surface in replay.
+`MarketContext` and `ConvergenceSignal` are **not** stored. They are re-assembled on replay by running the same convergence-engine and assembly logic the live layer uses, exercised against historical IntelligenceItems. This ensures the full MI code path — including convergence detection — runs during backtest, so bugs in signal-detection logic surface in replay.
 
 **Storage Technology**
 
@@ -409,7 +432,7 @@ class ReplayContext {
   getContext(assetClass: 'crypto' | 'stocks', timeWindow: Duration, trace_id: string): MarketContext {
     // Advance cursor to clock.now(), collect items within lookback window
     const items = this.cursor.next(this.clock.now());
-    // Re-assemble MarketContext using the same conflict-resolution + assembly
+    // Re-assemble MarketContext using the same convergence-engine + assembly
     // logic as the live path (same code, not a separate implementation)
     return assembleMarketContext(items, assetClass, timeWindow);
   }
@@ -424,7 +447,7 @@ Fixed 90-day window. Records older than 90 days are auto-purged. This keeps the 
 
 **Determinism Requirement**
 
-Conflict resolution must be deterministic given the same IntelligenceItems and clock — it is a pure function of items + clock, with no external state. This invariant is what makes re-assembling `MarketContext` on replay safe: the same historical items produce the same `MarketContext` the live system would have produced.
+Convergence-signal detection must be deterministic given the same IntelligenceItems and clock — it is a pure function of items + clock, with no external state. This invariant is what makes re-assembling `MarketContext` on replay safe: the same historical items produce the same `MarketContext` the live system would have produced.
 
 ### Implementation Constraint: No Persistence
 
@@ -451,7 +474,7 @@ The Market Intelligence layer does not persist state (no database, no checkpoint
 - Test external behavior (input → output), not implementation details
 - Mock LLM calls (sentiment analysis) — focus on orchestration logic
 - Test agent failures and recovery (ensure system doesn't block)
-- Test conflict resolution rules (verify priority logic is correct)
+- Test convergence-engine signal detection (verify confidence formulas and taxonomy mapping are correct)
 - Test delivery patterns (pull returns correct data, push delivers updates)
 - Test latency budgets (system responds within expected time)
 
@@ -459,7 +482,7 @@ The Market Intelligence layer does not persist state (no database, no checkpoint
 
 **Market Intelligence Core**
 - Agent orchestration (agents start/stop correctly, failures are handled)
-- Conflict resolution (DeepResearch wins on high-impact, Grok wins on viral narratives, etc.)
+- Convergence detection dispatch (signals returned alongside raw per-source items, not resolved to a single winner)
 - Delivery (pull returns correct data, push delivers updates, throttling works)
 - Health tracking (metrics are recorded correctly, alerts fire on failures)
 
@@ -475,10 +498,17 @@ The Market Intelligence layer does not persist state (no database, no checkpoint
 - Viral narrative detection (detects rapid mention count increases)
 - Rate limit handling (backs off when receiving 429 responses)
 
-**Conflict Resolution Engine**
-- Conflict detection (identifies when agents disagree on entity/timestamp)
-- Priority rules (DeepResearch wins on high-impact, Grok wins on viral narratives)
-- Audit logging (records all resolutions with reasons)
+**WorldMonitor Agent**
+- Decoupled polling (polls on its own 5–15 min cadence regardless of trading tick rate)
+- Normalization (WorldMonitor shapes map correctly onto `IntelligenceItem`, `sentiment` defaults to 0)
+- Failure handling (emits empty intelligence on outage, never blocks the pipeline)
+
+**Convergence Engine**
+- `StreamSnapshot` assembly (built fresh per tick, no cross-cycle carry)
+- Signal detection (each signal type's trigger condition and confidence formula, including the fixed/computed cases)
+- Source-taxonomy mapping (DeepResearch → wire+gov, Grok → social, WorldMonitor → intel+regional)
+- Spatial clustering (union-find grouping, diversity-bonus and final-score formulas)
+- Audit logging (records every detected signal)
 
 **Data Delivery**
 - Pull interface (returns correct data for time window, handles missing data)
@@ -489,7 +519,7 @@ The Market Intelligence layer does not persist state (no database, no checkpoint
 - Sidecar capture (raw + normalized items written to SQLite on push; live system unaffected if store is unavailable)
 - Cursor interface (returns items in timestamp order, respects `timestamp <= clock.now()` no-lookahead boundary, memory-efficient over long sequences)
 - ReplayContext (implements same `getContext()` contract as live MI; returns correct `MarketContext` from historical items)
-- Re-assembly (conflict resolution runs on replay; deterministic given same items + clock)
+- Re-assembly (convergence engine runs on replay; deterministic given same items + clock)
 - Retention (records older than 90 days are purged; backtest fails cleanly if requesting data beyond retention)
 
 ### Prior Art
@@ -541,7 +571,7 @@ Market Intelligence operates at Stage 0 (data collection), feeding into Stage 1 
 ### Domain Glossary Alignment
 
 Per CONTEXT.md:
-- **Market Intelligence**: "The news/sentiment half of the Stage 0 data layer. Runs specialized agents (professional news + social sentiment), resolves cross-source conflicts by priority, and delivers structured intelligence to analysts. Does not cover price/OHLCV — that is the Market Data Service."
+- **Market Intelligence**: "The news/sentiment half of the Stage 0 data layer. Runs specialized agents (professional news, social sentiment, and geopolitical/macro intelligence via WorldMonitor), detects cross-source convergence/triangulation/absence signals via an N-source convergence engine (ADR-0002), and delivers structured intelligence to analysts. Does not cover price/OHLCV — that is the Market Data Service."
 - **Market Data Service**: "A dedicated Stage 0-level data layer, parallel to Market Intelligence, that serves price OHLCV plus precomputed technical indicators to analysts."
 - **Analyst**: "An agent persona that examines market data through a specific lens (technical, fundamental, sentiment, etc.)."
 - **Debate Engine**: "Mediates between conflicting analyst views before the Trader consolidates."
@@ -562,19 +592,19 @@ These may need tuning in Stage 1 based on:
 
 ### Agent Cost Optimization
 
-Both agents run continuously, which means ongoing API costs (data source fees, LLM inference). If costs become prohibitive:
-- Reduce polling frequency (e.g., crypto from 5s to 30s)
+All three agents run continuously, which means ongoing API costs (data source fees, LLM inference, WorldMonitor's $39.99/mo Pro tier). If costs become prohibitive:
+- Reduce polling frequency (e.g., crypto from 5s to 30s; WorldMonitor is already decoupled at 5–15 min)
 - Use cheaper sentiment models (rule-based instead of LLM)
 - Batch process (accumulate data in 1-min windows, process in bulk)
 
-### Conflict Resolution Tuning
+### Convergence Engine Tuning
 
-The priority rules (DeepResearch wins on high-impact, Grok wins on viral narratives) are initial estimates. In practice:
-- May need to tune confidence thresholds (currently 0.7 for DeepResearch general sentiment)
-- May need to define "high-impact" more precisely (regulatory actions, earnings surprises, Fed announcements)
-- May need to track viral narrative baselines (1h rolling mean for mention count)
+The signal thresholds — the four "per-shift" confidence formulas (`prediction_leads_news`, `silent_divergence`, `flow_price_divergence`, `explained_market_move`) and the spatial-clustering radius — are unpinned config values, tuned in paper trading (per [#176](https://github.com/dd-jp/samurai-trading-system/issues/176)'s resolution). In practice:
+- May need to tune what counts as a qualifying prediction-market shift or market move
+- May need to tune the clustering radius for geo-tagged signals
+- May need to revisit the 60-min convergence window
 
-Log all conflicts and resolutions. Review weekly to see if priority rules need adjustment.
+Log all detected signals. Review weekly to see if thresholds need adjustment.
 
 ### Data Source Availability
 
@@ -598,16 +628,18 @@ Potential enhancements (not in this spec):
 
 Wayfinder decisions for this stage live in [docs/wayfinder/market-intelligence-map.md](../wayfinder/market-intelligence-map.md) (migrated from GitHub issue #12). Decisions synthesized here:
 
-- **Data sources** — Bloomberg, Reuters, SEC, Twitter/X, Reddit.
-- **Agent output / data contract** — `AgentIntelligence` / `IntelligenceItem` upstream; `MarketContext` / `ConflictResolution` downstream.
+- **Data sources** — Bloomberg, Reuters, SEC, Twitter/X, Reddit, WorldMonitor (geopolitical/macro).
+- **Agent output / data contract** — `AgentIntelligence` / `IntelligenceItem` upstream; `MarketContext` / `ConvergenceSignal` downstream.
 - **Data format & schema** — normalized UTC timestamps, asset-class tagging, entity extraction.
-- **Update frequency & cadence** — 5s crypto, 30s stocks (market hours), per-source cadence.
+- **Update frequency & cadence** — 5s crypto, 30s stocks (market hours), per-source cadence; WorldMonitor decoupled at 5–15 min regardless of trading cadence.
 - **Storage strategy & retention** — no persistence, restart cleanly, raw feeds ephemeral.
 - **API contracts with analysts** — pull (`getContext`) and push (`subscribe`) delivery patterns.
 - **Error handling & failure modes** — agent failures handled gracefully (retry/backoff/degrade), system never blocks.
 - **Data quality & validation** — schema validation, required fields, value ranges.
-- **Conflict resolution** (map-level decision) — DeepResearch wins on high-impact news; Grok wins on viral narratives > 2σ.
+- **Conflict resolution → convergence engine** (superseded 2026-07-23 — see [ADR-0002](../adr/0002-worldmonitor-mi-source.md)) — the original DeepResearch-wins-on-high-impact / Grok-wins-on-viral-narratives priority rule is fully replaced by an N-source convergence engine (convergence, triangulation, and absence signals across DeepResearch, Grok, and WorldMonitor). Full detail: [Integrate WorldMonitor as Market Intelligence source map (#169)](https://github.com/dd-jp/samurai-trading-system/issues/169), tickets #175/#176.
 
 - **Backtesting data requirements** (resolved 2026-07-20) — see "Backtesting replay store" section in Implementation Decisions above. Historical store persists both raw agent outputs + normalized IntelligenceItems in SQLite; new standalone replay service owns the store; push sidecar capture; cursor/iterator query interface; `ReplayContext` wraps cursor to implement same `getContext()` contract; 90-day retention; IntelligenceItems only stored (MarketContext re-assembled on replay to exercise full MI code path).
+
+- **WorldMonitor as third MI source + CII soft signal + convergence engine** (resolved 2026-07-23) — see [ADR-0002](../adr/0002-worldmonitor-mi-source.md) and the [Integrate WorldMonitor as Market Intelligence source map (#169)](https://github.com/dd-jp/samurai-trading-system/issues/169) for full decision detail across all eight resolved tickets.
 
 The parallel **Market Data Service** (price/OHLCV + indicators) is a separate Stage 0 component with its own map.
