@@ -21,6 +21,7 @@ Key architectural decisions:
 - **Circuit breakers halt entries, never exits; tiered; hard breaker needs manual re-arm.**
 - **Reads a portfolio-accounting view over the shared store** — synchronous, off the Feedback Loop's async path.
 - **Rejects terminate at Risk; only approved intents reach Verdict.**
+- **CII soft signal is advisory only** — WorldMonitor's Country Instability Index (ADR-0002) rides as a `warnings` field on `RiskDecision`, never trimming, rejecting, or otherwise affecting the pipeline's outcome.
 
 ## User Stories
 
@@ -97,6 +98,7 @@ interface RiskDecision {
   } | null;
   binding_constraint: string | null;  // e.g. 'per_asset_class_cap', 'circuit_breaker:portfolio_drawdown'
   reasons: string[];                   // machine tags + human text (audit)
+  warnings: string[];                  // advisory only, e.g. 'macro_risk_flag:RU' — never binding, never overrides status (see CII Soft Signal below)
   risk_snapshot: {
     exposure: Record<string, number>;  // per instrument / class / portfolio
     drawdown_pct: number;
@@ -142,11 +144,23 @@ Monotonic: each step only reduces risk. `binding_constraint` records the step th
 - **Session boundary:** UTC day for crypto, market-day for stocks.
 - Exact thresholds are config, tuned in paper trading.
 
+### Module: CII Soft Signal
+
+Adopted per [ADR-0002](../adr/0002-worldmonitor-mi-source.md) (WorldMonitor as a Market Intelligence source). WorldMonitor's Country Instability Index (CII, 0–100 per country) enters the Risk Manager as an **advisory warning, never a gate or a sizing input**. v1 scope, resolved in [CII soft-signal policy grilling — #174](https://github.com/dd-jp/samurai-trading-system/issues/174):
+
+- **Warning-only, no position-size scaling in v1.** No CII-driven sizing formula is implemented yet — no historical CII series exists at any WorldMonitor tier to calibrate one against (see ADR-0002 §6). Deferred to v2 alongside the correlation-matrix concentration upgrade (backlog #50), once [#182](https://github.com/dd-jp/samurai-trading-system/issues/182)'s post-launch CII snapshot capture yields real history.
+- **Samurai owns a static instrument→country/region mapping** (e.g. Russian ADRs → RU, energy majors → Middle East), independent of and not trusting WorldMonitor's own tagging — lives alongside the v1 static concentration buckets (Check Pipeline step 6).
+- **Surfaces as the advisory `warnings` field on `RiskDecision`** (e.g. `macro_risk_flag:RU`) — travels with the exact decision it's context for, no separate side-channel event or new plumbing.
+- **Fires on absolute CII level, not delta.** A sustained high-risk exposure warns every cycle it's evaluated, not just at the moment of a jump.
+- **Threshold ("CII > N") is an unpinned config value**, tuned in paper trading — same convention as every other Risk Manager threshold.
+- **Never overrides a circuit breaker or the check pipeline's approve/reject/trim outcome, no exceptions.** The CII check runs alongside the pipeline (informational), not as one of its ordered steps — it cannot trim, reject, or otherwise change `order_intent`.
+
 ### Module: State & Accounting
 
 - A small **portfolio-accounting module** computes the `PortfolioView` from the shared SQLite store (positions + fills written by Execution) **plus current marks (last price) from the Market Data Service**: equity = cash + mark-to-market of open positions, drawdown = peak-to-trough of the equity curve, notional exposure = `OpenPosition.filled_size × current mark` (freeze §4 — always reads `filled_size`, **never requested size**, so partially-filled positions are marked at what was actually filled). The *realized* components (round-trip PnL, consecutive losses) come from fills alone; only the *unrealized* mark-to-market components need current prices.
 - Risk reads this **synchronously**, independent of the Feedback Loop (which reads the same data for its slower tuning, but is never in Risk's hot path).
 - **Dependency:** this makes the Risk Manager a consumer of the **Market Data Service** via **two calls** (freeze §3): `getMark(instrument, asOf)` for current/last price (mark-to-market of open positions) **and** `getIndicator(instrument, spec, asOf)` for the **volatility-halt baseline** (the realized/implied-volatility reference the volatility circuit breaker trips against). Alongside the Analysts (`getBars`/`getIndicator`) and Verdict (`getMark`). The Market Data Service is still unbuilt and needs its own map; its scope must include serving current/last price for mark-to-market and indicators for the volatility baseline.
+- **Also a consumer of Market Intelligence's WorldMonitor adapter** (via its `cii-consumer.ts`, ADR-0002) for the CII soft signal — a separate, lower-frequency read than the Market Data Service dependency above, feeding the CII Soft Signal module.
 
 ### Module: Determinism & Kill-Switch
 
@@ -171,6 +185,8 @@ Monotonic: each step only reduces risk. `binding_constraint` records the step th
 
 **State & Determinism** — same input → same decision; point-in-time reads never see future fills.
 
+**CII Soft Signal** — warning fires at absolute CII level above threshold, not on delta; warning never appears in `binding_constraint` or changes `status`/`order_intent`; instrument→country mapping resolves correctly for static test fixtures.
+
 ### Prior Art
 
 - No implementation yet. Injected-clock / mock-clock patterns mirror the Trader, Analysts, and Market Intelligence specs. Deterministic-output assertions (no LLM mock) mirror the Trader spec.
@@ -188,6 +204,8 @@ Monotonic: each step only reduces risk. `binding_constraint` records the step th
 **Exact limit values** — all caps and breaker thresholds are config, tuned in paper trading; not fixed here.
 
 **Dynamic correlation** — v1 uses static concentration buckets; the correlation-matrix upgrade is v2 (backlog #50).
+
+**CII-driven position-size scaling** — v1 CII is warning-only; a `(1 - ciiDelta × k)`-style scaling formula is deferred to v2 alongside #50, pending real CII history from [#182](https://github.com/dd-jp/samurai-trading-system/issues/182).
 
 ## Further Notes
 
@@ -215,6 +233,7 @@ Risk introduces a small portfolio-accounting module (equity/drawdown/exposure ov
 - Dynamic correlation-matrix concentration (v2, #50).
 - Per-strategy risk budgeting once multiple strategies run concurrently.
 - Volatility-scaled exposure caps (tighten caps in high-vol regimes).
+- CII-driven position-size scaling (v2, alongside #50), once [#182](https://github.com/dd-jp/samurai-trading-system/issues/182) yields real CII history to calibrate against.
 
 ## Resolved Decisions (Sources)
 
@@ -227,5 +246,6 @@ Wayfinder decisions for this stage live in [docs/wayfinder/risk-manager-map.md](
 - **State & data** — portfolio-accounting view over the shared store, read synchronously off the Feedback Loop path.
 - **Backtest determinism** — same code path; point-in-time via injected clock; mode-flagged auto-re-arm.
 - **Exit & kill-switch** — exits pass verbatim; kill halts new entries; forced liquidation out of scope.
+- **CII soft signal** (resolved 2026-07-23, see [ADR-0002](../adr/0002-worldmonitor-mi-source.md) and [#174](https://github.com/dd-jp/samurai-trading-system/issues/174)) — WorldMonitor's Country Instability Index enters as an advisory `warnings` field on `RiskDecision`, warning-only in v1 (no sizing), Samurai-owned static instrument→country mapping, fires on absolute level not delta, unpinned threshold, never overrides breakers or the pipeline outcome.
 
-**Dependencies:** the portfolio-accounting view + shared position store (also used by the Trader, #48); the **Market Data Service** (current marks for mark-to-market — a second consumer alongside Analysts; still unbuilt, needs its own map); and the Feedback Loop (Stage 6, not yet charted) which tunes limits.
+**Dependencies:** the portfolio-accounting view + shared position store (also used by the Trader, #48); the **Market Data Service** (current marks for mark-to-market — a second consumer alongside Analysts; still unbuilt, needs its own map); the Feedback Loop (Stage 6, not yet charted) which tunes limits; and **Market Intelligence's WorldMonitor adapter** (CII soft signal, per ADR-0002).

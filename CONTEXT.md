@@ -62,7 +62,7 @@ Hard stop when a metric crosses a threshold. Max daily drawdown, max position si
 Alert system where silence itself triggers notification. If the bot stops reporting at its expected cadence, Telegram/email fires. Catches crash, network drop, zombie process.
 
 **Market Intelligence**
-The news/sentiment half of the Stage 0 data layer. Runs specialized agents (professional news + social sentiment), resolves cross-source conflicts by priority, and delivers structured intelligence to analysts. Does not cover price/OHLCV — that is the Market Data Service.
+The news/sentiment half of the Stage 0 data layer. Runs specialized agents (professional news, social sentiment, and geopolitical/macro intelligence via WorldMonitor), detects cross-source convergence/triangulation/absence signals via an N-source convergence engine (ADR-0002), and delivers structured intelligence to analysts. Does not cover price/OHLCV — that is the Market Data Service.
 
 **Market Data Service**
 A dedicated Stage 0-level data layer, parallel to Market Intelligence, that serves price OHLCV plus precomputed technical indicators (moving averages, RSI, etc.) to analysts. Market Intelligence covers news/sentiment intelligence only and does NOT serve price data — the Market Data Service fills that gap. Centralizes point-in-time indicator computation so analysts stay stateless. Needs its own wayfinder map before implementation.
