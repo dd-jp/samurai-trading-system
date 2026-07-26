@@ -157,6 +157,42 @@ export interface DebateLogStore {
 }
 
 /**
+ * Persisted real-field record of a `VerdictDecision` (verdict-spec.md story
+ * 17, shared-sqlite-store-spec.md `verdict_log`). Real-field companion to the
+ * generic `audit_log` (digests/hashes only) — mirrors `DebateLog`'s pattern of
+ * a stage-specific table alongside `audit_log`. Keyed by `trace_id`, the
+ * correlation ID threaded from the Orchestrator's tick (not `idempotency_key`,
+ * which is retained as a non-PK column for cross-reference to
+ * `open_positions`/`fills`). Append-only: one row per `VerdictDecision`.
+ */
+export interface VerdictLog {
+  trace_id: string;
+  idempotency_key: string;
+  instrument: string;
+  status: 'go' | 'no_go';
+  /** The gate that fired; null iff `status === 'go'`. */
+  no_go_reason: string | null;
+  /**
+   * True whenever a human path was actually taken — live approval/rejection/
+   * timeout, or backtest's bypassed-but-recorded HITL gate — i.e.
+   * `approval_path !== 'automated'`. NOT `would_require_approval`, which is
+   * also true on an automated backtest bypass where no override occurred.
+   */
+  hitl_override: boolean;
+  timestamp: Date;
+}
+
+/**
+ * shared_store `VerdictLog` port. Owned by Verdict (the writer); read by the
+ * Dashboard's verdict-history view. Append-only: no update/delete, one row
+ * per `trace_id`.
+ */
+export interface VerdictLogStore {
+  /** Persists one row per `VerdictDecision`; called once per `decide()`. */
+  writeLog(entry: VerdictLog): void;
+}
+
+/**
  * Lifecycle of a bracket's entry order. See docs/specs/execution-spec.md
  * ("Module: Order State Machine & Partial Fills"). Every transition is
  * persisted, so the state is always durable and inspectable. Ticket #82

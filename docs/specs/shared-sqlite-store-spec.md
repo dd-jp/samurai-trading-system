@@ -241,6 +241,26 @@ CREATE TABLE debate_log (
 );
 ```
 
+**Verdict** — owner: `docs/specs/verdict-spec.md`
+
+```sql
+-- One row per VerdictDecision, keyed by trace_id. Real-field companion to the
+-- generic audit_log (which only holds digests/hashes) -- mirrors debate_log's
+-- pattern of a stage-specific table alongside audit_log. Powers the dashboard's
+-- getVerdictHistory, which audit_log's hash-only columns cannot answer.
+CREATE TABLE verdict_log (
+  trace_id        TEXT PRIMARY KEY,
+  idempotency_key TEXT NOT NULL,
+  instrument      TEXT NOT NULL,
+  status          TEXT NOT NULL CHECK(status IN ('go', 'no_go')),
+  no_go_reason    TEXT,
+  hitl_override   INTEGER NOT NULL,
+  timestamp       TEXT NOT NULL
+);
+```
+
+Resolved: [Verdict: implement VerdictLogStore against the shared SQLite store (#206)](https://github.com/dd-jp/samurai-trading-system/issues/206), closing GAP-4 from the 2026-07-26 cross-verify pass ([docs/specs/cross-verify-2026-07-26.md](cross-verify-2026-07-26.md)) — `audit_log.output_digest` is a hash, not a queryable payload, so it cannot answer `VerdictAuditEntry.reason`/`.hitl_override`; `verdict_log` is Verdict's own real-field record, keyed by `trace_id` (the correlation ID threaded from the Orchestrator's tick) with `idempotency_key` retained as a non-PK column for cross-reference to `open_positions`/`fills`. `no_go_reason` is nullable (`null` on `go`); `hitl_override` is the dashboard-facing derived flag — true whenever `VerdictDecision.approval_path !== 'automated'` (a human path was actually taken, live or backtest-bypassed-but-recorded), not `would_require_approval` (which is also true on an automated-bypass backtest run where no override occurred).
+
 **Orchestrator** — owner: `docs/specs/orchestrator-spec.md`
 
 ```sql
@@ -269,12 +289,12 @@ CREATE TABLE current_tick (
 
 ### Non-Collision Verification
 
-`cross-spec-contracts.md`'s "shared-store table non-collision" spot-check was clean at the table-name level; re-verified here at the field level across all fourteen tables above:
+`cross-spec-contracts.md`'s "shared-store table non-collision" spot-check was clean at the table-name level; re-verified here at the field level across all fifteen tables above:
 
 - **`latest_mark` was missing `asset_class`** (#183) — the `Mark` interface (market-data-service-spec.md) declares it, the original persistence bullet dropped it. **Fixed above**, not silently — this DDL is the first place the full column list was ever written out, so there was no prior "wrong" schema to correct, only an incomplete prose description.
 - **`Fill` vs. the cost model's result type** — already resolved pre-existing (GAP-F renamed the cost model's return type to `CostModelResult` specifically to avoid colliding with the persisted `fills` table; `cross-spec-contracts.md` confirms this explicitly).
 - **`debate_id` type/semantics** — a deterministic hash string, consistent everywhere it's reused as a join key: `open_positions.debate_id`, `closed_trades.debate_id`, `cosine_setups.debate_id` (PK here), and `debate_log.debate_id` (PK there) are all `TEXT`, all populated from the same Debate Engine-issued hash (debate-engine-spec.md / trader-spec.md). No divergence.
-- **`idempotency_key` type/semantics** — `TEXT` everywhere it appears (`open_positions` PK, `fills` composite PK component, `closed_trades` PK, `cosine_setups` non-unique column). `cosine_setups` is the one table where it is deliberately **not** the primary key — see the note under that table — which is a real asymmetry with `open_positions`/`closed_trades` but not a collision: each table's key is dictated by its own write pattern (one `cosine_setups` row per *debate*, one `open_positions`/`closed_trades` row per *decision lifecycle*), matching this spec's "every table's own consumer dictates its key" principle.
+- **`idempotency_key` type/semantics** — `TEXT` everywhere it appears (`open_positions` PK, `fills` composite PK component, `closed_trades` PK, `cosine_setups` non-unique column, `verdict_log` non-unique column). `cosine_setups` and `verdict_log` are the two tables where it is deliberately **not** the primary key — see the notes under each table — which is a real asymmetry with `open_positions`/`closed_trades` but not a collision: each table's key is dictated by its own write pattern (one `cosine_setups` row per *debate*, one `verdict_log` row per *decision*, keyed on `trace_id` since that's the correlation ID Verdict actually receives, one `open_positions`/`closed_trades` row per *decision lifecycle*), matching this spec's "every table's own consumer dictates its key" principle.
 - **`asset_class` type/semantics** — the `CHECK(asset_class IN ('crypto', 'stocks'))` constraint and column name are identical across all five tables that carry it (`latest_mark`, `open_positions`, `closed_trades`, `cosine_setups`, `current_tick`). No divergence.
 - No other field-level collisions found.
 
@@ -320,6 +340,7 @@ Cost-Model/Backtest → config_trials
 Feedback Loop       → analyst_weights, strategy_params, risk_thresholds, dial_adjustments, cosine_setups (labels only; Trader writes)
 Trader              → cosine_setups (writes; FL labels)
 Debate Engine       → debate_log
+Verdict             → verdict_log
 Orchestrator        → audit_log, current_tick
 ```
 
@@ -348,4 +369,4 @@ Wayfinder decisions for this stage live on the [Shared SQLite Store map (#162)](
 - **Cosine setup store schema** — `cosine_setups` table, `debate_id` PK, `idempotency_key` retained as a required indexed non-unique join column, JSON feature vectors, nullable `r_multiple` as the open/closed signal, nullable `closed_at` for point-in-time correctness ([#181](https://github.com/dd-jp/samurai-trading-system/issues/181)).
 - **Consolidated DDL + field-level non-collision re-check** — this document ([#167](https://github.com/dd-jp/samurai-trading-system/issues/167)).
 
-**Dependencies:** none upstream — this is the foundational persistence layer every other stage's spec already assumes. Consumed by: Market Data Service, Execution, Cost-Model/Backtest Harness, Feedback Loop, Trader, Debate Engine, Orchestrator, Risk Manager, Verdict, and the Dashboard (read-only, via `audit_log`).
+**Dependencies:** none upstream — this is the foundational persistence layer every other stage's spec already assumes. Consumed by: Market Data Service, Execution, Cost-Model/Backtest Harness, Feedback Loop, Trader, Debate Engine, Orchestrator, Risk Manager, Verdict, and the Dashboard (read-only, via `audit_log` for tick status and `verdict_log` for verdict history).
