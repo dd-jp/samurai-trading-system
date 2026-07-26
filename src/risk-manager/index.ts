@@ -82,7 +82,7 @@ export class RiskManagerImpl implements RiskManager {
   constructor(private readonly config: RiskConfig) {}
 
   evaluate(input: RiskInput): RiskDecision {
-    const { intent, portfolio, breakers, correlation, cii } = input;
+    const { intent, portfolio, breakers, correlation, cii, critic } = input;
     const warnings = ciiWarnings(intent.instrument, cii, this.config.cii_threshold);
 
     if (intent.intent_type === 'exit') {
@@ -219,20 +219,63 @@ export class RiskManagerImpl implements RiskManager {
       };
     }
 
+    // Step 8: risk-critic review (#204).
+    const criticWarnings = warnings;
+    if (critic) {
+      const criticTrim = applyCritic(critic, notional, finalSize, reasons);
+      if (criticTrim.rejected) {
+        return {
+          status: 'rejected',
+          order_intent: null,
+          modifications: null,
+          binding_constraint: 'risk_critic:reject',
+          reasons,
+          warnings: criticWarnings,
+          risk_snapshot: snapshot(portfolio, breakers),
+        };
+      }
+      if (criticTrim.changed) {
+        notional = criticTrim.notional;
+        bindingConstraint = 'risk_critic:trim';
+      }
+    }
+
     return {
       status: 'approved',
-      order_intent: { ...intent, size: finalSize },
+      order_intent: { ...intent, size: notional / intent.entry },
       modifications: {
         original_size: intent.size,
-        final_size: finalSize,
-        // No check in the documented pipeline tightens a stop; reserved for
-        // future checks (e.g. circuit-breaker-adjacent volatility trims).
+        final_size: notional / intent.entry,
         stop_tightened: false,
       },
       binding_constraint: bindingConstraint,
       reasons,
-      warnings,
+      warnings: criticWarnings,
       risk_snapshot: snapshot(portfolio, breakers),
     };
   }
+}
+
+function applyCritic(
+  critic: { verdict: RiskCriticVerdict['verdict']; max_notional: number | null; reasoning: string },
+  notional: number,
+  finalSize: number,
+  reasons: string[],
+): { changed: boolean; notional: number; rejected: boolean } {
+  if (critic.verdict === 'pass' || critic.verdict === 'unavailable') {
+    return { changed: false, notional: finalSize * (critic.verdict === 'pass' ? 1 : 1), rejected: false };
+  }
+
+  if (critic.verdict === 'reject') {
+    reasons.push(`risk_critic: ${critic.reasoning}`);
+    return { changed: true, notional, rejected: true };
+  }
+
+  const criticCap = critic.max_notional ?? notional;
+  if (criticCap >= notional) {
+    return { changed: false, notional, rejected: false };
+  }
+
+  reasons.push(`risk_critic: trimmed notional from ${notional} to ${criticCap} (${critic.reasoning})`);
+  return { changed: true, notional: criticCap, rejected: false };
 }
