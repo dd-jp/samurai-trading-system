@@ -35,6 +35,15 @@ E[trade] = (P_win × Avg_win) − (P_loss × Avg_loss) − Costs. The north star
 **Edge**
 A statistical advantage that persists after costs, decay, and multiple-testing correction. Must be economically explainable (behavioral inefficiency, risk premium, or structural/liquidity advantage).
 
+**Samurai's Edge Thesis (Stage 0)**
+**Status: PROPOSED, awaiting David's affirmation** — per `docs/research/02-staged-deployment-plan.md` Stage 0, this is a claim only the strategy's owner can make ("*you* can explain your strategy's expected edge to someone else in under a minute"). Drafted here so the question isn't skipped; treat as open until confirmed.
+
+- **Claimed category:** structural / information-processing advantage — not behavioral-inefficiency (no claim of detecting specific crowd mispricing) and not risk-premium (not harvesting carry/volatility/liquidity premium).
+- **Mechanism:** the live pipeline synthesizes multiple independent signal lenses (technical, fundamental, sentiment, news, and geopolitical/macro context via Market Intelligence) *in parallel per tick*, then runs them through an adversarial Debate Engine that surfaces disagreement between lenses rather than averaging it away. The claim is that this catches cases a single-model or discretionary view would either miss (blind to one of the signal classes) or overconfidently smooth over (no adversarial check on its own read).
+- **Explicitly NOT part of the claimed edge:** Feedback Loop weight tuning. It is bounded, does not change the underlying market model (per the Feedback Loop glossary entry above), and per `docs/specs/analysts-spec.md`'s explicit exclusion of autonomous adaptation, leaning on it as a source of edge would itself undermine the "economically explainable edge" and PBO-discipline invariants. The synthesis + adversarial-disagreement mechanism must stand on its own; weight tuning only calibrates within it.
+- **Falsification test:** if the live pipeline's out-of-sample, post-cost expectancy (Stage 2/3-gated: DSR-significant, PBO ≤ 0.05) is statistically indistinguishable from a single best-performing analyst lens alone, or from the Stage 2 mechanical proxy strategy, the synthesis-plus-debate structure is not adding value beyond noise and cost — the thesis is false and the architecture needs rework, not re-tuning.
+- **Which stage gate tests it:** Stage 2/3, run against the **live LLM debate pipeline specifically** — not the mechanical proxy strategy (`docs/wayfinder` / issue #156, dual-SMA crossover). That proxy exists only to validate the Stage 1/2 harness (cost model, DSR/PBO, walk-forward) mechanically; its trend-continuation thesis is unrelated to this one and its results must never be read as evidence for or against this edge claim.
+
 **Overfitting**
 Manufacturing high in-sample Sharpe by testing too many configurations against noise. Measured via Probability of Backtest Overfitting (PBO). Kill if PBO > 0.05.
 
