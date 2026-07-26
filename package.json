@@ -8,7 +8,8 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && npm run build:migrations",
+    "build:migrations": "node --eval \"require('node:fs').cpSync('src/shared/store/migrations','dist/shared/store/migrations',{recursive:true})\"",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "biome check .",
@@ -18,8 +19,15 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.3",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^26.1.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.1"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.1": true
   }
 }
