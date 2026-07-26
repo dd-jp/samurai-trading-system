@@ -24,6 +24,7 @@ import type {
   PortfolioView,
   RiskConfig,
   RiskDecision,
+  RiskCriticVerdict,
   RiskInput,
   RiskManager,
 } from './types.js';

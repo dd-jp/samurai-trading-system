@@ -1,3 +1,5 @@
+import type { RiskCriticLog, RiskCriticStore, RiskCriticVerdict } from './types.js';
+
 export type { RiskCriticStore, RiskCriticLog, RiskCriticVerdict } from './types.js';
 
 export class InMemoryRiskCriticStore implements RiskCriticStore {
