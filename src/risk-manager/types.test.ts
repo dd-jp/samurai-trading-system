@@ -3,6 +3,7 @@ import type { OrderIntent } from '../shared/types.js';
 import type {
   BreakerState,
   CorrelationEstimate,
+  PersistedBreakerState,
   PortfolioView,
   RiskConfig,
   RiskDecision,
@@ -72,6 +73,29 @@ describe('BreakerState', () => {
   });
 });
 
+describe('PersistedBreakerState', () => {
+  it('matches the crash-restart-safe, one-row-per-tier shape (#203)', () => {
+    const rows: PersistedBreakerState[] = [
+      {
+        tier: 'portfolio_drawdown',
+        tripped: true,
+        tripped_at: new Date('2026-07-10T00:00:00Z'),
+        reset_at: null,
+        reason: 'portfolio_drawdown_hard',
+      },
+      {
+        tier: 'kill_switch',
+        tripped: false,
+        tripped_at: null,
+        reset_at: null,
+        reason: null,
+      },
+    ];
+
+    expectTypeOf(rows).toMatchTypeOf<PersistedBreakerState[]>();
+  });
+});
+
 describe('RiskConfig', () => {
   it('matches the config-driven threshold shape', () => {
     const config: RiskConfig = {
@@ -119,6 +143,16 @@ describe('RiskInput', () => {
         asset_class_tripped: { crypto: false, stocks: false },
         armed_breakers: [],
       },
+      next_breaker_state: [
+        {
+          tier: 'portfolio_drawdown',
+          tripped: false,
+          tripped_at: null,
+          reset_at: null,
+          reason: null,
+        },
+        { tier: 'kill_switch', tripped: false, tripped_at: null, reset_at: null, reason: null },
+      ],
       correlation: { correlations: {} },
       cii: {},
       mode: 'live',
@@ -142,6 +176,16 @@ describe('RiskDecision', () => {
         drawdown_pct: 0,
         armed_breakers: [],
       },
+      next_breaker_state: [
+        {
+          tier: 'portfolio_drawdown',
+          tripped: false,
+          tripped_at: null,
+          reset_at: null,
+          reason: null,
+        },
+        { tier: 'kill_switch', tripped: false, tripped_at: null, reset_at: null, reason: null },
+      ],
     };
 
     expectTypeOf(decision).toMatchTypeOf<RiskDecision>();
@@ -161,6 +205,16 @@ describe('RiskDecision', () => {
         drawdown_pct: 0,
         armed_breakers: [],
       },
+      next_breaker_state: [
+        {
+          tier: 'portfolio_drawdown',
+          tripped: true,
+          tripped_at: new Date('2026-07-10T00:00:00Z'),
+          reset_at: null,
+          reason: 'portfolio_drawdown_hard',
+        },
+        { tier: 'kill_switch', tripped: false, tripped_at: null, reset_at: null, reason: null },
+      ],
     };
 
     expectTypeOf(decision).toMatchTypeOf<RiskDecision>();

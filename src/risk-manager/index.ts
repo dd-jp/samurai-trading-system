@@ -30,6 +30,14 @@ import type {
 } from './types.js';
 
 /**
+ * `RiskInput.next_breaker_state` (#203) is only ever echoed onto
+ * `RiskDecision.next_breaker_state` below — `evaluate()` stays pure and
+ * never computes or mutates breaker state itself. The caller (whoever
+ * called `CircuitBreakers.getPersistedState()` to build this input)
+ * persists the echoed value to the `breaker_state` table after each call.
+ */
+
+/**
  * CII soft signal (#205, ADR-0002): runs alongside the check pipeline, not
  * as one of its ordered steps — purely advisory, never consulted by any trim
  * or reject decision above. Fires on the country's absolute CII level (not
@@ -83,7 +91,7 @@ export class RiskManagerImpl implements RiskManager {
   constructor(private readonly config: RiskConfig) {}
 
   evaluate(input: RiskInput): RiskDecision {
-    const { intent, portfolio, breakers, correlation, cii, critic } = input;
+    const { intent, portfolio, breakers, correlation, cii, critic, next_breaker_state } = input;
     const warnings = ciiWarnings(intent.instrument, cii, this.config.cii_threshold);
 
     if (intent.intent_type === 'exit') {
@@ -99,6 +107,7 @@ export class RiskManagerImpl implements RiskManager {
         reasons: ['exit: bypasses all entry gates, passes through verbatim'],
         warnings,
         risk_snapshot: snapshot(portfolio, breakers),
+        next_breaker_state,
       };
     }
 
@@ -122,6 +131,7 @@ export class RiskManagerImpl implements RiskManager {
         ],
         warnings,
         risk_snapshot: snapshot(portfolio, breakers),
+        next_breaker_state,
       };
     }
 
@@ -217,6 +227,7 @@ export class RiskManagerImpl implements RiskManager {
         reasons,
         warnings,
         risk_snapshot: snapshot(portfolio, breakers),
+        next_breaker_state,
       };
     }
 
@@ -233,6 +244,7 @@ export class RiskManagerImpl implements RiskManager {
           reasons,
           warnings: criticWarnings,
           risk_snapshot: snapshot(portfolio, breakers),
+          next_breaker_state,
         };
       }
       if (criticTrim.changed) {
@@ -253,6 +265,7 @@ export class RiskManagerImpl implements RiskManager {
       reasons,
       warnings: criticWarnings,
       risk_snapshot: snapshot(portfolio, breakers),
+      next_breaker_state,
     };
   }
 }

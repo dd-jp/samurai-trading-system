@@ -25,6 +25,22 @@ export interface BreakerState {
 }
 
 /**
+ * Crash-restart-safe row shape for the sticky breakers (hard drawdown +
+ * kill-switch) — one row per tier, matching the `breaker_state` table in
+ * shared-sqlite-store-spec.md (ticket #203). Unlike `BreakerState` (a
+ * derived, per-evaluate-call view with no timestamps), this shape is
+ * lossless: `CircuitBreakers` can be reconstructed from it exactly,
+ * which is what makes trip state survive a process restart.
+ */
+export interface PersistedBreakerState {
+  tier: 'portfolio_drawdown' | 'kill_switch';
+  tripped: boolean;
+  tripped_at: Date | null;
+  reset_at: Date | null;
+  reason: string | null;
+}
+
+/**
  * Accounting view over the shared store (#78). Consumed here read-only —
  * the pipeline never computes exposure/drawdown itself.
  */
@@ -114,6 +130,14 @@ export interface RiskInput {
   clock: Clock;
   portfolio: PortfolioView;
   breakers: BreakerState;
+  /**
+   * Lossless sticky-breaker rows for this call, pre-computed by
+   * `CircuitBreakers.getPersistedState()` (#203) — `evaluate()` only echoes
+   * this onto `RiskDecision.next_breaker_state`; it never derives or
+   * mutates it. The caller persists it to the `breaker_state` table after
+   * each call so a restart can reconstruct `CircuitBreakers` exactly.
+   */
+  next_breaker_state: PersistedBreakerState[];
   /** Pairwise correlation of the intent's instrument vs held instruments (#50); pre-computed by correlation.ts. */
   correlation: CorrelationEstimate;
   /**
@@ -155,6 +179,8 @@ export interface RiskDecision {
     drawdown_pct: number;
     armed_breakers: string[];
   };
+  /** Echo of `RiskInput.next_breaker_state` (#203) — the caller persists this to the `breaker_state` table so a restart survives a tripped breaker. */
+  next_breaker_state: PersistedBreakerState[];
 }
 
 /** Single test seam. Fully deterministic given its inputs. */
