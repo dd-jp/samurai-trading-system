@@ -11,7 +11,14 @@
  * (#50, correlation.ts) are consumed as pre-built inputs — this pipeline
  * does not compute exposure, drawdown, breaker trips, or correlations
  * itself.
+ *
+ * The CII soft signal (#205, ADR-0002) runs alongside this pipeline as a
+ * purely advisory check — it reads `RiskInput.cii` (pre-fetched by
+ * `CiiConsumer`, market-intelligence/worldmonitor-adapter/cii-consumer.ts)
+ * and appends to `RiskDecision.warnings`, but never participates in trimming
+ * or rejecting.
  */
+import { countryForInstrument } from './cii-mapping.js';
 import type {
   BreakerState,
   PortfolioView,
@@ -20,6 +27,26 @@ import type {
   RiskInput,
   RiskManager,
 } from './types.js';
+
+/**
+ * CII soft signal (#205, ADR-0002): runs alongside the check pipeline, not
+ * as one of its ordered steps — purely advisory, never consulted by any trim
+ * or reject decision above. Fires on the country's absolute CII level (not
+ * delta), so a sustained high-risk exposure warns every cycle it's
+ * evaluated. An unmapped instrument or a country with no cached score
+ * produces no warning.
+ */
+function ciiWarnings(instrument: string, cii: Record<string, number>, threshold: number): string[] {
+  const country = countryForInstrument(instrument);
+  if (country === null) {
+    return [];
+  }
+  const score = cii[country];
+  if (score === undefined || score <= threshold) {
+    return [];
+  }
+  return [`macro_risk_flag:${country}`];
+}
 
 function snapshot(portfolio: PortfolioView, breakers: BreakerState): RiskDecision['risk_snapshot'] {
   return {
@@ -55,7 +82,8 @@ export class RiskManagerImpl implements RiskManager {
   constructor(private readonly config: RiskConfig) {}
 
   evaluate(input: RiskInput): RiskDecision {
-    const { intent, portfolio, breakers, correlation } = input;
+    const { intent, portfolio, breakers, correlation, cii } = input;
+    const warnings = ciiWarnings(intent.instrument, cii, this.config.cii_threshold);
 
     if (intent.intent_type === 'exit') {
       return {
@@ -68,6 +96,7 @@ export class RiskManagerImpl implements RiskManager {
         },
         binding_constraint: null,
         reasons: ['exit: bypasses all entry gates, passes through verbatim'],
+        warnings,
         risk_snapshot: snapshot(portfolio, breakers),
       };
     }
@@ -90,6 +119,7 @@ export class RiskManagerImpl implements RiskManager {
             breakers.armed_breakers.length > 0 ? breakers.armed_breakers.join(', ') : 'none'
           })`,
         ],
+        warnings,
         risk_snapshot: snapshot(portfolio, breakers),
       };
     }
@@ -184,6 +214,7 @@ export class RiskManagerImpl implements RiskManager {
         modifications: null,
         binding_constraint: 'min_viable_size',
         reasons,
+        warnings,
         risk_snapshot: snapshot(portfolio, breakers),
       };
     }
@@ -200,6 +231,7 @@ export class RiskManagerImpl implements RiskManager {
       },
       binding_constraint: bindingConstraint,
       reasons,
+      warnings,
       risk_snapshot: snapshot(portfolio, breakers),
     };
   }

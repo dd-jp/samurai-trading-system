@@ -85,6 +85,7 @@ function makeConfig(overrides: Partial<RiskConfig> = {}): RiskConfig {
     portfolio_gross_cap: 1_000_000,
     concentration: { cap: 1_000_000, threshold: 0.7 },
     min_viable_size: 100,
+    cii_threshold: 70,
     ...overrides,
   };
 }
@@ -97,6 +98,7 @@ function makeInput(overrides: Partial<RiskInput> = {}): RiskInput {
     portfolio: makePortfolio(),
     breakers: makeBreakers(),
     correlation: makeCorrelation(),
+    cii: {},
     mode: 'live',
     ...overrides,
   };
@@ -375,5 +377,115 @@ describe('RiskManagerImpl.evaluate — audit fields', () => {
     expect(decision.risk_snapshot.exposure.portfolio).toBe(1_000);
     expect(decision.risk_snapshot.drawdown_pct).toBe(0.05);
     expect(decision.risk_snapshot.armed_breakers).toEqual(['crypto_daily_loss_soft']);
+  });
+});
+
+describe('RiskManagerImpl.evaluate — CII soft signal (#205)', () => {
+  it('fires macro_risk_flag when the mapped country is above the absolute threshold', () => {
+    const manager = new RiskManagerImpl(makeConfig({ cii_threshold: 70 }));
+    const input = makeInput({
+      intent: makeIntent({ instrument: 'YNDX' }),
+      cii: { RU: 85 },
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.warnings).toEqual(['macro_risk_flag:RU']);
+  });
+
+  it('does not fire when the country is at or below the threshold', () => {
+    const manager = new RiskManagerImpl(makeConfig({ cii_threshold: 70 }));
+    const input = makeInput({
+      intent: makeIntent({ instrument: 'YNDX' }),
+      cii: { RU: 70 },
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.warnings).toEqual([]);
+  });
+
+  it('does not fire for an instrument absent from the static country mapping', () => {
+    const manager = new RiskManagerImpl(makeConfig({ cii_threshold: 70 }));
+    const input = makeInput({
+      intent: makeIntent({ instrument: 'AAPL' }),
+      cii: { RU: 99 },
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.warnings).toEqual([]);
+  });
+
+  it('does not fire when the mapped country has no cached score', () => {
+    const manager = new RiskManagerImpl(makeConfig({ cii_threshold: 70 }));
+    const input = makeInput({
+      intent: makeIntent({ instrument: 'YNDX' }),
+      cii: {},
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.warnings).toEqual([]);
+  });
+
+  it('fires every cycle a sustained high CII level is evaluated, not just on change', () => {
+    const manager = new RiskManagerImpl(makeConfig({ cii_threshold: 70 }));
+    const input = makeInput({
+      intent: makeIntent({ instrument: 'YNDX' }),
+      cii: { RU: 90 },
+    });
+
+    const first = manager.evaluate(input);
+    const second = manager.evaluate(input);
+
+    expect(first.warnings).toEqual(['macro_risk_flag:RU']);
+    expect(second.warnings).toEqual(['macro_risk_flag:RU']);
+  });
+
+  it('never appears in binding_constraint or changes status/order_intent when it fires alongside a trim', () => {
+    const manager = new RiskManagerImpl(
+      makeConfig({ cii_threshold: 70, max_position_size: 5_000 }),
+    );
+    const input = makeInput({
+      intent: makeIntent({ instrument: 'YNDX', size: 100, entry: 100 }),
+      cii: { RU: 90 },
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.warnings).toEqual(['macro_risk_flag:RU']);
+    expect(decision.binding_constraint).toBe('per_trade_size_cap');
+    expect(decision.status).toBe('approved');
+    expect(decision.order_intent?.size).toBe(50);
+  });
+
+  it('still attaches the warning to an exit, which otherwise bypasses all entry gates', () => {
+    const manager = new RiskManagerImpl(makeConfig({ cii_threshold: 70 }));
+    const input = makeInput({
+      intent: makeIntent({ instrument: 'YNDX', intent_type: 'exit' }),
+      cii: { RU: 90 },
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.warnings).toEqual(['macro_risk_flag:RU']);
+    expect(decision.status).toBe('approved');
+    expect(decision.binding_constraint).toBeNull();
+  });
+
+  it('never appears in binding_constraint when a breaker rejects the intent', () => {
+    const manager = new RiskManagerImpl(makeConfig({ cii_threshold: 70 }));
+    const input = makeInput({
+      intent: makeIntent({ instrument: 'YNDX' }),
+      breakers: makeBreakers({ portfolio_tripped: true }),
+      cii: { RU: 90 },
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.warnings).toEqual(['macro_risk_flag:RU']);
+    expect(decision.status).toBe('rejected');
+    expect(decision.binding_constraint).toBe('circuit_breaker:portfolio');
   });
 });

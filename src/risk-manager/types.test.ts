@@ -81,6 +81,7 @@ describe('RiskConfig', () => {
       portfolio_gross_cap: 90_000,
       concentration: { cap: 30_000, threshold: 0.7 },
       min_viable_size: 500,
+      cii_threshold: 70,
     };
 
     expectTypeOf(config).toMatchTypeOf<RiskConfig>();
@@ -119,6 +120,7 @@ describe('RiskInput', () => {
         armed_breakers: [],
       },
       correlation: { correlations: {} },
+      cii: {},
       mode: 'live',
     };
 
@@ -134,6 +136,7 @@ describe('RiskDecision', () => {
       modifications: { original_size: 100, final_size: 80, stop_tightened: false },
       binding_constraint: 'per_trade_size_cap',
       reasons: ['per_trade_size_cap: trimmed to max_position_size'],
+      warnings: [],
       risk_snapshot: {
         exposure: { AAPL: 15_200, stocks: 15_200, portfolio: 15_200 },
         drawdown_pct: 0,
@@ -152,6 +155,7 @@ describe('RiskDecision', () => {
       modifications: null,
       binding_constraint: 'min_viable_size',
       reasons: ['min_viable_size: trimmed size below viable minimum'],
+      warnings: [],
       risk_snapshot: {
         exposure: {},
         drawdown_pct: 0,

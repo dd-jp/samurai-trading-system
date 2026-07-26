@@ -79,6 +79,8 @@ export interface RiskConfig {
   };
   /** Below this notional, a trimmed intent is dust and must be rejected. */
   min_viable_size: number;
+  /** CII soft signal (#205): absolute WorldMonitor CII level (0-100) above which a warning fires. Unpinned, tuned in paper trading. */
+  cii_threshold: number;
 }
 
 export interface RiskInput {
@@ -90,6 +92,14 @@ export interface RiskInput {
   breakers: BreakerState;
   /** Pairwise correlation of the intent's instrument vs held instruments (#50); pre-computed by correlation.ts. */
   correlation: CorrelationEstimate;
+  /**
+   * WorldMonitor CII soft signal (#205), keyed by country/region code.
+   * Pre-fetched by `CiiConsumer` (market-intelligence/worldmonitor-adapter/cii-consumer.ts)
+   * on its own decoupled cadence, not read live inside `evaluate()`. A country
+   * absent from this record has no known score (not zero risk) — see
+   * `CiiConsumer.getScores`.
+   */
+  cii: Record<string, number>;
   /** Selects manual vs auto re-arm for the hard breaker (consumed by #77, not this pipeline). */
   mode: 'live' | 'backtest';
 }
@@ -107,6 +117,12 @@ export interface RiskDecision {
   binding_constraint: string | null;
   /** Machine tags + human text (audit). */
   reasons: string[];
+  /**
+   * Advisory-only tags, e.g. 'macro_risk_flag:RU' from the CII soft signal
+   * (#205, ADR-0002). Never trims, rejects, or otherwise affects `status`,
+   * `order_intent`, or `binding_constraint` — see "Module: CII Soft Signal".
+   */
+  warnings: string[];
   risk_snapshot: {
     /** Per instrument / class / portfolio. */
     exposure: Record<string, number>;
