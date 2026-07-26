@@ -44,6 +44,7 @@ The three base repos and the `/tmp/{swarm,sentient,pybroker}-analysis.md` report
 ## Superseded documents
 
 This ADR is the canonical technical-foundation decision. It supersedes the conflicting infra choices in:
+
 - `~/Documents/Obsidian/Ideas/Samurai — Multi-Agent Trading System.md` (architecture still valid; infra now per this ADR)
 - `~/trading-system/SAMURAI-HANDOFF.md` (same)
 - `docs/trading-agent-handover.md` (greenfield-only infra now superseded by the hybrid)

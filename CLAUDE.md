@@ -20,20 +20,20 @@ Read/Write these as the project evolves:
 | `CONTEXT.md` (repo root) | Domain glossary. Terms, relationships, invariants. No implementation details. Update inline as terms resolve. |
 | `docs/adr/` | Architecture Decision Records. Only create when (1) hard to reverse, (2) surprising without context, (3) real trade-off. |
 | `docs/research/techstack.md` | Libraries, versions, why-chosen. Update as stack choices lock in. |
-| `docs/wayfinder/` | **Wayfinder maps + grilling decisions live here as local markdown** (`<stage>-map.md`): destination, decisions-so-far, open frontier, out-of-scope. This is the canonical home for design/planning — NOT GitHub issues. |
+| `docs/wayfinder/` | Historical/reference only — earlier maps written as local markdown before the switch to GitHub issues (2026-07-22). New wayfinder maps live as GitHub issues (see Standing Pipeline Rule 1), not here. |
 | `docs/specs/` | Synthesized specs (PRDs) per stage, `<stage>-spec.md`. Produced from the wayfinder map via `/to-spec`. |
 
 When in doubt, grep existing docs before writing new ones.
 
 ## Standing Pipeline Rules
 
-1. **Wayfinder before implementation — LOCAL.** Chart the map and resolve its frontier in `docs/wayfinder/<stage>-map.md` (local markdown, one grilling question at a time with the user). Do NOT create GitHub issues for maps or grilling questions. Never jump to `/implement` without a resolved wayfinder map and a written spec.
+1. **Wayfinder before implementation — GITHUB ISSUES.** Chart the map as a GitHub issue labeled `wayfinder-map` (or `wayfinder:map`), with its decision/research/prototype tickets as child issues, resolved one at a time with the user (one grilling question at a time). Claim a ticket by assignment before working it; set the board's Status field explicitly on claim and rely on the native "Item closed" project workflow to set Status → Done on close (confirmed reliable as of 2026-07-22). Record each ticket's resolution as a comment, close it, and append a one-line pointer to the map issue's "Decisions so far" section. Close the map issue itself once its frontier is clear (all children resolved) — the map's job is locking decisions, not holding open until the spec is written. Never jump to `/implement` without a resolved wayfinder map and a written spec.
 2. **Deep research = background agents + fable-mode synthesis.** See `deep-research-pipeline` skill for the 4-stage flow. Research agents on `openai/o4-mini-deep-research` via OpenRouter. Synthesis on Claude Opus + `fable-mode` skill.
 3. **Implementation = `/implement` + `/code-review` + commit.** The `/implement` skill auto-invokes code-review. Let it run. Don't hand-roll the loop.
 4. **Fable-mode discipline on ALL implementation.** Read spec fully, plan by risk, verify before reporting done, re-read diff as hostile reviewer before committing.
-5. **GitHub = implementation tickets only.** GitHub issues are created ONLY at `/to-tickets` time, from a completed spec. The project board (#1) therefore shows only real, actionable implementation tickets + PRs — never design/planning churn. Board auto-updates via native GitHub workflows (closed → Done, PR review → In Review, etc).
-6. **Project Board autolink.** This repo must be autolinked to project #1 so implementation issues auto-appear on the board. If `gh project item-add` is needed for ad-hoc additions, do it.
-7. **Workflow order:** `docs/wayfinder/<stage>-map.md` (chart + grill) → `docs/specs/<stage>-spec.md` (`/to-spec`) → cross-spec verification across all stages → `/to-tickets` (GitHub implementation issues). Specs cite their local wayfinder map, not issue numbers.
+5. **GitHub also hosts wayfinder maps/tickets now, alongside implementation tickets.** Wayfinder issues are labeled `wayfinder-map` / `wayfinder:research` / `wayfinder:prototype` / `wayfinder:grilling` / `wayfinder:task` so they're distinguishable from implementation tickets (created at `/to-tickets` time, from a completed spec) on the project board (#1) at a glance.
+6. **Project Board autolink.** This repo must be autolinked to project #1 so implementation issues (and wayfinder maps/tickets) auto-appear on the board. If `gh project item-add` is needed for ad-hoc additions, do it.
+7. **Workflow order:** wayfinder map issue (chart + grill, labeled `wayfinder-map`) → `docs/specs/<stage>-spec.md` (`/to-spec`) → cross-spec verification across all stages → `/to-tickets` (GitHub implementation issues). Specs cite their wayfinder map issue by name+link, not a bare number.
 
 ## Rate Limit Rule — HARD STOP
 
@@ -89,3 +89,13 @@ New research goes to `~/hermes-assistant/research/<topic>-<date>-raw.md` (raw) a
 2. Check docs/ for prior decisions
 3. Grep codebase for prior art
 4. If genuinely ambiguous and blocking — block with clear reason, don't guess
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).

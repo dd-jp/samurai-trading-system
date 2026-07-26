@@ -234,3 +234,7 @@ coverage/
 .DS_Store
 .orchestrator-state/
 .hermes/
+
+# Agents
+graphify-out
+.claude/
