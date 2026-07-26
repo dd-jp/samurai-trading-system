@@ -5,6 +5,7 @@ import { RiskManagerImpl } from './index.js';
 import type {
   BreakerState,
   CorrelationEstimate,
+  PersistedBreakerState,
   PortfolioView,
   RiskConfig,
   RiskInput,
@@ -76,6 +77,13 @@ function makeCorrelation(overrides: Partial<CorrelationEstimate> = {}): Correlat
   };
 }
 
+function makePersistedBreakerState(): PersistedBreakerState[] {
+  return [
+    { tier: 'portfolio_drawdown', tripped: false, tripped_at: null, reset_at: null, reason: null },
+    { tier: 'kill_switch', tripped: false, tripped_at: null, reset_at: null, reason: null },
+  ];
+}
+
 // Caps set high enough by default that no step trims unless a test lowers one.
 function makeConfig(overrides: Partial<RiskConfig> = {}): RiskConfig {
   return {
@@ -97,6 +105,7 @@ function makeInput(overrides: Partial<RiskInput> = {}): RiskInput {
     clock: fixedClock,
     portfolio: makePortfolio(),
     breakers: makeBreakers(),
+    next_breaker_state: makePersistedBreakerState(),
     correlation: makeCorrelation(),
     cii: {},
     mode: 'live',
@@ -124,6 +133,54 @@ describe('RiskManagerImpl.evaluate — exits', () => {
       stop_tightened: false,
     });
     expect(decision.binding_constraint).toBeNull();
+  });
+});
+
+describe('RiskManagerImpl.evaluate — next_breaker_state pass-through (#203)', () => {
+  it('echoes RiskInput.next_breaker_state onto RiskDecision unchanged on an approved entry', () => {
+    const manager = new RiskManagerImpl(makeConfig());
+    const persisted = [
+      {
+        tier: 'portfolio_drawdown' as const,
+        tripped: true,
+        tripped_at: new Date('2026-07-10T00:00:00Z'),
+        reset_at: null,
+        reason: 'portfolio_drawdown_hard',
+      },
+      { tier: 'kill_switch' as const, tripped: false, tripped_at: null, reset_at: null, reason: null },
+    ];
+    const input = makeInput({ next_breaker_state: persisted });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.next_breaker_state).toBe(persisted);
+  });
+
+  it('echoes next_breaker_state on a rejected entry (circuit-breaker gate)', () => {
+    const manager = new RiskManagerImpl(makeConfig());
+    const persisted = makePersistedBreakerState();
+    const input = makeInput({
+      breakers: makeBreakers({ portfolio_tripped: true }),
+      next_breaker_state: persisted,
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.status).toBe('rejected');
+    expect(decision.next_breaker_state).toBe(persisted);
+  });
+
+  it('echoes next_breaker_state on an exit', () => {
+    const manager = new RiskManagerImpl(makeConfig());
+    const persisted = makePersistedBreakerState();
+    const input = makeInput({
+      intent: makeIntent({ intent_type: 'exit' }),
+      next_breaker_state: persisted,
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.next_breaker_state).toBe(persisted);
   });
 });
 

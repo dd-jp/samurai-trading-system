@@ -65,7 +65,7 @@ Runs pending migrations, returns a typed handle. Components receive it via const
 
 ### Module: Consolidated Schema
 
-Every `CREATE TABLE` the store needs, collected from the eleven specs that implicitly define them plus the three that had no schema anywhere until this map resolved them. Field-level non-collision was re-verified across all fourteen tables (see **Non-Collision Verification** below).
+Every `CREATE TABLE` the store needs, collected from the eleven specs that implicitly define them plus the three that had no schema anywhere until this map resolved them (`verdict_log` and `breaker_state` were added later, per #206 and #203 respectively). Field-level non-collision was re-verified across all sixteen tables (see **Non-Collision Verification** below).
 
 **Market Data Service** — owner: `docs/specs/market-data-service-spec.md`
 
@@ -241,6 +241,26 @@ CREATE TABLE debate_log (
 );
 ```
 
+**Risk Manager** — owner: `docs/specs/risk-manager-spec.md`
+
+```sql
+-- One row per breaker tier. Crash-restart-safe home for the two sticky
+-- breakers (hard peak-to-trough drawdown, kill-switch) -- everything else
+-- CircuitBreakers computes is stateless/derived fresh each call and does
+-- not need persistence. Upserted by the caller after every RiskManagerImpl
+-- evaluate() call from RiskDecision.next_breaker_state; CircuitBreakers
+-- loads these rows on construction/restart instead of starting untripped.
+CREATE TABLE breaker_state (
+  tier        TEXT PRIMARY KEY CHECK(tier IN ('portfolio_drawdown', 'kill_switch')),
+  tripped     INTEGER NOT NULL,
+  tripped_at  TEXT,
+  reset_at    TEXT,
+  reason      TEXT
+);
+```
+
+Resolved: [Risk Manager: fix BreakerState persistence (crash-restart safety) (#203)](https://github.com/dd-jp/samurai-trading-system/issues/203) — closes the gap the 2026-07-26 cross-verify pass found (this consolidation had zero mention of "breaker" or "circuit" anywhere despite `risk-manager-spec.md` consuming `BreakerState` as an opaque `evaluate()` input with no stated writer). `tripped`/`tripped_at`/`reset_at`/`reason` mirror the four in-memory sticky fields `CircuitBreakers` already tracked (`hardTripped`, `hardTrippedAt`, `killSwitchEngaged`, `killSwitchReason`); the four stateless breakers (daily-loss, consecutive-loss, both volatility halts) are derived fresh from `PortfolioView` each call and never touch this table.
+
 **Verdict** — owner: `docs/specs/verdict-spec.md`
 
 ```sql
@@ -289,13 +309,14 @@ CREATE TABLE current_tick (
 
 ### Non-Collision Verification
 
-`cross-spec-contracts.md`'s "shared-store table non-collision" spot-check was clean at the table-name level; re-verified here at the field level across all fifteen tables above:
+`cross-spec-contracts.md`'s "shared-store table non-collision" spot-check was clean at the table-name level; re-verified here at the field level across all sixteen tables above:
 
 - **`latest_mark` was missing `asset_class`** (#183) — the `Mark` interface (market-data-service-spec.md) declares it, the original persistence bullet dropped it. **Fixed above**, not silently — this DDL is the first place the full column list was ever written out, so there was no prior "wrong" schema to correct, only an incomplete prose description.
 - **`Fill` vs. the cost model's result type** — already resolved pre-existing (GAP-F renamed the cost model's return type to `CostModelResult` specifically to avoid colliding with the persisted `fills` table; `cross-spec-contracts.md` confirms this explicitly).
 - **`debate_id` type/semantics** — a deterministic hash string, consistent everywhere it's reused as a join key: `open_positions.debate_id`, `closed_trades.debate_id`, `cosine_setups.debate_id` (PK here), and `debate_log.debate_id` (PK there) are all `TEXT`, all populated from the same Debate Engine-issued hash (debate-engine-spec.md / trader-spec.md). No divergence.
 - **`idempotency_key` type/semantics** — `TEXT` everywhere it appears (`open_positions` PK, `fills` composite PK component, `closed_trades` PK, `cosine_setups` non-unique column, `verdict_log` non-unique column). `cosine_setups` and `verdict_log` are the two tables where it is deliberately **not** the primary key — see the notes under each table — which is a real asymmetry with `open_positions`/`closed_trades` but not a collision: each table's key is dictated by its own write pattern (one `cosine_setups` row per *debate*, one `verdict_log` row per *decision*, keyed on `trace_id` since that's the correlation ID Verdict actually receives, one `open_positions`/`closed_trades` row per *decision lifecycle*), matching this spec's "every table's own consumer dictates its key" principle.
 - **`asset_class` type/semantics** — the `CHECK(asset_class IN ('crypto', 'stocks'))` constraint and column name are identical across all five tables that carry it (`latest_mark`, `open_positions`, `closed_trades`, `cosine_setups`, `current_tick`). No divergence.
+- **`breaker_state`** (#203) — `tier` is its own PK, disjoint from every other table's `debate_id`/`trace_id`/`idempotency_key` keying convention. `tripped_at`/`reset_at` are nullable `TEXT` timestamps (null while never-tripped/still-tripped respectively) — no other table has a comparable nullable-timestamp pair to collide with. No divergence.
 - No other field-level collisions found.
 
 ## Testing Decisions

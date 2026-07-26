@@ -249,3 +249,88 @@ describe('CircuitBreakers', () => {
     expect(released.armed_breakers).not.toContain('kill_switch:dead-mans-switch');
   });
 });
+
+describe('CircuitBreakers — crash-restart persistence (#203)', () => {
+  it('reports untripped/disengaged persisted state when nothing has tripped', () => {
+    const breakers = new CircuitBreakers(makeConfig());
+    breakers.evaluate(makeInput());
+
+    expect(breakers.getPersistedState()).toEqual([
+      {
+        tier: 'portfolio_drawdown',
+        tripped: false,
+        tripped_at: null,
+        reset_at: null,
+        reason: null,
+      },
+      { tier: 'kill_switch', tripped: false, tripped_at: null, reset_at: null, reason: null },
+    ]);
+  });
+
+  it('survives a fresh CircuitBreakers instance constructed from a persisted hard-drawdown trip', () => {
+    const config = makeConfig({ max_drawdown_pct: 20 });
+    const before = new CircuitBreakers(config);
+    before.evaluate(
+      makeInput({
+        portfolio: makePortfolio({ drawdown_pct: 25 }),
+        clock: makeClock('2026-07-10T00:00:00Z'),
+      }),
+    );
+
+    const persisted = before.getPersistedState();
+    expect(persisted).toEqual([
+      {
+        tier: 'portfolio_drawdown',
+        tripped: true,
+        tripped_at: new Date('2026-07-10T00:00:00Z'),
+        reset_at: null,
+        reason: 'portfolio_drawdown_hard',
+      },
+      { tier: 'kill_switch', tripped: false, tripped_at: null, reset_at: null, reason: null },
+    ]);
+
+    // Simulates a process restart: a brand-new instance, seeded only from the persisted rows.
+    const after = new CircuitBreakers(config, persisted);
+    const stillTripped = after.evaluate(
+      makeInput({ portfolio: makePortfolio({ drawdown_pct: 0 }), mode: 'live' }),
+    );
+
+    expect(stillTripped.portfolio_tripped).toBe(true);
+    expect(stillTripped.armed_breakers).toContain('portfolio_drawdown_hard');
+    expect(after.getPersistedState()).toEqual(persisted);
+  });
+
+  it('survives a fresh CircuitBreakers instance constructed from a persisted kill-switch engagement', () => {
+    const config = makeConfig();
+    const before = new CircuitBreakers(config);
+    before.engageKillSwitch('dead-mans-switch');
+
+    const persisted = before.getPersistedState();
+    expect(persisted).toContainEqual({
+      tier: 'kill_switch',
+      tripped: true,
+      tripped_at: null,
+      reset_at: null,
+      reason: 'dead-mans-switch',
+    });
+
+    const after = new CircuitBreakers(config, persisted);
+    const engaged = after.evaluate(makeInput());
+
+    expect(engaged.portfolio_tripped).toBe(true);
+    expect(engaged.armed_breakers).toContain('kill_switch:dead-mans-switch');
+  });
+
+  it('a re-armed/released breaker persists as cleared for the next restart', () => {
+    const config = makeConfig({ max_drawdown_pct: 20 });
+    const before = new CircuitBreakers(config);
+    before.evaluate(makeInput({ portfolio: makePortfolio({ drawdown_pct: 25 }) }));
+    before.reArm();
+
+    const persisted = before.getPersistedState();
+    const after = new CircuitBreakers(config, persisted);
+    const cleared = after.evaluate(makeInput({ portfolio: makePortfolio({ drawdown_pct: 0 }) }));
+
+    expect(cleared.portfolio_tripped).toBe(false);
+  });
+});

@@ -14,7 +14,7 @@
  * per-class baseline.
  */
 import type { Clock } from '../shared/clock.js';
-import type { BreakerState, PortfolioView } from './types.js';
+import type { BreakerState, PersistedBreakerState, PortfolioView } from './types.js';
 
 /** Config for the per-asset-class volatility halt. */
 export interface VolatilityBreakerConfig {
@@ -73,6 +73,17 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
  * are sticky: once tripped/engaged they stay that way across calls until
  * `reArm()` (live) / the configured auto-re-arm policy (backtest) /
  * `releaseKillSwitch()` clears them.
+ *
+ * Crash-restart safety (#203): the sticky fields above are the only state
+ * a process restart must not silently lose — a tripped hard breaker that
+ * re-arms itself on restart would defeat the reason it halted trading.
+ * `getPersistedState()` exports them as lossless `PersistedBreakerState`
+ * rows (one per tier) for the caller to write to the `breaker_state` table
+ * after each `evaluate()`/`reArm()`/`engageKillSwitch()`/`releaseKillSwitch()`
+ * call; passing those same rows back into the constructor on the next
+ * startup reconstructs this instance exactly. `CircuitBreakers` itself never
+ * touches a store — it only accepts/exposes plain data, so this stays
+ * synchronous and DB-free (the actual SQLite wiring is later, gated on #193).
  */
 export class CircuitBreakers {
   private hardTripped = false;
@@ -80,7 +91,42 @@ export class CircuitBreakers {
   private killSwitchEngaged = false;
   private killSwitchReason: string | null = null;
 
-  constructor(private readonly config: BreakerConfig) {}
+  constructor(
+    private readonly config: BreakerConfig,
+    initial?: readonly PersistedBreakerState[],
+  ) {
+    for (const row of initial ?? []) {
+      if (row.tier === 'portfolio_drawdown') {
+        this.hardTripped = row.tripped;
+        this.hardTrippedAt = row.tripped_at;
+      } else if (row.tier === 'kill_switch') {
+        this.killSwitchEngaged = row.tripped;
+        this.killSwitchReason = row.reason;
+      }
+    }
+  }
+
+  /** Lossless snapshot of the sticky breakers, one row per tier — for the caller to persist. */
+  getPersistedState(): PersistedBreakerState[] {
+    return [
+      {
+        tier: 'portfolio_drawdown',
+        tripped: this.hardTripped,
+        tripped_at: this.hardTrippedAt,
+        // Reset timing isn't tracked in-memory (reArm() only clears the trip); the
+        // caller can derive it from its own clock at write time if it needs one.
+        reset_at: null,
+        reason: this.hardTripped ? 'portfolio_drawdown_hard' : null,
+      },
+      {
+        tier: 'kill_switch',
+        tripped: this.killSwitchEngaged,
+        tripped_at: null,
+        reset_at: null,
+        reason: this.killSwitchReason,
+      },
+    ];
+  }
 
   /** Manual re-arm of the hard peak-to-trough drawdown breaker (live mode). */
   reArm(): void {
