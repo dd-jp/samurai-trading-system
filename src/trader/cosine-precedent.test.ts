@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { SetupNeighbor, SetupVector } from '../shared/types.js';
+import { openSharedStore } from '../shared/store/open-shared-store.js';
+import type { SetupNeighbor, SetupStore, SetupVector } from '../shared/types.js';
 import {
   cosineSimilarity,
   K_NEIGHBORS,
@@ -10,8 +11,10 @@ import {
   retrieveCosinePrecedent,
 } from './cosine-precedent.js';
 import { FixtureSetupStore } from './fixture-setup-store.js';
+import { SqliteSetupStore } from './sqlite-setup-store.js';
 
 const NOW = new Date('2026-07-15T12:00:00Z');
+const DECIDED_AT = new Date('2026-07-15T08:00:00Z');
 const CLOSED_BEFORE_NOW = new Date('2026-07-15T10:00:00Z');
 const CLOSED_AFTER_NOW = new Date('2026-07-15T14:00:00Z');
 
@@ -48,12 +51,31 @@ describe('cosineSimilarity', () => {
   });
 });
 
-describe('retrieveCosinePrecedent', () => {
+/**
+ * Retrieval behaviour is a property of the `SetupStore` port, so every case
+ * runs against both implementations: the in-memory fixture and the real
+ * SQLite-backed store over `cosine_setups` (#198). Seeding goes through the
+ * port itself (`writeSetup` + `labelSetup`) rather than the fixture's
+ * constructor, since that is the only way a real store can be populated.
+ */
+const STORE_IMPLEMENTATIONS: Array<[string, () => SetupStore]> = [
+  ['FixtureSetupStore', () => new FixtureSetupStore()],
+  ['SqliteSetupStore', () => new SqliteSetupStore(openSharedStore(':memory:'))],
+];
+
+describe.each(STORE_IMPLEMENTATIONS)('retrieveCosinePrecedent (%s)', (_name, makeStore) => {
+  function seeded(neighbors: SetupNeighbor[]): SetupStore {
+    const store = makeStore();
+    neighbors.forEach((entry, index) => {
+      const debateId = `debate-${index}`;
+      store.writeSetup(debateId, entry.vector, DECIDED_AT);
+      store.labelSetup(debateId, entry.r_multiple, entry.closed_at);
+    });
+    return store;
+  }
+
   it('returns nearest setups by cosine similarity with R-multiple labels', () => {
-    const store = new FixtureSetupStore([
-      neighbor({ r_multiple: 1.5 }),
-      neighbor({ r_multiple: -0.5 }),
-    ]);
+    const store = seeded([neighbor({ r_multiple: 1.5 }), neighbor({ r_multiple: -0.5 })]);
 
     const result = retrieveCosinePrecedent(TARGET, store, NOW);
 
@@ -63,7 +85,7 @@ describe('retrieveCosinePrecedent', () => {
   });
 
   it('sizes up within bound for a strongly precedent-supported setup', () => {
-    const store = new FixtureSetupStore([
+    const store = seeded([
       neighbor({ r_multiple: 2 }),
       neighbor({ r_multiple: 2.5 }),
       neighbor({ r_multiple: 3 }),
@@ -77,7 +99,7 @@ describe('retrieveCosinePrecedent', () => {
   });
 
   it('sizes down within bound for a contrary-precedent setup', () => {
-    const store = new FixtureSetupStore([
+    const store = seeded([
       neighbor({ r_multiple: -2 }),
       neighbor({ r_multiple: -2.5 }),
       neighbor({ r_multiple: -1.5 }),
@@ -91,15 +113,15 @@ describe('retrieveCosinePrecedent', () => {
   });
 
   it('never exceeds the 0.5x-1.5x bound even for extreme R-multiples', () => {
-    const bullish = new FixtureSetupStore([neighbor({ r_multiple: 50 })]);
-    const bearish = new FixtureSetupStore([neighbor({ r_multiple: -50 })]);
+    const bullish = seeded([neighbor({ r_multiple: 50 })]);
+    const bearish = seeded([neighbor({ r_multiple: -50 })]);
 
     expect(retrieveCosinePrecedent(TARGET, bullish, NOW).cosine_multiplier).toBe(MAX_MULTIPLIER);
     expect(retrieveCosinePrecedent(TARGET, bearish, NOW).cosine_multiplier).toBe(MIN_MULTIPLIER);
   });
 
   it('defaults to 0.75x with no_precedent flag when the store is empty', () => {
-    const store = new FixtureSetupStore([]);
+    const store = seeded([]);
 
     const result = retrieveCosinePrecedent(TARGET, store, NOW);
 
@@ -114,7 +136,7 @@ describe('retrieveCosinePrecedent', () => {
       debate_features: [-0.7, -1, -1, -0.1],
       market_features: [-0.3, -0.5],
     };
-    const store = new FixtureSetupStore([neighbor({ vector: dissimilar, r_multiple: 3 })]);
+    const store = seeded([neighbor({ vector: dissimilar, r_multiple: 3 })]);
 
     const result = retrieveCosinePrecedent(TARGET, store, NOW);
 
@@ -129,7 +151,7 @@ describe('retrieveCosinePrecedent', () => {
   });
 
   it('excludes neighbors not yet closed as of the clock (point-in-time)', () => {
-    const store = new FixtureSetupStore([neighbor({ r_multiple: 3, closed_at: CLOSED_AFTER_NOW })]);
+    const store = seeded([neighbor({ r_multiple: 3, closed_at: CLOSED_AFTER_NOW })]);
 
     const result = retrieveCosinePrecedent(TARGET, store, NOW);
 
@@ -138,10 +160,9 @@ describe('retrieveCosinePrecedent', () => {
   });
 
   it('limits retrieval to the K nearest qualifying neighbors', () => {
-    const many = Array.from({ length: K_NEIGHBORS + 5 }, (_, i) =>
-      neighbor({ r_multiple: 1 + i * 0.1 }),
+    const store = seeded(
+      Array.from({ length: K_NEIGHBORS + 5 }, (_, i) => neighbor({ r_multiple: 1 + i * 0.1 })),
     );
-    const store = new FixtureSetupStore(many);
 
     const result = retrieveCosinePrecedent(TARGET, store, NOW);
 

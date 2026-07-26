@@ -7,5 +7,10 @@
 
 export { decide } from './decide.js';
 export { computeIdempotencyKey } from './idempotency-key.js';
+export {
+  type SetupAssetClass,
+  SqliteSetupStore,
+  type SqliteSetupStoreOptions,
+} from './sqlite-setup-store.js';
 export type { AssetClass, Trader, TraderConfig, TraderInput } from './types.js';
 export { DEFAULT_TRADER_CONFIG } from './types.js';

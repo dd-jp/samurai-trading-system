@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { ClosedTrade } from '../shared/types.js';
+import { openSharedStore } from '../shared/store/open-shared-store.js';
+import type { ClosedTrade, SetupStore } from '../shared/types.js';
 import { FixtureSetupStore } from '../trader/fixture-setup-store.js';
+import { SqliteSetupStore } from '../trader/sqlite-setup-store.js';
 import { onTradeClose } from './on-trade-close.js';
 import type { OnTradeCloseInput } from './types.js';
 
@@ -26,9 +28,19 @@ function makeTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {
   };
 }
 
-describe('onTradeClose', () => {
+/**
+ * Labelling is a property of the `SetupStore` port, so every case runs against
+ * both the in-memory fixture and the real SQLite-backed store over
+ * `cosine_setups` (#198).
+ */
+const STORE_IMPLEMENTATIONS: Array<[string, () => SetupStore]> = [
+  ['FixtureSetupStore', () => new FixtureSetupStore()],
+  ['SqliteSetupStore', () => new SqliteSetupStore(openSharedStore(':memory:'))],
+];
+
+describe.each(STORE_IMPLEMENTATIONS)('onTradeClose (%s)', (_name, makeStore) => {
   it('labels the setup store with the correctly computed R, joined by debate_id', () => {
-    const store = new FixtureSetupStore();
+    const store = makeStore();
     store.writeSetup('debate-1', VECTOR, new Date('2026-07-01T09:00:00Z'));
     const trade = makeTrade();
     const input: OnTradeCloseInput = { setup_store: store };
@@ -42,7 +54,7 @@ describe('onTradeClose', () => {
   });
 
   it('does not appear as a precedent before its close_at (point-in-time)', () => {
-    const store = new FixtureSetupStore();
+    const store = makeStore();
     store.writeSetup('debate-1', VECTOR, new Date('2026-07-01T09:00:00Z'));
     const trade = makeTrade();
     onTradeClose(trade, 'trace-1', { setup_store: store });
@@ -52,7 +64,7 @@ describe('onTradeClose', () => {
   });
 
   it('skips labelling when initial risk is zero (undefined R)', () => {
-    const store = new FixtureSetupStore();
+    const store = makeStore();
     store.writeSetup('debate-1', VECTOR, new Date('2026-07-01T09:00:00Z'));
     const trade = makeTrade({ entry: 100, stop: 100 });
 
@@ -62,7 +74,7 @@ describe('onTradeClose', () => {
   });
 
   it('a scale-in position: each per-lot ClosedTrade labels its own setup entry', () => {
-    const store = new FixtureSetupStore();
+    const store = makeStore();
     store.writeSetup('debate-1', VECTOR, new Date('2026-07-01T09:00:00Z'));
     store.writeSetup('debate-2', VECTOR, new Date('2026-07-01T09:05:00Z'));
 
@@ -95,7 +107,7 @@ describe('onTradeClose', () => {
   });
 
   it('throws (via the store) rather than double-labelling the same debate_id', () => {
-    const store = new FixtureSetupStore();
+    const store = makeStore();
     store.writeSetup('debate-1', VECTOR, new Date('2026-07-01T09:00:00Z'));
     const trade = makeTrade();
 
