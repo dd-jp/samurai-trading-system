@@ -85,7 +85,20 @@ interface RiskInput {
   clock: Clock;                  // wall-clock live, simulated T in replay
   portfolio: PortfolioView;      // accounting view over the shared store (equity, drawdown, exposure)
   breakers: BreakerState;        // armed/tripped state + peaks, per tier
+  next_breaker_state: PersistedBreakerState[];  // lossless sticky-breaker rows (#203) — evaluate() only echoes this, see below
   mode: 'live' | 'backtest';     // selects manual vs auto re-arm for the hard breaker
+}
+
+// Crash-restart-safe row shape for the two sticky breakers (hard drawdown, kill-switch),
+// one row per tier — mirrors the `breaker_state` table (shared-sqlite-store-spec.md).
+// Unlike BreakerState (a derived, no-timestamp view recomputed every evaluate() call),
+// this is lossless: CircuitBreakers can be reconstructed from it exactly (#203).
+interface PersistedBreakerState {
+  tier: 'portfolio_drawdown' | 'kill_switch';
+  tripped: boolean;
+  tripped_at: Date | null;
+  reset_at: Date | null;
+  reason: string | null;
 }
 
 interface RiskDecision {
@@ -104,6 +117,7 @@ interface RiskDecision {
     drawdown_pct: number;
     armed_breakers: string[];
   };
+  next_breaker_state: PersistedBreakerState[];  // echo of RiskInput.next_breaker_state (#203) — caller persists this to `breaker_state` after every call
 }
 
 // Accounting view computed from the shared SQLite store (positions + fills written by
@@ -144,6 +158,7 @@ Monotonic: each step only reduces risk. `binding_constraint` records the step th
 - **Reset:** soft breakers auto-reset (next session / after cool-off); the hard drawdown breaker requires manual re-arm in `live` mode, or a configurable auto-re-arm policy in `backtest` mode.
 - **Session boundary:** UTC day for crypto, market-day for stocks.
 - Exact thresholds are config, tuned in paper trading.
+- **Crash-restart persistence (#203):** the two sticky breakers (hard drawdown, kill-switch) are the only breaker state that must survive a process restart — losing it would silently re-arm a breaker that halted trading for a reason. `CircuitBreakers.evaluate()` stays a pure, synchronous function; it does not persist anything itself. `CircuitBreakers` instead exposes `getPersistedState(): PersistedBreakerState[]` (one row per tier) for the caller to write to the `breaker_state` table (shared-sqlite-store-spec.md) after every `evaluate()`/`reArm()`/`engageKillSwitch()`/`releaseKillSwitch()` call, and accepts the same rows as an optional constructor argument to reconstruct sticky state on startup instead of starting from `hardTripped = false`. The four stateless breakers (daily-loss, consecutive-loss, both volatility halts) need no persistence — they're recomputed fresh from `PortfolioView` every call.
 
 ### Module: CII Soft Signal
 
@@ -187,6 +202,7 @@ Adopted per [ADR-0003](../adr/0003-risk-manager-critic-layer.md) (Risk Manager g
 - No LLM to mock — assert deterministic outputs.
 - Cover each pipeline step's trim and hard-reject paths, and the exit-always-passes path.
 - Cover breaker trip/reset (soft auto-reset, hard manual vs auto re-arm by mode).
+- Cover sticky-breaker persistence (#203): a fresh `CircuitBreakers` instance constructed from a persisted trip/kill-switch engagement reports the same tripped/engaged state as before the (simulated) restart.
 
 ### Modules to Test
 
