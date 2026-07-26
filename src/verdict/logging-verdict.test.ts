@@ -188,6 +188,18 @@ describe('LoggingVerdict.decide', () => {
     expect(row?.hitl_override).toBe(true);
   });
 
+  it('writes hitl_override true in paper mode, same as live (no backtest bypass)', async () => {
+    const store = new InMemoryVerdictLogStore();
+    const verdict = new LoggingVerdict(new VerdictImpl(), store);
+
+    const decision = await verdict.decide(makeInput({ mode: 'paper' }));
+
+    expect(decision.status).toBe('go');
+    expect(decision.approval_path).toBe('human');
+    const row = store.getByTraceId('trace-1');
+    expect(row?.hitl_override).toBe(true);
+  });
+
   it('writes hitl_override false on a backtest bypass, even though would_require_approval is true', async () => {
     const store = new InMemoryVerdictLogStore();
     const verdict = new LoggingVerdict(new VerdictImpl(), store);

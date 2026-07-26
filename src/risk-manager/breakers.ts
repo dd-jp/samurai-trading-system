@@ -45,7 +45,7 @@ export interface BreakerConfig {
   /** Soft, portfolio-level: N losing trades in a row halts new entries. */
   max_consecutive_losses: number;
   volatility: VolatilityBreakerConfig;
-  /** Consulted only in 'backtest' mode; live always requires a manual reArm() call. */
+  /** Consulted only in 'backtest' mode; live and paper always require a manual reArm() call. */
   auto_rearm: AutoReArmPolicy;
 }
 
@@ -58,7 +58,7 @@ export interface VolatilityReading {
 export interface BreakerEvalInput {
   portfolio: PortfolioView;
   volatility: VolatilityReading;
-  mode: 'live' | 'backtest';
+  mode: 'live' | 'paper' | 'backtest';
   clock: Clock;
 }
 
@@ -82,7 +82,7 @@ export class CircuitBreakers {
 
   constructor(private readonly config: BreakerConfig) {}
 
-  /** Manual re-arm of the hard peak-to-trough drawdown breaker (live mode). */
+  /** Manual re-arm of the hard peak-to-trough drawdown breaker (live/paper mode). */
   reArm(): void {
     this.hardTripped = false;
     this.hardTrippedAt = null;

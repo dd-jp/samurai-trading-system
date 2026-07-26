@@ -164,8 +164,9 @@ export interface DailyCycleInput {
   /**
    * Backtest auto-handles loosening approvals (like Verdict's HITL bypass)
    * and records them, so a replay exercises the same code path as live.
+   * Paper takes the same gated approval path as live.
    */
-  mode: 'live' | 'backtest';
+  mode: 'live' | 'paper' | 'backtest';
 }
 
 /** Shape frozen by feedback-loop-spec.md ("Key Interfaces"). */

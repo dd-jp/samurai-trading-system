@@ -458,6 +458,31 @@ describe('VerdictImpl.decide — automation dial', () => {
   });
 });
 
+describe('VerdictImpl.decide — paper mode', () => {
+  it('requires HITL via the real ApprovalChannel, same as live', async () => {
+    const verdict = new VerdictImpl();
+    const approvals = makeApprovals('approved');
+    const input = makeInput({ mode: 'paper', approvals });
+
+    const decision = await verdict.decide(input);
+
+    expect(approvals.requestApproval).toHaveBeenCalledTimes(1);
+    expect(decision.status).toBe('go');
+    expect(decision.approval_path).toBe('human');
+    expect(decision.would_require_approval).toBe(true);
+  });
+
+  it('no-goes when the human rejects, same as live', async () => {
+    const verdict = new VerdictImpl();
+    const approvals = makeApprovals('rejected');
+    const input = makeInput({ mode: 'paper', approvals });
+
+    const decision = await verdict.decide(input);
+
+    expect(decision.status).toBe('no_go');
+  });
+});
+
 describe('VerdictImpl.decide — backtest mode', () => {
   it('bypasses HITL with an automated go, recording would_require_approval', async () => {
     const verdict = new VerdictImpl();
