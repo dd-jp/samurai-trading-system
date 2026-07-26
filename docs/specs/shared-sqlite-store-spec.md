@@ -3,6 +3,7 @@
 **Status:** Draft (resolved wayfinder decisions synthesized)
 **Owner:** David (Deepak)
 **Date:** 2026-07-26
+**Wayfinder map:** [Shared SQLite Store (#162)](https://github.com/dd-jp/samurai-trading-system/issues/162)
 
 ## Problem Statement
 
@@ -14,7 +15,7 @@ This spec produces the store's design, not its implementation — implementation
 
 The shared store is a single **better-sqlite3** database per environment (`data/samurai-{env}.sqlite`), opened through one `openSharedStore(dbPath)` factory that runs pending migrations and returns a typed `SharedStore` handle, injected into every stage via constructor injection — the same `store: SharedStore` pattern already used throughout the Execution, Trader, and Risk specs. WAL mode + `synchronous=FULL` gives crash-restart safety without meaningfully taxing this system's tick-based (not HFT) write rate. Migrations are hand-rolled numbered SQL files tracked in a `schema_migrations` table — no ORM, matching the project's existing direct-SQL posture.
 
-Every table's schema was already implicitly decided by the spec that owns it; this document's job was mostly synthesis (collecting eleven specs' worth of implicit DDL into one place) plus five genuinely open decisions this map resolved: the SQLite driver, the migration strategy, the crash-safety mode, the module wiring pattern, the DB file-path convention, and three tables that had no schema anywhere (`config_trials`, the Feedback Loop's dial + adjustment-history tables, and the cosine setup store).
+Every table's schema was already implicitly decided by the spec that owns it; this document's job was mostly synthesis (collecting eleven specs' worth of implicit DDL into one place) plus five genuinely open decisions this map resolved: the SQLite driver, the migration strategy, the crash-safety mode, the module wiring pattern, the DB file-path convention, and three tables that had no schema anywhere (`config_trials`, the Feedback Loop's dial + adjustment-history tables, and the `cosine_setups` store).
 
 Key architectural decisions:
 - **better-sqlite3**, not `node:sqlite`, for maturity (`node:sqlite` is still experimental on Node 22).
@@ -22,7 +23,7 @@ Key architectural decisions:
 - **WAL mode + `synchronous=FULL`** — implements CONTEXT.md's crash-restart invariant; throughput cost is negligible at this system's write rate.
 - **`openSharedStore(dbPath): SharedStore` factory** — constructor injection everywhere, matching the existing pattern; the Orchestrator's composition root (where the factory is actually called) is separate, not-yet-charted work.
 - **One SQLite file per environment** (`data/samurai-paper.sqlite`, `data/samurai-live.sqlite`) — not a single file with an environment column, so paper/live PnL cross-contamination is physically impossible. Tests use a fresh temp file or `:memory:`.
-- **JSON columns for rich, non-queried nested data** (a WorldMonitor/audit_log-style JSONB pattern) — `config_trials.result_json`/`config_json`, `setups.debate_features_json`/`market_features_json` — rather than decomposing every nested structure into its own columns.
+- **JSON columns for rich, non-queried nested data** (a WorldMonitor/audit_log-style JSONB pattern) — `config_trials.result_json`/`config_json`, `cosine_setups.debate_features_json`/`market_features_json` — rather than decomposing every nested structure into its own columns.
 - **Every table's own consumer dictates its key** — no generic catch-all tables; `analyst_weights`/`strategy_params`/`risk_thresholds` are three tables, not one, because three different stages read them by three different natural keys.
 
 ## Implementation Decisions
@@ -43,6 +44,8 @@ CREATE TABLE schema_migrations (
 ```
 
 No ORM — matches the project's existing direct-SQL posture (no ORM anywhere else in the codebase). Needed because the live DB holds real trade data that must survive schema changes post-launch, while tests need the same schema built fresh and deterministically from the same migration files. (Resolved: [Decide: migration/versioning strategy](https://github.com/dd-jp/samurai-trading-system/issues/164).)
+
+The full DDL below is the eventual content of **`migrations/0001_init.sql`** — not created by this spec (spec-writing only; the migrations directory itself is implementation, handed to `/to-tickets`).
 
 ### Module: Crash-Safety Mode
 
@@ -88,7 +91,7 @@ CREATE TABLE latest_mark (
   instrument   TEXT PRIMARY KEY,
   price        REAL NOT NULL,
   observed_at  TEXT NOT NULL,
-  asset_class  TEXT NOT NULL CHECK(asset_class IN ('crypto', 'stocks')),  -- FIX: dropped in the original persistence bullet; the `Mark` interface (market-data-service-spec.md) already declares this field, added here to match
+  asset_class  TEXT NOT NULL CHECK(asset_class IN ('crypto', 'stocks')),  -- FIX (#183): dropped from the original persistence bullet; the `Mark` interface (market-data-service-spec.md) already declares this field, restored here to match
   source       TEXT NOT NULL
 );
 ```
@@ -107,25 +110,25 @@ CREATE TABLE open_positions (
   requested_size      REAL NOT NULL,
   filled_size         REAL NOT NULL,   -- cumulative; downstream reads THIS, never requested_size
   avg_entry_price     REAL NOT NULL,
-  stop                REAL NOT NULL,
+  stop                REAL NOT NULL,   -- live protective leg (resized on partial fill)
   target              REAL NOT NULL,
   order_state         TEXT NOT NULL,
   broker_order_ids    TEXT NOT NULL,   -- JSON string[]
   opened_at           TEXT NOT NULL,
-  decision_timestamp  TEXT NOT NULL
+  decision_timestamp  TEXT NOT NULL    -- the bar/decision time (from OrderIntent)
 );
 CREATE INDEX idx_open_positions_instrument ON open_positions(instrument, asset_class);
 
 -- One row per (partial) fill — every fill logged (CONTEXT.md invariant #4). Append-only.
 CREATE TABLE fills (
-  idempotency_key  TEXT NOT NULL,
-  broker_fill_id   TEXT NOT NULL,
-  leg              TEXT NOT NULL CHECK(leg IN ('entry', 'stop', 'target', 'exit')),
-  price            REAL NOT NULL,
-  qty              REAL NOT NULL,
-  fee              REAL NOT NULL,
-  timestamp        TEXT NOT NULL,
-  cost_breakdown_json  TEXT NULL,      -- JSON {spread_cost, commission, slippage, market_impact}; Simulated-adapter fills only
+  idempotency_key      TEXT NOT NULL,
+  broker_fill_id       TEXT NOT NULL,
+  leg                  TEXT NOT NULL CHECK(leg IN ('entry', 'stop', 'target', 'exit')),
+  price                REAL NOT NULL,
+  qty                  REAL NOT NULL,
+  fee                  REAL NOT NULL,
+  timestamp            TEXT NOT NULL,
+  cost_breakdown_json  TEXT NULL,      -- JSON {spread_cost, commission, slippage, market_impact}; Simulated-adapter fills only (undefined/null on real broker fills)
   PRIMARY KEY (idempotency_key, broker_fill_id)
 );
 
@@ -202,33 +205,39 @@ CREATE INDEX idx_dial_adjustments_dial ON dial_adjustments(dial_type, dial_name,
 CREATE INDEX idx_dial_adjustments_status ON dial_adjustments(status);
 
 -- The cosine setup store -- Trader writes at decision time, FL labels on trade close.
-CREATE TABLE setups (
-  idempotency_key       TEXT PRIMARY KEY,   -- Trader's deterministic decision key; one row per decision
-  debate_id             TEXT NOT NULL,      -- join to debate_log for attribution
-  debate_features_json  TEXT NOT NULL,      -- serialized number[]
-  market_features_json  TEXT NOT NULL,      -- serialized number[]
-  created_at            TEXT NOT NULL,      -- decision time
-  r_multiple            REAL NULL,          -- NULL = open/unlabelled; set once by FL's onTradeClose
-  closed_at             TEXT NULL           -- audit only, set together with r_multiple
+-- PK is debate_id (not idempotency_key): one setup vector per debate, matching how the
+-- Trader derives a SetupVector from a single DebateResult before sizing produces an order.
+-- idempotency_key is kept as a required, non-unique indexed column purely for FL's
+-- trade-close join (ClosedTrade carries idempotency_key, not debate_id alone, as its PK).
+CREATE TABLE cosine_setups (
+  debate_id             TEXT PRIMARY KEY,  -- one row per debate; Trader's setup-vector key
+  idempotency_key       TEXT NOT NULL,     -- FL's trade-close join column (non-unique: see note below)
+  instrument            TEXT NOT NULL,     -- retrieval scoping
+  asset_class           TEXT NOT NULL CHECK(asset_class IN ('crypto', 'stocks')),  -- retrieval scoping
+  debate_features_json  TEXT NOT NULL,     -- serialized number[] (SetupVector.debate_features)
+  market_features_json  TEXT NOT NULL,     -- serialized number[] (SetupVector.market_features)
+  r_multiple            REAL NULL,         -- NULL = open/unlabelled; set once by FL's onTradeClose. Also the open/closed signal: no separate status column.
+  closed_at             TEXT NULL,         -- nullable; set together with r_multiple, for point-in-time backtest correctness (retrieval must exclude setups not yet closed as of the injected clock)
+  created_at            TEXT NOT NULL      -- decision time
 );
-CREATE INDEX idx_setups_debate_id ON setups(debate_id);
-CREATE INDEX idx_setups_r_multiple ON setups(r_multiple);
+CREATE INDEX idx_cosine_setups_idempotency_key ON cosine_setups(idempotency_key);
+CREATE INDEX idx_cosine_setups_r_multiple ON cosine_setups(r_multiple);
 ```
 
-Resolved: [Decide: Feedback Loop dial tables + adjustment-history schema (#180)](https://github.com/dd-jp/samurai-trading-system/issues/180), [Decide: cosine setup store schema (#181)](https://github.com/dd-jp/samurai-trading-system/issues/181).
+Resolved: [Decide: Feedback Loop dial tables + adjustment-history schema (#180)](https://github.com/dd-jp/samurai-trading-system/issues/180), [Decide: cosine setup store schema (#181)](https://github.com/dd-jp/samurai-trading-system/issues/181). Note the `idempotency_key` column on `cosine_setups` is intentionally **not** unique/indexed-unique: a debate can in principle be revisited by more than one order-intent lifecycle over time (e.g. a skipped setup that's later re-evaluated under a fresh idempotency key), so uniqueness is enforced only on `debate_id`, the Trader's actual write key.
 
 **Debate Engine** — owner: `docs/specs/debate-engine-spec.md`
 
 ```sql
 -- Append-only. FL's system-of-record for per-analyst attribution, joined by debate_id.
 CREATE TABLE debate_log (
-  debate_id       TEXT PRIMARY KEY,
-  instrument      TEXT NOT NULL,
-  bar_timestamp   TEXT NOT NULL,
+  debate_id           TEXT PRIMARY KEY,
+  instrument          TEXT NOT NULL,
+  bar_timestamp       TEXT NOT NULL,
   contributions_json  TEXT NOT NULL,   -- JSON AnalystContribution[] (influence_score, stance, per analyst)
-  direction       TEXT NOT NULL CHECK(direction IN ('bullish', 'bearish', 'neutral')),
-  rounds          INTEGER NOT NULL,
-  created_at      TEXT NOT NULL
+  direction           TEXT NOT NULL CHECK(direction IN ('bullish', 'bearish', 'neutral')),
+  rounds              INTEGER NOT NULL,
+  created_at          TEXT NOT NULL
 );
 ```
 
@@ -262,9 +271,12 @@ CREATE TABLE current_tick (
 
 `cross-spec-contracts.md`'s "shared-store table non-collision" spot-check was clean at the table-name level; re-verified here at the field level across all fourteen tables above:
 
-- **`latest_mark` was missing `asset_class`** — the `Mark` interface (market-data-service-spec.md) declares it, the original persistence bullet dropped it. **Fixed above**, not silently — this DDL is the first place the full column list was ever written out, so there was no prior "wrong" schema to correct, only an incomplete prose description.
+- **`latest_mark` was missing `asset_class`** (#183) — the `Mark` interface (market-data-service-spec.md) declares it, the original persistence bullet dropped it. **Fixed above**, not silently — this DDL is the first place the full column list was ever written out, so there was no prior "wrong" schema to correct, only an incomplete prose description.
 - **`Fill` vs. the cost model's result type** — already resolved pre-existing (GAP-F renamed the cost model's return type to `CostModelResult` specifically to avoid colliding with the persisted `fills` table; `cross-spec-contracts.md` confirms this explicitly).
-- No other field-level collisions found. Every `idempotency_key`/`debate_id` cross-reference (`open_positions` ↔ `closed_trades` ↔ `setups` ↔ `debate_log`) uses the same string type and the same semantic key across all four tables.
+- **`debate_id` type/semantics** — a deterministic hash string, consistent everywhere it's reused as a join key: `open_positions.debate_id`, `closed_trades.debate_id`, `cosine_setups.debate_id` (PK here), and `debate_log.debate_id` (PK there) are all `TEXT`, all populated from the same Debate Engine-issued hash (debate-engine-spec.md / trader-spec.md). No divergence.
+- **`idempotency_key` type/semantics** — `TEXT` everywhere it appears (`open_positions` PK, `fills` composite PK component, `closed_trades` PK, `cosine_setups` non-unique column). `cosine_setups` is the one table where it is deliberately **not** the primary key — see the note under that table — which is a real asymmetry with `open_positions`/`closed_trades` but not a collision: each table's key is dictated by its own write pattern (one `cosine_setups` row per *debate*, one `open_positions`/`closed_trades` row per *decision lifecycle*), matching this spec's "every table's own consumer dictates its key" principle.
+- **`asset_class` type/semantics** — the `CHECK(asset_class IN ('crypto', 'stocks'))` constraint and column name are identical across all five tables that carry it (`latest_mark`, `open_positions`, `closed_trades`, `cosine_setups`, `current_tick`). No divergence.
+- No other field-level collisions found.
 
 ## Testing Decisions
 
@@ -272,7 +284,7 @@ CREATE TABLE current_tick (
 
 - Test the migration runner: applying migrations to an empty `:memory:` DB produces the exact schema above; re-applying is a no-op; `schema_migrations` reflects applied versions.
 - Test `openSharedStore`: returns a handle backed by the given path; runs pending migrations; WAL mode and `synchronous=FULL` are set on the connection.
-- Test each table's constraints directly (e.g. `open_positions.asset_class` CHECK rejects an invalid value; `config_trials` upsert-on-conflict overwrites `result_json`; `dial_adjustments.status` transitions correctly).
+- Test each table's constraints directly (e.g. `open_positions.asset_class` CHECK rejects an invalid value; `config_trials` upsert-on-conflict overwrites `result_json`; `dial_adjustments.status` transitions correctly; `cosine_setups.debate_id` PK rejects a duplicate write for the same debate).
 - No LLM to mock — this is pure schema/migration/connection-config testing.
 
 ### Modules to Test
@@ -281,7 +293,7 @@ CREATE TABLE current_tick (
 
 **Driver/Connection Config** — WAL mode, `synchronous=FULL`, one file per environment (paper/live never share a path).
 
-**Schema Constraints** — CHECK constraints on enums (`asset_class`, `side`, `intent_type`, `close_reason`, `dial_type`, `status`), PK uniqueness, upsert semantics on `config_trials`.
+**Schema Constraints** — CHECK constraints on enums (`asset_class`, `side`, `intent_type`, `close_reason`, `dial_type`, `status`), PK uniqueness, upsert semantics on `config_trials`, nullable-pair semantics on `cosine_setups` (`r_multiple`/`closed_at` set together, never independently).
 
 ### Prior Art
 
@@ -305,8 +317,8 @@ CREATE TABLE current_tick (
 Market Data Service → bars, latest_mark
 Execution           → open_positions, fills, closed_trades  (sole writer)
 Cost-Model/Backtest → config_trials
-Feedback Loop       → analyst_weights, strategy_params, risk_thresholds, dial_adjustments, setups (labels only; Trader writes)
-Trader              → setups (writes; FL labels)
+Feedback Loop       → analyst_weights, strategy_params, risk_thresholds, dial_adjustments, cosine_setups (labels only; Trader writes)
+Trader              → cosine_setups (writes; FL labels)
 Debate Engine       → debate_log
 Orchestrator        → audit_log, current_tick
 ```
@@ -315,7 +327,7 @@ Every stage above reads/writes through the one `SharedStore` handle from `openSh
 
 ### Domain Glossary Alignment
 
-Per CONTEXT.md's Shared State Store entry: this spec is that store, made concrete. No new glossary terms — `analyst_weights`/`strategy_params`/`risk_thresholds`/`dial_adjustments`/`setups`/`config_trials` are all named after their owning spec's existing vocabulary (`SetupVector`, `DailyCycleResult`, `BacktestReport`), not invented here.
+Per CONTEXT.md's Shared State Store entry: this spec is that store, made concrete. No new glossary terms — `analyst_weights`/`strategy_params`/`risk_thresholds`/`dial_adjustments`/`cosine_setups`/`config_trials` are all named after their owning spec's existing vocabulary (`SetupVector`, `DailyCycleResult`, `BacktestReport`), not invented here.
 
 ### Future Extensions
 
@@ -333,7 +345,7 @@ Wayfinder decisions for this stage live on the [Shared SQLite Store map (#162)](
 - **DB path convention** — `data/samurai-{env}.sqlite`, one file per environment ([#168](https://github.com/dd-jp/samurai-trading-system/issues/168)).
 - **config_trials schema** — JSON blobs, PK-based upsert ([#179](https://github.com/dd-jp/samurai-trading-system/issues/179)).
 - **Feedback Loop dial + adjustment-history schema** — three current-value tables, one shared history log, status-based approval gating ([#180](https://github.com/dd-jp/samurai-trading-system/issues/180)).
-- **Cosine setup store schema** — `setups` table, JSON feature vectors, nullable `r_multiple` as the open/closed signal ([#181](https://github.com/dd-jp/samurai-trading-system/issues/181)).
+- **Cosine setup store schema** — `cosine_setups` table, `debate_id` PK, `idempotency_key` retained as a required indexed non-unique join column, JSON feature vectors, nullable `r_multiple` as the open/closed signal, nullable `closed_at` for point-in-time correctness ([#181](https://github.com/dd-jp/samurai-trading-system/issues/181)).
 - **Consolidated DDL + field-level non-collision re-check** — this document ([#167](https://github.com/dd-jp/samurai-trading-system/issues/167)).
 
 **Dependencies:** none upstream — this is the foundational persistence layer every other stage's spec already assumes. Consumed by: Market Data Service, Execution, Cost-Model/Backtest Harness, Feedback Loop, Trader, Debate Engine, Orchestrator, Risk Manager, Verdict, and the Dashboard (read-only, via `audit_log`).
