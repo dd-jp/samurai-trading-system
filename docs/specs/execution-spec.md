@@ -304,6 +304,16 @@ Per CONTEXT.md:
 - **Shared State Store**: "open positions (reconciled against the broker as source of truth) … Execution writes fills." — this spec is that writer + reconciler.
 - Invariants satisfied: #4 (every fill logged — `Fill` rows), #5 (crash-restart must not lose positions — write-ahead + reconcile).
 
+### Broker-Adapter Cutover Process (Shadow Measurement, #177 resolution)
+
+WorldMonitor's CONCEPTS.md documents a Shadow Measurement pattern — run a candidate read path against real traffic while still serving from the incumbent. #177 scoped it to the `BrokerAdapter` swaps only (Alpaca → ccxt for crypto, Alpaca → IBKR for stocks), not the paper→live capital graduation decision, which stays governed by [[live-money-graduation]] (no fixed date, promising paper metrics, human judgment).
+
+- **Independent per asset class.** Crypto's Alpaca→ccxt and stocks' Alpaca→IBKR shadow-runs and cutover decisions are two separate gates on their own schedules — no coupling, matching crypto/stocks' already-separate tick cadences (5s/30s) and separate long-term brokers.
+- **Mechanism, two-phase:**
+  1. **Offline replay** — replay captured real orders from the shared-store audit log (`Fill`/`ClosedTrade` rows) against the candidate adapter's sandbox first, as a cheap first pass.
+  2. **Live dual-submit** — dual-submit real-time orders to both the incumbent adapter (live) and the candidate adapter's paper/sandbox endpoint, logging fill-price and latency divergence. The candidate's response is measured only — never acted on or fed back into the strategy.
+- **Cutover gate: metrics-informed, manual sign-off — not automatic.** Divergence metrics unlock a manual decision to cut over rather than triggering it automatically, mirroring the human-in-the-loop posture of the paper→live rule. Exact tolerance thresholds (fill-price bps, latency p99) are unpinned config, tuned once real shadow-run data exists.
+
 ### Research Alignment (docs 00/01/02)
 
 - One code path live/paper/backtest with a deterministic Simulated adapter over the injected cost model = the honest measurement harness (Stage 1) and paper-vs-live cost comparison (Stage 3). Persisting requested vs filled size + fees keeps realized-cost accounting truthful, so expectancy/PBO downstream are computed on reality.

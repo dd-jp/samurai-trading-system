@@ -149,6 +149,8 @@ interface DataSource {
 
 - **Tier 1 — input-hash response cache.** Key = `hash(instrument, kind, window|spec, asOf)`. Serves repeat reads within a tick (matches the Analysts' "cache on input hash" decision). Deterministic `asOf` makes the key sound; in backtest the same `asOf` legitimately returns the cached value.
 - **Tier 2 — cheap bulk tier.** The persisted `bars` table IS the bulk tier: backtest replay reads long sequential bar ranges cheaply from disk instead of recomputing or re-fetching per call. Indicators are memoized on the Tier-1 key.
+- **WorldMonitor One-Shot Hydration cross-check (#177 resolution):** this two-tier design already satisfies the pattern — refresh-tick reads hit Tier-1/Tier-2, not the origin API, so there is no boot-hydration miss that silently manufactures origin traffic on every tick. No design change; documented here as a confirmed cross-check, not a new decision.
+- **WorldMonitor Lever Test (standing constraint, #177 resolution):** whenever cache-tier/Redis sizing work is eventually scoped (still "not yet decided" — see Future Extensions), evaluate the proposal against egress ≈ origin-miss-count × payload-size before scoping it.
 
 ### Module: Ingestion & Sources
 
