@@ -21,6 +21,7 @@ Key architectural decisions:
 - **Circuit breakers halt entries, never exits; tiered; hard breaker needs manual re-arm.**
 - **Reads a portfolio-accounting view over the shared store** — synchronous, off the Feedback Loop's async path.
 - **Rejects terminate at Risk; only approved intents reach Verdict.**
+- **CII soft signal is advisory only** — WorldMonitor's Country Instability Index (ADR-0002) rides as a `warnings` field on `RiskDecision`, never trimming, rejecting, or otherwise affecting the pipeline's outcome.
 
 ## User Stories
 
@@ -97,6 +98,7 @@ interface RiskDecision {
   } | null;
   binding_constraint: string | null;  // e.g. 'per_asset_class_cap', 'circuit_breaker:portfolio_drawdown'
   reasons: string[];                   // machine tags + human text (audit)
+  warnings: string[];                  // advisory only, e.g. 'macro_risk_flag:RU' — never binding, never overrides status (see CII Soft Signal below)
   risk_snapshot: {
     exposure: Record<string, number>;  // per instrument / class / portfolio
     drawdown_pct: number;
@@ -128,8 +130,9 @@ Ordered; each step trims or hard-rejects; **exits skip all entry gates and alway
 3. **Per-asset exposure cap** — trim so total exposure to the instrument ≤ limit.
 4. **Per-asset-class exposure cap** — trim so the crypto/stocks bucket ≤ limit.
 5. **Portfolio gross exposure cap** — trim so total gross ≤ limit.
-6. **Concentration check (v1: static buckets)** — predefined correlated groups with per-bucket caps; trim to fit. (Dynamic correlation-matrix upgrade deferred to v2 — backlog ticket #50.)
-7. **Min-viable-size re-check** — if trimming pushed size below viable (respecting broker min order size), reject.
+6. **Concentration check (dynamic correlation matrix)** — point-in-time pairwise Pearson correlation over trailing returns (`src/risk-manager/correlation.ts`), trim to fit the correlated-risk cap. (Implemented per backlog ticket #50 — the "v1 static buckets" description in earlier drafts of this spec was stale; corrected 2026-07-26 during #186's grilling.)
+7. **Risk critic (advisory-authority)** — a single red-team LLM pass over the intent, narrative/qualitative risk only; may trim or hard-reject, same authority as the mechanical steps above. See "Module: Risk Critic" below. (Added per [ADR-0003](../adr/0003-risk-manager-critic-layer.md).)
+8. **Min-viable-size re-check** — if trimming pushed size below viable (respecting broker min order size), reject.
 
 Monotonic: each step only reduces risk. `binding_constraint` records the step that trimmed/killed the intent.
 
@@ -142,11 +145,33 @@ Monotonic: each step only reduces risk. `binding_constraint` records the step th
 - **Session boundary:** UTC day for crypto, market-day for stocks.
 - Exact thresholds are config, tuned in paper trading.
 
+### Module: CII Soft Signal
+
+Adopted per [ADR-0002](../adr/0002-worldmonitor-mi-source.md) (WorldMonitor as a Market Intelligence source). WorldMonitor's Country Instability Index (CII, 0–100 per country) enters the Risk Manager as an **advisory warning, never a gate or a sizing input**. v1 scope, resolved in [CII soft-signal policy grilling — #174](https://github.com/dd-jp/samurai-trading-system/issues/174):
+
+- **Warning-only, no position-size scaling in v1.** No CII-driven sizing formula is implemented yet — no historical CII series exists at any WorldMonitor tier to calibrate one against (see ADR-0002 §6). Deferred to v2 alongside the correlation-matrix concentration upgrade (backlog #50), once [#182](https://github.com/dd-jp/samurai-trading-system/issues/182)'s post-launch CII snapshot capture yields real history.
+- **Samurai owns a static instrument→country/region mapping** (e.g. Russian ADRs → RU, energy majors → Middle East), independent of and not trusting WorldMonitor's own tagging — lives alongside the v1 static concentration buckets (Check Pipeline step 6).
+- **Surfaces as the advisory `warnings` field on `RiskDecision`** (e.g. `macro_risk_flag:RU`) — travels with the exact decision it's context for, no separate side-channel event or new plumbing.
+- **Fires on absolute CII level, not delta.** A sustained high-risk exposure warns every cycle it's evaluated, not just at the moment of a jump.
+- **Threshold ("CII > N") is an unpinned config value**, tuned in paper trading — same convention as every other Risk Manager threshold.
+- **Never overrides a circuit breaker or the check pipeline's approve/reject/trim outcome, no exceptions.** The CII check runs alongside the pipeline (informational), not as one of its ordered steps — it cannot trim, reject, or otherwise change `order_intent`.
+
+### Module: Risk Critic
+
+Adopted per [ADR-0003](../adr/0003-risk-manager-critic-layer.md) (Risk Manager gains a single red-team critic), resolved via [#186](https://github.com/dd-jp/samurai-trading-system/issues/186) grilling. Answers the question `05-tradingagents-risk-debate-finding.md` raised: the mechanical checks (including the now-dynamic correlation concentration check, step 6) cover quantitative risk well; this module exists only for the narrative/qualitative risk they structurally cannot express.
+
+- **Scope: single critic, not a 3-persona debate.** The Debate Engine (Stage 3) already spends the multi-persona-adversarial-tension budget; a second full debate in Stage 4 is redundant given how narrow the blind spot is. One LLM pass, framed as "argue why this trade should be trimmed or rejected."
+- **Trigger: every gated `OrderIntent`, single-pass, no rebuttal round.** Runs regardless of whether the mechanical steps already trimmed the intent — a narrative-risk trade can pass every quantitative check clean, which is the scenario this module exists to catch. No second round arguing with itself.
+- **Authority: trim or hard-reject**, inserted as check-pipeline step 7 — the same authority as every mechanical step, not a separate gate and not conviction-modulation (architecturally unreachable from Stage 4: conviction is consumed by the Trader in Stage 3, before Risk ever sees the intent). Per the pipeline's monotonic invariant, a hard-reject from the critic is the *safe* direction, no different in kind from a circuit breaker trip.
+- **Determinism: replay-from-log, not a live call in backtest.** In `live`/paper mode, the critic makes a real LLM call and its verdict + reasoning is persisted keyed by `debate_id` (shared with `debate_log` and `cosine_setups`, per [#162](https://github.com/dd-jp/samurai-trading-system/issues/162)). In `backtest` mode, step 7 reads the logged verdict instead of re-calling the LLM — preserving the same-code-path-live-and-replay invariant (Determinism & Kill-Switch module) and keeping Stage 2's PBO/DSR/MinBTL statistics valid.
+- **Not yet decided** (deferred to implementation tickets): exact prompt/context contract (what market-intelligence/portfolio context it receives), fail-open vs fail-closed behavior on a critic API failure (the mechanical steps remain the safety net regardless of this module's availability), and dashboard surfacing of its verdicts.
+
 ### Module: State & Accounting
 
 - A small **portfolio-accounting module** computes the `PortfolioView` from the shared SQLite store (positions + fills written by Execution) **plus current marks (last price) from the Market Data Service**: equity = cash + mark-to-market of open positions, drawdown = peak-to-trough of the equity curve, notional exposure = `OpenPosition.filled_size × current mark` (freeze §4 — always reads `filled_size`, **never requested size**, so partially-filled positions are marked at what was actually filled). The *realized* components (round-trip PnL, consecutive losses) come from fills alone; only the *unrealized* mark-to-market components need current prices.
 - Risk reads this **synchronously**, independent of the Feedback Loop (which reads the same data for its slower tuning, but is never in Risk's hot path).
 - **Dependency:** this makes the Risk Manager a consumer of the **Market Data Service** via **two calls** (freeze §3): `getMark(instrument, asOf)` for current/last price (mark-to-market of open positions) **and** `getIndicator(instrument, spec, asOf)` for the **volatility-halt baseline** (the realized/implied-volatility reference the volatility circuit breaker trips against). Alongside the Analysts (`getBars`/`getIndicator`) and Verdict (`getMark`). The Market Data Service is still unbuilt and needs its own map; its scope must include serving current/last price for mark-to-market and indicators for the volatility baseline.
+- **Also a consumer of Market Intelligence's WorldMonitor adapter** (via its `cii-consumer.ts`, ADR-0002) for the CII soft signal — a separate, lower-frequency read than the Market Data Service dependency above, feeding the CII Soft Signal module.
 
 ### Module: Determinism & Kill-Switch
 
@@ -171,6 +196,10 @@ Monotonic: each step only reduces risk. `binding_constraint` records the step th
 
 **State & Determinism** — same input → same decision; point-in-time reads never see future fills.
 
+**CII Soft Signal** — warning fires at absolute CII level above threshold, not on delta; warning never appears in `binding_constraint` or changes `status`/`order_intent`; instrument→country mapping resolves correctly for static test fixtures.
+
+**Risk Critic** — backtest mode reads the logged `debate_id`-keyed verdict, never calls the LLM (assert no network/LLM-client call in a mock-clock backtest run); a trim/reject verdict updates `binding_constraint` to `risk_critic`; a pass verdict leaves the intent unchanged; runs on every gated intent regardless of prior pipeline trims.
+
 ### Prior Art
 
 - No implementation yet. Injected-clock / mock-clock patterns mirror the Trader, Analysts, and Market Intelligence specs. Deterministic-output assertions (no LLM mock) mirror the Trader spec.
@@ -187,7 +216,9 @@ Monotonic: each step only reduces risk. `binding_constraint` records the step th
 
 **Exact limit values** — all caps and breaker thresholds are config, tuned in paper trading; not fixed here.
 
-**Dynamic correlation** — v1 uses static concentration buckets; the correlation-matrix upgrade is v2 (backlog #50).
+**CII-driven position-size scaling** — v1 CII is warning-only; a `(1 - ciiDelta × k)`-style scaling formula is deferred pending real CII history from [#182](https://github.com/dd-jp/samurai-trading-system/issues/182).
+
+**Risk critic prompt/context contract, fail-open/fail-closed behavior, dashboard surfacing** — deferred to implementation tickets under `/to-tickets` (ADR-0003).
 
 ## Further Notes
 
@@ -212,9 +243,9 @@ Risk introduces a small portfolio-accounting module (equity/drawdown/exposure ov
 
 ### Future Extensions
 
-- Dynamic correlation-matrix concentration (v2, #50).
 - Per-strategy risk budgeting once multiple strategies run concurrently.
 - Volatility-scaled exposure caps (tighten caps in high-vol regimes).
+- CII-driven position-size scaling, once [#182](https://github.com/dd-jp/samurai-trading-system/issues/182) yields real CII history to calibrate against.
 
 ## Resolved Decisions (Sources)
 
@@ -222,10 +253,12 @@ Wayfinder decisions for this stage live in [docs/wayfinder/risk-manager-map.md](
 
 - **Output & authority** — modify-and-reject, monotonic risk-reducing; rejects terminate at Risk, only approved reach Verdict; `RiskDecision` shape.
 - **Architecture** — fully mechanical, deterministic, no LLM.
-- **Check pipeline & precedence** — ordered breakers→per-trade→per-asset→per-asset-class→portfolio→concentration→min-size; v1 static concentration buckets (v2 = #50).
+- **Check pipeline & precedence** — ordered breakers→per-trade→per-asset→per-asset-class→portfolio→concentration→risk critic→min-size; concentration uses the dynamic correlation matrix (#50, implemented; corrected from an earlier "static v1 buckets" description).
 - **Circuit breakers** — halt entries not exits; tiered; three metrics (daily-loss, peak-to-trough drawdown, consecutive losses); soft auto-reset / hard manual re-arm; UTC-day vs market-day sessions.
 - **State & data** — portfolio-accounting view over the shared store, read synchronously off the Feedback Loop path.
 - **Backtest determinism** — same code path; point-in-time via injected clock; mode-flagged auto-re-arm.
 - **Exit & kill-switch** — exits pass verbatim; kill halts new entries; forced liquidation out of scope.
+- **CII soft signal** (resolved 2026-07-23, see [ADR-0002](../adr/0002-worldmonitor-mi-source.md) and [#174](https://github.com/dd-jp/samurai-trading-system/issues/174)) — WorldMonitor's Country Instability Index enters as an advisory `warnings` field on `RiskDecision`, warning-only in v1 (no sizing), Samurai-owned static instrument→country mapping, fires on absolute level not delta, unpinned threshold, never overrides breakers or the pipeline outcome.
+- **Risk critic** (resolved 2026-07-26, see [ADR-0003](../adr/0003-risk-manager-critic-layer.md) and [#186](https://github.com/dd-jp/samurai-trading-system/issues/186)) — a single red-team LLM pass added as check-pipeline step 7, narrative/qualitative risk only, trim/hard-reject authority, replay-from-log for backtest determinism, runs on every gated intent single-pass with no rebuttal round.
 
-**Dependencies:** the portfolio-accounting view + shared position store (also used by the Trader, #48); the **Market Data Service** (current marks for mark-to-market — a second consumer alongside Analysts; still unbuilt, needs its own map); and the Feedback Loop (Stage 6, not yet charted) which tunes limits.
+**Dependencies:** the portfolio-accounting view + shared position store (also used by the Trader, #48); the **Market Data Service** (current marks for mark-to-market — a second consumer alongside Analysts; still unbuilt, needs its own map); the Feedback Loop (Stage 6, not yet charted) which tunes limits; **Market Intelligence's WorldMonitor adapter** (CII soft signal, per ADR-0002); and the **shared SQLite store's `debate_id`-keyed log tables** (risk critic verdict persistence, per ADR-0003 and #162).

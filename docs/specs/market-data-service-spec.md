@@ -160,7 +160,7 @@ interface DataSource {
 ### Module: Persistence
 
 - **`bars`** (instrument, timeframe, open_time, close_time, OHLCV, source) — append-only; the survivorship-free history AND the bulk tier.
-- **`latest_mark`** (instrument, price, observed_at, source) — one upserted row per instrument; read synchronously by Risk/Verdict.
+- **`latest_mark`** (instrument, price, observed_at, asset_class, source) — one upserted row per instrument; read synchronously by Risk/Verdict. (`asset_class` added per [docs/specs/shared-sqlite-store-spec.md](shared-sqlite-store-spec.md) — the `Mark` interface below already declared it; this bullet had dropped it.)
 - Both in the shared SQLite state store (CONTEXT.md Shared State Store). **Trade-off noted:** a high-write bar cache sharing the crash-critical positions DB risks single-writer lock contention; the documented scale valve is a separate SQLite file for the bar cache — not adopted in v1.
 
 ## Testing Decisions
