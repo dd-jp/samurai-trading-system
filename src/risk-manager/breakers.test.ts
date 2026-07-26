@@ -136,6 +136,46 @@ describe('CircuitBreakers', () => {
     expect(cleared.portfolio_tripped).toBe(false);
   });
 
+  it('requires a manual reArm() to clear the hard drawdown breaker in paper mode', () => {
+    const breakers = new CircuitBreakers(makeConfig({ max_drawdown_pct: 20 }));
+    breakers.evaluate(makeInput({ portfolio: makePortfolio({ drawdown_pct: 25 }), mode: 'paper' }));
+
+    const stillTripped = breakers.evaluate(
+      makeInput({ portfolio: makePortfolio({ drawdown_pct: 0 }), mode: 'paper' }),
+    );
+    expect(stillTripped.portfolio_tripped).toBe(true);
+
+    breakers.reArm();
+    const cleared = breakers.evaluate(
+      makeInput({ portfolio: makePortfolio({ drawdown_pct: 0 }), mode: 'paper' }),
+    );
+    expect(cleared.portfolio_tripped).toBe(false);
+  });
+
+  it('does not auto-re-arm the hard breaker in paper mode even if the recovery condition is met', () => {
+    const config = makeConfig({
+      max_drawdown_pct: 20,
+      auto_rearm: { recovery_drawdown_pct: 10, max_days_tripped: 1 },
+    });
+    const breakers = new CircuitBreakers(config);
+    breakers.evaluate(
+      makeInput({
+        portfolio: makePortfolio({ drawdown_pct: 25 }),
+        mode: 'paper',
+        clock: makeClock('2026-07-01T00:00:00Z'),
+      }),
+    );
+
+    const stillTripped = breakers.evaluate(
+      makeInput({
+        portfolio: makePortfolio({ drawdown_pct: 0 }),
+        mode: 'paper',
+        clock: makeClock('2026-08-01T00:00:00Z'),
+      }),
+    );
+    expect(stillTripped.portfolio_tripped).toBe(true);
+  });
+
   it('auto-re-arms the hard drawdown breaker under the backtest mode flag once recovered', () => {
     const config = makeConfig({
       max_drawdown_pct: 20,

@@ -127,7 +127,7 @@ export interface RiskInput {
   /** Red-team critic verdict (#204), pre-fetched by critic.ts. Absent = pass; mechanical steps are the safety net. */
   critic?: RiskCriticVerdict;
   /** Selects manual vs auto re-arm for the hard breaker (consumed by #77, not this pipeline). */
-  mode: 'live' | 'backtest';
+  mode: 'live' | 'paper' | 'backtest';
 }
 
 export interface RiskDecision {

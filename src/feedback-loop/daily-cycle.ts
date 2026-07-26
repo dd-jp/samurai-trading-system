@@ -134,7 +134,8 @@ export function runDailyCycle(input: DailyCycleInput): DailyCycleResult {
 
     // Backtest auto-handles loosening approvals (like Verdict's HITL bypass)
     // so replay exercises the same code path as live — and records it.
-    const gate = isThreshold && mode === 'live';
+    // Paper takes the same gated path as live, not backtest's auto-handling.
+    const gate = isThreshold && mode !== 'backtest';
     const { to, direction, gated } = applyGuardrail(current, proposal.target, dial, gate);
 
     if (gated) {

@@ -86,8 +86,8 @@ export interface VerdictInput {
   positionStore: PositionStore;
   breakers: BreakerState;
   config: VerdictConfig;
-  /** backtest bypasses HITL (auto-approve), recording would_require_approval. */
-  mode: 'live' | 'backtest';
+  /** backtest bypasses HITL (auto-approve), recording would_require_approval; paper behaves like live. */
+  mode: 'live' | 'paper' | 'backtest';
   approvals: ApprovalChannel;
 }
 

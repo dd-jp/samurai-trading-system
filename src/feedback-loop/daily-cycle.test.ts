@@ -287,7 +287,7 @@ describe('runDailyCycle — asymmetric risk-threshold guardrails', () => {
     },
   });
 
-  function thresholdHarness(target: number, mode: 'live' | 'backtest' = 'live'): Harness {
+  function thresholdHarness(target: number, mode: 'live' | 'paper' | 'backtest' = 'live'): Harness {
     return makeHarness({
       tuning: new InMemoryTuningStore({ weights: {}, thresholds: { max_position_size: 1000 } }),
       trades: new InMemoryClosedTradeStore([]),
@@ -320,6 +320,20 @@ describe('runDailyCycle — asymmetric risk-threshold guardrails', () => {
     expect(result.loosen_pending_approval).toEqual(['max_position_size']);
     expect(result.param_updates).toEqual({});
     // The safety limit is unchanged until a human says otherwise.
+    expect(tuning.getRiskThresholds().max_position_size).toBe(1000);
+    expect(adjustments.getEntries()).toEqual([]);
+    expect(approvals.requests).toEqual([
+      { name: 'max_position_size', from: 1000, to: 1100, requested_at: NOW },
+    ]);
+  });
+
+  it('routes a loosening to human approval in paper mode, same as live', () => {
+    const { input, tuning, approvals, adjustments } = thresholdHarness(2000, 'paper');
+
+    const result = runDailyCycle(input);
+
+    expect(result.loosen_pending_approval).toEqual(['max_position_size']);
+    expect(result.param_updates).toEqual({});
     expect(tuning.getRiskThresholds().max_position_size).toBe(1000);
     expect(adjustments.getEntries()).toEqual([]);
     expect(approvals.requests).toEqual([
