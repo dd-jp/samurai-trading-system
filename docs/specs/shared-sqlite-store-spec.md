@@ -65,7 +65,7 @@ Runs pending migrations, returns a typed handle. Components receive it via const
 
 ### Module: Consolidated Schema
 
-Every `CREATE TABLE` the store needs, collected from the eleven specs that implicitly define them plus the three that had no schema anywhere until this map resolved them (`verdict_log` and `breaker_state` were added later, per #206 and #203 respectively). Field-level non-collision was re-verified across all sixteen tables (see **Non-Collision Verification** below).
+Every `CREATE TABLE` the store needs, collected from the eleven specs that implicitly define them plus the three that had no schema anywhere until this map resolved them (`verdict_log` and `breaker_state` were added later, per #206 and #203 respectively). `cii_snapshots` was added later still, per #182 (`0003_cii_snapshots.sql`). Field-level non-collision was re-verified across all seventeen tables (see **Non-Collision Verification** below).
 
 **Market Data Service** — owner: `docs/specs/market-data-service-spec.md`
 
@@ -94,6 +94,21 @@ CREATE TABLE latest_mark (
   asset_class  TEXT NOT NULL CHECK(asset_class IN ('crypto', 'stocks')),  -- FIX (#183): dropped from the original persistence bullet; the `Mark` interface (market-data-service-spec.md) already declares this field, restored here to match
   source       TEXT NOT NULL
 );
+```
+
+**Market Intelligence** — owner: `docs/specs/market-intelligence-spec.md`
+
+```sql
+-- Post-launch CII history capture (#182) — the drawdown-correlation study #173 couldn't
+-- run for lack of any WorldMonitor-side history (ADR-0002 §6). Append-only; a missing/null
+-- provider read records no row, never a NULL score.
+CREATE TABLE cii_snapshots (
+  country_code  TEXT NOT NULL,
+  score         REAL NOT NULL CHECK(score BETWEEN 0 AND 100),
+  captured_at   TEXT NOT NULL,
+  PRIMARY KEY (country_code, captured_at)
+);
+CREATE INDEX idx_cii_snapshots_captured_at ON cii_snapshots(captured_at);
 ```
 
 **Execution** — owner: `docs/specs/execution-spec.md`, sole writer of all three tables below
@@ -310,7 +325,7 @@ CREATE TABLE current_tick (
 
 ### Non-Collision Verification
 
-`cross-spec-contracts.md`'s "shared-store table non-collision" spot-check was clean at the table-name level; re-verified here at the field level across all sixteen tables above:
+`cross-spec-contracts.md`'s "shared-store table non-collision" spot-check was clean at the table-name level; re-verified here at the field level across all seventeen tables above:
 
 - **`latest_mark` was missing `asset_class`** (#183) — the `Mark` interface (market-data-service-spec.md) declares it, the original persistence bullet dropped it. **Fixed above**, not silently — this DDL is the first place the full column list was ever written out, so there was no prior "wrong" schema to correct, only an incomplete prose description.
 - **`Fill` vs. the cost model's result type** — already resolved pre-existing (GAP-F renamed the cost model's return type to `CostModelResult` specifically to avoid colliding with the persisted `fills` table; `cross-spec-contracts.md` confirms this explicitly).
@@ -319,6 +334,7 @@ CREATE TABLE current_tick (
 - **`asset_class` type/semantics** — the `CHECK(asset_class IN ('crypto', 'stocks'))` constraint and column name are identical across all five tables that carry it (`latest_mark`, `open_positions`, `closed_trades`, `cosine_setups`, `current_tick`). No divergence.
 - **`breaker_state`** (#203) — `tier` is its own PK, disjoint from every other table's `debate_id`/`trace_id`/`idempotency_key` keying convention. `tripped_at`/`reset_at` are nullable `TEXT` timestamps (null while never-tripped/still-tripped respectively) — no other table has a comparable nullable-timestamp pair to collide with. No divergence.
 - **`dial_adjustments` was missing `reason`** (#197) — `Adjustment.reason` (feedback-loop-spec.md's "Module: Guardrailed Tuning") was already a required field consumed by `daily-cycle.ts`/`metrics.ts`; the original DDL bullet dropped it, the same class of gap as `latest_mark`/`asset_class` above. **Fixed above**, plus a real migration (`0002_dial_adjustments_reason.sql`, `ALTER TABLE ... ADD COLUMN reason TEXT NOT NULL DEFAULT ''`) since `0001_init.sql` had already shipped without it.
+- **`cii_snapshots`** (#182) — `country_code` is a plain `TEXT` code (WorldMonitor country codes, e.g. `'RU'`), disjoint from every other table's keying convention; not the same value space as `asset_class`'s `crypto`/`stocks` enum despite both being country/market-adjacent classifiers. `(country_code, captured_at)` composite PK is the append-only-history pattern already used by `bars`' `(instrument, timeframe, open_time)`. No divergence.
 - No other field-level collisions found.
 
 ## Testing Decisions

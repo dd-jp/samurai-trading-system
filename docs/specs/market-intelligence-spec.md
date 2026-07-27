@@ -234,13 +234,14 @@ The prior `ConflictResolution` (binary DeepResearch-vs-Grok winner) is replaced 
 
 ### Module: WorldMonitor Agent
 
-Adopted per [ADR-0002](../adr/0002-worldmonitor-mi-source.md). Location: `src/market-intelligence/worldmonitor-adapter/` (`client.ts`, `normalizer.ts`, `adapter.ts`, `cii-consumer.ts` + matching `*.test.ts` files).
+Adopted per [ADR-0002](../adr/0002-worldmonitor-mi-source.md). Location: `src/market-intelligence/worldmonitor-adapter/` (`client.ts`, `normalizer.ts`, `adapter.ts`, `cii-consumer.ts`, `cii-snapshot.ts`, `sqlite-cii-snapshot-store.ts` + matching `*.test.ts` files).
 
 **Responsibilities**
 - Poll WorldMonitor's MIT-licensed `worldmonitor` npm SDK (REST API as fallback) on its own decoupled cadence — **not** per-tick.
 - Normalize WorldMonitor items into `IntelligenceItem` (`agent_id: 'worldmonitor'`, `sentiment` defaults to `0`).
 - Separately pull CII scores and emit them to the Risk Manager (not through this layer's `MarketContext` — CII is a Risk Manager soft signal, not MI conflict-resolution input; see `docs/specs/risk-manager-spec.md`).
 - Handle source failures gracefully (emit empty intelligence, never block the pipeline — same contract as DeepResearch/Grok).
+- **Post-launch CII history capture (#182):** `cii-snapshot.ts`'s `captureCiiSnapshot` reads `CiiScoreProvider.getCii` directly (not `CiiConsumer`'s stale-tolerant cache — a snapshot job wants a true observation timestamp, not a cache hit) and persists one row per requested country to the `cii_snapshots` table (`sqlite-cii-snapshot-store.ts`; schema in `docs/specs/shared-sqlite-store-spec.md`). A pure function invoked externally, matching the Feedback Loop's `runDailyCycle` — no scheduler is wired in this codebase yet. Dormant until a live `CiiScoreProvider` exists (`client.ts`/`normalizer.ts`/`adapter.ts` are still unimplemented); once ~90 days of history accumulate, it unblocks the CII/drawdown correlation study [#173](https://github.com/dd-jp/samurai-trading-system/issues/173) couldn't run for lack of data (ADR-0002 §6).
 
 **Key Operations**
 
