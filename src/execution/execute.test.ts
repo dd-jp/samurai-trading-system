@@ -2,9 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { CostModel } from '../cost-model-backtest/types.js';
 import type { MarketDataService } from '../market-data-service/types.js';
 import type { Clock } from '../shared/clock.js';
-import type { Fill, OpenPosition, OrderIntent, OrderState } from '../shared/types.js';
+import type { OpenPosition, OrderIntent } from '../shared/types.js';
 import type { VerdictDecision } from '../verdict/types.js';
 import { ExecutionImpl } from './execute.js';
+import { openTestExecutionStore } from './sqlite-store-harness.js';
 import type {
   BrokerAck,
   BrokerAdapter,
@@ -12,7 +13,6 @@ import type {
   ExecutionInput,
   NativeBracketRequest,
   NormalizedFill,
-  SharedStore,
 } from './types.js';
 
 const NOW = new Date('2026-07-15T14:00:00Z');
@@ -61,64 +61,6 @@ function makeGo(orderOverrides: Partial<OrderIntent> = {}): VerdictDecision {
   };
 }
 
-/**
- * Minimal in-memory stand-in for the shared SQLite store. Records writes in
- * order so tests can assert what was durable at each point, not just the
- * end state.
- */
-class InMemoryStore implements SharedStore {
-  readonly positions = new Map<string, OpenPosition>();
-  readonly writeLog: string[] = [];
-
-  async findByKey(idempotency_key: string): Promise<boolean> {
-    return this.positions.has(idempotency_key);
-  }
-
-  async writeAheadPosition(position: OpenPosition): Promise<void> {
-    this.writeLog.push(`write-ahead:${position.idempotency_key}`);
-    this.positions.set(position.idempotency_key, { ...position });
-  }
-
-  async updatePositionState(
-    idempotency_key: string,
-    update: { order_state: OrderState; broker_order_ids: string[] },
-  ): Promise<void> {
-    const existing = this.positions.get(idempotency_key);
-    if (!existing) {
-      throw new Error(`updatePositionState: no write-ahead record for ${idempotency_key}`);
-    }
-    this.writeLog.push(`update:${idempotency_key}:${update.order_state}`);
-    this.positions.set(idempotency_key, { ...existing, ...update });
-  }
-
-  // Fill-lifecycle surface (#83). execute() never calls these; they exist so
-  // this store still satisfies the widened SharedStore.
-  async getOpenPositions(): Promise<OpenPosition[]> {
-    return [...this.positions.values()];
-  }
-
-  async hasFill(): Promise<boolean> {
-    return false;
-  }
-
-  async writeFill(): Promise<void> {}
-
-  async getFills(): Promise<Fill[]> {
-    return [];
-  }
-
-  async updatePositionFill(
-    idempotency_key: string,
-    update: { filled_size: number; avg_entry_price: number; order_state: OrderState },
-  ): Promise<void> {
-    const existing = this.positions.get(idempotency_key);
-    if (!existing) return;
-    this.positions.set(idempotency_key, { ...existing, ...update });
-  }
-
-  async writeClosedTrade(): Promise<void> {}
-}
-
 /** Accepts everything and records what it was handed. */
 function makeBroker(
   onSubmit?: (order: NativeBracketRequest) => void | Promise<void>,
@@ -155,7 +97,7 @@ function makeInput(overrides: Partial<ExecutionInput> = {}): ExecutionInput {
     trace_id: 'trace-1',
     clock: fixedClock,
     broker: makeBroker(),
-    store: new InMemoryStore(),
+    store: openTestExecutionStore().store,
     costModel: {} as CostModel,
     marketData: {} as MarketDataService,
     config,
@@ -166,7 +108,7 @@ function makeInput(overrides: Partial<ExecutionInput> = {}): ExecutionInput {
 
 describe('ExecutionImpl.execute', () => {
   it('expands the bracket, write-aheads, submits, and returns submitted', async () => {
-    const store = new InMemoryStore();
+    const { store } = openTestExecutionStore();
     const broker = makeBroker();
     const execution = new ExecutionImpl(makeInput({ store, broker }));
 
@@ -206,24 +148,24 @@ describe('ExecutionImpl.execute', () => {
   // asserting after execute() returns would pass even if the write happened
   // afterwards.
   it('persists the pending record BEFORE calling the broker', async () => {
-    const store = new InMemoryStore();
-    let stateAtSubmit: OpenPosition | undefined;
-    const broker = makeBroker(() => {
-      stateAtSubmit = store.positions.get('key-aapl-1355');
+    const { store } = openTestExecutionStore();
+    let stateAtSubmit: OpenPosition | null = null;
+    const broker = makeBroker(async () => {
+      stateAtSubmit = await store.getPosition('key-aapl-1355');
     });
 
     await new ExecutionImpl(makeInput({ store, broker })).execute(makeGo());
 
-    expect(stateAtSubmit).toBeDefined();
+    expect(stateAtSubmit).not.toBeNull();
     expect(stateAtSubmit?.order_state).toBe('pending');
     expect(store.writeLog).toEqual(['write-ahead:key-aapl-1355', 'update:key-aapl-1355:submitted']);
   });
 
   it('write-aheads the lot with the fields downstream binds', async () => {
-    const store = new InMemoryStore();
-    let stateAtSubmit: OpenPosition | undefined;
-    const broker = makeBroker(() => {
-      stateAtSubmit = store.positions.get('key-aapl-1355');
+    const { store } = openTestExecutionStore();
+    let stateAtSubmit: OpenPosition | null = null;
+    const broker = makeBroker(async () => {
+      stateAtSubmit = await store.getPosition('key-aapl-1355');
     });
 
     await new ExecutionImpl(makeInput({ store, broker })).execute(makeGo());
@@ -249,10 +191,10 @@ describe('ExecutionImpl.execute', () => {
   });
 
   it('persists the broker ack state after submit', async () => {
-    const store = new InMemoryStore();
+    const { store } = openTestExecutionStore();
     await new ExecutionImpl(makeInput({ store })).execute(makeGo());
 
-    expect(store.positions.get('key-aapl-1355')).toMatchObject({
+    expect(await store.getPosition('key-aapl-1355')).toMatchObject({
       order_state: 'submitted',
       broker_order_ids: ['key-aapl-1355:entry', 'key-aapl-1355:stop'],
     });
@@ -261,7 +203,7 @@ describe('ExecutionImpl.execute', () => {
   // AC: "Duplicate execute() calls with the same idempotency_key produce
   // exactly one submission."
   it('dedupes a repeat of the same key without touching the broker', async () => {
-    const store = new InMemoryStore();
+    const { store } = openTestExecutionStore();
     const broker = makeBroker();
     const execution = new ExecutionImpl(makeInput({ store, broker }));
 
@@ -282,7 +224,7 @@ describe('ExecutionImpl.execute', () => {
   // submission reaches the broker, which is what makes exactly one fill
   // possible downstream.
   it('submits exactly once across N replays of the same decision', async () => {
-    const store = new InMemoryStore();
+    const { store } = openTestExecutionStore();
     const broker = makeBroker();
     const execution = new ExecutionImpl(makeInput({ store, broker }));
 
@@ -299,11 +241,11 @@ describe('ExecutionImpl.execute', () => {
       'deduped',
       'deduped',
     ]);
-    expect(store.positions.size).toBe(1);
+    expect(await store.countAllPositions()).toBe(1);
   });
 
   it('treats a different instrument/bar as a separate decision', async () => {
-    const store = new InMemoryStore();
+    const { store } = openTestExecutionStore();
     const broker = makeBroker();
     const execution = new ExecutionImpl(makeInput({ store, broker }));
 
@@ -314,11 +256,11 @@ describe('ExecutionImpl.execute', () => {
 
     expect(other.status).toBe('submitted');
     expect(broker.calls).toHaveLength(2);
-    expect(store.positions.size).toBe(2);
+    expect(await store.countAllPositions()).toBe(2);
   });
 
   it('leaves the pending record intact when the broker call throws', async () => {
-    const store = new InMemoryStore();
+    const { store } = openTestExecutionStore();
     const broker: BrokerAdapter = {
       submitBracket: vi.fn().mockRejectedValue(new Error('connection reset')),
       fetchNewFills: vi.fn().mockResolvedValue([]),
@@ -334,11 +276,11 @@ describe('ExecutionImpl.execute', () => {
     // settle it, so the record stays `pending` for #86 to reconcile rather
     // than being guessed terminal.
     expect(result.order_state).toBe('pending');
-    expect(store.positions.get('key-aapl-1355')?.order_state).toBe('pending');
+    expect((await store.getPosition('key-aapl-1355'))?.order_state).toBe('pending');
   });
 
   it('does not act on a no_go', async () => {
-    const store = new InMemoryStore();
+    const { store } = openTestExecutionStore();
     const broker = makeBroker();
     const noGo: VerdictDecision = {
       status: 'no_go',
@@ -355,11 +297,11 @@ describe('ExecutionImpl.execute', () => {
     expect(result.status).toBe('error');
     expect(result.order_state).toBeNull();
     expect(broker.calls).toHaveLength(0);
-    expect(store.positions.size).toBe(0);
+    expect(await store.countAllPositions()).toBe(0);
   });
 
   it('routes scale_in through the bracket path as its own lot', async () => {
-    const store = new InMemoryStore();
+    const { store } = openTestExecutionStore();
     const broker = makeBroker();
 
     const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
@@ -367,13 +309,13 @@ describe('ExecutionImpl.execute', () => {
     );
 
     expect(result.status).toBe('submitted');
-    expect(store.positions.get('key-aapl-1355')?.intent_type).toBe('scale_in');
+    expect((await store.getPosition('key-aapl-1355'))?.intent_type).toBe('scale_in');
   });
 
   // The flatten path (submitFlatten -> ClosedTrade on round-trip-to-flat) is
   // #83's; #82 refuses it explicitly rather than silently bracketing an exit.
   it('refuses an exit intent, which has no bracket to expand', async () => {
-    const store = new InMemoryStore();
+    const { store } = openTestExecutionStore();
     const broker = makeBroker();
 
     const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
@@ -384,6 +326,6 @@ describe('ExecutionImpl.execute', () => {
     expect(result.reason).toContain('#83');
     expect(result.order_state).toBeNull();
     expect(broker.calls).toHaveLength(0);
-    expect(store.positions.size).toBe(0);
+    expect(await store.countAllPositions()).toBe(0);
   });
 });
