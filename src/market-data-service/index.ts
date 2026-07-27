@@ -1,6 +1,11 @@
 /**
  * Market Data Service — see docs/specs/market-data-service-spec.md, epic #51.
  * Implemented ticket-by-ticket starting with #64.
+ *
+ * Ticket #194 adds the `bars`/`latest_mark` persistence port
+ * (`MarketDataStore`) and its real `SqliteMarketDataStore` implementation
+ * over the shared store's tables (#193), wired into `MarketDataServiceImpl`
+ * as the Tier-2 bulk cache and the live mark table.
  */
 
 export type { FixtureLiveMark } from './fixture-data-source.js';
@@ -35,6 +40,7 @@ export type {
 export { IbkrDataSource } from './sources/ibkr-source.js';
 export type { LiveObservation, SourceConfig } from './sources/normalizing-data-source.js';
 export { NormalizingDataSource } from './sources/normalizing-data-source.js';
+export { SqliteMarketDataStore } from './sqlite-market-data-store.js';
 export { closeTimeOf, isDailyTimeframe, timeframeToMs } from './timeframe.js';
 export type { TradingCalendar } from './trading-calendar.js';
 export { AlwaysOpenCalendar, UsEquityRegularHoursCalendar } from './trading-calendar.js';
@@ -46,5 +52,6 @@ export type {
   IndicatorValue,
   Mark,
   MarketDataService,
+  MarketDataStore,
   Quote,
 } from './types.js';

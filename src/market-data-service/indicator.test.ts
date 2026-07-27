@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { Clock } from '../shared/clock.js';
+import { openSharedStore } from '../shared/store/open-shared-store.js';
 import { FixtureDataSource } from './fixture-data-source.js';
 import { MarketDataServiceImpl } from './service.js';
+import { SqliteMarketDataStore } from './sqlite-market-data-store.js';
 import type { Bar, BarWindow, DataSource, Mark } from './types.js';
+
+function newStore() {
+  return new SqliteMarketDataStore(openSharedStore(':memory:'));
+}
 
 class ManualClock implements Clock {
   constructor(private time: Date) {}
@@ -66,7 +72,12 @@ function buildService(bars: Bar[], asOf: Date) {
     'crypto',
   );
   const counting = new CountingDataSource(fixture);
-  const service = new MarketDataServiceImpl(counting, new ManualClock(asOf), 'backtest');
+  const service = new MarketDataServiceImpl(
+    counting,
+    new ManualClock(asOf),
+    'backtest',
+    newStore(),
+  );
   return { service, counting };
 }
 
@@ -87,6 +98,7 @@ describe('MarketDataServiceImpl.getIndicator', () => {
       ),
       new ManualClock(asOf),
       'backtest',
+      newStore(),
     ).getIndicator(INSTRUMENT, spec, asOf);
 
     expect(first).toEqual(second);

@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { FixtureDataSource } from '../market-data-service/fixture-data-source.js';
 import { MarketDataServiceImpl } from '../market-data-service/service.js';
+import { SqliteMarketDataStore } from '../market-data-service/sqlite-market-data-store.js';
 import type { Bar } from '../market-data-service/types.js';
 import { MarketIntelligenceStore } from '../market-intelligence/index.js';
 import type { Clock } from '../shared/clock.js';
+import { openSharedStore } from '../shared/store/open-shared-store.js';
 import { technicalAnalyst } from './technical-analyst.js';
 import type { AnalystInput, Signal } from './types.js';
 
@@ -56,7 +58,12 @@ function buildInput(signal: Signal, trace_id: string): AnalystInput {
     { price: 999, observed_at: ASOF, source: 'fixture-live' },
     signal.asset_class,
   );
-  const marketData = new MarketDataServiceImpl(dataSource, clock, 'backtest');
+  const marketData = new MarketDataServiceImpl(
+    dataSource,
+    clock,
+    'backtest',
+    new SqliteMarketDataStore(openSharedStore(':memory:')),
+  );
 
   const marketIntelligence = new MarketIntelligenceStore(clock);
   marketIntelligence.ingest({
