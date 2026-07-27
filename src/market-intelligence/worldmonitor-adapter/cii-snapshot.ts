@@ -52,19 +52,18 @@ export async function captureCiiSnapshot(
 
   await Promise.all(
     countryCodes.map(async (country) => {
-      let score: number | null;
       try {
-        score = await provider.getCii(country);
+        const score = await provider.getCii(country);
+        if (score === null) {
+          return;
+        }
+        store.record({ country_code: country, score, captured_at: capturedAt });
       } catch (error) {
-        console.error(`[cii-snapshot] getCii failed for country=${country}:`, error);
-        return;
+        // Covers both `provider.getCii` rejecting and `store.record` throwing (e.g. an
+        // out-of-range score tripping SqliteCiiSnapshotStore's guard) — either one is one
+        // country's failure, and the header's guarantee is that it doesn't stop the others.
+        console.error(`[cii-snapshot] capture failed for country=${country}:`, error);
       }
-
-      if (score === null) {
-        return;
-      }
-
-      store.record({ country_code: country, score, captured_at: capturedAt });
     }),
   );
 }

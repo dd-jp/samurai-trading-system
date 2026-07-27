@@ -69,6 +69,30 @@ describe('captureCiiSnapshot', () => {
     errorSpy.mockRestore();
   });
 
+  it("logs and skips a country whose store.record throws, without dropping the others'", async () => {
+    const recorded: CiiSnapshotRow[] = [];
+    const store: CiiSnapshotStore = {
+      record: (row: CiiSnapshotRow) => {
+        if (row.country_code === 'RU') {
+          throw new Error('score out of range');
+        }
+        recorded.push(row);
+      },
+    };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await captureCiiSnapshot(
+      ['RU', 'SA'],
+      stubProvider({ RU: 101, SA: 30 }),
+      store,
+      new FixedClock(NOW),
+    );
+
+    expect(recorded).toEqual([{ country_code: 'SA', score: 30, captured_at: NOW }]);
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
   it('is a no-op on an empty country list', async () => {
     const store = new RecordingStore();
 
