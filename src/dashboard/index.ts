@@ -1,20 +1,22 @@
 /**
- * Dashboard entry point — `npm run dashboard`. Wires the in-memory fixture
- * `QueryStore` (the same one the real SQLite-backed store will later replace)
- * into the read-only HTTP server. Mirrors `src/orchestrator/index.ts` as a
- * secondary entry point.
+ * Dashboard entry point — `npm run dashboard`. Wires the real SQLite-backed
+ * `QueryStore` (#161) into the read-only HTTP server. Mirrors
+ * `src/orchestrator/index.ts` as a secondary entry point.
  *
- * The fixture store makes the dashboard demoable today, before the shared
- * SQLite store exists anywhere in the codebase. Swapping to the real store is
- * a one-line change here (the `DashboardQueryStore` port is unchanged).
+ * File-path convention matches every other component's shared-store wiring
+ * (shared-sqlite-store-spec.md): `data/samurai-{env}.sqlite` at repo root,
+ * selected via `NODE_ENV` (defaults to `development`).
  */
-import { InMemoryQueryStore } from './fixture-store.js';
+import { openSharedStore } from '../shared/store/open-shared-store.js';
 import { createDashboardServer } from './server.js';
+import { SqliteQueryStore } from './sqlite-query-store.js';
 
 const port = Number(process.env.PORT ?? 8787);
 const host = process.env.HOST ?? '127.0.0.1';
+const env = process.env.NODE_ENV ?? 'development';
 
-const server = createDashboardServer({ port, host, store: new InMemoryQueryStore() });
+const db = openSharedStore(`data/samurai-${env}.sqlite`);
+const server = createDashboardServer({ port, host, store: new SqliteQueryStore(db) });
 
 await server.start();
 console.log(`Samurai dashboard → ${server.url}`);
