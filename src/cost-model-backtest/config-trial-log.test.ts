@@ -1,14 +1,27 @@
 import { describe, expect, it } from 'vitest';
+import { openSharedStore } from '../shared/store/open-shared-store.js';
+import type { ConfigTrialLog } from './config-trial-log.js';
 import { InMemoryConfigTrialLog } from './config-trial-log.js';
+import { SqliteConfigTrialLog } from './sqlite-config-trial-log.js';
 import type { BacktestReport } from './types.js';
 
 function report(config_hash: string, seed = 1): BacktestReport {
   return { config_hash, seed, tick_outcomes: [], lookahead_audit: 'passed' };
 }
 
-describe('InMemoryConfigTrialLog', () => {
+/**
+ * The trial-count discipline is a property of the `ConfigTrialLog` port, so
+ * every case runs against both implementations: the in-memory fixture and
+ * the real SQLite-backed store over `config_trials` (#196).
+ */
+const LOG_IMPLEMENTATIONS: Array<[string, () => ConfigTrialLog]> = [
+  ['InMemoryConfigTrialLog', () => new InMemoryConfigTrialLog()],
+  ['SqliteConfigTrialLog', () => new SqliteConfigTrialLog(openSharedStore(':memory:'))],
+];
+
+describe.each(LOG_IMPLEMENTATIONS)('%s', (_name, makeLog) => {
   it('counts one trial per distinct config hash', () => {
-    const log = new InMemoryConfigTrialLog();
+    const log = makeLog();
 
     log.recordTrial('config-a', report('config-a'));
     log.recordTrial('config-b', report('config-b'));
@@ -18,7 +31,7 @@ describe('InMemoryConfigTrialLog', () => {
   });
 
   it('starts at zero — an unsearched config space deflates by nothing', () => {
-    expect(new InMemoryConfigTrialLog().distinctTrialCount()).toBe(0);
+    expect(makeLog().distinctTrialCount()).toBe(0);
   });
 
   /**
@@ -28,7 +41,7 @@ describe('InMemoryConfigTrialLog', () => {
    * strategies for reasons unrelated to overfitting.
    */
   it('does not increment N when the same config is re-run', () => {
-    const log = new InMemoryConfigTrialLog();
+    const log = makeLog();
 
     log.recordTrial('config-a', report('config-a'));
     expect(log.distinctTrialCount()).toBe(1);
@@ -41,7 +54,7 @@ describe('InMemoryConfigTrialLog', () => {
   });
 
   it('does not increment N when a run differs only by seed', () => {
-    const log = new InMemoryConfigTrialLog();
+    const log = makeLog();
 
     log.recordTrial('config-a', report('config-a', 1));
     log.recordTrial('config-a', report('config-a', 2));
@@ -56,7 +69,7 @@ describe('InMemoryConfigTrialLog', () => {
    * property is that reading N is free of side effects.
    */
   it('does not increment N when N is read, however often', () => {
-    const log = new InMemoryConfigTrialLog();
+    const log = makeLog();
     log.recordTrial('config-a', report('config-a'));
 
     log.distinctTrialCount();
@@ -67,7 +80,7 @@ describe('InMemoryConfigTrialLog', () => {
   });
 
   it('keeps the latest report for a re-run config', () => {
-    const log = new InMemoryConfigTrialLog();
+    const log = makeLog();
 
     log.recordTrial('config-a', report('config-a', 1));
     log.recordTrial('config-a', report('config-a', 99));
@@ -76,12 +89,12 @@ describe('InMemoryConfigTrialLog', () => {
   });
 
   it('returns undefined for a config that was never evaluated', () => {
-    expect(new InMemoryConfigTrialLog().getTrial('never-seen')).toBeUndefined();
+    expect(makeLog().getTrial('never-seen')).toBeUndefined();
   });
 
   describe('refuses to corrupt N', () => {
     it('throws when the report is logged under a mismatched key', () => {
-      const log = new InMemoryConfigTrialLog();
+      const log = makeLog();
 
       expect(() => log.recordTrial('config-a', report('config-b'))).toThrow(
         /does not match the key/,
@@ -90,7 +103,7 @@ describe('InMemoryConfigTrialLog', () => {
     });
 
     it('throws on an empty config hash', () => {
-      const log = new InMemoryConfigTrialLog();
+      const log = makeLog();
 
       expect(() => log.recordTrial('', report(''))).toThrow(/must not be empty/);
       expect(log.distinctTrialCount()).toBe(0);

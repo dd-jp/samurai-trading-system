@@ -52,6 +52,13 @@
  * CPCV *generation* works (#89); CPCV *scoring* deliberately throws — see
  * `testRangeOf` in eval-executor.ts for why a disjoint test side cannot be
  * given an honest exposure denominator without changing `TradeSeries`.
+ *
+ * Ticket #196 adds the real `SqliteConfigTrialLog`, over the shared store's
+ * `config_trials` table (#193). `InMemoryConfigTrialLog` stays exported
+ * alongside it — a fixture double, per `SqliteSetupStore`/`FixtureSetupStore`
+ * precedent — since no composition root wires either yet (`eval-executor.ts`
+ * does not call `recordTrial`; see the #89/#90 notes above on why
+ * `BacktestReport.metrics` isn't wired into a caller that could).
  */
 
 export type { BacktestDeps } from './backtest.js';
@@ -74,6 +81,7 @@ export { computeMetrics } from './metrics.js';
 export { deflatedSharpe, minbtl, minbtlGuard, pbo } from './overfitting.js';
 export type { SplitOptions } from './splits.js';
 export { generateSplits } from './splits.js';
+export { SqliteConfigTrialLog } from './sqlite-config-trial-log.js';
 export type { SeriesOptions } from './trade-derivation.js';
 export { assertCostModelPriced, toReturnSeries, toTradeSeries } from './trade-derivation.js';
 export type {
