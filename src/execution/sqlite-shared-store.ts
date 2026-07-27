@@ -26,7 +26,8 @@ import type { SharedStore } from './types.js';
 /** Terminal `order_state`s — excluded from `getOpenPositions()` (execution-spec.md). */
 const TERMINAL_STATES: readonly OrderState[] = ['closed', 'cancelled', 'rejected', 'expired'];
 
-interface OpenPositionRow {
+/** Exported for `sqlite-store-harness.ts`, which reads the same row shape for its terminal-inclusive lookups. */
+export interface OpenPositionRow {
   idempotency_key: string;
   debate_id: string;
   instrument: string;
@@ -78,31 +79,43 @@ export class SqliteExecutionStore implements SharedStore {
    * the PK violation is left to surface rather than silently upserted.
    */
   async writeAheadPosition(position: OpenPosition): Promise<void> {
-    this.db
-      .prepare(
-        `INSERT INTO open_positions (
-           idempotency_key, debate_id, instrument, asset_class, side, intent_type,
-           requested_size, filled_size, avg_entry_price, stop, target,
-           order_state, broker_order_ids, opened_at, decision_timestamp
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        position.idempotency_key,
-        position.debate_id,
-        position.instrument,
-        position.asset_class,
-        position.side,
-        position.intent_type,
-        position.requested_size,
-        position.filled_size,
-        position.avg_entry_price,
-        position.stop,
-        position.target,
-        position.order_state,
-        JSON.stringify(position.broker_order_ids),
-        position.opened_at.toISOString(),
-        position.decision_timestamp.toISOString(),
-      );
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO open_positions (
+             idempotency_key, debate_id, instrument, asset_class, side, intent_type,
+             requested_size, filled_size, avg_entry_price, stop, target,
+             order_state, broker_order_ids, opened_at, decision_timestamp
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          position.idempotency_key,
+          position.debate_id,
+          position.instrument,
+          position.asset_class,
+          position.side,
+          position.intent_type,
+          position.requested_size,
+          position.filled_size,
+          position.avg_entry_price,
+          position.stop,
+          position.target,
+          position.order_state,
+          JSON.stringify(position.broker_order_ids),
+          position.opened_at.toISOString(),
+          position.decision_timestamp.toISOString(),
+        );
+    } catch (cause) {
+      if (isUniqueConstraintError(cause)) {
+        throw new Error(
+          `SqliteExecutionStore.writeAheadPosition: a position already exists for ` +
+            `idempotency_key '${position.idempotency_key}' — execute()'s findByKey gate should ` +
+            'have prevented this write.',
+          { cause },
+        );
+      }
+      throw cause;
+    }
   }
 
   /** Persist the post-ack transition (`pending` → `submitted`), or reconcile's adopted state. */
@@ -146,22 +159,34 @@ export class SqliteExecutionStore implements SharedStore {
    * surfaces as a constraint violation rather than silently double-counting.
    */
   async writeFill(fill: Fill): Promise<void> {
-    this.db
-      .prepare(
-        `INSERT INTO fills (
-           idempotency_key, broker_fill_id, leg, price, qty, fee, timestamp, cost_breakdown_json
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        fill.idempotency_key,
-        fill.broker_fill_id,
-        fill.leg,
-        fill.price,
-        fill.qty,
-        fill.fee,
-        fill.timestamp.toISOString(),
-        fill.cost_breakdown === undefined ? null : JSON.stringify(fill.cost_breakdown),
-      );
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO fills (
+             idempotency_key, broker_fill_id, leg, price, qty, fee, timestamp, cost_breakdown_json
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          fill.idempotency_key,
+          fill.broker_fill_id,
+          fill.leg,
+          fill.price,
+          fill.qty,
+          fill.fee,
+          fill.timestamp.toISOString(),
+          fill.cost_breakdown === undefined ? null : JSON.stringify(fill.cost_breakdown),
+        );
+    } catch (cause) {
+      if (isUniqueConstraintError(cause)) {
+        throw new Error(
+          `SqliteExecutionStore.writeFill: broker_fill_id '${fill.broker_fill_id}' was already ` +
+            `ingested for '${fill.idempotency_key}' — ingestFills()'s hasFill gate should have ` +
+            'prevented this write.',
+          { cause },
+        );
+      }
+      throw cause;
+    }
   }
 
   /**
@@ -198,33 +223,52 @@ export class SqliteExecutionStore implements SharedStore {
    * rather than a silent overwrite.
    */
   async writeClosedTrade(trade: ClosedTrade): Promise<void> {
-    this.db
-      .prepare(
-        `INSERT INTO closed_trades (
-           idempotency_key, debate_id, instrument, asset_class, side,
-           entry, stop, filled_size, realized_pnl_net, fees_total,
-           opened_at, closed_at, close_reason
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        trade.idempotency_key,
-        trade.debate_id,
-        trade.instrument,
-        trade.asset_class,
-        trade.side,
-        trade.entry,
-        trade.stop,
-        trade.filled_size,
-        trade.realized_pnl_net,
-        trade.fees_total,
-        trade.opened_at.toISOString(),
-        trade.closed_at.toISOString(),
-        trade.close_reason,
-      );
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO closed_trades (
+             idempotency_key, debate_id, instrument, asset_class, side,
+             entry, stop, filled_size, realized_pnl_net, fees_total,
+             opened_at, closed_at, close_reason
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          trade.idempotency_key,
+          trade.debate_id,
+          trade.instrument,
+          trade.asset_class,
+          trade.side,
+          trade.entry,
+          trade.stop,
+          trade.filled_size,
+          trade.realized_pnl_net,
+          trade.fees_total,
+          trade.opened_at.toISOString(),
+          trade.closed_at.toISOString(),
+          trade.close_reason,
+        );
+    } catch (cause) {
+      if (isUniqueConstraintError(cause)) {
+        throw new Error(
+          `SqliteExecutionStore.writeClosedTrade: a closed trade already exists for ` +
+            `idempotency_key '${trade.idempotency_key}' — a lot closes exactly once, ` +
+            'on round-trip-to-flat.',
+          { cause },
+        );
+      }
+      throw cause;
+    }
   }
 }
 
-function fromPositionRow(row: OpenPositionRow): OpenPosition {
+function isUniqueConstraintError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error as NodeJS.ErrnoException).code === 'SQLITE_CONSTRAINT_PRIMARYKEY'
+  );
+}
+
+export function fromPositionRow(row: OpenPositionRow): OpenPosition {
   return {
     idempotency_key: row.idempotency_key,
     debate_id: row.debate_id,

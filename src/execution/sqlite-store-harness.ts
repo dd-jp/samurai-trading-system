@@ -20,25 +20,11 @@
  */
 import { type SharedStore as Db, openSharedStore } from '../shared/store/open-shared-store.js';
 import type { ClosedTrade, OpenPosition, OrderState } from '../shared/types.js';
-import { SqliteExecutionStore } from './sqlite-shared-store.js';
-
-interface PositionRow {
-  idempotency_key: string;
-  debate_id: string;
-  instrument: string;
-  asset_class: 'crypto' | 'stocks';
-  side: 'buy' | 'sell';
-  intent_type: 'entry' | 'scale_in';
-  requested_size: number;
-  filled_size: number;
-  avg_entry_price: number;
-  stop: number;
-  target: number;
-  order_state: OrderState;
-  broker_order_ids: string;
-  opened_at: string;
-  decision_timestamp: string;
-}
+import {
+  fromPositionRow,
+  type OpenPositionRow,
+  SqliteExecutionStore,
+} from './sqlite-shared-store.js';
 
 interface ClosedTradeRow {
   idempotency_key: string;
@@ -80,7 +66,7 @@ export class TestExecutionStore extends SqliteExecutionStore {
   async getPosition(idempotency_key: string): Promise<OpenPosition | null> {
     const row = this.testDb
       .prepare('SELECT * FROM open_positions WHERE idempotency_key = ?')
-      .get(idempotency_key) as PositionRow | undefined;
+      .get(idempotency_key) as OpenPositionRow | undefined;
     return row === undefined ? null : fromPositionRow(row);
   }
 
@@ -102,26 +88,6 @@ export class TestExecutionStore extends SqliteExecutionStore {
 export function openTestExecutionStore(): { db: Db; store: TestExecutionStore } {
   const db = openSharedStore(':memory:');
   return { db, store: new TestExecutionStore(db) };
-}
-
-function fromPositionRow(row: PositionRow): OpenPosition {
-  return {
-    idempotency_key: row.idempotency_key,
-    debate_id: row.debate_id,
-    instrument: row.instrument,
-    asset_class: row.asset_class,
-    side: row.side,
-    intent_type: row.intent_type,
-    requested_size: row.requested_size,
-    filled_size: row.filled_size,
-    avg_entry_price: row.avg_entry_price,
-    stop: row.stop,
-    target: row.target,
-    order_state: row.order_state,
-    broker_order_ids: JSON.parse(row.broker_order_ids) as string[],
-    opened_at: new Date(row.opened_at),
-    decision_timestamp: new Date(row.decision_timestamp),
-  };
 }
 
 function fromClosedTradeRow(row: ClosedTradeRow): ClosedTrade {
