@@ -1,5 +1,5 @@
 -- Initial schema — transcribed from docs/specs/shared-sqlite-store-spec.md
--- "Module: Consolidated Schema". All fourteen tables; each owned by exactly one spec.
+-- "Module: Consolidated Schema". All sixteen tables; each owned by exactly one spec.
 
 -- Market Data Service — owner: docs/specs/market-data-service-spec.md
 
@@ -159,6 +159,22 @@ CREATE TABLE debate_log (
   direction           TEXT NOT NULL CHECK(direction IN ('bullish', 'bearish', 'neutral')),
   rounds              INTEGER NOT NULL,
   created_at          TEXT NOT NULL
+);
+
+-- Risk Manager — owner: docs/specs/risk-manager-spec.md
+
+-- One row per breaker tier. Crash-restart-safe home for the two sticky
+-- breakers (hard peak-to-trough drawdown, kill-switch) -- everything else
+-- CircuitBreakers computes is stateless/derived fresh each call and does
+-- not need persistence. Upserted by the caller after every RiskManagerImpl
+-- evaluate() call from RiskDecision.next_breaker_state; CircuitBreakers
+-- loads these rows on construction/restart instead of starting untripped.
+CREATE TABLE breaker_state (
+  tier        TEXT PRIMARY KEY CHECK(tier IN ('portfolio_drawdown', 'kill_switch')),
+  tripped     INTEGER NOT NULL,
+  tripped_at  TEXT,
+  reset_at    TEXT,
+  reason      TEXT
 );
 
 -- Verdict — owner: docs/specs/verdict-spec.md
