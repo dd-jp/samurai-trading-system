@@ -22,6 +22,9 @@ export {
 export { applyGuardrail, boundedStep, type GuardrailOutcome, moveDirection } from './guardrails.js';
 export { computeMetrics } from './metrics.js';
 export { onTradeClose } from './on-trade-close.js';
+export { SqliteAdjustmentLog } from './sqlite-adjustment-log.js';
+export { SqliteClosedTradeStore } from './sqlite-closed-trade-store.js';
+export { SqliteTuningStore } from './sqlite-tuning-store.js';
 export type {
   Adjustment,
   AdjustmentLog,
@@ -37,6 +40,7 @@ export type {
   MetricsInput,
   MetricsReport,
   OnTradeCloseInput,
+  PendingApprovalAdjustment,
   RevalidationSnapshot,
   TunableDial,
   TuningProposal,

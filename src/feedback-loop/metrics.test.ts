@@ -1,12 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { MetricsSuite } from '../cost-model-backtest/validation-types.js';
 import type { Clock } from '../shared/clock.js';
-import {
-  InMemoryAdjustmentLog,
-  InMemoryBreachAlertChannel,
-  InMemoryTuningStore,
-} from './fixture-stores.js';
+import { InMemoryBreachAlertChannel } from './fixture-stores.js';
 import { computeMetrics } from './metrics.js';
+import type { SqliteAdjustmentLog } from './sqlite-adjustment-log.js';
+import { openAdjustmentLog, openTuningStore } from './sqlite-store-harness.js';
+import type { SqliteTuningStore } from './sqlite-tuning-store.js';
 import type { FeedbackConfig, MetricsInput, RevalidationSnapshot, TunableDial } from './types.js';
 
 const NOW = new Date('2026-07-19T00:00:00Z');
@@ -64,12 +63,12 @@ function makeConfig(overrides: Partial<FeedbackConfig> = {}): FeedbackConfig {
 
 function makeInput(overrides: Partial<MetricsInput> = {}): {
   input: MetricsInput;
-  tuning: InMemoryTuningStore;
-  adjustments: InMemoryAdjustmentLog;
+  tuning: SqliteTuningStore;
+  adjustments: SqliteAdjustmentLog;
   alerts: InMemoryBreachAlertChannel;
 } {
-  const tuning = new InMemoryTuningStore({ thresholds: { max_position_size: 0.8 } });
-  const adjustments = new InMemoryAdjustmentLog();
+  const tuning = openTuningStore({ thresholds: { max_position_size: 0.8 } });
+  const adjustments = openAdjustmentLog();
   const alerts = new InMemoryBreachAlertChannel();
 
   const input: MetricsInput = {
