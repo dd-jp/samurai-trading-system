@@ -124,6 +124,11 @@ interface ClosedTradeRow {
   close_reason: 'stop' | 'target' | 'exit';
 }
 
+/** `closed_trades` joined with its `debate_log` row, for `getAttribution`'s single-query read. */
+interface AttributionRow extends ClosedTradeRow {
+  debate_contributions_json: string;
+}
+
 function fromOpenPositionRow(row: OpenPositionRow): OpenPosition {
   return {
     idempotency_key: row.idempotency_key,
@@ -260,27 +265,32 @@ export class SqliteQueryStore implements DashboardQueryStore {
     return weights;
   }
 
+  /**
+   * One joined query rather than a per-trade `debate_log` lookup: a trade
+   * with no matching debate row is excluded by the `JOIN` itself (same
+   * "skip, don't zero-attribute" behaviour as a missing row would give),
+   * so no post-filter is needed.
+   */
   getAttribution(asOf: Date): Record<string, AttributionSummary> {
     const from = new Date(asOf.getTime() - this.attributionWindowDays * 24 * 60 * 60 * 1000);
     const rows = this.db
-      .prepare(`SELECT * FROM closed_trades WHERE closed_at > ? AND closed_at <= ?`)
-      .all(from.toISOString(), asOf.toISOString()) as ClosedTradeRow[];
-    const trades = rows.map(fromClosedTradeRow);
+      .prepare(
+        `SELECT closed_trades.*, debate_log.contributions_json AS debate_contributions_json
+           FROM closed_trades
+           JOIN debate_log ON debate_log.debate_id = closed_trades.debate_id
+          WHERE closed_trades.closed_at > ? AND closed_trades.closed_at <= ?`,
+      )
+      .all(from.toISOString(), asOf.toISOString()) as AttributionRow[];
 
     const rollingR = new Map<string, number>();
-    for (const trade of trades) {
+    for (const row of rows) {
+      const trade = fromClosedTradeRow(row);
       const r = realizedR(trade);
       if (r === null) {
         continue;
       }
-      const debateRow = this.db
-        .prepare(`SELECT * FROM debate_log WHERE debate_id = ?`)
-        .get(trade.debate_id) as DebateLogRow | undefined;
-      if (debateRow === undefined) {
-        continue;
-      }
       const direction = trade.side === 'buy' ? 'bullish' : 'bearish';
-      const contributions = JSON.parse(debateRow.contributions_json) as AnalystContribution[];
+      const contributions = JSON.parse(row.debate_contributions_json) as AnalystContribution[];
       for (const contribution of contributions) {
         const credit = creditForContribution(contribution, r, direction, DISPLAY_CREDIT_CONFIG);
         rollingR.set(
