@@ -5,7 +5,7 @@
   "description": "Samurai — live-money multi-agent trading system (crypto + stocks). See CLAUDE.md and docs/specs/.",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && npm run build:migrations",
