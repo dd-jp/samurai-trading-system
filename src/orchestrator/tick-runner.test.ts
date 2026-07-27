@@ -4,10 +4,11 @@ import type { AnalystView, DebateResult } from '../debate-engine/types.js';
 import type { ExecutionResult } from '../execution/types.js';
 import type { RiskDecision } from '../risk-manager/types.js';
 import type { Clock } from '../shared/clock.js';
+import { openSharedStore } from '../shared/store/open-shared-store.js';
 import type { OrderIntent } from '../shared/types.js';
 import type { VerdictDecision } from '../verdict/types.js';
-import { InMemoryAuditLog } from './audit-log.js';
-import { InMemoryCurrentTickStore } from './current-tick-store.js';
+import { SqliteAuditLog } from './sqlite-audit-log.js';
+import { SqliteCurrentTickStore } from './sqlite-current-tick-store.js';
 import { SequentialTickRunner } from './tick-runner.js';
 import type { TickContext, TickSteps } from './types.js';
 
@@ -17,16 +18,17 @@ const TRACE_ID = 'trace-aapl-1400';
 const SIGNAL: Signal = { asset: 'AAPL', asset_class: 'stocks' };
 
 /**
- * A fresh no-op logger + real in-memory audit log + real in-memory
- * current_tick store per test, so rows never leak across tests.
+ * A fresh no-op logger + a SQLite audit log + SQLite current_tick store, each
+ * over its own `:memory:` DB, so rows never leak across tests.
  */
 function makeCtx(): TickContext {
+  const db = openSharedStore(':memory:');
   return {
     clock: CLOCK,
     trace_id: TRACE_ID,
     logger: { log: vi.fn() },
-    auditLog: new InMemoryAuditLog(),
-    currentTickStore: new InMemoryCurrentTickStore(),
+    auditLog: new SqliteAuditLog(db),
+    currentTickStore: new SqliteCurrentTickStore(db),
   };
 }
 
@@ -319,7 +321,7 @@ describe('SequentialTickRunner.runInstrument', () => {
 
     await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
 
-    const rows = (ctx.auditLog as InMemoryAuditLog).getByTraceId(TRACE_ID);
+    const rows = (ctx.auditLog as SqliteAuditLog).getByTraceId(TRACE_ID);
     expect(rows.map((row) => row.stage)).toEqual([
       'analysts',
       'debate',
@@ -338,7 +340,7 @@ describe('SequentialTickRunner.runInstrument', () => {
 
     await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
 
-    const rows = (ctx.auditLog as InMemoryAuditLog).getByTraceId(TRACE_ID);
+    const rows = (ctx.auditLog as SqliteAuditLog).getByTraceId(TRACE_ID);
     expect(rows.map((row) => row.stage)).toEqual(['analysts', 'debate', 'trader', 'risk']);
   });
 
@@ -367,7 +369,7 @@ describe('SequentialTickRunner.runInstrument', () => {
     const seen: string[] = [];
     const intent = makeIntent();
     const ctx = makeCtx();
-    const store = ctx.currentTickStore as InMemoryCurrentTickStore;
+    const store = ctx.currentTickStore as SqliteCurrentTickStore;
     const steps = makeSteps({
       analysts: async () => {
         seen.push(store.get('AAPL')?.stage ?? 'none');
@@ -405,8 +407,8 @@ describe('SequentialTickRunner.runInstrument', () => {
 
   it('current_tick row carries the instrument, asset_class, and trace_id', async () => {
     const ctx = makeCtx();
-    const store = ctx.currentTickStore as InMemoryCurrentTickStore;
-    let sawDuringDebate: ReturnType<InMemoryCurrentTickStore['get']>;
+    const store = ctx.currentTickStore as SqliteCurrentTickStore;
+    let sawDuringDebate: ReturnType<SqliteCurrentTickStore['get']>;
     const steps = makeSteps({
       debate: async () => {
         sawDuringDebate = store.get('AAPL');
@@ -427,7 +429,7 @@ describe('SequentialTickRunner.runInstrument', () => {
 
   it('deletes the current_tick row on a short-circuit, not just the happy path', async () => {
     const ctx = makeCtx();
-    const store = ctx.currentTickStore as InMemoryCurrentTickStore;
+    const store = ctx.currentTickStore as SqliteCurrentTickStore;
     const steps = makeSteps({ risk: vi.fn(async () => rejectedRisk()) });
 
     await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
@@ -437,7 +439,7 @@ describe('SequentialTickRunner.runInstrument', () => {
 
   it('leaves a stale current_tick row in place if a stage throws (crash mid-tick)', async () => {
     const ctx = makeCtx();
-    const store = ctx.currentTickStore as InMemoryCurrentTickStore;
+    const store = ctx.currentTickStore as SqliteCurrentTickStore;
     const steps = makeSteps({
       debate: vi.fn(async () => {
         throw new Error('boom');

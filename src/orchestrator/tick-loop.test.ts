@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Signal } from '../analysts/types.js';
 import type { Clock } from '../shared/clock.js';
-import { InMemoryAuditLog } from './audit-log.js';
-import { InMemoryCurrentTickStore } from './current-tick-store.js';
+import { openSharedStore } from '../shared/store/open-shared-store.js';
+import { SqliteAuditLog } from './sqlite-audit-log.js';
+import { SqliteCurrentTickStore } from './sqlite-current-tick-store.js';
 import { runTickPlan } from './tick-loop.js';
 import type {
   AuditLog,
@@ -18,8 +19,9 @@ import type {
 const NOW = new Date('2026-07-15T14:00:00Z');
 const CLOCK: Clock = { now: () => NOW };
 const LOGGER: Logger = { log: vi.fn() };
-const makeAuditLog = (): AuditLog => new InMemoryAuditLog();
-const makeCurrentTickStore = (): CurrentTickStore => new InMemoryCurrentTickStore();
+const makeAuditLog = (): AuditLog => new SqliteAuditLog(openSharedStore(':memory:'));
+const makeCurrentTickStore = (): CurrentTickStore =>
+  new SqliteCurrentTickStore(openSharedStore(':memory:'));
 
 function makePlan(...assets: string[]): TickPlan {
   const instruments: UniverseInstrument[] = assets.map((asset) => ({
