@@ -156,8 +156,7 @@ describe('SqliteConfigTrialLog', () => {
 
     expect(log.distinctTrialCount()).toBe(3);
     expect(
-      (db.prepare('SELECT COUNT(*) AS count FROM config_trials').get() as { count: number })
-        .count,
+      (db.prepare('SELECT COUNT(*) AS count FROM config_trials').get() as { count: number }).count,
     ).toBe(3);
   });
 });
