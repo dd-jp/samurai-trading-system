@@ -1,0 +1,50 @@
+name: AI Code Review (Nous Portal / DeepSeek V4 Pro)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get PR diff
+        run: |
+          git fetch origin ${{ github.base_ref }} --depth=1
+          git diff origin/${{ github.base_ref }}...HEAD > diff.txt
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deps
+        run: pip install openai
+
+      - name: Run review
+        env:
+          NOUS_API_KEY: ${{ secrets.NOUS_API_KEY }}
+          NOUS_BASE_URL: ${{ vars.NOUS_BASE_URL }}
+          NOUS_MODEL: ${{ vars.NOUS_MODEL }}
+        run: python .github/scripts/ai_review.py
+
+      - name: Post review comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('review_output.md', 'utf8');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body
+            });
