@@ -21,6 +21,11 @@ jobs:
           git fetch origin ${{ github.base_ref }} --depth=1
           git diff origin/${{ github.base_ref }}...HEAD > diff.txt
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
