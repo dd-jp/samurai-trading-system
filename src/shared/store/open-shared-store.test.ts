@@ -18,6 +18,7 @@ const TABLES = [
   'dial_adjustments',
   'cosine_setups',
   'debate_log',
+  'breaker_state',
   'verdict_log',
   'audit_log',
   'current_tick',
@@ -132,6 +133,26 @@ describe('openSharedStore', () => {
     expect(db.prepare('SELECT result_json FROM config_trials').all()).toEqual([
       { result_json: '{"sharpe":2}' },
     ]);
+  });
+
+  it('enforces the CHECK constraint on breaker_state.tier', () => {
+    const db = openSharedStore(':memory:');
+
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO breaker_state (tier, tripped, tripped_at, reset_at, reason)
+           VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run('daily_loss', 0, null, null, null),
+    ).toThrow();
+
+    db.prepare(
+      `INSERT INTO breaker_state (tier, tripped, tripped_at, reset_at, reason)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run('kill_switch', 1, '2026-07-26T00:00:00.000Z', null, 'manual halt');
+
+    expect(db.prepare('SELECT COUNT(*) AS n FROM breaker_state').get()).toEqual({ n: 1 });
   });
 
   it('rejects a duplicate cosine_setups write for the same debate (PK)', () => {
