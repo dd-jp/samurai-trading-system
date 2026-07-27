@@ -60,9 +60,12 @@ describe('openSharedStore', () => {
     const db = openSharedStore(':memory:');
 
     const versions = db.prepare('SELECT version FROM schema_migrations').all();
-    expect(versions).toEqual([{ version: 1 }]);
+    expect(versions).toEqual([{ version: 1 }, { version: 2 }]);
     expect(runMigrations(db)).toEqual([]);
-    expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([{ version: 1 }]);
+    expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
+      { version: 1 },
+      { version: 2 },
+    ]);
   });
 
   it('sets WAL mode and synchronous=FULL on a file-backed connection', () => {

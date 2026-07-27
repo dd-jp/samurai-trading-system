@@ -4,11 +4,13 @@ import type { AnalystContribution } from '../debate-engine/types.js';
 import type { Clock } from '../shared/clock.js';
 import type { ClosedTrade, DebateLog } from '../shared/types.js';
 import { runDailyCycle } from './daily-cycle.js';
+import type { SqliteAdjustmentLog } from './sqlite-adjustment-log.js';
 import {
-  InMemoryAdjustmentLog,
-  InMemoryClosedTradeStore,
-  InMemoryTuningStore,
-} from './fixture-stores.js';
+  openAdjustmentLog,
+  openClosedTradeStore,
+  openTuningStore,
+} from './sqlite-store-harness.js';
+import type { SqliteTuningStore } from './sqlite-tuning-store.js';
 import type {
   DailyCycleInput,
   FeedbackConfig,
@@ -99,8 +101,8 @@ function makeLog(debate_id: string, contributions: AnalystContribution[]): Debat
 
 interface Harness {
   input: DailyCycleInput;
-  tuning: InMemoryTuningStore;
-  adjustments: InMemoryAdjustmentLog;
+  tuning: SqliteTuningStore;
+  adjustments: SqliteAdjustmentLog;
   approvals: RecordingApprovals;
 }
 
@@ -110,10 +112,10 @@ function makeHarness(overrides: Partial<DailyCycleInput> = {}): Harness {
 
   const input: DailyCycleInput = {
     clock: makeClock(),
-    trades: new InMemoryClosedTradeStore([makeTrade()]),
+    trades: openClosedTradeStore([makeTrade()]),
     debate_log,
-    tuning: new InMemoryTuningStore({ weights: { bull: 0.5 } }),
-    adjustments: new InMemoryAdjustmentLog(),
+    tuning: openTuningStore({ weights: { bull: 0.5 } }),
+    adjustments: openAdjustmentLog(),
     config: makeConfig(),
     approvals: new RecordingApprovals(),
     proposals: [],
@@ -126,8 +128,8 @@ function makeHarness(overrides: Partial<DailyCycleInput> = {}): Harness {
   // cycle never touched.
   return {
     input,
-    tuning: input.tuning as InMemoryTuningStore,
-    adjustments: input.adjustments as InMemoryAdjustmentLog,
+    tuning: input.tuning as SqliteTuningStore,
+    adjustments: input.adjustments as SqliteAdjustmentLog,
     approvals: input.approvals as RecordingApprovals,
   };
 }
@@ -146,7 +148,7 @@ describe('runDailyCycle — attribution into weights', () => {
 
   it('lowers the weight of a losing trade’s driver', () => {
     const { input, tuning } = makeHarness({
-      trades: new InMemoryClosedTradeStore([makeTrade({ realized_pnl_net: -100 })]),
+      trades: openClosedTradeStore([makeTrade({ realized_pnl_net: -100 })]),
     });
 
     const result = runDailyCycle(input);
@@ -172,7 +174,7 @@ describe('runDailyCycle — attribution into weights', () => {
 
   it('leaves an analyst with no closed trades in the window untouched', () => {
     const { input, tuning } = makeHarness({
-      trades: new InMemoryClosedTradeStore([]),
+      trades: openClosedTradeStore([]),
     });
 
     const result = runDailyCycle(input);
@@ -184,7 +186,7 @@ describe('runDailyCycle — attribution into weights', () => {
 
   it('ignores trades that closed before the attribution window — point-in-time', () => {
     const stale = makeTrade({ closed_at: new Date(NOW.getTime() - 5 * DAY_MS) });
-    const { input, tuning } = makeHarness({ trades: new InMemoryClosedTradeStore([stale]) });
+    const { input, tuning } = makeHarness({ trades: openClosedTradeStore([stale]) });
 
     runDailyCycle(input);
 
@@ -193,7 +195,7 @@ describe('runDailyCycle — attribution into weights', () => {
 
   it('ignores trades that close after T — no lookahead in weights', () => {
     const future = makeTrade({ closed_at: new Date(NOW.getTime() + DAY_MS) });
-    const { input, tuning } = makeHarness({ trades: new InMemoryClosedTradeStore([future]) });
+    const { input, tuning } = makeHarness({ trades: openClosedTradeStore([future]) });
 
     runDailyCycle(input);
 
@@ -201,7 +203,7 @@ describe('runDailyCycle — attribution into weights', () => {
   });
 
   it('skips an analyst with a debate record but no weight row — nothing to step from', () => {
-    const { input } = makeHarness({ tuning: new InMemoryTuningStore({ weights: {} }) });
+    const { input } = makeHarness({ tuning: openTuningStore({ weights: {} }) });
 
     expect(runDailyCycle(input).weight_updates).toEqual({});
   });
@@ -214,7 +216,7 @@ describe('runDailyCycle — attribution into weights', () => {
 describe('runDailyCycle — bounded steps (acceptance criterion #4)', () => {
   it('cannot swing a weight past its bounded step on a single catastrophic trade', () => {
     const { input, tuning } = makeHarness({
-      trades: new InMemoryClosedTradeStore([
+      trades: openClosedTradeStore([
         // R = -50: a wipeout far worse than anything the band contemplates.
         makeTrade({ realized_pnl_net: -5000 }),
       ]),
@@ -229,7 +231,7 @@ describe('runDailyCycle — bounded steps (acceptance criterion #4)', () => {
 
   it('cannot swing a weight past its bounded step on a single spectacular trade', () => {
     const { input } = makeHarness({
-      trades: new InMemoryClosedTradeStore([makeTrade({ realized_pnl_net: 5000 })]),
+      trades: openClosedTradeStore([makeTrade({ realized_pnl_net: 5000 })]),
       config: makeConfig({ weights: makeDial({ max_step: 0.05 }) }),
     });
 
@@ -238,8 +240,8 @@ describe('runDailyCycle — bounded steps (acceptance criterion #4)', () => {
 
   it('never drives a weight below its floor, however bad the record', () => {
     const { input, tuning } = makeHarness({
-      tuning: new InMemoryTuningStore({ weights: { bull: 0.12 } }),
-      trades: new InMemoryClosedTradeStore([makeTrade({ realized_pnl_net: -5000 })]),
+      tuning: openTuningStore({ weights: { bull: 0.12 } }),
+      trades: openClosedTradeStore([makeTrade({ realized_pnl_net: -5000 })]),
       config: makeConfig({ weights: makeDial({ floor: 0.1, max_step: 0.05 }) }),
     });
 
@@ -250,8 +252,8 @@ describe('runDailyCycle — bounded steps (acceptance criterion #4)', () => {
 
   it('never lets a weight dominate past its ceiling', () => {
     const { input, tuning } = makeHarness({
-      tuning: new InMemoryTuningStore({ weights: { bull: 0.88 } }),
-      trades: new InMemoryClosedTradeStore([makeTrade({ realized_pnl_net: 5000 })]),
+      tuning: openTuningStore({ weights: { bull: 0.88 } }),
+      trades: openClosedTradeStore([makeTrade({ realized_pnl_net: 5000 })]),
       config: makeConfig({ weights: makeDial({ ceiling: 0.9, max_step: 0.05 }) }),
     });
 
@@ -262,7 +264,7 @@ describe('runDailyCycle — bounded steps (acceptance criterion #4)', () => {
 
   it('takes many cycles of consistent evidence to traverse the band', () => {
     const harness = makeHarness({
-      trades: new InMemoryClosedTradeStore([makeTrade({ realized_pnl_net: 5000 })]),
+      trades: openClosedTradeStore([makeTrade({ realized_pnl_net: 5000 })]),
       config: makeConfig({ weights: makeDial({ max_step: 0.05, ceiling: 0.9 }) }),
     });
 
@@ -289,8 +291,8 @@ describe('runDailyCycle — asymmetric risk-threshold guardrails', () => {
 
   function thresholdHarness(target: number, mode: 'live' | 'paper' | 'backtest' = 'live'): Harness {
     return makeHarness({
-      tuning: new InMemoryTuningStore({ weights: {}, thresholds: { max_position_size: 1000 } }),
-      trades: new InMemoryClosedTradeStore([]),
+      tuning: openTuningStore({ weights: {}, thresholds: { max_position_size: 1000 } }),
+      trades: openClosedTradeStore([]),
       config: thresholdConfig,
       proposals: [{ kind: 'risk_threshold', name: 'max_position_size', target }],
       mode,
@@ -343,8 +345,8 @@ describe('runDailyCycle — asymmetric risk-threshold guardrails', () => {
 
   it('honours tighten_is increase — a decrease is then the gated direction', () => {
     const { input, tuning } = makeHarness({
-      tuning: new InMemoryTuningStore({ weights: {}, thresholds: { min_viable_size: 100 } }),
-      trades: new InMemoryClosedTradeStore([]),
+      tuning: openTuningStore({ weights: {}, thresholds: { min_viable_size: 100 } }),
+      trades: openClosedTradeStore([]),
       config: makeConfig({
         risk_thresholds: {
           min_viable_size: makeDial({
@@ -402,8 +404,8 @@ describe('runDailyCycle — strategy params', () => {
 
   function paramHarness(target: number): Harness {
     return makeHarness({
-      tuning: new InMemoryTuningStore({ weights: {}, params: { conviction_multiplier: 1 } }),
-      trades: new InMemoryClosedTradeStore([]),
+      tuning: openTuningStore({ weights: {}, params: { conviction_multiplier: 1 } }),
+      trades: openClosedTradeStore([]),
       config: paramConfig,
       proposals: [{ kind: 'strategy_param', name: 'conviction_multiplier', target }],
     });
@@ -446,7 +448,7 @@ describe('runDailyCycle — strategy params', () => {
 describe('runDailyCycle — config integrity', () => {
   it('refuses to tune a dial with no declared bounds', () => {
     const { input } = makeHarness({
-      trades: new InMemoryClosedTradeStore([]),
+      trades: openClosedTradeStore([]),
       proposals: [{ kind: 'risk_threshold', name: 'undeclared', target: 1 }],
     });
 
@@ -455,7 +457,7 @@ describe('runDailyCycle — config integrity', () => {
 
   it('rejects a name declared as both a strategy param and a risk threshold', () => {
     const { input } = makeHarness({
-      trades: new InMemoryClosedTradeStore([]),
+      trades: openClosedTradeStore([]),
       config: makeConfig({
         strategy_params: { overlap: makeDial() },
         risk_thresholds: { overlap: makeDial() },
@@ -467,7 +469,7 @@ describe('runDailyCycle — config integrity', () => {
 
   it('skips a proposal for a dial the store has no value for', () => {
     const { input } = makeHarness({
-      trades: new InMemoryClosedTradeStore([]),
+      trades: openClosedTradeStore([]),
       config: makeConfig({ strategy_params: { unset: makeDial() } }),
       proposals: [{ kind: 'strategy_param', name: 'unset', target: 0.5 }],
     });

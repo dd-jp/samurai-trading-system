@@ -141,6 +141,27 @@ export interface AdjustmentLog {
 }
 
 /**
+ * A gated risk-threshold loosening queued for human approval — the
+ * `dial_adjustments` row `runDailyCycle` would write if `AdjustmentLog`
+ * recorded `loosen_pending_approval` entries (it doesn't yet: see
+ * `LoosenApprovalChannel`'s doc, "acting on the human's answer is a later
+ * cycle's job"). `dial` excludes `'analyst_weight'` — weights are never
+ * gated (spec: "Weights + strategy params tune freely within bounds").
+ * Kept as a schema-shaped type for `SqliteAdjustmentLog`'s pending-approval
+ * capability (#197) even though no current caller produces one, the same
+ * documented-gap pattern as `SqliteConfigTrialLog`'s `config_json`.
+ */
+export interface PendingApprovalAdjustment {
+  dial: 'strategy_param' | 'risk_threshold';
+  name: string;
+  from: number;
+  to: number;
+  direction: 'tighten' | 'loosen';
+  requested_at: Date;
+  reason: string;
+}
+
+/**
  * The subset of the spec's `FeedbackInput` that `runDailyCycle` actually
  * consumes. `portfolio` (PortfolioView) is absent because it feeds
  * `computeMetrics` (#93), not attribution; `store` is split into the two
