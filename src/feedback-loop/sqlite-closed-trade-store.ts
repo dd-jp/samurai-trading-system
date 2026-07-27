@@ -34,7 +34,10 @@ export class SqliteClosedTradeStore implements ClosedTradeStore {
   getClosedTradesBetween(from: Date, to: Date): ClosedTrade[] {
     const rows = this.db
       .prepare(
-        `SELECT * FROM closed_trades
+        `SELECT idempotency_key, debate_id, instrument, asset_class, side,
+                entry, stop, filled_size, realized_pnl_net, fees_total,
+                opened_at, closed_at, close_reason
+           FROM closed_trades
           WHERE closed_at > ? AND closed_at <= ?
           ORDER BY closed_at`,
       )

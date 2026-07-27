@@ -199,7 +199,8 @@ CREATE TABLE dial_adjustments (
   direction   TEXT CHECK(direction IN ('tighten', 'loosen') OR direction IS NULL),  -- NULL for weight adjustments
   status      TEXT NOT NULL CHECK(status IN ('applied', 'pending_approval', 'rejected', 'reverted')),
   cycle_date  TEXT NOT NULL,
-  created_at  TEXT NOT NULL
+  created_at  TEXT NOT NULL,
+  reason      TEXT NOT NULL  -- machine-readable cause, e.g. 'attribution', 'proposal', 'proposal:backtest_auto_approved' (#197)
 );
 CREATE INDEX idx_dial_adjustments_dial ON dial_adjustments(dial_type, dial_name, created_at);
 CREATE INDEX idx_dial_adjustments_status ON dial_adjustments(status);
@@ -317,6 +318,7 @@ CREATE TABLE current_tick (
 - **`idempotency_key` type/semantics** — `TEXT` everywhere it appears (`open_positions` PK, `fills` composite PK component, `closed_trades` PK, `cosine_setups` non-unique column, `verdict_log` non-unique column). `cosine_setups` and `verdict_log` are the two tables where it is deliberately **not** the primary key — see the notes under each table — which is a real asymmetry with `open_positions`/`closed_trades` but not a collision: each table's key is dictated by its own write pattern (one `cosine_setups` row per *debate*, one `verdict_log` row per *decision*, keyed on `trace_id` since that's the correlation ID Verdict actually receives, one `open_positions`/`closed_trades` row per *decision lifecycle*), matching this spec's "every table's own consumer dictates its key" principle.
 - **`asset_class` type/semantics** — the `CHECK(asset_class IN ('crypto', 'stocks'))` constraint and column name are identical across all five tables that carry it (`latest_mark`, `open_positions`, `closed_trades`, `cosine_setups`, `current_tick`). No divergence.
 - **`breaker_state`** (#203) — `tier` is its own PK, disjoint from every other table's `debate_id`/`trace_id`/`idempotency_key` keying convention. `tripped_at`/`reset_at` are nullable `TEXT` timestamps (null while never-tripped/still-tripped respectively) — no other table has a comparable nullable-timestamp pair to collide with. No divergence.
+- **`dial_adjustments` was missing `reason`** (#197) — `Adjustment.reason` (feedback-loop-spec.md's "Module: Guardrailed Tuning") was already a required field consumed by `daily-cycle.ts`/`metrics.ts`; the original DDL bullet dropped it, the same class of gap as `latest_mark`/`asset_class` above. **Fixed above**, plus a real migration (`0002_dial_adjustments_reason.sql`, `ALTER TABLE ... ADD COLUMN reason TEXT NOT NULL DEFAULT ''`) since `0001_init.sql` had already shipped without it.
 - No other field-level collisions found.
 
 ## Testing Decisions
