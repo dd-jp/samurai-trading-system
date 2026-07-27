@@ -29,6 +29,7 @@ export type {
 export { IbkrBrokerAdapter } from './ibkr-adapter.js';
 export type { SimulatedBrokerAdapterInput } from './simulated-adapter.js';
 export { SimulatedBrokerAdapter } from './simulated-adapter.js';
+export { SqliteExecutionStore } from './sqlite-shared-store.js';
 export type {
   BrokerAck,
   BrokerAdapter,

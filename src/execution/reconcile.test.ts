@@ -10,9 +10,10 @@ import { describe, expect, it } from 'vitest';
 import type { CostModel } from '../cost-model-backtest/types.js';
 import type { MarketDataService } from '../market-data-service/types.js';
 import type { Clock } from '../shared/clock.js';
-import type { Fill, OpenPosition, OrderIntent, OrderState } from '../shared/types.js';
+import type { OpenPosition, OrderIntent } from '../shared/types.js';
 import type { VerdictDecision } from '../verdict/types.js';
 import { ExecutionImpl } from './execute.js';
+import { openTestExecutionStore, type TestExecutionStore } from './sqlite-store-harness.js';
 import type {
   BrokerAck,
   BrokerAdapter,
@@ -21,7 +22,6 @@ import type {
   NativeBracketRequest,
   NormalizedFill,
   NormalizedOrder,
-  SharedStore,
 } from './types.js';
 
 const NOW = new Date('2026-07-15T14:00:00Z');
@@ -93,55 +93,6 @@ function pendingPosition(overrides: Partial<OpenPosition> = {}): OpenPosition {
   };
 }
 
-/** Survives the simulated crash — this is the durable half of the system. */
-class InMemoryStore implements SharedStore {
-  readonly positions = new Map<string, OpenPosition>();
-  readonly writeLog: string[] = [];
-
-  async findByKey(idempotency_key: string): Promise<boolean> {
-    return this.positions.has(idempotency_key);
-  }
-
-  async writeAheadPosition(position: OpenPosition): Promise<void> {
-    this.writeLog.push(`write-ahead:${position.idempotency_key}`);
-    this.positions.set(position.idempotency_key, { ...position });
-  }
-
-  async updatePositionState(
-    idempotency_key: string,
-    update: { order_state: OrderState; broker_order_ids: string[] },
-  ): Promise<void> {
-    const existing = this.positions.get(idempotency_key);
-    if (!existing) {
-      throw new Error(`updatePositionState: no write-ahead record for ${idempotency_key}`);
-    }
-    this.writeLog.push(`update:${idempotency_key}:${update.order_state}`);
-    this.positions.set(idempotency_key, { ...existing, ...update });
-  }
-
-  /** Non-terminal lots only — reconcile narrows further, to the in-flight ones. */
-  async getOpenPositions(): Promise<OpenPosition[]> {
-    const terminal: OrderState[] = ['closed', 'cancelled', 'rejected', 'expired'];
-    return [...this.positions.values()].filter(
-      (position) => !terminal.includes(position.order_state),
-    );
-  }
-
-  async hasFill(): Promise<boolean> {
-    return false;
-  }
-
-  async writeFill(): Promise<void> {}
-
-  async getFills(): Promise<Fill[]> {
-    return [];
-  }
-
-  async updatePositionFill(): Promise<void> {}
-
-  async writeClosedTrade(): Promise<void> {}
-}
-
 /**
  * The venue. Its `book` is what it will admit to having — seeding it is how a
  * test says "the submit landed" vs "it never did".
@@ -186,7 +137,7 @@ function makeBroker(): BrokerAdapter & {
   };
 }
 
-function makeInput(store: SharedStore, broker: BrokerAdapter): ExecutionInput {
+function makeInput(store: TestExecutionStore, broker: BrokerAdapter): ExecutionInput {
   const config: ExecutionConfig = {
     simulated: {
       volatility_indicator: { indicator: 'atr', params: { period: 14 }, lookback: 14 },
@@ -211,7 +162,7 @@ function makeInput(store: SharedStore, broker: BrokerAdapter): ExecutionInput {
 describe('reconcile — crash between write-ahead and broker ack', () => {
   it('marks the lot rejected when the venue never received the order, and the replay does not double-submit', async () => {
     // The crash: write-ahead is durable, the broker call never landed.
-    const store = new InMemoryStore();
+    const { store } = openTestExecutionStore();
     await store.writeAheadPosition(pendingPosition());
     const broker = makeBroker();
 
@@ -228,26 +179,26 @@ describe('reconcile — crash between write-ahead and broker ack', () => {
       broker_state: null,
       action: 'rejected',
     });
-    expect(store.positions.get(KEY)?.order_state).toBe('rejected');
+    expect((await store.getPosition(KEY))?.order_state).toBe('rejected');
 
     // Nothing was resubmitted by reconcile itself.
     expect(broker.submits).toHaveLength(0);
 
     // AC: exactly one order exists — the write-ahead record, now settled.
-    expect(store.positions.size).toBe(1);
+    expect(await store.countAllPositions()).toBe(1);
 
     // And the decision replaying (the same bar re-processed after restart)
     // still cannot reach the venue: the surviving record dedupes it.
     const replay = await restarted.execute(makeGo());
     expect(replay.status).toBe('deduped');
     expect(broker.submits).toHaveLength(0);
-    expect(store.positions.size).toBe(1);
+    expect(await store.countAllPositions()).toBe(1);
   });
 
   it('adopts the broker state when the order did land, and the replay still does not double-submit', async () => {
     // The other side of the same crash: the bracket reached the venue, the
     // ack never reached us.
-    const store = new InMemoryStore();
+    const { store } = openTestExecutionStore();
     await store.writeAheadPosition(pendingPosition());
     const broker = makeBroker();
     broker.book.set(KEY, {
@@ -267,13 +218,13 @@ describe('reconcile — crash between write-ahead and broker ack', () => {
       action: 'adopted',
     });
 
-    const settled = store.positions.get(KEY);
+    const settled = await store.getPosition(KEY);
     expect(settled?.order_state).toBe('submitted');
     // The venue's leg ids are adopted too — without them there is nothing to
     // cancel the bracket by.
     expect(settled?.broker_order_ids).toEqual([`${KEY}:entry`, `${KEY}:stop`]);
 
-    expect(store.positions.size).toBe(1);
+    expect(await store.countAllPositions()).toBe(1);
     expect(broker.submits).toHaveLength(0);
 
     const replay = await restarted.execute(makeGo());
@@ -285,7 +236,7 @@ describe('reconcile — crash between write-ahead and broker ack', () => {
     // End-to-end version of the AC, driving execute() rather than seeding the
     // store by hand. The broker accepts the bracket, then the process "dies"
     // before the ack is persisted.
-    const store = new InMemoryStore();
+    const { store } = openTestExecutionStore();
     const broker = makeBroker();
     const crashing = {
       ...broker,
@@ -301,26 +252,26 @@ describe('reconcile — crash between write-ahead and broker ack', () => {
     expect(crashed.status).toBe('error');
     // The write-ahead survives the failed submit — that is what makes this
     // recoverable rather than an invisible order.
-    expect(store.positions.get(KEY)?.order_state).toBe('pending');
+    expect((await store.getPosition(KEY))?.order_state).toBe('pending');
     expect(broker.submits).toHaveLength(1);
 
     // Restart, reconcile, then replay the decision.
     const after = new ExecutionImpl(makeInput(store, broker));
     await after.reconcile();
-    expect(store.positions.get(KEY)?.order_state).toBe('submitted');
+    expect((await store.getPosition(KEY))?.order_state).toBe('submitted');
 
     const replay = await after.execute(makeGo());
     expect(replay.status).toBe('deduped');
 
     // Exactly one order at the venue, exactly one record in the store.
     expect(broker.submits).toHaveLength(1);
-    expect(store.positions.size).toBe(1);
+    expect(await store.countAllPositions()).toBe(1);
   });
 });
 
 describe('reconcile — store-vs-broker divergence', () => {
   it('corrects the store in favour of the broker and reports the divergence', async () => {
-    const store = new InMemoryStore();
+    const { store } = openTestExecutionStore();
     await store.writeAheadPosition(
       pendingPosition({ order_state: 'submitted', broker_order_ids: [`${KEY}:entry`] }),
     );
@@ -335,7 +286,7 @@ describe('reconcile — store-vs-broker divergence', () => {
 
     const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
 
-    expect(store.positions.get(KEY)?.order_state).toBe('filled');
+    expect((await store.getPosition(KEY))?.order_state).toBe('filled');
     expect(report.divergences[0]).toMatchObject({
       store_state: 'submitted',
       broker_state: 'filled',
@@ -345,7 +296,7 @@ describe('reconcile — store-vs-broker divergence', () => {
   });
 
   it('leaves filled_size alone when adopting — the Fill rows own it', async () => {
-    const store = new InMemoryStore();
+    const { store } = openTestExecutionStore();
     await store.writeAheadPosition(pendingPosition({ order_state: 'submitted' }));
     const broker = makeBroker();
     broker.book.set(KEY, {
@@ -360,13 +311,13 @@ describe('reconcile — store-vs-broker divergence', () => {
     // Adopting the state must not invent a quantity: ingestFills() rebuilds
     // filled_size from the persisted Fill rows, and reconcile writing it here
     // would fight that reconstruction.
-    expect(store.positions.get(KEY)?.filled_size).toBe(0);
+    expect((await store.getPosition(KEY))?.filled_size).toBe(0);
     // Still non-terminal, so it stays visible to ingestFills().
     expect((await store.getOpenPositions()).map((p) => p.idempotency_key)).toEqual([KEY]);
   });
 
   it('reports no divergence and writes nothing when store and broker agree', async () => {
-    const store = new InMemoryStore();
+    const { store } = openTestExecutionStore();
     await store.writeAheadPosition(
       pendingPosition({ order_state: 'submitted', broker_order_ids: [`${KEY}:entry`] }),
     );
@@ -388,7 +339,7 @@ describe('reconcile — store-vs-broker divergence', () => {
   });
 
   it('is idempotent — a second pass finds nothing left to correct', async () => {
-    const store = new InMemoryStore();
+    const { store } = openTestExecutionStore();
     await store.writeAheadPosition(pendingPosition());
     const broker = makeBroker();
     broker.book.set(KEY, {
@@ -409,7 +360,7 @@ describe('reconcile — store-vs-broker divergence', () => {
 
 describe('reconcile — scope and safety', () => {
   it('leaves the record untouched and flags it when the adapter cannot answer', async () => {
-    const store = new InMemoryStore();
+    const { store } = openTestExecutionStore();
     await store.writeAheadPosition(pendingPosition());
     const broker = makeBroker();
     broker.failLookup = 'venue unreachable';
@@ -419,7 +370,7 @@ describe('reconcile — scope and safety', () => {
 
     // Ignorance is not evidence: marking this rejected would bury a position
     // that may well be live and filled.
-    expect(store.positions.get(KEY)?.order_state).toBe('pending');
+    expect((await store.getPosition(KEY))?.order_state).toBe('pending');
     expect(store.writeLog).toEqual([]);
     expect(report.corrected).toBe(0);
     expect(report.divergences[0]).toMatchObject({
@@ -430,7 +381,7 @@ describe('reconcile — scope and safety', () => {
   });
 
   it('only reconciles in-flight lots, leaving the fill lifecycle to ingestFills()', async () => {
-    const store = new InMemoryStore();
+    const { store } = openTestExecutionStore();
     await store.writeAheadPosition(
       pendingPosition({ idempotency_key: 'key-pending', order_state: 'pending' }),
     );
@@ -454,12 +405,12 @@ describe('reconcile — scope and safety', () => {
     ]);
     // The fill-driven states are untouched — their filled_size/avg price are
     // reconstructed from Fill rows, not from a venue order summary.
-    expect(store.positions.get('key-partial')?.order_state).toBe('partially_filled');
-    expect(store.positions.get('key-filled')?.order_state).toBe('filled');
+    expect((await store.getPosition('key-partial'))?.order_state).toBe('partially_filled');
+    expect((await store.getPosition('key-filled'))?.order_state).toBe('filled');
   });
 
   it('reports an empty pass when nothing is in flight', async () => {
-    const store = new InMemoryStore();
+    const { store } = openTestExecutionStore();
     const report = await new ExecutionImpl(makeInput(store, makeBroker())).reconcile();
 
     expect(report).toMatchObject({ checked: 0, corrected: 0, divergences: [] });
