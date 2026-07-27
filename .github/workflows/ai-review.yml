@@ -39,6 +39,7 @@ jobs:
           NOUS_API_KEY: ${{ secrets.NOUS_API_KEY }}
           NOUS_BASE_URL: ${{ vars.NOUS_BASE_URL }}
           NOUS_MODEL: ${{ vars.NOUS_MODEL }}
+          BASE_REF: ${{ github.base_ref }}
         run: python .github/scripts/ai_review.py
 
       - name: Post review comment
