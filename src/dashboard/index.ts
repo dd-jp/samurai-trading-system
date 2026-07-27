@@ -3,9 +3,9 @@
  * `QueryStore` (#161) into the read-only HTTP server. Mirrors
  * `src/orchestrator/index.ts` as a secondary entry point.
  *
- * File-path convention matches every other component's shared-store wiring
- * (shared-sqlite-store-spec.md): `data/samurai-{env}.sqlite` at repo root,
- * selected via `NODE_ENV` (defaults to `development`).
+ * File-path convention follows shared-sqlite-store-spec.md's "one file per
+ * environment": `data/samurai-{env}.sqlite` at repo root, selected via
+ * `NODE_ENV` (defaults to `development`).
  */
 import { openSharedStore } from '../shared/store/open-shared-store.js';
 import { createDashboardServer } from './server.js';

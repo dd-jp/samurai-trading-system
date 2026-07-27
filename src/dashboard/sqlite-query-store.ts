@@ -15,7 +15,7 @@
  * filtering below (`WHERE ... <= ?`) relies on that.
  *
  * Two `MetricsSuite` fields (`profit_factor`, `expectancy`) are honestly
- * derivable from `closed_trades` alone. The other six (`sharpe`, `sortino`,
+ * derivable from `closed_trades` alone. The other eight (`sharpe`, `sortino`,
  * `calmar`, `max_drawdown`, `skew`, `kurtosis`, `turnover`, `exposure`) are
  * defined over a periodic-returns / capital series (see
  * `cost-model-backtest/metrics.ts`) that no table in the current schema
