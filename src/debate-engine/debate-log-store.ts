@@ -1,10 +1,10 @@
 /**
  * In-memory `DebateLogStore` for #63 — a concrete implementation of the
  * port (not a test-only mock), mirroring src/trader/fixture-setup-store.ts's
- * `FixtureSetupStore` and src/orchestrator/current-tick-store.ts's
- * `InMemoryCurrentTickStore`. See docs/specs/debate-engine-spec.md
- * ("Debate log write"): the real SQLite-backed store is deferred (no shared
- * store exists anywhere in the codebase yet).
+ * `FixtureSetupStore`. See docs/specs/debate-engine-spec.md
+ * ("Debate log write"): the real SQLite-backed store is
+ * `SqliteDebateLogStore` (#200); this in-memory version stays as `DebateLogStore`'s
+ * lighter-weight double where a full shared-store DB isn't needed.
  */
 import type { DebateLog, DebateLogStore } from '../shared/types.js';
 import type { DebateResult } from './types.js';

@@ -4,20 +4,22 @@
  *
  * Ticket #94: the scheduler, the sequential stage chain, and bounded
  * concurrency across instruments. Ticket #95: trace-ID propagation into
- * structured logs and the `audit_log` spine (`JsonLogger`, `InMemoryAuditLog`,
- * `digest`). Ticket #96: the `current_tick` row (`InMemoryCurrentTickStore`)
- * and the dead-man's-switch heartbeat (`Heartbeat`, `TradeChannelHeartbeat`).
- * There is no production composition root yet — binding the real stage
- * instances needs `ingestFills`/reconciliation (#83, #86) and the Analysts
- * fan-out (#71) that do not exist yet.
+ * structured logs and the `audit_log` spine (`JsonLogger`, `digest`).
+ * Ticket #96: the `current_tick` row and the dead-man's-switch heartbeat
+ * (`Heartbeat`, `TradeChannelHeartbeat`). Ticket #201: `SqliteAuditLog`/
+ * `SqliteCurrentTickStore`, the real stores behind `audit_log`/`current_tick`
+ * (#193), wired into the tick runner in place of the earlier in-memory
+ * doubles. There is no production composition root yet — binding the real
+ * stage instances needs `ingestFills`/reconciliation (#83, #86) and the
+ * Analysts fan-out (#71) that do not exist yet.
  */
-export { InMemoryAuditLog } from './audit-log.js';
-export { InMemoryCurrentTickStore } from './current-tick-store.js';
 export { digest } from './digest.js';
 export { Heartbeat, type HeartbeatChannel } from './heartbeat.js';
 export { TradeChannelHeartbeat } from './heartbeat-channel.js';
 export { JsonLogger } from './logger.js';
 export { DEFAULT_UNIVERSE, type SchedulerConfig, UniverseScheduler } from './scheduler.js';
+export { type AuditLogEntry, SqliteAuditLog } from './sqlite-audit-log.js';
+export { SqliteCurrentTickStore } from './sqlite-current-tick-store.js';
 export { runTickPlan, type TickLoopConfig } from './tick-loop.js';
 export { SequentialTickRunner } from './tick-runner.js';
 export type {
