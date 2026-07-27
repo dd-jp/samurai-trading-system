@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 
 from openai import OpenAI
 
@@ -74,13 +75,21 @@ def classify_blast_radius(changed_files: list[str]) -> str:
 
 
 def get_changed_files() -> list[str]:
-    base_ref = os.environ["BASE_REF"]
+    base_ref = os.environ.get("BASE_REF")
+    if not base_ref:
+        print("warning: BASE_REF not set, skipping blast-radius classification", file=sys.stderr)
+        return []
+
     result = subprocess.run(
         ["git", "diff", "--name-only", f"origin/{base_ref}...HEAD"],
         capture_output=True,
         text=True,
-        check=True,
+        check=False,
     )
+    if result.returncode != 0:
+        print(f"warning: git diff failed, skipping blast-radius classification: {result.stderr}", file=sys.stderr)
+        return []
+
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
