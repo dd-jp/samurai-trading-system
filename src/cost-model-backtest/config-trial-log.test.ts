@@ -110,3 +110,54 @@ describe.each(LOG_IMPLEMENTATIONS)('%s', (_name, makeLog) => {
     });
   });
 });
+
+/**
+ * FL's revalidation path (spec: "must read `config_trials` directly ... and
+ * must never call `recordTrial`") needs to read a trial by hash without ever
+ * having called `recordTrial` on that same log instance — i.e. against a
+ * durable store, not just an in-process map. SQLite-only: this is exactly
+ * what the in-memory implementation cannot demonstrate (a fresh instance has
+ * no prior writes to read).
+ */
+describe('SqliteConfigTrialLog — reads survive a fresh handle to the same store', () => {
+  it('can read a previously recorded trial by config_hash without calling recordTrial', () => {
+    const db = openSharedStore(':memory:');
+    new SqliteConfigTrialLog(db).recordTrial('config-a', report('config-a', 42));
+
+    // A second log instance over the same underlying store — read-only from here.
+    const reader = new SqliteConfigTrialLog(db);
+
+    expect(reader.getTrial('config-a')).toEqual(report('config-a', 42));
+    expect(reader.distinctTrialCount()).toBe(1);
+  });
+});
+
+describe('SqliteConfigTrialLog', () => {
+  it('overwrites result_json in place on a re-run — no new row', () => {
+    const db = openSharedStore(':memory:');
+    const log = new SqliteConfigTrialLog(db);
+
+    log.recordTrial('config-a', report('config-a', 1));
+    log.recordTrial('config-a', report('config-a', 2));
+
+    expect(db.prepare('SELECT COUNT(*) AS count FROM config_trials').get()).toEqual({ count: 1 });
+    expect(log.getTrial('config-a')?.seed).toBe(2);
+  });
+
+  it('distinctTrialCount() is a SELECT COUNT(*) FROM config_trials', () => {
+    const db = openSharedStore(':memory:');
+    const log = new SqliteConfigTrialLog(db);
+
+    log.recordTrial('config-a', report('config-a'));
+    log.recordTrial('config-b', report('config-b'));
+    db.prepare(
+      "INSERT INTO config_trials (config_hash, seed, config_json, result_json, recorded_at) VALUES ('config-c', 1, '{}', '{}', '2026-01-01T00:00:00.000Z')",
+    ).run();
+
+    expect(log.distinctTrialCount()).toBe(3);
+    expect(
+      (db.prepare('SELECT COUNT(*) AS count FROM config_trials').get() as { count: number })
+        .count,
+    ).toBe(3);
+  });
+});
