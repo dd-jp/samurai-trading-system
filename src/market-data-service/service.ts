@@ -44,6 +44,19 @@ export class MarketDataServiceImpl implements MarketDataService {
    * value. Every caller (direct, `getIndicator`, `getADV`) is therefore
    * reading the real bulk cache, not an in-memory structure.
    *
+   * Still calls `dataSource.fetchBars` once per call rather than serving
+   * straight from `store.readBars` on a row-count match: a persisted cache
+   * that already holds >= `lookback` bars for an *older* `asOf` would satisfy
+   * that count check while missing every bar ingested since — a stepping
+   * backtest replay (same lookback, advancing `asOf` tick by tick) would
+   * silently serve stale data with no way to detect the gap short of asking
+   * the source. Skipping the fetch needs the store to track "freshest bar
+   * ingested" per (instrument, timeframe), which #194 does not add; until it
+   * does, this trades the "not re-fetched per call" half of the Tier-2 spec
+   * intent (Module: Caching) for correctness. `store.readBars` still serves
+   * every response, and `appendBars`'s idempotency makes the redundant fetch
+   * cheap to persist.
+   *
    * Filtering to `close_time <= asOf` happens twice by construction: once
    * before the write (so a source that leaks a forming candle never persists
    * it) and once implicitly in the read (`readBars`'s own `close_time <= ?`).
@@ -78,7 +91,9 @@ export class MarketDataServiceImpl implements MarketDataService {
     this.store.upsertLatestMark(instrument, mark);
     const stored = this.store.readLatestMark(instrument);
     if (!stored) {
-      throw new Error(`getMark: latest_mark write for ${instrument} did not persist.`);
+      throw new Error(
+        `MarketDataServiceImpl.getMark: latest_mark write for '${instrument}' did not persist.`,
+      );
     }
     return stored;
   }
@@ -88,8 +103,10 @@ export class MarketDataServiceImpl implements MarketDataService {
    * asOf). `spec.lookback` is pinned into the Tier-1 cache key so a
    * recursive indicator (EMA/RSI/ATR) seeded from a different history
    * length can never collide with another value under the same key.
-   * Tier-2 (bulk) reads the persisted bar cache once per call via
-   * `dataSource.fetchBars`, not per-bar, regardless of window size.
+   * Tier-1 (this cache) is what makes a call "free" on a repeat hit; the
+   * Tier-2 bulk read underneath it is `getBars` — see its doc comment for
+   * why that still calls the source once per miss rather than trusting the
+   * persisted cache's row count alone.
    */
   async getIndicator(
     instrument: string,
