@@ -65,4 +65,5 @@ export type {
   RoundStance,
 } from './round-orchestrator.js';
 export { MAX_ROUNDS, runDebate } from './round-orchestrator.js';
+export { SqliteDebateLogStore } from './sqlite-debate-log-store.js';
 export type { AnalystContribution, AnalystView, DebateResult, Direction } from './types.js';
