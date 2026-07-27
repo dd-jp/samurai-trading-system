@@ -87,6 +87,23 @@ export interface Quote {
 }
 
 /**
+ * The `bars` / `latest_mark` persistence port (ticket #194) — the shared
+ * SQLite store's Tier-2 bulk cache and the live mark table, behind the shared
+ * store from #193. `appendBars` is idempotent per `(instrument, timeframe,
+ * open_time)` (the `bars` PK): re-ingesting an already-stored bar is a no-op,
+ * never a duplicate row or an error. `upsertLatestMark` overwrites the single
+ * row per instrument — `latest_mark` holds only the current price, not
+ * history.
+ */
+export interface MarketDataStore {
+  appendBars(bars: readonly Bar[]): void;
+  /** Ascending by close_time, filtered to `close_time <= asOf`, most recent `lookback`. */
+  readBars(instrument: string, timeframe: string, asOf: Date, lookback: number): Bar[];
+  upsertLatestMark(instrument: string, mark: Mark): void;
+  readLatestMark(instrument: string): Mark | undefined;
+}
+
+/**
  * Source abstraction — the ONLY place that knows ccxt/IBKR/Alpaca specifics,
  * and the ONLY place that branches live vs backtest for marks. The serving
  * layer and all consumers stay source-blind; #66 supplies the real

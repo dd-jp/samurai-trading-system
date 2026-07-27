@@ -5,11 +5,13 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { Clock } from '../shared/clock.js';
+import { openSharedStore } from '../shared/store/open-shared-store.js';
 import { MarketDataServiceImpl } from './service.js';
 import { createDataSource, type DataSourceConfig } from './source-factory.js';
 import type { AlpacaBar, AlpacaClient } from './sources/alpaca-source.js';
 import type { CcxtClient, CcxtOhlcv } from './sources/ccxt-source.js';
 import type { IbkrClient, IbkrHistoricalBar } from './sources/ibkr-source.js';
+import { SqliteMarketDataStore } from './sqlite-market-data-store.js';
 
 class ManualClock implements Clock {
   constructor(private readonly time: Date) {}
@@ -46,7 +48,12 @@ const alpacaClient: AlpacaClient = {
 };
 
 function serviceFor(config: DataSourceConfig, mode: 'live' | 'backtest' = 'backtest') {
-  return new MarketDataServiceImpl(createDataSource(config), new ManualClock(ASOF), mode);
+  return new MarketDataServiceImpl(
+    createDataSource(config),
+    new ManualClock(ASOF),
+    mode,
+    new SqliteMarketDataStore(openSharedStore(':memory:')),
+  );
 }
 
 describe('crypto round-trip: ccxt payload -> ingestion -> getBars', () => {

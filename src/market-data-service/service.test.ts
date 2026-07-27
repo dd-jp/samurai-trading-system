@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { Clock } from '../shared/clock.js';
+import { openSharedStore } from '../shared/store/open-shared-store.js';
 import { FixtureDataSource } from './fixture-data-source.js';
 import { MarketDataServiceImpl } from './service.js';
+import { SqliteMarketDataStore } from './sqlite-market-data-store.js';
 import type { Bar, Quote } from './types.js';
 
 class ManualClock implements Clock {
@@ -50,7 +52,12 @@ function buildService(mode: 'live' | 'backtest', clock: Clock, quote?: Quote) {
     'crypto',
     quote,
   );
-  return new MarketDataServiceImpl(dataSource, clock, mode);
+  return new MarketDataServiceImpl(
+    dataSource,
+    clock,
+    mode,
+    new SqliteMarketDataStore(openSharedStore(':memory:')),
+  );
 }
 
 describe('MarketDataServiceImpl.getBars', () => {
@@ -153,7 +160,12 @@ describe('MarketDataServiceImpl.getADV', () => {
       { price: 999, observed_at: ASOF, source: 'fixture-live' },
       'crypto',
     );
-    const service = new MarketDataServiceImpl(dataSource, new ManualClock(ASOF), 'backtest');
+    const service = new MarketDataServiceImpl(
+      dataSource,
+      new ManualClock(ASOF),
+      'backtest',
+      new SqliteMarketDataStore(openSharedStore(':memory:')),
+    );
 
     const adv = await service.getADV(INSTRUMENT, { timeframe: TIMEFRAME, lookback: 10 }, ASOF);
 
@@ -166,7 +178,12 @@ describe('MarketDataServiceImpl.getADV', () => {
       { price: 999, observed_at: ASOF, source: 'fixture-live' },
       'crypto',
     );
-    const service = new MarketDataServiceImpl(dataSource, new ManualClock(ASOF), 'backtest');
+    const service = new MarketDataServiceImpl(
+      dataSource,
+      new ManualClock(ASOF),
+      'backtest',
+      new SqliteMarketDataStore(openSharedStore(':memory:')),
+    );
 
     await expect(
       service.getADV(INSTRUMENT, { timeframe: TIMEFRAME, lookback: 10 }, ASOF),
