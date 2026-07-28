@@ -1,0 +1,450 @@
+/**
+ * Stage 2 replay driver (ticket #243) — see
+ * docs/specs/stage2-validation-execution-spec.md ("Module: Replay Driver")
+ * and wayfinder map #154 (decision #158).
+ *
+ * Steps the mechanical proxy strategy (#242) bar-by-bar through the ingested
+ * historical bars (#241) and hands the result to `EvalExecutorImpl` through
+ * the ports it already declares (`ReplayTradeSource` in `eval-types.ts`,
+ * `ReplayTimeline` in `types.ts`). Neither of those files, nor
+ * `eval-executor.ts`, changes for this module: the driver adapts to them.
+ *
+ * **What this path deliberately does NOT do.** It never calls
+ * `BrokerAdapter`, `Trader.decide`, `RiskManagerImpl.evaluate` or
+ * `VerdictImpl.decide` — enforced structurally, by not importing any of them
+ * (there is a test asserting the import list stays clean). The proxy strategy
+ * is a complete stand-in for the whole pipeline here, not just for
+ * Analysts/Debate: this pass validates the *harness's honesty* (costs, no
+ * lookahead, survivorship), not the live gate sequence, which the Backtest
+ * Harness (#88) exercises over the real stage chain. Nothing here touches
+ * Execution's live write path.
+ *
+ * **Why fills go straight to `CostModel.fill`.** `BrokerAdapter` has no
+ * flatten/cancel method, so a signal exit cannot be routed through it — and
+ * routing entries through it while exits bypass it would price the two legs
+ * by different models. Both legs therefore call `CostModel.fill` directly,
+ * and every produced `Fill` carries the resulting `cost_breakdown` (mirroring
+ * the Simulated adapter's `CostModelResult` → `Fill` mapping, shared/types.ts)
+ * so `eval-executor.ts`'s `assertCostModelPriced` attestation passes without
+ * this path being special-cased.
+ *
+ * **Gaps are not wished away.** A stop or target exit is priced against the
+ * price the market actually offered: the bar's open when it already gapped
+ * through the level, otherwise the level itself. Assuming a fill at the exact
+ * stop through a gap is the flattering lie this whole component exists to
+ * prevent. `CostModel.fill` then moves that reference adversely, as it does
+ * for any fill.
+ *
+ * **`debate_id` on this path is synthetic.** There is no debate — it is
+ * derived deterministically from the lot's idempotency key purely so the
+ * `ClosedTrade` record is well-formed. Nothing here writes to `SetupStore` or
+ * `DebateLogStore`, so the "exactly once per setup" join invariant
+ * (cross-spec-contracts.md registry #1) is untouched by this module.
+ */
+
+import { computeIndicator } from '../market-data-service/indicators.js';
+import type { Bar } from '../market-data-service/types.js';
+import type { SimulatedClock } from '../shared/clock.js';
+import type { ClosedTrade, Fill } from '../shared/types.js';
+import type { ReplayTradeSource } from './eval-types.js';
+import { LookaheadAuditor } from './lookahead.js';
+import { type ProxySignal, type ProxyStrategyConfig, proxySignal } from './proxy-strategy.js';
+import type { CostModel, MarketState, ReplayTimeline } from './types.js';
+import { assertSurvivorshipFree, type DateRange, type InstrumentRegistry } from './universe.js';
+
+/** The audited source of historical bars — `Stage2HistoricalStore` (#241) in production. */
+export interface ReplayBarSource {
+  /** Bars for `symbol` with `close_time` inside `window` (inclusive), ascending. */
+  bars(symbol: string, window: DateRange): Bar[];
+}
+
+/** One replayed instrument. `asset_class` selects the cost model's parameter set. */
+export interface ReplayInstrument {
+  symbol: string;
+  asset_class: 'crypto' | 'stocks';
+}
+
+export interface ReplayDriverDeps {
+  barSource: ReplayBarSource;
+  /** The bar timestamps to step — `Stage2HistoricalStore` implements this too. */
+  timeline: ReplayTimeline;
+  registry: InstrumentRegistry;
+  costModel: CostModel;
+  /** Stepped bar-by-bar; the `LookaheadAuditor`'s reference for "now". */
+  clock: SimulatedClock;
+  universe: readonly ReplayInstrument[];
+  /**
+   * Notional committed per entry; `size = capitalPerTrade / reference price`.
+   *
+   * Deliberately a dependency and not a field on `ProxyStrategyConfig`: the
+   * spec pins the trial grid at exactly 12 configs, and `config_hash` is that
+   * config's identity. Widening it with a sizing knob would make N ambiguous.
+   */
+  capitalPerTrade: number;
+  /** Bars of volume averaged into `MarketState.adv`. Default 20. */
+  advWindow?: number;
+}
+
+export interface ReplayRunResult {
+  trades: ReplayTradeSource;
+  timeline: ReplayTimeline;
+}
+
+const DEFAULT_ADV_WINDOW = 20;
+
+/** An open lot, held between bars until an exit prices it. */
+interface OpenLot {
+  idempotency_key: string;
+  side: 'buy' | 'sell';
+  direction: 'long' | 'short';
+  size: number;
+  /** `CostModelResult.fill_price` of the entry — never an assumed level. */
+  entry: number;
+  /** The INITIAL protective stop: the denominator of R (shared/types.ts). */
+  stop: number;
+  target: number;
+  fees: number;
+  opened_at: Date;
+}
+
+/**
+ * Wraps the injected historical source with the harness's existing
+ * `LookaheadAuditor` seam, so a row stamped after `clock.now()` throws
+ * `LookaheadViolationError` out of the run rather than being scored.
+ *
+ * Stage 1 already audits at ingestion; this is the same audit re-applied at
+ * the replay seam, where the simulated clock is what defines "now". `Bar`
+ * carries `close_time` rather than the `timestamp` field `auditRows` expects,
+ * so rows are audited one at a time against that key — the bar's own
+ * point-in-time stamp.
+ */
+class AuditedBarSource implements ReplayBarSource {
+  constructor(
+    private readonly inner: ReplayBarSource,
+    private readonly auditor: LookaheadAuditor,
+  ) {}
+
+  bars(symbol: string, window: DateRange): Bar[] {
+    const rows = this.inner.bars(symbol, window);
+    for (const bar of rows) {
+      this.auditor.auditRead(`stage2_bars:${symbol}`, bar.close_time);
+    }
+    return rows;
+  }
+}
+
+/** In-memory `ReplayTradeSource` over one run's hand-constructed records. */
+class ReplayRecords implements ReplayTradeSource {
+  readonly trades: ClosedTrade[] = [];
+  private readonly fillsByKey = new Map<string, Fill[]>();
+
+  record(trade: ClosedTrade, fills: readonly Fill[]): void {
+    this.trades.push(trade);
+    this.fillsByKey.set(trade.idempotency_key, [...fills]);
+  }
+
+  async closedTrades(window: DateRange): Promise<readonly ClosedTrade[]> {
+    return this.trades
+      .filter(
+        (trade) =>
+          trade.closed_at.getTime() >= window.start.getTime() &&
+          trade.closed_at.getTime() <= window.end.getTime(),
+      )
+      .sort((a, b) => a.closed_at.getTime() - b.closed_at.getTime());
+  }
+
+  async fills(idempotency_key: string): Promise<readonly Fill[]> {
+    return this.fillsByKey.get(idempotency_key) ?? [];
+  }
+}
+
+/**
+ * `ReplayTimeline` over the timestamps the run actually stepped — not the
+ * injected timeline verbatim. `toReturnSeries` throws if a trade closes after
+ * the sample's last bar, so the timeline handed to the eval executor must be
+ * the one the trades were produced against.
+ */
+class SteppedTimeline implements ReplayTimeline {
+  constructor(private readonly stepped: readonly Date[]) {}
+
+  async barTimestamps(window: DateRange): Promise<readonly Date[]> {
+    return this.stepped.filter(
+      (at) => at.getTime() >= window.start.getTime() && at.getTime() <= window.end.getTime(),
+    );
+  }
+}
+
+/**
+ * One run's mutable state. Held here, not on the driver, so a driver instance
+ * can be re-run without a previous run's half-open lots leaking into it.
+ */
+interface RunState {
+  config: ProxyStrategyConfig;
+  records: ReplayRecords;
+  open: Map<string, OpenLot>;
+  /** Entry fills, held until their lot closes and the `ClosedTrade` is built. */
+  pendingFills: Map<string, Fill[]>;
+}
+
+export class ReplayDriver {
+  constructor(private readonly deps: ReplayDriverDeps) {}
+
+  async run(config: ProxyStrategyConfig, window: DateRange): Promise<ReplayRunResult> {
+    // Survivorship gate first, before a single bar is stepped — a biased
+    // universe invalidates the run, so fail before producing trades from it.
+    await assertSurvivorshipFree(
+      this.deps.universe.map((instrument) => instrument.symbol),
+      window,
+      this.deps.registry,
+    );
+
+    const source = new AuditedBarSource(this.deps.barSource, new LookaheadAuditor(this.deps.clock));
+    const state: RunState = {
+      config,
+      records: new ReplayRecords(),
+      open: new Map<string, OpenLot>(),
+      pendingFills: new Map<string, Fill[]>(),
+    };
+    const warmup = Math.max(config.fastWindow, config.slowWindow, config.atrWindow + 1);
+
+    const stepped = await this.deps.timeline.barTimestamps(window);
+
+    for (const at of stepped) {
+      // Monotonic by construction: `advanceTo` throws on a backwards step, so
+      // an unsorted timeline fails the run instead of rewinding T.
+      this.deps.clock.advanceTo(at);
+
+      for (const instrument of this.deps.universe) {
+        const bars = source.bars(instrument.symbol, { start: window.start, end: at });
+        const bar = bars[bars.length - 1];
+
+        // This instrument has no bar closing at this timestamp (the timeline
+        // is the union across the universe), or is still inside its warmup —
+        // `computeIndicator` on a short window returns a wrong SMA/ATR rather
+        // than erroring, so a short slice is never evaluated.
+        if (bar === undefined || bar.close_time.getTime() !== at.getTime()) continue;
+        if (bars.length < warmup) continue;
+
+        const signal = proxySignal(bars, config);
+        const lot = state.open.get(instrument.symbol);
+
+        if (lot !== undefined) {
+          const exit = exitOf(lot, bar, signal);
+          if (exit !== undefined) {
+            this.closeLot(state, instrument, lot, bar, bars, exit);
+            state.open.delete(instrument.symbol);
+          }
+          // No same-bar re-entry: the lot's exit is already priced at this
+          // bar, and re-entering on it would open a second lot against the
+          // same bar's information.
+          continue;
+        }
+
+        if (signal.direction === 'flat') continue;
+
+        state.open.set(
+          instrument.symbol,
+          this.openLot(state, instrument, bar, bars, signal, signal.direction),
+        );
+      }
+    }
+
+    // A lot still open at the last bar produces no `ClosedTrade`: only a
+    // round-trip-to-flat is a realized record (shared/types.ts), and marking
+    // it out at the final close would invent an exit no cost model priced.
+    return { trades: state.records, timeline: new SteppedTimeline(stepped) };
+  }
+
+  private openLot(
+    state: RunState,
+    instrument: ReplayInstrument,
+    bar: Bar,
+    bars: readonly Bar[],
+    signal: ProxySignal,
+    /** The signal's direction, narrowed by the caller's flat check. */
+    direction: 'long' | 'short',
+  ): OpenLot {
+    const side = direction === 'long' ? 'buy' : 'sell';
+    const idempotency_key = `proxy-${instrument.symbol}-${bar.close_time.toISOString()}`;
+    const size = this.deps.capitalPerTrade / bar.close;
+
+    const result = this.deps.costModel.fill(
+      {
+        instrument: instrument.symbol,
+        side,
+        size,
+        order_type: 'market',
+        idempotency_key,
+      },
+      this.marketState(state.config, instrument, bar, bars, bar.close),
+    );
+
+    state.pendingFills.set(idempotency_key, [
+      {
+        idempotency_key,
+        broker_fill_id: `${idempotency_key}:entry`,
+        leg: 'entry',
+        price: result.fill_price,
+        qty: result.filled_size,
+        fee: result.cost_breakdown.commission,
+        timestamp: bar.close_time,
+        cost_breakdown: { ...result.cost_breakdown },
+      },
+    ]);
+
+    return {
+      idempotency_key,
+      side,
+      direction,
+      size: result.filled_size,
+      entry: result.fill_price,
+      stop: signal.stop,
+      target: signal.target,
+      fees: result.cost_breakdown.commission,
+      opened_at: bar.close_time,
+    };
+  }
+
+  private closeLot(
+    state: RunState,
+    instrument: ReplayInstrument,
+    lot: OpenLot,
+    bar: Bar,
+    bars: readonly Bar[],
+    exit: { reason: ClosedTrade['close_reason']; reference: number },
+  ): void {
+    // Closing side is the opposite of the entry's, so the cost model moves the
+    // price adversely against the exit — not in its favor.
+    const side = lot.side === 'buy' ? 'sell' : 'buy';
+
+    const result = this.deps.costModel.fill(
+      {
+        instrument: instrument.symbol,
+        side,
+        size: lot.size,
+        order_type: 'market',
+        idempotency_key: lot.idempotency_key,
+      },
+      this.marketState(state.config, instrument, bar, bars, exit.reference),
+    );
+
+    const fills = state.pendingFills.get(lot.idempotency_key) ?? [];
+    fills.push({
+      idempotency_key: lot.idempotency_key,
+      broker_fill_id: `${lot.idempotency_key}:${exit.reason}`,
+      leg: exit.reason,
+      price: result.fill_price,
+      qty: result.filled_size,
+      fee: result.cost_breakdown.commission,
+      timestamp: bar.close_time,
+      cost_breakdown: { ...result.cost_breakdown },
+    });
+    state.pendingFills.delete(lot.idempotency_key);
+
+    const fees_total = lot.fees + result.cost_breakdown.commission;
+    const direction = lot.direction === 'long' ? 1 : -1;
+    const gross = (result.fill_price - lot.entry) * lot.size * direction;
+
+    state.records.record(
+      {
+        idempotency_key: lot.idempotency_key,
+        debate_id: `proxy-replay:${lot.idempotency_key}`,
+        instrument: instrument.symbol,
+        asset_class: instrument.asset_class,
+        side: lot.side,
+        entry: lot.entry,
+        stop: lot.stop,
+        filled_size: lot.size,
+        realized_pnl_net: gross - fees_total,
+        fees_total,
+        opened_at: lot.opened_at,
+        closed_at: bar.close_time,
+        close_reason: exit.reason,
+      },
+      fills,
+    );
+  }
+
+  /**
+   * The bar's market context. `spread` is null by design: daily historical
+   * bars carry no bid/ask, so the cost model fallback-models the spread from
+   * volatility (cross-spec OPEN-GAP-A). `volatility` is the same ATR the
+   * strategy sized its stop with, and `adv` the rolling mean bar volume.
+   */
+  private marketState(
+    config: ProxyStrategyConfig,
+    instrument: ReplayInstrument,
+    bar: Bar,
+    bars: readonly Bar[],
+    mid: number,
+  ): MarketState {
+    const advWindow = this.deps.advWindow ?? DEFAULT_ADV_WINDOW;
+    const recent = bars.slice(-advWindow);
+    const adv = recent.reduce((sum, row) => sum + row.volume, 0) / recent.length;
+
+    if (!(adv > 0)) {
+      throw new Error(
+        `ReplayDriver: ${instrument.symbol} has non-positive average volume (${adv}) at ` +
+          `${bar.close_time.toISOString()} — CostModel.fill cannot size market impact against ` +
+          'it. Re-ingest the instrument rather than replaying it as if it were liquid.',
+      );
+    }
+
+    return {
+      mid,
+      spread: null,
+      adv,
+      // The same ATR the strategy sized this lot's stop with — one volatility
+      // estimate, so the cost model and the stop cannot disagree about it.
+      volatility: computeIndicator(bars.slice(-(config.atrWindow + 1)) as Bar[], {
+        indicator: 'atr',
+        params: {},
+        lookback: config.atrWindow,
+      }),
+      asset_class: instrument.asset_class,
+      timestamp: this.deps.clock.now(),
+    };
+  }
+}
+
+/**
+ * Which exit, if any, this bar produces — and the reference price it is
+ * priced against.
+ *
+ * Stop is checked before target: when a single bar's range spans both levels,
+ * the intrabar path is unknowable from OHLC alone, and assuming the target
+ * came first is the optimistic reading.
+ *
+ * The reference is the bar's open when the open already gapped through the
+ * level, otherwise the level itself — the price the market actually offered,
+ * never an assumed fill at a level that was never available.
+ */
+function exitOf(
+  lot: OpenLot,
+  bar: Bar,
+  signal: ProxySignal,
+): { reason: ClosedTrade['close_reason']; reference: number } | undefined {
+  if (lot.direction === 'long') {
+    if (bar.low <= lot.stop) {
+      return { reason: 'stop', reference: bar.open < lot.stop ? bar.open : lot.stop };
+    }
+    if (bar.high >= lot.target) {
+      return { reason: 'target', reference: bar.open > lot.target ? bar.open : lot.target };
+    }
+  } else {
+    if (bar.high >= lot.stop) {
+      return { reason: 'stop', reference: bar.open > lot.stop ? bar.open : lot.stop };
+    }
+    if (bar.low <= lot.target) {
+      return { reason: 'target', reference: bar.open < lot.target ? bar.open : lot.target };
+    }
+  }
+
+  // Signal exit: the trend no longer favors the side the lot is on. Priced at
+  // the close — the bar on which the signal became knowable.
+  if (signal.direction !== lot.direction) {
+    return { reason: 'exit', reference: bar.close };
+  }
+
+  return undefined;
+}
