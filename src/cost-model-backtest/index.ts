@@ -59,6 +59,13 @@
  * precedent — since no composition root wires either yet (`eval-executor.ts`
  * does not call `recordTrial`; see the #89/#90 notes above on why
  * `BacktestReport.metrics` isn't wired into a caller that could).
+ *
+ * Ticket #242 (Stage 2 Validation Execution, wayfinder map #154, see
+ * docs/specs/stage2-validation-execution-spec.md) adds `proxy-strategy.ts` —
+ * the deterministic dual-SMA/ATR rule standing in for the live LLM debate
+ * pipeline during Stage 2. It is a pure signal function only; the replay
+ * driver that steps it through history (#243) is a separate, not-yet-built
+ * ticket.
  */
 
 export type { BacktestDeps } from './backtest.js';
@@ -79,6 +86,8 @@ export type { LookaheadViolation } from './lookahead.js';
 export { LookaheadAuditor, LookaheadViolationError } from './lookahead.js';
 export { computeMetrics } from './metrics.js';
 export { deflatedSharpe, minbtl, minbtlGuard, pbo } from './overfitting.js';
+export type { ProxySignal, ProxyStrategyConfig } from './proxy-strategy.js';
+export { proxySignal } from './proxy-strategy.js';
 export type { SplitOptions } from './splits.js';
 export { generateSplits } from './splits.js';
 export { SqliteConfigTrialLog } from './sqlite-config-trial-log.js';
