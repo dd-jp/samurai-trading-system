@@ -124,9 +124,11 @@ export interface TickOutcome {
  * "assert wiring, not stage logic" — and keeps the short-circuit test to
  * faking six functions.
  *
- * `analysts` and `debate` have no implementation to bind yet: the multi-persona
- * fan-out/quorum is #71/#72 (#70 shipped a single `technicalAnalyst`) and the
- * Debate Engine's core is unimplemented under epic #40.
+ * `analysts` and `debate` bind through a thin adapter rather than directly:
+ * `AnalystOrchestrator.runAnalysts`/`runDebate` don't match this shape 1:1
+ * (extra positional args, a richer return type) — see
+ * `src/orchestrator/production/analysts-adapter.ts` and `debate-adapter.ts`
+ * (ticket #235, ADR-0004 §3).
  */
 export interface TickSteps {
   analysts(input: { trace_id: string; signal: Signal; clock: Clock }): Promise<AnalystView[]>;
