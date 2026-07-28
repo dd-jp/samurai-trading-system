@@ -219,24 +219,28 @@ export interface ExecutionStepDeps {
 
 /**
  * `TickSteps.execution(verdict)` carries no `trace_id` (unlike every other
- * step) — `ExecutionInput.trace_id` is fixed at construction, so `execute()`
- * is called on one long-lived `ExecutionImpl` instance rather than a fresh
- * one per verdict. `trace_id` here is therefore process-scoped, not
- * tick-scoped; `SequentialTickRunner`'s own audit row already carries the
- * per-tick trace_id independently (tick-runner.ts's `record()`).
+ * step) — `ExecutionInput.trace_id` is fixed at construction. Rather than
+ * share one process-scoped trace_id across every execution (losing
+ * per-order correlation in broker/audit logs), a fresh `ExecutionImpl` is
+ * constructed per call using `verdict.idempotency_key` — a stable,
+ * per-order identifier already unique to this lot — as its `trace_id`.
+ * `ExecutionImpl` only holds references, so constructing one per call is
+ * cheap.
  */
 export function buildExecutionStep(deps: ExecutionStepDeps): TickSteps['execution'] {
-  const execution = new ExecutionImpl({
-    trace_id: 'production-execution-step',
-    clock: deps.clock,
-    broker: deps.broker,
-    store: deps.store,
-    costModel: deps.costModel,
-    marketData: deps.marketData,
-    config: deps.config,
-    mode: deps.mode,
-  });
-  return (verdict) => execution.execute(verdict);
+  return (verdict) => {
+    const execution = new ExecutionImpl({
+      trace_id: verdict.idempotency_key,
+      clock: deps.clock,
+      broker: deps.broker,
+      store: deps.store,
+      costModel: deps.costModel,
+      marketData: deps.marketData,
+      config: deps.config,
+      mode: deps.mode,
+    });
+    return execution.execute(verdict);
+  };
 }
 
 export interface PersistenceInstances {
