@@ -22,7 +22,7 @@ jobs:
             app_key_secret: NOUS_APP_PRIVATE_KEY
           - reviewer: nous-kimi
             model_var: KIMI_MODEL
-            api_key_secret: KIMI_API_KEY
+            api_key_secret: KIMI_NOUS_API_KEY
             app_id_var: KIMI_APP_ID
             app_key_secret: KIMI_APP_PRIVATE_KEY
     steps:
