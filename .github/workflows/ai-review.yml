@@ -55,7 +55,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
-          app-id: ${{ vars[matrix.app_id_var] }}
+          client-id: ${{ vars[matrix.app_id_var] }}
           private-key: ${{ secrets[matrix.app_key_secret] }}
 
       - name: Post review as ${{ matrix.reviewer }}
