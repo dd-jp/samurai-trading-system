@@ -53,6 +53,11 @@ failure in this diff could actually break in production (e.g. lost orders, \
 double fills, corrupted state, incorrect risk limits) and whether the diff \
 includes matching test coverage.
 
+Be compact: use short bullet points, not prose paragraphs, and for any dimension \
+with nothing to flag just write "No issues found." rather than padding it out. \
+The response must fit within the token budget — brevity beats exhaustive \
+explanation.
+
 Respond with a single JSON object, no markdown fences, matching exactly this shape:
 {
   "summary_markdown": "<the full five-section review, one '### <Dimension>' \
@@ -174,7 +179,7 @@ def call_model(diff: str, changed_files: list[str], model: str, api_key: str, ba
             # We rely on the prompt's JSON instructions plus the regex
             # extraction fallback below instead.
             resp = client.chat.completions.create(
-                model=model, messages=messages, max_tokens=4096
+                model=model, messages=messages, max_tokens=8192
             )
             raw = resp.choices[0].message.content or ""
             break
