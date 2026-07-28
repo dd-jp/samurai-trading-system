@@ -32,6 +32,23 @@ describe('startFromEnvironment', () => {
     expect(error.message).toContain('alpacaBrokerClient');
   });
 
+  it('rejects an unrecognised SAMURAI_MODE rather than casting it through', async () => {
+    // `backtest` auto-approves every HITL gate and `live` spends real money,
+    // so a typo must not reach VerdictImpl/ExecutionImpl as an opaque string.
+    const previous = process.env.SAMURAI_MODE;
+    process.env.SAMURAI_MODE = 'papper';
+    try {
+      const wired = Object.fromEntries(REQUIRED_INJECTED_CONFIG.map((key) => [key, {}])) as Record<
+        string,
+        unknown
+      >;
+      await expect(startFromEnvironment(wired as never)).rejects.toThrow(/SAMURAI_MODE/);
+    } finally {
+      if (previous === undefined) delete process.env.SAMURAI_MODE;
+      else process.env.SAMURAI_MODE = previous;
+    }
+  });
+
   it('lists every transport and stage config as a required injection', () => {
     // Guards against a future field being added to ProductionConfig as a
     // silently-optional dependency: these are the seams with no in-repo

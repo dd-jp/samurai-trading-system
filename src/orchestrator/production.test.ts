@@ -11,7 +11,14 @@
  * validated" bar is a manual E2E run, not a unit test).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CostModelImpl } from '../cost-model-backtest/cost-model.js';
+import { MockLlmClient } from '../debate-engine/llm/mock-client.js';
+import { SimulatedBrokerAdapter } from '../execution/simulated-adapter.js';
+import { FixtureDataSource } from '../market-data-service/fixture-data-source.js';
+import { MarketDataServiceImpl } from '../market-data-service/service.js';
 import type { AlpacaBar, AlpacaQuote } from '../market-data-service/sources/alpaca-source.js';
+import { SqliteMarketDataStore } from '../market-data-service/sqlite-market-data-store.js';
+import type { Bar } from '../market-data-service/types.js';
 import type { VolatilityReading } from '../risk-manager/breakers.js';
 import { SimulatedClock } from '../shared/clock.js';
 import {
@@ -20,6 +27,7 @@ import {
 } from '../shared/store/open-shared-store.js';
 import type { OrderIntent } from '../shared/types.js';
 import type { ApprovalOutcome, ApprovalRequest, VerdictDecision } from '../verdict/types.js';
+import { buildPersistence } from './production/direct-bind.js';
 import {
   buildProductionComponents,
   buildProductionOrchestrator,
@@ -148,6 +156,97 @@ function goVerdict(): VerdictDecision {
   };
 }
 
+/** Real per-stage config values (same shapes direct-bind.test.ts pins). */
+const REAL_CONFIGS = {
+  traderConfig: {
+    conviction_floor: 0.5,
+    max_risk_per_trade: 0.01,
+    asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
+    atr_timeframe: '1h',
+    atr_lookback: 14,
+    atr_k: 2,
+    vol_floor_fraction: 0.002,
+    non_converged_haircut: 0.5,
+    reward_risk_multiple: 2,
+    min_viable_notional: 10,
+    time_in_force: 'gtc',
+  },
+  riskConfig: {
+    max_position_size: 100_000,
+    per_asset_cap: 100_000,
+    per_asset_class_cap: { crypto: 100_000, stocks: 100_000 },
+    portfolio_gross_cap: 200_000,
+    concentration: { cap: 100_000, threshold: 0.9 },
+    min_viable_size: 0.0001,
+    cii_threshold: 80,
+  },
+  verdictConfig: {
+    automation_level: { crypto: 'auto', stocks: 'auto' },
+    max_signal_age: { crypto: 3_600_000, stocks: 3_600_000 },
+    drift_tolerance: 100,
+    human_timeout: 60_000,
+    allow_extended_hours: true,
+    flag_thresholds: { size_over: 1_000_000 },
+  },
+  executionConfig: {
+    simulated: {
+      volatility_indicator: { indicator: 'atr', params: { period: 14 }, lookback: 14 },
+      adv_window: { timeframe: '1d', lookback: 20 },
+    },
+  },
+  correlationConfig: { window: { timeframe: '1d', lookback: 30 }, min_bars: 5 },
+  breakerConfig: {
+    daily_loss_pct: 0.05,
+    max_drawdown_pct: 0.2,
+    max_consecutive_losses: 5,
+    volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+    auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+  },
+  costConfig: {
+    crypto: {
+      spreadVolatilityCoefficient: 0.1,
+      commissionRate: 0.0026,
+      slippageCoefficient: 0.05,
+      impactK: 0.5,
+    },
+    stocks: {
+      spreadVolatilityCoefficient: 0.05,
+      commissionRate: 0.0005,
+      slippageCoefficient: 0.02,
+      impactK: 0.3,
+    },
+  },
+} as unknown as Pick<
+  ProductionConfig,
+  | 'traderConfig'
+  | 'riskConfig'
+  | 'verdictConfig'
+  | 'executionConfig'
+  | 'correlationConfig'
+  | 'breakerConfig'
+  | 'costConfig'
+>;
+
+/** An hourly bar series long enough for the ATR/ADV lookbacks the chain reads. */
+function fixtureBars(instrument: string, timeframe: string, count: number, stepMs: number): Bar[] {
+  return Array.from({ length: count }, (_, index) => {
+    const close_time = new Date(START.getTime() - (count - index) * stepMs);
+    const price = 100 + index;
+    return {
+      instrument,
+      timeframe,
+      open_time: new Date(close_time.getTime() - stepMs),
+      close_time,
+      open: price,
+      high: price + 2,
+      low: price - 2,
+      close: price,
+      volume: 1_000,
+      source: 'fixture',
+    };
+  });
+}
+
 describe('SMOKE_TEST_UNIVERSE', () => {
   it('is a narrow, crypto-only universe (ADR-0004 §4)', () => {
     expect(SMOKE_TEST_UNIVERSE).toHaveLength(1);
@@ -194,6 +293,100 @@ describe('buildProductionComponents', () => {
 
   it('buildProductionTickRunner returns a SequentialTickRunner', () => {
     expect(buildProductionTickRunner(stubConfig(db))).toBeInstanceOf(SequentialTickRunner);
+  });
+});
+
+/**
+ * The composed chain actually running — the closest in-repo stand-in for
+ * ADR-0004's "wiring validated" bar, which itself is a manual run against
+ * real Alpaca paper. Every stage is the real implementation; only the leaves
+ * with no in-repo transport are swapped for the in-repo doubles the codebase
+ * already ships (`FixtureDataSource`, `SimulatedBrokerAdapter`,
+ * `MockLlmClient`), and the stores are the real `Sqlite*` ones.
+ */
+describe('composed tick chain (integration)', () => {
+  let db: SqliteHandle;
+
+  beforeEach(() => {
+    db = openSharedStore(':memory:');
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it('drives one instrument through the composed steps, recording each stage it reaches', async () => {
+    const clock = new SimulatedClock(START);
+    const hourMs = 60 * 60 * 1_000;
+    const bars = [
+      ...fixtureBars('BTC-USD', '1h', 60, hourMs),
+      ...fixtureBars('BTC-USD', '1m', 60, 60_000),
+      ...fixtureBars('BTC-USD', '1d', 40, 24 * hourMs),
+    ];
+    const dataSource = new FixtureDataSource(
+      bars,
+      { price: 160, observed_at: START, source: 'fixture' },
+      'crypto',
+      { bid: 159.5, ask: 160.5, observed_at: START, source: 'fixture' },
+    );
+
+    const llmClient = new MockLlmClient();
+    for (let i = 0; i < 40; i += 1) {
+      llmClient.enqueueText(
+        JSON.stringify({ stance: 'bullish', rationale: 'fixture rationale', converged: true }),
+      );
+    }
+
+    const costModel = new CostModelImpl(REAL_CONFIGS.costConfig);
+    const marketDataForBroker = new MarketDataServiceImpl(
+      dataSource,
+      clock,
+      'live',
+      new SqliteMarketDataStore(db),
+    );
+
+    const config = stubConfig(db, {
+      ...REAL_CONFIGS,
+      clock,
+      dataSource,
+      llmClient,
+      broker: new SimulatedBrokerAdapter({
+        clock,
+        costModel,
+        marketData: marketDataForBroker,
+        config: REAL_CONFIGS.executionConfig.simulated,
+      }),
+    });
+
+    const { steps } = buildProductionComponents(config);
+    const persistence = buildPersistence(db);
+    const logger = recordingLogger();
+
+    const outcome = await new SequentialTickRunner(steps).runInstrument(
+      { asset: 'BTC-USD', asset_class: 'crypto' },
+      {
+        clock,
+        trace_id: 'trace-composed',
+        logger,
+        auditLog: persistence.auditLog,
+        currentTickStore: persistence.currentTickStore,
+      },
+    );
+
+    const stages = persistence.auditLog.getByTraceId('trace-composed').map((row) => row.stage);
+
+    // All six stages, in order, one audit row each, under one trace_id — and
+    // the bracket actually reached the broker.
+    expect(stages).toEqual(['analysts', 'debate', 'trader', 'risk', 'verdict', 'execution']);
+    expect(outcome.final_stage).toBe('execution');
+    expect(outcome.verdict_status).toBe('go');
+    expect(outcome.execution_result?.status).toBe('submitted');
+    expect(outcome.execution_result?.broker_order_ids).toHaveLength(3);
+
+    // The progress row is upserted per stage and deleted on completion.
+    expect(persistence.currentTickStore.get('BTC-USD')).toBeUndefined();
+    expect(logger.entries.map((entry) => entry.stage)).toEqual(stages);
+    expect(logger.entries.every((entry) => entry.trace_id === 'trace-composed')).toBe(true);
   });
 });
 

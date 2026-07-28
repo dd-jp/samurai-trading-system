@@ -132,6 +132,24 @@ export const REQUIRED_INJECTED_CONFIG = [
   'ciiConsumerConfig',
 ] as const satisfies readonly (keyof ProductionConfig)[];
 
+const MODES = ['live', 'paper', 'backtest'] as const;
+
+/**
+ * `SAMURAI_MODE` is not a free-form string: it selects the HITL posture as
+ * well as the broker. `backtest` auto-approves every HITL gate
+ * (verdict/types.ts) and `live` spends real money, so a typo'd or unset-to-
+ * garbage value must not be cast through — it defaults to `paper` when
+ * absent and throws when present and unrecognised.
+ */
+function parseMode(raw: string | undefined): ProductionConfig['mode'] {
+  if (raw === undefined) return 'paper';
+  const mode = MODES.find((candidate) => candidate === raw);
+  if (mode === undefined) {
+    throw new Error(`Orchestrator cannot start: SAMURAI_MODE must be one of ${MODES.join('|')}.`);
+  }
+  return mode;
+}
+
 /**
  * Assembles a `ProductionConfig` from the environment plus `injected`, builds
  * the composition root, and starts it (orphan scan once, then the tick loop
@@ -158,7 +176,7 @@ export async function startFromEnvironment(
   }
 
   const env = process.env.NODE_ENV ?? 'development';
-  const mode = (process.env.SAMURAI_MODE ?? 'paper') as ProductionConfig['mode'];
+  const mode = parseMode(process.env.SAMURAI_MODE);
   const db = injected.db ?? openSharedStore(`data/samurai-${env}.sqlite`);
 
   const orchestrator = buildProductionOrchestrator({

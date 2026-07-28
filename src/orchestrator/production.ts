@@ -72,7 +72,7 @@ import type {
   LoosenApprovalChannel,
   TuningProposal,
 } from '../feedback-loop/types.js';
-import type { MarketDataService } from '../market-data-service/index.js';
+import type { DataSource, MarketDataService } from '../market-data-service/index.js';
 import { MarketDataServiceImpl } from '../market-data-service/service.js';
 import type { AlpacaClient as AlpacaDataClient } from '../market-data-service/sources/alpaca-source.js';
 import { AlpacaDataSource } from '../market-data-service/sources/alpaca-source.js';
@@ -190,6 +190,19 @@ export interface ProductionConfig {
    * something to invent under a wiring ticket.
    */
   dataSourceAssetClass?: 'crypto' | 'stocks';
+  /**
+   * Overrides the `AlpacaBrokerAdapter` this module would otherwise build.
+   * The `BrokerAdapter` port is dual-target by design (ADR-0001) — this is
+   * where `SimulatedBrokerAdapter` (backtest, and the composed-chain
+   * integration test) or a future ccxt/IBKR adapter binds without the
+   * composition root growing a broker-selection branch.
+   */
+  broker?: BrokerAdapter;
+  /**
+   * Overrides the `AlpacaDataSource` this module would otherwise build —
+   * same rationale as `broker`, for `FixtureDataSource`/ccxt/IBKR.
+   */
+  dataSource?: DataSource;
   /** Session calendar for stock gating (scheduler + Verdict gate). */
   tradingCalendar?: TradingCalendar;
   /** Sticky breaker rows recovered from a prior process, if any. */
@@ -292,10 +305,12 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   const clock = config.clock;
   const tradingCalendar = config.tradingCalendar ?? new UsEquityRegularHoursCalendar();
 
-  const dataSource = new AlpacaDataSource(config.alpacaDataClient, {
-    asset_class: config.dataSourceAssetClass ?? 'crypto',
-    calendar: config.tradingCalendar,
-  });
+  const dataSource =
+    config.dataSource ??
+    new AlpacaDataSource(config.alpacaDataClient, {
+      asset_class: config.dataSourceAssetClass ?? 'crypto',
+      calendar: config.tradingCalendar,
+    });
   const marketData: MarketDataService = new MarketDataServiceImpl(
     dataSource,
     clock,
@@ -317,7 +332,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   });
 
   const executionStore = new SqliteExecutionStore(config.db);
-  const broker = new AlpacaBrokerAdapter({ client: config.alpacaBrokerClient });
+  const broker = config.broker ?? new AlpacaBrokerAdapter({ client: config.alpacaBrokerClient });
   const circuitBreakers = new CircuitBreakers(config.breakerConfig, config.initialBreakerState);
   const ciiConsumer = new CiiConsumer(config.ciiScoreProvider, clock, config.ciiConsumerConfig);
 
