@@ -22,3 +22,15 @@ const INSTRUMENT_COUNTRY: Record<string, string> = {
 export function countryForInstrument(instrument: string): string | null {
   return INSTRUMENT_COUNTRY[instrument] ?? null;
 }
+
+/**
+ * Distinct country/region codes this mapping ever resolves to (#182). WorldMonitor's own CII
+ * covers 31 "Tier-1" countries (docs/research/04-worldmonitor-as-mi-source.md), but that list
+ * isn't enumerable through `CiiScoreProvider` (no discovery method — see cii-consumer.ts) and
+ * isn't reproduced here. Snapshotting exactly this mapping's codes instead is the defensible
+ * subset for #182's eventual goal (correlating CII against *Samurai's own* asset drawdowns):
+ * a country absent from this mapping has no instrument to correlate against anyway.
+ */
+export function trackedCountries(): string[] {
+  return [...new Set(Object.values(INSTRUMENT_COUNTRY))];
+}

@@ -22,6 +22,7 @@ const TABLES = [
   'verdict_log',
   'audit_log',
   'current_tick',
+  'cii_snapshots',
 ];
 
 const tempDirs: string[] = [];
@@ -60,11 +61,12 @@ describe('openSharedStore', () => {
     const db = openSharedStore(':memory:');
 
     const versions = db.prepare('SELECT version FROM schema_migrations').all();
-    expect(versions).toEqual([{ version: 1 }, { version: 2 }]);
+    expect(versions).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
       { version: 1 },
       { version: 2 },
+      { version: 3 },
     ]);
   });
 
