@@ -328,6 +328,19 @@ export class ReplayDriver {
       this.marketState(state.config, instrument, bar, bars, exit.reference),
     );
 
+    // `CostModelResult.filled_size` "may be < requested size in principle"
+    // (types.ts); `CostModelImpl` always fills fully today. If that ever
+    // changes, a `ClosedTrade` cannot represent the half-closed lot — its
+    // `filled_size` and `realized_pnl_net` would both describe a round-trip
+    // that did not happen. Fail loudly rather than book the fiction.
+    if (result.filled_size !== lot.size) {
+      throw new Error(
+        `ReplayDriver: exit of lot ${lot.idempotency_key} filled partially ` +
+          `(${result.filled_size} of ${lot.size}). A ClosedTrade records a completed round-trip ` +
+          'only; partial closes need per-leg lot accounting this replay path does not model.',
+      );
+    }
+
     const fills = state.pendingFills.get(lot.idempotency_key) ?? [];
     fills.push({
       idempotency_key: lot.idempotency_key,

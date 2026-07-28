@@ -120,6 +120,21 @@ class NearMidCostModel implements CostModel {
   }
 }
 
+/** Fills the entry in full but only half the exit — a partial close. */
+class PartialExitCostModel implements CostModel {
+  private calls = 0;
+
+  fill(request: FillRequest): CostModelResult {
+    const first = this.calls === 0;
+    this.calls++;
+    return {
+      fill_price: 100,
+      filled_size: first ? request.size : request.size / 2,
+      cost_breakdown: { spread_cost: 0, commission: 0, slippage: 0, market_impact: 0 },
+    };
+  }
+}
+
 /** Serves every fixture bar regardless of the requested window — a misbehaving source. */
 class UnfilteredBarSource implements ReplayBarSource {
   constructor(private readonly all: readonly Bar[]) {}
@@ -266,6 +281,76 @@ describe('ReplayDriver.run', () => {
     // The gap price the market actually opened at — not the stop the strategy
     // asked for, which was never available.
     expect(exitCall?.marketState.mid).toBe(50);
+  });
+
+  it('prices an unbroken stop exit at the stop level itself', async () => {
+    // Long entry at close 105 (ATR 3 → stop 99). The next bar opens above the
+    // stop and only dips through it intrabar, so the stop was genuinely
+    // available: the level is the honest reference, not the bar's open.
+    const bars = buildBars([100, 101, 102, 103, 104, 105, 100], {
+      6: { open: 104, high: 105, low: 98, close: 100 },
+    });
+    const { deps, costModel } = makeDeps(bars);
+
+    const result = await new ReplayDriver(deps).run(CONFIG, windowOf(bars));
+    const trades = await result.trades.closedTrades(windowOf(bars));
+
+    expect(trades.map((trade) => trade.close_reason)).toEqual(['stop']);
+    expect(trades[0]?.stop).toBe(99);
+    expect(costModel.requests[1]?.marketState.mid).toBe(99);
+  });
+
+  it('prices a target exit at the target, and at the gap price when it gapped through', async () => {
+    // Long entry at close 105 (ATR 3 → target 114).
+    const touched = buildBars([100, 101, 102, 103, 104, 105, 114], {
+      6: { open: 106, high: 115, low: 105, close: 114 },
+    });
+    const gapped = buildBars([100, 101, 102, 103, 104, 105, 120], {
+      6: { open: 120, high: 122, low: 119, close: 120 },
+    });
+
+    const touchedRun = makeDeps(touched);
+    const touchedTrades = await (
+      await new ReplayDriver(touchedRun.deps).run(CONFIG, windowOf(touched))
+    ).trades.closedTrades(windowOf(touched));
+
+    expect(touchedTrades.map((trade) => trade.close_reason)).toEqual(['target']);
+    expect(touchedRun.costModel.requests[1]?.marketState.mid).toBe(114);
+
+    const gappedRun = makeDeps(gapped);
+    const gappedTrades = await (
+      await new ReplayDriver(gappedRun.deps).run(CONFIG, windowOf(gapped))
+    ).trades.closedTrades(windowOf(gapped));
+
+    expect(gappedTrades.map((trade) => trade.close_reason)).toEqual(['target']);
+    // Gapped past the target — the fill happened at the open, not at 114.
+    expect(gappedRun.costModel.requests[1]?.marketState.mid).toBe(120);
+  });
+
+  it('replays the short side: sell entry, buy exit, stop above the entry', async () => {
+    // Falling series → short entry at close 95 (ATR 3 → stop 101).
+    const bars = buildBars([100, 99, 98, 97, 96, 95, 100], {
+      6: { open: 96, high: 102, low: 95, close: 100 },
+    });
+    const { deps, costModel } = makeDeps(bars);
+
+    const result = await new ReplayDriver(deps).run(CONFIG, windowOf(bars));
+    const trades = await result.trades.closedTrades(windowOf(bars));
+
+    expect(trades).toHaveLength(1);
+    expect(trades[0]?.side).toBe('sell');
+    expect(trades[0]?.stop).toBe(101);
+    expect(trades[0]?.close_reason).toBe('stop');
+    expect(costModel.requests[0]?.request.side).toBe('sell');
+    expect(costModel.requests[1]?.request.side).toBe('buy');
+    expect(costModel.requests[1]?.marketState.mid).toBe(101);
+  });
+
+  it('refuses to close a lot on a partial exit fill rather than mis-sizing the trade', async () => {
+    const bars = buildBars(REVERSAL_CLOSES);
+    const { deps } = makeDeps(bars, { costModel: new PartialExitCostModel() });
+
+    await expect(new ReplayDriver(deps).run(CONFIG, windowOf(bars))).rejects.toThrow(/partially/i);
   });
 
   it('fails the run when the data source serves a bar stamped after clock.now()', async () => {
