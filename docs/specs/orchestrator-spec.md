@@ -2,7 +2,7 @@
 
 **Status:** Draft (resolved wayfinder decisions synthesized)
 **Owner:** David (Deepak)
-**Date:** 2026-07-14
+**Date:** 2026-07-14 (Production Composition Root section added 2026-07-28, wayfinder map [#224](../../issues/224), [ADR-0004](../adr/0004-production-composition-root.md))
 
 ## Problem Statement
 
@@ -60,6 +60,13 @@ Key architectural decisions:
 
 14. As the Orchestrator, I want to emit a heartbeat over the trade channel Verdict already provisions (Telegram/Discord) on a fixed interval, so that an external watchdog can alert on silence (dead-man's-switch), not on the Orchestrator polling itself.
 15. As the Orchestrator, I want to hold no unrecoverable in-memory state across a tick, so that a crash-restart just resumes the schedule while Execution's own reconciliation (already specced) recovers in-flight orders. (`current_tick` is the one exception: disposable, best-effort progress state, not a system-of-record — losing it on crash costs nothing but a stale progress indicator.)
+
+### Production Composition Root
+
+16. As David, I want a single composition-root module that binds every real stage instance into the tick chain, so that `SequentialTickRunner` runs against the actual pipeline instead of test doubles, without any stage learning about wiring concerns.
+17. As the composition root, I want to adapt `AnalystOrchestrator.runAnalysts` and `runDebate`'s native signatures onto the exact `TickSteps.analysts`/`TickSteps.debate` shape, so that the tick runner's short-circuit logic (empty-view quorum skip) keeps working unchanged.
+18. As David, I want the first paper run to target a narrow smoke-test universe (1-2 instruments) rather than the full default universe, so that a wiring defect surfaces against the smallest possible blast radius before the universe widens to ADR-0001's SPY/QQQ/AAPL/TSLA/BTC-USD/ETH-USD default.
+19. As David, I want "wiring validated" (one clean automated tick end-to-end against real Alpaca paper) to be a distinct, earlier bar than "paper trading achieved" (a sustained 14-day unattended run), so that the composition root ships without waiting on an operational-stability soak test it doesn't own.
 
 ## Implementation Decisions
 
@@ -187,12 +194,40 @@ interface Heartbeat {
 - The Orchestrator's tick loop runs unchanged in backtest — only the injected `Clock`, `BrokerAdapter`/`DataSource` implementations, and `MarketDataService`/`MarketIntelligence` sources differ (Simulated adapter, historical data, simulated clock advancing deterministically). This is the seam cost-model-backtest-spec.md's "same code path" guarantee depends on (resolves cross-spec-contracts.md OPEN-GAP-D).
 - Concurrency cap is disabled or set to run sequentially in backtest for determinism (config-driven), since walk-forward replay needs deterministic ordering, not throughput.
 
+### Module: Production Composition Root
+
+**Resolved by [ADR-0004](../adr/0004-production-composition-root.md) (wayfinder map [#224](../../issues/224)).**
+
+**Responsibilities**
+- Bind the real stage instances into a `TickSteps` and construct a `SequentialTickRunner` from it — the one place real dependencies get closed over test-double-free.
+- Own the small adapter shims where a stage's native call signature doesn't already match `TickSteps` 1:1.
+- Wire Feedback Loop's event-driven and daily-batch entry points at the same composition point, without folding them into `TickSteps` — they are not part of the per-instrument tick chain.
+- Construct the persistence/reliability instances the tick chain and its surrounding process need: `SqliteAuditLog`, `SqliteCurrentTickStore`, `OrphanVerdictScanner`, `UniverseScheduler`, `Heartbeat`.
+
+**Key Interfaces**
+
+```typescript
+// New file: src/orchestrator/production.ts, re-exported from index.ts.
+function buildProductionTickRunner(config: ProductionConfig): {
+  tickRunner: SequentialTickRunner;
+  scheduler: UniverseScheduler;
+  heartbeat: Heartbeat;
+  orphanScanner: OrphanVerdictScanner;
+};
+```
+
+- **Six `TickSteps` bindings.** `trader` (`decide`), `risk` (`RiskManagerImpl.evaluate`), `verdict` (`VerdictImpl.decide`), and `execution` (`ExecutionImpl.execute`) bind directly — each already matches its `TickSteps` method once its own config/dependencies are closed over at construction time. `analysts` and `debate` need a thin adapter: `AnalystOrchestrator.runAnalysts(trace_id, signal, clock)` returns `AnalystRunResult` (`{ views, analyst_count, skipped }`), narrowed to the bare `AnalystView[]` `TickSteps.analysts` expects; `runDebate(input: DebateInput, personas: DebatePersonas)` takes two arguments, closed over the bull/bear/mediator persona set (each backed by the LLM client) to present `TickSteps.debate`'s one-argument shape.
+- **Not part of `TickSteps`:** Feedback Loop's `onTradeClose` (hooks off an `ExecutionResult` fill, called from the same composition point as a side-effect of a completed tick, not a `TickSteps` step) and `runDailyCycle` (its own daily-interval schedule, independent of the per-instrument tick chain).
+- **Universe is a config value, not a code path.** `UniverseScheduler`'s `SchedulerConfig.universe` already accepts an arbitrary instrument list; the first paper run passes a narrow smoke-test universe (1-2 instruments) rather than `DEFAULT_UNIVERSE`, widened only after a clean first tick.
+- **No new persistence or safety code here.** `SqliteAuditLog`/`SqliteCurrentTickStore` (#201), the HITL approval channel (#207), prompt-injection mitigations (#208), and `OrphanVerdictScanner` (#209) are already-closed implementations this module constructs and wires — it does not implement any of them.
+
 ## Testing Decisions
 
 - **Primary seam:** `TickRunner.runInstrument(signal, ctx)` — given a signal and a context (real or fake stage dependencies), assert the correct sequential call order, correct short-circuiting on a Risk reject or Verdict no-go (Execution never called), and correct trace_id propagation through every log/audit entry produced.
 - **Scheduler seam:** `Scheduler.nextTick(clock)` — given a clock and a trading-calendar fake, assert crypto always included and stocks included/excluded correctly around market open/close boundaries and holidays.
 - Good tests here assert *wiring and sequencing*, not stage decision logic — each stage's own spec/tests own its decision correctness. Prior art: the same seam-testing discipline as every other stage spec (one high-level function, fakes for dependencies, assert on outputs/side-effects not internals).
 - Determinism test: same seed + injected simulated clock + fixed universe → byte-identical `TickOutcome` sequence and `audit_log` rows across two runs (mirrors cost-model-backtest-spec's determinism story).
+- **Composition root seam:** `buildProductionTickRunner(config)` — given fake/stub adapters for each closed-over dependency (broker, market data, approval channel, etc.), assert the returned `TickSteps` callables produce the same call shape the existing `SequentialTickRunner` unit tests already fake (i.e. the adapter shims for `analysts`/`debate` are covered directly, not just through an end-to-end run). A single real, non-mocked run against Alpaca paper (+ the narrow smoke universe) is the manual/CI-gated E2E check, not a unit test — it's the "wiring validated" done-bar (ADR-0004), run once per environment, not on every commit.
 
 ## Out of Scope
 
@@ -207,3 +242,5 @@ interface Heartbeat {
 ## Further Notes
 
 Wayfinder decisions for this component live in [docs/wayfinder/orchestrator-map.md](../wayfinder/orchestrator-map.md). This is the last of the 11 components (6 pipeline stages + Market Intelligence + Market Data Service + Execution + cost-model/backtest + Orchestrator) to be charted and specced. With this spec in place, all cross-spec dependencies flagged across the design phase (GAP-I's Signal producer, OPEN-GAP-C's trace-IDs/logging/audit-spine, OPEN-GAP-D's tick-loop seam) resolve to a concrete owner. Remaining before `/to-tickets`: OPEN-GAP-B (dashboard/CLI) can be ticketed as a deferred v2 item without further charting; the trading-calendar dependency can be ticketed as a small infra task.
+
+**2026-07-28 addendum — Production Composition Root.** Wayfinder map [#224](../../issues/224) charted the final gap: this spec described the tick chain's shape but nothing wired real stage instances into it for an actual paper run. Resolved in [ADR-0004](../adr/0004-production-composition-root.md): a new `src/orchestrator/production.ts` binds every real stage into `TickSteps`, targets a narrow smoke-test universe for the first run, and treats "wiring validated" (one clean E2E tick) and "paper trading achieved" (a 14-day unattended soak) as two distinct, separately-ticketed bars. #74 (Trader position-aware branching) is the only related open ticket and is explicitly not a blocker. Ready for `/to-tickets`: the `production.ts` implementation ticket and the 14-day-soak follow-on ticket.
