@@ -17,10 +17,12 @@ jobs:
         include:
           - reviewer: nous-deepseek
             model_var: NOUS_MODEL
+            api_key_secret: NOUS_API_KEY
             app_id_var: NOUS_APP_ID
             app_key_secret: NOUS_APP_PRIVATE_KEY
           - reviewer: nous-kimi
             model_var: KIMI_MODEL
+            api_key_secret: KIMI_API_KEY
             app_id_var: KIMI_APP_ID
             app_key_secret: KIMI_APP_PRIVATE_KEY
     steps:
@@ -43,7 +45,7 @@ jobs:
 
       - name: Run review (${{ matrix.reviewer }})
         env:
-          NOUS_API_KEY: ${{ secrets.NOUS_API_KEY }}
+          NOUS_API_KEY: ${{ secrets[matrix.api_key_secret] }}
           NOUS_BASE_URL: ${{ vars.NOUS_BASE_URL }}
           REVIEW_MODEL: ${{ vars[matrix.model_var] }}
           BASE_REF: ${{ github.base_ref }}
