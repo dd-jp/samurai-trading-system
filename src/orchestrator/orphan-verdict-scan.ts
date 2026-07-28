@@ -71,10 +71,12 @@ interface OrphanRow {
 
 /**
  * Scans `verdict_log`/`audit_log` for orphaned `go` verdicts, alerts on each
- * one found via `channel`, and returns the full list. Callable directly —
- * there is no production composition root yet (`index.ts`'s docstring), so a
- * future startup sequence invokes this the same way
- * `cii-snapshot.ts` describes for pre-launch, not-yet-wired components.
+ * one found via `channel`, and returns the full list. Called once at startup
+ * by the production composition root (`production.ts`'s
+ * `buildProductionOrchestrator().start()`, #236) before the tick loop begins
+ * — it must read the audit trail before this run starts writing to it.
+ * Still callable directly by any other operator tool that wants the same
+ * read-only report.
  */
 export class OrphanVerdictScanner {
   async scan(
