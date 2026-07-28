@@ -9,6 +9,7 @@
  * and termination (#34) build on top of these, not the other way around.
  */
 
+import { wrapUntrusted } from './llm/prompt-safety.js';
 import type { LlmClient, LlmRequestContext } from './llm/types.js';
 import type { AnalystView, Direction } from './types.js';
 
@@ -93,14 +94,21 @@ function parseMediatorResponse(
   return { valid: true, data: parsed };
 }
 
-/** Renders AnalystViews into a compact text block shared by all persona prompts. */
+/**
+ * Renders AnalystViews into a compact text block shared by all persona
+ * prompts. `key_points` is ingested free text (ultimately traced back to
+ * news/sentiment ingestion) and untrustworthy as instruction content, so the
+ * rendered block is passed through `wrapUntrusted` (#208, prompt-safety.ts)
+ * rather than concatenated bare into the prompt.
+ */
 function renderAnalystViews(views: AnalystView[]): string {
-  return views
+  const rendered = views
     .map(
       (view) =>
         `- [${view.analyst_type}/${view.analyst_id}] ${view.direction} (confidence ${view.confidence}): ${view.key_points.join('; ')}`,
     )
     .join('\n');
+  return wrapUntrusted(rendered);
 }
 
 function buildContext(input: PersonaInput): LlmRequestContext {
@@ -159,14 +167,18 @@ export async function runMediatorPersona(
   client: LlmClient,
   input: MediatorInput,
 ): Promise<MediatorResponse> {
+  const bullBearBlock = [
+    `Bull (${input.bullResponse.stance}): ${input.bullResponse.rationale}`,
+    `Bear (${input.bearResponse.stance}): ${input.bearResponse.rationale}`,
+  ].join('\n');
+
   const prompt = [
     'You are the Mediator persona in a trading debate. Arbitrate between the',
     'Bull and Bear arguments below, evaluate whether material disagreement',
     'remains, and signal convergence if the debate can terminate. Respond as',
     'JSON: {"stance": "bullish"|"bearish"|"neutral", "rationale": string, "converged": boolean}.',
     '',
-    `Bull (${input.bullResponse.stance}): ${input.bullResponse.rationale}`,
-    `Bear (${input.bearResponse.stance}): ${input.bearResponse.rationale}`,
+    wrapUntrusted(bullBearBlock),
     '',
     'Underlying analyst views:',
     renderAnalystViews(input.analyst_views),
