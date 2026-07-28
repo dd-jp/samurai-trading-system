@@ -25,6 +25,22 @@ export {
   type OrphanGoVerdict,
   OrphanVerdictScanner,
 } from './orphan-verdict-scan.js';
+export { buildAnalystsStep } from './production/analysts-adapter.js';
+export { buildDebatePersonas, buildDebateStep } from './production/debate-adapter.js';
+export {
+  type AccountStateProvider,
+  buildExecutionStep,
+  buildPersistence,
+  buildRiskStep,
+  buildTraderStep,
+  buildVerdictStep,
+  type ExecutionStepDeps,
+  type PersistenceInstances,
+  type RiskStepDeps,
+  type TraderStepDeps,
+  type VerdictStepDeps,
+  type VolatilityReadingProvider,
+} from './production/direct-bind.js';
 export { DEFAULT_UNIVERSE, type SchedulerConfig, UniverseScheduler } from './scheduler.js';
 export { type AuditLogEntry, SqliteAuditLog } from './sqlite-audit-log.js';
 export { SqliteCurrentTickStore } from './sqlite-current-tick-store.js';
