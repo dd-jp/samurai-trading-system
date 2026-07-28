@@ -9,14 +9,22 @@
  * (`Heartbeat`, `TradeChannelHeartbeat`). Ticket #201: `SqliteAuditLog`/
  * `SqliteCurrentTickStore`, the real stores behind `audit_log`/`current_tick`
  * (#193), wired into the tick runner in place of the earlier in-memory
- * doubles. There is no production composition root yet — binding the real
- * stage instances needs `ingestFills`/reconciliation (#83, #86) and the
- * Analysts fan-out (#71) that do not exist yet.
+ * doubles. Ticket #209: `OrphanVerdictScanner` — restart-time detection of a
+ * `verdict_log` `go` with no matching `execution`-stage `audit_log` row (a
+ * crash between Verdict and Execution), alerting rather than auto-retrying.
+ * There is no production composition root yet — binding the real stage
+ * instances needs `ingestFills`/reconciliation (#83, #86) and the Analysts
+ * fan-out (#71) that do not exist yet.
  */
 export { digest } from './digest.js';
 export { Heartbeat, type HeartbeatChannel } from './heartbeat.js';
 export { TradeChannelHeartbeat } from './heartbeat-channel.js';
 export { JsonLogger } from './logger.js';
+export {
+  type OrphanAlertChannel,
+  type OrphanGoVerdict,
+  OrphanVerdictScanner,
+} from './orphan-verdict-scan.js';
 export { DEFAULT_UNIVERSE, type SchedulerConfig, UniverseScheduler } from './scheduler.js';
 export { type AuditLogEntry, SqliteAuditLog } from './sqlite-audit-log.js';
 export { SqliteCurrentTickStore } from './sqlite-current-tick-store.js';
