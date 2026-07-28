@@ -2,10 +2,18 @@ import json
 import re
 import subprocess
 import sys
+import time
 
 from openai import OpenAI
 
 MAX_DIFF_CHARS = 60000
+
+# Nous's inference proxy has been observed hard-timing-out (Cloudflare 524,
+# "origin took too long to respond") on slower models like kimi-k3, well
+# within GitHub Actions' step budget. Retry with backoff rather than
+# treating a single timeout as fatal.
+TRANSIENT_MAX_ATTEMPTS = 3
+TRANSIENT_BACKOFF_SECONDS = (20, 90)
 
 # Blast-radius tiers, based on this repo's src/ layout and the live-money
 # constraints in CLAUDE.md (persistence, order execution, risk management).
@@ -147,21 +155,48 @@ def call_model(diff: str, changed_files: list[str], model: str, api_key: str, ba
         f"PR diff:\n\n{diff}"
     )
 
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    # max_retries=0: we own the retry/backoff loop below so failures are
+    # visible and paced deliberately, instead of the SDK silently retrying
+    # with its own (much shorter) backoff first.
+    client = OpenAI(api_key=api_key, base_url=base_url, timeout=170.0, max_retries=0)
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
     ]
 
-    try:
-        resp = client.chat.completions.create(
-            model=model, response_format={"type": "json_object"}, messages=messages
-        )
-    except Exception as exc:  # noqa: BLE001 - proxy may reject response_format for this model
-        print(f"warning: request with response_format failed ({exc}); retrying without it", file=sys.stderr)
-        resp = client.chat.completions.create(model=model, messages=messages)
+    raw = None
+    last_exc = None
+    for attempt in range(TRANSIENT_MAX_ATTEMPTS):
+        try:
+            try:
+                resp = client.chat.completions.create(
+                    model=model, response_format={"type": "json_object"}, messages=messages
+                )
+            except Exception as exc:  # noqa: BLE001 - proxy may reject response_format for this model
+                print(f"warning: request with response_format failed ({exc}); retrying without it", file=sys.stderr)
+                resp = client.chat.completions.create(model=model, messages=messages)
+            raw = resp.choices[0].message.content or ""
+            break
+        except Exception as exc:  # noqa: BLE001 - upstream 5xx/timeouts are common on this endpoint
+            last_exc = exc
+            if attempt < TRANSIENT_MAX_ATTEMPTS - 1:
+                wait = TRANSIENT_BACKOFF_SECONDS[attempt]
+                print(
+                    f"warning: model call failed ({exc}); retrying in {wait}s "
+                    f"(attempt {attempt + 2}/{TRANSIENT_MAX_ATTEMPTS})",
+                    file=sys.stderr,
+                )
+                time.sleep(wait)
 
-    raw = resp.choices[0].message.content or ""
+    if raw is None:
+        return {
+            "summary_markdown": (
+                f"_This reviewer ({model}) could not be reached after {TRANSIENT_MAX_ATTEMPTS} "
+                f"attempts and was skipped. Last error: {last_exc}_"
+            ),
+            "inline_comments": [],
+            "verdict": None,
+        }
 
     try:
         parsed = json.loads(raw)
