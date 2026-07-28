@@ -59,6 +59,21 @@
  * precedent — since no composition root wires either yet (`eval-executor.ts`
  * does not call `recordTrial`; see the #89/#90 notes above on why
  * `BacktestReport.metrics` isn't wired into a caller that could).
+ *
+ * Ticket #242 (Stage 2 Validation Execution, wayfinder map #154, see
+ * docs/specs/stage2-validation-execution-spec.md) adds `proxy-strategy.ts` —
+ * the deterministic dual-SMA/ATR rule standing in for the live LLM debate
+ * pipeline during Stage 2. It is a pure signal function only; the replay
+ * driver that steps it through history (#243) is a separate, not-yet-built
+ * ticket.
+ *
+ * Ticket #241 adds `stage2-historical-store.ts` — `Stage2HistoricalStore`,
+ * a research-only scratch-SQLite store (never the shared store's `bars`
+ * table) that ingests Polygon/Massive daily aggregates and implements both
+ * `ReplayTimeline` and `InstrumentRegistry` for the replay driver (#243) to
+ * consume. `PolygonClient` is interface-only, matching this codebase's
+ * existing Alpaca/ccxt/IBKR client precedent — a real HTTP client is ops
+ * wiring, not this ticket's scope.
  */
 
 export type { BacktestDeps } from './backtest.js';
@@ -79,9 +94,13 @@ export type { LookaheadViolation } from './lookahead.js';
 export { LookaheadAuditor, LookaheadViolationError } from './lookahead.js';
 export { computeMetrics } from './metrics.js';
 export { deflatedSharpe, minbtl, minbtlGuard, pbo } from './overfitting.js';
+export type { ProxySignal, ProxyStrategyConfig } from './proxy-strategy.js';
+export { proxySignal } from './proxy-strategy.js';
 export type { SplitOptions } from './splits.js';
 export { generateSplits } from './splits.js';
 export { SqliteConfigTrialLog } from './sqlite-config-trial-log.js';
+export type { PolygonAggregate, PolygonClient } from './stage2-historical-store.js';
+export { Stage2HistoricalStore } from './stage2-historical-store.js';
 export type { SeriesOptions } from './trade-derivation.js';
 export { assertCostModelPriced, toReturnSeries, toTradeSeries } from './trade-derivation.js';
 export type {
