@@ -168,13 +168,14 @@ def call_model(diff: str, changed_files: list[str], model: str, api_key: str, ba
     last_exc = None
     for attempt in range(TRANSIENT_MAX_ATTEMPTS):
         try:
-            try:
-                resp = client.chat.completions.create(
-                    model=model, response_format={"type": "json_object"}, messages=messages
-                )
-            except Exception as exc:  # noqa: BLE001 - proxy may reject response_format for this model
-                print(f"warning: request with response_format failed ({exc}); retrying without it", file=sys.stderr)
-                resp = client.chat.completions.create(model=model, messages=messages)
+            # No response_format: Nous's endpoint doesn't document JSON-mode
+            # support, and constrained-decoding JSON modes on self-hosted
+            # backends are a common cause of exactly this kind of latency.
+            # We rely on the prompt's JSON instructions plus the regex
+            # extraction fallback below instead.
+            resp = client.chat.completions.create(
+                model=model, messages=messages, max_tokens=4096
+            )
             raw = resp.choices[0].message.content or ""
             break
         except Exception as exc:  # noqa: BLE001 - upstream 5xx/timeouts are common on this endpoint
