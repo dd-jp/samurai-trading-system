@@ -14,6 +14,7 @@ import {
   LlmRateLimitError,
   LlmTimeoutError,
 } from './errors.js';
+import { wrapUntrusted } from './prompt-safety.js';
 import { withRetry } from './retry.js';
 import type { LlmClient, LlmRequest, LlmResponse, LlmRetryConfig } from './types.js';
 
@@ -40,8 +41,17 @@ export interface AnthropicLlmClientConfig {
   retry: LlmRetryConfig;
 }
 
+/**
+ * `request.context.analyst_views` (and any `debate_state`) carries the same
+ * ingested free text (`key_points`, persona rationale) as `request.prompt` —
+ * some callers (e.g. `disagreement-detector.ts`) rely on it entirely rather
+ * than interpolating free text into the prompt string. Wrapping it here
+ * (#208, prompt-safety.ts) is what makes the mitigation hold on the actual
+ * wire content sent to the provider, not just on `personas.ts`'s `prompt`.
+ */
 function renderMessageContent<T>(request: LlmRequest<T>): string {
-  return `${request.prompt}\n\nContext:\n${JSON.stringify(request.context, null, 2)}`;
+  const contextJson = JSON.stringify(request.context, null, 2);
+  return `${request.prompt}\n\nContext:\n${wrapUntrusted(contextJson)}`;
 }
 
 function extractText(response: AnthropicMessageResponse): string {

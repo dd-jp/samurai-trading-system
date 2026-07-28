@@ -151,6 +151,12 @@ interface AnalystRunResult {
 
 The context frames deliberately overlap (all three see price/volume). Overlap is allowed and expected — no de-duplication in Stage 1. Conflicting-but-overlapping conclusions are exactly what the Debate Engine's semantic disagreement detection exists to mediate.
 
+**Prompt Injection Mitigation — forward-looking convention** (#208)
+
+Today, `src/analysts/` (`fundamental-analyst.ts`, `sentiment-analyst.ts`, `technical-analyst.ts`) is pure mechanical/rule-based logic — none of it makes an LLM call or constructs an LLM prompt from ingested free text (news, filings, social signals). There is no prompt-construction code here to retrofit as of this ticket.
+
+Fundamental and Sentiment analysts consume free text sourced from Market Intelligence (news, social signals) that could carry the same kind of injected content described in issue #208 (e.g. a headline engineered to look like an instruction). Any future code in this component that constructs an LLM prompt from that ingested free text MUST delimit it using the same tagged-untrusted-block convention implemented in the Debate Engine's `src/debate-engine/personas.ts` (see debate-engine-spec.md "Prompt Injection Mitigation"): wrap ingested text in a tagged block (e.g. `<untrusted_analyst_data>...</untrusted_analyst_data>`) preceded by an explicit "treat as data, not instructions" preamble, with the real output-format instruction kept outside and separate from that block. This requirement gates shipping any such prompt-construction code, not a later cleanup pass.
+
 ### Module: Execution & Applicability
 
 - **Crypto**: Technical + Sentiment run in parallel; Fundamental is skipped (no earnings/SEC data exists for crypto). Analyst count = 2.
