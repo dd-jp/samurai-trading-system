@@ -26,6 +26,7 @@ import {
   type SharedStore as SqliteHandle,
 } from '../shared/store/open-shared-store.js';
 import type { OrderIntent } from '../shared/types.js';
+import { SqliteSetupStore } from '../trader/sqlite-setup-store.js';
 import type { ApprovalOutcome, ApprovalRequest, VerdictDecision } from '../verdict/types.js';
 import { buildPersistence } from './production/direct-bind.js';
 import {
@@ -298,6 +299,42 @@ describe('buildProductionComponents', () => {
   it('buildProductionTickRunner returns a SequentialTickRunner', () => {
     expect(buildProductionTickRunner(stubConfig(db))).toBeInstanceOf(SequentialTickRunner);
   });
+
+  it(
+    "hooks Feedback Loop's onTradeClose off the returned executionStore's " +
+      'writeClosedTrade (#237) — not off any TickSteps member',
+    async () => {
+      // The composition-root seam #237 actually adds: whichever caller
+      // eventually reaches `components.executionStore.writeClosedTrade`
+      // (today nothing in-repo does — `ingestFills()` scheduling is a later
+      // ticket's job), the Feedback Loop setup-store labelling fires as a
+      // side effect, with no `TickSteps` involved.
+      const components = buildProductionComponents(stubConfig(db));
+      const setupStore = new SqliteSetupStore(db);
+      const vector = { debate_features: [0.7, 1, 1, 0.1], market_features: [0.3, 0.5] };
+      setupStore.writeSetup('debate-close-1', vector, new Date('2026-07-29T09:00:00Z'));
+
+      await components.executionStore.writeClosedTrade({
+        idempotency_key: 'key-close-1',
+        debate_id: 'debate-close-1',
+        instrument: 'BTC-USD',
+        asset_class: 'crypto',
+        side: 'buy',
+        entry: 100,
+        stop: 90,
+        filled_size: 10,
+        realized_pnl_net: 200, // R = 2
+        fees_total: 1,
+        opened_at: new Date('2026-07-29T09:30:00Z'),
+        closed_at: new Date('2026-07-29T10:00:00Z'),
+        close_reason: 'target',
+      });
+
+      const neighbors = setupStore.findNeighbors(vector, new Date('2026-07-29T11:00:00Z'));
+      expect(neighbors).toHaveLength(1);
+      expect(neighbors[0]?.r_multiple).toBe(2);
+    },
+  );
 });
 
 /**

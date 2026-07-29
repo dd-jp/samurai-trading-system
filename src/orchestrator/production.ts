@@ -38,7 +38,7 @@
  * return type, and `buildProductionOrchestrator` returns the full bundle plus
  * the `start`/`stop` the entrypoint needs.
  *
- * ## Not wired here (and why), per ADR-0004 §3
+ * ## Feedback Loop wiring, per ADR-0004 §3
  *
  * ADR-0004 asks for Feedback Loop's `onTradeClose` and `runDailyCycle` at
  * this composition point, "not as `TickSteps` members". `runDailyCycle` is
@@ -46,13 +46,19 @@
  * only when `ProductionConfig.feedback` supplies the two inputs with no
  * in-repo source (its `FeedbackConfig` values and the loosen-approval
  * channel); its four stores are all SQLite-backed and constructed here.
- * `onTradeClose` is **not** wired: it takes a `ClosedTrade`, and
- * `ExecutionResult` is not one — a `ClosedTrade` is emitted by
- * `ingestFills()` writing to the store on a round-trip-to-flat, with no
- * in-process event to subscribe to and no fill-polling loop in the codebase
- * to host the hook. Wiring it needs a trade-close event source that does not
- * exist yet; inventing one here would be new Execution behaviour under a
- * wiring ticket. Flagged as a follow-up rather than faked.
+ * `onTradeClose` IS wired (#237, superseding this file's earlier note that it
+ * was not): a `ClosedTrade` is never reachable from `TickOutcome.execution_result`
+ * (`ExecutionImpl.execute()` returns a submission ack only, and
+ * `intent_type: 'exit'` is unimplemented — #82/#83) — the only place one is
+ * ever produced is `ingestFills()` calling `SharedStore.writeClosedTrade()`
+ * (src/execution/ingest-fills.ts), on its own polling path. So
+ * `withOnTradeClose` (production/on-trade-close-hookup.ts) decorates
+ * `writeClosedTrade` itself, using the real `SqliteSetupStore` (#198) FL
+ * labels on trade close — not a `TickSteps` member, not reachable from
+ * `SequentialTickRunner`. Note: nothing in #234–#237 schedules
+ * `ingestFills()`/`reconcile()` on an interval yet, so this hook has no live
+ * caller in the running system until a later ticket adds that scheduling —
+ * out of scope here per the issue thread.
  */
 import { AnalystOrchestrator } from '../analysts/index.js';
 import { CostModelImpl } from '../cost-model-backtest/cost-model.js';
@@ -62,7 +68,11 @@ import { SqliteDebateLogStore } from '../debate-engine/sqlite-debate-log-store.j
 import { AlpacaBrokerAdapter } from '../execution/adapters/alpaca-adapter.js';
 import type { AlpacaClient as AlpacaBrokerClient } from '../execution/adapters/alpaca-client.js';
 import { SqliteExecutionStore } from '../execution/sqlite-shared-store.js';
-import type { BrokerAdapter, ExecutionConfig } from '../execution/types.js';
+import type {
+  BrokerAdapter,
+  ExecutionConfig,
+  SharedStore as ExecutionSharedStore,
+} from '../execution/types.js';
 import { runDailyCycle } from '../feedback-loop/daily-cycle.js';
 import { SqliteAdjustmentLog } from '../feedback-loop/sqlite-adjustment-log.js';
 import { SqliteClosedTradeStore } from '../feedback-loop/sqlite-closed-trade-store.js';
@@ -92,6 +102,7 @@ import type { CorrelationConfig } from '../risk-manager/correlation.js';
 import type { PersistedBreakerState, RiskConfig } from '../risk-manager/types.js';
 import type { Clock } from '../shared/clock.js';
 import type { SharedStore as SqliteHandle } from '../shared/store/open-shared-store.js';
+import { SqliteSetupStore } from '../trader/sqlite-setup-store.js';
 import type { TraderConfig } from '../trader/types.js';
 import type { ApprovalChannel, VerdictConfig } from '../verdict/types.js';
 import { Heartbeat, type HeartbeatChannel } from './heartbeat.js';
@@ -113,6 +124,7 @@ import {
   type PersistenceInstances,
   type VolatilityReadingProvider,
 } from './production/direct-bind.js';
+import { withOnTradeClose } from './production/on-trade-close-hookup.js';
 import { UniverseScheduler } from './scheduler.js';
 import { runTickPlan } from './tick-loop.js';
 import { SequentialTickRunner } from './tick-runner.js';
@@ -287,7 +299,16 @@ export interface ProductionComponents {
   broker: BrokerAdapter;
   analysts: AnalystOrchestrator;
   circuitBreakers: CircuitBreakers;
-  executionStore: SqliteExecutionStore;
+  /**
+   * The `onTradeClose`-hooked store (#237) — every consumer below
+   * (`getOpenPositions`, Verdict's `positionStore`, Execution's `store`)
+   * shares this one instance rather than each getting its own decorated
+   * copy, so a future scheduled `ingestFills()` call reaching this same
+   * field also reaches the hook. Typed as the `SharedStore` port, not the
+   * concrete `SqliteExecutionStore`, because `withOnTradeClose` returns a
+   * wrapper, not the class itself.
+   */
+  executionStore: ExecutionSharedStore;
 }
 
 /**
@@ -332,7 +353,16 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     market_data: marketData,
   });
 
-  const executionStore = new SqliteExecutionStore(config.db);
+  const logger = config.logger ?? new JsonLogger();
+  // Hooked once, shared everywhere below (see `ProductionComponents.executionStore`'s
+  // doc): `getOpenPositions`, Verdict's `positionStore` and Execution's
+  // `store` all read/write through this same instance, so `onTradeClose`
+  // fires no matter which of them eventually calls `writeClosedTrade`.
+  const executionStore = withOnTradeClose(
+    new SqliteExecutionStore(config.db),
+    { setup_store: new SqliteSetupStore(config.db) },
+    logger,
+  );
   const broker = config.broker ?? new AlpacaBrokerAdapter({ client: config.alpacaBrokerClient });
   const circuitBreakers = new CircuitBreakers(config.breakerConfig, config.initialBreakerState);
   const ciiConsumer = new CiiConsumer(config.ciiScoreProvider, clock, config.ciiConsumerConfig);
