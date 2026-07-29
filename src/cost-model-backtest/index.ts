@@ -81,6 +81,18 @@
  * `ReplayTimeline` for `EvalExecutorImpl` to score. It is a backtest-only
  * path: no `BrokerAdapter`, Trader, Risk or Verdict call anywhere in it, and
  * `eval-executor.ts`/`eval-types.ts`/`types.ts` are unchanged by it.
+ *
+ * Ticket #244 adds `trial-execution.ts` — `buildTrialGrid` (the 12-config
+ * cross-product) and `runTrialGrid`, which drives every config through the
+ * replay driver (#243) and `EvalExecutorImpl` (#90) and logs each in
+ * `ConfigTrialLog` (#89) exactly once by `config_hash`. Stock and crypto
+ * universes are scored as separate `EvalReport`s (`periodsPerYear` 252 vs
+ * 365), so the trial count stays 12 (what #245's Verdict deflates DSR/PBO/
+ * MinBTL by) even though the report count is `12 x asset classes present`.
+ * `ConfigTrialLog.recordTrial`, `EvalExecutorImpl.evaluate` and
+ * `generateSplits` are all used unchanged, per the spec's "existing seams"
+ * note — this ticket is orchestration, not a new implementation of any of
+ * them.
  */
 
 export type { BacktestDeps } from './backtest.js';
@@ -117,6 +129,19 @@ export type { PolygonAggregate, PolygonClient } from './stage2-historical-store.
 export { Stage2HistoricalStore } from './stage2-historical-store.js';
 export type { SeriesOptions } from './trade-derivation.js';
 export { assertCostModelPriced, toReturnSeries, toTradeSeries } from './trade-derivation.js';
+export type {
+  ReplayRunner,
+  TrialGridAssetClass,
+  TrialGridEntry,
+  TrialGridResult,
+  TrialGridRunDeps,
+} from './trial-execution.js';
+export {
+  buildTrialGrid,
+  CRYPTO_PERIODS_PER_YEAR,
+  runTrialGrid,
+  STOCK_PERIODS_PER_YEAR,
+} from './trial-execution.js';
 export type {
   AssetClassCostConfig,
   Backtest,
