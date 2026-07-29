@@ -310,7 +310,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     config.dataSource ??
     new AlpacaDataSource(config.alpacaDataClient, {
       asset_class: config.dataSourceAssetClass ?? 'crypto',
-      calendar: config.tradingCalendar,
+      calendar: tradingCalendar,
     });
   const marketData: MarketDataService = new MarketDataServiceImpl(
     dataSource,
