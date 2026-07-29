@@ -32,7 +32,6 @@ import {
   buildProductionComponents,
   buildProductionOrchestrator,
   buildProductionTickRunner,
-  type LoopTimers,
   type ProductionConfig,
   SMOKE_TEST_UNIVERSE,
   startTickLoop,
@@ -282,13 +281,18 @@ describe('buildProductionComponents', () => {
     expect(config.alpacaBrokerClient.submitOrder).toHaveBeenCalled();
   });
 
-  it('shares one broker adapter instance across the tick chain', () => {
-    const components = buildProductionComponents(stubConfig(db));
-    expect(components.broker).toBeDefined();
-    // A second call must produce independent instances — callers that need
-    // the shared ones read them off the same result, not by rebuilding.
-    const other = buildProductionComponents(stubConfig(db));
-    expect(other.broker).not.toBe(components.broker);
+  it('exposes the same broker instance the execution step submits through', async () => {
+    // The invariant that matters: `AlpacaBrokerAdapter` keeps its bracket-leg
+    // map in memory, so the adapter reachable via `components.broker` must be
+    // the one the bound step uses — not a second instance over the same
+    // account, which would lose those lookups.
+    const config = stubConfig(db);
+    const components = buildProductionComponents(config);
+    const submitSpy = vi.spyOn(components.broker, 'submitBracket');
+
+    await components.steps.execution(goVerdict());
+
+    expect(submitSpy).toHaveBeenCalledTimes(1);
   });
 
   it('buildProductionTickRunner returns a SequentialTickRunner', () => {
@@ -436,7 +440,7 @@ describe('startTickLoop', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(runInstrument).toHaveBeenCalledTimes(2);
 
-    loop.stop();
+    await loop.stop();
   });
 
   it('does not stack a second tick while one is still running', async () => {
@@ -470,7 +474,10 @@ describe('startTickLoop', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(runInstrument).toHaveBeenCalledTimes(2);
 
-    loop.stop();
+    // The second pass is now the in-flight one; `stop()` drains it, so it has
+    // to be released too or the shutdown legitimately waits forever.
+    release();
+    await loop.stop();
   });
 
   it('logs and survives a tick that throws', async () => {
@@ -496,7 +503,39 @@ describe('startTickLoop', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(runInstrument).toHaveBeenCalledTimes(2);
 
-    loop.stop();
+    await loop.stop();
+  });
+
+  it('stop() waits for an in-flight tick instead of abandoning it mid-pipeline', async () => {
+    let release!: () => void;
+    let finished = false;
+    const runInstrument = vi.fn(async (): Promise<TickOutcome> => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      finished = true;
+      return { trace_id: 't', final_stage: 'execution' };
+    });
+
+    const loop = startTickLoop({
+      scheduler: planScheduler(plan),
+      runner: { runInstrument } as TickRunner,
+      clock: new SimulatedClock(START),
+      logger: recordingLogger(),
+      persistence: persistence() as never,
+      tickIntervalMs: 1_000,
+      maxConcurrentInstruments: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(runInstrument).toHaveBeenCalledTimes(1);
+
+    const stopping = loop.stop();
+    expect(finished).toBe(false);
+
+    release();
+    await stopping;
+    expect(finished).toBe(true);
   });
 
   it('stops scheduling further ticks after stop()', async () => {
@@ -514,7 +553,7 @@ describe('startTickLoop', () => {
     });
 
     await vi.advanceTimersByTimeAsync(1_000);
-    loop.stop();
+    await loop.stop();
     await vi.advanceTimersByTimeAsync(10_000);
     expect(runInstrument).toHaveBeenCalledTimes(1);
   });
@@ -533,20 +572,10 @@ describe('buildProductionOrchestrator', () => {
     db.close();
   });
 
-  function fakeTimers(): LoopTimers {
-    return {
-      setTimeout: (handler, ms) => setTimeout(handler, ms),
-      clearTimeout: (handle) => clearTimeout(handle),
-      setInterval: (handler, ms) => setInterval(handler, ms),
-      clearInterval: (handle) => clearInterval(handle),
-    };
-  }
-
   it('runs the orphan scan exactly once, at startup, before any tick', async () => {
     const config = stubConfig(db, {
       tickIntervalMs: 1_000,
       heartbeatIntervalMs: 1_000,
-      timers: fakeTimers(),
     });
     const orchestrator = buildProductionOrchestrator(config);
     const scanSpy = vi.spyOn(orchestrator.orphanScanner, 'scan');
@@ -562,14 +591,13 @@ describe('buildProductionOrchestrator', () => {
     expect(scanSpy).toHaveBeenCalledTimes(1);
     expect(runSpy).toHaveBeenCalled();
 
-    orchestrator.stop();
+    await orchestrator.stop();
   });
 
   it('fires the heartbeat on its own interval, independent of the tick cadence', async () => {
     const config = stubConfig(db, {
       tickIntervalMs: 10_000,
       heartbeatIntervalMs: 1_000,
-      timers: fakeTimers(),
     });
     const orchestrator = buildProductionOrchestrator(config);
     vi.spyOn(orchestrator.tickRunner, 'runInstrument').mockResolvedValue({
@@ -581,14 +609,13 @@ describe('buildProductionOrchestrator', () => {
     await vi.advanceTimersByTimeAsync(3_000);
 
     expect(config.heartbeatChannel.postHeartbeat).toHaveBeenCalledTimes(3);
-    orchestrator.stop();
+    await orchestrator.stop();
   });
 
   it('stop() halts both the heartbeat and the tick loop', async () => {
     const config = stubConfig(db, {
       tickIntervalMs: 1_000,
       heartbeatIntervalMs: 1_000,
-      timers: fakeTimers(),
     });
     const orchestrator = buildProductionOrchestrator(config);
     const runSpy = vi
@@ -597,7 +624,7 @@ describe('buildProductionOrchestrator', () => {
 
     await orchestrator.start();
     await vi.advanceTimersByTimeAsync(1_000);
-    orchestrator.stop();
+    await orchestrator.stop();
 
     const beats = (config.heartbeatChannel.postHeartbeat as ReturnType<typeof vi.fn>).mock.calls
       .length;
@@ -612,15 +639,15 @@ describe('buildProductionOrchestrator', () => {
 
   it('stop() is idempotent', async () => {
     const orchestrator = buildProductionOrchestrator(
-      stubConfig(db, { tickIntervalMs: 1_000, heartbeatIntervalMs: 1_000, timers: fakeTimers() }),
+      stubConfig(db, { tickIntervalMs: 1_000, heartbeatIntervalMs: 1_000 }),
     );
     vi.spyOn(orchestrator.tickRunner, 'runInstrument').mockResolvedValue({
       trace_id: 't',
       final_stage: 'analysts',
     });
     await orchestrator.start();
-    orchestrator.stop();
-    expect(() => orchestrator.stop()).not.toThrow();
+    await orchestrator.stop();
+    await expect(orchestrator.stop()).resolves.toBeUndefined();
   });
 
   it('leaves the daily feedback cycle unstarted when it is not configured', async () => {
@@ -629,7 +656,6 @@ describe('buildProductionOrchestrator', () => {
       logger,
       tickIntervalMs: 48 * 60 * 60 * 1_000,
       heartbeatIntervalMs: 48 * 60 * 60 * 1_000,
-      timers: fakeTimers(),
     });
     const orchestrator = buildProductionOrchestrator(config);
 
@@ -637,7 +663,7 @@ describe('buildProductionOrchestrator', () => {
     // Well past the 24h default cycle: with no `feedback` block, no cycle runs.
     await vi.advanceTimersByTimeAsync(47 * 60 * 60 * 1_000);
     expect(logger.entries.filter((entry) => entry.stage === 'feedback-loop')).toHaveLength(0);
-    orchestrator.stop();
+    await orchestrator.stop();
   });
 
   it('runs the daily feedback cycle on its own timer when configured', async () => {
@@ -646,7 +672,6 @@ describe('buildProductionOrchestrator', () => {
       logger,
       tickIntervalMs: 100_000,
       heartbeatIntervalMs: 100_000,
-      timers: fakeTimers(),
       feedback: {
         intervalMs: 1_000,
         config: {} as never,
@@ -661,7 +686,7 @@ describe('buildProductionOrchestrator', () => {
     const cycleEntries = logger.entries.filter((entry) => entry.stage === 'feedback-loop');
     expect(cycleEntries).toHaveLength(2);
 
-    orchestrator.stop();
+    await orchestrator.stop();
     await vi.advanceTimersByTimeAsync(10_000);
     expect(logger.entries.filter((entry) => entry.stage === 'feedback-loop')).toHaveLength(2);
   });
@@ -676,7 +701,6 @@ describe('buildProductionOrchestrator', () => {
     const config = stubConfig(db, {
       tickIntervalMs: 1_000,
       heartbeatIntervalMs: 100_000,
-      timers: fakeTimers(),
     });
     const orchestrator = buildProductionOrchestrator(config);
 

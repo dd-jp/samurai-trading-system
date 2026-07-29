@@ -71,7 +71,7 @@ export {
   buildProductionComponents,
   buildProductionOrchestrator,
   buildProductionTickRunner,
-  type LoopTimers,
+  type FeedbackCycleConfig,
   type ProductionComponents,
   type ProductionConfig,
   type ProductionOrchestrator,
@@ -176,7 +176,10 @@ export async function startFromEnvironment(
   }
 
   const env = process.env.NODE_ENV ?? 'development';
-  const mode = parseMode(process.env.SAMURAI_MODE);
+  // An explicitly injected mode wins over the environment: a caller that
+  // passed `backtest`/`live` deliberately must not be silently downgraded to
+  // whatever `SAMURAI_MODE` says (mode selects the HITL posture).
+  const mode = injected.mode ?? parseMode(process.env.SAMURAI_MODE);
   const db = injected.db ?? openSharedStore(`data/samurai-${env}.sqlite`);
 
   const orchestrator = buildProductionOrchestrator({
@@ -209,9 +212,10 @@ export async function startFromEnvironment(
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const orchestrator = await startFromEnvironment();
+    // Await the drain: exiting mid-pass between Verdict's `go` and Execution's
+    // write is precisely the orphaned verdict #209 exists to detect.
     const shutdown = () => {
-      orchestrator.stop();
-      process.exit(0);
+      void orchestrator.stop().then(() => process.exit(0));
     };
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);

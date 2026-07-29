@@ -153,9 +153,21 @@ export interface ProductionConfig {
   alpacaDataClient: AlpacaDataClient;
   /** LLM provider behind the Debate personas (and, indirectly, disagreement detection). */
   llmClient: LlmClient;
-  /** Trade channel the dead-man's-switch heartbeat posts over. */
+  /**
+   * Trade channel the dead-man's-switch heartbeat posts over. Taken as the
+   * port, not as a Telegram/Discord client: `TradeChannelHeartbeat`
+   * (heartbeat-channel.ts) is the in-repo implementation to pass here, and it
+   * still needs a `TelegramClient` that this codebase does not implement.
+   */
   heartbeatChannel: HeartbeatChannel;
-  /** HITL approval round-trip (Verdict gate 6). */
+  /**
+   * HITL approval round-trip (Verdict gate 6). Same shape as
+   * `heartbeatChannel`: pass `SignedApprovalChannel`
+   * (verdict/notifications/verified-approval-channel.ts) so #207's HMAC
+   * verification is in the path — the composition root cannot construct it
+   * for you, because its `ApprovalRequestSender` leaf is another
+   * unimplemented transport.
+   */
   approvals: ApprovalChannel;
   /** Where a restart-time orphaned `go` verdict is reported. */
   orphanAlerts: OrphanAlertChannel;
@@ -224,8 +236,6 @@ export interface ProductionConfig {
    */
   feedback?: FeedbackCycleConfig;
   logger?: Logger;
-  /** Injected for tests; production uses the real timer functions. */
-  timers?: LoopTimers;
 }
 
 export interface FeedbackCycleConfig {
@@ -239,21 +249,6 @@ export interface FeedbackCycleConfig {
   /** Default 24h. */
   intervalMs?: number;
 }
-
-/** `setTimeout`/`setInterval` as an injected seam so the loop is testable under fake timers. */
-export interface LoopTimers {
-  setTimeout: (handler: () => void, ms: number) => NodeJS.Timeout;
-  clearTimeout: (handle: NodeJS.Timeout) => void;
-  setInterval: (handler: () => void, ms: number) => NodeJS.Timeout;
-  clearInterval: (handle: NodeJS.Timeout) => void;
-}
-
-const REAL_TIMERS: LoopTimers = {
-  setTimeout: (handler, ms) => setTimeout(handler, ms),
-  clearTimeout: (handle) => clearTimeout(handle),
-  setInterval: (handler, ms) => setInterval(handler, ms),
-  clearInterval: (handle) => clearInterval(handle),
-};
 
 const DEFAULT_TICK_INTERVAL_MS = 60_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000;
@@ -275,8 +270,14 @@ export interface ProductionOrchestrator {
    * tick loop. Resolves once startup is done — the loop keeps running after.
    */
   start(): Promise<OrphanGoVerdict[]>;
-  /** Stops the loop and the heartbeat. Idempotent. */
-  stop(): void;
+  /**
+   * Stops the heartbeat and the feedback timer immediately, and resolves once
+   * any in-flight tick has finished. Awaiting the drain matters on shutdown:
+   * killing the process between Verdict's `go` and Execution's write
+   * manufactures exactly the orphaned verdict `OrphanVerdictScanner` (#209)
+   * exists to detect. Idempotent.
+   */
+  stop(): Promise<void>;
 }
 
 /** Everything composed from in-repo code, built exactly once per process. */
@@ -382,7 +383,14 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   return { steps, marketData, broker, analysts, circuitBreakers, executionStore };
 }
 
-/** The ticket's literal signature: all six stages bound into one runner. */
+/**
+ * The ticket's literal signature: all six stages bound into one runner.
+ *
+ * Constructs its own `ProductionComponents`, so a process must call this
+ * **or** `buildProductionOrchestrator`, never both against the same account —
+ * two `AlpacaBrokerAdapter`s would each hold half the bracket-leg map. The
+ * orchestrator exposes its runner as `.tickRunner` for exactly that reason.
+ */
 export function buildProductionTickRunner(config: ProductionConfig): SequentialTickRunner {
   return new SequentialTickRunner(buildProductionComponents(config).steps);
 }
@@ -410,15 +418,14 @@ export function startTickLoop(deps: {
   persistence: PersistenceInstances;
   tickIntervalMs: number;
   maxConcurrentInstruments: number;
-  timers?: LoopTimers;
-}): { stop: () => void } {
-  const timers = deps.timers ?? REAL_TIMERS;
+}): { stop: () => Promise<void> } {
   let stopped = false;
-  let inFlight = false;
+  /** The current pass, so `stop()` can await it instead of abandoning it mid-pipeline. */
+  let inFlight: Promise<void> | undefined;
   let handle: NodeJS.Timeout | undefined;
 
   const runOnce = async (): Promise<void> => {
-    if (inFlight) {
+    if (inFlight !== undefined) {
       deps.logger.log({
         trace_id: 'tick-loop',
         stage: 'tick-loop',
@@ -427,15 +434,15 @@ export function startTickLoop(deps: {
       });
       return;
     }
-    inFlight = true;
     try {
       const plan = deps.scheduler.nextTick(deps.clock);
-      await runTickPlan(plan, deps.runner, deps.clock, {
+      inFlight = runTickPlan(plan, deps.runner, deps.clock, {
         max_concurrent_instruments: deps.maxConcurrentInstruments,
         logger: deps.logger,
         auditLog: deps.persistence.auditLog,
         currentTickStore: deps.persistence.currentTickStore,
-      });
+      }).then(() => undefined);
+      await inFlight;
     } catch (error) {
       // A thrown tick must not kill the process: the heartbeat's silence is
       // the intended external failure signal, and a transient stage/transport
@@ -449,13 +456,13 @@ export function startTickLoop(deps: {
         payload: { error: error instanceof Error ? error.message : String(error) },
       });
     } finally {
-      inFlight = false;
+      inFlight = undefined;
     }
   };
 
   const schedule = (): void => {
     if (stopped) return;
-    handle = timers.setTimeout(() => {
+    handle = setTimeout(() => {
       void runOnce().then(schedule);
     }, deps.tickIntervalMs);
   };
@@ -463,12 +470,14 @@ export function startTickLoop(deps: {
   schedule();
 
   return {
-    stop: () => {
+    stop: async () => {
       stopped = true;
       if (handle !== undefined) {
-        timers.clearTimeout(handle);
+        clearTimeout(handle);
         handle = undefined;
       }
+      // `runOnce` swallows its own errors, so this only ever waits.
+      await inFlight;
     },
   };
 }
@@ -493,8 +502,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   });
   const heartbeat = new Heartbeat(config.heartbeatChannel, logger);
 
-  const timers = config.timers ?? REAL_TIMERS;
-  let loop: { stop: () => void } | undefined;
+  let loop: { stop: () => Promise<void> } | undefined;
   let heartbeatHandle: NodeJS.Timeout | undefined;
   let feedbackHandle: NodeJS.Timeout | undefined;
 
@@ -549,7 +557,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     async start(): Promise<OrphanGoVerdict[]> {
       const orphans = await persistence.orphanScanner.scan(config.db, config.orphanAlerts, logger);
 
-      heartbeatHandle = timers.setInterval(() => {
+      heartbeatHandle = setInterval(() => {
         void heartbeat.emit(clock);
       }, config.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS);
 
@@ -561,12 +569,11 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         persistence,
         tickIntervalMs: config.tickIntervalMs ?? DEFAULT_TICK_INTERVAL_MS,
         maxConcurrentInstruments: config.maxConcurrentInstruments ?? 1,
-        timers,
       });
 
       const feedback = config.feedback;
       if (feedback !== undefined) {
-        feedbackHandle = timers.setInterval(
+        feedbackHandle = setInterval(
           () => runFeedbackCycle(feedback),
           feedback.intervalMs ?? DEFAULT_FEEDBACK_INTERVAL_MS,
         );
@@ -575,17 +582,20 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       return orphans;
     },
 
-    stop(): void {
-      loop?.stop();
-      loop = undefined;
+    async stop(): Promise<void> {
+      // Timers first, in-flight drain second: nothing new may start while the
+      // current pass finishes.
       if (heartbeatHandle !== undefined) {
-        timers.clearInterval(heartbeatHandle);
+        clearInterval(heartbeatHandle);
         heartbeatHandle = undefined;
       }
       if (feedbackHandle !== undefined) {
-        timers.clearInterval(feedbackHandle);
+        clearInterval(feedbackHandle);
         feedbackHandle = undefined;
       }
+      const stopping = loop?.stop();
+      loop = undefined;
+      await stopping;
     },
   };
 }
