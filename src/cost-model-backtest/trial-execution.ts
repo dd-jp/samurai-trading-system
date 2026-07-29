@@ -184,18 +184,43 @@ export async function runTrialGrid(deps: TrialGridRunDeps): Promise<TrialGridRes
     let loggedForSelection = false;
 
     for (const assetClass of deps.assetClasses) {
-      const runner = assetClass.makeRunner();
-      const run = await runner.run(config, deps.window);
-      const evaluator = makeEvaluator(run);
+      let report: EvalReport;
+      try {
+        const runner = assetClass.makeRunner();
+        const run = await runner.run(config, deps.window);
+        const evaluator = makeEvaluator(run);
 
-      const report = await evaluator.evaluate({
-        window: deps.window,
-        averageCapital: deps.averageCapital,
-        periodsPerYear: assetClass.periodsPerYear,
-        scheme: 'walk_forward',
-        embargo: WALK_FORWARD_EMBARGO_BARS,
-        barMs: DAY_MS,
-      });
+        report = await evaluator.evaluate({
+          window: deps.window,
+          averageCapital: deps.averageCapital,
+          periodsPerYear: assetClass.periodsPerYear,
+          scheme: 'walk_forward',
+          embargo: WALK_FORWARD_EMBARGO_BARS,
+          barMs: DAY_MS,
+        });
+      } catch (cause) {
+        // Deliberately fail-fast, not fail-soft: catching here and continuing
+        // to the next config would silently shrink the grid below 12
+        // configs/asset class, which #245 (Verdict) reads as the trial count
+        // N it deflates DSR/PBO/MinBTL by. A shrunk N understates deflation —
+        // an optimistic bias in the overfitting verdict — and a missing row
+        // breaks the configs×folds matrix PBO ranks configs against each
+        // other on (see this module's header). Swallowing `run()` failures
+        // would also swallow `LookaheadViolationError`, the one error this
+        // harness exists to surface, undermining the `lookahead_audit:
+        // 'passed'` attestation below (which is only honest because `run()`
+        // did not throw). What *is* a real gap in the thrown error — no
+        // config identity — is fixed here: rethrow with that context
+        // attached via `cause`, still aborting the whole grid.
+        throw new Error(
+          `runTrialGrid: failed on config_hash=${config_hash} ` +
+            `(fastWindow=${config.fastWindow}, slowWindow=${config.slowWindow}, ` +
+            `atrStopMult=${config.atrStopMult}, atrTargetMult=${config.atrTargetMult}), ` +
+            `asset_class=${assetClass.asset_class} — aborting grid rather than ` +
+            `returning a partial/misleading result set.`,
+          { cause },
+        );
+      }
 
       results.push({ config_hash, config, asset_class: assetClass.asset_class, report });
 
