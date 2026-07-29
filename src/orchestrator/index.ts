@@ -156,9 +156,23 @@ function parseMode(raw: string | undefined): ProductionConfig['mode'] {
  * and heartbeat). Throws — before opening any broker connection — if any
  * required dependency is absent.
  *
- * DB path convention matches `src/dashboard/index.ts` and
- * shared-sqlite-store-spec.md: `data/samurai-{env}.sqlite`, one file per
- * environment, so paper and live can never share state.
+ * DB path convention matches `src/dashboard/index.ts` (both call
+ * `sharedStorePath`): `data/samurai-{env}.sqlite`, one file per `NODE_ENV`.
+ *
+ * **This does not yet deliver paper/live separation, despite the shape.**
+ * shared-sqlite-store-spec.md § "DB file path convention" (#168) names the
+ * files `data/samurai-paper.sqlite` / `data/samurai-live.sqlite` — that is,
+ * keyed off the *trading mode*, which is what makes "paper/live PnL
+ * cross-contamination physically impossible". This code keys off `NODE_ENV`
+ * instead, so a single `NODE_ENV=production` host that flips `SAMURAI_MODE`
+ * from `paper` to `live` writes both into one file.
+ *
+ * Latent, not live: the `REQUIRED_INJECTED_CONFIG` guard above throws long
+ * before this line, because the seams it demands have no implementation yet.
+ * Left as-is deliberately rather than quietly re-keyed — `mode` resolves from
+ * `injected.mode ?? SAMURAI_MODE`, and an injected mode is invisible to the
+ * dashboard, so switching the path to mode needs a decision about how the
+ * reader derives it, not just a different template string.
  */
 export async function startFromEnvironment(
   injected: Partial<ProductionConfig> = {},

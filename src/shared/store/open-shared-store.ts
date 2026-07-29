@@ -33,6 +33,13 @@ export type SharedStore = BetterSqlite3.Database;
  *
  * `test` is listed because vitest sets `NODE_ENV=test`; suites that touch a
  * real file pass a temp path or `:memory:` directly and never reach here.
+ *
+ * Note the list is `NODE_ENV` values, which is what the entrypoints actually
+ * key off today. shared-sqlite-store-spec.md § "DB file path convention"
+ * (#168) names the files after the *trading mode* instead
+ * (`data/samurai-paper.sqlite` / `data/samurai-live.sqlite`) — that gap is
+ * documented at `startFromEnvironment` in src/orchestrator/index.ts and is
+ * not closed here.
  */
 export const STORE_ENVIRONMENTS = ['development', 'test', 'staging', 'production'] as const;
 
