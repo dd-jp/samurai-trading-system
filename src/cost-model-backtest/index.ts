@@ -74,6 +74,13 @@
  * consume. `PolygonClient` is interface-only, matching this codebase's
  * existing Alpaca/ccxt/IBKR client precedent — a real HTTP client is ops
  * wiring, not this ticket's scope.
+ *
+ * Ticket #243 adds `replay-driver.ts` — `ReplayDriver`, which steps the proxy
+ * strategy (#242) through the ingested bars (#241), prices every entry and
+ * exit through `CostModel.fill`, and produces `ReplayTradeSource`/
+ * `ReplayTimeline` for `EvalExecutorImpl` to score. It is a backtest-only
+ * path: no `BrokerAdapter`, Trader, Risk or Verdict call anywhere in it, and
+ * `eval-executor.ts`/`eval-types.ts`/`types.ts` are unchanged by it.
  */
 
 export type { BacktestDeps } from './backtest.js';
@@ -96,6 +103,13 @@ export { computeMetrics } from './metrics.js';
 export { deflatedSharpe, minbtl, minbtlGuard, pbo } from './overfitting.js';
 export type { ProxySignal, ProxyStrategyConfig } from './proxy-strategy.js';
 export { proxySignal } from './proxy-strategy.js';
+export type {
+  ReplayBarSource,
+  ReplayDriverDeps,
+  ReplayInstrument,
+  ReplayRunResult,
+} from './replay-driver.js';
+export { ReplayDriver } from './replay-driver.js';
 export type { SplitOptions } from './splits.js';
 export { generateSplits } from './splits.js';
 export { SqliteConfigTrialLog } from './sqlite-config-trial-log.js';
