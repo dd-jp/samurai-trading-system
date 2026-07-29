@@ -140,6 +140,7 @@ export { Stage2HistoricalStore } from './stage2-historical-store.js';
 export type {
   ConfigKillLineCheck,
   NotComputableReason,
+  PboOutcome,
   Stage2Verdict,
 } from './stage2-verdict.js';
 export { KILL_LINE, killLineChecks, renderStage2Verdict } from './stage2-verdict.js';

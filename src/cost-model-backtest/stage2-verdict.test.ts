@@ -121,10 +121,12 @@ describe('renderStage2Verdict', () => {
       window: FIVE_YEAR_WINDOW,
     });
 
-    expect(verdict.pbo).toEqual({
-      error: 'no_real_trial_data',
-      detail: expect.stringContaining('No TrialGridResult entries'),
-    });
+    expect(verdict.pbo).toEqual([
+      {
+        error: 'no_real_trial_data',
+        detail: expect.stringContaining('No TrialGridResult entries'),
+      },
+    ]);
   });
 
   it('reports pbo_requires_even_fold_count for the spec-shaped 5-fold walk-forward grid', () => {
@@ -141,10 +143,13 @@ describe('renderStage2Verdict', () => {
       window: FIVE_YEAR_WINDOW,
     });
 
-    expect(verdict.pbo).toEqual({
-      error: 'pbo_requires_even_fold_count',
-      detail: expect.stringContaining('5 folds'),
-    });
+    expect(verdict.pbo).toEqual([
+      {
+        error: 'pbo_requires_even_fold_count',
+        asset_class: 'stocks',
+        detail: expect.stringContaining('5 folds'),
+      },
+    ]);
   });
 
   it('computes PBO when a config x fold matrix happens to have an even fold count >= 4', () => {
@@ -159,11 +164,37 @@ describe('renderStage2Verdict', () => {
       window: FIVE_YEAR_WINDOW,
     });
 
-    expect(verdict.pbo).toMatchObject({ asset_class: 'stocks' });
-    if ('result' in verdict.pbo) {
-      expect(verdict.pbo.result.pbo).toBeGreaterThanOrEqual(0);
-      expect(verdict.pbo.result.pbo).toBeLessThanOrEqual(1);
+    expect(verdict.pbo).toHaveLength(1);
+    expect(verdict.pbo[0]).toMatchObject({ asset_class: 'stocks' });
+    const outcome = verdict.pbo[0];
+    if (outcome && 'result' in outcome) {
+      expect(outcome.result.pbo).toBeGreaterThanOrEqual(0);
+      expect(outcome.result.pbo).toBeLessThanOrEqual(1);
     }
+  });
+
+  it('computes PBO independently per asset class instead of dropping all but the first', () => {
+    // Stocks has an even fold count (computable); crypto has the spec's odd
+    // 5-fold count (not computable). Both must be reported — neither should
+    // silently overwrite or hide the other.
+    const results = [
+      trialResult('hash-a', 'stocks', [0.9, 0.9, 0.9, 0.9]),
+      trialResult('hash-b', 'stocks', [0.1, 0.1, 0.1, 0.1]),
+      trialResult('hash-c', 'crypto', [0.5, 0.6, 0.4, 0.7, 0.5]),
+    ];
+
+    const verdict = renderStage2Verdict({
+      results,
+      distinctTrialCount: 12,
+      window: FIVE_YEAR_WINDOW,
+    });
+
+    expect(verdict.pbo).toHaveLength(2);
+    const stocksOutcome = verdict.pbo.find((o) => o.asset_class === 'stocks');
+    const cryptoOutcome = verdict.pbo.find((o) => o.asset_class === 'crypto');
+    expect(stocksOutcome && 'result' in stocksOutcome).toBe(true);
+    expect(cryptoOutcome && 'error' in cryptoOutcome).toBe(true);
+    expect(verdict.overall_pass).toBe(false);
   });
 
   it('always reports the DSR gap as not computable, with a reason distinct from the PBO gap', () => {
@@ -201,7 +232,7 @@ describe('renderStage2Verdict', () => {
     });
 
     expect(verdict.kill_line_checks.every((c) => c.passes_oos_sharpe_line)).toBe(true);
-    expect('error' in verdict.pbo).toBe(true);
+    expect(verdict.pbo.every((o) => 'error' in o)).toBe(true);
     expect(verdict.overall_pass).toBe(false);
   });
 
