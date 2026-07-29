@@ -34,7 +34,7 @@
  */
 import { pathToFileURL } from 'node:url';
 import { SystemClock } from '../shared/clock.js';
-import { openSharedStore } from '../shared/store/open-shared-store.js';
+import { openSharedStore, sharedStorePath } from '../shared/store/open-shared-store.js';
 import {
   buildProductionOrchestrator,
   type ProductionConfig,
@@ -180,7 +180,7 @@ export async function startFromEnvironment(
   // passed `backtest`/`live` deliberately must not be silently downgraded to
   // whatever `SAMURAI_MODE` says (mode selects the HITL posture).
   const mode = injected.mode ?? parseMode(process.env.SAMURAI_MODE);
-  const db = injected.db ?? openSharedStore(`data/samurai-${env}.sqlite`);
+  const db = injected.db ?? openSharedStore(sharedStorePath(env));
 
   const orchestrator = buildProductionOrchestrator({
     ...(injected as ProductionConfig),

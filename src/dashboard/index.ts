@@ -7,15 +7,15 @@
  * environment": `data/samurai-{env}.sqlite` at repo root, selected via
  * `NODE_ENV` (defaults to `development`).
  */
-import { openSharedStore } from '../shared/store/open-shared-store.js';
+import { openSharedStore, sharedStorePath } from '../shared/store/open-shared-store.js';
 import { createDashboardServer } from './server.js';
 import { SqliteQueryStore } from './sqlite-query-store.js';
 
 const port = Number(process.env.PORT ?? 8787);
 const host = process.env.HOST ?? '127.0.0.1';
-const env = process.env.NODE_ENV ?? 'development';
-
-const db = openSharedStore(`data/samurai-${env}.sqlite`);
+// Same resolver the orchestrator uses: the dashboard reads the file the
+// orchestrator writes, so the two must not derive its name independently.
+const db = openSharedStore(sharedStorePath());
 const server = createDashboardServer({ port, host, store: new SqliteQueryStore(db) });
 
 await server.start();

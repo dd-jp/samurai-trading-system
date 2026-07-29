@@ -14,6 +14,52 @@ import { runMigrations } from './migrate.js';
 /** The typed handle passed to components by constructor injection. */
 export type SharedStore = BetterSqlite3.Database;
 
+/**
+ * The environments that may own a shared-store file. `NODE_ENV` is matched
+ * against this list rather than interpolated into the path as-is.
+ *
+ * The reason is *not* path traversal: `NODE_ENV` is operator-controlled, and
+ * anyone who can set it can already run arbitrary code, so no privilege
+ * boundary is crossed. The real failure is quieter and worse — a typo
+ * (`prod`, `Production`, a systemd unit that never exports it) silently opens
+ * a *different* SQLite file. The process then starts against an empty
+ * database while real positions sit open at the broker, which is precisely
+ * the "crash-restart must not lose open positions" invariant (CONTEXT.md)
+ * failing in the one way nothing alerts on: cleanly.
+ *
+ * So an unrecognised value throws instead of defaulting. Falling back to
+ * `development` would re-create the wrong-database bug rather than fix it —
+ * the same posture `parseMode` takes for `SAMURAI_MODE`.
+ *
+ * `test` is listed because vitest sets `NODE_ENV=test`; suites that touch a
+ * real file pass a temp path or `:memory:` directly and never reach here.
+ */
+export const STORE_ENVIRONMENTS = ['development', 'test', 'staging', 'production'] as const;
+
+export type StoreEnvironment = (typeof STORE_ENVIRONMENTS)[number];
+
+/**
+ * The one file-per-environment path convention
+ * (shared-sqlite-store-spec.md): `data/samurai-{env}.sqlite`.
+ *
+ * Shared by both entrypoints on purpose. The orchestrator writes this file
+ * and the dashboard reads it, so the two must agree on its name — deriving it
+ * twice is how they drift, and a dashboard pointed at a file the orchestrator
+ * never writes shows a healthy, empty system.
+ */
+export function sharedStorePath(rawEnv: string | undefined = process.env.NODE_ENV): string {
+  const env = rawEnv ?? 'development';
+  if (!(STORE_ENVIRONMENTS as readonly string[]).includes(env)) {
+    throw new Error(
+      `Refusing to open a shared store for NODE_ENV=${JSON.stringify(env)}: it must be one of ` +
+        `${STORE_ENVIRONMENTS.join('|')}. An unrecognised environment would silently open a ` +
+        'different database file, starting the process against empty state while real positions ' +
+        'are open at the broker.',
+    );
+  }
+  return `data/samurai-${env}.sqlite`;
+}
+
 export function openSharedStore(dbPath: string): SharedStore {
   const db = new BetterSqlite3(dbPath);
   // WAL is a no-op on an in-memory DB; SQLite ignores it rather than failing.
