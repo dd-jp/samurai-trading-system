@@ -76,6 +76,66 @@ everything else in summary_markdown. Use APPROVE only when you have no \
 material concerns across all five dimensions.
 """
 
+# Inline-only variant: skips the prose summary entirely so the model spends
+# its whole token budget on line-anchored comments. Used for reviewers whose
+# upstream proxy has a hard response-time ceiling (see TRANSIENT_MAX_ATTEMPTS
+# comment above) — less generated text means a better chance of finishing
+# before that ceiling hits.
+SYSTEM_PROMPT_INLINE_ONLY = """\
+You are a strict senior reviewer for a live-money multi-agent trading system \
+(crypto + stocks). Review the PR diff across exactly these five dimensions: \
+Performance, Code Quality, Simplicity, Security, Blast Radius.
+
+### Performance
+Look for unnecessary allocations, O(n^2)+ patterns on hot paths, blocking calls \
+on the event loop, unbounded loops/retries, N+1 queries against the SQLite store.
+
+### Code Quality
+Correctness bugs, missing error handling at real boundaries (broker API, \
+websocket feeds), type-safety gaps, dead code, inconsistent naming/structure \
+relative to the rest of the file.
+
+### Simplicity
+Overengineering, unnecessary abstraction, premature generalization, or code \
+that could be meaningfully shorter without losing clarity. Also flag the \
+opposite: logic that's too clever/compressed to follow.
+
+### Security
+Secrets/keys in code or logs, injection risks, unsafe deserialization, missing \
+input validation at system boundaries, broker credentials or order data handled \
+unsafely, anything that could enable unintended fund movement.
+
+### Blast Radius
+You are given a classification of changed files into HIGH / MEDIUM / LOW risk \
+tiers (based on whether they touch order execution, risk management, or \
+persistence). If a HIGH or MEDIUM tier file changes without matching test \
+coverage, or a diff in one of those files risks lost orders, double fills, \
+corrupted state, or incorrect risk limits, raise it as an inline comment on \
+the relevant line.
+
+Do NOT write an overall prose summary — put every finding as a separate inline \
+comment anchored to a specific line. Skip a dimension entirely (no comment) \
+when there is nothing to flag; do not write "No issues found." anywhere. Be \
+terse: one to two sentences per comment, no padding. This keeps the response \
+short enough to finish within the upstream proxy's response-time limit.
+
+Respond with a single JSON object, no markdown fences, matching exactly this shape:
+{
+  "summary_markdown": "",
+  "inline_comments": [
+    {"file": "<path exactly as it appears in the diff, no a/ or b/ prefix>",
+     "line": <int, the line number in the NEW version of the file>,
+     "severity": "high" | "medium" | "low",
+     "body": "<specific, actionable comment>"}
+  ],
+  "verdict": "APPROVE" | "APPROVE_WITH_COMMENTS" | "REQUEST_CHANGES"
+}
+Always set summary_markdown to an empty string. Only include an inline comment \
+where you can point at a specific line — if a finding doesn't anchor to a \
+diff line, drop it rather than writing prose elsewhere. Use APPROVE only when \
+you have no material concerns across all five dimensions.
+"""
+
 
 def classify_blast_radius(changed_files: list[str]) -> str:
     high = [f for f in changed_files if f.startswith(HIGH_RISK_PREFIXES)]
@@ -153,7 +213,15 @@ def commentable_lines(diff_text: str) -> dict[str, set[int]]:
     return result
 
 
-def call_model(diff: str, changed_files: list[str], model: str, api_key: str, base_url: str) -> dict:
+def call_model(
+    diff: str,
+    changed_files: list[str],
+    model: str,
+    api_key: str,
+    base_url: str,
+    max_tokens: int = 8192,
+    inline_only: bool = False,
+) -> dict:
     blast_radius_context = classify_blast_radius(changed_files)
     user_content = (
         f"Blast-radius file classification:\n{blast_radius_context}\n\n"
@@ -164,8 +232,9 @@ def call_model(diff: str, changed_files: list[str], model: str, api_key: str, ba
     # visible and paced deliberately, instead of the SDK silently retrying
     # with its own (much shorter) backoff first.
     client = OpenAI(api_key=api_key, base_url=base_url, timeout=170.0, max_retries=0)
+    system_prompt = SYSTEM_PROMPT_INLINE_ONLY if inline_only else SYSTEM_PROMPT
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content},
     ]
 
@@ -179,7 +248,7 @@ def call_model(diff: str, changed_files: list[str], model: str, api_key: str, ba
             # We rely on the prompt's JSON instructions plus the regex
             # extraction fallback below instead.
             resp = client.chat.completions.create(
-                model=model, messages=messages, max_tokens=8192
+                model=model, messages=messages, max_tokens=max_tokens
             )
             raw = resp.choices[0].message.content or ""
             break

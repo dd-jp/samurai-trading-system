@@ -20,11 +20,19 @@ jobs:
             api_key_secret: NOUS_API_KEY
             app_id_var: NOUS_APP_ID
             app_key_secret: NOUS_APP_PRIVATE_KEY
+            max_tokens: "8192"
+            inline_only: "false"
           - reviewer: nous-kimi
             model_var: KIMI_MODEL
             api_key_secret: KIMI_NOUS_API_KEY
             app_id_var: KIMI_APP_ID
             app_key_secret: KIMI_APP_PRIVATE_KEY
+            # kimi-k3 on Nous's proxy hits a hard Cloudflare 524 (120s origin
+            # timeout) at the default token budget — see review_lib.py.
+            # Inline-only + a smaller budget cuts generation time so it has
+            # a real chance of finishing before that ceiling.
+            max_tokens: "3000"
+            inline_only: "true"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -48,6 +56,8 @@ jobs:
           NOUS_API_KEY: ${{ secrets[matrix.api_key_secret] }}
           NOUS_BASE_URL: ${{ vars.NOUS_BASE_URL }}
           REVIEW_MODEL: ${{ vars[matrix.model_var] }}
+          REVIEW_MAX_TOKENS: ${{ matrix.max_tokens }}
+          REVIEW_INLINE_ONLY: ${{ matrix.inline_only }}
           BASE_REF: ${{ github.base_ref }}
         run: python .github/scripts/run_review.py
 
