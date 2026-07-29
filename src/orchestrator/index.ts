@@ -206,17 +206,63 @@ export async function startFromEnvironment(
   return orchestrator;
 }
 
+/**
+ * Builds the SIGINT/SIGTERM handler: drain, then exit deterministically.
+ *
+ * Exported (and its effects injected) purely so the two things that are easy
+ * to get silently wrong here are testable — this lives behind the entrypoint
+ * guard below, which no unit test can reach.
+ *
+ * **A rejected drain still exits, and exits quietly.** `stop()` can reject:
+ * it awaits the in-flight tick, and while `runOnce` swallows its own errors,
+ * a pass that rejects after `stop()` has already captured `inFlight` rejects
+ * in the caller too. Left unhandled the process does not hang — Node ≥15
+ * throws on unhandled rejections — but it dies on Node's terms: an exit code
+ * nobody chose, and a raw stack dump, which is exactly what the startup
+ * `catch` below refuses to print. Same posture here: message only, never the
+ * error object, because the config it may reference holds API credentials.
+ *
+ * **A second signal is ignored, not obeyed.** Draining matters more than
+ * signal responsiveness: exiting mid-pass between Verdict's `go` and
+ * Execution's write manufactures precisely the orphaned verdict #209 exists
+ * to detect. Without the guard a second Ctrl-C re-enters `stop()`, which now
+ * finds its timers cleared and its loop released and so resolves immediately
+ * — exiting 0 *through* the first drain rather than after it.
+ */
+export function buildShutdownHandler(
+  orchestrator: { stop: () => Promise<void> },
+  effects: { exit: (code: number) => void; stderr: (message: string) => void } = {
+    exit: (code) => process.exit(code),
+    stderr: (message) => {
+      process.stderr.write(message);
+    },
+  },
+): () => void {
+  let shuttingDown = false;
+
+  return () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    void orchestrator.stop().then(
+      () => effects.exit(0),
+      (error: unknown) => {
+        effects.stderr(
+          `orchestrator shutdown failed: ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+        effects.exit(1);
+      },
+    );
+  };
+}
+
 // Entrypoint guard: `npm run orchestrator` runs this file directly, but it is
 // also the package's export surface — importing it must not start a trading
 // process.
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const orchestrator = await startFromEnvironment();
-    // Await the drain: exiting mid-pass between Verdict's `go` and Execution's
-    // write is precisely the orphaned verdict #209 exists to detect.
-    const shutdown = () => {
-      void orchestrator.stop().then(() => process.exit(0));
-    };
+    const shutdown = buildShutdownHandler(orchestrator);
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);
   } catch (error) {

@@ -9,7 +9,7 @@
  * implicitly, since a top-level start would hang the suite.
  */
 import { describe, expect, it } from 'vitest';
-import { REQUIRED_INJECTED_CONFIG, startFromEnvironment } from './index.js';
+import { buildShutdownHandler, REQUIRED_INJECTED_CONFIG, startFromEnvironment } from './index.js';
 
 describe('startFromEnvironment', () => {
   it('refuses to start with nothing wired, naming every missing dependency', async () => {
@@ -57,5 +57,104 @@ describe('startFromEnvironment', () => {
     expect(REQUIRED_INJECTED_CONFIG).toContain('heartbeatChannel');
     expect(REQUIRED_INJECTED_CONFIG).toContain('orphanAlerts');
     expect(new Set(REQUIRED_INJECTED_CONFIG).size).toBe(REQUIRED_INJECTED_CONFIG.length);
+  });
+});
+
+describe('buildShutdownHandler', () => {
+  /** Records the effects the handler would have had on the real process. */
+  function spyEffects() {
+    const exits: number[] = [];
+    const errors: string[] = [];
+    return {
+      exits,
+      errors,
+      effects: {
+        exit: (code: number) => {
+          exits.push(code);
+        },
+        stderr: (message: string) => {
+          errors.push(message);
+        },
+      },
+    };
+  }
+
+  it('exits 0 only after the drain resolves, never before', async () => {
+    let release!: () => void;
+    const drained = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { exits, effects } = spyEffects();
+
+    buildShutdownHandler({ stop: () => drained }, effects)();
+    await Promise.resolve();
+
+    // Still draining: exiting here is the mid-pass exit #209 exists to detect.
+    expect(exits).toEqual([]);
+
+    release();
+    await drained;
+    await Promise.resolve();
+    expect(exits).toEqual([0]);
+  });
+
+  it('still exits — with a non-zero code — when the drain rejects', async () => {
+    const { exits, errors, effects } = spyEffects();
+
+    buildShutdownHandler({ stop: () => Promise.reject(new Error('tick blew up')) }, effects)();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(exits).toEqual([1]);
+    expect(errors.join('')).toMatch(/tick blew up/);
+  });
+
+  it('reports the failed drain by message only, never the thrown object', async () => {
+    // The startup catch has the same posture: a config-bearing error must not
+    // reach stderr, because the config holds API credentials.
+    const secretive = Object.assign(new Error('drain failed'), { apiKey: 'sk-live-must-not-leak' });
+    const { errors, effects } = spyEffects();
+
+    buildShutdownHandler({ stop: () => Promise.reject(secretive) }, effects)();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Both halves matter: the message must be reported, and only the message.
+    expect(errors.join('')).toMatch(/drain failed/);
+    expect(errors.join('')).not.toMatch(/sk-live-must-not-leak/);
+  });
+
+  it('ignores a second signal rather than exiting through the first drain', async () => {
+    let release!: () => void;
+    const drained = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let stopCalls = 0;
+    const { exits, effects } = spyEffects();
+    const shutdown = buildShutdownHandler(
+      {
+        stop: () => {
+          stopCalls++;
+          // A re-entrant stop() finds its timers cleared and its loop already
+          // released, so it resolves at once — which is exactly how a second
+          // Ctrl-C would exit 0 straight through the first, still-running drain.
+          return stopCalls === 1 ? drained : Promise.resolve();
+        },
+      },
+      effects,
+    );
+
+    shutdown();
+    shutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(stopCalls).toBe(1);
+    expect(exits).toEqual([]);
+
+    release();
+    await drained;
+    await Promise.resolve();
+    expect(exits).toEqual([0]);
   });
 });
