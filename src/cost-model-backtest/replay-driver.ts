@@ -108,28 +108,71 @@ interface OpenLot {
 }
 
 /**
- * Wraps the injected historical source with the harness's existing
- * `LookaheadAuditor` seam, so a row stamped after `clock.now()` throws
- * `LookaheadViolationError` out of the run rather than being scored.
+ * One instrument's bars for the whole run, read from the injected source
+ * **once** and then revealed prefix-by-prefix as the clock steps.
  *
- * Stage 1 already audits at ingestion; this is the same audit re-applied at
- * the replay seam, where the simulated clock is what defines "now". `Bar`
- * carries `close_time` rather than the `timestamp` field `auditRows` expects,
- * so rows are audited one at a time against that key — the bar's own
- * point-in-time stamp.
+ * Re-reading the source on every (timestamp × instrument) step is what the
+ * naive shape does, and against `Stage2HistoricalStore` that is a SQL query
+ * plus a full row-to-`Bar` materialization per step — O(steps × bars) row
+ * allocations for a strategy that only ever needs one more bar than it had
+ * last step. The cursor collapses that to one read per instrument per run.
+ *
+ * It is *not* just a cache: the `LookaheadAuditor` seam is preserved exactly,
+ * because the audit is what this whole component exists to keep honest.
+ *
+ * - Each bar is audited against `clock.now()` at the step it first becomes
+ *   visible — the same point-in-time assertion the per-step read made, since
+ *   a bar is only exposed once the clock has reached its `close_time`.
+ * - Rows the source served *outside* the requested window are never silently
+ *   dropped. They stay behind the cursor and are audited by `settle()` at the
+ *   end of the run, so a misbehaving source still fails the run rather than
+ *   having its extra rows quietly filtered away.
+ *
+ * `Bar` carries `close_time` rather than the `timestamp` field `auditRows`
+ * expects, so rows are audited one at a time against that key.
  */
-class AuditedBarSource implements ReplayBarSource {
-  constructor(
-    private readonly inner: ReplayBarSource,
-    private readonly auditor: LookaheadAuditor,
-  ) {}
+class BarCursor {
+  /** Every bar the source served for the run window, source order preserved. */
+  private readonly all: readonly Bar[];
+  /** Count of bars revealed so far — also the exclusive end of the visible prefix. */
+  private cursor = 0;
 
-  bars(symbol: string, window: DateRange): Bar[] {
-    const rows = this.inner.bars(symbol, window);
-    for (const bar of rows) {
-      this.auditor.auditRead(`stage2_bars:${symbol}`, bar.close_time);
+  constructor(
+    private readonly symbol: string,
+    source: ReplayBarSource,
+    window: DateRange,
+    private readonly auditor: LookaheadAuditor,
+  ) {
+    this.all = source.bars(symbol, window);
+  }
+
+  /**
+   * The bars visible at `at`: every bar with `close_time <= at`, ascending.
+   * Inclusive of a bar closing exactly at `at` — that is the current bar, the
+   * one the strategy is allowed to act on.
+   */
+  visibleAt(at: Date): readonly Bar[] {
+    while (this.cursor < this.all.length) {
+      const next = this.all[this.cursor] as Bar;
+      if (next.close_time.getTime() > at.getTime()) break;
+      this.auditor.auditRead(`stage2_bars:${this.symbol}`, next.close_time);
+      this.cursor++;
     }
-    return rows;
+    return this.all.slice(0, this.cursor);
+  }
+
+  /**
+   * Audits whatever the source served that the run never stepped to. With a
+   * well-behaved source this is empty (the timeline is the union of every
+   * ingested bar's close time). A row still sitting here after the last step
+   * is a row from outside the requested window, and auditing it against the
+   * final clock is what turns that into a failed run.
+   */
+  settle(): void {
+    for (let i = this.cursor; i < this.all.length; i++) {
+      this.auditor.auditRead(`stage2_bars:${this.symbol}`, (this.all[i] as Bar).close_time);
+    }
+    this.cursor = this.all.length;
   }
 }
 
@@ -198,7 +241,18 @@ export class ReplayDriver {
       this.deps.registry,
     );
 
-    const source = new AuditedBarSource(this.deps.barSource, new LookaheadAuditor(this.deps.clock));
+    // Per-run, never per-driver: `RunState` is rebuilt each run so a previous
+    // run's lots cannot leak into this one, and a cached bar cursor held on
+    // the driver would leak the same way.
+    const auditor = new LookaheadAuditor(this.deps.clock);
+    const cursors = new Map<string, BarCursor>();
+    for (const instrument of this.deps.universe) {
+      cursors.set(
+        instrument.symbol,
+        new BarCursor(instrument.symbol, this.deps.barSource, window, auditor),
+      );
+    }
+
     const state: RunState = {
       config,
       records: new ReplayRecords(),
@@ -215,7 +269,7 @@ export class ReplayDriver {
       this.deps.clock.advanceTo(at);
 
       for (const instrument of this.deps.universe) {
-        const bars = source.bars(instrument.symbol, { start: window.start, end: at });
+        const bars = (cursors.get(instrument.symbol) as BarCursor).visibleAt(at);
         const bar = bars[bars.length - 1];
 
         // This instrument has no bar closing at this timestamp (the timeline
@@ -248,6 +302,11 @@ export class ReplayDriver {
         );
       }
     }
+
+    // Anything the source served that the run never stepped to is audited
+    // now, against the final clock — a source that ignored the requested
+    // window fails the run instead of having its extra rows silently dropped.
+    for (const cursor of cursors.values()) cursor.settle();
 
     // A lot still open at the last bar produces no `ClosedTrade`: only a
     // round-trip-to-flat is a realized record (shared/types.ts), and marking

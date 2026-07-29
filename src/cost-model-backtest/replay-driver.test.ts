@@ -376,6 +376,20 @@ describe('ReplayDriver.run', () => {
     expect(barSource.calls).toBe(0);
   });
 
+  it('reads each instrument from the bar source once, not once per stepped bar', async () => {
+    const bars = buildBars(REVERSAL_CLOSES);
+    const { deps, barSource } = makeDeps(bars);
+
+    await new ReplayDriver(deps).run(CONFIG, windowOf(bars));
+
+    // One universe instrument, one read — not one per timestamp. Re-reading
+    // per step is a SQL query plus a full row materialization per step
+    // against the real `Stage2HistoricalStore`.
+    expect(deps.universe).toHaveLength(1);
+    expect(barSource.calls).toBe(1);
+    expect(bars.length).toBeGreaterThan(1);
+  });
+
   it('produces a timeline of exactly the bars it stepped', async () => {
     const bars = buildBars(REVERSAL_CLOSES);
     const { deps } = makeDeps(bars);
