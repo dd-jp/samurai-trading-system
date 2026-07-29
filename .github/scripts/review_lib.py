@@ -20,11 +20,9 @@ TRANSIENT_BACKOFF_SECONDS = (20, 90)
 HIGH_RISK_PREFIXES = ("src/execution/", "src/risk-manager/", "src/shared/store/")
 MEDIUM_RISK_PREFIXES = ("src/orchestrator/", "src/trader/", "src/debate-engine/")
 
-SYSTEM_PROMPT = """\
-You are a strict senior reviewer for a live-money multi-agent trading system \
-(crypto + stocks). Review the PR diff across exactly these five dimensions, \
-in this order: Performance, Code Quality, Simplicity, Security, Blast Radius.
-
+# Shared across both prompt variants below so the review criteria can't drift
+# out of sync between them — only the closing instructions differ.
+_DIMENSIONS = """\
 ### Performance
 Look for unnecessary allocations, O(n^2)+ patterns on hot paths, blocking calls \
 on the event loop, unbounded loops/retries, N+1 queries against the SQLite store.
@@ -47,7 +45,35 @@ unsafely, anything that could enable unintended fund movement.
 ### Blast Radius
 You are given a classification of changed files into HIGH / MEDIUM / LOW risk \
 tiers (based on whether they touch order execution, risk management, or \
-persistence). State the overall blast radius tier for this PR and justify it \
+persistence).\
+"""
+
+_INTRO = """\
+You are a strict senior reviewer for a live-money multi-agent trading system \
+(crypto + stocks). Review the PR diff across exactly these five dimensions, \
+in this order: Performance, Code Quality, Simplicity, Security, Blast Radius.
+
+"""
+
+_RESPONSE_SHAPE = """\
+Respond with a single JSON object, no markdown fences, matching exactly this shape:
+{{
+  "summary_markdown": {summary_markdown_field},
+  "inline_comments": [
+    {{"file": "<path exactly as it appears in the diff, no a/ or b/ prefix>",
+     "line": <int, the line number in the NEW version of the file>,
+     "severity": "high" | "medium" | "low",
+     "body": "<specific, actionable comment>"}}
+  ],
+  "verdict": "APPROVE" | "APPROVE_WITH_COMMENTS" | "REQUEST_CHANGES"
+}}
+{closing}\
+"""
+
+SYSTEM_PROMPT = (
+    _INTRO
+    + _DIMENSIONS
+    + """ State the overall blast radius tier for this PR and justify it \
 using the specific files changed. For HIGH or MEDIUM tier PRs, call out what a \
 failure in this diff could actually break in production (e.g. lost orders, \
 double fills, corrupted state, incorrect risk limits) and whether the diff \
@@ -58,23 +84,51 @@ with nothing to flag just write "No issues found." rather than padding it out. \
 The response must fit within the token budget — brevity beats exhaustive \
 explanation.
 
-Respond with a single JSON object, no markdown fences, matching exactly this shape:
-{
-  "summary_markdown": "<the full five-section review, one '### <Dimension>' \
-heading per dimension in the order above, 'No issues found.' under any \
-dimension with nothing to flag>",
-  "inline_comments": [
-    {"file": "<path exactly as it appears in the diff, no a/ or b/ prefix>",
-     "line": <int, the line number in the NEW version of the file>,
-     "severity": "high" | "medium" | "low",
-     "body": "<specific, actionable comment>"}
-  ],
-  "verdict": "APPROVE" | "APPROVE_WITH_COMMENTS" | "REQUEST_CHANGES"
-}
-Only include an inline comment where you can point at a specific line — put \
-everything else in summary_markdown. Use APPROVE only when you have no \
-material concerns across all five dimensions.
 """
+    + _RESPONSE_SHAPE.format(
+        summary_markdown_field=(
+            '"<the full five-section review, one \'### <Dimension>\' '
+            "heading per dimension in the order above, 'No issues found.' under any "
+            'dimension with nothing to flag>"'
+        ),
+        closing=(
+            "Only include an inline comment where you can point at a specific line — put "
+            "everything else in summary_markdown. Use APPROVE only when you have no "
+            "material concerns across all five dimensions."
+        ),
+    )
+)
+
+# Inline-only variant: skips the prose summary entirely so the model spends
+# its whole token budget on line-anchored comments. Used for reviewers whose
+# upstream proxy has a hard response-time ceiling (see TRANSIENT_MAX_ATTEMPTS
+# comment above) — less generated text means a better chance of finishing
+# before that ceiling hits.
+SYSTEM_PROMPT_INLINE_ONLY = (
+    _INTRO
+    + _DIMENSIONS
+    + """ If a HIGH or MEDIUM tier file changes without matching test \
+coverage, or a diff in one of those files risks lost orders, double fills, \
+corrupted state, or incorrect risk limits, raise it as an inline comment on \
+the relevant line.
+
+Do NOT write an overall prose summary — put every finding as a separate inline \
+comment anchored to a specific line. Skip a dimension entirely (no comment) \
+when there is nothing to flag; do not write "No issues found." anywhere. Be \
+terse: one to two sentences per comment, no padding. This keeps the response \
+short enough to finish within the upstream proxy's response-time limit.
+
+"""
+    + _RESPONSE_SHAPE.format(
+        summary_markdown_field='""',
+        closing=(
+            "Always set summary_markdown to an empty string. Only include an inline comment "
+            "where you can point at a specific line — if a finding doesn't anchor to a "
+            "diff line, drop it rather than writing prose elsewhere. Use APPROVE only when "
+            "you have no material concerns across all five dimensions."
+        ),
+    )
+)
 
 
 def classify_blast_radius(changed_files: list[str]) -> str:
@@ -153,7 +207,15 @@ def commentable_lines(diff_text: str) -> dict[str, set[int]]:
     return result
 
 
-def call_model(diff: str, changed_files: list[str], model: str, api_key: str, base_url: str) -> dict:
+def call_model(
+    diff: str,
+    changed_files: list[str],
+    model: str,
+    api_key: str,
+    base_url: str,
+    max_tokens: int = 8192,
+    inline_only: bool = False,
+) -> dict:
     blast_radius_context = classify_blast_radius(changed_files)
     user_content = (
         f"Blast-radius file classification:\n{blast_radius_context}\n\n"
@@ -164,8 +226,9 @@ def call_model(diff: str, changed_files: list[str], model: str, api_key: str, ba
     # visible and paced deliberately, instead of the SDK silently retrying
     # with its own (much shorter) backoff first.
     client = OpenAI(api_key=api_key, base_url=base_url, timeout=170.0, max_retries=0)
+    system_prompt = SYSTEM_PROMPT_INLINE_ONLY if inline_only else SYSTEM_PROMPT
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content},
     ]
 
@@ -179,9 +242,14 @@ def call_model(diff: str, changed_files: list[str], model: str, api_key: str, ba
             # We rely on the prompt's JSON instructions plus the regex
             # extraction fallback below instead.
             resp = client.chat.completions.create(
-                model=model, messages=messages, max_tokens=8192
+                model=model, messages=messages, max_tokens=max_tokens
             )
             raw = resp.choices[0].message.content or ""
+            print(
+                f"debug: finish_reason={resp.choices[0].finish_reason} "
+                f"content_chars={len(raw)}",
+                file=sys.stderr,
+            )
             break
         except Exception as exc:  # noqa: BLE001 - upstream 5xx/timeouts are common on this endpoint
             last_exc = exc
@@ -207,8 +275,12 @@ def call_model(diff: str, changed_files: list[str], model: str, api_key: str, ba
     try:
         parsed = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
-        # Model may have wrapped the JSON in prose or code fences; try to
-        # recover the largest {...} block before giving up.
+        # Model may have wrapped the JSON in prose or code fences, or the
+        # response may have been truncated mid-array by a low max_tokens
+        # budget (e.g. the inline-only reviewer's 3000-token cap); try to
+        # recover the largest {...} block before giving up. A truncated,
+        # unclosed array falls through to the raw-text summary below rather
+        # than raising — this path never crashes the job.
         match = re.search(r"\{.*\}", raw, re.DOTALL)
         try:
             parsed = json.loads(match.group(0)) if match else None

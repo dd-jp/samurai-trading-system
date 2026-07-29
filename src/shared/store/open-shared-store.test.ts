@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runMigrations } from './migrate.js';
-import { openSharedStore } from './open-shared-store.js';
+import { openSharedStore, STORE_ENVIRONMENTS, sharedStorePath } from './open-shared-store.js';
 
 const TABLES = [
   'bars',
@@ -174,5 +174,66 @@ describe('openSharedStore', () => {
     expect(() =>
       insert.run('debate-1', 'key-2', 'AAPL', 'stocks', '[1]', '[1]', '2026-07-26T00:00:00.000Z'),
     ).toThrow();
+  });
+});
+
+describe('sharedStorePath', () => {
+  it('names one file per environment, the convention both entrypoints share', () => {
+    expect(sharedStorePath('production')).toBe('data/samurai-production.sqlite');
+    expect(sharedStorePath('development')).toBe('data/samurai-development.sqlite');
+    // Distinct files is the mechanism, not a detail: paper and live sharing a
+    // file would make cross-contamination possible.
+    expect(new Set(STORE_ENVIRONMENTS.map((env) => sharedStorePath(env))).size).toBe(
+      STORE_ENVIRONMENTS.length,
+    );
+  });
+
+  it('reads NODE_ENV when called with no argument — both entrypoints rely on that', () => {
+    // vitest sets NODE_ENV=test, which is why `test` is allow-listed.
+    expect(sharedStorePath()).toBe('data/samurai-test.sqlite');
+  });
+
+  it('defaults to development when NODE_ENV is unset', () => {
+    const saved = process.env.NODE_ENV;
+    delete process.env.NODE_ENV;
+    try {
+      expect(sharedStorePath()).toBe('data/samurai-development.sqlite');
+    } finally {
+      process.env.NODE_ENV = saved;
+    }
+  });
+
+  it('throws on an unrecognised environment rather than opening a different file', () => {
+    // The failure this prevents is silent: `prod` would open an empty
+    // data/samurai-prod.sqlite while real positions sit open at the broker.
+    for (const raw of ['prod', 'Production', 'PRODUCTION', '', 'live']) {
+      expect(() => sharedStorePath(raw)).toThrow(/must be one of/i);
+    }
+  });
+
+  it('refuses a path-bearing environment instead of interpolating it', () => {
+    for (const raw of ['../../etc/passwd', 'production/../../x', 'a/b']) {
+      expect(() => sharedStorePath(raw)).toThrow(/must be one of/i);
+    }
+  });
+
+  it('names the offending value so an operator can see the typo', () => {
+    expect(() => sharedStorePath('prod')).toThrow(/"prod"/);
+  });
+
+  it('resolves identically whether NODE_ENV is passed explicitly or read here', () => {
+    // Both entrypoints call it with no argument, but the equivalence is what
+    // makes that safe: the orchestrator writes the file the dashboard reads,
+    // so any divergence between the two call shapes is a silent split-brain.
+    for (const raw of [...STORE_ENVIRONMENTS, undefined]) {
+      const saved = process.env.NODE_ENV;
+      if (raw === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = raw;
+      try {
+        expect(sharedStorePath()).toBe(sharedStorePath(process.env.NODE_ENV ?? 'development'));
+      } finally {
+        process.env.NODE_ENV = saved;
+      }
+    }
   });
 });
