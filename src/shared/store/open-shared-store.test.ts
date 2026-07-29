@@ -220,4 +220,20 @@ describe('sharedStorePath', () => {
   it('names the offending value so an operator can see the typo', () => {
     expect(() => sharedStorePath('prod')).toThrow(/"prod"/);
   });
+
+  it('resolves identically whether NODE_ENV is passed explicitly or read here', () => {
+    // Both entrypoints call it with no argument, but the equivalence is what
+    // makes that safe: the orchestrator writes the file the dashboard reads,
+    // so any divergence between the two call shapes is a silent split-brain.
+    for (const raw of [...STORE_ENVIRONMENTS, undefined]) {
+      const saved = process.env.NODE_ENV;
+      if (raw === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = raw;
+      try {
+        expect(sharedStorePath()).toBe(sharedStorePath(process.env.NODE_ENV ?? 'development'));
+      } finally {
+        process.env.NODE_ENV = saved;
+      }
+    }
+  });
 });

@@ -194,7 +194,10 @@ export async function startFromEnvironment(
   // passed `backtest`/`live` deliberately must not be silently downgraded to
   // whatever `SAMURAI_MODE` says (mode selects the HITL posture).
   const mode = injected.mode ?? parseMode(process.env.SAMURAI_MODE);
-  const db = injected.db ?? openSharedStore(sharedStorePath(env));
+  // Called with no argument, exactly as `src/dashboard/index.ts` calls it:
+  // the resolver reads `NODE_ENV` itself, so the writer and the reader cannot
+  // derive different paths. `env` above is for the startup log line only.
+  const db = injected.db ?? openSharedStore(sharedStorePath());
 
   const orchestrator = buildProductionOrchestrator({
     ...(injected as ProductionConfig),
