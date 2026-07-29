@@ -93,6 +93,16 @@
  * `generateSplits` are all used unchanged, per the spec's "existing seams"
  * note — this ticket is orchestration, not a new implementation of any of
  * them.
+ *
+ * Ticket #245 adds `stage2-verdict.ts` — `renderStage2Verdict`, which checks
+ * `TrialGridResult[]` (#244) against the spec's kill line via `overfitting.ts`
+ * (#89) unchanged. As of this ticket no real trial data exists (no Polygon
+ * ingestion has ever run — see docs/research/06-stage2-overfitting-verdict.md),
+ * so `renderStage2Verdict` reports MinBTL for real (window/N only) and typed
+ * `NotComputableReason`s for PBO (the spec's 5-fold walk-forward split is not
+ * the even-count symmetric CSCV partition `pbo()` requires) and DSR
+ * (`MetricsSuite.sharpe` is Lo-adjusted annualized, not the raw per-period
+ * Sharpe `deflatedSharpe()` needs) rather than fabricating numbers.
  */
 
 export type { BacktestDeps } from './backtest.js';
@@ -127,6 +137,13 @@ export { generateSplits } from './splits.js';
 export { SqliteConfigTrialLog } from './sqlite-config-trial-log.js';
 export type { PolygonAggregate, PolygonClient } from './stage2-historical-store.js';
 export { Stage2HistoricalStore } from './stage2-historical-store.js';
+export type {
+  ConfigKillLineCheck,
+  NotComputableReason,
+  PboOutcome,
+  Stage2Verdict,
+} from './stage2-verdict.js';
+export { KILL_LINE, killLineChecks, renderStage2Verdict } from './stage2-verdict.js';
 export type { SeriesOptions } from './trade-derivation.js';
 export { assertCostModelPriced, toReturnSeries, toTradeSeries } from './trade-derivation.js';
 export type {
