@@ -245,6 +245,11 @@ def call_model(
                 model=model, messages=messages, max_tokens=max_tokens
             )
             raw = resp.choices[0].message.content or ""
+            print(
+                f"debug: finish_reason={resp.choices[0].finish_reason} "
+                f"content_chars={len(raw)}",
+                file=sys.stderr,
+            )
             break
         except Exception as exc:  # noqa: BLE001 - upstream 5xx/timeouts are common on this endpoint
             last_exc = exc
