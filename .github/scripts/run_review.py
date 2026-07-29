@@ -23,6 +23,8 @@ def main() -> None:
             model=os.environ["REVIEW_MODEL"],
             api_key=os.environ["NOUS_API_KEY"],
             base_url=os.environ["NOUS_BASE_URL"],
+            max_tokens=int(os.environ.get("REVIEW_MAX_TOKENS") or "8192"),
+            inline_only=(os.environ.get("REVIEW_INLINE_ONLY") or "false").lower() == "true",
         )
         payload = build_review_payload(diff, model_result)
 
