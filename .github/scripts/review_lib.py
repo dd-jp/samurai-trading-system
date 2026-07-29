@@ -235,19 +235,44 @@ def call_model(
     raw = None
     last_exc = None
     for attempt in range(TRANSIENT_MAX_ATTEMPTS):
+        chunks: list[str] = []
+        finish_reason = None
+        start = time.monotonic()
+        first_chunk_at = None
         try:
+            # Stream rather than wait for the full completion. Cloudflare's
+            # 524 fires when the origin hasn't sent a *complete* response
+            # within its proxy timeout (~100s) — with stream=False, kimi-k3's
+            # hidden chain-of-thought means no bytes go out until generation
+            # is entirely done, so a slow-but-otherwise-healthy generation
+            # looks identical to a hung origin. Streaming sends bytes as soon
+            # as the first token is produced, which keeps the connection
+            # under Cloudflare's idle/first-byte timeout instead of its
+            # total-response one.
             # No response_format: Nous's endpoint doesn't document JSON-mode
             # support, and constrained-decoding JSON modes on self-hosted
             # backends are a common cause of exactly this kind of latency.
             # We rely on the prompt's JSON instructions plus the regex
             # extraction fallback below instead.
-            resp = client.chat.completions.create(
-                model=model, messages=messages, max_tokens=max_tokens
+            stream = client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True
             )
-            raw = resp.choices[0].message.content or ""
+            for event in stream:
+                if first_chunk_at is None:
+                    first_chunk_at = time.monotonic()
+                choice = event.choices[0] if event.choices else None
+                if choice is None:
+                    continue
+                if choice.delta and choice.delta.content:
+                    chunks.append(choice.delta.content)
+                if choice.finish_reason:
+                    finish_reason = choice.finish_reason
+            raw = "".join(chunks)
+            ttfc = f"{first_chunk_at - start:.1f}s" if first_chunk_at else "None"
             print(
-                f"debug: finish_reason={resp.choices[0].finish_reason} "
-                f"content_chars={len(raw)}",
+                f"debug: finish_reason={finish_reason} content_chars={len(raw)} "
+                f"time_to_first_chunk={ttfc} "
+                f"total_time={time.monotonic() - start:.1f}s",
                 file=sys.stderr,
             )
             break
