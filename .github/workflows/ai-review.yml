@@ -1,4 +1,4 @@
-name: AI Code Review (Nous Portal — DeepSeek + Kimi)
+name: AI Code Review (Nous DeepSeek + Codex)
 
 on:
   pull_request:
@@ -18,25 +18,26 @@ jobs:
           - reviewer: nous-deepseek
             model_var: NOUS_MODEL
             api_key_secret: NOUS_API_KEY
+            base_url_var: NOUS_BASE_URL
             app_id_var: NOUS_APP_ID
             app_key_secret: NOUS_APP_PRIVATE_KEY
             max_tokens: "8192"
             inline_only: "false"
-          - reviewer: nous-kimi
-            model_var: KIMI_MODEL
-            api_key_secret: KIMI_NOUS_API_KEY
-            app_id_var: KIMI_APP_ID
+          - reviewer: codex
+            model_var: CODEX_MODEL
+            api_key_secret: CODEX_API_KEY
+            base_url_var: CODEX_BASE_URL
+            app_id_var: CODEX_APP_ID
+            # The GitHub App backing this reviewer identity was renamed
+            # in place (Kimi -> codex-5-review, App ID 4413406 unchanged) rather
+            # than deleted/recreated, so its existing private key is still
+            # valid. Secret values can't be read back to migrate them under a
+            # new name, so this still points at the original secret rather
+            # than a new CODEX_APP_PRIVATE_KEY. Rotate + rename later if the
+            # naming mismatch matters; functionally it's already correct.
             app_key_secret: KIMI_APP_PRIVATE_KEY
-            # kimi-k3 is a reasoning model: hidden chain-of-thought tokens
-            # count against max_tokens and are spent before any answer text.
-            # At max_tokens=3000 it burned the whole budget on reasoning and
-            # returned finish_reason=length with zero content, every time —
-            # confirmed via the debug log in review_lib.py. Needs the full
-            # budget so reasoning + the (now inline-only, so shorter) answer
-            # both fit; the existing retry/backoff in review_lib.py already
-            # absorbs the Cloudflare 524s this occasionally causes.
             max_tokens: "8192"
-            inline_only: "true"
+            inline_only: "false"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -58,7 +59,7 @@ jobs:
       - name: Run review (${{ matrix.reviewer }})
         env:
           NOUS_API_KEY: ${{ secrets[matrix.api_key_secret] }}
-          NOUS_BASE_URL: ${{ vars.NOUS_BASE_URL }}
+          NOUS_BASE_URL: ${{ vars[matrix.base_url_var] }}
           REVIEW_MODEL: ${{ vars[matrix.model_var] }}
           REVIEW_MAX_TOKENS: ${{ matrix.max_tokens }}
           REVIEW_INLINE_ONLY: ${{ matrix.inline_only }}
