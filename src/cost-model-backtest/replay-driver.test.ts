@@ -376,6 +376,16 @@ describe('ReplayDriver.run', () => {
     expect(barSource.calls).toBe(0);
   });
 
+  it('fails the run when the data source serves bars out of close_time order', async () => {
+    const bars = buildBars(REVERSAL_CLOSES);
+    const shuffled = [bars[2] as Bar, bars[1] as Bar, ...bars.slice(3)];
+    const { deps } = makeDeps(bars, { barSource: new UnfilteredBarSource(shuffled) });
+
+    await expect(new ReplayDriver(deps).run(CONFIG, windowOf(bars))).rejects.toThrow(
+      /out of order/i,
+    );
+  });
+
   it('reads each instrument from the bar source once, not once per stepped bar', async () => {
     const bars = buildBars(REVERSAL_CLOSES);
     const { deps, barSource } = makeDeps(bars);

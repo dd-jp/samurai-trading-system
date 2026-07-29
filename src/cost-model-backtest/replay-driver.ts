@@ -144,6 +144,26 @@ class BarCursor {
     private readonly auditor: LookaheadAuditor,
   ) {
     this.all = source.bars(symbol, window);
+
+    // The cursor stops at the first bar stamped after `at`, so it only reads
+    // an ascending array correctly: a misordered row would cut the visible
+    // prefix short and every indicator would then be computed over too few
+    // bars, silently. `ReplayBarSource` documents ascending order; this is
+    // that contract asserted rather than assumed, matching the module's
+    // distrust-the-source posture (`settle()` cannot catch it, because a
+    // past-stamped straggler passes the lookahead audit cleanly).
+    for (let i = 1; i < this.all.length; i++) {
+      const previous = this.all[i - 1] as Bar;
+      const current = this.all[i] as Bar;
+      if (current.close_time.getTime() <= previous.close_time.getTime()) {
+        throw new Error(
+          `ReplayDriver: bar source served ${symbol} out of order — ` +
+            `${current.close_time.toISOString()} follows ${previous.close_time.toISOString()}. ` +
+            'ReplayBarSource must return bars ascending by close_time; replaying an unsorted ' +
+            'series would compute indicators over the wrong window without erroring.',
+        );
+      }
+    }
   }
 
   /**
