@@ -103,6 +103,20 @@
  * the even-count symmetric CSCV partition `pbo()` requires) and DSR
  * (`MetricsSuite.sharpe` is Lo-adjusted annualized, not the raw per-period
  * Sharpe `deflatedSharpe()` needs) rather than fabricating numbers.
+ *
+ * Ticket #266 adds `http-polygon-client.ts` — `HttpPolygonClient`, the real
+ * `PolygonClient` implementation `Stage2HistoricalStore` was built to accept
+ * (#241 deliberately left it interface-only, ops/setup out of scope). It
+ * follows `.next_url` pagination and maps this repo's `<BASE>-USD` crypto
+ * symbols to Polygon's `X:<BASE>USD` ticker format, per
+ * docs/research/polygon-aggregates-api-2026-07-31.md (#263). This ticket
+ * also adds `scripts/run-stage2.ts`, the one-shot runner wiring ingestion ->
+ * `TrialGridAssetClass`es -> `runTrialGrid` -> `renderStage2Verdict` into a
+ * runnable path — glue, not new design. Neither piece was exercised against
+ * live Polygon traffic in this environment (no network access); both are
+ * covered by tests against a mocked HTTP client / fake `PolygonClient`
+ * instead. A real 5-year ingestion and the resulting written verdict remain
+ * a follow-up manual/ops step (#245's still-open AC2/4/5).
  */
 
 export type { BacktestDeps } from './backtest.js';
@@ -119,6 +133,8 @@ export type {
   ReplayTradeSource,
   SplitEval,
 } from './eval-types.js';
+export type { HttpPolygonClientOptions } from './http-polygon-client.js';
+export { HttpPolygonClient, toPolygonTicker } from './http-polygon-client.js';
 export type { LookaheadViolation } from './lookahead.js';
 export { LookaheadAuditor, LookaheadViolationError } from './lookahead.js';
 export { computeMetrics } from './metrics.js';

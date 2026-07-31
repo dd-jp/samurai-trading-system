@@ -1,0 +1,249 @@
+/**
+ * Stage 2 runner (ticket #266) — see
+ * docs/specs/stage2-validation-execution-spec.md and wayfinder map #154
+ * (decisions #155/#157). One-shot (re-runnable) glue: ingests real Polygon
+ * OHLCV for the MVP universe, runs the 12-config grid across stock and
+ * crypto asset classes, and renders the Stage 2 overfitting verdict.
+ *
+ * **Ops/setup, not new design.** Every seam this wires already exists and is
+ * tested (`Stage2HistoricalStore` #241, `ReplayDriver` #243, `runTrialGrid`
+ * #244, `renderStage2Verdict` #245). `HttpPolygonClient` (#266,
+ * `../cost-model-backtest/http-polygon-client.js`) is the one new piece of
+ * logic this file's neighbor supplies; this file only sequences calls.
+ *
+ * **Not exercised against live Polygon traffic.** This sandboxed environment
+ * has no network access, so the real ~5-year, 6-symbol ingestion this script
+ * is built to run has never actually executed here. `runStage2` is unit-
+ * tested against a fake `PolygonClient` (`run-stage2.test.ts`) to verify the
+ * wiring/typechecking is correct; running it for real against Polygon and
+ * producing a written Stage 2 verdict is a follow-up manual/ops step — see
+ * #245's still-open AC2/4/5, which this ticket does not attempt to close.
+ *
+ * Usage: `POLYGON_API_KEY=... npx tsc -p tsconfig.json && node dist/scripts/run-stage2.js`
+ * (or wire an `npm run stage2` script once this has been run for real once).
+ */
+import {
+  type CostConfig,
+  CostModelImpl,
+  CRYPTO_PERIODS_PER_YEAR,
+  type DateRange,
+  HttpPolygonClient,
+  InMemoryConfigTrialLog,
+  type PolygonClient,
+  ReplayDriver,
+  renderStage2Verdict,
+  runTrialGrid,
+  STOCK_PERIODS_PER_YEAR,
+  Stage2HistoricalStore,
+  type Stage2Verdict,
+  type TrialGridAssetClass,
+  type TrialGridResult,
+} from '../cost-model-backtest/index.js';
+import { SimulatedClock } from '../shared/clock.js';
+
+/** The fixed MVP universe (CLAUDE.md "Broker Plan" / spec "User Stories"). */
+export const STOCK_SYMBOLS = ['SPY', 'QQQ', 'AAPL', 'TSLA'] as const;
+export const CRYPTO_SYMBOLS = ['BTC-USD', 'ETH-USD'] as const;
+
+const FIVE_YEARS_MS = 5 * 365 * 86_400_000;
+const DEFAULT_CAPITAL_PER_TRADE = 10_000;
+const DEFAULT_AVERAGE_CAPITAL = 10_000;
+
+/**
+ * Pessimistic cost-model defaults — mirrors `cost-model.test.ts`'s
+ * `PESSIMISTIC_CONFIG` fixture, the only asset-class cost values this repo
+ * has settled on so far. Overridable via `RunStage2Deps.costConfig` once a
+ * real config is decided; using the same fixture here keeps this script's
+ * numbers directly comparable to the unit-tested cost model behaviour.
+ */
+export const PESSIMISTIC_COST_CONFIG: CostConfig = {
+  crypto: {
+    spreadVolatilityCoefficient: 0.5,
+    commissionRate: 0.001,
+    slippageCoefficient: 0.2,
+    impactK: 0.1,
+  },
+  stocks: {
+    spreadVolatilityCoefficient: 0.1,
+    commissionRate: 0.0005,
+    slippageCoefficient: 0.05,
+    impactK: 0.05,
+  },
+};
+
+/** Default window: the last 5 years, ending "now" — the spec's Starter-tier depth. */
+export function defaultFiveYearWindow(now: Date = new Date()): DateRange {
+  return { start: new Date(now.getTime() - FIVE_YEARS_MS), end: now };
+}
+
+export interface RunStage2Deps {
+  polygonClient: PolygonClient;
+  window?: DateRange;
+  /** Scratch SQLite path for `Stage2HistoricalStore`. Defaults to `:memory:`. */
+  dbPath?: string;
+  capitalPerTrade?: number;
+  averageCapital?: number;
+  costConfig?: CostConfig;
+  /** Sink for the printed report — defaults to `console.log`. */
+  print?: (line: string) => void;
+}
+
+/**
+ * The run's shared replay context — identical across every asset class this
+ * script builds (`store`, `costModel`, `window`, `capitalPerTrade`). Bundled
+ * so `makeAssetClass` takes one context plus the three fields that actually
+ * vary per asset class, instead of the same four values traveling as
+ * separate positional params on every call.
+ */
+interface ReplayContext {
+  store: Stage2HistoricalStore;
+  costModel: CostModelImpl;
+  window: DateRange;
+  capitalPerTrade: number;
+}
+
+/** One asset class's fixed symbol/periodsPerYear pairing this script drives. */
+function makeAssetClass(
+  ctx: ReplayContext,
+  asset_class: 'stocks' | 'crypto',
+  symbols: readonly string[],
+  periodsPerYear: number,
+): TrialGridAssetClass {
+  return {
+    asset_class,
+    periodsPerYear,
+    makeRunner: () =>
+      new ReplayDriver({
+        barSource: ctx.store,
+        timeline: ctx.store,
+        registry: ctx.store,
+        costModel: ctx.costModel,
+        clock: new SimulatedClock(ctx.window.start),
+        universe: symbols.map((symbol) => ({ symbol, asset_class })),
+        capitalPerTrade: ctx.capitalPerTrade,
+      }),
+  };
+}
+
+/**
+ * Ingests the full MVP universe, runs the 12-config grid across stocks and
+ * crypto, and renders the Stage 2 verdict. Returns the verdict (and prints
+ * the full metrics suite per config plus the pass/kill decision via
+ * `deps.print`) so a caller/test can assert on the structured result without
+ * scraping stdout.
+ */
+export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
+  const window = deps.window ?? defaultFiveYearWindow();
+  const print = deps.print ?? console.log;
+  const capitalPerTrade = deps.capitalPerTrade ?? DEFAULT_CAPITAL_PER_TRADE;
+  const averageCapital = deps.averageCapital ?? DEFAULT_AVERAGE_CAPITAL;
+
+  const store = new Stage2HistoricalStore(deps.polygonClient, deps.dbPath ?? ':memory:');
+
+  print(
+    `Stage 2: ingesting ${STOCK_SYMBOLS.length + CRYPTO_SYMBOLS.length} MVP-universe symbols ` +
+      `over ${window.start.toISOString()} .. ${window.end.toISOString()}`,
+  );
+  for (const symbol of [...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS]) {
+    await store.ingest(symbol, window);
+    const barCount = store.bars(symbol, window).length;
+    print(`  ingested ${symbol}: ${barCount} bars`);
+  }
+
+  const costModel = new CostModelImpl(deps.costConfig ?? PESSIMISTIC_COST_CONFIG);
+  const configTrialLog = new InMemoryConfigTrialLog();
+  const ctx: ReplayContext = { store, costModel, window, capitalPerTrade };
+
+  const stocks = makeAssetClass(ctx, 'stocks', STOCK_SYMBOLS, STOCK_PERIODS_PER_YEAR);
+  const crypto = makeAssetClass(ctx, 'crypto', CRYPTO_SYMBOLS, CRYPTO_PERIODS_PER_YEAR);
+
+  print('Stage 2: running the 12-config trial grid across stocks + crypto...');
+  const results = await runTrialGrid({
+    assetClasses: [stocks, crypto],
+    window,
+    averageCapital,
+    configTrialLog,
+  });
+
+  const verdict = renderStage2Verdict({
+    results,
+    distinctTrialCount: configTrialLog.distinctTrialCount(),
+    window,
+  });
+
+  printReport(results, verdict, print);
+
+  return verdict;
+}
+
+/** Prints the full metrics suite per (config, asset class) plus the pass/kill decision. */
+function printReport(
+  results: readonly TrialGridResult[],
+  verdict: Stage2Verdict,
+  print: (line: string) => void,
+): void {
+  print('');
+  print('=== Stage 2: per-config metrics ===');
+  for (const result of results) {
+    const m = result.report.window;
+    print(
+      `[${result.asset_class}] ${result.config_hash} ` +
+        `fastWindow=${result.config.fastWindow} slowWindow=${result.config.slowWindow} ` +
+        `atrStopMult=${result.config.atrStopMult} atrTargetMult=${result.config.atrTargetMult}`,
+    );
+    print(
+      `    window: sharpe=${m.sharpe.toFixed(3)} sortino=${m.sortino.toFixed(3)} ` +
+        `calmar=${m.calmar.toFixed(3)} max_drawdown=${m.max_drawdown.toFixed(3)} ` +
+        `profit_factor=${m.profit_factor.toFixed(3)} expectancy=${m.expectancy.toFixed(3)} ` +
+        `skew=${m.skew.toFixed(3)} kurtosis=${m.kurtosis.toFixed(3)} ` +
+        `turnover=${m.turnover.toFixed(3)} exposure=${m.exposure.toFixed(3)}`,
+    );
+    for (const split of result.report.splits) {
+      print(`    fold sharpe=${split.metrics.sharpe.toFixed(3)}`);
+    }
+  }
+
+  print('');
+  print('=== Stage 2: kill-line checks (OOS Sharpe) ===');
+  for (const check of verdict.kill_line_checks) {
+    print(
+      `[${check.asset_class}] ${check.config_hash} oos_sharpe=${check.oos_sharpe.toFixed(3)} ` +
+        `window_sharpe=${check.window_sharpe.toFixed(3)} ` +
+        `passes=${check.passes_oos_sharpe_line}`,
+    );
+  }
+
+  print('');
+  print('=== Stage 2: MinBTL ===');
+  print(
+    `n_distinct_trials=${verdict.n_distinct_trials} exceeded=${verdict.min_btl.exceeded} ` +
+      JSON.stringify(verdict.min_btl),
+  );
+
+  print('');
+  print('=== Stage 2: PBO ===');
+  for (const outcome of verdict.pbo) {
+    print(JSON.stringify(outcome));
+  }
+
+  print('');
+  print('=== Stage 2: DSR ===');
+  print(JSON.stringify(verdict.dsr_note));
+
+  print('');
+  print(`=== Stage 2 VERDICT: ${verdict.overall_pass ? 'PASS' : 'KILL/INCOMPLETE'} ===`);
+}
+
+/**
+ * Entrypoint guard — only runs when this file is executed directly (`node
+ * dist/scripts/run-stage2.js`), not when imported by a test. Mirrors
+ * `src/orchestrator/index.ts` / `src/dashboard/index.ts`'s split between an
+ * exported, testable function and a thin top-level invocation.
+ */
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const polygonClient = new HttpPolygonClient();
+  runStage2({ polygonClient }).catch((error: unknown) => {
+    console.error('Stage 2 run failed:', error);
+    process.exitCode = 1;
+  });
+}
