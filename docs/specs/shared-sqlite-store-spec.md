@@ -65,7 +65,7 @@ Runs pending migrations, returns a typed handle. Components receive it via const
 
 ### Module: Consolidated Schema
 
-Every `CREATE TABLE` the store needs, collected from the eleven specs that implicitly define them plus the three that had no schema anywhere until this map resolved them (`verdict_log` and `breaker_state` were added later, per #206 and #203 respectively). `cii_snapshots` was added later still, per #182 (`0003_cii_snapshots.sql`). Field-level non-collision was re-verified across all seventeen tables (see **Non-Collision Verification** below).
+Every `CREATE TABLE` the store needs, collected from the eleven specs that implicitly define them plus the three that had no schema anywhere until this map resolved them (`verdict_log` and `breaker_state` were added later, per #206 and #203 respectively). `cii_snapshots` was added later still, per #182 (`0003_cii_snapshots.sql`). `account_state` was added later still, per the transport-layer-spec.md cross-verify pass (2026-07-31), closing a gap where `AccountStateProvider`'s `peak_equity` had no durable home. Field-level non-collision was re-verified across all eighteen tables (see **Non-Collision Verification** below).
 
 **Market Data Service** — owner: `docs/specs/market-data-service-spec.md`
 
@@ -323,9 +323,26 @@ CREATE TABLE current_tick (
 );
 ```
 
+**AccountStateProvider** — owner: `docs/specs/transport-layer-spec.md`
+
+```sql
+-- Durable account-level running state AccountStateProvider needs but Alpaca's
+-- account API doesn't carry (no all-time high-water-mark field). Deliberately
+-- NOT part of current_tick: that table is disposable, best-effort, and
+-- deleted on tick completion (see comment above) -- a monotonic high-water
+-- mark stored there would be silently wiped every tick, disabling the hard
+-- portfolio-drawdown circuit breaker (risk-manager-spec.md) that peak_equity
+-- feeds. Single durable row (key = 'default'), upserted every tick, never deleted.
+CREATE TABLE account_state (
+  key           TEXT PRIMARY KEY,
+  peak_equity   REAL NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+```
+
 ### Non-Collision Verification
 
-`cross-spec-contracts.md`'s "shared-store table non-collision" spot-check was clean at the table-name level; re-verified here at the field level across all seventeen tables above:
+`cross-spec-contracts.md`'s "shared-store table non-collision" spot-check was clean at the table-name level; re-verified here at the field level across all eighteen tables above:
 
 - **`latest_mark` was missing `asset_class`** (#183) — the `Mark` interface (market-data-service-spec.md) declares it, the original persistence bullet dropped it. **Fixed above**, not silently — this DDL is the first place the full column list was ever written out, so there was no prior "wrong" schema to correct, only an incomplete prose description.
 - **`Fill` vs. the cost model's result type** — already resolved pre-existing (GAP-F renamed the cost model's return type to `CostModelResult` specifically to avoid colliding with the persisted `fills` table; `cross-spec-contracts.md` confirms this explicitly).
@@ -335,6 +352,7 @@ CREATE TABLE current_tick (
 - **`breaker_state`** (#203) — `tier` is its own PK, disjoint from every other table's `debate_id`/`trace_id`/`idempotency_key` keying convention. `tripped_at`/`reset_at` are nullable `TEXT` timestamps (null while never-tripped/still-tripped respectively) — no other table has a comparable nullable-timestamp pair to collide with. No divergence.
 - **`dial_adjustments` was missing `reason`** (#197) — `Adjustment.reason` (feedback-loop-spec.md's "Module: Guardrailed Tuning") was already a required field consumed by `daily-cycle.ts`/`metrics.ts`; the original DDL bullet dropped it, the same class of gap as `latest_mark`/`asset_class` above. **Fixed above**, plus a real migration (`0002_dial_adjustments_reason.sql`, `ALTER TABLE ... ADD COLUMN reason TEXT NOT NULL DEFAULT ''`) since `0001_init.sql` had already shipped without it.
 - **`cii_snapshots`** (#182) — `country_code` is a plain `TEXT` code (WorldMonitor country codes, e.g. `'RU'`), disjoint from every other table's keying convention; not the same value space as `asset_class`'s `crypto`/`stocks` enum despite both being country/market-adjacent classifiers. `(country_code, captured_at)` composite PK is the append-only-history pattern already used by `bars`' `(instrument, timeframe, open_time)`. No divergence.
+- **`account_state`** (transport-layer-spec.md, 2026-07-31) — `key` is its own single-row PK (`'default'`), disjoint from every other table's keying convention; no other table carries a bare running-max scalar like `peak_equity`. No divergence.
 - No other field-level collisions found.
 
 ## Testing Decisions
@@ -381,6 +399,7 @@ Trader              → cosine_setups (writes; FL labels)
 Debate Engine       → debate_log
 Verdict             → verdict_log
 Orchestrator        → audit_log, current_tick
+Transport Layer     → account_state (AccountStateProvider, peak_equity)
 ```
 
 Every stage above reads/writes through the one `SharedStore` handle from `openSharedStore(dbPath)`, injected at each stage's construction.
