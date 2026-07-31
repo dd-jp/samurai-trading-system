@@ -9,8 +9,8 @@
 export type { Clock } from './clock.js';
 export { SimulatedClock, SystemClock } from './clock.js';
 export { fetchWithTimeout } from './http/fetch-with-timeout.js';
-export { withRetry } from './http/retry.js';
 export type { RetryConfig } from './http/retry.js';
+export { withRetry } from './http/retry.js';
 export type {
   ClosedTrade,
   ClosedTradeStore,
