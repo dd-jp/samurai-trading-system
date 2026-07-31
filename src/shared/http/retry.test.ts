@@ -122,7 +122,25 @@ describe('withRetry (generic)', () => {
   });
 
   it('honors retryAfterMs on a retryable error, overriding the computed backoff', async () => {
-    // Computed backoff for attempt 1 would be 100ms; the hint says wait 5000ms instead.
+    // Computed backoff for attempt 1 would be 100ms; the hint says wait 500ms instead
+    // (under CONFIG.maxDelayMs of 1000ms, so it isn't clamped).
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new RetryableError('rate limited', 500))
+      .mockResolvedValueOnce('ok');
+
+    const promise = withRetry(fn, CONFIG, isRetryable);
+
+    await vi.advanceTimersByTimeAsync(499);
+    expect(fn).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fn).toHaveBeenCalledTimes(2);
+
+    await expect(promise).resolves.toBe('ok');
+  });
+
+  it('clamps a retryAfterMs hint that exceeds maxDelayMs', async () => {
+    // CONFIG.maxDelayMs is 1000ms; a provider hint of 5000ms must not bypass it.
     const fn = vi
       .fn()
       .mockRejectedValueOnce(new RetryableError('rate limited', 5_000))
@@ -130,7 +148,27 @@ describe('withRetry (generic)', () => {
 
     const promise = withRetry(fn, CONFIG, isRetryable);
 
-    await vi.advanceTimersByTimeAsync(4_999);
+    await vi.advanceTimersByTimeAsync(CONFIG.maxDelayMs - 1);
+    expect(fn).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fn).toHaveBeenCalledTimes(2);
+
+    await expect(promise).resolves.toBe('ok');
+  });
+
+  it.each([
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    -1,
+  ])('falls back to computed backoff when retryAfterMs is invalid (%s)', async (invalidHint) => {
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new RetryableError('rate limited', invalidHint))
+      .mockResolvedValueOnce('ok');
+
+    const promise = withRetry(fn, CONFIG, isRetryable);
+
+    await vi.advanceTimersByTimeAsync(CONFIG.baseDelayMs - 1);
     expect(fn).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(fn).toHaveBeenCalledTimes(2);

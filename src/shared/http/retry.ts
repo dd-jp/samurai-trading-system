@@ -29,16 +29,21 @@ function backoffDelayMs(attempt: number, config: RetryConfig): number {
 /**
  * A retryable error may carry a provider-supplied hint for how long to wait
  * before the next attempt (e.g. a rate-limit error's `Retry-After`). When
- * present, it overrides the computed exponential backoff for that attempt —
- * duck-typed rather than tied to any one client's error hierarchy, since
- * each client defines its own error classes.
+ * present and a finite non-negative number, it overrides the computed
+ * exponential backoff for that attempt — still clamped to `maxDelayMs`, since
+ * a provider-controlled value must not be able to park the retry loop past
+ * the caller's latency budget. Duck-typed rather than tied to any one
+ * client's error hierarchy, since each client defines its own error classes.
  */
-function retryAfterHintMs(error: unknown): number | undefined {
+function retryAfterHintMs(error: unknown, config: RetryConfig): number | undefined {
   if (typeof error !== 'object' || error === null || !('retryAfterMs' in error)) {
     return undefined;
   }
   const hint = (error as { retryAfterMs?: unknown }).retryAfterMs;
-  return typeof hint === 'number' ? hint : undefined;
+  if (typeof hint !== 'number' || !Number.isFinite(hint) || hint < 0) {
+    return undefined;
+  }
+  return Math.min(hint, config.maxDelayMs);
 }
 
 /**
@@ -63,7 +68,7 @@ export async function withRetry<T>(
       if (!isRetryable(error) || attempt === config.maxAttempts) {
         throw error;
       }
-      await delay(retryAfterHintMs(error) ?? backoffDelayMs(attempt, config));
+      await delay(retryAfterHintMs(error, config) ?? backoffDelayMs(attempt, config));
     }
   }
 

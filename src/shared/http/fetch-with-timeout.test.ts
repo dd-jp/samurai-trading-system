@@ -46,6 +46,58 @@ describe('fetchWithTimeout', () => {
     expect(capturedSignal?.aborted).toBe(true);
   });
 
+  it('aborts the request when the caller-supplied signal aborts, before the timeout', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      capturedSignal = init.signal as AbortSignal;
+      return new Promise((_resolve, reject) => {
+        capturedSignal?.addEventListener('abort', () => {
+          reject(new DOMException('The operation was aborted.', 'AbortError'));
+        });
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const callerController = new AbortController();
+    const promise = fetchWithTimeout(
+      'https://example.test/slow',
+      { signal: callerController.signal },
+      10_000,
+    );
+    const assertion = expect(promise).rejects.toMatchObject({ name: 'AbortError' });
+
+    callerController.abort();
+    await assertion;
+
+    expect(capturedSignal?.aborted).toBe(true);
+  });
+
+  it('still aborts on timeout when the caller supplies a signal that never fires', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      capturedSignal = init.signal as AbortSignal;
+      return new Promise((_resolve, reject) => {
+        capturedSignal?.addEventListener('abort', () => {
+          reject(new DOMException('The operation was aborted.', 'AbortError'));
+        });
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const callerController = new AbortController();
+    const promise = fetchWithTimeout(
+      'https://example.test/slow',
+      { signal: callerController.signal },
+      500,
+    );
+    const assertion = expect(promise).rejects.toMatchObject({ name: 'AbortError' });
+
+    await vi.advanceTimersByTimeAsync(500);
+    await assertion;
+
+    expect(capturedSignal?.aborted).toBe(true);
+  });
+
   it('passes through caller-supplied init fields alongside the abort signal', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response('ok'));
     vi.stubGlobal('fetch', fetchMock);
