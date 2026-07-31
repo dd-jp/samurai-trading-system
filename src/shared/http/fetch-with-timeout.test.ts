@@ -25,20 +25,20 @@ describe('fetchWithTimeout', () => {
     expect(init.signal.aborted).toBe(false);
   });
 
-  it('aborts the request once timeoutMs elapses', async () => {
+  it('aborts the request once timeoutMs elapses, with a TimeoutError reason', async () => {
     let capturedSignal: AbortSignal | undefined;
     const fetchMock = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
       capturedSignal = init.signal as AbortSignal;
       return new Promise((_resolve, reject) => {
         capturedSignal?.addEventListener('abort', () => {
-          reject(new DOMException('The operation was aborted.', 'AbortError'));
+          reject(capturedSignal?.reason);
         });
       });
     });
     vi.stubGlobal('fetch', fetchMock);
 
     const promise = fetchWithTimeout('https://example.test/slow', {}, 500);
-    const assertion = expect(promise).rejects.toMatchObject({ name: 'AbortError' });
+    const assertion = expect(promise).rejects.toMatchObject({ name: 'TimeoutError' });
 
     await vi.advanceTimersByTimeAsync(500);
     await assertion;
@@ -46,13 +46,13 @@ describe('fetchWithTimeout', () => {
     expect(capturedSignal?.aborted).toBe(true);
   });
 
-  it('aborts the request when the caller-supplied signal aborts, before the timeout', async () => {
+  it('aborts the request when the caller-supplied signal aborts, before the timeout, preserving the caller reason', async () => {
     let capturedSignal: AbortSignal | undefined;
     const fetchMock = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
       capturedSignal = init.signal as AbortSignal;
       return new Promise((_resolve, reject) => {
         capturedSignal?.addEventListener('abort', () => {
-          reject(new DOMException('The operation was aborted.', 'AbortError'));
+          reject(capturedSignal?.reason);
         });
       });
     });
@@ -72,13 +72,13 @@ describe('fetchWithTimeout', () => {
     expect(capturedSignal?.aborted).toBe(true);
   });
 
-  it('still aborts on timeout when the caller supplies a signal that never fires', async () => {
+  it('still aborts on timeout, with a TimeoutError reason, when the caller supplies a signal that never fires', async () => {
     let capturedSignal: AbortSignal | undefined;
     const fetchMock = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
       capturedSignal = init.signal as AbortSignal;
       return new Promise((_resolve, reject) => {
         capturedSignal?.addEventListener('abort', () => {
-          reject(new DOMException('The operation was aborted.', 'AbortError'));
+          reject(capturedSignal?.reason);
         });
       });
     });
@@ -90,7 +90,7 @@ describe('fetchWithTimeout', () => {
       { signal: callerController.signal },
       500,
     );
-    const assertion = expect(promise).rejects.toMatchObject({ name: 'AbortError' });
+    const assertion = expect(promise).rejects.toMatchObject({ name: 'TimeoutError' });
 
     await vi.advanceTimersByTimeAsync(500);
     await assertion;
