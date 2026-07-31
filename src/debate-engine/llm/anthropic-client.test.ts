@@ -202,4 +202,41 @@ describe('AnthropicLlmClient', () => {
     expect(result.data).toEqual({ value: 'good' });
     expect(wire.createMessage).toHaveBeenCalledTimes(2);
   });
+
+  it('retries a malformed response and succeeds once a valid one arrives (isRetryable closure, #271)', async () => {
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi
+        .fn()
+        .mockResolvedValueOnce(textResponse('garbage'))
+        .mockResolvedValueOnce(textResponse('good')),
+    };
+    const client = new AnthropicLlmClient(wire, {
+      model: 'claude-sonnet-5',
+      max_tokens: 1024,
+      timeoutMs: 1_000,
+      retry: { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 1_000 },
+    });
+
+    const promise = client.complete(request());
+    await vi.advanceTimersByTimeAsync(100);
+
+    const result = await promise;
+    expect(result.data).toEqual({ value: 'good' });
+    expect(wire.createMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry an unclassified LlmProviderError (isRetryable closure, #271)', async () => {
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockRejectedValue(new Error('server exploded')),
+    };
+    const client = new AnthropicLlmClient(wire, {
+      model: 'claude-sonnet-5',
+      max_tokens: 1024,
+      timeoutMs: 1_000,
+      retry: { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 1_000 },
+    });
+
+    await expect(client.complete(request())).rejects.toBeInstanceOf(LlmProviderError);
+    expect(wire.createMessage).toHaveBeenCalledTimes(1);
+  });
 });

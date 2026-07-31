@@ -3,7 +3,8 @@
  * spec.md "LLM Selection & Prompt Engineering" out-of-scope note — this is
  * that implementation detail). Callers (#26 personas, #32 disagreement
  * detection) branch on error *type*, not on parsing provider-specific
- * messages, and the retry wrapper (retry.ts) uses these types to decide
+ * messages, and `anthropic-client.ts`'s `isRetryable` (closed over the
+ * shared `src/shared/http/retry.ts` loop, #271) uses these types to decide
  * what is worth retrying.
  */
 
