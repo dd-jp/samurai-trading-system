@@ -147,7 +147,13 @@ describe('RiskManagerImpl.evaluate — next_breaker_state pass-through (#203)', 
         reset_at: null,
         reason: 'portfolio_drawdown_hard',
       },
-      { tier: 'kill_switch' as const, tripped: false, tripped_at: null, reset_at: null, reason: null },
+      {
+        tier: 'kill_switch' as const,
+        tripped: false,
+        tripped_at: null,
+        reset_at: null,
+        reason: null,
+      },
     ];
     const input = makeInput({ next_breaker_state: persisted });
 

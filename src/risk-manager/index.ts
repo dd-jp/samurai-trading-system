@@ -23,8 +23,8 @@ import type {
   BreakerState,
   PortfolioView,
   RiskConfig,
-  RiskDecision,
   RiskCriticVerdict,
+  RiskDecision,
   RiskInput,
   RiskManager,
 } from './types.js';
@@ -277,7 +277,11 @@ function applyCritic(
   reasons: string[],
 ): { changed: boolean; notional: number; rejected: boolean } {
   if (critic.verdict === 'pass' || critic.verdict === 'unavailable') {
-    return { changed: false, notional: finalSize * (critic.verdict === 'pass' ? 1 : 1), rejected: false };
+    return {
+      changed: false,
+      notional: finalSize * (critic.verdict === 'pass' ? 1 : 1),
+      rejected: false,
+    };
   }
 
   if (critic.verdict === 'reject') {
@@ -290,6 +294,8 @@ function applyCritic(
     return { changed: false, notional, rejected: false };
   }
 
-  reasons.push(`risk_critic: trimmed notional from ${notional} to ${criticCap} (${critic.reasoning})`);
+  reasons.push(
+    `risk_critic: trimmed notional from ${notional} to ${criticCap} (${critic.reasoning})`,
+  );
   return { changed: true, notional: criticCap, rejected: false };
 }
