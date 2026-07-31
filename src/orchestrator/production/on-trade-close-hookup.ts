@@ -27,10 +27,10 @@
  * exposes exactly one `SharedStore` for the whole composition root to share.
  */
 
-import type { SharedStore } from '../../execution/types.js';
-import { onTradeClose } from '../../feedback-loop/on-trade-close.js';
-import type { OnTradeCloseInput } from '../../feedback-loop/types.js';
-import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../../shared/types.js';
+import type { SharedStore } from '../../execution/index.js';
+import type { OnTradeCloseInput } from '../../feedback-loop/index.js';
+import { onTradeClose } from '../../feedback-loop/index.js';
+import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../../shared/index.js';
 import type { Logger } from '../types.js';
 
 /**

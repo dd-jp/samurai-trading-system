@@ -1,6 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import type { TradingCalendar } from '../market-data-service/trading-calendar.js';
-import type { Clock } from '../shared/clock.js';
+import type { TradingCalendar } from '../market-data-service/index.js';
+import type { Clock } from '../shared/index.js';
 import { DEFAULT_UNIVERSE, type SchedulerConfig, UniverseScheduler } from './scheduler.js';
 import type { UniverseInstrument } from './types.js';
 

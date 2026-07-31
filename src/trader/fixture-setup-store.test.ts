@@ -1,5 +1,4 @@
-import { describe, expect, it } from 'vitest';
-import type { SetupVector } from '../shared/types.js';
+import type { SetupVector } from '../shared/index.js';
 import { FixtureSetupStore } from './fixture-setup-store.js';
 
 const VECTOR: SetupVector = { debate_features: [0.7, 1, 1, 0.1], market_features: [0.3, 0.5] };

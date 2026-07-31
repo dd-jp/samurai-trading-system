@@ -1,6 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Clock } from '../shared/clock.js';
-import { SystemClock } from '../shared/clock.js';
+import type { Clock } from '../shared/index.js';
+import { SystemClock } from '../shared/index.js';
 import { MarketIntelligenceStore } from './index.js';
 import type { AgentIntelligence, IntelligenceItem, MarketContext } from './types.js';
 

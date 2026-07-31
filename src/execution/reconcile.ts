@@ -24,7 +24,7 @@
  * reconcile first, then `ingestFills()` to pick up whatever filled while the
  * process was down.
  */
-import type { OpenPosition, OrderState } from '../shared/types.js';
+import type { OpenPosition, OrderState } from '../shared/index.js';
 import type { ExecutionInput, ReconcileDivergence, ReconcileReport } from './types.js';
 
 /** The states a crash can strand: written ahead, or acked but not advanced. */

@@ -20,8 +20,8 @@
  * against it — it simply has nothing to report for this universe.
  */
 import BetterSqlite3 from 'better-sqlite3';
-import { closeTimeOf } from '../market-data-service/timeframe.js';
-import type { Bar } from '../market-data-service/types.js';
+import type { Bar } from '../market-data-service/index.js';
+import { closeTimeOf } from '../market-data-service/index.js';
 import type { ReplayTimeline } from './types.js';
 import type { DateRange, InstrumentListing, InstrumentRegistry } from './universe.js';
 

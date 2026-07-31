@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest';
 import { deflatedSharpe, minbtl, minbtlGuard, pbo } from './overfitting.js';
 import type { DateRange } from './universe.js';
 

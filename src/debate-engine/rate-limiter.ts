@@ -11,7 +11,7 @@
  * Layer (#31, not yet built) — it only counts calls the caller reports via
  * `recordCall`, it never invokes an LLM itself.
  */
-import type { Clock } from '../shared/clock.js';
+import type { Clock } from '../shared/index.js';
 
 /**
  * Budget for a single time window. `windowMs` is the fixed window length;

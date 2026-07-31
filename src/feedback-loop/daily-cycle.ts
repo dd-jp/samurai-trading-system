@@ -16,7 +16,7 @@
  * `onTradeClose` (setup-store R-labelling) is #92 and `computeMetrics` is
  * #93; neither is implemented here.
  */
-import type { ClosedTrade } from '../shared/types.js';
+import type { ClosedTrade } from '../shared/index.js';
 import { accumulateCredit, impliedWeight } from './attribution.js';
 import { applyGuardrail } from './guardrails.js';
 import type {

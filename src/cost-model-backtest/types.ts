@@ -13,8 +13,8 @@
  * honestly populate them — see the note in `index.ts` on why #89 is not it.
  */
 
-import type { TickOutcome } from '../orchestrator/types.js';
-import type { SimulatedClock } from '../shared/clock.js';
+import type { TickOutcome } from '../orchestrator/index.js';
+import type { SimulatedClock } from '../shared/index.js';
 import type { DateRange } from './universe.js';
 
 /** A request to fill an order against the cost model. */

@@ -8,7 +8,7 @@
  * routing through `TradeChannelNotifier.notify` (which is shaped for a
  * `VerdictDecision`, not a liveness ping).
  */
-import type { DiscordClient, TelegramClient } from '../verdict/notifications/types.js';
+import type { DiscordClient, TelegramClient } from '../verdict/index.js';
 import type { HeartbeatChannel } from './heartbeat.js';
 
 function formatHeartbeat(timestamp: Date): string {

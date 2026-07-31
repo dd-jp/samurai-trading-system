@@ -1,7 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
 import type { AnalystOrchestrator } from '../../analysts/index.js';
-import type { AnalystView } from '../../debate-engine/types.js';
-import type { Clock } from '../../shared/clock.js';
+import type { AnalystView } from '../../debate-engine/index.js';
+import type { Clock } from '../../shared/index.js';
 import { buildAnalystsStep } from './analysts-adapter.js';
 
 const NOW = new Date('2026-07-28T14:00:00Z');

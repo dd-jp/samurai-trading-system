@@ -5,7 +5,7 @@
  * Enforcement, Module: Marks, Module: Indicators, Module: Caching) and
  * docs/specs/cross-spec-contracts.md §3.
  */
-import type { Clock } from '../shared/clock.js';
+import type { Clock } from '../shared/index.js';
 import { buildIndicatorCacheKey, IndicatorCache } from './indicator-cache.js';
 import { computeIndicator } from './indicators.js';
 import type {

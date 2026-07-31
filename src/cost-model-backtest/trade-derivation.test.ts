@@ -1,5 +1,4 @@
-import { describe, expect, it } from 'vitest';
-import type { ClosedTrade, Fill } from '../shared/types.js';
+import type { ClosedTrade, Fill } from '../shared/index.js';
 import { assertCostModelPriced, toReturnSeries, toTradeSeries } from './trade-derivation.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;

@@ -13,7 +13,7 @@
  * exactly the "warning" behaviour the spec rules out. A throw is unignorable
  * and aborts before a poisoned trade is produced.
  */
-import type { Clock } from '../shared/clock.js';
+import type { Clock } from '../shared/index.js';
 
 /** The offending read: what was read, when it is stamped, and the replay's T. */
 export interface LookaheadViolation {

@@ -14,7 +14,7 @@
  * (`wm.risk(countryCode)` per ADR-0002 §5); until then callers inject
  * whatever provider they have (e.g. a stub in tests).
  */
-import type { Clock } from '../../shared/clock.js';
+import type { Clock } from '../../shared/index.js';
 
 /** The raw per-country score read, decoupled from any particular SDK/transport. */
 export interface CiiScoreProvider {

@@ -18,13 +18,13 @@
  * how the tick runner already recognizes a quorum skip (tick-runner.ts).
  */
 
+import type { AnalystView } from '../debate-engine/index.js';
 import type { MarketDataService } from '../market-data-service/index.js';
 import type { MarketIntelligenceStore } from '../market-intelligence/index.js';
-import type { Clock } from '../shared/clock.js';
+import type { Clock } from '../shared/index.js';
 import { fundamentalAnalyst } from './fundamental-analyst.js';
 import { sentimentAnalyst } from './sentiment-analyst.js';
 import { technicalAnalyst } from './technical-analyst.js';
-import type { AnalystView } from '../debate-engine/index.js';
 import type { Analyst, AnalystFailure, AnalystRunResult, Signal } from './types.js';
 
 const ALL_PERSONAS: Analyst[] = [technicalAnalyst, fundamentalAnalyst, sentimentAnalyst];

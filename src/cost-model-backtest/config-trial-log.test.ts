@@ -1,5 +1,4 @@
-import { describe, expect, it } from 'vitest';
-import { openSharedStore } from '../shared/store/open-shared-store.js';
+import { openSharedStore } from '../shared/store/index.js';
 import type { ConfigTrialLog } from './config-trial-log.js';
 import { InMemoryConfigTrialLog } from './config-trial-log.js';
 import { SqliteConfigTrialLog } from './sqlite-config-trial-log.js';

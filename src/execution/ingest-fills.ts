@@ -16,7 +16,7 @@
  * dedup on `broker_fill_id`, and a lot closes once because closing makes it
  * terminal and terminal lots leave `getOpenPositions()`.
  */
-import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../shared/types.js';
+import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../shared/index.js';
 import type { ExecutionInput, NormalizedFill } from './types.js';
 
 /** A fill on a protective/closing leg — anything that isn't opening the lot. */

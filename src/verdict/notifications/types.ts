@@ -6,7 +6,7 @@
  * mirroring market-data-service/sources' AlpacaClient/CcxtClient/IbkrClient
  * pattern.
  */
-import type { RiskDecision } from '../../risk-manager/types.js';
+import type { RiskDecision } from '../../risk-manager/index.js';
 import type { VerdictDecision } from '../types.js';
 
 /**

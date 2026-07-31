@@ -1,6 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { openSharedStore } from '../shared/store/open-shared-store.js';
-import type { SetupNeighbor, SetupStore, SetupVector } from '../shared/types.js';
+import type { SetupNeighbor, SetupStore, SetupVector } from '../shared/index.js';
+import { openSharedStore } from '../shared/store/index.js';
 import {
   cosineSimilarity,
   K_NEIGHBORS,

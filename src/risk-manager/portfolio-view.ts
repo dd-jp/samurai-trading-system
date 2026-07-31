@@ -9,8 +9,8 @@
  * rather than invented. Only the mark-to-market/exposure math — this
  * ticket's acceptance criteria — is actually computed.
  */
-import type { MarketDataService } from '../market-data-service/types.js';
-import type { OpenPosition } from '../shared/types.js';
+import type { MarketDataService } from '../market-data-service/index.js';
+import type { OpenPosition } from '../shared/index.js';
 import type { PortfolioView } from './types.js';
 
 export interface PortfolioAccountingInput {

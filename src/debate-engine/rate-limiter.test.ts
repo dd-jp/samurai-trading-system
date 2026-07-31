@@ -1,5 +1,4 @@
-import { describe, expect, it } from 'vitest';
-import { SimulatedClock } from '../shared/clock.js';
+import { SimulatedClock } from '../shared/index.js';
 import { RateLimiter, type RateLimiterConfig } from './rate-limiter.js';
 
 const start = new Date('2026-07-19T00:00:00.000Z');

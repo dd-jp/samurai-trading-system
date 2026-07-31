@@ -6,6 +6,7 @@
  */
 
 export { decide } from './decide.js';
+export { FixtureSetupStore } from './fixture-setup-store.js';
 export { computeIdempotencyKey } from './idempotency-key.js';
 export {
   type SetupAssetClass,

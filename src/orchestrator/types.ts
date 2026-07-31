@@ -12,13 +12,12 @@
  * #96 adds `CurrentTickStore` to `TickContext` (the disposable per-instrument
  * progress row) and the dead-man's-switch heartbeat (heartbeat.ts).
  */
-import type { Signal } from '../analysts/types.js';
-import type { AnalystView, DebateResult } from '../debate-engine/types.js';
-import type { ExecutionResult } from '../execution/types.js';
-import type { RiskDecision } from '../risk-manager/types.js';
-import type { Clock } from '../shared/clock.js';
-import type { OrderIntent } from '../shared/types.js';
-import type { VerdictDecision } from '../verdict/types.js';
+import type { Signal } from '../analysts/index.js';
+import type { AnalystView, DebateResult } from '../debate-engine/index.js';
+import type { ExecutionResult } from '../execution/index.js';
+import type { RiskDecision } from '../risk-manager/index.js';
+import type { Clock, OrderIntent } from '../shared/index.js';
+import type { VerdictDecision } from '../verdict/index.js';
 
 export type AssetClass = 'crypto' | 'stocks';
 

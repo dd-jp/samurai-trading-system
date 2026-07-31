@@ -10,7 +10,7 @@
  * comparison.
  */
 
-import type { SharedStore } from '../shared/store/open-shared-store.js';
+import type { SharedStore } from '../shared/store/index.js';
 import type { Bar, Mark, MarketDataStore } from './types.js';
 
 interface BarRow {

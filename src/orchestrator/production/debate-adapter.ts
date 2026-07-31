@@ -41,27 +41,24 @@
  *   `rationale` rather than left blank; flagged in the PR as the one actual
  *   invention, not silently assumed correct.
  */
-import type { AnalystRoundStance } from '../../debate-engine/analyst-contribution.js';
-import { computeConvictionScore } from '../../debate-engine/conviction-score.js';
-import { detectDisagreements } from '../../debate-engine/disagreement-detector.js';
-import type { LlmClient } from '../../debate-engine/llm/types.js';
+import type { AnalystRoundStance, LlmClient } from '../../debate-engine/index.js';
 import {
-  type PersonaResponse,
-  runBearPersona,
-  runBullPersona,
-  runMediatorPersona,
-} from '../../debate-engine/personas.js';
-import {
+  computeConvictionScore,
   type DebatePersonas,
   type DebaterPersona,
+  detectDisagreements,
   MAX_ROUNDS,
   type MediatorAssessment,
   type MediatorPersona,
+  type PersonaResponse,
   type RoundContext,
   type RoundStance,
+  runBearPersona,
+  runBullPersona,
   runDebate,
-} from '../../debate-engine/round-orchestrator.js';
-import type { Clock } from '../../shared/clock.js';
+  runMediatorPersona,
+} from '../../debate-engine/index.js';
+import type { Clock } from '../../shared/index.js';
 import type { TickSteps } from '../types.js';
 
 /**

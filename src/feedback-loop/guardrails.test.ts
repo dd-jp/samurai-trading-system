@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest';
 import { applyGuardrail, boundedStep, moveDirection } from './guardrails.js';
 import type { TunableDial } from './types.js';
 

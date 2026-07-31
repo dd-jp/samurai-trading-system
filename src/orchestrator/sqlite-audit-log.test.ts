@@ -6,8 +6,7 @@
  * `rowid` tie-break; this file also varies the timestamp to prove the
  * `ORDER BY timestamp` half of the acceptance criterion.
  */
-import { describe, expect, it } from 'vitest';
-import { openSharedStore } from '../shared/store/open-shared-store.js';
+import { openSharedStore } from '../shared/store/index.js';
 import { type AuditLogEntry, SqliteAuditLog } from './sqlite-audit-log.js';
 
 const TRACE_ID = 'trace-aapl-1400';

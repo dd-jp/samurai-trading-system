@@ -7,7 +7,7 @@
  * environment": `data/samurai-{env}.sqlite` at repo root, selected via
  * `NODE_ENV` (defaults to `development`).
  */
-import { openSharedStore, sharedStorePath } from '../shared/store/open-shared-store.js';
+import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
 import { createDashboardServer } from './server.js';
 import { SqliteQueryStore } from './sqlite-query-store.js';
 

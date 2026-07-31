@@ -1,8 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
-import { CostModelImpl } from '../cost-model-backtest/cost-model.js';
-import type { CostConfig, CostModel, MarketState } from '../cost-model-backtest/types.js';
-import type { MarketDataService } from '../market-data-service/types.js';
-import type { Clock } from '../shared/clock.js';
+import type { CostConfig, CostModel, MarketState } from '../cost-model-backtest/index.js';
+import { CostModelImpl } from '../cost-model-backtest/index.js';
+import type { MarketDataService } from '../market-data-service/index.js';
+import type { Clock } from '../shared/index.js';
 import { SimulatedBrokerAdapter } from './simulated-adapter.js';
 import type { NativeBracketRequest, SimulatedAdapterConfig } from './types.js';
 

@@ -4,11 +4,9 @@
  * Decisions): a DebateResult + a fixture MarketDataService + a mock clock,
  * asserting on the returned OrderIntent (or null). There is no LLM to mock.
  */
-import { describe, expect, it } from 'vitest';
 import type { DebateResult } from '../debate-engine/index.js';
 import type { Bar, BarWindow, Mark, MarketDataService } from '../market-data-service/index.js';
-import type { Clock } from '../shared/clock.js';
-import type { OpenPosition } from '../shared/types.js';
+import type { Clock, OpenPosition } from '../shared/index.js';
 import { decide } from './decide.js';
 import type { AssetClass, TraderConfig, TraderInput } from './types.js';
 import { DEFAULT_TRADER_CONFIG } from './types.js';

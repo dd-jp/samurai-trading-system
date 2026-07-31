@@ -8,8 +8,8 @@
  * block until filled — the lot's lifecycle is advanced separately by
  * `ingestFills()`, which lives in its own module.
  */
-import type { OpenPosition } from '../shared/types.js';
-import type { VerdictDecision } from '../verdict/types.js';
+import type { OpenPosition } from '../shared/index.js';
+import type { VerdictDecision } from '../verdict/index.js';
 import { ingestFills } from './ingest-fills.js';
 import { reconcile } from './reconcile.js';
 import type {

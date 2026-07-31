@@ -1,6 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import type { RiskDecision } from '../../risk-manager/types.js';
-import type { OrderIntent } from '../../shared/types.js';
+import type { RiskDecision } from '../../risk-manager/index.js';
+import type { OrderIntent } from '../../shared/index.js';
 import type { ApprovalRequest, VerdictDecision } from '../types.js';
 import { TelegramChannel } from './telegram-channel.js';
 import type { TelegramClient } from './types.js';

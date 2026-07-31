@@ -8,7 +8,6 @@
  * rather than pulling an HTTP client dependency — the dashboard has zero
  * runtime deps and the tests add none.
  */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { InMemoryQueryStore } from './fixture-store.js';
 import { createDashboardServer, type DashboardServer } from './server.js';
 

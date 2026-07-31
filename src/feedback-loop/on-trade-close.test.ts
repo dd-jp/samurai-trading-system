@@ -1,8 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { openSharedStore } from '../shared/store/open-shared-store.js';
-import type { ClosedTrade, SetupStore } from '../shared/types.js';
-import { FixtureSetupStore } from '../trader/fixture-setup-store.js';
-import { SqliteSetupStore } from '../trader/sqlite-setup-store.js';
+import type { ClosedTrade, SetupStore } from '../shared/index.js';
+import { openSharedStore } from '../shared/store/index.js';
+import { FixtureSetupStore, SqliteSetupStore } from '../trader/index.js';
 import { onTradeClose } from './on-trade-close.js';
 import type { OnTradeCloseInput } from './types.js';
 

@@ -1,4 +1,3 @@
-import { describe, expect, it, vi } from 'vitest';
 import type {
   Bar,
   BarWindow,
@@ -6,8 +5,8 @@ import type {
   IndicatorValue,
   Mark,
   MarketDataService,
-} from '../market-data-service/types.js';
-import type { OpenPosition } from '../shared/types.js';
+} from '../market-data-service/index.js';
+import type { OpenPosition } from '../shared/index.js';
 import { computePortfolioView, type PortfolioAccountingInput } from './portfolio-view.js';
 
 const asOf = new Date('2026-07-15T09:30:00Z');

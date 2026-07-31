@@ -4,7 +4,7 @@
  * Ticket #69: push (subscribe) + staleness. Agent orchestration and conflict
  * resolution are not ticketed under epic #52 and are not implemented here.
  */
-import type { Clock } from '../shared/clock.js';
+import type { Clock } from '../shared/index.js';
 import type {
   AgentIntelligence,
   AssetClass,
@@ -23,6 +23,8 @@ export type {
   MarketContext,
   MarketContextCallback,
 } from './types.js';
+export type { CiiConsumerConfig, CiiScoreProvider } from './worldmonitor-adapter/cii-consumer.js';
+export { CiiConsumer } from './worldmonitor-adapter/cii-consumer.js';
 
 interface StoredItem {
   asset_class: AssetClass;

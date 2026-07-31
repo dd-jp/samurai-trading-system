@@ -6,8 +6,8 @@
  * log at trade close, joined by `debate_id` — not from the ephemeral,
  * no-persistence `DebateResult` (decision #10).
  */
-import type { AnalystContribution } from '../debate-engine/types.js';
-import type { DebateLogStore } from '../shared/types.js';
+import type { AnalystContribution } from '../debate-engine/index.js';
+import type { DebateLogStore } from '../shared/index.js';
 
 /** Returns undefined if no `DebateLog` row was ever written for this debate_id. */
 export function getContributionsForAttribution(

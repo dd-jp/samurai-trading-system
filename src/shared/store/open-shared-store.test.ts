@@ -1,7 +1,6 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
 import { runMigrations } from './migrate.js';
 import { openSharedStore, STORE_ENVIRONMENTS, sharedStorePath } from './open-shared-store.js';
 

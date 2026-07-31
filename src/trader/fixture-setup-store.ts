@@ -5,7 +5,7 @@
  * owns the `labelSetup` side of this same port; the real SQLite-backed store
  * is still deferred.
  */
-import type { SetupNeighbor, SetupStore, SetupVector } from '../shared/types.js';
+import type { SetupNeighbor, SetupStore, SetupVector } from '../shared/index.js';
 
 export class FixtureSetupStore implements SetupStore {
   private readonly neighbors: SetupNeighbor[];

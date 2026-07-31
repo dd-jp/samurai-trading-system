@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest';
 import { UsEquityRegularHoursCalendar } from '../trading-calendar.js';
 import type { BarWindow, DataSource } from '../types.js';
 import { type AlpacaBar, type AlpacaClient, AlpacaDataSource } from './alpaca-source.js';

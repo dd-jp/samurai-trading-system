@@ -13,10 +13,9 @@
  * since the `TuningStore` port itself carries no timestamp parameter.
  */
 
-import type { Clock } from '../shared/clock.js';
-import { SystemClock } from '../shared/clock.js';
-import type { SharedStore } from '../shared/store/open-shared-store.js';
-import type { TuningStore } from '../shared/types.js';
+import type { Clock, TuningStore } from '../shared/index.js';
+import { SystemClock } from '../shared/index.js';
+import type { SharedStore } from '../shared/store/index.js';
 
 interface AnalystWeightRow {
   analyst_id: string;

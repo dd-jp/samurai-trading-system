@@ -29,11 +29,10 @@
  * types owned by src/shared/types.ts (registry §4).
  */
 
-import type { CostModel } from '../cost-model-backtest/types.js';
-import type { BarWindow, IndicatorSpec, MarketDataService } from '../market-data-service/types.js';
-import type { Clock } from '../shared/clock.js';
-import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../shared/types.js';
-import type { VerdictDecision } from '../verdict/types.js';
+import type { CostModel } from '../cost-model-backtest/index.js';
+import type { BarWindow, IndicatorSpec, MarketDataService } from '../market-data-service/index.js';
+import type { Clock, ClosedTrade, Fill, OpenPosition, OrderState } from '../shared/index.js';
+import type { VerdictDecision } from '../verdict/index.js';
 
 /**
  * The normalized abstract bracket Execution hands the adapter: entry +

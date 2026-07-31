@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AnthropicMessageResponse, AnthropicMessagesClient } from './anthropic-client.js';
 import { AnthropicLlmClient } from './anthropic-client.js';
 import {

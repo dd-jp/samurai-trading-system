@@ -18,7 +18,7 @@
  */
 
 import type { AnalystView, Direction } from '../debate-engine/index.js';
-import type { BarWindow, IndicatorSpec } from '../market-data-service/types.js';
+import type { BarWindow, IndicatorSpec } from '../market-data-service/index.js';
 import type { Analyst, AnalystInput, AssetClass } from './types.js';
 
 const INDICATOR_TIMEFRAME = '1h';

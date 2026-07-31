@@ -1,4 +1,3 @@
-import { describe, expect, it, vi } from 'vitest';
 import { HttpPolygonClient, toPolygonTicker } from './http-polygon-client.js';
 import type { DateRange } from './universe.js';
 

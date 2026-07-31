@@ -9,7 +9,7 @@
  * scale-in's several per-lot closes each join to and label their own setup
  * entry independently.
  */
-import type { ClosedTrade } from '../shared/types.js';
+import type { ClosedTrade } from '../shared/index.js';
 import { realizedR } from './attribution.js';
 import type { OnTradeCloseInput } from './types.js';
 

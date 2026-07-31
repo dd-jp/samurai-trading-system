@@ -6,7 +6,7 @@
  * `OrderIntentMetadata.cosine_precedent` in the Trader's sizing pipeline
  * (#73) — not wired in here, since #73 is not yet implemented.
  */
-import type { SetupNeighbor, SetupStore, SetupVector } from '../shared/types.js';
+import type { SetupNeighbor, SetupStore, SetupVector } from '../shared/index.js';
 
 /** Nearest neighbors considered, after the similarity threshold filter. */
 export const K_NEIGHBORS = 5;

@@ -23,8 +23,36 @@ import type {
   BreakerState,
   PortfolioView,
   RiskConfig,
-  RiskDecision,
   RiskCriticVerdict,
+  RiskDecision,
+  RiskInput,
+  RiskManager,
+} from './types.js';
+
+export type {
+  AutoReArmPolicy,
+  BreakerConfig,
+  BreakerEvalInput,
+  VolatilityBreakerConfig,
+  VolatilityReading,
+} from './breakers.js';
+export { CircuitBreakers } from './breakers.js';
+export { countryForInstrument, trackedCountries } from './cii-mapping.js';
+export type { CorrelationConfig, CorrelationEstimateInput } from './correlation.js';
+export { computeCorrelationEstimate } from './correlation.js';
+export { InMemoryRiskCriticStore } from './critic-store.js';
+export type { PortfolioAccountingInput } from './portfolio-view.js';
+export { computePortfolioView } from './portfolio-view.js';
+export type {
+  BreakerState,
+  CorrelationEstimate,
+  PersistedBreakerState,
+  PortfolioView,
+  RiskConfig,
+  RiskCriticLog,
+  RiskCriticStore,
+  RiskCriticVerdict,
+  RiskDecision,
   RiskInput,
   RiskManager,
 } from './types.js';
@@ -277,7 +305,11 @@ function applyCritic(
   reasons: string[],
 ): { changed: boolean; notional: number; rejected: boolean } {
   if (critic.verdict === 'pass' || critic.verdict === 'unavailable') {
-    return { changed: false, notional: finalSize * (critic.verdict === 'pass' ? 1 : 1), rejected: false };
+    return {
+      changed: false,
+      notional: finalSize * (critic.verdict === 'pass' ? 1 : 1),
+      rejected: false,
+    };
   }
 
   if (critic.verdict === 'reject') {
@@ -290,6 +322,8 @@ function applyCritic(
     return { changed: false, notional, rejected: false };
   }
 
-  reasons.push(`risk_critic: trimmed notional from ${notional} to ${criticCap} (${critic.reasoning})`);
+  reasons.push(
+    `risk_critic: trimmed notional from ${notional} to ${criticCap} (${critic.reasoning})`,
+  );
   return { changed: true, notional: criticCap, rejected: false };
 }

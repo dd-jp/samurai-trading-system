@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest';
 import { wrapUntrusted } from './prompt-safety.js';
 
 describe('wrapUntrusted', () => {

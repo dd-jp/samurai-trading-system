@@ -16,7 +16,7 @@
  * simply omitted from the output — that omission is the warm-up fallback
  * (risk-manager-map.md AC3), not a fabricated correlation.
  */
-import type { Bar, BarWindow, MarketDataService } from '../market-data-service/types.js';
+import type { Bar, BarWindow, MarketDataService } from '../market-data-service/index.js';
 import type { CorrelationEstimate } from './types.js';
 
 export interface CorrelationConfig {

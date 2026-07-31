@@ -22,8 +22,8 @@
  *    composition root exists and can pass per-write scoping.
  */
 
-import type { SharedStore } from '../shared/store/open-shared-store.js';
-import type { SetupNeighbor, SetupStore, SetupVector } from '../shared/types.js';
+import type { SetupNeighbor, SetupStore, SetupVector } from '../shared/index.js';
+import type { SharedStore } from '../shared/store/index.js';
 
 export type SetupAssetClass = 'crypto' | 'stocks';
 

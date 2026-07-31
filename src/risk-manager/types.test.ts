@@ -1,5 +1,4 @@
-import { describe, expect, expectTypeOf, it } from 'vitest';
-import type { OrderIntent } from '../shared/types.js';
+import type { OrderIntent } from '../shared/index.js';
 import type {
   BreakerState,
   CorrelationEstimate,

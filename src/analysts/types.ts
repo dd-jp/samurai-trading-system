@@ -19,7 +19,7 @@
 import type { AnalystView } from '../debate-engine/index.js';
 import type { MarketDataService } from '../market-data-service/index.js';
 import type { MarketIntelligenceStore } from '../market-intelligence/index.js';
-import type { Clock } from '../shared/clock.js';
+import type { Clock } from '../shared/index.js';
 
 export type AssetClass = 'crypto' | 'stocks';
 

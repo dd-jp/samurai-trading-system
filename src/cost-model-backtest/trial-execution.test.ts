@@ -1,7 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import type { Bar } from '../market-data-service/types.js';
-import { digest } from '../orchestrator/digest.js';
-import { SimulatedClock } from '../shared/clock.js';
+import type { Bar } from '../market-data-service/index.js';
+import { digest } from '../orchestrator/index.js';
+import { SimulatedClock } from '../shared/index.js';
 import { InMemoryConfigTrialLog } from './config-trial-log.js';
 import type { EvalExecutor, EvalOptions, EvalReport } from './eval-types.js';
 import type { ProxyStrategyConfig } from './proxy-strategy.js';

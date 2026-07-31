@@ -1,5 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
-import type { Clock } from '../../shared/clock.js';
+import type { Clock } from '../../shared/index.js';
 import type { CiiScoreProvider } from './cii-consumer.js';
 import { type CiiSnapshotRow, type CiiSnapshotStore, captureCiiSnapshot } from './cii-snapshot.js';
 

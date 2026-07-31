@@ -5,8 +5,7 @@
  * #76 — the pipeline only. `PortfolioView` computation is #78; breaker-trip
  * computation is #77 — both are consumed here as pre-built inputs.
  */
-import type { Clock } from '../shared/clock.js';
-import type { OrderIntent } from '../shared/types.js';
+import type { Clock, OrderIntent } from '../shared/index.js';
 
 /**
  * Pre-computed breaker trip state, tiered per risk-manager-spec.md

@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest';
 import type { PolygonAggregate, PolygonClient } from './stage2-historical-store.js';
 import { Stage2HistoricalStore } from './stage2-historical-store.js';
 import { assertSurvivorshipFree } from './universe.js';

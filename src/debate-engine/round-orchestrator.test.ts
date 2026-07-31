@@ -1,5 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
-import { SimulatedClock } from '../shared/clock.js';
+import { SimulatedClock } from '../shared/index.js';
 import type {
   DebateInput,
   DebaterPersona,

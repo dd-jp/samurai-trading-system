@@ -1,6 +1,4 @@
-import { describe, expect, it } from 'vitest';
-import type { Clock } from '../shared/clock.js';
-import type { OrderIntent } from '../shared/types.js';
+import type { Clock, OrderIntent } from '../shared/index.js';
 import { RiskManagerImpl } from './index.js';
 import type {
   BreakerState,
@@ -147,7 +145,13 @@ describe('RiskManagerImpl.evaluate — next_breaker_state pass-through (#203)', 
         reset_at: null,
         reason: 'portfolio_drawdown_hard',
       },
-      { tier: 'kill_switch' as const, tripped: false, tripped_at: null, reset_at: null, reason: null },
+      {
+        tier: 'kill_switch' as const,
+        tripped: false,
+        tripped_at: null,
+        reset_at: null,
+        reason: null,
+      },
     ];
     const input = makeInput({ next_breaker_state: persisted });
 

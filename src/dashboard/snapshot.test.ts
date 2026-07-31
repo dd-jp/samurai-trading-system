@@ -6,10 +6,9 @@
  * Also asserts the read-only contract is structural: the fake store exposes
  * no setters, and the snapshot function calls only get-* methods.
  */
-import { describe, expect, it } from 'vitest';
-import type { MetricsSuite } from '../cost-model-backtest/validation-types.js';
-import type { Mark } from '../market-data-service/types.js';
-import type { AnalystContribution, DebateLog, OpenPosition } from '../shared/types.js';
+import type { MetricsSuite } from '../cost-model-backtest/index.js';
+import type { Mark } from '../market-data-service/index.js';
+import type { AnalystContribution, DebateLog, OpenPosition } from '../shared/index.js';
 import { buildSnapshot } from './snapshot.js';
 import type {
   AttributionSummary,

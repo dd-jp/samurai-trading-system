@@ -1,5 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
-import type { DiscordClient, TelegramClient } from '../verdict/notifications/types.js';
+import type { DiscordClient, TelegramClient } from '../verdict/index.js';
 import { TradeChannelHeartbeat } from './heartbeat-channel.js';
 
 const NOW = new Date('2026-07-15T14:00:00Z');

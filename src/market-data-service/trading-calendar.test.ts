@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest';
 import { AlwaysOpenCalendar, UsEquityRegularHoursCalendar } from './trading-calendar.js';
 
 describe('AlwaysOpenCalendar', () => {

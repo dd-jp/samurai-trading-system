@@ -17,8 +17,9 @@
  * flipped this bar. That split (this module reports the trend; the driver
  * owns position state) keeps this function pure.
  */
-import { computeIndicator } from '../market-data-service/indicators.js';
-import type { Bar } from '../market-data-service/types.js';
+
+import type { Bar } from '../market-data-service/index.js';
+import { computeIndicator } from '../market-data-service/index.js';
 
 export interface ProxyStrategyConfig {
   fastWindow: number;

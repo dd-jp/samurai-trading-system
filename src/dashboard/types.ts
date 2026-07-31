@@ -14,11 +14,11 @@
  * calls `QueryStore` read methods.
  */
 
-import type { MetricsSuite } from '../cost-model-backtest/validation-types.js';
-import type { Direction } from '../debate-engine/types.js';
-import type { Mark } from '../market-data-service/types.js';
-import type { AssetClass } from '../orchestrator/types.js';
-import type { DebateLog, OpenPosition } from '../shared/types.js';
+import type { MetricsSuite } from '../cost-model-backtest/index.js';
+import type { Direction } from '../debate-engine/index.js';
+import type { Mark } from '../market-data-service/index.js';
+import type { AssetClass } from '../orchestrator/index.js';
+import type { DebateLog, OpenPosition } from '../shared/index.js';
 
 /**
  * Coarse in-progress indicator sourced from the Orchestrator's `current_tick`

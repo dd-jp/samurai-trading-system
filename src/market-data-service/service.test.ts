@@ -1,6 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import type { Clock } from '../shared/clock.js';
-import { openSharedStore } from '../shared/store/open-shared-store.js';
+import type { Clock } from '../shared/index.js';
+import { openSharedStore } from '../shared/store/index.js';
 import { FixtureDataSource } from './fixture-data-source.js';
 import { MarketDataServiceImpl } from './service.js';
 import { SqliteMarketDataStore } from './sqlite-market-data-store.js';

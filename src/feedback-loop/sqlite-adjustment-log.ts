@@ -36,7 +36,7 @@
  * Added by migration `0002_dial_adjustments_reason.sql`.
  */
 
-import type { SharedStore } from '../shared/store/open-shared-store.js';
+import type { SharedStore } from '../shared/store/index.js';
 import type { Adjustment, AdjustmentLog, PendingApprovalAdjustment } from './types.js';
 
 type DialType = 'analyst_weight' | 'strategy_param' | 'risk_threshold';

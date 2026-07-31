@@ -1,5 +1,4 @@
-import { describe, expect, it } from 'vitest';
-import { openSharedStore } from '../shared/store/open-shared-store.js';
+import { openSharedStore } from '../shared/store/index.js';
 import { SqliteMarketDataStore } from './sqlite-market-data-store.js';
 import type { Bar, Mark } from './types.js';
 

@@ -1,5 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
-import type { Clock } from '../../shared/clock.js';
+import type { Clock } from '../../shared/index.js';
 import { CiiConsumer, type CiiScoreProvider } from './cii-consumer.js';
 
 class MutableClock implements Clock {

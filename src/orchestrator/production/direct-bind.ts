@@ -25,31 +25,30 @@
  * not fabricated here.
  */
 
-import type { CostModel } from '../../cost-model-backtest/types.js';
+import type { CostModel } from '../../cost-model-backtest/index.js';
+import type { BrokerAdapter, ExecutionConfig, SharedStore } from '../../execution/index.js';
 import { ExecutionImpl } from '../../execution/index.js';
-import type { BrokerAdapter, ExecutionConfig, SharedStore } from '../../execution/types.js';
-import type { MarketDataService } from '../../market-data-service/index.js';
-import type { TradingCalendar } from '../../market-data-service/trading-calendar.js';
-import type { CiiConsumer } from '../../market-intelligence/worldmonitor-adapter/cii-consumer.js';
+import type { MarketDataService, TradingCalendar } from '../../market-data-service/index.js';
+import type { CiiConsumer } from '../../market-intelligence/index.js';
 import type {
   BreakerEvalInput,
   CircuitBreakers,
+  PersistedBreakerState,
+  RiskConfig,
   VolatilityReading,
-} from '../../risk-manager/breakers.js';
-import { countryForInstrument } from '../../risk-manager/cii-mapping.js';
+} from '../../risk-manager/index.js';
 import {
   type CorrelationConfig,
   computeCorrelationEstimate,
-} from '../../risk-manager/correlation.js';
-import { RiskManagerImpl } from '../../risk-manager/index.js';
-import { computePortfolioView } from '../../risk-manager/portfolio-view.js';
-import type { PersistedBreakerState, RiskConfig } from '../../risk-manager/types.js';
-import type { Clock } from '../../shared/clock.js';
-import type { OpenPosition } from '../../shared/types.js';
+  computePortfolioView,
+  countryForInstrument,
+  RiskManagerImpl,
+} from '../../risk-manager/index.js';
+import type { Clock, OpenPosition } from '../../shared/index.js';
+import type { TraderConfig } from '../../trader/index.js';
 import { decide } from '../../trader/index.js';
-import type { TraderConfig } from '../../trader/types.js';
+import type { ApprovalChannel, PositionStore, VerdictConfig } from '../../verdict/index.js';
 import { VerdictImpl } from '../../verdict/index.js';
-import type { ApprovalChannel, PositionStore, VerdictConfig } from '../../verdict/types.js';
 import { OrphanVerdictScanner } from '../orphan-verdict-scan.js';
 import { SqliteAuditLog } from '../sqlite-audit-log.js';
 import { SqliteCurrentTickStore } from '../sqlite-current-tick-store.js';

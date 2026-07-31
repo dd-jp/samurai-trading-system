@@ -1,5 +1,4 @@
-import { describe, expect, it } from 'vitest';
-import type { Clock } from '../shared/clock.js';
+import type { Clock } from '../shared/index.js';
 import type { BreakerConfig, BreakerEvalInput } from './breakers.js';
 import { CircuitBreakers } from './breakers.js';
 import type { PortfolioView } from './types.js';

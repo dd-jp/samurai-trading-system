@@ -7,7 +7,7 @@
  * docs/specs/shared-sqlite-store-spec.md ("Verdict" — `verdict_log`).
  */
 
-import type { VerdictLogStore } from '../shared/types.js';
+import type { VerdictLogStore } from '../shared/index.js';
 import type { Verdict, VerdictDecision, VerdictInput } from './types.js';
 import { buildVerdictLog } from './verdict-log-store.js';
 

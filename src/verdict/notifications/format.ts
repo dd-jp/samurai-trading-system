@@ -4,7 +4,7 @@
  * No formatting decisions here read live state; given the same decision +
  * risk decision the message text is always the same.
  */
-import type { RiskDecision } from '../../risk-manager/types.js';
+import type { RiskDecision } from '../../risk-manager/index.js';
 import type { ApprovalRequest, VerdictDecision } from '../types.js';
 
 function orderContextLines(riskDecision: RiskDecision): string[] {

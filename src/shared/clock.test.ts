@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest';
 import { SimulatedClock, SystemClock } from './clock.js';
 
 describe('SystemClock', () => {

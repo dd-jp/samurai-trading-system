@@ -15,8 +15,8 @@
  * deterministic.
  */
 import { randomUUID } from 'node:crypto';
-import type { Signal } from '../analysts/types.js';
-import type { Clock } from '../shared/clock.js';
+import type { Signal } from '../analysts/index.js';
+import type { Clock } from '../shared/index.js';
 import type {
   AuditLog,
   CurrentTickStore,

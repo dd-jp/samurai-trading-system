@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest';
 import { LlmMalformedResponseError } from './llm/errors.js';
 import { MockLlmClient } from './llm/mock-client.js';
 import { runBearPersona, runBullPersona, runMediatorPersona } from './personas.js';
