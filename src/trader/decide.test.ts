@@ -418,6 +418,15 @@ describe('decide — position-aware branching (#74)', () => {
     expect(intent?.size).toBe(75);
   });
 
+  it('holds (null) rather than emitting a zero-size exit when every lot is still unfilled', async () => {
+    const pendingLot = openPosition({ order_state: 'pending', filled_size: 0 });
+    const debate = debateResult({ direction: 'bearish', confidence: 0.9, converged: true });
+
+    const intent = await decide(traderInput({ debate, positionState: async () => [pendingLot] }));
+
+    expect(intent).toBeNull();
+  });
+
   it('holds (null) on a neutral debate while holding a position', async () => {
     const position = openPosition();
     const debate = debateResult({ direction: 'neutral', confidence: 0.9 });

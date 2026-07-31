@@ -105,6 +105,12 @@ async function buildBracket(
 ): Promise<OrderIntent | null> {
   const { clock, config, debate, equity, instrument, marketData } = input;
 
+  // Every caller must have already excluded 'neutral' — sideFor has no
+  // direction to derive a side from. Checked here, not just assumed, so the
+  // invariant is enforced rather than merely documented.
+  if (debate.direction === 'neutral') {
+    throw new Error('buildBracket: debate.direction must not be neutral');
+  }
   if (debate.confidence < config.conviction_floor) return null;
 
   const asOf = clock.now();
@@ -139,7 +145,7 @@ async function buildBracket(
 
   if (size * entry < config.min_viable_notional) return null;
 
-  const side = sideFor(debate.direction as 'bullish' | 'bearish');
+  const side = sideFor(debate.direction);
   const direction = side === 'buy' ? 1 : -1;
 
   // The mark's OBSERVATION time is the decision bar coordinate — not
@@ -193,18 +199,23 @@ async function buildBracket(
 async function buildExitIntent(
   input: TraderInput,
   positions: OpenPosition[],
-): Promise<OrderIntent> {
+): Promise<OrderIntent | null> {
   const { clock, config, debate, instrument, marketData } = input;
 
-  const asOf = clock.now();
-  const mark = await marketData.getMark(instrument, asOf);
-  const decisionBar = mark.observed_at;
   const existingSide = positions[0]?.side;
   if (existingSide === undefined) {
     throw new Error('buildExitIntent: positions must be non-empty');
   }
   const closingSide = existingSide === 'buy' ? 'sell' : 'buy';
+  // Only filled exposure needs flattening — a lot still `pending`/
+  // `submitted` has nothing on the books yet, so an all-pending instrument
+  // has no fill to close and there is nothing to emit.
   const totalSize = positions.reduce((sum, lot) => sum + lot.filled_size, 0);
+  if (totalSize <= 0) return null;
+
+  const asOf = clock.now();
+  const mark = await marketData.getMark(instrument, asOf);
+  const decisionBar = mark.observed_at;
 
   return {
     idempotency_key: computeIdempotencyKey(instrument, decisionBar),
