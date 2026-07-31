@@ -80,7 +80,7 @@ Source: https://massive.com/docs/rest/crypto/aggregates/custom-bars (redirected 
 **Practical consequence for this repo's universe (SPY, QQQ, AAPL, TSLA, BTC-USD, ETH-USD):** the client needs a small ticker-translation function, e.g.:
 ```ts
 function toPolygonTicker(symbol: string): string {
-  return symbol.includes('-USD') ? `X:${symbol.replace('-USD', 'USD')}` : symbol;
+  return symbol.endsWith('-USD') ? `X:${symbol.slice(0, -4)}USD` : symbol;
 }
 ```
 
@@ -91,7 +91,7 @@ Source: same aggregates doc page.
 - When a date range's results exceed the page size (`limit`, max 50000, default 5000), the response includes a top-level `next_url` string.
 - Example observed in docs: `https://api.massive.com/v2/aggs/ticker/AAPL/range/1/day/1578114000000/2020-01-10?cursor=bGltaXQ9MiZzb3J0PWFzYw`
 - Mechanic: "If present, this value can be used to fetch the next page of data" — i.e. the client should `GET` `next_url` directly (it already encodes the full path + a `cursor` param) rather than reconstructing query params itself, looping until a response has no `next_url`.
-- **Open question / caveat:** the docs page fetched did **not** explicitly state whether the API key must be re-appended to `next_url`, or whether it's embedded/handled automatically. This is a real gap — could not confirm it from the page content returned. **Recommendation for the implementer:** append the API key to `next_url` defensively (most Polygon/Massive client SDKs, e.g. `client-python`'s `RESTClient`, are documented to auto-attach auth to "any API request" including presumably pagination follow-ups) and treat a 401 on the bare `next_url` as the signal that manual key-appending is required. Verify empirically against a real 5000+ bar request during implementation — for the MVP universe (SPY/QQQ/AAPL/TSLA/BTC-USD/ETH-USD, daily bars) pagination is unlikely to trigger in practice given `default limit 5000` and `max 50000`, since even ~10 years of daily bars is ~2500 rows, well under one page. Treat as low-priority polish, not a blocker.
+- **Open question / caveat:** the docs page fetched did **not** explicitly state whether the API key must be re-appended to `next_url`, or whether it's embedded/handled automatically. This is a real gap — could not confirm it from the page content returned. **Recommendation for the implementer:** reuse the same `Authorization: Bearer ${POLYGON_API_KEY}` header on the follow-up request rather than appending the key as a query param — an `?apiKey=` on `next_url` puts the credential in the URL, where it lands in request logs, proxies, and error reporters (the header-based approach avoids that regardless of which auth mechanism turns out to be required). Verify empirically against a real 5000+ bar request during implementation — for the MVP universe (SPY/QQQ/AAPL/TSLA/BTC-USD/ETH-USD, daily bars) pagination is unlikely to trigger in practice given `default limit 5000` and `max 50000`, since even ~10 years of daily bars is ~2500 rows, well under one page. Treat as low-priority polish, not a blocker — but whatever loop follows `next_url` should still cap the number of pages it will follow (e.g. a small fixed max, well above what this universe could ever produce) so a malformed or cyclical `next_url` can't spin forever and burn the rate limit.
 
 ## 4. Rate limits and lookback (Free / Starter tier)
 
@@ -113,17 +113,17 @@ Sources: https://github.com/massive-com/client-python (via WebFetch), https://ma
 
 - Confirmed: the official Python client authenticates via `RESTClient(api_key="<API_KEY>")` and the docs state "your API key will be automatically added [to] the correct authentication header for any API request" — i.e. **current official guidance favors an `Authorization` header**, injected by the SDK, over a raw query param.
 - **Not fully confirmed from primary sources fetched today:** the exact header name/format (`Authorization: Bearer <key>` is the industry-standard assumption and matches Polygon's long-documented historical behavior, but no verbatim header example turned up in either fetch — both pages described the mechanism in prose rather than showing a raw curl example).
-- **Also not disproven:** Polygon's classic (pre-rebrand) REST API has long supported `?apiKey=<key>` as a query parameter — this was the standard for years and is what most existing third-party integrations use. Nothing in the fetched docs said this was deprecated or removed; the Postman/SDK docs simply describe the *convenience* of auto-injecting a header rather than stating the query param is gone.
-- **Recommendation:** implement the client using the `Authorization: Bearer ${POLYGON_API_KEY}` header as the primary, documented-recommended method (matches current official guidance), but don't be surprised if `?apiKey=` also works as a fallback — this is the safer assumption given incomplete primary-source confirmation. **Verify empirically with one real request during implementation** rather than trusting this doc alone for the header name's exact casing/format.
+- **Also not disproven:** Polygon's classic (pre-rebrand) REST API has long supported `?apiKey=<key>` as a query parameter — this was the standard for years and is what most existing third-party integrations use. Nothing in the fetched docs said this was deprecated or removed; the Postman/SDK docs simply describe the *convenience* of auto-injecting a header rather than stating the query param is gone. That said, prefer the header regardless: a query-string key is credential-bearing text that ends up in request logs, proxies, and error reporters, so it shouldn't be the client's primary mechanism even where it's still accepted.
+- **Recommendation:** implement the client using the `Authorization: Bearer ${POLYGON_API_KEY}` header as the primary, documented-recommended method (matches current official guidance, and keeps the key out of URLs), but don't be surprised if `?apiKey=` also works as a fallback — this is the safer assumption given incomplete primary-source confirmation. **Verify empirically with one real request during implementation** rather than trusting this doc alone for the header name's exact casing/format.
 
 ## Summary for spec-writing
 
 `fetchAggregates(symbol, window)` implementation shape:
 1. Translate `symbol` → Polygon ticker (`X:BTCUSD` for crypto, pass-through for equities).
 2. Format `window.start`/`window.end` as `YYYY-MM-DD`.
-3. `GET https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/{from}/{to}?adjusted=true&sort=asc&limit=50000` with `Authorization: Bearer ${POLYGON_API_KEY}`.
+3. `GET {BASE_URL}/v2/aggs/ticker/{ticker}/range/1/day/{from}/{to}?adjusted=true&sort=asc&limit=50000` with `Authorization: Bearer ${POLYGON_API_KEY}` — `BASE_URL` is the one constant this doc recommends deciding once (`api.polygon.io` vs `api.massive.com`, see §"Important context" above), not hardcoded per-call.
 4. Unwrap `.results` (default to `[]` if absent), map only `{t,o,h,l,c,v}` — drop `vw`/`n`.
-5. Follow `.next_url` in a loop if present (rare for daily bars at this universe's scale); confirm whether re-auth is needed on the follow-up call.
+5. Follow `.next_url` in a loop if present (rare for daily bars at this universe's scale), reusing the same `Authorization` header rather than an `?apiKey=` query param; cap the number of pages followed so a malformed or cyclical `next_url` can't loop forever.
 6. Respect free-tier 5 calls/min if that's the provisioned plan (add a throttle/queue in front of the client, not per-call).
 
 ## Open questions / caveats (could not resolve from primary sources fetched)
