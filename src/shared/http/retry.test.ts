@@ -57,6 +57,16 @@ describe('withRetry (generic)', () => {
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
+  it('rejects with an Error, not undefined, when maxAttempts < 1', async () => {
+    const config: RetryConfig = { maxAttempts: 0, baseDelayMs: 100, maxDelayMs: 1_000 };
+    const fn = vi.fn();
+
+    await expect(withRetry(fn, config, isRetryable)).rejects.toThrow(
+      'RetryConfig.maxAttempts must be >= 1, got 0',
+    );
+    expect(fn).not.toHaveBeenCalled();
+  });
+
   it('exhausts maxAttempts and rethrows the last error', async () => {
     const error = new RetryableError('still slow');
     const fn = vi.fn().mockRejectedValue(error);

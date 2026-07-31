@@ -58,6 +58,10 @@ export async function withRetry<T>(
   config: RetryConfig,
   isRetryable: (error: unknown) => boolean,
 ): Promise<T> {
+  if (config.maxAttempts < 1) {
+    throw new Error(`RetryConfig.maxAttempts must be >= 1, got ${config.maxAttempts}`);
+  }
+
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= config.maxAttempts; attempt++) {
