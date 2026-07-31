@@ -17,17 +17,25 @@
  * ## Injected leaves — why `ProductionConfig` is large
  *
  * Every transport this system talks to (Alpaca REST for orders and for bars,
- * the LLM provider, the Telegram/Discord trade channel, WorldMonitor's CII
- * feed) exists in the codebase as an *interface only* — there is no HTTP
- * implementation of `AlpacaClient`, `AnthropicMessagesClient`,
- * `TelegramClient`, or `CiiScoreProvider` anywhere in `src/`, and `ccxt` is
- * not a dependency. Writing them here would be implementing three or four
- * components under a wiring ticket. So they are required `ProductionConfig`
- * fields instead: this module composes everything that *can* be composed
- * from in-repo code and names the rest as explicit seams. That is exactly
- * the precedent #234 set one level down with `AccountStateProvider` /
- * `VolatilityReadingProvider` — an honest injected seam beats a fabricated
- * implementation.
+ * the Telegram/Discord trade channel, WorldMonitor's CII feed) exists in the
+ * codebase as an *interface only* — there is no HTTP implementation of
+ * `AlpacaClient`, `TelegramClient`, or `CiiScoreProvider` anywhere in `src/`,
+ * and `ccxt` is not a dependency. Writing them here would be implementing
+ * three or four components under a wiring ticket. So they are required
+ * `ProductionConfig` fields instead: this module composes everything that
+ * *can* be composed from in-repo code and names the rest as explicit seams.
+ * That is exactly the precedent #234 set one level down with
+ * `AccountStateProvider` / `VolatilityReadingProvider` — an honest injected
+ * seam beats a fabricated implementation.
+ *
+ * The LLM provider is the one exception: since #274, `AnthropicHttpMessagesClient`
+ * (debate-engine/llm/anthropic-http-client.ts) is a real, in-repo
+ * `AnthropicMessagesClient` implementation, so this module builds the
+ * `AnthropicLlmClient` Debate/disagreement-detection close over by default —
+ * `ProductionConfig.llmClient` is now an optional override (same shape as
+ * `broker`/`dataSource` below), not a required seam. The default reads
+ * `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL` from the environment (see
+ * `buildDefaultLlmClient`).
  *
  * ## Two entry points, not one
  *
@@ -63,8 +71,13 @@
 import { AnalystOrchestrator } from '../analysts/index.js';
 import type { CostConfig } from '../cost-model-backtest/index.js';
 import { CostModelImpl } from '../cost-model-backtest/index.js';
-import type { LlmClient } from '../debate-engine/index.js';
-import { SqliteDebateLogStore } from '../debate-engine/index.js';
+import type { AnthropicLlmClientConfig, LlmClient } from '../debate-engine/index.js';
+import {
+  AnthropicHttpMessagesClient,
+  AnthropicLlmClient,
+  DEFAULT_ANTHROPIC_MODEL,
+  SqliteDebateLogStore,
+} from '../debate-engine/index.js';
 import type {
   AlpacaClient as AlpacaBrokerClient,
   BrokerAdapter,
@@ -170,8 +183,6 @@ export interface ProductionConfig {
   alpacaBrokerClient: AlpacaBrokerClient;
   /** Alpaca market-data REST surface, for bars and latest quotes. */
   alpacaDataClient: AlpacaDataClient;
-  /** LLM provider behind the Debate personas (and, indirectly, disagreement detection). */
-  llmClient: LlmClient;
   /**
    * Trade channel the dead-man's-switch heartbeat posts over. Taken as the
    * port, not as a Telegram/Discord client: `TradeChannelHeartbeat`
@@ -234,6 +245,15 @@ export interface ProductionConfig {
    * same rationale as `broker`, for `FixtureDataSource`/ccxt/IBKR.
    */
   dataSource?: DataSource;
+  /**
+   * Overrides the `AnthropicLlmClient` this module would otherwise build
+   * around `AnthropicHttpMessagesClient` (#274) — same rationale as
+   * `broker`/`dataSource`, for tests (`MockLlmClient`) or a future non-
+   * Anthropic provider. When omitted, the default reads `ANTHROPIC_API_KEY`
+   * (required) and `ANTHROPIC_MODEL` (optional, defaults to
+   * `DEFAULT_ANTHROPIC_MODEL`) from the environment.
+   */
+  llmClient?: LlmClient;
   /** Session calendar for stock gating (scheduler + Verdict gate). */
   tradingCalendar?: TradingCalendar;
   /** Sticky breaker rows recovered from a prior process, if any. */
@@ -272,6 +292,49 @@ export interface FeedbackCycleConfig {
 const DEFAULT_TICK_INTERVAL_MS = 60_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000;
 const DEFAULT_FEEDBACK_INTERVAL_MS = 24 * 60 * 60 * 1_000;
+
+/**
+ * Debate/disagreement-detection's LLM knobs (max tokens, per-attempt
+ * timeout, retry budget) are not yet exposed as their own `ProductionConfig`
+ * field — no ticket has asked for them to be tuned independently of these
+ * defaults, which match the values `disagreement-detector.integration.test.ts`
+ * already exercises against the real API. `model` is the one knob threaded
+ * from the environment (#274 AC), since a stale/rotated model id is the one
+ * failure mode ops needs to fix without a redeploy.
+ */
+const DEFAULT_LLM_CLIENT_CONFIG: Omit<AnthropicLlmClientConfig, 'model'> = {
+  max_tokens: 1024,
+  timeoutMs: 30_000,
+  retry: { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 },
+};
+
+/**
+ * The default `LlmClient`: `AnthropicHttpMessagesClient` (#274, real
+ * `fetch`-based `AnthropicMessagesClient`) wrapped in the pre-existing
+ * `AnthropicLlmClient` (retry/timeout/error-classification/prompt-safety
+ * unchanged by this ticket). `ANTHROPIC_MODEL` overrides
+ * `DEFAULT_ANTHROPIC_MODEL`; `ANTHROPIC_API_KEY` is read by
+ * `AnthropicHttpMessagesClient` itself (and throws if absent) rather than
+ * duplicated here.
+ *
+ * `AnthropicHttpMessagesClient` keeps its own default `fetchWithTimeout`
+ * budget rather than being handed `config.timeoutMs` here: that value already
+ * governs the outer race in `AnthropicLlmClient.callWithTimeout`, which starts
+ * its timer strictly before `createMessage()` is even called, so it is the
+ * one that actually decides a slow call's `LlmTimeoutError`. Threading the
+ * same number into the inner `fetchWithTimeout` as well would invite exactly
+ * that ambiguity — two timers racing on an identical deadline — for no
+ * observable benefit; the inner timeout stays a wider, independent backstop
+ * so an in-flight request is not left dangling after the outer race settles.
+ */
+function buildDefaultLlmClient(): LlmClient {
+  const config: AnthropicLlmClientConfig = {
+    ...DEFAULT_LLM_CLIENT_CONFIG,
+    model: process.env.ANTHROPIC_MODEL ?? DEFAULT_ANTHROPIC_MODEL,
+  };
+  const client = new AnthropicHttpMessagesClient();
+  return new AnthropicLlmClient(client, config);
+}
 
 /** The composed, still-stoppable process. Returned by `buildProductionOrchestrator`. */
 export interface ProductionOrchestrator {
@@ -388,7 +451,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
 
   const steps: TickSteps = {
     analysts: buildAnalystsStep(analysts),
-    debate: buildDebateStep(config.llmClient),
+    debate: buildDebateStep(config.llmClient ?? buildDefaultLlmClient()),
     trader: buildTraderStep({ ...breakerStateDeps, config: config.traderConfig }),
     risk: buildRiskStep({
       ...breakerStateDeps,

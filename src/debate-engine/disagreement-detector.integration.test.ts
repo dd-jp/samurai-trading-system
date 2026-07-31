@@ -54,7 +54,7 @@ describe.skipIf(!apiKey)('detectDisagreements (real LLM integration)', () => {
     const client = new AnthropicLlmClient(
       { createMessage },
       {
-        model: 'claude-3-5-haiku-latest',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 1024,
         timeoutMs: 30_000,
         retry: { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 },

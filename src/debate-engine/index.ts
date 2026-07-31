@@ -29,6 +29,11 @@ export type {
   AnthropicMessagesClient,
 } from './llm/anthropic-client.js';
 export { AnthropicLlmClient } from './llm/anthropic-client.js';
+export type { AnthropicHttpClientOptions } from './llm/anthropic-http-client.js';
+export {
+  AnthropicHttpMessagesClient,
+  DEFAULT_ANTHROPIC_MODEL,
+} from './llm/anthropic-http-client.js';
 export type { LlmError } from './llm/errors.js';
 export {
   LlmMalformedResponseError,
