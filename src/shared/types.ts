@@ -250,6 +250,13 @@ export interface OpenPosition {
   opened_at: Date;
   /** The bar/decision time, carried from the OrderIntent. */
   decision_timestamp: Date;
+  /**
+   * Carried from the originating `OrderIntentMetadata` (#74). The Trader's
+   * position-aware branching reads these to decide whether a same-direction
+   * debate's conviction rose materially enough to warrant a `scale_in`.
+   */
+  conviction: number;
+  converged: boolean;
 }
 
 /**

@@ -10,7 +10,7 @@
 import type { DebateResult } from '../debate-engine/index.js';
 import type { MarketDataService } from '../market-data-service/index.js';
 import type { Clock } from '../shared/clock.js';
-import type { OrderIntent } from '../shared/types.js';
+import type { OpenPosition, OrderIntent } from '../shared/types.js';
 
 /** Asset classes the risk multiplier is keyed on, matching `Mark.asset_class`. */
 export type AssetClass = 'crypto' | 'stocks';
@@ -67,6 +67,13 @@ export interface TraderConfig {
    */
   min_viable_notional: number;
   time_in_force: string;
+  /**
+   * #74: minimum conviction rise (current debate minus the position's
+   * stored `conviction`) that qualifies a same-direction hold for a bounded
+   * `scale_in` instead of a hold. Config, tuned in paper trading, like
+   * every other threshold here.
+   */
+  scale_in_conviction_delta: number;
 }
 
 export const DEFAULT_TRADER_CONFIG: TraderConfig = {
@@ -84,15 +91,14 @@ export const DEFAULT_TRADER_CONFIG: TraderConfig = {
   reward_risk_multiple: 2.0,
   min_viable_notional: 10,
   time_in_force: 'day',
+  scale_in_conviction_delta: 0.1,
 };
 
 /**
  * Fully deterministic given its inputs + the clock-scoped market data.
  *
- * Narrower than trader-spec.md's `TraderInput`: `positionState` (#74,
- * position-aware branching) and `setupStore` (#75, cosine precedent) are
- * absent because #73 is the no-position entry path and consults neither.
- * They are added additively by those tickets.
+ * Narrower than trader-spec.md's `TraderInput`: `setupStore` (#75, cosine
+ * precedent) is absent — nothing in this codebase consults it yet.
  */
 export interface TraderInput {
   /** Cross-cutting correlation ID, threaded from the Orchestrator's tick — not business data. */
@@ -110,6 +116,15 @@ export interface TraderInput {
   marketData: MarketDataService;
   equity: number;
   config: TraderConfig;
+  /**
+   * #74: position-aware branching. Live snapshot, not point-in-time — the
+   * Trader only ever runs on the current tick, unlike replay-scoped market
+   * data. Narrowed to a single function (matching
+   * `src/orchestrator/production/direct-bind.ts`'s `getOpenPositions`
+   * dependency), not the full `SharedStore`. `decide()` filters the
+   * returned lots down to `instrument` itself.
+   */
+  positionState: () => Promise<OpenPosition[]>;
 }
 
 /** The single test seam. `decide` in ./decide.ts is its implementation. */

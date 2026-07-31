@@ -23,6 +23,8 @@ function makePosition(overrides: Partial<OpenPosition> = {}): OpenPosition {
     broker_order_ids: [],
     opened_at: OPENED_AT,
     decision_timestamp: DECISION_AT,
+    conviction: 0.7,
+    converged: true,
     ...overrides,
   };
 }
@@ -167,6 +169,45 @@ describe('SqliteExecutionStore', () => {
 
       expect(await storeA.getOpenPositions()).toHaveLength(1);
       expect(await storeB.getOpenPositions()).toHaveLength(0);
+    });
+
+    /**
+     * Simulates a lot written before migration 0004 added conviction/
+     * converged — an INSERT that omits both columns entirely, so SQLite
+     * applies the ALTER TABLE ... DEFAULT. conviction defaults to 1 (not 0)
+     * specifically so a legacy lot's unknown true conviction can never look
+     * like it "rose materially" against a live debate's confidence (capped
+     * at 1.0) — it reads back as unable to scale-in, not eager to.
+     */
+    it('backfills a pre-migration row to conviction=1, converged=false — never spuriously scale-in eligible', async () => {
+      const { db, store } = makeStore();
+      db.prepare(
+        `INSERT INTO open_positions (
+           idempotency_key, debate_id, instrument, asset_class, side, intent_type,
+           requested_size, filled_size, avg_entry_price, stop, target,
+           order_state, broker_order_ids, opened_at, decision_timestamp
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        'legacy-key',
+        'debate-legacy',
+        'AAPL',
+        'stocks',
+        'buy',
+        'entry',
+        10,
+        10,
+        100,
+        95,
+        110,
+        'filled',
+        '[]',
+        OPENED_AT.toISOString(),
+        DECISION_AT.toISOString(),
+      );
+
+      const [legacy] = await store.getOpenPositions();
+      expect(legacy?.conviction).toBe(1);
+      expect(legacy?.converged).toBe(false);
     });
   });
 

@@ -71,6 +71,8 @@ const OPEN_POSITIONS: OpenPosition[] = [
     broker_order_ids: ['kraken-1'],
     opened_at: hoursAgo(1.5),
     decision_timestamp: hoursAgo(1.5),
+    conviction: 0.72,
+    converged: true,
   },
   {
     idempotency_key: 'ETH-USD-2026-07-19T11:30:00Z',
@@ -88,6 +90,8 @@ const OPEN_POSITIONS: OpenPosition[] = [
     broker_order_ids: ['kraken-2'],
     opened_at: hoursAgo(3),
     decision_timestamp: hoursAgo(3),
+    conviction: 0.68,
+    converged: true,
   },
   {
     idempotency_key: 'AAPL-2026-07-19T09:35:00Z',
@@ -105,6 +109,8 @@ const OPEN_POSITIONS: OpenPosition[] = [
     broker_order_ids: ['alpaca-1'],
     opened_at: hoursAgo(5),
     decision_timestamp: hoursAgo(5),
+    conviction: 0.61,
+    converged: false,
   },
 ];
 

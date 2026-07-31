@@ -105,6 +105,8 @@ export class ExecutionImpl implements Execution {
       broker_order_ids: [],
       opened_at: now,
       decision_timestamp: order.decision_timestamp,
+      conviction: order.metadata.conviction,
+      converged: order.metadata.converged,
     };
 
     // Write-ahead: `pending` is durable BEFORE the broker call, so a crash in

@@ -89,6 +89,8 @@ function pendingPosition(overrides: Partial<OpenPosition> = {}): OpenPosition {
     broker_order_ids: [],
     opened_at: NOW,
     decision_timestamp: new Date('2026-07-15T13:55:00Z'),
+    conviction: 0.72,
+    converged: true,
     ...overrides,
   };
 }

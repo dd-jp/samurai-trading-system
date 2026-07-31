@@ -37,6 +37,8 @@ function makePosition(overrides: Partial<OpenPosition> = {}): OpenPosition {
     broker_order_ids: ['alpaca-1'],
     opened_at: new Date('2026-07-27T10:00:00Z'),
     decision_timestamp: new Date('2026-07-27T09:55:00Z'),
+    conviction: 0.7,
+    converged: true,
     ...overrides,
   };
 }

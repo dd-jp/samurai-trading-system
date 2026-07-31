@@ -67,6 +67,8 @@ interface OpenPositionRow {
   broker_order_ids: string;
   opened_at: string;
   decision_timestamp: string;
+  conviction: number;
+  converged: 0 | 1;
 }
 
 interface DebateLogRow {
@@ -146,6 +148,8 @@ function fromOpenPositionRow(row: OpenPositionRow): OpenPosition {
     broker_order_ids: JSON.parse(row.broker_order_ids) as string[],
     opened_at: new Date(row.opened_at),
     decision_timestamp: new Date(row.decision_timestamp),
+    conviction: row.conviction,
+    converged: row.converged === 1,
   };
 }
 

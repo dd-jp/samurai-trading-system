@@ -50,6 +50,8 @@ function makePosition(overrides: Partial<OpenPosition> = {}): OpenPosition {
     broker_order_ids: ['order-1'],
     opened_at: asOf,
     decision_timestamp: asOf,
+    conviction: 0.7,
+    converged: true,
     ...overrides,
   };
 }
