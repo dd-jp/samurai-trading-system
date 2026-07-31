@@ -94,6 +94,7 @@ export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
       marketData: deps.marketData,
       equity: portfolio.equity,
       config: deps.config,
+      positionState: deps.getOpenPositions,
     });
   };
 }

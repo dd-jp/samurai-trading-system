@@ -1,8 +1,8 @@
 /**
  * Trader (Stage 3) — see docs/specs/trader-spec.md, epic #54.
  * Ticket #73: core decision, DebateResult -> OrderIntent entry bracket.
- * Position-aware branching (scale_in / exit / hold) is #74; cosine precedent
- * retrieval is #75. Neither is implemented here.
+ * Ticket #74: position-aware branching (scale_in / exit / hold). Cosine
+ * precedent retrieval is #75 — not implemented here.
  */
 
 export { decide } from './decide.js';

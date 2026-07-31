@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import type { DebateResult } from '../debate-engine/index.js';
 import type { Bar, BarWindow, Mark, MarketDataService } from '../market-data-service/index.js';
 import type { Clock } from '../shared/clock.js';
+import type { OpenPosition } from '../shared/types.js';
 import { decide } from './decide.js';
 import type { AssetClass, TraderConfig, TraderInput } from './types.js';
 import { DEFAULT_TRADER_CONFIG } from './types.js';
@@ -101,12 +102,36 @@ function traderInput(overrides: Partial<TraderInput> = {}): TraderInput {
     marketData: new FixtureMarketData(bars(15, 2)),
     equity: EQUITY,
     config: DEFAULT_TRADER_CONFIG,
+    positionState: async () => [],
     ...overrides,
   };
 }
 
 function configWith(overrides: Partial<TraderConfig>): TraderConfig {
   return { ...DEFAULT_TRADER_CONFIG, ...overrides };
+}
+
+function openPosition(overrides: Partial<OpenPosition> = {}): OpenPosition {
+  return {
+    idempotency_key: 'existing-key',
+    debate_id: 'debate-existing',
+    instrument: INSTRUMENT,
+    asset_class: 'stocks',
+    side: 'buy',
+    intent_type: 'entry',
+    requested_size: 50,
+    filled_size: 50,
+    avg_entry_price: ENTRY_PRICE,
+    stop: 96,
+    target: 108,
+    order_state: 'filled',
+    broker_order_ids: ['broker-1'],
+    opened_at: new Date('2026-07-14T10:00:00Z'),
+    decision_timestamp: new Date('2026-07-14T10:00:00Z'),
+    conviction: 0.6,
+    converged: true,
+    ...overrides,
+  };
 }
 
 /**
@@ -348,5 +373,99 @@ describe('decide — config injection', () => {
     const intent = await decide(traderInput({ config: configWith({ reward_risk_multiple: 3 }) }));
 
     expect(intent?.target).toBe(ENTRY_PRICE + 3 * EXPECTED_STOP_DISTANCE);
+  });
+});
+
+describe('decide — position-aware branching (#74)', () => {
+  it('holds (null) on a same-direction debate whose conviction has not risen materially', async () => {
+    const position = openPosition({ conviction: 0.6 });
+    const debate = debateResult({ direction: 'bullish', confidence: 0.65, converged: true });
+
+    const intent = await decide(traderInput({ debate, positionState: async () => [position] }));
+
+    expect(intent).toBeNull();
+  });
+
+  it('scale_ins on a same-direction debate whose conviction rose materially', async () => {
+    const position = openPosition({ conviction: 0.6 });
+    const debate = debateResult({ direction: 'bullish', confidence: 0.775, converged: true });
+
+    const intent = await decide(traderInput({ debate, positionState: async () => [position] }));
+
+    expect(intent).not.toBeNull();
+    expect(intent?.intent_type).toBe('scale_in');
+    expect(intent?.side).toBe('buy');
+    expect(intent?.size).toBeCloseTo(EXPECTED_SIZE);
+  });
+
+  it('exits (flattens) on an opposite-direction debate', async () => {
+    const position = openPosition({ side: 'buy', filled_size: 50 });
+    const secondLot = openPosition({
+      idempotency_key: 'existing-key-2',
+      side: 'buy',
+      filled_size: 25,
+    });
+    const debate = debateResult({ direction: 'bearish', confidence: 0.9, converged: true });
+
+    const intent = await decide(
+      traderInput({ debate, positionState: async () => [position, secondLot] }),
+    );
+
+    expect(intent).not.toBeNull();
+    expect(intent?.intent_type).toBe('exit');
+    // Closing a long is a sell, flattening the combined filled exposure of every lot.
+    expect(intent?.side).toBe('sell');
+    expect(intent?.size).toBe(75);
+  });
+
+  it('holds (null) on a neutral debate while holding a position', async () => {
+    const position = openPosition();
+    const debate = debateResult({ direction: 'neutral', confidence: 0.9 });
+
+    const intent = await decide(traderInput({ debate, positionState: async () => [position] }));
+
+    expect(intent).toBeNull();
+  });
+
+  it('holds (null) on a non-converged debate while holding, even same-direction with a material conviction rise', async () => {
+    const position = openPosition({ conviction: 0.5 });
+    const debate = debateResult({ direction: 'bullish', confidence: 0.9, converged: false });
+
+    const intent = await decide(traderInput({ debate, positionState: async () => [position] }));
+
+    expect(intent).toBeNull();
+  });
+
+  it('still enters when flat, even with an unrelated position open on another instrument', async () => {
+    const otherInstrumentPosition = openPosition({ instrument: 'TSLA' });
+
+    const intent = await decide(
+      traderInput({ positionState: async () => [otherInstrumentPosition] }),
+    );
+
+    expect(intent).not.toBeNull();
+    expect(intent?.intent_type).toBe('entry');
+  });
+
+  it('compares conviction against the most recently opened lot, not the oldest', async () => {
+    const olderLot = openPosition({
+      idempotency_key: 'older',
+      conviction: 0.5,
+      opened_at: new Date('2026-07-10T10:00:00Z'),
+    });
+    const newerLot = openPosition({
+      idempotency_key: 'newer',
+      conviction: 0.7,
+      opened_at: new Date('2026-07-14T10:00:00Z'),
+    });
+    // Rose past the older lot's conviction (0.5) but not past the newer
+    // lot's (0.7) by the required delta — should hold, not scale_in.
+    const debate = debateResult({ direction: 'bullish', confidence: 0.75, converged: true });
+
+    const intent = await decide(
+      traderInput({ debate, positionState: async () => [olderLot, newerLot] }),
+    );
+
+    expect(intent).toBeNull();
   });
 });

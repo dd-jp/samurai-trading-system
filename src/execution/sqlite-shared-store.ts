@@ -43,6 +43,8 @@ export interface OpenPositionRow {
   broker_order_ids: string;
   opened_at: string;
   decision_timestamp: string;
+  conviction: number;
+  converged: 0 | 1;
 }
 
 interface FillRow {
@@ -85,8 +87,9 @@ export class SqliteExecutionStore implements SharedStore {
           `INSERT INTO open_positions (
              idempotency_key, debate_id, instrument, asset_class, side, intent_type,
              requested_size, filled_size, avg_entry_price, stop, target,
-             order_state, broker_order_ids, opened_at, decision_timestamp
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             order_state, broker_order_ids, opened_at, decision_timestamp,
+             conviction, converged
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           position.idempotency_key,
@@ -104,6 +107,8 @@ export class SqliteExecutionStore implements SharedStore {
           JSON.stringify(position.broker_order_ids),
           position.opened_at.toISOString(),
           position.decision_timestamp.toISOString(),
+          position.conviction,
+          position.converged ? 1 : 0,
         );
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {
@@ -285,6 +290,8 @@ export function fromPositionRow(row: OpenPositionRow): OpenPosition {
     broker_order_ids: JSON.parse(row.broker_order_ids) as string[],
     opened_at: new Date(row.opened_at),
     decision_timestamp: new Date(row.decision_timestamp),
+    conviction: row.conviction,
+    converged: row.converged === 1,
   };
 }
 

@@ -49,6 +49,8 @@ async function seedPosition(
     broker_order_ids: ['key-1:entry', 'key-1:stop', 'key-1:target'],
     opened_at: OPENED_AT,
     decision_timestamp: OPENED_AT,
+    conviction: 0.7,
+    converged: true,
     ...overrides,
   };
   await store.writeAheadPosition(position);

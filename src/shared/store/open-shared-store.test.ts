@@ -61,12 +61,13 @@ describe('openSharedStore', () => {
     const db = openSharedStore(':memory:');
 
     const versions = db.prepare('SELECT version FROM schema_migrations').all();
-    expect(versions).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
+    expect(versions).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
       { version: 1 },
       { version: 2 },
       { version: 3 },
+      { version: 4 },
     ]);
   });
 
