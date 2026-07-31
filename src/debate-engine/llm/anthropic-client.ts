@@ -8,6 +8,7 @@
  * without a hard dependency on a specific SDK package.
  */
 
+import { withRetry } from '../../shared/index.js';
 import {
   LlmMalformedResponseError,
   LlmProviderError,
@@ -15,8 +16,23 @@ import {
   LlmTimeoutError,
 } from './errors.js';
 import { wrapUntrusted } from './prompt-safety.js';
-import { withRetry } from './retry.js';
 import type { LlmClient, LlmRequest, LlmResponse, LlmRetryConfig } from './types.js';
+
+/**
+ * Only failure modes the spec calls out as transient are retried (timeout,
+ * rate limit, malformed response — a fresh sample may parse cleanly).
+ * Anything else (auth errors, bad requests, unclassified `LlmProviderError`s)
+ * is assumed non-transient and rethrown immediately. Closed over the
+ * generalized `withRetry` (issue #271) — this predicate, and the LLM
+ * client's retry behavior, are unchanged from before that generalization.
+ */
+function isRetryable(error: unknown): boolean {
+  return (
+    error instanceof LlmTimeoutError ||
+    error instanceof LlmRateLimitError ||
+    error instanceof LlmMalformedResponseError
+  );
+}
 
 export interface AnthropicMessageRequest {
   model: string;
@@ -102,7 +118,7 @@ export class AnthropicLlmClient implements LlmClient {
   ) {}
 
   complete<T>(request: LlmRequest<T>): Promise<LlmResponse<T>> {
-    return withRetry(() => this.attempt(request), this.config.retry);
+    return withRetry(() => this.attempt(request), this.config.retry, isRetryable);
   }
 
   private async attempt<T>(request: LlmRequest<T>): Promise<LlmResponse<T>> {

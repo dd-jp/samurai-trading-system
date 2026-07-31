@@ -10,6 +10,7 @@
  * own structured output — this layer owns provider mechanics (calling out,
  * retrying, classifying failures), not prompt-specific schemas.
  */
+import type { RetryConfig } from '../../shared/index.js';
 import type { AnalystView } from '../types.js';
 
 /**
@@ -48,11 +49,11 @@ export interface LlmClient {
   complete<T>(request: LlmRequest<T>): Promise<LlmResponse<T>>;
 }
 
-/** Retry knobs (issue #31 AC: "Retry logic with exponential backoff (configurable)"). */
-export interface LlmRetryConfig {
-  /** Total attempts including the first, e.g. 3 = up to 2 retries. */
-  maxAttempts: number;
-  baseDelayMs: number;
-  /** Backoff is capped here so a long-running provider outage doesn't blow the debate's latency budget. */
-  maxDelayMs: number;
-}
+/**
+ * Retry knobs (issue #31 AC: "Retry logic with exponential backoff
+ * (configurable)"). Structurally identical to the generalized
+ * `src/shared/http/retry.ts`'s `RetryConfig` (issue #271) — aliased rather
+ * than duplicated so the two can't drift, while keeping this name as the
+ * public export `debate-engine/index.ts` already carries.
+ */
+export type LlmRetryConfig = RetryConfig;

@@ -16,7 +16,7 @@ Read this on every session start.
 Read/Write these as the project evolves:
 
 | File | Purpose |
-|------|---------|
+| ------ | --------- |
 | `CONTEXT.md` (repo root) | Domain glossary. Terms, relationships, invariants. No implementation details. Update inline as terms resolve. |
 | `docs/adr/` | Architecture Decision Records. Only create when (1) hard to reverse, (2) surprising without context, (3) real trade-off. |
 | `docs/research/techstack.md` | Libraries, versions, why-chosen. Update as stack choices lock in. |
@@ -95,6 +95,7 @@ New research goes to `~/hermes-assistant/research/<topic>-<date>-raw.md` (raw) a
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
 
 Rules:
+
 - For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
 - If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
