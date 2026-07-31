@@ -1,8 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
-import type { Bar } from '../market-data-service/types.js';
-import { SimulatedClock } from '../shared/clock.js';
+import type { Bar } from '../market-data-service/index.js';
+import { SimulatedClock } from '../shared/index.js';
 import { EvalExecutorImpl } from './eval-executor.js';
 import { LookaheadViolationError } from './lookahead.js';
 import type { ProxyStrategyConfig } from './proxy-strategy.js';

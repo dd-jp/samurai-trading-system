@@ -11,7 +11,7 @@
  */
 
 import type { AnalystView, Direction } from '../debate-engine/index.js';
-import type { BarWindow } from '../market-data-service/types.js';
+import type { BarWindow } from '../market-data-service/index.js';
 import type { IntelligenceItem } from '../market-intelligence/index.js';
 import type { Analyst, AnalystInput, AssetClass } from './types.js';
 

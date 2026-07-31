@@ -1,7 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import type { LlmClient, LlmRequest } from '../../debate-engine/llm/types.js';
-import type { AnalystView } from '../../debate-engine/types.js';
-import type { Clock } from '../../shared/clock.js';
+import type { AnalystView, LlmClient, LlmRequest } from '../../debate-engine/index.js';
+import type { Clock } from '../../shared/index.js';
 import { buildDebateStep } from './debate-adapter.js';
 
 const NOW = new Date('2026-07-28T14:00:00Z');

@@ -29,6 +29,34 @@ import type {
   RiskManager,
 } from './types.js';
 
+export type {
+  AutoReArmPolicy,
+  BreakerConfig,
+  BreakerEvalInput,
+  VolatilityBreakerConfig,
+  VolatilityReading,
+} from './breakers.js';
+export { CircuitBreakers } from './breakers.js';
+export { countryForInstrument, trackedCountries } from './cii-mapping.js';
+export type { CorrelationConfig, CorrelationEstimateInput } from './correlation.js';
+export { computeCorrelationEstimate } from './correlation.js';
+export { InMemoryRiskCriticStore } from './critic-store.js';
+export type { PortfolioAccountingInput } from './portfolio-view.js';
+export { computePortfolioView } from './portfolio-view.js';
+export type {
+  BreakerState,
+  CorrelationEstimate,
+  PersistedBreakerState,
+  PortfolioView,
+  RiskConfig,
+  RiskCriticLog,
+  RiskCriticStore,
+  RiskCriticVerdict,
+  RiskDecision,
+  RiskInput,
+  RiskManager,
+} from './types.js';
+
 /**
  * `RiskInput.next_breaker_state` (#203) is only ever echoed onto
  * `RiskDecision.next_breaker_state` below — `evaluate()` stays pure and

@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest';
 import type { EvalReport } from './eval-types.js';
 import { KILL_LINE, killLineChecks, renderStage2Verdict } from './stage2-verdict.js';
 import type { TrialGridResult } from './trial-execution.js';

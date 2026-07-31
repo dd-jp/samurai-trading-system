@@ -5,7 +5,7 @@
  * out to both configured channels internally); HITL approval round-trips
  * through Telegram, the spec's primary approval mechanism.
  */
-import type { RiskDecision } from '../../risk-manager/types.js';
+import type { RiskDecision } from '../../risk-manager/index.js';
 import type {
   ApprovalChannel,
   ApprovalOutcome,

@@ -8,7 +8,6 @@
  * export surface as well as the entrypoint); every test below relies on that
  * implicitly, since a top-level start would hang the suite.
  */
-import { describe, expect, it } from 'vitest';
 import { buildShutdownHandler, REQUIRED_INJECTED_CONFIG, startFromEnvironment } from './index.js';
 
 describe('startFromEnvironment', () => {

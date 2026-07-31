@@ -20,7 +20,7 @@
  * (cross-spec §5) exists to forbid.
  */
 
-import type { ClosedTrade } from '../shared/types.js';
+import type { ClosedTrade } from '../shared/index.js';
 import type {
   EvalExecutor,
   EvalOptions,

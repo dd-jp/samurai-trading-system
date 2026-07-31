@@ -8,15 +8,15 @@
  * Scope note: the repo populates its interfaces ticket-by-ticket — #91 is
  * `runDailyCycle`, #92 is `onTradeClose`, #93 is `computeMetrics`.
  */
-import type { MetricsSuite } from '../cost-model-backtest/validation-types.js';
-import type { Clock } from '../shared/clock.js';
+import type { MetricsSuite } from '../cost-model-backtest/index.js';
 import type {
+  Clock,
   ClosedTrade,
   ClosedTradeStore,
   DebateLogStore,
   SetupStore,
   TuningStore,
-} from '../shared/types.js';
+} from '../shared/index.js';
 
 /**
  * A human-set bound on one tunable dial. Every dial has all four: the spec's

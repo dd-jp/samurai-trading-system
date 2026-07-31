@@ -29,7 +29,7 @@
  * that guarantee forbids.
  */
 
-import type { ClosedTrade, Fill } from '../shared/types.js';
+import type { ClosedTrade, Fill } from '../shared/index.js';
 import type { DateRange } from './universe.js';
 import type { MetricsSuite, Split } from './validation-types.js';
 

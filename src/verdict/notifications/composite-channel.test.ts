@@ -1,6 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import type { RiskDecision } from '../../risk-manager/types.js';
-import type { OrderIntent } from '../../shared/types.js';
+import type { RiskDecision } from '../../risk-manager/index.js';
+import type { OrderIntent } from '../../shared/index.js';
 import type {
   ApprovalChannel,
   ApprovalOutcome,

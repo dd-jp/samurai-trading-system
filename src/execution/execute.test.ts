@@ -1,9 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
-import type { CostModel } from '../cost-model-backtest/types.js';
-import type { MarketDataService } from '../market-data-service/types.js';
-import type { Clock } from '../shared/clock.js';
-import type { OpenPosition, OrderIntent } from '../shared/types.js';
-import type { VerdictDecision } from '../verdict/types.js';
+import type { CostModel } from '../cost-model-backtest/index.js';
+import type { MarketDataService } from '../market-data-service/index.js';
+import type { Clock, OpenPosition, OrderIntent } from '../shared/index.js';
+import type { VerdictDecision } from '../verdict/index.js';
 import { ExecutionImpl } from './execute.js';
 import { openTestExecutionStore } from './sqlite-store-harness.js';
 import type {

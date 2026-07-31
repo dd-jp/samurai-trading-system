@@ -17,7 +17,7 @@
  * mediator's per-round `converged` flag is an INPUT the orchestrator reads,
  * not something it computes.
  */
-import type { Clock } from '../shared/clock.js';
+import type { Clock } from '../shared/index.js';
 import type { AnalystRoundStance } from './analyst-contribution.js';
 import { buildAnalystContributions } from './analyst-contribution.js';
 import { computeDebateId } from './debate-id.js';

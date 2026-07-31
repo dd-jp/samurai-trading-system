@@ -1,6 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import type { Clock } from '../shared/clock.js';
-import { openSharedStore } from '../shared/store/open-shared-store.js';
+import type { Clock } from '../shared/index.js';
+import { openSharedStore } from '../shared/store/index.js';
 import { SqliteTuningStore } from './sqlite-tuning-store.js';
 
 const NOW = new Date('2026-07-19T00:00:00Z');

@@ -5,11 +5,9 @@
  * resize, and `ClosedTrade` emission are asserted in isolation from any real
  * venue's timing.
  */
-import { describe, expect, it } from 'vitest';
-import type { CostModel } from '../cost-model-backtest/types.js';
-import type { MarketDataService } from '../market-data-service/types.js';
-import type { Clock } from '../shared/clock.js';
-import type { OpenPosition } from '../shared/types.js';
+import type { CostModel } from '../cost-model-backtest/index.js';
+import type { MarketDataService } from '../market-data-service/index.js';
+import type { Clock, OpenPosition } from '../shared/index.js';
 import { ExecutionImpl } from './execute.js';
 import { openTestExecutionStore, type TestExecutionStore } from './sqlite-store-harness.js';
 import type {

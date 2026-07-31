@@ -1,6 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { type SharedStore as Db, openSharedStore } from '../shared/store/open-shared-store.js';
-import type { ClosedTrade, Fill, OpenPosition } from '../shared/types.js';
+import type { ClosedTrade, Fill, OpenPosition } from '../shared/index.js';
+import { type SharedStore as Db, openSharedStore } from '../shared/store/index.js';
 import { SqliteExecutionStore } from './sqlite-shared-store.js';
 
 const OPENED_AT = new Date('2026-07-20T14:00:00Z');

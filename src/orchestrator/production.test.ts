@@ -10,24 +10,21 @@
  * own suite owns that) and a live broker round-trip (ADR-0004's "wiring
  * validated" bar is a manual E2E run, not a unit test).
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CostModelImpl } from '../cost-model-backtest/cost-model.js';
-import { MockLlmClient } from '../debate-engine/llm/mock-client.js';
-import { SimulatedBrokerAdapter } from '../execution/simulated-adapter.js';
-import { FixtureDataSource } from '../market-data-service/fixture-data-source.js';
-import { MarketDataServiceImpl } from '../market-data-service/service.js';
-import type { AlpacaBar, AlpacaQuote } from '../market-data-service/sources/alpaca-source.js';
-import { SqliteMarketDataStore } from '../market-data-service/sqlite-market-data-store.js';
-import type { Bar } from '../market-data-service/types.js';
-import type { VolatilityReading } from '../risk-manager/breakers.js';
-import { SimulatedClock } from '../shared/clock.js';
+import { CostModelImpl } from '../cost-model-backtest/index.js';
+import { MockLlmClient } from '../debate-engine/index.js';
+import { SimulatedBrokerAdapter } from '../execution/index.js';
+import type { AlpacaBar, AlpacaQuote, Bar } from '../market-data-service/index.js';
 import {
-  openSharedStore,
-  type SharedStore as SqliteHandle,
-} from '../shared/store/open-shared-store.js';
-import type { OrderIntent } from '../shared/types.js';
-import { SqliteSetupStore } from '../trader/sqlite-setup-store.js';
-import type { ApprovalOutcome, ApprovalRequest, VerdictDecision } from '../verdict/types.js';
+  FixtureDataSource,
+  MarketDataServiceImpl,
+  SqliteMarketDataStore,
+} from '../market-data-service/index.js';
+import type { VolatilityReading } from '../risk-manager/index.js';
+import type { OrderIntent } from '../shared/index.js';
+import { SimulatedClock } from '../shared/index.js';
+import { openSharedStore, type SharedStore as SqliteHandle } from '../shared/store/index.js';
+import { SqliteSetupStore } from '../trader/index.js';
+import type { ApprovalOutcome, ApprovalRequest, VerdictDecision } from '../verdict/index.js';
 import { buildPersistence } from './production/direct-bind.js';
 import {
   buildProductionComponents,

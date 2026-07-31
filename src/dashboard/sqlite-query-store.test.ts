@@ -6,12 +6,11 @@
  * tables with no cut-over writer yet (`verdict_log`, `analyst_weights`,
  * `latest_mark`, `current_tick`).
  */
-import { describe, expect, it } from 'vitest';
-import { SqliteDebateLogStore } from '../debate-engine/sqlite-debate-log-store.js';
-import type { AnalystContribution } from '../debate-engine/types.js';
-import { SqliteExecutionStore } from '../execution/sqlite-shared-store.js';
-import { openSharedStore, type SharedStore } from '../shared/store/open-shared-store.js';
-import type { ClosedTrade, DebateLog, OpenPosition } from '../shared/types.js';
+import type { AnalystContribution } from '../debate-engine/index.js';
+import { SqliteDebateLogStore } from '../debate-engine/index.js';
+import { SqliteExecutionStore } from '../execution/index.js';
+import type { ClosedTrade, DebateLog, OpenPosition } from '../shared/index.js';
+import { openSharedStore, type SharedStore } from '../shared/store/index.js';
 import { SqliteQueryStore } from './sqlite-query-store.js';
 
 const NOW = new Date('2026-07-27T12:00:00Z');

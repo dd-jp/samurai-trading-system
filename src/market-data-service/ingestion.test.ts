@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest';
 import { completedBars, deriveBacktestMark, normalizeBars, type RawCandle } from './ingestion.js';
 import { AlwaysOpenCalendar, UsEquityRegularHoursCalendar } from './trading-calendar.js';
 import type { Bar } from './types.js';

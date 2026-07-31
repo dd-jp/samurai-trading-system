@@ -14,8 +14,8 @@
  * the same debate resolved twice — a bug, not a legitimate re-run.
  */
 
-import type { SharedStore } from '../shared/store/open-shared-store.js';
-import type { DebateLog, DebateLogStore } from '../shared/types.js';
+import type { DebateLog, DebateLogStore } from '../shared/index.js';
+import type { SharedStore } from '../shared/store/index.js';
 import type { AnalystContribution, Direction } from './types.js';
 
 interface DebateLogRow {

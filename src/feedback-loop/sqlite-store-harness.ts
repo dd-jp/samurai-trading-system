@@ -20,8 +20,9 @@
  * synchronous seed data). The INSERT mirrors
  * `SqliteExecutionStore.writeClosedTrade`'s column list exactly.
  */
-import { openSharedStore, type SharedStore } from '../shared/store/open-shared-store.js';
-import type { ClosedTrade } from '../shared/types.js';
+
+import type { ClosedTrade } from '../shared/index.js';
+import { openSharedStore, type SharedStore } from '../shared/store/index.js';
 import { SqliteAdjustmentLog } from './sqlite-adjustment-log.js';
 import { SqliteClosedTradeStore } from './sqlite-closed-trade-store.js';
 import { SqliteTuningStore } from './sqlite-tuning-store.js';

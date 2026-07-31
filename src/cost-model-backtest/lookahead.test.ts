@@ -1,5 +1,4 @@
-import { describe, expect, it } from 'vitest';
-import { SimulatedClock } from '../shared/clock.js';
+import { SimulatedClock } from '../shared/index.js';
 import { LookaheadAuditor, LookaheadViolationError } from './lookahead.js';
 
 const T = new Date('2024-01-02T12:00:00.000Z');

@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest';
 import { CostModelImpl } from './cost-model.js';
 import type { CostConfig, FillRequest, MarketState } from './types.js';
 

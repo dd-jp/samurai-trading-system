@@ -3,9 +3,8 @@
  * from a source's native payload, through ingestion normalization, out of
  * `MarketDataServiceImpl.getBars` — the path a real consumer takes.
  */
-import { describe, expect, it } from 'vitest';
-import type { Clock } from '../shared/clock.js';
-import { openSharedStore } from '../shared/store/open-shared-store.js';
+import type { Clock } from '../shared/index.js';
+import { openSharedStore } from '../shared/store/index.js';
 import { MarketDataServiceImpl } from './service.js';
 import { createDataSource, type DataSourceConfig } from './source-factory.js';
 import type { AlpacaBar, AlpacaClient } from './sources/alpaca-source.js';

@@ -1,6 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { openSharedStore } from '../shared/store/open-shared-store.js';
-import type { SetupVector } from '../shared/types.js';
+import type { SetupVector } from '../shared/index.js';
+import { openSharedStore } from '../shared/store/index.js';
 import { SqliteSetupStore } from './sqlite-setup-store.js';
 
 const VECTOR: SetupVector = { debate_features: [0.7, 1, 1, 0.1], market_features: [0.3, 0.5] };

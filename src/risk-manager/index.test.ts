@@ -1,6 +1,4 @@
-import { describe, expect, it } from 'vitest';
-import type { Clock } from '../shared/clock.js';
-import type { OrderIntent } from '../shared/types.js';
+import type { Clock, OrderIntent } from '../shared/index.js';
 import { RiskManagerImpl } from './index.js';
 import type {
   BreakerState,

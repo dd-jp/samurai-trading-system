@@ -42,10 +42,9 @@
  * (cross-spec-contracts.md registry #1) is untouched by this module.
  */
 
-import { computeIndicator } from '../market-data-service/indicators.js';
-import type { Bar } from '../market-data-service/types.js';
-import type { SimulatedClock } from '../shared/clock.js';
-import type { ClosedTrade, Fill } from '../shared/types.js';
+import type { Bar } from '../market-data-service/index.js';
+import { computeIndicator } from '../market-data-service/index.js';
+import type { ClosedTrade, Fill, SimulatedClock } from '../shared/index.js';
 import type { ReplayTradeSource } from './eval-types.js';
 import { LookaheadAuditor } from './lookahead.js';
 import { type ProxySignal, type ProxyStrategyConfig, proxySignal } from './proxy-strategy.js';

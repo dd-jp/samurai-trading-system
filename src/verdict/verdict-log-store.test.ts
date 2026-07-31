@@ -1,5 +1,4 @@
-import { describe, expect, it } from 'vitest';
-import type { OrderIntent } from '../shared/types.js';
+import type { OrderIntent } from '../shared/index.js';
 import type { VerdictDecision, VerdictInput } from './types.js';
 import { buildVerdictLog, InMemoryVerdictLogStore } from './verdict-log-store.js';
 

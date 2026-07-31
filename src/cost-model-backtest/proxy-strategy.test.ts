@@ -1,6 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { computeIndicator } from '../market-data-service/indicators.js';
-import type { Bar } from '../market-data-service/types.js';
+import type { Bar } from '../market-data-service/index.js';
+import { computeIndicator } from '../market-data-service/index.js';
 import { type ProxyStrategyConfig, proxySignal } from './proxy-strategy.js';
 
 const BASE_CONFIG: ProxyStrategyConfig = {

@@ -18,7 +18,7 @@
  * `CcxtClient` is OHLCV/ticker only), so a real ccxt Exchange satisfies it
  * structurally.
  */
-import type { OrderState } from '../shared/types.js';
+import type { OrderState } from '../shared/index.js';
 import type {
   BrokerAck,
   BrokerAdapter,

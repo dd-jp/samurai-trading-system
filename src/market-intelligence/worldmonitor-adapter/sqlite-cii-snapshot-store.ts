@@ -14,7 +14,7 @@
  * fail silently instead of loudly. `record` checks the range itself first
  * so that case still throws.
  */
-import type { SharedStore } from '../../shared/store/open-shared-store.js';
+import type { SharedStore } from '../../shared/store/index.js';
 import type { CiiSnapshotRow, CiiSnapshotStore } from './cii-snapshot.js';
 
 export class SqliteCiiSnapshotStore implements CiiSnapshotStore {

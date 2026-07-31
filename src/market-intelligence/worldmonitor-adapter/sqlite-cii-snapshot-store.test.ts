@@ -1,5 +1,4 @@
-import { describe, expect, it } from 'vitest';
-import { openSharedStore } from '../../shared/store/open-shared-store.js';
+import { openSharedStore } from '../../shared/store/index.js';
 import { SqliteCiiSnapshotStore } from './sqlite-cii-snapshot-store.js';
 
 function makeStore() {

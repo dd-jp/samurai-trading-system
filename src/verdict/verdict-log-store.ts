@@ -6,7 +6,7 @@
  * ("Verdict" — `verdict_log`): the real SQLite-backed store is deferred (no
  * shared store exists anywhere in the codebase yet — #193 is still open).
  */
-import type { VerdictLog, VerdictLogStore } from '../shared/types.js';
+import type { VerdictLog, VerdictLogStore } from '../shared/index.js';
 import type { VerdictDecision, VerdictInput } from './types.js';
 
 /**

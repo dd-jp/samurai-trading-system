@@ -44,7 +44,7 @@
  * `Heartbeat` uses for `'heartbeat'`, since the failure happened in this
  * scan, not in the Verdict pipeline stage.
  */
-import type { SharedStore } from '../shared/store/open-shared-store.js';
+import type { SharedStore } from '../shared/store/index.js';
 import type { Logger } from './types.js';
 
 /** One `verdict_log` `go` row with no corresponding `execution`-stage `audit_log` row. */

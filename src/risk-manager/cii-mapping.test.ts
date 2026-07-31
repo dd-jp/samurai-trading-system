@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest';
 import { countryForInstrument, trackedCountries } from './cii-mapping.js';
 
 describe('countryForInstrument', () => {

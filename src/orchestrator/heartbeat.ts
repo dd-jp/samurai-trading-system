@@ -9,7 +9,7 @@
  * crash the Orchestrator process, since a crash is exactly the failure mode
  * the heartbeat exists to make externally visible via silence.
  */
-import type { Clock } from '../shared/clock.js';
+import type { Clock } from '../shared/index.js';
 import type { Logger } from './types.js';
 
 /** The trade-channel surface the heartbeat needs — see heartbeat-channel.ts. */

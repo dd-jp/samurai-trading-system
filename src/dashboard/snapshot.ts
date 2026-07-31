@@ -11,7 +11,7 @@
  * what actually filled. Recent-history window is fixed
  * (`RECENT_DEBATES_LIMIT` / `RECENT_VERDICTS_LIMIT`), no config surface yet.
  */
-import type { OpenPosition } from '../shared/types.js';
+import type { OpenPosition } from '../shared/index.js';
 import type { DashboardQueryStore, DashboardSnapshot, PositionRow } from './types.js';
 
 /** Matches the CLI views' default recent-history window; no config surface yet. */

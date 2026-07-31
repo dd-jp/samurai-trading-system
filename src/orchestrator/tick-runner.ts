@@ -26,7 +26,7 @@
  * criterion is that a stale row is safely overwritten next tick, not that a
  * crash is invisible.
  */
-import type { Signal } from '../analysts/types.js';
+import type { Signal } from '../analysts/index.js';
 import { digest } from './digest.js';
 import type { TickContext, TickOutcome, TickRunner, TickStage, TickSteps } from './types.js';
 

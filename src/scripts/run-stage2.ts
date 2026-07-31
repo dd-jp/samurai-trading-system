@@ -39,7 +39,7 @@ import {
   type TrialGridAssetClass,
   type TrialGridResult,
 } from '../cost-model-backtest/index.js';
-import { SimulatedClock } from '../shared/clock.js';
+import { SimulatedClock } from '../shared/index.js';
 
 /** The fixed MVP universe (CLAUDE.md "Broker Plan" / spec "User Stories"). */
 export const STOCK_SYMBOLS = ['SPY', 'QQQ', 'AAPL', 'TSLA'] as const;

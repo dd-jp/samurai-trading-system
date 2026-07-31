@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest';
 import type { PolygonAggregate, PolygonClient } from '../cost-model-backtest/index.js';
 import { CRYPTO_SYMBOLS, defaultFiveYearWindow, runStage2, STOCK_SYMBOLS } from './run-stage2.js';
 

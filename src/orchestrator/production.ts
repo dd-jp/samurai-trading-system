@@ -61,50 +61,57 @@
  * out of scope here per the issue thread.
  */
 import { AnalystOrchestrator } from '../analysts/index.js';
-import { CostModelImpl } from '../cost-model-backtest/cost-model.js';
-import type { CostConfig } from '../cost-model-backtest/types.js';
-import type { LlmClient } from '../debate-engine/llm/types.js';
-import { SqliteDebateLogStore } from '../debate-engine/sqlite-debate-log-store.js';
-import { AlpacaBrokerAdapter } from '../execution/adapters/alpaca-adapter.js';
-import type { AlpacaClient as AlpacaBrokerClient } from '../execution/adapters/alpaca-client.js';
-import { SqliteExecutionStore } from '../execution/sqlite-shared-store.js';
+import type { CostConfig } from '../cost-model-backtest/index.js';
+import { CostModelImpl } from '../cost-model-backtest/index.js';
+import type { LlmClient } from '../debate-engine/index.js';
+import { SqliteDebateLogStore } from '../debate-engine/index.js';
 import type {
+  AlpacaClient as AlpacaBrokerClient,
   BrokerAdapter,
   ExecutionConfig,
   SharedStore as ExecutionSharedStore,
-} from '../execution/types.js';
-import { runDailyCycle } from '../feedback-loop/daily-cycle.js';
-import { SqliteAdjustmentLog } from '../feedback-loop/sqlite-adjustment-log.js';
-import { SqliteClosedTradeStore } from '../feedback-loop/sqlite-closed-trade-store.js';
-import { SqliteTuningStore } from '../feedback-loop/sqlite-tuning-store.js';
+} from '../execution/index.js';
+import { AlpacaBrokerAdapter, SqliteExecutionStore } from '../execution/index.js';
 import type {
   FeedbackConfig,
   LoosenApprovalChannel,
   TuningProposal,
-} from '../feedback-loop/types.js';
-import type { DataSource, MarketDataService } from '../market-data-service/index.js';
-import { MarketDataServiceImpl } from '../market-data-service/service.js';
-import type { AlpacaClient as AlpacaDataClient } from '../market-data-service/sources/alpaca-source.js';
-import { AlpacaDataSource } from '../market-data-service/sources/alpaca-source.js';
-import { SqliteMarketDataStore } from '../market-data-service/sqlite-market-data-store.js';
+} from '../feedback-loop/index.js';
 import {
+  runDailyCycle,
+  SqliteAdjustmentLog,
+  SqliteClosedTradeStore,
+  SqliteTuningStore,
+} from '../feedback-loop/index.js';
+import type {
+  AlpacaClient as AlpacaDataClient,
+  DataSource,
+  MarketDataService,
+} from '../market-data-service/index.js';
+import {
+  AlpacaDataSource,
+  MarketDataServiceImpl,
+  SqliteMarketDataStore,
   type TradingCalendar,
   UsEquityRegularHoursCalendar,
-} from '../market-data-service/trading-calendar.js';
-import { MarketIntelligenceStore } from '../market-intelligence/index.js';
+} from '../market-data-service/index.js';
 import {
   CiiConsumer,
   type CiiConsumerConfig,
   type CiiScoreProvider,
-} from '../market-intelligence/worldmonitor-adapter/cii-consumer.js';
-import { type BreakerConfig, CircuitBreakers } from '../risk-manager/breakers.js';
-import type { CorrelationConfig } from '../risk-manager/correlation.js';
-import type { PersistedBreakerState, RiskConfig } from '../risk-manager/types.js';
-import type { Clock } from '../shared/clock.js';
-import type { SharedStore as SqliteHandle } from '../shared/store/open-shared-store.js';
-import { SqliteSetupStore } from '../trader/sqlite-setup-store.js';
-import type { TraderConfig } from '../trader/types.js';
-import type { ApprovalChannel, VerdictConfig } from '../verdict/types.js';
+  MarketIntelligenceStore,
+} from '../market-intelligence/index.js';
+import type {
+  CorrelationConfig,
+  PersistedBreakerState,
+  RiskConfig,
+} from '../risk-manager/index.js';
+import { type BreakerConfig, CircuitBreakers } from '../risk-manager/index.js';
+import type { Clock } from '../shared/index.js';
+import type { SharedStore as SqliteHandle } from '../shared/store/index.js';
+import type { TraderConfig } from '../trader/index.js';
+import { SqliteSetupStore } from '../trader/index.js';
+import type { ApprovalChannel, VerdictConfig } from '../verdict/index.js';
 import { Heartbeat, type HeartbeatChannel } from './heartbeat.js';
 import { JsonLogger } from './logger.js';
 import type {

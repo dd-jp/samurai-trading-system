@@ -1,4 +1,3 @@
-import { describe, expect, it, vi } from 'vitest';
 import { CcxtBrokerAdapter, type CcxtBrokerClient, type CcxtOrder } from './ccxt-adapter.js';
 import type { NativeBracketRequest } from './types.js';
 

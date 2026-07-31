@@ -11,7 +11,7 @@
  * clock puts multiple stages at the same ISO millisecond (the same reason
  * `SqliteExecutionStore.getFills` orders by `rowid`).
  */
-import type { SharedStore } from '../shared/store/open-shared-store.js';
+import type { SharedStore } from '../shared/store/index.js';
 import type { AuditLog } from './types.js';
 
 export interface AuditLogEntry {

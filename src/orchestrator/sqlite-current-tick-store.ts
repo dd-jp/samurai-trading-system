@@ -12,7 +12,7 @@
  * "disposable, best-effort" framing) — so silently overwriting is correct,
  * not a bug to guard against.
  */
-import type { SharedStore } from '../shared/store/open-shared-store.js';
+import type { SharedStore } from '../shared/store/index.js';
 import type { AssetClass, CurrentTick, CurrentTickStore, TickStage } from './types.js';
 
 interface CurrentTickRow {

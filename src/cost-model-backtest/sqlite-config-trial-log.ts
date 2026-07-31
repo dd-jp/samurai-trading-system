@@ -26,9 +26,9 @@
  * exists and can supply the full config.
  */
 
-import type { Clock } from '../shared/clock.js';
-import { SystemClock } from '../shared/clock.js';
-import type { SharedStore } from '../shared/store/open-shared-store.js';
+import type { Clock } from '../shared/index.js';
+import { SystemClock } from '../shared/index.js';
+import type { SharedStore } from '../shared/store/index.js';
 import type { ConfigTrialLog } from './config-trial-log.js';
 import type { BacktestReport } from './types.js';
 

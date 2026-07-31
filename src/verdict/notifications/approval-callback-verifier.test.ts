@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest';
 import type { ApprovalCallbackPayload } from './approval-callback-verifier.js';
 import { signApprovalCallback, verifyApprovalCallback } from './approval-callback-verifier.js';
 

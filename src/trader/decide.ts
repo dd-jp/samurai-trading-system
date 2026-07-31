@@ -11,7 +11,7 @@
  * Cosine precedent retrieval is #75 — see NO_PRECEDENT_COSINE_MULTIPLIER.
  */
 import type { Bar } from '../market-data-service/index.js';
-import type { OpenPosition, OrderIntent } from '../shared/types.js';
+import type { OpenPosition, OrderIntent } from '../shared/index.js';
 import { computeIdempotencyKey } from './idempotency-key.js';
 import type { AssetClass, TraderConfig, TraderInput } from './types.js';
 

@@ -9,8 +9,7 @@
  */
 import type { DebateResult } from '../debate-engine/index.js';
 import type { MarketDataService } from '../market-data-service/index.js';
-import type { Clock } from '../shared/clock.js';
-import type { OpenPosition, OrderIntent } from '../shared/types.js';
+import type { Clock, OpenPosition, OrderIntent } from '../shared/index.js';
 
 /** Asset classes the risk multiplier is keyed on, matching `Mark.asset_class`. */
 export type AssetClass = 'crypto' | 'stocks';

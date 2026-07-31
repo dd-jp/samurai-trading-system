@@ -21,7 +21,7 @@
  * observes it — finer-grained partial-fill history requires Alpaca's trade
  * updates/activities stream, which is out of scope for this ticket.
  */
-import type { OrderState } from '../../shared/types.js';
+import type { OrderState } from '../../shared/index.js';
 import type {
   BrokerAck,
   BrokerAdapter,

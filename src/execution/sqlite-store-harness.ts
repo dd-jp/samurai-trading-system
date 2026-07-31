@@ -18,8 +18,9 @@
  * stays exactly the port it implements — no test-only reads on the
  * production class.
  */
-import { type SharedStore as Db, openSharedStore } from '../shared/store/open-shared-store.js';
-import type { ClosedTrade, OpenPosition, OrderState } from '../shared/types.js';
+
+import type { ClosedTrade, OpenPosition, OrderState } from '../shared/index.js';
+import { type SharedStore as Db, openSharedStore } from '../shared/store/index.js';
 import {
   fromPositionRow,
   type OpenPositionRow,

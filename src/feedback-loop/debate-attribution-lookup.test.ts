@@ -1,6 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { buildDebateLog, InMemoryDebateLogStore } from '../debate-engine/debate-log-store.js';
-import type { AnalystContribution, DebateResult } from '../debate-engine/types.js';
+import type { AnalystContribution, DebateResult } from '../debate-engine/index.js';
+import { buildDebateLog, InMemoryDebateLogStore } from '../debate-engine/index.js';
 import { getContributionsForAttribution } from './debate-attribution-lookup.js';
 
 function makeContribution(overrides: Partial<AnalystContribution> = {}): AnalystContribution {

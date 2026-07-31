@@ -5,7 +5,7 @@
  * provisioning is an ops task (spec "Out of Scope: Channel provisioning"),
  * mirroring market-data-service/sources/alpaca-source.ts's injected client.
  */
-import type { RiskDecision } from '../../risk-manager/types.js';
+import type { RiskDecision } from '../../risk-manager/index.js';
 import type {
   ApprovalChannel,
   ApprovalOutcome,

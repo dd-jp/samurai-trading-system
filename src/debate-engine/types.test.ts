@@ -1,4 +1,3 @@
-import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { AnalystContribution, AnalystView, DebateResult, Direction } from './types.js';
 
 describe('Direction', () => {

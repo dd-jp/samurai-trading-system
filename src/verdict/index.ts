@@ -13,8 +13,8 @@
  * flag is set (non-converged, no-precedent, size-over, or near-limit —
  * `risk_decision.modifications != null`).
  */
-import type { RiskDecision } from '../risk-manager/types.js';
-import type { OrderIntent } from '../shared/types.js';
+import type { RiskDecision } from '../risk-manager/index.js';
+import type { OrderIntent } from '../shared/index.js';
 import type {
   ApprovalOutcome,
   Verdict,
@@ -178,6 +178,18 @@ export class VerdictImpl implements Verdict {
   }
 }
 
+export type { ApprovalCallbackPayload } from './notifications/approval-callback-verifier.js';
+export {
+  signApprovalCallback,
+  verifyApprovalCallback,
+} from './notifications/approval-callback-verifier.js';
+export { TradeChannel } from './notifications/composite-channel.js';
+export { DiscordChannel } from './notifications/discord-channel.js';
+export { formatApprovalRequest, formatDecisionMessage } from './notifications/format.js';
+export { TelegramChannel } from './notifications/telegram-channel.js';
+export type { DiscordClient, TelegramClient, TradeChannelNotifier } from './notifications/types.js';
+export type { ApprovalRequestSender } from './notifications/verified-approval-channel.js';
+export { SignedApprovalChannel } from './notifications/verified-approval-channel.js';
 export type {
   ApprovalChannel,
   ApprovalOutcome,

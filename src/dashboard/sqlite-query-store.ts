@@ -28,13 +28,13 @@
  * equity-curve table is the honest fix, not attempted here.
  */
 
-import type { MetricsSuite } from '../cost-model-backtest/validation-types.js';
-import type { AnalystContribution, Direction } from '../debate-engine/types.js';
-import { creditForContribution, realizedR } from '../feedback-loop/attribution.js';
-import type { Mark } from '../market-data-service/types.js';
-import type { AssetClass, TickStage } from '../orchestrator/types.js';
-import type { SharedStore } from '../shared/store/open-shared-store.js';
-import type { ClosedTrade, DebateLog, OpenPosition, OrderState } from '../shared/types.js';
+import type { MetricsSuite } from '../cost-model-backtest/index.js';
+import type { AnalystContribution, Direction } from '../debate-engine/index.js';
+import { creditForContribution, realizedR } from '../feedback-loop/index.js';
+import type { Mark } from '../market-data-service/index.js';
+import type { AssetClass, TickStage } from '../orchestrator/index.js';
+import type { ClosedTrade, DebateLog, OpenPosition, OrderState } from '../shared/index.js';
+import type { SharedStore } from '../shared/store/index.js';
 import type {
   AttributionSummary,
   DashboardQueryStore,

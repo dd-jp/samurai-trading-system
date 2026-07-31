@@ -19,8 +19,9 @@
  *    through `JSON.stringify`/`JSON.parse` at this boundary only — the port
  *    never sees the serialized form.
  */
-import type { SharedStore as Db } from '../shared/store/open-shared-store.js';
-import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../shared/types.js';
+
+import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../shared/index.js';
+import type { SharedStore as Db } from '../shared/store/index.js';
 import type { SharedStore } from './types.js';
 
 /** Terminal `order_state`s — excluded from `getOpenPositions()` (execution-spec.md). */

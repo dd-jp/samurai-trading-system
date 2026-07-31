@@ -13,7 +13,7 @@
  * synchronous, deterministic-given-inputs computation) against a configured
  * per-class baseline.
  */
-import type { Clock } from '../shared/clock.js';
+import type { Clock } from '../shared/index.js';
 import type { BreakerState, PersistedBreakerState, PortfolioView } from './types.js';
 
 /** Config for the per-asset-class volatility halt. */

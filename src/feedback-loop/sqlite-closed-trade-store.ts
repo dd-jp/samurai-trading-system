@@ -8,8 +8,8 @@
  * the Feedback Loop to accidentally mutate Execution's table.
  */
 
-import type { SharedStore } from '../shared/store/open-shared-store.js';
-import type { ClosedTrade, ClosedTradeStore } from '../shared/types.js';
+import type { ClosedTrade, ClosedTradeStore } from '../shared/index.js';
+import type { SharedStore } from '../shared/store/index.js';
 
 interface ClosedTradeRow {
   idempotency_key: string;

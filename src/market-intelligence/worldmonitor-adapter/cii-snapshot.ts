@@ -21,7 +21,7 @@
  * 90-day correlation study itself, which remains uncomputable until this
  * capture path has been running against a live adapter for that long.
  */
-import type { Clock } from '../../shared/clock.js';
+import type { Clock } from '../../shared/index.js';
 import type { CiiScoreProvider } from './cii-consumer.js';
 
 export interface CiiSnapshotRow {

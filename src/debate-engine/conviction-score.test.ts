@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest';
 import type { AnalystRoundStance } from './analyst-contribution.js';
 import { computeConvictionScore } from './conviction-score.js';
 import type { AnalystView } from './types.js';

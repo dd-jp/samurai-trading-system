@@ -14,10 +14,9 @@
  * submission, it does not block until filled (execution-spec.md, surface 1).
  * Arming and filling the protective legs is #83's lifecycle work.
  */
-import type { CostModel, FillRequest, MarketState } from '../cost-model-backtest/types.js';
-import type { MarketDataService } from '../market-data-service/types.js';
-import type { Clock } from '../shared/clock.js';
-import type { OrderState } from '../shared/types.js';
+import type { CostModel, FillRequest, MarketState } from '../cost-model-backtest/index.js';
+import type { MarketDataService } from '../market-data-service/index.js';
+import type { Clock, OrderState } from '../shared/index.js';
 import type {
   BrokerAck,
   BrokerAdapter,

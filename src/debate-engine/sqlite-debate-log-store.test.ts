@@ -1,6 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { openSharedStore } from '../shared/store/open-shared-store.js';
-import type { DebateLog } from '../shared/types.js';
+import type { DebateLog } from '../shared/index.js';
+import { openSharedStore } from '../shared/store/index.js';
 import { SqliteDebateLogStore } from './sqlite-debate-log-store.js';
 import type { AnalystContribution } from './types.js';
 

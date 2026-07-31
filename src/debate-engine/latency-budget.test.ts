@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DebateLogger } from './debate-logger.js';
 import {
   enforceLatencyBudget,

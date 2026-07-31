@@ -10,7 +10,7 @@
  * own structured output — this layer owns provider mechanics (calling out,
  * retrying, classifying failures), not prompt-specific schemas.
  */
-import type { RetryConfig } from '../../shared/http/retry.js';
+import type { RetryConfig } from '../../shared/index.js';
 import type { AnalystView } from '../types.js';
 
 /**

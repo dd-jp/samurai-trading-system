@@ -12,8 +12,8 @@
  * describes. The real holiday/session table implements it without touching
  * this file.
  */
-import type { TradingCalendar } from '../market-data-service/trading-calendar.js';
-import type { Clock } from '../shared/clock.js';
+import type { TradingCalendar } from '../market-data-service/index.js';
+import type { Clock } from '../shared/index.js';
 import type { Scheduler, TickPlan, UniverseInstrument } from './types.js';
 
 /**

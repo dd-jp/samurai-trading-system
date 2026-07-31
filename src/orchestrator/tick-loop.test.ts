@@ -1,7 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
-import type { Signal } from '../analysts/types.js';
-import type { Clock } from '../shared/clock.js';
-import { openSharedStore } from '../shared/store/open-shared-store.js';
+import type { Signal } from '../analysts/index.js';
+import type { Clock } from '../shared/index.js';
+import { openSharedStore } from '../shared/store/index.js';
 import { SqliteAuditLog } from './sqlite-audit-log.js';
 import { SqliteCurrentTickStore } from './sqlite-current-tick-store.js';
 import { runTickPlan } from './tick-loop.js';

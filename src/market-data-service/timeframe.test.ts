@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest';
 import { closeTimeOf, isDailyTimeframe, timeframeToMs } from './timeframe.js';
 
 describe('timeframeToMs', () => {

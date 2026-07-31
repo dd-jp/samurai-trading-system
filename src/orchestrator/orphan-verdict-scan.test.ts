@@ -16,8 +16,7 @@
  *   row) is the same state a crash there would leave, just read back over
  *   the same handle rather than a reopened one.
  */
-import { describe, expect, it, vi } from 'vitest';
-import { openSharedStore, type SharedStore } from '../shared/store/open-shared-store.js';
+import { openSharedStore, type SharedStore } from '../shared/store/index.js';
 import { type OrphanAlertChannel, OrphanVerdictScanner } from './orphan-verdict-scan.js';
 import type { Logger } from './types.js';
 

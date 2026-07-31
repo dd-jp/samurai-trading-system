@@ -1,8 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import type { Signal } from '../analysts/types.js';
-import type { Scheduler, TickContext, TickRunner } from '../orchestrator/types.js';
-import { type Clock, SimulatedClock } from '../shared/clock.js';
-import type { ClosedTrade, Fill } from '../shared/types.js';
+import type { Signal } from '../analysts/index.js';
+import type { Scheduler, TickContext, TickRunner } from '../orchestrator/index.js';
+import type { ClosedTrade, Fill } from '../shared/index.js';
+import { type Clock, SimulatedClock } from '../shared/index.js';
 import { BacktestHarness } from './backtest.js';
 import { EvalExecutorImpl } from './eval-executor.js';
 import type { EvalOptions, ReplayTradeSource } from './eval-types.js';

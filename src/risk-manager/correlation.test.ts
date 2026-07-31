@@ -1,4 +1,3 @@
-import { describe, expect, it, vi } from 'vitest';
 import type {
   Bar,
   BarWindow,
@@ -6,7 +5,7 @@ import type {
   IndicatorValue,
   Mark,
   MarketDataService,
-} from '../market-data-service/types.js';
+} from '../market-data-service/index.js';
 import {
   type CorrelationConfig,
   type CorrelationEstimateInput,

@@ -1,6 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import type { MetricsSuite } from '../cost-model-backtest/validation-types.js';
-import type { Clock } from '../shared/clock.js';
+import type { MetricsSuite } from '../cost-model-backtest/index.js';
+import type { Clock } from '../shared/index.js';
 import { InMemoryBreachAlertChannel } from './fixture-stores.js';
 import { computeMetrics } from './metrics.js';
 import type { SqliteAdjustmentLog } from './sqlite-adjustment-log.js';

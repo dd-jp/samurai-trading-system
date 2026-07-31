@@ -1,8 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SharedStore } from '../../execution/types.js';
-import type { OnTradeCloseInput } from '../../feedback-loop/types.js';
-import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../../shared/types.js';
-import { FixtureSetupStore } from '../../trader/fixture-setup-store.js';
+import type { SharedStore } from '../../execution/index.js';
+import type { OnTradeCloseInput } from '../../feedback-loop/index.js';
+import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../../shared/index.js';
+import { FixtureSetupStore } from '../../trader/index.js';
 import type { Logger } from '../types.js';
 
 const { onTradeCloseMock } = vi.hoisted(() => ({ onTradeCloseMock: vi.fn() }));

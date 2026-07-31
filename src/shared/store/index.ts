@@ -4,4 +4,4 @@
  * constructor injection and own their own tables.
  */
 export { MIGRATIONS_DIR, runMigrations } from './migrate.js';
-export { openSharedStore, type SharedStore } from './open-shared-store.js';
+export { openSharedStore, type SharedStore, sharedStorePath } from './open-shared-store.js';

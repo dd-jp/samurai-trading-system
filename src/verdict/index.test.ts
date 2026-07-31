@@ -1,9 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
-import type { TradingCalendar } from '../market-data-service/trading-calendar.js';
-import type { Mark, MarketDataService } from '../market-data-service/types.js';
-import type { BreakerState, RiskDecision } from '../risk-manager/types.js';
-import type { Clock } from '../shared/clock.js';
-import type { OrderIntent } from '../shared/types.js';
+import type { Mark, MarketDataService, TradingCalendar } from '../market-data-service/index.js';
+import type { BreakerState, RiskDecision } from '../risk-manager/index.js';
+import type { Clock, OrderIntent } from '../shared/index.js';
 import { VerdictImpl } from './index.js';
 import type {
   ApprovalChannel,

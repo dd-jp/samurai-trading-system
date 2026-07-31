@@ -6,7 +6,7 @@
  * SQLite-backed stores are deferred: no shared store exists anywhere in the
  * codebase yet.
  */
-import type { ClosedTrade, ClosedTradeStore, TuningStore } from '../shared/types.js';
+import type { ClosedTrade, ClosedTradeStore, TuningStore } from '../shared/index.js';
 import type { Adjustment, AdjustmentLog, BreachAlert, BreachAlertChannel } from './types.js';
 
 export class InMemoryClosedTradeStore implements ClosedTradeStore {

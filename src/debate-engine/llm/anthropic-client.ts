@@ -8,7 +8,7 @@
  * without a hard dependency on a specific SDK package.
  */
 
-import { withRetry } from '../../shared/http/retry.js';
+import { withRetry } from '../../shared/index.js';
 import {
   LlmMalformedResponseError,
   LlmProviderError,

@@ -5,7 +5,7 @@
  * ("Debate log write"). The real SQLite-backed store is
  * `SqliteDebateLogStore` (#200, src/debate-engine/sqlite-debate-log-store.ts).
  */
-import type { DebateLog, DebateLogStore } from '../shared/types.js';
+import type { DebateLog, DebateLogStore } from '../shared/index.js';
 import type { DebateResult } from './types.js';
 
 /**

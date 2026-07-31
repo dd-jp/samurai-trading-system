@@ -15,10 +15,10 @@
  * server or snapshot seam.
  */
 
-import type { MetricsSuite } from '../cost-model-backtest/validation-types.js';
-import type { AnalystContribution } from '../debate-engine/types.js';
-import type { Mark } from '../market-data-service/types.js';
-import type { DebateLog, OpenPosition } from '../shared/types.js';
+import type { MetricsSuite } from '../cost-model-backtest/index.js';
+import type { AnalystContribution } from '../debate-engine/index.js';
+import type { Mark } from '../market-data-service/index.js';
+import type { DebateLog, OpenPosition } from '../shared/index.js';
 import type {
   AttributionSummary,
   DashboardQueryStore,

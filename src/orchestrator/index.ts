@@ -33,8 +33,8 @@
  * are injected seams rather than something this ticket implements.
  */
 import { pathToFileURL } from 'node:url';
-import { SystemClock } from '../shared/clock.js';
-import { openSharedStore, sharedStorePath } from '../shared/store/open-shared-store.js';
+import { SystemClock } from '../shared/index.js';
+import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
 import {
   buildProductionOrchestrator,
   type ProductionConfig,

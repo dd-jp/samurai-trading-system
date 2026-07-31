@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest';
 import { detectDisagreements } from './disagreement-detector.js';
 import { LlmMalformedResponseError, LlmTimeoutError } from './llm/errors.js';
 import { MockLlmClient } from './llm/mock-client.js';

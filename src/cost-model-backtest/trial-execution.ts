@@ -39,7 +39,7 @@
  * arithmetic rather than a real comparison.
  */
 
-import { digest } from '../orchestrator/digest.js';
+import { digest } from '../orchestrator/index.js';
 import type { ConfigTrialLog } from './config-trial-log.js';
 import { EvalExecutorImpl } from './eval-executor.js';
 import type { EvalExecutor, EvalReport } from './eval-types.js';

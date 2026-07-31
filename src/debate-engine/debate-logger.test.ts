@@ -1,4 +1,3 @@
-import { describe, expect, it, vi } from 'vitest';
 import { JsonDebateLogger, type LogSink } from './debate-logger.js';
 import type { AnalystView, DebateResult } from './types.js';
 

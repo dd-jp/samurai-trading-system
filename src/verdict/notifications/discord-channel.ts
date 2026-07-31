@@ -6,7 +6,7 @@
  * decisions/approval-requests for visibility. The `DiscordClient` transport
  * is injected — provisioning is an ops task (spec "Out of Scope").
  */
-import type { RiskDecision } from '../../risk-manager/types.js';
+import type { RiskDecision } from '../../risk-manager/index.js';
 import type { VerdictDecision } from '../types.js';
 import { formatDecisionMessage } from './format.js';
 import type { DiscordClient, TradeChannelNotifier } from './types.js';

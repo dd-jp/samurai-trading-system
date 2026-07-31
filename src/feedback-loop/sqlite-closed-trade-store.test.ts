@@ -1,5 +1,4 @@
-import { describe, expect, it } from 'vitest';
-import type { ClosedTrade } from '../shared/types.js';
+import type { ClosedTrade } from '../shared/index.js';
 import { openClosedTradeStore } from './sqlite-store-harness.js';
 
 function makeTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {

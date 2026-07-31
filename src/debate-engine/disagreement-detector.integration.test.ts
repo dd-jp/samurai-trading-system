@@ -9,7 +9,6 @@
  * `AnthropicMessagesClient` (llm/anthropic-client.ts) is deliberately a
  * narrow structural interface so any wire client satisfies it without one.
  */
-import { describe, expect, it } from 'vitest';
 import { detectDisagreements } from './disagreement-detector.js';
 import type { AnthropicMessageRequest, AnthropicMessageResponse } from './llm/anthropic-client.js';
 import { AnthropicLlmClient } from './llm/anthropic-client.js';

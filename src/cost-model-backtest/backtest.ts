@@ -20,9 +20,9 @@
  * fails the whole run, so no report and no trades are produced from a replay
  * that peeked at the future.
  */
-import type { Signal } from '../analysts/types.js';
-import type { Scheduler, TickContext, TickOutcome, TickRunner } from '../orchestrator/types.js';
-import type { Clock, SimulatedClock } from '../shared/clock.js';
+import type { Signal } from '../analysts/index.js';
+import type { Scheduler, TickContext, TickOutcome, TickRunner } from '../orchestrator/index.js';
+import type { Clock, SimulatedClock } from '../shared/index.js';
 import type { Backtest, BacktestConfig, BacktestReport, ReplayTimeline } from './types.js';
 import { assertSurvivorshipFree, type InstrumentRegistry } from './universe.js';
 

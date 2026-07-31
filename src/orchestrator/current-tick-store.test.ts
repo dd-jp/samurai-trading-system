@@ -5,8 +5,7 @@
  * Exercises the store in isolation; tick-runner.test.ts covers the same
  * lifecycle as driven by `SequentialTickRunner`.
  */
-import { describe, expect, it } from 'vitest';
-import { openSharedStore } from '../shared/store/open-shared-store.js';
+import { openSharedStore } from '../shared/store/index.js';
 import { SqliteCurrentTickStore } from './sqlite-current-tick-store.js';
 import type { CurrentTick } from './types.js';
 

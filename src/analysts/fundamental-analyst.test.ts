@@ -1,11 +1,12 @@
-import { describe, expect, it } from 'vitest';
-import { FixtureDataSource } from '../market-data-service/fixture-data-source.js';
-import { MarketDataServiceImpl } from '../market-data-service/service.js';
-import { SqliteMarketDataStore } from '../market-data-service/sqlite-market-data-store.js';
-import type { Bar } from '../market-data-service/types.js';
+import type { Bar } from '../market-data-service/index.js';
+import {
+  FixtureDataSource,
+  MarketDataServiceImpl,
+  SqliteMarketDataStore,
+} from '../market-data-service/index.js';
 import { MarketIntelligenceStore } from '../market-intelligence/index.js';
-import type { Clock } from '../shared/clock.js';
-import { openSharedStore } from '../shared/store/open-shared-store.js';
+import type { Clock } from '../shared/index.js';
+import { openSharedStore } from '../shared/store/index.js';
 import { fundamentalAnalyst } from './fundamental-analyst.js';
 import type { AnalystInput, Signal } from './types.js';
 

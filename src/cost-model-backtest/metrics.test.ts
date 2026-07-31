@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest';
 import { computeMetrics } from './metrics.js';
 import type { ReturnSeries, TradeSeries } from './validation-types.js';
 
