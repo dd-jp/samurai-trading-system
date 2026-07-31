@@ -16,8 +16,6 @@ export type {
   AnalystFailure,
   AnalystInput,
   AnalystRunResult,
-  AnalystView,
   AssetClass,
-  Direction,
   Signal,
 } from './types.js';

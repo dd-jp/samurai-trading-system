@@ -1,6 +1,4 @@
-import type { RiskCriticLog, RiskCriticStore, RiskCriticVerdict } from './types.js';
-
-export type { RiskCriticStore, RiskCriticLog, RiskCriticVerdict } from './types.js';
+import type { RiskCriticLog, RiskCriticStore } from './types.js';
 
 export class InMemoryRiskCriticStore implements RiskCriticStore {
   private readonly rows = new Map<string, RiskCriticLog>();

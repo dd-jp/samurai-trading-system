@@ -21,8 +21,6 @@ import type { MarketDataService } from '../market-data-service/index.js';
 import type { MarketIntelligenceStore } from '../market-intelligence/index.js';
 import type { Clock } from '../shared/clock.js';
 
-export type { AnalystView, Direction } from '../debate-engine/index.js';
-
 export type AssetClass = 'crypto' | 'stocks';
 
 /**

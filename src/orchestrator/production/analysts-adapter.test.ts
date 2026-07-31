@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AnalystOrchestrator } from '../../analysts/index.js';
-import type { AnalystView } from '../../analysts/types.js';
+import type { AnalystView } from '../../debate-engine/types.js';
 import type { Clock } from '../../shared/clock.js';
 import { buildAnalystsStep } from './analysts-adapter.js';
 

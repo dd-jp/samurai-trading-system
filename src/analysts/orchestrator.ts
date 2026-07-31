@@ -24,7 +24,8 @@ import type { Clock } from '../shared/clock.js';
 import { fundamentalAnalyst } from './fundamental-analyst.js';
 import { sentimentAnalyst } from './sentiment-analyst.js';
 import { technicalAnalyst } from './technical-analyst.js';
-import type { Analyst, AnalystFailure, AnalystRunResult, AnalystView, Signal } from './types.js';
+import type { AnalystView } from '../debate-engine/index.js';
+import type { Analyst, AnalystFailure, AnalystRunResult, Signal } from './types.js';
 
 const ALL_PERSONAS: Analyst[] = [technicalAnalyst, fundamentalAnalyst, sentimentAnalyst];
 
