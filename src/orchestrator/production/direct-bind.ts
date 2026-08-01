@@ -69,7 +69,15 @@ export interface AccountStateProvider {
   }>;
 }
 
-/** Realized-vol reading for the volatility breaker tier — no in-repo indicator wired to it yet. */
+/**
+ * Realized-vol reading for the volatility breaker tier. `./volatility-reading-provider.ts`'s
+ * `MarketDataVolatilityReadingProvider` (#277) now implements this against
+ * `MarketDataService.getIndicator` over the configured universe — it stays a
+ * required constructor dependency here (not defaulted in `production.ts`)
+ * because `AccountStateProvider`, injected alongside it into every
+ * `BreakerStateDeps` call, still has no in-repo implementation; wiring both
+ * into the composition root is a follow-up.
+ */
 export interface VolatilityReadingProvider {
   getVolatilityReading(asOf: Date): Promise<VolatilityReading>;
 }
