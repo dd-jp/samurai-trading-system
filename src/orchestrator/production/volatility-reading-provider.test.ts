@@ -63,7 +63,7 @@ describe('MarketDataVolatilityReadingProvider', () => {
     expect(reading).toEqual({ crypto: 40, stocks: 15 });
   });
 
-  it('calls getIndicator for every universe instrument with the configured spec and asOf', async () => {
+  it('calls getIndicator for every universe instrument with the configured spec and asOf — unconditionally universe-wide, with no positions-gated fallback (nothing about open positions is ever passed in)', async () => {
     const { provider, getIndicator } = buildProvider();
 
     await provider.getVolatilityReading(NOW);
@@ -72,17 +72,6 @@ describe('MarketDataVolatilityReadingProvider', () => {
     for (const instrument of UNIVERSE) {
       expect(getIndicator).toHaveBeenCalledWith(instrument.asset, VOLATILITY_INDICATOR, NOW);
     }
-  });
-
-  it('is unconditionally universe-wide: no positions-gated fallback, reads every instrument regardless of open positions', async () => {
-    // Nothing about open positions is ever passed to this provider's constructor
-    // or `getVolatilityReading` — the only input governing which instruments are
-    // read is `universe`, proving there is no separate "no positions" branch.
-    const { provider, getIndicator } = buildProvider();
-
-    await provider.getVolatilityReading(NOW);
-
-    expect(getIndicator).toHaveBeenCalledTimes(UNIVERSE.length);
   });
 
   it('returns 0 for an asset class with no instruments in the universe, rather than a default-instrument fallback', async () => {

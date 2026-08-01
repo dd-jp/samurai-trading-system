@@ -32,7 +32,7 @@
  */
 import type { IndicatorSpec, MarketDataService } from '../../market-data-service/index.js';
 import type { VolatilityReading } from '../../risk-manager/index.js';
-import type { UniverseInstrument } from '../types.js';
+import type { AssetClass, UniverseInstrument } from '../types.js';
 import type { VolatilityReadingProvider } from './direct-bind.js';
 
 export interface VolatilityReadingProviderConfig {
@@ -75,8 +75,8 @@ export class MarketDataVolatilityReadingProvider implements VolatilityReadingPro
 }
 
 function maxByClass(
-  readings: readonly { asset_class: 'crypto' | 'stocks'; value: number }[],
-  asset_class: 'crypto' | 'stocks',
+  readings: readonly { asset_class: AssetClass; value: number }[],
+  asset_class: AssetClass,
 ): number {
   const values = readings
     .filter((reading) => reading.asset_class === asset_class)
