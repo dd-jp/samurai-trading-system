@@ -11,7 +11,11 @@
  * validated" bar is a manual E2E run, not a unit test).
  */
 import { CostModelImpl } from '../cost-model-backtest/index.js';
-import { DEFAULT_ANTHROPIC_MODEL, MockLlmClient } from '../debate-engine/index.js';
+import {
+  AnthropicLlmClient,
+  DEFAULT_ANTHROPIC_MODEL,
+  MockLlmClient,
+} from '../debate-engine/index.js';
 import { SimulatedBrokerAdapter } from '../execution/index.js';
 import type { AlpacaBar, AlpacaQuote, Bar } from '../market-data-service/index.js';
 import {
@@ -27,9 +31,11 @@ import { SqliteSetupStore } from '../trader/index.js';
 import type { ApprovalOutcome, ApprovalRequest, VerdictDecision } from '../verdict/index.js';
 import { buildPersistence } from './production/direct-bind.js';
 import {
+  buildDefaultLlmClient,
   buildProductionComponents,
   buildProductionOrchestrator,
   buildProductionTickRunner,
+  DEFAULT_LLM_CLIENT_CONFIG,
   type ProductionConfig,
   SMOKE_TEST_UNIVERSE,
   startTickLoop,
@@ -393,6 +399,23 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
 
     const warning = logger.entries.find((entry) => entry.level === 'warn');
     expect(warning?.payload).toMatchObject({ model: 'claude-custom-model' });
+  });
+
+  it('builds a real AnthropicLlmClient wrapping the live client, not just a log side effect', () => {
+    process.env.ANTHROPIC_API_KEY = 'test-fake-anthropic-key';
+    delete process.env.ANTHROPIC_MODEL;
+    const logger = recordingLogger();
+
+    const client = buildDefaultLlmClient(logger);
+
+    // Instance type + retry/timeout budget, not only the model threaded
+    // through the startup warn log's payload (kimi-3-review on #284).
+    expect(client).toBeInstanceOf(AnthropicLlmClient);
+    expect(DEFAULT_LLM_CLIENT_CONFIG).toEqual({
+      max_tokens: 1024,
+      timeoutMs: 30_000,
+      retry: { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 },
+    });
   });
 });
 

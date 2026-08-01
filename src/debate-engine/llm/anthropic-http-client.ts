@@ -63,6 +63,67 @@ export interface AnthropicHttpClientOptions {
   timeoutMs?: number;
 }
 
+/**
+ * Typed failure for this client's network boundary (non-2xx response,
+ * unparseable body, or a parseable-but-malformed body) — replaces a plain
+ * `Error` with a manually attached `status` property (PR #284 review). Kept
+ * local to this module rather than added to `errors.ts`'s `LlmError`
+ * hierarchy: `AnthropicLlmClient.classifyProviderError` (anthropic-client.ts)
+ * already duck-types *any* thrown error's `.status` field into the typed
+ * hierarchy (429 -> `LlmRateLimitError`, 408/504 -> `LlmTimeoutError`, else
+ * -> `LlmProviderError`) precisely so this client doesn't need to know about
+ * that classification — it only needs to expose `.status` consistently,
+ * which this class does via a real property instead of a cast.
+ */
+export class AnthropicApiError extends Error {
+  /** HTTP status code, or the response's status when the body itself failed to parse. */
+  readonly status: number;
+  /** Parsed response body, if one was available — for callers that want more than `message`. */
+  readonly body: unknown;
+
+  constructor(status: number, message: string, body?: unknown) {
+    super(message);
+    this.name = 'AnthropicApiError';
+    this.status = status;
+    this.body = body;
+  }
+}
+
+/** Caps how much of a response body is ever baked into an error message (goes straight to logs). */
+const MAX_ERROR_BODY_CHARS = 500;
+
+function truncateForError(text: string): string {
+  return text.length > MAX_ERROR_BODY_CHARS
+    ? `${text.slice(0, MAX_ERROR_BODY_CHARS)}… (truncated, ${text.length} chars total)`
+    : text;
+}
+
+/** Best-effort extraction of the Anthropic API's `{ error: { type, message } }` envelope. */
+function describeErrorBody(body: unknown): string | undefined {
+  if (typeof body !== 'object' || body === null || !('error' in body)) return undefined;
+  const detail = (body as { error?: { type?: unknown; message?: unknown } }).error;
+  if (typeof detail !== 'object' || detail === null) return undefined;
+  const type = typeof detail.type === 'string' ? detail.type : 'error';
+  const message = typeof detail.message === 'string' ? detail.message : undefined;
+  return message === undefined ? undefined : `${type}: ${message}`;
+}
+
+/** Builds the typed error for a non-2xx response, preferring the API's own error envelope over bare `statusText`. */
+async function buildApiError(response: Response): Promise<AnthropicApiError> {
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    body = undefined;
+  }
+  const detail = describeErrorBody(body) ?? response.statusText;
+  return new AnthropicApiError(
+    response.status,
+    `Anthropic API error: ${response.status} ${detail}`,
+    body,
+  );
+}
+
 /** Real HTTP `AnthropicMessagesClient` against the Anthropic Messages API. */
 export class AnthropicHttpMessagesClient implements AnthropicMessagesClient {
   private readonly apiKey: string;
@@ -98,21 +159,34 @@ export class AnthropicHttpMessagesClient implements AnthropicMessagesClient {
     );
 
     if (!response.ok) {
-      const error = new Error(
-        `Anthropic API error: ${response.status} ${response.statusText}`,
-      ) as Error & { status: number };
-      error.status = response.status;
-      throw error;
+      throw await buildApiError(response);
     }
 
-    const body: unknown = await response.json();
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch (cause) {
+      // A 2xx with an unparseable body (truncated stream, HTML from an
+      // intermediary proxy) would otherwise escape as a raw, unclassified
+      // `SyntaxError` — wrap it in the same typed shape as every other
+      // failure at this boundary (PR #284 review).
+      throw new AnthropicApiError(
+        response.status,
+        `Anthropic API error: response body could not be parsed as JSON (${
+          cause instanceof Error ? cause.message : String(cause)
+        })`,
+      );
+    }
+
     if (
       typeof body !== 'object' ||
       body === null ||
       !Array.isArray((body as { content?: unknown }).content)
     ) {
-      throw new Error(
-        `Anthropic API error: response body missing expected "content" array (${JSON.stringify(body)})`,
+      throw new AnthropicApiError(
+        response.status,
+        `Anthropic API error: response body missing expected "content" array (${truncateForError(JSON.stringify(body))})`,
+        body,
       );
     }
     return body as AnthropicMessageResponse;

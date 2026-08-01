@@ -305,7 +305,8 @@ const DEFAULT_FEEDBACK_INTERVAL_MS = 24 * 60 * 60 * 1_000;
  * from the environment (#274 AC), since a stale/rotated model id is the one
  * failure mode ops needs to fix without a redeploy.
  */
-const DEFAULT_LLM_CLIENT_CONFIG: Omit<AnthropicLlmClientConfig, 'model'> = {
+/** Exported for `production.test.ts` — asserts the actual retry/timeout budget wired into the live default, not just the model threaded through the startup warn log (PR #284 review). */
+export const DEFAULT_LLM_CLIENT_CONFIG: Omit<AnthropicLlmClientConfig, 'model'> = {
   max_tokens: 1024,
   timeoutMs: 30_000,
   retry: { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 },
@@ -330,7 +331,8 @@ const DEFAULT_LLM_CLIENT_CONFIG: Omit<AnthropicLlmClientConfig, 'model'> = {
  * observable benefit; the inner timeout stays a wider, independent backstop
  * so an in-flight request is not left dangling after the outer race settles.
  */
-function buildDefaultLlmClient(logger: Logger): LlmClient {
+/** Exported for `production.test.ts` — lets the test assert the constructed client's actual shape (instance type, model, retry/timeout config) rather than only the startup warn log's side effect (PR #284 review). */
+export function buildDefaultLlmClient(logger: Logger): LlmClient {
   const model = process.env.ANTHROPIC_MODEL ?? DEFAULT_ANTHROPIC_MODEL;
   // Loud, not silent: omitting `ProductionConfig.llmClient` now means a real,
   // billed Anthropic API call per debate round rather than a required seam

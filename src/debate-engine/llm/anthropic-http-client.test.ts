@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AnthropicHttpMessagesClient, DEFAULT_ANTHROPIC_MODEL } from './anthropic-http-client.js';
+import {
+  AnthropicApiError,
+  AnthropicHttpMessagesClient,
+  DEFAULT_ANTHROPIC_MODEL,
+} from './anthropic-http-client.js';
 
 const FAKE_KEY = 'test-fake-anthropic-key';
 
@@ -75,7 +79,7 @@ describe('AnthropicHttpMessagesClient', () => {
     expect(url).toBe('https://example.test/v1/messages');
   });
 
-  it('throws an error carrying the HTTP status when the API returns a non-2xx response', async () => {
+  it('throws a typed AnthropicApiError carrying the HTTP status when the API returns a non-2xx response', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ error: 'rate limited' }, 429));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -84,6 +88,24 @@ describe('AnthropicHttpMessagesClient', () => {
     await expect(
       client.createMessage({ model: 'm', max_tokens: 1, messages: [] }),
     ).rejects.toMatchObject({ status: 429 });
+    await expect(
+      client.createMessage({ model: 'm', max_tokens: 1, messages: [] }),
+    ).rejects.toBeInstanceOf(AnthropicApiError);
+  });
+
+  it('prefers the Anthropic error envelope (type/message) over bare statusText', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ error: { type: 'invalid_request_error', message: 'model not found' } }, 400),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AnthropicHttpMessagesClient({ apiKey: FAKE_KEY });
+
+    await expect(client.createMessage({ model: 'm', max_tokens: 1, messages: [] })).rejects.toThrow(
+      /invalid_request_error: model not found/,
+    );
   });
 
   it('throws rather than returning a body whose "content" is not an array', async () => {
@@ -95,6 +117,37 @@ describe('AnthropicHttpMessagesClient', () => {
     await expect(client.createMessage({ model: 'm', max_tokens: 1, messages: [] })).rejects.toThrow(
       /content/,
     );
+  });
+
+  it('truncates an oversized malformed body instead of dumping it verbatim into the error message', async () => {
+    const oversized = { unexpected: 'x'.repeat(1000) };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(oversized));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AnthropicHttpMessagesClient({ apiKey: FAKE_KEY });
+
+    await expect(client.createMessage({ model: 'm', max_tokens: 1, messages: [] })).rejects.toThrow(
+      /truncated/,
+    );
+  });
+
+  it('wraps a response.json() failure (e.g. truncated body) in a typed AnthropicApiError', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => {
+        throw new SyntaxError('Unexpected end of JSON input');
+      },
+    } as Response);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AnthropicHttpMessagesClient({ apiKey: FAKE_KEY });
+
+    const promise = client.createMessage({ model: 'm', max_tokens: 1, messages: [] });
+    await expect(promise).rejects.toBeInstanceOf(AnthropicApiError);
+    await expect(promise).rejects.toMatchObject({ status: 200 });
+    await expect(promise).rejects.toThrow(/could not be parsed as JSON/);
   });
 
   it('aborts the underlying fetch once the configured timeout elapses', async () => {
