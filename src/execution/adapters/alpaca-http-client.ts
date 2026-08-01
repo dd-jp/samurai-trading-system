@@ -98,9 +98,9 @@ export class AlpacaHttpBrokerClient implements AlpacaClient {
     this.retry = options.retry ?? DEFAULT_RETRY_CONFIG;
   }
 
-  private headers(): Record<string, string> {
+  private headers(init: RequestInit): Record<string, string> {
     return {
-      'content-type': 'application/json',
+      ...(init.body != null ? { 'content-type': 'application/json' } : {}),
       'APCA-API-KEY-ID': this.apiKey,
       'APCA-API-SECRET-KEY': this.apiSecret,
     };
@@ -114,7 +114,7 @@ export class AlpacaHttpBrokerClient implements AlpacaClient {
         try {
           response = await fetchWithTimeout(
             `${this.baseUrl}${path}`,
-            { ...init, headers: this.headers() },
+            { ...init, headers: this.headers(init) },
             this.timeoutMs,
           );
         } catch (cause) {

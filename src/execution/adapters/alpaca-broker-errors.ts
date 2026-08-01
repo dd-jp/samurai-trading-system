@@ -98,6 +98,10 @@ export function classifyAlpacaBrokerNetworkError(
   error: unknown,
   context: string,
 ): AlpacaBrokerError {
+  // `fetchWithTimeout` aborts with `new DOMException(…, 'TimeoutError')` as the
+  // abort reason (see src/shared/http/fetch-with-timeout.ts) — a caller-supplied
+  // signal's plain `AbortError` is deliberately NOT a timeout and falls through
+  // to the non-retryable ProviderError branch.
   const isTimeout = error instanceof DOMException && error.name === 'TimeoutError';
   const message = error instanceof Error ? error.message : String(error);
   if (isTimeout) {

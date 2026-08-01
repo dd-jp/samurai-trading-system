@@ -16,6 +16,16 @@ describe('parseRetryAfterMs', () => {
     expect(parseRetryAfterMs(response)).toBeUndefined();
   });
 
+  it('returns undefined for an empty Retry-After header (Number("") is 0, must not be trusted)', () => {
+    const response = new Response(null, { headers: { 'retry-after': '' } });
+    expect(parseRetryAfterMs(response)).toBeUndefined();
+  });
+
+  it('returns undefined for a whitespace-only Retry-After header', () => {
+    const response = new Response(null, { headers: { 'retry-after': '   ' } });
+    expect(parseRetryAfterMs(response)).toBeUndefined();
+  });
+
   it('returns undefined for a negative Retry-After value', () => {
     const response = new Response(null, { headers: { 'retry-after': '-1' } });
     expect(parseRetryAfterMs(response)).toBeUndefined();

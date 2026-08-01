@@ -86,6 +86,10 @@ export async function classifyAlpacaDataResponse(
 
 /** Classifies a network-level failure (e.g. a `fetchWithTimeout` abort) into the typed hierarchy. */
 export function classifyAlpacaDataNetworkError(error: unknown, context: string): AlpacaDataError {
+  // `fetchWithTimeout` aborts with `new DOMException(…, 'TimeoutError')` as the
+  // abort reason (see src/shared/http/fetch-with-timeout.ts) — a caller-supplied
+  // signal's plain `AbortError` is deliberately NOT a timeout and falls through
+  // to the non-retryable ProviderError branch.
   const isTimeout = error instanceof DOMException && error.name === 'TimeoutError';
   const message = error instanceof Error ? error.message : String(error);
   if (isTimeout) {

@@ -15,7 +15,9 @@
 /** Best-effort parse of a `Retry-After` header (seconds, per HTTP spec) into milliseconds. */
 export function parseRetryAfterMs(response: Response): number | undefined {
   const header = response.headers.get('retry-after');
-  if (header === null) return undefined;
+  // An empty/whitespace header means "no usable value", not 0 — `Number('')`
+  // is 0, so it must be rejected before the numeric parse.
+  if (header === null || header.trim() === '') return undefined;
   const seconds = Number(header);
   return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : undefined;
 }

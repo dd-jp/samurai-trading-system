@@ -98,6 +98,20 @@ describe('AlpacaHttpBrokerClient', () => {
     expect(headers['APCA-API-KEY-ID']).toBe(FAKE_KEY);
     expect(headers['APCA-API-SECRET-KEY']).toBe(FAKE_SECRET);
     expect(JSON.parse(init.body as string)).toEqual({ ...ORDER_REQUEST, type: 'limit' });
+    expect(headers['content-type']).toBe('application/json');
+  });
+
+  it('omits content-type on bodyless (GET) requests', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(ORDER_RESPONSE));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+    await client.getOrder('order-id');
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+    expect(headers['content-type']).toBeUndefined();
+    expect(headers['APCA-API-KEY-ID']).toBe(FAKE_KEY);
   });
 
   it('submitOrder always sends type: "limit" on the wire body (required by Alpaca, not part of the interface)', async () => {
