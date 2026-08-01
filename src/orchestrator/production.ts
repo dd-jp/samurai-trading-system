@@ -35,7 +35,8 @@
  * `ProductionConfig.llmClient` is now an optional override (same shape as
  * `broker`/`dataSource` below), not a required seam. The default reads
  * `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL` from the environment (see
- * `buildDefaultLlmClient`).
+ * `buildDefaultLlmClient`), which logs a `warn` at build time so a live
+ * client being constructed — real per-call spend — is never silent.
  *
  * ## Two entry points, not one
  *
@@ -251,7 +252,9 @@ export interface ProductionConfig {
    * `broker`/`dataSource`, for tests (`MockLlmClient`) or a future non-
    * Anthropic provider. When omitted, the default reads `ANTHROPIC_API_KEY`
    * (required) and `ANTHROPIC_MODEL` (optional, defaults to
-   * `DEFAULT_ANTHROPIC_MODEL`) from the environment.
+   * `DEFAULT_ANTHROPIC_MODEL`) from the environment — and logs a `warn` via
+   * `ProductionConfig.logger` at build time, since this silently turns on
+   * real, billed Anthropic API calls whenever the key happens to be set.
    */
   llmClient?: LlmClient;
   /** Session calendar for stock gating (scheduler + Verdict gate). */
@@ -327,10 +330,23 @@ const DEFAULT_LLM_CLIENT_CONFIG: Omit<AnthropicLlmClientConfig, 'model'> = {
  * observable benefit; the inner timeout stays a wider, independent backstop
  * so an in-flight request is not left dangling after the outer race settles.
  */
-function buildDefaultLlmClient(): LlmClient {
+function buildDefaultLlmClient(logger: Logger): LlmClient {
+  const model = process.env.ANTHROPIC_MODEL ?? DEFAULT_ANTHROPIC_MODEL;
+  // Loud, not silent: omitting `ProductionConfig.llmClient` now means a real,
+  // billed Anthropic API call per debate round rather than a required seam
+  // (kimi-3-review on #284) — this is the one signal that the live default
+  // was built instead of a test/mock override.
+  logger.log({
+    trace_id: 'startup',
+    stage: 'orchestrator',
+    level: 'warn',
+    message:
+      'ProductionConfig.llmClient not supplied — building live AnthropicHttpMessagesClient default',
+    payload: { model },
+  });
   const config: AnthropicLlmClientConfig = {
     ...DEFAULT_LLM_CLIENT_CONFIG,
-    model: process.env.ANTHROPIC_MODEL ?? DEFAULT_ANTHROPIC_MODEL,
+    model,
   };
   const client = new AnthropicHttpMessagesClient();
   return new AnthropicLlmClient(client, config);
@@ -451,7 +467,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
 
   const steps: TickSteps = {
     analysts: buildAnalystsStep(analysts),
-    debate: buildDebateStep(config.llmClient ?? buildDefaultLlmClient()),
+    debate: buildDebateStep(config.llmClient ?? buildDefaultLlmClient(logger)),
     trader: buildTraderStep({ ...breakerStateDeps, config: config.traderConfig }),
     risk: buildRiskStep({
       ...breakerStateDeps,

@@ -105,6 +105,16 @@ export class AnthropicHttpMessagesClient implements AnthropicMessagesClient {
       throw error;
     }
 
-    return (await response.json()) as AnthropicMessageResponse;
+    const body: unknown = await response.json();
+    if (
+      typeof body !== 'object' ||
+      body === null ||
+      !Array.isArray((body as { content?: unknown }).content)
+    ) {
+      throw new Error(
+        `Anthropic API error: response body missing expected "content" array (${JSON.stringify(body)})`,
+      );
+    }
+    return body as AnthropicMessageResponse;
   }
 }

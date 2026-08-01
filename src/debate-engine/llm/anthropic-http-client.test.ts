@@ -86,6 +86,17 @@ describe('AnthropicHttpMessagesClient', () => {
     ).rejects.toMatchObject({ status: 429 });
   });
 
+  it('throws rather than returning a body whose "content" is not an array', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ unexpected: 'shape' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AnthropicHttpMessagesClient({ apiKey: FAKE_KEY });
+
+    await expect(client.createMessage({ model: 'm', max_tokens: 1, messages: [] })).rejects.toThrow(
+      /content/,
+    );
+  });
+
   it('aborts the underlying fetch once the configured timeout elapses', async () => {
     let capturedSignal: AbortSignal | undefined;
     const fetchMock = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
