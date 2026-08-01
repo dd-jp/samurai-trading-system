@@ -12,8 +12,12 @@
  * `market-data-service/sources/` has its own parallel `AlpacaData*`
  * hierarchy rather than sharing this one, since the two clients hit
  * different Alpaca APIs (Trading v2 vs. Market Data v2) and classification
- * must not silently couple across that boundary.
+ * must not silently couple across that boundary. The `Retry-After`-parsing
+ * and body-truncation helpers underneath carry no such domain coupling, so
+ * those are shared (`shared/http/response-errors.js`) rather than duplicated.
  */
+
+import { parseRetryAfterMs, truncateForError } from '../../shared/index.js';
 
 export class AlpacaBrokerTimeoutError extends Error {
   constructor(message: string) {
@@ -64,23 +68,6 @@ export function isRetryableAlpacaBrokerError(error: unknown): boolean {
     return error.status !== undefined && error.status >= 500 && error.status <= 599;
   }
   return false;
-}
-
-/** Best-effort parse of a `Retry-After` header (seconds, per HTTP spec) into milliseconds. */
-export function parseRetryAfterMs(response: Response): number | undefined {
-  const header = response.headers.get('retry-after');
-  if (header === null) return undefined;
-  const seconds = Number(header);
-  return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : undefined;
-}
-
-/** Caps how much of a response body is ever baked into an error message (goes straight to logs). */
-const MAX_ERROR_BODY_CHARS = 500;
-
-function truncateForError(text: string): string {
-  return text.length > MAX_ERROR_BODY_CHARS
-    ? `${text.slice(0, MAX_ERROR_BODY_CHARS)}… (truncated, ${text.length} chars total)`
-    : text;
 }
 
 /** Classifies a non-2xx Alpaca response into the typed hierarchy: 429 -> RateLimit, 408/504 -> Timeout, else -> ProviderError. */
