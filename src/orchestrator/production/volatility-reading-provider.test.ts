@@ -157,4 +157,69 @@ describe('MarketDataVolatilityReadingProvider', () => {
 
     expect(getIndicator).toHaveBeenCalledTimes(UNIVERSE.length);
   });
+
+  it('warns for an empty asset class once at construction, not on every getVolatilityReading call', async () => {
+    const cryptoOnly: readonly UniverseInstrument[] = [{ asset: 'BTC-USD', asset_class: 'crypto' }];
+    const { provider, log } = buildProvider(cryptoOnly);
+    log.mockClear();
+
+    await provider.getVolatilityReading(NOW);
+    await provider.getVolatilityReading(NOW);
+
+    expect(log).not.toHaveBeenCalledWith(expect.objectContaining({ level: 'warn' }));
+  });
+
+  it('bounds in-flight getIndicator calls to the concurrency cap on a large universe', async () => {
+    const bigUniverse: readonly UniverseInstrument[] = Array.from({ length: 40 }, (_, i) => ({
+      asset: `INST-${i}`,
+      asset_class: i % 2 === 0 ? 'crypto' : 'stocks',
+    }));
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const getIndicator = vi.fn(async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await Promise.resolve();
+      inFlight -= 1;
+      return { indicator: VOLATILITY_INDICATOR.indicator, value: 1, as_of_bar_close: NOW };
+    });
+    const marketData = { getIndicator } as unknown as MarketDataService;
+    const { logger } = fakeLogger();
+
+    const provider = new MarketDataVolatilityReadingProvider({
+      marketData,
+      universe: bigUniverse,
+      volatility_indicator: VOLATILITY_INDICATOR,
+      logger,
+    });
+
+    await provider.getVolatilityReading(NOW);
+
+    expect(getIndicator).toHaveBeenCalledTimes(bigUniverse.length);
+    expect(maxInFlight).toBeLessThanOrEqual(8);
+  });
+
+  it('redacts query-string-shaped substrings from a rejected getIndicator error before logging', async () => {
+    const getIndicator = vi.fn(async (instrument: string) => {
+      throw new Error(
+        `request to https://market-data.example/v1/quote?api_key=SECRET123&x=1 failed for ${instrument}`,
+      );
+    });
+    const marketData = { getIndicator } as unknown as MarketDataService;
+    const { logger, log } = fakeLogger();
+
+    const provider = new MarketDataVolatilityReadingProvider({
+      marketData,
+      universe: [{ asset: 'BTC-USD', asset_class: 'crypto' }],
+      volatility_indicator: VOLATILITY_INDICATOR,
+      logger,
+    });
+
+    await provider.getVolatilityReading(NOW);
+
+    const errorCall = log.mock.calls.find((call) => call[0].level === 'error');
+    expect(errorCall?.[0].payload.error).not.toContain('SECRET123');
+    expect(errorCall?.[0].payload.error).toContain('api_key=[redacted]');
+  });
 });
