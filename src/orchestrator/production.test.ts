@@ -11,7 +11,11 @@
  * validated" bar is a manual E2E run, not a unit test).
  */
 import { CostModelImpl } from '../cost-model-backtest/index.js';
-import { MockLlmClient } from '../debate-engine/index.js';
+import {
+  AnthropicLlmClient,
+  DEFAULT_ANTHROPIC_MODEL,
+  MockLlmClient,
+} from '../debate-engine/index.js';
 import { SimulatedBrokerAdapter } from '../execution/index.js';
 import type { AlpacaBar, AlpacaQuote, Bar } from '../market-data-service/index.js';
 import {
@@ -27,9 +31,11 @@ import { SqliteSetupStore } from '../trader/index.js';
 import type { ApprovalOutcome, ApprovalRequest, VerdictDecision } from '../verdict/index.js';
 import { buildPersistence } from './production/direct-bind.js';
 import {
+  buildDefaultLlmClient,
   buildProductionComponents,
   buildProductionOrchestrator,
   buildProductionTickRunner,
+  DEFAULT_LLM_CLIENT_CONFIG,
   type ProductionConfig,
   SMOKE_TEST_UNIVERSE,
   startTickLoop,
@@ -332,6 +338,85 @@ describe('buildProductionComponents', () => {
       expect(neighbors[0]?.r_multiple).toBe(2);
     },
   );
+});
+
+/**
+ * `buildDefaultLlmClient` — the live-client fallback `ProductionConfig.llmClient`
+ * being optional now takes when omitted (kimi-3-review on #284: MEDIUM-tier
+ * wiring with no matching test at the time). Only the build-time seam is
+ * exercised here (env parsing, missing-key throw, the startup `warn` log) —
+ * the built `AnthropicHttpMessagesClient` itself never has `createMessage`
+ * called, so no `fetch` stub is needed.
+ */
+describe('buildProductionComponents (default llmClient fallback)', () => {
+  let db: SqliteHandle;
+  let previousApiKey: string | undefined;
+  let previousModel: string | undefined;
+
+  beforeEach(() => {
+    db = openSharedStore(':memory:');
+    previousApiKey = process.env.ANTHROPIC_API_KEY;
+    previousModel = process.env.ANTHROPIC_MODEL;
+  });
+
+  afterEach(() => {
+    db.close();
+    if (previousApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = previousApiKey;
+    if (previousModel === undefined) delete process.env.ANTHROPIC_MODEL;
+    else process.env.ANTHROPIC_MODEL = previousModel;
+  });
+
+  function configWithoutLlmClient(overrides: Partial<ProductionConfig> = {}): ProductionConfig {
+    const { llmClient: _llmClient, ...rest } = stubConfig(db, overrides);
+    return rest;
+  }
+
+  it('throws when ANTHROPIC_API_KEY is unset and llmClient is omitted', () => {
+    delete process.env.ANTHROPIC_API_KEY;
+
+    expect(() => buildProductionComponents(configWithoutLlmClient())).toThrow(/ANTHROPIC_API_KEY/);
+  });
+
+  it('logs a startup warn and defaults to DEFAULT_ANTHROPIC_MODEL when built live', () => {
+    process.env.ANTHROPIC_API_KEY = 'test-fake-anthropic-key';
+    delete process.env.ANTHROPIC_MODEL;
+    const logger = recordingLogger();
+
+    buildProductionComponents(configWithoutLlmClient({ logger }));
+
+    const warning = logger.entries.find((entry) => entry.level === 'warn');
+    expect(warning?.message).toMatch(/live AnthropicHttpMessagesClient/);
+    expect(warning?.payload).toMatchObject({ model: DEFAULT_ANTHROPIC_MODEL });
+  });
+
+  it('honors ANTHROPIC_MODEL as an override in the logged payload', () => {
+    process.env.ANTHROPIC_API_KEY = 'test-fake-anthropic-key';
+    process.env.ANTHROPIC_MODEL = 'claude-custom-model';
+    const logger = recordingLogger();
+
+    buildProductionComponents(configWithoutLlmClient({ logger }));
+
+    const warning = logger.entries.find((entry) => entry.level === 'warn');
+    expect(warning?.payload).toMatchObject({ model: 'claude-custom-model' });
+  });
+
+  it('builds a real AnthropicLlmClient wrapping the live client, not just a log side effect', () => {
+    process.env.ANTHROPIC_API_KEY = 'test-fake-anthropic-key';
+    delete process.env.ANTHROPIC_MODEL;
+    const logger = recordingLogger();
+
+    const client = buildDefaultLlmClient(logger);
+
+    // Instance type + retry/timeout budget, not only the model threaded
+    // through the startup warn log's payload (kimi-3-review on #284).
+    expect(client).toBeInstanceOf(AnthropicLlmClient);
+    expect(DEFAULT_LLM_CLIENT_CONFIG).toEqual({
+      max_tokens: 1024,
+      timeoutMs: 30_000,
+      retry: { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 },
+    });
+  });
 });
 
 /**

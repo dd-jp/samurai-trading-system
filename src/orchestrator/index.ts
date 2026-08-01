@@ -25,12 +25,15 @@
  *
  * This file is also the process entrypoint (`npm run orchestrator`): run
  * directly, it assembles a `ProductionConfig` and starts the loop. Every
- * external transport it needs (Alpaca REST, the LLM provider, the trade
- * channel, the CII feed) exists in this codebase as an interface with no
- * implementation, so `startFromEnvironment` fails fast with a message
+ * external transport it needs except the LLM provider (Alpaca REST, the
+ * trade channel, the CII feed) exists in this codebase as an interface with
+ * no implementation, so `startFromEnvironment` fails fast with a message
  * naming what is missing rather than starting a half-wired process against
  * real money. See `production.ts`'s doc comment for why those transports
- * are injected seams rather than something this ticket implements.
+ * are injected seams rather than something this ticket implements, and for
+ * why the LLM provider (#274, `AnthropicHttpMessagesClient`) is the one
+ * exception — built by default from `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL`
+ * rather than injected here.
  */
 import { pathToFileURL } from 'node:url';
 import { SystemClock } from '../shared/index.js';
@@ -102,11 +105,17 @@ export type {
 /**
  * Config fields the process cannot derive from the environment or from
  * in-repo code, and must therefore be supplied by the caller: the external
- * transports (no HTTP implementation of `AlpacaClient` /
- * `AnthropicMessagesClient` / `TelegramClient` / `CiiScoreProvider` exists in
- * `src/`, and `ccxt` is not a dependency) plus the per-stage config objects,
- * whose values are explicitly "tuned in paper trading" in every stage spec
- * rather than checked in.
+ * transports (no HTTP implementation of `AlpacaClient` / `TelegramClient` /
+ * `CiiScoreProvider` exists in `src/`, and `ccxt` is not a dependency) plus
+ * the per-stage config objects, whose values are explicitly "tuned in paper
+ * trading" in every stage spec rather than checked in.
+ *
+ * `llmClient` is deliberately absent from this list since #274:
+ * `production.ts` now builds a real `AnthropicLlmClient` (over
+ * `AnthropicHttpMessagesClient`) by default, reading `ANTHROPIC_API_KEY`
+ * (required, throws if absent) and `ANTHROPIC_MODEL` (optional) from the
+ * environment directly rather than through this injected-seam list — see
+ * `ProductionConfig.llmClient`'s doc comment in production.ts.
  *
  * Listing them by name is the point: an operator running `npm run
  * orchestrator` today gets a message naming exactly what is not wired,
@@ -115,7 +124,6 @@ export type {
 export const REQUIRED_INJECTED_CONFIG = [
   'alpacaBrokerClient',
   'alpacaDataClient',
-  'llmClient',
   'heartbeatChannel',
   'approvals',
   'orphanAlerts',

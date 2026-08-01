@@ -12,6 +12,7 @@
 import { detectDisagreements } from './disagreement-detector.js';
 import type { AnthropicMessageRequest, AnthropicMessageResponse } from './llm/anthropic-client.js';
 import { AnthropicLlmClient } from './llm/anthropic-client.js';
+import { DEFAULT_ANTHROPIC_MODEL } from './llm/anthropic-http-client.js';
 import type { AnalystView } from './types.js';
 
 const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -54,7 +55,7 @@ describe.skipIf(!apiKey)('detectDisagreements (real LLM integration)', () => {
     const client = new AnthropicLlmClient(
       { createMessage },
       {
-        model: 'claude-3-5-haiku-latest',
+        model: DEFAULT_ANTHROPIC_MODEL,
         max_tokens: 1024,
         timeoutMs: 30_000,
         retry: { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 },
