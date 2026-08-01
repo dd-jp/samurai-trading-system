@@ -10,6 +10,7 @@
  */
 import type { OpenPosition } from '../shared/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
+import { describeBrokerError } from './broker-error.js';
 import { ingestFills } from './ingest-fills.js';
 import { reconcile } from './reconcile.js';
 import type {
@@ -112,7 +113,22 @@ export class ExecutionImpl implements Execution {
     // Write-ahead: `pending` is durable BEFORE the broker call, so a crash in
     // the gap leaves a record to reconcile against the broker (#86) instead
     // of an invisible order that a restart would submit a second time.
-    await store.writeAheadPosition(position);
+    //
+    // The PK collision here is the TOCTOU tail of the findByKey gate above: a
+    // concurrent execute() for the same key can pass that gate before this
+    // write lands. The store's constraint is the real arbiter — the loser
+    // re-checks and reports `deduped`, the same answer it would have gotten
+    // had it arrived a beat later.
+    try {
+      await store.writeAheadPosition(position);
+    } catch (error) {
+      if (await store.findByKey(idempotencyKey)) {
+        return result('deduped', idempotencyKey, now, {
+          reason: 'a concurrent execute() wrote ahead for this idempotency_key first',
+        });
+      }
+      throw error;
+    }
 
     let ack: Awaited<ReturnType<typeof broker.submitBracket>>;
     try {
@@ -122,9 +138,12 @@ export class ExecutionImpl implements Execution {
       // landed is unknown here, and only the broker can settle that. #86's
       // reconciliation adopts broker truth. Marking it terminal on the way
       // out would be a guess, and the losing guess double-submits.
+      // Sanitized, never raw: broker error objects embed the request they
+      // failed on — auth headers included — and this reason string travels to
+      // audit_log/dashboard/notifications.
       return result('error', idempotencyKey, now, {
         order_state: 'pending',
-        reason: error instanceof Error ? error.message : String(error),
+        reason: describeBrokerError(error),
       });
     }
 

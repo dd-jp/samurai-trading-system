@@ -2,7 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RetryConfig } from './retry.js';
 import { withRetry } from './retry.js';
 
-const CONFIG: RetryConfig = { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 1_000 };
+// `random: () => 1` pins the equal-jitter delay at its maximum — exactly the
+// pre-jitter exponential value — so the timing assertions stay exact.
+const CONFIG: RetryConfig = {
+  maxAttempts: 3,
+  baseDelayMs: 100,
+  maxDelayMs: 1_000,
+  random: () => 1,
+};
 
 /** A generic retryable failure carrying an optional `Retry-After`-style hint. */
 class RetryableError extends Error {
@@ -82,7 +89,12 @@ describe('withRetry (generic)', () => {
   });
 
   it('backs off exponentially between attempts', async () => {
-    const config: RetryConfig = { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 10_000 };
+    const config: RetryConfig = {
+      maxAttempts: 3,
+      baseDelayMs: 100,
+      maxDelayMs: 10_000,
+      random: () => 1,
+    };
     const error = new RetryableError('slow');
     const fn = vi
       .fn()
@@ -108,7 +120,12 @@ describe('withRetry (generic)', () => {
   });
 
   it('caps the backoff delay at maxDelayMs', async () => {
-    const config: RetryConfig = { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 150 };
+    const config: RetryConfig = {
+      maxAttempts: 3,
+      baseDelayMs: 100,
+      maxDelayMs: 150,
+      random: () => 1,
+    };
     const error = new RetryableError('slow');
     const fn = vi
       .fn()
@@ -179,6 +196,29 @@ describe('withRetry (generic)', () => {
     const promise = withRetry(fn, CONFIG, isRetryable);
 
     await vi.advanceTimersByTimeAsync(CONFIG.baseDelayMs - 1);
+    expect(fn).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fn).toHaveBeenCalledTimes(2);
+
+    await expect(promise).resolves.toBe('ok');
+  });
+
+  it('jitters the backoff: random=0 halves the delay, random=1 keeps it whole', async () => {
+    const config: RetryConfig = {
+      maxAttempts: 2,
+      baseDelayMs: 100,
+      maxDelayMs: 1_000,
+      random: () => 0,
+    };
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new RetryableError('slow'))
+      .mockResolvedValueOnce('ok');
+
+    const promise = withRetry(fn, config, isRetryable);
+
+    // Equal jitter: delay ∈ [50, 100]; with random()=0 it is exactly 50ms.
+    await vi.advanceTimersByTimeAsync(49);
     expect(fn).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(fn).toHaveBeenCalledTimes(2);

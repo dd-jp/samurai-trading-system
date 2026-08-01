@@ -7,7 +7,9 @@
  * MarketDataService). Implementation ticket #68 — structural contracts only.
  */
 
-export type AssetClass = 'crypto' | 'stocks';
+import type { AssetClass } from '../shared/index.js';
+
+export type { AssetClass };
 
 /** Milliseconds. Window length ending at the service-resolved `asOf`. */
 export type Duration = number;

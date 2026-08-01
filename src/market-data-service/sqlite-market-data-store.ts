@@ -47,20 +47,25 @@ export class SqliteMarketDataStore implements MarketDataStore {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
 
-    for (const bar of bars) {
-      insert.run(
-        bar.instrument,
-        bar.timeframe,
-        bar.open_time.toISOString(),
-        bar.close_time.toISOString(),
-        bar.open,
-        bar.high,
-        bar.low,
-        bar.close,
-        bar.volume,
-        bar.source,
-      );
-    }
+    // One transaction per batch: better-sqlite3 otherwise wraps every run()
+    // in its own implicit transaction, an fsync per bar — ~100x slower on
+    // bulk backfills (code-review 2026-08-01, H9).
+    this.db.transaction(() => {
+      for (const bar of bars) {
+        insert.run(
+          bar.instrument,
+          bar.timeframe,
+          bar.open_time.toISOString(),
+          bar.close_time.toISOString(),
+          bar.open,
+          bar.high,
+          bar.low,
+          bar.close,
+          bar.volume,
+          bar.source,
+        );
+      }
+    })();
   }
 
   /**

@@ -18,17 +18,14 @@
  * (orchestrator/logger.ts) satisfies `LogSink` structurally with no import
  * needed, so the concrete stdout-JSON sink is reused for free at wiring time.
  */
+import type { Logger } from '../shared/index.js';
 import type { AnalystView, DebateResult, Direction } from './types.js';
 
-export interface LogSink {
-  log(entry: {
-    trace_id: string;
-    stage: string;
-    level: 'info' | 'warn' | 'error';
-    message: string;
-    payload?: unknown;
-  }): void;
-}
+/**
+ * Alias of the canonical shared `Logger` shape (shared/types.ts — code-review
+ * 2026-08-01, M6), keeping this module's established `LogSink` name.
+ */
+export type LogSink = Logger;
 
 /**
  * A single analyst's failure to contribute a usable view to this debate

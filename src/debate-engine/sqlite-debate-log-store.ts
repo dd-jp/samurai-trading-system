@@ -15,7 +15,7 @@
  */
 
 import type { DebateLog, DebateLogStore } from '../shared/index.js';
-import type { SharedStore } from '../shared/store/index.js';
+import { isUniqueConstraintError, type SharedStore } from '../shared/store/index.js';
 import type { AnalystContribution, Direction } from './types.js';
 
 interface DebateLogRow {
@@ -80,11 +80,4 @@ export class SqliteDebateLogStore implements DebateLogStore {
       created_at: new Date(row.created_at),
     };
   }
-}
-
-function isUniqueConstraintError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error as NodeJS.ErrnoException).code === 'SQLITE_CONSTRAINT_PRIMARYKEY'
-  );
 }

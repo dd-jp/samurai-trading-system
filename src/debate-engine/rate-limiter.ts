@@ -25,7 +25,9 @@ export interface RateLimitConfig {
 }
 
 /** Asset classes recognized by `OrderIntent`/`OpenPosition` elsewhere in the codebase. */
-export type AssetClass = 'crypto' | 'stocks';
+import type { AssetClass } from '../shared/index.js';
+
+export type { AssetClass };
 
 /**
  * Per-asset-class configuration (story: "Supports different limits per

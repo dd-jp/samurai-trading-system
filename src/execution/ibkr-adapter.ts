@@ -17,6 +17,8 @@
  * against the real API is ops wiring, and no behaviour beyond that slice is
  * assumed here.
  */
+import type { RateLimiter } from '../shared/index.js';
+import { rateLimited } from '../shared/index.js';
 import type { BrokerAck, BrokerAdapter, NativeBracketRequest, NormalizedFill } from './types.js';
 
 /** A native IBKR bracket: parent entry + two OCA-grouped protective children. */
@@ -63,8 +65,17 @@ export class IbkrBrokerAdapter implements BrokerAdapter {
   private readonly brackets = new Map<string, IbkrBracketOrderIds>();
   /** Reverse index: venue order id → which bracket/leg it belongs to. */
   private readonly legs = new Map<string, { clientOrderId: string; leg: NormalizedFill['leg'] }>();
+  private readonly client: IbkrBrokerClient;
 
-  constructor(private readonly client: IbkrBrokerClient) {}
+  /**
+   * `rateLimiter` paces every TWS call (execution-spec.md story 16 — IBKR
+   * enforces pacing violations with disconnects). Omitted = unpaced, for
+   * tests; the composition root wiring a real TWS client must pass a
+   * `TokenBucket` sized to the venue.
+   */
+  constructor(client: IbkrBrokerClient, rateLimiter?: RateLimiter) {
+    this.client = rateLimiter === undefined ? client : rateLimited(client, rateLimiter);
+  }
 
   async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
     // Broker-native dedup: the second layer behind execute()'s store check.

@@ -112,6 +112,37 @@ describe('AlpacaBrokerAdapter.submitBracket', () => {
 });
 
 describe('AlpacaBrokerAdapter.fetchNewFills', () => {
+  it('skips a fill whose filled_avg_price is null instead of recording price 0', async () => {
+    const client = makeClient({
+      getOrder: vi.fn().mockResolvedValue(
+        acceptedOrder({
+          status: 'partially_filled',
+          filled_qty: '40',
+          filled_avg_price: null,
+          filled_at: '2026-07-15T14:05:00Z',
+        }),
+      ),
+    });
+    const adapter = new AlpacaBrokerAdapter({ client });
+    await adapter.submitBracket(makeBracket());
+
+    // A zero-price fill would drag avg_entry_price toward zero and feed
+    // phantom PnL downstream; the unpriced fill is re-offered next poll.
+    expect(await adapter.fetchNewFills(new Date(0))).toEqual([]);
+  });
+
+  it('paces client calls through an injected rate limiter', async () => {
+    const acquire = vi.fn().mockResolvedValue(undefined);
+    const client = makeClient();
+    const adapter = new AlpacaBrokerAdapter({ client, rateLimiter: { acquire } });
+
+    await adapter.submitBracket(makeBracket());
+    await adapter.fetchNewFills(new Date(0));
+
+    // One token per venue call: submitOrder + the fill poll's getOrder.
+    expect(acquire).toHaveBeenCalledTimes(2);
+  });
+
   it('normalizes an entry fill into the shared NormalizedFill shape', async () => {
     const filledAt = '2026-07-15T14:05:00Z';
     const client = makeClient({

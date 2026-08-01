@@ -16,10 +16,10 @@ import type { Signal } from '../analysts/index.js';
 import type { AnalystView, DebateResult } from '../debate-engine/index.js';
 import type { ExecutionResult } from '../execution/index.js';
 import type { RiskDecision } from '../risk-manager/index.js';
-import type { Clock, OrderIntent } from '../shared/index.js';
+import type { AssetClass, Clock, OrderIntent } from '../shared/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
 
-export type AssetClass = 'crypto' | 'stocks';
+export type { AssetClass };
 
 /** One entry in the configured universe (orchestrator-spec.md story 3). */
 export interface UniverseInstrument {
@@ -39,16 +39,14 @@ export interface Scheduler {
   nextTick(clock: Clock): TickPlan;
 }
 
-/** Shared structured-logging interface; trace_id threads every line (#95). */
-export interface Logger {
-  log(entry: {
-    trace_id: string;
-    stage: string;
-    level: 'info' | 'warn' | 'error';
-    message: string;
-    payload?: unknown;
-  }): void;
-}
+/**
+ * Shared structured-logging interface; trace_id threads every line (#95).
+ * Canonical shape lives in `shared/types.ts` (code-review 2026-08-01, M6);
+ * re-exported here so orchestrator-internal imports keep working.
+ */
+import type { Logger } from '../shared/index.js';
+
+export type { Logger };
 
 /** shared_store.audit_log writer (#95). */
 export interface AuditLog {

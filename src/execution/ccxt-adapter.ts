@@ -18,7 +18,8 @@
  * `CcxtClient` is OHLCV/ticker only), so a real ccxt Exchange satisfies it
  * structurally.
  */
-import type { OrderState } from '../shared/index.js';
+import type { OrderState, RateLimiter } from '../shared/index.js';
+import { rateLimited } from '../shared/index.js';
 import type {
   BrokerAck,
   BrokerAdapter,
@@ -91,8 +92,18 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
   private readonly brackets = new Map<string, EmulatedBracket>();
   /** Fills awaiting ingestion, in arrival order (#83 drains them). */
   private readonly fills: NormalizedFill[] = [];
+  private readonly client: CcxtBrokerClient;
 
-  constructor(private readonly client: CcxtBrokerClient) {}
+  /**
+   * `rateLimiter` paces every venue call (execution-spec.md story 16 —
+   * Kraken/Coinbase free tiers throttle around 1 order/sec, and a ban while a
+   * lot is live means no stops and no cancels). Omitted = unpaced, which is
+   * only appropriate for tests; the composition root wiring a real exchange
+   * must pass a `TokenBucket` sized to the venue.
+   */
+  constructor(client: CcxtBrokerClient, rateLimiter?: RateLimiter) {
+    this.client = rateLimiter === undefined ? client : rateLimited(client, rateLimiter);
+  }
 
   /**
    * Places the ENTRY ONLY. The protective legs cannot be placed yet: they must
@@ -142,7 +153,10 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
    * work; today its caller is the test suite.
    */
   async syncBrackets(): Promise<void> {
-    for (const bracket of this.brackets.values()) {
+    // Snapshot: a concurrent submitBracket() mutates the Map mid-await, and
+    // V8 leaves it undefined whether a for...of over the live Map visits the
+    // new entry — the snapshot keeps each poll's worklist deterministic.
+    for (const bracket of [...this.brackets.values()]) {
       if (bracket.phase === 'pending_entry') {
         await this.advanceEntry(bracket);
         continue;

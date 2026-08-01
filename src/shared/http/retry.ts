@@ -15,15 +15,28 @@ export interface RetryConfig {
   baseDelayMs: number;
   /** Backoff is capped here so a long-running provider outage doesn't blow the caller's latency budget. */
   maxDelayMs: number;
+  /**
+   * Randomness source for the backoff jitter, `[0, 1)`. Defaults to
+   * `Math.random`; tests inject a constant for deterministic delays.
+   */
+  random?: () => number;
 }
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Exponential backoff with equal jitter (execution-spec.md story 15:
+ * "bounded exponential backoff + jitter"): half the exponential delay is
+ * kept, half is randomized. Without it, every retry loop in a fleet that
+ * restarted together fires on the same cadence — a synchronized retry storm
+ * against per-IP/per-account broker limits.
+ */
 function backoffDelayMs(attempt: number, config: RetryConfig): number {
-  const raw = config.baseDelayMs * 2 ** (attempt - 1);
-  return Math.min(raw, config.maxDelayMs);
+  const capped = Math.min(config.baseDelayMs * 2 ** (attempt - 1), config.maxDelayMs);
+  const random = config.random ?? Math.random;
+  return capped / 2 + random() * (capped / 2);
 }
 
 /**

@@ -46,9 +46,19 @@ export async function computePortfolioView(
   const exposure_by_class = { crypto: 0, stocks: 0 };
 
   for (const position of positions) {
+    const mark = marks.get(position.instrument);
+    // A missing mark must fail loudly, never default to 0: zero-notional for
+    // a live lot understates exposure, and Risk would approve trades against
+    // a partially blind portfolio.
+    if (mark === undefined) {
+      throw new Error(
+        `computePortfolioView: no mark for open position '${position.instrument}' — ` +
+          'cannot price exposure',
+      );
+    }
     // Freeze §4: always filled_size, never requested_size — a partially-filled
     // lot is marked at what actually filled.
-    const notional = position.filled_size * (marks.get(position.instrument) ?? 0);
+    const notional = position.filled_size * mark;
     exposure_by_instrument[position.instrument] =
       (exposure_by_instrument[position.instrument] ?? 0) + notional;
     exposure_by_class[position.asset_class] += notional;

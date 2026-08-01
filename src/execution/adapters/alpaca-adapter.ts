@@ -21,7 +21,8 @@
  * observes it — finer-grained partial-fill history requires Alpaca's trade
  * updates/activities stream, which is out of scope for this ticket.
  */
-import type { OrderState } from '../../shared/index.js';
+import type { OrderState, RateLimiter } from '../../shared/index.js';
+import { rateLimited } from '../../shared/index.js';
 import type {
   BrokerAck,
   BrokerAdapter,
@@ -33,16 +34,27 @@ import type { AlpacaClient, AlpacaOrder, AlpacaOrderLeg } from './alpaca-client.
 
 export interface AlpacaBrokerAdapterInput {
   client: AlpacaClient;
+  /**
+   * Paces every Alpaca call (execution-spec.md story 16 — Alpaca throttles at
+   * 200 req/min and a mid-position throttle means no stops/cancels). Omitted
+   * = unpaced, for tests; the production composition root passes a
+   * `TokenBucket` sized to the venue.
+   */
+  rateLimiter?: RateLimiter;
 }
 
 export class AlpacaBrokerAdapter implements BrokerAdapter {
   /** client_order_id -> the bracket parent's Alpaca order id. */
   private readonly brackets = new Map<string, string>();
+  private readonly client: AlpacaClient;
 
-  constructor(private readonly input: AlpacaBrokerAdapterInput) {}
+  constructor(input: AlpacaBrokerAdapterInput) {
+    this.client =
+      input.rateLimiter === undefined ? input.client : rateLimited(input.client, input.rateLimiter);
+  }
 
   async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
-    const response = await this.input.client.submitOrder({
+    const response = await this.client.submitOrder({
       symbol: order.instrument,
       side: order.side,
       qty: String(order.size),
@@ -80,7 +92,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * contract wants.
    */
   async getOrder(clientOrderId: string): Promise<NormalizedOrder | null> {
-    const order = await this.input.client.getOrderByClientOrderId(clientOrderId);
+    const order = await this.client.getOrderByClientOrderId(clientOrderId);
     if (order === null) return null;
 
     // Re-populating the map lets a post-restart `fetchNewFills` find this
@@ -116,7 +128,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     const fills: NormalizedFill[] = [];
 
     for (const [clientOrderId, entryOrderId] of this.brackets) {
-      const entry = await this.input.client.getOrder(entryOrderId);
+      const entry = await this.client.getOrder(entryOrderId);
 
       collectFill(entry, 'entry', clientOrderId, since, fills);
       for (const leg of entry.legs ?? []) {
@@ -141,7 +153,12 @@ function collectFill(
   fills: NormalizedFill[],
 ): void {
   const filledQty = Number.parseFloat(order.filled_qty);
-  if (filledQty <= 0 || order.filled_at === null) {
+  // `filled_avg_price === null` alongside a positive filled_qty is an Alpaca
+  // data race/edge — recording it as price 0 would drag the lot's weighted
+  // avg toward zero and feed phantom PnL to the Feedback Loop. Skipping is
+  // safe: the feed is poll-based and inclusive-of-`since`, so the fill is
+  // re-offered on the next poll, priced.
+  if (filledQty <= 0 || order.filled_at === null || order.filled_avg_price === null) {
     return;
   }
 
@@ -154,7 +171,7 @@ function collectFill(
     client_order_id: clientOrderId,
     broker_fill_id: order.id,
     leg,
-    price: order.filled_avg_price === null ? 0 : Number.parseFloat(order.filled_avg_price),
+    price: Number.parseFloat(order.filled_avg_price),
     qty: filledQty,
     // Alpaca is commission-free on US equities; crypto fee attribution is
     // deferred (out of scope for this ticket's entry/stop-out equities path).

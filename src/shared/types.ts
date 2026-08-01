@@ -8,6 +8,31 @@
 import type { AnalystContribution, Direction } from '../debate-engine/index.js';
 
 /**
+ * The two markets this system trades. Canonical home (code-review 2026-08-01,
+ * H5): component `types.ts` files re-export this rather than redeclaring the
+ * union, so adding an asset class is one edit, not five.
+ */
+export type AssetClass = 'crypto' | 'stocks';
+
+/** One structured log line; `trace_id` threads every line (#95). */
+export interface LogEntry {
+  trace_id: string;
+  stage: string;
+  level: 'info' | 'warn' | 'error';
+  message: string;
+  payload?: unknown;
+}
+
+/**
+ * Shared structured-logging interface. Canonical home (code-review
+ * 2026-08-01, M6): the orchestrator's `Logger` and the debate engine's
+ * `LogSink` are aliases of this one shape.
+ */
+export interface Logger {
+  log(entry: LogEntry): void;
+}
+
+/**
  * The bracket handed from the Trader to the Risk Manager. See
  * docs/specs/trader-spec.md ("Key Interfaces"). Defined here (not in
  * src/trader) because `metadata.debate_id` is the join key three other
@@ -24,7 +49,7 @@ export interface OrderIntent {
    */
   idempotency_key: string;
   instrument: string;
-  asset_class: 'crypto' | 'stocks';
+  asset_class: AssetClass;
   side: 'buy' | 'sell';
   /** A reversal is exit-then-fresh-entry, not a single zero-crossing bracket. */
   intent_type: 'entry' | 'scale_in' | 'exit';
@@ -228,7 +253,7 @@ export interface OpenPosition {
   idempotency_key: string;
   debate_id: string;
   instrument: string;
-  asset_class: 'crypto' | 'stocks';
+  asset_class: AssetClass;
   side: 'buy' | 'sell';
   /** Exits close a lot; they never create one — hence no 'exit' here. */
   intent_type: 'entry' | 'scale_in';
@@ -306,7 +331,7 @@ export interface ClosedTrade {
   /** Attribution + setup-store join key. */
   debate_id: string;
   instrument: string;
-  asset_class: 'crypto' | 'stocks';
+  asset_class: AssetClass;
   side: 'buy' | 'sell';
   /** Avg entry, derived from the entry fills. */
   entry: number;
