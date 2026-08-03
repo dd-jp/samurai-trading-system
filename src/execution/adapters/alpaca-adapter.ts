@@ -46,15 +46,17 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   /** client_order_id -> the bracket parent's Alpaca order id. */
   private readonly brackets = new Map<string, string>();
   /**
-   * Alpaca's documented ceiling is 200 requests/minute per key, so 5/second is
-   * comfortably inside it while still bounding a runaway poll loop — a
-   * placeholder default pending tuning against the real account's tier, not a
-   * transcription of the venue's limit.
+   * Alpaca's documented ceiling is 200 requests/minute per key — 3.33/second —
+   * so the sustained rate is set BELOW it at 3/second, with a burst of 5 for
+   * the short flurry a bracket submit or a reconcile sweep issues back-to-back.
+   * A placeholder default pending tuning against the real account's tier, not a
+   * transcription of the venue's limit; it errs under the ceiling because the
+   * cost of being wrong is a throttled key mid-sweep.
    */
   private readonly rateLimiter: TokenBucket;
 
   constructor(private readonly input: AlpacaBrokerAdapterInput) {
-    this.rateLimiter = input.rateLimiter ?? new TokenBucket({ capacity: 5, refillPerSecond: 5 });
+    this.rateLimiter = input.rateLimiter ?? new TokenBucket({ capacity: 5, refillPerSecond: 3 });
   }
 
   /**
@@ -147,19 +149,50 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * The fill feed `ingestFills()` drains, in the same shape
    * `SimulatedBrokerAdapter.fetchNewFills` already produces. Point-in-time:
    * never returns a fill dated before `since`.
+   *
+   * Each bracket is isolated. `ingestFills()` awaits this as ONE call before
+   * advancing ANY lot, and `brackets` iterates in insertion order, so an
+   * unhandled throw here does not just lose one order's fills — it aborts the
+   * whole account's ingestion cycle, and a bracket that Alpaca persistently
+   * reports malformed would starve every bracket submitted after it, stop-outs
+   * included. Refusing to book one bad fill must not cost the sweep.
+   *
+   * The isolation is per BRACKET, not per `collectFill`: a bracket whose entry
+   * price cannot be recorded must not have its exit legs booked either, or the
+   * lot's accounting is built on a fill that was rejected.
    */
   async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
     const fills: NormalizedFill[] = [];
+    const failures: unknown[] = [];
 
     for (const [clientOrderId, entryOrderId] of this.brackets) {
-      const entry = await this.call('fetchNewFills', () =>
-        this.input.client.getOrder(entryOrderId),
-      );
+      try {
+        const entry = await this.call('fetchNewFills', () =>
+          this.input.client.getOrder(entryOrderId),
+        );
 
-      collectFill(entry, 'entry', clientOrderId, since, fills);
-      for (const leg of entry.legs ?? []) {
-        collectFill(leg, legName(leg), clientOrderId, since, fills);
+        collectFill(entry, 'entry', clientOrderId, since, fills);
+        for (const leg of entry.legs ?? []) {
+          collectFill(leg, legName(leg), clientOrderId, since, fills);
+        }
+      } catch (error) {
+        // Skipped, not swallowed: this bracket contributes nothing to THIS
+        // sweep and is retried on the next one. That is the same shape as an
+        // order the venue has not reported yet, and `ingestFills()` dedups on
+        // `broker_fill_id`, so re-polling costs nothing.
+        failures.push(error);
       }
+    }
+
+    // Progress wins when there is any: dropping good fills to report a bad
+    // bracket would re-create the account-wide stall this isolation removes.
+    // A wholly-failed sweep is the one case where throwing costs nothing — and
+    // it must not be reported as the "no new fills" that an empty array means.
+    if (fills.length === 0 && failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        `Alpaca fetchNewFills: all ${failures.length} bracket(s) failed; no fills could be read`,
+      );
     }
 
     return fills;

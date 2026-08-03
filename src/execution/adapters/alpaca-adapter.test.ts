@@ -394,8 +394,54 @@ describe('AlpacaBrokerAdapter.fetchNewFills on inconsistent venue data', () => {
     const adapter = new AlpacaBrokerAdapter({ client, rateLimiter: permissiveLimiter() });
     await adapter.submitBracket(makeBracket());
 
-    await expect(adapter.fetchNewFills(new Date(0))).rejects.toThrow(
-      /reports filled_qty 100 but no filled_avg_price/,
-    );
+    // The only bracket is the bad one, so nothing is lost by throwing — and an
+    // empty array here would read as "no new fills", which is a different fact.
+    const error = await adapter.fetchNewFills(new Date(0)).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors[0]).toMatchObject({
+      message: expect.stringMatching(/reports filled_qty 100 but no filled_avg_price/),
+    });
+  });
+
+  it('isolates a malformed bracket so it cannot starve the rest of the sweep', async () => {
+    // The regression this guards: `ingestFills()` awaits fetchNewFills ONCE
+    // before advancing any lot, and `brackets` iterates in insertion order, so
+    // an unhandled throw on the FIRST bracket would abort ingestion for the
+    // whole account — stop-outs on every later bracket included.
+    const filledAt = '2026-07-15T15:00:00Z';
+    const client = makeClient({
+      getOrder: vi
+        .fn()
+        // Submitted first, so it is swept first — the starvation position.
+        .mockResolvedValueOnce(
+          acceptedOrder({
+            id: 'alpaca-poisoned',
+            status: 'filled',
+            filled_qty: '100',
+            filled_avg_price: null,
+            filled_at: filledAt,
+          }),
+        )
+        .mockResolvedValueOnce(
+          acceptedOrder({
+            id: 'alpaca-healthy',
+            status: 'filled',
+            filled_qty: '50',
+            filled_avg_price: '100.02',
+            filled_at: filledAt,
+          }),
+        ),
+    });
+    const adapter = new AlpacaBrokerAdapter({ client, rateLimiter: permissiveLimiter() });
+    await adapter.submitBracket(makeBracket({ client_order_id: 'poisoned-lot' }));
+    await adapter.submitBracket(makeBracket({ client_order_id: 'healthy-lot' }));
+
+    const fills = await adapter.fetchNewFills(new Date(0));
+
+    // The healthy lot still ingests; the poisoned one contributes nothing and
+    // is retried next sweep (dedup on broker_fill_id makes that free).
+    expect(fills).toHaveLength(1);
+    expect(fills[0]).toMatchObject({ client_order_id: 'healthy-lot', qty: 50, price: 100.02 });
   });
 });
