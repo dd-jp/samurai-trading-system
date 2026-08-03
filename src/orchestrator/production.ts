@@ -366,11 +366,22 @@ export interface FeedbackCycleConfig {
 const DEFAULT_TICK_INTERVAL_MS = 60_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000;
 const DEFAULT_FILL_POLL_INTERVAL_MS = 15_000;
-/** ATR(14): the conventional realized-volatility read, and what the cost model's `MarketState.volatility` uses. */
+/**
+ * ATR(14): the conventional realized-volatility read, and the same shape
+ * `SimulatedAdapterConfig.volatility_indicator` carries for
+ * `MarketState.volatility`. `'atr'` is one of the four indicators
+ * `computeIndicator` dispatches on (indicators.ts) — an unrecognized name
+ * would throw per instrument and leave the volatility breaker tier wired but
+ * permanently reading its failure fallback, which is worse than leaving it a
+ * required seam because it looks live.
+ *
+ * `lookback: 15`, not 14: `atr()` consumes the first bar only to seed
+ * `previousClose`, so N bars yield N-1 true ranges. A 14-period ATR needs 15.
+ */
 const DEFAULT_VOLATILITY_INDICATOR: IndicatorSpec = {
   indicator: 'atr',
   params: { period: 14 },
-  lookback: 14,
+  lookback: 15,
 };
 const DEFAULT_FEEDBACK_INTERVAL_MS = 24 * 60 * 60 * 1_000;
 
@@ -952,8 +963,13 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       const stoppingFillSync = fillSync?.stop();
       loop = undefined;
       fillSync = undefined;
-      await stopping;
-      await stoppingFillSync;
+      // `allSettled`, not two sequential awaits: `buildShutdownHandler`'s doc
+      // comment records that `stop()` CAN reject (a pass that rejects after
+      // `stop()` captured `inFlight` rejects in the caller too). Awaiting in
+      // series would leave the second drain's promise unawaited on that path
+      // — an unhandled rejection, and the fill poll's drain silently
+      // discarded during shutdown. This still drains both concurrently.
+      await Promise.allSettled([stopping, stoppingFillSync]);
     },
   };
 }
