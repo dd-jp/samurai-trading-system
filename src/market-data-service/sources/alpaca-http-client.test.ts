@@ -126,6 +126,51 @@ describe('AlpacaHttpDataClient — equities', () => {
     expect(secondUrl).toContain('page_token=page-2');
   });
 
+  it('getBars scales the page-cap guard with a large `limit` instead of tripping at the fixed 25-page default', async () => {
+    // BUFFER_MULTIPLIER=8, PAGE_SIZE=1_000 → a limit of 5_000 needs up to
+    // ceil(5_000*8/1_000)+2 = 42 pages of headroom, well past the old fixed
+    // cap of 25. 30 legitimate pages must not trip the pagination guard.
+    const totalPages = 30;
+    let calls = 0;
+    const fetchMock = vi.fn().mockImplementation(() => {
+      calls++;
+      const bar = { t: `2026-0${(calls % 9) + 1}-01T00:00:00Z`, o: 1, h: 1, l: 1, c: 1, v: 1 };
+      const next_page_token = calls < totalPages ? `page-${calls + 1}` : null;
+      return Promise.resolve(jsonResponse({ bars: [bar], symbol: 'AAPL', next_page_token }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpDataClient({
+      assetClass: 'stocks',
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+    });
+    const result = await client.getBars('AAPL', '1d', new Date('2026-07-03T00:00:00Z'), 5_000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(totalPages);
+    expect(result).toHaveLength(totalPages);
+  });
+
+  it('getBars still trips the pagination guard on a genuinely cyclical/malformed next_page_token', async () => {
+    // Small `limit` keeps the scaled cap at its MAX_PAGES=25 floor — a token
+    // that never terminates must still be caught.
+    const bar = { t: '2026-07-01T00:00:00Z', o: 1, h: 1, l: 1, c: 1, v: 1 };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ bars: [bar], symbol: 'AAPL', next_page_token: 'same' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpDataClient({
+      assetClass: 'stocks',
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+    });
+
+    await expect(client.getBars('AAPL', '1d', new Date('2026-07-03T00:00:00Z'), 2)).rejects.toThrow(
+      AlpacaDataProviderError,
+    );
+  });
+
   it('getLatestQuote hits /v2/stocks/{symbol}/quotes/latest and unwraps the quote', async () => {
     const fetchMock = vi
       .fn()

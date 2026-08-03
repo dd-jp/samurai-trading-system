@@ -267,15 +267,23 @@ export class AlpacaHttpDataClient implements AlpacaClient {
     const start = new Date(asOf.getTime() - Math.max(bufferMs, minBufferMs));
     const alpacaSymbol = this.assetClass === 'crypto' ? toAlpacaCryptoSymbol(symbol) : symbol;
 
+    // `bufferMs`'s calendar-time window can, for large `limit`, hold many more
+    // rows than `limit` itself (worst case ~`BUFFER_MULTIPLIER`x, at density 1
+    // for 24/7 crypto) — a fixed page cap sized for typical small lookbacks
+    // would then trip on a legitimate large request before a malformed/cyclical
+    // token ever could. Scale the cap with the request instead; +2 pages of
+    // slack absorbs boundary rounding without weakening the loop guard itself.
+    const maxPages = Math.max(MAX_PAGES, Math.ceil((limit * BUFFER_MULTIPLIER) / PAGE_SIZE) + 2);
+
     const out: AlpacaBar[] = [];
     let pageToken: string | undefined;
     let pages = 0;
 
     do {
       pages++;
-      if (pages > MAX_PAGES) {
+      if (pages > maxPages) {
         throw new AlpacaDataProviderError(
-          `AlpacaHttpDataClient.getBars: exceeded ${MAX_PAGES} pages for ${symbol} — refusing to ` +
+          `AlpacaHttpDataClient.getBars: exceeded ${maxPages} pages for ${symbol} — refusing to ` +
             'follow next_page_token further (malformed/cyclical pagination guard).',
         );
       }
