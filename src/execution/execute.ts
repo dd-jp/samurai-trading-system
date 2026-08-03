@@ -8,7 +8,9 @@
  * block until filled — the lot's lifecycle is advanced separately by
  * `ingestFills()`, which lives in its own module.
  */
+
 import type { OpenPosition } from '../shared/index.js';
+import { isUniqueConstraintError } from '../shared/store/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
 import { describeBrokerError } from './broker-error.js';
 import { ingestFills } from './ingest-fills.js';
@@ -119,10 +121,15 @@ export class ExecutionImpl implements Execution {
     // write lands. The store's constraint is the real arbiter — the loser
     // re-checks and reports `deduped`, the same answer it would have gotten
     // had it arrived a beat later.
+    //
+    // Only a *constraint* failure means "someone else got there first". Any
+    // other write failure (disk full, SQLITE_BUSY, a corrupt db) must surface:
+    // reporting it as `deduped` would tell the caller an order is already
+    // live when nothing was ever persisted or sent.
     try {
       await store.writeAheadPosition(position);
     } catch (error) {
-      if (await store.findByKey(idempotencyKey)) {
+      if (isUniqueConstraintError(error) && (await store.findByKey(idempotencyKey))) {
         return result('deduped', idempotencyKey, now, {
           reason: 'a concurrent execute() wrote ahead for this idempotency_key first',
         });
