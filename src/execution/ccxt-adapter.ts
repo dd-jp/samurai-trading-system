@@ -100,9 +100,11 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
    * default is NOT "unlimited" — an adapter with no pacing is the C2 finding.
    * 1 order/second is the free-tier order rate Kraken/Coinbase publish for the
    * cheapest tier, so it is the conservative floor that cannot be wrong in the
-   * dangerous direction. A placeholder pending real per-venue tuning: an
-   * exchange-specific limit belongs with the exchange's credentials, i.e. in
-   * ops wiring, not hard-coded here.
+   * dangerous direction. A placeholder pending real per-venue tuning (#299):
+   * an exchange-specific limit belongs with the exchange's credentials, i.e.
+   * in ops wiring, not hard-coded here. #299 also records this default's known
+   * cost — at 1/second the two protective legs in `armLegs` serialize, placing
+   * them ≥1s apart and widening the unprotected-lot window.
    */
   constructor(
     private readonly client: CcxtBrokerClient,

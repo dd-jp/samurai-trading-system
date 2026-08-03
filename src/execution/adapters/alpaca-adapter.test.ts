@@ -404,6 +404,31 @@ describe('AlpacaBrokerAdapter.fetchNewFills on inconsistent venue data', () => {
     });
   });
 
+  it('refuses an unparseable filled_qty rather than booking NaN', async () => {
+    // `NaN <= 0` is false, so without an explicit finite check this sails past
+    // the "nothing filled" guard and is recorded as `qty: NaN`, which poisons
+    // weighted-average pricing and realized PnL without ever failing loudly.
+    const client = makeClient({
+      getOrder: vi.fn().mockResolvedValue(
+        acceptedOrder({
+          status: 'filled',
+          filled_qty: 'N/A',
+          filled_avg_price: '100.02',
+          filled_at: '2026-07-15T14:05:00Z',
+        }),
+      ),
+    });
+    const adapter = new AlpacaBrokerAdapter({ client, rateLimiter: permissiveLimiter() });
+    await adapter.submitBracket(makeBracket());
+
+    const error = await adapter.fetchNewFills(new Date(0)).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors[0]).toMatchObject({
+      message: expect.stringMatching(/unparseable filled_qty 'N\/A'/),
+    });
+  });
+
   it('isolates a malformed bracket so it cannot starve the rest of the sweep', async () => {
     // The regression this guards: `ingestFills()` awaits fetchNewFills ONCE
     // before advancing any lot, and `brackets` iterates in insertion order, so

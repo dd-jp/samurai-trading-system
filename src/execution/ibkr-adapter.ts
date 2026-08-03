@@ -75,7 +75,8 @@ export class IbkrBrokerAdapter implements BrokerAdapter {
    * which for this adapter means the venue holding a live bracket stops taking
    * calls; 5/second is a conservative placeholder well under that, pending
    * tuning against a real TWS gateway (whose limits vary by account and
-   * connection).
+   * connection) — tracked as #299, which also moves these out of compile-time
+   * constants into the ops config that holds the credentials they pace.
    */
   constructor(
     private readonly client: IbkrBrokerClient,

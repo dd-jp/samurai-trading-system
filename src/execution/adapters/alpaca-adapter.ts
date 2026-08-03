@@ -49,9 +49,9 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * Alpaca's documented ceiling is 200 requests/minute per key — 3.33/second —
    * so the sustained rate is set BELOW it at 3/second, with a burst of 5 for
    * the short flurry a bracket submit or a reconcile sweep issues back-to-back.
-   * A placeholder default pending tuning against the real account's tier, not a
-   * transcription of the venue's limit; it errs under the ceiling because the
-   * cost of being wrong is a throttled key mid-sweep.
+   * A placeholder default pending tuning against the real account's tier
+   * (#299), not a transcription of the venue's limit; it errs under the ceiling
+   * because the cost of being wrong is a throttled key mid-sweep.
    */
   private readonly rateLimiter: TokenBucket;
 
@@ -212,6 +212,19 @@ function collectFill(
   fills: NormalizedFill[],
 ): void {
   const filledQty = Number.parseFloat(order.filled_qty);
+
+  // `NaN <= 0` is FALSE, so an unparseable quantity ('', 'N/A', anything
+  // non-numeric) would sail past the guard below and be booked as `qty: NaN` —
+  // which then silently propagates through weighted-average pricing, realized
+  // PnL and the R-multiple, poisoning every figure it touches without ever
+  // failing. Checked before the ordering guard for exactly that reason.
+  if (!Number.isFinite(filledQty)) {
+    throw new Error(
+      `Alpaca order ${order.id} (${leg} leg of '${clientOrderId}') reports an unparseable ` +
+        `filled_qty '${order.filled_qty}'`,
+    );
+  }
+
   if (filledQty <= 0 || order.filled_at === null) {
     return;
   }
