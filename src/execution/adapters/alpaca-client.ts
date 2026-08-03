@@ -68,4 +68,39 @@ export interface AlpacaClient {
    * store.
    */
   getOrderByClientOrderId(clientOrderId: string): Promise<AlpacaOrder | null>;
+  /**
+   * The account ledger (`GET /v2/account`) — Alpaca's own authoritative view
+   * of cash and equity, which `AccountStateProvider` reads rather than
+   * reimplementing (transport-layer-spec.md story 23).
+   *
+   * On the `AlpacaClient` (broker) interface rather than a separate account
+   * client because it is the same Trading API, same host, same credentials:
+   * a second client would duplicate the auth/retry/error plumbing to reach
+   * one more path on the service this one already talks to.
+   */
+  getAccount(): Promise<AlpacaAccount>;
+}
+
+/**
+ * The subset of `GET /v2/account` this system reads. Alpaca returns these as
+ * decimal STRINGS, and they are kept as strings here for the same reason
+ * `AlpacaOrder.filled_qty` is: parsing belongs to the consumer, which can
+ * then decide what an unparseable value means rather than silently receiving
+ * a `NaN` the wire shape claimed was a number.
+ */
+export interface AlpacaAccount {
+  /** Settled cash. */
+  cash: string;
+  /** Total account value including open positions — the high-water mark's input. */
+  equity: string;
+  /**
+   * Equity at the previous trading day's close.
+   *
+   * NOTE (cross-verify 2026-07-31, GAP-8): whether this boundary is scoped to
+   * the US stock trading day is UNVERIFIED against a live account. For a 24/7
+   * crypto instrument that boundary may not match risk-manager-spec.md's
+   * stated "UTC day" semantics for `daily_pnl_pct`. Open decision — see
+   * `AlpacaAccountStateProvider`.
+   */
+  last_equity: string;
 }

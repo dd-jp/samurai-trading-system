@@ -147,6 +147,7 @@ import type {
   OrphanGoVerdict,
   OrphanVerdictScanner,
 } from './orphan-verdict-scan.js';
+import { AlpacaAccountStateProvider } from './production/account-state.js';
 import { buildAnalystsStep } from './production/analysts-adapter.js';
 import { buildDebateStep } from './production/debate-adapter.js';
 import {
@@ -163,6 +164,7 @@ import {
 } from './production/direct-bind.js';
 import { withOnTradeClose } from './production/on-trade-close-hookup.js';
 import { UniverseScheduler } from './scheduler.js';
+import { SqliteAccountStateStore } from './sqlite-account-state-store.js';
 import { runTickPlan } from './tick-loop.js';
 import { SequentialTickRunner } from './tick-runner.js';
 import type { Logger, Scheduler, TickRunner, TickSteps, UniverseInstrument } from './types.js';
@@ -220,8 +222,16 @@ export interface ProductionConfig {
   orphanAlerts: OrphanAlertChannel;
   /** WorldMonitor CII reads (ADR-0002; live wiring parked during paper trading). */
   ciiScoreProvider: CiiScoreProvider;
-  /** Account accounting scalars — no in-repo realized-PnL tracker (#234). */
-  accountState: AccountStateProvider;
+  /**
+   * Account accounting scalars. Optional since #276: when omitted this module
+   * builds an `AlpacaAccountStateProvider` over `alpacaBrokerClient`'s
+   * `GET /v2/account`, the durable `account_state` table, and the existing
+   * `ClosedTrade` store — the three sources transport-layer-spec.md's
+   * "Module: AccountStateProvider" names. Same override shape as
+   * `broker`/`dataSource`/`llmClient`, for tests and for a future non-Alpaca
+   * account ledger.
+   */
+  accountState?: AccountStateProvider;
   /** Realized-vol reading for the volatility breaker tier — no in-repo indicator (#234). */
   volatility: VolatilityReadingProvider;
 
@@ -501,7 +511,20 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   const breakerStateDeps = {
     marketData,
     circuitBreakers,
-    accountState: config.accountState,
+    // Defaulted, not required (#276): the three sources this needs — Alpaca's
+    // account ledger, the durable `account_state` table, and the existing
+    // ClosedTrade store — all exist in-repo now, so an injected seam would be
+    // asking the caller to build what this module can compose.
+    accountState:
+      config.accountState ??
+      new AlpacaAccountStateProvider({
+        client: config.alpacaBrokerClient,
+        store: new SqliteAccountStateStore(config.db),
+        // The existing ClosedTrade reader, per spec story 25 — no new
+        // realized-PnL ledger is built when one already exists.
+        closedTrades: new SqliteClosedTradeStore(config.db),
+        logger: config.logger ?? new JsonLogger(),
+      }),
     volatility: config.volatility,
     getOpenPositions: () => executionStore.getOpenPositions(),
     mode: config.mode,

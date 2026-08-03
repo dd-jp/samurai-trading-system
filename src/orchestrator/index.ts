@@ -128,7 +128,6 @@ export const REQUIRED_INJECTED_CONFIG = [
   'approvals',
   'orphanAlerts',
   'ciiScoreProvider',
-  'accountState',
   'volatility',
   'traderConfig',
   'riskConfig',
