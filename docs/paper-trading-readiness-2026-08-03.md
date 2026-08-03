@@ -16,6 +16,8 @@ The single most consequential gap, and the only Tier-1 item with no ticket.
 
 Both surfaces are **fully implemented** (`src/execution/ingest-fills.ts`, `src/execution/reconcile.ts`) and exposed on `ExecutionImpl` (`execute.ts:32`, `execute.ts:43`). Nothing calls either one outside tests. The composition root says so itself, twice, in `production.ts:67-70` and `production/on-trade-close-hookup.ts:16`.
 
+Verified three ways, since this is an absence-of-evidence claim: no textual caller outside `execution/`; no indirect dispatch through the port either — the orchestrator reaches Execution at exactly one place, `direct-bind.ts:250`, and it calls `execute()` only; and no ticket exists in **any** state (#83 and #86 built these surfaces and are closed; #224/#236/#237 did the wiring and are closed).
+
 This is a *scheduling* gap, not missing logic — which is good news for the size of the fix, and bad news for how easy it is to miss. The tick loop runs Analysts → Debate → Trader → Risk → Verdict → Execution and submits a bracket. Then the lifecycle stops.
 
 One gap, four silent downstream failures:
@@ -70,7 +72,11 @@ Trader emits it (`trader/decide.ts:225`), Risk handles it (`risk-manager/index.t
 
 **D2. `account_state` table specced, never migrated.** `shared-sqlite-store-spec.md` (per GAP-7) defines it; no migration creates it. See item 4.
 
-**D3. `BrokerAdapter` is missing three specced methods.** `execution-spec.md:133-137` defines `submitFlatten`, `cancel`, and `getOpenPositions`. The code interface (`execution/types.ts:121-158`) has none of them — only `submitBracket`, `getOrder`, `fetchNewFills`, `resizeProtectiveLegs`. Consequences: no order cancellation, and **no forced-liquidation capability** — so a Risk/Verdict kill-switch decision has no mechanism to flatten with, which `execution-spec.md:279` contemplates as Execution's job. Related to item 6 but broader.
+**D3. `BrokerAdapter` is missing three specced methods — mismatch of unknown intent.** `execution-spec.md:133-137` defines `submitFlatten`, `cancel`, and `getOpenPositions`. The code interface (`execution/types.ts:121-158`) has none of them — only `submitBracket`, `getOrder`, `fetchNewFills`, `resizeProtectiveLegs`.
+
+I did **not** establish whether this is drift or a deliberate descope. Wayfinder #224 scoped the first run to enter/hold-only, and `cross-verify-2026-07-31.md` GAP-2 records an unresolved question about exactly that phasing — so these three may have been intentionally left out, in which case the spec needs the phasing edit rather than the code needing the methods. Resolving GAP-2 settles this too.
+
+Either way the *capability* is absent: no order cancellation, and no forced-liquidation path, which `execution-spec.md:279` contemplates as Execution's job. That matters for a kill-switch regardless of which document is wrong.
 
 **D4. Not a code divergence — spec-vs-spec drift.** GAP-1/2/4/5/6 in `cross-verify-2026-07-31.md` remain open and are all documents disagreeing with documents, not code disagreeing with either. Listed here only so they are not mistaken for code gaps.
 
