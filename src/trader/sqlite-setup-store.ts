@@ -23,7 +23,7 @@
  */
 
 import type { SetupNeighbor, SetupStore, SetupVector } from '../shared/index.js';
-import type { SharedStore } from '../shared/store/index.js';
+import { isUniqueConstraintError, type SharedStore } from '../shared/store/index.js';
 
 export type SetupAssetClass = 'crypto' | 'stocks';
 
@@ -145,11 +145,4 @@ export class SqliteSetupStore implements SetupStore {
       );
     }
   }
-}
-
-function isUniqueConstraintError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error as NodeJS.ErrnoException).code === 'SQLITE_CONSTRAINT_PRIMARYKEY'
-  );
 }

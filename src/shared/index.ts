@@ -15,11 +15,14 @@ export { withRetry } from './http/retry.js';
 export type { TokenBucketConfig } from './http/token-bucket.js';
 export { TokenBucket } from './http/token-bucket.js';
 export type {
+  AssetClass,
   ClosedTrade,
   ClosedTradeStore,
   DebateLog,
   DebateLogStore,
   Fill,
+  LogEntry,
+  Logger,
   OpenPosition,
   OrderIntent,
   OrderIntentMetadata,

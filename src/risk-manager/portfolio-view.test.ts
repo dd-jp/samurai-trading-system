@@ -127,6 +127,25 @@ describe('computePortfolioView — mark sourcing', () => {
     // 10 + 20 filled, aggregated onto the one instrument.
     expect(view.exposure_by_instrument.AAPL).toBe(3_000);
   });
+
+  it('throws rather than silently pricing exposure at 0 when a mark is missing', async () => {
+    // A conforming MarketDataService can't return "no mark" (getMark always
+    // resolves to a priced Mark or rejects) — this simulates the only way
+    // the internal marks map can hold an unusable entry: a malformed/NaN
+    // price slipping through the service boundary. The guard exists so that
+    // case fails loudly instead of understating exposure to Risk.
+    const marketData = makeMarketData({ AAPL: 150 });
+    marketData.getMark = vi
+      .fn()
+      .mockResolvedValue({ ...makeMark(150), price: undefined }) as MarketDataService['getMark'];
+    const input = makeInput({
+      positions: [makePosition({ filled_size: 10 })],
+      marketData,
+      asOf,
+    });
+
+    await expect(computePortfolioView(input)).rejects.toThrow("no mark for held instrument 'AAPL'");
+  });
 });
 
 describe('computePortfolioView — aggregation', () => {

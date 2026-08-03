@@ -127,6 +127,27 @@ describe('AlpacaBrokerAdapter.submitBracket', () => {
 });
 
 describe('AlpacaBrokerAdapter.fetchNewFills', () => {
+  // The sweep awaits `getOrder` per bracket, so a `submitBracket` landing
+  // mid-pass would otherwise be picked up by that same pass — whose `since`
+  // window predates it, dropping its fills (PR #290 review, deepseek; the
+  // same fix #297 applied to ccxt's `syncBrackets`).
+  it('does not poll a bracket submitted while the pass is already in flight', async () => {
+    const client = makeClient();
+    const adapter = new AlpacaBrokerAdapter({ client, rateLimiter: permissiveLimiter() });
+    await adapter.submitBracket(makeBracket());
+
+    (client.getOrder as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      // A concurrent submission mutates the bracket map mid-iteration.
+      await adapter.submitBracket(makeBracket({ client_order_id: 'key-tsla-1400' }));
+      return acceptedOrder();
+    });
+
+    await adapter.fetchNewFills(new Date(0));
+
+    // One getOrder: the pass's worklist was fixed at entry, not re-read.
+    expect(client.getOrder).toHaveBeenCalledTimes(1);
+  });
+
   it('normalizes an entry fill into the shared NormalizedFill shape', async () => {
     const filledAt = '2026-07-15T14:05:00Z';
     const client = makeClient({

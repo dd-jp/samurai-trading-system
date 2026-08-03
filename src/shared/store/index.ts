@@ -5,3 +5,4 @@
  */
 export { MIGRATIONS_DIR, runMigrations } from './migrate.js';
 export { openSharedStore, type SharedStore, sharedStorePath } from './open-shared-store.js';
+export { isUniqueConstraintError } from './sqlite-utils.js';

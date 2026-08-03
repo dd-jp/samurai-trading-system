@@ -122,6 +122,7 @@ import type {
 } from '../risk-manager/index.js';
 import { type BreakerConfig, CircuitBreakers } from '../risk-manager/index.js';
 import type { Clock } from '../shared/index.js';
+import { TokenBucket } from '../shared/index.js';
 import type { SharedStore as SqliteHandle } from '../shared/store/index.js';
 import type { TraderConfig } from '../trader/index.js';
 import { SqliteSetupStore } from '../trader/index.js';
@@ -451,7 +452,15 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     { setup_store: new SqliteSetupStore(config.db) },
     logger,
   );
-  const broker = config.broker ?? new AlpacaBrokerAdapter({ client: config.alpacaBrokerClient });
+  // Token bucket sized under Alpaca's 200 req/min (execution-spec.md story
+  // 16): burst covers a bracket submit plus a fill poll, sustained rate stays
+  // at ~90/min so the data-side calls sharing the account limit fit too.
+  const broker =
+    config.broker ??
+    new AlpacaBrokerAdapter({
+      client: config.alpacaBrokerClient,
+      rateLimiter: new TokenBucket({ capacity: 10, refillPerSecond: 1.5 }),
+    });
   const circuitBreakers = new CircuitBreakers(config.breakerConfig, config.initialBreakerState);
   const ciiConsumer = new CiiConsumer(config.ciiScoreProvider, clock, config.ciiConsumerConfig);
 
@@ -630,14 +639,20 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
    * the timer callback down with it; caught and logged for the same reason
    * the tick loop catches (one bad cycle must not end the run).
    */
+  // Constructed once and closed over, not per invocation — the stores are
+  // stateless over the shared handle, so a fresh set each cycle bought
+  // nothing (code-review 2026-08-01, H7).
+  const feedbackStores = {
+    trades: new SqliteClosedTradeStore(config.db),
+    debate_log: new SqliteDebateLogStore(config.db),
+    tuning: new SqliteTuningStore(config.db, clock),
+    adjustments: new SqliteAdjustmentLog(config.db),
+  };
   const runFeedbackCycle = (feedback: FeedbackCycleConfig): void => {
     try {
       const result = runDailyCycle({
         clock,
-        trades: new SqliteClosedTradeStore(config.db),
-        debate_log: new SqliteDebateLogStore(config.db),
-        tuning: new SqliteTuningStore(config.db, clock),
-        adjustments: new SqliteAdjustmentLog(config.db),
+        ...feedbackStores,
         config: feedback.config,
         approvals: feedback.approvals,
         proposals: feedback.proposals ?? [],

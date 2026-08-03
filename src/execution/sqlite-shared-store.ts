@@ -21,7 +21,7 @@
  */
 
 import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../shared/index.js';
-import type { SharedStore as Db } from '../shared/store/index.js';
+import { type SharedStore as Db, isUniqueConstraintError } from '../shared/store/index.js';
 import type { SharedStore } from './types.js';
 
 /** Terminal `order_state`s — excluded from `getOpenPositions()` (execution-spec.md). */
@@ -284,13 +284,6 @@ export class SqliteExecutionStore implements SharedStore {
       throw cause;
     }
   }
-}
-
-function isUniqueConstraintError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error as NodeJS.ErrnoException).code === 'SQLITE_CONSTRAINT_PRIMARYKEY'
-  );
 }
 
 export function fromPositionRow(row: OpenPositionRow): OpenPosition {

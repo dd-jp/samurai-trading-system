@@ -165,7 +165,13 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     const fills: NormalizedFill[] = [];
     const failures: unknown[] = [];
 
-    for (const [clientOrderId, entryOrderId] of this.brackets) {
+    // Snapshot, as #297 already did for `CcxtBrokerAdapter.syncBrackets` (M3):
+    // the `getOrder` below awaits inside this loop, and a Map iterator DOES
+    // visit entries inserted mid-iteration — so a bracket submitted during the
+    // sweep would be drained by a pass whose `since` window predates it, and
+    // its fills silently dropped. The snapshot fixes each pass's worklist at
+    // entry (PR #290 review, deepseek).
+    for (const [clientOrderId, entryOrderId] of [...this.brackets]) {
       try {
         const entry = await this.call('fetchNewFills', () =>
           this.input.client.getOrder(entryOrderId),

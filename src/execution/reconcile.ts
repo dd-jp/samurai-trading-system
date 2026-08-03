@@ -77,6 +77,10 @@ async function reconcileLot(
       store_state: position.order_state,
       broker_state: null,
       action: 'undetermined',
+      // Safe to surface verbatim: #297's H1 makes every adapter convert what
+      // its client threw into a `BrokerError` built only from curated fields,
+      // so the credentialed original never reaches this catch. Same posture
+      // and same expression as `execute()`'s submit-failure branch.
       reason: error instanceof Error ? error.message : String(error),
     };
   }

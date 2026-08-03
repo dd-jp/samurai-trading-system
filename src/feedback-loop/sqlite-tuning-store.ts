@@ -17,20 +17,33 @@ import type { Clock, TuningStore } from '../shared/index.js';
 import { SystemClock } from '../shared/index.js';
 import type { SharedStore } from '../shared/store/index.js';
 
-interface AnalystWeightRow {
-  analyst_id: string;
-  weight: number;
+/**
+ * The three dial tables share one shape — (name key, REAL value, updated_at)
+ * — differing only in identifiers, so the getter/setter pairs collapse into
+ * one KV helper per direction (code-review 2026-08-01, M8). Identifiers are
+ * interpolated from these fixed literals only, never from caller input.
+ */
+interface DialTable {
+  table: 'analyst_weights' | 'strategy_params' | 'risk_thresholds';
+  keyColumn: 'analyst_id' | 'param_name' | 'threshold_name';
+  valueColumn: 'weight' | 'value';
 }
 
-interface StrategyParamRow {
-  param_name: string;
-  value: number;
-}
-
-interface RiskThresholdRow {
-  threshold_name: string;
-  value: number;
-}
+const ANALYST_WEIGHTS: DialTable = {
+  table: 'analyst_weights',
+  keyColumn: 'analyst_id',
+  valueColumn: 'weight',
+};
+const STRATEGY_PARAMS: DialTable = {
+  table: 'strategy_params',
+  keyColumn: 'param_name',
+  valueColumn: 'value',
+};
+const RISK_THRESHOLDS: DialTable = {
+  table: 'risk_thresholds',
+  keyColumn: 'threshold_name',
+  valueColumn: 'value',
+};
 
 export class SqliteTuningStore implements TuningStore {
   constructor(
@@ -39,53 +52,44 @@ export class SqliteTuningStore implements TuningStore {
   ) {}
 
   getAnalystWeights(): Record<string, number> {
-    const rows = this.db
-      .prepare('SELECT analyst_id, weight FROM analyst_weights')
-      .all() as AnalystWeightRow[];
-    return Object.fromEntries(rows.map((row) => [row.analyst_id, row.weight]));
+    return this.kvGetAll(ANALYST_WEIGHTS);
   }
 
   setAnalystWeight(analyst_id: string, weight: number): void {
-    this.db
-      .prepare(
-        `INSERT INTO analyst_weights (analyst_id, weight, updated_at)
-         VALUES (?, ?, ?)
-         ON CONFLICT(analyst_id) DO UPDATE SET weight = excluded.weight, updated_at = excluded.updated_at`,
-      )
-      .run(analyst_id, weight, this.clock.now().toISOString());
+    this.kvSet(ANALYST_WEIGHTS, analyst_id, weight);
   }
 
   getStrategyParams(): Record<string, number> {
-    const rows = this.db
-      .prepare('SELECT param_name, value FROM strategy_params')
-      .all() as StrategyParamRow[];
-    return Object.fromEntries(rows.map((row) => [row.param_name, row.value]));
+    return this.kvGetAll(STRATEGY_PARAMS);
   }
 
   setStrategyParam(name: string, value: number): void {
-    this.db
-      .prepare(
-        `INSERT INTO strategy_params (param_name, value, updated_at)
-         VALUES (?, ?, ?)
-         ON CONFLICT(param_name) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-      )
-      .run(name, value, this.clock.now().toISOString());
+    this.kvSet(STRATEGY_PARAMS, name, value);
   }
 
   getRiskThresholds(): Record<string, number> {
-    const rows = this.db
-      .prepare('SELECT threshold_name, value FROM risk_thresholds')
-      .all() as RiskThresholdRow[];
-    return Object.fromEntries(rows.map((row) => [row.threshold_name, row.value]));
+    return this.kvGetAll(RISK_THRESHOLDS);
   }
 
   setRiskThreshold(name: string, value: number): void {
+    this.kvSet(RISK_THRESHOLDS, name, value);
+  }
+
+  private kvGetAll(dial: DialTable): Record<string, number> {
+    const rows = this.db
+      .prepare(`SELECT ${dial.keyColumn} AS key, ${dial.valueColumn} AS value FROM ${dial.table}`)
+      .all() as { key: string; value: number }[];
+    return Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  }
+
+  private kvSet(dial: DialTable, key: string, value: number): void {
     this.db
       .prepare(
-        `INSERT INTO risk_thresholds (threshold_name, value, updated_at)
+        `INSERT INTO ${dial.table} (${dial.keyColumn}, ${dial.valueColumn}, updated_at)
          VALUES (?, ?, ?)
-         ON CONFLICT(threshold_name) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+         ON CONFLICT(${dial.keyColumn}) DO UPDATE
+           SET ${dial.valueColumn} = excluded.${dial.valueColumn}, updated_at = excluded.updated_at`,
       )
-      .run(name, value, this.clock.now().toISOString());
+      .run(key, value, this.clock.now().toISOString());
   }
 }

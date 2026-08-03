@@ -200,6 +200,77 @@ describe('ExecutionImpl.execute', () => {
     });
   });
 
+  // TOCTOU tail of the findByKey gate: a concurrent execute() for the same
+  // key can pass the gate before this one's write-ahead lands. The loser of
+  // the PK race must come back `deduped`, not throw.
+  it('returns deduped when a concurrent execute() wins the write-ahead race', async () => {
+    const { store } = openTestExecutionStore();
+    const broker = makeBroker();
+
+    // Simulate the interleaving: findByKey says "free" the first time, then a
+    // rival's write-ahead lands before ours does.
+    let firstCheck = true;
+    const racingStore: typeof store = Object.create(store);
+    racingStore.findByKey = async (key: string) => {
+      if (firstCheck) {
+        firstCheck = false;
+        await store.writeAheadPosition({
+          ...makeIntent(),
+          idempotency_key: key,
+          debate_id: 'debate-abc123',
+          requested_size: 100,
+          filled_size: 0,
+          avg_entry_price: 0,
+          order_state: 'pending',
+          broker_order_ids: [],
+          opened_at: NOW,
+          conviction: 0.72,
+          converged: true,
+          intent_type: 'entry',
+        } as OpenPosition);
+        return false;
+      }
+      return store.findByKey(key);
+    };
+
+    const result = await new ExecutionImpl(makeInput({ store: racingStore, broker })).execute(
+      makeGo(),
+    );
+
+    expect(result.status).toBe('deduped');
+    expect(result.reason).toContain('already exists for this idempotency_key');
+    expect(broker.calls).toHaveLength(0);
+  });
+
+  // Only a constraint collision means "a rival got there first". A write that
+  // failed for any other reason (disk full, SQLITE_BUSY) must surface — a
+  // `deduped` there would tell the caller an order is already live when
+  // nothing was persisted and nothing was sent (PR #290 review, deepseek).
+  it('rethrows a non-constraint write-ahead failure instead of reporting deduped', async () => {
+    const { store } = openTestExecutionStore();
+    const broker = makeBroker();
+
+    const failingStore: typeof store = Object.create(store);
+    failingStore.writeAheadPosition = async () => {
+      throw new Error('database or disk is full');
+    };
+    // Free at the gate, present by the time the catch re-checks — the shape
+    // the old row-existence-only catch would have swallowed as `deduped`.
+    let firstCheck = true;
+    failingStore.findByKey = async () => {
+      if (firstCheck) {
+        firstCheck = false;
+        return false;
+      }
+      return true;
+    };
+
+    await expect(
+      new ExecutionImpl(makeInput({ store: failingStore, broker })).execute(makeGo()),
+    ).rejects.toThrow('database or disk is full');
+    expect(broker.calls).toHaveLength(0);
+  });
+
   // AC: "Duplicate execute() calls with the same idempotency_key produce
   // exactly one submission."
   it('dedupes a repeat of the same key without touching the broker', async () => {

@@ -9,10 +9,10 @@
  */
 import type { DebateResult } from '../debate-engine/index.js';
 import type { MarketDataService } from '../market-data-service/index.js';
-import type { Clock, OpenPosition, OrderIntent } from '../shared/index.js';
-
 /** Asset classes the risk multiplier is keyed on, matching `Mark.asset_class`. */
-export type AssetClass = 'crypto' | 'stocks';
+import type { AssetClass, Clock, OpenPosition, OrderIntent } from '../shared/index.js';
+
+export type { AssetClass };
 
 /**
  * Every field here is flagged "config, tuned in paper trading" by
