@@ -64,10 +64,17 @@
  * `withOnTradeClose` (production/on-trade-close-hookup.ts) decorates
  * `writeClosedTrade` itself, using the real `SqliteSetupStore` (#198) FL
  * labels on trade close — not a `TickSteps` member, not reachable from
- * `SequentialTickRunner`. Note: nothing in #234–#237 schedules
- * `ingestFills()`/`reconcile()` on an interval yet, so this hook has no live
- * caller in the running system until a later ticket adds that scheduling —
- * out of scope here per the issue thread.
+ * `SequentialTickRunner`.
+ *
+ * ## Fill sync — the other lifecycle this root owns
+ *
+ * `ingestFills()`/`reconcile()` ARE now scheduled (superseding this file's
+ * earlier note that nothing drove them): `start()` awaits a one-shot
+ * `reconcile()` before the tick loop, then runs `ingestFills()` on its own
+ * self-scheduling poll — see `./fill-sync.ts` for why the ordering and the
+ * non-`setInterval` cadence are both load-bearing. That is what gives
+ * `withOnTradeClose` a live caller, and what lets a lot advance past
+ * `submitted` at all.
  */
 import { AnalystOrchestrator } from '../analysts/index.js';
 import type { CostConfig } from '../cost-model-backtest/index.js';
@@ -127,6 +134,12 @@ import type { SharedStore as SqliteHandle } from '../shared/store/index.js';
 import type { TraderConfig } from '../trader/index.js';
 import { SqliteSetupStore } from '../trader/index.js';
 import type { ApprovalChannel, VerdictConfig } from '../verdict/index.js';
+import {
+  FILL_SYNC_TRACE_ID,
+  RECONCILE_TRACE_ID,
+  runStartupReconcile,
+  startFillSync,
+} from './fill-sync.js';
 import { Heartbeat, type HeartbeatChannel } from './heartbeat.js';
 import { JsonLogger } from './logger.js';
 import type {
@@ -139,10 +152,12 @@ import { buildDebateStep } from './production/debate-adapter.js';
 import {
   type AccountStateProvider,
   buildExecutionStep,
+  buildExecutionSurface,
   buildPersistence,
   buildRiskStep,
   buildTraderStep,
   buildVerdictStep,
+  type ExecutionStepDeps,
   type PersistenceInstances,
   type VolatilityReadingProvider,
 } from './production/direct-bind.js';
@@ -266,6 +281,16 @@ export interface ProductionConfig {
   tickIntervalMs?: number;
   /** Heartbeat cadence, independent of the tick cadence. Default 60s. */
   heartbeatIntervalMs?: number;
+  /**
+   * Gap between fill polls (`ingestFills()`), measured from the end of one
+   * poll to the start of the next. Default 15s — deliberately tighter than
+   * the tick cadence: a lot's protective legs are resized from cumulative
+   * filled quantity, so the poll interval is how long a partially-filled lot
+   * can sit under-protected. Each poll costs one `getOrder` per open bracket
+   * against the adapter's token bucket, which is what bounds how low this can
+   * usefully go.
+   */
+  fillPollIntervalMs?: number;
   /** Bounds concurrent instrument passes within one tick (LLM rate limit). Default 1. */
   maxConcurrentInstruments?: number;
   /**
@@ -295,6 +320,7 @@ export interface FeedbackCycleConfig {
 
 const DEFAULT_TICK_INTERVAL_MS = 60_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000;
+const DEFAULT_FILL_POLL_INTERVAL_MS = 15_000;
 const DEFAULT_FEEDBACK_INTERVAL_MS = 24 * 60 * 60 * 1_000;
 
 /**
@@ -398,6 +424,11 @@ export interface ProductionComponents {
    * wrapper, not the class itself.
    */
   executionStore: ExecutionSharedStore;
+  /**
+   * Execution's dependency set, exposed so the fill-sync loop can bind
+   * `reconcile()`/`ingestFills()` from the same object the tick step uses.
+   */
+  executionDeps: ExecutionStepDeps;
 }
 
 /**
@@ -476,6 +507,19 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     mode: config.mode,
   };
 
+  // Hoisted, not inlined into `buildExecutionStep`: the fill-sync loop binds
+  // `reconcile()`/`ingestFills()` from this same object, so Execution cannot
+  // gain a dependency on the tick path and silently miss it on the poll path.
+  const executionDeps: ExecutionStepDeps = {
+    clock,
+    broker,
+    store: executionStore,
+    costModel: new CostModelImpl(config.costConfig),
+    marketData,
+    config: config.executionConfig,
+    mode: config.mode,
+  };
+
   const steps: TickSteps = {
     analysts: buildAnalystsStep(analysts),
     debate: buildDebateStep(config.llmClient ?? buildDefaultLlmClient(logger)),
@@ -496,18 +540,10 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       config: config.verdictConfig,
       approvals: config.approvals,
     }),
-    execution: buildExecutionStep({
-      clock,
-      broker,
-      store: executionStore,
-      costModel: new CostModelImpl(config.costConfig),
-      marketData,
-      config: config.executionConfig,
-      mode: config.mode,
-    }),
+    execution: buildExecutionStep(executionDeps),
   };
 
-  return { steps, marketData, broker, analysts, circuitBreakers, executionStore };
+  return { steps, marketData, broker, analysts, circuitBreakers, executionStore, executionDeps };
 }
 
 /**
@@ -630,8 +666,14 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   const heartbeat = new Heartbeat(config.heartbeatChannel, logger);
 
   let loop: { stop: () => Promise<void> } | undefined;
+  let fillSync: { stop: () => Promise<void> } | undefined;
   let heartbeatHandle: NodeJS.Timeout | undefined;
   let feedbackHandle: NodeJS.Timeout | undefined;
+
+  // Execution's two polled surfaces, bound once. Built from the same
+  // `ExecutionStepDeps` the tick step uses, so the two paths cannot drift.
+  const fillSyncExecution = buildExecutionSurface(components.executionDeps, FILL_SYNC_TRACE_ID);
+  const reconcileExecution = buildExecutionSurface(components.executionDeps, RECONCILE_TRACE_ID);
 
   /**
    * Feedback Loop's daily batch on its own timer — not a `TickSteps` member
@@ -690,9 +732,24 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     async start(): Promise<OrphanGoVerdict[]> {
       const orphans = await persistence.orphanScanner.scan(config.db, config.orphanAlerts, logger);
 
+      // Reconcile BEFORE the tick loop and before the first fill poll, and
+      // awaited rather than fired off. A crash leaves lots stranded
+      // `pending`/`submitted`, and starting to trade against a store that
+      // still disagrees with the venue is what reconcile exists to prevent —
+      // so a failure here propagates out of `start()` instead of being
+      // logged and stepped over.
+      await runStartupReconcile({ execution: reconcileExecution, logger });
+
       heartbeatHandle = setInterval(() => {
         void heartbeat.emit(clock);
       }, config.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS);
+
+      fillSync = startFillSync({
+        execution: fillSyncExecution,
+        clock,
+        logger,
+        fillPollIntervalMs: config.fillPollIntervalMs ?? DEFAULT_FILL_POLL_INTERVAL_MS,
+      });
 
       loop = startTickLoop({
         scheduler,
@@ -726,9 +783,15 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         clearInterval(feedbackHandle);
         feedbackHandle = undefined;
       }
+      // Both drains started before either is awaited: they are independent,
+      // and awaiting them in series would make shutdown take the sum of a
+      // tick and a fill poll rather than the longer of the two.
       const stopping = loop?.stop();
+      const stoppingFillSync = fillSync?.stop();
       loop = undefined;
+      fillSync = undefined;
       await stopping;
+      await stoppingFillSync;
     },
   };
 }
