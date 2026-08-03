@@ -28,7 +28,7 @@ describe('startFromEnvironment', () => {
 
     expect(error.message).not.toMatch(/\bllmClient\b/);
     expect(error.message).not.toMatch(/\btraderConfig\b/);
-    expect(error.message).toContain('alpacaBrokerClient');
+    expect(error.message).toContain('heartbeatChannel');
   });
 
   it('rejects an unrecognised SAMURAI_MODE rather than casting it through', async () => {
@@ -52,10 +52,19 @@ describe('startFromEnvironment', () => {
     // Guards against a future field being added to ProductionConfig as a
     // silently-optional dependency: these are the seams with no in-repo
     // implementation, and the list is the contract.
-    expect(REQUIRED_INJECTED_CONFIG).toContain('alpacaDataClient');
     expect(REQUIRED_INJECTED_CONFIG).toContain('heartbeatChannel');
     expect(REQUIRED_INJECTED_CONFIG).toContain('orphanAlerts');
+    expect(REQUIRED_INJECTED_CONFIG).toContain('ciiScoreProvider');
     expect(new Set(REQUIRED_INJECTED_CONFIG).size).toBe(REQUIRED_INJECTED_CONFIG.length);
+
+    // The other half of the contract: a seam that HAS an in-repo
+    // implementation must not stay on this list, or the entrypoint keeps
+    // demanding something the composition root can build for itself. These
+    // three left the list when #273/#286 (Alpaca HTTP clients) and #276
+    // (AccountStateProvider) landed.
+    expect(REQUIRED_INJECTED_CONFIG).not.toContain('alpacaBrokerClient');
+    expect(REQUIRED_INJECTED_CONFIG).not.toContain('alpacaDataClient');
+    expect(REQUIRED_INJECTED_CONFIG).not.toContain('accountState');
   });
 });
 

@@ -92,7 +92,11 @@ import type {
   ExecutionConfig,
   SharedStore as ExecutionSharedStore,
 } from '../execution/index.js';
-import { AlpacaBrokerAdapter, SqliteExecutionStore } from '../execution/index.js';
+import {
+  AlpacaBrokerAdapter,
+  AlpacaHttpBrokerClient,
+  SqliteExecutionStore,
+} from '../execution/index.js';
 import type {
   FeedbackConfig,
   LoosenApprovalChannel,
@@ -111,6 +115,7 @@ import type {
 } from '../market-data-service/index.js';
 import {
   AlpacaDataSource,
+  AlpacaHttpDataClient,
   MarketDataServiceImpl,
   SqliteMarketDataStore,
   type TradingCalendar,
@@ -198,10 +203,20 @@ export interface ProductionConfig {
   mode: 'live' | 'paper' | 'backtest';
 
   // --- Transports with no in-repo implementation (see file doc comment) ---
-  /** Alpaca trading REST surface, for order submission. */
-  alpacaBrokerClient: AlpacaBrokerClient;
-  /** Alpaca market-data REST surface, for bars and latest quotes. */
-  alpacaDataClient: AlpacaDataClient;
+  /**
+   * Alpaca trading REST surface, for order submission. Optional since #273/
+   * #286 landed `AlpacaHttpBrokerClient`: when omitted this module builds it
+   * with the endpoint derived from `mode` (see
+   * `buildDefaultAlpacaBrokerClient` — a live host from a non-live mode is
+   * refused, #293).
+   */
+  alpacaBrokerClient?: AlpacaBrokerClient;
+  /**
+   * Alpaca market-data REST surface, for bars and latest quotes. Optional for
+   * the same reason; defaults to `AlpacaHttpDataClient` on
+   * `dataSourceAssetClass`.
+   */
+  alpacaDataClient?: AlpacaDataClient;
   /**
    * Trade channel the dead-man's-switch heartbeat posts over. Taken as the
    * port, not as a Telegram/Discord client: `TradeChannelHeartbeat`
@@ -391,6 +406,71 @@ export function buildDefaultLlmClient(logger: Logger): LlmClient {
   return new AnthropicLlmClient(client, config);
 }
 
+/** Alpaca's two trading hosts. Which one is chosen is decided by `mode`, never defaulted. */
+export const ALPACA_PAPER_BASE_URL = 'https://paper-api.alpaca.markets';
+export const ALPACA_LIVE_BASE_URL = 'https://api.alpaca.markets';
+
+/**
+ * The default broker wire client, with the endpoint DERIVED FROM `mode`
+ * rather than left to `AlpacaHttpBrokerClient`'s own default (#293).
+ *
+ * The class defaults to the paper host, which is the safe direction, but a
+ * default is still the wrong mechanism here: it means the single most
+ * consequential fact about a running process — whether its orders spend real
+ * money — is decided by a constant nobody passed rather than by the `mode`
+ * the operator explicitly set. Deriving it makes `mode` the one control, and
+ * makes a mismatch impossible rather than unlikely.
+ *
+ * `backtest` gets the paper host too: that mode is meant to run against
+ * `SimulatedBrokerAdapter`, so if it ever reaches a real client at all, the
+ * harmless endpoint is the one to reach.
+ *
+ * `ALPACA_BASE_URL` can still override, because a staging/mock endpoint is a
+ * legitimate need — but pointing it at the live host from a non-live mode
+ * throws rather than being honoured. An override that silently upgrades a
+ * paper process to real money is the exact accident #293 exists to prevent.
+ */
+export function buildDefaultAlpacaBrokerClient(
+  mode: ProductionConfig['mode'],
+  logger: Logger,
+): AlpacaBrokerClient {
+  const modeBaseUrl = mode === 'live' ? ALPACA_LIVE_BASE_URL : ALPACA_PAPER_BASE_URL;
+  const override = process.env.ALPACA_BASE_URL;
+
+  if (override?.startsWith(ALPACA_LIVE_BASE_URL) && mode !== 'live') {
+    throw new Error(
+      `ALPACA_BASE_URL points at Alpaca's LIVE trading host ('${override}') but SAMURAI_MODE ` +
+        `is '${mode}'. Refusing to start: this combination spends real money from a process ` +
+        'the operator asked to be non-live. Set SAMURAI_MODE=live if that is genuinely intended.',
+    );
+  }
+
+  const baseUrl = override ?? modeBaseUrl;
+
+  logger.log({
+    trace_id: 'startup',
+    stage: 'orchestrator',
+    level: baseUrl === ALPACA_LIVE_BASE_URL ? 'warn' : 'info',
+    message:
+      baseUrl === ALPACA_LIVE_BASE_URL
+        ? 'building LIVE Alpaca broker client — orders will spend real money'
+        : 'building paper Alpaca broker client',
+    payload: { mode, baseUrl },
+  });
+
+  return new AlpacaHttpBrokerClient({ baseUrl });
+}
+
+/**
+ * The default market-data wire client. No mode branch: Alpaca serves market
+ * data from one host for paper and live accounts alike, so there is no
+ * money-safety decision to make here — only the asset-class path root, which
+ * `AlpacaDataSource` needs fixed at construction.
+ */
+export function buildDefaultAlpacaDataClient(assetClass: 'crypto' | 'stocks'): AlpacaDataClient {
+  return new AlpacaHttpDataClient({ assetClass });
+}
+
 /** The composed, still-stoppable process. Returned by `buildProductionOrchestrator`. */
 export interface ProductionOrchestrator {
   tickRunner: SequentialTickRunner;
@@ -457,10 +537,18 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   const clock = config.clock;
   const tradingCalendar = config.tradingCalendar ?? new UsEquityRegularHoursCalendar();
 
+  // One broker wire client for the whole root: the order adapter and the
+  // account-state provider both talk to Alpaca's Trading API, and two clients
+  // would mean two token budgets against one account's shared rate limit.
+  const brokerClient =
+    config.alpacaBrokerClient ??
+    buildDefaultAlpacaBrokerClient(config.mode, config.logger ?? new JsonLogger());
+
+  const assetClass = config.dataSourceAssetClass ?? 'crypto';
   const dataSource =
     config.dataSource ??
-    new AlpacaDataSource(config.alpacaDataClient, {
-      asset_class: config.dataSourceAssetClass ?? 'crypto',
+    new AlpacaDataSource(config.alpacaDataClient ?? buildDefaultAlpacaDataClient(assetClass), {
+      asset_class: assetClass,
       calendar: tradingCalendar,
     });
   const marketData: MarketDataService = new MarketDataServiceImpl(
@@ -499,7 +587,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   const broker =
     config.broker ??
     new AlpacaBrokerAdapter({
-      client: config.alpacaBrokerClient,
+      client: brokerClient,
       rateLimiter: new TokenBucket({ capacity: 10, refillPerSecond: 1.5 }),
     });
   const circuitBreakers = new CircuitBreakers(config.breakerConfig, config.initialBreakerState);
@@ -518,7 +606,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     accountState:
       config.accountState ??
       new AlpacaAccountStateProvider({
-        client: config.alpacaBrokerClient,
+        client: brokerClient,
         store: new SqliteAccountStateStore(config.db),
         // The existing ClosedTrade reader, per spec story 25 — no new
         // realized-PnL ledger is built when one already exists.
