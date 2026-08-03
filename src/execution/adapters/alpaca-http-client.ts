@@ -107,8 +107,8 @@ export class AlpacaHttpBrokerClient implements AlpacaClient {
   }
 
   /** Runs one HTTP attempt through `withRetry`, returning the parsed JSON body of a 2xx response. */
-  private async request(path: string, init: RequestInit, context: string): Promise<unknown> {
-    return withRetry(
+  private async request<T>(path: string, init: RequestInit, context: string): Promise<T> {
+    return withRetry<T>(
       async () => {
         let response: Response;
         try {
@@ -126,7 +126,7 @@ export class AlpacaHttpBrokerClient implements AlpacaClient {
         }
 
         try {
-          return await response.json();
+          return (await response.json()) as T;
         } catch (cause) {
           throw new AlpacaBrokerProviderError(
             `Alpaca API error: response body could not be parsed as JSON (${context}): ${
@@ -145,31 +145,28 @@ export class AlpacaHttpBrokerClient implements AlpacaClient {
     // interface's `limit_price` already implies a limit entry, but Alpaca's `POST /v2/orders`
     // still requires the `type` field on the request body itself (#260 research). Adding it
     // here, not to the interface, keeps the "no interface change" constraint intact.
-    const body = await this.request(
+    return this.request<AlpacaOrder>(
       '/v2/orders',
       { method: 'POST', body: JSON.stringify({ ...request, type: 'limit' }) },
       'submitOrder',
     );
-    return body as AlpacaOrder;
   }
 
   async getOrder(alpacaOrderId: string): Promise<AlpacaOrder> {
-    const body = await this.request(
+    return this.request<AlpacaOrder>(
       `/v2/orders/${encodeURIComponent(alpacaOrderId)}`,
       { method: 'GET' },
       'getOrder',
     );
-    return body as AlpacaOrder;
   }
 
   async getOrderByClientOrderId(clientOrderId: string): Promise<AlpacaOrder | null> {
     try {
-      const body = await this.request(
+      return await this.request<AlpacaOrder>(
         `/v2/orders:by_client_order_id?client_order_id=${encodeURIComponent(clientOrderId)}`,
         { method: 'GET' },
         'getOrderByClientOrderId',
       );
-      return body as AlpacaOrder;
     } catch (error) {
       if (error instanceof AlpacaBrokerProviderError && error.status === 404) {
         return null;

@@ -101,6 +101,27 @@ describe('AlpacaHttpBrokerClient', () => {
     expect(headers['content-type']).toBe('application/json');
   });
 
+  it('submitOrder passes through a full bracket response (nested take-profit/stop-loss legs) unmodified', async () => {
+    // The client sends `type: 'limit'` on every request regardless of
+    // order_class (#260) but never inspects or narrows the response shape —
+    // this proves a bracket order's nested `legs` survive untouched, not
+    // just the flat fields the other fixture happens to cover.
+    const bracketResponse = {
+      ...ORDER_RESPONSE,
+      legs: [
+        { id: 'leg-take-profit', type: 'limit', limit_price: '110.00', status: 'held' },
+        { id: 'leg-stop-loss', type: 'stop', stop_price: '95.00', status: 'held' },
+      ],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(bracketResponse));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+    const result = await client.submitOrder(ORDER_REQUEST);
+
+    expect(result).toEqual(bracketResponse);
+  });
+
   it('omits content-type on bodyless (GET) requests', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(ORDER_RESPONSE));
     vi.stubGlobal('fetch', fetchMock);
@@ -298,5 +319,21 @@ describe('AlpacaHttpBrokerClient', () => {
 
     expect(result).toEqual(ORDER_RESPONSE);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('classifies a generic network failure (e.g. DNS resolution TypeError) as a non-retryable AlpacaBrokerProviderError', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('fetch failed'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+      retry: { maxAttempts: 3, baseDelayMs: 10, maxDelayMs: 100 },
+    });
+
+    await expect(client.getOrder('alpaca-order-1')).rejects.toMatchObject({
+      name: 'AlpacaBrokerProviderError',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

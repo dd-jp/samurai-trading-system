@@ -93,6 +93,13 @@ const PAGE_SIZE = 1_000;
  * `limit` bars instead of a loud failure, so it errs wide.
  */
 const BUFFER_MULTIPLIER = 8;
+/**
+ * TODO(#292): an extremely sparse symbol (e.g. a multi-week trading halt)
+ * can still underfetch even at BUFFER_MULTIPLIER's headroom — a
+ * `result.length < limit` check after the fetch would turn that into a loud
+ * failure instead of a silent short read, but needs a decision on what
+ * callers should do with a partial read (fail vs. proceed with fewer bars).
+ */
 
 /** Alpaca's raw per-bar shape on the wire — a superset of `AlpacaBar` (also carries `n`, `vw`). */
 interface RawAlpacaBar {
