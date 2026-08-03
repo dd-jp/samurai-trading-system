@@ -17,6 +17,13 @@ export { completedBars, deriveBacktestMark, normalizeBars } from './ingestion.js
 export { MarketDataServiceImpl } from './service.js';
 export type { DataSourceConfig } from './source-factory.js';
 export { createDataSource } from './source-factory.js';
+export {
+  AlpacaDataProviderError,
+  AlpacaDataRateLimitError,
+  AlpacaDataTimeoutError,
+} from './sources/alpaca-data-errors.js';
+export type { AlpacaHttpDataClientOptions } from './sources/alpaca-http-client.js';
+export { AlpacaHttpDataClient } from './sources/alpaca-http-client.js';
 export type {
   AlpacaBar,
   AlpacaClient,

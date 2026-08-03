@@ -7,12 +7,19 @@
 
 export type { AlpacaBrokerAdapterInput } from './adapters/alpaca-adapter.js';
 export { AlpacaBrokerAdapter } from './adapters/alpaca-adapter.js';
+export {
+  AlpacaBrokerProviderError,
+  AlpacaBrokerRateLimitError,
+  AlpacaBrokerTimeoutError,
+} from './adapters/alpaca-broker-errors.js';
 export type {
   AlpacaBracketOrderRequest,
   AlpacaClient,
   AlpacaOrder,
   AlpacaOrderLeg,
 } from './adapters/alpaca-client.js';
+export type { AlpacaHttpBrokerClientOptions } from './adapters/alpaca-http-client.js';
+export { AlpacaHttpBrokerClient } from './adapters/alpaca-http-client.js';
 export { BrokerError, sanitizeBrokerError } from './broker-error.js';
 export type {
   CcxtBrokerClient,
