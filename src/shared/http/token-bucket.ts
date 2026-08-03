@@ -46,7 +46,10 @@ export class TokenBucket implements RateLimiter {
 
   async acquire(): Promise<void> {
     const turn = this.tail.then(() => this.take());
-    // Later acquirers queue behind this one even if it has to sleep.
+    // Later acquirers queue behind this one even if it has to sleep. The
+    // `catch` detoxifies only the *chain* — one waiter's failure must not
+    // reject every acquirer queued behind it. `turn` itself is returned
+    // unswallowed, so the failing caller still sees its own error.
     this.tail = turn.catch(() => undefined);
     return turn;
   }

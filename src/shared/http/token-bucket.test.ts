@@ -46,6 +46,24 @@ describe('TokenBucket', () => {
     expect(granted).toBe(true);
   });
 
+  // The `catch` on the queue tail detoxifies the chain only — it must not
+  // swallow the failure from the caller that actually hit it, and the queue
+  // must keep serving afterwards (PR #290 review, deepseek).
+  it("surfaces a waiter's failure to that caller without poisoning the queue", async () => {
+    let clockReads = 0;
+    const bucket = new TokenBucket({ capacity: 5, refillPerSecond: 1 }, () => {
+      clockReads += 1;
+      // Read 1 is the constructor's; read 2 is the first acquire's refill.
+      if (clockReads === 2) {
+        throw new Error('clock read failed');
+      }
+      return Date.now();
+    });
+
+    await expect(bucket.acquire()).rejects.toThrow('clock read failed');
+    await expect(bucket.acquire()).resolves.toBeUndefined();
+  });
+
   it('refills up to capacity, never beyond', async () => {
     const bucket = new TokenBucket({ capacity: 2, refillPerSecond: 1 }, () => Date.now());
     await bucket.acquire();

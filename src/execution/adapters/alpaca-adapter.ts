@@ -157,7 +157,9 @@ function collectFill(
   // data race/edge — recording it as price 0 would drag the lot's weighted
   // avg toward zero and feed phantom PnL to the Feedback Loop. Skipping is
   // safe: the feed is poll-based and inclusive-of-`since`, so the fill is
-  // re-offered on the next poll, priced.
+  // re-offered on the next poll, priced. A *permanently* unpriced fill would
+  // instead leave the lot stuck with nothing escalating — recovery belongs to
+  // reconciliation, not to this adapter inventing a price: see #298.
   if (filledQty <= 0 || order.filled_at === null || order.filled_avg_price === null) {
     return;
   }
