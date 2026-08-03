@@ -21,10 +21,18 @@ const isRetryable = (error: unknown): boolean => error instanceof RetryableError
 describe('withRetry (generic)', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    // Backoff is full-jitter (`Math.random() * capped`), so the delay a test
+    // observes is a draw, not a constant. Pinning the draw to 1 makes the
+    // observed delay the jitter window's UPPER BOUND — which is exactly the
+    // deterministic schedule these tests were written against, so each
+    // exact-delay assertion below now reads as "never waits longer than this".
+    // The jitter itself is exercised by its own test, which re-pins the draw.
+    vi.spyOn(Math, 'random').mockReturnValue(1);
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it('returns the result on first success without delay', async () => {
@@ -81,7 +89,59 @@ describe('withRetry (generic)', () => {
     expect(fn).toHaveBeenCalledTimes(CONFIG.maxAttempts);
   });
 
-  it('backs off exponentially between attempts', async () => {
+  it('draws the backoff from within the exponential window rather than waiting the full ceiling', async () => {
+    // Full jitter: the delay is a uniform draw from [0, capped], so half a
+    // draw is half the window. Asserting through the timer (rather than
+    // exporting the private `backoffDelayMs`) keeps the test on the observable
+    // behaviour — when the retry actually fires.
+    vi.mocked(Math.random).mockReturnValue(0.5);
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new RetryableError('slow'))
+      .mockResolvedValueOnce('ok');
+
+    const promise = withRetry(fn, CONFIG, isRetryable);
+
+    // Window is 100ms; the 0.5 draw fires at 50ms, well before the ceiling.
+    await vi.advanceTimersByTimeAsync(49);
+    expect(fn).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fn).toHaveBeenCalledTimes(2);
+
+    await expect(promise).resolves.toBe('ok');
+  });
+
+  it('de-correlates concurrent callers: independent draws produce different delays', async () => {
+    // The thundering-herd property the jitter exists for — asserted against
+    // the real RNG, since a mocked one cannot show independence.
+    vi.mocked(Math.random).mockRestore();
+    const delays = new Set<number>();
+
+    for (let i = 0; i < 20; i++) {
+      // Fake timers advance the clock to each timer's firing time, so the gap
+      // between the two attempts IS the delay the loop chose.
+      const attemptTimes: number[] = [];
+      const fn = () => {
+        attemptTimes.push(Date.now());
+        throw new RetryableError('slow');
+      };
+
+      const promise = withRetry(fn, CONFIG, isRetryable).catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(CONFIG.maxDelayMs * 4);
+      await promise;
+
+      const gap = (attemptTimes[1] ?? 0) - (attemptTimes[0] ?? 0);
+      expect(gap).toBeGreaterThanOrEqual(0);
+      expect(gap).toBeLessThanOrEqual(CONFIG.baseDelayMs);
+      delays.add(gap);
+    }
+
+    // 20 identical gaps across independent draws would mean the backoff is
+    // still deterministic.
+    expect(delays.size).toBeGreaterThan(1);
+  });
+
+  it('never waits longer than the exponential ceiling', async () => {
     const config: RetryConfig = { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 10_000 };
     const error = new RetryableError('slow');
     const fn = vi

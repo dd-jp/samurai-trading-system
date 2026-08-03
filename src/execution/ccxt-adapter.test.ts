@@ -1,5 +1,17 @@
+import { TokenBucket } from '../shared/index.js';
+import { BrokerError } from './broker-error.js';
 import { CcxtBrokerAdapter, type CcxtBrokerClient, type CcxtOrder } from './ccxt-adapter.js';
 import type { NativeBracketRequest } from './types.js';
+
+/**
+ * The adapter's own default paces ccxt at 1 call/second, which would make
+ * every test below wait out real wall-clock seconds. These tests are about
+ * bracket emulation, not pacing — the pacing has its own tests at the bottom
+ * of this file and in `shared/http/token-bucket.test.ts`.
+ */
+function permissiveLimiter(): TokenBucket {
+  return new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 });
+}
 
 const FILL_TS = new Date('2026-07-15T14:00:00Z').getTime();
 
@@ -77,7 +89,7 @@ describe('CcxtBrokerAdapter', () => {
   describe('submitBracket', () => {
     it('places only the entry leg — the protective legs are armed on entry fill', async () => {
       const { client, createOrder } = makeClient();
-      const adapter = new CcxtBrokerAdapter(client);
+      const adapter = new CcxtBrokerAdapter(client, permissiveLimiter());
 
       const ack = await adapter.submitBracket(REQUEST);
 
@@ -95,7 +107,7 @@ describe('CcxtBrokerAdapter', () => {
 
     it('treats a duplicate client order id as a venue-side no-op', async () => {
       const { client, createOrder } = makeClient();
-      const adapter = new CcxtBrokerAdapter(client);
+      const adapter = new CcxtBrokerAdapter(client, permissiveLimiter());
 
       await adapter.submitBracket(REQUEST);
       const ack = await adapter.submitBracket(REQUEST);
@@ -108,7 +120,7 @@ describe('CcxtBrokerAdapter', () => {
   describe('syncBrackets', () => {
     it('leaves a working entry alone', async () => {
       const { client, createOrder } = makeClient();
-      const adapter = new CcxtBrokerAdapter(client);
+      const adapter = new CcxtBrokerAdapter(client, permissiveLimiter());
       await adapter.submitBracket(REQUEST);
 
       await adapter.syncBrackets();
@@ -119,7 +131,7 @@ describe('CcxtBrokerAdapter', () => {
 
     it('arms stop and target sized to the FILLED quantity, not the requested size', async () => {
       const { client, orders, createOrder } = makeClient();
-      const adapter = new CcxtBrokerAdapter(client);
+      const adapter = new CcxtBrokerAdapter(client, permissiveLimiter());
       await adapter.submitBracket(REQUEST);
       orders.set(ENTRY_ID, filledOrder(ENTRY_ID, 1.5, 99.5));
 
@@ -147,7 +159,7 @@ describe('CcxtBrokerAdapter', () => {
 
     it('arms exit legs on the opposite side of a sell entry', async () => {
       const { client, orders, createOrder } = makeClient();
-      const adapter = new CcxtBrokerAdapter(client);
+      const adapter = new CcxtBrokerAdapter(client, permissiveLimiter());
       await adapter.submitBracket({ ...REQUEST, side: 'sell', stop: 120, target: 90 });
       orders.set(ENTRY_ID, filledOrder(ENTRY_ID, 2, 100));
 
@@ -159,7 +171,7 @@ describe('CcxtBrokerAdapter', () => {
 
     it('does not re-arm an already-armed bracket', async () => {
       const { client, orders, createOrder } = makeClient();
-      const adapter = new CcxtBrokerAdapter(client);
+      const adapter = new CcxtBrokerAdapter(client, permissiveLimiter());
       await adapter.submitBracket(REQUEST);
       orders.set(ENTRY_ID, filledOrder(ENTRY_ID, 2, 100));
 
@@ -172,7 +184,7 @@ describe('CcxtBrokerAdapter', () => {
 
     it('resolves a bracket whose entry died without filling', async () => {
       const { client, orders, createOrder, cancelOrder } = makeClient();
-      const adapter = new CcxtBrokerAdapter(client);
+      const adapter = new CcxtBrokerAdapter(client, permissiveLimiter());
       await adapter.submitBracket(REQUEST);
       orders.set(ENTRY_ID, makeOrder({ id: ENTRY_ID, status: 'canceled', filled: 0 }));
 
@@ -188,7 +200,7 @@ describe('CcxtBrokerAdapter', () => {
   describe('OCO emulation', () => {
     async function armedBracket() {
       const fake = makeClient();
-      const adapter = new CcxtBrokerAdapter(fake.client);
+      const adapter = new CcxtBrokerAdapter(fake.client, permissiveLimiter());
       await adapter.submitBracket(REQUEST);
       fake.orders.set(ENTRY_ID, filledOrder(ENTRY_ID, 2, 100));
       await adapter.syncBrackets();
@@ -255,7 +267,7 @@ describe('CcxtBrokerAdapter', () => {
   describe('fetchNewFills', () => {
     it('normalizes entry and exit fills into the shared NormalizedFill shape', async () => {
       const { client, orders } = makeClient();
-      const adapter = new CcxtBrokerAdapter(client);
+      const adapter = new CcxtBrokerAdapter(client, permissiveLimiter());
       await adapter.submitBracket(REQUEST);
       orders.set(ENTRY_ID, filledOrder(ENTRY_ID, 2, 99.5, 0.26));
       await adapter.syncBrackets();
@@ -291,7 +303,7 @@ describe('CcxtBrokerAdapter', () => {
 
     it('never returns a fill dated before `since`', async () => {
       const { client, orders } = makeClient();
-      const adapter = new CcxtBrokerAdapter(client);
+      const adapter = new CcxtBrokerAdapter(client, permissiveLimiter());
       await adapter.submitBracket(REQUEST);
       orders.set(ENTRY_ID, filledOrder(ENTRY_ID, 2, 99.5));
       await adapter.syncBrackets();
@@ -302,7 +314,7 @@ describe('CcxtBrokerAdapter', () => {
 
     it('refuses to fabricate a fill price the venue did not report', async () => {
       const { client, orders } = makeClient();
-      const adapter = new CcxtBrokerAdapter(client);
+      const adapter = new CcxtBrokerAdapter(client, permissiveLimiter());
       await adapter.submitBracket(REQUEST);
       orders.set(
         ENTRY_ID,
@@ -310,6 +322,40 @@ describe('CcxtBrokerAdapter', () => {
       );
 
       await expect(adapter.syncBrackets()).rejects.toThrow(/no average fill price/);
+    });
+  });
+
+  describe('outbound call discipline', () => {
+    it('paces every outbound call through the rate limiter', async () => {
+      const { client } = makeClient();
+      const limiter = permissiveLimiter();
+      const acquire = vi.spyOn(limiter, 'acquire');
+      const adapter = new CcxtBrokerAdapter(client, limiter);
+
+      await adapter.submitBracket(REQUEST);
+      await adapter.syncBrackets();
+
+      // Entry placement + the entry-status poll — an unpaced call would show
+      // up here as a client call the limiter never saw.
+      expect(acquire).toHaveBeenCalledTimes(2);
+    });
+
+    it('never lets a venue error carry its HTTP context out of the adapter', async () => {
+      // ccxt builds errors from the failed request, key and all; `execute()`
+      // copies a thrown message into a logged ExecutionResult.reason.
+      const secret = 'kraken-api-key-abc123';
+      const { client } = makeClient();
+      client.createOrder = vi.fn(async () => {
+        throw Object.assign(new Error(`401 GET /orders API-Key: ${secret}`), { status: 401 });
+      }) as typeof client.createOrder;
+      const adapter = new CcxtBrokerAdapter(client, permissiveLimiter());
+
+      const error = await adapter.submitBracket(REQUEST).catch((thrown: unknown) => thrown);
+
+      expect(error).toBeInstanceOf(BrokerError);
+      expect((error as BrokerError).message).toBe('ccxt submitBracket failed (status 401)');
+      expect((error as BrokerError).message).not.toContain(secret);
+      expect('cause' in (error as BrokerError)).toBe(false);
     });
   });
 });

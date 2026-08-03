@@ -20,6 +20,7 @@ export type {
 } from './adapters/alpaca-client.js';
 export type { AlpacaHttpBrokerClientOptions } from './adapters/alpaca-http-client.js';
 export { AlpacaHttpBrokerClient } from './adapters/alpaca-http-client.js';
+export { BrokerError, sanitizeBrokerError } from './broker-error.js';
 export type {
   CcxtBrokerClient,
   CcxtOrder,
@@ -36,7 +37,7 @@ export type {
 export { IbkrBrokerAdapter } from './ibkr-adapter.js';
 export type { SimulatedBrokerAdapterInput } from './simulated-adapter.js';
 export { SimulatedBrokerAdapter } from './simulated-adapter.js';
-export { SqliteExecutionStore } from './sqlite-shared-store.js';
+export { DuplicatePositionError, SqliteExecutionStore } from './sqlite-shared-store.js';
 export type {
   BrokerAck,
   BrokerAdapter,

@@ -26,6 +26,30 @@ export interface PortfolioAccountingInput {
   consecutive_losses: number;
 }
 
+/**
+ * Fails closed on a missing mark instead of defaulting to zero.
+ *
+ * Unreachable today — `marks` is built from exactly the instruments held, and
+ * `MarketDataService.getMark` either answers or throws, so the `Promise.all`
+ * above has already rejected if any lookup failed. The guard is here for the
+ * day that stops being true (an instrument-key normalization mismatch between
+ * the store and the data service is the obvious way in): a zero mark silently
+ * reports a real position as zero exposure, which understates gross exposure
+ * and drawdown and hands Risk a green light for a trade it would otherwise
+ * block. For a view whose entire job is bounding risk, "I don't know" must
+ * stop the sweep, not read as "nothing there".
+ */
+function markFor(marks: Map<string, number>, instrument: string): number {
+  const mark = marks.get(instrument);
+  if (mark === undefined) {
+    throw new Error(
+      `computePortfolioView: no mark for held instrument '${instrument}' — refusing to value ` +
+        'the position at zero, which would understate exposure to Risk.',
+    );
+  }
+  return mark;
+}
+
 export async function computePortfolioView(
   input: PortfolioAccountingInput,
 ): Promise<PortfolioView> {
@@ -48,7 +72,7 @@ export async function computePortfolioView(
   for (const position of positions) {
     // Freeze §4: always filled_size, never requested_size — a partially-filled
     // lot is marked at what actually filled.
-    const notional = position.filled_size * (marks.get(position.instrument) ?? 0);
+    const notional = position.filled_size * markFor(marks, position.instrument);
     exposure_by_instrument[position.instrument] =
       (exposure_by_instrument[position.instrument] ?? 0) + notional;
     exposure_by_class[position.asset_class] += notional;

@@ -229,3 +229,22 @@ describe('SimulatedBrokerAdapter.submitBracket', () => {
     expect(await adapter.fetchNewFills(new Date(OBSERVED_AT.getTime() + 1))).toHaveLength(0);
   });
 });
+
+describe('SimulatedBrokerAdapter.getOrder', () => {
+  // The instrument is declared but unused here. The assertion that matters is
+  // structural: this adapter must accept the same arguments `reconcile()`
+  // passes every other adapter, which is only compiler-enforced while the
+  // parameter is declared.
+  it('answers the BrokerAdapter lookup by client order id, ignoring the instrument', async () => {
+    const adapter = makeAdapter();
+    const bracket = makeBracket();
+    await adapter.submitBracket(bracket);
+
+    const order = await adapter.getOrder(bracket.client_order_id, bracket.instrument);
+
+    expect(order?.client_order_id).toBe(bracket.client_order_id);
+    // A simulated venue is authoritative in both directions: absent means
+    // never submitted, not "we cannot tell".
+    expect(await adapter.getOrder('never-submitted', bracket.instrument)).toBeNull();
+  });
+});

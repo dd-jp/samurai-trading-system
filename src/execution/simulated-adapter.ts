@@ -108,11 +108,14 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
    * crashed write-ahead here — and it is why this adapter never throws from
    * `getOrder` while a real one must when it cannot answer.
    *
-   * `instrument` is unused: a simulated venue keys on the client order id
-   * alone, so the parameter is simply not declared (as the no-op
-   * `resizeProtectiveLegs` overrides elsewhere do).
+   * `_instrument` is declared but unused: a simulated venue keys on the client
+   * order id alone. Declaring it anyway is what keeps the compiler enforcing
+   * the `BrokerAdapter.getOrder` contract here — TypeScript accepts a method
+   * that drops trailing parameters, so omitting it silently exempted this
+   * adapter from a signature every other one has to satisfy, and a future
+   * widening of that parameter would fail everywhere except here.
    */
-  async getOrder(clientOrderId: string): Promise<NormalizedOrder | null> {
+  async getOrder(clientOrderId: string, _instrument: string): Promise<NormalizedOrder | null> {
     const order = this.accepted.get(clientOrderId);
     if (order === undefined) return null;
 
