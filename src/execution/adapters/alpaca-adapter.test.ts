@@ -131,6 +131,27 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
     expect(await adapter.fetchNewFills(new Date(0))).toEqual([]);
   });
 
+  // The poll awaits `getOrder` per bracket, so a `submitBracket` landing
+  // mid-pass would otherwise be picked up by that same pass — whose `since`
+  // window predates it (PR #290 review, deepseek; same fix as ccxt's
+  // syncBrackets snapshot).
+  it('does not poll a bracket submitted while the pass is already in flight', async () => {
+    const client = makeClient();
+    const adapter = new AlpacaBrokerAdapter({ client });
+    await adapter.submitBracket(makeBracket());
+
+    (client.getOrder as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      // A concurrent submission mutates the bracket map mid-iteration.
+      await adapter.submitBracket(makeBracket({ client_order_id: 'key-tsla-1400' }));
+      return acceptedOrder();
+    });
+
+    await adapter.fetchNewFills(new Date(0));
+
+    // One getOrder: the pass's worklist was fixed at entry, not re-read.
+    expect(client.getOrder).toHaveBeenCalledTimes(1);
+  });
+
   it('paces client calls through an injected rate limiter', async () => {
     const acquire = vi.fn().mockResolvedValue(undefined);
     const client = makeClient();

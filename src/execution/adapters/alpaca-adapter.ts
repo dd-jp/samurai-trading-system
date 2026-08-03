@@ -127,7 +127,12 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
     const fills: NormalizedFill[] = [];
 
-    for (const [clientOrderId, entryOrderId] of this.brackets) {
+    // Snapshot, as in CcxtBrokerAdapter.syncBrackets: `getOrder` awaits inside
+    // this loop, and a Map iterator visits entries inserted mid-iteration — so
+    // a bracket submitted during the poll would be drained by a pass whose
+    // `since` window predates it. The snapshot keeps each poll's worklist
+    // fixed at entry (PR #290 review, deepseek).
+    for (const [clientOrderId, entryOrderId] of [...this.brackets]) {
       const entry = await this.client.getOrder(entryOrderId);
 
       collectFill(entry, 'entry', clientOrderId, since, fills);
