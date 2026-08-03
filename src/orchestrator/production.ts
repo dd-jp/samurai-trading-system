@@ -111,6 +111,7 @@ import {
 import type {
   AlpacaClient as AlpacaDataClient,
   DataSource,
+  IndicatorSpec,
   MarketDataService,
 } from '../market-data-service/index.js';
 import {
@@ -140,6 +141,12 @@ import type { TraderConfig } from '../trader/index.js';
 import { SqliteSetupStore } from '../trader/index.js';
 import type { ApprovalChannel, VerdictConfig } from '../verdict/index.js';
 import {
+  ConsoleApprovalChannel,
+  LoggingHeartbeatChannel,
+  LoggingOrphanAlertChannel,
+  ParkedCiiScoreProvider,
+} from './console-channels.js';
+import {
   FILL_SYNC_TRACE_ID,
   RECONCILE_TRACE_ID,
   runStartupReconcile,
@@ -168,6 +175,7 @@ import {
   type VolatilityReadingProvider,
 } from './production/direct-bind.js';
 import { withOnTradeClose } from './production/on-trade-close-hookup.js';
+import { MarketDataVolatilityReadingProvider } from './production/volatility-reading-provider.js';
 import { UniverseScheduler } from './scheduler.js';
 import { SqliteAccountStateStore } from './sqlite-account-state-store.js';
 import { runTickPlan } from './tick-loop.js';
@@ -218,12 +226,15 @@ export interface ProductionConfig {
    */
   alpacaDataClient?: AlpacaDataClient;
   /**
-   * Trade channel the dead-man's-switch heartbeat posts over. Taken as the
+   * Trade channel the dead-man's-switch heartbeat posts over. Optional: when
+   * omitted a log-only `LoggingHeartbeatChannel` stands in so a supervised
+   * smoke run can start (#275 remains open for the real transport — a log
+   * line nobody tails is not a dead-man's switch). Taken as the
    * port, not as a Telegram/Discord client: `TradeChannelHeartbeat`
    * (heartbeat-channel.ts) is the in-repo implementation to pass here, and it
    * still needs a `TelegramClient` that this codebase does not implement.
    */
-  heartbeatChannel: HeartbeatChannel;
+  heartbeatChannel?: HeartbeatChannel;
   /**
    * HITL approval round-trip (Verdict gate 6). Same shape as
    * `heartbeatChannel`: pass `SignedApprovalChannel`
@@ -232,11 +243,11 @@ export interface ProductionConfig {
    * for you, because its `ApprovalRequestSender` leaf is another
    * unimplemented transport.
    */
-  approvals: ApprovalChannel;
-  /** Where a restart-time orphaned `go` verdict is reported. */
-  orphanAlerts: OrphanAlertChannel;
+  approvals?: ApprovalChannel;
+  /** Where a restart-time orphaned `go` verdict is reported. Defaults to the log. */
+  orphanAlerts?: OrphanAlertChannel;
   /** WorldMonitor CII reads (ADR-0002; live wiring parked during paper trading). */
-  ciiScoreProvider: CiiScoreProvider;
+  ciiScoreProvider?: CiiScoreProvider;
   /**
    * Account accounting scalars. Optional since #276: when omitted this module
    * builds an `AlpacaAccountStateProvider` over `alpacaBrokerClient`'s
@@ -248,7 +259,7 @@ export interface ProductionConfig {
    */
   accountState?: AccountStateProvider;
   /** Realized-vol reading for the volatility breaker tier — no in-repo indicator (#234). */
-  volatility: VolatilityReadingProvider;
+  volatility?: VolatilityReadingProvider;
 
   // --- Stage configuration (shapes, not values — tuned in paper trading) ---
   traderConfig: TraderConfig;
@@ -298,6 +309,15 @@ export interface ProductionConfig {
    * real, billed Anthropic API calls whenever the key happens to be set.
    */
   llmClient?: LlmClient;
+  /**
+   * Indicator the volatility breaker tier reads, per asset class instrument
+   * (transport-layer-spec.md story 26). Defaults to ATR(14) — the same shape
+   * `SimulatedAdapterConfig.volatility_indicator` carries for
+   * `MarketState.volatility`. A tuning value like the rest, so it is a knob
+   * rather than a constant, but it has a defensible default so the breaker
+   * has a reading without one more required seam.
+   */
+  volatilityIndicator?: IndicatorSpec;
   /** Session calendar for stock gating (scheduler + Verdict gate). */
   tradingCalendar?: TradingCalendar;
   /** Sticky breaker rows recovered from a prior process, if any. */
@@ -346,6 +366,12 @@ export interface FeedbackCycleConfig {
 const DEFAULT_TICK_INTERVAL_MS = 60_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000;
 const DEFAULT_FILL_POLL_INTERVAL_MS = 15_000;
+/** ATR(14): the conventional realized-volatility read, and what the cost model's `MarketState.volatility` uses. */
+const DEFAULT_VOLATILITY_INDICATOR: IndicatorSpec = {
+  indicator: 'atr',
+  params: { period: 14 },
+  lookback: 14,
+};
 const DEFAULT_FEEDBACK_INTERVAL_MS = 24 * 60 * 60 * 1_000;
 
 /**
@@ -591,7 +617,14 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       rateLimiter: new TokenBucket({ capacity: 10, refillPerSecond: 1.5 }),
     });
   const circuitBreakers = new CircuitBreakers(config.breakerConfig, config.initialBreakerState);
-  const ciiConsumer = new CiiConsumer(config.ciiScoreProvider, clock, config.ciiConsumerConfig);
+  // Parked by default (ADR-0002): the live WorldMonitor feed costs money per
+  // call and the geopolitical tier is not what the first paper run tests.
+  // `null` is already a documented answer on this port.
+  const ciiConsumer = new CiiConsumer(
+    config.ciiScoreProvider ?? new ParkedCiiScoreProvider(),
+    clock,
+    config.ciiConsumerConfig,
+  );
 
   // Shared by the trader/risk/verdict binds: all three derive the current
   // portfolio + breaker state from the same sources, fetched fresh at their
@@ -613,7 +646,16 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
         closedTrades: new SqliteClosedTradeStore(config.db),
         logger: config.logger ?? new JsonLogger(),
       }),
-    volatility: config.volatility,
+    // #277's provider, wired by default now that AccountStateProvider (#276)
+    // exists — the only reason direct-bind.ts left it a required seam.
+    volatility:
+      config.volatility ??
+      new MarketDataVolatilityReadingProvider({
+        marketData,
+        universe: config.universe ?? SMOKE_TEST_UNIVERSE,
+        volatility_indicator: config.volatilityIndicator ?? DEFAULT_VOLATILITY_INDICATOR,
+        logger: config.logger ?? new JsonLogger(),
+      }),
     getOpenPositions: () => executionStore.getOpenPositions(),
     mode: config.mode,
   };
@@ -649,7 +691,9 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // second connection with a divergent view of the same table.
       positionStore: executionStore,
       config: config.verdictConfig,
-      approvals: config.approvals,
+      // Log-only stand-in when unwired (#275): it auto-approves, and its
+      // constructor refuses to exist in live mode.
+      approvals: config.approvals ?? new ConsoleApprovalChannel(logger, config.mode),
     }),
     execution: buildExecutionStep(executionDeps),
   };
@@ -774,7 +818,10 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     universe: config.universe ?? SMOKE_TEST_UNIVERSE,
     calendar: config.tradingCalendar ?? new UsEquityRegularHoursCalendar(),
   });
-  const heartbeat = new Heartbeat(config.heartbeatChannel, logger);
+  const heartbeat = new Heartbeat(
+    config.heartbeatChannel ?? new LoggingHeartbeatChannel(logger),
+    logger,
+  );
 
   let loop: { stop: () => Promise<void> } | undefined;
   let fillSync: { stop: () => Promise<void> } | undefined;
@@ -841,7 +888,11 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     logger,
 
     async start(): Promise<OrphanGoVerdict[]> {
-      const orphans = await persistence.orphanScanner.scan(config.db, config.orphanAlerts, logger);
+      const orphans = await persistence.orphanScanner.scan(
+        config.db,
+        config.orphanAlerts ?? new LoggingOrphanAlertChannel(logger),
+        logger,
+      );
 
       // Reconcile BEFORE the tick loop and before the first fill poll, and
       // awaited rather than fired off. A crash leaves lots stranded

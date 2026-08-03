@@ -122,11 +122,6 @@ export type {
  * instead of a process that starts and silently trades on invented defaults.
  */
 export const REQUIRED_INJECTED_CONFIG = [
-  'heartbeatChannel',
-  'approvals',
-  'orphanAlerts',
-  'ciiScoreProvider',
-  'volatility',
   'traderConfig',
   'riskConfig',
   'verdictConfig',
