@@ -21,9 +21,22 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Bounded exponential backoff with FULL jitter: a uniform draw from
+ * `[0, min(base * 2^(attempt-1), maxDelayMs)]`, not the ceiling itself.
+ *
+ * The jitter is the point, not a refinement. Every client sharing this loop
+ * retries on the same deterministic schedule, so a provider outage that fails
+ * N callers at once has them all wake at exactly base, then 2*base, then
+ * 4*base — a synchronized thundering herd that keeps the provider saturated
+ * and re-triggers the same failure. Spreading each caller's wake time across
+ * the window de-correlates them at no cost to the cap.
+ *
+ * Randomizing DOWNWARD only: the cap still bounds the caller's latency budget.
+ */
 function backoffDelayMs(attempt: number, config: RetryConfig): number {
   const raw = config.baseDelayMs * 2 ** (attempt - 1);
-  return Math.min(raw, config.maxDelayMs);
+  return Math.random() * Math.min(raw, config.maxDelayMs);
 }
 
 /**
@@ -48,9 +61,10 @@ function retryAfterHintMs(error: unknown, config: RetryConfig): number | undefin
 
 /**
  * Runs `fn`, retrying up to `config.maxAttempts` total attempts on an error
- * `isRetryable` accepts, with exponential backoff between attempts (unless
- * the error carries a `retryAfterMs` hint, which takes precedence for that
- * attempt's delay). The last error is rethrown once attempts are exhausted
+ * `isRetryable` accepts, with jittered exponential backoff between attempts
+ * (unless the error carries a `retryAfterMs` hint, which takes precedence for
+ * that attempt's delay and is used as-is — an explicit provider instruction is
+ * not ours to randomize). The last error is rethrown once attempts are exhausted
  * or `isRetryable` rejects it.
  */
 export async function withRetry<T>(

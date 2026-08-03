@@ -13,6 +13,7 @@ export type {
   AlpacaOrder,
   AlpacaOrderLeg,
 } from './adapters/alpaca-client.js';
+export { BrokerError, sanitizeBrokerError } from './broker-error.js';
 export type {
   CcxtBrokerClient,
   CcxtOrder,
@@ -29,7 +30,7 @@ export type {
 export { IbkrBrokerAdapter } from './ibkr-adapter.js';
 export type { SimulatedBrokerAdapterInput } from './simulated-adapter.js';
 export { SimulatedBrokerAdapter } from './simulated-adapter.js';
-export { SqliteExecutionStore } from './sqlite-shared-store.js';
+export { DuplicatePositionError, SqliteExecutionStore } from './sqlite-shared-store.js';
 export type {
   BrokerAck,
   BrokerAdapter,

@@ -12,6 +12,7 @@ import type { OpenPosition } from '../shared/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
 import { ingestFills } from './ingest-fills.js';
 import { reconcile } from './reconcile.js';
+import { DuplicatePositionError } from './sqlite-shared-store.js';
 import type {
   Execution,
   ExecutionInput,
@@ -112,7 +113,26 @@ export class ExecutionImpl implements Execution {
     // Write-ahead: `pending` is durable BEFORE the broker call, so a crash in
     // the gap leaves a record to reconcile against the broker (#86) instead
     // of an invisible order that a restart would submit a second time.
-    await store.writeAheadPosition(position);
+    //
+    // The `findByKey` gate above is check-then-act, so two callers replaying
+    // the same decision can both pass it before either has written. The
+    // primary key is what actually settles that race — and it settles it in
+    // the store, meaning the loser learns it lost by catching this. Reporting
+    // that as `error` would be wrong twice over: nothing failed, and a caller
+    // that retries on error would keep re-losing the same race. Only the
+    // typed duplicate is treated as dedup; every other store failure means
+    // the write-ahead did NOT happen, and swallowing it would let the broker
+    // call proceed with no durable record behind it.
+    try {
+      await store.writeAheadPosition(position);
+    } catch (error) {
+      if (error instanceof DuplicatePositionError) {
+        return result('deduped', idempotencyKey, now, {
+          reason: 'an order or fill already exists for this idempotency_key',
+        });
+      }
+      throw error;
+    }
 
     let ack: Awaited<ReturnType<typeof broker.submitBracket>>;
     try {

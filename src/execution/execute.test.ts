@@ -220,6 +220,48 @@ describe('ExecutionImpl.execute', () => {
     expect(broker.calls).toHaveLength(1);
   });
 
+  // The `findByKey` gate is check-then-act: two concurrent calls both read
+  // "absent" before either writes, so the primary key — not the gate — is what
+  // decides the race. The loser must land on `deduped`, not on an unhandled
+  // constraint violation escaping execute().
+  it('dedupes the loser of a concurrent race on the same key', async () => {
+    const { store } = openTestExecutionStore();
+    const broker = makeBroker();
+    const execution = new ExecutionImpl(makeInput({ store, broker }));
+
+    const [first, second] = await Promise.all([
+      execution.execute(makeGo()),
+      execution.execute(makeGo()),
+    ]);
+
+    expect([first?.status, second?.status].sort()).toEqual(['deduped', 'submitted']);
+    // Pins WHICH layer deduped: two write-ahead attempts means both calls got
+    // past `findByKey` and the primary key settled it. Without this the test
+    // would pass just as happily if the gate had caught the second call,
+    // silently stopping short of the branch it exists to cover.
+    expect(store.writeLog.filter((entry) => entry.startsWith('write-ahead')).length).toBe(2);
+    const deduped = first?.status === 'deduped' ? first : second;
+    expect(deduped?.reason).toBe('an order or fill already exists for this idempotency_key');
+    expect(deduped?.broker_order_ids).toBeNull();
+    // The whole point: the race cost the venue nothing and the store one row.
+    expect(broker.calls).toHaveLength(1);
+    expect(await store.countAllPositions()).toBe(1);
+  });
+
+  it('rethrows a write-ahead failure that is not a duplicate key', async () => {
+    // A store that could not write has NOT written; reporting that as dedup
+    // would claim a durable record that does not exist, and the lot would
+    // reach the broker with nothing behind it to reconcile.
+    const { store } = openTestExecutionStore();
+    vi.spyOn(store, 'writeAheadPosition').mockRejectedValue(new Error('disk full'));
+    const broker = makeBroker();
+
+    await expect(new ExecutionImpl(makeInput({ store, broker })).execute(makeGo())).rejects.toThrow(
+      'disk full',
+    );
+    expect(broker.calls).toHaveLength(0);
+  });
+
   // AC: "submit-N-times yields exactly one fill" — at this seam, exactly one
   // submission reaches the broker, which is what makes exactly one fill
   // possible downstream.

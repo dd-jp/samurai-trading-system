@@ -1,3 +1,5 @@
+import { TokenBucket } from '../shared/index.js';
+import { BrokerError } from './broker-error.js';
 import { IbkrBrokerAdapter, type IbkrBrokerClient, type IbkrExecution } from './ibkr-adapter.js';
 import type { NativeBracketRequest } from './types.js';
 
@@ -16,6 +18,16 @@ const REQUEST: NativeBracketRequest = {
 };
 
 const IDS = { parentOrderId: 'p1', stopOrderId: 's1', takeProfitOrderId: 't1' };
+
+/**
+ * These tests are about native-bracket placement and fill normalization, not
+ * pacing — a permissive bucket keeps them off the wall clock however many
+ * calls a case makes. Pacing is asserted in its own describe below and in
+ * `shared/http/token-bucket.test.ts`.
+ */
+function permissiveLimiter(): TokenBucket {
+  return new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 });
+}
 
 function makeClient(executions: IbkrExecution[] = []) {
   const placeBracketOrder = vi.fn<IbkrBrokerClient['placeBracketOrder']>(async () => IDS);
@@ -39,7 +51,7 @@ describe('IbkrBrokerAdapter', () => {
   describe('submitBracket', () => {
     it('places entry, stop and target as ONE native bracket in an OCA group', async () => {
       const { client, placeBracketOrder } = makeClient();
-      const adapter = new IbkrBrokerAdapter(client);
+      const adapter = new IbkrBrokerAdapter(client, permissiveLimiter());
 
       const ack = await adapter.submitBracket(REQUEST);
 
@@ -66,7 +78,7 @@ describe('IbkrBrokerAdapter', () => {
 
     it('maps a sell entry to the SELL action', async () => {
       const { client, placeBracketOrder } = makeClient();
-      const adapter = new IbkrBrokerAdapter(client);
+      const adapter = new IbkrBrokerAdapter(client, permissiveLimiter());
 
       await adapter.submitBracket({ ...REQUEST, side: 'sell' });
 
@@ -75,7 +87,7 @@ describe('IbkrBrokerAdapter', () => {
 
     it('treats a duplicate client order id as a venue-side no-op', async () => {
       const { client, placeBracketOrder } = makeClient();
-      const adapter = new IbkrBrokerAdapter(client);
+      const adapter = new IbkrBrokerAdapter(client, permissiveLimiter());
 
       await adapter.submitBracket(REQUEST);
       const ack = await adapter.submitBracket(REQUEST);
@@ -91,7 +103,7 @@ describe('IbkrBrokerAdapter', () => {
         execution({ execId: 'e1', orderId: 'p1', price: 99.5, shares: 10, commission: 1 }),
         execution({ execId: 'e2', orderId: 's1', price: 90, shares: 10, commission: 0.9 }),
       ]);
-      const adapter = new IbkrBrokerAdapter(client);
+      const adapter = new IbkrBrokerAdapter(client, permissiveLimiter());
       await adapter.submitBracket(REQUEST);
 
       const fills = await adapter.fetchNewFills(new Date(0));
@@ -122,7 +134,7 @@ describe('IbkrBrokerAdapter', () => {
 
     it('maps the take-profit order to the target leg', async () => {
       const { client } = makeClient([execution({ orderId: 't1' })]);
-      const adapter = new IbkrBrokerAdapter(client);
+      const adapter = new IbkrBrokerAdapter(client, permissiveLimiter());
       await adapter.submitBracket(REQUEST);
 
       expect((await adapter.fetchNewFills(new Date(0)))[0]?.leg).toBe('target');
@@ -132,7 +144,7 @@ describe('IbkrBrokerAdapter', () => {
       // A manual TWS trade or another session's order shares the account's
       // execution feed; it belongs to no bracket here and has no leg to claim.
       const { client } = makeClient([execution({ orderId: 'someone-elses' })]);
-      const adapter = new IbkrBrokerAdapter(client);
+      const adapter = new IbkrBrokerAdapter(client, permissiveLimiter());
       await adapter.submitBracket(REQUEST);
 
       expect(await adapter.fetchNewFills(new Date(0))).toEqual([]);
@@ -140,12 +152,46 @@ describe('IbkrBrokerAdapter', () => {
 
     it('never returns a fill dated before `since`', async () => {
       const { client, fetchExecutions } = makeClient([execution()]);
-      const adapter = new IbkrBrokerAdapter(client);
+      const adapter = new IbkrBrokerAdapter(client, permissiveLimiter());
       await adapter.submitBracket(REQUEST);
 
       const since = new Date(Date.parse(FILL_TIME) + 1);
       expect(await adapter.fetchNewFills(since)).toEqual([]);
       expect(fetchExecutions).toHaveBeenCalledWith(since);
     });
+  });
+});
+
+describe('IbkrBrokerAdapter outbound call discipline', () => {
+  it('paces every outbound call through the rate limiter', async () => {
+    const { client } = makeClient();
+    const limiter = permissiveLimiter();
+    const acquire = vi.spyOn(limiter, 'acquire');
+    const adapter = new IbkrBrokerAdapter(client, limiter);
+
+    await adapter.submitBracket(REQUEST);
+    await adapter.fetchNewFills(new Date(0));
+
+    // placeBracketOrder + fetchExecutions — an unpaced call would show up here
+    // as a client call the limiter never saw.
+    expect(acquire).toHaveBeenCalledTimes(2);
+  });
+
+  it('never lets a venue error carry its connection context out of the adapter', async () => {
+    const secret = 'tws-session-token-7719';
+    const { client } = makeClient();
+    client.placeBracketOrder = vi.fn(async () => {
+      throw Object.assign(new Error(`TWS rejected: auth=${secret}`), { code: 1100 });
+    }) as typeof client.placeBracketOrder;
+    const adapter = new IbkrBrokerAdapter(client, permissiveLimiter());
+
+    const error = await adapter.submitBracket(REQUEST).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(BrokerError);
+    expect((error as BrokerError).message).toBe(
+      'ibkr submitBracket failed (status unknown, code 1100)',
+    );
+    expect((error as BrokerError).message).not.toContain(secret);
+    expect('cause' in (error as BrokerError)).toBe(false);
   });
 });

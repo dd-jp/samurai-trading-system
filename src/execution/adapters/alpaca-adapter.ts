@@ -21,7 +21,8 @@
  * observes it — finer-grained partial-fill history requires Alpaca's trade
  * updates/activities stream, which is out of scope for this ticket.
  */
-import type { OrderState } from '../../shared/index.js';
+import { type OrderState, TokenBucket } from '../../shared/index.js';
+import { sanitizeBrokerError } from '../broker-error.js';
 import type {
   BrokerAck,
   BrokerAdapter,
@@ -33,26 +34,59 @@ import type { AlpacaClient, AlpacaOrder, AlpacaOrderLeg } from './alpaca-client.
 
 export interface AlpacaBrokerAdapterInput {
   client: AlpacaClient;
+  /**
+   * Optional so existing wiring (src/orchestrator/production.ts) keeps
+   * working; when absent the adapter still paces itself rather than running
+   * unlimited — see the default below.
+   */
+  rateLimiter?: TokenBucket;
 }
 
 export class AlpacaBrokerAdapter implements BrokerAdapter {
   /** client_order_id -> the bracket parent's Alpaca order id. */
   private readonly brackets = new Map<string, string>();
+  /**
+   * Alpaca's documented ceiling is 200 requests/minute per key, so 5/second is
+   * comfortably inside it while still bounding a runaway poll loop — a
+   * placeholder default pending tuning against the real account's tier, not a
+   * transcription of the venue's limit.
+   */
+  private readonly rateLimiter: TokenBucket;
 
-  constructor(private readonly input: AlpacaBrokerAdapterInput) {}
+  constructor(private readonly input: AlpacaBrokerAdapterInput) {
+    this.rateLimiter = input.rateLimiter ?? new TokenBucket({ capacity: 5, refillPerSecond: 5 });
+  }
+
+  /**
+   * The single door to the injected client: pacing before the call (C2),
+   * credential-safe error conversion after it (H1). Alpaca's REST errors quote
+   * the failed request — including the `APCA-API-KEY-ID` header on an auth
+   * failure — and `execute()` copies a thrown message straight into a logged
+   * `ExecutionResult.reason`.
+   */
+  private async call<T>(operation: string, fn: () => Promise<T>): Promise<T> {
+    await this.rateLimiter.acquire();
+    try {
+      return await fn();
+    } catch (cause) {
+      throw sanitizeBrokerError('alpaca', operation, cause);
+    }
+  }
 
   async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
-    const response = await this.input.client.submitOrder({
-      symbol: order.instrument,
-      side: order.side,
-      qty: String(order.size),
-      limit_price: String(order.entry),
-      time_in_force: order.time_in_force,
-      client_order_id: order.client_order_id,
-      order_class: 'bracket',
-      take_profit: { limit_price: String(order.target) },
-      stop_loss: { stop_price: String(order.stop) },
-    });
+    const response = await this.call('submitBracket', () =>
+      this.input.client.submitOrder({
+        symbol: order.instrument,
+        side: order.side,
+        qty: String(order.size),
+        limit_price: String(order.entry),
+        time_in_force: order.time_in_force,
+        client_order_id: order.client_order_id,
+        order_class: 'bracket',
+        take_profit: { limit_price: String(order.target) },
+        stop_loss: { stop_price: String(order.stop) },
+      }),
+    );
 
     this.brackets.set(order.client_order_id, response.id);
 
@@ -80,7 +114,9 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * contract wants.
    */
   async getOrder(clientOrderId: string): Promise<NormalizedOrder | null> {
-    const order = await this.input.client.getOrderByClientOrderId(clientOrderId);
+    const order = await this.call('getOrder', () =>
+      this.input.client.getOrderByClientOrderId(clientOrderId),
+    );
     if (order === null) return null;
 
     // Re-populating the map lets a post-restart `fetchNewFills` find this
@@ -116,7 +152,9 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     const fills: NormalizedFill[] = [];
 
     for (const [clientOrderId, entryOrderId] of this.brackets) {
-      const entry = await this.input.client.getOrder(entryOrderId);
+      const entry = await this.call('fetchNewFills', () =>
+        this.input.client.getOrder(entryOrderId),
+      );
 
       collectFill(entry, 'entry', clientOrderId, since, fills);
       for (const leg of entry.legs ?? []) {
@@ -150,11 +188,25 @@ function collectFill(
     return;
   }
 
+  // A positive filled quantity with no average price is Alpaca contradicting
+  // itself, and there is no safe way to record it: a zero price is not a
+  // conservative guess but a fabricated one, and it flows straight into
+  // realized PnL, the R-multiple and the feedback loop's weighting — a lot
+  // booked at 0 reads as a total loss or an infinite gain depending on side.
+  // Same posture the ccxt adapter takes in `toFill`: refuse rather than
+  // silently degrade, and let the poll retry once the venue is coherent.
+  if (order.filled_avg_price === null) {
+    throw new Error(
+      `Alpaca order ${order.id} (${leg} leg of '${clientOrderId}') reports filled_qty ` +
+        `${order.filled_qty} but no filled_avg_price to record`,
+    );
+  }
+
   fills.push({
     client_order_id: clientOrderId,
     broker_fill_id: order.id,
     leg,
-    price: order.filled_avg_price === null ? 0 : Number.parseFloat(order.filled_avg_price),
+    price: Number.parseFloat(order.filled_avg_price),
     qty: filledQty,
     // Alpaca is commission-free on US equities; crypto fee attribution is
     // deferred (out of scope for this ticket's entry/stop-out equities path).

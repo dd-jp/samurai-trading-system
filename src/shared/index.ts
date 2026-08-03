@@ -11,6 +11,8 @@ export { SimulatedClock, SystemClock } from './clock.js';
 export { fetchWithTimeout } from './http/fetch-with-timeout.js';
 export type { RetryConfig } from './http/retry.js';
 export { withRetry } from './http/retry.js';
+export type { TokenBucketConfig } from './http/token-bucket.js';
+export { TokenBucket } from './http/token-bucket.js';
 export type {
   ClosedTrade,
   ClosedTradeStore,
