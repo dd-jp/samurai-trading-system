@@ -1,43 +1,101 @@
 /**
- * Broker-error sanitization (code-review 2026-08-01, H1). ccxt, Alpaca REST
- * and IBKR TWS error objects routinely embed the raw HTTP request — URL,
- * query string, auth headers, sometimes the signed body — in their message.
- * `execute()`/`reconcile()` surface `error.message` into
- * `ExecutionResult.reason`, which flows onward to audit_log, the dashboard
- * and notification channels, so anything credential-shaped must die here at
- * the adapter boundary. The raw error object itself never leaves the caller's
- * scope — only this sanitized string does.
+ * Credential-safe broker error wrapper.
+ *
+ * Every broker client this repo injects (ccxt exchanges, Alpaca's REST client,
+ * an IBKR/TWS adapter) builds its errors from the failed HTTP exchange — and
+ * that exchange carries the API key, in a header, a signed URL or the request
+ * body it echoes back. Those errors currently travel unmodified out of an
+ * adapter and into `execute()`, which copies `error.message` into
+ * `ExecutionResult.reason`, which is logged and rendered on the dashboard. One
+ * throttled order is enough to write a trading key into a log file.
+ *
+ * The fix is a hard boundary, not redaction: an adapter converts whatever the
+ * client threw into a `BrokerError` built ONLY from fields this module chose,
+ * and the original is dropped on the floor. There is deliberately no `cause`,
+ * no `raw`, no audit field — a curated wrapper that still carries the raw
+ * error just moves the credential from the message into whatever reads
+ * `cause`, and "we only log the curated part" is a promise no future caller is
+ * bound by. What is not retained cannot leak.
+ *
+ * The cost is real and accepted: debugging a venue failure means reading the
+ * venue's own dashboard, because the status code and venue error code kept
+ * here are all this process will ever know.
  */
 
-/** Header/param names that carry credentials across our three venues. */
-const CREDENTIAL_FIELD =
-  /\b(authorization|api[-_]?key|apca[-_]api[-_][a-z-]+|secret[-_ ]?key|access[-_ ]?token|token|signature|passphrase|nonce)\b\s*[:=]\s*("[^"]*"|'[^']*'|\S+)/gi;
+export class BrokerError extends Error {
+  /** Which adapter failed — 'ccxt' | 'alpaca' | 'ibkr'. */
+  readonly venue: string;
+  /** Which adapter operation failed, e.g. 'submitBracket', 'fetchNewFills'. */
+  readonly operation: string;
+  /** HTTP status, when the client exposed one on a recognized shape. */
+  readonly statusCode: number | undefined;
+  /** The venue's own error code, when the client exposed one. */
+  readonly venueCode: string | undefined;
+
+  constructor(
+    venue: string,
+    operation: string,
+    statusCode: number | undefined,
+    venueCode: string | undefined,
+  ) {
+    // The message is composed from the curated fields alone. Interpolating any
+    // part of the original — even a "safe-looking" prefix — is what reopens
+    // the leak, since the client chooses that text, not us.
+    super(
+      `${venue} ${operation} failed (status ${statusCode ?? 'unknown'}` +
+        `${venueCode === undefined ? '' : `, code ${venueCode}`})`,
+    );
+    this.name = 'BrokerError';
+    this.venue = venue;
+    this.operation = operation;
+    this.statusCode = statusCode;
+    this.venueCode = venueCode;
+  }
+}
 
 /**
- * Long unbroken base64/hex-ish runs — the shape of every API key/secret/HMAC
- * the venues issue. Idempotency keys are also hashes and get caught too;
- * that is accepted collateral, since the key travels separately on
- * `ExecutionResult.idempotency_key`.
+ * Converts anything a broker client threw into a `BrokerError`, keeping only
+ * a status code and a venue error code.
+ *
+ * Duck-typed across the shapes the three clients actually use (`status`,
+ * `statusCode`, `response.status`, `code`) rather than tied to any client's
+ * error classes — those are third-party types this repo deliberately does not
+ * depend on, and a client that changes its hierarchy must degrade to "unknown
+ * status" rather than crash the adapter.
+ *
+ * `cause` is read and discarded. It is never returned, attached or re-thrown.
  */
-const TOKEN_BLOB =
-  /\b(?=[A-Za-z0-9+/=_-]*[A-Za-z])(?=[A-Za-z0-9+/=_-]*[0-9])[A-Za-z0-9+/=_-]{20,}\b/g;
+export function sanitizeBrokerError(venue: string, operation: string, cause: unknown): BrokerError {
+  return new BrokerError(venue, operation, readStatusCode(cause), readVenueCode(cause));
+}
 
-/** Query strings can carry signed params; nothing downstream needs them. */
-const QUERY_STRING = /\?[^\s"']+/g;
+/** Any object; `unknown` prop reads are type-guarded at each use site. */
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
 
-const MAX_REASON_LENGTH = 300;
+function readStatusCode(cause: unknown): number | undefined {
+  const record = asRecord(cause);
+  if (record === undefined) return undefined;
+
+  for (const candidate of [record.status, record.statusCode, asRecord(record.response)?.status]) {
+    // Finite-number guard, not just `typeof`: a client that reports `NaN` for
+    // a transport failure must read as "unknown", not as a status.
+    if (typeof candidate === 'number' && Number.isFinite(candidate)) return candidate;
+  }
+  return undefined;
+}
 
 /**
- * A surfaceable one-line description of a broker error: name + message with
- * credential-shaped content masked and the whole string length-capped.
+ * `code` is stringified because clients disagree on its type (ccxt throws
+ * string codes, Node's fetch layer surfaces numeric `errno`-style ones), and
+ * the field is only ever displayed.
  */
-export function describeBrokerError(error: unknown): string {
-  const raw = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-
-  const masked = raw
-    .replace(CREDENTIAL_FIELD, '$1=[REDACTED]')
-    .replace(QUERY_STRING, '?[REDACTED]')
-    .replace(TOKEN_BLOB, '[REDACTED]');
-
-  return masked.length > MAX_REASON_LENGTH ? `${masked.slice(0, MAX_REASON_LENGTH)}…` : masked;
+function readVenueCode(cause: unknown): string | undefined {
+  const code = asRecord(cause)?.code;
+  if (typeof code === 'string' && code.length > 0) return code;
+  if (typeof code === 'number' && Number.isFinite(code)) return String(code);
+  return undefined;
 }

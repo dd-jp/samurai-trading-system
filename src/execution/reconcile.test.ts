@@ -376,7 +376,7 @@ describe('reconcile — scope and safety', () => {
     expect(report.divergences[0]).toMatchObject({
       action: 'undetermined',
       broker_state: null,
-      reason: 'Error: venue unreachable',
+      reason: 'venue unreachable',
     });
   });
 

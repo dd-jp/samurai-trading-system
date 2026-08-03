@@ -25,7 +25,6 @@
  * process was down.
  */
 import type { OpenPosition, OrderState } from '../shared/index.js';
-import { describeBrokerError } from './broker-error.js';
 import type { ExecutionInput, ReconcileDivergence, ReconcileReport } from './types.js';
 
 /** The states a crash can strand: written ahead, or acked but not advanced. */
@@ -78,9 +77,11 @@ async function reconcileLot(
       store_state: position.order_state,
       broker_state: null,
       action: 'undetermined',
-      // Sanitized: this reason surfaces to operators/audit, and broker errors
-      // can embed the credentialed request they failed on.
-      reason: describeBrokerError(error),
+      // Safe to surface verbatim: #297's H1 makes every adapter convert what
+      // its client threw into a `BrokerError` built only from curated fields,
+      // so the credentialed original never reaches this catch. Same posture
+      // and same expression as `execute()`'s submit-failure branch.
+      reason: error instanceof Error ? error.message : String(error),
     };
   }
 

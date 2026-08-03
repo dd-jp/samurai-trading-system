@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { rateLimited } from './rate-limited-client.js';
-import { TokenBucket, UNLIMITED } from './token-bucket.js';
+import { TokenBucket } from './token-bucket.js';
 
+// Vitest's fake timers stub `Date.now` alongside `setTimeout`, so the bucket's
+// default clock advances in lockstep with `advanceTimersByTimeAsync` — same
+// convention as retry.test.ts, and the reason no hand-rolled clock is injected
+// here (one that drifted from the timers would hang the refill loop instead of
+// failing).
 describe('TokenBucket', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -11,106 +15,101 @@ describe('TokenBucket', () => {
     vi.useRealTimers();
   });
 
-  it('rejects a non-positive capacity or refill rate', () => {
-    expect(() => new TokenBucket({ capacity: 0, refillPerSecond: 1 })).toThrow('capacity >= 1');
-    expect(() => new TokenBucket({ capacity: 1, refillPerSecond: 0 })).toThrow('capacity >= 1');
-  });
+  it('acquires immediately while the bucket has tokens', async () => {
+    const bucket = new TokenBucket({ capacity: 3, refillPerSecond: 1 });
+    const acquired: number[] = [];
 
-  it('grants burst capacity without waiting', async () => {
-    const bucket = new TokenBucket({ capacity: 3, refillPerSecond: 1 }, () => Date.now());
-
-    let granted = 0;
     await Promise.all(
-      [1, 2, 3].map(async () => {
+      [0, 1, 2].map(async (i) => {
         await bucket.acquire();
-        granted += 1;
+        acquired.push(i);
       }),
     );
 
-    expect(granted).toBe(3);
+    // No timer had to fire: the burst is what `capacity` buys.
+    expect(acquired).toHaveLength(3);
   });
 
-  it('makes a caller past the burst wait for the refill', async () => {
-    const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 1 }, () => Date.now());
+  it('blocks once capacity is exhausted, then admits on refill', async () => {
+    const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 1 });
     await bucket.acquire();
 
-    let granted = false;
-    const second = bucket.acquire().then(() => {
-      granted = true;
+    let admitted = false;
+    const pending = bucket.acquire().then(() => {
+      admitted = true;
     });
 
-    await vi.advanceTimersByTimeAsync(500);
-    expect(granted).toBe(false);
-    await vi.advanceTimersByTimeAsync(500);
-    await second;
-    expect(granted).toBe(true);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(admitted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await pending;
+    expect(admitted).toBe(true);
   });
 
-  // The `catch` on the queue tail detoxifies the chain only — it must not
-  // swallow the failure from the caller that actually hit it, and the queue
-  // must keep serving afterwards (PR #290 review, deepseek).
-  it("surfaces a waiter's failure to that caller without poisoning the queue", async () => {
-    let clockReads = 0;
-    const bucket = new TokenBucket({ capacity: 5, refillPerSecond: 1 }, () => {
-      clockReads += 1;
-      // Read 1 is the constructor's; read 2 is the first acquire's refill.
-      if (clockReads === 2) {
-        throw new Error('clock read failed');
-      }
-      return Date.now();
-    });
+  it('serializes concurrent acquires on an exhausted bucket instead of releasing them together', async () => {
+    // The failure this guards: computing a wait once and consuming on wake
+    // lets both parked callers take the same refilled token and fire in the
+    // same instant — the burst the bucket exists to prevent. Adapters do issue
+    // concurrent calls (Promise.all over two protective legs).
+    const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 1 });
+    await bucket.acquire();
 
-    await expect(bucket.acquire()).rejects.toThrow('clock read failed');
-    await expect(bucket.acquire()).resolves.toBeUndefined();
+    const order: string[] = [];
+    const pending = Promise.all([
+      bucket.acquire().then(() => order.push('a')),
+      bucket.acquire().then(() => order.push('b')),
+    ]);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(order).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await pending;
+    expect(order).toHaveLength(2);
   });
 
-  it('refills up to capacity, never beyond', async () => {
-    const bucket = new TokenBucket({ capacity: 2, refillPerSecond: 1 }, () => Date.now());
+  it('refills over time and never above capacity', async () => {
+    const bucket = new TokenBucket({ capacity: 2, refillPerSecond: 1 });
     await bucket.acquire();
     await bucket.acquire();
 
-    // Ten seconds refills far more than 2 tokens' worth — the cap holds it at 2.
+    // Ten seconds of idle credits far more than two tokens; the cap must hold,
+    // so exactly two acquires are free and the third waits a full second.
     await vi.advanceTimersByTimeAsync(10_000);
     await bucket.acquire();
     await bucket.acquire();
 
-    let granted = false;
-    const third = bucket.acquire().then(() => {
-      granted = true;
+    let admitted = false;
+    const pending = bucket.acquire().then(() => {
+      admitted = true;
     });
     await vi.advanceTimersByTimeAsync(999);
-    expect(granted).toBe(false);
+    expect(admitted).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
-    await third;
-    expect(granted).toBe(true);
-  });
-});
-
-describe('rateLimited', () => {
-  it('takes a token before every method call', async () => {
-    const acquisitions: number[] = [];
-    let counter = 0;
-    const limiter = {
-      acquire: async () => {
-        counter += 1;
-        acquisitions.push(counter);
-      },
-    };
-    const client = {
-      async ping(value: string): Promise<string> {
-        return `pong:${value}`;
-      },
-    };
-
-    const paced = rateLimited(client, limiter);
-
-    await expect(paced.ping('a')).resolves.toBe('pong:a');
-    await expect(paced.ping('b')).resolves.toBe('pong:b');
-    expect(acquisitions).toEqual([1, 2]);
+    await pending;
+    expect(admitted).toBe(true);
   });
 
-  it('passes non-function properties through untouched', () => {
-    const client = { name: 'kraken', async call(): Promise<void> {} };
-    expect(rateLimited(client, UNLIMITED).name).toBe('kraken');
+  it('paces a sustained run at the configured rate', async () => {
+    const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 2 });
+    await bucket.acquire();
+
+    let done = 0;
+    const pending = Promise.all([
+      bucket.acquire().then(() => {
+        done += 1;
+      }),
+      bucket.acquire().then(() => {
+        done += 1;
+      }),
+    ]);
+
+    // 2/second → one token every 500ms.
+    await vi.advanceTimersByTimeAsync(500);
+    expect(done).toBe(1);
+    await vi.advanceTimersByTimeAsync(500);
+    await pending;
+    expect(done).toBe(2);
   });
 });

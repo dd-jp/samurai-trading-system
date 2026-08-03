@@ -21,8 +21,8 @@
  * observes it — finer-grained partial-fill history requires Alpaca's trade
  * updates/activities stream, which is out of scope for this ticket.
  */
-import type { OrderState, RateLimiter } from '../../shared/index.js';
-import { rateLimited } from '../../shared/index.js';
+import { type OrderState, TokenBucket } from '../../shared/index.js';
+import { sanitizeBrokerError } from '../broker-error.js';
 import type {
   BrokerAck,
   BrokerAdapter,
@@ -35,36 +35,60 @@ import type { AlpacaClient, AlpacaOrder, AlpacaOrderLeg } from './alpaca-client.
 export interface AlpacaBrokerAdapterInput {
   client: AlpacaClient;
   /**
-   * Paces every Alpaca call (execution-spec.md story 16 — Alpaca throttles at
-   * 200 req/min and a mid-position throttle means no stops/cancels). Omitted
-   * = unpaced, for tests; the production composition root passes a
-   * `TokenBucket` sized to the venue.
+   * Optional so existing wiring (src/orchestrator/production.ts) keeps
+   * working; when absent the adapter still paces itself rather than running
+   * unlimited — see the default below.
    */
-  rateLimiter?: RateLimiter;
+  rateLimiter?: TokenBucket;
 }
 
 export class AlpacaBrokerAdapter implements BrokerAdapter {
   /** client_order_id -> the bracket parent's Alpaca order id. */
   private readonly brackets = new Map<string, string>();
-  private readonly client: AlpacaClient;
+  /**
+   * Alpaca's documented ceiling is 200 requests/minute per key — 3.33/second —
+   * so the sustained rate is set BELOW it at 3/second, with a burst of 5 for
+   * the short flurry a bracket submit or a reconcile sweep issues back-to-back.
+   * A placeholder default pending tuning against the real account's tier
+   * (#299), not a transcription of the venue's limit; it errs under the ceiling
+   * because the cost of being wrong is a throttled key mid-sweep.
+   */
+  private readonly rateLimiter: TokenBucket;
 
-  constructor(input: AlpacaBrokerAdapterInput) {
-    this.client =
-      input.rateLimiter === undefined ? input.client : rateLimited(input.client, input.rateLimiter);
+  constructor(private readonly input: AlpacaBrokerAdapterInput) {
+    this.rateLimiter = input.rateLimiter ?? new TokenBucket({ capacity: 5, refillPerSecond: 3 });
+  }
+
+  /**
+   * The single door to the injected client: pacing before the call (C2),
+   * credential-safe error conversion after it (H1). Alpaca's REST errors quote
+   * the failed request — including the `APCA-API-KEY-ID` header on an auth
+   * failure — and `execute()` copies a thrown message straight into a logged
+   * `ExecutionResult.reason`.
+   */
+  private async call<T>(operation: string, fn: () => Promise<T>): Promise<T> {
+    await this.rateLimiter.acquire();
+    try {
+      return await fn();
+    } catch (cause) {
+      throw sanitizeBrokerError('alpaca', operation, cause);
+    }
   }
 
   async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
-    const response = await this.client.submitOrder({
-      symbol: order.instrument,
-      side: order.side,
-      qty: String(order.size),
-      limit_price: String(order.entry),
-      time_in_force: order.time_in_force,
-      client_order_id: order.client_order_id,
-      order_class: 'bracket',
-      take_profit: { limit_price: String(order.target) },
-      stop_loss: { stop_price: String(order.stop) },
-    });
+    const response = await this.call('submitBracket', () =>
+      this.input.client.submitOrder({
+        symbol: order.instrument,
+        side: order.side,
+        qty: String(order.size),
+        limit_price: String(order.entry),
+        time_in_force: order.time_in_force,
+        client_order_id: order.client_order_id,
+        order_class: 'bracket',
+        take_profit: { limit_price: String(order.target) },
+        stop_loss: { stop_price: String(order.stop) },
+      }),
+    );
 
     this.brackets.set(order.client_order_id, response.id);
 
@@ -92,7 +116,9 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * contract wants.
    */
   async getOrder(clientOrderId: string): Promise<NormalizedOrder | null> {
-    const order = await this.client.getOrderByClientOrderId(clientOrderId);
+    const order = await this.call('getOrder', () =>
+      this.input.client.getOrderByClientOrderId(clientOrderId),
+    );
     if (order === null) return null;
 
     // Re-populating the map lets a post-restart `fetchNewFills` find this
@@ -123,22 +149,56 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * The fill feed `ingestFills()` drains, in the same shape
    * `SimulatedBrokerAdapter.fetchNewFills` already produces. Point-in-time:
    * never returns a fill dated before `since`.
+   *
+   * Each bracket is isolated. `ingestFills()` awaits this as ONE call before
+   * advancing ANY lot, and `brackets` iterates in insertion order, so an
+   * unhandled throw here does not just lose one order's fills — it aborts the
+   * whole account's ingestion cycle, and a bracket that Alpaca persistently
+   * reports malformed would starve every bracket submitted after it, stop-outs
+   * included. Refusing to book one bad fill must not cost the sweep.
+   *
+   * The isolation is per BRACKET, not per `collectFill`: a bracket whose entry
+   * price cannot be recorded must not have its exit legs booked either, or the
+   * lot's accounting is built on a fill that was rejected.
    */
   async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
     const fills: NormalizedFill[] = [];
+    const failures: unknown[] = [];
 
-    // Snapshot, as in CcxtBrokerAdapter.syncBrackets: `getOrder` awaits inside
-    // this loop, and a Map iterator visits entries inserted mid-iteration — so
-    // a bracket submitted during the poll would be drained by a pass whose
-    // `since` window predates it. The snapshot keeps each poll's worklist
-    // fixed at entry (PR #290 review, deepseek).
+    // Snapshot, as #297 already did for `CcxtBrokerAdapter.syncBrackets` (M3):
+    // the `getOrder` below awaits inside this loop, and a Map iterator DOES
+    // visit entries inserted mid-iteration — so a bracket submitted during the
+    // sweep would be drained by a pass whose `since` window predates it, and
+    // its fills silently dropped. The snapshot fixes each pass's worklist at
+    // entry (PR #290 review, deepseek).
     for (const [clientOrderId, entryOrderId] of [...this.brackets]) {
-      const entry = await this.client.getOrder(entryOrderId);
+      try {
+        const entry = await this.call('fetchNewFills', () =>
+          this.input.client.getOrder(entryOrderId),
+        );
 
-      collectFill(entry, 'entry', clientOrderId, since, fills);
-      for (const leg of entry.legs ?? []) {
-        collectFill(leg, legName(leg), clientOrderId, since, fills);
+        collectFill(entry, 'entry', clientOrderId, since, fills);
+        for (const leg of entry.legs ?? []) {
+          collectFill(leg, legName(leg), clientOrderId, since, fills);
+        }
+      } catch (error) {
+        // Skipped, not swallowed: this bracket contributes nothing to THIS
+        // sweep and is retried on the next one. That is the same shape as an
+        // order the venue has not reported yet, and `ingestFills()` dedups on
+        // `broker_fill_id`, so re-polling costs nothing.
+        failures.push(error);
       }
+    }
+
+    // Progress wins when there is any: dropping good fills to report a bad
+    // bracket would re-create the account-wide stall this isolation removes.
+    // A wholly-failed sweep is the one case where throwing costs nothing — and
+    // it must not be reported as the "no new fills" that an empty array means.
+    if (fills.length === 0 && failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        `Alpaca fetchNewFills: all ${failures.length} bracket(s) failed; no fills could be read`,
+      );
     }
 
     return fills;
@@ -158,20 +218,40 @@ function collectFill(
   fills: NormalizedFill[],
 ): void {
   const filledQty = Number.parseFloat(order.filled_qty);
-  // `filled_avg_price === null` alongside a positive filled_qty is an Alpaca
-  // data race/edge — recording it as price 0 would drag the lot's weighted
-  // avg toward zero and feed phantom PnL to the Feedback Loop. Skipping is
-  // safe: the feed is poll-based and inclusive-of-`since`, so the fill is
-  // re-offered on the next poll, priced. A *permanently* unpriced fill would
-  // instead leave the lot stuck with nothing escalating — recovery belongs to
-  // reconciliation, not to this adapter inventing a price: see #298.
-  if (filledQty <= 0 || order.filled_at === null || order.filled_avg_price === null) {
+
+  // `NaN <= 0` is FALSE, so an unparseable quantity ('', 'N/A', anything
+  // non-numeric) would sail past the guard below and be booked as `qty: NaN` —
+  // which then silently propagates through weighted-average pricing, realized
+  // PnL and the R-multiple, poisoning every figure it touches without ever
+  // failing. Checked before the ordering guard for exactly that reason.
+  if (!Number.isFinite(filledQty)) {
+    throw new Error(
+      `Alpaca order ${order.id} (${leg} leg of '${clientOrderId}') reports an unparseable ` +
+        `filled_qty '${order.filled_qty}'`,
+    );
+  }
+
+  if (filledQty <= 0 || order.filled_at === null) {
     return;
   }
 
   const filledAt = new Date(order.filled_at);
   if (filledAt.getTime() < since.getTime()) {
     return;
+  }
+
+  // A positive filled quantity with no average price is Alpaca contradicting
+  // itself, and there is no safe way to record it: a zero price is not a
+  // conservative guess but a fabricated one, and it flows straight into
+  // realized PnL, the R-multiple and the feedback loop's weighting — a lot
+  // booked at 0 reads as a total loss or an infinite gain depending on side.
+  // Same posture the ccxt adapter takes in `toFill`: refuse rather than
+  // silently degrade, and let the poll retry once the venue is coherent.
+  if (order.filled_avg_price === null) {
+    throw new Error(
+      `Alpaca order ${order.id} (${leg} leg of '${clientOrderId}') reports filled_qty ` +
+        `${order.filled_qty} but no filled_avg_price to record`,
+    );
   }
 
   fills.push({

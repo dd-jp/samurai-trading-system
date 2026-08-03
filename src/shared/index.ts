@@ -9,12 +9,11 @@
 export type { Clock } from './clock.js';
 export { SimulatedClock, SystemClock } from './clock.js';
 export { fetchWithTimeout } from './http/fetch-with-timeout.js';
-export { rateLimited } from './http/rate-limited-client.js';
 export { parseRetryAfterMs, truncateForError } from './http/response-errors.js';
 export type { RetryConfig } from './http/retry.js';
 export { withRetry } from './http/retry.js';
-export type { RateLimiter, TokenBucketConfig } from './http/token-bucket.js';
-export { TokenBucket, UNLIMITED } from './http/token-bucket.js';
+export type { TokenBucketConfig } from './http/token-bucket.js';
+export { TokenBucket } from './http/token-bucket.js';
 export type {
   AssetClass,
   ClosedTrade,

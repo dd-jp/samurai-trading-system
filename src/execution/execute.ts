@@ -8,13 +8,11 @@
  * block until filled — the lot's lifecycle is advanced separately by
  * `ingestFills()`, which lives in its own module.
  */
-
 import type { OpenPosition } from '../shared/index.js';
-import { isUniqueConstraintError } from '../shared/store/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
-import { describeBrokerError } from './broker-error.js';
 import { ingestFills } from './ingest-fills.js';
 import { reconcile } from './reconcile.js';
+import { DuplicatePositionError } from './sqlite-shared-store.js';
 import type {
   Execution,
   ExecutionInput,
@@ -116,22 +114,21 @@ export class ExecutionImpl implements Execution {
     // the gap leaves a record to reconcile against the broker (#86) instead
     // of an invisible order that a restart would submit a second time.
     //
-    // The PK collision here is the TOCTOU tail of the findByKey gate above: a
-    // concurrent execute() for the same key can pass that gate before this
-    // write lands. The store's constraint is the real arbiter — the loser
-    // re-checks and reports `deduped`, the same answer it would have gotten
-    // had it arrived a beat later.
-    //
-    // Only a *constraint* failure means "someone else got there first". Any
-    // other write failure (disk full, SQLITE_BUSY, a corrupt db) must surface:
-    // reporting it as `deduped` would tell the caller an order is already
-    // live when nothing was ever persisted or sent.
+    // The `findByKey` gate above is check-then-act, so two callers replaying
+    // the same decision can both pass it before either has written. The
+    // primary key is what actually settles that race — and it settles it in
+    // the store, meaning the loser learns it lost by catching this. Reporting
+    // that as `error` would be wrong twice over: nothing failed, and a caller
+    // that retries on error would keep re-losing the same race. Only the
+    // typed duplicate is treated as dedup; every other store failure means
+    // the write-ahead did NOT happen, and swallowing it would let the broker
+    // call proceed with no durable record behind it.
     try {
       await store.writeAheadPosition(position);
     } catch (error) {
-      if (isUniqueConstraintError(error) && (await store.findByKey(idempotencyKey))) {
+      if (error instanceof DuplicatePositionError) {
         return result('deduped', idempotencyKey, now, {
-          reason: 'a concurrent execute() wrote ahead for this idempotency_key first',
+          reason: 'an order or fill already exists for this idempotency_key',
         });
       }
       throw error;
@@ -145,12 +142,9 @@ export class ExecutionImpl implements Execution {
       // landed is unknown here, and only the broker can settle that. #86's
       // reconciliation adopts broker truth. Marking it terminal on the way
       // out would be a guess, and the losing guess double-submits.
-      // Sanitized, never raw: broker error objects embed the request they
-      // failed on — auth headers included — and this reason string travels to
-      // audit_log/dashboard/notifications.
       return result('error', idempotencyKey, now, {
         order_state: 'pending',
-        reason: describeBrokerError(error),
+        reason: error instanceof Error ? error.message : String(error),
       });
     }
 

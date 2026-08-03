@@ -144,7 +144,7 @@ describe('computePortfolioView — mark sourcing', () => {
       asOf,
     });
 
-    await expect(computePortfolioView(input)).rejects.toThrow("no mark for open position 'AAPL'");
+    await expect(computePortfolioView(input)).rejects.toThrow("no mark for held instrument 'AAPL'");
   });
 });
 

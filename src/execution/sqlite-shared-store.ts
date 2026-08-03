@@ -59,6 +59,27 @@ interface FillRow {
   cost_breakdown_json: string | null;
 }
 
+/**
+ * Thrown when the write-ahead INSERT loses a race for an idempotency key.
+ *
+ * A named type rather than a message prefix because `execute()` has to
+ * DISCRIMINATE on it: a duplicate key means another caller already acted on
+ * this decision (answer `deduped`), while any other failure means the
+ * write-ahead did not happen and must not be mistaken for one. String-matching
+ * that distinction would make the message load-bearing, and the first person to
+ * reword it would silently turn real store failures into dedup responses.
+ */
+export class DuplicatePositionError extends Error {
+  constructor(readonly idempotency_key: string) {
+    super(
+      `SqliteExecutionStore.writeAheadPosition: a position already exists for ` +
+        `idempotency_key '${idempotency_key}' — execute()'s findByKey gate should ` +
+        'have prevented this write.',
+    );
+    this.name = 'DuplicatePositionError';
+  }
+}
+
 export class SqliteExecutionStore implements SharedStore {
   constructor(private readonly db: Db) {}
 
@@ -77,9 +98,12 @@ export class SqliteExecutionStore implements SharedStore {
 
   /**
    * Write-ahead: INSERT before the broker call, so a crash in the gap leaves
-   * a recoverable `pending` row (#86 reconciles it). A duplicate key here is
-   * a caller bug — `execute()`'s `findByKey` gate is meant to prevent it — so
-   * the PK violation is left to surface rather than silently upserted.
+   * a recoverable `pending` row (#86 reconciles it). A duplicate key surfaces
+   * as `DuplicatePositionError` rather than being silently upserted: the row
+   * that won the race is another caller's in-flight order, and overwriting it
+   * would erase the broker ids reconciliation needs. `execute()`'s `findByKey`
+   * gate normally prevents this; the PK is the backstop for two callers that
+   * both pass that gate before either has written.
    */
   async writeAheadPosition(position: OpenPosition): Promise<void> {
     try {
@@ -113,12 +137,7 @@ export class SqliteExecutionStore implements SharedStore {
         );
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {
-        throw new Error(
-          `SqliteExecutionStore.writeAheadPosition: a position already exists for ` +
-            `idempotency_key '${position.idempotency_key}' — execute()'s findByKey gate should ` +
-            'have prevented this write.',
-          { cause },
-        );
+        throw new DuplicatePositionError(position.idempotency_key);
       }
       throw cause;
     }

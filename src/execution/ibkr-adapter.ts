@@ -17,8 +17,8 @@
  * against the real API is ops wiring, and no behaviour beyond that slice is
  * assumed here.
  */
-import type { RateLimiter } from '../shared/index.js';
-import { rateLimited } from '../shared/index.js';
+import { TokenBucket } from '../shared/index.js';
+import { sanitizeBrokerError } from './broker-error.js';
 import type { BrokerAck, BrokerAdapter, NativeBracketRequest, NormalizedFill } from './types.js';
 
 /** A native IBKR bracket: parent entry + two OCA-grouped protective children. */
@@ -65,16 +65,39 @@ export class IbkrBrokerAdapter implements BrokerAdapter {
   private readonly brackets = new Map<string, IbkrBracketOrderIds>();
   /** Reverse index: venue order id → which bracket/leg it belongs to. */
   private readonly legs = new Map<string, { clientOrderId: string; leg: NormalizedFill['leg'] }>();
-  private readonly client: IbkrBrokerClient;
+
+  private readonly rateLimiter: TokenBucket;
 
   /**
-   * `rateLimiter` paces every TWS call (execution-spec.md story 16 — IBKR
-   * enforces pacing violations with disconnects). Omitted = unpaced, for
-   * tests; the composition root wiring a real TWS client must pass a
-   * `TokenBucket` sized to the venue.
+   * Optional so existing wiring keeps working, but the default is deliberately
+   * not "unlimited" — an unpaced adapter is the C2 finding. TWS pacing
+   * violations are counted per rolling second and answered with a disconnect,
+   * which for this adapter means the venue holding a live bracket stops taking
+   * calls; 5/second is a conservative placeholder well under that, pending
+   * tuning against a real TWS gateway (whose limits vary by account and
+   * connection) — tracked as #299, which also moves these out of compile-time
+   * constants into the ops config that holds the credentials they pace.
    */
-  constructor(client: IbkrBrokerClient, rateLimiter?: RateLimiter) {
-    this.client = rateLimiter === undefined ? client : rateLimited(client, rateLimiter);
+  constructor(
+    private readonly client: IbkrBrokerClient,
+    rateLimiter: TokenBucket = new TokenBucket({ capacity: 5, refillPerSecond: 5 }),
+  ) {
+    this.rateLimiter = rateLimiter;
+  }
+
+  /**
+   * The single door to the injected client: pacing before the call (C2),
+   * credential-safe error conversion after it (H1). A TWS client's errors
+   * carry connection and request context, and `execute()` copies a thrown
+   * message into a logged `ExecutionResult.reason`.
+   */
+  private async call<T>(operation: string, fn: () => Promise<T>): Promise<T> {
+    await this.rateLimiter.acquire();
+    try {
+      return await fn();
+    } catch (cause) {
+      throw sanitizeBrokerError('ibkr', operation, cause);
+    }
   }
 
   async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
@@ -85,18 +108,20 @@ export class IbkrBrokerAdapter implements BrokerAdapter {
       return ack(order.client_order_id, existing);
     }
 
-    const ids = await this.client.placeBracketOrder({
-      clientOrderId: order.client_order_id,
-      symbol: order.instrument,
-      action: order.side === 'buy' ? 'BUY' : 'SELL',
-      totalQuantity: order.size,
-      limitPrice: order.entry,
-      stopPrice: order.stop,
-      takeProfitPrice: order.target,
-      tif: order.time_in_force,
-      // One bracket per lot, so the idempotency key names its OCA group.
-      ocaGroup: order.client_order_id,
-    });
+    const ids = await this.call('submitBracket', () =>
+      this.client.placeBracketOrder({
+        clientOrderId: order.client_order_id,
+        symbol: order.instrument,
+        action: order.side === 'buy' ? 'BUY' : 'SELL',
+        totalQuantity: order.size,
+        limitPrice: order.entry,
+        stopPrice: order.stop,
+        takeProfitPrice: order.target,
+        tif: order.time_in_force,
+        // One bracket per lot, so the idempotency key names its OCA group.
+        ocaGroup: order.client_order_id,
+      }),
+    );
 
     this.brackets.set(order.client_order_id, ids);
     this.legs.set(ids.parentOrderId, { clientOrderId: order.client_order_id, leg: 'entry' });
@@ -153,7 +178,7 @@ export class IbkrBrokerAdapter implements BrokerAdapter {
    * whichever venue is wired in. Never returns a fill dated before `since`.
    */
   async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
-    const executions = await this.client.fetchExecutions(since);
+    const executions = await this.call('fetchNewFills', () => this.client.fetchExecutions(since));
 
     return executions.flatMap((exec) => {
       // The execution feed is account-wide: a manual TWS trade or another

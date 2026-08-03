@@ -26,6 +26,30 @@ export interface PortfolioAccountingInput {
   consecutive_losses: number;
 }
 
+/**
+ * Fails closed on a missing mark instead of defaulting to zero.
+ *
+ * Unreachable today — `marks` is built from exactly the instruments held, and
+ * `MarketDataService.getMark` either answers or throws, so the `Promise.all`
+ * above has already rejected if any lookup failed. The guard is here for the
+ * day that stops being true (an instrument-key normalization mismatch between
+ * the store and the data service is the obvious way in): a zero mark silently
+ * reports a real position as zero exposure, which understates gross exposure
+ * and drawdown and hands Risk a green light for a trade it would otherwise
+ * block. For a view whose entire job is bounding risk, "I don't know" must
+ * stop the sweep, not read as "nothing there".
+ */
+function markFor(marks: Map<string, number>, instrument: string): number {
+  const mark = marks.get(instrument);
+  if (mark === undefined) {
+    throw new Error(
+      `computePortfolioView: no mark for held instrument '${instrument}' — refusing to value ` +
+        'the position at zero, which would understate exposure to Risk.',
+    );
+  }
+  return mark;
+}
+
 export async function computePortfolioView(
   input: PortfolioAccountingInput,
 ): Promise<PortfolioView> {
@@ -46,19 +70,9 @@ export async function computePortfolioView(
   const exposure_by_class = { crypto: 0, stocks: 0 };
 
   for (const position of positions) {
-    const mark = marks.get(position.instrument);
-    // A missing mark must fail loudly, never default to 0: zero-notional for
-    // a live lot understates exposure, and Risk would approve trades against
-    // a partially blind portfolio.
-    if (mark === undefined) {
-      throw new Error(
-        `computePortfolioView: no mark for open position '${position.instrument}' — ` +
-          'cannot price exposure',
-      );
-    }
     // Freeze §4: always filled_size, never requested_size — a partially-filled
     // lot is marked at what actually filled.
-    const notional = position.filled_size * mark;
+    const notional = position.filled_size * markFor(marks, position.instrument);
     exposure_by_instrument[position.instrument] =
       (exposure_by_instrument[position.instrument] ?? 0) + notional;
     exposure_by_class[position.asset_class] += notional;

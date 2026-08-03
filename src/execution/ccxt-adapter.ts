@@ -18,8 +18,8 @@
  * `CcxtClient` is OHLCV/ticker only), so a real ccxt Exchange satisfies it
  * structurally.
  */
-import type { OrderState, RateLimiter } from '../shared/index.js';
-import { rateLimited } from '../shared/index.js';
+import { type OrderState, TokenBucket } from '../shared/index.js';
+import { sanitizeBrokerError } from './broker-error.js';
 import type {
   BrokerAck,
   BrokerAdapter,
@@ -92,17 +92,44 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
   private readonly brackets = new Map<string, EmulatedBracket>();
   /** Fills awaiting ingestion, in arrival order (#83 drains them). */
   private readonly fills: NormalizedFill[] = [];
-  private readonly client: CcxtBrokerClient;
+
+  private readonly rateLimiter: TokenBucket;
 
   /**
-   * `rateLimiter` paces every venue call (execution-spec.md story 16 —
-   * Kraken/Coinbase free tiers throttle around 1 order/sec, and a ban while a
-   * lot is live means no stops and no cancels). Omitted = unpaced, which is
-   * only appropriate for tests; the composition root wiring a real exchange
-   * must pass a `TokenBucket` sized to the venue.
+   * `rateLimiter` is optional so existing wiring keeps working, but the
+   * default is NOT "unlimited" — an adapter with no pacing is the C2 finding.
+   * 1 order/second is the free-tier order rate Kraken/Coinbase publish for the
+   * cheapest tier, so it is the conservative floor that cannot be wrong in the
+   * dangerous direction. A placeholder pending real per-venue tuning (#299):
+   * an exchange-specific limit belongs with the exchange's credentials, i.e.
+   * in ops wiring, not hard-coded here. #299 also records this default's known
+   * cost — at 1/second the two protective legs in `armLegs` serialize, placing
+   * them ≥1s apart and widening the unprotected-lot window.
    */
-  constructor(client: CcxtBrokerClient, rateLimiter?: RateLimiter) {
-    this.client = rateLimiter === undefined ? client : rateLimited(client, rateLimiter);
+  constructor(
+    private readonly client: CcxtBrokerClient,
+    rateLimiter: TokenBucket = new TokenBucket({ capacity: 1, refillPerSecond: 1 }),
+  ) {
+    this.rateLimiter = rateLimiter;
+  }
+
+  /**
+   * The single door to the injected client, so the two things every outbound
+   * call needs cannot be forgotten on a new one: pacing before (C2) and
+   * credential-safe error conversion after (H1). ccxt errors embed the failed
+   * HTTP exchange — signed URL, headers, sometimes the key itself — and
+   * `execute()` copies a thrown message into a logged `ExecutionResult.reason`.
+   *
+   * Wrapping at the LEAF, not around the `Promise.all`s: a combinator wrap
+   * would double-convert and lose which leg failed.
+   */
+  private async call<T>(operation: string, fn: () => Promise<T>): Promise<T> {
+    await this.rateLimiter.acquire();
+    try {
+      return await fn();
+    } catch (cause) {
+      throw sanitizeBrokerError('ccxt', operation, cause);
+    }
   }
 
   /**
@@ -120,13 +147,11 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
       return this.ackFor(existing);
     }
 
-    const entry = await this.client.createOrder(
-      order.instrument,
-      'limit',
-      order.side,
-      order.size,
-      order.entry,
-      { clientOrderId: order.client_order_id, timeInForce: order.time_in_force },
+    const entry = await this.call('submitBracket', () =>
+      this.client.createOrder(order.instrument, 'limit', order.side, order.size, order.entry, {
+        clientOrderId: order.client_order_id,
+        timeInForce: order.time_in_force,
+      }),
     );
 
     const bracket: EmulatedBracket = {
@@ -153,9 +178,11 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
    * work; today its caller is the test suite.
    */
   async syncBrackets(): Promise<void> {
-    // Snapshot: a concurrent submitBracket() mutates the Map mid-await, and
-    // V8 leaves it undefined whether a for...of over the live Map visits the
-    // new entry — the snapshot keeps each poll's worklist deterministic.
+    // Snapshot first: the loop awaits per bracket, and a `submitBracket`
+    // landing in one of those gaps mutates the Map mid-iteration — so whether
+    // the new bracket is swept this pass or next is decided by timing. A lot's
+    // protective legs must not be armed (or not) by a coin flip; the array
+    // makes each sweep act on the set that existed when it started.
     for (const bracket of [...this.brackets.values()]) {
       if (bracket.phase === 'pending_entry') {
         await this.advanceEntry(bracket);
@@ -197,7 +224,9 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
       );
     }
 
-    const entry = await this.client.fetchOrder(bracket.entryOrderId, instrument);
+    const entry = await this.call('getOrder', () =>
+      this.client.fetchOrder(bracket.entryOrderId, instrument),
+    );
 
     return {
       client_order_id: clientOrderId,
@@ -221,7 +250,9 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
   /** `pending_entry` → `arming` → `armed`, or → `resolved` if the entry died. */
   private async advanceEntry(bracket: EmulatedBracket): Promise<void> {
     const { request } = bracket;
-    const entry = await this.client.fetchOrder(bracket.entryOrderId, request.instrument);
+    const entry = await this.call('fetchEntryStatus', () =>
+      this.client.fetchOrder(bracket.entryOrderId, request.instrument),
+    );
 
     // Claim the transition before any further await, so an overlapping poll
     // cannot place a second pair of legs.
@@ -265,16 +296,20 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
     bracket.armAttempt += 1;
 
     const [stop, target] = await Promise.all([
-      this.client.createOrder(request.instrument, 'limit', exitSide, filledSize, request.stop, {
-        clientOrderId: `${request.client_order_id}:stop${suffix}`,
-        stopLossPrice: request.stop,
-        timeInForce: request.time_in_force,
-      }),
-      this.client.createOrder(request.instrument, 'limit', exitSide, filledSize, request.target, {
-        clientOrderId: `${request.client_order_id}:target${suffix}`,
-        takeProfitPrice: request.target,
-        timeInForce: request.time_in_force,
-      }),
+      this.call('armStopLeg', () =>
+        this.client.createOrder(request.instrument, 'limit', exitSide, filledSize, request.stop, {
+          clientOrderId: `${request.client_order_id}:stop${suffix}`,
+          stopLossPrice: request.stop,
+          timeInForce: request.time_in_force,
+        }),
+      ),
+      this.call('armTargetLeg', () =>
+        this.client.createOrder(request.instrument, 'limit', exitSide, filledSize, request.target, {
+          clientOrderId: `${request.client_order_id}:target${suffix}`,
+          takeProfitPrice: request.target,
+          timeInForce: request.time_in_force,
+        }),
+      ),
     ]);
 
     bracket.stopOrderId = stop.id;
@@ -311,10 +346,16 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
     bracket.phase = 'arming';
 
     await Promise.all([
-      stopOrderId === null ? undefined : this.client.cancelOrder(stopOrderId, request.instrument),
+      stopOrderId === null
+        ? undefined
+        : this.call('cancelStopLeg', () =>
+            this.client.cancelOrder(stopOrderId, request.instrument),
+          ),
       targetOrderId === null
         ? undefined
-        : this.client.cancelOrder(targetOrderId, request.instrument),
+        : this.call('cancelTargetLeg', () =>
+            this.client.cancelOrder(targetOrderId, request.instrument),
+          ),
     ]);
 
     await this.armLegs(bracket, filledQty);
@@ -329,8 +370,10 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
     if (stopOrderId === null || targetOrderId === null) return;
 
     const [stop, target] = await Promise.all([
-      this.client.fetchOrder(stopOrderId, request.instrument),
-      this.client.fetchOrder(targetOrderId, request.instrument),
+      this.call('fetchStopStatus', () => this.client.fetchOrder(stopOrderId, request.instrument)),
+      this.call('fetchTargetStatus', () =>
+        this.client.fetchOrder(targetOrderId, request.instrument),
+      ),
     ]);
 
     // Everything from here to the phase write is synchronous, which is what
@@ -357,7 +400,9 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
     // its lot — an orphan for #86 to reconcile against broker truth. Retrying
     // here instead would risk the one thing the emulation must never do:
     // cancel twice.
-    await this.client.cancelOrder(filled.siblingId, request.instrument);
+    await this.call('cancelSibling', () =>
+      this.client.cancelOrder(filled.siblingId, request.instrument),
+    );
   }
 
   /**

@@ -1,42 +1,72 @@
-import { describe, expect, it } from 'vitest';
-import { describeBrokerError } from './broker-error.js';
+import { BrokerError, sanitizeBrokerError } from './broker-error.js';
 
-describe('describeBrokerError', () => {
-  it('keeps a plain transport message readable', () => {
-    expect(describeBrokerError(new Error('connection reset'))).toBe('Error: connection reset');
+/** A credential the wrapper must never carry forward, in any field. */
+const SECRET = 'PKTEST_APIKEY_9f2c';
+
+describe('sanitizeBrokerError', () => {
+  it('builds the message from the curated fields alone', () => {
+    const error = sanitizeBrokerError('alpaca', 'submitBracket', {
+      status: 429,
+      code: 'throttled',
+    });
+
+    expect(error).toBeInstanceOf(BrokerError);
+    expect(error.message).toBe('alpaca submitBracket failed (status 429, code throttled)');
+    expect(error.venue).toBe('alpaca');
+    expect(error.operation).toBe('submitBracket');
+    expect(error.statusCode).toBe(429);
+    expect(error.venueCode).toBe('throttled');
   });
 
-  it('stringifies non-Error throwables', () => {
-    expect(describeBrokerError('boom')).toBe('boom');
-  });
-
-  it('masks credential-named fields', () => {
-    const error = new Error(
-      'request failed: APCA-API-KEY-ID: PK123SHORT, APCA-API-SECRET-KEY: sk9, status 403',
+  it('never carries any part of the original message', () => {
+    const raw = new Error(
+      `401 Unauthorized: GET https://api.example/v2/orders — headers: {"APCA-API-KEY-ID":"${SECRET}"}`,
     );
-    const described = describeBrokerError(error);
-    expect(described).not.toContain('PK123SHORT');
-    expect(described).not.toContain('sk9');
-    expect(described).toContain('[REDACTED]');
+
+    const error = sanitizeBrokerError('alpaca', 'getOrder', raw);
+
+    expect(error.message).not.toContain(SECRET);
+    expect(error.message).not.toContain('api.example');
+    expect(error.message).not.toContain('Unauthorized');
+    expect(error.message).toBe('alpaca getOrder failed (status unknown)');
   });
 
-  it('masks long key-shaped token blobs even without a field name', () => {
-    const secret = 'AbC123dEf456GhI789jKl012MnO345pQr678StU9';
-    const described = describeBrokerError(new Error(`kraken rejected nonce for ${secret}`));
-    expect(described).not.toContain(secret);
-    expect(described).toContain('[REDACTED]');
+  it('retains no reference to the original error anywhere on the wrapper', () => {
+    // The whole point of the boundary: a curated message with the raw error
+    // still hanging off `cause` leaks the moment anything serializes the error.
+    const raw = Object.assign(new Error(`boom ${SECRET}`), { status: 500, apiKey: SECRET });
+
+    const error = sanitizeBrokerError('ccxt', 'createOrder', raw);
+
+    expect('cause' in error).toBe(false);
+    expect(Object.values(error)).not.toContain(raw);
+    expect(JSON.stringify({ ...error, message: error.message, stack: '' })).not.toContain(SECRET);
   });
 
-  it('strips query strings, which can carry signed params', () => {
-    const described = describeBrokerError(
-      new Error('GET https://api.example.com/v2/orders?apiKey=deadbeef&sig=ffff failed'),
-    );
-    expect(described).not.toContain('deadbeef');
-    expect(described).toContain('?[REDACTED]');
+  it.each([
+    ['status', { status: 503 }],
+    ['statusCode', { statusCode: 503 }],
+    ['response.status', { response: { status: 503 } }],
+  ])('duck-types the status code off %s', (_shape, cause) => {
+    expect(sanitizeBrokerError('ccxt', 'fetchOrder', cause).statusCode).toBe(503);
   });
 
-  it('caps the length so a dumped request body cannot flood the audit log', () => {
-    const described = describeBrokerError(new Error('x'.repeat(2_000)));
-    expect(described.length).toBeLessThanOrEqual(301);
+  it('stringifies a numeric venue code', () => {
+    expect(sanitizeBrokerError('ibkr', 'fetchNewFills', { code: 1100 }).venueCode).toBe('1100');
+  });
+
+  it.each([
+    ['a bare string', 'connection reset'],
+    ['null', null],
+    ['undefined', undefined],
+    ['an error with no HTTP context', new Error('socket hang up')],
+    ['a non-finite status', { status: Number.NaN }],
+    ['an empty code', { code: '' }],
+  ])('degrades to unknown when %s is thrown', (_shape, cause) => {
+    const error = sanitizeBrokerError('ibkr', 'submitBracket', cause);
+
+    expect(error.statusCode).toBeUndefined();
+    expect(error.venueCode).toBeUndefined();
+    expect(error.message).toBe('ibkr submitBracket failed (status unknown)');
   });
 });
