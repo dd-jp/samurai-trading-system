@@ -24,8 +24,8 @@
  * placement was calibrated on, and fails loudly if a future change to
  * `computeIndicator`'s `atr` case would move it.
  */
-import { describe, expect, it } from 'vitest';
 import { type Bar, computeIndicator } from '../market-data-service/index.js';
+import { atrIndicatorSpec } from './decide.js';
 
 const LOOKBACK = 14;
 
@@ -57,13 +57,18 @@ function LEGACY_TRADER_ATR(bars: Bar[], lookback: number): number | null {
   return window.reduce((sum, tr) => sum + tr, 0) / window.length;
 }
 
-/** What `decide.ts` now passes; `params.period` pinned so it cannot drift. */
+/**
+ * The real spec `decide.ts` asks MDS for — imported, not rebuilt here. A
+ * local copy would keep this file green if `atrIndicatorSpec` drifted (e.g.
+ * someone dropped the pinned `params.period` and let `computeIndicator`'s
+ * `?? spec.lookback` fallback turn this into an ATR(15)), which is precisely
+ * the drift this file exists to catch.
+ *
+ * `atrFor` itself is not called here: it guards `bars.length < 2` and returns
+ * null, which would hide the NaN the last test below has to observe.
+ */
 function mdsAtr(bars: Bar[], lookback: number): number {
-  return computeIndicator(bars, {
-    indicator: 'atr',
-    params: { period: lookback },
-    lookback: lookback + 1,
-  });
+  return computeIndicator(bars, atrIndicatorSpec(lookback));
 }
 
 /**

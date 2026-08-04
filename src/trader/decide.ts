@@ -10,7 +10,7 @@
  *
  * Cosine precedent retrieval is #75 — see NO_PRECEDENT_COSINE_MULTIPLIER.
  */
-import { type Bar, computeIndicator } from '../market-data-service/index.js';
+import { type Bar, computeIndicator, type IndicatorSpec } from '../market-data-service/index.js';
 import type { OpenPosition, OrderIntent } from '../shared/index.js';
 import { computeIdempotencyKey } from './idempotency-key.js';
 import type { AssetClass, TraderConfig, TraderInput } from './types.js';
@@ -35,6 +35,27 @@ function sideFor(direction: 'bullish' | 'bearish'): 'buy' | 'sell' {
 }
 
 /**
+ * The exact `IndicatorSpec` Trader asks the Market Data Service for. Exported
+ * so `atr-equivalence.test.ts` can pin THIS spec rather than a hand-rebuilt
+ * copy of it — a duplicate would keep passing if the real one drifted, which
+ * is the whole failure mode that test exists to catch. Module-internal: it is
+ * deliberately not re-exported from `trader/index.js`.
+ *
+ * `params.period` is pinned explicitly rather than left to
+ * `computeIndicator`'s `params.period ?? spec.lookback` fallback — with
+ * `spec.lookback` being the BAR-WINDOW width (`atr_lookback + 1`, matching
+ * `DEFAULT_VOLATILITY_INDICATOR`), that fallback would silently make this an
+ * ATR(15), the exact off-by-one commit 0281a8c already had to fix once.
+ */
+export function atrIndicatorSpec(lookback: number): IndicatorSpec {
+  return {
+    indicator: 'atr',
+    params: { period: lookback },
+    lookback: lookback + 1,
+  };
+}
+
+/**
  * Average true range for the stop, computed by the Market Data Service's
  * indicator registry rather than by Trader (ticket #304 — #65 landed the
  * registry, which retired the private copy Trader carried while #65 was
@@ -50,24 +71,17 @@ function sideFor(direction: 'bullish' | 'bearish'): 'buy' | 'sell' {
  * against NaN is false) into an emitted intent with NaN size/stop/target.
  *
  * Bars are consumed in the order `getBars` returns them — ascending by
- * close_time, per `MarketDataStore.readBars`'s contract, which is also what
- * `computeIndicator` documents that it requires. Trader used to re-sort
- * defensively; that now belongs to the MDS read, not to every consumer of it.
+ * close_time, which is the documented contract of
+ * `MarketDataService.getBars`, the interface Trader is actually injected, and
+ * is also what `computeIndicator` documents that it requires. Trader used to
+ * re-sort defensively; that now belongs to the MDS read, not to every
+ * consumer of it.
  */
 function atrFor(bars: Bar[], lookback: number): number | null {
   // < 2 bars is < 1 true range: the first bar only seeds `previousClose`.
   if (bars.length < 2) return null;
 
-  return computeIndicator(bars, {
-    indicator: 'atr',
-    // Pinned explicitly rather than left to `computeIndicator`'s
-    // `params.period ?? spec.lookback` fallback — with `lookback` being the
-    // BAR-WINDOW width (`atr_lookback + 1`, matching
-    // `DEFAULT_VOLATILITY_INDICATOR`), that fallback would silently make this
-    // an ATR(15), the exact off-by-one commit 0281a8c already had to fix once.
-    params: { period: lookback },
-    lookback: lookback + 1,
-  });
+  return computeIndicator(bars, atrIndicatorSpec(lookback));
 }
 
 /**
@@ -121,7 +135,13 @@ async function buildBracket(
       // mean of those ranges: `computeIndicator`'s `atr` seeds on the first
       // `period` ranges and Wilder-smooths the rest, so a window wider than
       // this engages that smoothing and moves every stop in the system.
-      // src/trader/atr-equivalence.test.ts pins both halves of that.
+      //
+      // Two tests pin the two halves, and neither pins the other's:
+      // `atr-equivalence.test.ts` pins the ALGORITHMIC boundary (plain mean
+      // at or below `period` ranges, smoothing beyond it); `decide.test.ts`
+      // ("fetches exactly atr_lookback + 1 bars ...") pins THIS window, so
+      // widening the fetch — or dropping `atr_timeframe` — fails a test
+      // rather than silently repricing every stop.
       { timeframe: config.atr_timeframe, lookback: config.atr_lookback + 1 },
       asOf,
     ),
@@ -134,7 +154,10 @@ async function buildBracket(
   // this config says. Same trade-off, same shape, as the cost model's
   // `replay-driver` / `proxy-strategy` call sites. Cost of that: Trader
   // misses the Tier-1 indicator cache — cheap at one ATR per instrument per
-  // cycle, and recoverable once `IndicatorSpec` grows a timeframe.
+  // cycle. Note the bypass buys nothing at DEFAULT_TRADER_CONFIG, whose
+  // `atr_timeframe` is '1h', the same value `getIndicator` hardcodes; it is
+  // what keeps a NON-default `atr_timeframe` honest. Recoverable once
+  // `IndicatorSpec` grows a timeframe — tracked in #315.
   const atr = atrFor(bars, config.atr_lookback);
   if (atr === null) return null;
 
