@@ -37,6 +37,15 @@ const MUTATED_ENV_VARS = [
   'ALPACA_API_SECRET',
   'ANTHROPIC_API_KEY',
   'NODE_ENV',
+  // #322: every test in this file drives the real construction path, and that
+  // path now refuses to start until the operator has said where alerts go.
+  // Defaulted to `log-only` per test below; the Telegram three are cleared so
+  // an ambient value on the developer's machine cannot change what these
+  // tests exercise.
+  'SAMURAI_ALERTS',
+  'TELEGRAM_BOT_TOKEN',
+  'TELEGRAM_CHAT_ID',
+  'TELEGRAM_ALLOWED_USER_IDS',
 ] as const;
 
 const savedEnv = new Map<string, string | undefined>();
@@ -45,6 +54,12 @@ beforeEach(() => {
   for (const name of MUTATED_ENV_VARS) {
     savedEnv.set(name, process.env[name]);
   }
+  // The attended posture, named explicitly (#322) — which is the only way it
+  // can be reached. Individual tests override it to prove the refusals.
+  process.env.SAMURAI_ALERTS = 'log-only';
+  delete process.env.TELEGRAM_BOT_TOKEN;
+  delete process.env.TELEGRAM_CHAT_ID;
+  delete process.env.TELEGRAM_ALLOWED_USER_IDS;
 });
 
 afterEach(() => {
@@ -233,6 +248,94 @@ describe('startFromEnvironment — the shipped paper profile', () => {
         await orchestrator.stop();
       }
     });
+  });
+
+  it('refuses to boot at all when SAMURAI_ALERTS is unset (#322)', async () => {
+    // The ticket's core claim: there is no path from an unconfigured host to a
+    // running process whose alerts all go to a log nobody reads. Credentials
+    // are present here, so the only thing standing between this call and a
+    // started orchestrator is the alerts decision.
+    delete process.env.SAMURAI_ALERTS;
+
+    const error = await startFromEnvironment({
+      ...paperStartingProfile('paper'),
+      db: openSharedStore(':memory:'),
+    }).catch((e: unknown) => e as Error);
+
+    expect(error.message).toContain('SAMURAI_ALERTS');
+  });
+
+  it('names every missing Telegram variable when the unattended mode is selected', async () => {
+    // SECURITY: the bot token is set and the other two are not. The message
+    // must name what is missing and carry no credential — it is written
+    // straight to stderr by the entrypoint's startup catch.
+    const sentinel = '1234567:AA-not-a-real-bot-token-sentinel';
+    process.env.SAMURAI_ALERTS = 'telegram';
+    process.env.TELEGRAM_BOT_TOKEN = sentinel;
+
+    const error = await startFromEnvironment({
+      ...paperStartingProfile('paper'),
+      db: openSharedStore(':memory:'),
+    }).catch((e: unknown) => e as Error);
+
+    expect(error.message).toContain('TELEGRAM_CHAT_ID');
+    expect(error.message).toContain('TELEGRAM_ALLOWED_USER_IDS');
+    expect(error.message).not.toContain(sentinel);
+    // The token IS set, so it must not be reported as missing.
+    expect(error.message).not.toContain('TELEGRAM_BOT_TOKEN');
+  });
+
+  it('boots with the real push transport under SAMURAI_ALERTS=telegram', async () => {
+    // The other half of #322: the unattended posture actually assembles.
+    // Nothing here reaches Telegram — the client is constructed, no poll loop
+    // is started, and `stop()` runs long before the first 60s heartbeat.
+    process.env.SAMURAI_ALERTS = 'telegram';
+    process.env.TELEGRAM_BOT_TOKEN = 'dummy-token-not-a-credential';
+    process.env.TELEGRAM_CHAT_ID = '-1001234567890';
+    process.env.TELEGRAM_ALLOWED_USER_IDS = '42';
+
+    const entries: Parameters<Logger['log']>[0][] = [];
+    const logger: Logger = { log: (entry) => entries.push(entry) };
+
+    const orchestrator = await startFromEnvironment({
+      ...paperStartingProfile('paper'),
+      db: openSharedStore(':memory:'),
+      logger,
+    });
+
+    try {
+      expect(entries.some((e) => e.message.includes('SAMURAI_ALERTS=telegram'))).toBe(true);
+      expect(entries.some((e) => e.message === 'orchestrator started')).toBe(true);
+      // And the log-only warning is NOT emitted — the two are mutually
+      // exclusive, so this fails if the telegram branch silently fell back.
+      expect(entries.some((e) => e.message.includes('SAMURAI_ALERTS=log-only'))).toBe(false);
+      // The bot token must not reach any log line: it is a bearer credential
+      // for the whole bot and sits in every request URL.
+      expect(JSON.stringify(entries)).not.toContain('dummy-token-not-a-credential');
+
+      // The assertion that actually proves the wiring, rather than proving a
+      // log line: drive the composed `Heartbeat` and watch the request leave.
+      // A startup log claiming `telegram` while the orchestrator was still
+      // handed `LoggingHeartbeatChannel` would pass every check above and fail
+      // this one. Transport stubbed — nothing reaches Telegram.
+      const fetchStub = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ ok: true, result: {} }),
+      });
+      vi.stubGlobal('fetch', fetchStub);
+      try {
+        await orchestrator.heartbeat.emit({ now: () => new Date('2026-08-04T10:00:00Z') });
+
+        expect(fetchStub).toHaveBeenCalledTimes(1);
+        const [, init] = fetchStub.mock.calls[0] as [string, { body: string }];
+        expect(JSON.parse(init.body)).toMatchObject({ chat_id: '-1001234567890' });
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    } finally {
+      await orchestrator.stop();
+    }
   });
 
   it('refuses to boot the shipped profile into live mode', () => {

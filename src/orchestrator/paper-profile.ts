@@ -45,14 +45,20 @@
  *
  * ## Transports are NOT here
  *
- * This profile supplies config values only. The alert transports
- * (`heartbeatChannel`, `approvals`, `orphanAlerts`, `unpricedFillAlerts`)
- * are deliberately left to the composition root's log-only defaults — wiring
- * the real `TelegramBotApiClient` (#275) at the composition root is
- * [#322](https://github.com/dd-jp/samurai-trading-system/issues/322), not
- * this ticket. Until #322 lands, every "alert" this process raises is a log
- * line, which is enough for a supervised smoke run and explicitly not enough
- * for the unattended soak (#238).
+ * This profile supplies config values only, and deliberately names no
+ * transport. That is not the same as leaving them unwired:
+ * [#322](https://github.com/dd-jp/samurai-trading-system/issues/322) resolves
+ * the three outbound alert channels (`heartbeatChannel`, `orphanAlerts`,
+ * `unpricedFillAlerts`) from `SAMURAI_ALERTS` in `startFromEnvironment`, so a
+ * paper run started with `SAMURAI_ALERTS=telegram` pushes them to a phone —
+ * which is what makes the unattended soak (#238) unattended. Putting that
+ * decision here instead would have hard-coded one operator's posture into a
+ * checked-in file; it is a deployment choice, not a tuning value.
+ *
+ * `approvals` is the exception and is still a log-only stand-in: it is an
+ * inbound HITL round trip rather than an alert, and wiring it through Telegram
+ * is #275's remaining half. See `verdictConfig.automation_level` below for
+ * what that means for the `manual` setting in practice.
  */
 import type { CostConfig } from '../cost-model-backtest/index.js';
 import type { ExecutionConfig } from '../execution/index.js';
@@ -221,7 +227,8 @@ function buildProfileConfigs(): Pick<
      *
      * Worth being explicit about what `manual` means *today*, because it is
      * not what the spec sentence implies: with no real approval transport
-     * wired (#275/#322), the composition root falls back to
+     * wired (#275's remaining half — #322 wired the outbound alert channels,
+     * which are a different seam), the composition root falls back to
      * `ConsoleApprovalChannel`, which auto-approves and logs a `warn` naming
      * the trade and stating that no human reviewed it. So `manual` currently
      * buys an exercised HITL code path and an audit trail of machine consent
@@ -268,8 +275,9 @@ function buildProfileConfigs(): Pick<
     drift_tolerance: 500,
     /**
      * UNSOURCED (milliseconds). Inert while `ConsoleApprovalChannel` resolves
-     * synchronously; it becomes load-bearing the moment #322 wires a real
-     * channel. 15 min is a coffee-break response window, and the gate is
+     * synchronously; it becomes load-bearing the moment a real approval
+     * channel is wired (#275's remaining half — #322 wired the outbound alerts
+     * only). 15 min is a coffee-break response window, and the gate is
      * fail-safe either way — verdict-spec.md "Timeout -> no-go".
      */
     human_timeout: 15 * 60_000,

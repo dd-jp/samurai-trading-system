@@ -117,7 +117,14 @@ describe('startFromEnvironment', () => {
 });
 
 describe('missingCredentialEnvVars', () => {
-  const CREDENTIALS = ['ALPACA_API_KEY', 'ALPACA_API_SECRET', 'ANTHROPIC_API_KEY'] as const;
+  const CREDENTIALS = [
+    'ALPACA_API_KEY',
+    'ALPACA_API_SECRET',
+    'ANTHROPIC_API_KEY',
+    'TELEGRAM_BOT_TOKEN',
+    'TELEGRAM_CHAT_ID',
+    'TELEGRAM_ALLOWED_USER_IDS',
+  ] as const;
   const saved: Record<string, string | undefined> = {};
 
   beforeEach(() => {
@@ -139,7 +146,7 @@ describe('missingCredentialEnvVars', () => {
     // Each client refuses to be built without its own key, but they are
     // constructed in sequence — so without this pre-flight an unconfigured
     // host learns about exactly one variable per attempt.
-    expect(missingCredentialEnvVars({})).toEqual([
+    expect(missingCredentialEnvVars({}, 'log-only')).toEqual([
       'ALPACA_API_KEY',
       'ALPACA_API_SECRET',
       'ANTHROPIC_API_KEY',
@@ -154,18 +161,21 @@ describe('missingCredentialEnvVars', () => {
     process.env.ALPACA_API_SECRET = 'set';
     process.env.ANTHROPIC_API_KEY = 'set';
 
-    expect(missingCredentialEnvVars({})).toEqual(['ALPACA_API_KEY']);
+    expect(missingCredentialEnvVars({}, 'log-only')).toEqual(['ALPACA_API_KEY']);
   });
 
   it('does not demand credentials for clients the caller injected', () => {
     // A test or a non-Alpaca composition root supplying its own clients must
     // not be asked for keys it will never use.
     expect(
-      missingCredentialEnvVars({
-        alpacaBrokerClient: {} as never,
-        dataSource: {} as never,
-        llmClient: {} as never,
-      }),
+      missingCredentialEnvVars(
+        {
+          alpacaBrokerClient: {} as never,
+          dataSource: {} as never,
+          llmClient: {} as never,
+        },
+        'log-only',
+      ),
     ).toEqual([]);
   });
 
@@ -175,16 +185,37 @@ describe('missingCredentialEnvVars', () => {
     // through it even when `ProductionConfig.broker` is a simulated adapter.
     // Skipping the check on `broker` alone would move the failure back to a
     // deep stack trace inside construction.
-    expect(missingCredentialEnvVars({ broker: {} as never, llmClient: {} as never })).toEqual([
-      'ALPACA_API_KEY',
-      'ALPACA_API_SECRET',
-    ]);
+    expect(
+      missingCredentialEnvVars({ broker: {} as never, llmClient: {} as never }, 'log-only'),
+    ).toEqual(['ALPACA_API_KEY', 'ALPACA_API_SECRET']);
   });
 
   it('never returns a credential VALUE, only its variable name', () => {
     process.env.ALPACA_API_KEY = 'super-secret-key';
+    process.env.TELEGRAM_BOT_TOKEN = 'super-secret-bot-token';
 
-    expect(missingCredentialEnvVars({}).join(' ')).not.toContain('super-secret-key');
+    expect(missingCredentialEnvVars({}, 'telegram').join(' ')).not.toContain('super-secret-key');
+    expect(missingCredentialEnvVars({}, 'telegram').join(' ')).not.toContain(
+      'super-secret-bot-token',
+    );
+  });
+
+  it('demands the Telegram variables only under the unattended alerts mode (#322)', () => {
+    // The mode is passed in rather than read from `process.env` here on
+    // purpose: what this pre-flight reports must not depend on ambient state
+    // that a sibling test could leave behind.
+    expect(missingCredentialEnvVars({}, 'telegram')).toEqual([
+      'ALPACA_API_KEY',
+      'ALPACA_API_SECRET',
+      'ANTHROPIC_API_KEY',
+      'TELEGRAM_BOT_TOKEN',
+      'TELEGRAM_CHAT_ID',
+      'TELEGRAM_ALLOWED_USER_IDS',
+    ]);
+    expect(missingCredentialEnvVars({}, 'log-only')).not.toContain('TELEGRAM_BOT_TOKEN');
+    // `undefined` — the caller injected every alert channel, so no transport
+    // credential is needed either.
+    expect(missingCredentialEnvVars({}, undefined)).not.toContain('TELEGRAM_BOT_TOKEN');
   });
 });
 

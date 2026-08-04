@@ -66,10 +66,31 @@ npm run lint:fix
 ### Orchestrator (live tick loop)
 
 ```bash
-npm run orchestrator
+yarn orchestrator
 ```
 
 Runs the full pipeline: market data → analysts → debate → trader → risk → verdict → execution. Scheduler handles crypto (24/7 WebSocket) and stock market hours.
+
+#### Required environment
+
+The orchestrator refuses to start rather than guess at any of these. It names every missing variable at startup.
+
+| Variable | Values | Purpose |
+| --- | --- | --- |
+| `SAMURAI_MODE` | `paper` (default) / `backtest` / `live` | Selects the broker environment and the HITL posture. The shipped entrypoint refuses `live` — see `src/orchestrator/paper-profile.ts`. |
+| `SAMURAI_ALERTS` | `telegram` / `log-only` — **required, no default** | Where operator alerts go. |
+| `ALPACA_API_KEY`, `ALPACA_API_SECRET` | | Broker + market data. |
+| `ANTHROPIC_API_KEY` | | LLM debate. |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ALLOWED_USER_IDS` | | Required only when `SAMURAI_ALERTS=telegram`. |
+
+**Attended vs unattended (`SAMURAI_ALERTS`).** Three escalations — the dead-man's-switch heartbeat, an orphaned `go` verdict found at restart, and a fill the venue will not price — are the only warning an operator gets that the system has stopped or is stuck.
+
+- `SAMURAI_ALERTS=telegram` pushes all three to the trade channel. **This is the posture an unattended run requires**, and the only one appropriate for the 14-day soak.
+- `SAMURAI_ALERTS=log-only` writes them to stdout instead. Legitimate for an **attended** run — local development, a supervised smoke test, a backtest — where somebody is reading the log stream. It logs a `warn` at startup saying so.
+
+There is deliberately no default. A process that silently fell back to log-only would look healthy right up until the day it stopped and nobody noticed.
+
+`node dist/orchestrator/index.js` does not read a `.env` file on its own — use `node --env-file=.env.local dist/orchestrator/index.js`, or export the variables. The tracked `.env` holds empty placeholders and is not a configured environment; real credentials belong in the gitignored `.env.local`.
 
 ### CLI (operator dashboard)
 

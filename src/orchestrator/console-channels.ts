@@ -1,18 +1,24 @@
 /**
- * Log-only stand-ins for the three human-facing transports, so a smoke run
- * can start before a real `TelegramClient` exists (#275).
+ * Log-only stand-ins for the human-facing transports.
  *
- * These are stand-ins, not implementations. #275 stays open: a real channel
- * means long-polling `getUpdates`, an allowlisted `callback_query.from.id`,
- * and the HMAC round-trip through `SignedApprovalChannel` — none of which is
- * approximated here. What these give is an operator watching the log stream
- * instead of a phone, which is enough to observe a BTC-USD paper tick end to
- * end and nothing more.
+ * These are stand-ins, not implementations. What they give is an operator
+ * watching the log stream instead of a phone, which is enough to observe a
+ * BTC-USD paper tick end to end and nothing more.
  *
- * Two of the three are uncontroversial: a heartbeat and an orphan alert are
- * pure outbound notifications, and writing them to the log loses reachability
- * (nobody is paged) but changes no decision. The approval channel is
- * different, and is treated differently below.
+ * **They are no longer reachable by omission for the three outbound alerts
+ * (#322).** The shipped entrypoint requires `SAMURAI_ALERTS`, and these three
+ * are what `SAMURAI_ALERTS=log-only` explicitly selects — an ATTENDED-run
+ * posture (local dev, a supervised smoke test), announced with a `warn` at
+ * startup. `SAMURAI_ALERTS=telegram` passes `TradeChannelHeartbeat` /
+ * `TradeChannelOrphanAlert` / `TradeChannelUnpricedFillAlert` over a real
+ * `TelegramBotApiClient` (#275) instead. See alert-transport.ts.
+ *
+ * The three outbound ones are uncontroversial as stand-ins: a heartbeat, an
+ * orphan alert and a stuck-lot alert are pure notifications, and writing them
+ * to the log loses reachability (nobody is paged) but changes no decision. The
+ * approval channel is different, and is treated differently below — it is also
+ * the one still reached by omission, because wiring an inbound HITL round trip
+ * through Telegram is #275's remaining half, not #322's.
  */
 import type { UnpricedFillAlert, UnpricedFillAlertChannel } from '../execution/index.js';
 import type { CiiScoreProvider } from '../market-intelligence/index.js';
@@ -27,8 +33,8 @@ import type { Logger } from './types.js';
  * Worth being explicit about what is lost: the heartbeat's whole purpose is
  * that its SILENCE is noticed by something outside this process. A log line
  * nobody tails is not a dead-man's switch — it is a diary. Fine for a
- * supervised smoke run, not a substitute for #275 before an unattended soak
- * (#238).
+ * supervised smoke run, and never for an unattended soak (#238), which is why
+ * selecting it now requires saying `SAMURAI_ALERTS=log-only` out loud (#322).
  */
 export class LoggingHeartbeatChannel implements HeartbeatChannel {
   constructor(private readonly logger: Logger) {}
@@ -72,10 +78,9 @@ export class LoggingOrphanAlertChannel implements OrphanAlertChannel {
  * position the system cannot account for, and it will not resolve itself.
  *
  * Same caveat as the heartbeat's log-only stand-in: a log line nobody tails is
- * not an alert. This is the production DEFAULT only because `TelegramClient`
- * has no composition-root wiring yet (#275); `TradeChannelUnpricedFillAlert`
- * (unpriced-fill-channel.ts) is the reachable-from-a-phone implementation, and
- * an unattended soak (#238) should inject it.
+ * not an alert. `TradeChannelUnpricedFillAlert` (unpriced-fill-channel.ts) is
+ * the reachable-from-a-phone implementation, and `SAMURAI_ALERTS=telegram`
+ * (#322) is what an unattended soak (#238) sets to get it.
  */
 export class LoggingUnpricedFillAlertChannel implements UnpricedFillAlertChannel {
   constructor(private readonly logger: Logger) {}
