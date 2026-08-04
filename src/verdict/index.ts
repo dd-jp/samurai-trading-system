@@ -178,6 +178,7 @@ export class VerdictImpl implements Verdict {
   }
 }
 
+export { LoggingVerdict } from './logging-verdict.js';
 export type { ApprovalCallbackPayload } from './notifications/approval-callback-verifier.js';
 export {
   signApprovalCallback,
@@ -219,6 +220,7 @@ export type {
 } from './notifications/types.js';
 export type { ApprovalRequestSender } from './notifications/verified-approval-channel.js';
 export { SignedApprovalChannel } from './notifications/verified-approval-channel.js';
+export { SqliteVerdictLogStore } from './sqlite-verdict-log-store.js';
 export type {
   ApprovalChannel,
   ApprovalOutcome,

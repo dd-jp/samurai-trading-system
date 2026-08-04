@@ -510,6 +510,25 @@ describe('composed tick chain (integration)', () => {
     expect(persistence.currentTickStore.get('BTC-USD')).toBeUndefined();
     expect(logger.entries.map((entry) => entry.stage)).toEqual(stages);
     expect(logger.entries.every((entry) => entry.trace_id === 'trace-composed')).toBe(true);
+
+    // #302: the `go` verdict above must have left a real `verdict_log` row
+    // through the PRODUCTION composition path (`buildProductionComponents`
+    // -> `buildVerdictStep`), not a hand-rolled `LoggingVerdict` wiring in
+    // this test. `OrphanVerdictScanner`'s startup query depends on this row
+    // existing — with no writer wired, the query always returns zero
+    // orphans regardless of the truth. Reverting `direct-bind.ts`'s
+    // `buildVerdictStep` to a bare `new VerdictImpl()` must fail this
+    // assertion.
+    const verdictLogRow = db
+      .prepare('SELECT trace_id, status, instrument FROM verdict_log WHERE trace_id = ?')
+      .get('trace-composed') as
+      | { trace_id: string; status: string; instrument: string }
+      | undefined;
+    expect(verdictLogRow).toEqual({
+      trace_id: 'trace-composed',
+      status: 'go',
+      instrument: 'BTC-USD',
+    });
   });
 });
 

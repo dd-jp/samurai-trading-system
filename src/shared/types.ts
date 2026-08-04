@@ -208,9 +208,21 @@ export interface VerdictLog {
 }
 
 /**
- * shared_store `VerdictLog` port. Owned by Verdict (the writer); read by the
- * Dashboard's verdict-history view. Append-only: no update/delete, one row
- * per `trace_id`.
+ * shared_store `VerdictLog` port. Owned by Verdict (the writer) — the only
+ * production consumer is `LoggingVerdict` (verdict/logging-verdict.ts),
+ * which calls `writeLog` once per `decide()`. Append-only: no update/delete,
+ * one row per `trace_id`.
+ *
+ * Deliberately write-only (no `getByTraceId` or similar read accessor,
+ * #306): every real reader of `verdict_log` — the Dashboard's
+ * `SqliteQueryStore` and the Orchestrator's `OrphanVerdictScanner` — reads
+ * the table directly over `SharedStore`, not through this port, and the
+ * scanner's orphan query (a `NOT EXISTS` join against `audit_log`) couldn't
+ * be expressed through a `trace_id` getter regardless. Widening the port to
+ * match `InMemoryVerdictLogStore`'s old `getByTraceId` (test-only
+ * convenience, never called by production code) would advertise a contract
+ * nothing needs; see verdict-log-store.ts's doc comment for the fuller
+ * accounting.
  */
 export interface VerdictLogStore {
   /** Persists one row per `VerdictDecision`; called once per `decide()`. */

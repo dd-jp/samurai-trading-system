@@ -1,6 +1,6 @@
 import type { Mark, MarketDataService, TradingCalendar } from '../market-data-service/index.js';
 import type { BreakerState, RiskDecision } from '../risk-manager/index.js';
-import type { Clock, OrderIntent } from '../shared/index.js';
+import type { Clock, OrderIntent, VerdictLog, VerdictLogStore } from '../shared/index.js';
 import { VerdictImpl } from './index.js';
 import { LoggingVerdict } from './logging-verdict.js';
 import type {
@@ -10,7 +10,6 @@ import type {
   VerdictConfig,
   VerdictInput,
 } from './types.js';
-import { InMemoryVerdictLogStore } from './verdict-log-store.js';
 
 const NOW = new Date('2026-07-15T14:00:00Z');
 const fixedClock: Clock = { now: () => NOW };
@@ -105,6 +104,26 @@ function makeApprovals(outcome: ApprovalOutcome = 'approved'): ApprovalChannel {
   return { requestApproval: vi.fn().mockResolvedValue(outcome) };
 }
 
+/**
+ * Port-shaped fake, not `InMemoryVerdictLogStore` (#306): these tests exist
+ * to prove `LoggingVerdict` calls `writeLog` with the right row, which is
+ * exactly the `VerdictLogStore` contract — asserting through the concrete
+ * class's now-removed `getByTraceId` would test implementation surface the
+ * port never promised.
+ */
+function makeStore(): VerdictLogStore & { writeLog: ReturnType<typeof vi.fn> } {
+  return { writeLog: vi.fn() };
+}
+
+/** The row most recently written for `trace_id`, or undefined if none was. */
+function lastRowFor(
+  store: { writeLog: ReturnType<typeof vi.fn> },
+  trace_id: string,
+): VerdictLog | undefined {
+  const rows = store.writeLog.mock.calls.map((call) => call[0] as VerdictLog);
+  return rows.filter((row) => row.trace_id === trace_id).at(-1);
+}
+
 function makeInput(overrides: Partial<VerdictInput> = {}): VerdictInput {
   return {
     trace_id: 'trace-1',
@@ -123,7 +142,7 @@ function makeInput(overrides: Partial<VerdictInput> = {}): VerdictInput {
 
 describe('LoggingVerdict.decide', () => {
   it('writes exactly one verdict_log row for a no-go decision (staleness, no HITL reached)', async () => {
-    const store = new InMemoryVerdictLogStore();
+    const store = makeStore();
     const verdict = new LoggingVerdict(new VerdictImpl(), store);
     const input = makeInput({
       risk_decision: makeRiskDecision({
@@ -135,7 +154,7 @@ describe('LoggingVerdict.decide', () => {
 
     expect(decision.status).toBe('no_go');
     expect(decision.no_go_reason).toBe('staleness');
-    expect(store.getByTraceId('trace-1')).toEqual({
+    expect(lastRowFor(store, 'trace-1')).toEqual({
       trace_id: 'trace-1',
       idempotency_key: decision.idempotency_key,
       instrument: 'AAPL',
@@ -147,58 +166,58 @@ describe('LoggingVerdict.decide', () => {
   });
 
   it('writes a go row with hitl_override true when reached via human approval', async () => {
-    const store = new InMemoryVerdictLogStore();
+    const store = makeStore();
     const verdict = new LoggingVerdict(new VerdictImpl(), store);
 
     const decision = await verdict.decide(makeInput());
 
     expect(decision.status).toBe('go');
     expect(decision.approval_path).toBe('human');
-    const row = store.getByTraceId('trace-1');
+    const row = lastRowFor(store, 'trace-1');
     expect(row?.status).toBe('go');
     expect(row?.no_go_reason).toBeNull();
     expect(row?.hitl_override).toBe(true);
   });
 
   it('writes hitl_override true when the human rejects', async () => {
-    const store = new InMemoryVerdictLogStore();
+    const store = makeStore();
     const verdict = new LoggingVerdict(new VerdictImpl(), store);
 
     const decision = await verdict.decide(makeInput({ approvals: makeApprovals('rejected') }));
 
     expect(decision.status).toBe('no_go');
     expect(decision.no_go_reason).toBe('human_rejected');
-    const row = store.getByTraceId('trace-1');
+    const row = lastRowFor(store, 'trace-1');
     expect(row?.no_go_reason).toBe('human_rejected');
     expect(row?.hitl_override).toBe(true);
   });
 
   it('writes hitl_override true on a human timeout', async () => {
-    const store = new InMemoryVerdictLogStore();
+    const store = makeStore();
     const verdict = new LoggingVerdict(new VerdictImpl(), store);
 
     const decision = await verdict.decide(makeInput({ approvals: makeApprovals('timeout') }));
 
     expect(decision.status).toBe('no_go');
     expect(decision.no_go_reason).toBe('timeout');
-    const row = store.getByTraceId('trace-1');
+    const row = lastRowFor(store, 'trace-1');
     expect(row?.hitl_override).toBe(true);
   });
 
   it('writes hitl_override true in paper mode, same as live (no backtest bypass)', async () => {
-    const store = new InMemoryVerdictLogStore();
+    const store = makeStore();
     const verdict = new LoggingVerdict(new VerdictImpl(), store);
 
     const decision = await verdict.decide(makeInput({ mode: 'paper' }));
 
     expect(decision.status).toBe('go');
     expect(decision.approval_path).toBe('human');
-    const row = store.getByTraceId('trace-1');
+    const row = lastRowFor(store, 'trace-1');
     expect(row?.hitl_override).toBe(true);
   });
 
   it('writes hitl_override false on a backtest bypass, even though would_require_approval is true', async () => {
-    const store = new InMemoryVerdictLogStore();
+    const store = makeStore();
     const verdict = new LoggingVerdict(new VerdictImpl(), store);
 
     const decision = await verdict.decide(makeInput({ mode: 'backtest' }));
@@ -206,12 +225,12 @@ describe('LoggingVerdict.decide', () => {
     expect(decision.status).toBe('go');
     expect(decision.approval_path).toBe('automated');
     expect(decision.would_require_approval).toBe(true);
-    const row = store.getByTraceId('trace-1');
+    const row = lastRowFor(store, 'trace-1');
     expect(row?.hitl_override).toBe(false);
   });
 
   it('writes hitl_override false on a fully automated go (auto dial, no HITL engaged)', async () => {
-    const store = new InMemoryVerdictLogStore();
+    const store = makeStore();
     const verdict = new LoggingVerdict(new VerdictImpl(), store);
 
     const decision = await verdict.decide(
@@ -220,12 +239,12 @@ describe('LoggingVerdict.decide', () => {
 
     expect(decision.status).toBe('go');
     expect(decision.approval_path).toBe('automated');
-    const row = store.getByTraceId('trace-1');
+    const row = lastRowFor(store, 'trace-1');
     expect(row?.hitl_override).toBe(false);
   });
 
   it('returns the inner decision unchanged', async () => {
-    const store = new InMemoryVerdictLogStore();
+    const store = makeStore();
     const inner = new VerdictImpl();
     const verdict = new LoggingVerdict(inner, store);
     const input = makeInput();
@@ -237,7 +256,7 @@ describe('LoggingVerdict.decide', () => {
   });
 
   it('does not conflate rows across distinct trace_ids', async () => {
-    const store = new InMemoryVerdictLogStore();
+    const store = makeStore();
     const verdict = new LoggingVerdict(new VerdictImpl(), store);
 
     await verdict.decide(makeInput({ trace_id: 'trace-a' }));
@@ -248,7 +267,7 @@ describe('LoggingVerdict.decide', () => {
       }),
     );
 
-    expect(store.getByTraceId('trace-a')?.instrument).toBe('AAPL');
-    expect(store.getByTraceId('trace-b')?.instrument).toBe('TSLA');
+    expect(lastRowFor(store, 'trace-a')?.instrument).toBe('AAPL');
+    expect(lastRowFor(store, 'trace-b')?.instrument).toBe('TSLA');
   });
 });

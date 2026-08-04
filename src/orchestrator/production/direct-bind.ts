@@ -48,7 +48,7 @@ import type { Clock, OpenPosition } from '../../shared/index.js';
 import type { TraderConfig } from '../../trader/index.js';
 import { decide } from '../../trader/index.js';
 import type { ApprovalChannel, PositionStore, VerdictConfig } from '../../verdict/index.js';
-import { VerdictImpl } from '../../verdict/index.js';
+import { LoggingVerdict, SqliteVerdictLogStore, VerdictImpl } from '../../verdict/index.js';
 import { OrphanVerdictScanner } from '../orphan-verdict-scan.js';
 import { SqliteAuditLog } from '../sqlite-audit-log.js';
 import { SqliteCurrentTickStore } from '../sqlite-current-tick-store.js';
@@ -188,10 +188,30 @@ export interface VerdictStepDeps extends BreakerStateDeps {
   positionStore: PositionStore;
   config: VerdictConfig;
   approvals: ApprovalChannel;
+  /**
+   * Backs the `LoggingVerdict` decorator's `verdict_log` write (#302). Same
+   * shared handle every other Sqlite* store in this composition root reads/
+   * writes through — see `buildPersistence` below. Typed via
+   * `ConstructorParameters`, not a bare `SharedStore` annotation: this
+   * module already imports a DIFFERENT `SharedStore` from
+   * `../../execution/index.js` (`ExecutionStepDeps.store`'s type, an
+   * unrelated interface with the same name) for `ExecutionStepDeps` above —
+   * `buildPersistence`'s `store` param uses the identical workaround.
+   */
+  store: ConstructorParameters<typeof SqliteVerdictLogStore>[0];
 }
 
+/**
+ * `LoggingVerdict` wraps `VerdictImpl` so every `decide()` call persists a
+ * `verdict_log` row via `SqliteVerdictLogStore` (#302) — without this, the
+ * table stays permanently empty and `OrphanVerdictScanner`'s query can never
+ * find a row to report on. `NotifyingVerdict` (notifying-verdict.ts) stays
+ * unwired here deliberately: #307 is the open ticket deciding whether one
+ * decorator or two is the right shape once both are live; this ticket wires
+ * only the one #302 needs.
+ */
 export function buildVerdictStep(deps: VerdictStepDeps): TickSteps['verdict'] {
-  const verdict = new VerdictImpl();
+  const verdict = new LoggingVerdict(new VerdictImpl(), new SqliteVerdictLogStore(deps.store));
 
   return async ({ trace_id, risk_decision, clock }) => {
     // Gate 5's fire-time re-check needs current breaker state, not the
