@@ -282,6 +282,13 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
     const fills: NormalizedFill[] = [];
     const failures: unknown[] = [];
+    /**
+     * Counted apart from `failures.length`, which now also collects journal and
+     * alert-delivery failures (#298). Reporting those as "brackets failed"
+     * would send an operator reading the soak log to the venue to investigate
+     * orders that were never the problem.
+     */
+    let bracketFailures = 0;
 
     // Snapshot, as #297 already did for `CcxtBrokerAdapter.syncBrackets` (M3):
     // the `getOrder` below awaits inside this loop, and a Map iterator DOES
@@ -321,6 +328,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
           }
         }
         failures.push(error);
+        bracketFailures += 1;
       }
     }
 
@@ -348,7 +356,8 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     if (fills.length === 0 && failures.length > 0) {
       throw new AggregateError(
         failures,
-        `Alpaca fetchNewFills: all ${failures.length} bracket(s) failed; no fills could be read`,
+        `Alpaca fetchNewFills: ${failures.length} failure(s) during the sweep ` +
+          `(${bracketFailures} bracket(s) failed); no fills could be read`,
       );
     }
 
@@ -357,11 +366,16 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
   /**
    * The age-out (#298). Sweeps the RECORDED anomalies rather than only the ones
-   * this pass happened to re-observe — the escalation must not depend on the
-   * fill still being re-offered, and `ingestFills()` bounds the feed by the
-   * oldest open lot's `opened_at`, so a lot that leaves `getOpenPositions()`
-   * for any other reason takes its unpriced fill out of the window with it.
-   * Table-driven, so the clock keeps running either way.
+   * this pass happened to re-observe: whether the venue still reports the order,
+   * whether it is still in the bracket index, and whether it falls inside
+   * `ingestFills()`'s `since` window are all things the escalation must not
+   * depend on. Table-driven, so the clock keeps running either way.
+   *
+   * What it DOES depend on is being called — `ingestFills()` returns before
+   * touching the broker when there are no open positions, so no sweep runs and
+   * nothing ages. That is not a hole for the case this exists to catch: a stuck
+   * lot is by definition non-terminal, so it keeps `getOpenPositions()`
+   * non-empty and the poll firing until someone resolves it.
    *
    * Alerts ONCE per fill, recorded durably: a permanent venue anomaly must not
    * page an operator every 15 seconds for the rest of the soak. `alerted_at` is
