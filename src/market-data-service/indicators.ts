@@ -183,9 +183,20 @@ export class InsufficientBarsError extends Error {
  *
  * A non-positive or non-integer period is rejected rather than tolerated:
  * `sma`'s `slice(-period)` at `period = 0` returns the WHOLE array (`-0 === 0`)
- * and would answer a full-window mean labelled a 0-period one, and a `NaN`
- * period makes every length comparison below false — both are the same silent
- * fabrication this module now refuses to produce.
+ * and would answer a full-window mean labelled a 0-period one; a `NaN` period
+ * makes every length comparison below false; and a FRACTIONAL period seeds
+ * over `slice`'s truncated count while `rsi`/`atr` divide by the untruncated
+ * one. All three are the same silent fabrication this module now refuses.
+ *
+ * This throws on a path `atrFor` does NOT guard (it calls `minimumBarsFor`
+ * outside any catch), so it is only safe because no period in this repo is
+ * computed: `TraderConfig.atr_lookback` is the literal 14 in
+ * `DEFAULT_TRADER_CONFIG`, spread unchanged by `paper-profile.ts`, and the
+ * Feedback Loop's `strategy_params` dials are written to the tuning store
+ * only — nothing feeds a tuned value back into an `IndicatorSpec`. If that
+ * ever changes, a stepped dial is exactly how a fractional period would
+ * arrive, and this check would turn a mispriced tick into a dead one; revisit
+ * it then rather than assuming it stays free.
  */
 function periodOf(spec: IndicatorSpec): number {
   const period = spec.params.period ?? spec.lookback;
@@ -252,6 +263,19 @@ export function minimumBarsFor(spec: IndicatorSpec): number {
  * trips conservatively instead of going inert. Returning `null` here would
  * instead push a new nullable through every consumer, and the ones that forgot
  * to handle it would land back at a `NaN` sizing a live stop.
+ *
+ * Containment was checked, not assumed, because this path fires far more often
+ * than `assertAscending` ever did (a cold instrument, a fresh DB after
+ * restart, a venue gap). No throw from here escapes one instrument's pass:
+ * the technical analyst's SMA/RSI reject inside
+ * `AnalystOrchestrator.runAnalysts`'s per-persona `catch`, which records the
+ * reason and — technical being `mandatory` — returns an empty view set, so
+ * `SequentialTickRunner` short-circuits that instrument at `analysts` with a
+ * logged `quorum_skip`; `simulated-adapter`'s `buildMarketState` surfaces as
+ * an `error` execution result; and `production.ts`'s tick loop is the
+ * backstop that costs one tick rather than the run. Note `runTickPlan` has no
+ * per-instrument catch of its own, so that backstop is the only one below the
+ * process — which is why every consumer above converts rather than propagates.
  *
  * The length guard is checked AFTER the ordering guard on purpose: a
  * misordered window means a broken FEED, which is the more actionable

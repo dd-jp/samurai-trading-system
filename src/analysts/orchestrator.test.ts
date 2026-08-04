@@ -47,10 +47,10 @@ function buildBars(): Bar[] {
 const BARS = buildBars();
 const ASOF = BARS[BARS.length - 1].close_time;
 
-function buildDeps(assetClass: AssetClass) {
+function buildDeps(assetClass: AssetClass, bars: Bar[] = BARS) {
   const clock = new ManualClock(ASOF);
   const dataSource = new FixtureDataSource(
-    BARS,
+    bars,
     { price: 999, observed_at: ASOF, source: 'fixture-live' },
     assetClass,
   );
@@ -154,6 +154,41 @@ describe('AnalystOrchestrator', () => {
       'sentiment',
       'technical',
     ]);
+  });
+
+  it('contains a short-window indicator throw as a recorded quorum skip, not a rejected tick (#319)', async () => {
+    // The containment `computeIndicator`'s docstring relies on, pinned with
+    // the REAL technical analyst rather than a stub. #319 made a short window
+    // throw instead of answering a fabricated RSI, and that path fires far
+    // more often than the misordered-feed throw it joined — a cold
+    // instrument, a fresh DB after restart, a venue gap. `runTickPlan` has no
+    // per-instrument catch, so if this escaped here it would abort every
+    // OTHER instrument in the tick too.
+    //
+    // Instead it lands in the per-persona catch: technical is `mandatory`, so
+    // the pass is a quorum skip with the reason recorded, and `runAnalysts`
+    // itself resolves. Degraded and visible, not silent and not fatal.
+    const coldStart = BARS.slice(0, 5);
+    const { clock, marketData, marketIntelligence } = buildDeps('crypto', coldStart);
+    const orchestrator = new AnalystOrchestrator({
+      market_data: marketData,
+      market_intelligence: marketIntelligence,
+    });
+    const signal: Signal = { asset: INSTRUMENT, asset_class: 'crypto' };
+
+    const result = await orchestrator.runAnalysts('trace-1', signal, clock);
+
+    expect(result.skipped).toBe(true);
+    expect(result.views).toEqual([]);
+    expect(result.failures).toContainEqual(
+      expect.objectContaining({
+        analyst_type: 'technical',
+        role: 'mandatory',
+        // Whichever of the analyst's two indicator reads rejects first —
+        // `Promise.all` gives no ordering guarantee, and both are short.
+        reason: expect.stringMatching(/needs \d+ bars but received 5/),
+      }),
+    );
   });
 
   it('blocks the handoff (quorum-miss) when a mandatory persona fails', async () => {
