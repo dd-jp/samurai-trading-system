@@ -122,14 +122,6 @@ export type {
  * instead of a process that starts and silently trades on invented defaults.
  */
 export const REQUIRED_INJECTED_CONFIG = [
-  'alpacaBrokerClient',
-  'alpacaDataClient',
-  'heartbeatChannel',
-  'approvals',
-  'orphanAlerts',
-  'ciiScoreProvider',
-  'accountState',
-  'volatility',
   'traderConfig',
   'riskConfig',
   'verdictConfig',
@@ -189,11 +181,13 @@ export async function startFromEnvironment(
   if (missing.length > 0) {
     throw new Error(
       `Orchestrator cannot start: ${missing.length} required dependencies are not wired ` +
-        `(${missing.join(', ')}). These are injected seams, not settings: the HTTP clients ` +
-        'for Alpaca/LLM/trade-channel/CII have no implementation in this codebase yet, and ' +
-        'the per-stage config values are tuned in paper trading rather than checked in. ' +
-        'Supply them via startFromEnvironment(injected) — see ProductionConfig in ' +
-        'src/orchestrator/production.ts.',
+        `(${missing.join(', ')}). These are injected seams, not settings. The Alpaca broker ` +
+        'and market-data clients, the LLM client and the account-state provider are no longer ' +
+        'among them — those are built from the environment now (#273/#286/#276). What remains ' +
+        'is the trade-channel/HITL/CII transports, which still have no implementation in this ' +
+        'codebase, plus the per-stage config values, which are tuned in paper trading rather ' +
+        'than checked in. Supply them via startFromEnvironment(injected) — see ProductionConfig ' +
+        'in src/orchestrator/production.ts.',
     );
   }
 

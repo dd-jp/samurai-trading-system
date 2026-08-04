@@ -28,7 +28,7 @@ describe('startFromEnvironment', () => {
 
     expect(error.message).not.toMatch(/\bllmClient\b/);
     expect(error.message).not.toMatch(/\btraderConfig\b/);
-    expect(error.message).toContain('alpacaBrokerClient');
+    expect(error.message).toContain('riskConfig');
   });
 
   it('rejects an unrecognised SAMURAI_MODE rather than casting it through', async () => {
@@ -52,10 +52,29 @@ describe('startFromEnvironment', () => {
     // Guards against a future field being added to ProductionConfig as a
     // silently-optional dependency: these are the seams with no in-repo
     // implementation, and the list is the contract.
-    expect(REQUIRED_INJECTED_CONFIG).toContain('alpacaDataClient');
-    expect(REQUIRED_INJECTED_CONFIG).toContain('heartbeatChannel');
-    expect(REQUIRED_INJECTED_CONFIG).toContain('orphanAlerts');
+    expect(REQUIRED_INJECTED_CONFIG).toContain('riskConfig');
+    expect(REQUIRED_INJECTED_CONFIG).toContain('verdictConfig');
+    expect(REQUIRED_INJECTED_CONFIG).toContain('executionConfig');
     expect(new Set(REQUIRED_INJECTED_CONFIG).size).toBe(REQUIRED_INJECTED_CONFIG.length);
+
+    // The other half of the contract: a seam that HAS an in-repo
+    // implementation must not stay on this list, or the entrypoint keeps
+    // demanding something the composition root can build for itself. These
+    // three left the list when #273/#286 (Alpaca HTTP clients) and #276
+    // (AccountStateProvider) landed.
+    expect(REQUIRED_INJECTED_CONFIG).not.toContain('alpacaBrokerClient');
+    expect(REQUIRED_INJECTED_CONFIG).not.toContain('alpacaDataClient');
+    expect(REQUIRED_INJECTED_CONFIG).not.toContain('accountState');
+    expect(REQUIRED_INJECTED_CONFIG).not.toContain('volatility');
+    expect(REQUIRED_INJECTED_CONFIG).not.toContain('heartbeatChannel');
+    expect(REQUIRED_INJECTED_CONFIG).not.toContain('approvals');
+    expect(REQUIRED_INJECTED_CONFIG).not.toContain('orphanAlerts');
+    expect(REQUIRED_INJECTED_CONFIG).not.toContain('ciiScoreProvider');
+
+    // What is left is exactly the per-stage tuning config, which every stage
+    // spec says is tuned in paper trading rather than checked in — no
+    // transport remains on this list.
+    expect([...REQUIRED_INJECTED_CONFIG].every((key) => key.endsWith('Config'))).toBe(true);
   });
 });
 

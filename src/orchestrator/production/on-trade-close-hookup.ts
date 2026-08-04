@@ -13,18 +13,16 @@
  * chain — nothing here is a `TickSteps` member, and nothing here is called
  * from `SequentialTickRunner`.
  *
- * Note `ingestFills()`/`reconcile()` are not scheduled anywhere in the
- * running system yet (no interval calls them) — that gap is explicitly out
- * of scope for #234–#237 per the issue thread, so with no scheduled poll this
- * hook currently has no live caller either. It fires the moment something
- * does call `writeClosedTrade` (production code or a future scheduling
- * ticket), without further wiring changes.
+ * This hook now HAS a live caller: `orchestrator/fill-sync.ts` runs
+ * `ingestFills()` on a scheduled poll (superseding the earlier note here that
+ * nothing did, which was true while #234–#237 left the scheduling out of
+ * scope). Every `ClosedTrade` that poll emits reaches this decoration.
  *
  * Wired onto `buildProductionComponents`' single `executionStore` instance —
- * not a second decorated instance used only by the execution step — so any
- * future caller (the entry-fill path today, a scheduled `ingestFills()`
- * tomorrow) reaches the same hooked store, and `ProductionComponents`
- * exposes exactly one `SharedStore` for the whole composition root to share.
+ * not a second decorated instance used only by the execution step — so both
+ * callers (the tick's execution step and the fill-sync poll) reach the same
+ * hooked store, and `ProductionComponents` exposes exactly one `SharedStore`
+ * for the whole composition root to share.
  */
 
 import type { SharedStore } from '../../execution/index.js';

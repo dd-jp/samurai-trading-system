@@ -49,7 +49,12 @@ import {
   classifyAlpacaBrokerResponse,
   isRetryableAlpacaBrokerError,
 } from './alpaca-broker-errors.js';
-import type { AlpacaBracketOrderRequest, AlpacaClient, AlpacaOrder } from './alpaca-client.js';
+import type {
+  AlpacaAccount,
+  AlpacaBracketOrderRequest,
+  AlpacaClient,
+  AlpacaOrder,
+} from './alpaca-client.js';
 
 const DEFAULT_BASE_URL = 'https://paper-api.alpaca.markets';
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -150,6 +155,10 @@ export class AlpacaHttpBrokerClient implements AlpacaClient {
       { method: 'POST', body: JSON.stringify({ ...request, type: 'limit' }) },
       'submitOrder',
     );
+  }
+
+  async getAccount(): Promise<AlpacaAccount> {
+    return this.request<AlpacaAccount>('/v2/account', { method: 'GET' }, 'getAccount');
   }
 
   async getOrder(alpacaOrderId: string): Promise<AlpacaOrder> {

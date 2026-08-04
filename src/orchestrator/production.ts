@@ -64,10 +64,17 @@
  * `withOnTradeClose` (production/on-trade-close-hookup.ts) decorates
  * `writeClosedTrade` itself, using the real `SqliteSetupStore` (#198) FL
  * labels on trade close — not a `TickSteps` member, not reachable from
- * `SequentialTickRunner`. Note: nothing in #234–#237 schedules
- * `ingestFills()`/`reconcile()` on an interval yet, so this hook has no live
- * caller in the running system until a later ticket adds that scheduling —
- * out of scope here per the issue thread.
+ * `SequentialTickRunner`.
+ *
+ * ## Fill sync — the other lifecycle this root owns
+ *
+ * `ingestFills()`/`reconcile()` ARE now scheduled (superseding this file's
+ * earlier note that nothing drove them): `start()` awaits a one-shot
+ * `reconcile()` before the tick loop, then runs `ingestFills()` on its own
+ * self-scheduling poll — see `./fill-sync.ts` for why the ordering and the
+ * non-`setInterval` cadence are both load-bearing. That is what gives
+ * `withOnTradeClose` a live caller, and what lets a lot advance past
+ * `submitted` at all.
  */
 import { AnalystOrchestrator } from '../analysts/index.js';
 import type { CostConfig } from '../cost-model-backtest/index.js';
@@ -85,7 +92,11 @@ import type {
   ExecutionConfig,
   SharedStore as ExecutionSharedStore,
 } from '../execution/index.js';
-import { AlpacaBrokerAdapter, SqliteExecutionStore } from '../execution/index.js';
+import {
+  AlpacaBrokerAdapter,
+  AlpacaHttpBrokerClient,
+  SqliteExecutionStore,
+} from '../execution/index.js';
 import type {
   FeedbackConfig,
   LoosenApprovalChannel,
@@ -100,10 +111,12 @@ import {
 import type {
   AlpacaClient as AlpacaDataClient,
   DataSource,
+  IndicatorSpec,
   MarketDataService,
 } from '../market-data-service/index.js';
 import {
   AlpacaDataSource,
+  AlpacaHttpDataClient,
   MarketDataServiceImpl,
   SqliteMarketDataStore,
   type TradingCalendar,
@@ -127,6 +140,18 @@ import type { SharedStore as SqliteHandle } from '../shared/store/index.js';
 import type { TraderConfig } from '../trader/index.js';
 import { SqliteSetupStore } from '../trader/index.js';
 import type { ApprovalChannel, VerdictConfig } from '../verdict/index.js';
+import {
+  ConsoleApprovalChannel,
+  LoggingHeartbeatChannel,
+  LoggingOrphanAlertChannel,
+  ParkedCiiScoreProvider,
+} from './console-channels.js';
+import {
+  FILL_SYNC_TRACE_ID,
+  RECONCILE_TRACE_ID,
+  runStartupReconcile,
+  startFillSync,
+} from './fill-sync.js';
 import { Heartbeat, type HeartbeatChannel } from './heartbeat.js';
 import { JsonLogger } from './logger.js';
 import type {
@@ -134,20 +159,25 @@ import type {
   OrphanGoVerdict,
   OrphanVerdictScanner,
 } from './orphan-verdict-scan.js';
+import { AlpacaAccountStateProvider } from './production/account-state.js';
 import { buildAnalystsStep } from './production/analysts-adapter.js';
 import { buildDebateStep } from './production/debate-adapter.js';
 import {
   type AccountStateProvider,
   buildExecutionStep,
+  buildExecutionSurface,
   buildPersistence,
   buildRiskStep,
   buildTraderStep,
   buildVerdictStep,
+  type ExecutionStepDeps,
   type PersistenceInstances,
   type VolatilityReadingProvider,
 } from './production/direct-bind.js';
 import { withOnTradeClose } from './production/on-trade-close-hookup.js';
+import { MarketDataVolatilityReadingProvider } from './production/volatility-reading-provider.js';
 import { UniverseScheduler } from './scheduler.js';
+import { SqliteAccountStateStore } from './sqlite-account-state-store.js';
 import { runTickPlan } from './tick-loop.js';
 import { SequentialTickRunner } from './tick-runner.js';
 import type { Logger, Scheduler, TickRunner, TickSteps, UniverseInstrument } from './types.js';
@@ -181,17 +211,30 @@ export interface ProductionConfig {
   mode: 'live' | 'paper' | 'backtest';
 
   // --- Transports with no in-repo implementation (see file doc comment) ---
-  /** Alpaca trading REST surface, for order submission. */
-  alpacaBrokerClient: AlpacaBrokerClient;
-  /** Alpaca market-data REST surface, for bars and latest quotes. */
-  alpacaDataClient: AlpacaDataClient;
   /**
-   * Trade channel the dead-man's-switch heartbeat posts over. Taken as the
+   * Alpaca trading REST surface, for order submission. Optional since #273/
+   * #286 landed `AlpacaHttpBrokerClient`: when omitted this module builds it
+   * with the endpoint derived from `mode` (see
+   * `buildDefaultAlpacaBrokerClient` — a live host from a non-live mode is
+   * refused, #293).
+   */
+  alpacaBrokerClient?: AlpacaBrokerClient;
+  /**
+   * Alpaca market-data REST surface, for bars and latest quotes. Optional for
+   * the same reason; defaults to `AlpacaHttpDataClient` on
+   * `dataSourceAssetClass`.
+   */
+  alpacaDataClient?: AlpacaDataClient;
+  /**
+   * Trade channel the dead-man's-switch heartbeat posts over. Optional: when
+   * omitted a log-only `LoggingHeartbeatChannel` stands in so a supervised
+   * smoke run can start (#275 remains open for the real transport — a log
+   * line nobody tails is not a dead-man's switch). Taken as the
    * port, not as a Telegram/Discord client: `TradeChannelHeartbeat`
    * (heartbeat-channel.ts) is the in-repo implementation to pass here, and it
    * still needs a `TelegramClient` that this codebase does not implement.
    */
-  heartbeatChannel: HeartbeatChannel;
+  heartbeatChannel?: HeartbeatChannel;
   /**
    * HITL approval round-trip (Verdict gate 6). Same shape as
    * `heartbeatChannel`: pass `SignedApprovalChannel`
@@ -200,15 +243,23 @@ export interface ProductionConfig {
    * for you, because its `ApprovalRequestSender` leaf is another
    * unimplemented transport.
    */
-  approvals: ApprovalChannel;
-  /** Where a restart-time orphaned `go` verdict is reported. */
-  orphanAlerts: OrphanAlertChannel;
+  approvals?: ApprovalChannel;
+  /** Where a restart-time orphaned `go` verdict is reported. Defaults to the log. */
+  orphanAlerts?: OrphanAlertChannel;
   /** WorldMonitor CII reads (ADR-0002; live wiring parked during paper trading). */
-  ciiScoreProvider: CiiScoreProvider;
-  /** Account accounting scalars — no in-repo realized-PnL tracker (#234). */
-  accountState: AccountStateProvider;
+  ciiScoreProvider?: CiiScoreProvider;
+  /**
+   * Account accounting scalars. Optional since #276: when omitted this module
+   * builds an `AlpacaAccountStateProvider` over `alpacaBrokerClient`'s
+   * `GET /v2/account`, the durable `account_state` table, and the existing
+   * `ClosedTrade` store — the three sources transport-layer-spec.md's
+   * "Module: AccountStateProvider" names. Same override shape as
+   * `broker`/`dataSource`/`llmClient`, for tests and for a future non-Alpaca
+   * account ledger.
+   */
+  accountState?: AccountStateProvider;
   /** Realized-vol reading for the volatility breaker tier — no in-repo indicator (#234). */
-  volatility: VolatilityReadingProvider;
+  volatility?: VolatilityReadingProvider;
 
   // --- Stage configuration (shapes, not values — tuned in paper trading) ---
   traderConfig: TraderConfig;
@@ -258,6 +309,15 @@ export interface ProductionConfig {
    * real, billed Anthropic API calls whenever the key happens to be set.
    */
   llmClient?: LlmClient;
+  /**
+   * Indicator the volatility breaker tier reads, per asset class instrument
+   * (transport-layer-spec.md story 26). Defaults to ATR(14) — the same shape
+   * `SimulatedAdapterConfig.volatility_indicator` carries for
+   * `MarketState.volatility`. A tuning value like the rest, so it is a knob
+   * rather than a constant, but it has a defensible default so the breaker
+   * has a reading without one more required seam.
+   */
+  volatilityIndicator?: IndicatorSpec;
   /** Session calendar for stock gating (scheduler + Verdict gate). */
   tradingCalendar?: TradingCalendar;
   /** Sticky breaker rows recovered from a prior process, if any. */
@@ -266,6 +326,16 @@ export interface ProductionConfig {
   tickIntervalMs?: number;
   /** Heartbeat cadence, independent of the tick cadence. Default 60s. */
   heartbeatIntervalMs?: number;
+  /**
+   * Gap between fill polls (`ingestFills()`), measured from the end of one
+   * poll to the start of the next. Default 15s — deliberately tighter than
+   * the tick cadence: a lot's protective legs are resized from cumulative
+   * filled quantity, so the poll interval is how long a partially-filled lot
+   * can sit under-protected. Each poll costs one `getOrder` per open bracket
+   * against the adapter's token bucket, which is what bounds how low this can
+   * usefully go.
+   */
+  fillPollIntervalMs?: number;
   /** Bounds concurrent instrument passes within one tick (LLM rate limit). Default 1. */
   maxConcurrentInstruments?: number;
   /**
@@ -295,6 +365,24 @@ export interface FeedbackCycleConfig {
 
 const DEFAULT_TICK_INTERVAL_MS = 60_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000;
+const DEFAULT_FILL_POLL_INTERVAL_MS = 15_000;
+/**
+ * ATR(14): the conventional realized-volatility read, and the same shape
+ * `SimulatedAdapterConfig.volatility_indicator` carries for
+ * `MarketState.volatility`. `'atr'` is one of the four indicators
+ * `computeIndicator` dispatches on (indicators.ts) — an unrecognized name
+ * would throw per instrument and leave the volatility breaker tier wired but
+ * permanently reading its failure fallback, which is worse than leaving it a
+ * required seam because it looks live.
+ *
+ * `lookback: 15`, not 14: `atr()` consumes the first bar only to seed
+ * `previousClose`, so N bars yield N-1 true ranges. A 14-period ATR needs 15.
+ */
+const DEFAULT_VOLATILITY_INDICATOR: IndicatorSpec = {
+  indicator: 'atr',
+  params: { period: 14 },
+  lookback: 15,
+};
 const DEFAULT_FEEDBACK_INTERVAL_MS = 24 * 60 * 60 * 1_000;
 
 /**
@@ -355,6 +443,83 @@ export function buildDefaultLlmClient(logger: Logger): LlmClient {
   return new AnthropicLlmClient(client, config);
 }
 
+/**
+ * Alpaca's two trading hosts. Which one is chosen is decided by `mode`, never
+ * defaulted.
+ *
+ * Module-private on purpose (PR #301 review, deepseek): the mode guard below
+ * is the only sanctioned way to reach the live host from this codebase, and an
+ * exported `ALPACA_LIVE_BASE_URL` is an affordance for reaching it without
+ * one. Un-exporting does not make bypass impossible — anyone can type the
+ * literal — but it removes the import that would make bypass look sanctioned.
+ * The tests assert the literal URLs rather than these constants, which is the
+ * stronger assertion anyway: comparing a constant against itself proves
+ * nothing about the host actually contacted.
+ */
+const ALPACA_PAPER_BASE_URL = 'https://paper-api.alpaca.markets';
+const ALPACA_LIVE_BASE_URL = 'https://api.alpaca.markets';
+
+/**
+ * The default broker wire client, with the endpoint DERIVED FROM `mode`
+ * rather than left to `AlpacaHttpBrokerClient`'s own default (#293).
+ *
+ * The class defaults to the paper host, which is the safe direction, but a
+ * default is still the wrong mechanism here: it means the single most
+ * consequential fact about a running process — whether its orders spend real
+ * money — is decided by a constant nobody passed rather than by the `mode`
+ * the operator explicitly set. Deriving it makes `mode` the one control, and
+ * makes a mismatch impossible rather than unlikely.
+ *
+ * `backtest` gets the paper host too: that mode is meant to run against
+ * `SimulatedBrokerAdapter`, so if it ever reaches a real client at all, the
+ * harmless endpoint is the one to reach.
+ *
+ * `ALPACA_BASE_URL` can still override, because a staging/mock endpoint is a
+ * legitimate need — but pointing it at the live host from a non-live mode
+ * throws rather than being honoured. An override that silently upgrades a
+ * paper process to real money is the exact accident #293 exists to prevent.
+ */
+export function buildDefaultAlpacaBrokerClient(
+  mode: ProductionConfig['mode'],
+  logger: Logger,
+): AlpacaBrokerClient {
+  const modeBaseUrl = mode === 'live' ? ALPACA_LIVE_BASE_URL : ALPACA_PAPER_BASE_URL;
+  const override = process.env.ALPACA_BASE_URL;
+
+  if (override?.startsWith(ALPACA_LIVE_BASE_URL) && mode !== 'live') {
+    throw new Error(
+      `ALPACA_BASE_URL points at Alpaca's LIVE trading host ('${override}') but SAMURAI_MODE ` +
+        `is '${mode}'. Refusing to start: this combination spends real money from a process ` +
+        'the operator asked to be non-live. Set SAMURAI_MODE=live if that is genuinely intended.',
+    );
+  }
+
+  const baseUrl = override ?? modeBaseUrl;
+
+  logger.log({
+    trace_id: 'startup',
+    stage: 'orchestrator',
+    level: baseUrl === ALPACA_LIVE_BASE_URL ? 'warn' : 'info',
+    message:
+      baseUrl === ALPACA_LIVE_BASE_URL
+        ? 'building LIVE Alpaca broker client — orders will spend real money'
+        : 'building paper Alpaca broker client',
+    payload: { mode, baseUrl },
+  });
+
+  return new AlpacaHttpBrokerClient({ baseUrl });
+}
+
+/**
+ * The default market-data wire client. No mode branch: Alpaca serves market
+ * data from one host for paper and live accounts alike, so there is no
+ * money-safety decision to make here — only the asset-class path root, which
+ * `AlpacaDataSource` needs fixed at construction.
+ */
+export function buildDefaultAlpacaDataClient(assetClass: 'crypto' | 'stocks'): AlpacaDataClient {
+  return new AlpacaHttpDataClient({ assetClass });
+}
+
 /** The composed, still-stoppable process. Returned by `buildProductionOrchestrator`. */
 export interface ProductionOrchestrator {
   tickRunner: SequentialTickRunner;
@@ -398,6 +563,11 @@ export interface ProductionComponents {
    * wrapper, not the class itself.
    */
   executionStore: ExecutionSharedStore;
+  /**
+   * Execution's dependency set, exposed so the fill-sync loop can bind
+   * `reconcile()`/`ingestFills()` from the same object the tick step uses.
+   */
+  executionDeps: ExecutionStepDeps;
 }
 
 /**
@@ -416,10 +586,18 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   const clock = config.clock;
   const tradingCalendar = config.tradingCalendar ?? new UsEquityRegularHoursCalendar();
 
+  // One broker wire client for the whole root: the order adapter and the
+  // account-state provider both talk to Alpaca's Trading API, and two clients
+  // would mean two token budgets against one account's shared rate limit.
+  const brokerClient =
+    config.alpacaBrokerClient ??
+    buildDefaultAlpacaBrokerClient(config.mode, config.logger ?? new JsonLogger());
+
+  const assetClass = config.dataSourceAssetClass ?? 'crypto';
   const dataSource =
     config.dataSource ??
-    new AlpacaDataSource(config.alpacaDataClient, {
-      asset_class: config.dataSourceAssetClass ?? 'crypto',
+    new AlpacaDataSource(config.alpacaDataClient ?? buildDefaultAlpacaDataClient(assetClass), {
+      asset_class: assetClass,
       calendar: tradingCalendar,
     });
   const marketData: MarketDataService = new MarketDataServiceImpl(
@@ -458,11 +636,18 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   const broker =
     config.broker ??
     new AlpacaBrokerAdapter({
-      client: config.alpacaBrokerClient,
+      client: brokerClient,
       rateLimiter: new TokenBucket({ capacity: 10, refillPerSecond: 1.5 }),
     });
   const circuitBreakers = new CircuitBreakers(config.breakerConfig, config.initialBreakerState);
-  const ciiConsumer = new CiiConsumer(config.ciiScoreProvider, clock, config.ciiConsumerConfig);
+  // Parked by default (ADR-0002): the live WorldMonitor feed costs money per
+  // call and the geopolitical tier is not what the first paper run tests.
+  // `null` is already a documented answer on this port.
+  const ciiConsumer = new CiiConsumer(
+    config.ciiScoreProvider ?? new ParkedCiiScoreProvider(),
+    clock,
+    config.ciiConsumerConfig,
+  );
 
   // Shared by the trader/risk/verdict binds: all three derive the current
   // portfolio + breaker state from the same sources, fetched fresh at their
@@ -470,9 +655,44 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   const breakerStateDeps = {
     marketData,
     circuitBreakers,
-    accountState: config.accountState,
-    volatility: config.volatility,
+    // Defaulted, not required (#276): the three sources this needs — Alpaca's
+    // account ledger, the durable `account_state` table, and the existing
+    // ClosedTrade store — all exist in-repo now, so an injected seam would be
+    // asking the caller to build what this module can compose.
+    accountState:
+      config.accountState ??
+      new AlpacaAccountStateProvider({
+        client: brokerClient,
+        store: new SqliteAccountStateStore(config.db),
+        // The existing ClosedTrade reader, per spec story 25 — no new
+        // realized-PnL ledger is built when one already exists.
+        closedTrades: new SqliteClosedTradeStore(config.db),
+        logger: config.logger ?? new JsonLogger(),
+      }),
+    // #277's provider, wired by default now that AccountStateProvider (#276)
+    // exists — the only reason direct-bind.ts left it a required seam.
+    volatility:
+      config.volatility ??
+      new MarketDataVolatilityReadingProvider({
+        marketData,
+        universe: config.universe ?? SMOKE_TEST_UNIVERSE,
+        volatility_indicator: config.volatilityIndicator ?? DEFAULT_VOLATILITY_INDICATOR,
+        logger: config.logger ?? new JsonLogger(),
+      }),
     getOpenPositions: () => executionStore.getOpenPositions(),
+    mode: config.mode,
+  };
+
+  // Hoisted, not inlined into `buildExecutionStep`: the fill-sync loop binds
+  // `reconcile()`/`ingestFills()` from this same object, so Execution cannot
+  // gain a dependency on the tick path and silently miss it on the poll path.
+  const executionDeps: ExecutionStepDeps = {
+    clock,
+    broker,
+    store: executionStore,
+    costModel: new CostModelImpl(config.costConfig),
+    marketData,
+    config: config.executionConfig,
     mode: config.mode,
   };
 
@@ -494,20 +714,14 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // second connection with a divergent view of the same table.
       positionStore: executionStore,
       config: config.verdictConfig,
-      approvals: config.approvals,
+      // Log-only stand-in when unwired (#275): it auto-approves, and its
+      // constructor refuses to exist in live mode.
+      approvals: config.approvals ?? new ConsoleApprovalChannel(logger, config.mode),
     }),
-    execution: buildExecutionStep({
-      clock,
-      broker,
-      store: executionStore,
-      costModel: new CostModelImpl(config.costConfig),
-      marketData,
-      config: config.executionConfig,
-      mode: config.mode,
-    }),
+    execution: buildExecutionStep(executionDeps),
   };
 
-  return { steps, marketData, broker, analysts, circuitBreakers, executionStore };
+  return { steps, marketData, broker, analysts, circuitBreakers, executionStore, executionDeps };
 }
 
 /**
@@ -627,11 +841,20 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     universe: config.universe ?? SMOKE_TEST_UNIVERSE,
     calendar: config.tradingCalendar ?? new UsEquityRegularHoursCalendar(),
   });
-  const heartbeat = new Heartbeat(config.heartbeatChannel, logger);
+  const heartbeat = new Heartbeat(
+    config.heartbeatChannel ?? new LoggingHeartbeatChannel(logger),
+    logger,
+  );
 
   let loop: { stop: () => Promise<void> } | undefined;
+  let fillSync: { stop: () => Promise<void> } | undefined;
   let heartbeatHandle: NodeJS.Timeout | undefined;
   let feedbackHandle: NodeJS.Timeout | undefined;
+
+  // Execution's two polled surfaces, bound once. Built from the same
+  // `ExecutionStepDeps` the tick step uses, so the two paths cannot drift.
+  const fillSyncExecution = buildExecutionSurface(components.executionDeps, FILL_SYNC_TRACE_ID);
+  const reconcileExecution = buildExecutionSurface(components.executionDeps, RECONCILE_TRACE_ID);
 
   /**
    * Feedback Loop's daily batch on its own timer — not a `TickSteps` member
@@ -688,11 +911,30 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     logger,
 
     async start(): Promise<OrphanGoVerdict[]> {
-      const orphans = await persistence.orphanScanner.scan(config.db, config.orphanAlerts, logger);
+      const orphans = await persistence.orphanScanner.scan(
+        config.db,
+        config.orphanAlerts ?? new LoggingOrphanAlertChannel(logger),
+        logger,
+      );
+
+      // Reconcile BEFORE the tick loop and before the first fill poll, and
+      // awaited rather than fired off. A crash leaves lots stranded
+      // `pending`/`submitted`, and starting to trade against a store that
+      // still disagrees with the venue is what reconcile exists to prevent —
+      // so a failure here propagates out of `start()` instead of being
+      // logged and stepped over.
+      await runStartupReconcile({ execution: reconcileExecution, logger });
 
       heartbeatHandle = setInterval(() => {
         void heartbeat.emit(clock);
       }, config.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS);
+
+      fillSync = startFillSync({
+        execution: fillSyncExecution,
+        clock,
+        logger,
+        fillPollIntervalMs: config.fillPollIntervalMs ?? DEFAULT_FILL_POLL_INTERVAL_MS,
+      });
 
       loop = startTickLoop({
         scheduler,
@@ -726,9 +968,20 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         clearInterval(feedbackHandle);
         feedbackHandle = undefined;
       }
+      // Both drains started before either is awaited: they are independent,
+      // and awaiting them in series would make shutdown take the sum of a
+      // tick and a fill poll rather than the longer of the two.
       const stopping = loop?.stop();
+      const stoppingFillSync = fillSync?.stop();
       loop = undefined;
-      await stopping;
+      fillSync = undefined;
+      // `allSettled`, not two sequential awaits: `buildShutdownHandler`'s doc
+      // comment records that `stop()` CAN reject (a pass that rejects after
+      // `stop()` captured `inFlight` rejects in the caller too). Awaiting in
+      // series would leave the second drain's promise unawaited on that path
+      // — an unhandled rejection, and the fill poll's drain silently
+      // discarded during shutdown. This still drains both concurrently.
+      await Promise.allSettled([stopping, stoppingFillSync]);
     },
   };
 }

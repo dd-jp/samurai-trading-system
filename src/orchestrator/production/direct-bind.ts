@@ -251,6 +251,35 @@ export function buildExecutionStep(deps: ExecutionStepDeps): TickSteps['executio
   };
 }
 
+/**
+ * Execution's OTHER two surfaces — `reconcile()` and `ingestFills()` — bound
+ * for the fill-sync loop (src/orchestrator/fill-sync.ts).
+ *
+ * Separate from `buildExecutionStep` because these are not tick steps: they
+ * are not driven by a verdict, take no input, and run on their own cadence
+ * (ADR-0004 §3's posture for `runDailyCycle` — a lifecycle the composition
+ * root owns, not a `TickSteps` member). Sharing `ExecutionStepDeps` keeps the
+ * dependency list in one place, so a new Execution dependency cannot be
+ * wired into the tick path and forgotten on the polling path.
+ *
+ * `trace_id` is a fixed synthetic string rather than a per-order key: a poll
+ * spans every open lot at once, so no single order id describes it. The two
+ * surfaces get distinct ids so a reconcile and an ingest are separable in the
+ * audit trail.
+ */
+export function buildExecutionSurface(deps: ExecutionStepDeps, traceId: string): ExecutionImpl {
+  return new ExecutionImpl({
+    trace_id: traceId,
+    clock: deps.clock,
+    broker: deps.broker,
+    store: deps.store,
+    costModel: deps.costModel,
+    marketData: deps.marketData,
+    config: deps.config,
+    mode: deps.mode,
+  });
+}
+
 export interface PersistenceInstances {
   auditLog: SqliteAuditLog;
   currentTickStore: SqliteCurrentTickStore;
