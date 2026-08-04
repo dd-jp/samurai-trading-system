@@ -7,11 +7,11 @@ import { buildDefaultAlpacaBrokerClient } from './production.js';
 import type { LogEntry, Logger } from './types.js';
 
 /**
- * Spelled out rather than imported from `production.ts`. The constants there
- * are module-private, but that is not the only reason: asserting a value
- * against the constant that produced it proves the code is self-consistent,
- * not that `paper` reaches the paper host. These literals are the actual
- * claim, and a typo in either constant fails here.
+ * Spelled out rather than imported. The hosts now live in the execution
+ * module's client (#293) and are not exported at all — but that is not the
+ * only reason: asserting a value against the constant that produced it proves
+ * the code is self-consistent, not that `paper` reaches the paper host. These
+ * literals are the actual claim, and a typo in either constant fails here.
  */
 const PAPER_HOST = 'https://paper-api.alpaca.markets';
 const LIVE_HOST = 'https://api.alpaca.markets';
@@ -91,6 +91,48 @@ describe('buildDefaultAlpacaBrokerClient', () => {
     process.env.ALPACA_BASE_URL = LIVE_HOST;
 
     expect(() => buildDefaultAlpacaBrokerClient('live', makeLogger())).not.toThrow();
+  });
+
+  /**
+   * A string-prefix comparison is case- and whitespace-sensitive; DNS is
+   * neither. Each of these is the live trading host, and each one bypassed the
+   * original `startsWith` check (#293 follow-up).
+   */
+  it.each([
+    'https://API.ALPACA.MARKETS',
+    'https://Api.Alpaca.Markets/',
+    ' https://api.alpaca.markets',
+    'https://api.alpaca.markets:443',
+  ])('refuses the live host spelled as %s in paper mode', (override) => {
+    process.env.ALPACA_BASE_URL = override;
+
+    expect(() => buildDefaultAlpacaBrokerClient('paper', makeLogger())).toThrow(
+      /Refusing to start/,
+    );
+  });
+
+  // The reverse mismatch: an operator who set live mode but is silently
+  // filling paper orders is running on a false picture of their own risk.
+  it('refuses a paper-host override when mode is live', () => {
+    process.env.ALPACA_BASE_URL = PAPER_HOST;
+
+    expect(() => buildDefaultAlpacaBrokerClient('live', makeLogger())).toThrow(/environment/);
+  });
+
+  it('refuses an empty ALPACA_BASE_URL rather than falling back to a default', () => {
+    process.env.ALPACA_BASE_URL = '';
+
+    expect(() => buildDefaultAlpacaBrokerClient('paper', makeLogger())).toThrow(/baseUrl/);
+  });
+
+  // The log line is the operator's only readout of which host is in play, so
+  // it must not be emitted by a build that then throws.
+  it('does not log a host it failed to build a client for', () => {
+    process.env.ALPACA_BASE_URL = PAPER_HOST;
+    const logger = makeLogger();
+
+    expect(() => buildDefaultAlpacaBrokerClient('live', logger)).toThrow();
+    expect(logger.entries).toHaveLength(0);
   });
 
   it('allows a non-live override (staging/mock) from paper mode', () => {

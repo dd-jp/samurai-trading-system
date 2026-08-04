@@ -258,13 +258,21 @@ describe('AlpacaHttpBrokerClient', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('respects a custom baseUrl (e.g. the live trading host)', async () => {
+  /**
+   * Was "respects a custom baseUrl (e.g. the live trading host)" — a bare
+   * `baseUrl: 'https://api.alpaca.markets'` used to be honoured, which is the
+   * accident #293 closes. A custom host is still respected; reaching the LIVE
+   * one now also takes `environment: 'live'`. See the environment-guard
+   * describe block below for the refusal cases.
+   */
+  it('respects a custom baseUrl when the environment agrees', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(ORDER_RESPONSE));
     vi.stubGlobal('fetch', fetchMock);
 
     const client = new AlpacaHttpBrokerClient({
       apiKey: FAKE_KEY,
       apiSecret: FAKE_SECRET,
+      environment: 'live',
       baseUrl: 'https://api.alpaca.markets',
     });
     await client.getOrder('alpaca-order-1');
@@ -335,5 +343,159 @@ describe('AlpacaHttpBrokerClient', () => {
       name: 'AlpacaBrokerProviderError',
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * The paper/live environment guard (#293).
+ *
+ * Every test here passes `apiKey`/`apiSecret` explicitly. That is not
+ * boilerplate: the constructor validates credentials FIRST, so a guard test
+ * that omitted them would throw `ALPACA_API_KEY is not set` and pass with the
+ * guard deleted. Same reason the assertions match on the message rather than
+ * calling a bare `toThrow()`.
+ */
+describe('AlpacaHttpBrokerClient — paper/live environment guard (#293)', () => {
+  const PAPER_HOST = 'https://paper-api.alpaca.markets';
+  const LIVE_HOST = 'https://api.alpaca.markets';
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function hostOf(fetchMock: ReturnType<typeof vi.fn>): string {
+    const [url] = fetchMock.mock.calls[0] as [string];
+    return new URL(url).origin;
+  }
+
+  async function contactedHost(options: {
+    environment?: 'paper' | 'live';
+    baseUrl?: string;
+  }): Promise<string> {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(ORDER_RESPONSE));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AlpacaHttpBrokerClient({
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+      ...options,
+    });
+    await client.getOrder('alpaca-order-1');
+    return hostOf(fetchMock);
+  }
+
+  it('reaches the paper host when neither environment nor baseUrl is given', async () => {
+    expect(await contactedHost({})).toBe(PAPER_HOST);
+  });
+
+  it('reaches the paper host for an explicit paper environment', async () => {
+    expect(await contactedHost({ environment: 'paper' })).toBe(PAPER_HOST);
+  });
+
+  // The one word that makes a process spend real money. Reachable only by
+  // typing it — never by defaulting, never by omission.
+  it('reaches the live host only for an explicit live environment', async () => {
+    expect(await contactedHost({ environment: 'live' })).toBe(LIVE_HOST);
+  });
+
+  it('allows the live host when the environment says live', async () => {
+    expect(await contactedHost({ environment: 'live', baseUrl: LIVE_HOST })).toBe(LIVE_HOST);
+  });
+
+  // THE key test: a live baseUrl with no environment stated. Before #293 this
+  // silently traded real money; the default must refuse, not accommodate.
+  it('refuses a live baseUrl when the environment is omitted (defaults to paper)', () => {
+    expect(
+      () =>
+        new AlpacaHttpBrokerClient({
+          apiKey: FAKE_KEY,
+          apiSecret: FAKE_SECRET,
+          baseUrl: LIVE_HOST,
+        }),
+    ).toThrow(/environment/);
+  });
+
+  it('refuses a live baseUrl when the environment says paper', () => {
+    expect(
+      () =>
+        new AlpacaHttpBrokerClient({
+          apiKey: FAKE_KEY,
+          apiSecret: FAKE_SECRET,
+          environment: 'paper',
+          baseUrl: LIVE_HOST,
+        }),
+    ).toThrow(/environment/);
+  });
+
+  // The "or vice versa" half: an operator who believes they are live but is
+  // silently filling paper orders has a broken risk model too.
+  it('refuses the paper host when the environment says live', () => {
+    expect(
+      () =>
+        new AlpacaHttpBrokerClient({
+          apiKey: FAKE_KEY,
+          apiSecret: FAKE_SECRET,
+          environment: 'live',
+          baseUrl: PAPER_HOST,
+        }),
+    ).toThrow(/environment/);
+  });
+
+  // A string-prefix check would let every one of these through to real money.
+  it.each([
+    'https://API.ALPACA.MARKETS',
+    'https://Api.Alpaca.Markets/',
+    ' https://api.alpaca.markets',
+    'https://api.alpaca.markets/v2',
+    'https://api.alpaca.markets:443',
+  ])('refuses the live host spelled as %s from a paper client', (baseUrl) => {
+    expect(
+      () =>
+        new AlpacaHttpBrokerClient({
+          apiKey: FAKE_KEY,
+          apiSecret: FAKE_SECRET,
+          environment: 'paper',
+          baseUrl,
+        }),
+    ).toThrow(/environment/);
+  });
+
+  it('refuses an empty baseUrl rather than silently resolving one', () => {
+    expect(
+      () => new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET, baseUrl: '' }),
+    ).toThrow(/baseUrl/);
+  });
+
+  it('refuses an unparseable baseUrl', () => {
+    expect(
+      () =>
+        new AlpacaHttpBrokerClient({
+          apiKey: FAKE_KEY,
+          apiSecret: FAKE_SECRET,
+          baseUrl: 'paper-api.alpaca.markets',
+        }),
+    ).toThrow(/baseUrl/);
+  });
+
+  it('allows a non-Alpaca host (staging/mock) in either environment', async () => {
+    expect(await contactedHost({ baseUrl: 'http://localhost:9999' })).toBe('http://localhost:9999');
+    expect(await contactedHost({ environment: 'live', baseUrl: 'http://localhost:9999' })).toBe(
+      'http://localhost:9999',
+    );
+  });
+
+  it('never puts the credentials in the mismatch message', () => {
+    try {
+      new AlpacaHttpBrokerClient({
+        apiKey: FAKE_KEY,
+        apiSecret: FAKE_SECRET,
+        environment: 'paper',
+        baseUrl: LIVE_HOST,
+      });
+      expect.unreachable('constructor should have thrown');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).not.toContain(FAKE_KEY);
+      expect(message).not.toContain(FAKE_SECRET);
+    }
   });
 });

@@ -27,11 +27,23 @@
  * public docs, one paper-account key pair covers both Trading and Market
  * Data APIs.
  *
- * **Base URL.** Defaults to the paper-trading host
- * (`https://paper-api.alpaca.markets`) — this system trades paper-only per
- * CLAUDE.md's money-graduation posture (backtest -> paper -> tiny live
- * capital); the live host (`https://api.alpaca.markets`) is an explicit
- * `baseUrl` override, never a silent default.
+ * **Base URL and environment (#293).** `environment` — `'paper'` (default) or
+ * `'live'` — is the single control over which of Alpaca's two trading hosts
+ * this client may reach, and `baseUrl` must agree with it. Reaching the live
+ * host takes typing `environment: 'live'`; omitting the option, mis-setting an
+ * env var, or passing an empty `baseUrl` all fail closed to paper or throw,
+ * never to real money. A `baseUrl` naming one host while `environment` names
+ * the other throws at construction, before any order can be placed — the
+ * money-safety decision is made once, loudly, rather than inferred from a
+ * constant nobody passed. Alpaca exposes no cheap "is this key paper or live"
+ * probe (docs/research/alpaca-rest-api-surface-2026-07-29.md), so this is a
+ * consistency check between two operator-supplied facts, not a verification
+ * that the credentials themselves belong to the named environment. Non-Alpaca
+ * hosts (a local mock, a staging proxy) are allowed in either environment:
+ * they spend nothing, so there is nothing to guard.
+ *
+ * This posture is CLAUDE.md's money-graduation ladder (backtest -> paper ->
+ * tiny live capital) expressed in code.
  *
  * Uses `fetchWithTimeout`/`withRetry` (issue #271, shared/http/) — same
  * boilerplate every real HTTP client in this transport layer shares. Retry
@@ -56,7 +68,90 @@ import type {
   AlpacaOrder,
 } from './alpaca-client.js';
 
-const DEFAULT_BASE_URL = 'https://paper-api.alpaca.markets';
+/** Which of Alpaca's two trading environments a client is permitted to reach. */
+export type AlpacaTradingEnvironment = 'paper' | 'live';
+
+/**
+ * Alpaca's two trading hosts, keyed by hostname.
+ *
+ * Hostname-keyed rather than prefix-matched on the full URL: DNS is
+ * case-insensitive and indifferent to port, path and surrounding whitespace,
+ * so `https://API.ALPACA.MARKETS`, `https://api.alpaca.markets:443/v2` and
+ * `' https://api.alpaca.markets'` all reach real money while failing a
+ * `startsWith` comparison. Anything a prefix check would wave through is a
+ * paper process placing live orders.
+ *
+ * The live URL is deliberately not exported as a named constant (PR #301
+ * review): an importable `ALPACA_LIVE_BASE_URL` is an affordance for reaching
+ * the live host without going through the guard. Callers name the environment;
+ * this module resolves the host.
+ */
+const ALPACA_TRADING_HOSTS: Readonly<Record<string, AlpacaTradingEnvironment>> = {
+  'paper-api.alpaca.markets': 'paper',
+  'api.alpaca.markets': 'live',
+};
+
+const BASE_URL_BY_ENVIRONMENT: Readonly<Record<AlpacaTradingEnvironment, string>> = {
+  paper: 'https://paper-api.alpaca.markets',
+  live: 'https://api.alpaca.markets',
+};
+
+/**
+ * Which Alpaca trading environment a base URL actually reaches.
+ *
+ * `'other'` is a host Alpaca does not serve trading from (a local mock, a
+ * staging proxy) — permitted in either environment. `'invalid'` is a string
+ * that is not an absolute URL at all, including the empty string; it is
+ * reported rather than defaulted, because a base URL nobody can parse is a
+ * misconfiguration, and quietly substituting one is how a process ends up
+ * somewhere its operator did not choose.
+ *
+ * Exported so the orchestrator's composition root classifies `ALPACA_BASE_URL`
+ * with exactly the same rules this client enforces, rather than a second
+ * approximation of them.
+ */
+export function classifyAlpacaTradingHost(
+  baseUrl: string,
+): AlpacaTradingEnvironment | 'other' | 'invalid' {
+  let hostname: string;
+  try {
+    hostname = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    return 'invalid';
+  }
+  return ALPACA_TRADING_HOSTS[hostname] ?? 'other';
+}
+
+/**
+ * The base URL this client will use, or a throw.
+ *
+ * Absent `baseUrl` resolves from `environment` — so the failure mode of
+ * "nobody passed anything" is the paper host, and the failure mode of "someone
+ * passed the wrong thing" is a crash rather than a wrong-account order. The
+ * messages carry `environment` and `baseUrl` only; credentials are never
+ * interpolated into an error from this module (see the options' doc comments).
+ */
+function resolveBaseUrl(environment: AlpacaTradingEnvironment, override?: string): string {
+  if (override === undefined) return BASE_URL_BY_ENVIRONMENT[environment];
+
+  const host = classifyAlpacaTradingHost(override);
+  if (host === 'invalid') {
+    throw new Error(
+      `AlpacaHttpBrokerClient: baseUrl '${override}' is not an absolute URL. Omit it to use the ` +
+        `${environment} host, or pass a full origin such as https://localhost:9999 for a mock.`,
+    );
+  }
+  if (host !== 'other' && host !== environment) {
+    throw new Error(
+      `AlpacaHttpBrokerClient: baseUrl '${override}' is Alpaca's ${host} trading host but ` +
+        `environment is '${environment}'. Refusing to construct: these must agree, because the ` +
+        'one is the account the orders land in and the other is what the operator believes they ' +
+        `set. Pass environment: '${host}' if that is genuinely intended.`,
+    );
+  }
+  return override;
+}
+
 const DEFAULT_TIMEOUT_MS = 10_000;
 /** ~200 req/min (issue #260 research) tolerates a short base delay; capped well under the reconciliation loop's own budget. */
 const DEFAULT_RETRY_CONFIG: RetryConfig = { maxAttempts: 3, baseDelayMs: 250, maxDelayMs: 4_000 };
@@ -66,7 +161,17 @@ export interface AlpacaHttpBrokerClientOptions {
   apiKey?: string;
   /** Defaults to `process.env.ALPACA_API_SECRET`. Never logged or thrown into an error message. */
   apiSecret?: string;
-  /** Defaults to the paper-trading host. Pass the live host explicitly to trade real money. */
+  /**
+   * Which Alpaca trading environment this client may reach. Defaults to
+   * `'paper'` — live is never reached by omission, only by naming it. Must
+   * agree with `baseUrl` when that names one of Alpaca's trading hosts.
+   */
+  environment?: AlpacaTradingEnvironment;
+  /**
+   * Defaults to the host `environment` implies. Supply it only to point at a
+   * non-Alpaca endpoint (mock/staging) — naming the other environment's host
+   * throws rather than overriding `environment`.
+   */
   baseUrl?: string;
   /** Per-attempt network timeout passed to `fetchWithTimeout`. */
   timeoutMs?: number;
@@ -77,7 +182,12 @@ export interface AlpacaHttpBrokerClientOptions {
 export class AlpacaHttpBrokerClient implements AlpacaClient {
   private readonly apiKey: string;
   private readonly apiSecret: string;
-  private readonly baseUrl: string;
+  /**
+   * Public and readonly: the resolved host is the fact a startup log needs to
+   * state, and re-deriving it at the composition root would be a second copy
+   * of the resolution rules. Carries no credential.
+   */
+  readonly baseUrl: string;
   private readonly timeoutMs: number;
   private readonly retry: RetryConfig;
 
@@ -98,7 +208,7 @@ export class AlpacaHttpBrokerClient implements AlpacaClient {
     }
     this.apiKey = apiKey;
     this.apiSecret = apiSecret;
-    this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
+    this.baseUrl = resolveBaseUrl(options.environment ?? 'paper', options.baseUrl);
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.retry = options.retry ?? DEFAULT_RETRY_CONFIG;
   }

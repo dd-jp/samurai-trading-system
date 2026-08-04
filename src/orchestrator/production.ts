@@ -88,6 +88,7 @@ import {
 } from '../debate-engine/index.js';
 import type {
   AlpacaClient as AlpacaBrokerClient,
+  AlpacaTradingEnvironment,
   BrokerAdapter,
   ExecutionConfig,
   SharedStore as ExecutionSharedStore,
@@ -95,6 +96,7 @@ import type {
 import {
   AlpacaBrokerAdapter,
   AlpacaHttpBrokerClient,
+  classifyAlpacaTradingHost,
   SqliteBrokerStateStore,
   SqliteExecutionStore,
 } from '../execution/index.js';
@@ -445,49 +447,40 @@ export function buildDefaultLlmClient(logger: Logger): LlmClient {
 }
 
 /**
- * Alpaca's two trading hosts. Which one is chosen is decided by `mode`, never
- * defaulted.
+ * The default broker wire client, with the Alpaca environment DERIVED FROM
+ * `mode` rather than left to `AlpacaHttpBrokerClient`'s own default (#293).
  *
- * Module-private on purpose (PR #301 review, deepseek): the mode guard below
- * is the only sanctioned way to reach the live host from this codebase, and an
- * exported `ALPACA_LIVE_BASE_URL` is an affordance for reaching it without
- * one. Un-exporting does not make bypass impossible — anyone can type the
- * literal — but it removes the import that would make bypass look sanctioned.
- * The tests assert the literal URLs rather than these constants, which is the
- * stronger assertion anyway: comparing a constant against itself proves
- * nothing about the host actually contacted.
- */
-const ALPACA_PAPER_BASE_URL = 'https://paper-api.alpaca.markets';
-const ALPACA_LIVE_BASE_URL = 'https://api.alpaca.markets';
-
-/**
- * The default broker wire client, with the endpoint DERIVED FROM `mode`
- * rather than left to `AlpacaHttpBrokerClient`'s own default (#293).
+ * The class defaults to paper, which is the safe direction, but a default is
+ * still the wrong mechanism here: it means the single most consequential fact
+ * about a running process — whether its orders spend real money — is decided
+ * by a constant nobody passed rather than by the `mode` the operator
+ * explicitly set. Deriving it makes `mode` the one control, and makes a
+ * mismatch impossible rather than unlikely.
  *
- * The class defaults to the paper host, which is the safe direction, but a
- * default is still the wrong mechanism here: it means the single most
- * consequential fact about a running process — whether its orders spend real
- * money — is decided by a constant nobody passed rather than by the `mode`
- * the operator explicitly set. Deriving it makes `mode` the one control, and
- * makes a mismatch impossible rather than unlikely.
- *
- * `backtest` gets the paper host too: that mode is meant to run against
+ * `backtest` is paper too: that mode is meant to run against
  * `SimulatedBrokerAdapter`, so if it ever reaches a real client at all, the
- * harmless endpoint is the one to reach.
+ * harmless account is the one to reach.
  *
- * `ALPACA_BASE_URL` can still override, because a staging/mock endpoint is a
- * legitimate need — but pointing it at the live host from a non-live mode
- * throws rather than being honoured. An override that silently upgrades a
- * paper process to real money is the exact accident #293 exists to prevent.
+ * `ALPACA_BASE_URL` can still override the host, because a staging/mock
+ * endpoint is a legitimate need — but naming Alpaca's live host from a
+ * non-live mode throws rather than being honoured, and the reverse (a live
+ * mode silently filling paper orders) is refused by the client. An override
+ * that silently upgrades a paper process to real money is the exact accident
+ * #293 exists to prevent.
+ *
+ * Host classification is `classifyAlpacaTradingHost` from the execution
+ * barrel, not a local string comparison: the original `startsWith` check here
+ * was case- and whitespace-sensitive, so `https://API.ALPACA.MARKETS` walked
+ * straight past it. One classifier means one set of rules to be right about.
  */
 export function buildDefaultAlpacaBrokerClient(
   mode: ProductionConfig['mode'],
   logger: Logger,
 ): AlpacaBrokerClient {
-  const modeBaseUrl = mode === 'live' ? ALPACA_LIVE_BASE_URL : ALPACA_PAPER_BASE_URL;
+  const environment: AlpacaTradingEnvironment = mode === 'live' ? 'live' : 'paper';
   const override = process.env.ALPACA_BASE_URL;
 
-  if (override?.startsWith(ALPACA_LIVE_BASE_URL) && mode !== 'live') {
+  if (override !== undefined && classifyAlpacaTradingHost(override) === 'live' && mode !== 'live') {
     throw new Error(
       `ALPACA_BASE_URL points at Alpaca's LIVE trading host ('${override}') but SAMURAI_MODE ` +
         `is '${mode}'. Refusing to start: this combination spends real money from a process ` +
@@ -495,20 +488,25 @@ export function buildDefaultAlpacaBrokerClient(
     );
   }
 
-  const baseUrl = override ?? modeBaseUrl;
+  // Constructed before the log line, not after: the client re-checks the
+  // environment/host agreement and can still throw, and a startup log naming a
+  // host the process never reached is worse than no log at all.
+  const client = new AlpacaHttpBrokerClient(
+    override === undefined ? { environment } : { environment, baseUrl: override },
+  );
 
   logger.log({
     trace_id: 'startup',
     stage: 'orchestrator',
-    level: baseUrl === ALPACA_LIVE_BASE_URL ? 'warn' : 'info',
+    level: environment === 'live' ? 'warn' : 'info',
     message:
-      baseUrl === ALPACA_LIVE_BASE_URL
+      environment === 'live'
         ? 'building LIVE Alpaca broker client — orders will spend real money'
         : 'building paper Alpaca broker client',
-    payload: { mode, baseUrl },
+    payload: { mode, environment, baseUrl: client.baseUrl },
   });
 
-  return new AlpacaHttpBrokerClient({ baseUrl });
+  return client;
 }
 
 /**

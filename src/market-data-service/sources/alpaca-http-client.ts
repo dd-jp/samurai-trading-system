@@ -9,6 +9,17 @@
  * change — this module only supplies the real HTTP implementation
  * `AlpacaDataSource` is already injected against.
  *
+ * **No paper/live environment guard here, deliberately (#293).** The broker
+ * client (execution/adapters/alpaca-http-client.ts) carries an `environment`
+ * option because its two hosts spend different money. Market data has one
+ * host — `https://data.alpaca.markets` serves paper and live accounts
+ * alike — so there is no environment to get wrong and nothing an operator
+ * could point this client at that would place an order. The asset-class split
+ * below is this client's only construction-time routing decision. Do not add a
+ * parallel `environment` option here for symmetry's sake: an option with no
+ * failure mode behind it teaches readers that the broker client's option is
+ * also ceremonial.
+ *
  * **Crypto/equity is a path-root split, not a query parameter** (spec):
  *   - equities: `GET /v2/stocks/{symbol}/bars`, `GET /v2/stocks/{symbol}/quotes/latest`
  *   - crypto:   `GET /v2/crypto/us/bars`,        `GET /v2/crypto/us/latest/quotes`
