@@ -20,7 +20,14 @@ export {
   InMemoryTuningStore,
 } from './fixture-stores.js';
 export { applyGuardrail, boundedStep, type GuardrailOutcome, moveDirection } from './guardrails.js';
-export { computeMetrics } from './metrics.js';
+export {
+  computeMetrics,
+  DSR_INSIGNIFICANT,
+  LIVE_BACKTEST_DIVERGENCE_OVER_MAX,
+  OOS_SHARPE_UNDER_MIN,
+  PBO_OVER_MAX,
+  REVALIDATION_GATED_KILL_LINES,
+} from './metrics.js';
 export { onTradeClose } from './on-trade-close.js';
 export { SqliteAdjustmentLog } from './sqlite-adjustment-log.js';
 export { SqliteClosedTradeStore } from './sqlite-closed-trade-store.js';
@@ -32,6 +39,8 @@ export type {
   BreachAlertChannel,
   DailyCycleInput,
   DailyCycleResult,
+  DailyMetricsSample,
+  DailyMetricsSource,
   FeedbackConfig,
   FeedbackLoop,
   KillThresholds,

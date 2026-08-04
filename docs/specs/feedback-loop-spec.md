@@ -111,6 +111,12 @@ interface MetricsReport {
     deflated_sharpe: number; pbo: number;
   };
   breaches: string[];           // FL-only. e.g. 'pbo_over_0.05', 'oos_sharpe_under_0.5'
+  not_evaluated: string[];      // Kill-lines that could NOT be checked this run, so "did not
+                                // breach" is never read as "was checked and passed" (#327).
+                                // Two routine causes: no `revalidation` snapshot (every
+                                // non-revalidation day) makes the three snapshot-gated lines
+                                // un-runnable; `backtest_reference_sharpe <= 0` leaves
+                                // live_backtest_divergence_over_max inert. Empty = all four ran.
 }
 ```
 

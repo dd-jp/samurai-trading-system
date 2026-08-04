@@ -61,6 +61,19 @@
  * only when `ProductionConfig.feedback` supplies the two inputs with no
  * in-repo source (its `FeedbackConfig` values and the loosen-approval
  * channel); its four stores are all SQLite-backed and constructed here.
+ * **Not starting it is now announced at startup at `warn` (#327)** — it used
+ * to be reached by pure omission, which is the same silent-by-omission bug
+ * #293/#320/#322 closed elsewhere.
+ *
+ * `computeMetrics` — the kill-line detector — runs in that same timer, after
+ * the tuning cycle, whenever `FeedbackCycleConfig.metrics` supplies a
+ * `DailyMetricsSource` (#327). Before that ticket it had no production caller
+ * at all, so all four kill-lines were unreachable in a paper run. The suite
+ * is *supplied* rather than computed here because no live equity return
+ * series is persisted — see `DailyMetricsSource` for why inventing one would
+ * be worse than the silence, given that a breach WRITES risk thresholds.
+ * A breach alerts through `ProductionConfig.breachAlerts` and never kills:
+ * kill/rework stays a human decision, and there is no kill primitive here.
  * `onTradeClose` IS wired (#237, superseding this file's earlier note that it
  * was not): a `ClosedTrade` is never reachable from `TickOutcome.execution_result`
  * (`ExecutionImpl.execute()` returns a submission ack only, and
@@ -108,11 +121,14 @@ import {
   SqliteExecutionStore,
 } from '../execution/index.js';
 import type {
+  BreachAlertChannel,
+  DailyMetricsSource,
   FeedbackConfig,
   LoosenApprovalChannel,
   TuningProposal,
 } from '../feedback-loop/index.js';
 import {
+  computeMetrics,
   runDailyCycle,
   SqliteAdjustmentLog,
   SqliteClosedTradeStore,
@@ -152,6 +168,7 @@ import { SqliteSetupStore } from '../trader/index.js';
 import type { ApprovalChannel, VerdictConfig } from '../verdict/index.js';
 import {
   ConsoleApprovalChannel,
+  LoggingBreachAlertChannel,
   LoggingHeartbeatChannel,
   LoggingOrphanAlertChannel,
   LoggingUnpricedFillAlertChannel,
@@ -386,6 +403,13 @@ export interface ProductionConfig {
    * here. Omit it and the daily timer simply never starts.
    */
   feedback?: FeedbackCycleConfig;
+  /**
+   * Where a kill-threshold breach goes (#93, wired #327). Defaults to
+   * `LoggingBreachAlertChannel`; `SAMURAI_ALERTS=telegram` replaces it with
+   * `TradeChannelBreachAlert` at the entrypoint, like the other three
+   * outbound alerts (alert-transport.ts).
+   */
+  breachAlerts?: BreachAlertChannel;
   logger?: Logger;
 }
 
@@ -399,6 +423,36 @@ export interface FeedbackCycleConfig {
   proposals?: TuningProposal[];
   /** Default 24h. */
   intervalMs?: number;
+  /**
+   * What makes `computeMetrics` — and with it the four kill-lines — actually
+   * run each cycle (#327). Optional for one honest reason, spelled out in
+   * `DailyMetricsSource`'s doc: no live equity return series is persisted, so
+   * the `MetricsSuite` cannot be produced in-repo and must be supplied.
+   *
+   * Omit it and the kill-line detector does not run. That is announced at
+   * startup at `warn` rather than left to be discovered — a paper run can
+   * degrade exactly the way these lines exist to catch, and silence is the
+   * bug #327 closes.
+   */
+  metrics?: DailyMetricsConfig;
+}
+
+export interface DailyMetricsConfig {
+  /** Supplies the day's already-computed suite, or `undefined` for "none this cycle". */
+  source: DailyMetricsSource;
+  /**
+   * The frozen selected config's backtest Sharpe — the divergence check's
+   * baseline. Supplied for the same reason the suite is: no selected-config
+   * record with a backtest Sharpe is persisted in-repo (`SqliteConfigTrialLog`
+   * has the documented `config_json` gap, and Stage 2's runner uses an
+   * in-memory trial log).
+   *
+   * A value `<= 0` cannot breach by design — `liveBacktestDivergence` refuses
+   * to manufacture a breach off a broken reference — which makes
+   * `live_backtest_divergence_over_max` inert. That is warned about once, not
+   * silently tolerated.
+   */
+  backtest_reference_sharpe: number;
 }
 
 const DEFAULT_TICK_INTERVAL_MS = 60_000;
@@ -921,6 +975,94 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     tuning: new SqliteTuningStore(config.db, clock),
     adjustments: new SqliteAdjustmentLog(config.db),
   };
+  const breachAlerts = config.breachAlerts ?? new LoggingBreachAlertChannel(logger);
+
+  /**
+   * Latch for the inert-divergence warn (#327 item 3). The condition is a
+   * property of the frozen config, not of the day, so it is true on every
+   * cycle — an unattended daily timer would otherwise repeat it forever.
+   */
+  let warnedInertDivergence = false;
+
+  /**
+   * `computeMetrics`'s production caller (#327) — the thing that makes the
+   * four kill-lines reachable in a paper run at all. Runs inside the same
+   * daily timer as `runDailyCycle`, after it, so a breach's defensive
+   * auto-tighten lands on thresholds the cycle has already finished writing
+   * rather than racing it.
+   *
+   * Returns without computing when no suite is available. That is the honest
+   * path, not a failure: see `DailyMetricsSource`. It is logged at `warn`
+   * every time, because a cycle that checked nothing must never look like a
+   * cycle that found nothing.
+   */
+  const runMetricsCheck = (metrics: DailyMetricsConfig, feedbackConfig: FeedbackConfig): void => {
+    const sample = metrics.source.getDailyMetrics();
+    if (sample === undefined) {
+      logger.log({
+        trace_id: 'feedback-cycle',
+        stage: 'feedback-loop',
+        level: 'warn',
+        message:
+          'no daily MetricsSuite this cycle — all four kill-lines were skipped, NOT passed ' +
+          '(pbo_over_max, oos_sharpe_under_min, dsr_insignificant, ' +
+          'live_backtest_divergence_over_max)',
+        payload: { kill_lines_evaluated: 0 },
+      });
+      return;
+    }
+
+    if (metrics.backtest_reference_sharpe <= 0 && !warnedInertDivergence) {
+      warnedInertDivergence = true;
+      logger.log({
+        trace_id: 'feedback-cycle',
+        stage: 'feedback-loop',
+        level: 'warn',
+        message:
+          'backtest_reference_sharpe <= 0 — live_backtest_divergence_over_max is INERT and can ' +
+          'never breach. A non-positive reference has no meaningful relative drop, so the check ' +
+          'returns 0 by design; set FeedbackCycleConfig.metrics.backtest_reference_sharpe to the ' +
+          "frozen selected config's backtest Sharpe to arm it. Warned once per process.",
+        payload: { backtest_reference_sharpe: metrics.backtest_reference_sharpe },
+      });
+    }
+
+    const report = computeMetrics({
+      clock,
+      daily: sample.daily,
+      ...(sample.revalidation === undefined ? {} : { revalidation: sample.revalidation }),
+      backtest_reference_sharpe: metrics.backtest_reference_sharpe,
+      tuning: feedbackStores.tuning,
+      adjustments: feedbackStores.adjustments,
+      // The same `FeedbackConfig` the tuning cycle used — its
+      // `kill_thresholds` are the four lines, and its `risk_thresholds` are
+      // what a breach auto-tightens.
+      config: feedbackConfig,
+      alerts: breachAlerts,
+    });
+
+    logger.log({
+      trace_id: 'feedback-cycle',
+      stage: 'feedback-loop',
+      // A breach is an `error` even though the alert channel also carries it:
+      // the log is the record an operator reads back after the fact.
+      level: report.breaches.length > 0 ? 'error' : 'info',
+      message:
+        report.breaches.length > 0
+          ? 'daily metrics computed — KILL-THRESHOLD BREACH (alerted, thresholds auto-tightened)'
+          : 'daily metrics computed',
+      payload: {
+        breaches: report.breaches,
+        // Carried into the log as well as the report so a revalidation-less
+        // day is legible in the log stream, not only to a caller holding the
+        // returned `MetricsReport`.
+        not_evaluated: report.not_evaluated,
+        revalidation_present: report.revalidation !== undefined,
+        daily: report.daily,
+      },
+    });
+  };
+
   const runFeedbackCycle = (feedback: FeedbackCycleConfig): void => {
     try {
       const result = runDailyCycle({
@@ -938,6 +1080,15 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         message: 'daily feedback cycle complete',
         payload: result,
       });
+
+      // Inside the same try/catch — a throw here must not take the timer down
+      // either — and deliberately AFTER the cycle's own log line, so a metrics
+      // failure cannot erase the record that the tuning cycle itself
+      // succeeded: the 'complete' line is already written by then, and the
+      // catch below adds a 'failed' line rather than replacing it.
+      if (feedback.metrics !== undefined) {
+        runMetricsCheck(feedback.metrics, feedback.config);
+      }
     } catch (error) {
       logger.log({
         trace_id: 'feedback-cycle',
@@ -996,8 +1147,39 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         maxConcurrentInstruments: config.maxConcurrentInstruments ?? 1,
       });
 
+      // #327: both of these degraded modes were previously reached by pure
+      // omission — no warn, no log line, no trace. An operator who forgot the
+      // config got a system that looked healthy and never learned anything.
+      // Warned at STARTUP, not at first use: the first daily cycle is up to
+      // 24h away, and "silent for a day" is indistinguishable from "broken".
       const feedback = config.feedback;
-      if (feedback !== undefined) {
+      if (feedback === undefined) {
+        logger.log({
+          trace_id: 'startup',
+          stage: 'feedback-loop',
+          level: 'warn',
+          message:
+            'ProductionConfig.feedback is not set — the daily feedback cycle will NEVER run. ' +
+            'No analyst weight is attributed, no dial is tuned, and no kill-line ' +
+            '(pbo_over_max, oos_sharpe_under_min, dsr_insignificant, ' +
+            'live_backtest_divergence_over_max) is ever evaluated. The run will look healthy ' +
+            'and learn nothing.',
+          payload: { feedback_cycle: 'not_started' },
+        });
+      } else {
+        if (feedback.metrics === undefined) {
+          logger.log({
+            trace_id: 'startup',
+            stage: 'feedback-loop',
+            level: 'warn',
+            message:
+              'FeedbackCycleConfig.metrics is not set — the daily cycle will tune dials but ' +
+              'computeMetrics will NEVER run, so all four kill-lines stay unevaluated. No ' +
+              'MetricsSuite can be produced in-repo today (no equity return series is ' +
+              'persisted; see DailyMetricsSource), so it must be supplied.',
+            payload: { kill_lines: 'not_evaluated' },
+          });
+        }
         feedbackHandle = setInterval(
           () => runFeedbackCycle(feedback),
           feedback.intervalMs ?? DEFAULT_FEEDBACK_INTERVAL_MS,

@@ -33,7 +33,7 @@
  *   bug being fixed, and a default of `telegram` would fail every dev run for
  *   want of a bot token.
  *
- * A caller that injected all three channels itself is not asked for the
+ * A caller that injected every channel itself is not asked for the
  * variable at all (`resolveAlertsMode` returns `undefined`), mirroring
  * `missingCredentialEnvVars`' `satisfiedByInjection` in index.ts: it has
  * already made the decision explicitly. Injecting *some* of them does not
@@ -74,6 +74,7 @@
  */
 import type { SharedStore as SqliteHandle } from '../shared/store/index.js';
 import { TelegramBotApiClient } from '../verdict/index.js';
+import { TradeChannelBreachAlert } from './breach-alert-channel.js';
 import { TradeChannelHeartbeat } from './heartbeat-channel.js';
 import { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
 import type { ProductionConfig } from './production.js';
@@ -88,14 +89,19 @@ export const ALERTS_MODES = ['telegram', 'log-only'] as const;
 export type AlertsMode = (typeof ALERTS_MODES)[number];
 
 /**
- * The `ProductionConfig` fields this module owns — the three outbound operator
+ * The `ProductionConfig` fields this module owns — the outbound operator
  * escalations, and nothing else. `approvals` is deliberately absent: it is an
  * inbound round trip, not an alert, and wiring it is #275's remaining half.
+ *
+ * `breachAlerts` joined the list in #327: a kill-threshold breach is the
+ * fourth outbound escalation, and it had the same shape of hole as the
+ * original three — a real channel type with no transport selected for it.
  */
 export const ALERT_CHANNEL_FIELDS = [
   'heartbeatChannel',
   'orphanAlerts',
   'unpricedFillAlerts',
+  'breachAlerts',
 ] as const satisfies readonly (keyof ProductionConfig)[];
 
 /** What `SAMURAI_ALERTS=telegram` needs in the environment. See the module doc for the allowlist. */
@@ -105,7 +111,7 @@ export const TELEGRAM_ALERT_ENV_VARS = [
   'TELEGRAM_ALLOWED_USER_IDS',
 ] as const;
 
-/** The three channels, as `buildProductionOrchestrator` takes them. */
+/** The alert channels, as `buildProductionOrchestrator` takes them. */
 export type AlertChannels = Pick<ProductionConfig, (typeof ALERT_CHANNEL_FIELDS)[number]>;
 
 /**
@@ -162,8 +168,8 @@ export function buildAlertChannels(deps: {
       level: 'warn',
       message:
         `${ENV_VAR}=log-only — every operator alert (heartbeat, orphaned go verdict, stuck ` +
-        'unpriced fill) is a log line, and nothing will reach a phone. Correct for an ATTENDED ' +
-        `run only; an unattended soak (#238) needs ${ENV_VAR}=telegram.`,
+        'unpriced fill, kill-threshold breach) is a log line, and nothing will reach a phone. ' +
+        `Correct for an ATTENDED run only; an unattended soak (#238) needs ${ENV_VAR}=telegram.`,
       payload: { alerts: 'log-only' },
     });
     return {};
@@ -192,9 +198,9 @@ export function buildAlertChannels(deps: {
     stage: 'orchestrator',
     level: 'info',
     message:
-      `${ENV_VAR}=telegram — heartbeat, orphaned go verdicts and stuck unpriced fills will be ` +
-      'pushed to the trade channel. No approval poll is started here; HITL approvals still ' +
-      'resolve through ProductionConfig.approvals (#275).',
+      `${ENV_VAR}=telegram — heartbeat, orphaned go verdicts, stuck unpriced fills and ` +
+      'kill-threshold breaches will be pushed to the trade channel. No approval poll is started ' +
+      'here; HITL approvals still resolve through ProductionConfig.approvals (#275).',
     // Never the token, and never the chat id: neither is a secret worth a log
     // line, and the token is a bearer credential for the entire bot.
     payload: { alerts: 'telegram' },
@@ -209,6 +215,9 @@ export function buildAlertChannels(deps: {
       : {}),
     ...(deps.injected.unpricedFillAlerts === undefined
       ? { unpricedFillAlerts: new TradeChannelUnpricedFillAlert(telegram, chatId) }
+      : {}),
+    ...(deps.injected.breachAlerts === undefined
+      ? { breachAlerts: new TradeChannelBreachAlert(telegram, chatId, deps.logger) }
       : {}),
   };
 }
