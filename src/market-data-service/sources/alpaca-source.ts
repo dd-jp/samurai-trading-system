@@ -39,7 +39,19 @@ export interface AlpacaQuote {
 }
 
 export interface AlpacaClient {
-  getBars(symbol: string, timeframe: string, asOf: Date, limit: number): Promise<AlpacaBar[]>;
+  /**
+   * `partial` (issue #292) is the caller's short-read policy: omitted or
+   * `'error'` means an implementation that CAN detect an under-covered range
+   * must fail loudly rather than return fewer than `limit` bars; `'allow'` is
+   * the explicit opt-in for a caller that tolerates a short window.
+   */
+  getBars(
+    symbol: string,
+    timeframe: string,
+    asOf: Date,
+    limit: number,
+    partial?: 'error' | 'allow',
+  ): Promise<AlpacaBar[]>;
   getLatestQuote(symbol: string): Promise<AlpacaQuote>;
 }
 
@@ -81,8 +93,9 @@ export class AlpacaDataSource extends NormalizingDataSource {
     timeframe: string,
     asOf: Date,
     limit: number,
+    partial?: 'error' | 'allow',
   ): Promise<RawCandle[]> {
-    const bars = await this.#client.getBars(instrument, timeframe, asOf, limit);
+    const bars = await this.#client.getBars(instrument, timeframe, asOf, limit, partial);
 
     return bars.map((bar) => ({
       open_time: new Date(bar.t),

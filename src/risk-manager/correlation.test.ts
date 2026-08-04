@@ -159,7 +159,27 @@ describe('computeCorrelationEstimate — point-in-time reads', () => {
 
     await computeCorrelationEstimate(input);
 
-    expect(marketData.getBars).toHaveBeenCalledWith('AAPL', window, asOf);
-    expect(marketData.getBars).toHaveBeenCalledWith('MSFT', window, asOf);
+    expect(marketData.getBars).toHaveBeenCalledWith('AAPL', { ...window, partial: 'allow' }, asOf);
+    expect(marketData.getBars).toHaveBeenCalledWith('MSFT', { ...window, partial: 'allow' }, asOf);
+  });
+
+  /**
+   * #292: a short bar window is degraded-but-valid HERE and nowhere else —
+   * `min_bars` already omits an under-covered pair. Without the opt-in, a
+   * single thin peer would reject the whole `Promise.all` and take every
+   * instrument's correlation read (and the tick) down with it.
+   */
+  it('opts into a partial read, since min_bars already handles a short window', async () => {
+    const marketData = makeMarketData({
+      AAPL: makeBars('AAPL', [100, 101, 102, 103]),
+      MSFT: makeBars('MSFT', [50, 51, 52, 53]),
+    });
+    const input = makeInput({ otherInstruments: ['MSFT'], marketData, asOf });
+
+    await computeCorrelationEstimate(input);
+
+    for (const call of (marketData.getBars as ReturnType<typeof vi.fn>).mock.calls) {
+      expect((call[1] as BarWindow).partial).toBe('allow');
+    }
   });
 });

@@ -21,6 +21,7 @@ export {
   AlpacaDataProviderError,
   AlpacaDataRateLimitError,
   AlpacaDataTimeoutError,
+  AlpacaDataUnderfetchError,
 } from './sources/alpaca-data-errors.js';
 export type { AlpacaHttpDataClientOptions } from './sources/alpaca-http-client.js';
 export { AlpacaHttpDataClient } from './sources/alpaca-http-client.js';

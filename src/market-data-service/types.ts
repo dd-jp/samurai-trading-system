@@ -34,6 +34,21 @@ export interface BarWindow {
   timeframe: string;
   /** Count of bars (or duration) ending at asOf. */
   lookback: number;
+  /**
+   * What a source should do when the venue cannot produce `lookback` bars
+   * (issue #292). Omitted means `'error'`: the safe behaviour is the default,
+   * because almost every consumer of a short window is silently WRONG rather
+   * than merely degraded — an SMA/RSI/ATR computed over 3 bars is presented
+   * as an SMA/RSI/ATR over `lookback`, and a mispriced stop follows from it.
+   *
+   * `'allow'` is an explicit opt-in for the call sites that can actually
+   * reason about a short window and already guard it (today: the Risk
+   * Manager's correlation estimate, whose `min_bars` check omits an
+   * under-covered pair by design). Only sources that can distinguish the two
+   * cases honour it — `AlpacaHttpDataClient` does; the fixture/replay sources
+   * serve fixed history and are unaffected.
+   */
+  partial?: 'error' | 'allow';
 }
 
 /**

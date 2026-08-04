@@ -232,3 +232,20 @@ describe('point-in-time discipline holds at the source', () => {
     expect(bars.map((b) => b.close)).toEqual([107]);
   });
 });
+
+describe("the window's short-read policy reaches the source client (#292)", () => {
+  it('forwards window.partial to AlpacaClient.getBars, and undefined when unset', async () => {
+    const getBars = vi.fn(async (): Promise<AlpacaBar[]> => ALPACA_BARS);
+    const source = new AlpacaDataSource(
+      { getBars, getLatestQuote: async () => ({ t: ASOF.toISOString(), ap: 1, bp: 1 }) },
+      { asset_class: 'stocks' },
+    );
+
+    await source.fetchBars('AAPL', { ...WINDOW, partial: 'allow' }, ASOF);
+    expect(getBars).toHaveBeenLastCalledWith('AAPL', '1h', ASOF, WINDOW.lookback, 'allow');
+
+    // Unset means "no opt-in" — the client applies its own fail-loud default.
+    await source.fetchBars('AAPL', WINDOW, ASOF);
+    expect(getBars).toHaveBeenLastCalledWith('AAPL', '1h', ASOF, WINDOW.lookback, undefined);
+  });
+});
