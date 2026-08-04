@@ -508,4 +508,21 @@ describe('money-math precision (ADR-0005)', () => {
     expect(trade.close_reason).toBe('stop');
     expect(driftOf(trade.realized_pnl_net, exact.pnlNet)).toBeLessThan(MAX_TOLERATED_DRIFT_USD);
   });
+
+  it('reads an entry as filled when its tranches sum a hair under the requested size', async () => {
+    // Same defect class as the flat comparison, milder consequence: a lot
+    // requested at 1.0 and filled 0.7 + 0.2 + 0.1 (float sum
+    // 0.9999999999999999) is complete, and a bare `>=` reports it forever as
+    // `partially_filled` — a state the rest of the system reads as "the venue
+    // still owes us quantity".
+    const { store } = openTestExecutionStore();
+    await store.writeAheadPosition(seedPosition({ requested_size: 1, stop: 95 }));
+    const entries = ['0.7', '0.2', '0.1'].map((qty) => ({ price: '100', qty, fee: '0.1' }));
+    expect(entries.reduce((sum, f) => sum + Number(f.qty), 0)).toBeLessThan(1);
+
+    const broker = new ScriptedBroker(normalized(entries, 'entry', 'e'));
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    expect((await store.getPosition('lot-1'))?.order_state).toBe('filled');
+  });
 });

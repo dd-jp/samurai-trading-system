@@ -126,12 +126,13 @@ function nextState(position: OpenPosition, filledSize: number, flat: boolean): O
  * `getOpenPositions()` consuming Risk's exposure caps.
  *
  * 1e-12 relative is ~3 orders above the accumulation error a realistic fill
- * count produces (n·2^-53 ≈ 1e-14 at n = 100) and far below any venue's lot
- * granularity, so it absorbs float noise and cannot absorb a real unfilled
- * remainder. Declaring flat a dust-quantity early is also the safe direction
- * of the two: `reconcile()` (#86) corrects a store-vs-broker divergence,
- * whereas a lot that never closes is unrecoverable without operator action.
- * See [ADR-0005](../../docs/adr/0005-money-math-precision.md).
+ * count produces (n·2^-53 ≈ 1e-14 at n = 100) and orders below any venue's
+ * minimum quantity increment, so it absorbs float noise and cannot absorb a
+ * real unfilled remainder: a quantity this small does not exist at the
+ * broker, so a lot that reads flat here is flat there too. The tolerance has
+ * to carry that argument on its own — `reconcile()` (#86) only inspects
+ * `pending`/`submitted` lots, so it never revisits one this code has marked
+ * terminal. See [ADR-0005](../../docs/adr/0005-money-math-precision.md).
  */
 const QTY_EPSILON_RELATIVE = 1e-12;
 
