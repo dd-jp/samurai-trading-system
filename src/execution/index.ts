@@ -6,7 +6,10 @@
  */
 
 export type { AlpacaBrokerAdapterInput } from './adapters/alpaca-adapter.js';
-export { AlpacaBrokerAdapter } from './adapters/alpaca-adapter.js';
+export {
+  AlpacaBrokerAdapter,
+  DEFAULT_UNPRICED_FILL_AGE_OUT_MS,
+} from './adapters/alpaca-adapter.js';
 export {
   AlpacaBrokerProviderError,
   AlpacaBrokerRateLimitError,
@@ -34,6 +37,8 @@ export type {
   BrokerBracketRequestFields,
   BrokerStateStore,
   BrokerVenue,
+  UnpricedFillObservation,
+  UnpricedFillRecord,
 } from './broker-state-store.js';
 export { InMemoryBrokerStateStore } from './broker-state-store.js';
 export type {
@@ -70,3 +75,4 @@ export type {
   SharedStore,
   SimulatedAdapterConfig,
 } from './types.js';
+export type { UnpricedFillAlert, UnpricedFillAlertChannel } from './unpriced-fill-alert.js';

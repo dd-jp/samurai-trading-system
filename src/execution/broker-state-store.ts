@@ -78,6 +78,34 @@ export interface BrokerBracketOrderIds {
   target_order_id: string | null;
 }
 
+/**
+ * A fill the venue reports filled but cannot price (#298) — the observation an
+ * adapter records instead of booking a fabricated price.
+ *
+ * `instrument` is denormalized from the bracket parent because the alert built
+ * from this row has to be actionable on its own: an operator reading it needs
+ * the symbol and the quantity, not a foreign key.
+ */
+export interface UnpricedFillObservation {
+  client_order_id: string;
+  /** The venue order id the fill would have been booked under. */
+  broker_fill_id: string;
+  leg: NormalizedFill['leg'];
+  instrument: string;
+  /** The quantity the venue claims filled — what makes this a contradiction. */
+  qty: number;
+}
+
+/** A persisted `UnpricedFillObservation` plus its age-out clock. */
+export interface UnpricedFillRecord extends UnpricedFillObservation {
+  /** Set once, on first observation. Never advanced — this IS the clock. */
+  first_seen_at: Date;
+  /** Refreshed each sweep that still sees it unpriced; diagnostic only. */
+  last_seen_at: Date;
+  /** Null until an age-out alert has been delivered for this fill. */
+  alerted_at: Date | null;
+}
+
 export interface BrokerStateStore {
   /** Every bracket this venue has ever recorded, oldest first. */
   loadBrackets(venue: BrokerVenue): BrokerBracketRecord[];
@@ -97,6 +125,26 @@ export interface BrokerStateStore {
   loadObservedFills(venue: BrokerVenue): NormalizedFill[];
   /** Idempotent on `(venue, client_order_id, broker_fill_id)`. */
   saveObservedFill(venue: BrokerVenue, fill: NormalizedFill): void;
+  /**
+   * Notes that this fill is still unpriced as of `seenAt` (#298).
+   *
+   * FIRST WRITE WINS on `first_seen_at`: a re-observation refreshes
+   * `last_seen_at` and the observation's mutable fields and leaves the clock
+   * alone. That is the whole point — a fill re-offered unpriced on every poll,
+   * across restarts, must accumulate age rather than resetting it.
+   */
+  recordUnpricedFill(venue: BrokerVenue, observation: UnpricedFillObservation, seenAt: Date): void;
+  /** Every still-unresolved unpriced fill for this venue, oldest first. */
+  loadUnpricedFills(venue: BrokerVenue): UnpricedFillRecord[];
+  /** Records that the age-out alert for this fill was actually delivered. */
+  markUnpricedFillAlerted(
+    venue: BrokerVenue,
+    clientOrderId: string,
+    brokerFillId: string,
+    alertedAt: Date,
+  ): void;
+  /** Drops the row: the venue priced the fill and it has been ingested. */
+  clearUnpricedFill(venue: BrokerVenue, clientOrderId: string, brokerFillId: string): void;
 }
 
 /**
@@ -115,6 +163,7 @@ export interface BrokerStateStore {
 export class InMemoryBrokerStateStore implements BrokerStateStore {
   private readonly brackets = new Map<string, BrokerBracketRecord>();
   private readonly fills = new Map<string, NormalizedFill & { venue: BrokerVenue }>();
+  private readonly unpriced = new Map<string, UnpricedFillRecord & { venue: BrokerVenue }>();
 
   loadBrackets(venue: BrokerVenue): BrokerBracketRecord[] {
     return [...this.brackets.values()].filter((record) => record.venue === venue);
@@ -168,8 +217,49 @@ export class InMemoryBrokerStateStore implements BrokerStateStore {
       venue,
     });
   }
+
+  recordUnpricedFill(venue: BrokerVenue, observation: UnpricedFillObservation, seenAt: Date): void {
+    const rowKey = fillKey(venue, observation.client_order_id, observation.broker_fill_id);
+    const existing = this.unpriced.get(rowKey);
+    this.unpriced.set(rowKey, {
+      ...observation,
+      venue,
+      // Mirrors the SQL implementation's untouched `first_seen_at` on conflict.
+      // Kept in step deliberately: a test double whose clock resets where the
+      // real store's does not is how a suite certifies the bug it was written
+      // to catch.
+      first_seen_at: existing?.first_seen_at ?? seenAt,
+      last_seen_at: seenAt,
+      alerted_at: existing?.alerted_at ?? null,
+    });
+  }
+
+  loadUnpricedFills(venue: BrokerVenue): UnpricedFillRecord[] {
+    return [...this.unpriced.values()]
+      .filter((row) => row.venue === venue)
+      .map(({ venue: _venue, ...row }) => row);
+  }
+
+  markUnpricedFillAlerted(
+    venue: BrokerVenue,
+    clientOrderId: string,
+    brokerFillId: string,
+    alertedAt: Date,
+  ): void {
+    const existing = this.unpriced.get(fillKey(venue, clientOrderId, brokerFillId));
+    if (existing === undefined) return;
+    existing.alerted_at = alertedAt;
+  }
+
+  clearUnpricedFill(venue: BrokerVenue, clientOrderId: string, brokerFillId: string): void {
+    this.unpriced.delete(fillKey(venue, clientOrderId, brokerFillId));
+  }
 }
 
 function key(venue: BrokerVenue, clientOrderId: string): string {
   return `${venue}|${clientOrderId}`;
+}
+
+function fillKey(venue: BrokerVenue, clientOrderId: string, brokerFillId: string): string {
+  return `${venue}|${clientOrderId}|${brokerFillId}`;
 }

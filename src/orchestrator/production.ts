@@ -92,6 +92,7 @@ import type {
   BrokerAdapter,
   ExecutionConfig,
   SharedStore as ExecutionSharedStore,
+  UnpricedFillAlertChannel,
 } from '../execution/index.js';
 import {
   AlpacaBrokerAdapter,
@@ -147,6 +148,7 @@ import {
   ConsoleApprovalChannel,
   LoggingHeartbeatChannel,
   LoggingOrphanAlertChannel,
+  LoggingUnpricedFillAlertChannel,
   ParkedCiiScoreProvider,
 } from './console-channels.js';
 import {
@@ -249,6 +251,23 @@ export interface ProductionConfig {
   approvals?: ApprovalChannel;
   /** Where a restart-time orphaned `go` verdict is reported. Defaults to the log. */
   orphanAlerts?: OrphanAlertChannel;
+  /**
+   * Where a fill the venue reports filled but will not price is escalated once
+   * it has been stuck too long (#298). Defaults to
+   * `LoggingUnpricedFillAlertChannel`, with the same caveat as
+   * `heartbeatChannel`: the default is reachable only by an operator reading
+   * the log stream. For an unattended soak (#238) pass
+   * `TradeChannelUnpricedFillAlert` (unpriced-fill-channel.ts), which needs the
+   * `TelegramClient` this codebase still does not construct (#275).
+   */
+  unpricedFillAlerts?: UnpricedFillAlertChannel;
+  /**
+   * How long a fill may stay unpriced before that escalation fires. Defaults to
+   * `DEFAULT_UNPRICED_FILL_AGE_OUT_MS` (15 minutes) — see its doc for why that
+   * number, and note it is only meaningful against `fillPollIntervalMs`, since
+   * the check runs on the fill poll.
+   */
+  unpricedFillAgeOutMs?: number;
   /** WorldMonitor CII reads (ADR-0002; live wiring parked during paper trading). */
   ciiScoreProvider?: CiiScoreProvider;
   /**
@@ -642,6 +661,14 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // filling when the process died. The in-memory default is only ever
       // right for a test.
       state: new SqliteBrokerStateStore(config.db),
+      // #298: the same store carries the age-out clock for a fill the venue
+      // will not price, which is why it must be the durable one here — a
+      // restart that reset the clock would age nothing out across a soak.
+      unpricedFillAlerts: config.unpricedFillAlerts ?? new LoggingUnpricedFillAlertChannel(logger),
+      ...(config.unpricedFillAgeOutMs === undefined
+        ? {}
+        : { unpricedFillAgeOutMs: config.unpricedFillAgeOutMs }),
+      clock,
     });
   const circuitBreakers = new CircuitBreakers(config.breakerConfig, config.initialBreakerState);
   // Parked by default (ADR-0002): the live WorldMonitor feed costs money per

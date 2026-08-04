@@ -17,6 +17,8 @@ import type {
   BrokerBracketRecord,
   BrokerStateStore,
   BrokerVenue,
+  UnpricedFillObservation,
+  UnpricedFillRecord,
 } from './broker-state-store.js';
 import type { NormalizedFill } from './types.js';
 
@@ -48,6 +50,17 @@ interface ObservedFillRow {
   qty: number;
   fee: number;
   timestamp: string;
+}
+
+interface UnpricedFillRow {
+  client_order_id: string;
+  broker_fill_id: string;
+  leg: NormalizedFill['leg'];
+  instrument: string;
+  qty: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  alerted_at: string | null;
 }
 
 export class SqliteBrokerStateStore implements BrokerStateStore {
@@ -207,6 +220,86 @@ export class SqliteBrokerStateStore implements BrokerStateStore {
         fill.fee,
         fill.timestamp.toISOString(),
       );
+  }
+
+  /**
+   * The age-out clock's write (#298). `first_seen_at` is absent from the
+   * `DO UPDATE SET` list on purpose and that omission is the feature: a fill
+   * re-offered unpriced on every poll — and across restarts, which is what
+   * makes this durable rather than a Map — must accumulate age, not reset it.
+   * `alerted_at` is left alone for the same reason: a re-observation is not a
+   * new anomaly.
+   */
+  recordUnpricedFill(venue: BrokerVenue, observation: UnpricedFillObservation, seenAt: Date): void {
+    this.db
+      .prepare(
+        `INSERT INTO broker_unpriced_fills (
+           venue, client_order_id, broker_fill_id, leg, instrument, qty,
+           first_seen_at, last_seen_at, alerted_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+         ON CONFLICT(venue, client_order_id, broker_fill_id) DO UPDATE SET
+           leg = excluded.leg,
+           instrument = excluded.instrument,
+           -- Alpaca reports CUMULATIVE filled quantity, so a later observation
+           -- of the same order may legitimately be larger. The latest reading
+           -- wins; the clock does not move.
+           qty = excluded.qty,
+           last_seen_at = excluded.last_seen_at`,
+      )
+      .run(
+        venue,
+        observation.client_order_id,
+        observation.broker_fill_id,
+        observation.leg,
+        observation.instrument,
+        observation.qty,
+        seenAt.toISOString(),
+        seenAt.toISOString(),
+      );
+  }
+
+  loadUnpricedFills(venue: BrokerVenue): UnpricedFillRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT client_order_id, broker_fill_id, leg, instrument, qty,
+                first_seen_at, last_seen_at, alerted_at
+           FROM broker_unpriced_fills WHERE venue = ? ORDER BY first_seen_at, rowid`,
+      )
+      .all(venue) as UnpricedFillRow[];
+
+    return rows.map((row) => ({
+      client_order_id: row.client_order_id,
+      broker_fill_id: row.broker_fill_id,
+      leg: row.leg,
+      instrument: row.instrument,
+      qty: row.qty,
+      first_seen_at: new Date(row.first_seen_at),
+      last_seen_at: new Date(row.last_seen_at),
+      alerted_at: row.alerted_at === null ? null : new Date(row.alerted_at),
+    }));
+  }
+
+  markUnpricedFillAlerted(
+    venue: BrokerVenue,
+    clientOrderId: string,
+    brokerFillId: string,
+    alertedAt: Date,
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE broker_unpriced_fills SET alerted_at = ?
+          WHERE venue = ? AND client_order_id = ? AND broker_fill_id = ?`,
+      )
+      .run(alertedAt.toISOString(), venue, clientOrderId, brokerFillId);
+  }
+
+  clearUnpricedFill(venue: BrokerVenue, clientOrderId: string, brokerFillId: string): void {
+    this.db
+      .prepare(
+        `DELETE FROM broker_unpriced_fills
+          WHERE venue = ? AND client_order_id = ? AND broker_fill_id = ?`,
+      )
+      .run(venue, clientOrderId, brokerFillId);
   }
 }
 

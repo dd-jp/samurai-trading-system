@@ -101,6 +101,7 @@ export type {
   TickSteps,
   UniverseInstrument,
 } from './types.js';
+export { TradeChannelUnpricedFillAlert } from './unpriced-fill-channel.js';
 
 /**
  * Config fields the process cannot derive from the environment or from
