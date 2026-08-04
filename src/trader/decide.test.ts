@@ -54,13 +54,24 @@ function bars(count: number, trueRange: number): Bar[] {
 
 /** Serves a fixed bar window and mark — the Trader's only data dependency. */
 class FixtureMarketData implements MarketDataService {
+  /**
+   * The window `decide` last ASKED for. Recorded, not just ignored, because
+   * the fetch width is itself a correctness property: `decide.ts` requests
+   * `atr_lookback + 1` bars precisely so `computeIndicator`'s `atr` stays a
+   * plain mean, and a wider request would engage Wilder smoothing and move
+   * every stop in the system. Serving fixed bars regardless of the request
+   * means nothing else in this file can observe that regression.
+   */
+  requestedWindow: BarWindow | undefined;
+
   constructor(
     private readonly fixtureBars: Bar[],
     private readonly assetClass: AssetClass = 'stocks',
     private readonly price: number = ENTRY_PRICE,
   ) {}
 
-  async getBars(_instrument: string, _window: BarWindow, _asOf: Date): Promise<Bar[]> {
+  async getBars(_instrument: string, window: BarWindow, _asOf: Date): Promise<Bar[]> {
+    this.requestedWindow = window;
     return this.fixtureBars;
   }
 
@@ -281,6 +292,65 @@ describe('decide — volatility', () => {
   });
 });
 
+/**
+ * ATR is computed by the Market Data Service now (#304), so the only ATR
+ * input Trader still controls is the BAR WINDOW it asks for. These pin that
+ * window. Both assertions use a NON-default config on purpose: at
+ * `DEFAULT_TRADER_CONFIG` the expected values (`1h`, 15) coincide with
+ * `atr_lookback = 14` and with the `DEFAULT_INDICATOR_TIMEFRAME` that
+ * `getIndicator` hardcodes, so a default-config assertion would pin two
+ * coincidences instead of two relationships.
+ */
+describe('decide — ATR bar window (#304)', () => {
+  it('fetches exactly atr_lookback + 1 bars, so ATR stays a plain mean', async () => {
+    // The `+ 1` is load-bearing. `computeIndicator`'s `atr` seeds on the
+    // first `period` true ranges and Wilder-smooths the rest; N + 1 bars
+    // yield only N ranges, so in production the smoothing loop never runs
+    // and the result is the plain mean Trader's stops were calibrated on.
+    // Widen this fetch and every stop in the system moves — see
+    // atr-equivalence.test.ts, which pins the algorithmic half.
+    //
+    // The assertion here is on the REQUEST, not the resulting ATR: the
+    // fixture serves its 15 bars whatever it is asked for, so the value
+    // computed on this path is not the one production would see. The
+    // request width is the only half a fixture can pin, and it is the half
+    // nothing pinned before.
+    const marketData = new FixtureMarketData(bars(15, 2));
+
+    await decide(traderInput({ marketData, config: configWith({ atr_lookback: 7 }) }));
+
+    expect(marketData.requestedWindow?.lookback).toBe(8);
+  });
+
+  it('fails loudly if getBars serves a descending window, rather than mispricing the stop', async () => {
+    // Trader stopped re-sorting defensively when #304 moved ATR to MDS, so
+    // ascending order became a trusted contract of `MarketDataService.getBars`.
+    // Trust without enforcement is a silent misprice: reversed bars yield a
+    // plausible ATR, not an error, and every stop sized from it is wrong.
+    // `computeIndicator` asserts the order, so a broken source costs one
+    // logged tick (production.ts's tick loop catches it) instead of live
+    // money. This pins that Trader's path really is covered by that assertion.
+    const descending = [...bars(15, 2)].reverse();
+
+    await expect(
+      decide(traderInput({ marketData: new FixtureMarketData(descending) })),
+    ).rejects.toThrow(/ascending by close_time/);
+  });
+
+  it('fetches on config.atr_timeframe, not the indicator default', async () => {
+    // Why `decide.ts` calls `computeIndicator` on its own bar slice instead
+    // of `marketData.getIndicator`: `IndicatorSpec` has no timeframe, so
+    // `getIndicator` would pin ATR to its hardcoded 1h whatever this config
+    // says (#315). That justification is only worth anything if a non-1h
+    // timeframe actually reaches the fetch — which is what this asserts.
+    const marketData = new FixtureMarketData(bars(15, 2));
+
+    await decide(traderInput({ marketData, config: configWith({ atr_timeframe: '15m' }) }));
+
+    expect(marketData.requestedWindow?.timeframe).toBe('15m');
+  });
+});
+
 describe('decide — non-convergence haircut', () => {
   it('halves size when the debate did not converge, and records the haircut', async () => {
     const converged = await decide(traderInput());
@@ -321,6 +391,47 @@ describe('decide — skip paths', () => {
     const intent = await decide(traderInput({ marketData: new FixtureMarketData(bars(1, 2)) }));
 
     expect(intent).toBeNull();
+  });
+
+  it('returns null on an empty bar window rather than sizing off NaN', async () => {
+    // A cold instrument with nothing ingested yet. The Market Data Service's
+    // `computeIndicator` answers NaN, not null, on a window this short, and
+    // NaN defeats every downstream guard (`stopDistance <= 0` and the
+    // min-notional check are both false against NaN) — so the skip has to
+    // happen before an intent is built (#304). Which of `atrFor`'s two
+    // guards does it is not this test's business: the bar-count check skips
+    // first, and the finiteness check would catch the same NaN if it didn't.
+    const intent = await decide(traderInput({ marketData: new FixtureMarketData(bars(0, 2)) }));
+
+    expect(intent).toBeNull();
+  });
+
+  it('returns null when the computed ATR is not finite, rather than sizing off NaN', async () => {
+    // The bar-count guard only covers the EMPTY-SEED path to NaN. A corrupt
+    // feed — one bar with a non-numeric high/low — produces a NaN true range
+    // on a perfectly well-sized window, and NaN then defeats every guard
+    // downstream of `atrFor`: `Math.max(NaN, volFloor)` is NaN,
+    // `stopDistance <= 0` is false against NaN, and `size * entry <
+    // min_viable_notional` is false too. Without the finiteness check this
+    // emits a live OrderIntent with NaN size, stop AND target.
+    const corrupt = bars(15, 2);
+    // biome-ignore lint/style/noNonNullAssertion: fixed-length fixture built two lines above.
+    corrupt[7]!.high = Number.NaN;
+
+    const intent = await decide(traderInput({ marketData: new FixtureMarketData(corrupt) }));
+
+    expect(intent).toBeNull();
+  });
+
+  it('does trade on exactly two bars — the first width that yields a true range', async () => {
+    // The pass side of the same `bars.length < 2` guard. Without it, a guard
+    // tightened to `< 3` would still satisfy every skip test above while
+    // silently refusing to trade a freshly-warmed instrument. Two bars yield
+    // one true range, so ATR equals that range exactly — the same 2 the
+    // default 15-bar fixture produces, hence an identical intent.
+    const twoBars = await decide(traderInput({ marketData: new FixtureMarketData(bars(2, 2)) }));
+
+    expect(twoBars).toEqual(await decide(traderInput()));
   });
 });
 

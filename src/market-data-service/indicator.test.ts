@@ -1,6 +1,7 @@
 import type { Clock } from '../shared/index.js';
 import { openSharedStore } from '../shared/store/index.js';
 import { FixtureDataSource } from './fixture-data-source.js';
+import { computeIndicator } from './indicators.js';
 import { MarketDataServiceImpl } from './service.js';
 import { SqliteMarketDataStore } from './sqlite-market-data-store.js';
 import type { Bar, BarWindow, DataSource, Mark } from './types.js';
@@ -153,5 +154,57 @@ describe('MarketDataServiceImpl.getIndicator', () => {
     );
 
     expect(result.as_of_bar_close.toISOString()).toBe(asOf.toISOString());
+  });
+});
+
+/**
+ * Ascending order is `computeIndicator`'s documented precondition, and every
+ * production indicator computation funnels through it — `getIndicator` here,
+ * plus the three call sites that slice their own bars (`trader/decide.ts`,
+ * `proxy-strategy.ts`, `replay-driver.ts`). Documenting a contract does not
+ * enforce it, and the failure mode is silent: a reversed window yields a
+ * plausible-looking number, not an error, and every stop derived from it is
+ * mispriced. So the assertion is tested at the choke point rather than at any
+ * one caller.
+ */
+describe('computeIndicator — bar ordering is enforced, not assumed', () => {
+  const start = new Date('2026-07-01T00:00:00Z');
+  const ascending = buildBars(20, start);
+
+  it('throws on a descending window instead of returning a wrong number', () => {
+    const descending = [...ascending].reverse();
+
+    expect(() =>
+      computeIndicator(descending, { indicator: 'atr', params: {}, lookback: 14 }),
+    ).toThrow(/ascending by close_time/);
+  });
+
+  it('throws on a single bar out of sequence, not just a fully reversed window', () => {
+    // The realistic feed fault: one straggler stamped in the past. A
+    // fully-reversed array is the easy case; this is the one that would slip
+    // through a cheaper "is the first bar before the last bar" check.
+    const interleaved = [...ascending];
+    const straggler = interleaved[3] as Bar;
+    interleaved[3] = interleaved[11] as Bar;
+    interleaved[11] = straggler;
+
+    expect(() =>
+      computeIndicator(interleaved, { indicator: 'sma', params: {}, lookback: 20 }),
+    ).toThrow(/ascending by close_time/);
+  });
+
+  it('accepts equal close_times — an inversion corrupts the maths, a duplicate does not', () => {
+    const duplicated = [...ascending];
+    duplicated[5] = { ...(duplicated[4] as Bar) };
+
+    expect(() =>
+      computeIndicator(duplicated, { indicator: 'atr', params: {}, lookback: 14 }),
+    ).not.toThrow();
+  });
+
+  it('leaves a correctly ordered window untouched', () => {
+    expect(
+      computeIndicator(ascending, { indicator: 'atr', params: {}, lookback: 14 }),
+    ).toBeGreaterThan(0);
   });
 });

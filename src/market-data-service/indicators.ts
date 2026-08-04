@@ -99,12 +99,52 @@ function atr(bars: Bar[], period: number): number {
 }
 
 /**
+ * Ascending order is this module's precondition, so it is asserted here
+ * rather than trusted — every production indicator computation funnels
+ * through `computeIndicator` (`service.ts` `getIndicator`, `trader/decide.ts`,
+ * `proxy-strategy.ts`, `replay-driver.ts`), and each one of them either
+ * documents ascending bars or inherits the guarantee from
+ * `MarketDataService.getBars`. A documented contract is not an enforced one:
+ * a source that returned a descending or interleaved window would feed
+ * reversed true-range legs into `atr` and silently reprice every stop derived
+ * from it, with no error anywhere. Cost is one pass over ~15 bars, against an
+ * indicator that already walks them.
+ *
+ * Throwing, not sorting: a misordered window means the data source is broken,
+ * and quietly repairing it here would hide that from every other consumer of
+ * the same feed. Contained by design — `production.ts`'s tick loop logs the
+ * throw and forfeits one tick rather than the run, and the backtest lets it
+ * propagate deliberately (`backtest.ts`). This is the posture `replay-driver`'s
+ * `BarCursor` already takes on the same contract, for the same reason.
+ *
+ * Non-decreasing rather than strictly increasing: an inversion is the failure
+ * mode that corrupts the maths; equal close_times do not reorder anything.
+ */
+function assertAscending(bars: Bar[]): void {
+  for (let i = 1; i < bars.length; i++) {
+    const previous = bars[i - 1] as Bar;
+    const current = bars[i] as Bar;
+    if (current.close_time.getTime() < previous.close_time.getTime()) {
+      throw new Error(
+        `computeIndicator: bars must be ascending by close_time — ` +
+          `${current.close_time.toISOString()} follows ${previous.close_time.toISOString()} ` +
+          `at index ${i}. Computing over a misordered window would silently produce a wrong ` +
+          'indicator value rather than fail.',
+      );
+    }
+  }
+}
+
+/**
  * Computes `spec.indicator` deterministically over `bars` — a close-time-
  * filtered, ascending-by-close_time window whose length is the pinned
  * `spec.lookback`. `params.period` selects the indicator's own window
  * within that lookback (defaults to the full lookback for sma/ema/rsi).
+ *
+ * Throws if `bars` is not ascending; see `assertAscending`.
  */
 export function computeIndicator(bars: Bar[], spec: IndicatorSpec): number {
+  assertAscending(bars);
   const period = spec.params.period ?? spec.lookback;
 
   switch (spec.indicator) {

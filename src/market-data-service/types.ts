@@ -126,6 +126,19 @@ export interface DataSource {
  * callers stay clock-blind.
  */
 export interface MarketDataService {
+  /**
+   * Ascending by close_time, filtered to `close_time <= asOf`, most recent
+   * `window.lookback` bars — the same ordering guarantee `MarketDataStore.readBars`
+   * makes, restated here because this is the interface consumers are injected
+   * with and `MarketDataStore` is an MDS-internal port they never see.
+   *
+   * The order is load-bearing, not incidental: `computeIndicator` requires
+   * ascending bars, and `trader/decide.ts` feeds this result straight to it
+   * without re-sorting. Implementations must honour it — but they are not
+   * merely trusted to: `computeIndicator` asserts the order and throws, so a
+   * source that served descending bars fails loudly instead of silently
+   * repricing every ATR-derived stop.
+   */
   getBars(instrument: string, window: BarWindow, asOf: Date): Promise<Bar[]>;
   getIndicator(instrument: string, spec: IndicatorSpec, asOf: Date): Promise<IndicatorValue>;
   getMark(instrument: string, asOf: Date): Promise<Mark>;
