@@ -652,6 +652,61 @@ describe('AlpacaBrokerAdapter across a restart', () => {
     expect(fills).toHaveLength(1);
     expect(fills[0]).toMatchObject({ client_order_id: 'idem-1', leg: 'entry' });
   });
+
+  it('recovers a bracket whose journal write never happened, via the venue lookup', async () => {
+    // PR #310 review (deepseek): "a crash between `submitOrder` and
+    // `saveBracket` leaves an orphaned order at the broker with no local cache
+    // entry". The order IS at the venue and the journal row is missing — but
+    // for Alpaca that window is closed by an interlock rather than by a
+    // placeholder row, and this test is the proof.
+    //
+    // `execute()` writes the lot `pending` BEFORE calling the broker
+    // (execute.ts) and only advances it to `submitted` AFTER `submitBracket`
+    // RETURNS. So a missing journal row implies `submitBracket` did not
+    // return, which implies the lot is still `pending`, which is in-flight
+    // (reconcile.ts `IN_FLIGHT`) — and startup reconcile runs before the first
+    // fill poll. Alpaca's `getOrder` answers from the VENUE by client order
+    // id, needing no local state, so it repopulates both cache and journal.
+    const { path, db } = openFileStore();
+    const order = alpacaOrder();
+    const client = {
+      submitOrder: vi.fn(async () => order),
+      getOrder: vi.fn(async () => order),
+      getOrderByClientOrderId: vi.fn(async () => order),
+    } as unknown as AlpacaClient;
+
+    // The venue call lands; the journal write is what dies.
+    const dyingState = new SqliteBrokerStateStore(db);
+    vi.spyOn(dyingState, 'saveBracket').mockImplementation(() => {
+      throw new Error('simulated DB failure after the order reached the venue');
+    });
+    const first = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      state: dyingState,
+    });
+    await expect(first.submitBracket(STOCK_REQUEST)).rejects.toThrow(/simulated DB failure/);
+
+    // Nothing was journalled — the reviewer's premise, reproduced.
+    expect(new SqliteBrokerStateStore(db).loadBrackets('alpaca')).toEqual([]);
+
+    // --- restart ------------------------------------------------------------
+    const second = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      state: new SqliteBrokerStateStore(reopen(path)),
+    });
+    expect(await second.fetchNewFills(SINCE)).toEqual([]);
+
+    // Startup reconcile settles the still-`pending` lot, which for Alpaca is a
+    // direct venue query. That single call restores the cache AND the journal.
+    await second.getOrder('idem-1', 'AAPL');
+
+    expect(await second.fetchNewFills(SINCE)).toHaveLength(1);
+    expect(new SqliteBrokerStateStore(db).loadBrackets('alpaca')[0]?.entry_order_id).toBe(
+      'parent-1',
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
