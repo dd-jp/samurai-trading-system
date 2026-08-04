@@ -15,9 +15,11 @@
  * Hence: this parser throws rather than degrading. Every rejected shape is a
  * config the operator must fix before the gate is armed:
  * - unset / empty / whitespace-only — fails closed, silently
- * - wildcards (`*`, `all`, `any`) — the one permissive shape a validator can
- *   actually catch; an over-broad *list* of real numeric ids cannot be
- *   distinguished from a correct one and is out of reach here
+ * - wildcards — `*`, `all`, `any`, `everyone`, `.*`, matched case-insensitively
+ *   (the full set is `WILDCARDS` below; keep this list in sync with it). This
+ *   is the one permissive shape a validator can actually catch; an over-broad
+ *   *list* of real numeric ids cannot be distinguished from a correct one and
+ *   is out of reach here
  * - non-numeric, fractional, or hex entries — a typo that would otherwise
  *   silently drop a legitimate approver
  * - empty entries (`123,,456`, a trailing comma) — rejected rather than
