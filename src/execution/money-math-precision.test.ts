@@ -22,13 +22,7 @@
 
 import type { CostModel } from '../cost-model-backtest/index.js';
 import { realizedR } from '../feedback-loop/index.js';
-import type {
-  Bar,
-  BarWindow,
-  IndicatorValue,
-  Mark,
-  MarketDataService,
-} from '../market-data-service/index.js';
+import type { Bar, IndicatorValue, Mark, MarketDataService } from '../market-data-service/index.js';
 import { computePortfolioView } from '../risk-manager/index.js';
 import type { Clock, ClosedTrade, OpenPosition } from '../shared/index.js';
 import { ExecutionImpl } from './execute.js';
@@ -454,11 +448,18 @@ describe('money-math precision (ADR-0005)', () => {
       'BTC-USD': '119873.41',
       'SHIB-USD': '0.00001234',
     };
+    // Every method except `getMark` throws rather than returning a bland
+    // stub value: `computePortfolioView` reads marks and nothing else, and
+    // this test's whole claim is that the equity it produces came from those
+    // marks. If the implementation later starts pricing off bars, an
+    // indicator, a spread or ADV, a permissive stub would let it keep
+    // measuring drift against an oracle that no longer describes the code.
+    const notOnThisPath = (method: string) => async (): Promise<never> => {
+      throw new Error(`computePortfolioView called ${method}: equity must price off marks only`);
+    };
     const marketData: MarketDataService = {
-      getBars: vi.fn(async (): Promise<Bar[]> => []),
-      getIndicator: vi.fn(async (): Promise<IndicatorValue> => {
-        throw new Error('unused');
-      }),
+      getBars: vi.fn(notOnThisPath('getBars') as () => Promise<Bar[]>),
+      getIndicator: vi.fn(notOnThisPath('getIndicator') as () => Promise<IndicatorValue>),
       getMark: vi.fn(
         async (instrument: string): Promise<Mark> => ({
           price: Number(marks[instrument]),
@@ -467,8 +468,8 @@ describe('money-math precision (ADR-0005)', () => {
           asset_class: 'crypto',
         }),
       ),
-      getSpreadEstimate: vi.fn(async (): Promise<number | null> => null),
-      getADV: vi.fn(async (_i: string, _w: BarWindow, _a: Date): Promise<number> => 0),
+      getSpreadEstimate: vi.fn(notOnThisPath('getSpreadEstimate') as () => Promise<number | null>),
+      getADV: vi.fn(notOnThisPath('getADV') as () => Promise<number>),
     };
 
     const cash = '1234567.89';

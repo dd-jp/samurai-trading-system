@@ -125,9 +125,10 @@ function nextState(position: OpenPosition, filledSize: number, flat: boolean): O
  * no `ClosedTrade` for the Feedback Loop, and a phantom lot left in
  * `getOpenPositions()` consuming Risk's exposure caps.
  *
- * The margin over float noise is 90x at n = 100 fills (n·2^-53 ≈ 1.1e-14)
- * and 36x at the 250-fills-per-leg worst case ADR-0005 §1 derives
- * ((n+2)·2^-53 ≈ 2.8e-14) — comfortable, but tens of times, NOT orders of
+ * The margin over float noise, measured against the same (n+2)·2^-53 bound
+ * ADR-0005 §1 derives (n products, an n-term naive summation, one division),
+ * is 88x at n = 100 fills (1.13e-14) and 36x at the 250-fills-per-leg worst
+ * case (2.80e-14) — comfortable, but tens of times, NOT orders of
  * magnitude: a workload past ~9,000 fills on one leg would need this
  * constant revisited. The margin in the other direction is the wide one: a
  * residue of 1e-12 of a lot is orders below any venue's minimum quantity
