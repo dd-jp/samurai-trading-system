@@ -15,6 +15,7 @@ import {
   DEFAULT_MAX_ROTATED_FILES,
   fileSinkConfigFromEnvironment,
   RotatingFileSink,
+  writeAll,
 } from './rotating-file-sink.js';
 
 let dir: string;
@@ -279,6 +280,43 @@ describe('RotatingFileSink — degradation (never throws into a tick)', () => {
       sink.close();
       sink.close();
     }).not.toThrow();
+  });
+});
+
+describe('writeAll — partial writes and the zero-progress guard', () => {
+  it('drains the buffer across partial writes', () => {
+    const bytes = Buffer.from('abcdefghij', 'utf8');
+    const chunks: string[] = [];
+    // A writer that only ever accepts 3 bytes at a time.
+    writeAll(7, bytes, (_fd, buffer, offset, length) => {
+      const take = Math.min(3, length);
+      chunks.push(buffer.subarray(offset, offset + take).toString('utf8'));
+      return take;
+    });
+
+    expect(chunks).toEqual(['abc', 'def', 'ghi', 'j']);
+  });
+
+  it('throws instead of spinning when a write makes no progress', () => {
+    // Review on #349: a `writeSync` returning 0 without throwing never advances
+    // the offset, so the loop spins forever — inside a tick, with nothing
+    // thrown for `attempt` to catch and no way for the heartbeat to notice,
+    // because the process is wedged rather than dead. If this test ever hangs
+    // instead of throwing, the guard is gone.
+    expect(() => writeAll(7, Buffer.from('abc', 'utf8'), () => 0)).toThrow(/no progress/i);
+  });
+
+  it('degrades the sink rather than hanging it when writes make no progress', () => {
+    const sink = new RotatingFileSink({
+      filePath: join(dir, 'orchestrator.log'),
+      maxBytes: 1024,
+      maxRotatedFiles: 2,
+      onFailure: () => {},
+      writeLine: (fd, bytes) => writeAll(fd, bytes, () => 0),
+    });
+
+    expect(() => sink.write('{"tick":1}\n')).not.toThrow();
+    expect(sink.degraded).toBe(true);
   });
 });
 

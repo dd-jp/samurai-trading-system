@@ -354,10 +354,43 @@ export class RotatingFileSink {
   }
 }
 
-/** `writeSync` may write fewer bytes than asked; drain the buffer. */
-function writeAll(fd: number, bytes: Buffer): void {
+/**
+ * `writeSync` may write fewer bytes than asked; drain the buffer.
+ *
+ * **The zero-progress guard is the important line.** Raised in review on #349:
+ * a `writeSync` that returns 0 without throwing — a stuck descriptor, an
+ * exotic device — never advances `offset`, and this loop spins forever. That
+ * failure is uniquely bad here: `attempt` cannot catch it because nothing is
+ * thrown, so the sink never degrades, the tick never completes, and the
+ * dead-man's-switch heartbeat (#96) cannot fire because the process is not
+ * dead, just wedged inside a log call. A trading process hung mid-tick with
+ * open positions is the worst outcome in this file.
+ *
+ * Converting it to a throw hands it to `attempt`, which is the machinery that
+ * already knows what to do: retire the sink, warn on stdout, keep trading. The
+ * guard costs one comparison per iteration; being wrong without it costs the
+ * run. `writeSync` returning 0 for a non-empty buffer should be impossible on
+ * a regular file, and "should be impossible" is not a reason to spin forever
+ * if it happens.
+ *
+ * `write` is injectable purely so that path is testable without a wedged
+ * filesystem.
+ */
+export function writeAll(
+  fd: number,
+  bytes: Buffer,
+  write: (fd: number, buffer: Buffer, offset: number, length: number) => number = writeSync,
+): void {
   let offset = 0;
   while (offset < bytes.length) {
-    offset += writeSync(fd, bytes, offset, bytes.length - offset);
+    const written = write(fd, bytes, offset, bytes.length - offset);
+    if (written <= 0) {
+      throw new Error(
+        `writeSync made no progress (returned ${written}) with ${bytes.length - offset} of ` +
+          `${bytes.length} bytes left to write. Treating as a failed write rather than ` +
+          'retrying, because retrying is an infinite loop inside a tick.',
+      );
+    }
+    offset += written;
   }
 }
