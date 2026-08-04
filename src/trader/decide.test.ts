@@ -322,6 +322,21 @@ describe('decide — ATR bar window (#304)', () => {
     expect(marketData.requestedWindow?.lookback).toBe(8);
   });
 
+  it('fails loudly if getBars serves a descending window, rather than mispricing the stop', async () => {
+    // Trader stopped re-sorting defensively when #304 moved ATR to MDS, so
+    // ascending order became a trusted contract of `MarketDataService.getBars`.
+    // Trust without enforcement is a silent misprice: reversed bars yield a
+    // plausible ATR, not an error, and every stop sized from it is wrong.
+    // `computeIndicator` asserts the order, so a broken source costs one
+    // logged tick (production.ts's tick loop catches it) instead of live
+    // money. This pins that Trader's path really is covered by that assertion.
+    const descending = [...bars(15, 2)].reverse();
+
+    await expect(
+      decide(traderInput({ marketData: new FixtureMarketData(descending) })),
+    ).rejects.toThrow(/ascending by close_time/);
+  });
+
   it('fetches on config.atr_timeframe, not the indicator default', async () => {
     // Why `decide.ts` calls `computeIndicator` on its own bar slice instead
     // of `marketData.getIndicator`: `IndicatorSpec` has no timeframe, so
@@ -385,6 +400,23 @@ describe('decide — skip paths', () => {
     // min-notional check are both false against NaN) — so the skip has to
     // happen on the bar count, before the indicator is consulted (#304).
     const intent = await decide(traderInput({ marketData: new FixtureMarketData(bars(0, 2)) }));
+
+    expect(intent).toBeNull();
+  });
+
+  it('returns null when the computed ATR is not finite, rather than sizing off NaN', async () => {
+    // The bar-count guard only covers the EMPTY-SEED path to NaN. A corrupt
+    // feed — one bar with a non-numeric high/low — produces a NaN true range
+    // on a perfectly well-sized window, and NaN then defeats every guard
+    // downstream of `atrFor`: `Math.max(NaN, volFloor)` is NaN,
+    // `stopDistance <= 0` is false against NaN, and `size * entry <
+    // min_viable_notional` is false too. Without the finiteness check this
+    // emits a live OrderIntent with NaN size, stop AND target.
+    const corrupt = bars(15, 2);
+    // biome-ignore lint/style/noNonNullAssertion: fixed-length fixture built two lines above.
+    corrupt[7]!.high = Number.NaN;
+
+    const intent = await decide(traderInput({ marketData: new FixtureMarketData(corrupt) }));
 
     expect(intent).toBeNull();
   });

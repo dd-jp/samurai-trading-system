@@ -134,8 +134,10 @@ export interface MarketDataService {
    *
    * The order is load-bearing, not incidental: `computeIndicator` requires
    * ascending bars, and `trader/decide.ts` feeds this result straight to it
-   * without re-sorting. A source or store that returned descending bars would
-   * silently misprice every ATR-derived stop rather than fail.
+   * without re-sorting. Implementations must honour it — but they are not
+   * merely trusted to: `computeIndicator` asserts the order and throws, so a
+   * source that served descending bars fails loudly instead of silently
+   * repricing every ATR-derived stop.
    */
   getBars(instrument: string, window: BarWindow, asOf: Date): Promise<Bar[]>;
   getIndicator(instrument: string, spec: IndicatorSpec, asOf: Date): Promise<IndicatorValue>;

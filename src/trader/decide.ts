@@ -63,25 +63,36 @@ export function atrIndicatorSpec(lookback: number): IndicatorSpec {
  * "N bars yield N-1 true ranges" seeding rule cannot be fixed in one
  * implementation and left wrong in the other.
  *
- * Returns null when there is not enough history to form a single true range;
- * a stop cannot be sized without one. That guard is load-bearing and cannot
- * be delegated downstream: `computeIndicator` divides by an empty seed and
- * returns NaN, and NaN passes straight through `Math.max`, the
- * `stopDistance <= 0` check and the min-notional check (every comparison
- * against NaN is false) into an emitted intent with NaN size/stop/target.
+ * Returns null on any ATR that cannot size a stop, which is TWO conditions,
+ * not one:
+ *
+ * 1. Fewer than two bars — too little history to form a single true range.
+ * 2. A non-finite result. `computeIndicator` returns NaN rather than throwing
+ *    on an empty seed, and it propagates NaN out of corrupt bar data (one
+ *    non-numeric high/low poisons a true range on an otherwise well-sized
+ *    window). The bar-count check alone covers only the first of those.
+ *
+ * Both collapse to null here because NaN is not safely ignorable downstream:
+ * it passes straight through `Math.max`, the `stopDistance <= 0` check and
+ * the min-notional check (every comparison against NaN is false) and lands in
+ * an EMITTED OrderIntent with NaN size, stop and target. That was verified,
+ * not assumed — the "returns null when the computed ATR is not finite" test
+ * fails with exactly that intent if the finiteness check is removed.
  *
  * Bars are consumed in the order `getBars` returns them — ascending by
  * close_time, which is the documented contract of
  * `MarketDataService.getBars`, the interface Trader is actually injected, and
- * is also what `computeIndicator` documents that it requires. Trader used to
- * re-sort defensively; that now belongs to the MDS read, not to every
- * consumer of it.
+ * which `computeIndicator` now ENFORCES rather than merely documenting (it
+ * throws on a misordered window). Trader used to re-sort defensively; that
+ * check belongs at the one place every indicator computation passes through,
+ * not in every consumer of it.
  */
 function atrFor(bars: Bar[], lookback: number): number | null {
   // < 2 bars is < 1 true range: the first bar only seeds `previousClose`.
   if (bars.length < 2) return null;
 
-  return computeIndicator(bars, atrIndicatorSpec(lookback));
+  const atr = computeIndicator(bars, atrIndicatorSpec(lookback));
+  return Number.isFinite(atr) ? atr : null;
 }
 
 /**
