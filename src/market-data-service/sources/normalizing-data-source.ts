@@ -29,19 +29,33 @@ export interface SourceConfig {
 export abstract class NormalizingDataSource implements DataSource {
   protected constructor(private readonly config: SourceConfig) {}
 
-  /** Map the source's historical-bars payload into open-timestamped candles. */
+  /**
+   * Map the source's historical-bars payload into open-timestamped candles.
+   *
+   * `partial` (issue #292) is the window's short-read policy, forwarded
+   * verbatim so the decision stays at the call site that can reason about it.
+   * A source with no notion of an under-covered range simply omits the
+   * parameter — implementing this with four parameters stays type-correct.
+   */
   protected abstract fetchRawCandles(
     instrument: string,
     timeframe: string,
     asOf: Date,
     limit: number,
+    partial?: 'error' | 'allow',
   ): Promise<RawCandle[]>;
 
   /** Map the source's streaming quote/trade payload into an observation. */
   protected abstract fetchLiveObservation(instrument: string): Promise<LiveObservation>;
 
   async fetchBars(instrument: string, window: BarWindow, asOf: Date): Promise<Bar[]> {
-    const candles = await this.fetchRawCandles(instrument, window.timeframe, asOf, window.lookback);
+    const candles = await this.fetchRawCandles(
+      instrument,
+      window.timeframe,
+      asOf,
+      window.lookback,
+      window.partial,
+    );
     const bars = normalizeBars(candles, {
       instrument,
       timeframe: window.timeframe,

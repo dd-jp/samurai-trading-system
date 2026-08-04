@@ -42,6 +42,57 @@ export class AlpacaDataProviderError extends Error {
   }
 }
 
+/**
+ * The venue answered fine — it just does not have `requested` bars in the
+ * searched range (issue #292). Deliberately NOT an `AlpacaDataProviderError`:
+ * nothing upstream failed, so classifying it as a provider fault would make
+ * "Alpaca is broken" and "this symbol is too sparse for the window you asked
+ * for" indistinguishable to anyone reading logs.
+ *
+ * Carries the numbers a human needs to act on it (which symbol, how many bars
+ * were asked for, how many exist in the widened range) rather than a bare
+ * message, so a caller that wants to degrade can read `received` instead of
+ * re-parsing the text. Never retryable: repeating an identical request cannot
+ * conjure bars that do not exist.
+ */
+export class AlpacaDataUnderfetchError extends Error {
+  readonly symbol: string;
+  readonly timeframe: string;
+  /** Bars the caller asked for. */
+  readonly requested: number;
+  /** Bars the widened range actually produced. */
+  readonly received: number;
+  /** Start of the widest range searched (the retry's), ISO-8601. */
+  readonly searchedFrom: string;
+  /** `asOf` — the point-in-time boundary, never widened. */
+  readonly searchedTo: string;
+
+  constructor(details: {
+    symbol: string;
+    timeframe: string;
+    requested: number;
+    received: number;
+    searchedFrom: string;
+    searchedTo: string;
+  }) {
+    super(
+      `AlpacaHttpDataClient.getBars: ${details.symbol} ${details.timeframe} produced ` +
+        `${details.received} bars for a requested ${details.requested} over ` +
+        `${details.searchedFrom}..${details.searchedTo} (already widened once). Refusing to ` +
+        'return a short window silently — an indicator computed over fewer bars than the ' +
+        "caller asked for is wrong, not merely degraded. Pass partial: 'allow' if this " +
+        'call site genuinely tolerates fewer bars.',
+    );
+    this.name = 'AlpacaDataUnderfetchError';
+    this.symbol = details.symbol;
+    this.timeframe = details.timeframe;
+    this.requested = details.requested;
+    this.received = details.received;
+    this.searchedFrom = details.searchedFrom;
+    this.searchedTo = details.searchedTo;
+  }
+}
+
 export type AlpacaDataError =
   | AlpacaDataTimeoutError
   | AlpacaDataRateLimitError

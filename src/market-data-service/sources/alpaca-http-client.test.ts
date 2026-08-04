@@ -1,4 +1,4 @@
-import { AlpacaDataProviderError } from './alpaca-data-errors.js';
+import { AlpacaDataProviderError, AlpacaDataUnderfetchError } from './alpaca-data-errors.js';
 import {
   AlpacaHttpDataClient,
   toAlpacaCryptoSymbol,
@@ -7,6 +7,28 @@ import {
 
 const FAKE_KEY = 'test-fake-alpaca-key';
 const FAKE_SECRET = 'test-fake-alpaca-secret';
+
+/** `start`/`end` of the request a `fetch` mock was called with, as epoch ms. */
+function rangeOf(call: unknown): { start: number; end: number } {
+  const [url] = call as [string];
+  const params = new URL(url).searchParams;
+  return {
+    start: Date.parse(params.get('start') as string),
+    end: Date.parse(params.get('end') as string),
+  };
+}
+
+/** `count` ascending daily bars ending the day before `2026-07-03`. */
+function dailyBars(count: number): Array<Record<string, number | string>> {
+  return Array.from({ length: count }, (_unused, i) => ({
+    t: new Date(Date.parse('2026-07-02T00:00:00Z') - (count - 1 - i) * 86_400_000).toISOString(),
+    o: 1,
+    h: 1,
+    l: 1,
+    c: 1,
+    v: 1,
+  }));
+}
 
 function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return {
@@ -63,7 +85,16 @@ describe('AlpacaHttpDataClient — equities', () => {
       apiKey: FAKE_KEY,
       apiSecret: FAKE_SECRET,
     });
-    const result = await client.getBars('AAPL', '1d', new Date('2026-07-02T00:00:00Z'), 10);
+    // `partial: 'allow'` because this fixture deliberately returns one bar for
+    // a limit of 10 — the request SHAPE is what's under test here, not the
+    // underfetch policy (which has its own describe block below).
+    const result = await client.getBars(
+      'AAPL',
+      '1d',
+      new Date('2026-07-02T00:00:00Z'),
+      10,
+      'allow',
+    );
 
     expect(result).toEqual([{ t: bar.t, o: 1, h: 2, l: 0.5, c: 1.5, v: 100 }]);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -145,7 +176,16 @@ describe('AlpacaHttpDataClient — equities', () => {
       apiKey: FAKE_KEY,
       apiSecret: FAKE_SECRET,
     });
-    const result = await client.getBars('AAPL', '1d', new Date('2026-07-03T00:00:00Z'), 5_000);
+    // `partial: 'allow'`: 30 one-bar pages is a deliberate short read against a
+    // limit of 5_000 — the page-cap guard is what's under test, not the
+    // underfetch policy, and widening would change the call count asserted here.
+    const result = await client.getBars(
+      'AAPL',
+      '1d',
+      new Date('2026-07-03T00:00:00Z'),
+      5_000,
+      'allow',
+    );
 
     expect(fetchMock).toHaveBeenCalledTimes(totalPages);
     expect(result).toHaveLength(totalPages);
@@ -214,7 +254,15 @@ describe('AlpacaHttpDataClient — crypto', () => {
       apiKey: FAKE_KEY,
       apiSecret: FAKE_SECRET,
     });
-    const result = await client.getBars('BTC-USD', '1m', new Date('2026-07-02T00:00:00Z'), 5);
+    // `partial: 'allow'` — one-bar fixture against a limit of 5; the crypto
+    // request shape is what's under test (see the underfetch describe below).
+    const result = await client.getBars(
+      'BTC-USD',
+      '1m',
+      new Date('2026-07-02T00:00:00Z'),
+      5,
+      'allow',
+    );
 
     expect(result).toEqual([{ t: bar.t, o: 30000, h: 31000, l: 29000, c: 30500, v: 10 }]);
     const [url] = fetchMock.mock.calls[0] as [string];
@@ -234,7 +282,15 @@ describe('AlpacaHttpDataClient — crypto', () => {
       apiKey: FAKE_KEY,
       apiSecret: FAKE_SECRET,
     });
-    const result = await client.getBars('BTC-USD', '1m', new Date('2026-07-02T00:00:00Z'), 5);
+    // `partial: 'allow'` — see the sibling test above; the response-key
+    // fallback is what's under test, not the underfetch policy.
+    const result = await client.getBars(
+      'BTC-USD',
+      '1m',
+      new Date('2026-07-02T00:00:00Z'),
+      5,
+      'allow',
+    );
 
     expect(result).toEqual([{ t: bar.t, o: 30000, h: 31000, l: 29000, c: 30500, v: 10 }]);
   });
@@ -369,5 +425,115 @@ describe('AlpacaHttpDataClient — shared behavior', () => {
 
     expect(result).toEqual({ t: '2026-07-01T00:00:00Z', ap: 101, bp: 100 });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('AlpacaHttpDataClient — sparse-symbol underfetch (#292)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  const ASOF = new Date('2026-07-03T00:00:00Z');
+
+  function stocksClient(): AlpacaHttpDataClient {
+    return new AlpacaHttpDataClient({
+      assetClass: 'stocks',
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+    });
+  }
+
+  it('widens the window once and retries when the first range yields fewer than `limit` bars', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ bars: dailyBars(2), symbol: 'AAPL' }))
+      .mockResolvedValueOnce(jsonResponse({ bars: dailyBars(5), symbol: 'AAPL' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await stocksClient().getBars('AAPL', '1d', ASOF, 5);
+
+    expect(result).toHaveLength(5);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const first = rangeOf(fetchMock.mock.calls[0]);
+    const second = rangeOf(fetchMock.mock.calls[1]);
+    // The retry must reach FURTHER BACK, not merely repeat the same request.
+    expect(second.start).toBeLessThan(first.start);
+    // `asOf` is the point-in-time boundary — widening must never move it.
+    expect(second.end).toBe(first.end);
+    expect(second.end).toBe(ASOF.getTime());
+  });
+
+  it('throws AlpacaDataUnderfetchError when even the widened range cannot produce `limit` bars', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ bars: dailyBars(2), symbol: 'AAPL' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const error = await stocksClient()
+      .getBars('AAPL', '1d', ASOF, 5)
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(AlpacaDataUnderfetchError);
+    const underfetch = error as AlpacaDataUnderfetchError;
+    expect(underfetch.symbol).toBe('AAPL');
+    expect(underfetch.timeframe).toBe('1d');
+    expect(underfetch.requested).toBe(5);
+    expect(underfetch.received).toBe(2);
+    expect(underfetch.message).toContain('AAPL');
+    // Bounded: exactly one widened retry, never an unbounded widening loop.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns the short read unwidened when the caller opts in with partial: 'allow'", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ bars: dailyBars(2), symbol: 'AAPL' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await stocksClient().getBars('AAPL', '1d', ASOF, 5, 'allow');
+
+    expect(result).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not widen or throw when the first range already satisfies `limit`', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ bars: dailyBars(5), symbol: 'AAPL' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await stocksClient().getBars('AAPL', '1d', ASOF, 5);
+
+    expect(result).toHaveLength(5);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies the same widen-then-throw path on the crypto endpoint', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ bars: { 'BTC/USD': dailyBars(1) }, next_page_token: null }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpDataClient({
+      assetClass: 'crypto',
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+    });
+
+    await expect(client.getBars('BTC-USD', '1d', ASOF, 4)).rejects.toBeInstanceOf(
+      AlpacaDataUnderfetchError,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const first = rangeOf(fetchMock.mock.calls[0]);
+    const second = rangeOf(fetchMock.mock.calls[1]);
+    expect(second.start).toBeLessThan(first.start);
   });
 });

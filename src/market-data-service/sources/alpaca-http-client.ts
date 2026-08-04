@@ -70,6 +70,7 @@ import { fetchWithTimeout, withRetry } from '../../shared/index.js';
 import { isDailyTimeframe, timeframeToMs } from '../timeframe.js';
 import {
   AlpacaDataProviderError,
+  AlpacaDataUnderfetchError,
   classifyAlpacaDataNetworkError,
   classifyAlpacaDataResponse,
   isRetryableAlpacaDataError,
@@ -94,12 +95,21 @@ const PAGE_SIZE = 1_000;
  */
 const BUFFER_MULTIPLIER = 8;
 /**
- * TODO(#292): an extremely sparse symbol (e.g. a multi-week trading halt)
- * can still underfetch even at BUFFER_MULTIPLIER's headroom — a
- * `result.length < limit` check after the fetch would turn that into a loud
- * failure instead of a silent short read, but needs a decision on what
- * callers should do with a partial read (fail vs. proceed with fewer bars).
+ * Widening factor for the one retry a short first read earns (issue #292).
+ * BUFFER_MULTIPLIER's headroom assumes a roughly-continuous trading calendar;
+ * an extremely sparse symbol (a multi-week halt, a fresh listing) breaks that
+ * assumption and the first window comes back short.
  */
+const RETRY_WIDEN_FACTOR = 4;
+/**
+ * Calendar-time floor for that retry, because a purely multiplicative widen
+ * cannot escape a weekend at small `limit`s: `1h`/`limit=1` searches 8 hours,
+ * and 8x4 = 32 hours still lands entirely inside a Saturday. Ten days clears
+ * any US equity weekend plus an adjacent holiday, which is the difference
+ * between "our window was too narrow" (fixable, and this fixes it) and "the
+ * symbol genuinely has no bars there" (not fixable — that throws).
+ */
+const RETRY_MIN_WINDOW_MS = 10 * 86_400_000;
 
 /** Alpaca's raw per-bar shape on the wire — a superset of `AlpacaBar` (also carries `n`, `vw`). */
 interface RawAlpacaBar {
@@ -260,27 +270,32 @@ export class AlpacaHttpDataClient implements AlpacaClient {
     );
   }
 
-  async getBars(
+  /**
+   * Ascending bars in `[asOf - windowMs, asOf]`, every page followed.
+   * Returns everything the range holds — trimming to a caller's `limit` and
+   * deciding what a short range means are `getBars`'s job, not this one's.
+   */
+  private async fetchRange(
     symbol: string,
     timeframe: string,
     asOf: Date,
-    limit: number,
+    windowMs: number,
   ): Promise<AlpacaBar[]> {
     const alpacaTimeframe = toAlpacaTimeframe(timeframe);
-    const bufferMs = timeframeToMs(timeframe) * limit * BUFFER_MULTIPLIER;
-    // Small-`limit` daily requests still need at least a few calendar days of
-    // headroom to cross a weekend; the multiplier alone can underflow at limit=1.
-    const minBufferMs = isDailyTimeframe(timeframe) ? 4 * 86_400_000 : 0;
-    const start = new Date(asOf.getTime() - Math.max(bufferMs, minBufferMs));
+    const start = new Date(asOf.getTime() - windowMs);
     const alpacaSymbol = this.assetClass === 'crypto' ? toAlpacaCryptoSymbol(symbol) : symbol;
 
-    // `bufferMs`'s calendar-time window can, for large `limit`, hold many more
-    // rows than `limit` itself (worst case ~`BUFFER_MULTIPLIER`x, at density 1
-    // for 24/7 crypto) — a fixed page cap sized for typical small lookbacks
-    // would then trip on a legitimate large request before a malformed/cyclical
-    // token ever could. Scale the cap with the request instead; +2 pages of
+    // The calendar-time window can, for large `limit`, hold many more rows than
+    // `limit` itself (worst case ~`BUFFER_MULTIPLIER`x, at density 1 for 24/7
+    // crypto) — a fixed page cap sized for typical small lookbacks would then
+    // trip on a legitimate large request before a malformed/cyclical token ever
+    // could. Scale the cap with the window actually being searched instead (so
+    // a widened retry gets a widened cap, not the first attempt's); +2 pages of
     // slack absorbs boundary rounding without weakening the loop guard itself.
-    const maxPages = Math.max(MAX_PAGES, Math.ceil((limit * BUFFER_MULTIPLIER) / PAGE_SIZE) + 2);
+    const maxPages = Math.max(
+      MAX_PAGES,
+      Math.ceil(windowMs / timeframeToMs(timeframe) / PAGE_SIZE) + 2,
+    );
 
     const out: AlpacaBar[] = [];
     let pageToken: string | undefined;
@@ -324,7 +339,62 @@ export class AlpacaHttpDataClient implements AlpacaClient {
       }
     } while (pageToken !== undefined);
 
-    return out.slice(-limit);
+    return out;
+  }
+
+  /**
+   * The most recent `limit` bars at or before `asOf`.
+   *
+   * **Short reads fail loudly (issue #292).** `BUFFER_MULTIPLIER`'s window is
+   * sized against a roughly-continuous trading calendar; a sparse symbol (a
+   * multi-week halt, a fresh listing, a thinly-quoted ticker) breaks that and
+   * the range comes back with fewer than `limit` bars. Returning that quietly
+   * is the failure this repo keeps getting bitten by: `computeIndicator` has
+   * no minimum-length guard, so an SMA/RSI/ATR over 3 bars is served as one
+   * over `limit` bars, and a mispriced stop follows from it.
+   *
+   * The fixable case is separated from the unsatisfiable one by RETRYING
+   * ONCE over a wider window (`RETRY_WIDEN_FACTOR`, floored at
+   * `RETRY_MIN_WINDOW_MS` so the retry can actually clear a weekend) rather
+   * than by guessing from the response: "our buffer was too narrow" then
+   * resolves itself, and only a genuinely-sparse symbol reaches the throw.
+   * Exactly one retry — a widening loop against a symbol with no history
+   * would walk back years of pages for nothing.
+   *
+   * `partial: 'allow'` opts out for a caller that can reason about a short
+   * window (the Risk Manager's correlation estimate, whose `min_bars` check
+   * already omits an under-covered pair); it skips the retry too, so an
+   * opted-in caller costs exactly one request, as before. `asOf` is never
+   * widened — only `start` moves, so point-in-time discipline is untouched.
+   */
+  async getBars(
+    symbol: string,
+    timeframe: string,
+    asOf: Date,
+    limit: number,
+    partial: 'error' | 'allow' = 'error',
+  ): Promise<AlpacaBar[]> {
+    const bufferMs = timeframeToMs(timeframe) * limit * BUFFER_MULTIPLIER;
+    // Small-`limit` daily requests still need at least a few calendar days of
+    // headroom to cross a weekend; the multiplier alone can underflow at limit=1.
+    const minBufferMs = isDailyTimeframe(timeframe) ? 4 * 86_400_000 : 0;
+    const windowMs = Math.max(bufferMs, minBufferMs);
+
+    const first = await this.fetchRange(symbol, timeframe, asOf, windowMs);
+    if (first.length >= limit || partial === 'allow') return first.slice(-limit);
+
+    const widenedMs = Math.max(windowMs * RETRY_WIDEN_FACTOR, RETRY_MIN_WINDOW_MS);
+    const widened = await this.fetchRange(symbol, timeframe, asOf, widenedMs);
+    if (widened.length >= limit) return widened.slice(-limit);
+
+    throw new AlpacaDataUnderfetchError({
+      symbol,
+      timeframe,
+      requested: limit,
+      received: widened.length,
+      searchedFrom: new Date(asOf.getTime() - widenedMs).toISOString(),
+      searchedTo: asOf.toISOString(),
+    });
   }
 
   async getLatestQuote(symbol: string): Promise<AlpacaQuote> {

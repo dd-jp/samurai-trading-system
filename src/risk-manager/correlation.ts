@@ -83,7 +83,14 @@ export async function computeCorrelationEstimate(
   const returnsByInstrument = new Map<string, number[]>(
     await Promise.all(
       instruments.map(async (i) => {
-        const bars = await marketData.getBars(i, config.window, asOf);
+        // `partial: 'allow'` (issue #292): a short window is degraded-but-valid
+        // HERE and almost nowhere else — the `min_bars` check below already
+        // omits an under-covered pair rather than trusting a thin correlation.
+        // Without the opt-in, one sparse peer would reject this `Promise.all`
+        // and take every instrument's correlation read down with it (and, via
+        // production.ts's tick loop, forfeit the tick) instead of dropping the
+        // one pair that couldn't be estimated.
+        const bars = await marketData.getBars(i, { ...config.window, partial: 'allow' }, asOf);
         return [i, logReturns(bars)] as const;
       }),
     ),
