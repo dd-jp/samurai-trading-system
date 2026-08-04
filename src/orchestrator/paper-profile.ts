@@ -232,12 +232,25 @@ function buildProfileConfigs(): Pick<
     automation_level: { crypto: 'manual', stocks: 'manual' },
     /**
      * UNSOURCED (milliseconds; spec puts exact thresholds out of scope).
-     * Bounded from below by the tick cadence — `DEFAULT_TICK_INTERVAL_MS` is
-     * 60s and an intent is decided and gated inside one pass, so anything
-     * under a minute would no-go on staleness by construction. 5 min crypto
-     * / 15 min stocks: crypto is 24/7 and re-prices continuously, equities
-     * move in session structure, which is the same asymmetry every other
-     * per-asset-class knob here carries.
+     *
+     * Sized against the right clock, which is the trap here. Gate 1 measures
+     * `now - order.decision_timestamp`, and `decision_timestamp` is
+     * `mark.observed_at` (trader/decide.ts) — the *quote's own* timestamp
+     * (`AlpacaDataSource.fetchLiveObservation`), deliberately not
+     * `clock.now()`, so a crash-restart re-deciding the same bar keeps its
+     * idempotency key. It is emphatically NOT the ATR bar's close time: were
+     * it, a 5-minute bound under a `'1h'` `atr_timeframe` would no-go every
+     * trade on staleness forever. For BTC-USD, which quotes continuously,
+     * `observed_at` lands within seconds of the decision.
+     *
+     * 5 min crypto / 15 min stocks, with several tick intervals
+     * (`DEFAULT_TICK_INTERVAL_MS`, 60s) of headroom either way. The asymmetry
+     * is the same one every other per-asset-class knob here carries: crypto
+     * re-prices 24/7, equities move in session structure — and an equity mark
+     * is "legitimately old when the session is shut"
+     * (`NormalizingDataSource.fetchMark`), which the market-open gate catches
+     * first anyway. No stock is in `SMOKE_TEST_UNIVERSE`; widening to
+     * equities should re-check that interaction rather than assume it.
      */
     max_signal_age: { crypto: 5 * 60_000, stocks: 15 * 60_000 },
     /**
