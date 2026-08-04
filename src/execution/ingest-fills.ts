@@ -81,7 +81,7 @@ async function advanceLot(
   if (filledSize === 0) return;
 
   const avgEntryPrice = weightedAvgPrice(entryFills);
-  const flat = totalQty(exitFills) >= filledSize;
+  const flat = coversQty(totalQty(exitFills), filledSize);
   const orderState = nextState(position, filledSize, flat);
 
   // Size the protection to what actually filled, before persisting the
@@ -112,7 +112,32 @@ async function advanceLot(
  */
 function nextState(position: OpenPosition, filledSize: number, flat: boolean): OrderState {
   if (flat) return 'closed';
-  return filledSize >= position.requested_size ? 'filled' : 'partially_filled';
+  return coversQty(filledSize, position.requested_size) ? 'filled' : 'partially_filled';
+}
+
+/**
+ * Relative tolerance on the quantity comparisons, because both sides are
+ * float64 sums of decimal `Fill.qty` rows and two sums of the SAME total
+ * differ unless the tranches happen to share a summation order: entry
+ * tranches of 0.3 + 0.3 + 0.4 total exactly 1, while exit tranches of
+ * 0.7 + 0.2 + 0.1 total 0.9999999999999999. A bare `>=` therefore reads a
+ * fully-exited lot as still open — forever, since no further fill is coming:
+ * no `ClosedTrade` for the Feedback Loop, and a phantom lot left in
+ * `getOpenPositions()` consuming Risk's exposure caps.
+ *
+ * 1e-12 relative is ~3 orders above the accumulation error a realistic fill
+ * count produces (n·2^-53 ≈ 1e-14 at n = 100) and far below any venue's lot
+ * granularity, so it absorbs float noise and cannot absorb a real unfilled
+ * remainder. Declaring flat a dust-quantity early is also the safe direction
+ * of the two: `reconcile()` (#86) corrects a store-vs-broker divergence,
+ * whereas a lot that never closes is unrecoverable without operator action.
+ * See [ADR-0005](../../docs/adr/0005-money-math-precision.md).
+ */
+const QTY_EPSILON_RELATIVE = 1e-12;
+
+/** `actual >= target`, tolerant of float64 summation noise on either side. */
+function coversQty(actual: number, target: number): boolean {
+  return actual >= target - Math.abs(target) * QTY_EPSILON_RELATIVE;
 }
 
 function closedTrade(
