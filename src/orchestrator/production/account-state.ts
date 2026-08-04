@@ -136,14 +136,46 @@ export class AlpacaAccountStateProvider implements AccountStateProvider {
  * a silent `NaN`: `cash` feeds equity, `equity` feeds the drawdown
  * denominator, and NaN propagates through both without ever failing a
  * comparison — the breaker would simply never trip.
+ *
+ * This is the whole boundary. `getAccount()` has exactly one consumer — the
+ * three calls above — so every string Alpaca sends passes through here before
+ * it can reach the store or the breakers (PR #301 review, deepseek).
  */
-function parseMoney(raw: string, field: string): number {
-  const value = Number.parseFloat(raw);
+function parseMoney(raw: unknown, field: string): number {
+  const value = toFiniteNumber(raw);
   if (!Number.isFinite(value)) {
     throw new Error(
-      `Alpaca GET /v2/account returned an unparseable '${field}': '${raw}'. ` +
+      `Alpaca GET /v2/account returned an unparseable '${field}': ${JSON.stringify(raw)}. ` +
         'Refusing to feed a non-numeric account figure to the circuit breakers.',
     );
   }
   return value;
+}
+
+/**
+ * `unknown` in, because this is JSON off the wire: the declared type says
+ * `string`, but nothing enforces that at the boundary and a malformed response
+ * must fail loudly rather than crash on `.trim()`.
+ *
+ * Two conversions are wrong here in opposite directions, so neither is used
+ * alone:
+ *
+ * - `Number.parseFloat` stops at the first invalid character, so a
+ *   thousands-separated `'100,000.50'` becomes `100` — wrong by three orders
+ *   of magnitude on the figure that divides the drawdown breaker, and never
+ *   `NaN`, so the guard above would pass it.
+ * - `Number` rejects that trailing garbage, but turns `''` and `'  '` into
+ *   `0`, which sails through the finite check as a genuine zero equity — and a
+ *   zero `last_equity` is precisely the case `dailyPnlPct` answers `0` to.
+ *
+ * So: reject blank explicitly, then let `Number` be strict about the rest.
+ */
+function toFiniteNumber(raw: unknown): number {
+  if (typeof raw === 'number') return raw;
+  if (typeof raw !== 'string') return Number.NaN;
+
+  const trimmed = raw.trim();
+  if (trimmed === '') return Number.NaN;
+
+  return Number(trimmed);
 }

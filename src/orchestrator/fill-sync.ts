@@ -17,9 +17,14 @@
  *
  * ## Why a self-scheduling timeout, not `setInterval`
  *
+ * `startFillSync` below re-arms a `setTimeout` after each pass settles. The
+ * rejected alternative was `setInterval`, and this paragraph describes that
+ * hypothetical, not the code:
+ *
  * `ingestFills()` is async and makes N broker calls — one `getOrder` per open
- * bracket, paced by the adapter's token bucket. Under `setInterval` a poll
- * slower than its own period re-enters: two passes would both read
+ * bracket, paced by the adapter's token bucket. A `setInterval` fires on a
+ * fixed period regardless of whether the previous pass has finished, so a poll
+ * slower than its own period would re-enter: two passes would both read
  * `getOpenPositions()` and both call `resizeProtectiveLegs`, racing on the
  * protective quantity of a lot that is mid-fill. The tick loop
  * (`startTickLoop`) already solved this — `setTimeout` re-armed only after

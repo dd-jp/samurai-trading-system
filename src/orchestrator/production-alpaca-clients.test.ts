@@ -3,12 +3,18 @@
  * thing standing between a `paper` process and real money if someone points
  * `ALPACA_BASE_URL` at the live host.
  */
-import {
-  ALPACA_LIVE_BASE_URL,
-  ALPACA_PAPER_BASE_URL,
-  buildDefaultAlpacaBrokerClient,
-} from './production.js';
+import { buildDefaultAlpacaBrokerClient } from './production.js';
 import type { LogEntry, Logger } from './types.js';
+
+/**
+ * Spelled out rather than imported from `production.ts`. The constants there
+ * are module-private, but that is not the only reason: asserting a value
+ * against the constant that produced it proves the code is self-consistent,
+ * not that `paper` reaches the paper host. These literals are the actual
+ * claim, and a typo in either constant fails here.
+ */
+const PAPER_HOST = 'https://paper-api.alpaca.markets';
+const LIVE_HOST = 'https://api.alpaca.markets';
 
 function makeLogger(): Logger & { entries: LogEntry[] } {
   const entries: LogEntry[] = [];
@@ -41,9 +47,9 @@ describe('buildDefaultAlpacaBrokerClient', () => {
   }
 
   it.each([
-    ['paper', ALPACA_PAPER_BASE_URL],
-    ['backtest', ALPACA_PAPER_BASE_URL],
-    ['live', ALPACA_LIVE_BASE_URL],
+    ['paper', PAPER_HOST],
+    ['backtest', PAPER_HOST],
+    ['live', LIVE_HOST],
   ] as const)('derives the %s endpoint from mode, not from a default', (mode, expected) => {
     const logger = makeLogger();
 
@@ -74,7 +80,7 @@ describe('buildDefaultAlpacaBrokerClient', () => {
     'paper',
     'backtest',
   ] as const)('refuses a live ALPACA_BASE_URL override in %s mode', (mode) => {
-    process.env.ALPACA_BASE_URL = ALPACA_LIVE_BASE_URL;
+    process.env.ALPACA_BASE_URL = LIVE_HOST;
 
     // The accident #293 exists to prevent: an override silently upgrading a
     // non-live process to real money.
@@ -82,7 +88,7 @@ describe('buildDefaultAlpacaBrokerClient', () => {
   });
 
   it('allows a live override when mode is genuinely live', () => {
-    process.env.ALPACA_BASE_URL = ALPACA_LIVE_BASE_URL;
+    process.env.ALPACA_BASE_URL = LIVE_HOST;
 
     expect(() => buildDefaultAlpacaBrokerClient('live', makeLogger())).not.toThrow();
   });

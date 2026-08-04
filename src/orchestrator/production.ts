@@ -443,9 +443,21 @@ export function buildDefaultLlmClient(logger: Logger): LlmClient {
   return new AnthropicLlmClient(client, config);
 }
 
-/** Alpaca's two trading hosts. Which one is chosen is decided by `mode`, never defaulted. */
-export const ALPACA_PAPER_BASE_URL = 'https://paper-api.alpaca.markets';
-export const ALPACA_LIVE_BASE_URL = 'https://api.alpaca.markets';
+/**
+ * Alpaca's two trading hosts. Which one is chosen is decided by `mode`, never
+ * defaulted.
+ *
+ * Module-private on purpose (PR #301 review, deepseek): the mode guard below
+ * is the only sanctioned way to reach the live host from this codebase, and an
+ * exported `ALPACA_LIVE_BASE_URL` is an affordance for reaching it without
+ * one. Un-exporting does not make bypass impossible — anyone can type the
+ * literal — but it removes the import that would make bypass look sanctioned.
+ * The tests assert the literal URLs rather than these constants, which is the
+ * stronger assertion anyway: comparing a constant against itself proves
+ * nothing about the host actually contacted.
+ */
+const ALPACA_PAPER_BASE_URL = 'https://paper-api.alpaca.markets';
+const ALPACA_LIVE_BASE_URL = 'https://api.alpaca.markets';
 
 /**
  * The default broker wire client, with the endpoint DERIVED FROM `mode`

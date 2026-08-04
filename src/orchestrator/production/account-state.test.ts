@@ -225,17 +225,46 @@ describe('AlpacaAccountStateProvider', () => {
     }
   });
 
-  it('rejects an unparseable money field instead of feeding NaN to the breakers', async () => {
+  /**
+   * The three shapes that must not become a number, one per failure mode:
+   * outright garbage, a `parseFloat`-truncatable figure, and a blank that
+   * `Number` would call zero. The last two are the dangerous ones — they
+   * produce a *finite* wrong answer rather than a NaN anyone would notice.
+   */
+  it.each([
+    ['outright garbage', 'N/A'],
+    ['a thousands-separated figure parseFloat would truncate to 100', '100,000.50'],
+    ['a trailing-unit figure', '100000 USD'],
+    ['an empty string Number would call zero', ''],
+    ['whitespace Number would call zero', '   '],
+    ['a null the wire type does not admit', null as unknown as string],
+  ])('rejects %s instead of feeding a wrong number to the breakers', async (_label, equity) => {
     const { store, cleanup } = openStore();
     try {
       const provider = new AlpacaAccountStateProvider({
-        client: makeClient(makeAccount({ equity: 'N/A' })),
+        client: makeClient(makeAccount({ equity })),
         store,
         closedTrades: makeTradeReader([]),
         logger: makeLogger(),
       });
 
       await expect(provider.getAccountState(asOf)).rejects.toThrow("unparseable 'equity'");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('still accepts the ordinary decimal string Alpaca actually sends', async () => {
+    const { store, cleanup } = openStore();
+    try {
+      const provider = new AlpacaAccountStateProvider({
+        client: makeClient(makeAccount({ cash: '49999.37' })),
+        store,
+        closedTrades: makeTradeReader([]),
+        logger: makeLogger(),
+      });
+
+      expect((await provider.getAccountState(asOf)).cash).toBe(49_999.37);
     } finally {
       cleanup();
     }
