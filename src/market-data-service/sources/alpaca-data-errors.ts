@@ -94,6 +94,16 @@ export class AlpacaDataUnderfetchError extends Error {
   }
 }
 
+/**
+ * What the `classify*` functions below can return — i.e. the ways an Alpaca
+ * REQUEST can fail. `AlpacaDataUnderfetchError` is deliberately NOT a member:
+ * it is raised by `getBars` after a successful request, above both the page
+ * walk and `withRetry`, so no classifier can ever produce one and widening
+ * this union would only tell callers of `classifyAlpacaDataResponse` to expect
+ * a value it cannot return. Retryability is decided at runtime by
+ * `isRetryableAlpacaDataError(error: unknown)`, which returns false for an
+ * underfetch (pinned by a test) regardless of this type.
+ */
 export type AlpacaDataError =
   | AlpacaDataTimeoutError
   | AlpacaDataRateLimitError

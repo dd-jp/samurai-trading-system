@@ -1,4 +1,8 @@
-import { AlpacaDataProviderError, AlpacaDataUnderfetchError } from './alpaca-data-errors.js';
+import {
+  AlpacaDataProviderError,
+  AlpacaDataUnderfetchError,
+  isRetryableAlpacaDataError,
+} from './alpaca-data-errors.js';
 import {
   AlpacaHttpDataClient,
   toAlpacaCryptoSymbol,
@@ -529,6 +533,25 @@ describe('AlpacaHttpDataClient — sparse-symbol underfetch (#292)', () => {
       AlpacaDataUnderfetchError,
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('classifies an underfetch as non-retryable, and not as a provider fault', () => {
+    // Repeating an identical request cannot conjure bars that do not exist, so
+    // no retry wrapper anywhere may treat this as retryable — and it must not
+    // masquerade as an AlpacaDataProviderError, which would make "Alpaca is
+    // broken" and "this symbol is too sparse" indistinguishable in logs and in
+    // `isRetryableAlpacaDataError`'s 5xx branch.
+    const error = new AlpacaDataUnderfetchError({
+      symbol: 'AAPL',
+      timeframe: '1d',
+      requested: 5,
+      received: 2,
+      searchedFrom: '2026-06-03T00:00:00.000Z',
+      searchedTo: '2026-07-03T00:00:00.000Z',
+    });
+
+    expect(isRetryableAlpacaDataError(error)).toBe(false);
+    expect(error).not.toBeInstanceOf(AlpacaDataProviderError);
   });
 
   it('returns no bars, and makes no request, for a zero-length window', async () => {
