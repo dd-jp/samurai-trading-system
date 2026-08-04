@@ -63,21 +63,28 @@ export function atrIndicatorSpec(lookback: number): IndicatorSpec {
  * "N bars yield N-1 true ranges" seeding rule cannot be fixed in one
  * implementation and left wrong in the other.
  *
- * Returns null on any ATR that cannot size a stop, which is TWO conditions,
- * not one:
+ * Returns null on any ATR that cannot size a stop. The FINITENESS CHECK is
+ * what makes that true, and it is the only one of the two guards below that
+ * is load-bearing:
  *
- * 1. Fewer than two bars — too little history to form a single true range.
- * 2. A non-finite result. `computeIndicator` returns NaN rather than throwing
- *    on an empty seed, and it propagates NaN out of corrupt bar data (one
- *    non-numeric high/low poisons a true range on an otherwise well-sized
- *    window). The bar-count check alone covers only the first of those.
+ * - Too little history (< 2 bars) gives `computeIndicator` an empty seed, so
+ *   it divides by zero and returns NaN.
+ * - Corrupt bar data (one non-numeric high/low) poisons a true range on an
+ *   otherwise well-sized window, and returns NaN too.
  *
- * Both collapse to null here because NaN is not safely ignorable downstream:
- * it passes straight through `Math.max`, the `stopDistance <= 0` check and
- * the min-notional check (every comparison against NaN is false) and lands in
- * an EMITTED OrderIntent with NaN size, stop and target. That was verified,
- * not assumed — the "returns null when the computed ATR is not finite" test
- * fails with exactly that intent if the finiteness check is removed.
+ * Both arrive as NaN, so `Number.isFinite` alone covers both — deleting the
+ * bar-count check leaves the suite green, which was checked rather than
+ * assumed. The bar-count check is kept as a cheap, named statement of intent
+ * ("< 2 bars is < 1 true range"), NOT as the thing standing between Trader
+ * and a NaN intent. Do not delete the finiteness check on the grounds that
+ * the length check has it covered; it is the other way round.
+ *
+ * NaN must not be allowed downstream at all: it passes straight through
+ * `Math.max`, the `stopDistance <= 0` check and the min-notional check (every
+ * comparison against NaN is false) and lands in an EMITTED OrderIntent with
+ * NaN size, stop and target. Verified, not assumed — reverting
+ * `Number.isFinite` reproduces exactly that intent in the "returns null when
+ * the computed ATR is not finite" test.
  *
  * Bars are consumed in the order `getBars` returns them — ascending by
  * close_time, which is the documented contract of
@@ -89,6 +96,7 @@ export function atrIndicatorSpec(lookback: number): IndicatorSpec {
  */
 function atrFor(bars: Bar[], lookback: number): number | null {
   // < 2 bars is < 1 true range: the first bar only seeds `previousClose`.
+  // Stated intent, not the NaN guard — see the docstring.
   if (bars.length < 2) return null;
 
   const atr = computeIndicator(bars, atrIndicatorSpec(lookback));

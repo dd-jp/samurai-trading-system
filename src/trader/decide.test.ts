@@ -398,7 +398,9 @@ describe('decide — skip paths', () => {
     // `computeIndicator` answers NaN, not null, on a window this short, and
     // NaN defeats every downstream guard (`stopDistance <= 0` and the
     // min-notional check are both false against NaN) — so the skip has to
-    // happen on the bar count, before the indicator is consulted (#304).
+    // happen before an intent is built (#304). Which of `atrFor`'s two
+    // guards does it is not this test's business: the bar-count check skips
+    // first, and the finiteness check would catch the same NaN if it didn't.
     const intent = await decide(traderInput({ marketData: new FixtureMarketData(bars(0, 2)) }));
 
     expect(intent).toBeNull();
