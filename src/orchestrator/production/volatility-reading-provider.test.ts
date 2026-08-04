@@ -1,8 +1,16 @@
 import type {
+  Bar,
   IndicatorSpec,
   IndicatorValue,
   MarketDataService,
 } from '../../market-data-service/index.js';
+import {
+  FixtureDataSource,
+  MarketDataServiceImpl,
+  SqliteMarketDataStore,
+} from '../../market-data-service/index.js';
+import type { Clock } from '../../shared/index.js';
+import { openSharedStore } from '../../shared/store/index.js';
 import type { Logger, UniverseInstrument } from '../types.js';
 import { MarketDataVolatilityReadingProvider } from './volatility-reading-provider.js';
 
@@ -146,6 +154,75 @@ describe('MarketDataVolatilityReadingProvider', () => {
       expect.objectContaining({
         level: 'error',
         payload: expect.objectContaining({ instrument: 'TSLA', asset_class: 'stocks' }),
+      }),
+    );
+  });
+
+  it('fails closed against the REAL MarketDataService when an instrument is short of bars (#319)', async () => {
+    // The other fail-closed tests above drive a stubbed `getIndicator`. This
+    // one wires the real `MarketDataServiceImpl` over a real SQLite store, so
+    // it pins the actual production path #319 changed: a cold instrument now
+    // makes `computeIndicator` THROW rather than answer an ATR(14) computed
+    // from 5 true ranges. That throw lands on the already-shipped rejected
+    // branch and aggregates as `FAILURE_READING`, so the volatility breaker
+    // trips conservatively instead of comparing against a fabricated number
+    // — which is why throwing is consistent with this module's posture
+    // rather than a new failure mode it has to learn about.
+    const asOf = new Date('2026-07-28T14:00:00Z');
+    const warmInstrument = 'BTC-USD';
+    const coldInstrument = 'ETH-USD';
+    const universe: readonly UniverseInstrument[] = [
+      { asset: warmInstrument, asset_class: 'crypto' },
+      { asset: coldInstrument, asset_class: 'crypto' },
+    ];
+
+    const bar = (instrument: string, index: number, count: number): Bar => {
+      const closeTime = new Date(asOf.getTime() - (count - 1 - index) * 60 * 60 * 1000);
+      const close = 100 + Math.sin(index / 3) * 4;
+      return {
+        instrument,
+        timeframe: '1h',
+        open_time: new Date(closeTime.getTime() - 60 * 60 * 1000),
+        close_time: closeTime,
+        open: close,
+        high: close + 2,
+        low: close - 2,
+        close,
+        volume: 1,
+        source: 'fixture',
+      };
+    };
+
+    const bars: Bar[] = [
+      // Warm: 20 bars, comfortably past the ATR(14) width.
+      ...Array.from({ length: 20 }, (_, i) => bar(warmInstrument, i, 20)),
+      // Cold: 6 bars — enough that no source call was short, not enough for ATR(14).
+      ...Array.from({ length: 6 }, (_, i) => bar(coldInstrument, i, 6)),
+    ];
+
+    const clock: Clock = { now: () => asOf };
+    const marketData = new MarketDataServiceImpl(
+      new FixtureDataSource(bars, { price: 100, observed_at: asOf, source: 'fixture' }, 'crypto'),
+      clock,
+      'backtest',
+      new SqliteMarketDataStore(openSharedStore(':memory:')),
+    );
+    const { logger, log } = fakeLogger();
+
+    const provider = new MarketDataVolatilityReadingProvider({
+      marketData,
+      universe,
+      volatility_indicator: { indicator: 'atr', params: { period: 14 }, lookback: 15 },
+      logger,
+    });
+
+    const reading = await provider.getVolatilityReading(asOf);
+
+    expect(reading.crypto).toBe(Number.POSITIVE_INFINITY);
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'error',
+        payload: expect.objectContaining({ instrument: coldInstrument }),
       }),
     );
   });

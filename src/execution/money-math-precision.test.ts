@@ -268,7 +268,7 @@ class ScriptedBroker implements BrokerAdapter {
 function makeInput(broker: BrokerAdapter, store: TestExecutionStore): ExecutionInput {
   const config: ExecutionConfig = {
     simulated: {
-      volatility_indicator: { indicator: 'atr', params: { period: 14 }, lookback: 14 },
+      volatility_indicator: { indicator: 'atr', params: { period: 14 }, lookback: 15 },
       adv_window: { timeframe: '1d', lookback: 20 },
     },
   };

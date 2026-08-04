@@ -11,7 +11,7 @@ const OBSERVED_AT = new Date('2026-07-15T13:59:00Z');
 const fixedClock: Clock = { now: () => NOW };
 
 const CONFIG: SimulatedAdapterConfig = {
-  volatility_indicator: { indicator: 'atr', params: { period: 14 }, lookback: 14 },
+  volatility_indicator: { indicator: 'atr', params: { period: 14 }, lookback: 15 },
   adv_window: { timeframe: '1d', lookback: 20 },
 };
 

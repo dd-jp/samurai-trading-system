@@ -11,20 +11,24 @@
  *
  * `LEGACY_TRADER_ATR` below is the deleted function, verbatim, kept as the
  * reference implementation. These tests prove:
- *   1. They agree exactly (to MDS's 8dp rounding) for every bar count Trader
- *      can present — because Trader fetches `atr_lookback + 1` bars, which
- *      yields at most `atr_lookback` true ranges, and `atr`'s smoothing loop
- *      is empty whenever `trueRanges.length <= period`.
+ *   1. They agree exactly (to MDS's 8dp rounding) at the width Trader
+ *      presents — `atr_lookback + 1` bars, which yields exactly
+ *      `atr_lookback` true ranges, so `atr`'s smoothing loop is empty
+ *      (`trueRanges.length <= period`).
  *   2. They DIVERGE once the window is wider than that, which is exactly why
  *      the `+ 1` fetch width in `decide.ts` is load-bearing rather than
  *      incidental. If someone widens that fetch, Wilder's smoothing switches
  *      on and every stop in the system moves.
+ *   3. They diverge NARROWER than that too, since #319: the legacy function
+ *      fabricated a short-window mean and called it ATR(`lookback`);
+ *      `computeIndicator` now throws `InsufficientBarsError`. That is the one
+ *      deliberate behavioural break from the migrated function.
  *
  * So this file is not a one-off check: it pins the equivalence Trader's stop
  * placement was calibrated on, and fails loudly if a future change to
  * `computeIndicator`'s `atr` case would move it.
  */
-import { type Bar, computeIndicator } from '../market-data-service/index.js';
+import { type Bar, computeIndicator, InsufficientBarsError } from '../market-data-service/index.js';
 import { atrIndicatorSpec } from './decide.js';
 
 const LOOKBACK = 14;
@@ -64,8 +68,9 @@ function LEGACY_TRADER_ATR(bars: Bar[], lookback: number): number | null {
  * `?? spec.lookback` fallback turn this into an ATR(15)), which is precisely
  * the drift this file exists to catch.
  *
- * `atrFor` itself is not called here: it guards `bars.length < 2` and returns
- * null, which would hide the NaN the last test below has to observe.
+ * `atrFor` itself is not called here: it pre-checks `minimumBarsFor` and
+ * returns null, which would hide the throw the last test below has to
+ * observe.
  */
 function mdsAtr(bars: Bar[], lookback: number): number {
   return computeIndicator(bars, atrIndicatorSpec(lookback));
@@ -106,20 +111,28 @@ function pseudoRandomBars(count: number, seed: number): Bar[] {
 }
 
 describe('ATR migration (#304) — Trader’s deleted computeAtr vs MDS computeIndicator', () => {
+  // Parametrized on the LOOKBACK, each at its own `lookback + 1` fetch width,
+  // rather than on a bar count at a fixed ATR(14). Before #319 this ran short
+  // windows through an ATR(14) spec — 2, 3, 7 and 14 bars — and the two
+  // implementations "agreed" because both fabricated the same short-window
+  // mean. `computeIndicator` now refuses those, so the plain-mean regime is
+  // pinned the honest way: every case here is a window wide enough for the
+  // period it claims, which is exactly the invariant `atrIndicatorSpec`
+  // encodes and the only shape Trader can present now.
   it.each([
+    1,
     2,
-    3,
-    7,
-    14,
-    LOOKBACK + 1,
-  ])('agrees exactly at %i bars — every width Trader can present', (barCount) => {
+    6,
+    13,
+    LOOKBACK,
+  ])('agrees exactly for an ATR(%i) over its own lookback + 1 fetch width', (lookback) => {
     for (let seed = 1; seed <= 25; seed++) {
-      const bars = pseudoRandomBars(barCount, seed);
-      const legacy = LEGACY_TRADER_ATR(bars, LOOKBACK);
+      const bars = pseudoRandomBars(lookback + 1, seed);
+      const legacy = LEGACY_TRADER_ATR(bars, lookback);
       expect(legacy).not.toBeNull();
       // MDS rounds to 8dp for determinism; the legacy function did not.
       // That fixed rounding is the ONLY numeric difference between them.
-      expect(mdsAtr(bars, LOOKBACK)).toBeCloseTo(legacy as number, 8);
+      expect(mdsAtr(bars, lookback)).toBeCloseTo(legacy as number, 8);
     }
   });
 
@@ -142,13 +155,30 @@ describe('ATR migration (#304) — Trader’s deleted computeAtr vs MDS computeI
     expect(mdsAtr(bars, LOOKBACK)).not.toBeCloseTo(legacy, 6);
   });
 
-  it('returns NaN below two bars, which is why decide.ts guards the length itself', () => {
-    // The legacy function returned null and `buildBracket` skipped on it.
-    // `computeIndicator` divides by an empty seed instead: NaN survives
-    // `Math.max`, `stopDistance <= 0` and the min-notional check (every
-    // comparison against NaN is false), so an unguarded migration would emit
-    // an OrderIntent with NaN size/stop/target rather than skipping.
+  it('THROWS below the seed width where the legacy function fabricated a mean (#319)', () => {
+    // The divergence that matters now, and the reason `atrFor` pre-checks the
+    // length rather than trusting the value.
+    //
+    // The legacy function answered a number for ANY window of two bars or
+    // more — `trueRanges.slice(-14)` over 13 ranges is 13 ranges, divided by
+    // 13, returned as an ATR(14). `computeIndicator` used to do the same via
+    // `seedRanges.length`. Both were fabrications, and identical fabrications,
+    // which is why the equivalence tests above could not see the bug.
+    // `computeIndicator` now refuses, with the arity in the error.
+    const oneShort = pseudoRandomBars(LOOKBACK, 3);
+    expect(LEGACY_TRADER_ATR(oneShort, LOOKBACK)).toBeCloseTo(
+      // The fabricated value the legacy code shipped: a mean over 13 ranges.
+      LEGACY_TRADER_ATR(oneShort, LOOKBACK - 1) as number,
+      10,
+    );
+    expect(() => mdsAtr(oneShort, LOOKBACK)).toThrow(InsufficientBarsError);
+
+    // And at the extreme: one bar is no true range at all. The legacy
+    // function returned null and `buildBracket` skipped on it; the throw is
+    // what `atrFor`'s length pre-check converts back into that same skip.
     expect(LEGACY_TRADER_ATR(pseudoRandomBars(1, 3), LOOKBACK)).toBeNull();
-    expect(mdsAtr(pseudoRandomBars(1, 3), LOOKBACK)).toBeNaN();
+    expect(() => mdsAtr(pseudoRandomBars(1, 3), LOOKBACK)).toThrow(
+      /atr\(14\) needs 15 bars but received 1/,
+    );
   });
 });

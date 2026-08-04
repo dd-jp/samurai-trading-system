@@ -10,7 +10,12 @@
  *
  * Cosine precedent retrieval is #75 — see NO_PRECEDENT_COSINE_MULTIPLIER.
  */
-import { type Bar, computeIndicator, type IndicatorSpec } from '../market-data-service/index.js';
+import {
+  type Bar,
+  computeIndicator,
+  type IndicatorSpec,
+  minimumBarsFor,
+} from '../market-data-service/index.js';
 import type { OpenPosition, OrderIntent } from '../shared/index.js';
 import { computeIdempotencyKey } from './idempotency-key.js';
 import type { AssetClass, TraderConfig, TraderInput } from './types.js';
@@ -63,21 +68,24 @@ export function atrIndicatorSpec(lookback: number): IndicatorSpec {
  * "N bars yield N-1 true ranges" seeding rule cannot be fixed in one
  * implementation and left wrong in the other.
  *
- * Returns null on any ATR that cannot size a stop. The FINITENESS CHECK is
- * what makes that true, and it is the only one of the two guards below that
- * is load-bearing:
+ * Returns null on any ATR that cannot size a stop. BOTH guards below are
+ * load-bearing, and they cover different failures:
  *
- * - Too little history (< 2 bars) gives `computeIndicator` an empty seed, so
- *   it divides by zero and returns NaN.
+ * - Too little history. Since #319 `computeIndicator` THROWS
+ *   (`InsufficientBarsError`) rather than answering a short-window mean
+ *   labelled ATR(`lookback`), so the length check is what keeps Trader on its
+ *   existing skip path instead of letting that throw kill the tick. It asks
+ *   `minimumBarsFor` — the module that owns the arity — rather than restating
+ *   a number here, so the two cannot drift apart; a hardcoded `< 2` was the
+ *   old check, and it let 3 bars through as an "ATR(14)" computed from two
+ *   true ranges, which is a mispriced stop, not a rough one.
+ *   Deliberately a pre-check and not a `try`/`catch`: catching would also have
+ *   to be narrow enough to re-throw `computeIndicator`'s ascending-order
+ *   error, which `production.ts` means to surface as a forfeited tick.
  * - Corrupt bar data (one non-numeric high/low) poisons a true range on an
- *   otherwise well-sized window, and returns NaN too.
- *
- * Both arrive as NaN, so `Number.isFinite` alone covers both — deleting the
- * bar-count check leaves the suite green, which was checked rather than
- * assumed. The bar-count check is kept as a cheap, named statement of intent
- * ("< 2 bars is < 1 true range"), NOT as the thing standing between Trader
- * and a NaN intent. Do not delete the finiteness check on the grounds that
- * the length check has it covered; it is the other way round.
+ *   otherwise well-sized window and returns NaN. Nothing about the window's
+ *   LENGTH catches that, so `Number.isFinite` is still the only thing standing
+ *   between Trader and a NaN intent on a full-width window.
  *
  * NaN must not be allowed downstream at all: it passes straight through
  * `Math.max`, the `stopDistance <= 0` check and the min-notional check (every
@@ -95,11 +103,14 @@ export function atrIndicatorSpec(lookback: number): IndicatorSpec {
  * not in every consumer of it.
  */
 function atrFor(bars: Bar[], lookback: number): number | null {
-  // < 2 bars is < 1 true range: the first bar only seeds `previousClose`.
-  // Stated intent, not the NaN guard — see the docstring.
-  if (bars.length < 2) return null;
+  const spec = atrIndicatorSpec(lookback);
 
-  const atr = computeIndicator(bars, atrIndicatorSpec(lookback));
+  // `lookback + 1` bars yield `lookback` true ranges — the arity lives in
+  // `minimumBarsFor`, not in a literal here. Skipping the trade is the only
+  // safe answer: a stop cannot be priced off an ATR that does not exist.
+  if (bars.length < minimumBarsFor(spec)) return null;
+
+  const atr = computeIndicator(bars, spec);
   return Number.isFinite(atr) ? atr : null;
 }
 

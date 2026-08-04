@@ -27,8 +27,27 @@ const CONTEXT_CANDLE_LOOKBACK = 20;
 /** 24h news/sentiment context window, matching the always-on context frame. */
 const MI_CONTEXT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * `sma` reads the closes directly, so an SMA(14) is exactly 14 bars: the
+ * `params.period ?? lookback` fallback resolves to 14 and needs no `+ 1`.
+ */
 const SMA_SPEC: IndicatorSpec = { indicator: 'sma', params: {}, lookback: INDICATOR_LOOKBACK };
-const RSI_SPEC: IndicatorSpec = { indicator: 'rsi', params: {}, lookback: INDICATOR_LOOKBACK };
+/**
+ * `lookback: INDICATOR_LOOKBACK + 1`, and `params.period` pinned rather than
+ * left to the `?? lookback` fallback — the same shape `trader/decide.ts`'s
+ * `atrIndicatorSpec` and `production.ts`'s `DEFAULT_VOLATILITY_INDICATOR`
+ * carry, for the same reason. `rsi` consumes the first bar only to seed the
+ * previous close, so N bars yield N-1 changes: this used to ask for 14 bars
+ * and get an RSI averaged over 13 changes but divided by 14 — presented in
+ * `key_points` as "RSI(14)". Issue #319 made that throw instead of lying, so
+ * the width is now correct rather than merely unenforced. Leaving `params`
+ * empty and bumping only `lookback` would have silently made this an RSI(15).
+ */
+const RSI_SPEC: IndicatorSpec = {
+  indicator: 'rsi',
+  params: { period: INDICATOR_LOOKBACK },
+  lookback: INDICATOR_LOOKBACK + 1,
+};
 
 /** RSI above this alongside a rising close is treated as overbought, not confirming bullish. */
 const RSI_OVERBOUGHT = 70;
