@@ -14,7 +14,10 @@ import {
   paperStartingProfile,
   REQUIRED_INJECTED_CONFIG,
   startFromEnvironment,
+  storePathEncodesTradingMode,
+  warnIfStorePathIgnoresMode,
 } from './index.js';
+import type { Logger } from './types.js';
 
 describe('startFromEnvironment', () => {
   it('refuses to start with nothing wired, naming every missing dependency', async () => {
@@ -182,6 +185,74 @@ describe('missingCredentialEnvVars', () => {
     process.env.ALPACA_API_KEY = 'super-secret-key';
 
     expect(missingCredentialEnvVars({}).join(' ')).not.toContain('super-secret-key');
+  });
+});
+
+describe('storePathEncodesTradingMode', () => {
+  // The predicate behind the #330 startup warning. Worth its own tests
+  // because it is what decides when the warning STOPS: it is written against
+  // the shape #168 asks for, so re-keying the path to mode makes it true and
+  // the warning silences itself, rather than someone having to remember to
+  // delete it.
+  it('is false for every NODE_ENV-keyed filename in use today', () => {
+    for (const env of ['development', 'test', 'staging', 'production']) {
+      expect(storePathEncodesTradingMode(`data/samurai-${env}.sqlite`, 'paper')).toBe(false);
+      expect(storePathEncodesTradingMode(`data/samurai-${env}.sqlite`, 'live')).toBe(false);
+    }
+  });
+
+  it('is true for the mode-keyed filenames #168 specifies', () => {
+    expect(storePathEncodesTradingMode('data/samurai-paper.sqlite', 'paper')).toBe(true);
+    expect(storePathEncodesTradingMode('data/samurai-live.sqlite', 'live')).toBe(true);
+    expect(storePathEncodesTradingMode('data/samurai-backtest.sqlite', 'backtest')).toBe(true);
+  });
+
+  it('does not confuse one mode-keyed file for another', () => {
+    // The failure that would matter most: a live process quietly accepting the
+    // paper file as correctly keyed.
+    expect(storePathEncodesTradingMode('data/samurai-paper.sqlite', 'live')).toBe(false);
+    expect(storePathEncodesTradingMode('data/samurai-live.sqlite', 'paper')).toBe(false);
+  });
+
+  it('reads the filename only, not the directories above it', () => {
+    // A developer whose checkout happens to sit under `~/live/...` must not
+    // silence the warning by accident.
+    expect(
+      storePathEncodesTradingMode('/home/me/live/data/samurai-production.sqlite', 'live'),
+    ).toBe(false);
+  });
+});
+
+describe('warnIfStorePathIgnoresMode', () => {
+  function recordingLogger(): Logger & { entries: Parameters<Logger['log']>[0][] } {
+    const entries: Parameters<Logger['log']>[0][] = [];
+    return { entries, log: (entry) => entries.push(entry) };
+  }
+
+  it('warns when the resolved filename cannot distinguish paper from live (#330)', () => {
+    const logger = recordingLogger();
+
+    warnIfStorePathIgnoresMode({ dbPath: 'data/samurai-production.sqlite', mode: 'paper', logger });
+
+    expect(logger.entries).toHaveLength(1);
+    const [entry] = logger.entries;
+    expect(entry?.level).toBe('warn');
+    // Both facts the operator needs to act: which mode this process believes
+    // it is in, and which file it is actually writing.
+    expect(entry?.payload).toMatchObject({
+      mode: 'paper',
+      db_file: 'samurai-production.sqlite',
+    });
+    expect(entry?.message).toContain('#330');
+  });
+
+  it('stays silent once the path is keyed off mode', () => {
+    // This is the branch that retires the warning when #330 lands.
+    const logger = recordingLogger();
+
+    warnIfStorePathIgnoresMode({ dbPath: 'data/samurai-paper.sqlite', mode: 'paper', logger });
+
+    expect(logger.entries).toEqual([]);
   });
 });
 

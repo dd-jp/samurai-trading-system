@@ -42,9 +42,11 @@
  * every missing variable, rather than starting a half-wired process against
  * real money.
  */
+import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { SystemClock } from '../shared/index.js';
 import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
+import { JsonLogger } from './logger.js';
 import { paperStartingProfile } from './paper-profile.js';
 import {
   buildProductionOrchestrator,
@@ -52,6 +54,7 @@ import {
   type ProductionOrchestrator,
   SMOKE_TEST_UNIVERSE,
 } from './production.js';
+import type { Logger } from './types.js';
 
 export { digest } from './digest.js';
 export { Heartbeat, type HeartbeatChannel } from './heartbeat.js';
@@ -232,6 +235,77 @@ function assertCredentialsPresent(injected: Partial<ProductionConfig>): void {
 }
 
 /**
+ * Whether `dbPath`'s filename identifies the trading mode it belongs to —
+ * i.e. whether it is the shape shared-sqlite-store-spec.md § "DB file path
+ * convention" (#168) asks for (`data/samurai-paper.sqlite` /
+ * `data/samurai-live.sqlite`) rather than the `NODE_ENV`-keyed shape this
+ * codebase actually resolves.
+ *
+ * False for every filename in use today, which is the point: it is the
+ * condition for the startup warning below, written against the *fixed* shape
+ * so that [#330](https://github.com/dd-jp/samurai-trading-system/issues/330)
+ * re-keying the path silences the warning by making this true. Nobody has to
+ * remember to delete it, and nobody can delete it early without the test
+ * turning red.
+ *
+ * Filename only, never the directories above it: a checkout that happens to
+ * live under `~/live/` must not be able to silence this by accident.
+ */
+export function storePathEncodesTradingMode(
+  dbPath: string,
+  mode: ProductionConfig['mode'],
+): boolean {
+  return basename(dbPath).includes(mode);
+}
+
+/**
+ * Warns, once at startup, when the file this process is about to write cannot
+ * distinguish paper money from real money —
+ * [#330](https://github.com/dd-jp/samurai-trading-system/issues/330).
+ *
+ * The hazard in full: `sharedStorePath()` keys off `NODE_ENV`, so a single
+ * `NODE_ENV=production` host that flips `SAMURAI_MODE` from `paper` to `live`
+ * writes both into `samurai-production.sqlite`. A live composition root then
+ * reads paper lots and fills as real state and computes its risk caps and
+ * drawdown against them — the exact cross-contamination #168's convention
+ * exists to make impossible.
+ *
+ * A warning rather than a refusal, deliberately: paper trading on one
+ * `NODE_ENV` is unaffected in practice, and #323's whole purpose was to let a
+ * paper run start. Refusing here would re-break the thing that ticket fixed,
+ * to guard a transition (`paper` → `live` on one host) that the shipped
+ * entrypoint already refuses on other grounds.
+ *
+ * **Do not delete this as noise.** #330 records that it is removed only when
+ * the real fix lands — and by construction it removes itself then, because
+ * `storePathEncodesTradingMode` starts answering true.
+ */
+export function warnIfStorePathIgnoresMode(deps: {
+  dbPath: string;
+  mode: ProductionConfig['mode'];
+  logger: Logger;
+}): void {
+  if (storePathEncodesTradingMode(deps.dbPath, deps.mode)) return;
+
+  deps.logger.log({
+    trace_id: 'startup',
+    stage: 'orchestrator',
+    level: 'warn',
+    message:
+      'shared store path is keyed off NODE_ENV, not trading mode — this file cannot separate ' +
+      'paper from live, so a later live run on this host would inherit paper positions as real ' +
+      'state (#330, spec #168). Safe for a paper-only host; must be resolved before live money.',
+    payload: {
+      mode: deps.mode,
+      // Filename, not the absolute path: the path can carry a home directory,
+      // and a startup log line is not the place to disclose one.
+      db_file: basename(deps.dbPath),
+      expected_convention: `samurai-${deps.mode}.sqlite`,
+    },
+  });
+}
+
+/**
  * Assembles a `ProductionConfig` from the environment plus `injected`, builds
  * the composition root, and starts it (orphan scan once, then the tick loop
  * and heartbeat). Throws — before opening any broker connection — if any
@@ -248,17 +322,28 @@ function assertCredentialsPresent(injected: Partial<ProductionConfig>): void {
  * instead, so a single `NODE_ENV=production` host that flips `SAMURAI_MODE`
  * from `paper` to `live` writes both into one file.
  *
- * **Reachable as of #323, where it was latent before.** The earlier note here
- * said the `REQUIRED_INJECTED_CONFIG` guard threw long before this line, which
- * is no longer true — `yarn orchestrator` now boots. Two things still stand
- * between this hazard and a live wrong answer: the shipped entrypoint runs on
+ * **Reachable as of #323, where it was latent before — tracked as
+ * [#330](https://github.com/dd-jp/samurai-trading-system/issues/330).** The
+ * earlier note here said the `REQUIRED_INJECTED_CONFIG` guard threw long
+ * before this line, which is no longer true: `yarn orchestrator` now boots, so
+ * the path is resolved on every start. Two things still stand between this
+ * hazard and a live wrong answer — the shipped entrypoint runs on
  * `paperStartingProfile`, which refuses `live` outright, and a `live` process
- * would have to be someone's own composition root. That makes it narrower than
- * it looks, and it is still the wrong key. Left as-is rather than quietly
- * re-keyed under an unrelated ticket — `mode` resolves from `injected.mode ??
- * SAMURAI_MODE`, and an injected mode is invisible to the dashboard, so
- * switching the path to mode needs a decision about how the reader derives it,
- * not just a different template string.
+ * would have to be someone's own composition root — but it is still the wrong
+ * key, and #330 gates it on any live-money run.
+ *
+ * Not re-keyed here, deliberately and not for lack of effort: `mode` resolves
+ * from `injected.mode ?? SAMURAI_MODE`, and an injected mode is invisible to
+ * the dashboard, which calls `sharedStorePath()` with no argument precisely so
+ * writer and reader cannot derive different paths. Switching the key needs a
+ * decision about how the *reader* derives mode, plus a migration story for
+ * existing files — #330's scope, not a template-string change.
+ *
+ * What this function does do meanwhile is say so out loud:
+ * `warnIfStorePathIgnoresMode` logs a `warn` at startup naming the mode and
+ * the file actually being written. Per #330 that warning is removed only when
+ * the real fix lands — and it retires itself when it does, since re-keying
+ * makes `storePathEncodesTradingMode` true.
  */
 export async function startFromEnvironment(
   injected: Partial<ProductionConfig> = {},
@@ -290,13 +375,30 @@ export async function startFromEnvironment(
   // that cannot authenticate should not leave a freshly-created SQLite file
   // behind as a side effect of failing.
   assertCredentialsPresent(injected);
-  // Called with no argument, exactly as `src/dashboard/index.ts` calls it:
-  // the resolver reads `NODE_ENV` itself, so the writer and the reader cannot
-  // derive different paths. `env` above is for the startup log line only.
-  const db = injected.db ?? openSharedStore(sharedStorePath());
+
+  // One logger for the whole startup, threaded into the composition root
+  // rather than left for it to default: the #330 warning below has to be
+  // emitted before the store is opened, and it must land on the same stream as
+  // every line after it.
+  const logger = injected.logger ?? new JsonLogger();
+
+  // `sharedStorePath()` is called with no argument, exactly as
+  // `src/dashboard/index.ts` calls it: the resolver reads `NODE_ENV` itself,
+  // so the writer and the reader cannot derive different paths. `env` above is
+  // for the startup log line only.
+  //
+  // Resolved and warned about before opening, and only when we resolved it —
+  // an injected handle's path is not ours to guess at (#330).
+  let db = injected.db;
+  if (db === undefined) {
+    const dbPath = sharedStorePath();
+    warnIfStorePathIgnoresMode({ dbPath, mode, logger });
+    db = openSharedStore(dbPath);
+  }
 
   const orchestrator = buildProductionOrchestrator({
     ...(injected as ProductionConfig),
+    logger,
     db,
     clock: injected.clock ?? new SystemClock(),
     mode,
