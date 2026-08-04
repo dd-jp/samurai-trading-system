@@ -65,7 +65,7 @@ Runs pending migrations, returns a typed handle. Components receive it via const
 
 ### Module: Consolidated Schema
 
-Every `CREATE TABLE` the store needs, collected from the eleven specs that implicitly define them plus the three that had no schema anywhere until this map resolved them (`verdict_log` and `breaker_state` were added later, per #206 and #203 respectively). `cii_snapshots` was added later still, per #182 (`0003_cii_snapshots.sql`). `account_state` was added later still, per the transport-layer-spec.md cross-verify pass (2026-07-31), closing a gap where `AccountStateProvider`'s `peak_equity` had no durable home. Field-level non-collision was re-verified across all eighteen tables (see **Non-Collision Verification** below).
+Every `CREATE TABLE` the store needs, collected from the eleven specs that implicitly define them plus the three that had no schema anywhere until this map resolved them (`verdict_log` and `breaker_state` were added later, per #206 and #203 respectively). `cii_snapshots` was added later still, per #182 (`0003_cii_snapshots.sql`). `account_state` was added later still, per the transport-layer-spec.md cross-verify pass (2026-07-31), closing a gap where `AccountStateProvider`'s `peak_equity` had no durable home. `broker_brackets` and `broker_observed_fills` were added last, per [#287](https://github.com/dd-jp/samurai-trading-system/issues/287) (`0007_broker_adapter_state.sql`), closing the gap where every live `BrokerAdapter` held money-critical venue state in process-local memory. Field-level non-collision was re-verified across all twenty tables (see **Non-Collision Verification** below).
 
 **Market Data Service** — owner: `docs/specs/market-data-service-spec.md`
 
@@ -162,6 +162,77 @@ CREATE TABLE closed_trades (
   opened_at          TEXT NOT NULL,
   closed_at          TEXT NOT NULL,
   close_reason       TEXT NOT NULL CHECK(close_reason IN ('stop', 'target', 'exit'))
+);
+```
+
+**Broker Adapters** — owner: `docs/specs/execution-spec.md` ("Module: Broker Abstraction"), written from BELOW the `SharedStore` seam
+
+```sql
+-- Durable BrokerAdapter-local venue bookkeeping (#287). NOT part of open_positions:
+-- that is the lot's system-of-record, owned by the store seam ABOVE the adapter, and
+-- adapter state is a different grain with a different owner -- which venue order id is
+-- which leg, how far the ccxt OCO emulation has got. Nothing above the broker boundary
+-- may read it; folding it into open_positions would leak the emulation through the seam
+-- and give the lot record a second writer.
+--
+-- One table for all three venues because no consumer reads across them: each adapter
+-- loads only `WHERE venue = ?`, and `venue` is in the PK so two adapters can never
+-- collide on a shared client order id. Per-venue column applicability:
+--   ccxt   -- all columns; this IS the emulation's state machine.
+--   ibkr   -- identity + the three order ids; phase is always 'armed' (the OCA group is
+--             the state machine).
+--   alpaca -- identity + the three order ids, same as IBKR. Only entry_order_id is read
+--             back (the adapter indexes client-order-id -> bracket parent and reaches the
+--             children through the parent's legs); both children are written anyway
+--             because the submit response carries them.
+-- The request columns are nullable because the two REHYDRATION paths (Alpaca/IBKR
+-- getOrder, which learn of a bracket by asking the venue) legitimately know the order
+-- ids and not the request that produced them; inventing values there would be worse
+-- than none. A ccxt row always carries them, being the only venue that re-places legs.
+CREATE TABLE broker_brackets (
+  venue            TEXT NOT NULL CHECK(venue IN ('ccxt', 'ibkr', 'alpaca')),
+  client_order_id  TEXT NOT NULL,    -- same value as open_positions.idempotency_key
+  phase            TEXT NOT NULL CHECK(phase IN ('pending_entry', 'arming', 'armed', 'resolved')),
+  entry_order_id   TEXT NULL,        -- ccxt entry / IBKR parent / Alpaca bracket parent
+  stop_order_id    TEXT NULL,
+  target_order_id  TEXT NULL,
+  instrument       TEXT NULL,
+  asset_class      TEXT NULL CHECK(asset_class IS NULL OR asset_class IN ('crypto', 'stocks')),
+  side             TEXT NULL CHECK(side IS NULL OR side IN ('buy', 'sell')),
+  size             REAL NULL,        -- REQUESTED size, not the filled quantity
+  entry_price      REAL NULL,        -- the request's limit prices, NOT open_positions'
+  stop_price       REAL NULL,        -- live protective levels: named apart on purpose
+  target_price     REAL NULL,
+  time_in_force    TEXT NULL,
+  armed_qty        REAL NULL,        -- ccxt: quantity the LIVE legs protect
+  arming_qty       REAL NULL,        -- ccxt: quantity the IN-FLIGHT arming episode places
+  arm_attempt      INTEGER NOT NULL DEFAULT 0,  -- ccxt: fixes the leg client-order-id suffix
+  updated_at       TEXT NOT NULL,
+  PRIMARY KEY (venue, client_order_id)
+);
+
+-- The ccxt adapter's observed-fill queue, made durable. Only ccxt writes here, and the
+-- asymmetry is real rather than an oversight: Alpaca and IBKR DERIVE their fills from the
+-- venue on every fetchNewFills, so a durable bracket row is enough to make those feeds
+-- whole after a restart. ccxt's fills are generated by a TRANSITION (advanceEntry
+-- normalizes the entry fill exactly once, on the pending_entry -> arming edge) and nothing
+-- re-derives them, so an armed bracket's undrained entry fill was lost outright on a crash.
+-- Append-only and UNPRUNED, and unbounded over time rather than over a process lifetime as
+-- the in-memory array it replaces was: the adapter loads its whole venue partition on
+-- construction. Pruning is deferred, not forgotten -- a row may only be dropped once its
+-- fill is certain to be in `fills`, and that certainty lives above the broker seam in
+-- ingestFills(), which this table's writer cannot see. ingestFills() dedups on
+-- broker_fill_id, so a re-offered row costs nothing.
+CREATE TABLE broker_observed_fills (
+  venue            TEXT NOT NULL CHECK(venue IN ('ccxt', 'ibkr', 'alpaca')),
+  client_order_id  TEXT NOT NULL,
+  broker_fill_id   TEXT NOT NULL,
+  leg              TEXT NOT NULL CHECK(leg IN ('entry', 'stop', 'target', 'exit')),
+  price            REAL NOT NULL,
+  qty              REAL NOT NULL,
+  fee              REAL NOT NULL,
+  timestamp        TEXT NOT NULL,
+  PRIMARY KEY (venue, client_order_id, broker_fill_id)
 );
 ```
 
@@ -342,7 +413,7 @@ CREATE TABLE account_state (
 
 ### Non-Collision Verification
 
-`cross-spec-contracts.md`'s "shared-store table non-collision" spot-check was clean at the table-name level; re-verified here at the field level across all eighteen tables above:
+`cross-spec-contracts.md`'s "shared-store table non-collision" spot-check was clean at the table-name level; re-verified here at the field level across all twenty tables above:
 
 - **`latest_mark` was missing `asset_class`** (#183) — the `Mark` interface (market-data-service-spec.md) declares it, the original persistence bullet dropped it. **Fixed above**, not silently — this DDL is the first place the full column list was ever written out, so there was no prior "wrong" schema to correct, only an incomplete prose description.
 - **`Fill` vs. the cost model's result type** — already resolved pre-existing (GAP-F renamed the cost model's return type to `CostModelResult` specifically to avoid colliding with the persisted `fills` table; `cross-spec-contracts.md` confirms this explicitly).
@@ -353,6 +424,11 @@ CREATE TABLE account_state (
 - **`dial_adjustments` was missing `reason`** (#197) — `Adjustment.reason` (feedback-loop-spec.md's "Module: Guardrailed Tuning") was already a required field consumed by `daily-cycle.ts`/`metrics.ts`; the original DDL bullet dropped it, the same class of gap as `latest_mark`/`asset_class` above. **Fixed above**, plus a real migration (`0002_dial_adjustments_reason.sql`, `ALTER TABLE ... ADD COLUMN reason TEXT NOT NULL DEFAULT ''`) since `0001_init.sql` had already shipped without it.
 - **`cii_snapshots`** (#182) — `country_code` is a plain `TEXT` code (WorldMonitor country codes, e.g. `'RU'`), disjoint from every other table's keying convention; not the same value space as `asset_class`'s `crypto`/`stocks` enum despite both being country/market-adjacent classifiers. `(country_code, captured_at)` composite PK is the append-only-history pattern already used by `bars`' `(instrument, timeframe, open_time)`. No divergence.
 - **`account_state`** (transport-layer-spec.md, 2026-07-31) — `key` is its own single-row PK (`'default'`), disjoint from every other table's keying convention; no other table carries a bare running-max scalar like `peak_equity`. No divergence.
+- **`broker_brackets` / `broker_observed_fills`** (#287, 2026-08-04) — three deliberate near-misses, all resolved by naming rather than left to be inferred:
+  - **`client_order_id` vs `idempotency_key`** — the same VALUE (`NativeBracketRequest.client_order_id` is set from the OrderIntent's idempotency key), a different NAME. These two tables are written from below the `SharedStore` seam, where the concept is the broker-native idempotency handle rather than the pipeline's decision key — the same distinction `NormalizedFill.client_order_id` already draws in code. Renaming it `idempotency_key` here would imply the adapter knows about a pipeline concept it deliberately does not.
+  - **`entry_price`/`stop_price`/`target_price` vs `open_positions.avg_entry_price`/`stop`/`target`** — named APART on purpose, because they mean different things: these are the prices the bracket was REQUESTED at and never change, whereas `open_positions.stop`/`target` are the live protective levels that get resized on partial fill. Reusing `stop`/`target` would invite exactly the wrong join.
+  - **`broker_observed_fills` vs `fills`** — same grain (one row per observed fill) but different owner and different lifetime: `fills` is the append-only system-of-record written by `ingestFills()` above the seam, `broker_observed_fills` is one adapter's undrained queue below it. The PK shape is deliberately parallel (`(venue, client_order_id, broker_fill_id)` against `(idempotency_key, broker_fill_id)`), with `venue` prefixed for the same reason it is in `broker_brackets`'.
+  - `venue`, `phase`, `arm_attempt`, `armed_qty` and `arming_qty` appear in no other table. `asset_class`/`side`/`leg` carry the identical CHECK constraints as everywhere else, minus the `IS NULL OR` relaxation the nullable request columns require. No divergence.
 - No other field-level collisions found.
 
 ## Testing Decisions

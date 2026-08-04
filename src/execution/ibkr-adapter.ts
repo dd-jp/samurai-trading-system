@@ -13,13 +13,29 @@
  * The TWS client is INJECTED — connection provisioning is an ops/setup task,
  * not this spec's logic, matching the market-data IBKR source (#66).
  * `IbkrBrokerClient` is the narrowest slice this adapter needs (native bracket
- * placement + the account execution feed); the TWS adapter implementing it
- * against the real API is ops wiring, and no behaviour beyond that slice is
- * assumed here.
+ * placement, the account execution feed, and since #287/#294 an order-status
+ * query); the TWS adapter implementing it against the real API is ops wiring,
+ * and no behaviour beyond that slice is assumed here.
+ *
+ * #287/#295 made the leg index durable. The `legs` reverse index is how an
+ * account-wide execution report finds its bracket, and it used to live only in
+ * this process — so after a restart every execution IBKR reported was silently
+ * dropped as "not ours", and the lot's fills were lost.
  */
-import { TokenBucket } from '../shared/index.js';
+import { type OrderState, TokenBucket } from '../shared/index.js';
 import { sanitizeBrokerError } from './broker-error.js';
-import type { BrokerAck, BrokerAdapter, NativeBracketRequest, NormalizedFill } from './types.js';
+import {
+  type BrokerStateStore,
+  InMemoryBrokerStateStore,
+  toRequestFields,
+} from './broker-state-store.js';
+import type {
+  BrokerAck,
+  BrokerAdapter,
+  NativeBracketRequest,
+  NormalizedFill,
+  NormalizedOrder,
+} from './types.js';
 
 /** A native IBKR bracket: parent entry + two OCA-grouped protective children. */
 export interface IbkrBracketRequest {
@@ -55,18 +71,78 @@ export interface IbkrExecution {
   time: string;
 }
 
+/**
+ * TWS's account of a bracket previously placed under one of our client order
+ * ids (#294). The order-status surface `getOrder` needs and #85 left out.
+ */
+export interface IbkrOrderStatus {
+  /** Echoed back so a caller can be sure which order answered. */
+  clientOrderId: string;
+  /** The parent entry leg — the order whose state `getOrder` reports. */
+  parentOrderId: string;
+  /**
+   * The OCA children as TWS still knows them. Null where the venue reports no
+   * such child (a bracket whose children were cancelled or never accepted) —
+   * the adapter records what the venue says rather than assuming three legs.
+   */
+  stopOrderId: string | null;
+  takeProfitOrderId: string | null;
+  /**
+   * TWS's `orderStatus` string for the PARENT leg, verbatim
+   * (`'Submitted'`, `'Filled'`, `'Cancelled'`, `'Inactive'`, …). Kept as a
+   * bare string, like the Alpaca slice's, so a TWS version that adds a status
+   * does not need this interface changed to be reported honestly.
+   */
+  status: string;
+  /** Cumulative filled quantity of the parent leg. */
+  filledQuantity: number;
+}
+
 export interface IbkrBrokerClient {
   placeBracketOrder(request: IbkrBracketRequest): Promise<IbkrBracketOrderIds>;
   fetchExecutions(since: Date): Promise<IbkrExecution[]>;
+  /**
+   * TWS's account of `clientOrderId`, or `null` if the venue AUTHORITATIVELY
+   * has no such order (#294).
+   *
+   * The null contract is the narrow one `BrokerAdapter.getOrder` defines:
+   * `reconcile()` reads null as "the write-ahead never landed" and marks the
+   * lot `rejected`, so an implementation that merely cannot reach TWS MUST
+   * throw. Concretely that means an implementation may return null only after
+   * a successful scan that found nothing — a connection error, a timeout or a
+   * partial response has to propagate.
+   *
+   * Implementing it against the real API is ops wiring and out of scope here,
+   * exactly as `placeBracketOrder` is: TWS has no single "get order by client
+   * id" call, so a concrete client is expected to scan `reqOpenOrders` plus
+   * `reqCompletedOrders` and match on the order ref it set at placement.
+   */
+  fetchOrderStatus(clientOrderId: string): Promise<IbkrOrderStatus | null>;
+}
+
+/**
+ * What this adapter records for a bracket, as distinct from what
+ * `placeBracketOrder` RETURNS. A fresh placement always yields all three ids,
+ * which is why `IbkrBracketOrderIds` requires them; a bracket learned from
+ * `fetchOrderStatus` or rebuilt from the journal may have children the venue
+ * no longer reports. Modelling that as `null` rather than `''` keeps "the venue
+ * has no such child" from being spelled the same way as a real id — the same
+ * reason the Alpaca adapter's `legOrderIds` refuses the empty-string sentinel.
+ */
+interface TrackedBracketLegs {
+  parentOrderId: string;
+  stopOrderId: string | null;
+  takeProfitOrderId: string | null;
 }
 
 export class IbkrBrokerAdapter implements BrokerAdapter {
   /** Placed brackets by client order id — the venue-side dedup's local half. */
-  private readonly brackets = new Map<string, IbkrBracketOrderIds>();
+  private readonly brackets = new Map<string, TrackedBracketLegs>();
   /** Reverse index: venue order id → which bracket/leg it belongs to. */
   private readonly legs = new Map<string, { clientOrderId: string; leg: NormalizedFill['leg'] }>();
 
   private readonly rateLimiter: TokenBucket;
+  private readonly state: BrokerStateStore;
 
   /**
    * Optional so existing wiring keeps working, but the default is deliberately
@@ -77,12 +153,51 @@ export class IbkrBrokerAdapter implements BrokerAdapter {
    * tuning against a real TWS gateway (whose limits vary by account and
    * connection) — tracked as #299, which also moves these out of compile-time
    * constants into the ops config that holds the credentials they pace.
+   *
+   * `state` is optional for the same compatibility reason, but the two
+   * defaults are not equivalent: the rate-limit default is merely
+   * conservative, whereas the in-memory state default IS the #287/#295 bug.
+   * Any wiring that means to survive a restart must inject
+   * `SqliteBrokerStateStore`.
    */
   constructor(
     private readonly client: IbkrBrokerClient,
     rateLimiter: TokenBucket = new TokenBucket({ capacity: 5, refillPerSecond: 5 }),
+    state: BrokerStateStore = new InMemoryBrokerStateStore(),
   ) {
     this.rateLimiter = rateLimiter;
+    this.state = state;
+    this.rehydrate();
+  }
+
+  /**
+   * Rebuild both indexes from the durable journal (#287). Synchronous and in
+   * the constructor: the first `fetchExecutions` sweep after a restart must
+   * already be able to claim its own executions, or they are dropped as
+   * another account's and never offered again.
+   */
+  private rehydrate(): void {
+    for (const record of this.state.loadBrackets('ibkr')) {
+      if (record.entry_order_id === null) continue;
+
+      this.track(record.client_order_id, {
+        parentOrderId: record.entry_order_id,
+        stopOrderId: record.stop_order_id,
+        takeProfitOrderId: record.target_order_id,
+      });
+    }
+  }
+
+  /** Both indexes, always written together — they must never disagree. */
+  private track(clientOrderId: string, ids: TrackedBracketLegs): void {
+    this.brackets.set(clientOrderId, ids);
+    this.legs.set(ids.parentOrderId, { clientOrderId, leg: 'entry' });
+    if (ids.stopOrderId !== null) {
+      this.legs.set(ids.stopOrderId, { clientOrderId, leg: 'stop' });
+    }
+    if (ids.takeProfitOrderId !== null) {
+      this.legs.set(ids.takeProfitOrderId, { clientOrderId, leg: 'target' });
+    }
   }
 
   /**
@@ -102,7 +217,9 @@ export class IbkrBrokerAdapter implements BrokerAdapter {
 
   async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
     // Broker-native dedup: the second layer behind execute()'s store check.
-    // IBKR rejects a repeated client order id independently of this map.
+    // Rehydrated on construction since #287, so it survives a restart rather
+    // than waving a second bracket through against a live lot. IBKR rejects a
+    // repeated client order id independently of this map.
     const existing = this.brackets.get(order.client_order_id);
     if (existing !== undefined) {
       return ack(order.client_order_id, existing);
@@ -123,38 +240,70 @@ export class IbkrBrokerAdapter implements BrokerAdapter {
       }),
     );
 
-    this.brackets.set(order.client_order_id, ids);
-    this.legs.set(ids.parentOrderId, { clientOrderId: order.client_order_id, leg: 'entry' });
-    this.legs.set(ids.stopOrderId, { clientOrderId: order.client_order_id, leg: 'stop' });
-    this.legs.set(ids.takeProfitOrderId, { clientOrderId: order.client_order_id, leg: 'target' });
+    this.track(order.client_order_id, ids);
+    // `phase: 'armed'` because on a native-bracket venue there is no local
+    // state machine to be partway through — the OCA group is live from this
+    // call, which is exactly what "armed" means everywhere else in this store.
+    this.state.saveBracket({
+      venue: 'ibkr',
+      client_order_id: order.client_order_id,
+      phase: 'armed',
+      entry_order_id: ids.parentOrderId,
+      stop_order_id: ids.stopOrderId,
+      target_order_id: ids.takeProfitOrderId,
+      request: toRequestFields(order),
+      armed_qty: null,
+      arming_qty: null,
+      arm_attempt: 0,
+    });
 
     return ack(order.client_order_id, ids);
   }
 
   /**
-   * The reconciliation lookup (#86) — which this adapter cannot serve, and
-   * says so rather than guessing.
+   * The reconciliation lookup (#86), served against the client slice's
+   * order-status query (#294).
    *
-   * `IbkrBrokerClient` is the narrow slice this file declared for #85: native
-   * bracket placement plus the execution feed. It carries no order-status
-   * query, so there is nothing here to ask IBKR what became of a given client
-   * order id, and `brackets` is only this process's own placements — empty
-   * after exactly the restart reconcile exists to handle.
+   * This used to throw unconditionally, which meant every IBKR lot came out of
+   * `reconcile()` as `undetermined` — execution-spec.md stories 8–11 could
+   * never settle a single IBKR position without a manual-recovery event, and
+   * the long-term stocks path of ADR-0001 was blocked on it.
    *
-   * Throwing is the honest answer under the `BrokerAdapter.getOrder`
-   * contract: null means the venue authoritatively has no such order, and
-   * claiming that from a cold map would have `reconcile()` mark live IBKR
-   * positions `rejected`. Reconcile records the throw as `undetermined` and
-   * leaves the store untouched. Serving this properly needs an order-status /
-   * open-orders call added to the client slice and a TWS implementation
-   * behind it — ops wiring beyond what this ticket scopes.
+   * The venue is asked DIRECTLY, by our client order id, rather than answered
+   * from `brackets`: the map is this adapter's own bookkeeping, and even
+   * rehydrated it is a record of what we placed, not of what IBKR did with it.
+   * A null here is therefore TWS's own answer — which is what the
+   * `BrokerAdapter.getOrder` contract requires before reconcile may treat it
+   * as "never placed" — and a transport failure throws out of `call()` and is
+   * left to propagate, which reconcile records as `undetermined`.
    */
-  async getOrder(clientOrderId: string): Promise<never> {
-    throw new Error(
-      `IBKR adapter cannot report order state for client_order_id '${clientOrderId}': ` +
-        'the injected client exposes no order-status query. Reconciliation against IBKR ' +
-        'requires that surface first.',
-    );
+  async getOrder(clientOrderId: string): Promise<NormalizedOrder | null> {
+    const status = await this.call('getOrder', () => this.client.fetchOrderStatus(clientOrderId));
+    if (status === null) return null;
+
+    // Re-populating both indexes (and the journal) lets a post-restart
+    // `fetchNewFills` claim this bracket's executions even if it was placed by
+    // a process whose journal row predates this one — the reconciliation sweep
+    // is the only thing that knows these orders still exist.
+    this.track(clientOrderId, {
+      parentOrderId: status.parentOrderId,
+      stopOrderId: status.stopOrderId,
+      takeProfitOrderId: status.takeProfitOrderId,
+    });
+    this.state.recordBracketOrderIds('ibkr', clientOrderId, {
+      entry_order_id: status.parentOrderId,
+      stop_order_id: status.stopOrderId,
+      target_order_id: status.takeProfitOrderId,
+    });
+
+    return {
+      client_order_id: clientOrderId,
+      broker_order_ids: [status.parentOrderId, status.stopOrderId, status.takeProfitOrderId].filter(
+        (id): id is string => id !== null,
+      ),
+      order_state: mapOrderState(status.status, status.filledQuantity),
+      filled_qty: status.filledQuantity,
+    };
   }
 
   /**
@@ -176,6 +325,10 @@ export class IbkrBrokerAdapter implements BrokerAdapter {
    * The fill feed `ingestFills()` drains — same contract as the ccxt and
    * Simulated adapters', so the lifecycle above is exercised identically
    * whichever venue is wired in. Never returns a fill dated before `since`.
+   *
+   * Fills are DERIVED from the venue on every call rather than journalled, so
+   * this adapter needs no observed-fill table of its own: a durable `legs`
+   * index is enough to make the whole feed whole again after a restart (#295).
    */
   async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
     const executions = await this.call('fetchNewFills', () => this.client.fetchExecutions(since));
@@ -208,12 +361,49 @@ export class IbkrBrokerAdapter implements BrokerAdapter {
   }
 }
 
-function ack(clientOrderId: string, ids: IbkrBracketOrderIds): BrokerAck {
+function ack(clientOrderId: string, ids: TrackedBracketLegs): BrokerAck {
   return {
     client_order_id: clientOrderId,
     // Entry + both attached legs exist from the first call — that is what
-    // "native bracket" buys over the ccxt emulation.
-    broker_order_ids: [ids.parentOrderId, ids.stopOrderId, ids.takeProfitOrderId],
+    // "native bracket" buys over the ccxt emulation. The filter only bites on
+    // the dedup path, where `ids` came from the journal or a venue lookup and
+    // a child the venue no longer reports is genuinely absent.
+    broker_order_ids: [ids.parentOrderId, ids.stopOrderId, ids.takeProfitOrderId].filter(
+      (id): id is string => id !== null,
+    ),
     order_state: 'submitted',
   };
+}
+
+/**
+ * TWS `orderStatus` → our `OrderState`, for the reconciliation lookup.
+ *
+ * `'Inactive'` is the one that needs an argument. IBKR uses it both for an
+ * order the system rejected AND for one that is merely not working right now
+ * (outside market hours, an attribute the venue will not accept yet), and the
+ * status alone does not say which. It maps to `submitted`, NOT `rejected`,
+ * because the two mistakes are not symmetric: calling a live pending order
+ * `rejected` has `reconcile()` write the lot off while it can still fill,
+ * leaving a real position nobody is watching — whereas calling a dead order
+ * `submitted` merely leaves the store where it already was, changing nothing
+ * and diverging on the next sweep. Between burying a live position and
+ * deferring a dead one, defer.
+ *
+ * Never `closed`: that is our round-trip-to-flat accounting concept derived
+ * from `Fill` rows, not a state a venue reports.
+ */
+function mapOrderState(status: string, filledQuantity: number): OrderState {
+  switch (status) {
+    case 'Filled':
+      return 'filled';
+    case 'Cancelled':
+    case 'ApiCancelled':
+      return 'cancelled';
+    // 'PendingSubmit' | 'PreSubmitted' | 'Submitted' | 'PendingCancel' |
+    // 'ApiPending' | 'Inactive' and anything a future TWS adds: the venue has
+    // the order and has not finished it. Whether anything has filled is what
+    // separates an acknowledged order from a partially filled one.
+    default:
+      return filledQuantity > 0 ? 'partially_filled' : 'submitted';
+  }
 }

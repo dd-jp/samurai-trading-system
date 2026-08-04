@@ -20,9 +20,20 @@
  * fill carrying the cumulative filled quantity as of the poll that first
  * observes it — finer-grained partial-fill history requires Alpaca's trade
  * updates/activities stream, which is out of scope for this ticket.
+ *
+ * #287/#295 made the bracket index durable. Alpaca is the one venue where
+ * that index is a CACHE rather than the truth — `getOrder` asks the venue
+ * directly and the native bracket is the state machine — but the cache is
+ * still load-bearing for `fetchNewFills`, which polls only what is in it. See
+ * `state` on the input below for why the cache had to be persisted anyway.
  */
 import { type OrderState, TokenBucket } from '../../shared/index.js';
 import { sanitizeBrokerError } from '../broker-error.js';
+import {
+  type BrokerStateStore,
+  InMemoryBrokerStateStore,
+  toRequestFields,
+} from '../broker-state-store.js';
 import type {
   BrokerAck,
   BrokerAdapter,
@@ -40,6 +51,29 @@ export interface AlpacaBrokerAdapterInput {
    * unlimited — see the default below.
    */
   rateLimiter?: TokenBucket;
+  /**
+   * Durable home for the bracket index (#287). Optional for the same
+   * compatibility reason as `rateLimiter`, but the two defaults are not
+   * equivalent: that one is merely conservative, whereas the in-memory default
+   * here IS the #295 bug. src/orchestrator/production.ts injects
+   * `SqliteBrokerStateStore`.
+   *
+   * Alpaca's index is a cache of a venue-authoritative lookup, so persisting
+   * it is a WARM-UP rather than a source of truth — unlike ccxt, where the
+   * persisted phase IS the truth. It is persisted anyway because the warm-up
+   * is what `fetchNewFills` iterates: `getOrder` repopulates the cache, but
+   * `reconcile()` only calls `getOrder` for lots that are still in-flight
+   * (`pending`/`submitted`), so a `partially_filled` lot whose exit legs have
+   * not filled yet is never re-cached and its fills are never polled again.
+   *
+   * The alternative considered and rejected: derive `fetchNewFills`' worklist
+   * from `open_positions`, which already carries `idempotency_key` and
+   * `broker_order_ids` and is arguably the more correct source. It would give
+   * this adapter a dependency on the `SharedStore` seam it currently has no
+   * business knowing about, and it changes MVP-path behaviour on a ticket
+   * whose own priority note says the Alpaca path is not the one it is fixing.
+   */
+  state?: BrokerStateStore;
 }
 
 export class AlpacaBrokerAdapter implements BrokerAdapter {
@@ -54,9 +88,19 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * because the cost of being wrong is a throttled key mid-sweep.
    */
   private readonly rateLimiter: TokenBucket;
+  private readonly state: BrokerStateStore;
 
   constructor(private readonly input: AlpacaBrokerAdapterInput) {
     this.rateLimiter = input.rateLimiter ?? new TokenBucket({ capacity: 5, refillPerSecond: 3 });
+    this.state = input.state ?? new InMemoryBrokerStateStore();
+
+    // Synchronous, in the constructor: the first `fetchNewFills` sweep after a
+    // restart iterates this map, and an empty one reports "no new fills" —
+    // indistinguishable, above the adapter, from a quiet market.
+    for (const record of this.state.loadBrackets('alpaca')) {
+      if (record.entry_order_id === null) continue;
+      this.brackets.set(record.client_order_id, record.entry_order_id);
+    }
   }
 
   /**
@@ -94,6 +138,20 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
     const legIds = (response.legs ?? []).map((leg) => leg.id);
 
+    // `phase: 'armed'` — on a native-bracket venue there is no local state
+    // machine to be partway through; the bracket is live from this call.
+    this.state.saveBracket({
+      venue: 'alpaca',
+      client_order_id: order.client_order_id,
+      phase: 'armed',
+      entry_order_id: response.id,
+      ...legOrderIds(response.legs),
+      request: toRequestFields(order),
+      armed_qty: null,
+      arming_qty: null,
+      arm_attempt: 0,
+    });
+
     return {
       client_order_id: order.client_order_id,
       broker_order_ids: [response.id, ...legIds],
@@ -123,8 +181,14 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
     // Re-populating the map lets a post-restart `fetchNewFills` find this
     // bracket again — the reconciliation sweep is the only thing that knows
-    // these orders still exist.
+    // these orders still exist. Journalled too, via the partial-upsert path:
+    // this call knows the venue's order ids but NOT the request that produced
+    // them, and writing invented request values would be worse than none.
     this.brackets.set(clientOrderId, order.id);
+    this.state.recordBracketOrderIds('alpaca', clientOrderId, {
+      entry_order_id: order.id,
+      ...legOrderIds(order.legs),
+    });
 
     return {
       client_order_id: clientOrderId,
@@ -203,6 +267,22 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
     return fills;
   }
+}
+
+/**
+ * The bracket's protective children, split by kind for the journal. Null where
+ * Alpaca reports no such leg — which it legitimately does once a leg has been
+ * cancelled — rather than an empty string standing in for "don't know".
+ */
+function legOrderIds(legs: AlpacaOrderLeg[] | undefined): {
+  stop_order_id: string | null;
+  target_order_id: string | null;
+} {
+  const all = legs ?? [];
+  return {
+    stop_order_id: all.find((leg) => legName(leg) === 'stop')?.id ?? null,
+    target_order_id: all.find((leg) => legName(leg) === 'target')?.id ?? null,
+  };
 }
 
 function legName(leg: AlpacaOrderLeg): 'target' | 'stop' {

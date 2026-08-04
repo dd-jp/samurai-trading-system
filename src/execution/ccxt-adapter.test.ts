@@ -68,12 +68,19 @@ function makeClient() {
     return order;
   });
 
+  // The fake indexes by venue id, so this resolves through the same
+  // `venue-<clientOrderId>` convention `createOrder` above invents.
+  const fetchOrderByClientOrderId = vi.fn<CcxtBrokerClient['fetchOrderByClientOrderId']>(
+    async (clientOrderId) => orders.get(`venue-${clientOrderId}`) ?? null,
+  );
+
   return {
-    client: { createOrder, cancelOrder, fetchOrder },
+    client: { createOrder, cancelOrder, fetchOrder, fetchOrderByClientOrderId },
     orders,
     createOrder,
     cancelOrder,
     fetchOrder,
+    fetchOrderByClientOrderId,
   };
 }
 

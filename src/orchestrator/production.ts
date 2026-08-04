@@ -95,6 +95,7 @@ import type {
 import {
   AlpacaBrokerAdapter,
   AlpacaHttpBrokerClient,
+  SqliteBrokerStateStore,
   SqliteExecutionStore,
 } from '../execution/index.js';
 import type {
@@ -638,6 +639,11 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     new AlpacaBrokerAdapter({
       client: brokerClient,
       rateLimiter: new TokenBucket({ capacity: 10, refillPerSecond: 1.5 }),
+      // #287: without a durable bracket index the adapter starts every run
+      // blind, and `fetchNewFills` polls nothing for lots that were already
+      // filling when the process died. The in-memory default is only ever
+      // right for a test.
+      state: new SqliteBrokerStateStore(config.db),
     });
   const circuitBreakers = new CircuitBreakers(config.breakerConfig, config.initialBreakerState);
   // Parked by default (ADR-0002): the live WorldMonitor feed costs money per
