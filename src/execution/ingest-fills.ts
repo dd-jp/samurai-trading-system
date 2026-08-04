@@ -125,14 +125,17 @@ function nextState(position: OpenPosition, filledSize: number, flat: boolean): O
  * no `ClosedTrade` for the Feedback Loop, and a phantom lot left in
  * `getOpenPositions()` consuming Risk's exposure caps.
  *
- * 1e-12 relative is ~3 orders above the accumulation error a realistic fill
- * count produces (n·2^-53 ≈ 1e-14 at n = 100) and orders below any venue's
- * minimum quantity increment, so it absorbs float noise and cannot absorb a
- * real unfilled remainder: a quantity this small does not exist at the
- * broker, so a lot that reads flat here is flat there too. The tolerance has
- * to carry that argument on its own — `reconcile()` (#86) only inspects
- * `pending`/`submitted` lots, so it never revisits one this code has marked
- * terminal. See [ADR-0005](../../docs/adr/0005-money-math-precision.md).
+ * The margin over float noise is 90x at n = 100 fills (n·2^-53 ≈ 1.1e-14)
+ * and 36x at the 250-fills-per-leg worst case ADR-0005 §1 derives
+ * ((n+2)·2^-53 ≈ 2.8e-14) — comfortable, but tens of times, NOT orders of
+ * magnitude: a workload past ~9,000 fills on one leg would need this
+ * constant revisited. The margin in the other direction is the wide one: a
+ * residue of 1e-12 of a lot is orders below any venue's minimum quantity
+ * increment, so it does not exist at the broker either and a lot that reads
+ * flat here is flat there too. The tolerance has to carry that argument on
+ * its own — `reconcile()` (#86) only inspects `pending`/`submitted` lots, so
+ * it never revisits one this code has marked terminal.
+ * See [ADR-0005](../../docs/adr/0005-money-math-precision.md).
  */
 const QTY_EPSILON_RELATIVE = 1e-12;
 

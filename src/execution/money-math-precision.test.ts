@@ -509,6 +509,32 @@ describe('money-math precision (ADR-0005)', () => {
     expect(driftOf(trade.realized_pnl_net, exact.pnlNet)).toBeLessThan(MAX_TOLERATED_DRIFT_USD);
   });
 
+  it('leaves a lot open when the exit shortfall is above the tolerance, not float noise', async () => {
+    // The other side of the epsilon, and the dangerous one: `coversQty()`
+    // declares a lot terminally `closed`, and `reconcile()` only inspects
+    // pending/submitted lots, so a tolerance that grew to swallow a REAL
+    // remainder would strand quantity at the broker with the store believing
+    // the lot flat. 1e-9 of the lot is 1000x the 1e-12 tolerance and still
+    // far below any venue's minimum increment — it must read as unfilled.
+    const { store } = openTestExecutionStore();
+    await store.writeAheadPosition(seedPosition({ requested_size: 1, stop: 95 }));
+    const entries = [{ price: '100', qty: '1', fee: '0.1' }];
+    // 1 − 1e-9 exits: a genuine, if small, unfilled remainder.
+    const exits = [{ price: '110', qty: '0.999999999', fee: '0.1' }];
+
+    const broker = new ScriptedBroker([
+      ...normalized(entries, 'entry', 'e'),
+      ...normalized(exits, 'stop', 'x'),
+    ]);
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    expect(await store.getClosedTrades()).toHaveLength(0);
+    const position = await store.getPosition('lot-1');
+    expect(position?.order_state).toBe('filled');
+    // Still live: Risk must keep seeing the exposure that is genuinely open.
+    expect((await store.getOpenPositions()).map((p) => p.idempotency_key)).toContain('lot-1');
+  });
+
   it('reads an entry as filled when its tranches sum a hair under the requested size', async () => {
     // Same defect class as the flat comparison, milder consequence: a lot
     // requested at 1.0 and filled 0.7 + 0.2 + 0.1 (float sum
