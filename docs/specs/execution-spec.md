@@ -150,6 +150,7 @@ interface BrokerAdapter {
 - States as `OrderState` above; every transition persisted (durable, inspectable).
 - **Partial fills:** entry lingers in `partially_filled`; the armed stop/target legs are (re)sized to cumulative *filled* quantity. Persist `requested_size` AND `filled_size` + `avg_fill_price` + `fees`. R and exposure downstream read the filled fields.
 - **Round-trip to flat** (protective leg fully fills, or an `exit` fully fills) → state `closed` → emit `ClosedTrade`.
+- **"Fully" is float-tolerant, by a relative epsilon (1e-12 of the lot).** Both sides of the comparison are float64 sums of decimal fill quantities, and two sums of the same true total differ unless the tranches share a summation order (0.3+0.3+0.4 is exactly 1; 0.7+0.2+0.1 is 0.9999999999999999). An exact `>=` therefore leaves a fully-exited lot open forever — no `ClosedTrade`, and a phantom position holding Risk's exposure caps. The epsilon is orders below any venue's lot granularity, so it absorbs float noise only. See [ADR-0005](../adr/0005-money-math-precision.md).
 
 ### Module: Resilience (retries / rate limits)
 

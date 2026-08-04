@@ -81,7 +81,7 @@ async function advanceLot(
   if (filledSize === 0) return;
 
   const avgEntryPrice = weightedAvgPrice(entryFills);
-  const flat = totalQty(exitFills) >= filledSize;
+  const flat = coversQty(totalQty(exitFills), filledSize);
   const orderState = nextState(position, filledSize, flat);
 
   // Size the protection to what actually filled, before persisting the
@@ -112,7 +112,37 @@ async function advanceLot(
  */
 function nextState(position: OpenPosition, filledSize: number, flat: boolean): OrderState {
   if (flat) return 'closed';
-  return filledSize >= position.requested_size ? 'filled' : 'partially_filled';
+  return coversQty(filledSize, position.requested_size) ? 'filled' : 'partially_filled';
+}
+
+/**
+ * Relative tolerance on the quantity comparisons, because both sides are
+ * float64 sums of decimal `Fill.qty` rows and two sums of the SAME total
+ * differ unless the tranches happen to share a summation order: entry
+ * tranches of 0.3 + 0.3 + 0.4 total exactly 1, while exit tranches of
+ * 0.7 + 0.2 + 0.1 total 0.9999999999999999. A bare `>=` therefore reads a
+ * fully-exited lot as still open — forever, since no further fill is coming:
+ * no `ClosedTrade` for the Feedback Loop, and a phantom lot left in
+ * `getOpenPositions()` consuming Risk's exposure caps.
+ *
+ * The margin over float noise, measured against the same (n+2)·2^-53 bound
+ * ADR-0005 §1 derives (n products, an n-term naive summation, one division),
+ * is 88x at n = 100 fills (1.13e-14) and 36x at the 250-fills-per-leg worst
+ * case (2.80e-14) — comfortable, but tens of times, NOT orders of
+ * magnitude: a workload past ~9,000 fills on one leg would need this
+ * constant revisited. The margin in the other direction is the wide one: a
+ * residue of 1e-12 of a lot is orders below any venue's minimum quantity
+ * increment, so it does not exist at the broker either and a lot that reads
+ * flat here is flat there too. The tolerance has to carry that argument on
+ * its own — `reconcile()` (#86) only inspects `pending`/`submitted` lots, so
+ * it never revisits one this code has marked terminal.
+ * See [ADR-0005](../../docs/adr/0005-money-math-precision.md).
+ */
+const QTY_EPSILON_RELATIVE = 1e-12;
+
+/** `actual >= target`, tolerant of float64 summation noise on either side. */
+function coversQty(actual: number, target: number): boolean {
+  return actual >= target - Math.abs(target) * QTY_EPSILON_RELATIVE;
 }
 
 function closedTrade(
