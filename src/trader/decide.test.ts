@@ -305,10 +305,16 @@ describe('decide — ATR bar window (#304)', () => {
   it('fetches exactly atr_lookback + 1 bars, so ATR stays a plain mean', async () => {
     // The `+ 1` is load-bearing. `computeIndicator`'s `atr` seeds on the
     // first `period` true ranges and Wilder-smooths the rest; N + 1 bars
-    // yield only N ranges, so the smoothing loop never runs and the result
-    // is the plain mean Trader's stops were calibrated on. Widen this fetch
-    // and every stop in the system moves — see atr-equivalence.test.ts,
-    // which pins the algorithmic half of the same property.
+    // yield only N ranges, so in production the smoothing loop never runs
+    // and the result is the plain mean Trader's stops were calibrated on.
+    // Widen this fetch and every stop in the system moves — see
+    // atr-equivalence.test.ts, which pins the algorithmic half.
+    //
+    // The assertion here is on the REQUEST, not the resulting ATR: the
+    // fixture serves its 15 bars whatever it is asked for, so the value
+    // computed on this path is not the one production would see. The
+    // request width is the only half a fixture can pin, and it is the half
+    // nothing pinned before.
     const marketData = new FixtureMarketData(bars(15, 2));
 
     await decide(traderInput({ marketData, config: configWith({ atr_lookback: 7 }) }));
