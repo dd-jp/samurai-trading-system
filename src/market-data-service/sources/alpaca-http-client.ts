@@ -110,6 +110,17 @@ const RETRY_WIDEN_FACTOR = 4;
  * symbol genuinely has no bars there" (not fixable — that throws).
  */
 const RETRY_MIN_WINDOW_MS = 10 * 86_400_000;
+/**
+ * Hard ceiling on the retry's page walk, expressed in rows so it holds across
+ * timeframes. Without it a large `limit` turns the widened window into a very
+ * long paginated crawl (`1m`/`limit=5_000` widens to ~111 days ≈ 160k rows ≈
+ * 160 sequential requests) against a ~200 req/min budget shared with the broker
+ * API — one failing `getBars` could starve live order placement. A request that
+ * already came back short from its own generous window is not going to be
+ * rescued by widening anyway, so when the ceiling leaves no room to widen, the
+ * retry is skipped and the throw happens immediately.
+ */
+const RETRY_MAX_ROWS = MAX_PAGES * PAGE_SIZE;
 
 /** Alpaca's raw per-bar shape on the wire — a superset of `AlpacaBar` (also carries `n`, `vw`). */
 interface RawAlpacaBar {
@@ -358,8 +369,10 @@ export class AlpacaHttpDataClient implements AlpacaClient {
    * `RETRY_MIN_WINDOW_MS` so the retry can actually clear a weekend) rather
    * than by guessing from the response: "our buffer was too narrow" then
    * resolves itself, and only a genuinely-sparse symbol reaches the throw.
-   * Exactly one retry — a widening loop against a symbol with no history
-   * would walk back years of pages for nothing.
+   * Exactly one retry, and only within `RETRY_MAX_ROWS` — a widening loop (or
+   * an unbounded single widen at large `limit`) against a symbol with no
+   * history would walk back years of pages for nothing, on a rate-limit budget
+   * shared with live order placement.
    *
    * `partial: 'allow'` opts out for a caller that can reason about a short
    * window (the Risk Manager's correlation estimate, whose `min_bars` check
@@ -374,7 +387,12 @@ export class AlpacaHttpDataClient implements AlpacaClient {
     limit: number,
     partial: 'error' | 'allow' = 'error',
   ): Promise<AlpacaBar[]> {
-    const bufferMs = timeframeToMs(timeframe) * limit * BUFFER_MULTIPLIER;
+    // `slice(-0)` is `slice(0)` — the WHOLE array, not none of it. Guarded
+    // rather than relied upon: a `lookback: 0` window is operator config away.
+    if (limit <= 0) return [];
+
+    const timeframeMs = timeframeToMs(timeframe);
+    const bufferMs = timeframeMs * limit * BUFFER_MULTIPLIER;
     // Small-`limit` daily requests still need at least a few calendar days of
     // headroom to cross a weekend; the multiplier alone can underflow at limit=1.
     const minBufferMs = isDailyTimeframe(timeframe) ? 4 * 86_400_000 : 0;
@@ -383,16 +401,22 @@ export class AlpacaHttpDataClient implements AlpacaClient {
     const first = await this.fetchRange(symbol, timeframe, asOf, windowMs);
     if (first.length >= limit || partial === 'allow') return first.slice(-limit);
 
-    const widenedMs = Math.max(windowMs * RETRY_WIDEN_FACTOR, RETRY_MIN_WINDOW_MS);
-    const widened = await this.fetchRange(symbol, timeframe, asOf, widenedMs);
-    if (widened.length >= limit) return widened.slice(-limit);
+    const widenedMs = Math.min(
+      Math.max(windowMs * RETRY_WIDEN_FACTOR, RETRY_MIN_WINDOW_MS),
+      RETRY_MAX_ROWS * timeframeMs,
+    );
+    // No room left under the ceiling — don't spend a second full page walk to
+    // re-read a subset of what the first attempt already searched.
+    const searched =
+      widenedMs > windowMs ? await this.fetchRange(symbol, timeframe, asOf, widenedMs) : first;
+    if (searched.length >= limit) return searched.slice(-limit);
 
     throw new AlpacaDataUnderfetchError({
       symbol,
       timeframe,
       requested: limit,
-      received: widened.length,
-      searchedFrom: new Date(asOf.getTime() - widenedMs).toISOString(),
+      received: searched.length,
+      searchedFrom: new Date(asOf.getTime() - Math.max(windowMs, widenedMs)).toISOString(),
       searchedTo: asOf.toISOString(),
     });
   }

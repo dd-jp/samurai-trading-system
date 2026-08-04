@@ -514,6 +514,35 @@ describe('AlpacaHttpDataClient — sparse-symbol underfetch (#292)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('skips the retry entirely when the first window already exceeds the retry row ceiling', async () => {
+    // 1m/limit=5_000 searches ~27.8 days on the first attempt; the retry
+    // ceiling (MAX_PAGES * PAGE_SIZE = 25_000 rows ≈ 17.4 days at 1m) leaves no
+    // room to widen, so a second full page walk would only re-read a subset —
+    // at a cost of up to ~160 sequential requests against a rate-limit budget
+    // shared with live order placement. It must throw on the first attempt.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ bars: dailyBars(1), symbol: 'AAPL' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(stocksClient().getBars('AAPL', '1m', ASOF, 5_000)).rejects.toBeInstanceOf(
+      AlpacaDataUnderfetchError,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns no bars, and makes no request, for a zero-length window', async () => {
+    // `slice(-0)` is `slice(0)` — the whole array. A `lookback: 0` window must
+    // not come back holding every bar in the buffer.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ bars: dailyBars(5), symbol: 'AAPL' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await stocksClient().getBars('AAPL', '1d', ASOF, 0)).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('applies the same widen-then-throw path on the crypto endpoint', async () => {
     const fetchMock = vi
       .fn()

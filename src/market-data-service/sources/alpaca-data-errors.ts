@@ -78,7 +78,8 @@ export class AlpacaDataUnderfetchError extends Error {
     super(
       `AlpacaHttpDataClient.getBars: ${details.symbol} ${details.timeframe} produced ` +
         `${details.received} bars for a requested ${details.requested} over ` +
-        `${details.searchedFrom}..${details.searchedTo} (already widened once). Refusing to ` +
+        `${details.searchedFrom}..${details.searchedTo} (the widest range this request ` +
+        'is allowed to search). Refusing to ' +
         'return a short window silently — an indicator computed over fewer bars than the ' +
         "caller asked for is wrong, not merely degraded. Pass partial: 'allow' if this " +
         'call site genuinely tolerates fewer bars.',
