@@ -24,20 +24,28 @@
  * exist until #83/#86/#71 landed — all three are closed and merged.)
  *
  * This file is also the process entrypoint (`npm run orchestrator`): run
- * directly, it assembles a `ProductionConfig` and starts the loop. Every
- * external transport it needs except the LLM provider (Alpaca REST, the
- * trade channel, the CII feed) exists in this codebase as an interface with
- * no implementation, so `startFromEnvironment` fails fast with a message
- * naming what is missing rather than starting a half-wired process against
- * real money. See `production.ts`'s doc comment for why those transports
- * are injected seams rather than something this ticket implements, and for
- * why the LLM provider (#274, `AnthropicHttpMessagesClient`) is the one
- * exception — built by default from `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL`
- * rather than injected here.
+ * directly, it assembles a `ProductionConfig` and starts the loop.
+ *
+ * Ticket #323: it now actually can. The entrypoint passes the checked-in
+ * paper starting profile (`./paper-profile.ts`) — the eight per-stage config
+ * objects `REQUIRED_INJECTED_CONFIG` demands, every value carrying its
+ * provenance — so there is a path from `yarn orchestrator` to a running tick
+ * loop for the first time. Those values are explicitly a *starting point for
+ * tuning*, not tuned values, and `paperStartingProfile` refuses `live`
+ * outright for that reason.
+ *
+ * What the profile deliberately does NOT supply is the transports. The alert
+ * channels fall through to the composition root's log-only stand-ins
+ * (`console-channels.ts`); wiring the real `TelegramBotApiClient` (#275) at
+ * the composition root is #322. Credentials are not supplied either, and must
+ * not be: `assertCredentialsPresent` below fails the process fast, naming
+ * every missing variable, rather than starting a half-wired process against
+ * real money.
  */
 import { pathToFileURL } from 'node:url';
 import { SystemClock } from '../shared/index.js';
 import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
+import { paperStartingProfile } from './paper-profile.js';
 import {
   buildProductionOrchestrator,
   type ProductionConfig,
@@ -54,6 +62,7 @@ export {
   type OrphanGoVerdict,
   OrphanVerdictScanner,
 } from './orphan-verdict-scan.js';
+export { PAPER_ACCOUNT_EQUITY_ANCHOR, paperStartingProfile } from './paper-profile.js';
 export { buildAnalystsStep } from './production/analysts-adapter.js';
 export { buildDebatePersonas, buildDebateStep } from './production/debate-adapter.js';
 export {
@@ -104,23 +113,21 @@ export type {
 export { TradeChannelUnpricedFillAlert } from './unpriced-fill-channel.js';
 
 /**
- * Config fields the process cannot derive from the environment or from
- * in-repo code, and must therefore be supplied by the caller: the external
- * transports (no HTTP implementation of `AlpacaClient` / `TelegramClient` /
- * `CiiScoreProvider` exists in `src/`, and `ccxt` is not a dependency) plus
- * the per-stage config objects, whose values are explicitly "tuned in paper
- * trading" in every stage spec rather than checked in.
+ * The per-stage config objects the process cannot derive from the environment
+ * or from in-repo code, and must therefore be supplied by the caller.
  *
- * `llmClient` is deliberately absent from this list since #274:
- * `production.ts` now builds a real `AnthropicLlmClient` (over
- * `AnthropicHttpMessagesClient`) by default, reading `ANTHROPIC_API_KEY`
- * (required, throws if absent) and `ANTHROPIC_MODEL` (optional) from the
- * environment directly rather than through this injected-seam list — see
- * `ProductionConfig.llmClient`'s doc comment in production.ts.
+ * Every remaining entry is a set of *tuning values*. The transports are no
+ * longer among them: the Alpaca broker/market-data clients and the LLM client
+ * are built from the environment (#273/#286/#274), the account-state provider
+ * is composed in-repo (#276), and the human-facing channels have log-only
+ * defaults plus, since #275, a real `TelegramBotApiClient` waiting to be wired
+ * at the composition root (#322).
  *
- * Listing them by name is the point: an operator running `npm run
- * orchestrator` today gets a message naming exactly what is not wired,
- * instead of a process that starts and silently trades on invented defaults.
+ * The list stays required even though `./paper-profile.ts` now satisfies it,
+ * and that is deliberate: a programmatic caller that forgets one must still be
+ * told which one, by name, rather than silently inheriting a profile nobody
+ * chose. The shipped entrypoint passes the profile explicitly; nothing
+ * defaults to it.
  */
 export const REQUIRED_INJECTED_CONFIG = [
   'traderConfig',
@@ -152,10 +159,83 @@ function parseMode(raw: string | undefined): ProductionConfig['mode'] {
 }
 
 /**
+ * The credentials the composition root's own defaults will read straight out
+ * of `process.env`, listed against the injected override that would make each
+ * one unnecessary.
+ *
+ * Checked here, ahead of construction, purely so the operator learns about all
+ * of them at once. Each client already refuses to be built without its key —
+ * that check is the authority and stays where it is — but they are constructed
+ * one after another inside `buildProductionComponents`, so an unconfigured
+ * host otherwise reveals exactly one missing variable per run, and only the
+ * first one.
+ *
+ * The overrides are not incidental: `buildProductionComponents` builds the
+ * Alpaca *broker* client unconditionally (the account-state provider needs it
+ * even when `ProductionConfig.broker` is overridden), while the *data* client
+ * is skipped when either `dataSource` or `alpacaDataClient` is supplied, and
+ * the LLM client is skipped when `llmClient` is. A test injecting stubs must
+ * not be asked for keys it will never use.
+ */
+const CREDENTIAL_REQUIREMENTS: readonly {
+  vars: readonly string[];
+  satisfiedByInjection: (injected: Partial<ProductionConfig>) => boolean;
+}[] = [
+  {
+    vars: ['ALPACA_API_KEY', 'ALPACA_API_SECRET'],
+    satisfiedByInjection: (injected) =>
+      injected.alpacaBrokerClient !== undefined &&
+      (injected.dataSource !== undefined || injected.alpacaDataClient !== undefined),
+  },
+  {
+    vars: ['ANTHROPIC_API_KEY'],
+    satisfiedByInjection: (injected) => injected.llmClient !== undefined,
+  },
+];
+
+/**
+ * Every credential this run will need and does not have. Empty string counts
+ * as absent — the tracked `.env` ships the Alpaca keys as empty placeholders,
+ * and `--env-file` turns those into `''` rather than leaving them unset, which
+ * is the same "not configured" state.
+ *
+ * Exported for tests. Returns names only; it never reads, echoes, or logs a
+ * credential's value.
+ */
+export function missingCredentialEnvVars(injected: Partial<ProductionConfig>): string[] {
+  return CREDENTIAL_REQUIREMENTS.filter(
+    (requirement) => !requirement.satisfiedByInjection(injected),
+  )
+    .flatMap((requirement) => requirement.vars)
+    .filter((name) => (process.env[name] ?? '').length === 0);
+}
+
+/**
+ * Fails the process before anything is constructed when a credential the
+ * defaults need is absent. This is correct behaviour, not an obstacle: a
+ * trading process that cannot authenticate must stop loudly rather than start
+ * into a half-alive state and discover it on its first order.
+ */
+function assertCredentialsPresent(injected: Partial<ProductionConfig>): void {
+  const missing = missingCredentialEnvVars(injected);
+  if (missing.length === 0) return;
+
+  throw new Error(
+    `Orchestrator cannot start: ${missing.length} required credential(s) are not set ` +
+      `(${missing.join(', ')}). Provide them via the environment — .env.local, which is ` +
+      'gitignored — or pass the corresponding clients explicitly (alpacaBrokerClient / ' +
+      'alpacaDataClient / llmClient on ProductionConfig). The tracked .env holds empty ' +
+      'placeholders and is not a configured environment; an empty value counts as missing. ' +
+      'Note that `node dist/orchestrator/index.js` does not read any .env file on its own — ' +
+      'use `node --env-file=.env.local dist/orchestrator/index.js` or export the variables.',
+  );
+}
+
+/**
  * Assembles a `ProductionConfig` from the environment plus `injected`, builds
  * the composition root, and starts it (orphan scan once, then the tick loop
  * and heartbeat). Throws — before opening any broker connection — if any
- * required dependency is absent.
+ * required dependency or credential is absent.
  *
  * DB path convention matches `src/dashboard/index.ts` (both call
  * `sharedStorePath`): `data/samurai-{env}.sqlite`, one file per `NODE_ENV`.
@@ -168,12 +248,17 @@ function parseMode(raw: string | undefined): ProductionConfig['mode'] {
  * instead, so a single `NODE_ENV=production` host that flips `SAMURAI_MODE`
  * from `paper` to `live` writes both into one file.
  *
- * Latent, not live: the `REQUIRED_INJECTED_CONFIG` guard above throws long
- * before this line, because the seams it demands have no implementation yet.
- * Left as-is deliberately rather than quietly re-keyed — `mode` resolves from
- * `injected.mode ?? SAMURAI_MODE`, and an injected mode is invisible to the
- * dashboard, so switching the path to mode needs a decision about how the
- * reader derives it, not just a different template string.
+ * **Reachable as of #323, where it was latent before.** The earlier note here
+ * said the `REQUIRED_INJECTED_CONFIG` guard threw long before this line, which
+ * is no longer true — `yarn orchestrator` now boots. Two things still stand
+ * between this hazard and a live wrong answer: the shipped entrypoint runs on
+ * `paperStartingProfile`, which refuses `live` outright, and a `live` process
+ * would have to be someone's own composition root. That makes it narrower than
+ * it looks, and it is still the wrong key. Left as-is rather than quietly
+ * re-keyed under an unrelated ticket — `mode` resolves from `injected.mode ??
+ * SAMURAI_MODE`, and an injected mode is invisible to the dashboard, so
+ * switching the path to mode needs a decision about how the reader derives it,
+ * not just a different template string.
  */
 export async function startFromEnvironment(
   injected: Partial<ProductionConfig> = {},
@@ -182,13 +267,15 @@ export async function startFromEnvironment(
   if (missing.length > 0) {
     throw new Error(
       `Orchestrator cannot start: ${missing.length} required dependencies are not wired ` +
-        `(${missing.join(', ')}). These are injected seams, not settings. The Alpaca broker ` +
-        'and market-data clients, the LLM client and the account-state provider are no longer ' +
-        'among them — those are built from the environment now (#273/#286/#276). What remains ' +
-        'is the trade-channel/HITL/CII transports, which still have no implementation in this ' +
-        'codebase, plus the per-stage config values, which are tuned in paper trading rather ' +
-        'than checked in. Supply them via startFromEnvironment(injected) — see ProductionConfig ' +
-        'in src/orchestrator/production.ts.',
+        `(${missing.join(', ')}). These are the per-stage tuning values, and nothing in this ` +
+        'process can invent them. The transports are no longer on this list: the Alpaca broker ' +
+        'and market-data clients, the LLM client and the account-state provider are built from ' +
+        'the environment (#273/#286/#274/#276), and the trade-channel/HITL/CII channels have ' +
+        'log-only defaults at the composition root — #275 landed a real TelegramBotApiClient, ' +
+        'whose wiring is #322. For a paper run, pass the checked-in starting profile: ' +
+        'startFromEnvironment(paperStartingProfile(mode)) from src/orchestrator/paper-profile.ts ' +
+        '— that is exactly what `yarn orchestrator` does. To supply your own, see ' +
+        'ProductionConfig in src/orchestrator/production.ts.',
     );
   }
 
@@ -197,6 +284,12 @@ export async function startFromEnvironment(
   // passed `backtest`/`live` deliberately must not be silently downgraded to
   // whatever `SAMURAI_MODE` says (mode selects the HITL posture).
   const mode = injected.mode ?? parseMode(process.env.SAMURAI_MODE);
+  // After the mode is resolved and before the store is opened: an
+  // unrecognised `SAMURAI_MODE` is the more fundamental error (mode decides
+  // which Alpaca host the credentials would even be used against), and a run
+  // that cannot authenticate should not leave a freshly-created SQLite file
+  // behind as a side effect of failing.
+  assertCredentialsPresent(injected);
   // Called with no argument, exactly as `src/dashboard/index.ts` calls it:
   // the resolver reads `NODE_ENV` itself, so the writer and the reader cannot
   // derive different paths. `env` above is for the startup log line only.
@@ -281,7 +374,14 @@ export function buildShutdownHandler(
 // process.
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    const orchestrator = await startFromEnvironment();
+    // The profile is passed explicitly, never defaulted into
+    // `startFromEnvironment` (#323): the guard above has to stay falsifiable
+    // for every other caller. `parseMode` runs here so `paperStartingProfile`
+    // can refuse `live` before anything is constructed; the resolved mode then
+    // travels on the profile, so `startFromEnvironment` does not re-derive it.
+    const orchestrator = await startFromEnvironment(
+      paperStartingProfile(parseMode(process.env.SAMURAI_MODE)),
+    );
     const shutdown = buildShutdownHandler(orchestrator);
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);

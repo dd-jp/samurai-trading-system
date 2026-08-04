@@ -10,7 +10,8 @@
  * trace rather than the legible message the guard was written to give.
  */
 import { openSharedStore } from '../shared/store/index.js';
-import { startFromEnvironment } from './index.js';
+import { paperStartingProfile, startFromEnvironment } from './index.js';
+import type { Logger } from './types.js';
 
 /**
  * The eight per-stage config objects — all that remains required. Stubbed
@@ -86,5 +87,95 @@ describe('startFromEnvironment — real construction path', () => {
     // asserts the replacement is at least as legible as what it replaced.
     expect(error.message).toContain('ALPACA_API_KEY');
     expect(error.message).toContain('.env.local');
+  });
+
+  it('names every missing credential in one message, not one per attempt', () => {
+    // Regression guard for the pre-flight added in #323. Before it, an
+    // unconfigured host learned about `ALPACA_API_KEY` alone — the broker
+    // client is simply the first thing `buildProductionComponents`
+    // constructs — and only discovered `ALPACA_API_SECRET`, then
+    // `ANTHROPIC_API_KEY`, on subsequent runs.
+    delete process.env.ALPACA_API_KEY;
+    delete process.env.ALPACA_API_SECRET;
+    delete process.env.ANTHROPIC_API_KEY;
+
+    const error = startFromEnvironment({
+      ...STAGE_CONFIGS,
+      db: openSharedStore(':memory:'),
+    }).catch((e: unknown) => e as Error);
+
+    return error.then((e) => {
+      expect(e.message).toContain('ALPACA_API_KEY');
+      expect(e.message).toContain('ALPACA_API_SECRET');
+      expect(e.message).toContain('ANTHROPIC_API_KEY');
+    });
+  });
+});
+
+/**
+ * The ticket's actual acceptance criterion (#323): not "the guard no longer
+ * lists the transports" and not "the profile type-checks", but that the
+ * shipped starting profile drives the real construction path all the way to
+ * the `orchestrator started` log line.
+ *
+ * Deliberately NOT proved here, and unprovable without real keys: that the
+ * credentials authenticate, that Alpaca accepts an order built from these
+ * values, or that any of the numbers are well-chosen. Nothing below makes a
+ * network call — the store is empty, so the startup reconcile has no lots to
+ * check, and `stop()` runs long before the first 60s tick.
+ */
+describe('startFromEnvironment — the shipped paper profile', () => {
+  const saved = {
+    key: process.env.ALPACA_API_KEY,
+    secret: process.env.ALPACA_API_SECRET,
+    anthropic: process.env.ANTHROPIC_API_KEY,
+  };
+
+  beforeEach(() => {
+    // Syntactically valid, functionally worthless: enough to construct the
+    // HTTP clients, not enough to authenticate. Real credentials are never
+    // required — or wanted — by this suite.
+    process.env.ALPACA_API_KEY = 'dummy-key-not-a-credential';
+    process.env.ALPACA_API_SECRET = 'dummy-secret-not-a-credential';
+    process.env.ANTHROPIC_API_KEY = 'dummy-anthropic-not-a-credential';
+  });
+
+  afterEach(() => {
+    for (const [name, value] of [
+      ['ALPACA_API_KEY', saved.key],
+      ['ALPACA_API_SECRET', saved.secret],
+      ['ANTHROPIC_API_KEY', saved.anthropic],
+    ] as const) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+
+  it('boots to a running tick loop and logs `orchestrator started`', async () => {
+    const entries: Parameters<Logger['log']>[0][] = [];
+    const logger: Logger = { log: (entry) => entries.push(entry) };
+
+    const orchestrator = await startFromEnvironment({
+      ...paperStartingProfile('paper'),
+      db: openSharedStore(':memory:'),
+      logger,
+    });
+
+    try {
+      const started = entries.find((entry) => entry.message === 'orchestrator started');
+      expect(started).toBeDefined();
+      expect(started?.payload).toMatchObject({ mode: 'paper', universe: ['BTC-USD'] });
+    } finally {
+      // The loop, the heartbeat and the fill poll are all armed by `start()`;
+      // leaving them running would leak timers into the rest of the suite.
+      await orchestrator.stop();
+    }
+  });
+
+  it('refuses to boot the shipped profile into live mode', () => {
+    // `mode` is refused at the profile, before `startFromEnvironment` is even
+    // called — so no store is opened and no client is constructed. Live stays
+    // reachable, but only for a caller passing values somebody tuned.
+    expect(() => paperStartingProfile('live')).toThrow(/live/i);
   });
 });
