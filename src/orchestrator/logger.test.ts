@@ -82,6 +82,41 @@ describe('JsonLogger', () => {
     expect(warns[0].message).toMatch(/sink/i);
   });
 
+  it('does not throw when reporting the sink failure itself fails', () => {
+    // The same hole review found in `RotatingFileSink.report` (#349), one file
+    // over: the degradation warn goes to stdout, and stdout throws EPIPE once
+    // the far end of the pipe is gone. Modelled exactly — the entry line is
+    // written fine, then the pipe breaks before the warn about the failing
+    // sink can go out. A file failure must not become an exception in a tick.
+    let writes = 0;
+    writeSpy.mockImplementation((chunk: unknown) => {
+      writes += 1;
+      if (writes > 1) throw new Error('EPIPE: broken pipe');
+      stdout.push(String(chunk));
+      return true;
+    });
+
+    const logger = new JsonLogger({
+      write: () => {
+        throw new Error('ENOSPC: no space left on device');
+      },
+    });
+
+    expect(() => logger.log(ENTRY)).not.toThrow();
+    // The entry itself still got out, and the warn was attempted (2 writes).
+    expect(stdout.map((s) => JSON.parse(s).message)).toEqual(['decided']);
+    expect(writes).toBe(2);
+
+    // The documented asymmetry, pinned: a *later* call does throw — but from
+    // `log`'s own primary `process.stdout.write` (#95 behaviour, and the same
+    // posture `buildShutdownHandler` takes with stderr), never from the sink
+    // path. Requirement 4 is about sink failures; a dead stdout is a different
+    // decision that this ticket deliberately does not take.
+    expect(() => logger.log(ENTRY)).toThrow(/EPIPE/);
+    // 3, not 4: the sink's degradation was reported once and never retried.
+    expect(writes).toBe(3);
+  });
+
   it('does not route the sink-failure warn back through the sink', () => {
     // Otherwise the degradation warn is the thing that recurses.
     let attempts = 0;

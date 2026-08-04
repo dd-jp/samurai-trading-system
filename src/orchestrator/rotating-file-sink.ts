@@ -319,13 +319,37 @@ export class RotatingFileSink {
     } catch (error) {
       this.failed = true;
       this.close();
-      this.options.onFailure?.(
+      this.report(
         `structured log file sink disabled: could not ${what} ` +
           `(${this.options.filePath}) — ${error instanceof Error ? error.message : String(error)}. ` +
           'Logging continues on stdout only, and will not resume to file until the process is ' +
           'restarted. An unattended soak (#238) started this way keeps no durable diagnostic ' +
           'trace: fix the path or its permissions and restart.',
       );
+    }
+  }
+
+  /**
+   * Reports the degradation, and swallows a failure to report it.
+   *
+   * Raised in review on #349, and not theoretical: the shipped `onFailure` is
+   * `warnOnStdout` (logger.ts), and `process.stdout.write` throws EPIPE the
+   * moment the far end of the pipe goes away — routine for a long-running
+   * process someone attached to and detached from, or one whose supervisor
+   * closed the pipe. Without this catch, `attempt`'s handler for a *file*
+   * failure would itself throw, straight out of `write()` and into a tick.
+   *
+   * There is nowhere left to escalate at that point: the file sink is gone and
+   * the stream that reports on it is gone too. The only correct behaviour is
+   * to keep trading. `failed` is already set, so nothing retries.
+   */
+  private report(message: string): void {
+    try {
+      this.options.onFailure?.(message);
+    } catch {
+      // Both sinks are broken. Losing the message is strictly better than
+      // losing the run — this class's one hard guarantee is that a logging
+      // call inside a tick never throws.
     }
   }
 }

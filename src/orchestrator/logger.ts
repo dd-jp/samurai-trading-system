@@ -104,11 +104,27 @@ export class JsonLogger implements Logger {
     } catch (error) {
       if (this.sinkFailureReported) return;
       this.sinkFailureReported = true;
-      warnOnStdout(
-        'structured log file sink threw and is being ignored for the rest of this process: ' +
-          `${error instanceof Error ? error.message : String(error)}. Logging continues on ` +
-          'stdout only.',
-      );
+      try {
+        warnOnStdout(
+          'structured log file sink threw and is being ignored for the rest of this process: ' +
+            `${error instanceof Error ? error.message : String(error)}. Logging continues on ` +
+            'stdout only.',
+        );
+      } catch {
+        // Reporting the sink failure failed too — `process.stdout.write` throws
+        // EPIPE once the far end of the pipe is gone. Raised in review on #349
+        // against `RotatingFileSink`; the same hole existed here. With both
+        // destinations broken there is nowhere left to escalate, and losing the
+        // message is strictly better than throwing into a tick.
+        //
+        // Note the deliberate asymmetry with `log`'s own unguarded
+        // `process.stdout.write` above: a *sink* failure must never propagate,
+        // which is this ticket's requirement, but stdout failing on the primary
+        // write is #95's behaviour and the posture the rest of the composition
+        // root already takes (`buildShutdownHandler` writes to stderr
+        // unguarded). Changing that is a separate decision, not a side effect
+        // of adding a file sink.
+      }
     }
   }
 }

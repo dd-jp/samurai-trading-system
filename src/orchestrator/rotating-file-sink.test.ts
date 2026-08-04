@@ -223,6 +223,50 @@ describe('RotatingFileSink — degradation (never throws into a tick)', () => {
     expect(attempts).toBe(1);
   });
 
+  it('does not let a throwing onFailure escape into the caller', () => {
+    // Raised in review on #349, and real: `onFailure` is `warnOnStdout`, and
+    // `process.stdout.write` throws EPIPE when the far end of the pipe goes
+    // away — routine for a long-running process someone attached to and
+    // detached from. Without this, a *file* failure would be converted into an
+    // exception thrown out of `write()` and straight into a tick, which is the
+    // one thing this class must never do.
+    const filePath = join(dir, 'orchestrator.log');
+    const sink = new RotatingFileSink({
+      filePath,
+      maxBytes: 1024,
+      maxRotatedFiles: 2,
+      onFailure: () => {
+        throw new Error('EPIPE: broken pipe');
+      },
+      writeLine: () => {
+        throw new Error('ENOSPC: no space left on device');
+      },
+    });
+
+    expect(() => sink.write('{"tick":1}\n')).not.toThrow();
+    // And the sink still retired itself, rather than being left half-degraded
+    // by the reporting failure.
+    expect(sink.degraded).toBe(true);
+    expect(() => sink.write('{"tick":2}\n')).not.toThrow();
+  });
+
+  it('does not let a throwing onFailure escape the constructor', () => {
+    const unwritable = join(dir, 'locked-2');
+    mkdirSync(unwritable, { mode: 0o500 });
+
+    expect(
+      () =>
+        new RotatingFileSink({
+          filePath: join(unwritable, 'sub', 'orchestrator.log'),
+          maxBytes: 1024,
+          maxRotatedFiles: 2,
+          onFailure: () => {
+            throw new Error('EPIPE: broken pipe');
+          },
+        }),
+    ).not.toThrow();
+  });
+
   it('never throws from close(), even when already degraded', () => {
     const sink = new RotatingFileSink({
       filePath: join(dir, 'orchestrator.log'),
