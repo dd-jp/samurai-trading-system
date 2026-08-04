@@ -186,8 +186,37 @@ export {
 export { TradeChannel } from './notifications/composite-channel.js';
 export { DiscordChannel } from './notifications/discord-channel.js';
 export { formatApprovalRequest, formatDecisionMessage } from './notifications/format.js';
+export { parseAllowedUserIds } from './notifications/telegram/allowlist.js';
+export type {
+  CorrelationTarget,
+  CorrelationTokenPair,
+} from './notifications/telegram/correlation-tokens.js';
+export {
+  CorrelationTokenStore,
+  tokenLogPrefix,
+} from './notifications/telegram/correlation-tokens.js';
+export type { TelegramApprovalGatewayOptions } from './notifications/telegram/telegram-approval-gateway.js';
+export { TelegramApprovalGateway } from './notifications/telegram/telegram-approval-gateway.js';
+export type {
+  CallbackAuditLog,
+  TelegramBotApiClientOptions,
+} from './notifications/telegram/telegram-bot-api-client.js';
+export { TelegramBotApiClient } from './notifications/telegram/telegram-bot-api-client.js';
+export type { TelegramError } from './notifications/telegram/telegram-errors.js';
+export {
+  isRetryableTelegramError,
+  TelegramProviderError,
+  TelegramRateLimitError,
+  TelegramTimeoutError,
+} from './notifications/telegram/telegram-errors.js';
 export { TelegramChannel } from './notifications/telegram-channel.js';
-export type { DiscordClient, TelegramClient, TradeChannelNotifier } from './notifications/types.js';
+export type {
+  ApprovalButtonTarget,
+  ApprovalCallback,
+  DiscordClient,
+  TelegramClient,
+  TradeChannelNotifier,
+} from './notifications/types.js';
 export type { ApprovalRequestSender } from './notifications/verified-approval-channel.js';
 export { SignedApprovalChannel } from './notifications/verified-approval-channel.js';
 export type {

@@ -1,6 +1,6 @@
 import type { RiskDecision } from '../../risk-manager/index.js';
 import type { OrderIntent } from '../../shared/index.js';
-import type { ApprovalRequest, VerdictDecision } from '../types.js';
+import type { VerdictDecision } from '../types.js';
 import { TelegramChannel } from './telegram-channel.js';
 import type { TelegramClient } from './types.js';
 
@@ -60,7 +60,8 @@ function makeDecision(overrides: Partial<VerdictDecision> = {}): VerdictDecision
 function makeClient(overrides: Partial<TelegramClient> = {}): TelegramClient {
   return {
     sendMessage: vi.fn().mockResolvedValue(undefined),
-    sendApprovalRequest: vi.fn().mockResolvedValue('approved'),
+    sendApprovalButtons: vi.fn().mockResolvedValue(undefined),
+    onApprovalCallback: vi.fn(),
     ...overrides,
   };
 }
@@ -82,24 +83,5 @@ describe('TelegramChannel.notify', () => {
   });
 });
 
-describe('TelegramChannel.requestApproval', () => {
-  it('round-trips a request through the client and returns its outcome', async () => {
-    const client = makeClient({ sendApprovalRequest: vi.fn().mockResolvedValue('rejected') });
-    const channel = new TelegramChannel(client, 'chat-123');
-    const request: ApprovalRequest = {
-      order_intent: makeIntent(),
-      risk_decision: makeRiskDecision(),
-      trace_id: 'trace-1',
-      timeout_ms: 300_000,
-    };
-
-    const outcome = await channel.requestApproval(request);
-
-    expect(outcome).toBe('rejected');
-    expect(client.sendApprovalRequest).toHaveBeenCalledWith(
-      'chat-123',
-      expect.stringContaining('Approval requested'),
-      300_000,
-    );
-  });
-});
+// `TelegramChannel.requestApproval` was retired in #275 — see the class doc
+// comment. The live HITL gate is covered by telegram/telegram-approval-gateway.test.ts.
