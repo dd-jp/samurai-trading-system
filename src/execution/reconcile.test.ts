@@ -140,7 +140,7 @@ function makeBroker(): BrokerAdapter & {
 function makeInput(store: TestExecutionStore, broker: BrokerAdapter): ExecutionInput {
   const config: ExecutionConfig = {
     simulated: {
-      volatility_indicator: { indicator: 'atr', params: { period: 14 }, lookback: 14 },
+      volatility_indicator: { indicator: 'atr', params: { period: 14 }, lookback: 15 },
       adv_window: { bars: 20, timeframe: '1d' },
     },
   };

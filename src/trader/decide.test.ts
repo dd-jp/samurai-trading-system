@@ -394,13 +394,14 @@ describe('decide — skip paths', () => {
   });
 
   it('returns null on an empty bar window rather than sizing off NaN', async () => {
-    // A cold instrument with nothing ingested yet. The Market Data Service's
-    // `computeIndicator` answers NaN, not null, on a window this short, and
-    // NaN defeats every downstream guard (`stopDistance <= 0` and the
-    // min-notional check are both false against NaN) — so the skip has to
-    // happen before an intent is built (#304). Which of `atrFor`'s two
-    // guards does it is not this test's business: the bar-count check skips
-    // first, and the finiteness check would catch the same NaN if it didn't.
+    // A cold instrument with nothing ingested yet. Since #319
+    // `computeIndicator` THROWS on a window this short rather than answering
+    // NaN, so `atrFor`'s length pre-check is what turns that into Trader's
+    // existing skip instead of a rejected tick. Before #304 the same window
+    // produced a NaN that defeated every downstream guard (`stopDistance <=
+    // 0` and the min-notional check are both false against NaN) and reached
+    // an emitted intent; either way the skip has to happen before an intent
+    // is built.
     const intent = await decide(traderInput({ marketData: new FixtureMarketData(bars(0, 2)) }));
 
     expect(intent).toBeNull();
@@ -423,15 +424,33 @@ describe('decide — skip paths', () => {
     expect(intent).toBeNull();
   });
 
-  it('does trade on exactly two bars — the first width that yields a true range', async () => {
-    // The pass side of the same `bars.length < 2` guard. Without it, a guard
-    // tightened to `< 3` would still satisfy every skip test above while
-    // silently refusing to trade a freshly-warmed instrument. Two bars yield
-    // one true range, so ATR equals that range exactly — the same 2 the
-    // default 15-bar fixture produces, hence an identical intent.
-    const twoBars = await decide(traderInput({ marketData: new FixtureMarketData(bars(2, 2)) }));
+  it('skips one bar short of the ATR width and trades at exactly that width (#319)', async () => {
+    // Both sides of the boundary `atrFor` now sits on, in one test because
+    // neither half means anything alone.
+    //
+    // The SKIP side is the behaviour change #319 bought. This used to trade
+    // on TWO bars: `computeIndicator`'s `atr` divides by `seedRanges.length`,
+    // so a 2-bar window answered a single true range and Trader labelled it
+    // ATR(14) and sized a live stop off it. Every width from 2 to
+    // `atr_lookback` was that same fabrication, differing only in how many
+    // ranges it averaged. `atr_lookback` bars — one short — must now skip.
+    //
+    // The TRADE side stops the guard being over-tightened: a freshly warmed
+    // instrument at exactly `atr_lookback + 1` bars yields exactly
+    // `atr_lookback` true ranges, which is a genuine ATR(14), and must still
+    // trade. It produces the same intent as the default fixture because
+    // `bars()` gives every candle an identical true range.
+    const { atr_lookback } = DEFAULT_TRADER_CONFIG;
 
-    expect(twoBars).toEqual(await decide(traderInput()));
+    const oneShort = await decide(
+      traderInput({ marketData: new FixtureMarketData(bars(atr_lookback, 2)) }),
+    );
+    const exact = await decide(
+      traderInput({ marketData: new FixtureMarketData(bars(atr_lookback + 1, 2)) }),
+    );
+
+    expect(oneShort).toBeNull();
+    expect(exact).toEqual(await decide(traderInput()));
   });
 });
 

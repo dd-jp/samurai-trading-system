@@ -1,7 +1,7 @@
 import type { Clock } from '../shared/index.js';
 import { openSharedStore } from '../shared/store/index.js';
 import { FixtureDataSource } from './fixture-data-source.js';
-import { computeIndicator } from './indicators.js';
+import { computeIndicator, InsufficientBarsError, minimumBarsFor } from './indicators.js';
 import { MarketDataServiceImpl } from './service.js';
 import { SqliteMarketDataStore } from './sqlite-market-data-store.js';
 import type { Bar, BarWindow, DataSource, Mark } from './types.js';
@@ -154,6 +154,156 @@ describe('MarketDataServiceImpl.getIndicator', () => {
     );
 
     expect(result.as_of_bar_close.toISOString()).toBe(asOf.toISOString());
+  });
+
+  it('rejects rather than serving an indicator the stored window is too short for (#319)', async () => {
+    // The service-level half of #319, and the reason the client-level fix
+    // (#292's `AlpacaDataUnderfetchError`) does not close the class:
+    // `getBars` serves from `store.readBars`, so the bar count a source
+    // returned and the bar count an indicator actually sees are decoupled.
+    // Here the instrument genuinely only has 8 bars of history at `asOf`, so
+    // no source call was ever short — yet an ATR(14) would still have been
+    // computed over 7 true ranges and cached under an ATR(14) key.
+    const shortHistory = buildBars(8, start);
+    const coldAsOf = shortHistory[7]?.close_time as Date;
+    const { service } = buildService(shortHistory, coldAsOf);
+
+    await expect(
+      service.getIndicator(
+        INSTRUMENT,
+        { indicator: 'atr', params: { period: 14 }, lookback: 15 },
+        coldAsOf,
+      ),
+    ).rejects.toThrow(InsufficientBarsError);
+  });
+});
+
+/**
+ * The minimum-length guard (issue #319). `computeIndicator` is the single
+ * choke point every risk-bearing indicator read funnels through — Trader's
+ * stop placement, the technical analyst's SMA/RSI, the simulated adapter's
+ * `MarketState.volatility`, the volatility breaker's reading — so this is
+ * where "an indicator asked for N must not be computed over fewer than N"
+ * has to hold.
+ *
+ * These are DIRECT unit tests on purpose. `trader/decide.ts` pre-checks the
+ * length itself (so it can skip rather than die), which means deleting the
+ * guard inside `computeIndicator` would leave its consumer tests green — the
+ * mutation would only show up here.
+ */
+describe('computeIndicator — a period-N indicator is never computed over fewer than N inputs', () => {
+  const start = new Date('2026-07-01T00:00:00Z');
+  const PERIOD = 14;
+
+  /** (spec, minimum window) for each supported indicator, from the module's own arity. */
+  const CASES = [
+    { indicator: 'sma', required: PERIOD },
+    { indicator: 'ema', required: PERIOD },
+    // `+ 1`: the first bar is consumed only to seed a predecessor.
+    { indicator: 'rsi', required: PERIOD + 1 },
+    { indicator: 'atr', required: PERIOD + 1 },
+  ] as const;
+
+  it.each(CASES)('throws for $indicator one bar short of its $required', ({
+    indicator,
+    required,
+  }) => {
+    const spec = { indicator, params: { period: PERIOD }, lookback: required };
+
+    expect(minimumBarsFor(spec)).toBe(required);
+    expect(() => computeIndicator(buildBars(required - 1, start), spec)).toThrow(
+      InsufficientBarsError,
+    );
+  });
+
+  it.each(CASES)('computes $indicator at exactly its $required', ({ indicator, required }) => {
+    const spec = { indicator, params: { period: PERIOD }, lookback: required };
+
+    const value = computeIndicator(buildBars(required, start), spec);
+
+    expect(Number.isFinite(value)).toBe(true);
+  });
+
+  it('refuses the exact case #319 names: 3 bars presented as an ATR(14)', () => {
+    // `atr` divides by `seedRanges.length`, so this used to answer a mean of
+    // TWO true ranges and hand it to `trader/decide.ts` as ATR(14) — a stop
+    // priced off a number that does not describe 14 periods of anything.
+    // The old value is asserted here so the regression is legible: the guard
+    // is not rejecting a NaN, it is rejecting a plausible-looking number.
+    const threeBars = buildBars(3, start);
+    const spec = { indicator: 'atr', params: { period: 14 }, lookback: 15 };
+
+    const twoRangeMean = computeIndicator(threeBars, {
+      indicator: 'atr',
+      params: { period: 2 },
+      lookback: 3,
+    });
+    expect(twoRangeMean).toBeGreaterThan(0);
+
+    expect(() => computeIndicator(threeBars, spec)).toThrow(InsufficientBarsError);
+  });
+
+  it('carries the arity in the error, so a caller can degrade without parsing text', () => {
+    const spec = { indicator: 'rsi', params: { period: 14 }, lookback: 15 };
+
+    try {
+      computeIndicator(buildBars(9, start), spec);
+      expect.unreachable('computeIndicator should have thrown');
+    } catch (error) {
+      expect(error).toBeInstanceOf(InsufficientBarsError);
+      const insufficient = error as InsufficientBarsError;
+      expect(insufficient.name).toBe('InsufficientBarsError');
+      expect(insufficient.indicator).toBe('rsi');
+      expect(insufficient.period).toBe(14);
+      expect(insufficient.required).toBe(15);
+      expect(insufficient.received).toBe(9);
+    }
+  });
+
+  it('measures against params.period, not the lookback, when the two differ', () => {
+    // A 50-bar lookback carrying `period: 10` needs 10 bars, not 50 — the
+    // lookback is the warm-up window, the period is what the value claims to
+    // describe. Guarding on the lookback would refuse legitimate reads.
+    const spec = { indicator: 'sma', params: { period: 10 }, lookback: 50 };
+
+    expect(minimumBarsFor(spec)).toBe(10);
+    expect(Number.isFinite(computeIndicator(buildBars(10, start), spec))).toBe(true);
+    expect(() => computeIndicator(buildBars(9, start), spec)).toThrow(InsufficientBarsError);
+  });
+
+  it('falls back to the lookback as the period when params.period is absent', () => {
+    // `params.period ?? spec.lookback` — the technical analyst's SMA_SPEC
+    // shape. The guard has to follow the same fallback or it would measure
+    // against a period the computation never used.
+    const spec = { indicator: 'sma', params: {}, lookback: 20 };
+
+    expect(minimumBarsFor(spec)).toBe(20);
+    expect(() => computeIndicator(buildBars(19, start), spec)).toThrow(InsufficientBarsError);
+  });
+
+  it('reports the ORDERING fault, not the length, when a window is both', () => {
+    // Order is checked first on purpose: a misordered window means a broken
+    // feed, which is the more actionable diagnosis. A length complaint would
+    // send an operator looking for missing history instead.
+    const bothWrong = [...buildBars(3, start)].reverse();
+
+    expect(() =>
+      computeIndicator(bothWrong, { indicator: 'atr', params: { period: 14 }, lookback: 15 }),
+    ).toThrow(/ascending by close_time/);
+  });
+
+  it('rejects a zero or negative period instead of silently meaning the whole window', () => {
+    // `slice(-0)` is `slice(0)` — the WHOLE array. A `period: 0` sma would
+    // have answered a full-window mean labelled a 0-period one, which is the
+    // same fabrication by a different route.
+    const twenty = buildBars(20, start);
+
+    expect(() =>
+      computeIndicator(twenty, { indicator: 'sma', params: { period: 0 }, lookback: 20 }),
+    ).toThrow(/positive integer/);
+    expect(() =>
+      computeIndicator(twenty, { indicator: 'sma', params: { period: -5 }, lookback: 20 }),
+    ).toThrow(/positive integer/);
   });
 });
 
