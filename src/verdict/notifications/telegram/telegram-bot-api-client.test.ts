@@ -554,6 +554,27 @@ describe('TelegramBotApiClient long-poll loop lifecycle', () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
     await expect(h.client.stop()).resolves.toBeUndefined();
   });
+
+  it('stop() aborts an in-flight long poll instead of waiting out its 35s HTTP budget', async () => {
+    const h = makeClient();
+    // A getUpdates that only settles when its AbortSignal fires — i.e. a
+    // normal long poll sitting open, waiting for an update that never comes.
+    h.fetchMock.mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () =>
+            reject(new DOMException('Aborted.', 'AbortError')),
+          );
+        }),
+    );
+
+    h.client.start();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const started = Date.now();
+    await h.client.stop();
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
 });
 
 describe('CallbackAuditLog port', () => {
