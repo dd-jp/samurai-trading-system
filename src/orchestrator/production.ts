@@ -456,7 +456,7 @@ export function buildDefaultLlmClient(logger: Logger): LlmClient {
  * stronger assertion anyway: comparing a constant against itself proves
  * nothing about the host actually contacted.
  */
-const ALPACA_PAPER_BASE_URL = 'https://paper-api.alpaca.markets';
+const ALPACA_PAPER_BASE_URL = 'https://paper-api.alpaca.markets/v2';
 const ALPACA_LIVE_BASE_URL = 'https://api.alpaca.markets';
 
 /**
