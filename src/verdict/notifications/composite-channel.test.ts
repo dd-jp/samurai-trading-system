@@ -1,11 +1,6 @@
 import type { RiskDecision } from '../../risk-manager/index.js';
 import type { OrderIntent } from '../../shared/index.js';
-import type {
-  ApprovalChannel,
-  ApprovalOutcome,
-  ApprovalRequest,
-  VerdictDecision,
-} from '../types.js';
+import type { VerdictDecision } from '../types.js';
 import { TradeChannel } from './composite-channel.js';
 import type { TradeChannelNotifier } from './types.js';
 
@@ -61,13 +56,8 @@ function makeDecision(): VerdictDecision {
   };
 }
 
-type TelegramLike = TradeChannelNotifier & ApprovalChannel;
-
-function makeTelegram(outcome: ApprovalOutcome = 'approved'): TelegramLike {
-  return {
-    notify: vi.fn().mockResolvedValue(undefined),
-    requestApproval: vi.fn().mockResolvedValue(outcome),
-  };
+function makeTelegram(): TradeChannelNotifier {
+  return { notify: vi.fn().mockResolvedValue(undefined) };
 }
 
 function makeDiscord(): TradeChannelNotifier {
@@ -97,20 +87,5 @@ describe('TradeChannel.notify', () => {
   });
 });
 
-describe('TradeChannel.requestApproval', () => {
-  it('delegates the HITL round-trip to Telegram', async () => {
-    const telegram = makeTelegram('rejected');
-    const channel = new TradeChannel(telegram, makeDiscord());
-    const request: ApprovalRequest = {
-      order_intent: makeIntent(),
-      risk_decision: makeRiskDecision(),
-      trace_id: 'trace-1',
-      timeout_ms: 300_000,
-    };
-
-    const outcome = await channel.requestApproval(request);
-
-    expect(outcome).toBe('rejected');
-    expect(telegram.requestApproval).toHaveBeenCalledWith(request);
-  });
-});
+// `TradeChannel.requestApproval` was retired in #275 — see the class doc comment.
+// The live HITL gate is covered by telegram/telegram-approval-gateway.test.ts.

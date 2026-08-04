@@ -6,7 +6,8 @@ const NOW = new Date('2026-07-15T14:00:00Z');
 function makeTelegram(): TelegramClient {
   return {
     sendMessage: vi.fn().mockResolvedValue(undefined),
-    sendApprovalRequest: vi.fn(),
+    sendApprovalButtons: vi.fn().mockResolvedValue(undefined),
+    onApprovalCallback: vi.fn(),
   };
 }
 
