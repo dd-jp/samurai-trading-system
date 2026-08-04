@@ -54,7 +54,7 @@ import {
   resolveAlertsMode,
   TELEGRAM_ALERT_ENV_VARS,
 } from './alert-transport.js';
-import { JsonLogger } from './logger.js';
+import { buildEntrypointLogger, JsonLogger } from './logger.js';
 import { paperStartingProfile } from './paper-profile.js';
 import {
   buildProductionOrchestrator,
@@ -77,7 +77,7 @@ export { TradeChannelBreachAlert } from './breach-alert-channel.js';
 export { digest } from './digest.js';
 export { Heartbeat, type HeartbeatChannel } from './heartbeat.js';
 export { TradeChannelHeartbeat } from './heartbeat-channel.js';
-export { JsonLogger } from './logger.js';
+export { buildEntrypointLogger, formatLogLine, JsonLogger, type LogLineSink } from './logger.js';
 export { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
 export {
   type OrphanAlertChannel,
@@ -113,6 +113,14 @@ export {
   SMOKE_TEST_UNIVERSE,
   startTickLoop,
 } from './production.js';
+export {
+  DEFAULT_LOG_FILE,
+  DEFAULT_MAX_BYTES,
+  DEFAULT_MAX_ROTATED_FILES,
+  type FileSinkConfig,
+  fileSinkConfigFromEnvironment,
+  RotatingFileSink,
+} from './rotating-file-sink.js';
 export { DEFAULT_UNIVERSE, type SchedulerConfig, UniverseScheduler } from './scheduler.js';
 export { type AuditLogEntry, SqliteAuditLog } from './sqlite-audit-log.js';
 export { SqliteCurrentTickStore } from './sqlite-current-tick-store.js';
@@ -559,9 +567,19 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
     // for every other caller. `parseMode` runs here so `paperStartingProfile`
     // can refuse `live` before anything is constructed; the resolved mode then
     // travels on the profile, so `startFromEnvironment` does not re-derive it.
-    const orchestrator = await startFromEnvironment(
-      paperStartingProfile(parseMode(process.env.SAMURAI_MODE)),
-    );
+    //
+    // The logger is passed here for the same reason, and only here (#325):
+    // this is the *deployment* — the run that must leave a durable diagnostic
+    // trace behind without a shell redirect, because a 14-day unattended soak
+    // (#238) is unanswerable without one. `startFromEnvironment` keeps its
+    // stdout-only `new JsonLogger()` fallback, so no test or programmatic
+    // composition root opens a file as a side effect of constructing an
+    // orchestrator. An unwritable path degrades to stdout with a warn rather
+    // than stopping the process; see logger.ts / rotating-file-sink.ts.
+    const orchestrator = await startFromEnvironment({
+      ...paperStartingProfile(parseMode(process.env.SAMURAI_MODE)),
+      logger: buildEntrypointLogger(),
+    });
     const shutdown = buildShutdownHandler(orchestrator);
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);

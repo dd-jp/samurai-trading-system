@@ -44,6 +44,15 @@ Locked-in choices, versions, and rationale. Update as stack crystallizes.
 | Dead-man's switch | Telegram bot | Owner's primary messaging channel. Silence itself = alert. |
 | Trade notifications | Telegram bot | Same channel, same reason. |
 
+## Logging
+
+| Component | Choice | Why |
+|-----------|--------|-----|
+| Structured log format | Hand-rolled one-JSON-line-per-entry (`JsonLogger`, `src/orchestrator/logger.ts`) | Every stage already logs through one shared `Logger` interface (`src/shared/types.ts`); the format is six fields. |
+| Sinks | stdout + hand-rolled size-rotating file (`src/orchestrator/rotating-file-sink.ts`) | **#325, decided against adding `pino` + `pino-roll`.** ADR-0001's posture is minimal hard dependencies, and the library would not *replace* anything here: the stages log through the shared `Logger` interface, so pino would arrive as a second logging abstraction wrapped by the first. What was actually missing is one `write(line)` byte sink — ~150 lines, synchronous (a line written the instant it is produced survives the crash it describes), degrading to stdout-only on any I/O failure rather than throwing into a tick. |
+| Rotation / retention | Size-based, `SAMURAI_LOG_MAX_BYTES` (16 MiB) × `SAMURAI_LOG_MAX_FILES` (10 rotated generations) | Bounded at ~176 MiB, which a 14-day soak (#238) fits inside. Short on purpose: these files are the *diagnostic* record only. The durable trade record — every signal, order and fill, and therefore the UK CGT disposal history CLAUDE.md requires — is SQLite, and nothing in it depends on a rotated log generation surviving. |
+| Log shipping / aggregation | None | Single-operator, single-host (MacBook). Revisit with the observability-stack open decision below. |
+
 ## Testing / Validation
 
 | Tool | Why |

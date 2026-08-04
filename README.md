@@ -83,6 +83,21 @@ The orchestrator refuses to start rather than guess at any of these. It names ev
 | `ANTHROPIC_API_KEY` | | LLM debate. |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ALLOWED_USER_IDS` | | Required only when `SAMURAI_ALERTS=telegram`. |
 
+#### Optional — durable log sink
+
+`yarn orchestrator` writes the structured log to stdout **and** to a rotating file, so a run started without a shell redirect still leaves a diagnostic trace behind. All three variables are optional; the defaults are the intended configuration.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SAMURAI_LOG_FILE` | `logs/orchestrator.log` | Active log file. Created `0o600` in a `0o700` directory; `logs/` is gitignored. |
+| `SAMURAI_LOG_MAX_BYTES` | `16777216` (16 MiB) | Rotate when the active file would exceed this. |
+| `SAMURAI_LOG_MAX_FILES` | `10` | Rotated generations kept (`orchestrator.log.1` … `.10`), excluding the active file. On-disk ceiling is therefore ~176 MiB. `0` means **keep nothing**: rotation discards the full file rather than renaming it, so only the last `SAMURAI_LOG_MAX_BYTES` of history survive. It does not mean "never rotate". |
+
+A malformed value is refused at startup rather than defaulted. An **unwritable** path is not: the sink degrades to stdout-only, logs one `warn` saying file logging is off until restart, and the process keeps running — a logging problem must never end a trading run.
+
+Retention is deliberately short. These files are the *diagnostic* record; the durable trade record (every signal, order and fill, and so the UK CGT disposal history) is SQLite, and nothing in it depends on a log generation surviving.
+
+
 **Attended vs unattended (`SAMURAI_ALERTS`).** Three escalations — the dead-man's-switch heartbeat, an orphaned `go` verdict found at restart, and a fill the venue will not price — are the only warning an operator gets that the system has stopped or is stuck.
 
 - `SAMURAI_ALERTS=telegram` pushes all three to the trade channel. **This is the posture an unattended run requires**, and the only one appropriate for the 14-day soak.
