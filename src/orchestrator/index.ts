@@ -34,18 +34,26 @@
  * tuning*, not tuned values, and `paperStartingProfile` refuses `live`
  * outright for that reason.
  *
- * What the profile deliberately does NOT supply is the transports. The alert
- * channels fall through to the composition root's log-only stand-ins
- * (`console-channels.ts`); wiring the real `TelegramBotApiClient` (#275) at
- * the composition root is #322. Credentials are not supplied either, and must
- * not be: `assertCredentialsPresent` below fails the process fast, naming
- * every missing variable, rather than starting a half-wired process against
- * real money.
+ * What the profile deliberately does NOT supply is the transports. Ticket
+ * #322 supplies the operator-facing three (heartbeat, orphaned go verdict,
+ * stuck unpriced fill) here instead, from `SAMURAI_ALERTS` — a REQUIRED
+ * variable with no default, because falling back to the log-only stand-ins by
+ * omission is precisely what made the "unattended" soak (#238) not unattended.
+ * See `./alert-transport.ts` for the full rationale. Credentials are not
+ * supplied either, and must not be: `assertCredentialsPresent` below fails the
+ * process fast, naming every missing variable, rather than starting a
+ * half-wired process against real money.
  */
 import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { SystemClock } from '../shared/index.js';
 import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
+import {
+  type AlertsMode,
+  buildAlertChannels,
+  resolveAlertsMode,
+  TELEGRAM_ALERT_ENV_VARS,
+} from './alert-transport.js';
 import { JsonLogger } from './logger.js';
 import { paperStartingProfile } from './paper-profile.js';
 import {
@@ -56,10 +64,20 @@ import {
 } from './production.js';
 import type { Logger } from './types.js';
 
+export {
+  ALERT_CHANNEL_FIELDS,
+  ALERTS_MODES,
+  type AlertChannels,
+  type AlertsMode,
+  buildAlertChannels,
+  resolveAlertsMode,
+  TELEGRAM_ALERT_ENV_VARS,
+} from './alert-transport.js';
 export { digest } from './digest.js';
 export { Heartbeat, type HeartbeatChannel } from './heartbeat.js';
 export { TradeChannelHeartbeat } from './heartbeat-channel.js';
 export { JsonLogger } from './logger.js';
+export { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
 export {
   type OrphanAlertChannel,
   type OrphanGoVerdict,
@@ -122,9 +140,11 @@ export { TradeChannelUnpricedFillAlert } from './unpriced-fill-channel.js';
  * Every remaining entry is a set of *tuning values*. The transports are no
  * longer among them: the Alpaca broker/market-data clients and the LLM client
  * are built from the environment (#273/#286/#274), the account-state provider
- * is composed in-repo (#276), and the human-facing channels have log-only
- * defaults plus, since #275, a real `TelegramBotApiClient` waiting to be wired
- * at the composition root (#322).
+ * is composed in-repo (#276), and the three operator alert channels are built
+ * from `SAMURAI_ALERTS` plus the Telegram variables (#322, `TelegramBotApiClient`
+ * from #275). The HITL `approvals` channel is the one human-facing seam still
+ * on a log-only default — an inbound round trip, not an alert, and #275's
+ * remaining half.
  *
  * The list stays required even though `./paper-profile.ts` now satisfies it,
  * and that is deliberate: a programmatic caller that forgets one must still be
@@ -182,17 +202,34 @@ function parseMode(raw: string | undefined): ProductionConfig['mode'] {
  */
 const CREDENTIAL_REQUIREMENTS: readonly {
   vars: readonly string[];
-  satisfiedByInjection: (injected: Partial<ProductionConfig>) => boolean;
+  /**
+   * True when this run never touches these variables — because the caller
+   * injected the client that would have read them, or because the alerts mode
+   * it selected needs no transport credentials at all.
+   */
+  unusedByThisRun: (context: {
+    injected: Partial<ProductionConfig>;
+    alertsMode: AlertsMode | undefined;
+  }) => boolean;
 }[] = [
   {
     vars: ['ALPACA_API_KEY', 'ALPACA_API_SECRET'],
-    satisfiedByInjection: (injected) =>
+    unusedByThisRun: ({ injected }) =>
       injected.alpacaBrokerClient !== undefined &&
       (injected.dataSource !== undefined || injected.alpacaDataClient !== undefined),
   },
   {
     vars: ['ANTHROPIC_API_KEY'],
-    satisfiedByInjection: (injected) => injected.llmClient !== undefined,
+    unusedByThisRun: ({ injected }) => injected.llmClient !== undefined,
+  },
+  {
+    // #322. Required only under `SAMURAI_ALERTS=telegram`, which is why the
+    // alerts mode is resolved before this pre-flight runs rather than
+    // alongside it — the mode is what decides whether these are credentials
+    // this run needs or variables it will never read. `log-only` (and a caller
+    // that injected every channel, which resolves to `undefined`) needs none.
+    vars: TELEGRAM_ALERT_ENV_VARS,
+    unusedByThisRun: ({ alertsMode }) => alertsMode !== 'telegram',
   },
 ];
 
@@ -205,9 +242,12 @@ const CREDENTIAL_REQUIREMENTS: readonly {
  * Exported for tests. Returns names only; it never reads, echoes, or logs a
  * credential's value.
  */
-export function missingCredentialEnvVars(injected: Partial<ProductionConfig>): string[] {
+export function missingCredentialEnvVars(
+  injected: Partial<ProductionConfig>,
+  alertsMode: AlertsMode | undefined,
+): string[] {
   return CREDENTIAL_REQUIREMENTS.filter(
-    (requirement) => !requirement.satisfiedByInjection(injected),
+    (requirement) => !requirement.unusedByThisRun({ injected, alertsMode }),
   )
     .flatMap((requirement) => requirement.vars)
     .filter((name) => (process.env[name] ?? '').length === 0);
@@ -219,9 +259,19 @@ export function missingCredentialEnvVars(injected: Partial<ProductionConfig>): s
  * trading process that cannot authenticate must stop loudly rather than start
  * into a half-alive state and discover it on its first order.
  */
-function assertCredentialsPresent(injected: Partial<ProductionConfig>): void {
-  const missing = missingCredentialEnvVars(injected);
+function assertCredentialsPresent(
+  injected: Partial<ProductionConfig>,
+  alertsMode: AlertsMode | undefined,
+): void {
+  const missing = missingCredentialEnvVars(injected, alertsMode);
   if (missing.length === 0) return;
+
+  // Named separately because the fix is different in kind: these are missing
+  // because of a mode the operator selected, and re-selecting the other mode is
+  // a legitimate way out that the generic advice below does not suggest.
+  const telegram = missing.filter((name) =>
+    (TELEGRAM_ALERT_ENV_VARS as readonly string[]).includes(name),
+  );
 
   throw new Error(
     `Orchestrator cannot start: ${missing.length} required credential(s) are not set ` +
@@ -229,6 +279,13 @@ function assertCredentialsPresent(injected: Partial<ProductionConfig>): void {
       'gitignored — or pass the corresponding clients explicitly (alpacaBrokerClient / ' +
       'alpacaDataClient / llmClient on ProductionConfig). The tracked .env holds empty ' +
       'placeholders and is not a configured environment; an empty value counts as missing. ' +
+      (telegram.length > 0
+        ? `SAMURAI_ALERTS=telegram is what makes ${telegram.join(', ')} required — re-run with ` +
+          'SAMURAI_ALERTS=log-only to accept log-only alerting for an ATTENDED run instead ' +
+          '(not for an unattended soak). TELEGRAM_ALLOWED_USER_IDS is on that list because ' +
+          'TelegramBotApiClient validates the HITL approval allowlist at construction, not ' +
+          'because this process polls for approvals — see alert-transport.ts. '
+        : '') +
       'Note that `node dist/orchestrator/index.js` does not read any .env file on its own — ' +
       'use `node --env-file=.env.local dist/orchestrator/index.js` or export the variables.',
   );
@@ -309,7 +366,8 @@ export function warnIfStorePathIgnoresMode(deps: {
  * Assembles a `ProductionConfig` from the environment plus `injected`, builds
  * the composition root, and starts it (orphan scan once, then the tick loop
  * and heartbeat). Throws — before opening any broker connection — if any
- * required dependency or credential is absent.
+ * required dependency or credential is absent, or if the operator has not said
+ * where alerts go (`SAMURAI_ALERTS`, #322 — see `./alert-transport.ts`).
  *
  * DB path convention matches `src/dashboard/index.ts` (both call
  * `sharedStorePath`): `data/samurai-{env}.sqlite`, one file per `NODE_ENV`.
@@ -355,9 +413,10 @@ export async function startFromEnvironment(
         `(${missing.join(', ')}). These are the per-stage tuning values, and nothing in this ` +
         'process can invent them. The transports are no longer on this list: the Alpaca broker ' +
         'and market-data clients, the LLM client and the account-state provider are built from ' +
-        'the environment (#273/#286/#274/#276), and the trade-channel/HITL/CII channels have ' +
-        'log-only defaults at the composition root — #275 landed a real TelegramBotApiClient, ' +
-        'whose wiring is #322. For a paper run, pass the checked-in starting profile: ' +
+        'the environment (#273/#286/#274/#276), and the three operator alert channels are ' +
+        "selected by SAMURAI_ALERTS (#322) — telegram builds #275's TelegramBotApiClient, " +
+        "log-only keeps the composition root's log-only stand-ins. For a paper run, pass the " +
+        'checked-in starting profile: ' +
         'startFromEnvironment(paperStartingProfile(mode)) from src/orchestrator/paper-profile.ts ' +
         '— that is exactly what `yarn orchestrator` does. To supply your own, see ' +
         'ProductionConfig in src/orchestrator/production.ts.',
@@ -369,12 +428,20 @@ export async function startFromEnvironment(
   // passed `backtest`/`live` deliberately must not be silently downgraded to
   // whatever `SAMURAI_MODE` says (mode selects the HITL posture).
   const mode = injected.mode ?? parseMode(process.env.SAMURAI_MODE);
-  // After the mode is resolved and before the store is opened: an
+  // Strictly before the credential pre-flight: the alerts mode is what decides
+  // whether the Telegram variables are credentials this run needs or ones it
+  // will never read, so the pre-flight cannot name them until this resolves.
+  // An operator with nothing configured therefore sees SAMURAI_ALERTS first
+  // and the credential list on the next attempt — the one place this file
+  // knowingly gives up its "name everything at once" property, because the
+  // alternative is guessing which transport's credentials to demand.
+  const alertsMode = resolveAlertsMode(injected);
+  // After the modes are resolved and before the store is opened: an
   // unrecognised `SAMURAI_MODE` is the more fundamental error (mode decides
   // which Alpaca host the credentials would even be used against), and a run
   // that cannot authenticate should not leave a freshly-created SQLite file
   // behind as a side effect of failing.
-  assertCredentialsPresent(injected);
+  assertCredentialsPresent(injected, alertsMode);
 
   // One logger for the whole startup, threaded into the composition root
   // rather than left for it to default: the #330 warning below has to be
@@ -396,7 +463,16 @@ export async function startFromEnvironment(
     db = openSharedStore(dbPath);
   }
 
+  // #322. Built after the store is open (the Telegram client audit-logs
+  // inbound allowlist rejections through it) and spread BEFORE `injected`, so
+  // a channel the caller passed explicitly always wins over the one this
+  // resolves. `buildAlertChannels` also omits any field already injected, so
+  // the two mechanisms agree rather than relying on spread order alone.
+  const alertChannels =
+    alertsMode === undefined ? {} : buildAlertChannels({ alertsMode, injected, db, logger });
+
   const orchestrator = buildProductionOrchestrator({
+    ...alertChannels,
     ...(injected as ProductionConfig),
     logger,
     db,

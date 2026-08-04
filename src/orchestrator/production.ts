@@ -17,16 +17,22 @@
  * ## Injected leaves — why `ProductionConfig` is large
  *
  * Every transport this system talks to (Alpaca REST for orders and for bars,
- * the Telegram/Discord trade channel, WorldMonitor's CII feed) exists in the
- * codebase as an *interface only* — there is no HTTP implementation of
- * `AlpacaClient`, `TelegramClient`, or `CiiScoreProvider` anywhere in `src/`,
- * and `ccxt` is not a dependency. Writing them here would be implementing
- * three or four components under a wiring ticket. So they are required
- * `ProductionConfig` fields instead: this module composes everything that
- * *can* be composed from in-repo code and names the rest as explicit seams.
- * That is exactly the precedent #234 set one level down with
+ * the Telegram/Discord trade channel, WorldMonitor's CII feed) once existed in
+ * the codebase as an *interface only*, and writing them here would have been
+ * implementing three or four components under a wiring ticket. So they became
+ * optional `ProductionConfig` fields instead: this module composes everything
+ * that *can* be composed from in-repo code and names the rest as explicit
+ * seams. That is exactly the precedent #234 set one level down with
  * `AccountStateProvider` / `VolatilityReadingProvider` — an honest injected
  * seam beats a fabricated implementation.
+ *
+ * Most of them have since been filled in: `AlpacaHttpBrokerClient` /
+ * `AlpacaHttpDataClient` (#273/#286) and `AnthropicHttpMessagesClient` (#274)
+ * are built here by default, and `TelegramBotApiClient` (#275) is built one
+ * level up, in `startFromEnvironment`, and passed in as the three alert
+ * channels below (#322 — see alert-transport.ts for why the *selection*
+ * belongs at the entrypoint rather than here). `CiiScoreProvider` is the one
+ * genuinely unimplemented transport left, deliberately parked (ADR-0002).
  *
  * The LLM provider is the one exception: since #274, `AnthropicHttpMessagesClient`
  * (debate-engine/llm/anthropic-http-client.ts) is a real, in-repo
@@ -232,12 +238,17 @@ export interface ProductionConfig {
   alpacaDataClient?: AlpacaDataClient;
   /**
    * Trade channel the dead-man's-switch heartbeat posts over. Optional: when
-   * omitted a log-only `LoggingHeartbeatChannel` stands in so a supervised
-   * smoke run can start (#275 remains open for the real transport — a log
-   * line nobody tails is not a dead-man's switch). Taken as the
-   * port, not as a Telegram/Discord client: `TradeChannelHeartbeat`
-   * (heartbeat-channel.ts) is the in-repo implementation to pass here, and it
-   * still needs a `TelegramClient` that this codebase does not implement.
+   * omitted a log-only `LoggingHeartbeatChannel` stands in, which is a diary
+   * rather than a dead-man's switch — its whole point is that its SILENCE is
+   * noticed by something outside this process.
+   *
+   * **The shipped entrypoint no longer reaches that default by omission
+   * (#322).** `startFromEnvironment` resolves `SAMURAI_ALERTS` — a required
+   * variable with no default — and passes `TradeChannelHeartbeat` over a real
+   * `TelegramBotApiClient` (#275) under `telegram`, or nothing at all under an
+   * explicitly-named `log-only`. This field stays the port rather than a
+   * Telegram/Discord client, so a programmatic caller can still inject its
+   * own; see alert-transport.ts.
    */
   heartbeatChannel?: HeartbeatChannel;
   /**
@@ -249,16 +260,21 @@ export interface ProductionConfig {
    * unimplemented transport.
    */
   approvals?: ApprovalChannel;
-  /** Where a restart-time orphaned `go` verdict is reported. Defaults to the log. */
+  /**
+   * Where a restart-time orphaned `go` verdict is reported. Defaults to the
+   * log; `TradeChannelOrphanAlert` (orphan-alert-channel.ts) is the
+   * reachable-from-a-phone implementation, wired by `SAMURAI_ALERTS=telegram`
+   * (#322).
+   */
   orphanAlerts?: OrphanAlertChannel;
   /**
    * Where a fill the venue reports filled but will not price is escalated once
    * it has been stuck too long (#298). Defaults to
    * `LoggingUnpricedFillAlertChannel`, with the same caveat as
    * `heartbeatChannel`: the default is reachable only by an operator reading
-   * the log stream. For an unattended soak (#238) pass
-   * `TradeChannelUnpricedFillAlert` (unpriced-fill-channel.ts), which needs the
-   * `TelegramClient` this codebase still does not construct (#275).
+   * the log stream. `TradeChannelUnpricedFillAlert` (unpriced-fill-channel.ts)
+   * is what an unattended soak (#238) needs, and `SAMURAI_ALERTS=telegram`
+   * (#322) is what supplies it.
    */
   unpricedFillAlerts?: UnpricedFillAlertChannel;
   /**

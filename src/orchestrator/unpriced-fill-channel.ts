@@ -8,10 +8,9 @@
  *
  * This is the implementation that makes #298's acceptance criterion reachable
  * during an UNATTENDED soak (#238): `LoggingUnpricedFillAlertChannel` writes a
- * line nobody is tailing at 3am, whereas this one reaches a phone. It is not
- * the production default only because the composition root does not construct
- * a `TelegramClient` yet — that is #275's remaining half. Inject it here and
- * the alert is real.
+ * line nobody is tailing at 3am, whereas this one reaches a phone. Since #322
+ * it is wired for real — `SAMURAI_ALERTS=telegram` builds it over a
+ * `TelegramBotApiClient` at the entrypoint (alert-transport.ts).
  *
  * Discord is optional and mirrors the heartbeat's shape: both are attempted
  * together, so a Telegram outage does not silence the Discord copy.
