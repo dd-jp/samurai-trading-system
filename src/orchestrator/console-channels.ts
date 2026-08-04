@@ -14,6 +14,7 @@
  * (nobody is paged) but changes no decision. The approval channel is
  * different, and is treated differently below.
  */
+import type { UnpricedFillAlert, UnpricedFillAlertChannel } from '../execution/index.js';
 import type { CiiScoreProvider } from '../market-intelligence/index.js';
 import type { ApprovalChannel, ApprovalOutcome, ApprovalRequest } from '../verdict/index.js';
 import type { HeartbeatChannel } from './heartbeat.js';
@@ -57,6 +58,43 @@ export class LoggingOrphanAlertChannel implements OrphanAlertChannel {
       level: 'error',
       message: 'orphaned go verdict found at startup — verify against the venue',
       payload: { ...orphan },
+    });
+  }
+}
+
+/**
+ * A fill the venue reports filled and will not price, aged past its threshold
+ * (#298), written to the log at `error`.
+ *
+ * `error`, for `LoggingOrphanAlertChannel`'s reason: the lot behind it is stuck
+ * — under-filled in the store, its stop sized to the wrong quantity, and unable
+ * to emit a `ClosedTrade` — while the venue believes it filled. That is a
+ * position the system cannot account for, and it will not resolve itself.
+ *
+ * Same caveat as the heartbeat's log-only stand-in: a log line nobody tails is
+ * not an alert. This is the production DEFAULT only because `TelegramClient`
+ * has no composition-root wiring yet (#275); `TradeChannelUnpricedFillAlert`
+ * (unpriced-fill-channel.ts) is the reachable-from-a-phone implementation, and
+ * an unattended soak (#238) should inject it.
+ */
+export class LoggingUnpricedFillAlertChannel implements UnpricedFillAlertChannel {
+  constructor(private readonly logger: Logger) {}
+
+  async postUnpricedFillAlert(alert: UnpricedFillAlert): Promise<void> {
+    this.logger.log({
+      // Not a tick trace: this is a broker anomaly observed by the fill poll,
+      // the same synthetic-trace convention `Heartbeat`/`OrphanVerdictScanner`
+      // use for work that belongs to no pipeline pass.
+      trace_id: 'unpriced-fill',
+      stage: 'execution',
+      level: 'error',
+      message:
+        'broker reports a filled quantity it will not price — the lot is stuck; ' +
+        'check the order on the venue and reconcile it by hand',
+      payload: {
+        ...alert,
+        first_seen_at: alert.first_seen_at.toISOString(),
+      },
     });
   }
 }

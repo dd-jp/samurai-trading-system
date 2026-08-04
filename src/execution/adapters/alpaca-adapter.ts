@@ -27,12 +27,14 @@
  * still load-bearing for `fetchNewFills`, which polls only what is in it. See
  * `state` on the input below for why the cache had to be persisted anyway.
  */
-import { type OrderState, TokenBucket } from '../../shared/index.js';
+import { type Clock, type OrderState, SystemClock, TokenBucket } from '../../shared/index.js';
 import { sanitizeBrokerError } from '../broker-error.js';
 import {
   type BrokerStateStore,
   InMemoryBrokerStateStore,
   toRequestFields,
+  type UnpricedFillObservation,
+  type UnpricedFillRecord,
 } from '../broker-state-store.js';
 import type {
   BrokerAck,
@@ -41,7 +43,25 @@ import type {
   NormalizedFill,
   NormalizedOrder,
 } from '../types.js';
+import type { UnpricedFillAlertChannel } from '../unpriced-fill-alert.js';
 import type { AlpacaClient, AlpacaOrder, AlpacaOrderLeg } from './alpaca-client.js';
+
+/**
+ * How long a fill may sit unpriced before it stops being "the venue is briefly
+ * behind" and becomes "a lot is stuck and nobody knows" (#298).
+ *
+ * 15 minutes, against a 15-second fill poll (`DEFAULT_FILL_POLL_INTERVAL_MS`
+ * in orchestrator/production.ts): ~60 consecutive polls, all reporting a
+ * positive `filled_qty` with no `filled_avg_price`. That is far outside any
+ * plausible settlement lag on a venue that prices market orders instantly, and
+ * still short enough that an operator hears about it inside one trading hour
+ * rather than at the end of an unattended 14-day soak (#238).
+ *
+ * A default, not a constant: `AlpacaBrokerAdapterInput.unpricedFillAgeOutMs`
+ * overrides it, and `ProductionConfig.unpricedFillAgeOutMs` threads it from the
+ * composition root.
+ */
+export const DEFAULT_UNPRICED_FILL_AGE_OUT_MS = 15 * 60_000;
 
 export interface AlpacaBrokerAdapterInput {
   client: AlpacaClient;
@@ -74,6 +94,31 @@ export interface AlpacaBrokerAdapterInput {
    * whose own priority note says the Alpaca path is not the one it is fixing.
    */
   state?: BrokerStateStore;
+  /**
+   * Where a permanently-unpriced fill is escalated (#298). REQUIRED, unlike
+   * every other seam here, and the asymmetry is deliberate: this ticket's
+   * acceptance criterion is that such a fill "cannot leave a lot stuck with no
+   * operator-visible signal", and an optional channel is exactly how that
+   * signal goes missing. `state`'s optional in-memory default is the cautionary
+   * precedent — the comment above calls that default "the #295 bug" — so the
+   * one seam whose absence IS the failure mode does not get one.
+   *
+   * Log-only is a legitimate implementation (`LoggingUnpricedFillAlertChannel`,
+   * the production default until a `TelegramClient` is wired at the composition
+   * root, #275); silence is not.
+   */
+  unpricedFillAlerts: UnpricedFillAlertChannel;
+  /**
+   * How long a fill may stay unpriced before it is escalated. Defaults to
+   * `DEFAULT_UNPRICED_FILL_AGE_OUT_MS`.
+   */
+  unpricedFillAgeOutMs?: number;
+  /**
+   * Reads the age-out clock. Injected rather than `new Date()` so a test can
+   * age a fill without sleeping, and so the adapter measures time the same way
+   * the rest of the system does. Defaults to `SystemClock`.
+   */
+  clock?: Clock;
 }
 
 export class AlpacaBrokerAdapter implements BrokerAdapter {
@@ -89,10 +134,14 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    */
   private readonly rateLimiter: TokenBucket;
   private readonly state: BrokerStateStore;
+  private readonly clock: Clock;
+  private readonly unpricedFillAgeOutMs: number;
 
   constructor(private readonly input: AlpacaBrokerAdapterInput) {
     this.rateLimiter = input.rateLimiter ?? new TokenBucket({ capacity: 5, refillPerSecond: 3 });
     this.state = input.state ?? new InMemoryBrokerStateStore();
+    this.clock = input.clock ?? new SystemClock();
+    this.unpricedFillAgeOutMs = input.unpricedFillAgeOutMs ?? DEFAULT_UNPRICED_FILL_AGE_OUT_MS;
 
     // Synchronous, in the constructor: the first `fetchNewFills` sweep after a
     // restart iterates this map, and an empty one reports "no new fills" —
@@ -224,6 +273,11 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * The isolation is per BRACKET, not per `collectFill`: a bracket whose entry
    * price cannot be recorded must not have its exit legs booked either, or the
    * lot's accounting is built on a fill that was rejected.
+   *
+   * A refused unpriced fill is additionally REMEMBERED (#298) before the sweep
+   * returns, and escalated once it has been unpriced too long — see
+   * `escalateAgedUnpricedFills`. Skipping is the right answer for the transient
+   * case and, on its own, silence for the permanent one.
    */
   async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
     const fills: NormalizedFill[] = [];
@@ -241,18 +295,51 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
           this.input.client.getOrder(entryOrderId),
         );
 
-        collectFill(entry, 'entry', clientOrderId, since, fills);
+        const instrument = symbolOf(entry);
+        collectFill(entry, 'entry', clientOrderId, instrument, since, fills);
         for (const leg of entry.legs ?? []) {
-          collectFill(leg, legName(leg), clientOrderId, since, fills);
+          collectFill(leg, legName(leg), clientOrderId, instrument, since, fills);
         }
       } catch (error) {
         // Skipped, not swallowed: this bracket contributes nothing to THIS
         // sweep and is retried on the next one. That is the same shape as an
         // order the venue has not reported yet, and `ingestFills()` dedups on
         // `broker_fill_id`, so re-polling costs nothing.
+        if (error instanceof UnpricedFillError) {
+          // Durable, and stamped with the FIRST sighting: this is the clock the
+          // age-out runs on, and it has to survive the restart that a 14-day
+          // unattended soak will contain several of.
+          //
+          // Guarded, because this runs INSIDE the per-bracket catch: a throw
+          // from the journal here would escape the isolation entirely and abort
+          // the account's whole sweep — turning one venue anomaly into the
+          // stop-outs-for-everyone starvation this loop exists to prevent.
+          try {
+            this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
+          } catch (stateError) {
+            failures.push(stateError);
+          }
+        }
         failures.push(error);
       }
     }
+
+    // The venue caught up: this fill priced, was collected above, and is about
+    // to be booked, so its anomaly row is resolved. Done here rather than in
+    // `collectFill` so the normalizer stays a pure function of one order.
+    try {
+      for (const fill of fills) {
+        this.state.clearUnpricedFill('alpaca', fill.client_order_id, fill.broker_fill_id);
+      }
+    } catch (stateError) {
+      // Same reasoning as above, and cheaper still to survive: a stale row only
+      // risks one redundant alert, whereas losing the sweep loses real fills.
+      failures.push(stateError);
+    }
+
+    // Before the throw below, and unconditionally: escalation must not depend
+    // on whether some OTHER bracket happened to produce a fill this sweep.
+    await this.escalateAgedUnpricedFills(failures);
 
     // Progress wins when there is any: dropping good fills to report a bad
     // bracket would re-create the account-wide stall this isolation removes.
@@ -266,6 +353,116 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     }
 
     return fills;
+  }
+
+  /**
+   * The age-out (#298). Sweeps the RECORDED anomalies rather than only the ones
+   * this pass happened to re-observe — the escalation must not depend on the
+   * fill still being re-offered, and `ingestFills()` bounds the feed by the
+   * oldest open lot's `opened_at`, so a lot that leaves `getOpenPositions()`
+   * for any other reason takes its unpriced fill out of the window with it.
+   * Table-driven, so the clock keeps running either way.
+   *
+   * Alerts ONCE per fill, recorded durably: a permanent venue anomaly must not
+   * page an operator every 15 seconds for the rest of the soak. `alerted_at` is
+   * written only AFTER the channel accepted the alert, so a channel outage is
+   * retried on the next sweep instead of being marked as delivered — the
+   * "do not silently give up" half of the requirement.
+   */
+  private async escalateAgedUnpricedFills(failures: unknown[]): Promise<void> {
+    const now = this.clock.now();
+
+    let recorded: readonly UnpricedFillRecord[];
+    try {
+      recorded = this.state.loadUnpricedFills('alpaca');
+    } catch (stateError) {
+      // The sweep's fills are still good; only the escalation is blind this
+      // pass, and the rows outlive the failure, so the next sweep escalates.
+      failures.push(stateError);
+      return;
+    }
+
+    for (const record of recorded) {
+      if (record.alerted_at !== null) continue;
+
+      const unpricedForMs = now.getTime() - record.first_seen_at.getTime();
+      if (unpricedForMs < this.unpricedFillAgeOutMs) continue;
+
+      try {
+        await this.input.unpricedFillAlerts.postUnpricedFillAlert({
+          venue: 'alpaca',
+          client_order_id: record.client_order_id,
+          broker_fill_id: record.broker_fill_id,
+          leg: record.leg,
+          instrument: record.instrument,
+          qty: record.qty,
+          first_seen_at: record.first_seen_at,
+          unpriced_for_ms: unpricedForMs,
+          age_out_ms: this.unpricedFillAgeOutMs,
+        });
+      } catch {
+        // The channel's own error is READ AND DISCARDED, never re-thrown or
+        // attached — `BrokerError`'s posture (broker-error.ts), and it applies
+        // just as hard here: a Telegram/Discord transport failure quotes the
+        // request it failed on, and that URL carries the bot token. What is
+        // replaced cannot leak. The row stays unalerted, so the next sweep
+        // retries delivery.
+        failures.push(
+          new Error(
+            `Alpaca unpriced-fill alert delivery failed for order ${record.broker_fill_id} ` +
+              `(${record.leg} leg of '${record.client_order_id}')`,
+          ),
+        );
+        // Unrecorded, so the next sweep tries again — the alert this fill is
+        // owed has not been spent.
+        continue;
+      }
+
+      try {
+        this.state.markUnpricedFillAlerted(
+          'alpaca',
+          record.client_order_id,
+          record.broker_fill_id,
+          now,
+        );
+      } catch (stateError) {
+        // Delivered but not recorded: the next sweep will alert again. Noisy,
+        // never silent — the direction to fail in.
+        failures.push(stateError);
+      }
+    }
+  }
+}
+
+/**
+ * The bracket parent's symbol, or `'unknown'` when the venue omitted it.
+ *
+ * `AlpacaOrder.symbol` is declared non-optional, so this only fires on a
+ * payload that already contradicts the contract — and that is exactly when the
+ * age-out matters most. The alternative, letting `undefined` reach a NOT NULL
+ * column, would trade a slightly less informative alert for no alert at all.
+ * `'unknown'` over `''` because it survives being read aloud in a message.
+ */
+function symbolOf(order: AlpacaOrder): string {
+  return typeof order.symbol === 'string' && order.symbol.length > 0 ? order.symbol : 'unknown';
+}
+
+/**
+ * A fill the venue reports filled and cannot price. Carries the observation so
+ * `fetchNewFills` can start (or continue) its age-out clock — the plain `Error`
+ * this replaces left the sweep nothing to remember it by.
+ *
+ * Thrown rather than returned so the existing per-bracket isolation is
+ * unchanged: a bracket whose entry cannot be priced must not have its exit legs
+ * booked either.
+ */
+class UnpricedFillError extends Error {
+  readonly observation: UnpricedFillObservation;
+
+  constructor(message: string, observation: UnpricedFillObservation) {
+    super(message);
+    this.name = 'UnpricedFillError';
+    this.observation = observation;
   }
 }
 
@@ -290,10 +487,16 @@ function legName(leg: AlpacaOrderLeg): 'target' | 'stop' {
   return leg.type === 'limit' ? 'target' : 'stop';
 }
 
+/**
+ * `instrument` comes from the BRACKET PARENT, not from `order`: `AlpacaOrderLeg`
+ * carries no `symbol`, and an alert that cannot name the symbol is not
+ * actionable. A bracket's legs trade the parent's symbol by construction.
+ */
 function collectFill(
   order: AlpacaOrder | AlpacaOrderLeg,
   leg: NormalizedFill['leg'],
   clientOrderId: string,
+  instrument: string,
   since: Date,
   fills: NormalizedFill[],
 ): void {
@@ -327,10 +530,22 @@ function collectFill(
   // booked at 0 reads as a total loss or an infinite gain depending on side.
   // Same posture the ccxt adapter takes in `toFill`: refuse rather than
   // silently degrade, and let the poll retry once the venue is coherent.
+  //
+  // "Let the poll retry" is only half an answer, though, and the other half is
+  // #298: if the venue NEVER prices this fill, retrying forever is silence.
+  // The typed error carries what the caller needs to start an age-out clock on
+  // it — refusing to book the fill and refusing to notice are different things.
   if (order.filled_avg_price === null) {
-    throw new Error(
+    throw new UnpricedFillError(
       `Alpaca order ${order.id} (${leg} leg of '${clientOrderId}') reports filled_qty ` +
         `${order.filled_qty} but no filled_avg_price to record`,
+      {
+        client_order_id: clientOrderId,
+        broker_fill_id: order.id,
+        leg,
+        instrument,
+        qty: filledQty,
+      },
     );
   }
 

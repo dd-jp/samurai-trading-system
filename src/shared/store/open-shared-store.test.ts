@@ -27,6 +27,7 @@ const TABLES = [
   'account_state',
   'broker_brackets',
   'broker_observed_fills',
+  'broker_unpriced_fills',
 ];
 
 const tempDirs: string[] = [];
@@ -73,6 +74,7 @@ describe('openSharedStore', () => {
       { version: 5 },
       { version: 6 },
       { version: 7 },
+      { version: 8 },
     ]);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
@@ -83,6 +85,7 @@ describe('openSharedStore', () => {
       { version: 5 },
       { version: 6 },
       { version: 7 },
+      { version: 8 },
     ]);
   });
 

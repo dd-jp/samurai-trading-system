@@ -16,7 +16,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { TokenBucket } from '../shared/index.js';
+import { type Clock, TokenBucket } from '../shared/index.js';
 import { type SharedStore as Db, openSharedStore } from '../shared/store/index.js';
 import { AlpacaBrokerAdapter } from './adapters/alpaca-adapter.js';
 import type { AlpacaClient, AlpacaOrder } from './adapters/alpaca-client.js';
@@ -24,6 +24,7 @@ import { CcxtBrokerAdapter, type CcxtBrokerClient, type CcxtOrder } from './ccxt
 import { IbkrBrokerAdapter, type IbkrBrokerClient, type IbkrExecution } from './ibkr-adapter.js';
 import { SqliteBrokerStateStore } from './sqlite-broker-state-store.js';
 import type { NativeBracketRequest } from './types.js';
+import type { UnpricedFillAlert, UnpricedFillAlertChannel } from './unpriced-fill-alert.js';
 
 const FILL_TS = new Date('2026-07-15T14:00:00Z').getTime();
 const FILL_TIME = '2026-07-15T14:00:00.000Z';
@@ -50,6 +51,26 @@ const STOCK_REQUEST: NativeBracketRequest = {
 /** Pacing has its own suites; these are about state, not the wall clock. */
 function permissiveLimiter(): TokenBucket {
   return new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 });
+}
+
+/** #298's age-out, stated here rather than inherited from the adapter's default. */
+const AGE_OUT_MS = 15 * 60_000;
+const FIRST_SEEN = new Date(FILL_TS + 60_000);
+
+/** A clock frozen at one instant — each "process" below gets its own. */
+function fixedClock(now: Date): Clock {
+  return { now: () => now };
+}
+
+/** The operator escalation port (#298), recording what reached a human. */
+function recordingAlerts(): UnpricedFillAlertChannel & { readonly posted: UnpricedFillAlert[] } {
+  const posted: UnpricedFillAlert[] = [];
+  return {
+    posted,
+    postUnpricedFillAlert: async (alert) => {
+      posted.push(alert);
+    },
+  };
 }
 
 const tempDirs: string[] = [];
@@ -596,6 +617,9 @@ describe('IbkrBrokerAdapter.getOrder', () => {
 function alpacaOrder(overrides: Partial<AlpacaOrder> = {}): AlpacaOrder {
   return {
     id: 'parent-1',
+    // Alpaca reports the symbol on the bracket PARENT and not on its legs, so
+    // it is the only source for the instrument an unpriced-fill alert names.
+    symbol: 'AAPL',
     status: 'partially_filled',
     filled_qty: '1',
     filled_avg_price: '100',
@@ -636,6 +660,7 @@ describe('AlpacaBrokerAdapter across a restart', () => {
       client,
       rateLimiter: permissiveLimiter(),
       state: new SqliteBrokerStateStore(db),
+      unpricedFillAlerts: recordingAlerts(),
     });
     await first.submitBracket(STOCK_REQUEST);
 
@@ -646,6 +671,7 @@ describe('AlpacaBrokerAdapter across a restart', () => {
       client,
       rateLimiter: permissiveLimiter(),
       state: new SqliteBrokerStateStore(reopen(path)),
+      unpricedFillAlerts: recordingAlerts(),
     });
     const fills = await second.fetchNewFills(SINCE);
 
@@ -684,6 +710,7 @@ describe('AlpacaBrokerAdapter across a restart', () => {
       client,
       rateLimiter: permissiveLimiter(),
       state: dyingState,
+      unpricedFillAlerts: recordingAlerts(),
     });
     await expect(first.submitBracket(STOCK_REQUEST)).rejects.toThrow(/simulated DB failure/);
 
@@ -695,6 +722,7 @@ describe('AlpacaBrokerAdapter across a restart', () => {
       client,
       rateLimiter: permissiveLimiter(),
       state: new SqliteBrokerStateStore(reopen(path)),
+      unpricedFillAlerts: recordingAlerts(),
     });
     expect(await second.fetchNewFills(SINCE)).toEqual([]);
 
@@ -706,6 +734,74 @@ describe('AlpacaBrokerAdapter across a restart', () => {
     expect(new SqliteBrokerStateStore(db).loadBrackets('alpaca')[0]?.entry_order_id).toBe(
       'parent-1',
     );
+  });
+
+  it('keeps the unpriced-fill age-out clock running across a restart (#298)', async () => {
+    // The durability requirement, and the reason the clock is a table rather
+    // than a field on the adapter: a 14-day unattended soak (#238) contains
+    // restarts, and an in-process clock resets to zero on every one of them.
+    // A fill the venue will never price would then be re-observed as "brand
+    // new" forever and age out never — passing every in-process test while
+    // failing the only scenario the ticket is about.
+    const { path, db } = openFileStore();
+    const unpriced = alpacaOrder({
+      status: 'filled',
+      filled_qty: '1',
+      filled_avg_price: null,
+      filled_at: FILL_TIME,
+    });
+    const client = {
+      submitOrder: vi.fn(async () => unpriced),
+      getOrder: vi.fn(async () => unpriced),
+      getOrderByClientOrderId: vi.fn(async () => unpriced),
+    } as unknown as AlpacaClient;
+
+    const firstAlerts = recordingAlerts();
+    const first = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      state: new SqliteBrokerStateStore(db),
+      unpricedFillAlerts: firstAlerts,
+      unpricedFillAgeOutMs: AGE_OUT_MS,
+      clock: fixedClock(FIRST_SEEN),
+    });
+    await first.submitBracket(STOCK_REQUEST);
+
+    // First process: the anomaly is seen and recorded, and is not yet old.
+    await first.fetchNewFills(SINCE).catch(() => undefined);
+    expect(firstAlerts.posted).toEqual([]);
+
+    // --- restart -------------------------------------------------------------
+    // A genuinely fresh adapter over the same database file: new bracket map,
+    // new everything, and a clock reading one threshold later.
+    const secondAlerts = recordingAlerts();
+    const second = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      state: new SqliteBrokerStateStore(reopen(path)),
+      unpricedFillAlerts: secondAlerts,
+      unpricedFillAgeOutMs: AGE_OUT_MS,
+      clock: fixedClock(new Date(FIRST_SEEN.getTime() + AGE_OUT_MS)),
+    });
+
+    // On its FIRST sweep — not merely eventually. A restart that restarted the
+    // clock would instead have to wait out another full threshold here, which
+    // is exactly the bug, and "it alerts eventually" would not catch it.
+    await second.fetchNewFills(SINCE).catch(() => undefined);
+
+    expect(secondAlerts.posted).toMatchObject([
+      {
+        venue: 'alpaca',
+        client_order_id: 'idem-1',
+        broker_fill_id: 'parent-1',
+        leg: 'entry',
+        instrument: 'AAPL',
+        qty: 1,
+        // Stamped by the FIRST process, read back by the second.
+        first_seen_at: FIRST_SEEN,
+        unpriced_for_ms: AGE_OUT_MS,
+      },
+    ]);
   });
 });
 

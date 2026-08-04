@@ -65,7 +65,7 @@ Runs pending migrations, returns a typed handle. Components receive it via const
 
 ### Module: Consolidated Schema
 
-Every `CREATE TABLE` the store needs, collected from the eleven specs that implicitly define them plus the three that had no schema anywhere until this map resolved them (`verdict_log` and `breaker_state` were added later, per #206 and #203 respectively). `cii_snapshots` was added later still, per #182 (`0003_cii_snapshots.sql`). `account_state` was added later still, per the transport-layer-spec.md cross-verify pass (2026-07-31), closing a gap where `AccountStateProvider`'s `peak_equity` had no durable home. `broker_brackets` and `broker_observed_fills` were added last, per [#287](https://github.com/dd-jp/samurai-trading-system/issues/287) (`0007_broker_adapter_state.sql`), closing the gap where every live `BrokerAdapter` held money-critical venue state in process-local memory. Field-level non-collision was re-verified across all twenty tables (see **Non-Collision Verification** below).
+Every `CREATE TABLE` the store needs, collected from the eleven specs that implicitly define them plus the three that had no schema anywhere until this map resolved them (`verdict_log` and `breaker_state` were added later, per #206 and #203 respectively). `cii_snapshots` was added later still, per #182 (`0003_cii_snapshots.sql`). `account_state` was added later still, per the transport-layer-spec.md cross-verify pass (2026-07-31), closing a gap where `AccountStateProvider`'s `peak_equity` had no durable home. `broker_brackets` and `broker_observed_fills` were added last, per [#287](https://github.com/dd-jp/samurai-trading-system/issues/287) (`0007_broker_adapter_state.sql`), closing the gap where every live `BrokerAdapter` held money-critical venue state in process-local memory. `broker_unpriced_fills` was added last of all, per [#298](https://github.com/dd-jp/samurai-trading-system/issues/298) (`0008_broker_unpriced_fills.sql`), giving a permanently-unpriced fill a durable age-out clock so it escalates to an operator instead of leaving a lot stuck in silence. Field-level non-collision was re-verified across all twenty-one tables (see **Non-Collision Verification** below).
 
 **Market Data Service** — owner: `docs/specs/market-data-service-spec.md`
 
@@ -232,6 +232,30 @@ CREATE TABLE broker_observed_fills (
   qty              REAL NOT NULL,
   fee              REAL NOT NULL,
   timestamp        TEXT NOT NULL,
+  PRIMARY KEY (venue, client_order_id, broker_fill_id)
+);
+
+-- The age-out clock for a fill the venue reports filled and will not price (#298,
+-- 0008_broker_unpriced_fills.sql). An adapter refuses to book such a fill -- a zero price is
+-- fabricated, and it flows into weighted-average entry, realized PnL and the R-multiple --
+-- and relies on the next poll re-offering it priced. Right for the transient case, silent
+-- for the permanent one: the lot stays under-filled, its stop is never resized to the real
+-- quantity, no ClosedTrade is emitted, and nothing escalates. This table remembers WHEN the
+-- anomaly was first seen, so the adapter can escalate it to an operator once past a
+-- threshold and only once. DURABLE because the clock must outlive a restart: an unattended
+-- soak (#238) contains restarts, and an in-process clock would age nothing out. Deleted when
+-- the venue finally prices the fill. NOT `broker_observed_fills`: `price` is NOT NULL there,
+-- and an unpriced row on that path is exactly what is being refused.
+CREATE TABLE broker_unpriced_fills (
+  venue            TEXT NOT NULL CHECK(venue IN ('ccxt', 'ibkr', 'alpaca')),
+  client_order_id  TEXT NOT NULL,
+  broker_fill_id   TEXT NOT NULL,
+  leg              TEXT NOT NULL CHECK(leg IN ('entry', 'stop', 'target', 'exit')),
+  instrument       TEXT NOT NULL,   -- denormalized from the parent: legs carry no symbol
+  qty              REAL NOT NULL,   -- what the venue claims filled
+  first_seen_at    TEXT NOT NULL,   -- set once, never updated -- THE clock
+  last_seen_at     TEXT NOT NULL,
+  alerted_at       TEXT NULL,       -- set only after the alert was accepted by the channel
   PRIMARY KEY (venue, client_order_id, broker_fill_id)
 );
 ```
@@ -431,6 +455,7 @@ CREATE TABLE account_state (
   - **`entry_price`/`stop_price`/`target_price` vs `open_positions.avg_entry_price`/`stop`/`target`** — named APART on purpose, because they mean different things: these are the prices the bracket was REQUESTED at and never change, whereas `open_positions.stop`/`target` are the live protective levels that get resized on partial fill. Reusing `stop`/`target` would invite exactly the wrong join.
   - **`broker_observed_fills` vs `fills`** — same grain (one row per observed fill) but different owner and different lifetime: `fills` is the append-only system-of-record written by `ingestFills()` above the seam, `broker_observed_fills` is one adapter's undrained queue below it. The PK shape is deliberately parallel (`(venue, client_order_id, broker_fill_id)` against `(idempotency_key, broker_fill_id)`), with `venue` prefixed for the same reason it is in `broker_brackets`'.
   - `venue`, `phase`, `arm_attempt`, `armed_qty` and `arming_qty` appear in no other table. `asset_class`/`side`/`leg` carry the identical CHECK constraints as everywhere else, minus the `IS NULL OR` relaxation the nullable request columns require. No divergence.
+- **`broker_unpriced_fills`** ([#298](https://github.com/dd-jp/samurai-trading-system/issues/298), 2026-08-04) — shares `venue`/`client_order_id`/`broker_fill_id`/`leg`/`qty` with `broker_observed_fills` by design (same venue vocabulary, same PK shape, same reason for the `venue` prefix), and is deliberately NOT that table: the two hold opposite facts about a fill. `broker_observed_fills` is a queue of PRICED fills waiting to be drained (`price` NOT NULL); this is the record of fills that could not be priced at all, so it carries no `price` column to fabricate one into. `instrument` is denormalized rather than joined because the alert built from a row must be actionable standalone; it means the same thing as `open_positions.instrument`, with the same value space. `first_seen_at`/`last_seen_at`/`alerted_at` appear in no other table — they are an escalation clock, not a market or lot timestamp, and are named apart from `timestamp`/`opened_at`/`closed_at` for that reason. No divergence.
 - No other field-level collisions found.
 
 ## Testing Decisions

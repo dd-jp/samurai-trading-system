@@ -2,6 +2,7 @@ import {
   ConsoleApprovalChannel,
   LoggingHeartbeatChannel,
   LoggingOrphanAlertChannel,
+  LoggingUnpricedFillAlertChannel,
   ParkedCiiScoreProvider,
 } from './console-channels.js';
 import type { LogEntry, Logger } from './types.js';
@@ -39,6 +40,35 @@ describe('LoggingOrphanAlertChannel', () => {
     // An orphaned `go` is the one state that can hide a real position.
     expect(logger.entries[0]?.level).toBe('error');
     expect(logger.entries[0]?.trace_id).toBe('trace-1');
+  });
+});
+
+describe('LoggingUnpricedFillAlertChannel', () => {
+  it('reports a stuck lot at error level, naming the order an operator must look up', async () => {
+    const logger = makeLogger();
+    const firstSeen = new Date('2026-08-03T12:00:00Z');
+
+    await new LoggingUnpricedFillAlertChannel(logger).postUnpricedFillAlert({
+      venue: 'alpaca',
+      client_order_id: 'key-aapl-1355',
+      broker_fill_id: 'alpaca-entry-1',
+      leg: 'entry',
+      instrument: 'AAPL',
+      qty: 100,
+      first_seen_at: firstSeen,
+      unpriced_for_ms: 900_000,
+      age_out_ms: 900_000,
+    });
+
+    // `error`, not `warn`: the lot behind it cannot advance, cannot size its
+    // stop correctly and will never emit a ClosedTrade.
+    expect(logger.entries[0]?.level).toBe('error');
+    expect(logger.entries[0]?.payload).toMatchObject({
+      broker_fill_id: 'alpaca-entry-1',
+      instrument: 'AAPL',
+      qty: 100,
+      first_seen_at: firstSeen.toISOString(),
+    });
   });
 });
 
