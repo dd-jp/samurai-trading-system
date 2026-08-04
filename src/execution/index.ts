@@ -18,8 +18,14 @@ export type {
   AlpacaOrder,
   AlpacaOrderLeg,
 } from './adapters/alpaca-client.js';
-export type { AlpacaHttpBrokerClientOptions } from './adapters/alpaca-http-client.js';
-export { AlpacaHttpBrokerClient } from './adapters/alpaca-http-client.js';
+export type {
+  AlpacaHttpBrokerClientOptions,
+  AlpacaTradingEnvironment,
+} from './adapters/alpaca-http-client.js';
+export {
+  AlpacaHttpBrokerClient,
+  classifyAlpacaTradingHost,
+} from './adapters/alpaca-http-client.js';
 export { BrokerError, sanitizeBrokerError } from './broker-error.js';
 export type {
   BrokerBracketOrderIds,
