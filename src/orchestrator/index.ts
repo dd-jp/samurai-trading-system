@@ -73,6 +73,7 @@ export {
   resolveAlertsMode,
   TELEGRAM_ALERT_ENV_VARS,
 } from './alert-transport.js';
+export { TradeChannelBreachAlert } from './breach-alert-channel.js';
 export { digest } from './digest.js';
 export { Heartbeat, type HeartbeatChannel } from './heartbeat.js';
 export { TradeChannelHeartbeat } from './heartbeat-channel.js';
@@ -104,6 +105,7 @@ export {
   buildProductionComponents,
   buildProductionOrchestrator,
   buildProductionTickRunner,
+  type DailyMetricsConfig,
   type FeedbackCycleConfig,
   type ProductionComponents,
   type ProductionConfig,

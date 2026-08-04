@@ -21,6 +21,7 @@
  * through Telegram is #275's remaining half, not #322's.
  */
 import type { UnpricedFillAlert, UnpricedFillAlertChannel } from '../execution/index.js';
+import type { BreachAlert, BreachAlertChannel } from '../feedback-loop/index.js';
 import type { CiiScoreProvider } from '../market-intelligence/index.js';
 import type { ApprovalChannel, ApprovalOutcome, ApprovalRequest } from '../verdict/index.js';
 import type { HeartbeatChannel } from './heartbeat.js';
@@ -99,6 +100,43 @@ export class LoggingUnpricedFillAlertChannel implements UnpricedFillAlertChannel
       payload: {
         ...alert,
         first_seen_at: alert.first_seen_at.toISOString(),
+      },
+    });
+  }
+}
+
+/**
+ * A kill-threshold breach (#93), written to the log at `error`.
+ *
+ * `error`, for `LoggingOrphanAlertChannel`'s reason and more so: a breach
+ * means the strategy's own validation says its edge may be gone — PBO over
+ * its line, out-of-sample Sharpe under it, a statistically insignificant
+ * Deflated Sharpe, or live performance diverging from the backtest that
+ * justified the config. The Feedback Loop has already defensively tightened
+ * every risk threshold by the time this fires; the kill/rework call is the
+ * human's, and this is how the human hears about it.
+ *
+ * Same caveat as the other log-only stand-ins: a log line nobody tails is not
+ * an alert. `TradeChannelBreachAlert` (breach-alert-channel.ts) is the
+ * reachable-from-a-phone implementation, selected by `SAMURAI_ALERTS=telegram`
+ * (#322) — which an unattended soak (#238) sets.
+ */
+export class LoggingBreachAlertChannel implements BreachAlertChannel {
+  constructor(private readonly logger: Logger) {}
+
+  postBreachAlert(alert: BreachAlert): void {
+    this.logger.log({
+      // The daily batch belongs to no single tick, so it uses the same
+      // synthetic trace the feedback cycle already logs under.
+      trace_id: 'feedback-cycle',
+      stage: 'feedback-loop',
+      level: 'error',
+      message:
+        'kill-threshold breach — risk thresholds auto-tightened; review the strategy and ' +
+        'decide kill or rework (no automatic kill is ever applied)',
+      payload: {
+        breaches: alert.breaches,
+        reported_at: alert.reported_at.toISOString(),
       },
     });
   }

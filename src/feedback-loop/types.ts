@@ -310,4 +310,57 @@ export interface MetricsReport {
   revalidation?: RevalidationSnapshot;
   /** FL-only. e.g. 'pbo_over_max', 'oos_sharpe_under_min'. Never triggers a kill — alert + auto-tighten only. */
   breaches: string[];
+  /**
+   * Kill-lines this run could NOT evaluate, so that "did not breach" is never
+   * mistaken for "was never checked" (#327).
+   *
+   * Two causes, both routine and both silent until now:
+   *
+   * - No `revalidation` snapshot — which is every non-revalidation day, by
+   *   design. The three snapshot-gated lines (`pbo_over_max`,
+   *   `oos_sharpe_under_min`, `dsr_insignificant`) simply do not run.
+   * - `backtest_reference_sharpe <= 0` — `liveBacktestDivergence` returns `0`
+   *   rather than manufacture a false breach off a broken reference (correct,
+   *   and unchanged), which leaves `live_backtest_divergence_over_max` inert.
+   *
+   * An empty array is the only clean bill of health: it means all four lines
+   * actually ran. A caller reading `breaches` alone cannot tell the
+   * difference — which is precisely how a degrading paper run reports nothing.
+   */
+  not_evaluated: string[];
+}
+
+/**
+ * Where a live run gets the `MetricsSuite` that `computeMetrics` evaluates
+ * (#327).
+ *
+ * A supplied port, not a computation here, and deliberately so. The
+ * validation library's own `computeMetrics(returns, trades)` needs a
+ * `ReturnSeries` — evenly spaced periodic equity returns — and this repo
+ * persists no such series: `account_state` (migration 0006) holds
+ * `peak_equity`, a high-water scalar, and that migration's own comment
+ * records `daily_open_equity` as an OPEN decision (GAP-8). Deriving a return
+ * series from realized `ClosedTrade` PnL instead would use the wrong
+ * denominator and be unevenly spaced.
+ *
+ * That matters more than tidiness, because a breach does not merely report:
+ * `autoTighten` WRITES every risk threshold toward its extreme and appends to
+ * the `AdjustmentLog`. Stepping real risk config off an invented series is a
+ * worse failure than the silence it would paper over.
+ *
+ * So the suite is supplied by the operator/Stage-2 harness, exactly as
+ * `FeedbackConfig`'s tuned values and `LoosenApprovalChannel` already are.
+ * Returning `undefined` is a first-class answer meaning "no suite this
+ * cycle"; the orchestrator says so out loud rather than booking it as a
+ * passing check.
+ */
+export interface DailyMetricsSource {
+  getDailyMetrics(): DailyMetricsSample | undefined;
+}
+
+export interface DailyMetricsSample {
+  /** Already computed by the validation library — never derived here. */
+  daily: MetricsSuite;
+  /** Present only on the weekly/monthly revalidation cadence. */
+  revalidation?: RevalidationSnapshot;
 }

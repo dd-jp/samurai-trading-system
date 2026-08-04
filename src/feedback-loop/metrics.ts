@@ -14,10 +14,21 @@
 import { applyGuardrail } from './guardrails.js';
 import type { Adjustment, BreachAlert, MetricsInput, MetricsReport } from './types.js';
 
-const PBO_OVER_MAX = 'pbo_over_max';
-const OOS_SHARPE_UNDER_MIN = 'oos_sharpe_under_min';
-const DSR_INSIGNIFICANT = 'dsr_insignificant';
-const LIVE_BACKTEST_DIVERGENCE_OVER_MAX = 'live_backtest_divergence_over_max';
+export const PBO_OVER_MAX = 'pbo_over_max';
+export const OOS_SHARPE_UNDER_MIN = 'oos_sharpe_under_min';
+export const DSR_INSIGNIFICANT = 'dsr_insignificant';
+export const LIVE_BACKTEST_DIVERGENCE_OVER_MAX = 'live_backtest_divergence_over_max';
+
+/**
+ * The three lines that need a `RevalidationSnapshot`. Absent one — every
+ * non-revalidation day — none of them can be evaluated, which is reported in
+ * `MetricsReport.not_evaluated` rather than passing silently (#327).
+ */
+export const REVALIDATION_GATED_KILL_LINES: readonly string[] = [
+  PBO_OVER_MAX,
+  OOS_SHARPE_UNDER_MIN,
+  DSR_INSIGNIFICANT,
+];
 
 function mean(values: readonly number[]): number {
   let sum = 0;
@@ -106,9 +117,31 @@ function autoTighten(input: MetricsInput, now: Date): void {
   }
 }
 
+/**
+ * Which kill-lines this input cannot answer at all. Computed from the same
+ * two conditions `detectBreaches` skips on, so the report can never claim a
+ * line passed when it was never run (#327).
+ */
+function notEvaluated(input: MetricsInput): string[] {
+  const lines: string[] = [];
+
+  if (input.revalidation === undefined) {
+    lines.push(...REVALIDATION_GATED_KILL_LINES);
+  }
+  // Mirrors `liveBacktestDivergence`'s guard exactly. The `0` return stays —
+  // a broken reference must not manufacture a breach — but the resulting
+  // "no breach" is not evidence of health, so it is recorded as un-run.
+  if (input.backtest_reference_sharpe <= 0) {
+    lines.push(LIVE_BACKTEST_DIVERGENCE_OVER_MAX);
+  }
+
+  return lines;
+}
+
 export function computeMetrics(input: MetricsInput): MetricsReport {
   const now = input.clock.now();
   const breaches = detectBreaches(input);
+  const not_evaluated = notEvaluated(input);
 
   if (breaches.length > 0) {
     const alert: BreachAlert = { breaches, reported_at: now };
@@ -117,6 +150,6 @@ export function computeMetrics(input: MetricsInput): MetricsReport {
   }
 
   return input.revalidation === undefined
-    ? { daily: input.daily, breaches }
-    : { daily: input.daily, revalidation: input.revalidation, breaches };
+    ? { daily: input.daily, breaches, not_evaluated }
+    : { daily: input.daily, revalidation: input.revalidation, breaches, not_evaluated };
 }

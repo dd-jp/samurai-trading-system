@@ -10,6 +10,7 @@
  * own suite owns that) and a live broker round-trip (ADR-0004's "wiring
  * validated" bar is a manual E2E run, not a unit test).
  */
+import type { MetricsSuite } from '../cost-model-backtest/index.js';
 import { CostModelImpl } from '../cost-model-backtest/index.js';
 import {
   AnthropicLlmClient,
@@ -17,6 +18,8 @@ import {
   MockLlmClient,
 } from '../debate-engine/index.js';
 import { SimulatedBrokerAdapter } from '../execution/index.js';
+import type { DailyMetricsSample, FeedbackConfig } from '../feedback-loop/index.js';
+import { SqliteTuningStore } from '../feedback-loop/index.js';
 import type { AlpacaBar, AlpacaQuote, Bar } from '../market-data-service/index.js';
 import {
   FixtureDataSource,
@@ -800,7 +803,18 @@ describe('buildProductionOrchestrator', () => {
     await orchestrator.start();
     // Well past the 24h default cycle: with no `feedback` block, no cycle runs.
     await vi.advanceTimersByTimeAsync(47 * 60 * 60 * 1_000);
-    expect(logger.entries.filter((entry) => entry.stage === 'feedback-loop')).toHaveLength(0);
+    expect(logger.entries.filter((entry) => entry.trace_id === 'feedback-cycle')).toHaveLength(0);
+
+    // ...but it is no longer SILENT about it (#327). Unstarted-by-omission is
+    // the failure mode: the run looks healthy and learns nothing.
+    const startupWarns = logger.entries.filter(
+      (entry) => entry.stage === 'feedback-loop' && entry.trace_id === 'startup',
+    );
+    expect(startupWarns).toHaveLength(1);
+    expect(startupWarns[0]?.level).toBe('warn');
+    expect(startupWarns[0]?.message).toContain('ProductionConfig.feedback');
+    // Names the kill-lines that consequently never run.
+    expect(startupWarns[0]?.message).toContain('pbo_over_max');
     await orchestrator.stop();
   });
 
@@ -821,12 +835,218 @@ describe('buildProductionOrchestrator', () => {
     await orchestrator.start();
     await vi.advanceTimersByTimeAsync(2_000);
 
-    const cycleEntries = logger.entries.filter((entry) => entry.stage === 'feedback-loop');
+    const cycleEntries = logger.entries.filter((entry) => entry.trace_id === 'feedback-cycle');
     expect(cycleEntries).toHaveLength(2);
+
+    // No `metrics` block, so the kill-line detector is still inert — and says
+    // so at startup rather than leaving it to be discovered (#327).
+    const metricsWarn = logger.entries.filter(
+      (entry) => entry.trace_id === 'startup' && entry.stage === 'feedback-loop',
+    );
+    expect(metricsWarn).toHaveLength(1);
+    expect(metricsWarn[0]?.level).toBe('warn');
+    expect(metricsWarn[0]?.message).toContain('FeedbackCycleConfig.metrics');
 
     await orchestrator.stop();
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(logger.entries.filter((entry) => entry.stage === 'feedback-loop')).toHaveLength(2);
+    expect(logger.entries.filter((entry) => entry.trace_id === 'feedback-cycle')).toHaveLength(2);
+  });
+
+  /**
+   * #327 — `computeMetrics` had no production caller, so all four kill-lines
+   * were unreachable in a paper run. These assert the EFFECTS of the wiring
+   * (an alert posted, a risk threshold actually written), not that a function
+   * was invoked: a spy on the call would pass against a stub that does
+   * nothing.
+   */
+  describe('kill-line wiring (#327)', () => {
+    const SUITE: MetricsSuite = {
+      sharpe: 0.2,
+      sortino: 0.3,
+      calmar: 0.4,
+      max_drawdown: 0.2,
+      profit_factor: 1.1,
+      expectancy: 0.05,
+      skew: 0.1,
+      kurtosis: 0.5,
+      turnover: 0.3,
+      exposure: 0.4,
+    };
+
+    function feedbackConfig(): FeedbackConfig {
+      const dial = {
+        max_step: 0.05,
+        floor: 0.1,
+        ceiling: 0.9,
+        tighten_is: 'decrease' as const,
+      };
+      return {
+        attribution_window_ms: 24 * 60 * 60 * 1_000,
+        weights: dial,
+        shadow_credit: 0.1,
+        shadow_influence_ceiling: 0.2,
+        strategy_params: {},
+        risk_thresholds: { max_position_size: dial },
+        kill_thresholds: {
+          max_pbo: 0.05,
+          min_oos_sharpe: 0.5,
+          min_deflated_sharpe: 0.95,
+          max_live_backtest_divergence: 0.5,
+        },
+      };
+    }
+
+    function metricsConfig(
+      db: SqliteHandle,
+      overrides: {
+        sample?: DailyMetricsSample | undefined;
+        backtest_reference_sharpe?: number;
+      } = {},
+    ) {
+      const logger = recordingLogger();
+      const postBreachAlert = vi.fn();
+      // Seeded so `autoTighten` has a row to step — an absent threshold is a
+      // documented no-op, which would make the test vacuous.
+      const tuning = new SqliteTuningStore(db, new SimulatedClock(START));
+      tuning.setRiskThreshold('max_position_size', 0.8);
+
+      const config = stubConfig(db, {
+        logger,
+        tickIntervalMs: 100_000,
+        heartbeatIntervalMs: 100_000,
+        breachAlerts: { postBreachAlert },
+        feedback: {
+          intervalMs: 1_000,
+          config: feedbackConfig(),
+          approvals: { requestLoosenApproval: vi.fn() },
+          metrics: {
+            source: {
+              getDailyMetrics: () =>
+                'sample' in overrides
+                  ? overrides.sample
+                  : { daily: SUITE, revalidation: undefined },
+            },
+            backtest_reference_sharpe: overrides.backtest_reference_sharpe ?? 1.5,
+          },
+        },
+      });
+
+      return { config, logger, postBreachAlert, tuning };
+    }
+
+    it('calls computeMetrics from the daily timer: a breaching suite alerts AND auto-tightens', async () => {
+      // live sharpe 0.2 vs reference 1.5 = 87% divergence, over the 0.5 line.
+      const { config, logger, postBreachAlert, tuning } = metricsConfig(db);
+      const orchestrator = buildProductionOrchestrator(config);
+
+      await orchestrator.start();
+      await vi.advanceTimersByTimeAsync(1_500);
+
+      // The operator alert actually fired, through the real channel seam.
+      expect(postBreachAlert).toHaveBeenCalledTimes(1);
+      expect(postBreachAlert.mock.calls[0]?.[0]).toMatchObject({
+        breaches: ['live_backtest_divergence_over_max'],
+      });
+      // ...and the defensive auto-tighten actually WROTE. This is the
+      // assertion that goes red if the computeMetrics call is removed.
+      expect(tuning.getRiskThresholds().max_position_size).toBeCloseTo(0.75);
+
+      const breachLog = logger.entries.find((e) => e.message.includes('KILL-THRESHOLD BREACH'));
+      expect(breachLog?.level).toBe('error');
+
+      await orchestrator.stop();
+    });
+
+    it('records revalidation-skipped lines rather than reporting a clean bill of health', async () => {
+      // Healthy divergence, no revalidation snapshot — the shape of an
+      // ordinary non-revalidation day.
+      const { config, logger, postBreachAlert } = metricsConfig(db, {
+        backtest_reference_sharpe: 0.2,
+      });
+      const orchestrator = buildProductionOrchestrator(config);
+
+      await orchestrator.start();
+      await vi.advanceTimersByTimeAsync(1_500);
+
+      expect(postBreachAlert).not.toHaveBeenCalled();
+      const metricsLog = logger.entries.find((e) => e.message === 'daily metrics computed');
+      expect(metricsLog).toBeDefined();
+      // Not an empty array: three lines were skipped, not passed.
+      expect(metricsLog?.payload).toMatchObject({
+        breaches: [],
+        not_evaluated: ['pbo_over_max', 'oos_sharpe_under_min', 'dsr_insignificant'],
+      });
+
+      await orchestrator.stop();
+    });
+
+    it('warns once — not every cycle — that a non-positive reference Sharpe makes divergence inert', async () => {
+      const { config, logger } = metricsConfig(db, { backtest_reference_sharpe: 0 });
+      const orchestrator = buildProductionOrchestrator(config);
+
+      await orchestrator.start();
+      // Three cycles.
+      await vi.advanceTimersByTimeAsync(3_500);
+
+      const inertWarns = logger.entries.filter((e) =>
+        e.message.includes('live_backtest_divergence_over_max is INERT'),
+      );
+      expect(inertWarns).toHaveLength(1);
+      expect(inertWarns[0]?.level).toBe('warn');
+
+      // The line is recorded as un-evaluated on every cycle even so.
+      const metricsLog = logger.entries.find((e) => e.message === 'daily metrics computed');
+      expect(metricsLog?.payload).toMatchObject({
+        not_evaluated: [
+          'pbo_over_max',
+          'oos_sharpe_under_min',
+          'dsr_insignificant',
+          'live_backtest_divergence_over_max',
+        ],
+      });
+
+      await orchestrator.stop();
+    });
+
+    it('warns every cycle when the source yields no suite, and computes nothing', async () => {
+      const { config, logger, postBreachAlert, tuning } = metricsConfig(db, { sample: undefined });
+      const orchestrator = buildProductionOrchestrator(config);
+
+      await orchestrator.start();
+      await vi.advanceTimersByTimeAsync(2_500);
+
+      const skipped = logger.entries.filter((e) =>
+        e.message.includes('no daily MetricsSuite this cycle'),
+      );
+      expect(skipped.length).toBeGreaterThanOrEqual(2);
+      expect(skipped[0]?.level).toBe('warn');
+      expect(postBreachAlert).not.toHaveBeenCalled();
+      // Untouched: nothing was computed, so nothing was tightened.
+      expect(tuning.getRiskThresholds().max_position_size).toBeCloseTo(0.8);
+
+      await orchestrator.stop();
+    });
+
+    it('a metrics failure does not take the timer or the tuning cycle down', async () => {
+      const { config, logger } = metricsConfig(db);
+      const feedback = config.feedback as NonNullable<ProductionConfig['feedback']>;
+      (feedback.metrics as NonNullable<typeof feedback.metrics>).source = {
+        getDailyMetrics: () => {
+          throw new Error('metrics source exploded');
+        },
+      };
+      const orchestrator = buildProductionOrchestrator(config);
+
+      await orchestrator.start();
+      await vi.advanceTimersByTimeAsync(2_500);
+
+      // Caught and logged, and the timer kept running.
+      expect(
+        logger.entries.filter((e) => e.message === 'daily feedback cycle failed').length,
+      ).toBeGreaterThanOrEqual(2);
+
+      await orchestrator.stop();
+    });
   });
 
   it('schedules the narrow smoke universe by default', () => {

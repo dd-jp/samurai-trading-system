@@ -211,3 +211,76 @@ describe('computeMetrics', () => {
     expect(adjustments.getEntries()).toEqual([]);
   });
 });
+
+/**
+ * #327 — "did not breach" must never read as "was checked and passed". These
+ * assert the RECORD, not a log line: a revalidation-less day and a broken
+ * reference Sharpe both produce `breaches: []`, and the only thing that tells
+ * them apart from a genuine all-clear is `not_evaluated`.
+ */
+describe('computeMetrics — un-evaluated kill-lines (#327)', () => {
+  it('reports nothing un-evaluated when all four lines actually ran', () => {
+    const { input } = makeInput();
+    const report = computeMetrics(input);
+
+    expect(report.breaches).toEqual([]);
+    expect(report.not_evaluated).toEqual([]);
+  });
+
+  it('records the three revalidation-gated lines as un-evaluated on a revalidation-less day', () => {
+    const { input } = makeInput({ revalidation: undefined });
+    const report = computeMetrics(input);
+
+    // The clean bill of health it would otherwise look like...
+    expect(report.breaches).toEqual([]);
+    // ...is distinguishable only because of this.
+    expect(report.not_evaluated).toEqual([
+      'pbo_over_max',
+      'oos_sharpe_under_min',
+      'dsr_insignificant',
+    ]);
+  });
+
+  it('records the divergence line as inert when backtest_reference_sharpe <= 0', () => {
+    const { input } = makeInput({ backtest_reference_sharpe: 0 });
+    const report = computeMetrics(input);
+
+    expect(report.breaches).toEqual([]);
+    expect(report.not_evaluated).toEqual(['live_backtest_divergence_over_max']);
+  });
+
+  it('records a negative reference Sharpe as inert too, without manufacturing a breach', () => {
+    const { input, alerts, adjustments } = makeInput({
+      backtest_reference_sharpe: -1,
+      daily: makeSuite({ sharpe: -5 }),
+    });
+    const report = computeMetrics(input);
+
+    // The `0` return is deliberate and unchanged — visibility is the fix.
+    expect(report.breaches).toEqual([]);
+    expect(report.not_evaluated).toEqual(['live_backtest_divergence_over_max']);
+    expect(alerts.getAlerts()).toEqual([]);
+    expect(adjustments.getEntries()).toEqual([]);
+  });
+
+  it('records all four as un-evaluated when a revalidation-less day meets a broken reference', () => {
+    const { input } = makeInput({ revalidation: undefined, backtest_reference_sharpe: 0 });
+    const report = computeMetrics(input);
+
+    expect(report.breaches).toEqual([]);
+    expect(report.not_evaluated).toEqual([
+      'pbo_over_max',
+      'oos_sharpe_under_min',
+      'dsr_insignificant',
+      'live_backtest_divergence_over_max',
+    ]);
+  });
+
+  it('leaves not_evaluated empty for a line that ran and genuinely breached', () => {
+    const { input } = makeInput({ revalidation: makeRevalidation({ pbo: 0.1 }) });
+    const report = computeMetrics(input);
+
+    expect(report.breaches).toEqual(['pbo_over_max']);
+    expect(report.not_evaluated).toEqual([]);
+  });
+});
