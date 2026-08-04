@@ -80,7 +80,13 @@ describe('SqliteVerdictLogStore', () => {
     expect(readRow(db, 'trace-b')?.instrument).toBe('TSLA');
   });
 
-  it('upserts on a repeated trace_id rather than throwing (idempotent retry)', () => {
+  it('a repeated trace_id does not throw, but the ORIGINAL row wins (first-write-wins, not last)', () => {
+    // Append-only per the port's doc comment (shared/types.ts): a second
+    // write for a trace_id that already has a row must not overwrite it —
+    // that would let a later call erase the very `go` row
+    // OrphanVerdictScanner depends on. See this file's own doc comment for
+    // the full reasoning; this test is what would catch a regression to
+    // `DO UPDATE`.
     const db = openSharedStore(':memory:');
     const store = new SqliteVerdictLogStore(db);
 
@@ -89,6 +95,7 @@ describe('SqliteVerdictLogStore', () => {
 
     const rows = db.prepare('SELECT * FROM verdict_log WHERE trace_id = ?').all('trace-1');
     expect(rows).toHaveLength(1);
-    expect(readRow(db, 'trace-1')?.status).toBe('go');
+    expect(readRow(db, 'trace-1')?.status).toBe('no_go');
+    expect(readRow(db, 'trace-1')?.no_go_reason).toBe('drift');
   });
 });

@@ -14,15 +14,28 @@
  * Follows `SqliteAccountStateStore` (#276) / `SqliteBrokerStateStore` (#287):
  * a small focused class over the shared handle.
  *
- * `trace_id` is the table's `PRIMARY KEY` (0001_init.sql), so this upserts
- * with `ON CONFLICT ... DO UPDATE` rather than a bare `INSERT` — matching
- * both precedents' reasoning ("a retry racing itself"). Nothing in
+ * `trace_id` is the table's `PRIMARY KEY` (0001_init.sql), so a bare
+ * `INSERT` would throw and abort the tick on a repeated `trace_id` (a
+ * retried tick, a re-processed crash-recovery pass) — nothing in
  * `SequentialTickRunner` re-runs the verdict stage for a `trace_id` that has
- * already produced a decision today, but a bare `INSERT` would throw and
- * abort the tick if that ever changed (a retried tick, a re-processed
- * crash-recovery pass), turning a write-once assumption into a pipeline
- * crash. An idempotent upsert costs nothing when the assumption holds and
- * avoids that failure mode when it doesn't.
+ * already produced a decision today, but a write-once assumption shouldn't
+ * be able to crash the pipeline if that ever changes. So this upserts, but
+ * with `ON CONFLICT(trace_id) DO NOTHING` — first-write-wins, NOT
+ * `DO UPDATE`/last-write-wins. `VerdictLogStore`'s port doc (shared/types.ts)
+ * promises "Append-only: no update/delete, one row per trace_id"; unlike
+ * `SqliteAccountStateStore`'s `peak_equity` (a running high-water mark,
+ * correctly upserted with `MAX()`) or `SqliteBrokerStateStore`'s bracket
+ * state (live venue state, correctly upserted with `COALESCE()`),
+ * `verdict_log` is an audit record of what Verdict actually decided — the
+ * row `OrphanVerdictScanner` depends on to know a `go` was ever produced for
+ * this `trace_id`. A `DO UPDATE` that let a later call (e.g. gate 5's
+ * fire-time breaker re-check landing differently the second time) silently
+ * replace an original `go` row with a `no_go` one would erase exactly the
+ * evidence #302 exists to make visible — reintroducing the hole this ticket
+ * closes, just behind a rarer trigger. `DO NOTHING` gets the "don't crash on
+ * a duplicate write" benefit without that risk: the first decision recorded
+ * for a `trace_id` is permanent, matching the port's append-only contract
+ * exactly.
  *
  * No `getByTraceId` — see verdict-log-store.ts's doc comment for why the
  * port stays write-only and this store doesn't add a read method the port
@@ -42,13 +55,7 @@ export class SqliteVerdictLogStore implements VerdictLogStore {
         `INSERT INTO verdict_log (
            trace_id, idempotency_key, instrument, status, no_go_reason, hitl_override, timestamp
          ) VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(trace_id) DO UPDATE SET
-           idempotency_key = excluded.idempotency_key,
-           instrument = excluded.instrument,
-           status = excluded.status,
-           no_go_reason = excluded.no_go_reason,
-           hitl_override = excluded.hitl_override,
-           timestamp = excluded.timestamp`,
+         ON CONFLICT(trace_id) DO NOTHING`,
       )
       .run(
         entry.trace_id,

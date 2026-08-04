@@ -1,35 +1,22 @@
 /**
- * In-memory `VerdictLogStore` for #206 — the port's non-SQLite reference
- * implementation, mirroring src/debate-engine/debate-log-store.ts's
- * `InMemoryDebateLogStore` and src/dashboard/fixture-store.ts's
- * `InMemoryQueryStore`. See docs/specs/shared-sqlite-store-spec.md
- * ("Verdict" — `verdict_log`). The real SQLite-backed store is
- * `./sqlite-verdict-log-store.ts`'s `SqliteVerdictLogStore` (#302) — the
- * shared store (#193) has existed since before this class's #206 doc
- * comment last said otherwise; nothing in production actually constructed
- * either implementation until #302 wired `SqliteVerdictLogStore` into
- * `direct-bind.ts`'s `buildVerdictStep`.
+ * `buildVerdictLog` — constructs a `VerdictLog` row from a resolved
+ * `VerdictDecision`. See docs/specs/shared-sqlite-store-spec.md ("Verdict" —
+ * `verdict_log`) and `./sqlite-verdict-log-store.ts`'s `SqliteVerdictLogStore`
+ * (#302), the port's production implementation.
  *
- * Its `rows` map is written but, as of #302, never read back anywhere in
- * this codebase (its own test only asserts `writeLog` doesn't throw, and
- * `LoggingVerdict`'s tests now use a port-shaped `{ writeLog: vi.fn() }`
- * fake instead — see logging-verdict.test.ts). It stays because it encodes
- * the table's real semantics (one row per `trace_id`, last write wins,
- * `VerdictLogStore`-shaped) more precisely than a bare spy would, for
- * whichever future test or non-SQLite composition root wants that. If that
- * need never materializes, this class — not just its `getByTraceId` — is
- * the next thing to cut.
- *
- * No `getByTraceId` (#306): the port doesn't declare one (see its doc
- * comment in shared/types.ts for why), and grepping this class's only
- * non-test construction sites found none — every caller that reads
- * `verdict_log` back does so with raw SQL against `SharedStore`
- * (`OrphanVerdictScanner`, the Dashboard's `SqliteQueryStore`), not through
- * this port-typed store. A prior version of this class had a `getByTraceId`
- * that only its own tests ever called; dropping it removes implementation
- * surface the port never promised and no production code depended on.
+ * This file previously also held `InMemoryVerdictLogStore`, the port's
+ * non-SQLite reference implementation (#206) — removed in #302's review pass
+ * (kimi-3-review) once dropping `getByTraceId` (#306) left it with zero
+ * consumers: nothing in production ever constructed it (that gap is what
+ * #302 fixed, by wiring `SqliteVerdictLogStore` instead), its `rows` map was
+ * written but never read back by anything, and its own test
+ * (`'a written decision...'`) only asserted `writeLog` doesn't throw — which
+ * `Map.set` can't meaningfully fail at. `LoggingVerdict`'s tests now use a
+ * port-shaped `{ writeLog: vi.fn() }` fake (logging-verdict.test.ts) instead
+ * of a concrete class, per docs/coding-standards.md's "grep for consumers;
+ * if none exist outside the file's own module, it's dead — remove it."
  */
-import type { VerdictLog, VerdictLogStore } from '../shared/index.js';
+import type { VerdictLog } from '../shared/index.js';
 import type { VerdictDecision, VerdictInput } from './types.js';
 
 /**
@@ -58,12 +45,4 @@ export function buildVerdictLog(input: VerdictInput, decision: VerdictDecision):
     hitl_override: decision.approval_path !== 'automated',
     timestamp: decision.timestamp,
   };
-}
-
-export class InMemoryVerdictLogStore implements VerdictLogStore {
-  private readonly rows = new Map<string, VerdictLog>();
-
-  writeLog(entry: VerdictLog): void {
-    this.rows.set(entry.trace_id, entry);
-  }
 }

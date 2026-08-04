@@ -45,6 +45,14 @@ import {
   RiskManagerImpl,
 } from '../../risk-manager/index.js';
 import type { Clock, OpenPosition } from '../../shared/index.js';
+// Aliased: this module already imports a DIFFERENT `SharedStore` above (an
+// unrelated `execution/index.js` interface, `ExecutionStepDeps.store`'s
+// type) — the alias names which one `VerdictStepDeps.store` actually is,
+// rather than leaning on `ConstructorParameters<typeof SqliteVerdictLogStore>`
+// to dodge the collision (kimi-3-review/deepseek-review on #302's PR: that
+// form only surfaces a shape mismatch at the `new SqliteVerdictLogStore(...)`
+// call site, not here at the interface).
+import type { SharedStore as VerdictLogDb } from '../../shared/store/index.js';
 import type { TraderConfig } from '../../trader/index.js';
 import { decide } from '../../trader/index.js';
 import type { ApprovalChannel, PositionStore, VerdictConfig } from '../../verdict/index.js';
@@ -191,14 +199,11 @@ export interface VerdictStepDeps extends BreakerStateDeps {
   /**
    * Backs the `LoggingVerdict` decorator's `verdict_log` write (#302). Same
    * shared handle every other Sqlite* store in this composition root reads/
-   * writes through — see `buildPersistence` below. Typed via
-   * `ConstructorParameters`, not a bare `SharedStore` annotation: this
-   * module already imports a DIFFERENT `SharedStore` from
-   * `../../execution/index.js` (`ExecutionStepDeps.store`'s type, an
-   * unrelated interface with the same name) for `ExecutionStepDeps` above —
-   * `buildPersistence`'s `store` param uses the identical workaround.
+   * writes through — see `buildPersistence` below. `VerdictLogDb` is this
+   * file's own import alias for `shared/store/index.js`'s `SharedStore`
+   * (see the import above for why it's aliased, not the bare name).
    */
-  store: ConstructorParameters<typeof SqliteVerdictLogStore>[0];
+  store: VerdictLogDb;
 }
 
 /**

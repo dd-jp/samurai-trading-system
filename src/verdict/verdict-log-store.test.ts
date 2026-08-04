@@ -1,6 +1,6 @@
 import type { OrderIntent } from '../shared/index.js';
 import type { VerdictDecision, VerdictInput } from './types.js';
-import { buildVerdictLog, InMemoryVerdictLogStore } from './verdict-log-store.js';
+import { buildVerdictLog } from './verdict-log-store.js';
 
 function makeIntent(overrides: Partial<OrderIntent> = {}): OrderIntent {
   return {
@@ -134,23 +134,11 @@ describe('buildVerdictLog', () => {
   });
 });
 
-describe('InMemoryVerdictLogStore', () => {
-  // No `getByTraceId` coverage here (#306) — the port is write-only (see its
-  // doc comment in shared/types.ts) and this class no longer exposes a read
-  // accessor nothing in production called. This class's remaining job is
-  // "satisfies the VerdictLogStore port for tests that want a non-SQLite
-  // double" — the SQLite-backed implementation is covered separately in
-  // sqlite-verdict-log-store.test.ts, and `LoggingVerdict`'s write-through
-  // behavior is covered in logging-verdict.test.ts via a port-shaped fake.
-  it('accepts a written log without throwing, for any number of distinct trace_ids', () => {
-    const store = new InMemoryVerdictLogStore();
-    const first = buildVerdictLog(makeInput({ trace_id: 'trace-1' }), makeDecision());
-    const second = buildVerdictLog(
-      makeInput({ trace_id: 'trace-2' }),
-      makeDecision({ status: 'no_go', order: null, no_go_reason: 'breaker' }),
-    );
-
-    expect(() => store.writeLog(first)).not.toThrow();
-    expect(() => store.writeLog(second)).not.toThrow();
-  });
-});
+// No `InMemoryVerdictLogStore` describe block here (#302 review pass,
+// kimi-3-review): the class was deleted from verdict-log-store.ts as dead
+// code once dropping `getByTraceId` (#306) left it with zero consumers and
+// its remaining test asserting only `Map.set` doesn't throw. See
+// verdict-log-store.ts's doc comment for the full reasoning.
+// `SqliteVerdictLogStore` (the production implementation) is covered in
+// sqlite-verdict-log-store.test.ts; `LoggingVerdict`'s write-through
+// behavior is covered in logging-verdict.test.ts via a port-shaped fake.
