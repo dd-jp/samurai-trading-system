@@ -185,8 +185,27 @@ export function fileSinkConfigFromEnvironment(
   };
 }
 
+/**
+ * The value, or `undefined` when the variable is absent or holds nothing but
+ * whitespace.
+ *
+ * The trim is not cosmetic — raised in review on #349. `Number(' ')` is `0`,
+ * and `0` is a *legal* value for `SAMURAI_LOG_MAX_FILES` meaning "keep
+ * nothing". So a stray space — a misconfigured compose file, a quoted-empty
+ * shell variable, a copy-paste — would have silently switched retention from
+ * ten generations to none, which is exactly the "retention window nobody
+ * chose" that `positiveInteger` refuses on every other malformed input. It
+ * would not have been caught by `SAMURAI_LOG_MAX_BYTES` either being wrong,
+ * because that one has `min = 1` and so already rejects `0`.
+ *
+ * Whitespace-only is treated as *unset*, not as an error, matching the
+ * established rule that an empty value counts as absent (`missingCredentialEnvVars`
+ * in index.ts takes the same line). Incidental surrounding whitespace on a real
+ * value is trimmed and accepted: `' 3 '` is unambiguous.
+ */
 function nonEmpty(raw: string | undefined): string | undefined {
-  return raw !== undefined && raw.length > 0 ? raw : undefined;
+  const trimmed = raw?.trim();
+  return trimmed !== undefined && trimmed.length > 0 ? trimmed : undefined;
 }
 
 function positiveInteger(raw: string | undefined, name: string, fallback: number, min = 0): number {

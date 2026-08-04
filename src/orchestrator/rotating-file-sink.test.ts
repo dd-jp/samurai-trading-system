@@ -389,6 +389,40 @@ describe('fileSinkConfigFromEnvironment', () => {
     process.env.SAMURAI_LOG_FILE = '';
     expect(fileSinkConfigFromEnvironment().filePath).toBe(DEFAULT_LOG_FILE);
   });
+
+  it('treats a whitespace-only value as unset, not as a path made of spaces', () => {
+    process.env.SAMURAI_LOG_FILE = '   ';
+    expect(fileSinkConfigFromEnvironment().filePath).toBe(DEFAULT_LOG_FILE);
+  });
+
+  it('never reads a whitespace-only SAMURAI_LOG_MAX_FILES as 0', () => {
+    // Raised in review on #349: `Number(' ')` is 0, and 0 is a *legal* value
+    // for this variable ("keep nothing"). So a stray space from a misconfigured
+    // compose file or a quoted-empty shell variable would have silently
+    // switched retention from ten generations to none — a retention window
+    // nobody chose. `SAMURAI_LOG_MAX_BYTES` was never exposed to this, because
+    // its `min` of 1 already rejects 0; this variable's does not.
+    //
+    // Whitespace-only resolves to *unset* — the default — rather than to an
+    // error, matching the established "an empty value counts as absent" rule.
+    // The regression this guards is the 0, not the throw.
+    process.env.SAMURAI_LOG_MAX_FILES = ' ';
+    const config = fileSinkConfigFromEnvironment();
+
+    expect(config.maxRotatedFiles).not.toBe(0);
+    expect(config.maxRotatedFiles).toBe(DEFAULT_MAX_ROTATED_FILES);
+  });
+
+  it('treats a whitespace-only SAMURAI_LOG_MAX_BYTES as unset too', () => {
+    process.env.SAMURAI_LOG_MAX_BYTES = '\t';
+    expect(fileSinkConfigFromEnvironment().maxBytes).toBe(DEFAULT_MAX_BYTES);
+  });
+
+  it('still accepts a value with incidental surrounding whitespace', () => {
+    // Trimming is about rejecting *only*-whitespace; ' 3 ' is unambiguous.
+    process.env.SAMURAI_LOG_MAX_FILES = ' 3 ';
+    expect(fileSinkConfigFromEnvironment().maxRotatedFiles).toBe(3);
+  });
 });
 
 describe('RotatingFileSink — maxRotatedFiles=0', () => {
