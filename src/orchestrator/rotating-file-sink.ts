@@ -46,6 +46,42 @@
  *   for a shared host's other accounts. (Modes apply at creation only — an
  *   existing file's permissions are the operator's.)
  *
+ * ## Why synchronous, and why that is not a tick-latency problem
+ *
+ * Raised in review on #349 and answered with measurements rather than a
+ * rewrite, so it does not have to be re-litigated. On the deployment target
+ * (Node 26, darwin/arm64, 461-byte lines — a real orchestrator log line):
+ *
+ * | case | cost |
+ * | --- | --- |
+ * | steady-state write, mean | **2.8 µs** (p50 2.2 µs, p99 6.8 µs; ~344k lines/sec) |
+ * | rotation write at the shipped 16 MiB × 10 policy | 2.5 ms mean, 4.7 ms worst |
+ * | 20 log lines in a tick | 0.056 ms |
+ * | 1000 log lines in a tick | 2.8 ms |
+ *
+ * Against `DEFAULT_TICK_INTERVAL_MS` (60 s), `LATENCY_BUDGET_MS.crypto` (15 s)
+ * and the Alpaca broker client's own 10 s request timeout, a realistic tick
+ * spends **0.0004%** of the debate budget in this sink. The expensive case —
+ * the close + 10-rename shift + reopen — costs ~5 ms and fires once per 16 MiB,
+ * which at soak volumes is roughly once a day: about eleven times across the
+ * whole 14-day run.
+ *
+ * It also does not introduce a synchronous write; it doubles one. `JsonLogger`
+ * already called `process.stdout.write` per line, measured at 2.75 µs against
+ * this sink's 2.63 µs — the same syscall to the same kind of destination.
+ *
+ * The affirmative argument matters more than the cost, though: **an async or
+ * worker-based sink loses buffered lines exactly when the process dies.** This
+ * log exists to answer "why did it do that on day 6" (#238), and the lines
+ * immediately before a crash are the ones that answer it. Trading a guaranteed
+ * few microseconds for the possibility of losing precisely the most valuable
+ * records in the file is the wrong trade for this component. `fs/promises` or a
+ * worker thread would buy latency this application has in enormous surplus, at
+ * the cost of durability it has none to spare of.
+ *
+ * (Benchmark was one-off and deliberately not committed: a timing assertion is
+ * exactly the kind of test that goes flaky in CI. Numbers are in #349.)
+ *
  * ## Degradation
  *
  * Any I/O failure — at construction or mid-run — flips the sink to `degraded`,
@@ -172,7 +208,10 @@ function positiveInteger(raw: string | undefined, name: string, fallback: number
 /**
  * An append-only, size-rotated line sink. Synchronous by design: a structured
  * log line written the instant it is produced survives the crash it is
- * describing, which a buffered async sink does not.
+ * describing, which a buffered async sink does not. See the module doc
+ * ("Why synchronous, and why that is not a tick-latency problem") for the
+ * measured cost — 2.8 µs a line, 0.0004% of the crypto debate budget for a
+ * realistic tick.
  */
 export class RotatingFileSink {
   private readonly options: RotatingFileSinkOptions;
