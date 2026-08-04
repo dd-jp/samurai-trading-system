@@ -55,11 +55,18 @@ Built from what the **real** analysts actually emit — `technical-analyst.ts:96
 ]
 ```
 
-**This is the finding that matters most, and it is structural rather than generated.** `key_points` are mechanical telemetry strings — an indicator reading, a count of items in a window. There is no *thesis* here in the sense the Devil's Advocate proposal assumes. Nothing states a causal claim ("BTC breaks out because ETF inflows are accelerating"); the pipeline never produces one. What reaches the debate is a direction, a confidence, and four numeric observations.
+**This is the finding that matters most, and it is structural rather than generated.** `key_points` are mechanical telemetry strings — an indicator reading, a count of items in a window. Nothing at the analyst layer states a causal claim ("BTC breaks out because ETF inflows are accelerating"). What reaches the debate is a direction, a confidence, and a handful of numeric observations.
 
-A Devil's Advocate is defined as the specialist who disproves *the investment thesis*. If the system has no thesis object, then either the pass invents the thesis before attacking it — reasoning about what the numbers might imply — or it attacks the numbers directly, which is a narrower job than the proposal describes.
+**But a thesis object does exist — one stage later.** `DebateResult` (`debate-engine/types.ts:62`) carries `synthesis` ("Coherent position statement synthesized by the mediator") and `position` ("Actionable recommendation in prose"), plus `disagreement_summary` and `open_items`. That is a stated thesis, in prose, produced by the mediator.
 
-That question sits upstream of everything the map currently asks.
+So the input a Devil's Advocate gets is not one question but two, and they differ by placement:
+
+- **At Stage 1 (analyst role)** there is no thesis. The pass would have to infer one from telemetry before attacking it — an inference layer the proposal didn't account for, and the most likely place a cheaper model goes wrong, since a misread thesis yields confident, well-formed, irrelevant conditions.
+- **After Debate** the thesis is handed to it directly in `synthesis`/`position`, and `open_items` already names what the debate itself failed to resolve.
+
+This constrains placement more than the map assumed: the component's central input only exists downstream of Debate.
+
+*(Corrected after first draft — the initial version of this section claimed the system produces no thesis object at all. That is true at the analyst layer and false at `DebateResult`.)*
 
 ---
 
@@ -148,7 +155,7 @@ Facts about the two outputs. The verdicts on these are the ticket's job, not thi
 
 5. **The thresholds are anchored to entry-time values.** `61804.2` is SMA at the moment of generation. Whether conditions re-anchor as the position ages is unspecified here and is a live design question — though note that watching them *after* entry is ruled out of scope on the map.
 
-6. **The DA restated the thesis before attacking it**, because no thesis object exists to attack. That restatement is an inference layer the proposal didn't account for — and it is where a cheaper model would most plausibly go wrong, since a misread thesis produces confident, well-formed, irrelevant conditions.
+6. **The DA restated the thesis before attacking it**, because no thesis reaches Stage 1. Placed after Debate it would not need to — `DebateResult.synthesis` and `position` hand it one, and `open_items` names what the debate left unresolved. The restatement is therefore an artifact of placement, not an inherent property of the component.
 
 ## For the ticket's four questions
 
