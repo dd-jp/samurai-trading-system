@@ -45,10 +45,18 @@ import {
   RiskManagerImpl,
 } from '../../risk-manager/index.js';
 import type { Clock, OpenPosition } from '../../shared/index.js';
+// Aliased: this module already imports a DIFFERENT `SharedStore` above (an
+// unrelated `execution/index.js` interface, `ExecutionStepDeps.store`'s
+// type) — the alias names which one `VerdictStepDeps.store` actually is,
+// rather than leaning on `ConstructorParameters<typeof SqliteVerdictLogStore>`
+// to dodge the collision (kimi-3-review/deepseek-review on #302's PR: that
+// form only surfaces a shape mismatch at the `new SqliteVerdictLogStore(...)`
+// call site, not here at the interface).
+import type { SharedStore as VerdictLogDb } from '../../shared/store/index.js';
 import type { TraderConfig } from '../../trader/index.js';
 import { decide } from '../../trader/index.js';
 import type { ApprovalChannel, PositionStore, VerdictConfig } from '../../verdict/index.js';
-import { VerdictImpl } from '../../verdict/index.js';
+import { LoggingVerdict, SqliteVerdictLogStore, VerdictImpl } from '../../verdict/index.js';
 import { OrphanVerdictScanner } from '../orphan-verdict-scan.js';
 import { SqliteAuditLog } from '../sqlite-audit-log.js';
 import { SqliteCurrentTickStore } from '../sqlite-current-tick-store.js';
@@ -188,10 +196,27 @@ export interface VerdictStepDeps extends BreakerStateDeps {
   positionStore: PositionStore;
   config: VerdictConfig;
   approvals: ApprovalChannel;
+  /**
+   * Backs the `LoggingVerdict` decorator's `verdict_log` write (#302). Same
+   * shared handle every other Sqlite* store in this composition root reads/
+   * writes through — see `buildPersistence` below. `VerdictLogDb` is this
+   * file's own import alias for `shared/store/index.js`'s `SharedStore`
+   * (see the import above for why it's aliased, not the bare name).
+   */
+  store: VerdictLogDb;
 }
 
+/**
+ * `LoggingVerdict` wraps `VerdictImpl` so every `decide()` call persists a
+ * `verdict_log` row via `SqliteVerdictLogStore` (#302) — without this, the
+ * table stays permanently empty and `OrphanVerdictScanner`'s query can never
+ * find a row to report on. `NotifyingVerdict` (notifying-verdict.ts) stays
+ * unwired here deliberately: #307 is the open ticket deciding whether one
+ * decorator or two is the right shape once both are live; this ticket wires
+ * only the one #302 needs.
+ */
 export function buildVerdictStep(deps: VerdictStepDeps): TickSteps['verdict'] {
-  const verdict = new VerdictImpl();
+  const verdict = new LoggingVerdict(new VerdictImpl(), new SqliteVerdictLogStore(deps.store));
 
   return async ({ trace_id, risk_decision, clock }) => {
     // Gate 5's fire-time re-check needs current breaker state, not the

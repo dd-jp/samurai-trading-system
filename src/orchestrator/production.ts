@@ -723,6 +723,9 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // Log-only stand-in when unwired (#275): it auto-approves, and its
       // constructor refuses to exist in live mode.
       approvals: config.approvals ?? new ConsoleApprovalChannel(logger, config.mode),
+      // Backs LoggingVerdict's verdict_log write (#302) — the same handle
+      // every other Sqlite* store in this function reads/writes through.
+      store: config.db,
     }),
     execution: buildExecutionStep(executionDeps),
   };

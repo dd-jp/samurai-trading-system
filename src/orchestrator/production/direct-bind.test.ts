@@ -320,6 +320,7 @@ describe('buildVerdictStep', () => {
       next_breaker_state: [],
     };
 
+    const db = openSharedStore(':memory:');
     const step = buildVerdictStep({
       tradingCalendar: { isOpen: () => true, hasSession: () => true } as never,
       positionStore: { findByKey: vi.fn(async () => false) },
@@ -337,6 +338,7 @@ describe('buildVerdictStep', () => {
       volatility: FAKE_VOLATILITY,
       getOpenPositions: async () => NO_POSITIONS,
       mode: 'paper',
+      store: db,
     });
 
     const result: VerdictDecision = await step({
@@ -346,6 +348,78 @@ describe('buildVerdictStep', () => {
     });
 
     expect(result.status).toBe('go');
+  });
+
+  it('persists the go decision to verdict_log (#302 — LoggingVerdict must be wired, not a bare VerdictImpl)', async () => {
+    const db = openSharedStore(':memory:');
+    const riskDecision = {
+      status: 'approved' as const,
+      order_intent: {
+        idempotency_key: 'key-2',
+        instrument: 'TSLA',
+        asset_class: 'stocks' as const,
+        side: 'buy' as const,
+        intent_type: 'entry' as const,
+        size: 10,
+        entry: 100,
+        stop: 95,
+        target: 110,
+        time_in_force: 'day',
+        decision_timestamp: NOW,
+        metadata: {
+          debate_id: 'debate-2',
+          conviction: 0.8,
+          converged: true,
+          sizing: {
+            conviction_multiplier: 1,
+            non_converged_haircut: 1,
+            cosine_multiplier: 0.75,
+            vol_floor_applied: false,
+          },
+          cosine_precedent: { no_precedent: true, nearest_ids: [] },
+        },
+      },
+      modifications: null,
+      binding_constraint: null,
+      reasons: [],
+      warnings: [],
+      risk_snapshot: { exposure: {}, drawdown_pct: 0, armed_breakers: [] },
+      next_breaker_state: [],
+    };
+
+    const step = buildVerdictStep({
+      tradingCalendar: { isOpen: () => true, hasSession: () => true } as never,
+      positionStore: { findByKey: vi.fn(async () => false) },
+      config: VERDICT_CONFIG,
+      approvals: { requestApproval: vi.fn(async () => 'approved') },
+      marketData: FAKE_MARKET_DATA,
+      circuitBreakers: new CircuitBreakers({
+        daily_loss_pct: 0.05,
+        max_drawdown_pct: 0.2,
+        max_consecutive_losses: 5,
+        volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+        auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+      }),
+      accountState: FAKE_ACCOUNT_STATE,
+      volatility: FAKE_VOLATILITY,
+      getOpenPositions: async () => NO_POSITIONS,
+      mode: 'paper',
+      store: db,
+    });
+
+    const result: VerdictDecision = await step({
+      trace_id: 'trace-verdict-log',
+      risk_decision: riskDecision as never,
+      clock: CLOCK,
+    });
+
+    expect(result.status).toBe('go');
+    const row = db
+      .prepare('SELECT * FROM verdict_log WHERE trace_id = ?')
+      .get('trace-verdict-log') as { status: string; instrument: string } | undefined;
+    expect(row).toBeDefined();
+    expect(row?.status).toBe('go');
+    expect(row?.instrument).toBe('TSLA');
   });
 });
 

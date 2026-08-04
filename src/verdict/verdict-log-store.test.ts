@@ -1,6 +1,6 @@
 import type { OrderIntent } from '../shared/index.js';
 import type { VerdictDecision, VerdictInput } from './types.js';
-import { buildVerdictLog, InMemoryVerdictLogStore } from './verdict-log-store.js';
+import { buildVerdictLog } from './verdict-log-store.js';
 
 function makeIntent(overrides: Partial<OrderIntent> = {}): OrderIntent {
   return {
@@ -134,34 +134,11 @@ describe('buildVerdictLog', () => {
   });
 });
 
-describe('InMemoryVerdictLogStore', () => {
-  it('a written decision: row exists and is joinable by trace_id', () => {
-    const store = new InMemoryVerdictLogStore();
-    const log = buildVerdictLog(makeInput(), makeDecision());
-
-    store.writeLog(log);
-
-    expect(store.getByTraceId('trace-1')).toEqual(log);
-  });
-
-  it('an unwritten trace_id: lookup is absent', () => {
-    const store = new InMemoryVerdictLogStore();
-
-    expect(store.getByTraceId('trace-never-written')).toBeUndefined();
-  });
-
-  it('does not conflate rows across distinct trace_ids', () => {
-    const store = new InMemoryVerdictLogStore();
-    const first = buildVerdictLog(makeInput({ trace_id: 'trace-1' }), makeDecision());
-    const second = buildVerdictLog(
-      makeInput({ trace_id: 'trace-2' }),
-      makeDecision({ status: 'no_go', order: null, no_go_reason: 'breaker' }),
-    );
-
-    store.writeLog(first);
-    store.writeLog(second);
-
-    expect(store.getByTraceId('trace-1')).toEqual(first);
-    expect(store.getByTraceId('trace-2')).toEqual(second);
-  });
-});
+// No `InMemoryVerdictLogStore` describe block here (#302 review pass,
+// kimi-3-review): the class was deleted from verdict-log-store.ts as dead
+// code once dropping `getByTraceId` (#306) left it with zero consumers and
+// its remaining test asserting only `Map.set` doesn't throw. See
+// verdict-log-store.ts's doc comment for the full reasoning.
+// `SqliteVerdictLogStore` (the production implementation) is covered in
+// sqlite-verdict-log-store.test.ts; `LoggingVerdict`'s write-through
+// behavior is covered in logging-verdict.test.ts via a port-shaped fake.
