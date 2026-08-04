@@ -8,6 +8,8 @@
  * path or `:memory:`. Two paths never share state — paper/live cross-
  * contamination is physically impossible.
  */
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
 import { runMigrations } from './migrate.js';
 
@@ -67,7 +69,30 @@ export function sharedStorePath(rawEnv: string | undefined = process.env.NODE_EN
   return `data/samurai-${env}.sqlite`;
 }
 
+/**
+ * SQLite creates the database *file*, never the directory holding it. The
+ * convention path is `data/samurai-{env}.sqlite` and `data/` is gitignored, so
+ * on every fresh clone the directory is absent and better-sqlite3 throws
+ * "Cannot open database because the directory does not exist" — an error that
+ * names neither the path nor the fix (#323: it was the first thing `yarn
+ * orchestrator` hit once the config guard stopped throwing).
+ *
+ * Creating it is the writer's own concern, not the operator's: nothing about a
+ * `mkdir` is a decision anyone needs to make. `recursive: true` is also
+ * idempotent, so this costs one no-op syscall on every subsequent start.
+ *
+ * `:memory:` (and any bare filename) has no directory component to create;
+ * `dirname` answers `'.'` for both, which always exists.
+ */
+function ensureParentDirectory(dbPath: string): void {
+  if (dbPath === ':memory:') return;
+  const directory = dirname(dbPath);
+  if (directory === '.') return;
+  mkdirSync(directory, { recursive: true });
+}
+
 export function openSharedStore(dbPath: string): SharedStore {
+  ensureParentDirectory(dbPath);
   const db = new BetterSqlite3(dbPath);
   // WAL is a no-op on an in-memory DB; SQLite ignores it rather than failing.
   db.pragma('journal_mode = WAL');

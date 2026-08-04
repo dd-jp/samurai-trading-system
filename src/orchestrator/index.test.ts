@@ -8,7 +8,16 @@
  * export surface as well as the entrypoint); every test below relies on that
  * implicitly, since a top-level start would hang the suite.
  */
-import { buildShutdownHandler, REQUIRED_INJECTED_CONFIG, startFromEnvironment } from './index.js';
+import {
+  buildShutdownHandler,
+  missingCredentialEnvVars,
+  paperStartingProfile,
+  REQUIRED_INJECTED_CONFIG,
+  startFromEnvironment,
+  storePathEncodesTradingMode,
+  warnIfStorePathIgnoresMode,
+} from './index.js';
+import type { Logger } from './types.js';
 
 describe('startFromEnvironment', () => {
   it('refuses to start with nothing wired, naming every missing dependency', async () => {
@@ -75,6 +84,175 @@ describe('startFromEnvironment', () => {
     // spec says is tuned in paper trading rather than checked in — no
     // transport remains on this list.
     expect([...REQUIRED_INJECTED_CONFIG].every((key) => key.endsWith('Config'))).toBe(true);
+  });
+
+  it('does not still claim the trade-channel/HITL transports are unimplemented (#323)', async () => {
+    // #275 landed a real `TelegramBotApiClient`, so the guard's original text
+    // was describing a codebase that no longer exists. An error message that
+    // is confidently out of date is worse than a terse one: it sends an
+    // operator looking for work that is already done.
+    const error = await startFromEnvironment().catch((e: unknown) => e as Error);
+
+    expect(error.message).not.toMatch(/still have no implementation/i);
+    expect(error.message).toContain('TelegramBotApiClient');
+    // And it points at the way out that now exists.
+    expect(error.message).toContain('paperStartingProfile');
+  });
+
+  it('is satisfied by the checked-in paper profile', () => {
+    // The claim the whole ticket rests on: the profile covers the guard
+    // exactly, with nothing left over for the entrypoint to invent.
+    const profile = paperStartingProfile('paper');
+
+    expect(REQUIRED_INJECTED_CONFIG.filter((key) => profile[key] === undefined)).toEqual([]);
+  });
+
+  it('does NOT default to the paper profile — an unwired caller still fails', async () => {
+    // Defaulting `injected` to the profile would make the guard above
+    // unfalsifiable and let any programmatic caller silently inherit values
+    // nobody chose for it. The entrypoint passes the profile explicitly
+    // instead. This is the test that would catch that shortcut.
+    await expect(startFromEnvironment()).rejects.toThrow(/required dependencies are not wired/i);
+  });
+});
+
+describe('missingCredentialEnvVars', () => {
+  const CREDENTIALS = ['ALPACA_API_KEY', 'ALPACA_API_SECRET', 'ANTHROPIC_API_KEY'] as const;
+  const saved: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    for (const name of CREDENTIALS) {
+      saved[name] = process.env[name];
+      delete process.env[name];
+    }
+  });
+
+  afterEach(() => {
+    for (const name of CREDENTIALS) {
+      const value = saved[name];
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+
+  it('names every missing credential at once, not one per run', () => {
+    // Each client refuses to be built without its own key, but they are
+    // constructed in sequence — so without this pre-flight an unconfigured
+    // host learns about exactly one variable per attempt.
+    expect(missingCredentialEnvVars({})).toEqual([
+      'ALPACA_API_KEY',
+      'ALPACA_API_SECRET',
+      'ANTHROPIC_API_KEY',
+    ]);
+  });
+
+  it('treats an empty value as missing, matching the tracked .env placeholders', () => {
+    // `.env` ships `ALPACA_API_KEY=` and `--env-file` turns that into `''`,
+    // not `undefined`. Both mean "not configured", and both Alpaca clients
+    // already reject an empty string.
+    process.env.ALPACA_API_KEY = '';
+    process.env.ALPACA_API_SECRET = 'set';
+    process.env.ANTHROPIC_API_KEY = 'set';
+
+    expect(missingCredentialEnvVars({})).toEqual(['ALPACA_API_KEY']);
+  });
+
+  it('does not demand credentials for clients the caller injected', () => {
+    // A test or a non-Alpaca composition root supplying its own clients must
+    // not be asked for keys it will never use.
+    expect(
+      missingCredentialEnvVars({
+        alpacaBrokerClient: {} as never,
+        dataSource: {} as never,
+        llmClient: {} as never,
+      }),
+    ).toEqual([]);
+  });
+
+  it('still demands Alpaca keys when only the broker ADAPTER is overridden', () => {
+    // `buildProductionComponents` builds the Alpaca wire client
+    // unconditionally — `AccountStateProvider` reads `GET /v2/account`
+    // through it even when `ProductionConfig.broker` is a simulated adapter.
+    // Skipping the check on `broker` alone would move the failure back to a
+    // deep stack trace inside construction.
+    expect(missingCredentialEnvVars({ broker: {} as never, llmClient: {} as never })).toEqual([
+      'ALPACA_API_KEY',
+      'ALPACA_API_SECRET',
+    ]);
+  });
+
+  it('never returns a credential VALUE, only its variable name', () => {
+    process.env.ALPACA_API_KEY = 'super-secret-key';
+
+    expect(missingCredentialEnvVars({}).join(' ')).not.toContain('super-secret-key');
+  });
+});
+
+describe('storePathEncodesTradingMode', () => {
+  // The predicate behind the #330 startup warning. Worth its own tests
+  // because it is what decides when the warning STOPS: it is written against
+  // the shape #168 asks for, so re-keying the path to mode makes it true and
+  // the warning silences itself, rather than someone having to remember to
+  // delete it.
+  it('is false for every NODE_ENV-keyed filename in use today', () => {
+    for (const env of ['development', 'test', 'staging', 'production']) {
+      expect(storePathEncodesTradingMode(`data/samurai-${env}.sqlite`, 'paper')).toBe(false);
+      expect(storePathEncodesTradingMode(`data/samurai-${env}.sqlite`, 'live')).toBe(false);
+    }
+  });
+
+  it('is true for the mode-keyed filenames #168 specifies', () => {
+    expect(storePathEncodesTradingMode('data/samurai-paper.sqlite', 'paper')).toBe(true);
+    expect(storePathEncodesTradingMode('data/samurai-live.sqlite', 'live')).toBe(true);
+    expect(storePathEncodesTradingMode('data/samurai-backtest.sqlite', 'backtest')).toBe(true);
+  });
+
+  it('does not confuse one mode-keyed file for another', () => {
+    // The failure that would matter most: a live process quietly accepting the
+    // paper file as correctly keyed.
+    expect(storePathEncodesTradingMode('data/samurai-paper.sqlite', 'live')).toBe(false);
+    expect(storePathEncodesTradingMode('data/samurai-live.sqlite', 'paper')).toBe(false);
+  });
+
+  it('reads the filename only, not the directories above it', () => {
+    // A developer whose checkout happens to sit under `~/live/...` must not
+    // silence the warning by accident.
+    expect(
+      storePathEncodesTradingMode('/home/me/live/data/samurai-production.sqlite', 'live'),
+    ).toBe(false);
+  });
+});
+
+describe('warnIfStorePathIgnoresMode', () => {
+  function recordingLogger(): Logger & { entries: Parameters<Logger['log']>[0][] } {
+    const entries: Parameters<Logger['log']>[0][] = [];
+    return { entries, log: (entry) => entries.push(entry) };
+  }
+
+  it('warns when the resolved filename cannot distinguish paper from live (#330)', () => {
+    const logger = recordingLogger();
+
+    warnIfStorePathIgnoresMode({ dbPath: 'data/samurai-production.sqlite', mode: 'paper', logger });
+
+    expect(logger.entries).toHaveLength(1);
+    const [entry] = logger.entries;
+    expect(entry?.level).toBe('warn');
+    // Both facts the operator needs to act: which mode this process believes
+    // it is in, and which file it is actually writing.
+    expect(entry?.payload).toMatchObject({
+      mode: 'paper',
+      db_file: 'samurai-production.sqlite',
+    });
+    expect(entry?.message).toContain('#330');
+  });
+
+  it('stays silent once the path is keyed off mode', () => {
+    // This is the branch that retires the warning when #330 lands.
+    const logger = recordingLogger();
+
+    warnIfStorePathIgnoresMode({ dbPath: 'data/samurai-paper.sqlite', mode: 'paper', logger });
+
+    expect(logger.entries).toEqual([]);
   });
 });
 

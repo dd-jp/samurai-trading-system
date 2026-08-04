@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runMigrations } from './migrate.js';
@@ -95,6 +95,25 @@ describe('openSharedStore', () => {
     expect(db.pragma('journal_mode', { simple: true })).toBe('wal');
     // synchronous=FULL is 2 in SQLite's pragma encoding.
     expect(db.pragma('synchronous', { simple: true })).toBe(2);
+  });
+
+  it('creates the parent directory rather than failing on a fresh checkout (#323)', () => {
+    // `sharedStorePath()` resolves to `data/samurai-{env}.sqlite`, and `data/`
+    // is gitignored — so on any fresh clone it does not exist. Without this,
+    // `yarn orchestrator` died at the store open with better-sqlite3's
+    // "Cannot open database because the directory does not exist": no path, no
+    // stage, no hint that a `mkdir` is all it wanted.
+    const root = mkdtempSync(join(tmpdir(), 'samurai-store-'));
+    const path = join(root, 'data', 'nested', 'samurai-development.sqlite');
+
+    const db = openSharedStore(path);
+
+    try {
+      expect(existsSync(path)).toBe(true);
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('persists across reopen of the same path', () => {
