@@ -22,6 +22,15 @@ export type { AlpacaHttpBrokerClientOptions } from './adapters/alpaca-http-clien
 export { AlpacaHttpBrokerClient } from './adapters/alpaca-http-client.js';
 export { BrokerError, sanitizeBrokerError } from './broker-error.js';
 export type {
+  BrokerBracketOrderIds,
+  BrokerBracketPhase,
+  BrokerBracketRecord,
+  BrokerBracketRequestFields,
+  BrokerStateStore,
+  BrokerVenue,
+} from './broker-state-store.js';
+export { InMemoryBrokerStateStore } from './broker-state-store.js';
+export type {
   CcxtBrokerClient,
   CcxtOrder,
   CcxtOrderStatus,
@@ -33,10 +42,12 @@ export type {
   IbkrBracketRequest,
   IbkrBrokerClient,
   IbkrExecution,
+  IbkrOrderStatus,
 } from './ibkr-adapter.js';
 export { IbkrBrokerAdapter } from './ibkr-adapter.js';
 export type { SimulatedBrokerAdapterInput } from './simulated-adapter.js';
 export { SimulatedBrokerAdapter } from './simulated-adapter.js';
+export { SqliteBrokerStateStore } from './sqlite-broker-state-store.js';
 export { DuplicatePositionError, SqliteExecutionStore } from './sqlite-shared-store.js';
 export type {
   BrokerAck,

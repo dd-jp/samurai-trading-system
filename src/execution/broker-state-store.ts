@@ -1,0 +1,175 @@
+/**
+ * The adapters' durable state seam (#287, closing #294/#295) — migration
+ * `0007_broker_adapter_state.sql`.
+ *
+ * Every live adapter keeps a working set in memory (the ccxt emulation's
+ * bracket Map, IBKR's leg reverse-index, Alpaca's parent-order-id index) and
+ * writes through to this store so a restart can rebuild it. The Maps are not
+ * replaced by the store: the ccxt emulation's exactly-once sibling cancel
+ * depends on claiming a phase transition with no `await` in between, so the
+ * hot path has to stay in-process.
+ *
+ * SYNCHRONOUS ON PURPOSE, and this is the load-bearing design decision of the
+ * whole ticket. Every method here is called from inside one of those
+ * synchronous claims (`advanceEntry`, `advanceExits`, `resizeProtectiveLegs`
+ * in ccxt-adapter.ts, each of which documents that "everything from here to
+ * the phase write is synchronous"). An async seam would insert an await into
+ * that window and reopen the double-arm / double-cancel races those claims
+ * exist to close. better-sqlite3 is synchronous, so nothing is given up —
+ * `SqliteAccountStateStore` (#276) is the same shape for the same reason.
+ */
+import type { NativeBracketRequest, NormalizedFill } from './types.js';
+
+/**
+ * Which adapter owns a row. In the primary key of both tables, so two adapters
+ * wired over one database can never read each other's brackets even if a
+ * client order id were reused across venues.
+ */
+export type BrokerVenue = 'ccxt' | 'ibkr' | 'alpaca';
+
+/** ccxt's emulated lifecycle; always `'armed'` on a native-bracket venue. */
+export type BrokerBracketPhase = 'pending_entry' | 'arming' | 'armed' | 'resolved';
+
+/**
+ * One persisted bracket. See the migration for per-venue column applicability
+ * — in short, ccxt uses all of it, Alpaca and IBKR use the identity plus the
+ * venue order ids because their venue owns the state machine.
+ */
+export interface BrokerBracketRecord {
+  venue: BrokerVenue;
+  client_order_id: string;
+  phase: BrokerBracketPhase;
+  entry_order_id: string | null;
+  stop_order_id: string | null;
+  target_order_id: string | null;
+  /**
+   * The originating `NativeBracketRequest`, or null on a row learned from the
+   * venue rather than from a submit (Alpaca/IBKR `getOrder`), which knows the
+   * order ids and not the request that produced them.
+   */
+  request: BrokerBracketRequestFields | null;
+  armed_qty: number | null;
+  arming_qty: number | null;
+  arm_attempt: number;
+}
+
+/**
+ * The request fields an adapter needs to re-place a leg after a restart:
+ * everything in `NativeBracketRequest` except the client order id, which is
+ * the row's own key.
+ *
+ * DERIVED from `NativeBracketRequest` rather than re-listed, so a field added
+ * there is a compile error here instead of a column that silently stops being
+ * journalled — the same spec/code drift class this repo treats as its own
+ * defect.
+ */
+export type BrokerBracketRequestFields = Omit<NativeBracketRequest, 'client_order_id'>;
+
+/** The journalled half of a bracket request — the one place it is spelled out. */
+export function toRequestFields(order: NativeBracketRequest): BrokerBracketRequestFields {
+  const { client_order_id: _clientOrderId, ...fields } = order;
+  return fields;
+}
+
+/** The venue order ids a rehydration path learns without the request. */
+export interface BrokerBracketOrderIds {
+  entry_order_id: string | null;
+  stop_order_id: string | null;
+  target_order_id: string | null;
+}
+
+export interface BrokerStateStore {
+  /** Every bracket this venue has ever recorded, oldest first. */
+  loadBrackets(venue: BrokerVenue): BrokerBracketRecord[];
+  /** Full-row upsert — the submit path and every ccxt phase transition. */
+  saveBracket(record: BrokerBracketRecord): void;
+  /**
+   * Partial upsert for the REHYDRATION paths: record the venue's order ids for
+   * a client order id whose original request this process never saw. Leaves
+   * the request columns untouched (null on insert) rather than inventing them.
+   */
+  recordBracketOrderIds(
+    venue: BrokerVenue,
+    clientOrderId: string,
+    ids: BrokerBracketOrderIds,
+  ): void;
+  /** The observed-fill journal for this venue, oldest first. */
+  loadObservedFills(venue: BrokerVenue): NormalizedFill[];
+  /** Idempotent on `(venue, client_order_id, broker_fill_id)`. */
+  saveObservedFill(venue: BrokerVenue, fill: NormalizedFill): void;
+}
+
+/**
+ * The no-persistence implementation — semantically identical to the
+ * process-local Maps the adapters used before this ticket.
+ *
+ * It is the constructor DEFAULT so existing wiring and test doubles keep
+ * working, but note the asymmetry with the adapters' `rateLimiter` default:
+ * that default is merely conservative, whereas THIS default IS the bug #287
+ * exists to fix. Production wiring must inject `SqliteBrokerStateStore`
+ * (src/orchestrator/production.ts does, for the Alpaca MVP path) or the
+ * adapter silently starts every run with empty state while real positions sit
+ * open at the broker — the same quiet failure `sharedStorePath` throws to
+ * prevent.
+ */
+export class InMemoryBrokerStateStore implements BrokerStateStore {
+  private readonly brackets = new Map<string, BrokerBracketRecord>();
+  private readonly fills = new Map<string, NormalizedFill & { venue: BrokerVenue }>();
+
+  loadBrackets(venue: BrokerVenue): BrokerBracketRecord[] {
+    return [...this.brackets.values()].filter((record) => record.venue === venue);
+  }
+
+  saveBracket(record: BrokerBracketRecord): void {
+    const existing = this.brackets.get(key(record.venue, record.client_order_id));
+    this.brackets.set(key(record.venue, record.client_order_id), {
+      ...record,
+      // Mirrors the SQL implementation's `COALESCE(excluded, existing)` on the
+      // request columns: a save that carries no request must never blank one a
+      // submit recorded. Kept in step deliberately — a test double that is
+      // merely *nearly* the real store is how a suite certifies a bug.
+      request: record.request ?? existing?.request ?? null,
+    });
+  }
+
+  recordBracketOrderIds(
+    venue: BrokerVenue,
+    clientOrderId: string,
+    ids: BrokerBracketOrderIds,
+  ): void {
+    const existing = this.brackets.get(key(venue, clientOrderId));
+    this.brackets.set(key(venue, clientOrderId), {
+      venue,
+      client_order_id: clientOrderId,
+      phase: existing?.phase ?? 'armed',
+      request: existing?.request ?? null,
+      armed_qty: existing?.armed_qty ?? null,
+      arming_qty: existing?.arming_qty ?? null,
+      arm_attempt: existing?.arm_attempt ?? 0,
+      // COALESCE per id, mirroring the SQL implementation: a venue lookup that
+      // reports no child (because the venue has since cancelled it) must not
+      // blank an id a submit recorded, or IBKR's `legs` index loses it on the
+      // next restart and its executions go unclaimed — #295, reinstated.
+      entry_order_id: ids.entry_order_id ?? existing?.entry_order_id ?? null,
+      stop_order_id: ids.stop_order_id ?? existing?.stop_order_id ?? null,
+      target_order_id: ids.target_order_id ?? existing?.target_order_id ?? null,
+    });
+  }
+
+  loadObservedFills(venue: BrokerVenue): NormalizedFill[] {
+    return [...this.fills.values()]
+      .filter((fill) => fill.venue === venue)
+      .map(({ venue: _venue, ...fill }) => fill);
+  }
+
+  saveObservedFill(venue: BrokerVenue, fill: NormalizedFill): void {
+    this.fills.set(`${venue}|${fill.client_order_id}|${fill.broker_fill_id}`, {
+      ...fill,
+      venue,
+    });
+  }
+}
+
+function key(venue: BrokerVenue, clientOrderId: string): string {
+  return `${venue}|${clientOrderId}`;
+}

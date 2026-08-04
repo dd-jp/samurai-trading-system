@@ -32,7 +32,20 @@ function permissiveLimiter(): TokenBucket {
 function makeClient(executions: IbkrExecution[] = []) {
   const placeBracketOrder = vi.fn<IbkrBrokerClient['placeBracketOrder']>(async () => IDS);
   const fetchExecutions = vi.fn<IbkrBrokerClient['fetchExecutions']>(async () => executions);
-  return { client: { placeBracketOrder, fetchExecutions }, placeBracketOrder, fetchExecutions };
+  const fetchOrderStatus = vi.fn<IbkrBrokerClient['fetchOrderStatus']>(async (clientOrderId) => ({
+    clientOrderId,
+    parentOrderId: IDS.parentOrderId,
+    stopOrderId: IDS.stopOrderId,
+    takeProfitOrderId: IDS.takeProfitOrderId,
+    status: 'Submitted',
+    filledQuantity: 0,
+  }));
+  return {
+    client: { placeBracketOrder, fetchExecutions, fetchOrderStatus },
+    placeBracketOrder,
+    fetchExecutions,
+    fetchOrderStatus,
+  };
 }
 
 function execution(overrides: Partial<IbkrExecution> = {}): IbkrExecution {

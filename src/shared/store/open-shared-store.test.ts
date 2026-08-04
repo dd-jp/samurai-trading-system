@@ -22,6 +22,11 @@ const TABLES = [
   'audit_log',
   'current_tick',
   'cii_snapshots',
+  // `account_state` shipped in 0006 without being listed here — the assertion
+  // is only as good as the list, so it is added with 0007's two.
+  'account_state',
+  'broker_brackets',
+  'broker_observed_fills',
 ];
 
 const tempDirs: string[] = [];
@@ -67,6 +72,7 @@ describe('openSharedStore', () => {
       { version: 4 },
       { version: 5 },
       { version: 6 },
+      { version: 7 },
     ]);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
@@ -76,6 +82,7 @@ describe('openSharedStore', () => {
       { version: 4 },
       { version: 5 },
       { version: 6 },
+      { version: 7 },
     ]);
   });
 
