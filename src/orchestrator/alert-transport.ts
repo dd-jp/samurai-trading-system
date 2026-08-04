@@ -33,7 +33,7 @@
  *   bug being fixed, and a default of `telegram` would fail every dev run for
  *   want of a bot token.
  *
- * A caller that injected all three channels itself is not asked for the
+ * A caller that injected every channel itself is not asked for the
  * variable at all (`resolveAlertsMode` returns `undefined`), mirroring
  * `missingCredentialEnvVars`' `satisfiedByInjection` in index.ts: it has
  * already made the decision explicitly. Injecting *some* of them does not
@@ -111,7 +111,7 @@ export const TELEGRAM_ALERT_ENV_VARS = [
   'TELEGRAM_ALLOWED_USER_IDS',
 ] as const;
 
-/** The three channels, as `buildProductionOrchestrator` takes them. */
+/** The alert channels, as `buildProductionOrchestrator` takes them. */
 export type AlertChannels = Pick<ProductionConfig, (typeof ALERT_CHANNEL_FIELDS)[number]>;
 
 /**
@@ -217,15 +217,7 @@ export function buildAlertChannels(deps: {
       ? { unpricedFillAlerts: new TradeChannelUnpricedFillAlert(telegram, chatId) }
       : {}),
     ...(deps.injected.breachAlerts === undefined
-      ? {
-          breachAlerts: new TradeChannelBreachAlert(
-            telegram,
-            chatId,
-            undefined,
-            undefined,
-            deps.logger,
-          ),
-        }
+      ? { breachAlerts: new TradeChannelBreachAlert(telegram, chatId, deps.logger) }
       : {}),
   };
 }

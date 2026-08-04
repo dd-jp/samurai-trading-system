@@ -10,6 +10,7 @@ import {
   resolveAlertsMode,
   TELEGRAM_ALERT_ENV_VARS,
 } from './alert-transport.js';
+import { TradeChannelBreachAlert } from './breach-alert-channel.js';
 import { TradeChannelHeartbeat } from './heartbeat-channel.js';
 import { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
 import type { ProductionConfig } from './production.js';
@@ -155,7 +156,7 @@ describe('buildAlertChannels — log-only', () => {
 });
 
 describe('buildAlertChannels — telegram', () => {
-  it('wires all three operator alerts onto the real trade-channel adapters', () => {
+  it('wires every operator alert onto the real trade-channel adapters', () => {
     configureTelegramEnv();
     const channels = buildAlertChannels({
       alertsMode: 'telegram',
@@ -167,6 +168,32 @@ describe('buildAlertChannels — telegram', () => {
     expect(channels.heartbeatChannel).toBeInstanceOf(TradeChannelHeartbeat);
     expect(channels.orphanAlerts).toBeInstanceOf(TradeChannelOrphanAlert);
     expect(channels.unpricedFillAlerts).toBeInstanceOf(TradeChannelUnpricedFillAlert);
+    expect(channels.breachAlerts).toBeInstanceOf(TradeChannelBreachAlert);
+  });
+
+  /**
+   * The pairing that `ALERT_CHANNEL_FIELDS`-derived tests cannot catch on their
+   * own: a field in that array which the telegram branch does NOT build makes
+   * `resolveAlertsMode` demand `SAMURAI_ALERTS` for a channel nothing
+   * constructs — so `telegram` silently falls through to production.ts's
+   * log-only default while the operator believes alerts reach a phone. That is
+   * the exact hole #322 exists to close, one channel down.
+   */
+  it('builds a real adapter for every field it requires a decision about', () => {
+    configureTelegramEnv();
+    const channels = buildAlertChannels({
+      alertsMode: 'telegram',
+      injected: {},
+      db: openSharedStore(':memory:'),
+      logger: recordingLogger(),
+    });
+
+    for (const field of ALERT_CHANNEL_FIELDS) {
+      expect(
+        channels[field],
+        `${field} is in ALERT_CHANNEL_FIELDS but telegram builds no adapter`,
+      ).toBeDefined();
+    }
   });
 
   it('does not replace a channel the caller injected', () => {

@@ -50,20 +50,26 @@ export class TradeChannelBreachAlert implements BreachAlertChannel {
   readonly #telegramChatId: string;
   readonly #discord: DiscordClient | undefined;
   readonly #discordChannelId: string | undefined;
-  readonly #logger: Logger | undefined;
+  readonly #logger: Logger;
 
+  /**
+   * `logger` is REQUIRED and sits ahead of the optional Discord pair for that
+   * reason. The only alternative to logging a failed send is silence on the
+   * one alert that matters most — a breach whose push failed would otherwise
+   * vanish entirely — so this is not a dependency a caller may decline.
+   */
   constructor(
     telegram: TelegramClient,
     telegramChatId: string,
+    logger: Logger,
     discord?: DiscordClient,
     discordChannelId?: string,
-    logger?: Logger,
   ) {
     this.#telegram = telegram;
     this.#telegramChatId = telegramChatId;
+    this.#logger = logger;
     this.#discord = discord;
     this.#discordChannelId = discordChannelId;
-    this.#logger = logger;
   }
 
   postBreachAlert(alert: BreachAlert): void {
@@ -77,7 +83,7 @@ export class TradeChannelBreachAlert implements BreachAlertChannel {
         : Promise.resolve(),
     ]).then((results) => {
       const failed = results.filter((r) => r.status === 'rejected');
-      if (failed.length === 0 || this.#logger === undefined) {
+      if (failed.length === 0) {
         return;
       }
       // A breach that could not be delivered is itself an operator-visible
