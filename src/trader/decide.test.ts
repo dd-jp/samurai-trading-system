@@ -322,6 +322,17 @@ describe('decide — skip paths', () => {
 
     expect(intent).toBeNull();
   });
+
+  it('returns null on an empty bar window rather than sizing off NaN', async () => {
+    // A cold instrument with nothing ingested yet. The Market Data Service's
+    // `computeIndicator` answers NaN, not null, on a window this short, and
+    // NaN defeats every downstream guard (`stopDistance <= 0` and the
+    // min-notional check are both false against NaN) — so the skip has to
+    // happen on the bar count, before the indicator is consulted (#304).
+    const intent = await decide(traderInput({ marketData: new FixtureMarketData(bars(0, 2)) }));
+
+    expect(intent).toBeNull();
+  });
 });
 
 describe('decide — determinism & idempotency', () => {

@@ -10,7 +10,7 @@
  *
  * Cosine precedent retrieval is #75 — see NO_PRECEDENT_COSINE_MULTIPLIER.
  */
-import type { Bar } from '../market-data-service/index.js';
+import { type Bar, computeIndicator } from '../market-data-service/index.js';
 import type { OpenPosition, OrderIntent } from '../shared/index.js';
 import { computeIdempotencyKey } from './idempotency-key.js';
 import type { AssetClass, TraderConfig, TraderInput } from './types.js';
@@ -35,41 +35,39 @@ function sideFor(direction: 'bullish' | 'bearish'): 'buy' | 'sell' {
 }
 
 /**
- * Average true range over the last `lookback` true ranges.
- *
- * Computed here from `getBars` rather than read from the Market Data
- * Service because #73 is blocked by #64 (bar/mark serving) and not by #65,
- * which owns `getIndicator` and the indicator cache — the MDS interface has
- * no indicator method yet (see src/market-data-service/types.ts). Interim:
- * supersede this with `getIndicator(instrument, {indicator: 'atr'...})` once
- * #65 lands, so ATR is computed once, deterministically, in one place.
+ * Average true range for the stop, computed by the Market Data Service's
+ * indicator registry rather than by Trader (ticket #304 — #65 landed the
+ * registry, which retired the private copy Trader carried while #65 was
+ * open). Indicator maths lives in exactly one place now, so the
+ * "N bars yield N-1 true ranges" seeding rule cannot be fixed in one
+ * implementation and left wrong in the other.
  *
  * Returns null when there is not enough history to form a single true range;
- * a stop cannot be sized without one.
+ * a stop cannot be sized without one. That guard is load-bearing and cannot
+ * be delegated downstream: `computeIndicator` divides by an empty seed and
+ * returns NaN, and NaN passes straight through `Math.max`, the
+ * `stopDistance <= 0` check and the min-notional check (every comparison
+ * against NaN is false) into an emitted intent with NaN size/stop/target.
+ *
+ * Bars are consumed in the order `getBars` returns them — ascending by
+ * close_time, per `MarketDataStore.readBars`'s contract, which is also what
+ * `computeIndicator` documents that it requires. Trader used to re-sort
+ * defensively; that now belongs to the MDS read, not to every consumer of it.
  */
-function computeAtr(bars: Bar[], lookback: number): number | null {
-  // Sorted rather than trusting arrival order, so ATR is independent of how
-  // the data source happened to return the window.
-  const [earliest, ...rest] = [...bars].sort(
-    (a, b) => a.close_time.getTime() - b.close_time.getTime(),
-  );
-  if (earliest === undefined || rest.length === 0) return null;
+function atrFor(bars: Bar[], lookback: number): number | null {
+  // < 2 bars is < 1 true range: the first bar only seeds `previousClose`.
+  if (bars.length < 2) return null;
 
-  let previousClose = earliest.close;
-  const trueRanges: number[] = [];
-  for (const current of rest) {
-    trueRanges.push(
-      Math.max(
-        current.high - current.low,
-        Math.abs(current.high - previousClose),
-        Math.abs(previousClose - current.low),
-      ),
-    );
-    previousClose = current.close;
-  }
-
-  const window = trueRanges.slice(-lookback);
-  return window.reduce((sum, tr) => sum + tr, 0) / window.length;
+  return computeIndicator(bars, {
+    indicator: 'atr',
+    // Pinned explicitly rather than left to `computeIndicator`'s
+    // `params.period ?? spec.lookback` fallback — with `lookback` being the
+    // BAR-WINDOW width (`atr_lookback + 1`, matching
+    // `DEFAULT_VOLATILITY_INDICATOR`), that fallback would silently make this
+    // an ATR(15), the exact off-by-one commit 0281a8c already had to fix once.
+    params: { period: lookback },
+    lookback: lookback + 1,
+  });
 }
 
 /**
@@ -119,13 +117,25 @@ async function buildBracket(
     marketData.getBars(
       instrument,
       // lookback + 1 bars yield `lookback` true ranges: each needs its
-      // predecessor's close.
+      // predecessor's close. The `+ 1` is also what keeps the ATR a plain
+      // mean of those ranges: `computeIndicator`'s `atr` seeds on the first
+      // `period` ranges and Wilder-smooths the rest, so a window wider than
+      // this engages that smoothing and moves every stop in the system.
+      // src/trader/atr-equivalence.test.ts pins both halves of that.
       { timeframe: config.atr_timeframe, lookback: config.atr_lookback + 1 },
       asOf,
     ),
   ]);
 
-  const atr = computeAtr(bars, config.atr_lookback);
+  // Bars are fetched here, not read through `marketData.getIndicator`, so
+  // `config.atr_timeframe` is honoured: `getIndicator` hardcodes its own
+  // `DEFAULT_INDICATOR_TIMEFRAME` because `IndicatorSpec` carries no
+  // timeframe, and routing through it would silently pin ATR to 1h whatever
+  // this config says. Same trade-off, same shape, as the cost model's
+  // `replay-driver` / `proxy-strategy` call sites. Cost of that: Trader
+  // misses the Tier-1 indicator cache — cheap at one ATR per instrument per
+  // cycle, and recoverable once `IndicatorSpec` grows a timeframe.
+  const atr = atrFor(bars, config.atr_lookback);
   if (atr === null) return null;
 
   const entry = mark.price;

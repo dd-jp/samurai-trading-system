@@ -27,7 +27,7 @@
 | M6 | `Logger`/`LogSink` two authorities | #290 | canonical in `shared/types.ts` |
 | M8 | Tuning-store KV triplication | #290 | one `kvGet`/`kvSet` pair |
 | LOW | Simulated `getOrder` drops `instrument` | #297 | `simulated-adapter.ts:118` — `_instrument` declared |
-| LOW | `computeAtr` blocked by #65 | — | #65 is now **closed**; see untracked below |
+| LOW | `computeAtr` blocked by #65 | **#304** | resolved 2026-08-04, after this snapshot — `decide.ts` now calls MDS `computeIndicator`; `atr-equivalence.test.ts` pins the equivalence |
 
 ## Partial (1)
 
@@ -56,7 +56,7 @@
 ## Untracked — no issue exists (6)
 
 1. **M11 — correlation warm-up blind spot.** Pairs under `min_bars` are omitted, so a genuinely correlated new pair reads as uncorrelated to the concentration check. `correlation.ts:15-17` documents it as intended (risk-manager-map.md AC3), and the review agreed it's documented — but explicitly called it "a real exposure blind spot" anyway. Neither fixed nor ticketed.
-2. **`computeAtr` still in Trader** (`trader/decide.ts`). The review said this belongs to MDS and was blocked by #65 — **#65 is now closed**, so the blocker is gone and the move simply hasn't happened.
+2. ~~**`computeAtr` still in Trader** (`trader/decide.ts`). The review said this belongs to MDS and was blocked by #65 — **#65 is now closed**, so the blocker is gone and the move simply hasn't happened.~~ **Ticketed as #304 and resolved 2026-08-04** (after this snapshot): Trader's private ATR is deleted and `decide.ts` reads the MDS indicator registry. A differential test proved the two implementations agree exactly at Trader's call width and diverge beyond it — the `lookback + 1` fetch is now documented as load-bearing rather than incidental.
 3. **C5 remainder** — the two un-added indexes above.
 4. **Thin wrapper sprawl** — `analysts-adapter.ts` (5-line body); `logging-verdict.ts` + `notifying-verdict.ts` mergeable.
 5. **`VerdictLogStore` port narrower than impl** (`getByTraceId` not on the port).
