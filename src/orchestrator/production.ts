@@ -878,8 +878,17 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // `logger` here is what makes an analyst failure visible at all — see the
     // adapter's doc comment (issue #358 item 4).
     analysts: buildAnalystsStep(analysts, logger),
+    // Two independent stores hang off this one step, both over `config.db`:
+    // #367's `SqliteLlmSpendStore` meters what the debate COSTS (the
+    // dashboard's spend tile), and #364's `SqliteDebateLogStore` records what
+    // the debate DECIDED. The latter was constructed for the Feedback Loop's
+    // `feedbackStores.debate_log` to read and had no writer anywhere in the
+    // tick path, so `attribution.ts` had nothing to attribute over the whole
+    // soak.
     debate: buildDebateStep(
       config.llmClient ?? buildDefaultLlmClient(logger, new SqliteLlmSpendStore(config.db, logger)),
+      new SqliteDebateLogStore(config.db),
+      logger,
     ),
     trader: buildTraderStep({ ...breakerStateDeps, config: config.traderConfig }),
     risk: buildRiskStep({

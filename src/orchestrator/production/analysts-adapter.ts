@@ -40,8 +40,10 @@
  * refactor, and bounding costs nothing operationally: the operator needs WHICH
  * analyst failed and WHY in short form, and both survive.
  *
- * Deliberately narrow. `sanitizeFailureReason` masks only well-known
- * credential-carrying SYNTAXES (`bot<digits>:<token>`, `Bearer <token>`,
+ * Deliberately narrow. `sanitizeLogText` (moved to
+ * `src/shared/sanitize-log-text.ts` in #364, when the debate adapter became
+ * its second caller) masks only well-known credential-carrying SYNTAXES
+ * (`bot<digits>:<token>`, `Bearer <token>`,
  * `key/secret/token/password/auth = <value>`), never anything that merely looks
  * random. Over-masking would put us back where this ticket started — a quorum
  * skip whose stated cause says nothing — so a real failure like
@@ -49,35 +51,8 @@
  * verbatim, and a test pins exactly that.
  */
 import type { AnalystFailure, AnalystOrchestrator } from '../../analysts/index.js';
-import { type Logger, truncateForError } from '../../shared/index.js';
+import { type Logger, sanitizeLogText } from '../../shared/index.js';
 import type { TickSteps } from '../types.js';
-
-/**
- * Credential-carrying syntaxes, masked value-only so the surrounding message
- * still reads. Kept to shapes that are unambiguously a secret being assigned —
- * a bare high-entropy string is NOT matched, because legitimate failure reasons
- * are full of ids, hashes and ISO timestamps.
- */
-const CREDENTIAL_PATTERNS: readonly RegExp[] = [
-  // Telegram bot token in a URL path: `/bot123456:AA...`
-  /\bbot\d{4,}:[A-Za-z0-9_-]+/gi,
-  // A bare Telegram-shaped token: long digit run, colon, long opaque suffix.
-  /\b\d{6,}:[A-Za-z0-9_-]{20,}\b/g,
-  // `Bearer <token>`
-  /\bBearer\s+[^\s,;"'}\]]+/gi,
-  // `apiKey=x`, `"api_secret": "x"`, `token: x`, `password=x`, `auth: x`, and
-  // Alpaca's own header names.
-  /\b(?:APCA-API-KEY-ID|APCA-API-SECRET-KEY|api[_-]?key|api[_-]?secret|secret|token|password|passwd|pwd|auth)\b["']?\s*[:=]\s*["']?[^\s,;"'}\]]+/gi,
-];
-
-/** Masks known credential syntaxes, then caps length — mask first, so truncation cannot bisect a token and leave half of it. */
-function sanitizeFailureReason(reason: string): string {
-  let masked = reason;
-  for (const pattern of CREDENTIAL_PATTERNS) {
-    masked = masked.replace(pattern, '[REDACTED]');
-  }
-  return truncateForError(masked);
-}
 
 export function buildAnalystsStep(
   orchestrator: AnalystOrchestrator,
@@ -93,7 +68,7 @@ export function buildAnalystsStep(
       const safe = result.failures.map((failure: AnalystFailure) => ({
         analyst_type: failure.analyst_type,
         role: failure.role,
-        reason: sanitizeFailureReason(failure.reason),
+        reason: sanitizeLogText(failure.reason),
       }));
       const detail = safe
         .map((failure) => `${failure.analyst_type} (${failure.role}): ${failure.reason}`)

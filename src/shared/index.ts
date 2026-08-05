@@ -14,6 +14,7 @@ export type { RetryConfig } from './http/retry.js';
 export { withRetry } from './http/retry.js';
 export type { TokenBucketConfig } from './http/token-bucket.js';
 export { TokenBucket } from './http/token-bucket.js';
+export { sanitizeLogText } from './sanitize-log-text.js';
 export type {
   AssetClass,
   ClosedTrade,

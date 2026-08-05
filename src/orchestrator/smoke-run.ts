@@ -355,6 +355,13 @@ export interface SmokeTick {
 export interface SmokeObservations {
   /** From `audit_log`, grouped by trace, ordered as the tick runner wrote them. */
   ticks: SmokeTick[];
+  /**
+   * From `debate_log` — the row `feedback-loop/attribution.ts` joins on to
+   * credit analysts (#364). Observed here because a store with no caller is
+   * invisible to every other check in this file: the tick's `audit_log` line
+   * says `debate: bullish` whether or not a row was ever written.
+   */
+  debates: { debate_id: string; instrument: string; direction: string; rounds: number }[];
   /** From `verdict_log` — the row `OrphanVerdictScanner` reads at restart. */
   verdicts: { trace_id: string; instrument: string; status: string; no_go_reason: string | null }[];
   /** From `open_positions` — written ahead by `ExecutionImpl` before the broker call. */
@@ -406,6 +413,9 @@ export function readSmokeObservations(db: SqliteHandle): SmokeObservations {
 
   return {
     ticks: [...byTrace.values()],
+    debates: db
+      .prepare('SELECT debate_id, instrument, direction, rounds FROM debate_log ORDER BY rowid')
+      .all() as SmokeObservations['debates'],
     verdicts: db
       .prepare('SELECT trace_id, instrument, status, no_go_reason FROM verdict_log ORDER BY rowid')
       .all() as SmokeObservations['verdicts'],
@@ -442,12 +452,21 @@ export interface SmokeGateResult {
  * 1. the loop ran at all (timers, scheduler, shutdown);
  * 2. some tick got past Analysts — the literal condition #350 names, and the
  *    one a credentialed run against a 401ing data feed fails;
- * 3. a `go` reached `verdict_log` (Verdict's gates, the HITL path, and the row
+ * 3. a resolved debate reached `debate_log` (#364 — the store was constructed
+ *    and never called, so a whole paper run of converged debates left the
+ *    Feedback Loop's attribution input at zero rows);
+ * 4. a `go` reached `verdict_log` (Verdict's gates, the HITL path, and the row
  *    `OrphanVerdictScanner` reads at restart);
- * 4. Execution accepted the `go` and reported `submitted`;
- * 5. a lot was written ahead to `open_positions` and reached the broker;
- * 6. a fill came back through the fill-sync poll — the only thing that proves
+ * 5. Execution accepted the `go` and reported `submitted`;
+ * 6. a lot was written ahead to `open_positions` and reached the broker;
+ * 7. a fill came back through the fill-sync poll — the only thing that proves
  *    `ingestFills()` is actually scheduled and draining.
+ *
+ * Requirement 3 asks for at least ONE row, not one per tick: the smoke clock
+ * is frozen at `SMOKE_RUN_INSTANT` and the fixture views are identical every
+ * tick, so all three ticks hash to the same `debate_id` and the writer's
+ * first-write-wins guard (debate-adapter.ts) correctly collapses them to one
+ * row rather than duplicating that debate's analysts in attribution.
  *
  * A `ClosedTrade` is NOT required: see `SMOKE_CLOSED_TRADE_NOTE`.
  */
@@ -466,7 +485,7 @@ export function evaluateSmokeGate(
   },
 ): SmokeGateResult {
   const failures: string[] = [];
-  const { ticks, verdicts, positions, fills } = observations;
+  const { ticks, debates, verdicts, positions, fills } = observations;
 
   if (options.alpacaWireClientReached === true) {
     failures.push(
@@ -491,6 +510,15 @@ export function evaluateSmokeGate(
       'no tick got past Analysts — every pass short-circuited at the quorum gate, so Debate, ' +
         'Trader, Risk, Verdict and Execution were never exercised at all (this is exactly what ' +
         'a credential-less real run does today, and the reason #350 exists)',
+    );
+  }
+
+  if (debates.length === 0) {
+    failures.push(
+      'no row in debate_log — a tick got past Analysts but no resolved debate was persisted, so ' +
+        "the Feedback Loop's weight attribution (attribution.ts joins closed_trades.debate_id " +
+        'against debate_log) has no input and the debate itself is unreconstructable after the ' +
+        'fact (audit_log holds digests only). This is the #364 defect exactly',
     );
   }
 
@@ -556,6 +584,13 @@ export function formatSmokeReport(
   for (const [index, tick] of observations.ticks.entries()) {
     const reached = tick.stages.map((entry) => `${entry.stage}:${entry.decision}`).join(' -> ');
     lines.push(`  tick ${index + 1} [${tick.trace_id}] ${reached}`);
+  }
+
+  lines.push('', `debates logged: ${observations.debates.length}`);
+  for (const debate of observations.debates) {
+    lines.push(
+      `  ${debate.instrument} ${debate.direction} rounds=${debate.rounds} [${debate.debate_id}]`,
+    );
   }
 
   lines.push('', `verdicts recorded: ${observations.verdicts.length}`);
