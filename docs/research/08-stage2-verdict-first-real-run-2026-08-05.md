@@ -11,6 +11,15 @@ identified are **unchanged and still block PBO and DSR**.
 
 Raw run output: [stage2-run-2026-08-05.txt](stage2-run-2026-08-05.txt).
 
+> **Followed up 2026-08-05 by
+> [09-stage2-cost-decomposition-2026-08-05.md](09-stage2-cost-decomposition-2026-08-05.md).** The
+> "Turnover, not necessarily signal" question below is now answered: gross of modeled costs, 16 of
+> 24 pairs clear the kill line instead of 2, and all 24 improve. The kill is dominated by the cost
+> fixture. Two claims in this document are corrected there — the hedge in Finding 1 that the 2-year
+> cap "may be an account setting, not a purchase" (it is a paid plan limit, confirmed by probe), and
+> the recommendation ordering (calibrate the cost model *before* buying history). MinBTL's
+> `exceeded: true` is untouched by any of it — the grid is over budget on sample length and N alone.
+
 ## Headline verdict
 
 > **Stage 2 gate: NOT PASSED — `KILL/INCOMPLETE`.**
