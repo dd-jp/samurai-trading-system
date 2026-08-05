@@ -12,6 +12,7 @@
  * (`RECENT_DEBATES_LIMIT` / `RECENT_VERDICTS_LIMIT`), no config surface yet.
  */
 import type { OpenPosition } from '../shared/index.js';
+import { buildPipelineView, PIPELINE_LOOKBACK_MS, PIPELINE_MAX_LANES } from './pipeline-query.js';
 import { NULL_PROVIDER_STATUS, type ProviderStatusReader } from './provider-status.js';
 import type { DashboardQueryStore, DashboardSnapshot, PositionRow } from './types.js';
 
@@ -108,5 +109,12 @@ export function buildSnapshot(
     metrics,
     providers: providers.readProviderStatus(),
     llm_spend: store.getLlmSpend(asOf),
+    // Same `asOf` as every other field above, which is the reason the Pipeline
+    // view rides this payload instead of its own endpoint: two polls would let
+    // the lanes and the tables describe different instants and leave the
+    // operator to reconcile them.
+    pipeline: buildPipelineView(
+      store.getPipelineActivity(PIPELINE_MAX_LANES, PIPELINE_LOOKBACK_MS, asOf),
+    ),
   };
 }

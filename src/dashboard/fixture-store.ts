@@ -19,10 +19,14 @@ import type { MetricsSuite } from '../cost-model-backtest/index.js';
 import type { AnalystContribution } from '../debate-engine/index.js';
 import type { Mark } from '../market-data-service/index.js';
 import type { DebateLog, OpenPosition } from '../shared/index.js';
+import type { PipelineStage } from './pipeline-types.js';
 import type {
   AttributionSummary,
   DashboardQueryStore,
   LlmSpendSummary,
+  PipelineActivity,
+  PipelineLiveTick,
+  PipelineStageEvent,
   TickStatus,
   VerdictAuditEntry,
 } from './types.js';
@@ -342,6 +346,85 @@ const LLM_SPEND_ALL = {
   },
 };
 
+/**
+ * Pipeline-view fixtures (#411). One lane per instrument in `MARKS`, chosen so
+ * every cell state and every outcome the render layer has to draw appears at
+ * least once without the developer having to run a tick:
+ *
+ *  - BTC-USD — a clean walk to Execution (`go`).
+ *  - ETH-USD — a debate retried once, then rejected at Verdict (`no_go`),
+ *    which is what puts a two-attempt cell and a completed-but-negative
+ *    traversal on screen together.
+ *  - AAPL    — stopped at Trader on `no_trade`.
+ *  - TSLA    — stopped at Analysts on `quorum_skip`.
+ *  - SPY     — in flight at Debate, on the same trace as `TICK_STATUS` so the
+ *              two views of the live tick agree.
+ *  - QQQ     — no trace at all: the idle lane (#413).
+ *
+ * AAPL and TSLA are the deliberate ones. Both are traces the SQLite store
+ * cannot attribute today — `audit_log` has no instrument column, and a tick
+ * that ends before Verdict leaves nothing to join on (see
+ * `pipeline-query.ts`'s header). They are in the fixtures precisely because
+ * the UI must be built against the short-circuits the operator will eventually
+ * see, rather than against the subset the current schema can serve.
+ */
+const PIPELINE_NOW = NOW;
+
+function pipelineEvent(
+  trace_id: string,
+  instrument: string,
+  asset_class: PipelineStageEvent['asset_class'],
+  stage: PipelineStage,
+  decision: string,
+  secondsAgo: number,
+): PipelineStageEvent {
+  return {
+    trace_id,
+    instrument,
+    asset_class,
+    stage,
+    decision,
+    timestamp: new Date(PIPELINE_NOW.getTime() - secondsAgo * 1_000),
+  };
+}
+
+const PIPELINE_EVENTS: PipelineStageEvent[] = [
+  pipelineEvent('trace-p-btc', 'BTC-USD', 'crypto', 'analysts', 'quorum_met', 190),
+  pipelineEvent('trace-p-btc', 'BTC-USD', 'crypto', 'debate', 'bullish', 186),
+  pipelineEvent('trace-p-btc', 'BTC-USD', 'crypto', 'trader', 'entry', 175),
+  pipelineEvent('trace-p-btc', 'BTC-USD', 'crypto', 'risk', 'approved', 173),
+  pipelineEvent('trace-p-btc', 'BTC-USD', 'crypto', 'verdict', 'go', 172),
+  pipelineEvent('trace-p-btc', 'BTC-USD', 'crypto', 'execution', 'filled', 170),
+
+  pipelineEvent('trace-p-eth', 'ETH-USD', 'crypto', 'analysts', 'quorum_met', 130),
+  pipelineEvent('trace-p-eth', 'ETH-USD', 'crypto', 'debate', 'retry', 127),
+  pipelineEvent('trace-p-eth', 'ETH-USD', 'crypto', 'debate', 'bearish', 118),
+  pipelineEvent('trace-p-eth', 'ETH-USD', 'crypto', 'trader', 'entry', 114),
+  pipelineEvent('trace-p-eth', 'ETH-USD', 'crypto', 'risk', 'approved', 113),
+  pipelineEvent('trace-p-eth', 'ETH-USD', 'crypto', 'verdict', 'no_go', 112),
+
+  pipelineEvent('trace-p-aapl', 'AAPL', 'stocks', 'analysts', 'quorum_met', 95),
+  pipelineEvent('trace-p-aapl', 'AAPL', 'stocks', 'debate', 'neutral', 91),
+  pipelineEvent('trace-p-aapl', 'AAPL', 'stocks', 'trader', 'no_trade', 84),
+
+  pipelineEvent('trace-p-tsla', 'TSLA', 'stocks', 'analysts', 'quorum_skip', 47),
+
+  // The live trace's completed stages. Its current stage has no row yet — the
+  // audit row is written after the stage returns — which is exactly the state
+  // a `live` cell has to render from.
+  pipelineEvent('trace-007', 'SPY', 'stocks', 'analysts', 'quorum_met', 6),
+];
+
+const PIPELINE_LIVE: PipelineLiveTick[] = [
+  {
+    instrument: 'SPY',
+    asset_class: 'stocks',
+    stage: 'debate',
+    trace_id: TICK_STATUS.trace_id,
+    entered_at: new Date(PIPELINE_NOW.getTime() - 4_000),
+  },
+];
+
 export class InMemoryQueryStore implements DashboardQueryStore {
   getRecentDebates(limit: number, _asOf: Date): DebateLog[] {
     return RECENT_DEBATES.slice(0, limit);
@@ -384,6 +467,25 @@ export class InMemoryQueryStore implements DashboardQueryStore {
       last_24h: { ...LLM_SPEND_24H },
       last_7d: { ...LLM_SPEND_7D },
       all_time: { ...LLM_SPEND_ALL },
+    };
+  }
+
+  /**
+   * `maxLanes` is honoured (the fixtures are the universe, and a store that
+   * ignored its own bound would let the dashboard ship never having exercised
+   * one); `lookbackMs` and `asOf` are not, for the same reason every method
+   * above ignores `asOf` — the fixture data is static, so every trace is
+   * always "recent".
+   */
+  getPipelineActivity(maxLanes: number, _lookbackMs: number, _asOf: Date): PipelineActivity {
+    const universe = Object.entries(MARKS)
+      .map(([instrument, mark]) => ({ instrument, asset_class: mark.asset_class }))
+      .slice(0, maxLanes);
+    const laneInstruments = new Set(universe.map((entry) => entry.instrument));
+    return {
+      universe,
+      events: PIPELINE_EVENTS.filter((event) => laneInstruments.has(event.instrument)),
+      live: PIPELINE_LIVE.filter((tick) => laneInstruments.has(tick.instrument)),
     };
   }
 }

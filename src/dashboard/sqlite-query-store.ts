@@ -35,12 +35,16 @@ import type { Mark } from '../market-data-service/index.js';
 import type { AssetClass, TickStage } from '../orchestrator/index.js';
 import type { ClosedTrade, DebateLog, OpenPosition, OrderState } from '../shared/index.js';
 import type { SharedStore } from '../shared/store/index.js';
+import { PIPELINE_STAGES, type PipelineStage } from './pipeline-types.js';
 import type {
   AttributionSummary,
   DashboardQueryStore,
   LlmPerDebateStats,
   LlmSpendSummary,
   LlmSpendWindow,
+  PipelineActivity,
+  PipelineLiveTick,
+  PipelineStageEvent,
   TickStatus,
   VerdictAuditEntry,
 } from './types.js';
@@ -105,6 +109,27 @@ interface CurrentTickRow {
   asset_class: AssetClass;
   stage: TickStage;
   trace_id: string;
+}
+
+interface UniverseRow {
+  instrument: string;
+  asset_class: AssetClass;
+}
+
+interface PipelineTickRow extends UniverseRow {
+  stage: TickStage;
+  trace_id: string;
+  updated_at: string;
+}
+
+interface AuditStageRow {
+  trace_id: string;
+  stage: PipelineStage;
+  decision: string;
+  timestamp: string;
+  /** NULL for rows written before migration 0013, and for non-tick audit rows. */
+  instrument: string | null;
+  asset_class: AssetClass | null;
 }
 
 interface ClosedTradeRow {
@@ -368,6 +393,169 @@ export class SqliteQueryStore implements DashboardQueryStore {
       // relying on that is a trick the next reader has to decode.
       all_time: this.spendBetween(null, until),
     };
+  }
+
+  /**
+   * The Pipeline view's read (#411) — lane universe, attributed stage rows,
+   * and in-flight ticks, in four bounded queries.
+   *
+   * ## Why the instrument is a join and not a column
+   *
+   * `audit_log` is `(trace_id, stage, decision, input_digest, output_digest,
+   * timestamp)` — no instrument — and `trace_id` is a bare `randomUUID()`
+   * minted per instrument per tick (tick-loop.ts). Only two tables carry both
+   * a `trace_id` and an instrument, so those are the only ways in:
+   *
+   *  - `current_tick` — the tick running right now, deleted at tick end.
+   *  - `verdict_log` — one row per `VerdictDecision`, so only traces that
+   *    actually reached Verdict.
+   *
+   * A tick that short-circuits at Analysts, Trader or Risk therefore writes
+   * its stage rows and stays unattributable. That gap is asserted in
+   * `sqlite-query-store.test.ts` rather than described here alone, and
+   * `pipeline-query.ts`'s header carries the whole consequence and the fix
+   * (one additive migration putting `instrument` on `audit_log`). Nothing else
+   * in the read path changes when it lands — only this method.
+   *
+   * `llm_spend.debate_id -> debate_log.instrument` would widen coverage a
+   * little and is deliberately NOT used: it still misses `quorum_skip` (the
+   * tick never reaches an LLM call), and `SqliteLlmSpendStore.record` swallows
+   * its write failures by design, so a metering hiccup would silently delete a
+   * lane. An identity index has to be a system of record; that table is not
+   * one.
+   *
+   * Payload is bounded three ways for the 3-second poll: `maxLanes` caps the
+   * universe, `lookbackMs` caps how far back a lane reaches (#413), and at
+   * most one settled candidate plus one live trace per lane reach the audit
+   * query.
+   */
+  getPipelineActivity(maxLanes: number, lookbackMs: number, asOf: Date): PipelineActivity {
+    const until = asOf.toISOString();
+    const from = new Date(asOf.getTime() - lookbackMs).toISOString();
+
+    // `latest_mark` is the closest thing the schema has to "the instruments
+    // this bot watches" — one upserted row per instrument the Market Data
+    // Service has priced. It is not the tick universe: it answers what has
+    // been PRICED, and the two diverge when the configured universe changes
+    // (and will again if Stage 0 selection lands, #397). `current_tick` is
+    // unioned in so an instrument mid-tick that has no mark yet still gets a
+    // lane — the one instrument doing something would otherwise be the one
+    // missing. The ORDER BY exists to make the LIMIT deterministic; wire order
+    // is `buildPipelineView`'s call.
+    const universe = this.db
+      .prepare(
+        `SELECT instrument, asset_class FROM latest_mark
+          UNION
+         SELECT instrument, asset_class FROM current_tick WHERE updated_at > ? AND updated_at <= ?
+          ORDER BY asset_class, instrument
+          LIMIT ?`,
+      )
+      .all(from, until, maxLanes) as UniverseRow[];
+    const laneInstruments = new Set(universe.map((row) => row.instrument));
+
+    // The window applies to `current_tick` too, unlike `getTickStatus`, which
+    // takes the latest row unconditionally. A crash mid-tick deliberately
+    // leaves the row behind (tick-runner.ts: a stale row must be visible, not
+    // tidied away), and a lane that showed it forever would report a dead tick
+    // as running until that instrument next completed a tick.
+    const live = (
+      this.db
+        .prepare(
+          `SELECT instrument, asset_class, stage, trace_id, updated_at FROM current_tick
+            WHERE updated_at > ? AND updated_at <= ?
+            ORDER BY updated_at DESC`,
+        )
+        .all(from, until) as PipelineTickRow[]
+    )
+      .filter((row) => laneInstruments.has(row.instrument))
+      .map<PipelineLiveTick>((row) => ({
+        instrument: row.instrument,
+        asset_class: row.asset_class,
+        stage: row.stage,
+        trace_id: row.trace_id,
+        entered_at: new Date(row.updated_at),
+      }));
+
+    return {
+      universe,
+      events: this.pipelineEvents(laneInstruments, from, until),
+      live,
+    };
+  }
+
+  /**
+   * Stage rows for the newest trace of each lane instrument.
+   *
+   * Attribution comes straight off `audit_log.instrument` (migration 0013).
+   * Before that column existed the only trace_id → instrument links in the
+   * schema were `current_tick` (in-flight only, and deleted at tick end) and
+   * `verdict_log` (only traces that reached Verdict) — which between them
+   * cannot see a SHORT-CIRCUITED tick at all. A `quorum_skip` at Analysts or a
+   * breaker trip at Risk belonged to no instrument, so the lane that most
+   * needed explaining was the one that stayed blank. Reading the column is
+   * what makes `stopped` cells reachable in production and not only in
+   * fixtures.
+   *
+   * The `stage IN (…)` filter is not defensive tidiness: `audit_log.stage` is
+   * unconstrained TEXT and the HITL Telegram callback writes
+   * `verdict.hitl.telegram_callback` rows under the pipeline's own `trace_id`
+   * (telegram-bot-api-client.ts:112). Without the filter those land in a lane
+   * as an eighth, unrenderable stage.
+   *
+   * `ORDER BY … timestamp, rowid` is `SqliteAuditLog.getByTraceId`'s ordering,
+   * for its reason: `audit_log` has no primary key, SQLite's tie-break for
+   * equal timestamps is unspecified, and a fixed clock puts several stages on
+   * the same ISO millisecond.
+   */
+  private pipelineEvents(
+    laneInstruments: ReadonlySet<string>,
+    fromIso: string,
+    untilIso: string,
+  ): PipelineStageEvent[] {
+    if (laneInstruments.size === 0) {
+      return [];
+    }
+    const stagePlaceholders = PIPELINE_STAGES.map(() => '?').join(', ');
+
+    const rows = this.db
+      .prepare(
+        `SELECT trace_id, instrument, asset_class, stage, decision, timestamp FROM audit_log
+          WHERE timestamp > ? AND timestamp <= ?
+            AND instrument IS NOT NULL
+            AND stage IN (${stagePlaceholders})
+          ORDER BY timestamp, rowid`,
+      )
+      .all(fromIso, untilIso, ...PIPELINE_STAGES) as AuditStageRow[];
+
+    // One trace per instrument — a lane renders exactly one — and the newest
+    // wins. Rows arrive oldest-first, because that ordering is load-bearing
+    // for the stage sequence within a trace, so a later row simply overwrites
+    // the claim and the last trace seen is the one that survives.
+    const chosenTrace = new Map<string, string>();
+    for (const row of rows) {
+      if (row.instrument !== null && laneInstruments.has(row.instrument)) {
+        chosenTrace.set(row.instrument, row.trace_id);
+      }
+    }
+
+    const events: PipelineStageEvent[] = [];
+    for (const row of rows) {
+      if (row.instrument === null || row.asset_class === null) {
+        continue;
+      }
+      if (chosenTrace.get(row.instrument) !== row.trace_id) {
+        continue;
+      }
+      events.push({
+        trace_id: row.trace_id,
+        instrument: row.instrument,
+        asset_class: row.asset_class,
+        stage: row.stage,
+        decision: row.decision,
+        timestamp: new Date(row.timestamp),
+      });
+    }
+    return events;
   }
 
   private spendBetween(fromIso: string | null, untilIso: string): LlmSpendWindow {

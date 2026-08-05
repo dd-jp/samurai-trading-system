@@ -499,3 +499,356 @@ describe('percentile', () => {
     expect(percentile([7, 9], 1)).toBe(9);
   });
 });
+
+/**
+ * The Pipeline view's read (#411). These tests pin the ATTRIBUTION rules as
+ * much as the data: `audit_log` has no instrument column, so which stage rows
+ * a lane can see is a property of the joins this method performs, and the last
+ * test here is the standing record of what those joins still cannot reach.
+ */
+describe('SqliteQueryStore.getPipelineActivity', () => {
+  const LOOKBACK_MS = 15 * 60 * 1_000;
+
+  function minutesBefore(minutes: number): string {
+    return new Date(NOW.getTime() - minutes * 60 * 1_000).toISOString();
+  }
+
+  function seedMark(db: SharedStore, instrument: string, asset_class: string): void {
+    db.prepare(
+      `INSERT INTO latest_mark (instrument, price, observed_at, asset_class, source)
+       VALUES (?, 100, ?, ?, 'alpaca')`,
+    ).run(instrument, minutesBefore(1), asset_class);
+  }
+
+  function seedTick(
+    db: SharedStore,
+    tick: { instrument: string; asset_class: string; stage: string; trace_id: string; at: string },
+  ): void {
+    db.prepare(
+      `INSERT INTO current_tick (instrument, asset_class, stage, trace_id, updated_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run(tick.instrument, tick.asset_class, tick.stage, tick.trace_id, tick.at);
+  }
+
+  function seedVerdict(
+    db: SharedStore,
+    verdict: { trace_id: string; instrument: string; status: string; at: string },
+  ): void {
+    db.prepare(
+      `INSERT INTO verdict_log (trace_id, idempotency_key, instrument, status, no_go_reason, hitl_override, timestamp)
+       VALUES (?, ?, ?, ?, NULL, 0, ?)`,
+    ).run(
+      verdict.trace_id,
+      `key-${verdict.trace_id}`,
+      verdict.instrument,
+      verdict.status,
+      verdict.at,
+    );
+  }
+
+  /**
+   * `instrument`/`asset_class` default to AAPL/stocks — most cases here run a
+   * single instrument and only care about the stage walk. Attribution is not
+   * optional in production: since migration 0013 `tick-runner.ts` always
+   * writes both, and a row without them is one of the two documented
+   * unattributable cases (pre-migration rows, and the HITL callback path).
+   */
+  function seedAudit(
+    db: SharedStore,
+    row: {
+      trace_id: string;
+      stage: string;
+      decision: string;
+      at: string;
+      instrument?: string | null;
+      asset_class?: string | null;
+    },
+  ): void {
+    db.prepare(
+      `INSERT INTO audit_log
+         (trace_id, stage, decision, input_digest, output_digest, timestamp, instrument, asset_class)
+       VALUES (?, ?, ?, 'in', 'out', ?, ?, ?)`,
+    ).run(
+      row.trace_id,
+      row.stage,
+      row.decision,
+      row.at,
+      row.instrument === undefined ? 'AAPL' : row.instrument,
+      row.asset_class === undefined ? 'stocks' : row.asset_class,
+    );
+  }
+
+  it('builds the lane universe from marked instruments and in-flight ticks, in lane order', () => {
+    const db = makeDb();
+    seedMark(db, 'TSLA', 'stocks');
+    seedMark(db, 'BTC-USD', 'crypto');
+    // An instrument mid-tick that has no mark yet must still get a lane —
+    // otherwise the one instrument actually doing something is the one missing.
+    seedTick(db, {
+      instrument: 'ETH-USD',
+      asset_class: 'crypto',
+      stage: 'debate',
+      trace_id: 'trace-live',
+      at: minutesBefore(1),
+    });
+
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+
+    expect(activity.universe).toEqual([
+      { instrument: 'BTC-USD', asset_class: 'crypto' },
+      { instrument: 'ETH-USD', asset_class: 'crypto' },
+      { instrument: 'TSLA', asset_class: 'stocks' },
+    ]);
+  });
+
+  it('bounds the universe by maxLanes so a 3-second poll cannot grow with latest_mark', () => {
+    const db = makeDb();
+    for (const instrument of ['AAPL', 'MSFT', 'QQQ', 'SPY', 'TSLA']) {
+      seedMark(db, instrument, 'stocks');
+    }
+
+    const activity = new SqliteQueryStore(db).getPipelineActivity(2, LOOKBACK_MS, NOW);
+
+    expect(activity.universe.map((u) => u.instrument)).toEqual(['AAPL', 'MSFT']);
+  });
+
+  it('attributes a settled trace to its instrument through verdict_log', () => {
+    const db = makeDb();
+    seedMark(db, 'AAPL', 'stocks');
+    seedVerdict(db, {
+      trace_id: 'trace-1',
+      instrument: 'AAPL',
+      status: 'no_go',
+      at: minutesBefore(2),
+    });
+    seedAudit(db, {
+      trace_id: 'trace-1',
+      stage: 'analysts',
+      decision: 'quorum_met',
+      at: minutesBefore(3),
+    });
+    seedAudit(db, {
+      trace_id: 'trace-1',
+      stage: 'verdict',
+      decision: 'no_go',
+      at: minutesBefore(2),
+    });
+
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+
+    expect(activity.events).toHaveLength(2);
+    expect(activity.events[0]).toMatchObject({
+      trace_id: 'trace-1',
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+      stage: 'analysts',
+      decision: 'quorum_met',
+    });
+    // `asset_class` is not on `verdict_log` — it comes from the universe row,
+    // which is why an instrument with neither a mark nor a tick has no lane.
+    expect(activity.events[1]?.stage).toBe('verdict');
+  });
+
+  it('attributes an in-flight trace through current_tick and reports when it entered the stage', () => {
+    const db = makeDb();
+    seedMark(db, 'BTC-USD', 'crypto');
+    seedTick(db, {
+      instrument: 'BTC-USD',
+      asset_class: 'crypto',
+      stage: 'trader',
+      trace_id: 'trace-live',
+      at: minutesBefore(1),
+    });
+    seedAudit(db, {
+      trace_id: 'trace-live',
+      stage: 'analysts',
+      decision: 'quorum_met',
+      at: minutesBefore(2),
+      instrument: 'BTC-USD',
+      asset_class: 'crypto',
+    });
+
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+
+    expect(activity.live).toEqual([
+      {
+        instrument: 'BTC-USD',
+        asset_class: 'crypto',
+        stage: 'trader',
+        trace_id: 'trace-live',
+        entered_at: new Date(minutesBefore(1)),
+      },
+    ]);
+    expect(activity.events.map((e) => e.stage)).toEqual(['analysts']);
+  });
+
+  it('keeps only the most recent settled trace per instrument', () => {
+    const db = makeDb();
+    seedMark(db, 'AAPL', 'stocks');
+    seedVerdict(db, { trace_id: 'old', instrument: 'AAPL', status: 'go', at: minutesBefore(9) });
+    seedVerdict(db, { trace_id: 'new', instrument: 'AAPL', status: 'go', at: minutesBefore(2) });
+    seedAudit(db, { trace_id: 'old', stage: 'verdict', decision: 'go', at: minutesBefore(9) });
+    seedAudit(db, { trace_id: 'new', stage: 'verdict', decision: 'go', at: minutesBefore(2) });
+
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+
+    // One lane holds one trace, so fetching every trace in the window would be
+    // payload the view cannot use — on a 3-second poll that is the difference
+    // between a bounded read and one that grows with the soak.
+    expect(activity.events.map((e) => e.trace_id)).toEqual(['new']);
+  });
+
+  it('drops traces and ticks older than the lookback window', () => {
+    const db = makeDb();
+    seedMark(db, 'AAPL', 'stocks');
+    seedMark(db, 'TSLA', 'stocks');
+    seedVerdict(db, { trace_id: 'stale', instrument: 'AAPL', status: 'go', at: minutesBefore(60) });
+    seedAudit(db, { trace_id: 'stale', stage: 'verdict', decision: 'go', at: minutesBefore(60) });
+    // A crash mid-tick deliberately leaves `current_tick` behind
+    // (tick-runner.ts). Outside the window it must not read as in-flight, or
+    // the view reports a dead tick as running for as long as the row survives.
+    seedTick(db, {
+      instrument: 'TSLA',
+      asset_class: 'stocks',
+      stage: 'debate',
+      trace_id: 'crashed',
+      at: minutesBefore(90),
+    });
+
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+
+    expect(activity.events).toEqual([]);
+    expect(activity.live).toEqual([]);
+    // The lanes themselves survive — an instrument with nothing recent is idle,
+    // not absent.
+    expect(activity.universe).toHaveLength(2);
+  });
+
+  it('excludes rows after asOf, following the store-wide <= convention', () => {
+    const db = makeDb();
+    seedMark(db, 'AAPL', 'stocks');
+    seedVerdict(db, {
+      trace_id: 'trace-1',
+      instrument: 'AAPL',
+      status: 'go',
+      at: minutesBefore(2),
+    });
+    seedAudit(db, {
+      trace_id: 'trace-1',
+      stage: 'analysts',
+      decision: 'quorum_met',
+      at: minutesBefore(3),
+    });
+    seedAudit(db, {
+      trace_id: 'trace-1',
+      stage: 'verdict',
+      decision: 'go',
+      at: new Date(NOW.getTime() + 60_000).toISOString(),
+    });
+
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+
+    expect(activity.events.map((e) => e.stage)).toEqual(['analysts']);
+  });
+
+  it('ignores audit rows whose stage is not a pipeline stage', () => {
+    const db = makeDb();
+    seedMark(db, 'AAPL', 'stocks');
+    seedVerdict(db, {
+      trace_id: 'trace-1',
+      instrument: 'AAPL',
+      status: 'go',
+      at: minutesBefore(2),
+    });
+    seedAudit(db, { trace_id: 'trace-1', stage: 'verdict', decision: 'go', at: minutesBefore(2) });
+    // The HITL Telegram callback writes to `audit_log` under the SAME
+    // `trace_id` with its own stage name (telegram-bot-api-client.ts:112).
+    // `audit_log.stage` is unconstrained TEXT, so nothing but this filter stops
+    // it landing in a lane as an eighth, unrenderable stage.
+    seedAudit(db, {
+      trace_id: 'trace-1',
+      stage: 'verdict.hitl.telegram_callback',
+      decision: 'allowlist_rejected',
+      at: minutesBefore(2),
+    });
+
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+
+    expect(activity.events.map((e) => e.stage)).toEqual(['verdict']);
+  });
+
+  it('orders a trace by timestamp then rowid, as getByTraceId does', () => {
+    const db = makeDb();
+    seedMark(db, 'AAPL', 'stocks');
+    seedVerdict(db, {
+      trace_id: 'trace-1',
+      instrument: 'AAPL',
+      status: 'go',
+      at: minutesBefore(2),
+    });
+    // Same ISO millisecond for every stage — what a fixed clock produces, and
+    // where an unspecified tie-break would scramble the walk.
+    const sameMs = minutesBefore(2);
+    for (const stage of ['analysts', 'debate', 'trader', 'risk', 'verdict']) {
+      seedAudit(db, { trace_id: 'trace-1', stage, decision: 'ok', at: sameMs });
+    }
+
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+
+    expect(activity.events.map((e) => e.stage)).toEqual([
+      'analysts',
+      'debate',
+      'trader',
+      'risk',
+      'verdict',
+    ]);
+  });
+
+  it('sees a trace that short-circuited before Verdict, via audit_log.instrument', () => {
+    const db = makeDb();
+    seedMark(db, 'AAPL', 'stocks');
+    // A complete, real tick that stopped at Trader on `no_trade`. Its
+    // `current_tick` row was deleted at tick end and it never reached Verdict,
+    // so before migration 0013 nothing in the schema tied it to AAPL and this
+    // lane rendered blank — indistinguishable from a closed market. The
+    // instrument on the audit rows is the whole difference.
+    seedAudit(db, {
+      trace_id: 'trace-1',
+      stage: 'analysts',
+      decision: 'quorum_met',
+      at: minutesBefore(3),
+    });
+    seedAudit(db, {
+      trace_id: 'trace-1',
+      stage: 'trader',
+      decision: 'no_trade',
+      at: minutesBefore(3),
+    });
+
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+
+    expect(activity.events.map((e) => e.stage)).toEqual(['analysts', 'trader']);
+    expect(activity.events[1]).toMatchObject({ instrument: 'AAPL', decision: 'no_trade' });
+  });
+
+  it('ignores audit rows with no instrument — unattributable is not a lane', () => {
+    const db = makeDb();
+    seedMark(db, 'AAPL', 'stocks');
+    // Both documented sources of NULL: rows written before migration 0013, and
+    // the HITL callback path, which records under an existing trace_id with no
+    // `Signal` in scope. Neither may be guessed into a lane.
+    seedAudit(db, {
+      trace_id: 'legacy',
+      stage: 'verdict',
+      decision: 'go',
+      at: minutesBefore(2),
+      instrument: null,
+      asset_class: null,
+    });
+
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+
+    expect(activity.events).toEqual([]);
+    expect(activity.universe).toEqual([{ instrument: 'AAPL', asset_class: 'stocks' }]);
+  });
+});

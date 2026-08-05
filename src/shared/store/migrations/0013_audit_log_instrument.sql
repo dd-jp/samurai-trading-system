@@ -1,0 +1,52 @@
+-- Instrument attribution on `audit_log` (#412's pipeline view, map #411).
+--
+-- WHY THIS IS NEEDED AT ALL. `audit_log` is the only table that records a tick
+-- reaching a stage — one row per stage, written by `tick-runner.ts`'s `record`
+-- closure. It carries `trace_id` and nothing that says WHICH INSTRUMENT the
+-- trace belonged to. `trace_id` itself is a bare `randomUUID()`
+-- (tick-loop.ts), so it decodes to nothing.
+--
+-- That gap is invisible until something tries to read the pipeline per
+-- instrument, which is exactly what the dashboard's Pipeline view does. The
+-- only two trace_id -> instrument links in the schema are:
+--
+--   * `current_tick` — the IN-FLIGHT tick only, and its row is DELETED when
+--     the tick ends, so it is a liveness signal and never a history; and
+--   * `verdict_log` — only traces that got as far as Verdict.
+--
+-- The union of those two is "ticks happening right now, plus ticks that
+-- finished the pipeline". Everything that SHORT-CIRCUITED — a `quorum_skip` at
+-- Analysts, a `no_setup` at Trader, a breaker trip at Risk — is attributable
+-- to no instrument at all. Those are precisely the events an operator watching
+-- a paper soak needs to see: a lane that goes quiet because Risk keeps
+-- rejecting it looks identical to a lane on a closed market.
+--
+-- WHY TWO NULLABLE COLUMNS RATHER THAN A JOIN TABLE OR A DECODABLE trace_id.
+-- The writer already holds both values in scope — `tick-runner.ts`'s `record`
+-- closure closes over `signal.asset` and `signal.asset_class` — so this is a
+-- write that was always available and simply never persisted. An additive
+-- `ALTER TABLE ... ADD COLUMN` on SQLite rewrites no rows and takes no table
+-- lock worth naming, which matters because `audit_log` is written on the hot
+-- tick path, once per stage per instrument.
+--
+-- NULL MEANS "NOT ATTRIBUTABLE", NOT "NO INSTRUMENT". Two honest sources of
+-- NULL, and readers must treat both as unknown rather than as a lane:
+--
+--   1. Every row written before this migration. The pipeline view simply has
+--      no history from before it ran, which is correct — it never had one.
+--   2. Audit rows written outside a tick. `telegram-bot-api-client.ts` records
+--      a `verdict.hitl.telegram_callback` row under an existing trace_id from
+--      the HITL callback path, where no `Signal` is in scope. That row is a
+--      real audit event and a non-event for the pipeline view, which filters
+--      on the seven pipeline stage names anyway.
+--
+-- NO INDEX HERE, DELIBERATELY. The read this enables is bounded by a time
+-- window (`WHERE timestamp >= ?`), and `audit_log` already has no primary key
+-- because a tick can legitimately reach the same stage twice across retries.
+-- Adding a covering index for a query that runs once every three seconds
+-- against a windowed slice would cost every tick's write to save a read that
+-- is already cheap. `0005_hot_path_indexes.sql` exists for paths that were
+-- measured; this one has not been.
+
+ALTER TABLE audit_log ADD COLUMN instrument TEXT;
+ALTER TABLE audit_log ADD COLUMN asset_class TEXT;

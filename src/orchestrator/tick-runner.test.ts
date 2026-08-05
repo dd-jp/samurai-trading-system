@@ -336,6 +336,25 @@ describe('SequentialTickRunner.runInstrument', () => {
     expect(rows).toHaveLength(new Set(rows.map((row) => row.stage)).size);
   });
 
+  it('attributes every audit row to the instrument and asset class it came from', async () => {
+    const steps = makeSteps();
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    // Migration 0013. Asserted on the RUNNER rather than only on the store,
+    // because the store happily accepts a row without them: this is the caller
+    // that has to pass them, and until it did, every tick that short-circuited
+    // before Verdict was attributable to no instrument at all.
+    const rows = (ctx.auditLog as SqliteAuditLog).getByTraceId(TRACE_ID);
+    expect(rows).not.toHaveLength(0);
+    expect(
+      rows.every(
+        (row) => row.instrument === SIGNAL.asset && row.asset_class === SIGNAL.asset_class,
+      ),
+    ).toBe(true);
+  });
+
   it('records only the stages reached before a short-circuit', async () => {
     const steps = makeSteps({ risk: vi.fn(async () => rejectedRisk()) });
     const ctx = makeCtx();

@@ -19,6 +19,7 @@ import type { Direction } from '../debate-engine/index.js';
 import type { Mark } from '../market-data-service/index.js';
 import type { AssetClass } from '../orchestrator/index.js';
 import type { DebateLog, OpenPosition } from '../shared/index.js';
+import type { PipelineStage, PipelineView } from './pipeline-types.js';
 import type { ProviderStatusPanel, ProviderStatusReader } from './provider-status.js';
 
 /**
@@ -197,6 +198,69 @@ export interface LlmSpendSummary {
 }
 
 /**
+ * One `audit_log` row that has been ATTRIBUTED to an instrument — the raw
+ * material the Pipeline view's lanes are built from (wayfinder map #411).
+ *
+ * `audit_log` itself carries no instrument (0001_init.sql: `trace_id`,
+ * `stage`, `decision`, two digests, `timestamp`) and `trace_id` is a bare
+ * `randomUUID()` (tick-loop.ts), so the instrument is a JOIN result, not a
+ * column read. `SqliteQueryStore.getPipelineActivity` documents which joins
+ * are available and what they cannot see.
+ *
+ * `stage` is narrowed to `PipelineStage` rather than left as the table's raw
+ * TEXT: `audit_log.stage` is unconstrained and genuinely carries non-pipeline
+ * values under a pipeline `trace_id` (the HITL Telegram callback writes
+ * `verdict.hitl.telegram_callback`, telegram-bot-api-client.ts:112), so the
+ * store MUST filter to the seven known stages before handing rows over.
+ */
+export interface PipelineStageEvent {
+  trace_id: string;
+  instrument: string;
+  asset_class: AssetClass;
+  stage: PipelineStage;
+  /** `audit_log.decision` — the stage's decision word (`quorum_skip`, `no_go`, …). */
+  decision: string;
+  timestamp: Date;
+}
+
+/**
+ * One in-flight tick, from `current_tick`. Distinct from `TickStatus` only by
+ * carrying `entered_at`, which the Pipeline view needs so the render layer can
+ * run the live cell's clock forward between 3-second polls.
+ */
+export interface PipelineLiveTick {
+  instrument: string;
+  asset_class: AssetClass;
+  stage: PipelineStage;
+  trace_id: string;
+  /** `current_tick.updated_at` — when the tick entered this stage. */
+  entered_at: Date;
+}
+
+/**
+ * Everything `buildPipelineView` needs, in one read. Deliberately raw: the
+ * store fetches and attributes, the pure builder in `pipeline-query.ts`
+ * decides lane order, cell states and outcomes, so all of that is testable
+ * without a database.
+ */
+export interface PipelineActivity {
+  /**
+   * The lane universe — one entry per instrument the dashboard draws a row
+   * for, whether or not it has ticked. Already bounded to `maxLanes` by the
+   * store; ordered into wire order by the builder.
+   */
+  universe: { instrument: string; asset_class: AssetClass }[];
+  /**
+   * Candidate traces' stage rows, ordered by `(trace_id, timestamp, rowid)`.
+   * Ordering by `rowid` within a timestamp matches `SqliteAuditLog.getByTraceId`
+   * — a fixed test clock puts several stages on the same ISO millisecond.
+   */
+  events: PipelineStageEvent[];
+  /** Every in-flight tick in the window, newest first. Empty when nothing is running. */
+  live: PipelineLiveTick[];
+}
+
+/**
  * The single payload `GET /api/snapshot` returns. Exactly the four CLI views
  * plus the coarse tick-in-progress line, projected to JSON-friendly shapes.
  */
@@ -226,6 +290,13 @@ export interface DashboardSnapshot {
    */
   providers: ProviderStatusPanel;
   llm_spend: LlmSpendSummary;
+  /**
+   * The Pipeline view's lanes (#411/#412) — the same poll, a second view.
+   * Rides on the existing 3s `GET /api/snapshot` rather than a new endpoint:
+   * charting decision 1 on the map rules out any new liveness transport, and
+   * a second endpoint would let the two views disagree about `as_of`.
+   */
+  pipeline: PipelineView;
 }
 
 /**
@@ -263,4 +334,16 @@ export interface DashboardQueryStore {
    * same relationship this store has to `open_positions` or `verdict_log`.
    */
   getLlmSpend(asOf: Date): LlmSpendSummary;
+  /**
+   * Raw material for the Pipeline view (#411). `maxLanes` bounds the number of
+   * instruments; `lookbackMs` bounds how far back a lane reaches (#413) — both
+   * are passed in rather than read from config so the caller that owns the
+   * poll (`buildSnapshot`) owns the payload size, exactly as the `limit`
+   * arguments above do.
+   *
+   * Bounded on purpose: this rides the 3-second poll, so it must never grow
+   * with the audit history. At most one settled candidate trace and one live
+   * trace per lane are returned.
+   */
+  getPipelineActivity(maxLanes: number, lookbackMs: number, asOf: Date): PipelineActivity;
 }
