@@ -14,7 +14,7 @@ Runner: `src/scripts/run-stage2-cost-decomposition.ts`. Attribution: `src/cost-m
 > **The Stage 2 kill is a cost-model artifact, not a dead signal.**
 >
 > Net of `PESSIMISTIC_COST_CONFIG`, **2 of 24** (config, asset class) pairs clear the 0.5 OOS Sharpe
-> kill line. Gross of the same modeled costs, **16 of 24** do — and **all 24 improve**, with 22 of 24
+> kill line. Gross of the same modeled costs, **16 of 24** do — and **all 24 improve**, with 23 of 24
 > gross out-of-sample Sharpes positive. Crypto moves from a range of −1.2 … −9.0 to +0.22 … +3.10.
 >
 > The cost fixture charges crypto **211bps per round trip** — an adverse price move of **0.45 ATR on
@@ -48,12 +48,18 @@ the net one, so it is comparable to the 0.5 line the gate is actually defined on
 | | net | gross |
 |---|---|---|
 | Pairs clearing the 0.5 OOS Sharpe line | **2 / 24** | **16 / 24** |
-| Pairs with a positive OOS Sharpe | 2 / 24 | **22 / 24** |
+| Pairs with a positive OOS Sharpe | 2 / 24 | **23 / 24** |
 | Crypto OOS Sharpe range | −1.21 … **−9.00** | **+0.22 … +3.10** |
 | Stocks OOS Sharpe range | −1.56 … +0.77 | −0.03 … +1.32 |
 
 Every one of the 12 crypto configs is negative net and positive gross. The worst pair in the
 committed verdict (`fast=10 slow=30 stop=1.5 target=2`, crypto, OOS **−9.001**) is **+0.266** gross.
+The single gross pair still negative is `stocks fast=20 slow=50 stop=2 target=3`, at −0.030.
+
+**The ×1 rung of the sensitivity ladder reproduces the committed verdict per-pair** — 0.774 and
+0.536 for the two passing stock configs, −9.001 for the worst crypto config, 2/24 passing. That is
+the confirmation that the millisecond-pinned window recovered the same effective window and the same
+fold boundaries as the original run, rather than a similar one.
 
 ## Finding 2 — the cost fixture charges 0.45 ATR per fill on crypto
 
@@ -98,9 +104,21 @@ rungs, which is why the fall is not proportional):
 | ×0.05 | 14 / 24 | 2.7 bps | 11.0 bps |
 | ×0 (gross) | 16 / 24 | — | — |
 
-The grid's fate is decided between ×0.5 and ×0.25 — that is, the cost fixture is roughly **2–4×**
-away from the level at which the verdict flips. Given the orientation figures above, plausible
-venue-calibrated costs land at or below that threshold for both asset classes.
+The grid's fate is decided between ×0.5 and ×0.25 — the fixture is roughly **2–4×** away from the
+level at which the verdict flips.
+
+> **Read this ladder as a sensitivity diagnostic, NOT as a forecast of the calibrated result.**
+> `scaleCostConfig` multiplies all four coefficients uniformly, and a real calibration does not move
+> them uniformly — for crypto it moves two of them in *opposite* directions. Spread and slippage
+> come down hard (0.25 ATR of half-spread against a real BTC/ETH quoted spread of order a basis
+> point). But the fixture's `commissionRate: 0.001` is 10bps per leg, which is *lower* than the
+> published base-tier taker fees at the venues under consideration — so calibration would push
+> commission **up**. The calibrated point therefore sits off this ladder entirely, and "×0.25 →
+> 11/24" is a property of a synthetic uniform scale, not the number to expect after calibrating.
+>
+> What survives is the qualitative result, and it is robust: spread and slippage are **95%** of the
+> crypto charge, so collapsing them cuts the total far more than doubling a 10bps commission adds
+> back. The direction is not in doubt; the exact post-calibration count is.
 
 ## Finding 4 — the Polygon cap is a paid plan limit, confirmed
 
@@ -120,10 +138,16 @@ lifting it is a **purchase**, not a toggle. Correcting the earlier hedge.
 
 The gate still does not pass, and nothing here changes that:
 
-1. **MinBTL gets WORSE, not better.** The sample supports 7 trials; the grid runs 12. Going from 2
-   passing configs to 11–16 passing configs makes the "pick the best of the grid" selection effect
-   *more* dangerous, not less. A larger set of survivors on an over-budget grid is precisely what
-   MinBTL exists to flag.
+1. **MinBTL is unchanged, and still failed.** The sample supports 7 trials; the grid runs 12
+   (`exceeded: true`). That verdict is a function of sample length and N alone — the cost model
+   touches neither, so nothing here improves it or worsens it. The grid remains over budget by 5
+   trials, and that on its own keeps the gate shut.
+
+   Worth stating what the decomposition does *not* imply, though: a larger set of survivors is not
+   itself evidence of overfitting here. Overfitting's signature is a handful of lucky winners
+   scattered unevenly across a grid. What this run shows is **all 24 pairs improving and every
+   crypto config flipping sign** — uniform behaviour across the whole parameter space, which is the
+   pattern of a systematic effect (one cost input dominating) rather than of cherry-picking.
 2. **PBO and DSR are still structurally uncomputable** — 5 anchored walk-forward folds are not a
    CSCV partition, and `MetricsSuite` exposes no per-period Sharpe. Unchanged, and still blocking
    [#384](../../issues/384) and [#375](../../issues/375).
@@ -139,13 +163,16 @@ The gate still does not pass, and nothing here changes that:
 The (a)/(c) ordering David set resolves cleanly, and it inverts the earlier recommendation:
 
 1. **Calibrate the cost model before buying history.** It is free, it is the single largest lever on
-   the verdict (2/24 → plausibly 11–14/24), and re-running a 12-config grid against a fixture that
-   is 2–4× too pessimistic would waste whatever the history costs. `PESSIMISTIC_COST_CONFIG`'s own
+   the verdict, and re-running a 12-config grid against a fixture whose dominant term is off by an
+   order of magnitude would waste whatever the history costs. (How far the pass count moves is *not*
+   predicted here — see the caveat under Finding 3 on why the ladder's rungs are not the calibrated
+   point. The direction is solid; the number is not.) `PESSIMISTIC_COST_CONFIG`'s own
    comment concedes it "mirrors `cost-model.test.ts`'s `PESSIMISTIC_CONFIG` fixture, the only
    asset-class cost values this repo has settled on so far" — it was never a calibration. The
    specific defect is the null-spread fallback `spread = volatility × coefficient`, which is what
    produces 0.25 ATR of half-spread; a real quoted-spread input, or a coefficient fit to observed
-   spreads, replaces it.
+   spreads, replaces it. Note the calibration is not one-directional: the same pass should raise
+   `commissionRate`, which at 10bps per leg sits *below* published base-tier crypto taker fees.
 2. **Then buy the history — it is still needed, for a different reason than before.** Not to rescue
    the Sharpes (calibration does that) but to make N=12 legitimate: 5 years raises the MinBTL cap
    from 7 toward ~45. With a calibrated cost model and 2 years of data the grid would show more

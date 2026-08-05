@@ -209,6 +209,13 @@ describe('the gross reconstruction', () => {
       actual.map((t) => t.idempotency_key),
     );
 
+    // The add-back has no per-side branch because the sign flip on a short
+    // cancels out (see the module header's derivation). That is only PROVED if
+    // the fixture path actually contains both sides — a long-only sample would
+    // leave the short algebra untested while the test still passed.
+    expect(actual.some((t) => t.side === 'buy')).toBe(true);
+    expect(actual.some((t) => t.side === 'sell')).toBe(true);
+
     for (const [i, trade] of reconstructed.entries()) {
       expect(trade.realized_pnl_net).toBeCloseTo(
         (actual[i] as (typeof actual)[number]).realized_pnl_net,
