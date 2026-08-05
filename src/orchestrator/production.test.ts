@@ -71,7 +71,19 @@ function recordingLogger(): Logger & { entries: Parameters<Logger['log']>[0][] }
  * because the codebase ships no implementation of them (see production.ts's
  * doc comment) — not because a real one is being avoided here.
  */
-function stubConfig(db: SqliteHandle, overrides: Partial<ProductionConfig> = {}): ProductionConfig {
+/**
+ * `ProductionConfig` with the seams this stub ALWAYS supplies marked
+ * non-optional.
+ *
+ * They are optional on `ProductionConfig` because the composition root builds
+ * a default when they are absent — but this fixture always passes them, and
+ * assertions below read `config.alpacaBrokerClient.submitOrder` directly.
+ * Narrowing once here beats six non-null assertions at the call sites.
+ */
+type StubConfig = ProductionConfig &
+  Required<Pick<ProductionConfig, 'alpacaBrokerClient' | 'heartbeatChannel'>>;
+
+function stubConfig(db: SqliteHandle, overrides: Partial<ProductionConfig> = {}): StubConfig {
   const submitOrder = vi.fn(async () => ({
     id: 'alpaca-order-1',
     client_order_id: 'k',
@@ -94,7 +106,7 @@ function stubConfig(db: SqliteHandle, overrides: Partial<ProductionConfig> = {})
       })),
       listOrders: vi.fn(async () => []),
       listFills: vi.fn(async () => []),
-    } as unknown as ProductionConfig['alpacaBrokerClient'],
+    } as unknown as NonNullable<ProductionConfig['alpacaBrokerClient']>,
     alpacaDataClient: {
       getBars: vi.fn(async (): Promise<AlpacaBar[]> => []),
       getLatestQuote: vi.fn(
@@ -105,7 +117,10 @@ function stubConfig(db: SqliteHandle, overrides: Partial<ProductionConfig> = {})
     heartbeatChannel: { postHeartbeat: vi.fn(async () => undefined) },
     approvals: {
       requestApproval: vi.fn(
-        async (_request: ApprovalRequest): Promise<ApprovalOutcome> => ({ status: 'timeout' }),
+        // `ApprovalOutcome` is the bare union `'approved' | 'rejected' |
+        // 'timeout'`, not an object with a `status` — the `as unknown as`
+        // below was masking a stub that returned a shape the port never had.
+        async (_request: ApprovalRequest): Promise<ApprovalOutcome> => 'timeout',
       ),
     } as unknown as ProductionConfig['approvals'],
     orphanAlerts: { postOrphanAlert: vi.fn(async () => undefined) },
@@ -114,17 +129,30 @@ function stubConfig(db: SqliteHandle, overrides: Partial<ProductionConfig> = {})
       getAccountState: vi.fn(async () => ({
         cash: 100_000,
         peak_equity: 100_000,
+        // `as const`: `SessionBasis` discriminates on `known: true | false`,
+        // and without it the literal widens to `boolean` and matches neither.
         daily_basis: {
           crypto: { known: true, open_equity: 100_000, realized_pnl: 0 },
           stocks: { known: true, open_equity: 100_000, realized_pnl: 0 },
           portfolio: { known: true, open_equity: 100_000, realized_pnl: 0 },
-        },
+        } as const,
         consecutive_losses: 0,
       })),
     },
     volatility: {
+      // `VolatilityReading` is per-asset-class (`{ crypto, stocks }`); the
+      // former `{ atr_percentile: 0.5 }` shape has not existed for some time
+      // and only survived because the `as VolatilityReading` cast silenced it.
+      //
+      // That cast was not merely untidy — it made the volatility breaker
+      // INERT for every test in this file. With neither `crypto` nor `stocks`
+      // present, both readings were `undefined` and every comparison against
+      // the trip threshold was false, so the composed-tick chain below has
+      // never actually run that breaker. These values sit under
+      // `baseline × multiplier` (0.05 × 3 crypto, 0.02 × 3 stocks) so the
+      // breaker now genuinely evaluates and genuinely stays armed.
       getVolatilityReading: vi.fn(
-        async (): Promise<VolatilityReading> => ({ atr_percentile: 0.5 }) as VolatilityReading,
+        async (): Promise<VolatilityReading> => ({ crypto: 0.02, stocks: 0.01 }),
       ),
     },
     traderConfig: {} as ProductionConfig['traderConfig'],
@@ -470,7 +498,8 @@ describe('composed tick chain (integration)', () => {
       bars,
       { price: 160, observed_at: START, source: 'fixture' },
       'crypto',
-      { bid: 159.5, ask: 160.5, observed_at: START, source: 'fixture' },
+      // `Quote` carries no `source` — that field belongs to `Mark`.
+      { bid: 159.5, ask: 160.5, observed_at: START },
     );
 
     const llmClient = new MockLlmClient();
@@ -1482,7 +1511,10 @@ describe('buildProductionOrchestrator', () => {
               getDailyMetrics: () =>
                 'sample' in overrides
                   ? overrides.sample
-                  : { daily: SUITE, revalidation: undefined },
+                  : // `revalidation` omitted rather than set to `undefined`:
+                    // it is optional on `DailyMetricsSample` and nothing here
+                    // supplies a default to override.
+                    { daily: SUITE },
             },
             backtest_reference_sharpe: overrides.backtest_reference_sharpe ?? 1.5,
           },

@@ -60,7 +60,18 @@ function makeConfig(overrides: Partial<FeedbackConfig> = {}): FeedbackConfig {
   };
 }
 
-function makeInput(overrides: Partial<MetricsInput> = {}): {
+/**
+ * Deliberately NOT `Partial<MetricsInput>`. Under `exactOptionalPropertyTypes`
+ * a `Partial` of an optional property rejects an explicitly-passed
+ * `undefined`, but that is precisely how three tests below say "no
+ * revalidation this cycle" — the default below supplies one, and the spread
+ * has to be able to take it back out. Omitting the key instead would silently
+ * leave `makeRevalidation()` in place and make those tests assert the
+ * opposite of what they are named for.
+ */
+type MetricsInputOverrides = { [K in keyof MetricsInput]?: MetricsInput[K] | undefined };
+
+function makeInput(overrides: MetricsInputOverrides = {}): {
   input: MetricsInput;
   tuning: SqliteTuningStore;
   adjustments: SqliteAdjustmentLog;
