@@ -146,7 +146,7 @@ because the numbers were checked against the floor by hand after the run.
 the real model. It is a wrong *description*, which is worse in a document meant to justify a
 purchase decision.
 
-### P13 — A shared store used as a per-asset-class timeline *([#420](../../issues/420))*
+### P13 — A shared store used as a per-asset-class timeline *(FIXED — [#420](../../issues/420))*
 
 **Symptom:** the moment `MetricsSuite.observations` was added (#406) and printed, every row of the
 Stage 2 report — stocks and crypto alike — read **1,229 observations** over the same 2-year window.
@@ -166,6 +166,17 @@ Nothing type-checks the scope, because the type is right — it is the *contents
 **Same family as P2 and P12,** and caught the same way: not by review, but by a number finally
 appearing in the output. Two asset classes had reported an identical sample length for as long as
 the report existed.
+
+**Fixed 2026-08-05.** `Stage2HistoricalStore.timelineFor(symbols)` scopes the timeline per asset
+class. Stocks now report 500 observations and crypto 729, and the OOS-Sharpe pass count moved 12 →
+14 of 24. PBO and DSR barely moved — DSR because it depends on Sharpe and length through `SR·√n`,
+and the bug scaled those two by exact inverses.
+
+**The sharpest lesson is why no test caught it:** the fixture returned identical aggregates for all
+six symbols, so every close time coincided and the whole-store union was indistinguishable from
+either class's own timeline. A replay driven off the wrong one produced exactly the right answer.
+**A fixture that is more uniform than production hides whole classes of defect** — the new one
+offsets crypto by half a day, as the real cadences are.
 
 ---
 

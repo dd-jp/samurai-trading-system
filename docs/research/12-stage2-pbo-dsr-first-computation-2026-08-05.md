@@ -4,7 +4,9 @@
 terms were computable at all ([#406](../../issues/406), improvement I2 in
 [11-pitfalls-and-improvements-2026-08-05.md](11-pitfalls-and-improvements-2026-08-05.md)).
 
-Raw output: [stage2-pbo-dsr-2026-08-05.txt](stage2-pbo-dsr-2026-08-05.txt).
+Raw output: [stage2-pbo-dsr-corrected-2026-08-05.txt](stage2-pbo-dsr-corrected-2026-08-05.txt)
+(**authoritative** — after the [#420](../../issues/420) timeline fix). The original run is kept as
+[stage2-pbo-dsr-2026-08-05.txt](stage2-pbo-dsr-2026-08-05.txt) for comparison.
 Code: `cscv` scheme in `src/cost-model-backtest/splits.ts`, DSR inputs on `MetricsSuite`
 (`metrics.ts`), both consumed by `stage2-verdict.ts`.
 
@@ -13,9 +15,9 @@ Code: `cscv` scheme in `src/cost-model-backtest/splits.ts`, DSR inputs on `Metri
 > **Two of Stage 2's four kill-line terms had never produced a number. Both now do, and both
 > reject.**
 >
-> PBO is **0.65 for stocks and 0.35 for crypto** against a kill line of 0.05. DSR is **0.25 and
-> 0.52** against a 0.95 significance line. The OOS-Sharpe count is unchanged at 12 of 24, and
-> MinBTL still reports 12 trials against a cap of 7.
+> PBO is **0.65 for stocks and 0.30 for crypto** against a kill line of 0.05. DSR is **0.26 and
+> 0.52** against a 0.95 significance line. The OOS-Sharpe count is **14 of 24**, and MinBTL still
+> reports 12 trials against a cap of 7.
 >
 > The gate returns `KILL/INCOMPLETE` — but for the first time the "INCOMPLETE" half is gone. Every
 > term of the kill line has now been evaluated, and the strategy fails three of the four.
@@ -37,26 +39,27 @@ design and what the statistic is defined over — pitfall P7, "seams designed wi
 Run over the effective window **2024-08-06 .. 2026-08-05** (the 2 years the Polygon plan serves
 against a requested 5 — see P4), under `CALIBRATED_COST_CONFIG`.
 
-> **Read the sample-length caveat below before quoting any Sharpe here.** The new `observations`
-> field immediately exposed a pre-existing defect: both asset classes report **1,229** observations
-> over the same window, which cannot be true of both. It does not change the verdict — every term
-> fails by a wide margin — but it does distort the per-period Sharpes.
+> **Numbers below are the corrected ones.** The new `observations` field immediately exposed a
+> pre-existing defect — both asset classes reported **1,229** observations over the same window,
+> which cannot be true of both. Fixed in [#420](../../issues/420) and the gate re-run; the section
+> "The defect this run found" records what moved and what did not.
 
 | term | stocks | crypto | kill line | verdict |
 |---|---|---|---|---|
-| Pairs clearing OOS Sharpe | 6 / 12 | 6 / 12 | >= 0.5 | unchanged from the calibrated run |
-| **PBO** | **0.65** | **0.35** | <= 0.05 | **reject, both** |
-| **DSR** | **0.254** | **0.519** | >= 0.95 | **reject, both** |
+| Return observations | 500 | 729 | — | the real trading-day counts |
+| Pairs clearing OOS Sharpe | 8 / 12 | 6 / 12 | >= 0.5 | **14 / 24** |
+| **PBO** | **0.65** | **0.30** | <= 0.05 | **reject, both** |
+| **DSR** | **0.255** | **0.519** | >= 0.95 | **reject, both** |
 | MinBTL | 12 trials vs cap 7 | same | N <= cap | **exceeded** |
 
 The DSR row deflates the config each asset class's search would actually have selected — the
-highest OOS Sharpe, which is `09adb83…` at 1.282 for stocks and `b9cc5ba…` at 2.304 for crypto. Their
-whole-window per-period Sharpes are 0.0295 and 0.0488. Deflated by N = 12 over 1,229 observations,
-those are the 0.254 and 0.519 above.
+highest OOS Sharpe, which is `09adb83…` for stocks and `b9cc5ba…` for crypto. Their whole-window
+per-period Sharpes are 0.0463 and 0.0633. Deflated by N = 12 over 500 and 729 observations, those
+are the 0.255 and 0.519 above.
 
-## The caveat: every run has scored both asset classes over one merged timeline
+## The defect this run found (fixed in #420)
 
-**Found by the new field, on its first run.** `observations` is reported as **1,229 for stocks and
+**Found by the new field, on its first run.** `observations` came back as **1,229 for stocks and
 1,229 for crypto** — identical, in a run where stocks trade ~504 days over two years and crypto
 trades ~730. Both numbers cannot be right, and 1,229 ≈ 504 + 730 is the giveaway.
 
@@ -94,28 +97,54 @@ belonging to the other class:
 - **PBO is the least affected.** It is a rank statistic across configs, and every config in an
   asset class shares the same timeline, so the distortion is common-mode.
 
-**Not introduced here, and not fixed here.** This has been true of every Stage 2 run in this repo,
-including the first real verdict and the calibrated run — those numbers carry the same distortion.
-The fix belongs in its own change with its own re-run, because it moves every Sharpe in the report;
-folding it into the seams work would mean shipping two verdicts in one diff. Tracked as
-[#420](../../issues/420).
+**Fixed, and the gate re-run.** `Stage2HistoricalStore.timelineFor(symbols)` returns a timeline
+scoped to one asset class, and both scripts now build one per class. The corrected run is the
+authoritative one, and the predicted scaling landed almost exactly:
+
+| | before (#419) | after (#420) | predicted |
+|---|---|---|---|
+| stocks observations | 1,229 | **500** | ~504 |
+| crypto observations | 1,229 | **729** | ~730 |
+| stocks per-period Sharpe | 0.0295 | **0.0463** | ×1.56 → 0.0461 |
+| crypto per-period Sharpe | 0.0488 | **0.0633** | ×1.28 → 0.0625 |
+| OOS Sharpe pass count | 12 / 24 | **14 / 24** | up, stocks most |
+| PBO (stocks / crypto) | 0.65 / 0.35 | **0.65 / 0.30** | barely moves |
+| DSR (stocks / crypto) | 0.254 / 0.519 | **0.255 / 0.519** | barely moves |
+
+**DSR being unmoved is not a coincidence, and is worth understanding.** The statistic depends on the
+Sharpe and the sample length in the combination `SR·√n`. Zero-padding scaled the Sharpe by
+`√(n_real/n_union)` while inflating `n` from `n_real` to `n_union` — the two effects are exact
+inverses in that product, so DSR was very nearly invariant to the bug. That is why it moved by
+0.0006 while the underlying Sharpe moved by 57%. A statistic can be robust to a defect and still be
+computed from wrong inputs; the robustness is luck, not validation.
+
+**PBO barely moved** for the reason predicted: it is a rank statistic across configs that all shared
+the same timeline, so the distortion was common-mode. Crypto's 0.35 → 0.30 is one partition of 20
+changing hands.
+
+**What it does change is the OOS Sharpe count: 12 → 14 of 24**, with stocks going 6 → 8 since their
+Sharpes were the more understated. That is the number the earlier write-ups quote, so
+[08-…md](08-stage2-verdict-first-real-run-2026-08-05.md) and
+[10-…md](10-cost-model-calibration-2026-08-05.md) both under-report it; neither has been re-run.
 
 **Why the field earned its place.** This is precisely the P2/P12 pattern — a value nothing in the
 output distinguished from a correct one. Two asset classes had been quietly reporting the same
 sample length for as long as the report has existed, and the only reason it surfaced now is that
-something finally printed the number.
+something finally printed the number. The test fixture had masked it perfectly: it returned
+identical bars for all six symbols, so every close time coincided and the union was
+indistinguishable from either class's own timeline.
 
 ## What PBO 0.65 means, in plain terms
 
 Across the symmetric partitions of the six CSCV folds, the config that scored best on the training
 half landed **at or below the median** on the held-out half in 65% of them for stocks. Above 0.5,
 config selection is worse than a coin flip: picking the in-sample winner actively anti-predicts
-out-of-sample rank. Crypto's 0.35 is better and still seven times the kill line.
+out-of-sample rank. Crypto's 0.30 is better and still six times the kill line.
 
-This is the concrete form of the risk P8 flagged in the abstract. The cost calibration took the
-grid from 2 of 24 configs passing to 12, which made "just pick the best one" look far more
-attractive — and PBO is the measurement saying that picking the best one is precisely what does not
-survive.
+This is the concrete form of the risk P8 flagged in the abstract. Cost calibration took the grid
+from 2 of 24 configs passing to 12, and the timeline fix took it to 14 — each step making "just pick
+the best one" look more attractive. PBO is the measurement saying that picking the best one is
+precisely what does not survive.
 
 ### Two honest limitations on the PBO figure
 
@@ -148,14 +177,17 @@ itself move PBO, which is measured over whatever configs remain.
 
 ## What to do next
 
-1. **Do not read 12 of 24 as a signal.** It is the same evidence as before, and PBO now prices what
-   selecting from it costs.
+1. **Do not read 14 of 24 as a signal.** It is the same evidence as before, scored over the right
+   timeline, and PBO now prices what selecting from it costs.
 2. **Fix the trial budget anyway** (I1 / #405) — MinBTL is still exceeded, and a smaller grid also
    makes the PBO estimate less dependent on a large config set.
 3. **Re-run this gate after any change to the grid or the cost model.** All four terms are
    computable now, so there is no longer a reason to report a partial verdict.
 4. **Arm the Feedback Loop kill-lines** ([#384](../../issues/384), [#375](../../issues/375)) — they
    were blocked on exactly these two seams, and both are now unblocked.
-5. **Give each asset class its own replay timeline**, then re-run this gate. Until that lands, treat
-   every Sharpe in this document — and in the two before it — as distorted by the merged timeline
-   described above. The pass/fail conclusions hold; the magnitudes do not.
+5. **Done — #420.** Each asset class now has its own replay timeline and this gate has been re-run;
+   the numbers above are the corrected ones. The Sharpe magnitudes in
+   [08-…md](08-stage2-verdict-first-real-run-2026-08-05.md) and
+   [10-…md](10-cost-model-calibration-2026-08-05.md) are still the pre-fix ones — understated, and
+   not worth a re-run on their own, since both documents' conclusions were about cost attribution
+   rather than about a Sharpe level.

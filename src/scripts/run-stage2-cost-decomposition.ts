@@ -168,7 +168,11 @@ function makeAssetClass(
     makeRunner: () =>
       new ReplayDriver({
         barSource: store,
-        timeline: store,
+        // Scoped per asset class (#420) — same fix as run-stage2.ts. The
+        // decomposition compares net against gross over the same trades, so an
+        // unscoped timeline distorts both sides equally and the *ratio* would
+        // survive; the per-config Sharpes it prints would not.
+        timeline: store.timelineFor(symbols),
         registry: store,
         costModel,
         clock: new SimulatedClock(window.start),
