@@ -5,7 +5,7 @@ import {
   SqliteDebateLogStore,
 } from '../../debate-engine/index.js';
 import { accumulateCredit } from '../../feedback-loop/index.js';
-import type { Clock, ClosedTrade, DebateLogStore, LogEntry, Logger } from '../../shared/index.js';
+import type { Clock, ClosedTrade, LogEntry, Logger } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { buildDebateStep } from './debate-adapter.js';
 
@@ -62,11 +62,6 @@ function fakeLlmClient(options: FakeLlmOptions = {}): LlmClient {
 function recordingLogger(): { logger: Logger; entries: LogEntry[] } {
   const entries: LogEntry[] = [];
   return { logger: { log: (entry) => entries.push(entry) }, entries };
-}
-
-/** Every `debate_log` row currently in an in-memory store, via the port's only read. */
-function rowsFor(store: DebateLogStore, debate_id: string) {
-  return store.getByDebateId(debate_id);
 }
 
 describe('buildDebateStep', () => {
@@ -135,7 +130,7 @@ describe('buildDebateStep', () => {
     expect(result.rounds_completed).toBe(3);
     // A halted debate is at least as interesting as a converged one: the row
     // is written on the same path, no convergence branch.
-    expect(rowsFor(store, result.debate_id)?.rounds).toBe(3);
+    expect(store.getByDebateId(result.debate_id)?.rounds).toBe(3);
   });
 
   it('writes NO row when the debate throws partway, and logs the miss', async () => {
@@ -151,7 +146,7 @@ describe('buildDebateStep', () => {
     // debate_id is recomputable from (instrument, bar, views) even though the
     // debate produced no result — assert nothing was written under it, so the
     // eventual successful re-run can still claim the write-once key.
-    expect(rowsFor(store, computeDebateId('AAPL', NOW, views))).toBeUndefined();
+    expect(store.getByDebateId(computeDebateId('AAPL', NOW, views))).toBeUndefined();
 
     const missed = entries.find((entry) => entry.stage === 'debate' && entry.level === 'error');
     expect(missed).toBeDefined();

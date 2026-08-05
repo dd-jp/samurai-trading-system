@@ -76,8 +76,12 @@ import {
   runDebate,
   runMediatorPersona,
 } from '../../debate-engine/index.js';
-import type { Clock, DebateLogStore, Logger } from '../../shared/index.js';
-import { sanitizeLogText } from '../../shared/index.js';
+import {
+  type Clock,
+  type DebateLogStore,
+  type Logger,
+  sanitizeLogText,
+} from '../../shared/index.js';
 import type { TickSteps } from '../types.js';
 
 /**
@@ -214,6 +218,16 @@ export function buildDebatePersonas(
  * write skipped, at `warn` — the same first-write-wins posture as
  * `SqliteVerdictLogStore`'s `ON CONFLICT DO NOTHING` (#302), without weakening
  * the store's own contract for callers that genuinely should never collide.
+ *
+ * The read and the insert are separate statements rather than one atomic
+ * upsert, and that is sound HERE for a reason worth stating: both are
+ * synchronous `better-sqlite3` calls with no `await` between them, so no other
+ * task can interleave in-process — the only interleaving that could defeat the
+ * check is a SECOND PROCESS writing the same shared store, which the paper run
+ * (#238) does not do. Should one ever exist, the loser gets
+ * `SqliteDebateLogStore.writeLog`'s named duplicate error rather than this
+ * quiet skip, which is the right way round: a cross-process collision on a
+ * content-hash key is a real anomaly, not a retry.
  *
  * A write failure that is NOT a duplicate propagates: `debate_log` is the
  * Feedback Loop's system-of-record, and a store that cannot accept the row is
