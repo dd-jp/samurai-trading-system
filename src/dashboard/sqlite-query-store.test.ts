@@ -230,7 +230,9 @@ describe('SqliteQueryStore', () => {
       analyst_id: 'technical-analyst',
       window_days: 30,
     });
-    expect(attribution['technical-analyst']?.rolling_r).toBeCloseTo(0.5 * 1); // influence_score x agreement x R
+    // agreement × R. `influence_score` is no longer a factor (#370) — the
+    // fixture's 0.5 influence used to halve this figure.
+    expect(attribution['technical-analyst']?.rolling_r).toBeCloseTo(1);
   });
 
   it('excludes attribution for trades whose debate log row is missing', async () => {

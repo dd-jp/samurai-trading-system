@@ -48,12 +48,6 @@ import type {
 /** Mirrors execution-spec.md / SqliteExecutionStore's terminal-state exclusion. */
 const TERMINAL_STATES: readonly OrderState[] = ['closed', 'cancelled', 'rejected', 'expired'];
 
-/** No shadow-credit bonus for the dashboard's display figure — that boost is FL's
- * tuning-specific policy (feedback-loop-spec.md), not a general "how right was this
- * analyst" number. Reusing `creditForContribution` with it zeroed gives the same
- * influence-weighted correctness term FL uses, without importing FL's tuning knobs. */
-const DISPLAY_CREDIT_CONFIG = { shadow_credit: 0, shadow_influence_ceiling: 0 };
-
 interface OpenPositionRow {
   idempotency_key: string;
   debate_id: string;
@@ -299,7 +293,9 @@ export class SqliteQueryStore implements DashboardQueryStore {
       const direction = trade.side === 'buy' ? 'bullish' : 'bearish';
       const contributions = JSON.parse(row.debate_contributions_json) as AnalystContribution[];
       for (const contribution of contributions) {
-        const credit = creditForContribution(contribution, r, direction, DISPLAY_CREDIT_CONFIG);
+        // Same correctness figure the Feedback Loop attributes on (#370 left
+        // `creditForContribution` with no tuning knobs to diverge over).
+        const credit = creditForContribution(contribution, r, direction);
         rollingR.set(
           contribution.analyst_id,
           (rollingR.get(contribution.analyst_id) ?? 0) + credit,

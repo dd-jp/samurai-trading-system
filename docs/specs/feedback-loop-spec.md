@@ -29,7 +29,7 @@ Key architectural decisions:
 
 1. As the Feedback Loop, I want to recompute analyst weights daily from accumulated closed-trade outcomes, so that weighting reflects realized performance, not a static prior.
 2. As the Feedback Loop, I want to attribute each trade's realized R to analysts by their debate influence, signed by stance-vs-outcome, so that analysts who drove good trades gain weight and those who drove bad ones lose it.
-3. As the Feedback Loop, I want to give small shadow credit to right-but-low-influence analysts, so that a quietly-correct analyst can climb back.
+3. ~~As the Feedback Loop, I want to give small shadow credit to right-but-low-influence analysts, so that a quietly-correct analyst can climb back.~~ **Retired 2026-08-05 ([#370](https://github.com/dd-jp/samurai-trading-system/issues/370))** — shadow credit existed to offset a low `influence_score`, and attribution no longer reads influence at all. See "Module: Weight Attribution".
 4. As the Feedback Loop, I want to move each weight only a bounded step per cycle and keep weights floored/capped, so that no analyst swings wildly, drops to zero permanently, or dominates.
 5. As the Debate Engine, I want to read the updated weights when applying them downstream, so that the debate reflects current analyst credibility.
 
@@ -126,8 +126,8 @@ interface MetricsReport {
 
 **Source of the per-analyst breakdown (cross-spec — advisor-caught).** Attribution needs `AnalystContribution[]` (`influence_score`, `final_position`) at trade close — but the Debate Engine is deliberately no-persistence (#10), so `DebateResult` isn't retained, and neither `OrderIntent.metadata` nor the numeric setup store carries the contributions. The source is the Debate Engine's **debate log** (debate-engine-spec story 20: "log every debate — inputs, rounds, output — to tune weights in the Feedback Loop"), joined to the closed trade by **`debate_id`**. This is not contradictory with #10: operational debate *state* is ephemeral (re-run from scratch on crash), while the debate *log* is a separate append-only analytics/audit record that IS persisted as FL's system-of-record for attribution. `debate_id` must therefore be present on the trade record and deterministic across a debate re-run (see the cross-spec reconciliation note).
 
-- **Influence-weighted:** attribute a closed trade's realized R to analysts by their debate `influence_score` (read from the debate log via `debate_id`), signed by stance-vs-outcome. Winners' drivers gain, losers' drivers lose.
-- **Shadow credit:** small credit to right-but-low-influence analysts (stance matched outcome though they didn't sway the debate).
+- **Correctness-weighted:** attribute a closed trade's realized R to analysts by stance-vs-outcome — `agreement × R`, read from the debate log via `debate_id`. Winners' backers gain, losers' backers lose, at equal magnitude.
+- ~~**Influence-weighted** … **Shadow credit** …~~ **Retired 2026-08-05 ([#370](https://github.com/dd-jp/samurai-trading-system/issues/370)).** Attribution scaled credit by `influence_score`, with a small shadow-credit top-up for right-but-low-influence analysts (story 3). Two findings retired both: `computeInfluenceScore` measures how often an analyst was **moved**, not how much it moved others, so it paid followers as drivers; and it is `0` for the single-round debates production produces, so the influence term contributed nothing and shadow credit silently carried the whole signal at a tenth of its magnitude. `influence_score` is still computed and logged as an observation of stance movement — re-arming it as a credit factor needs a formula that measures influence in the direction this module claims.
 - **Bounded step** toward the performance-implied weight (e.g. realized hit-rate/expectancy), capped per daily cycle.
 - **Floors/caps:** no analyst weight reaches 0 permanently or dominates.
 
@@ -163,7 +163,7 @@ interface MetricsReport {
 ### What Makes a Good Test
 
 - Test `runDailyCycle` / `onTradeClose` / `computeMetrics` at their seams with a mocked clock-scoped store.
-- Attribution: a winning trade raises its drivers' weights, a loser lowers them, bounded and floored; shadow credit applies to right-but-low-influence analysts.
+- Attribution: a winning trade raises its backers' weights, a loser lowers them, bounded and floored. (Shadow credit retired — #370.)
 - Guardrails: auto-tighten applies; auto-loosen queues for approval and does not apply without it; hard bounds never crossed.
 - Labelling: on close, the right setup gets the right R, joined correctly; no label before close (point-in-time).
 - Metrics: full suite computed; a breach triggers alert + auto-tighten but not an automatic kill.

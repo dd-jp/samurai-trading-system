@@ -384,19 +384,16 @@ describe('paperStartingProfile', () => {
       expect(cyclesToTraverse).toBeGreaterThan(14);
     });
 
-    it('keeps shadow credit small and its ceiling inside the influence scale', () => {
+    it('carries no shadow-credit knobs — attribution no longer reads influence (#370)', () => {
       const config = paperStartingProfile('paper').feedback?.config;
       if (config === undefined) throw new Error('no feedback config');
 
-      // `influence_score` is a 0.0-1.0 stance-change fraction
-      // (debate-engine/analyst-contribution.ts), and both of these are read on
-      // that scale. Story 3 asks for "small" shadow credit; a value at or
-      // above 1 would pay a silent analyst more than a maximally influential
-      // one.
-      expect(config.shadow_credit).toBeGreaterThan(0);
-      expect(config.shadow_credit).toBeLessThan(0.5);
-      expect(config.shadow_influence_ceiling).toBeGreaterThan(0);
-      expect(config.shadow_influence_ceiling).toBeLessThan(1);
+      // Both fields were `influence_score` compensation. Credit is correctness
+      // alone now, so a profile still setting them would be configuring a knob
+      // nothing consults — this fails if one is reintroduced without a
+      // consumer.
+      expect('shadow_credit' in config).toBe(false);
+      expect('shadow_influence_ceiling' in config).toBe(false);
     });
 
     it('sets the three kill-lines the spec states literally', () => {
