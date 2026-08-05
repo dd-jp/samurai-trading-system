@@ -17,12 +17,14 @@ const NOW = new Date('2026-08-05T12:00:00Z');
 interface SpendRow {
   trace_id: string;
   stage: string;
+  debate_id: string | null;
   model: string;
   input_tokens: number;
   output_tokens: number;
   cache_creation_input_tokens: number;
   cache_read_input_tokens: number;
   cost_usd: number | null;
+  latency_ms: number | null;
   timestamp: string;
 }
 
@@ -38,6 +40,7 @@ describe('SqliteLlmSpendStore', () => {
       stage: 'debate',
       model: 'claude-haiku-4-5-20251001',
       usage: { input_tokens: 1_000_000, output_tokens: 1_000_000 },
+      latency_ms: 1_234,
       timestamp: NOW,
     });
 
@@ -56,6 +59,7 @@ describe('SqliteLlmSpendStore', () => {
       stage: 'debate',
       model: 'claude-haiku-4-5',
       usage: { input_tokens: 10, output_tokens: 10 },
+      latency_ms: 10,
       timestamp: NOW,
     });
 
@@ -71,6 +75,7 @@ describe('SqliteLlmSpendStore', () => {
       stage: 'debate',
       model: 'claude-unreleased-9',
       usage: { input_tokens: 4_242, output_tokens: 99 },
+      latency_ms: 99,
       timestamp: NOW,
     });
 
@@ -97,6 +102,7 @@ describe('SqliteLlmSpendStore', () => {
         stage: 'debate',
         model: 'claude-haiku-4-5',
         usage: { input_tokens: 1, output_tokens: 1 },
+        latency_ms: 1,
         timestamp: NOW,
       }),
     ).not.toThrow();
@@ -106,6 +112,66 @@ describe('SqliteLlmSpendStore', () => {
     expect(logged).toHaveLength(1);
     expect(logged[0]?.level).toBe('warn');
     expect(logged[0]?.trace_id).toBe('trace-1');
+  });
+
+  it('persists per-call latency and the debate it belongs to (#326)', () => {
+    const db = openSharedStore(':memory:');
+    new SqliteLlmSpendStore(db).record({
+      trace_id: 'trace-1',
+      stage: 'debate',
+      debate_id: 'debate-abc',
+      model: 'claude-haiku-4-5',
+      usage: { input_tokens: 10, output_tokens: 10 },
+      latency_ms: 4_321,
+      timestamp: NOW,
+    });
+
+    const [row] = rows(db);
+    // The whole point of the ticket: latency reaches a column, not stdout.
+    expect(row?.latency_ms).toBe(4_321);
+    expect(row?.debate_id).toBe('debate-abc');
+  });
+
+  it('stores a 0ms call as 0, not NULL — a fast call is a measurement', () => {
+    // `MockLlmClient` returns `latency_ms: 0` by design, and a local double can
+    // genuinely round to 0. NULL is reserved for "never measured" (rows
+    // predating migration 0012); conflating the two would let real
+    // sub-millisecond calls vanish from the percentile sample.
+    const db = openSharedStore(':memory:');
+    new SqliteLlmSpendStore(db).record({
+      trace_id: 'trace-1',
+      stage: 'debate',
+      debate_id: 'debate-abc',
+      model: 'claude-haiku-4-5',
+      usage: { input_tokens: 1, output_tokens: 1 },
+      latency_ms: 0,
+      timestamp: NOW,
+    });
+
+    const [row] = rows(db);
+    expect(row?.latency_ms).toBe(0);
+    expect(row?.latency_ms).not.toBeNull();
+  });
+
+  it('writes an unattributed call as NULL debate_id rather than losing the row', () => {
+    // Regression guard with teeth: better-sqlite3 REFUSES to bind `undefined`,
+    // so passing `entry.debate_id` straight through would throw into `record`'s
+    // own swallowing catch — the row would silently never exist, and the meter
+    // would under-report every call made outside a debate.
+    const db = openSharedStore(':memory:');
+    new SqliteLlmSpendStore(db).record({
+      trace_id: 'trace-1',
+      stage: 'debate',
+      model: 'claude-haiku-4-5',
+      usage: { input_tokens: 7, output_tokens: 3 },
+      latency_ms: 55,
+      timestamp: NOW,
+    });
+
+    const all = rows(db);
+    expect(all).toHaveLength(1);
+    expect(all[0]?.debate_id).toBeNull();
+    expect(all[0]?.input_tokens).toBe(7);
   });
 
   it('does not require a logger to stay non-throwing', () => {
@@ -118,6 +184,7 @@ describe('SqliteLlmSpendStore', () => {
         stage: 'debate',
         model: 'claude-haiku-4-5',
         usage: { input_tokens: 1, output_tokens: 1 },
+        latency_ms: 1,
         timestamp: NOW,
       }),
     ).not.toThrow();

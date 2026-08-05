@@ -139,6 +139,49 @@ export interface LlmSpendWindow {
   calls: number;
   /** Calls whose model was not in the rate table; excluded from `cost_usd`. */
   unpriced_calls: number;
+  /** What one decision cost and how long its LLM calls took (#326). */
+  per_debate: LlmPerDebateStats;
+}
+
+/**
+ * Per-DECISION cost and LLM latency over a window (#326) — the figures that
+ * answer "what does one decision cost me, and is round 3 earning its
+ * latency?". Computed by grouping `llm_spend` on `debate_id` (one debate = one
+ * decision = ~3 rounds x 3 personas + one disagreement call) and taking
+ * percentiles ACROSS debates.
+ *
+ * p50/p95 rather than a mean, deliberately: LLM latency is long-tailed (a
+ * retried call adds a whole extra attempt), and a mean over that tail reports
+ * a duration no debate actually experienced.
+ */
+export interface LlmPerDebateStats {
+  /** Distinct `debate_id`s with at least one metered call in the window. */
+  debates: number;
+  /**
+   * Calls in the window with no `debate_id`. The honest caveat that travels
+   * with these percentiles, exactly as `unpriced_calls` does for `cost_usd`:
+   * spend from unattributed calls is in the window total above but in none of
+   * the per-debate figures here.
+   */
+  unattributed_calls: number;
+  /** Median / 95th-percentile USD across debates (unpriced calls contribute 0). */
+  cost_usd_p50: number;
+  cost_usd_p95: number;
+  /**
+   * Median / 95th-percentile SUM OF PER-CALL LLM LATENCY across debates.
+   *
+   * Read the name literally: this is time spent inside LLM calls, NOT the
+   * debate's wall-clock elapsed time. The two differ whenever calls overlap or
+   * a call is retried under itself. Time in the provider is the number the
+   * ticket asks about ("is round 3 earning its latency?"), and it is the only
+   * one `llm_spend` can honestly report — the table has no debate start/end.
+   *
+   * Calls with a NULL `latency_ms` (rows written before migration 0012) are
+   * excluded from the sum rather than counted as 0, so a pre-existing row
+   * cannot drag a percentile toward zero.
+   */
+  llm_latency_ms_p50: number;
+  llm_latency_ms_p95: number;
 }
 
 /**

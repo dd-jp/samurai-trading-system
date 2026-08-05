@@ -154,6 +154,17 @@ export async function detectDisagreements(
    * this function to propagate the cancellation.
    */
   signal?: AbortSignal,
+  /**
+   * Spend attribution (#326). This is the one call per debate that
+   * debate-engine-spec.md deliberately bounds ("runs once per debate, not per
+   * round, so the LLM cost is bounded") — leaving it unattributed would leave
+   * a fixed, per-debate slice of the bill out of every per-decision cost
+   * figure, understating exactly the number this ticket exists to produce.
+   *
+   * Optional and last, like `signal` before it: this function has callers in
+   * the suite that pass two arguments and care about neither.
+   */
+  attribution?: { trace_id?: string | undefined; debate_id?: string | undefined },
 ): Promise<DisagreementAnalysis> {
   if (views.length < 2) {
     return directionalFallback(views);
@@ -162,7 +173,12 @@ export async function detectDisagreements(
   try {
     const response = await llmClient.complete({
       prompt: PROMPT,
-      context: { analyst_views: views },
+      context: {
+        analyst_views: views,
+        trace_id: attribution?.trace_id,
+        stage: 'debate',
+        debate_id: attribution?.debate_id,
+      },
       parseResponse: parseDisagreementResponse,
       signal,
     });

@@ -1,0 +1,59 @@
+-- Per-call latency and per-debate attribution on `llm_spend` (#326).
+--
+-- WHY THESE TWO COLUMNS LAND HERE AND NOT ON `debate_log`. #326's body asks
+-- to "prefer widening `debate_log` (a nullable-column migration) over a new
+-- table"; that preference was written before `llm_spend` existed (#367) and no
+-- longer holds. `debate_log` is ONE ROW PER DEBATE. The signal this ticket
+-- exists to capture — "is round 3 earning its latency?" — is a PER-CALL
+-- signal: three rounds x (bull, bear, mediator) plus one disagreement call,
+-- each separately timed and separately billed. Rolling that into a single
+-- per-debate total at write time discards exactly the breakdown that makes the
+-- question answerable. `llm_spend` is already one row per call, already
+-- carries `stage`/`model`/`cost_usd`, and is already the table the dashboard
+-- aggregates. Widening it costs two nullable columns; widening `debate_log`
+-- would cost the round-level detail.
+--
+-- WHY `debate_id` AND NOT `trace_id` + `stage` AS THE DEBATE KEY:
+--
+--   1. `debate_log` HAS NO `trace_id` COLUMN (0001_init.sql: debate_id,
+--      instrument, bar_timestamp, contributions_json, direction, rounds,
+--      created_at). The acceptance criterion is "joinable by `debate_id`" and
+--      today that join is not expressible in SQL at all — there is no shared
+--      column between the two tables.
+--   2. `trace_id` IS NOT STABLE ACROSS A RETRY. `tick-loop.ts` mints a fresh
+--      `trace_id` per instrument per tick, while `debate_id` is a content hash
+--      of (instrument, bar, views) and is deliberately identical on a retried
+--      tick within the same bar — that is what
+--      `debate-adapter.ts:persistDebateLog`'s first-write-wins check relies
+--      on. A retried debate therefore splits its spend across two `trace_id`s
+--      while `debate_log` keeps one row; keyed on `debate_id`, both attempts'
+--      cost lands on the debate that actually happened.
+--   3. `stage` DISCRIMINATES NOTHING TODAY. Every call defaults to 'debate'
+--      (no LLM-backed analyst exists — see the note in llm/spend-sink.ts), so
+--      `trace_id` + `stage` is `trace_id` with extra steps.
+--
+-- `debate_id` IS NULLABLE, and NULL means "not attributable to a debate", not
+-- "no debate". Two real sources of NULL: rows written before this migration,
+-- and any future `complete()` call issued outside a debate (an LLM-backed
+-- analyst, an ad-hoc script). The dashboard's per-debate percentiles exclude
+-- NULLs and report `unattributed_calls` alongside, the same way `cost_usd`'s
+-- NULLs are excluded from the dollar total and reported as `unpriced_calls` —
+-- an omission that is visible beats one that silently shifts a percentile.
+--
+-- `latency_ms` IS NULLABLE FOR THE SAME REASON `cost_usd` IS. 0 is a REAL,
+-- REACHABLE latency in this codebase (`MockLlmClient` returns `latency_ms: 0`
+-- by design, and a sub-millisecond local double rounds to 0), so NOT NULL
+-- DEFAULT 0 would make every pre-migration row indistinguishable from a
+-- genuinely instantaneous call and drag p50 toward zero. NULL is the only
+-- value that cannot be mistaken for a measurement.
+ALTER TABLE llm_spend ADD COLUMN latency_ms INTEGER;
+ALTER TABLE llm_spend ADD COLUMN debate_id TEXT;
+
+-- NO INDEX ON `debate_id`, deliberately, mirroring 0010's stated posture
+-- ("index the read the operator surface actually issues, nothing else"). The
+-- dashboard's per-debate query is `GROUP BY debate_id` inside a `timestamp`
+-- window: the existing `idx_llm_spend_timestamp` drives the range scan, and
+-- the grouping sorts whatever that scan yields — a `debate_id` index cannot
+-- serve a query whose leading predicate is a timestamp range. An operator's
+-- ad-hoc `debate_log JOIN llm_spend USING (debate_id)` is a one-off, not a hot
+-- path, and does not justify an index on every insert in the hot path.

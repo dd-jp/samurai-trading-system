@@ -27,19 +27,26 @@ export interface LlmRequestContext {
    * Attribution for the local spend meter (llm/spend-sink.ts) — which tick and
    * which stage this call should be billed against on the dashboard.
    *
-   * Optional, and currently supplied by nobody. `detectDisagreements` (the
-   * only `complete()` call site today) has no `trace_id` in scope, and
-   * threading one there means changing its signature and every caller's — a
-   * ripple well beyond what a spend tile is worth. The meter records
-   * `'unattributed'` when these are absent, which costs only the ability to
-   * slice spend by tick; the TOTAL, which is what the dashboard shows, is
-   * exact either way.
+   * Declared by #367 for exactly this moment ("so that wiring attribution is a
+   * one-line change at each call site instead of a second migration"); #326
+   * supplies them. Still optional: `LlmRequest` is constructed by inline test
+   * doubles all over this suite, and the meter records `'unattributed'` when
+   * they are absent rather than refusing the call.
    *
-   * Declared now rather than later so that wiring attribution is a one-line
-   * change at each call site instead of a second migration.
+   * NOT SENT TO THE MODEL. `AnthropicLlmClient.renderMessageContent`
+   * serializes `context` into the prompt, so these three fields are stripped
+   * there — a trace id and a content hash are meter bookkeeping, not prompt
+   * content, and putting them on the wire would be a cost ticket that costs
+   * tokens.
    */
-  trace_id?: string;
-  stage?: string;
+  trace_id?: string | undefined;
+  stage?: string | undefined;
+  /**
+   * The debate this call belongs to (#326) — the join key to
+   * `debate_log.debate_id`. See migrations/0012 for why this, rather than
+   * `trace_id` + `stage`, is what attributes a call to a decision.
+   */
+  debate_id?: string | undefined;
 }
 
 /**

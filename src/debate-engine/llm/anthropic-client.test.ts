@@ -1,4 +1,8 @@
-import type { AnthropicMessageResponse, AnthropicMessagesClient } from './anthropic-client.js';
+import type {
+  AnthropicMessageRequest,
+  AnthropicMessageResponse,
+  AnthropicMessagesClient,
+} from './anthropic-client.js';
 import { AnthropicLlmClient } from './anthropic-client.js';
 import {
   LlmCancelledError,
@@ -290,6 +294,101 @@ describe('AnthropicLlmClient spend metering', () => {
     expect(sink.records).toHaveLength(1);
     expect(sink.records[0]?.usage).toEqual({ input_tokens: 120, output_tokens: 30 });
     expect(sink.records[0]?.model).toBe('claude-haiku-4-5');
+  });
+
+  it('meters the SAME latency it returns to the caller (#326)', async () => {
+    // Measured once, around the wire call, and passed into the sink — not
+    // re-measured there. If these two could disagree, the dashboard's
+    // percentiles and the debate logger's budget warning would be describing
+    // different calls.
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockImplementation(async () => {
+        // Fake timers make the elapsed span exact and non-flaky.
+        vi.advanceTimersByTime(2_500);
+        return usageResponse('good');
+      }),
+    };
+    const sink = recordingSink();
+    const client = new AnthropicLlmClient(
+      wire,
+      { model: 'claude-haiku-4-5', max_tokens: 100, timeoutMs: 10_000, retry: NO_RETRY },
+      sink,
+    );
+
+    const response = await client.complete(request());
+
+    expect(response.latency_ms).toBe(2_500);
+    expect(sink.records[0]?.latency_ms).toBe(2_500);
+  });
+
+  it('attributes a call to the debate on its request context (#326)', async () => {
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockResolvedValue(usageResponse('good')),
+    };
+    const sink = recordingSink();
+    const client = new AnthropicLlmClient(
+      wire,
+      { model: 'claude-haiku-4-5', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      sink,
+    );
+
+    const attributed = request();
+    attributed.context.trace_id = 'trace-9';
+    attributed.context.stage = 'debate';
+    attributed.context.debate_id = 'debate-xyz';
+    await client.complete(attributed);
+
+    expect(sink.records[0]?.trace_id).toBe('trace-9');
+    expect(sink.records[0]?.stage).toBe('debate');
+    expect(sink.records[0]?.debate_id).toBe('debate-xyz');
+  });
+
+  it('leaves debate_id undefined when the caller supplies none', async () => {
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockResolvedValue(usageResponse('good')),
+    };
+    const sink = recordingSink();
+    const client = new AnthropicLlmClient(
+      wire,
+      { model: 'claude-haiku-4-5', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      sink,
+    );
+
+    await client.complete(request());
+
+    // Not a made-up placeholder string: 'unattributed' is right for `trace_id`
+    // (NOT NULL column) but a debate id that is absent must stay absent, so the
+    // dashboard can exclude the call from per-debate percentiles rather than
+    // grouping every stray call into one fictional debate.
+    expect(sink.records[0]?.debate_id).toBeUndefined();
+    expect(sink.records[0]?.trace_id).toBe('unattributed');
+  });
+
+  it('does not send attribution to the model — a cost ticket must not cost tokens', async () => {
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockResolvedValue(usageResponse('good')),
+    };
+    const client = new AnthropicLlmClient(wire, {
+      model: 'claude-haiku-4-5',
+      max_tokens: 100,
+      timeoutMs: 1000,
+      retry: NO_RETRY,
+    });
+
+    const attributed = request();
+    attributed.context.trace_id = 'trace-should-not-ship';
+    attributed.context.stage = 'debate';
+    attributed.context.debate_id = 'debate-should-not-ship';
+    await client.complete(attributed);
+
+    const sent = (wire.createMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+      | AnthropicMessageRequest
+      | undefined;
+    const content = sent?.messages[0]?.content ?? '';
+    expect(content).not.toContain('trace-should-not-ship');
+    expect(content).not.toContain('debate-should-not-ship');
+    // The real context still ships — this strips attribution, not the prompt.
+    expect(content).toContain('analyst_views');
   });
 
   it('meters a MALFORMED response too — it was still generated and still billed', async () => {

@@ -11,7 +11,7 @@ import { SqliteDebateLogStore } from '../debate-engine/index.js';
 import { SqliteExecutionStore } from '../execution/index.js';
 import type { ClosedTrade, DebateLog, OpenPosition } from '../shared/index.js';
 import { openSharedStore, type SharedStore } from '../shared/store/index.js';
-import { SqliteQueryStore } from './sqlite-query-store.js';
+import { percentile, SqliteQueryStore } from './sqlite-query-store.js';
 
 const NOW = new Date('2026-07-27T12:00:00Z');
 
@@ -272,6 +272,16 @@ describe('SqliteQueryStore.getLlmSpend', () => {
       cache_creation_input_tokens: 0,
       calls: 0,
       unpriced_calls: 0,
+      // No debates means no percentile to report; 0 rather than null so the
+      // tile has something to render without unwrapping (#326).
+      per_debate: {
+        debates: 0,
+        unattributed_calls: 0,
+        cost_usd_p50: 0,
+        cost_usd_p95: 0,
+        llm_latency_ms_p50: 0,
+        llm_latency_ms_p95: 0,
+      },
     });
   });
 
@@ -321,5 +331,169 @@ describe('SqliteQueryStore.getLlmSpend', () => {
     expect(window.cache_read_input_tokens).toBe(100);
     expect(window.cache_creation_input_tokens).toBe(10);
     expect(window.output_tokens).toBe(40);
+  });
+});
+
+/**
+ * Per-DECISION cost and LLM latency (#326) — "what does one decision cost me,
+ * and is round 3 earning its latency?".
+ */
+describe('SqliteQueryStore.getLlmSpend per-debate percentiles', () => {
+  function seedCall(
+    db: SharedStore,
+    call: { debate_id: string | null; cost: number | null; latency: number | null; at: Date },
+  ): void {
+    db.prepare(
+      `INSERT INTO llm_spend (
+         trace_id, stage, debate_id, model, input_tokens, output_tokens,
+         cache_creation_input_tokens, cache_read_input_tokens, cost_usd, latency_ms, timestamp
+       ) VALUES ('t', 'debate', ?, 'claude-haiku-4-5', 100, 20, 5, 50, ?, ?, ?)`,
+    ).run(call.debate_id, call.cost, call.latency, call.at.toISOString());
+  }
+
+  const AT = new Date(NOW.getTime() - 60 * 60 * 1000);
+
+  /** n debates, each of `calls` identical calls — so a per-debate total is calls x each. */
+  function seedDebates(
+    db: SharedStore,
+    debates: Array<{ id: string; cost: number; latency: number; calls?: number }>,
+  ): void {
+    for (const debate of debates) {
+      for (let i = 0; i < (debate.calls ?? 1); i++) {
+        seedCall(db, { debate_id: debate.id, cost: debate.cost, latency: debate.latency, at: AT });
+      }
+    }
+  }
+
+  it('sums each debate before taking percentiles, so the unit is a decision not a call', () => {
+    const db = makeDb();
+    // One debate of four calls at 1000ms / $0.01 each = 4000ms / $0.04.
+    seedDebates(db, [{ id: 'debate-1', cost: 0.01, latency: 1_000, calls: 4 }]);
+
+    const stats = new SqliteQueryStore(db).getLlmSpend(NOW).last_24h.per_debate;
+    expect(stats.debates).toBe(1);
+    // Per-CALL percentiles would report 1000 / $0.01 here. The distinction is
+    // the entire point of grouping on debate_id.
+    expect(stats.llm_latency_ms_p50).toBe(4_000);
+    expect(stats.cost_usd_p50).toBeCloseTo(0.04, 10);
+  });
+
+  it('reports a p95 that is above p50 on a long tail rather than collapsing to the median', () => {
+    const db = makeDb();
+    // Nine fast debates and one slow one: p50 is fast, p95 is the outlier.
+    // This is the shape a retried call produces, and the reason the tile shows
+    // both. Ten samples, deliberately: nearest rank puts p95 at ceil(0.95 x 10)
+    // = 10, the slowest — with twenty it would be the 19th and a single
+    // outlier would (correctly) not move it.
+    const debates = Array.from({ length: 9 }, (_, i) => ({
+      id: `fast-${i}`,
+      cost: 0.01,
+      latency: 1_000,
+    }));
+    debates.push({ id: 'slow', cost: 0.5, latency: 60_000 });
+    seedDebates(db, debates);
+
+    const stats = new SqliteQueryStore(db).getLlmSpend(NOW).last_24h.per_debate;
+    expect(stats.debates).toBe(10);
+    expect(stats.llm_latency_ms_p50).toBe(1_000);
+    expect(stats.llm_latency_ms_p95).toBe(60_000);
+    expect(stats.cost_usd_p50).toBeCloseTo(0.01, 10);
+    expect(stats.cost_usd_p95).toBeCloseTo(0.5, 10);
+  });
+
+  it('excludes unattributed calls from the percentiles and counts them instead', () => {
+    const db = makeDb();
+    seedDebates(db, [{ id: 'debate-1', cost: 0.02, latency: 2_000 }]);
+    // A NULL debate_id folded into the grouping would appear as a second
+    // "debate" — here a huge one — and drag p95 up by construction.
+    seedCall(db, { debate_id: null, cost: 9.99, latency: 900_000, at: AT });
+    seedCall(db, { debate_id: null, cost: 9.99, latency: 900_000, at: AT });
+
+    const window = new SqliteQueryStore(db).getLlmSpend(NOW).last_24h;
+    expect(window.per_debate.debates).toBe(1);
+    expect(window.per_debate.unattributed_calls).toBe(2);
+    expect(window.per_debate.llm_latency_ms_p95).toBe(2_000);
+    // The window TOTAL still includes them — they were really spent.
+    expect(window.calls).toBe(3);
+    expect(window.cost_usd).toBeCloseTo(20, 10);
+  });
+
+  it('leaves an entirely unmeasured debate out of the latency sample, not in it as 0ms', () => {
+    const db = makeDb();
+    // Rows written before migration 0012 have no latency. Scored as 0 they
+    // would seat a fake instantaneous debate in the sample and drag both
+    // percentiles down — the exact failure the nullable column exists to
+    // prevent. Two unmeasured debates against two measured ones, so a
+    // COALESCE-to-0 implementation would put p50 at 0 and be unmistakable.
+    seedCall(db, { debate_id: 'old-1', cost: 0.01, latency: null, at: AT });
+    seedCall(db, { debate_id: 'old-2', cost: 0.01, latency: null, at: AT });
+    seedDebates(db, [
+      { id: 'new-1', cost: 0.01, latency: 5_000 },
+      { id: 'new-2', cost: 0.01, latency: 9_000 },
+    ]);
+
+    const stats = new SqliteQueryStore(db).getLlmSpend(NOW).last_24h.per_debate;
+    // The pre-0012 debates are still debates and still have a cost...
+    expect(stats.debates).toBe(4);
+    expect(stats.cost_usd_p50).toBeCloseTo(0.01, 10);
+    // ...but the latency percentiles are taken over [5000, 9000] alone.
+    expect(stats.llm_latency_ms_p50).toBe(5_000);
+    expect(stats.llm_latency_ms_p95).toBe(9_000);
+  });
+
+  it('still totals the measured calls of a debate that is only PARTLY unmeasured', () => {
+    const db = makeDb();
+    // A debate straddling the migration: some calls timed, some not. Its
+    // latency is a floor, not an unknown, so it stays in the sample with the
+    // calls it did measure rather than being dropped wholesale.
+    seedCall(db, { debate_id: 'straddle', cost: 0.01, latency: null, at: AT });
+    seedCall(db, { debate_id: 'straddle', cost: 0.01, latency: 3_000, at: AT });
+    seedCall(db, { debate_id: 'straddle', cost: 0.01, latency: 4_000, at: AT });
+
+    const stats = new SqliteQueryStore(db).getLlmSpend(NOW).last_24h.per_debate;
+    expect(stats.debates).toBe(1);
+    expect(stats.llm_latency_ms_p50).toBe(7_000);
+  });
+
+  it('scopes per-debate percentiles to the same window as the totals beside them', () => {
+    const db = makeDb();
+    seedCall(db, { debate_id: 'recent', cost: 0.01, latency: 1_000, at: hoursBefore24(1) });
+    seedCall(db, { debate_id: 'older', cost: 0.02, latency: 90_000, at: hoursBefore24(48) });
+
+    const spend = new SqliteQueryStore(db).getLlmSpend(NOW);
+    // A window filter applied to the totals but not to the percentiles is the
+    // kind of drift that makes two numbers on one tile describe different days.
+    expect(spend.last_24h.per_debate.debates).toBe(1);
+    expect(spend.last_24h.per_debate.llm_latency_ms_p95).toBe(1_000);
+    expect(spend.last_7d.per_debate.debates).toBe(2);
+    expect(spend.last_7d.per_debate.llm_latency_ms_p95).toBe(90_000);
+  });
+
+  function hoursBefore24(hours: number): Date {
+    return new Date(NOW.getTime() - hours * 60 * 60 * 1000);
+  }
+});
+
+describe('percentile', () => {
+  it('returns 0 for an empty sample rather than NaN or undefined', () => {
+    // A fresh database has no debates; the tile must render, not crash.
+    expect(percentile([], 0.5)).toBe(0);
+    expect(percentile([], 0.95)).toBe(0);
+  });
+
+  it('takes the nearest rank, never an interpolated value that nothing observed', () => {
+    const sample = [10, 20, 30, 40];
+    expect(percentile(sample, 0.5)).toBe(20);
+    expect(percentile(sample, 0.95)).toBe(40);
+    // 0.25 x 4 = 1 exactly — the boundary an off-by-one gets wrong.
+    expect(percentile(sample, 0.25)).toBe(10);
+  });
+
+  it('clamps to the ends instead of reading past the array', () => {
+    expect(percentile([7], 0.5)).toBe(7);
+    expect(percentile([7], 0.95)).toBe(7);
+    // fraction 0 would give rank 0; the smallest observation is the answer.
+    expect(percentile([7, 9], 0)).toBe(7);
+    expect(percentile([7, 9], 1)).toBe(9);
   });
 });

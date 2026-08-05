@@ -108,7 +108,17 @@ export interface AnthropicLlmClientConfig {
  * wire content sent to the provider, not just on `personas.ts`'s `prompt`.
  */
 function renderMessageContent<T>(request: LlmRequest<T>): string {
-  const contextJson = JSON.stringify(request.context, null, 2);
+  // Attribution (#326) is meter bookkeeping, not prompt content. Stripped
+  // before serialization so threading a trace id and a debate hash through
+  // `context` neither costs input tokens on every call nor feeds the model
+  // opaque identifiers it has no use for.
+  const {
+    trace_id: _trace_id,
+    stage: _stage,
+    debate_id: _debate_id,
+    ...promptContext
+  } = request.context;
+  const contextJson = JSON.stringify(promptContext, null, 2);
   return `${request.prompt}\n\nContext:\n${wrapUntrusted(contextJson)}`;
 }
 
@@ -187,7 +197,7 @@ export class AnthropicLlmClient implements LlmClient {
     // still generated and still billed. Recording only well-formed responses
     // would make the meter understate spend by exactly the calls most likely
     // to be retried — i.e. it would be most wrong when it matters most.
-    this.recordSpend(request, response);
+    this.recordSpend(request, response, latency_ms);
 
     const rawText = extractText(response);
     const parsed = request.parseResponse(rawText);
@@ -205,15 +215,28 @@ export class AnthropicLlmClient implements LlmClient {
    * failed call — the information does not exist client-side — so this is a
    * known floor on the figure, not an oversight. Retries are each counted
    * separately, which is correct: each attempt is separately billed.
+   *
+   * `latency_ms` (#326) is the SAME number returned to the caller on
+   * `LlmResponse` — measured once, around `callWithTimeout`, and passed in
+   * rather than re-measured here, so the persisted figure and the logged one
+   * can never disagree. It is recorded even for a response that goes on to
+   * fail the parse gate below, for the same reason the tokens are: the call
+   * took that long and cost that much whether or not the answer was usable.
    */
-  private recordSpend<T>(request: LlmRequest<T>, response: AnthropicMessageResponse): void {
+  private recordSpend<T>(
+    request: LlmRequest<T>,
+    response: AnthropicMessageResponse,
+    latency_ms: number,
+  ): void {
     if (response.usage === undefined) return;
     try {
       this.spendSink.record({
         trace_id: request.context.trace_id ?? 'unattributed',
         stage: request.context.stage ?? 'debate',
+        debate_id: request.context.debate_id,
         model: response.model ?? this.config.model,
         usage: response.usage,
+        latency_ms,
         timestamp: new Date(),
       });
     } catch {
