@@ -73,12 +73,64 @@ through on sells. Rather than invent a rate for those, `commissionRate` is set t
 `CostModelImpl`'s structural 1bp floor is left to do the job — which is already more than the real
 pass-through, so the model stays conservative without a fabricated number in it.
 
+### The structural floors, not the measurement, now price equities
+
+`CostModelImpl` floors the half-spread at 1bp of mid and commission at 1bp of notional, so that no
+config can construct a frictionless fill. Against the measured spreads, that floor **binds for three
+of the four equities**:
+
+| | measured full spread | implied half-spread | 1bp floor binds? |
+|---|---|---|---|
+| SPY | 0.30 bps | 0.15 bps | **yes** (~6×) |
+| QQQ | 0.39 bps | 0.20 bps | **yes** (~5×) |
+| AAPL | 1.49 bps | 0.75 bps | **yes** |
+| TSLA | 3.24 bps | 1.62 bps | no |
+| BTC / ETH | 11.72 / 13.34 bps | ~6 bps | no |
+
+Confirmed empirically rather than inferred: re-running the sensitivity ladder under the calibrated
+config, the realized **stock** charge is 2.3bps at ×1 and still **2.0bps at ×0.05** — scaling every
+equity coefficient down twentyfold barely moves it. Crypto over the same rungs falls 34.5 → 2.4bps,
+exactly as a measured, unfloored term should. In a representative stock row the components are
+`spread=348, commission=340` — near-identical, which is the signature of both sitting on the same
+floor rather than on any market data.
+
+**So the equity `spreadVolatilityCoefficient` is effectively inoperative.** Fills would be identical
+at 0.0037, 0.001, or 0. Equities pay roughly 1bp half-spread + 1bp commission per leg ≈ **2.3bps of
+round-trip notional**, against a measured reality nearer 0.5bps — still ~4–5× conservative, and
+none of that conservatism is measurement. It is the guard rail.
+
+This is not an error in the run: 12/24 is a real result from the real cost model with its floors
+applied, and erring conservative is the right direction. But the equity spread number should be read
+as *documented and inoperative*, not as *driving the result*. Only crypto's calibration actually
+changes what gets charged — which is also why crypto moved 0/12 → 6/12 while stocks moved only
+2/12 → 6/12. That asymmetry is the floors, not the market.
+
+**After calibration, crypto cost is dominated by the published fee, not the spread.** In a
+representative crypto row: `commission=6203` of `total=8544` — **73%**. The exercise has inverted
+which term matters, and the remaining crypto cost is the one number here that is externally
+verifiable from a fee schedule.
+
 **Slippage is an assumption, and is labelled as one in the config.** It cannot be measured without
 live fills, and inventing a coefficient is the precise defect this exercise exists to remove. It is
 therefore *derived*: `spreadVolatilityCoefficient / 4`, i.e. half of the half-spread, as a
 conservative buffer on top of the modeled crossing cost. The fraction is a judgement call. The paper
 soak (#238) will produce live fills to replace it with, which is also the modeled-vs-realized
 divergence check the Feedback Loop already wants (cross-spec GAP-F).
+
+Note the "half of the half-spread" relationship holds only *before* the floor. Slippage has no
+floor, so wherever the half-spread is floored up to 1bp — three of four equities — slippage is
+nearer a tenth of the effective half-spread than a half. Visible in the stock row above:
+`spread=348, slippage=84`.
+
+### Two sampling caveats
+
+- **Quote pages are truncated at 500.** Alpaca returns ascending, so for the high-volume equities
+  (all four hit the cap) the sample is the *first* ~500 quotes of the five-minute window — around
+  four and a half minutes before the bell rather than the final seconds. Immaterial wherever the
+  floor binds anyway, but a small optimistic bias for TSLA, the one equity the floor does not catch.
+  Crypto (~118 quotes/day) is not truncated.
+- **24 dates is a modest sample.** Enough for a median with a tight median/p90 gap; not enough to
+  characterise a regime change.
 
 ## The calibrated verdict
 
@@ -89,6 +141,12 @@ divergence check the Feedback Loop already wants (cross-spec GAP-F).
 | MinBTL | 12 trials vs cap 7, `exceeded: true` | **identical** |
 | PBO / DSR | not computable | **not computable** |
 | **Verdict** | **KILL/INCOMPLETE** | **KILL/INCOMPLETE** |
+
+Run over the **effective window 2024-08-06 .. 2026-08-05**, from a requested window pinned to the
+millisecond (`STAGE2_PINNED_WINDOW`) rather than `defaultFiveYearWindow()`'s `new Date()`-relative
+range — otherwise the fold boundaries, and so the pass count, would shift on every re-run. That is
+pitfall P6 in the companion document, and the first calibrated run was made before it was applied;
+the entrypoint now passes the pinned window.
 
 12/24 sits between the frictionless bound (16/24) and the uniform ×0.25 rung (11/24) — consistent
 with both, and a useful sanity check that the calibration did not overshoot into fantasy.

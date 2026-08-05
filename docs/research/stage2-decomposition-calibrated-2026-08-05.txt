@@ -1,0 +1,169 @@
+Stage 2 cost decomposition: ingesting over 2021-08-06T18:17:07.694Z .. 2026-08-05T18:17:07.694Z
+  SPY: 501 bars
+  QQQ: 501 bars
+  AAPL: 501 bars
+  TSLA: 501 bars
+  BTC-USD: 730 bars
+  ETH-USD: 730 bars
+Effective window: 2024-08-06 .. 2026-08-05
+Scoring the 12-config grid NET of costs (reproducing the committed verdict)...
+Scoring the same grid GROSS of costs...
+Sweeping the cost fixture down to find what the grid can bear...
+
+=== Gross vs net, per (config, asset class) ===
+[stocks] fast=10 slow=30 stop=2 target=3 (eb1d8a627b39c6ee4f6657a872b0ae36fb8755b51ef56f2ccfa0a00c84f4e0f8)
+    oos_sharpe   net=0.659 gross=0.729
+    window_sharpe net=0.369 gross=0.422
+    profit_factor net=1.131 gross=1.151 turnover=338.0
+    costs: total=775 spread=348 slippage=84 impact=3 commission=340
+    cost rate: 2.3bps of notional over 169 trades, 0.006 ATR adverse move per fill
+[crypto] fast=10 slow=30 stop=2 target=3 (eb1d8a627b39c6ee4f6657a872b0ae36fb8755b51ef56f2ccfa0a00c84f4e0f8)
+    oos_sharpe   net=0.133 gross=0.986
+    window_sharpe net=-0.066 gross=0.499
+    profit_factor net=0.979 gross=1.169 turnover=248.0
+    costs: total=8544 spread=1530 slippage=765 impact=46 commission=6203
+    cost rate: 34.4bps of notional over 124 trades, 0.021 ATR adverse move per fill
+[stocks] fast=10 slow=30 stop=1.5 target=2 (33264d64d33599cb7f0a8b0bd54418d83c35674a4333ce60d59eab75a753306e)
+    oos_sharpe   net=1.015 gross=1.141
+    window_sharpe net=0.889 gross=0.994
+    profit_factor net=1.195 gross=1.222 turnover=538.0
+    costs: total=1220 spread=549 slippage=128 impact=5 commission=539
+    cost rate: 2.3bps of notional over 269 trades, 0.006 ATR adverse move per fill
+[crypto] fast=10 slow=30 stop=1.5 target=2 (33264d64d33599cb7f0a8b0bd54418d83c35674a4333ce60d59eab75a753306e)
+    oos_sharpe   net=-1.440 gross=0.266
+    window_sharpe net=-1.333 gross=-0.055
+    profit_factor net=0.804 gross=0.992 turnover=378.0
+    costs: total=13128 spread=2404 slippage=1202 impact=72 commission=9450
+    cost rate: 34.7bps of notional over 189 trades, 0.021 ATR adverse move per fill
+[stocks] fast=10 slow=30 stop=3 target=4 (09adb8372de8c0de8d38bdc9bb2ec76d59db115fc8c1cf5012d4fdcecb741bf0)
+    oos_sharpe   net=1.282 gross=1.323
+    window_sharpe net=0.729 gross=0.766
+    profit_factor net=1.311 gross=1.330 turnover=224.0
+    costs: total=522 spread=234 slippage=61 impact=2 commission=226
+    cost rate: 2.3bps of notional over 112 trades, 0.006 ATR adverse move per fill
+[crypto] fast=10 slow=30 stop=3 target=4 (09adb8372de8c0de8d38bdc9bb2ec76d59db115fc8c1cf5012d4fdcecb741bf0)
+    oos_sharpe   net=1.750 gross=2.485
+    window_sharpe net=0.278 gross=0.627
+    profit_factor net=1.138 gross=1.342 turnover=184.0
+    costs: total=6313 spread=1123 slippage=562 impact=34 commission=4594
+    cost rate: 34.3bps of notional over 92 trades, 0.021 ATR adverse move per fill
+[stocks] fast=10 slow=50 stop=2 target=3 (26eccc85543740276c3296e936446ab598129041a77e97d5703f9ec9bfa57fc7)
+    oos_sharpe   net=0.002 gross=0.072
+    window_sharpe net=-0.032 gross=0.027
+    profit_factor net=0.991 gross=1.008 turnover=342.0
+    costs: total=778 spread=350 slippage=81 impact=3 commission=343
+    cost rate: 2.3bps of notional over 171 trades, 0.006 ATR adverse move per fill
+[crypto] fast=10 slow=50 stop=2 target=3 (26eccc85543740276c3296e936446ab598129041a77e97d5703f9ec9bfa57fc7)
+    oos_sharpe   net=0.120 gross=0.961
+    window_sharpe net=0.193 gross=0.720
+    profit_factor net=1.062 gross=1.251 turnover=196.0
+    costs: total=6743 spread=1211 slippage=606 impact=36 commission=4891
+    cost rate: 34.4bps of notional over 98 trades, 0.021 ATR adverse move per fill
+[stocks] fast=10 slow=50 stop=1.5 target=2 (d8f02e4bf99c3ad181ad41ceeee0713f38c5661396a18cfc93cdbdcc5a411b6e)
+    oos_sharpe   net=0.467 gross=0.617
+    window_sharpe net=0.520 gross=0.641
+    profit_factor net=1.100 gross=1.125 turnover=516.0
+    costs: total=1169 spread=526 slippage=121 impact=4 commission=517
+    cost rate: 2.3bps of notional over 258 trades, 0.006 ATR adverse move per fill
+[crypto] fast=10 slow=50 stop=1.5 target=2 (d8f02e4bf99c3ad181ad41ceeee0713f38c5661396a18cfc93cdbdcc5a411b6e)
+    oos_sharpe   net=-1.006 gross=0.448
+    window_sharpe net=-0.778 gross=0.534
+    profit_factor net=0.890 gross=1.083 turnover=308.0
+    costs: total=10677 spread=1952 slippage=976 impact=57 commission=7691
+    cost rate: 34.7bps of notional over 154 trades, 0.021 ATR adverse move per fill
+[stocks] fast=10 slow=50 stop=3 target=4 (ae599cce85494ea9739b5d4a9e937734ae54e17b498ea9e35f61b3d8218233b3)
+    oos_sharpe   net=0.389 gross=0.430
+    window_sharpe net=0.336 gross=0.373
+    profit_factor net=1.140 gross=1.157 turnover=210.0
+    costs: total=478 spread=214 slippage=50 impact=2 commission=212
+    cost rate: 2.3bps of notional over 105 trades, 0.006 ATR adverse move per fill
+[crypto] fast=10 slow=50 stop=3 target=4 (ae599cce85494ea9739b5d4a9e937734ae54e17b498ea9e35f61b3d8218233b3)
+    oos_sharpe   net=1.339 gross=1.901
+    window_sharpe net=0.448 gross=0.707
+    profit_factor net=1.279 gross=1.474 turnover=130.0
+    costs: total=4454 spread=793 slippage=397 impact=24 commission=3241
+    cost rate: 34.3bps of notional over 65 trades, 0.021 ATR adverse move per fill
+[stocks] fast=20 slow=30 stop=2 target=3 (b3465871eb92c0cdfbaaa907815ee0152eb67a88dc6322401b1d728fdc72964b)
+    oos_sharpe   net=0.761 gross=0.843
+    window_sharpe net=0.469 gross=0.523
+    profit_factor net=1.161 gross=1.181 turnover=358.0
+    costs: total=820 spread=369 slippage=89 impact=3 commission=359
+    cost rate: 2.3bps of notional over 179 trades, 0.006 ATR adverse move per fill
+[crypto] fast=20 slow=30 stop=2 target=3 (b3465871eb92c0cdfbaaa907815ee0152eb67a88dc6322401b1d728fdc72964b)
+    oos_sharpe   net=1.349 gross=2.521
+    window_sharpe net=1.211 gross=1.908
+    profit_factor net=1.305 gross=1.562 turnover=238.0
+    costs: total=8200 spread=1475 slippage=737 impact=43 commission=5945
+    cost rate: 34.5bps of notional over 119 trades, 0.021 ATR adverse move per fill
+[stocks] fast=20 slow=30 stop=1.5 target=2 (3e2580768b4df07689c29162b5a0c6ac93e48c591d37b39a2e521492554b225e)
+    oos_sharpe   net=1.184 gross=1.309
+    window_sharpe net=0.693 gross=0.761
+    profit_factor net=1.252 gross=1.281 turnover=556.0
+    costs: total=1264 spread=569 slippage=133 impact=5 commission=557
+    cost rate: 2.3bps of notional over 278 trades, 0.006 ATR adverse move per fill
+[crypto] fast=20 slow=30 stop=1.5 target=2 (3e2580768b4df07689c29162b5a0c6ac93e48c591d37b39a2e521492554b225e)
+    oos_sharpe   net=-0.996 gross=0.785
+    window_sharpe net=0.007 gross=1.263
+    profit_factor net=1.001 gross=1.237 turnover=346.0
+    costs: total=12000 spread=2195 slippage=1097 impact=65 commission=8642
+    cost rate: 34.7bps of notional over 173 trades, 0.021 ATR adverse move per fill
+[stocks] fast=20 slow=30 stop=3 target=4 (87bd3470662a308b6e8f15148fbc51de522cc69ccd5df2ff0133cccaa94db20f)
+    oos_sharpe   net=1.193 gross=1.244
+    window_sharpe net=0.756 gross=0.789
+    profit_factor net=1.376 gross=1.396 turnover=242.0
+    costs: total=555 spread=249 slippage=60 impact=2 commission=243
+    cost rate: 2.3bps of notional over 121 trades, 0.006 ATR adverse move per fill
+[crypto] fast=20 slow=30 stop=3 target=4 (87bd3470662a308b6e8f15148fbc51de522cc69ccd5df2ff0133cccaa94db20f)
+    oos_sharpe   net=2.217 gross=3.103
+    window_sharpe net=1.405 gross=1.866
+    profit_factor net=1.630 gross=1.928 turnover=172.0
+    costs: total=5927 spread=1067 slippage=533 impact=32 commission=4295
+    cost rate: 34.5bps of notional over 86 trades, 0.021 ATR adverse move per fill
+[stocks] fast=20 slow=50 stop=2 target=3 (c4f582f0c76ab46582d3120b6d065f3c36cbc56b1c5dc70e7d53936958f7e58c)
+    oos_sharpe   net=-0.102 gross=-0.030
+    window_sharpe net=-0.005 gross=0.039
+    profit_factor net=0.998 gross=1.014 turnover=318.0
+    costs: total=725 spread=326 slippage=77 impact=3 commission=319
+    cost rate: 2.3bps of notional over 159 trades, 0.006 ATR adverse move per fill
+[crypto] fast=20 slow=50 stop=2 target=3 (c4f582f0c76ab46582d3120b6d065f3c36cbc56b1c5dc70e7d53936958f7e58c)
+    oos_sharpe   net=0.988 gross=2.164
+    window_sharpe net=1.099 gross=1.652
+    profit_factor net=1.399 gross=1.639 turnover=196.0
+    costs: total=6775 spread=1237 slippage=619 impact=36 commission=4883
+    cost rate: 34.6bps of notional over 98 trades, 0.021 ATR adverse move per fill
+[stocks] fast=20 slow=50 stop=1.5 target=2 (8fc991ac2f80bcae8463dd92e1d8822b5f536af27d5e361c1bbbf679e3439951)
+    oos_sharpe   net=0.195 gross=0.337
+    window_sharpe net=0.410 gross=0.501
+    profit_factor net=1.103 gross=1.126 turnover=496.0
+    costs: total=1124 spread=506 slippage=117 impact=4 commission=497
+    cost rate: 2.3bps of notional over 248 trades, 0.006 ATR adverse move per fill
+[crypto] fast=20 slow=50 stop=1.5 target=2 (8fc991ac2f80bcae8463dd92e1d8822b5f536af27d5e361c1bbbf679e3439951)
+    oos_sharpe   net=-1.625 gross=0.220
+    window_sharpe net=0.071 gross=0.971
+    profit_factor net=1.017 gross=1.244 turnover=292.0
+    costs: total=10114 spread=1849 slippage=924 impact=54 commission=7287
+    cost rate: 34.6bps of notional over 146 trades, 0.021 ATR adverse move per fill
+[stocks] fast=20 slow=50 stop=3 target=4 (b9cc5ba502b3e96134e29f6092cece8a41a4d0f29de184be283a6341e8d30341)
+    oos_sharpe   net=0.097 gross=0.134
+    window_sharpe net=0.213 gross=0.237
+    profit_factor net=1.125 gross=1.139 turnover=194.0
+    costs: total=440 spread=197 slippage=46 impact=2 commission=196
+    cost rate: 2.3bps of notional over 97 trades, 0.006 ATR adverse move per fill
+[crypto] fast=20 slow=50 stop=3 target=4 (b9cc5ba502b3e96134e29f6092cece8a41a4d0f29de184be283a6341e8d30341)
+    oos_sharpe   net=2.304 gross=3.004
+    window_sharpe net=0.821 gross=1.040
+    profit_factor net=1.771 gross=2.044 turnover=116.0
+    costs: total=3995 spread=718 slippage=359 impact=21 commission=2897
+    cost rate: 34.4bps of notional over 58 trades, 0.021 ATR adverse move per fill
+
+=== Cost sensitivity (pairs clearing the 0.5 OOS Sharpe line) ===
+  cost×1     passes=12/24 stocks=2.3bps crypto=34.5bps
+  cost×0.5   passes=14/24 stocks=2.1bps crypto=17.3bps
+  cost×0.25  passes=14/24 stocks=2.1bps crypto=8.7bps
+  cost×0.1   passes=15/24 stocks=2.0bps crypto=3.8bps
+  cost×0.05  passes=15/24 stocks=2.0bps crypto=2.4bps
+  cost×0     passes=16/24 (gross)
+
+=== Discriminator ===
+pairs clearing the 0.5 OOS Sharpe kill line:  net=12/24 gross=16/24
+Removing modeled costs rescues configs: the net kill is at least partly COST DRAG.

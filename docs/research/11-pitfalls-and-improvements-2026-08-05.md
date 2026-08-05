@@ -121,6 +121,26 @@ error is multiplied by that number — it is precisely why an 18× spread overst
 rather than a rounding difference. `trade-derivation.ts` already anticipates this in a comment:
 *"a trade worth revisiting if turnover ever becomes a kill criterion"*. It should be one.
 
+### P12 — A guard rail silently became the dominant term
+
+**Symptom:** after calibrating the equity spread from 0.1 to a measured 0.0037, the realized equity
+charge barely moved. `CostModelImpl` floors the half-spread at 1bp of mid and commission at 1bp of
+notional, and the measured half-spreads are **below** that floor for SPY (0.15bps), QQQ (0.20bps)
+and AAPL (0.75bps). Scaling every equity coefficient down twentyfold moves the realized charge from
+2.3bps to 2.0bps — i.e. hardly at all.
+
+So a carefully measured coefficient is inoperative for three of four equities, and the price is set
+by a guard rail. Nothing in the output said so: the cost breakdown reports `spread` and `commission`
+identically whether they came from the model or from the floor, and the give-away (`spread=348,
+commission=340`, suspiciously equal) is only obvious once you know to look.
+
+**This is P2 again** — a safety path that has quietly become the only path — and it was caught only
+because the numbers were checked against the floor by hand after the run.
+
+**Not a wrong result:** erring conservative is the right direction, and 12/24 is a real run through
+the real model. It is a wrong *description*, which is worse in a document meant to justify a
+purchase decision.
+
 ---
 
 ## Improvements, in priority order
@@ -178,7 +198,15 @@ The one calibrated term still without a measured basis. The paper soak (#238) pr
 comparing modeled to realized cost is also the Feedback Loop's own divergence check (cross-spec
 GAP-F), so building it serves two purposes.
 
-### I9 — Pin windows and archive raw output for every gate run
+### I9 — Report when a floor or a fallback fired, not just the number
+
+Both P2 and P12 are the same failure: a defensive path that becomes the primary one with nothing in
+the output distinguishing it. `CostModelResult` should carry which components were floored (and the
+replay should count null-spread fallbacks), so a run states plainly "3 of 4 equities priced at the
+structural floor, not from the config". That converts a hand-check-after-the-fact into a fact the
+report asserts. Cheap, and it retires a recurring class rather than one instance.
+
+### I10 — Pin windows and archive raw output for every gate run
 
 Both now done for Stage 2 (P6, P10) and worth making the standing convention: a gate run that cannot
 be reproduced, or whose raw output was eaten by `.gitignore`, is not evidence.

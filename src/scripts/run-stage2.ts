@@ -145,6 +145,20 @@ export function defaultFiveYearWindow(now: Date = new Date()): DateRange {
   return { start: new Date(now.getTime() - FIVE_YEARS_MS), end: now };
 }
 
+/**
+ * The exact window the 2026-08-05 verdict requested, to the millisecond.
+ *
+ * A direct run uses this rather than `defaultFiveYearWindow()`, which reads
+ * `new Date()` and therefore shifts the effective window — and with it every
+ * walk-forward fold boundary — on each new day. A gate verdict that cannot be
+ * reproduced tomorrow is not evidence, and the first real Stage 2 run was
+ * recorded before that was noticed.
+ */
+export const STAGE2_PINNED_WINDOW: DateRange = {
+  start: new Date('2021-08-06T18:17:07.694Z'),
+  end: new Date('2026-08-05T18:17:07.694Z'),
+};
+
 export interface RunStage2Deps {
   polygonClient: PolygonClient;
   window?: DateRange;
@@ -378,7 +392,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // Stated explicitly at the entrypoint rather than by changing `runStage2`'s
   // own default, so every existing caller and test keeps the cost config it
   // was written against and only a direct run picks up the calibrated one.
-  runStage2({ polygonClient, costConfig: costConfigFromEnv() }).catch((error: unknown) => {
+  runStage2({
+    polygonClient,
+    costConfig: costConfigFromEnv(),
+    window: STAGE2_PINNED_WINDOW,
+  }).catch((error: unknown) => {
     console.error('Stage 2 run failed:', error);
     process.exitCode = 1;
   });

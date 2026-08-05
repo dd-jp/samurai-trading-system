@@ -57,10 +57,12 @@ import {
 import { SimulatedClock } from '../shared/index.js';
 import {
   CRYPTO_SYMBOLS,
+  costConfigFromEnv,
   DEFAULT_AVERAGE_CAPITAL,
   DEFAULT_CAPITAL_PER_TRADE,
   effectiveWindow,
   PESSIMISTIC_COST_CONFIG,
+  STAGE2_PINNED_WINDOW,
   STOCK_SYMBOLS,
 } from './run-stage2.js';
 
@@ -69,10 +71,7 @@ import {
  * millisecond, so the effective window this intersects to — and therefore
  * every fold boundary — matches that run rather than merely resembling it.
  */
-export const PINNED_VERDICT_WINDOW: DateRange = {
-  start: new Date('2021-08-06T18:17:07.694Z'),
-  end: new Date('2026-08-05T18:17:07.694Z'),
-};
+export const PINNED_VERDICT_WINDOW: DateRange = STAGE2_PINNED_WINDOW;
 
 export interface CostDecompositionDeps {
   polygonClient: PolygonClient;
@@ -402,7 +401,10 @@ function printReport(result: CostDecompositionResult, print: (line: string) => v
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  runCostDecomposition({ polygonClient: new HttpPolygonClient() }).catch((error: unknown) => {
+  runCostDecomposition({
+    polygonClient: new HttpPolygonClient(),
+    costConfig: costConfigFromEnv(),
+  }).catch((error: unknown) => {
     console.error('Cost decomposition failed:', error);
     process.exitCode = 1;
   });
