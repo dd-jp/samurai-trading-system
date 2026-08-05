@@ -64,9 +64,21 @@ function transactedObservations(): SmokeObservations {
   };
 }
 
+/**
+ * A limiter that saw the run — the shape a healthy process produces (#388).
+ * REQUIRED by `evaluateSmokeGate`, not optional: see that option's doc for the
+ * mutation that made it so.
+ */
+function meteredSnapshot() {
+  return { crypto: { debatesUsed: 1, llmCallsUsed: 4 } };
+}
+
 describe('evaluateSmokeGate', () => {
   it('passes when the pipeline transacted end to end', () => {
-    const gate = evaluateSmokeGate(transactedObservations(), { minTicks: 2 });
+    const gate = evaluateSmokeGate(transactedObservations(), {
+      minTicks: 2,
+      llmRateLimiterSnapshot: meteredSnapshot(),
+    });
 
     expect(gate.failures).toEqual([]);
     expect(gate.passed).toBe(true);
@@ -76,11 +88,17 @@ describe('evaluateSmokeGate', () => {
     const observations = transactedObservations();
     expect(observations.closedTrades).toEqual([]);
 
-    expect(evaluateSmokeGate(observations, { minTicks: 2 }).passed).toBe(true);
+    expect(
+      evaluateSmokeGate(observations, { minTicks: 2, llmRateLimiterSnapshot: meteredSnapshot() })
+        .passed,
+    ).toBe(true);
   });
 
   it('fails when the loop ran fewer ticks than asked for', () => {
-    const gate = evaluateSmokeGate(transactedObservations(), { minTicks: 5 });
+    const gate = evaluateSmokeGate(transactedObservations(), {
+      minTicks: 5,
+      llmRateLimiterSnapshot: meteredSnapshot(),
+    });
 
     expect(gate.passed).toBe(false);
     expect(gate.failures[0]).toContain('completed 2 of 5 expected ticks');
@@ -104,7 +122,10 @@ describe('evaluateSmokeGate', () => {
       fills: [],
     };
 
-    const gate = evaluateSmokeGate(observations, { minTicks: 2 });
+    const gate = evaluateSmokeGate(observations, {
+      minTicks: 2,
+      llmRateLimiterSnapshot: meteredSnapshot(),
+    });
 
     expect(gate.passed).toBe(false);
     expect(gate.failures.some((failure) => failure.includes('no tick got past Analysts'))).toBe(
@@ -119,10 +140,52 @@ describe('evaluateSmokeGate', () => {
    * caller. Nothing else in this gate could see that.
    */
   it('fails when a debate ran but no debate_log row was written (#364)', () => {
-    const gate = evaluateSmokeGate({ ...transactedObservations(), debates: [] }, { minTicks: 2 });
+    const gate = evaluateSmokeGate(
+      { ...transactedObservations(), debates: [] },
+      { minTicks: 2, llmRateLimiterSnapshot: meteredSnapshot() },
+    );
 
     expect(gate.passed).toBe(false);
     expect(gate.failures.some((failure) => failure.includes('no row in debate_log'))).toBe(true);
+  });
+
+  /**
+   * The #388 defect, expressed as a gate condition, and the exact mirror of
+   * the #364 case above: every observation is green — a debate resolved, a row
+   * was written, a lot filled — while the rate limiter metered zero LLM calls,
+   * because it is constructed beside the LLM path rather than in it. No table
+   * records this, so nothing else in this gate could see it.
+   */
+  it('fails when debates resolved but the rate limiter metered no LLM call (#388)', () => {
+    const gate = evaluateSmokeGate(transactedObservations(), {
+      minTicks: 2,
+      llmRateLimiterSnapshot: { crypto: { debatesUsed: 3, llmCallsUsed: 0 } },
+    });
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('#388 defect'))).toBe(true);
+  });
+
+  it('fails when the limiter admitted no debate at all, not just no call (#388)', () => {
+    const gate = evaluateSmokeGate(transactedObservations(), {
+      minTicks: 2,
+      llmRateLimiterSnapshot: {},
+    });
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('#388 defect'))).toBe(true);
+  });
+
+  it('does not demand metering from a run that never debated — that fails as #364 instead', () => {
+    // Ordering matters for the operator: a run with no debates must be told
+    // the debate never happened, not that the limiter saw nothing.
+    const gate = evaluateSmokeGate(
+      { ...transactedObservations(), debates: [] },
+      { minTicks: 2, llmRateLimiterSnapshot: {} },
+    );
+
+    expect(gate.failures.some((failure) => failure.includes('no row in debate_log'))).toBe(true);
+    expect(gate.failures.some((failure) => failure.includes('#388 defect'))).toBe(false);
   });
 
   it('fails when no GO verdict was recorded, naming the no-go reasons seen', () => {
@@ -138,7 +201,7 @@ describe('evaluateSmokeGate', () => {
           },
         ],
       },
-      { minTicks: 2 },
+      { minTicks: 2, llmRateLimiterSnapshot: meteredSnapshot() },
     );
 
     expect(gate.passed).toBe(false);
@@ -151,14 +214,20 @@ describe('evaluateSmokeGate', () => {
     if (firstTick === undefined) throw new Error('fixture regression: no first tick');
     firstTick.stages = firstTick.stages.filter((entry) => entry.stage !== 'execution');
 
-    const gate = evaluateSmokeGate(observations, { minTicks: 2 });
+    const gate = evaluateSmokeGate(observations, {
+      minTicks: 2,
+      llmRateLimiterSnapshot: meteredSnapshot(),
+    });
 
     expect(gate.passed).toBe(false);
     expect(gate.failures.some((failure) => failure.includes('reached Execution'))).toBe(true);
   });
 
   it('fails when nothing was written ahead to open_positions', () => {
-    const gate = evaluateSmokeGate({ ...transactedObservations(), positions: [] }, { minTicks: 2 });
+    const gate = evaluateSmokeGate(
+      { ...transactedObservations(), positions: [] },
+      { minTicks: 2, llmRateLimiterSnapshot: meteredSnapshot() },
+    );
 
     expect(gate.passed).toBe(false);
     expect(gate.failures.some((failure) => failure.includes('open_positions'))).toBe(true);
@@ -170,7 +239,10 @@ describe('evaluateSmokeGate', () => {
    * actually scheduled rather than merely wired.
    */
   it('fails when the order was submitted but no fill was ever ingested', () => {
-    const gate = evaluateSmokeGate({ ...transactedObservations(), fills: [] }, { minTicks: 2 });
+    const gate = evaluateSmokeGate(
+      { ...transactedObservations(), fills: [] },
+      { minTicks: 2, llmRateLimiterSnapshot: meteredSnapshot() },
+    );
 
     expect(gate.passed).toBe(false);
     expect(gate.failures.some((failure) => failure.includes('ingestFills'))).toBe(true);
@@ -184,6 +256,7 @@ describe('evaluateSmokeGate', () => {
   it('fails when anything reached the Alpaca wire client, even if everything else transacted', () => {
     const gate = evaluateSmokeGate(transactedObservations(), {
       minTicks: 2,
+      llmRateLimiterSnapshot: meteredSnapshot(),
       alpacaWireClientReached: true,
     });
 
@@ -198,7 +271,7 @@ describe('evaluateSmokeGate', () => {
         ...transactedObservations(),
         fills: [{ idempotency_key: 'idem-1', leg: 'stop', price: 150, qty: 1, fee: 0 }],
       },
-      { minTicks: 2 },
+      { minTicks: 2, llmRateLimiterSnapshot: meteredSnapshot() },
     );
 
     expect(gate.passed).toBe(false);
@@ -210,7 +283,7 @@ describe('formatSmokeReport', () => {
     const observations = transactedObservations();
     const report = formatSmokeReport(
       observations,
-      evaluateSmokeGate(observations, { minTicks: 2 }),
+      evaluateSmokeGate(observations, { minTicks: 2, llmRateLimiterSnapshot: meteredSnapshot() }),
     ).join('\n');
 
     expect(report).toContain(
@@ -237,7 +310,7 @@ describe('formatSmokeReport', () => {
     };
     const report = formatSmokeReport(
       observations,
-      evaluateSmokeGate(observations, { minTicks: 3 }),
+      evaluateSmokeGate(observations, { minTicks: 3, llmRateLimiterSnapshot: meteredSnapshot() }),
     ).join('\n');
 
     expect(report).toContain('GATE: FAIL');
@@ -478,7 +551,10 @@ describe('runSmoke (end-to-end, real composition root)', () => {
       closedTrades: [],
     };
 
-    const gate = evaluateSmokeGate(observations, { minTicks: 1 });
+    const gate = evaluateSmokeGate(observations, {
+      minTicks: 1,
+      llmRateLimiterSnapshot: meteredSnapshot(),
+    });
 
     expect(gate.passed).toBe(false);
     expect(gate.failures).toHaveLength(6);

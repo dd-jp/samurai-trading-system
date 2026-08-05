@@ -496,8 +496,17 @@ export function evaluateSmokeGate(
      * shape as #364, whose `debate_log` assertion in this gate is the only
      * check that has ever caught it. A limiter that metered nothing while
      * debates were resolving is that defect, exactly.
+     *
+     * **REQUIRED, unlike `alpacaWireClientReached` above.** That asymmetry is
+     * the point and was found by mutation: with this optional, deleting the
+     * one line in `runSmoke` that passes it left the check vacuously true —
+     * `yarn smoke` exited 0 and the entire suite stayed green. A backstop that
+     * can be switched off by omitting an argument is #388's own defect class
+     * reproduced inside the fix for #388. Required makes forgetting it a
+     * COMPILE error, the same structural argument that makes `RateLimiter` a
+     * required positional on `buildDebateStep`.
      */
-    llmRateLimiterSnapshot?: Partial<
+    llmRateLimiterSnapshot: Partial<
       Record<AssetClass, { llmCallsUsed: number; debatesUsed: number }>
     >;
   },
@@ -543,7 +552,7 @@ export function evaluateSmokeGate(
   // Requirement 3b (#388): the debate that produced that row went through the
   // rate limiter. Hung off `debates.length` rather than standing alone so that
   // a run which never debated fails on the check above, naming the real cause.
-  if (debates.length > 0 && options.llmRateLimiterSnapshot !== undefined) {
+  if (debates.length > 0) {
     const totals = Object.values(options.llmRateLimiterSnapshot);
     const llmCallsUsed = totals.reduce((sum, entry) => sum + entry.llmCallsUsed, 0);
     const debatesUsed = totals.reduce((sum, entry) => sum + entry.debatesUsed, 0);
