@@ -7,12 +7,7 @@ import {
   impliedWeight,
   realizedR,
 } from './attribution.js';
-import type { FeedbackConfig, TunableDial } from './types.js';
-
-const SHADOW: Pick<FeedbackConfig, 'shadow_credit' | 'shadow_influence_ceiling'> = {
-  shadow_credit: 0.1,
-  shadow_influence_ceiling: 0.2,
-};
+import type { TunableDial } from './types.js';
 
 function makeContribution(overrides: Partial<AnalystContribution> = {}): AnalystContribution {
   return {
@@ -131,7 +126,6 @@ describe('creditForContribution — signed by stance-vs-outcome', () => {
         makeContribution({ final_position: stance }),
         r,
         direction,
-        SHADOW,
       );
       expect(Math.sign(credit)).toBe(positive ? 1 : -1);
     });
@@ -142,47 +136,46 @@ describe('creditForContribution — signed by stance-vs-outcome', () => {
       makeContribution({ final_position: 'neutral' }),
       2,
       'bullish',
-      SHADOW,
     );
     expect(credit).toBe(0);
   });
 
-  it('scales credit by influence — the louder driver of a winner gains more', () => {
-    const loud = creditForContribution(makeContribution({ influence_score: 0.9 }), 2, 'bullish', {
-      ...SHADOW,
-      shadow_credit: 0,
-    });
-    const quiet = creditForContribution(makeContribution({ influence_score: 0.3 }), 2, 'bullish', {
-      ...SHADOW,
-      shadow_credit: 0,
-    });
-    expect(loud).toBeGreaterThan(quiet);
+  /*
+   * #370. Credit used to be scaled by `influence_score`, with a shadow-credit
+   * top-up below an influence ceiling. `computeInfluenceScore` measures how
+   * often an analyst was MOVED, not how much it moved others, and it is 0 for
+   * the one-round debates production actually produces — so the weighting ran
+   * on a dead input and shadow credit silently carried the whole signal.
+   * These pin that the input is gone, not merely currently zero.
+   */
+  it('ignores influence_score entirely — a loud and a quiet analyst earn the same', () => {
+    const loud = creditForContribution(makeContribution({ influence_score: 0.9 }), 2, 'bullish');
+    const quiet = creditForContribution(makeContribution({ influence_score: 0 }), 2, 'bullish');
+    expect(loud).toBe(quiet);
   });
 
-  it('adds shadow credit to a right-but-low-influence analyst', () => {
-    const quiet = makeContribution({ influence_score: 0.1 });
-    const withShadow = creditForContribution(quiet, 2, 'bullish', SHADOW);
-    const withoutShadow = creditForContribution(quiet, 2, 'bullish', {
-      ...SHADOW,
-      shadow_credit: 0,
-    });
-    expect(withShadow).toBeGreaterThan(withoutShadow);
-    // "Small" — the shadow term must not swamp the influence-weighted signal.
-    expect(withShadow - withoutShadow).toBeCloseTo(SHADOW.shadow_credit * 2, 10);
+  it('is exactly agreement × R, so credit survives an all-zero influence debate', () => {
+    // The production case: every contribution scores 0 influence. Under the
+    // old formula this collapsed to the shadow term alone.
+    const contribution = makeContribution({ influence_score: 0 });
+    expect(creditForContribution(contribution, 2, 'bullish')).toBe(2);
+    expect(creditForContribution(contribution, -1, 'bullish')).toBe(-1);
   });
 
-  it('withholds shadow credit from a high-influence analyst — it did sway the debate', () => {
-    const loud = makeContribution({ influence_score: 0.8 });
-    expect(creditForContribution(loud, 2, 'bullish', SHADOW)).toBe(
-      creditForContribution(loud, 2, 'bullish', { ...SHADOW, shadow_credit: 0 }),
+  it('penalises a wrong analyst at the same magnitude it rewards a right one', () => {
+    // Symmetry is the behavioural change #370 makes: shadow credit was
+    // upside-only, so a zero-influence loser used to be floored near 0.
+    const right = creditForContribution(
+      makeContribution({ final_position: 'bullish' }),
+      2,
+      'bullish',
     );
-  });
-
-  it('does not double-penalise a quietly-wrong analyst — shadow credit is upside-only', () => {
-    const quiet = makeContribution({ influence_score: 0.1 });
-    expect(creditForContribution(quiet, -1, 'bullish', SHADOW)).toBe(
-      creditForContribution(quiet, -1, 'bullish', { ...SHADOW, shadow_credit: 0 }),
+    const wrong = creditForContribution(
+      makeContribution({ final_position: 'bearish' }),
+      2,
+      'bullish',
     );
+    expect(wrong).toBe(-right);
   });
 });
 
@@ -196,7 +189,7 @@ describe('accumulateCredit — the DebateLog join', () => {
       ]),
     );
 
-    const credits = accumulateCredit([makeTrade({ debate_id: 'debate-1' })], log, SHADOW);
+    const credits = accumulateCredit([makeTrade({ debate_id: 'debate-1' })], log);
 
     expect([...credits.keys()].sort()).toEqual(['bear', 'bull']);
     // Winning long: the bull gains, the bear loses.
@@ -212,7 +205,6 @@ describe('accumulateCredit — the DebateLog join', () => {
     const credits = accumulateCredit(
       [makeTrade({ debate_id: 'debate-1' }), makeTrade({ debate_id: 'debate-2' })],
       log,
-      SHADOW,
     );
 
     expect(credits.get('bull')?.trade_count).toBe(2);
@@ -222,7 +214,6 @@ describe('accumulateCredit — the DebateLog join', () => {
     const credits = accumulateCredit(
       [makeTrade({ debate_id: 'never-logged' })],
       new InMemoryDebateLogStore(),
-      SHADOW,
     );
     expect(credits.size).toBe(0);
   });
@@ -231,7 +222,7 @@ describe('accumulateCredit — the DebateLog join', () => {
     const log = new InMemoryDebateLogStore();
     log.writeLog(makeLog('debate-1', [makeContribution({ analyst_id: 'bull' })]));
 
-    const credits = accumulateCredit([makeTrade({ stop: 100 })], log, SHADOW);
+    const credits = accumulateCredit([makeTrade({ stop: 100 })], log);
     expect(credits.size).toBe(0);
   });
 });

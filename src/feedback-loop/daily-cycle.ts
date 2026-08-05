@@ -76,7 +76,7 @@ export function runDailyCycle(input: DailyCycleInput): DailyCycleResult {
   };
 
   // --- Dial 1: analyst weights, from attribution. Never gated. ---
-  const credits = accumulateCredit(tradesInWindow(input, now), input.debate_log, config);
+  const credits = accumulateCredit(tradesInWindow(input, now), input.debate_log);
   const weights = tuning.getAnalystWeights();
 
   for (const credit of credits.values()) {

@@ -53,15 +53,14 @@ export interface FeedbackConfig {
   attribution_window_ms: number;
   /** Step cap + hard band applied to EVERY analyst weight. */
   weights: TunableDial;
-  /**
-   * Credit multiplier for a right-but-low-influence analyst, as a fraction of
-   * the influence-weighted credit (spec story 3 — "small"). Lets a quietly
-   * correct analyst climb back instead of being pinned by its own low
-   * influence.
+  /*
+   * `shadow_credit` / `shadow_influence_ceiling` were removed by #370. Both
+   * existed only to compensate an analyst that `influence_score` had scored
+   * quiet, and attribution no longer reads `influence_score` at all — see
+   * `creditForContribution`. Left as a note rather than deprecated fields so
+   * a profile that still sets them fails to compile instead of setting a knob
+   * nothing consults.
    */
-  shadow_credit: number;
-  /** `influence_score` at or below which an analyst counts as low-influence for shadow credit. */
-  shadow_influence_ceiling: number;
   /** Per strategy-param bounds, keyed by param name. Tuned freely inside them. */
   strategy_params: Record<string, TunableDial>;
   /** Per risk-threshold bounds, keyed by threshold name. Loosening is gated. */
