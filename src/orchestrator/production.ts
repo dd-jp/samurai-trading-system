@@ -141,6 +141,7 @@ import {
   SqliteAdjustmentLog,
   SqliteClosedTradeStore,
   SqliteTuningStore,
+  seedAnalystWeights,
 } from '../feedback-loop/index.js';
 import type {
   AlpacaClient as AlpacaDataClient,
@@ -1323,6 +1324,26 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
           payload: { feedback_cycle: 'not_started' },
         });
       } else {
+        // #371: before the first cycle, not after it. `runDailyCycle` steps
+        // only analysts that already have an `analyst_weights` row, so on a
+        // fresh store every cycle attributed real trades and then skipped
+        // every analyst — an empty table and a soak that "ran cleanly" while
+        // learning nothing. Idempotent by row presence, so the restarts a
+        // 14-day soak (#238) will see do not flatten what the loop has
+        // learned; see `seedAnalystWeights`.
+        const seedResult = seedAnalystWeights({
+          tuning: feedbackStores.tuning,
+          analyst_ids: components.analysts.analystIds(),
+          dial: feedback.config.weights,
+        });
+        logger.log({
+          trace_id: 'startup',
+          stage: 'feedback-loop',
+          level: 'info',
+          message: 'analyst weight rows ready for the daily cycle',
+          payload: { seeded: seedResult.seeded, already_tuned: seedResult.existing },
+        });
+
         if (feedback.metrics === undefined) {
           logger.log({
             trace_id: 'startup',

@@ -177,18 +177,18 @@ const PAPER_ANALYST_WEIGHT_TRAVERSE_CYCLES = 20;
  * nothing. With this block wired, the daily cycle runs, but only one of its
  * three dials has a populated store behind it today:
  *
- * - **Analyst weights** — attribution's own dial. `runDailyCycle` steps only
- *   analysts that already have an `analyst_weights` row ("seeding it is the
- *   weight store's job, not a tuning cycle's", daily-cycle.ts), and nothing in
- *   the repo writes that table yet. So the cycle reads real closed trades and
- *   real debate rows (#364 gave `debate_log` a writer) and attributes them —
- *   and then finds no row to step. Nothing reads the weights either: the
- *   Debate Engine does not consult them, only the dashboard displays them.
- *   Tracked as
- *   [#371](https://github.com/dd-jp/samurai-trading-system/issues/371), the
- *   same shape of follow-on #345 is for `metrics`. **Not fixed here** — a
- *   seeder is a decision about which analysts exist and at what prior, which
- *   is not a starting *value* this file can invent.
+ * - **Analyst weights** — attribution's own dial, and the one that now moves
+ *   (#371). `runDailyCycle` steps only analysts that already have an
+ *   `analyst_weights` row ("seeding it is the weight store's job, not a tuning
+ *   cycle's", daily-cycle.ts); the composition root seeds one neutral row per
+ *   analyst it builds at startup (`seedAnalystWeights`, called from
+ *   production.ts), idempotently, so a soak restart cannot flatten what the
+ *   loop has learned. With that row present the cycle reads real closed trades
+ *   and real debate rows (#364 gave `debate_log` a writer), attributes them,
+ *   and steps the weight — recorded in `dial_adjustments` as an
+ *   `analyst_weight` row. What still does NOT happen is anything reading those
+ *   weights at debate time; that is a recorded decision, not an oversight —
+ *   see the `weights` dial below.
  * - **Strategy params / risk thresholds** — moved only by `proposals`, and the
  *   profile supplies none, because nothing in the repo produces one. See the
  *   two empty records below for why they are empty rather than pre-declared.
@@ -229,6 +229,48 @@ function buildFeedbackConfig(): FeedbackConfig {
    */
   const attribution_window_ms = 2 * DEFAULT_FEEDBACK_INTERVAL_MS;
 
+  /**
+   * ## Who reads these weights — a decision, recorded (#371)
+   *
+   * **Nothing applies an analyst weight at debate time, and this ticket
+   * deliberately did not add it.** The loop seeds, attributes, steps, bounds
+   * and audits the dial; the number is real and it moves. It just has no
+   * consumer in the decision path yet, and the dashboard's display is the only
+   * place it is read.
+   *
+   * That is a gap against feedback-loop-spec.md story 5 ("As the Debate
+   * Engine, I want to read the updated weights when applying them
+   * downstream"), and it is stated here rather than quietly closed with an
+   * invented mechanism, because the specs pin the plumbing and not the
+   * behaviour:
+   *
+   * - analysts-spec.md story 27 pins the TRANSPORT — the orchestrator reads
+   *   the weights map at tick start and passes it through for the Debate
+   *   Engine to apply — and is explicit that analysts stay weight-blind.
+   * - debate-engine-spec.md pins nothing about applying it. "Weighted debates
+   *   (some analysts have more influence based on track record)" is listed
+   *   under **Future Extensions — not in this spec**, and its scope section
+   *   says the Debate Engine "provides the data (per-analyst contributions,
+   *   influence scores) that enables weight adjustment, but the adjustment
+   *   logic itself is out of scope". No round-orchestration rule, conviction
+   *   formula or mediator step takes a weight as an input anywhere in it.
+   *
+   * So "read the weights" has no single meaning to implement. Scaling an
+   * analyst's `confidence`, weighting a vote count at termination, biasing the
+   * mediator's prompt, and scaling `influence_score` are four different
+   * trading systems, and every one of them changes the direction and size of
+   * real orders from the day it ships. Choosing one here would put a guessed
+   * weighting mechanism into every debate of a 14-day soak, where its effect
+   * would be indistinguishable from the market's — and a distortion nobody
+   * chose is worse than an honest gap, which is the same standard #327 and
+   * #366 were held to.
+   *
+   * What the soak now produces is exactly what picking a mechanism needs:
+   * which analyst the loop promotes or demotes, by how much, and off which
+   * trades. Picking it is a wayfinder decision (CLAUDE.md Standing Pipeline
+   * Rule 1) against a debate-engine map + spec amendment, not a line of code
+   * in a starting-values file.
+   */
   const weights: TunableDial = {
     /**
      * `DERIVED` from the band, and written as the derivation rather than as

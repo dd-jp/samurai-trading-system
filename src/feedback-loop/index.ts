@@ -29,6 +29,11 @@ export {
   REVALIDATION_GATED_KILL_LINES,
 } from './metrics.js';
 export { onTradeClose } from './on-trade-close.js';
+export {
+  type SeedAnalystWeightsInput,
+  type SeedAnalystWeightsResult,
+  seedAnalystWeights,
+} from './seed-analyst-weights.js';
 export { SqliteAdjustmentLog } from './sqlite-adjustment-log.js';
 export { SqliteClosedTradeStore } from './sqlite-closed-trade-store.js';
 export { SqliteTuningStore } from './sqlite-tuning-store.js';
