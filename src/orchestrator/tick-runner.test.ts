@@ -487,8 +487,32 @@ describe('SequentialTickRunner.runInstrument — risk warnings surfacing (#303)'
     expect(warns[0].message).toContain('correlation_warmup:MSFT');
     expect(warns[0].message).toContain('correlation_warmup:TSLA');
     expect(warns[0].payload).toEqual({
+      instrument: 'AAPL',
       warnings: ['correlation_warmup:MSFT', 'correlation_warmup:TSLA'],
     });
+  });
+
+  /**
+   * A `correlation_warmup:` tag names one side of a PAIR, and the side short
+   * on history may be this tick's own instrument. Without the intent's
+   * instrument on the line, `correlation_warmup:MSFT` reads as "MSFT is new"
+   * when the truth may be "AAPL is new and MSFT is fine".
+   */
+  it('names the tick instrument on the line, so a pair-scoped tag is not read as peer-scoped', async () => {
+    const intent = makeIntent();
+    const steps = makeSteps({
+      risk: vi.fn(async () => ({
+        ...approvedRisk(intent),
+        warnings: ['correlation_warmup:MSFT'],
+      })),
+    });
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const warns = warnEntries(ctx);
+    expect(warns[0].message).toContain('AAPL');
+    expect(warns[0].payload).toMatchObject({ instrument: 'AAPL' });
   });
 
   it('raises the warning even when the decision is rejected and the tick short-circuits', async () => {

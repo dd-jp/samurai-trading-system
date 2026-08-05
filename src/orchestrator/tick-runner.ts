@@ -103,12 +103,16 @@ export class SequentialTickRunner implements TickRunner {
     // but not observable. This is that reader. Advisory by contract: it never
     // touches control flow, only the operator-visible log level.
     if (riskDecision.warnings.length > 0) {
+      // `instrument` is carried explicitly: a `correlation_warmup:MSFT` tag
+      // names one side of a PAIR, and the unmeasurable side may be this tick's
+      // own instrument (see `CorrelationEstimate.insufficient_history`). Without
+      // the intent's instrument on the line an operator cannot tell which.
       logger.log({
         trace_id,
         stage: 'risk',
         level: 'warn',
-        message: `risk: advisory warnings — ${riskDecision.warnings.join(', ')}`,
-        payload: { warnings: riskDecision.warnings },
+        message: `risk: ${instrument} — advisory warnings: ${riskDecision.warnings.join(', ')}`,
+        payload: { instrument, warnings: riskDecision.warnings },
       });
     }
     if (riskDecision.status === 'rejected') {
