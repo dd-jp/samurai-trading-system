@@ -87,7 +87,7 @@
  * per-key limit shared across both APIs, not a separate budget per client).
  */
 
-import type { RetryConfig } from '../../shared/index.js';
+import type { RetryConfig, TokenBucket } from '../../shared/index.js';
 import { fetchWithTimeout, withRetry } from '../../shared/index.js';
 import { isDailyTimeframe, timeframeToMs } from '../timeframe.js';
 import {
@@ -346,6 +346,23 @@ export interface AlpacaHttpDataClientOptions {
   /** Per-attempt network timeout passed to `fetchWithTimeout`. */
   timeoutMs?: number;
   retry?: RetryConfig;
+  /**
+   * Outbound pacing, SHARED with the broker adapter (#391).
+   *
+   * Alpaca's 200 req/min is per ACCOUNT, so this client and
+   * `AlpacaBrokerAdapter` spend one budget. Before #391 only the broker was
+   * paced and this client could exceed the headroom reserved for it freely —
+   * with six instruments (#381) and #386's bounded widen-and-retry, a single
+   * cold sweep is a burst that earns the 429 for the ORDER path.
+   *
+   * Calls made here take `acquireBackground()`, so a bar burst can never park
+   * an order behind the refill (`TokenBucket.reserveForPriority`).
+   *
+   * Optional: left unset, the client is unpaced, which is what every existing
+   * unit test wants. The composition root always supplies it — see
+   * `buildAlpacaDataSource`.
+   */
+  rateLimiter?: TokenBucket | undefined;
 }
 
 /** Real HTTP market-data `AlpacaClient` against Alpaca's Market Data API v2. */
@@ -361,6 +378,7 @@ export class AlpacaHttpDataClient implements AlpacaClient {
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
   private readonly retry: RetryConfig;
+  private readonly rateLimiter: TokenBucket | undefined;
 
   constructor(options: AlpacaHttpDataClientOptions) {
     const apiKey = options.apiKey ?? process.env.ALPACA_API_KEY;
@@ -405,6 +423,7 @@ export class AlpacaHttpDataClient implements AlpacaClient {
     this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.retry = options.retry ?? DEFAULT_RETRY_CONFIG;
+    this.rateLimiter = options.rateLimiter;
   }
 
   /**
@@ -432,6 +451,16 @@ export class AlpacaHttpDataClient implements AlpacaClient {
   private async requestJson(url: string, context: string): Promise<unknown> {
     return withRetry(
       async () => {
+        // INSIDE the retry body, not outside it (#391): a retried attempt is a
+        // second request against the same per-account budget, and pacing only
+        // the first attempt would let a degraded venue — the exact moment
+        // #386's widen-and-retry also fires — burst through the bucket.
+        //
+        // `acquireBackground` yields to the order path: market data waits for
+        // the reserve to be re-minted on top of its own token, so a bar sweep
+        // can be late but cannot delay a protective leg.
+        await this.rateLimiter?.acquireBackground();
+
         let response: Response;
         try {
           response = await fetchWithTimeout(url, { headers: this.headers() }, this.timeoutMs);

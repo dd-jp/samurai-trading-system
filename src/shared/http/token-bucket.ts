@@ -20,6 +20,23 @@ export interface TokenBucketConfig {
   capacity: number;
   /** Steady-state rate the bucket sustains once the burst is spent. */
   refillPerSecond: number;
+  /**
+   * Tokens `acquireBackground()` may not spend, reserved for `acquire()`
+   * (#391).
+   *
+   * Exists because ONE bucket now paces two consumers with very different
+   * urgency against a single per-account budget: order placement and market
+   * data. Splitting them into two buckets cannot be safe — the limit belongs
+   * to the account, so two independent buckets re-create exactly the
+   * over-subscription this closes. But a shared bucket with no reserve lets a
+   * six-instrument bar sweep drain it and park an order behind the refill,
+   * and a delayed protective leg is the failure mode this whole module
+   * exists to avoid.
+   *
+   * Defaults to 0, which is exactly today's behaviour for every venue with a
+   * single consumer (ccxt, ibkr) — the reserve is inert unless configured.
+   */
+  reserveForPriority?: number;
 }
 
 function delay(ms: number): Promise<void> {
@@ -54,16 +71,33 @@ export class TokenBucket {
    * again.
    */
   async acquire(): Promise<void> {
+    await this.take(0);
+  }
+
+  /**
+   * Like `acquire()`, but leaves `reserveForPriority` tokens untouched (#391).
+   *
+   * For the consumer that can afford to wait — market data — so that a burst
+   * of bar fetches cannot park an order behind the refill. A background caller
+   * on a drained bucket waits for the reserve to be re-minted ON TOP of its
+   * own token, which is the intended cost: data is late, orders are not.
+   */
+  async acquireBackground(): Promise<void> {
+    await this.take(this.config.reserveForPriority ?? 0);
+  }
+
+  private async take(reserve: number): Promise<void> {
+    const needed = 1 + reserve;
     while (true) {
       this.refill();
-      if (this.tokens >= 1) {
+      if (this.tokens >= needed) {
         this.tokens -= 1;
         return;
       }
       // Time until the deficit is minted. `refillPerSecond` is trusted to be
       // positive; a non-positive rate is a misconfiguration that would park
       // every call forever rather than pace it.
-      const waitMs = ((1 - this.tokens) / this.config.refillPerSecond) * 1000;
+      const waitMs = ((needed - this.tokens) / this.config.refillPerSecond) * 1000;
       await delay(Math.max(waitMs, 0));
     }
   }

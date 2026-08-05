@@ -3,7 +3,7 @@ import { openSharedStore } from '../shared/store/index.js';
 import { FixtureDataSource } from './fixture-data-source.js';
 import { MarketDataServiceImpl } from './service.js';
 import { SqliteMarketDataStore } from './sqlite-market-data-store.js';
-import type { Bar, Quote } from './types.js';
+import type { Bar, BarWindow, DataSource, Mark, Quote } from './types.js';
 
 class ManualClock implements Clock {
   constructor(private time: Date) {}
@@ -84,6 +84,100 @@ describe('MarketDataServiceImpl.getBars', () => {
     const bars = await service.getBars(INSTRUMENT, { timeframe: TIMEFRAME, lookback: 10 });
 
     expect(bars).toHaveLength(2);
+  });
+});
+
+/**
+ * #391: repeat calls inside one bar interval must not re-fetch. Six
+ * instruments on Alpaca's per-ACCOUNT 200 req/min is only affordable if a tick
+ * that learns nothing new costs no HTTP call.
+ */
+describe('MarketDataServiceImpl.getBars — per-bar-interval caching (#391)', () => {
+  /** Wraps the fixture source to count how often the network would be hit. */
+  class CountingDataSource implements DataSource {
+    fetches = 0;
+
+    constructor(private readonly inner: DataSource) {}
+
+    async fetchBars(instrument: string, window: BarWindow, asOf: Date): Promise<Bar[]> {
+      this.fetches += 1;
+      return this.inner.fetchBars(instrument, window, asOf);
+    }
+
+    async fetchMark(instrument: string, asOf: Date, mode: 'live' | 'backtest'): Promise<Mark> {
+      return this.inner.fetchMark(instrument, asOf, mode);
+    }
+
+    async fetchQuote(instrument: string, asOf: Date): Promise<Quote | undefined> {
+      return this.inner.fetchQuote(instrument, asOf);
+    }
+  }
+
+  function buildCounting(mode: 'live' | 'backtest') {
+    const source = new CountingDataSource(
+      new FixtureDataSource(
+        BARS,
+        { price: 999, observed_at: new Date('2026-07-15T10:59:59Z'), source: 'fixture-live' },
+        'crypto',
+      ),
+    );
+    const service = new MarketDataServiceImpl(
+      source,
+      new ManualClock(ASOF),
+      mode,
+      new SqliteMarketDataStore(openSharedStore(':memory:')),
+    );
+    return { service, source };
+  }
+
+  it('serves a repeat call inside the same bar interval without touching the source', async () => {
+    const { service, source } = buildCounting('live');
+    const window = { timeframe: TIMEFRAME, lookback: 2 };
+
+    const first = await service.getBars(INSTRUMENT, window, ASOF);
+    // 20 minutes later — same 1h bar, so no bar has closed since.
+    const second = await service.getBars(
+      INSTRUMENT,
+      window,
+      new Date(ASOF.getTime() + 20 * 60_000),
+    );
+
+    expect(source.fetches).toBe(1);
+    expect(second).toEqual(first);
+  });
+
+  it('re-fetches once the bar interval rolls over', async () => {
+    const { service, source } = buildCounting('live');
+    const window = { timeframe: TIMEFRAME, lookback: 2 };
+
+    await service.getBars(INSTRUMENT, window, ASOF);
+    await service.getBars(INSTRUMENT, window, new Date(ASOF.getTime() + 60 * 60_000));
+
+    expect(source.fetches).toBe(2);
+  });
+
+  it('re-fetches for a DEEPER lookback in the same interval', async () => {
+    // Live collision, not a hypothetical: DEFAULT_VOLATILITY_INDICATOR asks for
+    // 15 bars while the technical analyst asks for 20, both within one hour. A
+    // cache keyed on the interval alone would serve the shallow window to the
+    // deeper caller.
+    const { service, source } = buildCounting('live');
+
+    await service.getBars(INSTRUMENT, { timeframe: TIMEFRAME, lookback: 1 }, ASOF);
+    const deeper = await service.getBars(INSTRUMENT, { timeframe: TIMEFRAME, lookback: 2 }, ASOF);
+
+    expect(source.fetches).toBe(2);
+    expect(deeper).toHaveLength(2);
+  });
+
+  it('never caches in backtest — replay steps asOf on its own terms', async () => {
+    const { service, source } = buildCounting('backtest');
+    const window = { timeframe: TIMEFRAME, lookback: 2 };
+
+    await service.getBars(INSTRUMENT, window, ASOF);
+    await service.getBars(INSTRUMENT, window, ASOF);
+
+    expect(source.fetches).toBe(2);
   });
 });
 

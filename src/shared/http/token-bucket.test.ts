@@ -113,3 +113,78 @@ describe('TokenBucket', () => {
     expect(done).toBe(2);
   });
 });
+
+/**
+ * #391's acceptance criterion: "order placement cannot be starved behind a
+ * market-data burst". One bucket paces both consumers because Alpaca's limit
+ * is per account, so the reserve is what keeps the shared budget safe for the
+ * consumer that cannot wait.
+ */
+describe('TokenBucket priority reserve (#391)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('lets an order through immediately after market data has drained everything it may spend', async () => {
+    const bucket = new TokenBucket({
+      capacity: 10,
+      refillPerSecond: 1,
+      reserveForPriority: 4,
+    });
+
+    // Background callers may spend down to the reserve and no further: 6 of 10.
+    for (let i = 0; i < 6; i++) {
+      await bucket.acquireBackground();
+    }
+
+    let orderPlaced = false;
+    const order = bucket.acquire().then(() => {
+      orderPlaced = true;
+    });
+
+    // No timer advance: the reserve is still there, so the order does not wait
+    // for a refill even though market data just took every token it could.
+    await order;
+    expect(orderPlaced).toBe(true);
+  });
+
+  it('parks the next background call on a drained-to-reserve bucket', async () => {
+    const bucket = new TokenBucket({ capacity: 10, refillPerSecond: 1, reserveForPriority: 4 });
+    for (let i = 0; i < 6; i++) {
+      await bucket.acquireBackground();
+    }
+
+    let extra = false;
+    const pending = bucket.acquireBackground().then(() => {
+      extra = true;
+    });
+
+    // A background caller needs 1 + reserve = 5 tokens present, and 4 remain,
+    // so it waits a full second for the fifth to be minted.
+    await vi.advanceTimersByTimeAsync(999);
+    expect(extra).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await pending;
+    expect(extra).toBe(true);
+  });
+
+  it('is inert without a reserve — the single-consumer venues are unchanged', async () => {
+    const bucket = new TokenBucket({ capacity: 2, refillPerSecond: 1 });
+
+    await bucket.acquireBackground();
+    await bucket.acquireBackground();
+
+    let third = false;
+    const pending = bucket.acquireBackground().then(() => {
+      third = true;
+    });
+    expect(third).toBe(false);
+    await vi.advanceTimersByTimeAsync(1000);
+    await pending;
+    expect(third).toBe(true);
+  });
+});
