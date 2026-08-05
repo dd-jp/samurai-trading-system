@@ -58,12 +58,19 @@
  * ADR-0004 asks for Feedback Loop's `onTradeClose` and `runDailyCycle` at
  * this composition point, "not as `TickSteps` members". `runDailyCycle` is
  * wired, on its own daily timer independent of the tick chain, and starts
- * only when `ProductionConfig.feedback` supplies the two inputs with no
- * in-repo source (its `FeedbackConfig` values and the loosen-approval
- * channel); its four stores are all SQLite-backed and constructed here.
- * **Not starting it is now announced at startup at `warn` (#327)** — it used
- * to be reached by pure omission, which is the same silent-by-omission bug
- * #293/#320/#322 closed elsewhere.
+ * only when `ProductionConfig.feedback` is supplied; its four stores are all
+ * SQLite-backed and constructed here. **Not starting it is announced at
+ * startup at `warn` (#327)** — it used to be reached by pure omission, which
+ * is the same silent-by-omission bug #293/#320/#322 closed elsewhere.
+ *
+ * **And a paper run now supplies it (#366).** The two inputs that used to have
+ * no in-repo source have the same two homes every comparable input already
+ * had: the `FeedbackConfig` values are starting values, so they sit in
+ * `paperStartingProfile` (paper-profile.ts) beside the other eight sets, and
+ * the loosen-approval channel is a transport, so it is selected from
+ * `SAMURAI_ALERTS` (alert-transport.ts) and defaults to
+ * `LoggingLoosenApprovalChannel` here. Before that, the 14-day soak (#238)
+ * would have run stage 6 of a 6-stage pipeline dead for the whole window.
  *
  * `computeMetrics` — the kill-line detector — runs in that same timer, after
  * the tuning cycle, whenever `FeedbackCycleConfig.metrics` supplies a
@@ -172,6 +179,7 @@ import {
   ConsoleApprovalChannel,
   LoggingBreachAlertChannel,
   LoggingHeartbeatChannel,
+  LoggingLoosenApprovalChannel,
   LoggingOrphanAlertChannel,
   LoggingUnpricedFillAlertChannel,
   ParkedCiiScoreProvider,
@@ -414,11 +422,18 @@ export interface ProductionConfig {
   /**
    * Feedback Loop's daily batch (ADR-0004 §3: wired at this composition
    * point, deliberately *not* as a `TickSteps` member — it runs on its own
-   * schedule, not per instrument). Optional because its two remaining inputs
-   * have no in-repo source: `FeedbackConfig`'s values are tuned in paper
-   * trading, and `LoosenApprovalChannel` is another human-facing transport
-   * with no implementation. Its four stores are all SQLite-backed and built
-   * here. Omit it and the daily timer simply never starts.
+   * schedule, not per instrument). Its four stores are all SQLite-backed and
+   * built here. Omit it and the daily timer simply never starts — which is
+   * warned about loudly at startup (#327), because a run that never tunes
+   * anything looks exactly like a healthy one.
+   *
+   * **Both reasons this used to have no supplier are now closed (#366).**
+   * `FeedbackConfig`'s values are tuned in paper trading, so they live where
+   * the other eight sets of starting values live — `paperStartingProfile`
+   * (paper-profile.ts) — and `LoosenApprovalChannel` is resolved from
+   * `SAMURAI_ALERTS` like every other outbound escalation, defaulting to
+   * `loosenApprovals` below. A paper run started through the shipped
+   * entrypoint therefore supplies this.
    */
   feedback?: FeedbackCycleConfig;
   /**
@@ -428,12 +443,38 @@ export interface ProductionConfig {
    * outbound alerts (alert-transport.ts).
    */
   breachAlerts?: BreachAlertChannel;
+  /**
+   * Where a gated risk-threshold LOOSENING request goes (#91, wired #366).
+   * Defaults to `LoggingLoosenApprovalChannel`; `SAMURAI_ALERTS=telegram`
+   * replaces it with `TradeChannelLoosenApproval`, like the other four
+   * outbound escalations (alert-transport.ts).
+   *
+   * Top-level rather than a field of `feedback` for the reason every other
+   * transport is: `paperStartingProfile` supplies tuning *values* and names no
+   * transport, because where an operator's alerts go is a deployment decision
+   * and not something a checked-in file should hard-code. `FeedbackCycleConfig`
+   * keeps its own `approvals` override, which wins over this when both are
+   * given (see `runFeedbackCycle`).
+   *
+   * There is no live-mode refusal here, unlike `ConsoleApprovalChannel`: this
+   * port returns `void` and cannot approve anything, so neither implementation
+   * can fabricate consent. A request nobody reads leaves the threshold exactly
+   * where it was.
+   */
+  loosenApprovals?: LoosenApprovalChannel;
   logger?: Logger;
 }
 
 export interface FeedbackCycleConfig {
   config: FeedbackConfig;
-  approvals: LoosenApprovalChannel;
+  /**
+   * Per-cycle override for `ProductionConfig.loosenApprovals`. Optional since
+   * #366: the channel is a transport, so it is resolved from `SAMURAI_ALERTS`
+   * alongside the other outbound escalations and falls back to
+   * `LoggingLoosenApprovalChannel` — the same shape `breachAlerts` has. Supply
+   * it here only to override that for this cycle's config specifically.
+   */
+  approvals?: LoosenApprovalChannel;
   /**
    * Param/threshold moves to consider this cycle. Empty is a valid, meaningful
    * cycle: analyst weights are attributed from closed trades, not proposed.
@@ -514,7 +555,17 @@ const DEFAULT_VOLATILITY_INDICATOR: IndicatorSpec = {
   params: { period: 14 },
   lookback: 15,
 };
-const DEFAULT_FEEDBACK_INTERVAL_MS = 24 * 60 * 60 * 1_000;
+/**
+ * The Feedback Loop's cadence — "daily batch" (feedback-loop-spec.md § Cadence
+ * & Scope).
+ *
+ * Exported since #366 so `paperStartingProfile` can express
+ * `FeedbackConfig.attribution_window_ms` as a multiple of it rather than as an
+ * unrelated literal. The two are coupled: a window shorter than the gap between
+ * cycles drops the trades that closed in between, and nothing else in the
+ * config records that relationship.
+ */
+export const DEFAULT_FEEDBACK_INTERVAL_MS = 24 * 60 * 60 * 1_000;
 
 /**
  * Debate/disagreement-detection's LLM knobs (max tokens, per-attempt
@@ -1066,6 +1117,21 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     adjustments: new SqliteAdjustmentLog(config.db),
   };
   const breachAlerts = config.breachAlerts ?? new LoggingBreachAlertChannel(logger);
+  /**
+   * #366. Resolved once, outside the timer callback, for `feedbackStores`'
+   * reason — and read in the same precedence order the alert channels use: an
+   * explicit per-cycle override first, then the transport `SAMURAI_ALERTS`
+   * selected, then the log-only stand-in.
+   *
+   * Whichever wins, none of them can approve: the port returns `void`, so an
+   * unanswered request leaves the risk threshold untouched. That is
+   * fail-closed, and it is a property of `runDailyCycle` gating the write —
+   * not of the channel being trustworthy.
+   */
+  const loosenApprovals =
+    config.feedback?.approvals ??
+    config.loosenApprovals ??
+    new LoggingLoosenApprovalChannel(logger);
 
   /**
    * Latch for the inert-divergence warn (#327 item 3). The condition is a
@@ -1159,7 +1225,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         clock,
         ...feedbackStores,
         config: feedback.config,
-        approvals: feedback.approvals,
+        approvals: loosenApprovals,
         proposals: feedback.proposals ?? [],
         mode: config.mode,
       });

@@ -120,6 +120,7 @@ import { openSharedStore, type SharedStore as SqliteHandle } from '../shared/sto
 import {
   LoggingBreachAlertChannel,
   LoggingHeartbeatChannel,
+  LoggingLoosenApprovalChannel,
   LoggingOrphanAlertChannel,
   LoggingUnpricedFillAlertChannel,
 } from './console-channels.js';
@@ -779,13 +780,17 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // defaults reach Alpaca over the network.
       accountState: new FixedAccountStateProvider(),
       alpacaBrokerClient,
-      // Naming log-only alerting explicitly. Injecting all four is also what
-      // makes `resolveAlertsMode` return `undefined` (alert-transport.ts), so
-      // this run neither reads `SAMURAI_ALERTS` nor falls back by omission.
+      // Naming log-only alerting explicitly. Injecting all of
+      // `ALERT_CHANNEL_FIELDS` is also what makes `resolveAlertsMode` return
+      // `undefined` (alert-transport.ts), so this run neither reads
+      // `SAMURAI_ALERTS` nor falls back by omission. Miss one and the gate
+      // starts demanding an environment variable of every developer who runs
+      // it — which is why the list is derived, not remembered.
       heartbeatChannel: new LoggingHeartbeatChannel(logger),
       orphanAlerts: new LoggingOrphanAlertChannel(logger),
       unpricedFillAlerts: new LoggingUnpricedFillAlertChannel(logger),
       breachAlerts: new LoggingBreachAlertChannel(logger),
+      loosenApprovals: new LoggingLoosenApprovalChannel(logger),
       tickIntervalMs,
       fillPollIntervalMs,
       // Fast enough to fire several times inside a ~1s run. The heartbeat is a

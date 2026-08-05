@@ -32,6 +32,7 @@ import { SimulatedClock } from '../shared/index.js';
 import { openSharedStore, type SharedStore as SqliteHandle } from '../shared/store/index.js';
 import { SqliteSetupStore } from '../trader/index.js';
 import type { ApprovalOutcome, ApprovalRequest, VerdictDecision } from '../verdict/index.js';
+import { paperStartingProfile } from './paper-profile.js';
 import { buildPersistence } from './production/direct-bind.js';
 import {
   buildDefaultLlmClient,
@@ -881,6 +882,209 @@ describe('buildProductionOrchestrator', () => {
     await orchestrator.stop();
     await vi.advanceTimersByTimeAsync(10_000);
     expect(logger.entries.filter((entry) => entry.trace_id === 'feedback-cycle')).toHaveLength(2);
+  });
+
+  /**
+   * #366 — `ProductionConfig.feedback` had no supplier, so the `#327` warn
+   * above fired on every real paper start and the daily timer never began. A
+   * 14-day soak (#238) therefore ran 5 of the 6 pipeline stages while looking
+   * healthy.
+   *
+   * These drive the CHECKED-IN profile through the real composition root, not
+   * a stub config: the bug was precisely that the shipped entrypoint's config
+   * lacked a field, which a hand-built test config can never reproduce.
+   */
+  describe('feedback cycle wiring for a paper soak (#366)', () => {
+    /** Long enough that the tick/heartbeat timers stay out of the way. */
+    const QUIET = 48 * 60 * 60 * 1_000;
+
+    function paperProfileConfig(overrides: Partial<ProductionConfig> = {}): ProductionConfig {
+      const logger = recordingLogger();
+      const config = stubConfig(db, {
+        ...paperStartingProfile('paper'),
+        logger,
+        tickIntervalMs: QUIET,
+        heartbeatIntervalMs: QUIET,
+        ...overrides,
+      });
+      return config;
+    }
+
+    it('starts the daily cycle, with neither not_started nor a missing-feedback warn', async () => {
+      const config = paperProfileConfig();
+      const logger = config.logger as ReturnType<typeof recordingLogger>;
+      const orchestrator = buildProductionOrchestrator(config);
+
+      await orchestrator.start();
+      // Past the 24h default cadence the profile deliberately does not
+      // override.
+      await vi.advanceTimersByTimeAsync(25 * 60 * 60 * 1_000);
+
+      // The two things a paper start must no longer emit.
+      expect(
+        logger.entries.filter(
+          (entry) => (entry.payload as { feedback_cycle?: string } | undefined)?.feedback_cycle,
+        ),
+      ).toHaveLength(0);
+      expect(
+        logger.entries.filter((entry) => entry.message.includes('ProductionConfig.feedback')),
+      ).toHaveLength(0);
+
+      // ...and the cycle really ran, rather than merely not warning.
+      expect(
+        logger.entries.filter((entry) => entry.message === 'daily feedback cycle complete'),
+      ).toHaveLength(1);
+
+      await orchestrator.stop();
+    });
+
+    it('keeps the metrics warn firing, so #345 stays visible instead of swallowed', async () => {
+      const config = paperProfileConfig();
+      const logger = config.logger as ReturnType<typeof recordingLogger>;
+      const orchestrator = buildProductionOrchestrator(config);
+
+      await orchestrator.start();
+
+      // The profile leaves `metrics` unset on purpose: `computeMetrics` needs
+      // a `DailyMetricsSource` that does not exist yet. Stubbing one would
+      // turn "the four kill-lines were never checked" into something that
+      // reads like "they passed" — so the warn must survive this ticket.
+      const warn = logger.entries.find((entry) =>
+        entry.message.includes('FeedbackCycleConfig.metrics'),
+      );
+      expect(warn?.level).toBe('warn');
+      expect(warn?.payload).toMatchObject({ kill_lines: 'not_evaluated' });
+
+      await orchestrator.stop();
+    });
+
+    /**
+     * The fail-closed property, asserted where it actually lives: the store.
+     *
+     * The profile declares no `risk_thresholds` dial (nothing writes that
+     * table yet), so this case adds one and seeds a value — otherwise the
+     * gated path is unreachable and the test would be vacuous.
+     */
+    function loosenConfig(overrides: Partial<ProductionConfig> = {}): {
+      config: ProductionConfig;
+      tuning: SqliteTuningStore;
+    } {
+      const profile = paperStartingProfile('paper');
+      const tuning = new SqliteTuningStore(db, new SimulatedClock(START));
+      tuning.setRiskThreshold('max_position_size', 5_000);
+
+      const config = paperProfileConfig({
+        feedback: {
+          intervalMs: 1_000,
+          config: {
+            ...profile.feedback?.config,
+            risk_thresholds: {
+              max_position_size: {
+                max_step: 500,
+                floor: 1_000,
+                ceiling: 10_000,
+                tighten_is: 'decrease',
+              },
+            },
+          } as FeedbackConfig,
+          // Raising a loss-bounding cap: the move the loop may never make on
+          // its own authority.
+          proposals: [{ kind: 'risk_threshold', name: 'max_position_size', target: 6_000 }],
+        },
+        ...overrides,
+      });
+
+      return { config, tuning };
+    }
+
+    it('refuses to loosen a risk threshold nobody approved — the dial does not move', async () => {
+      const { config, tuning } = loosenConfig();
+      const logger = config.logger as ReturnType<typeof recordingLogger>;
+      const orchestrator = buildProductionOrchestrator(config);
+
+      await orchestrator.start();
+      await vi.advanceTimersByTimeAsync(1_500);
+
+      // THE assertion. No approval transport in this repo can deliver a "yes"
+      // back to the process, so a proposed loosening must expire unapplied
+      // rather than fall through to the value it asked for.
+      expect(tuning.getRiskThresholds().max_position_size).toBe(5_000);
+      // ...and it is not written to the audit log either: nothing happened,
+      // so nothing is recorded as having happened.
+      expect(
+        db
+          .prepare('SELECT COUNT(*) AS n FROM dial_adjustments WHERE dial_name = ?')
+          .get('max_position_size'),
+      ).toEqual({ n: 0 });
+
+      const cycle = logger.entries.find(
+        (entry) => entry.message === 'daily feedback cycle complete',
+      );
+      expect(cycle?.payload).toMatchObject({
+        loosen_pending_approval: ['max_position_size'],
+        applied: false,
+      });
+
+      await orchestrator.stop();
+    });
+
+    it('falls back to the log-only channel and says the threshold stayed put', async () => {
+      const { config } = loosenConfig();
+      const logger = config.logger as ReturnType<typeof recordingLogger>;
+      const orchestrator = buildProductionOrchestrator(config);
+
+      await orchestrator.start();
+      await vi.advanceTimersByTimeAsync(1_500);
+
+      // Nothing supplied `loosenApprovals`, so the composition root's own
+      // stand-in is what the cycle reached — the same default shape
+      // `breachAlerts` has.
+      const entry = logger.entries.find((e) => e.message.includes('LOOSENING proposed'));
+      expect(entry?.level).toBe('warn');
+      expect(entry?.payload).toMatchObject({ name: 'max_position_size', applied: false });
+
+      await orchestrator.stop();
+    });
+
+    it('uses the transport SAMURAI_ALERTS selected when one is supplied', async () => {
+      const requestLoosenApproval = vi.fn();
+      const { config, tuning } = loosenConfig({ loosenApprovals: { requestLoosenApproval } });
+      const orchestrator = buildProductionOrchestrator(config);
+
+      await orchestrator.start();
+      await vi.advanceTimersByTimeAsync(1_500);
+
+      expect(requestLoosenApproval).toHaveBeenCalledTimes(1);
+      expect(requestLoosenApproval.mock.calls[0]?.[0]).toMatchObject({
+        name: 'max_position_size',
+        from: 5_000,
+        // The BOUNDED value a human would be approving, not the raw target —
+        // one `max_step`, not the 6,000 the proposal asked for.
+        to: 5_500,
+      });
+      // Notifying is not applying, whichever channel carries it.
+      expect(tuning.getRiskThresholds().max_position_size).toBe(5_000);
+
+      await orchestrator.stop();
+    });
+
+    it('still lets an explicit per-cycle approvals override win', async () => {
+      const perCycle = vi.fn();
+      const topLevel = vi.fn();
+      const { config } = loosenConfig({ loosenApprovals: { requestLoosenApproval: topLevel } });
+      const orchestrator = buildProductionOrchestrator({
+        ...config,
+        feedback: { ...config.feedback, approvals: { requestLoosenApproval: perCycle } } as never,
+      });
+
+      await orchestrator.start();
+      await vi.advanceTimersByTimeAsync(1_500);
+
+      expect(perCycle).toHaveBeenCalledTimes(1);
+      expect(topLevel).not.toHaveBeenCalled();
+
+      await orchestrator.stop();
+    });
   });
 
   /**

@@ -21,7 +21,12 @@
  * through Telegram is #275's remaining half, not #322's.
  */
 import type { UnpricedFillAlert, UnpricedFillAlertChannel } from '../execution/index.js';
-import type { BreachAlert, BreachAlertChannel } from '../feedback-loop/index.js';
+import type {
+  BreachAlert,
+  BreachAlertChannel,
+  LoosenApprovalChannel,
+  LoosenApprovalRequest,
+} from '../feedback-loop/index.js';
 import type { CiiScoreProvider } from '../market-intelligence/index.js';
 import type { ApprovalChannel, ApprovalOutcome, ApprovalRequest } from '../verdict/index.js';
 import type { HeartbeatChannel } from './heartbeat.js';
@@ -137,6 +142,70 @@ export class LoggingBreachAlertChannel implements BreachAlertChannel {
       payload: {
         breaches: alert.breaches,
         reported_at: alert.reported_at.toISOString(),
+      },
+    });
+  }
+}
+
+/**
+ * A gated risk-threshold LOOSENING, written to the log at `warn` (#366).
+ *
+ * ## Why this one is a stand-in and not a fabricated consent
+ *
+ * Read `ConsoleApprovalChannel` below before assuming this is the same shape.
+ * It is not, and the difference is the whole safety argument:
+ *
+ * - `ApprovalChannel.requestApproval` returns `Promise<ApprovalOutcome>`. A
+ *   log-only implementation has to *answer*, and the only answers available to
+ *   a machine with no human on the line are a fabricated `'approved'` or a
+ *   `'rejected'` that impersonates a working gate.
+ * - `LoosenApprovalChannel.requestLoosenApproval` returns `void`. It is
+ *   outbound-only by construction (feedback-loop/types.ts: "Fire-and-forget by
+ *   design ... a loosening is queued into `loosen_pending_approval` and never
+ *   applied by the cycle that proposed it"). There is no answer to fabricate,
+ *   so this channel cannot approve anything even if it wanted to.
+ *
+ * **Which way it fails, explicitly: CLOSED.** A loosen request that reaches
+ * nobody leaves the risk threshold exactly where it was. `runDailyCycle`
+ * `continue`s past a gated move without writing the dial and without appending
+ * to the `AdjustmentLog`, so the safety limit stands until a human changes it
+ * out of band. The cost of no approver is a threshold that stays tight
+ * forever, never one that quietly relaxes — and that is the correct direction
+ * to fail in for the dial that bounds loss.
+ *
+ * The one path that *does* auto-apply a loosening is `mode: 'backtest'`
+ * (`gate = isThreshold && mode !== 'backtest'`, daily-cycle.ts), which spends
+ * no money and records the move as `proposal:backtest_auto_approved`. Paper
+ * and live take the gated path — deliberately, per `DailyCycleInput.mode`.
+ *
+ * Same caveat as the other log-only stand-ins: a log line nobody tails is not
+ * a notification. `TradeChannelLoosenApproval` (loosen-approval-channel.ts) is
+ * the reachable-from-a-phone implementation, selected by
+ * `SAMURAI_ALERTS=telegram` (#322/#366) — which an unattended soak (#238) sets.
+ *
+ * `warn`, not `error`: nothing is broken and no position is at risk. The
+ * system asked a question and will keep running safely without an answer.
+ */
+export class LoggingLoosenApprovalChannel implements LoosenApprovalChannel {
+  constructor(private readonly logger: Logger) {}
+
+  requestLoosenApproval(request: LoosenApprovalRequest): void {
+    this.logger.log({
+      // The daily batch belongs to no single tick, so it shares the synthetic
+      // trace the feedback cycle already logs under.
+      trace_id: 'feedback-cycle',
+      stage: 'feedback-loop',
+      level: 'warn',
+      message:
+        'risk-threshold LOOSENING proposed and NOT applied — it needs a human, and no approval ' +
+        'transport can deliver one back to this process. The threshold stays where it is until ' +
+        'somebody changes it out of band (fail-closed, #366).',
+      payload: {
+        name: request.name,
+        from: request.from,
+        to: request.to,
+        requested_at: request.requested_at.toISOString(),
+        applied: false,
       },
     });
   }
