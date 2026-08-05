@@ -9,15 +9,20 @@
  * `buildMarketState` — `marketData.getIndicator(instrument,
  * config.volatility_indicator, now)` — no new data source.
  *
- * Aggregation is always over the full configured universe
- * (`ProductionConfig.universe`), not open positions: `getIndicator` is
- * called for every instrument, partitioned by `asset_class`, and reduced to
- * one number per class via **max** — matching `CircuitBreakers.evaluate`'s
- * conservative, worst-case-trips-it intent, not a smoothed average. Because
- * the universe is populated by config rather than by open positions, a
- * reading is always available; there is no default-instrument fallback for
- * a "no positions open" case (that describes an earlier, inconsistent
- * wayfinder resolution on #264 — superseded, see #277).
+ * Aggregation is over the configured universe (`ProductionConfig.universe`),
+ * not open positions: `getIndicator` is called for every instrument,
+ * partitioned by `asset_class`, and reduced to one number per class via
+ * **max** — matching `CircuitBreakers.evaluate`'s conservative,
+ * worst-case-trips-it intent, not a smoothed average. Because the universe is
+ * populated by config rather than by open positions, a reading is available
+ * whenever the venue is; there is no default-instrument fallback for a "no
+ * positions open" case (that describes an earlier, inconsistent wayfinder
+ * resolution on #264 — superseded, see #277).
+ *
+ * The one thing that DOES narrow the set is the session calendar: an
+ * instrument whose venue is shut at `asOf` is not read at all (issue #386).
+ * See `getVolatilityReading` for why, and for why that is not a weakening of
+ * the fail-closed posture below.
  *
  * No new caching layer: `getIndicator` calls land on `MarketDataService`'s
  * existing input-hash (Tier-1) response cache
@@ -42,6 +47,7 @@ import type {
   IndicatorSpec,
   IndicatorValue,
   MarketDataService,
+  TradingCalendar,
 } from '../../market-data-service/index.js';
 import type { VolatilityReading } from '../../risk-manager/index.js';
 import type { AssetClass, Logger, UniverseInstrument } from '../types.js';
@@ -53,13 +59,26 @@ export interface VolatilityReadingProviderConfig {
   universe: readonly UniverseInstrument[];
   /** Same indicator spec `SimulatedAdapterConfig.volatility_indicator` reads for `MarketState.volatility`. */
   volatility_indicator: IndicatorSpec;
+  /**
+   * Session calendars per asset class — the same pair `UniverseScheduler`
+   * gates its tick plan on, so the two cannot disagree about when a venue is
+   * open (issue #386; see `getVolatilityReading`).
+   *
+   * Required rather than defaulted to always-open: a defaulted calendar is a
+   * gate that a future wiring change can silently drop, and the failure it
+   * prevents (a permanently armed `volatility_halt:stocks` overnight) looks
+   * exactly like a working system from the outside.
+   */
+  calendars: Record<AssetClass, TradingCalendar>;
   /** Failures and empty-class config slips are logged, not silently absorbed (see FAILURE_READING). */
   logger: Logger;
 }
 
 /**
- * No instruments of a class in the universe: no reading, so the breaker
- * never trips on an absent class. Safe even at a 0 configured baseline —
+ * No instruments of a class to read at `asOf` — either none in the universe,
+ * or none whose venue is open (issue #386; see `getVolatilityReading`). No
+ * reading, so the breaker never trips on a class it cannot observe. Safe even
+ * at a 0 configured baseline —
  * `CircuitBreakers.evaluate`'s volatility check is a strict `>`, so a 0
  * reading never trips regardless of baseline. This is also today's actual
  * live behavior for `stocks`, not just a corner case: `SMOKE_TEST_UNIVERSE`
@@ -123,17 +142,61 @@ export class MarketDataVolatilityReadingProvider implements VolatilityReadingPro
     }
   }
 
+  /**
+   * Aggregated over the instruments whose venue is OPEN at `asOf` — not the
+   * whole configured universe (issue #386).
+   *
+   * A shut venue has no current volatility to read. Before this gate, every
+   * equity was read overnight anyway: with `DEFAULT_UNIVERSE` (#381) that is
+   * four `getIndicator` calls per tick that cannot succeed, each folded in as
+   * `FAILURE_READING` (`Infinity`) and each logged at `error`. Measured on a
+   * live paper run: exactly four error lines per tick, ~5,700 a day, and a
+   * soft `volatility_halt:stocks` armed for ~16 hours a weekday and all
+   * weekend — driven by a bar-count artifact rather than by any market
+   * condition. That is the alert-fatigue failure mode #383 and #362 already
+   * fixed elsewhere, and it is worse here because an operator trained to
+   * scroll past `error` scrolls past the stuck-fill and kill-threshold lines
+   * too.
+   *
+   * The fail-closed handling below is deliberately UNCHANGED. It is the right
+   * answer to "this indicator is unreadable and I don't know why"; it was the
+   * wrong answer only because "unreadable" was the expected state most of the
+   * day. Gating the read makes that correct by construction: a class with no
+   * open instrument aggregates to `NO_READING` (0, inert, and re-armed on the
+   * next in-session tick) via the same empty-class path a class absent from
+   * the universe takes, so nothing has to distinguish "shut" from "broken"
+   * after the fact. An in-session instrument that fails still trips the
+   * breaker conservatively.
+   *
+   * A 0 reading for a shut class is safe because this reading is ENTRY-side
+   * only, which is worth stating since an equity position can be held
+   * overnight and "0" would otherwise read as "calm" rather than
+   * "unobserved". `CircuitBreakers.evaluate` folds it into
+   * `asset_class_tripped`, and that field has exactly two consumers:
+   * `RiskManagerImpl.evaluate`'s Step-1 gate, which an `intent_type: 'exit'`
+   * returns before ever reaching ("bypasses all entry gates"), and
+   * `verdict`'s Gate 5, which for stocks sits behind Gate 4's market-open
+   * check anyway. No exit, stop-widen, or kill-line path reads it, and the
+   * raw reading is never persisted — only the boolean trip result is.
+   *
+   * This is the noise half of #386. The correctness half is
+   * `NormalizingDataSource.fetchBars`'s in-session bar-count guarantee: the
+   * Trader sizes stops off the same ATR read DURING the session, where no
+   * calendar gate can help it.
+   */
   async getVolatilityReading(asOf: Date): Promise<VolatilityReading> {
-    const { marketData, universe, volatility_indicator, logger } = this.config;
+    const { marketData, universe, volatility_indicator, calendars, logger } = this.config;
+
+    const open = universe.filter((instrument) => calendars[instrument.asset_class].isOpen(asOf));
 
     const settled = await settleWithConcurrency(
-      universe,
+      open,
       MAX_CONCURRENT_INDICATOR_CALLS,
       (instrument) => marketData.getIndicator(instrument.asset, volatility_indicator, asOf),
     );
 
-    const readings = universe.map((instrument, index) => {
-      // Safe: `settled` was built via `settleWithConcurrency(universe, ...)`, so it has
+    const readings = open.map((instrument, index) => {
+      // Safe: `settled` was built via `settleWithConcurrency(open, ...)`, so it has
       // exactly one entry per instrument at the same index — `as` avoids a spurious
       // `noUncheckedIndexedAccess`.
       const result = settled[index] as PromiseSettledResult<IndicatorValue>;

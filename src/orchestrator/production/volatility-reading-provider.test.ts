@@ -3,18 +3,35 @@ import type {
   IndicatorSpec,
   IndicatorValue,
   MarketDataService,
+  TradingCalendar,
 } from '../../market-data-service/index.js';
 import {
+  AlwaysOpenCalendar,
   FixtureDataSource,
   MarketDataServiceImpl,
   SqliteMarketDataStore,
+  UsEquityRegularHoursCalendar,
 } from '../../market-data-service/index.js';
 import type { Clock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
-import type { Logger, UniverseInstrument } from '../types.js';
+import type { AssetClass, Logger, UniverseInstrument } from '../types.js';
 import { MarketDataVolatilityReadingProvider } from './volatility-reading-provider.js';
 
+/** Tuesday 10:00 ET — the US equity session is open, so the gate admits both classes. */
 const NOW = new Date('2026-07-28T14:00:00Z');
+/** Sunday night — the US equity session is shut, crypto is not. */
+const SESSION_SHUT = new Date('2026-07-19T23:00:00Z');
+/**
+ * Tuesday 03:00 ET — a TRADING DAY, but hours before the open. Most of the
+ * overnight error volume #386 measured came from weekday nights, not
+ * weekends, so this pins the gate to `isOpen` and not `isTradingDay`.
+ */
+const WEEKDAY_OVERNIGHT = new Date('2026-07-28T07:00:00Z');
+
+const CALENDARS: Record<AssetClass, TradingCalendar> = {
+  crypto: new AlwaysOpenCalendar(),
+  stocks: new UsEquityRegularHoursCalendar(),
+};
 const VOLATILITY_INDICATOR: IndicatorSpec = {
   indicator: 'atr',
   params: { period: 14 },
@@ -78,6 +95,7 @@ function buildProvider(
     marketData,
     universe,
     volatility_indicator: VOLATILITY_INDICATOR,
+    calendars: CALENDARS,
     logger,
   });
 
@@ -213,6 +231,7 @@ describe('MarketDataVolatilityReadingProvider', () => {
       marketData,
       universe,
       volatility_indicator: { indicator: 'atr', params: { period: 14 }, lookback: 15 },
+      calendars: CALENDARS,
       logger,
     });
 
@@ -268,6 +287,7 @@ describe('MarketDataVolatilityReadingProvider', () => {
       marketData,
       universe: bigUniverse,
       volatility_indicator: VOLATILITY_INDICATOR,
+      calendars: CALENDARS,
       logger,
     });
 
@@ -275,6 +295,75 @@ describe('MarketDataVolatilityReadingProvider', () => {
 
     expect(getIndicator).toHaveBeenCalledTimes(bigUniverse.length);
     expect(maxInFlight).toBeLessThanOrEqual(8);
+  });
+
+  describe('does not read a class whose venue is shut (#386)', () => {
+    it('calls getIndicator only for the instruments that are in session', async () => {
+      const { provider, getIndicator } = buildProvider();
+
+      await provider.getVolatilityReading(SESSION_SHUT);
+
+      expect(getIndicator).toHaveBeenCalledTimes(3); // the three crypto pairs
+      for (const asset of ['BTC-USD', 'ETH-USD', 'SOL-USD']) {
+        expect(getIndicator).toHaveBeenCalledWith(asset, VOLATILITY_INDICATOR, SESSION_SHUT);
+      }
+      for (const asset of ['AAPL', 'TSLA']) {
+        expect(getIndicator).not.toHaveBeenCalledWith(asset, VOLATILITY_INDICATOR, SESSION_SHUT);
+      }
+    });
+
+    it('reads the shut class as 0 (inert), not as the fail-closed Infinity sentinel', async () => {
+      // Pre-fix every equity threw `atr(14) needs 15 bars but received 12` and
+      // folded in as `FAILURE_READING`, arming `volatility_halt:stocks` for ~16
+      // hours a weekday and all weekend on a bar-count artifact.
+      const { provider } = buildProvider();
+
+      const reading = await provider.getVolatilityReading(SESSION_SHUT);
+
+      expect(reading).toEqual({ crypto: 40, stocks: 0 });
+    });
+
+    it('logs no per-instrument error line while the venue is shut', async () => {
+      // ~5,700 `error` lines a day on a 14-day soak, all of them expected —
+      // the alert-fatigue failure mode #383 and #362 fixed elsewhere.
+      const { provider, log } = buildProvider(UNIVERSE, { AAPL: 'reject', TSLA: 'reject' });
+
+      await provider.getVolatilityReading(SESSION_SHUT);
+
+      expect(log).not.toHaveBeenCalledWith(expect.objectContaining({ level: 'error' }));
+    });
+
+    it('gates on the SESSION, not the trading day — a weekday night is shut too', async () => {
+      // `isTradingDay` is true all Tuesday, including 03:00 ET. Gating on it
+      // would leave the weekday-overnight hours reading equities, which is
+      // where most of #386's ~5,700 error lines a day actually came from.
+      const { provider, getIndicator } = buildProvider();
+
+      const reading = await provider.getVolatilityReading(WEEKDAY_OVERNIGHT);
+
+      expect(getIndicator).toHaveBeenCalledTimes(3); // the three crypto pairs
+      expect(reading.stocks).toBe(0);
+    });
+
+    it('reads the class again on the very next in-session tick, so the gate never latches', async () => {
+      const { provider, getIndicator } = buildProvider();
+
+      await provider.getVolatilityReading(SESSION_SHUT);
+      const reading = await provider.getVolatilityReading(NOW);
+
+      expect(getIndicator).toHaveBeenCalledWith('AAPL', VOLATILITY_INDICATOR, NOW);
+      expect(reading).toEqual({ crypto: 40, stocks: 15 });
+    });
+
+    it('still fails closed for an in-session instrument that cannot be read', async () => {
+      // The gate must not become a way for a genuine equity failure to go quiet.
+      const { provider, log } = buildProvider(UNIVERSE, { TSLA: 'reject' });
+
+      const reading = await provider.getVolatilityReading(NOW);
+
+      expect(reading.stocks).toBe(Number.POSITIVE_INFINITY);
+      expect(log).toHaveBeenCalledWith(expect.objectContaining({ level: 'error' }));
+    });
   });
 
   it('redacts query-string-shaped substrings from a rejected getIndicator error before logging', async () => {
@@ -290,6 +379,7 @@ describe('MarketDataVolatilityReadingProvider', () => {
       marketData,
       universe: [{ asset: 'BTC-USD', asset_class: 'crypto' }],
       volatility_indicator: VOLATILITY_INDICATOR,
+      calendars: CALENDARS,
       logger,
     });
 

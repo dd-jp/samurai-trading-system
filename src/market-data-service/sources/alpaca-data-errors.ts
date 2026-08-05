@@ -54,6 +54,15 @@ export class AlpacaDataProviderError extends Error {
  * message, so a caller that wants to degrade can read `received` instead of
  * re-parsing the text. Never retryable: repeating an identical request cannot
  * conjure bars that do not exist.
+ *
+ * Scoped to the RAW wire payload, and that scope is load-bearing (issue #386):
+ * `normalizeBars` afterwards drops every out-of-session candle, so a payload
+ * that satisfies this guard can still leave the caller short. That second
+ * shortfall is `InSessionUnderfetchError`'s
+ * (`sources/normalizing-data-source.ts`) — a complement to this error, not a
+ * replacement for it, and deliberately not this class because the same
+ * skeleton also backs ccxt and IBKR reads that no Alpaca-named error should
+ * ever describe.
  */
 export class AlpacaDataUnderfetchError extends Error {
   readonly symbol: string;

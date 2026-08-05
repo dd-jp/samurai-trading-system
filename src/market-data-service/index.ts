@@ -54,7 +54,10 @@ export type {
 } from './sources/ibkr-source.js';
 export { IbkrDataSource } from './sources/ibkr-source.js';
 export type { LiveObservation, SourceConfig } from './sources/normalizing-data-source.js';
-export { NormalizingDataSource } from './sources/normalizing-data-source.js';
+export {
+  InSessionUnderfetchError,
+  NormalizingDataSource,
+} from './sources/normalizing-data-source.js';
 export { SqliteMarketDataStore } from './sqlite-market-data-store.js';
 export { closeTimeOf, isDailyTimeframe, timeframeToMs } from './timeframe.js';
 export type { TradingCalendar } from './trading-calendar.js';
