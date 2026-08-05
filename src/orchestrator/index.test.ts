@@ -165,6 +165,22 @@ describe('missingCredentialEnvVars', () => {
     expect(missingCredentialEnvVars({}, 'log-only')).toEqual(['ALPACA_API_KEY']);
   });
 
+  it('treats a whitespace-only value as missing too', () => {
+    // Same rule the alert transport applies at its own read (#342 follow-up):
+    // a variable holding nothing but whitespace is not configured. Without
+    // this the two disagree — the pre-flight reports a clean environment and
+    // `buildAlertChannels` then throws about the same variable one step later,
+    // defeating the whole point of naming every missing one at once.
+    process.env.ALPACA_API_KEY = ' ';
+    process.env.ALPACA_API_SECRET = '\n';
+    process.env.ANTHROPIC_API_KEY = 'set';
+
+    expect(missingCredentialEnvVars({}, 'log-only')).toEqual([
+      'ALPACA_API_KEY',
+      'ALPACA_API_SECRET',
+    ]);
+  });
+
   it('does not demand credentials for clients the caller injected', () => {
     // A test or a non-Alpaca composition root supplying its own clients must
     // not be asked for keys it will never use.

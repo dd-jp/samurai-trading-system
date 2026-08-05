@@ -153,6 +153,26 @@ describe('resolveAlertsMode', () => {
     expect(resolveAlertsMode({})).toBe('log-only');
   });
 
+  it('accepts a named mode carrying incidental whitespace from an env file', () => {
+    // `SAMURAI_ALERTS=telegram\n` out of a `--env-file` or a heredoc is the
+    // mode the operator typed. Refusing it produced "must be one of
+    // telegram|log-only" for a value that reads as `telegram` on screen —
+    // a fail-loud, but one nobody could act on. Both post-trim outcomes are
+    // still values the operator wrote, so trimming invents nothing.
+    process.env.SAMURAI_ALERTS = ' telegram\n';
+    expect(resolveAlertsMode({})).toBe('telegram');
+
+    process.env.SAMURAI_ALERTS = '\tlog-only ';
+    expect(resolveAlertsMode({})).toBe('log-only');
+  });
+
+  it('still rejects a whitespace-only value rather than defaulting', () => {
+    // Trimming must not open a path from "nothing meaningful set" to a mode.
+    process.env.SAMURAI_ALERTS = '   ';
+
+    expect(() => resolveAlertsMode({})).toThrow(/SAMURAI_ALERTS/);
+  });
+
   it('needs no mode at all when the caller injected every alert channel itself', () => {
     // Same posture as `missingCredentialEnvVars`' `satisfiedByInjection`: a
     // caller that supplied all three transports has already made this decision
@@ -455,6 +475,71 @@ describe('buildAlertChannels — heartbeat destination is separate from escalati
     process.env.TELEGRAM_HEARTBEAT_CHAT_ID = '';
 
     expect(() => telegramChannels()).toThrow(/TELEGRAM_HEARTBEAT_CHAT_ID/);
+  });
+
+  it('treats a whitespace-only TELEGRAM_HEARTBEAT_CHAT_ID as unset, not as a chat', () => {
+    // Same rule as the empty string, and the one `nonEmpty` in
+    // rotating-file-sink.ts already applies to `SAMURAI_LOG_MAX_FILES`: a
+    // value that is nothing but whitespace is "not configured", never a
+    // destination. `chat_id: "  "` is a Bot API 400 discovered on the first
+    // beat, days into an unattended soak.
+    configureTelegramEnv();
+    process.env.TELEGRAM_HEARTBEAT_CHAT_ID = ' \n\t ';
+
+    expect(() => telegramChannels()).toThrow(/TELEGRAM_HEARTBEAT_CHAT_ID/);
+    // And refused as ABSENT rather than as the same-chat case: the operator's
+    // fix differs (set the variable vs. create a second chat).
+    expect(() => telegramChannels()).toThrow(/is not set/);
+  });
+
+  it('refuses a heartbeat chat that equals the escalation chat but for whitespace', () => {
+    // The hole kimi-3-review found in #353: raw `===` meant one trailing
+    // newline out of an env file — `TELEGRAM_HEARTBEAT_CHAT_ID=-100…\n` —
+    // slipped past the refusal while still addressing the escalation chat.
+    // The guard would report safe and the property it exists to protect
+    // (muting the beat cannot mute an escalation) would be gone. Direct
+    // precedent: #293/#320, where a whitespace-sensitive `startsWith` let
+    // ' https://api.alpaca.markets' walk past a live-host guard.
+    for (const padded of [
+      `${ESCALATION_CHAT_ID}\n`,
+      ` ${ESCALATION_CHAT_ID}`,
+      `\t${ESCALATION_CHAT_ID} `,
+    ]) {
+      configureTelegramEnv();
+      process.env.TELEGRAM_HEARTBEAT_CHAT_ID = padded;
+
+      expect(() => telegramChannels()).toThrow(/is the same chat as/);
+    }
+  });
+
+  it('refuses an escalation chat that equals the heartbeat chat but for whitespace', () => {
+    // The mirror image: the padding can sit on either variable, and only
+    // normalizing one of them leaves the other half of the hole open.
+    configureTelegramEnv();
+    process.env.TELEGRAM_CHAT_ID = ` ${HEARTBEAT_CHAT_ID} `;
+
+    expect(() => telegramChannels()).toThrow(/is the same chat as/);
+  });
+
+  it('hands the adapters normalized chat ids, never the padded env value', async () => {
+    // The second half of the fix, and a bug in its own right: a trailing
+    // newline inside a `chat_id` is a Bot API 400, so a padded id that IS
+    // distinct from the escalation chat would pass the refusal and then fail
+    // every single send. Normalize once, at the read, and both the comparison
+    // and the wire see the same value.
+    configureTelegramEnv();
+    process.env.TELEGRAM_CHAT_ID = ` ${ESCALATION_CHAT_ID}\n`;
+    process.env.TELEGRAM_HEARTBEAT_CHAT_ID = `\t${HEARTBEAT_CHAT_ID} `;
+    const fetchStub = stubTelegramFetch();
+    const channels = telegramChannels();
+
+    await channels.heartbeatChannel?.postHeartbeat(new Date('2026-08-04T10:00:00Z'));
+    await channels.orphanAlerts?.postOrphanAlert(ORPHAN);
+
+    expect(sentMessages(fetchStub).map((m) => m.chat_id)).toEqual([
+      HEARTBEAT_CHAT_ID,
+      ESCALATION_CHAT_ID,
+    ]);
   });
 
   it('asks for no heartbeat chat at all when the caller injected the heartbeat channel', () => {

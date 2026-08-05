@@ -184,6 +184,15 @@ const MODES = ['live', 'paper', 'backtest'] as const;
  * (verdict/types.ts) and `live` spends real money, so a typo'd or unset-to-
  * garbage value must not be cast through — it defaults to `paper` when
  * absent and throws when present and unrecognised.
+ *
+ * **Deliberately does not trim**, unlike `SAMURAI_ALERTS` and the chat ids
+ * (#342 follow-up). Examined during that sweep and left alone, because both
+ * edges move the wrong way here: `'live '` throws today and would resolve to
+ * `live` with a trim — turning a hard refusal into a real-money path — and
+ * `'  '` throws today but would become "absent", silently defaulting to
+ * `paper`. Where the trimmed value could be `live`, a value nobody typed
+ * exactly is refused rather than guessed at, per production.ts: live "is not
+ * reachable by omission, by a defaulted constant, or by a mis-set env var".
  */
 function parseMode(raw: string | undefined): ProductionConfig['mode'] {
   if (raw === undefined) return 'paper';
@@ -263,7 +272,13 @@ const CREDENTIAL_REQUIREMENTS: readonly {
  * Every credential this run will need and does not have. Empty string counts
  * as absent — the tracked `.env` ships the Alpaca keys as empty placeholders,
  * and `--env-file` turns those into `''` rather than leaving them unset, which
- * is the same "not configured" state.
+ * is the same "not configured" state. So does whitespace-only, for the same
+ * reason and to keep one rule: `requireEnv` in alert-transport.ts trims before
+ * it decides (#342 follow-up), and `rotating-file-sink.ts`'s `nonEmpty` already
+ * says this pre-flight "takes the same line". If it did not, a quoted-empty
+ * `TELEGRAM_CHAT_ID=' '` would pass here and throw one step later from
+ * `buildAlertChannels` — defeating the entire point of naming every missing
+ * variable at once.
  *
  * Exported for tests. Returns names only; it never reads, echoes, or logs a
  * credential's value.
@@ -276,7 +291,7 @@ export function missingCredentialEnvVars(
     (requirement) => !requirement.unusedByThisRun({ injected, alertsMode }),
   )
     .flatMap((requirement) => requirement.vars)
-    .filter((name) => (process.env[name] ?? '').length === 0);
+    .filter((name) => (process.env[name] ?? '').trim().length === 0);
 }
 
 /**
