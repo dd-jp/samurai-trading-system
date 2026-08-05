@@ -466,6 +466,35 @@ describe('decide — skip paths', () => {
     expect(intent).toBeNull();
   });
 
+  it('returns null when the mark price is not finite, rather than pricing off NaN', async () => {
+    // The sibling case to the corrupt-ATR test above, on the input that was
+    // NOT defended: the ATR is fine and the bars are fine, but the QUOTE is
+    // corrupt. `AlpacaHttpDataClient` casts the wire body
+    // (`as CryptoLatestQuoteResponse`) without validating that `ap`/`bp` are
+    // numbers, so a null field arrives here as a NaN `mark.price`.
+    //
+    // NaN then defeats the same three guards the ATR comment lists —
+    // `Math.max(atr, NaN)` is NaN, `stopDistance <= 0` is false, `size *
+    // entry < min_viable_notional` is false — and lands in an EMITTED intent
+    // whose entry, stop AND target are all NaN.
+    const intent = await decide(
+      traderInput({ marketData: new FixtureMarketData(bars(15, 2), 'stocks', Number.NaN) }),
+    );
+
+    expect(intent).toBeNull();
+  });
+
+  it('returns null when equity is not finite, rather than sizing off NaN', async () => {
+    // The third NaN inlet. `equity` is supplied by the caller from an account
+    // read, so a malformed broker response reaches sizing the same way a
+    // malformed quote reaches pricing. `size` is the choke point every
+    // numeric input funnels through — guarding it covers this case and any
+    // later one, which the per-input `entry` check alone would not.
+    const intent = await decide(traderInput({ equity: Number.NaN }));
+
+    expect(intent).toBeNull();
+  });
+
   it('skips one bar short of the ATR width and trades at exactly that width (#319)', async () => {
     // Both sides of the boundary `atrFor` now sits on, in one test because
     // neither half means anything alone.
