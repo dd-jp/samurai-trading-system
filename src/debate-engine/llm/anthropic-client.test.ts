@@ -367,6 +367,27 @@ describe('AnthropicLlmClient spend metering', () => {
     expect(sink.records).toHaveLength(2);
   });
 
+  it('does not let a throwing sink fail the LLM call (PR #367 review)', async () => {
+    // `LlmSpendSink` is a public interface, so the "never throws" contract
+    // cannot be trusted per-implementation — a metering side effect must not
+    // be able to abort a completed, already-billed call or trigger a retry.
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockResolvedValue(usageResponse('good')),
+    };
+    const client = new AnthropicLlmClient(
+      wire,
+      { model: 'claude-haiku-4-5', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      {
+        record: () => {
+          throw new Error('disk full');
+        },
+      },
+    );
+
+    await expect(client.complete(request())).resolves.toMatchObject({ data: { value: 'good' } });
+    expect(wire.createMessage).toHaveBeenCalledTimes(1);
+  });
+
   it('meters nothing by default, so a client built without a sink is unchanged', async () => {
     const wire: AnthropicMessagesClient = {
       createMessage: vi.fn().mockResolvedValue(usageResponse('good')),

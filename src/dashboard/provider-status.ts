@@ -163,6 +163,34 @@ function parseMoney(value: string | undefined): number | null {
  */
 function swallow(): void {}
 
+/**
+ * Bounds a promise that this module cannot bound from the inside.
+ *
+ * The Polygon probe gets its deadline from `fetchWithTimeout`, but the Alpaca
+ * probe goes through the injected `AlpacaClient` interface, which promises
+ * nothing about timeouts — the real `AlpacaHttpBrokerClient` has its own, a
+ * different implementation need not. Without this, one hung `getAccount()`
+ * leaves `pollOnce` pending forever, and because the two probes share a
+ * `Promise.all`, it takes the POLYGON tile down with it: the whole panel
+ * freezes at its last value with nothing on screen saying so.
+ *
+ * The loser of a `Promise.race` stays pending, so if the slow call later
+ * rejects with nobody listening Node treats it as an unhandled rejection and
+ * kills the process. `work.catch(swallow)` is what makes the race safe; the
+ * `finally` clears the timer so a fast win does not leave one armed.
+ */
+function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
+  work.catch(swallow);
+  let timer: NodeJS.Timeout | undefined;
+  const expiry = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    timer.unref?.();
+  });
+  return Promise.race([work, expiry]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+}
+
 /** Maps an HTTP status onto the operator-facing cause. */
 function stateForStatus(status: number): ProviderState {
   if (status === 401) return 'unauthorized';
@@ -261,7 +289,11 @@ export class ProviderStatusPoller implements ProviderStatusReader {
     }
 
     try {
-      const account = await this.alpaca.getAccount();
+      const account = await withTimeout(
+        this.alpaca.getAccount(),
+        PROBE_TIMEOUT_MS,
+        'Alpaca account probe',
+      );
       const cash = parseMoney(account.cash);
       const equity = parseMoney(account.equity);
       if (cash === null || equity === null) {

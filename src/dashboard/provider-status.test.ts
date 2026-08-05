@@ -127,6 +127,34 @@ describe('ProviderStatusPoller — Alpaca', () => {
     expect(alpaca.state).toBe('not_configured');
   });
 
+  it('bounds a hung account call instead of stalling the poller forever (PR #367 review)', async () => {
+    // The `AlpacaClient` interface promises nothing about timeouts. Without a
+    // bound here, one hung `getAccount()` leaves `pollOnce` pending forever —
+    // and since both probes share a `Promise.all`, it takes the Polygon tile
+    // down with it and freezes the whole panel silently.
+    vi.useFakeTimers();
+    try {
+      stubFetch(() => response(200));
+      const poller = new ProviderStatusPoller({
+        // Never settles.
+        alpaca: alpacaStub(() => new Promise<never>(() => {})),
+        polygonApiKey: 'test-key',
+      });
+
+      const polled = poller.pollOnce();
+      await vi.advanceTimersByTimeAsync(10_000);
+      const { alpaca, polygon } = await polled;
+
+      expect(alpaca.state).toBe('error');
+      expect(alpaca.detail).toContain('timed out');
+      expect(alpaca.balance).toBeNull();
+      // The point of the fix: the other tile still updates.
+      expect(polygon.state).toBe('ok');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('never throws out of pollOnce when the account call rejects', async () => {
     stubFetch(() => response(200));
     const poller = new ProviderStatusPoller({
