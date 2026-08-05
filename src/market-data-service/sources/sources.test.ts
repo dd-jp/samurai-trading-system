@@ -1,4 +1,8 @@
-import { UsEquityRegularHoursCalendar } from '../trading-calendar.js';
+import {
+  AlwaysOpenCalendar,
+  type TradingCalendar,
+  UsEquityRegularHoursCalendar,
+} from '../trading-calendar.js';
 import type { BarWindow, DataSource } from '../types.js';
 import { type AlpacaBar, type AlpacaClient, AlpacaDataSource } from './alpaca-source.js';
 import { type CcxtClient, CcxtDataSource, type CcxtOhlcv } from './ccxt-source.js';
@@ -197,7 +201,12 @@ describe('market-hours gating', () => {
   });
 
   it('gates on an injected calendar, so the real session table can replace the default', async () => {
-    const closedAllWeek = { isOpen: () => false, isTradingDay: () => false };
+    const alwaysOpen = new AlwaysOpenCalendar();
+    const closedAllWeek: TradingCalendar = {
+      isOpen: () => false,
+      isTradingDay: () => false,
+      sessionStart: (instant) => alwaysOpen.sessionStart(instant),
+    };
     const source = new IbkrDataSource(ibkrClient, { calendar: closedAllWeek });
 
     expect(await source.fetchBars('AAPL', WINDOW, ASOF)).toEqual([]);

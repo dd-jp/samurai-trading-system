@@ -1,4 +1,9 @@
-import type { Mark, MarketDataService, TradingCalendar } from '../market-data-service/index.js';
+import {
+  AlwaysOpenCalendar,
+  type Mark,
+  type MarketDataService,
+  type TradingCalendar,
+} from '../market-data-service/index.js';
 import type { BreakerState, RiskDecision } from '../risk-manager/index.js';
 import type { Clock, OrderIntent } from '../shared/index.js';
 import { VerdictImpl } from './index.js';
@@ -101,10 +106,13 @@ function makeMarketData(mark: Mark = makeMark()): MarketDataService {
   } as unknown as MarketDataService;
 }
 
+const SESSION_BOUNDARY = new AlwaysOpenCalendar();
+
 function makeTradingCalendar(isOpen = true): TradingCalendar {
   return {
     isOpen: () => isOpen,
     isTradingDay: () => true,
+    sessionStart: (instant) => SESSION_BOUNDARY.sessionStart(instant),
   };
 }
 

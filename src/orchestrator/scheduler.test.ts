@@ -1,4 +1,4 @@
-import type { TradingCalendar } from '../market-data-service/index.js';
+import { AlwaysOpenCalendar, type TradingCalendar } from '../market-data-service/index.js';
 import type { Clock } from '../shared/index.js';
 import { DEFAULT_UNIVERSE, type SchedulerConfig, UniverseScheduler } from './scheduler.js';
 import type { UniverseInstrument } from './types.js';
@@ -10,12 +10,16 @@ function clockAt(instant: Date): Clock {
   return { now: () => instant };
 }
 
+/** The scheduler gates on `isOpen` only; session boundaries are not its concern. */
+const SESSION_BOUNDARY = new AlwaysOpenCalendar();
+
 /** Open exactly on the instants listed; closed otherwise. */
 function calendarOpenAt(...openInstants: Date[]): TradingCalendar {
   const open = new Set(openInstants.map((instant) => instant.getTime()));
   return {
     isOpen: (instant) => open.has(instant.getTime()),
     isTradingDay: (instant) => open.has(instant.getTime()),
+    sessionStart: (instant) => SESSION_BOUNDARY.sessionStart(instant),
   };
 }
 
@@ -69,6 +73,7 @@ describe('UniverseScheduler.nextTick', () => {
     const calendar: TradingCalendar = {
       isOpen: (instant) => instant.getTime() < close.getTime(),
       isTradingDay: () => true,
+      sessionStart: (instant) => SESSION_BOUNDARY.sessionStart(instant),
     };
     const scheduler = makeScheduler({ calendar });
 
@@ -91,6 +96,7 @@ describe('UniverseScheduler.nextTick', () => {
         return true;
       },
       isTradingDay: () => true,
+      sessionStart: (instant) => SESSION_BOUNDARY.sessionStart(instant),
     };
 
     makeScheduler({ calendar }).nextTick(clockAt(MARKET_OPEN));
