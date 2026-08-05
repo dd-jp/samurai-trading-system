@@ -613,6 +613,10 @@ async function poll() {
     try {
       renderPipeline(s.pipeline, s.debates);
     } catch (pe) {
+      // Logged as well as displayed: the panel message keeps the operator
+      // informed, but only the console keeps the stack, and a swallowed stack
+      // is how a rendering bug survives a whole soak unnoticed.
+      console.error('pipeline render failed', pe);
       document.getElementById('pl-lanes').innerHTML =
         '<div class="pl-empty">Pipeline view failed to render: ' + esc(pe.message) + '</div>';
     }
