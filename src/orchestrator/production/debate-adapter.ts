@@ -59,15 +59,19 @@ import type {
   LlmClient,
 } from '../../debate-engine/index.js';
 import {
+  buildAnalystContributions,
   buildDebateLog,
   computeConvictionScore,
   computeDebateId,
   type DebatePersonas,
   type DebaterPersona,
   detectDisagreements,
+  enforceLatencyBudget,
+  JsonDebateLogger,
   MAX_ROUNDS,
   type MediatorAssessment,
   type MediatorPersona,
+  type PartialDebateState,
   type PersonaResponse,
   type RateLimiter,
   type RoundContext,
@@ -85,6 +89,32 @@ import {
 } from '../../shared/index.js';
 import type { TickSteps } from '../types.js';
 import { RateLimitedLlmClient } from './rate-limited-llm-client.js';
+
+/**
+ * The persona set plus the debate's synthesis-in-progress (#374).
+ *
+ * `enforceLatencyBudget` needs a `getCurrentState` to build the partial
+ * synthesis its timeout path returns, and `runDebate` deliberately does not
+ * expose round state — the ephemeral debate is "no transcript, no
+ * persistence" (debate-engine-spec.md). The mediator closure below is
+ * nonetheless the one place that HAS that state: it already accumulates
+ * `accumulatedStances` and sees every round's synthesis. So the state is read
+ * off the closure rather than plumbed out of the orchestrator, which keeps
+ * `runDebate`'s contract unchanged.
+ *
+ * Extends `DebatePersonas` rather than wrapping it so existing callers can
+ * keep passing the result straight to `runDebate`.
+ */
+export interface DebatePersonasWithState extends DebatePersonas {
+  /**
+   * The last COMPLETED round's synthesis, or `undefined` if the budget fired
+   * before any round finished (`enforceLatencyBudget` then uses its
+   * low-confidence fallback). A round in flight has no assessment to report,
+   * which is why this is written at the end of `mediator.assess` and not at
+   * its start.
+   */
+  getCurrentState: () => PartialDebateState | undefined;
+}
 
 /**
  * Builds one debate's bull/bear/mediator port set over a shared LLM client.
@@ -109,10 +139,11 @@ export function buildDebatePersonas(
    * working; those calls simply meter as unattributed.
    */
   debate_id?: string,
-): DebatePersonas {
+): DebatePersonasWithState {
   let lastBull: PersonaResponse | undefined;
   let lastBear: PersonaResponse | undefined;
   const accumulatedStances: AnalystRoundStance[] = [];
+  let currentState: PartialDebateState | undefined;
 
   const bull: DebaterPersona = {
     async argue(context) {
@@ -179,6 +210,36 @@ export function buildDebatePersonas(
 
       const confidence = computeConvictionScore(context.views, accumulatedStances);
 
+      // Recorded AFTER the round's LLM calls returned, so this is always a
+      // completed round (#374). `debate_id` is required by
+      // `PartialDebateState` and is what the timeout path stamps on its
+      // result, so a persona set built without one (the pre-#326 test
+      // callers) reports no state rather than inventing an id that would not
+      // match the `debate_log` row.
+      if (debate_id !== undefined) {
+        currentState = {
+          synthesis: response.rationale,
+          position: `${response.stance}: ${response.rationale}`,
+          confidence,
+          contributions: buildAnalystContributions(context.views, accumulatedStances),
+          disagreement_summary: disagreement.summary,
+          // A partial state is non-converged by construction, and
+          // `runDebate` holds the invariant that a non-converged result
+          // carries non-empty `open_items` so Trader/Risk can apply caution.
+          // Its own fallback — the disagreement summary — is empty on every
+          // non-final round (`detectDisagreements` runs once per debate), so
+          // falling back to it here would satisfy the invariant with an empty
+          // string. This says what actually happened instead.
+          open_items:
+            disagreement.conflicts.length > 0
+              ? disagreement.conflicts.map((conflict) => conflict.nature)
+              : ['debate did not converge before the latency budget fired'],
+          rounds_completed: context.round,
+          direction: response.stance,
+          debate_id,
+        };
+      }
+
       return {
         converged: response.converged,
         stances,
@@ -197,7 +258,7 @@ export function buildDebatePersonas(
     },
   };
 
-  return { bull, bear, mediator, clock };
+  return { bull, bear, mediator, clock, getCurrentState: () => currentState };
 }
 
 /**
@@ -434,9 +495,42 @@ export function buildDebateStep(
       debate_id,
     );
 
+    // LATENCY BUDGET (#374). `enforceLatencyBudget` was implemented, tested,
+    // exported — and called by nothing, so a pathological debate held the
+    // tick, its LLM connections and its rate-limit budget for as long as the
+    // provider took. Over an unattended 14-day soak (#238) that has no
+    // ceiling at all.
+    //
+    // The budget is per asset class (`LATENCY_BUDGET_MS`: crypto 15s, stocks
+    // 60s) and `asset_class` is already on the step's input, so the lookup
+    // needs nothing new. NOTE: #346 disputes the crypto figure as
+    // arithmetically impossible at max rounds — this wires the MECHANISM at
+    // the values the spec currently states; #346 still owns the values.
+    //
+    // `signal` is threaded into `runDebate`, which `throwIfAborted`s before
+    // every persona call, so a timed-out debate stops spending instead of
+    // running to completion with its answers discarded (#347 built that
+    // contract for this call site).
+    //
+    // A timed-out debate still RESOLVES — partial synthesis when a round
+    // completed, low-confidence fallback when none did — so it flows into
+    // `persistDebateLog` like any other resolved debate, which is exactly
+    // what that function's doc comment already anticipated.
     let result: DebateResult;
     try {
-      result = await runDebate({ views, instrument, bar }, personas);
+      result = await enforceLatencyBudget({
+        assetClass: asset_class,
+        trace_id,
+        debate_id,
+        produceResult: (signal) => runDebate({ views, instrument, bar }, personas, { signal }),
+        getCurrentState: personas.getCurrentState,
+        // `JsonDebateLogger` over the step's own sink, so the timeout line
+        // lands in the same stream as every other debate line. A step built
+        // without a logger (tests) gets a no-op sink rather than an optional
+        // logger on `enforceLatencyBudget`, whose contract is that a fired
+        // budget is always recorded somewhere.
+        logger: new JsonDebateLogger(logger ?? { log: () => {} }),
+      });
     } catch (cause) {
       logDebateFailure({ logger, trace_id, instrument, bar, views, cause });
       throw cause;
