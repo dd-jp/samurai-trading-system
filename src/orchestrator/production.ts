@@ -1077,6 +1077,31 @@ export interface ProductionComponents {
  */
 export function buildProductionComponents(config: ProductionConfig): ProductionComponents {
   const clock = config.clock;
+
+  // FIRST, ahead of every store, socket and wire client below (PR #390
+  // review). The LLM budget is constructed here rather than beside the debate
+  // step it feeds because `RateLimiter`'s constructor VALIDATES its config, and
+  // a malformed budget should be refused before this function has opened a
+  // SQLite handle or built an Alpaca client — a throw from the middle of the
+  // wiring would leave a half-built root behind. Same placement reasoning as
+  // #376 moving seeding ahead of the tick loops so a rejected `start()` cannot
+  // leave live timers running.
+  //
+  // One instance for the process, shared by every instrument's debate: a
+  // limiter per debate or per instrument would count each window separately and
+  // enforce nothing across the universe — the shape the incidental
+  // `maxConcurrentInstruments: 1` throttle already had.
+  //
+  // It takes THIS root's `clock`, which is what advances its fixed window.
+  // `startFromEnvironment` supplies `SystemClock`, so a live or paper process
+  // rolls the window on real time. A caller that injects a FROZEN clock (the
+  // offline smoke run does) gets one window for the whole run and must keep its
+  // debate count under `maxDebates` — true today at 3 ticks against 20, and the
+  // reason that gate asserts on the limiter rather than ignoring it.
+  const llmRateLimiter =
+    config.llmRateLimiter ??
+    new RateLimiter(clock, config.rateLimiterConfig ?? DEFAULT_LLM_RATE_LIMIT_CONFIG);
+
   const tradingCalendar = config.tradingCalendar ?? new UsEquityRegularHoursCalendar();
   /**
    * ONE calendar pair, shared by every consumer that needs to know when a
@@ -1256,23 +1281,6 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     config: config.executionConfig,
     mode: config.mode,
   };
-
-  // The LLM budget, constructed ONCE for the process and shared by every
-  // instrument's debate (#388). One instance is the whole point: a limiter per
-  // debate, or per instrument, would count each one's window separately and
-  // enforce nothing across the universe — which is the shape the incidental
-  // `maxConcurrentInstruments: 1` throttle already had.
-  //
-  // Note it takes THIS root's `clock`, which is what advances its fixed window.
-  // `startFromEnvironment` supplies `SystemClock`, so a live or paper process
-  // rolls the window on real time. A caller that injects a FROZEN clock (the
-  // offline smoke run does) gets one window for the whole run and must keep
-  // its debate count under `maxDebates` — true today at 3 ticks against 20,
-  // and the reason that gate asserts on the limiter rather than ignoring it.
-
-  const llmRateLimiter =
-    config.llmRateLimiter ??
-    new RateLimiter(clock, config.rateLimiterConfig ?? DEFAULT_LLM_RATE_LIMIT_CONFIG);
 
   const steps: TickSteps = {
     // `logger` here is what makes an analyst failure visible at all — see the

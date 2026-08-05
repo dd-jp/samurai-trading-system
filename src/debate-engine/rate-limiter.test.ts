@@ -27,6 +27,64 @@ function makeConfig(overrides: Partial<RateLimiterConfig['default']> = {}): Rate
  * a value FALLS BACK to `default` rather than throwing — which is also why M11
  * was silent rather than loud.
  */
+/**
+ * The construction-time preconditions that make `reserve`'s totality ENFORCED
+ * rather than merely documented (PR #390 review).
+ *
+ * Each case below is one of the three shapes that were empirically found to
+ * make `reserve` throw mid-debate. They are all total, permanent
+ * misconfigurations, so the right time to fail is boot — loudly, before any
+ * timer exists — not the first debate, where a throw reads as "this instrument
+ * silently never trades" for the length of a 14-day soak.
+ */
+describe('RateLimiter refuses a misconfigured budget at construction', () => {
+  const clock = new SimulatedClock(start);
+
+  it('refuses a config with no `default`', () => {
+    expect(() => new RateLimiter(clock, {} as unknown as RateLimiterConfig)).toThrow(
+      /config\.default is required/,
+    );
+  });
+
+  it('refuses a null config', () => {
+    expect(() => new RateLimiter(clock, null as unknown as RateLimiterConfig)).toThrow(
+      /config is required/,
+    );
+  });
+
+  it('refuses a clock that does not return a Date', () => {
+    // Would otherwise throw on `clock.now().getTime()` at the first debate.
+    expect(
+      () => new RateLimiter({ now: () => undefined } as unknown as SimulatedClock, makeConfig()),
+    ).toThrow(/must return a Date/);
+  });
+
+  it('refuses a per-asset-class entry that is malformed, naming the field', () => {
+    expect(
+      () =>
+        new RateLimiter(clock, {
+          default: { windowMs: 60_000, maxLlmCalls: 10, maxDebates: 3 },
+          perAssetClass: { stocks: { maxLlmCalls: 5 } as never },
+        }),
+    ).toThrow(/perAssetClass\.stocks\.windowMs/);
+  });
+
+  /**
+   * `windowMs: 0` is the dangerous one: `currentWindow`'s
+   * `now - windowStart < windowMs` is never true, so every call mints a fresh
+   * window and the limiter enforces NOTHING while reading as configured.
+   */
+  it('refuses windowMs: 0, which would silently disable enforcement', () => {
+    expect(() => new RateLimiter(clock, makeConfig({ windowMs: 0 }))).toThrow(
+      /default\.windowMs must be a finite number/,
+    );
+  });
+
+  it('accepts a budget of zero debates — "admit nothing" is a valid setting', () => {
+    expect(() => new RateLimiter(clock, makeConfig({ maxDebates: 0 }))).not.toThrow();
+  });
+});
+
 describe('RateLimiter.reserve is total over AssetClass', () => {
   const assetClasses = ['crypto', 'stocks'] as const;
 

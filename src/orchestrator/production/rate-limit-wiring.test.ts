@@ -138,6 +138,40 @@ describe('the LLM rate limiter is in the production path (#388)', () => {
     expect(snapshot.crypto).toBeUndefined();
   });
 
+  /**
+   * The precondition is ENFORCED at the composition root, not just documented
+   * (PR #390 review). `buildDebateStep` calls `reserve` outside its try/catch
+   * because `reserve` is total over `AssetClass` — but that only held while the
+   * config shape was well formed, and the shape was guaranteed by TypeScript
+   * alone. A `rateLimiterConfig` injected with no `default` (reachable by any
+   * caller who casts) used to survive construction and throw on the first
+   * debate; now the root refuses to build.
+   */
+  it('refuses to build with a rateLimiterConfig that has no `default`', () => {
+    expect(() =>
+      buildProductionComponents(
+        stubConfig(db, {
+          llmClient: countingLlmClient(),
+          rateLimiterConfig: {} as unknown as ProductionConfig['rateLimiterConfig'],
+        }),
+      ),
+    ).toThrow(/config\.default is required/);
+  });
+
+  it('refuses before opening any store or wire client, not part-way through wiring', () => {
+    // Placement matters as much as the check: a throw from the middle of
+    // `buildProductionComponents` would leave a half-built root behind. The
+    // limiter is constructed first, so nothing downstream has run yet — proven
+    // by the broker wire client never being touched.
+    const config = stubConfig(db, {
+      llmClient: countingLlmClient(),
+      rateLimiterConfig: {} as unknown as ProductionConfig['rateLimiterConfig'],
+    });
+
+    expect(() => buildProductionComponents(config)).toThrow();
+    expect(config.alpacaBrokerClient?.listOrders).not.toHaveBeenCalled();
+  });
+
   it('still constructs a finite budget when no rateLimiterConfig is supplied', async () => {
     // The fallback is a ceiling, not an absence: a programmatic caller that
     // forgets the config must not get today's `undefined` back.

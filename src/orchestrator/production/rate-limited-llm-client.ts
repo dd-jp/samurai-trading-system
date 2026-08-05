@@ -32,6 +32,27 @@
  * before a debate starts (see `buildDebateStep`), and a debate that is admitted
  * runs to completion without ever being parked mid-flight.
  *
+ * ## What it counts, stated precisely
+ *
+ * LOGICAL calls — one `recordCall` per `complete()` — not HTTP attempts. This
+ * decorator sits ABOVE `AnthropicLlmClient`, whose `complete` wraps its own
+ * `attempt` in `withRetry(..., config.retry)`, so a call that is retried once
+ * issues two requests to the provider and meters as ONE.
+ *
+ * Deliberate, and disclosed rather than papered over (PR #390 review): the
+ * limiter's unit is "an LLM call a debate makes", which is what
+ * `WORST_CASE_LLM_CALLS_PER_DEBATE` reserves against and what the per-debate
+ * budget is reasoned about in. Metering below the retry would count transport
+ * attempts, a different quantity, and could not be per-asset-class — the inner
+ * client has no instrument.
+ *
+ * The consequence is bounded and worth knowing: at `DEFAULT_LLM_CLIENT_CONFIG`'s
+ * `maxAttempts: 2`, actual provider requests are at most 2x the metered figure,
+ * and only in the pathological case where every call fails retryably. A
+ * constant, bounded factor does not defeat a ceiling whose job is stopping
+ * UNBOUNDED growth from a config change, and the retries are separately paced
+ * by their own backoff.
+ *
  * ## What it does owe the cancellation contract
  *
  * With no wait of its own, the only zombie this layer can create is issuing —
