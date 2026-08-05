@@ -57,6 +57,26 @@ describe('startFromEnvironment', () => {
     }
   });
 
+  it('does NOT trim SAMURAI_MODE — trailing whitespace is refused, never silently cast to a real mode (#355)', async () => {
+    // Pinned deliberately (#355, per #342 follow-up docs on parseMode): unlike
+    // TELEGRAM_BOT_TOKEN and the chat ids, SAMURAI_MODE must stay raw. If this
+    // ever starts trimming, 'live ' stops being a hard refusal and becomes a
+    // real-money path — the opposite direction a "helpful" normalization fix
+    // should ever move this value.
+    const previous = process.env.SAMURAI_MODE;
+    process.env.SAMURAI_MODE = 'live ';
+    try {
+      const wired = Object.fromEntries(REQUIRED_INJECTED_CONFIG.map((key) => [key, {}])) as Record<
+        string,
+        unknown
+      >;
+      await expect(startFromEnvironment(wired as never)).rejects.toThrow(/SAMURAI_MODE/);
+    } finally {
+      if (previous === undefined) delete process.env.SAMURAI_MODE;
+      else process.env.SAMURAI_MODE = previous;
+    }
+  });
+
   it('lists every transport and stage config as a required injection', () => {
     // Guards against a future field being added to ProductionConfig as a
     // silently-optional dependency: these are the seams with no in-repo
