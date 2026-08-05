@@ -19,11 +19,22 @@ import {
 } from './index.js';
 import type { Logger } from './types.js';
 
+/**
+ * See the twin in `startup.test.ts`. Resolve arm of the `.then(…, …)` pairs
+ * below, so `error` types as `Error` instead of the
+ * `Error | ProductionOrchestrator` union the old `.catch(e => e as Error)`
+ * produced — and so a guard that stopped rejecting fails by name rather than
+ * by an `undefined.message`.
+ */
+function resolvedUnexpectedly(): never {
+  throw new Error('startFromEnvironment resolved, but this test requires it to reject');
+}
+
 describe('startFromEnvironment', () => {
   it('refuses to start with nothing wired, naming every missing dependency', async () => {
     await expect(startFromEnvironment()).rejects.toThrow(/cannot start/i);
 
-    const error = await startFromEnvironment().catch((e: unknown) => e as Error);
+    const error = await startFromEnvironment().then(resolvedUnexpectedly, (e: unknown) => e as Error);
     for (const key of REQUIRED_INJECTED_CONFIG) {
       expect(error.message).toContain(key);
     }
@@ -33,7 +44,7 @@ describe('startFromEnvironment', () => {
     const error = await startFromEnvironment({
       llmClient: {} as never,
       traderConfig: {} as never,
-    }).catch((e: unknown) => e as Error);
+    }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     expect(error.message).not.toMatch(/\bllmClient\b/);
     expect(error.message).not.toMatch(/\btraderConfig\b/);
@@ -111,7 +122,7 @@ describe('startFromEnvironment', () => {
     // was describing a codebase that no longer exists. An error message that
     // is confidently out of date is worse than a terse one: it sends an
     // operator looking for work that is already done.
-    const error = await startFromEnvironment().catch((e: unknown) => e as Error);
+    const error = await startFromEnvironment().then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     expect(error.message).not.toMatch(/still have no implementation/i);
     expect(error.message).toContain('TelegramBotApiClient');

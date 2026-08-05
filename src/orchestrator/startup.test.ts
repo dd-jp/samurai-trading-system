@@ -15,6 +15,22 @@ import { paperStartingProfile, startFromEnvironment } from './index.js';
 import type { Logger } from './types.js';
 
 /**
+ * The resolve arm of the `.then(…, …)` pairs below, which exist so that
+ * `error` types as `Error` rather than `Error | ProductionOrchestrator` — the
+ * union the old `.catch(e => e as Error)` produced, on which `.message` does
+ * not exist.
+ *
+ * Throwing rather than returning is the point. Every assertion here reads
+ * `error.message`; if the guard under test ever stopped rejecting, the old
+ * form handed back a live orchestrator whose `.message` is `undefined`, and
+ * `expect(undefined).toContain(...)` fails with a type error about the
+ * matcher instead of naming what actually broke.
+ */
+function resolvedUnexpectedly(): never {
+  throw new Error('startFromEnvironment resolved, but this test requires it to reject');
+}
+
+/**
  * Every environment variable this file mutates, saved and restored around
  * EVERY test in the file — one hook pair at file scope rather than a
  * hand-rolled pair per `describe`.
@@ -119,7 +135,7 @@ describe('startFromEnvironment — real construction path', () => {
     const error = await startFromEnvironment({
       ...STAGE_CONFIGS,
       db: openSharedStore(':memory:'),
-    }).catch((e: unknown) => e as Error);
+    }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     // Names the variable and how to supply it. The seams guard used to catch
     // this case by demanding an injected client; now that the client is built
@@ -142,7 +158,7 @@ describe('startFromEnvironment — real construction path', () => {
     const error = startFromEnvironment({
       ...STAGE_CONFIGS,
       db: openSharedStore(':memory:'),
-    }).catch((e: unknown) => e as Error);
+    }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     return error.then((e) => {
       expect(e.message).toContain('ALPACA_API_KEY');
@@ -280,7 +296,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
     const error = await startFromEnvironment({
       ...paperStartingProfile('paper'),
       db: openSharedStore(':memory:'),
-    }).catch((e: unknown) => e as Error);
+    }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     expect(error.message).toContain('SAMURAI_ALERTS');
   });
@@ -296,7 +312,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
     const error = await startFromEnvironment({
       ...paperStartingProfile('paper'),
       db: openSharedStore(':memory:'),
-    }).catch((e: unknown) => e as Error);
+    }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     expect(error.message).toContain('TELEGRAM_CHAT_ID');
     expect(error.message).toContain('TELEGRAM_ALLOWED_USER_IDS');

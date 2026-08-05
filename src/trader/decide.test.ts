@@ -5,7 +5,13 @@
  * asserting on the returned OrderIntent (or null). There is no LLM to mock.
  */
 import type { DebateResult } from '../debate-engine/index.js';
-import type { Bar, BarWindow, Mark, MarketDataService } from '../market-data-service/index.js';
+import type {
+  Bar,
+  BarWindow,
+  IndicatorValue,
+  Mark,
+  MarketDataService,
+} from '../market-data-service/index.js';
 import type { Clock, OpenPosition } from '../shared/index.js';
 import { decide } from './decide.js';
 import type { AssetClass, TraderConfig, TraderInput } from './types.js';
@@ -82,6 +88,32 @@ class FixtureMarketData implements MarketDataService {
       source: 'fixture',
       asset_class: this.assetClass,
     };
+  }
+
+  /**
+   * The three `MarketDataService` members `decide` must never reach for, and
+   * the reason they are present at all: the `implements` clause above went
+   * unchecked until `tsconfig.test.json` existed, so this double claimed to
+   * satisfy a five-method port while supplying two.
+   *
+   * They throw rather than return a plausible value on purpose. `decide.ts`
+   * deliberately fetches bars and computes the ATR itself instead of routing
+   * through `getIndicator`, because `getIndicator` hardcodes its own
+   * timeframe and would silently pin ATR to 1h whatever `atr_timeframe`
+   * says — see the comment at that call site. A stub returning a number
+   * would let that regression back in quietly; one that throws fails the
+   * suite the moment `decide` starts using it.
+   */
+  async getIndicator(): Promise<IndicatorValue> {
+    throw new Error('FixtureMarketData.getIndicator: decide must compute ATR from getBars');
+  }
+
+  async getSpreadEstimate(): Promise<number | null> {
+    throw new Error('FixtureMarketData.getSpreadEstimate: not part of the Trader path');
+  }
+
+  async getADV(): Promise<number> {
+    throw new Error('FixtureMarketData.getADV: not part of the Trader path');
   }
 }
 

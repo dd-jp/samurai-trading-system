@@ -44,9 +44,14 @@ export interface Scheduler {
  * Canonical shape lives in `shared/types.ts` (code-review 2026-08-01, M6);
  * re-exported here so orchestrator-internal imports keep working.
  */
-import type { Logger } from '../shared/index.js';
+import type { LogEntry, Logger } from '../shared/index.js';
 
-export type { Logger };
+// `LogEntry` travels with `Logger`, not separately: it is the argument type of
+// `Logger.log`, so anything building a fake logger against this module needs
+// both. Five call sites were already importing it from here on that
+// assumption and silently getting nothing, because until `tsconfig.test.json`
+// existed no compiler read them.
+export type { LogEntry, Logger };
 
 /** shared_store.audit_log writer (#95). */
 export interface AuditLog {
