@@ -106,6 +106,7 @@ export function buildDebatePersonas(
       const response = await runBullPersona(llmClient, {
         trace_id,
         analyst_views: context.views,
+        signal: context.signal,
       });
       lastBull = response;
       return { persona: 'bull', round: context.round, argument: response.rationale };
@@ -117,6 +118,7 @@ export function buildDebatePersonas(
       const response = await runBearPersona(llmClient, {
         trace_id,
         analyst_views: context.views,
+        signal: context.signal,
       });
       lastBear = response;
       return { persona: 'bear', round: context.round, argument: response.rationale };
@@ -136,6 +138,7 @@ export function buildDebatePersonas(
         analyst_views: context.views,
         bullResponse: lastBull,
         bearResponse: lastBear,
+        signal: context.signal,
       });
 
       const stances: RoundStance[] = context.views.map((view) => ({
@@ -152,7 +155,7 @@ export function buildDebatePersonas(
 
       const isFinalRound = response.converged || context.round === MAX_ROUNDS;
       const disagreement = isFinalRound
-        ? await detectDisagreements(context.views, llmClient)
+        ? await detectDisagreements(context.views, llmClient, context.signal)
         : { summary: '', conflicts: [], method: 'directional_fallback' as const };
 
       const confidence = computeConvictionScore(context.views, accumulatedStances);

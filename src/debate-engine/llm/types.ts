@@ -54,6 +54,27 @@ export interface LlmRequest<T> {
   prompt: string;
   context: LlmRequestContext;
   parseResponse: (rawText: string) => { valid: true; data: T } | { valid: false; reason: string };
+  /**
+   * Cancels this call (#347). When it aborts, an implementation that supports
+   * cancellation must stop the in-flight request and reject with
+   * `LlmCancelledError` — not merely stop waiting, which is what
+   * `Promise.race` alone does and which keeps paying for the answer.
+   *
+   * OPTIONAL, and on the request rather than as a second `complete` parameter,
+   * deliberately. `LlmClient` has three implementations in-repo
+   * (`AnthropicLlmClient`, `MockLlmClient`, `ConstantResponseLlmClient`) plus
+   * inline test doubles; a required field would break every construction site
+   * of `LlmRequest` in the suite for a capability only the HTTP client can
+   * actually honour. An implementation that ignores the signal is degraded
+   * (it finishes a call nobody reads) but not incorrect — the caller's
+   * `AbortSignal` still terminates the caller, and the round loop still
+   * refuses to issue the NEXT call (round-orchestrator.ts), so an unaware
+   * client costs at most the one request already in flight.
+   *
+   * Not part of `context`: `AnthropicLlmClient` serializes `context` into the
+   * prompt, and an `AbortSignal` is transport state, not prompt content.
+   */
+  signal?: AbortSignal | undefined;
 }
 
 export interface LlmResponse<T> {

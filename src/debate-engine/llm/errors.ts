@@ -50,8 +50,32 @@ export class LlmProviderError extends Error {
   }
 }
 
+/**
+ * The caller cancelled the call via `LlmRequest.signal` (#347) — the debate's
+ * latency budget fired and the in-flight request was aborted.
+ *
+ * Its own class rather than an `LlmProviderError`, for two reasons that both
+ * bite over a 14-day unattended soak (#238):
+ *
+ *  1. A cancellation is NOT a fault. Folding it into `LlmProviderError` would
+ *     make a deliberate act indistinguishable from a real provider failure in
+ *     logs, and an operator who sees one per timed-out tick learns to ignore
+ *     the class — training away the signal that a genuine LLM outage sends.
+ *  2. It must never be retried. `isRetryable` (anthropic-client.ts) covers
+ *     only timeout/rate-limit/malformed, so a distinct class is excluded by
+ *     construction: retrying a call the caller just cancelled would spend
+ *     exactly the money the cancellation exists to save.
+ */
+export class LlmCancelledError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LlmCancelledError';
+  }
+}
+
 export type LlmError =
   | LlmTimeoutError
   | LlmRateLimitError
   | LlmMalformedResponseError
-  | LlmProviderError;
+  | LlmProviderError
+  | LlmCancelledError;

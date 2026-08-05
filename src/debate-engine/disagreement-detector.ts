@@ -142,6 +142,18 @@ function directionalFallback(views: AnalystView[]): DisagreementAnalysis {
 export async function detectDisagreements(
   views: AnalystView[],
   llmClient: LlmClient,
+  /**
+   * Cancels the semantic-detection call (#347). This is a billed LLM call
+   * inside the debate, so the latency budget has to be able to reach it too.
+   *
+   * Note the interaction with this function's never-throws contract: a
+   * cancelled call lands in the same `catch` as any other failure and returns
+   * the directional fallback. That is correct — the caller is being torn down
+   * and will discard the value — and it is why the round loop
+   * (round-orchestrator.ts) checks the signal ITSELF rather than relying on
+   * this function to propagate the cancellation.
+   */
+  signal?: AbortSignal,
 ): Promise<DisagreementAnalysis> {
   if (views.length < 2) {
     return directionalFallback(views);
@@ -152,6 +164,7 @@ export async function detectDisagreements(
       prompt: PROMPT,
       context: { analyst_views: views },
       parseResponse: parseDisagreementResponse,
+      signal,
     });
 
     return {

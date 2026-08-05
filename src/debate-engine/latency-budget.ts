@@ -53,16 +53,55 @@ const LOW_CONFIDENCE_FALLBACK = {
 } as const;
 
 /**
+ * Reason handed to the debate's `AbortSignal` when the budget fires. Carries
+ * the numbers so anything that surfaces it (a log line, a rethrown error)
+ * says WHY the call stopped rather than a bare "aborted".
+ */
+export class DebateBudgetExceededError extends Error {
+  readonly budget_ms: number;
+  readonly elapsed_ms: number;
+
+  constructor(budget_ms: number, elapsed_ms: number) {
+    super(`debate cancelled: latency budget of ${budget_ms}ms exceeded after ${elapsed_ms}ms`);
+    this.name = 'DebateBudgetExceededError';
+    this.budget_ms = budget_ms;
+    this.elapsed_ms = elapsed_ms;
+  }
+}
+
+/**
  * Races `produceResult` against the asset class's hard budget. On timeout,
  * builds a `DebateResult` from `getCurrentState()` (or the low-confidence
  * fallback if no partial state exists), flags `converged: false`, attaches
  * `timed_out` metadata, and logs the event via `logger.logTimeout`.
+ *
+ * CANCELLATION (#347). `Promise.race` stops the CALLER waiting; it does not
+ * stop the debate. Before this ticket the losing `produceResult()` chain ran
+ * to completion — up to six more bull/bear/mediator LLM calls, each issued,
+ * awaited and BILLED, whose answers were then discarded, while holding HTTP
+ * connections and provider rate-limit budget into the next tick. So the budget
+ * now hands the debate an `AbortSignal` and aborts it when the timer fires.
+ *
+ * WHAT IS RECORDED, and why: exactly what was recorded before — whatever
+ * `getCurrentState()` returns, read AFTER the abort. Cancelling changes what
+ * the debate does NEXT, never what it already produced. A round that completed
+ * before the budget fired is in the partial state and is used; the round in
+ * flight at that instant has no assessment to record (its persona calls never
+ * returned), so there is nothing to discard or keep — the choice does not
+ * arise. That keeps the caller-visible contract identical to before: partial
+ * synthesis when one exists, low-confidence fallback when none does.
  */
 export async function enforceLatencyBudget(params: {
   assetClass: AssetClass;
   trace_id: string;
   debate_id: string;
-  produceResult: () => Promise<DebateResult>;
+  /**
+   * Receives the debate's cancellation signal. Existing zero-argument callers
+   * still typecheck (TypeScript allows a function that ignores parameters) —
+   * they simply keep the old abandon-on-timeout behaviour, which is why the
+   * production caller must thread it into `runDebate`.
+   */
+  produceResult: (signal: AbortSignal) => Promise<DebateResult>;
   getCurrentState: () => PartialDebateState | undefined;
   logger: DebateLogger;
 }): Promise<DebateResult> {
@@ -70,21 +109,46 @@ export async function enforceLatencyBudget(params: {
   const budget_ms = LATENCY_BUDGET_MS[assetClass];
   const started_at = Date.now();
 
-  const result = await Promise.race([
-    produceResult().then((result): { status: 'completed'; result: DebateResult } => ({
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const debate = produceResult(controller.signal).then(
+    (result): { status: 'completed'; result: DebateResult } => ({
       status: 'completed',
       result,
-    })),
+    }),
+  );
+
+  // A cancelled debate REJECTS, and it rejects after this function has already
+  // returned its fallback — so nothing is awaiting it. Attaching this handler
+  // is what stops a deliberate cancellation from surfacing as an unhandled
+  // rejection (fatal under `--unhandled-rejections=strict`, and noise in the
+  // soak log either way). It does not swallow a pre-timeout failure: the race
+  // below still sees, and still propagates, a rejection that arrives first.
+  debate.catch(() => {});
+
+  const result = await Promise.race([
+    debate,
     new Promise<{ status: 'timed_out' }>((resolve) => {
-      setTimeout(() => resolve({ status: 'timed_out' }), budget_ms);
+      timer = setTimeout(() => resolve({ status: 'timed_out' }), budget_ms);
     }),
   ]);
+
+  // Cleared on BOTH paths. The debate winning the race used to leave the
+  // budget timer pending until it fired for nothing — one leaked timer per
+  // tick, every tick, for the length of the soak.
+  clearTimeout(timer);
 
   if (result.status === 'completed') {
     return result.result;
   }
 
   const elapsed_ms = Date.now() - started_at;
+
+  // Aborted BEFORE `getCurrentState()` and before any logging: the first thing
+  // that must happen once the budget is blown is that the spending stops.
+  controller.abort(new DebateBudgetExceededError(budget_ms, elapsed_ms));
+
   const partial = getCurrentState();
 
   logger.logTimeout({
