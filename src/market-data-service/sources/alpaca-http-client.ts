@@ -340,7 +340,11 @@ export interface AlpacaHttpDataClientOptions {
 /** Real HTTP market-data `AlpacaClient` against Alpaca's Market Data API v2. */
 export class AlpacaHttpDataClient implements AlpacaClient {
   private readonly assetClass: 'crypto' | 'stocks';
-  private readonly feed: AlpacaDataFeed;
+  /**
+   * Resolved for a STOCKS client only, and `undefined` for crypto — see the
+   * constructor for why an unused env var must not be able to fail a boot.
+   */
+  private readonly feed: AlpacaDataFeed | undefined;
   private readonly apiKey: string;
   private readonly apiSecret: string;
   private readonly baseUrl: string;
@@ -363,14 +367,48 @@ export class AlpacaHttpDataClient implements AlpacaClient {
       );
     }
     this.assetClass = options.assetClass;
-    // Resolved at construction, not per request: an unrecognised env value must
-    // fail the process at wiring time rather than on the first equity tick.
-    this.feed = options.feed ?? resolveAlpacaDataFeed(process.env[ALPACA_DATA_FEED_ENV_VAR]);
+    // Resolved at construction, not per request: an unrecognised value must
+    // fail at wiring time rather than on the first equity tick, and a mid-run
+    // environment edit must not change the tape underneath a running process.
+    //
+    // Resolved for STOCKS ONLY, which keeps the field honest against its own
+    // "Ignored for crypto" contract. A crypto client never sends `feed` — the
+    // crypto endpoints take no such parameter — so reading the variable here
+    // would let a typo'd `ALPACA_DATA_FEED` kill a crypto-only process over a
+    // value it would never use.
+    //
+    // This does NOT weaken the fail-fast posture, because the failure moves to
+    // the client that would actually use the value rather than disappearing:
+    // `resolveAlpacaDataFeed` accepts only `iex`/`sip`, so a malformed value
+    // can never become a *wrong feed* — it can only throw. The day equities
+    // enter the universe, `buildAlpacaDataSource` constructs a stocks client
+    // (both of them, for a mixed universe) and that constructor throws at boot,
+    // naming the variable. The window in which a typo goes unnoticed is exactly
+    // the window in which it is inert.
+    this.feed =
+      options.assetClass === 'stocks'
+        ? (options.feed ?? resolveAlpacaDataFeed(process.env[ALPACA_DATA_FEED_ENV_VAR]))
+        : undefined;
     this.apiKey = apiKey;
     this.apiSecret = apiSecret;
     this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.retry = options.retry ?? DEFAULT_RETRY_CONFIG;
+  }
+
+  /**
+   * The feed to send on an equity request. Non-null by construction on every
+   * path that calls this — the constructor resolves it whenever
+   * `assetClass === 'stocks'`, and only the stocks branches read it.
+   *
+   * The fallback is deliberately a VALUE and not an omission: dropping the
+   * parameter is what produces the 403 this option exists to prevent
+   * (`AlpacaDataFeed`), so a future refactor that reached here from an
+   * unexpected path should still send a working feed rather than silently
+   * restore the outage.
+   */
+  private get equityFeed(): AlpacaDataFeed {
+    return this.feed ?? DEFAULT_ALPACA_DATA_FEED;
   }
 
   private headers(): Record<string, string> {
@@ -473,7 +511,7 @@ export class AlpacaHttpDataClient implements AlpacaClient {
         // every equity bars request 403s, because `end` is always `clock.now()`
         // and a Basic subscription cannot read SIP data under 15 minutes old.
         // See `AlpacaDataFeed` for the live status codes.
-        params.set('feed', this.feed);
+        params.set('feed', this.equityFeed);
         const body = (await this.requestJson(
           `${this.baseUrl}/${ALPACA_STOCKS_API_VERSION}/stocks/${encodeURIComponent(
             symbol,
@@ -577,7 +615,7 @@ export class AlpacaHttpDataClient implements AlpacaClient {
     // Basic subscription: the mark and the bars an indicator is computed from
     // must come from the same tape, or an ATR-derived stop is priced against a
     // venue the mark never saw.
-    const quoteParams = new URLSearchParams({ feed: this.feed });
+    const quoteParams = new URLSearchParams({ feed: this.equityFeed });
     const body = (await this.requestJson(
       `${this.baseUrl}/${ALPACA_STOCKS_API_VERSION}/stocks/${encodeURIComponent(
         symbol,

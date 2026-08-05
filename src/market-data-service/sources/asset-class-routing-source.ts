@@ -55,6 +55,33 @@ export class AssetClassRoutingDataSource implements DataSource {
   readonly #assetClassOf: ReadonlyMap<string, AssetClass>;
 
   constructor(config: AssetClassRoutingSourceConfig) {
+    // Both sources, checked at CONSTRUCTION rather than on first use.
+    //
+    // The type says `Record<AssetClass, DataSource>`, so a TypeScript caller
+    // cannot omit one — but the composition root builds this object from a
+    // universe at runtime, and the interesting callers are exactly the ones
+    // assembling it dynamically. Without this, a missing source surfaces as
+    // `undefined.fetchBars(...)` — an opaque `TypeError` thrown mid-tick, from
+    // inside a stage, on whichever instrument happened to route there first.
+    //
+    // That is the same class of defect as a misrouted asset class: a wiring
+    // error that reaches an operator as a stage failure rather than as a
+    // startup failure, which is how #358 stayed invisible for a whole run. A
+    // constructor guard turns it into a boot-time message naming the missing
+    // class, matching how `startFromEnvironment` already refuses missing seams.
+    const missing = (['crypto', 'stocks'] as const).filter(
+      (assetClass) => config.sources[assetClass] === undefined,
+    );
+    if (missing.length > 0) {
+      throw new Error(
+        `AssetClassRoutingDataSource: no data source supplied for ${missing.join(' and ')}. ` +
+          'This class exists only to serve a universe spanning BOTH asset classes, and it routes ' +
+          'per instrument — so a missing source is not a narrower router, it is an instrument ' +
+          'that will throw mid-tick when something first asks for its bars. Supply both, or use ' +
+          'a single AlpacaDataSource directly if the universe really holds one asset class.',
+      );
+    }
+
     this.#sources = config.sources;
     this.#assetClassOf = config.assetClassOf;
   }

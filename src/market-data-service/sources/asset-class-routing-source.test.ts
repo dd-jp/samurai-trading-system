@@ -64,6 +64,77 @@ describe('AssetClassRoutingDataSource', () => {
     expect(stocks.fetchMark).not.toHaveBeenCalled();
   });
 
+  describe('constructor guard on the source pair', () => {
+    // A missing source is the same class of wiring error as a misrouted one:
+    // it reaches an operator as an opaque `TypeError` from inside a stage,
+    // mid-tick, rather than as a startup failure. #358 is the precedent for
+    // why that distinction matters.
+    const assetClassOf = new Map<string, AssetClass>([['AAPL', 'stocks']]);
+
+    it('refuses construction when the stocks source is missing', () => {
+      expect(
+        () =>
+          new AssetClassRoutingDataSource({
+            sources: { crypto: makeSource('crypto') } as unknown as {
+              crypto: DataSource;
+              stocks: DataSource;
+            },
+            assetClassOf,
+          }),
+      ).toThrow(/stocks/);
+    });
+
+    it('refuses construction when the crypto source is missing', () => {
+      expect(
+        () =>
+          new AssetClassRoutingDataSource({
+            sources: { stocks: makeSource('stocks') } as unknown as {
+              crypto: DataSource;
+              stocks: DataSource;
+            },
+            assetClassOf,
+          }),
+      ).toThrow(/crypto/);
+    });
+
+    it('names both when neither is supplied', () => {
+      expect(
+        () =>
+          new AssetClassRoutingDataSource({
+            sources: {} as unknown as { crypto: DataSource; stocks: DataSource },
+            assetClassOf,
+          }),
+      ).toThrow(/crypto and stocks/);
+    });
+
+    it('fails at construction, not on the first fetch', async () => {
+      // The point of the guard: without it the object constructs happily and
+      // the defect surfaces later, from inside a stage, on whichever
+      // instrument routed there first.
+      let constructed: AssetClassRoutingDataSource | undefined;
+      expect(() => {
+        constructed = new AssetClassRoutingDataSource({
+          sources: { crypto: makeSource('crypto') } as unknown as {
+            crypto: DataSource;
+            stocks: DataSource;
+          },
+          assetClassOf,
+        });
+      }).toThrow();
+      expect(constructed).toBeUndefined();
+    });
+
+    it('constructs normally when both are supplied', () => {
+      expect(
+        () =>
+          new AssetClassRoutingDataSource({
+            sources: { crypto: makeSource('crypto'), stocks: makeSource('stocks') },
+            assetClassOf,
+          }),
+      ).not.toThrow();
+    });
+  });
+
   it('throws on an instrument with no configured asset class rather than guessing', async () => {
     const router = makeRouter({ crypto: makeSource('crypto'), stocks: makeSource('stocks') });
 
