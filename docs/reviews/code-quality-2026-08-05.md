@@ -20,7 +20,8 @@ Measured, not assumed:
 | --- | --- |
 | `biome check .` | 351 files, clean |
 | `tsc -p tsconfig.json --noEmit` | clean |
-| `vitest run` | 1,924 passed, 1 skipped, **9.3s** |
+| `tsc -p tsconfig.test.json` | **did not exist** — see H2; now clean |
+| `vitest run` | 1,924 passed, 1 skipped, **9.3s** (1,926 after the H1 tests) |
 | `: any` / `as any` (non-test) | **5** occurrences |
 | `tsconfig` strictness | `strict` + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes` + `noImplicitOverride` |
 
@@ -28,9 +29,20 @@ This is a well-kept codebase. Comment density is unusually high and the comments
 
 ---
 
+## Status
+
+**H1 and H2 are fixed** (commits `9caaaf6`, `683a20c` and the four between them). Everything else below is still open. What the two fixes actually turned up is recorded inline under each finding — in both cases it was worse than this report first predicted.
+
+---
+
 ## High — fix before more live capital
 
-### H1. Wire JSON is cast, never validated
+### H1. Wire JSON is cast, never validated — GUARD LANDED, VALIDATION STILL OPEN
+
+> **Done (`9caaaf6`):** the two `Number.isFinite` guards in `decide.ts`, plus tests that fail without them. The `NaN`-priced-intent path described below is closed.
+>
+> **Still open:** the wire-level validation. `alpaca-http-client.ts`, `http-polygon-client.ts` and `anthropic-http-client.ts` still cast unvalidated JSON — Trader now refuses the bad value instead of trading on it, but every other consumer of those clients is still unguarded.
+
 
 `src/market-data-service/sources/alpaca-http-client.ts:515,531,615,635`
 `src/cost-model-backtest/http-polygon-client.ts:128`
@@ -78,9 +90,12 @@ function parseRawBar(raw: unknown, context: string): RawAlpacaBar {
 
 Throwing an existing `*ProviderError` means the existing retry/classification path already handles it — no new plumbing. Do the same for `RawAlpacaQuote`, `PolygonAggregatesResponse`, and the Anthropic response body. Effort: ~1 day including tests. No dependency needed; a schema library (zod/valibot) would work but is not required for four shapes.
 
-**Cheap belt-and-braces regardless:** add `if (!Number.isFinite(entry)) return null;` next to the existing `atr === null` bail in `decide.ts`, mirroring the guard that already protects ATR. Ten minutes, and it closes the specific path above even before the wire validation lands.
+**Belt-and-braces — done in `9caaaf6`.** Two guards, not one: `!Number.isFinite(entry)` at the quote inlet so a skip names the bad input, and `!Number.isFinite(size)` before the min-notional check, since `size` is the choke point every numeric input funnels through — including `equity`, which arrives from an account read this module also does not validate. Both tests fail without the guards.
 
-### H2. The test suite is never type-checked
+### H2. The test suite is never type-checked — FIXED (`683a20c`)
+
+> **Done.** `tsconfig.test.json` + `yarn typecheck`, and the full backlog cleared. The prediction below was that a first run would surface a backlog; it surfaced **126 real errors across 37 files**, and four of them were tests that had stopped testing anything. See "What H2 found" after the fix description.
+
 
 `tsconfig.json:22`
 
@@ -103,7 +118,28 @@ So **40,023 lines of test code — 53% of the repo — have zero type coverage.*
   "include": ["src/**/*.ts"] }
 ```
 
-and `"typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json"`. Expect a first-run backlog of errors — that backlog *is* the finding. Effort: 30 min to wire, unknown to clear; do it now so it never gets worse.
+and `"typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json"`.
+
+**Two implementation notes, both learned the hard way.**
+
+`extends` inherits the base `exclude`, and `exclude` filters whatever `include` matched — so widening `include` alone leaves `**/*.test.ts` excluded and the config silently checks **nothing**. The first version of this file reported "0 errors" and was checking zero test files. Both keys must be set. Verify by injecting `const x: number = 'nope'` into a `.test.ts` and confirming it fails; do that again after any later edit to the config.
+
+`vitest.config.ts` sets `globals: true`, so the config needs `"types": ["node", "vitest/globals"]` or every `describe`/`it`/`expect` is unresolved. The build config stays on `["node"]` — shipped code must not see them.
+
+`noUncheckedIndexedAccess` is relaxed **in the test config only**. Measured: 193 errors with it on, 66 from the rule itself across 15 files, none a real defect — all `arr[0]` after an explicit length assertion. Each would need a `biome-ignore lint/style/noNonNullAssertion` line under this repo's style (~130 lines of noise), and the failure mode differs: silent `undefined` propagation in production, a loud throw in a test. Production keeps the rule.
+
+#### What H2 found
+
+126 errors across 37 files. Most were doubles that had fallen behind their ports, but four were tests that had quietly stopped testing their subject:
+
+- **The volatility breaker was inert in the composed-tick integration test.** `production.test.ts` stubbed `VolatilityReading` as `{ atr_percentile: 0.5 }` behind an `as VolatilityReading` cast. The type is `{ crypto, stocks }`, so both real fields were `undefined`, every comparison against the trip threshold was false, and the breaker has never actually evaluated in that chain. Correcting the shape made the test fail — because the breaker finally ran.
+- **A vacuous assertion in `rate-limit-wiring.test.ts`:** `expect(config.alpacaBrokerClient?.listOrders).not.toHaveBeenCalled()`. `AlpacaClient` has no `listOrders`, so this read `undefined` off the stub and passed whatever the wiring did.
+- **`alpaca-adapter.test.ts` had one construction missing `unpricedFillAlerts`** — the seam whose own doc comment says a construction that forgets it "cannot exist".
+- **`snapshot.test.ts`'s spend fixture never grew `per_debate`** (added by #326, `cbea81f`), so the dashboard snapshot tests asserted against a window shape production had stopped producing.
+
+Three fixes went into production code rather than tests, because the port was the problem: `buildRiskStep` now takes `CiiScoreSource` (`Pick<CiiConsumer, 'getScores'>`) instead of the concrete class, whose private `cache`/`inFlight`/`provider`/`clock` made a structural double impossible; `AlpacaBrokerAdapter.getOrder` and `AlwaysOpenCalendar.isOpen`/`isTradingDay` now declare the parameters their ports pass.
+
+**CI does not run it.** `.github/workflows/ai-review.yml` is the only workflow and it runs a Python review script. `yarn typecheck` is local-only until that changes — worth a CI step, or the backlog rebuilds.
 
 ---
 
@@ -328,9 +364,9 @@ Recorded so nobody re-opens these.
 
 | # | Item | Effort | Why this order |
 | --- | --- | --- | --- |
-| 0 | **H1 quick guard** — `Number.isFinite(entry)` bail in `decide.ts` | 10 min | Closes the verified `NaN`-price path today |
-| 1 | **H2** typecheck the tests | 30 min + backlog | Every later refactor is safer once the compiler sees the tests |
-| 2 | **H1** validate wire JSON | ~1 day | Only finding that can put a wrong number into an order |
+| ~~0~~ | ~~**H1 quick guard**~~ | — | **Done** `9caaaf6` |
+| ~~1~~ | ~~**H2** typecheck the tests~~ | — | **Done** `683a20c` — 126 errors cleared |
+| 2 | **H1** validate wire JSON | ~1 day | Still the only finding that can put a wrong number into an order, for every consumer except Trader |
 | 3 | **M2** shared `ClosedTradeRow` | 1 hr | Provably identical; zero risk |
 | 4 | **M4** small dupes | 1 hr | Trivial |
 | 5 | **P1** `ingest-fills` bucketing | 30 min | Quadratic, isolated |
@@ -342,4 +378,6 @@ Recorded so nobody re-opens these.
 | 11 | **L1** split `production.ts` | ~half day | Highest risk file; own branch, own PR |
 | — | **P2** reconcile concurrency | 2 hrs | Verify venue pacing first; may be correct as-is |
 
-Total for items 1–10: roughly three focused days, minus whatever backlog H2 uncovers.
+Items 0 and 1 are done. The rest is roughly three focused days.
+
+**One item M3 should absorb:** the H2 pass added two copies of a five-line `resolvedUnexpectedly` helper (`orchestrator/index.test.ts`, `orchestrator/startup.test.ts`) because there is nowhere shared to put it. That is the same gap M3 describes — when `src/shared/testing/` exists, both move there.
