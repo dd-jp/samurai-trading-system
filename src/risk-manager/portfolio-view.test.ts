@@ -62,7 +62,11 @@ function makeInput(overrides: Partial<PortfolioAccountingInput> = {}): Portfolio
     asOf,
     cash: 100_000,
     peak_equity: 100_000,
-    daily_pnl_pct: 0,
+    daily_basis: {
+      crypto: { known: true, open_equity: 100_000, realized_pnl: 0 },
+      stocks: { known: true, open_equity: 100_000, realized_pnl: 0 },
+      portfolio: { known: true, open_equity: 100_000, realized_pnl: 0 },
+    },
     consecutive_losses: 0,
     ...overrides,
   };
@@ -214,12 +218,41 @@ describe('computePortfolioView — equity and drawdown', () => {
 });
 
 describe('computePortfolioView — pass-through fields', () => {
-  it('passes daily_pnl_pct and consecutive_losses through unchanged', async () => {
-    const input = makeInput({ daily_pnl_pct: -0.02, consecutive_losses: 3 });
+  it('divides realized PnL by session-open equity, per class, and passes losses through', async () => {
+    const input = makeInput({
+      daily_basis: {
+        crypto: { known: true, open_equity: 100_000, realized_pnl: -2_000 },
+        stocks: { known: true, open_equity: 50_000, realized_pnl: 500 },
+        portfolio: { known: true, open_equity: 100_000, realized_pnl: -1_500 },
+      },
+      consecutive_losses: 3,
+    });
 
     const view = await computePortfolioView(input);
 
-    expect(view.daily_pnl_pct).toBe(-0.02);
+    // No open positions in this fixture, so the unrealized term is 0 and each
+    // figure is realized/open_equity against its OWN class's denominator.
+    expect(view.daily_pnl.crypto).toEqual({ known: true, pct: -0.02 });
+    expect(view.daily_pnl.stocks).toEqual({ known: true, pct: 0.01 });
+    expect(view.daily_pnl.portfolio).toEqual({ known: true, pct: -0.015 });
     expect(view.consecutive_losses).toBe(3);
+  });
+
+  it('carries an unknown basis through as unknown, never as a zero percentage', async () => {
+    const input = makeInput({
+      daily_basis: {
+        crypto: { known: false, reason: 'no snapshot for this session' },
+        stocks: { known: true, open_equity: 50_000, realized_pnl: 0 },
+        portfolio: { known: false, reason: 'no snapshot for this session' },
+      },
+    });
+
+    const view = await computePortfolioView(input);
+
+    // The whole point of the union: an absent denominator must not surface as
+    // `pct: 0`, which the daily-loss breaker would read as a flat day.
+    expect(view.daily_pnl.crypto.known).toBe(false);
+    expect(view.daily_pnl.portfolio.known).toBe(false);
+    expect(view.daily_pnl.stocks).toEqual({ known: true, pct: 0 });
   });
 });

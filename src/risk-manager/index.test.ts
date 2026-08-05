@@ -53,7 +53,11 @@ function makePortfolio(overrides: Partial<PortfolioView> = {}): PortfolioView {
     exposure_by_instrument: {},
     exposure_by_class: { crypto: 0, stocks: 0 },
     gross_exposure: 0,
-    daily_pnl_pct: 0,
+    daily_pnl: {
+      crypto: { known: true, pct: 0 },
+      stocks: { known: true, pct: 0 },
+      portfolio: { known: true, pct: 0 },
+    },
     consecutive_losses: 0,
     ...overrides,
   };

@@ -143,6 +143,7 @@ import type {
 import {
   AlpacaDataSource,
   AlpacaHttpDataClient,
+  AlwaysOpenCalendar,
   MarketDataServiceImpl,
   SqliteMarketDataStore,
   type TradingCalendar,
@@ -206,6 +207,7 @@ import { withOnTradeClose } from './production/on-trade-close-hookup.js';
 import { MarketDataVolatilityReadingProvider } from './production/volatility-reading-provider.js';
 import { UniverseScheduler } from './scheduler.js';
 import { SqliteAccountStateStore } from './sqlite-account-state-store.js';
+import { SqliteSessionEquityStore } from './sqlite-session-equity-store.js';
 import { runTickPlan } from './tick-loop.js';
 import { SequentialTickRunner } from './tick-runner.js';
 import type { Logger, Scheduler, TickRunner, TickSteps, UniverseInstrument } from './types.js';
@@ -796,9 +798,18 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       new AlpacaAccountStateProvider({
         client: brokerClient,
         store: new SqliteAccountStateStore(config.db),
+        // Per-class session-open equity snapshots (#332) — the local
+        // replacement for Alpaca's blended `last_equity` (GAP-8).
+        sessionEquity: new SqliteSessionEquityStore(config.db),
         // The existing ClosedTrade reader, per spec story 25 — no new
         // realized-PnL ledger is built when one already exists.
         closedTrades: new SqliteClosedTradeStore(config.db),
+        // Two calendars: crypto resets at 00:00 UTC, stocks at the prior 16:00
+        // ET close. `tradingCalendar` is the equity one (it gates market-hours
+        // scheduling), so only it is overridable here — a crypto session has no
+        // holidays or half-days for a config to express.
+        calendars: { crypto: new AlwaysOpenCalendar(), stocks: tradingCalendar },
+        mode: config.mode,
         logger: config.logger ?? new JsonLogger(),
       }),
     // #277's provider, wired by default now that AccountStateProvider (#276)

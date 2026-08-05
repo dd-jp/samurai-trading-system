@@ -93,14 +93,10 @@ export interface AlpacaAccount {
   cash: string;
   /** Total account value including open positions — the high-water mark's input. */
   equity: string;
-  /**
-   * Equity at the previous trading day's close.
-   *
-   * NOTE (cross-verify 2026-07-31, GAP-8): whether this boundary is scoped to
-   * the US stock trading day is UNVERIFIED against a live account. For a 24/7
-   * crypto instrument that boundary may not match risk-manager-spec.md's
-   * stated "UTC day" semantics for `daily_pnl_pct`. Open decision — see
-   * `AlpacaAccountStateProvider`.
-   */
-  last_equity: string;
+  // `last_equity` is deliberately ABSENT (#332). Alpaca still sends it; nothing
+  // here reads it. It carries one reset boundary for a portfolio that has two,
+  // and per #260 that boundary was never verified against a live account — so
+  // the daily figure is now derived locally from `session_equity` snapshots
+  // instead (GAP-8, resolved). Leaving the field declared would invite a future
+  // caller to reach for it again; omitting it makes that a compile error.
 }

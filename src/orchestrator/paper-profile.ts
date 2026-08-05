@@ -347,10 +347,11 @@ function buildProfileConfigs(): Pick<
      * stateless, so it auto-resets the moment the metric recovers
      * (risk-manager-spec.md "soft breakers auto-reset").
      *
-     * A FRACTION, not a percentage: `PortfolioView.daily_pnl_pct` is
-     * `(equity - last_equity) / last_equity` (production/account-state.ts),
-     * and the comparison is `daily_pnl_pct <= -daily_loss_pct`. A `5` here
-     * would mean 500% and never trip.
+     * A FRACTION, not a percentage: `PortfolioView.daily_pnl.portfolio.pct` is
+     * `(realized + unrealized) / session-open equity` since 00:00 UTC (#332 —
+     * orchestrator/sqlite-session-equity-store.ts, risk-manager/portfolio-view.ts),
+     * and the comparison is `pct <= -daily_loss_pct`. A `5` here would mean
+     * 500% and never trip.
      */
     daily_loss_pct: 0.05,
     /**
