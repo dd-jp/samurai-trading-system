@@ -313,5 +313,8 @@ function newTickContext(signal: Signal, clock: Clock): TickContext {
     trace_id: `${signal.asset}@${clock.now().toISOString()}`,
     logger: { log: () => {} },
     auditLog: { record: () => {} },
+    // See backtest.test.ts: inert current-tick store, the harness has no
+    // live tick to publish.
+    currentTickStore: { upsert: () => {}, delete: () => {}, get: () => undefined },
   };
 }

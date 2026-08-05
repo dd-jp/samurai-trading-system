@@ -69,7 +69,9 @@ function makeConfig(overrides: Partial<FeedbackConfig> = {}): FeedbackConfig {
  * leave `makeRevalidation()` in place and make those tests assert the
  * opposite of what they are named for.
  */
-type MetricsInputOverrides = { [K in keyof MetricsInput]?: MetricsInput[K] | undefined };
+type MetricsInputOverrides = Partial<MetricsInput> & {
+  revalidation?: MetricsInput['revalidation'] | undefined;
+};
 
 function makeInput(overrides: MetricsInputOverrides = {}): {
   input: MetricsInput;

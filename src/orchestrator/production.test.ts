@@ -91,6 +91,13 @@ function stubConfig(db: SqliteHandle, overrides: Partial<ProductionConfig> = {})
     legs: [],
   }));
 
+  // Cast on the way out, not on the literal: `exactOptionalPropertyTypes`
+  // makes `{ ...base, ...overrides }` unassignable to `StubConfig`, because
+  // `Partial<ProductionConfig>` permits a caller to pass an explicit
+  // `approvals: undefined` and erase a required field. No caller does, and
+  // typing `overrides` loosely enough to say so would defeat the point of the
+  // parameter. The fields below are still checked — the cast only covers the
+  // spread.
   return {
     db,
     clock: new SimulatedClock(START),
@@ -164,7 +171,7 @@ function stubConfig(db: SqliteHandle, overrides: Partial<ProductionConfig> = {})
     costConfig: {} as ProductionConfig['costConfig'],
     ciiConsumerConfig: { pollIntervalMs: 600_000 },
     ...overrides,
-  };
+  } as StubConfig;
 }
 
 /** A minimal but structurally complete `go` — enough for Execution to reach the broker. */
