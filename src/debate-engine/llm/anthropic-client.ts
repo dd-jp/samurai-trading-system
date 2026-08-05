@@ -255,12 +255,13 @@ export class AnthropicLlmClient implements LlmClient {
 
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
+        const expired = new LlmTimeoutError(`LLM call exceeded ${this.config.timeoutMs}ms`);
         // Abort first, reject second: the point of the ticket is that the
-        // request stops, not merely that the caller stops waiting.
-        timeoutController.abort(
-          new LlmTimeoutError(`LLM call exceeded ${this.config.timeoutMs}ms`),
-        );
-        reject(new LlmTimeoutError(`LLM call exceeded ${this.config.timeoutMs}ms`));
+        // request stops, not merely that the caller stops waiting. The same
+        // error object is the abort reason, so a wire client that surfaces
+        // `signal.reason` and this race report the identical failure.
+        timeoutController.abort(expired);
+        reject(expired);
       }, this.config.timeoutMs);
     });
 
@@ -282,12 +283,10 @@ export class AnthropicLlmClient implements LlmClient {
         throw classifyProviderError(error);
       });
 
-    // The losing side of the race now REJECTS (aborted) rather than hanging
-    // forever, and a rejection nobody is awaiting is an unhandled rejection —
-    // which Node can be configured to treat as fatal. Handled here so that
-    // cancelling a call can never take the process down with it.
-    call.catch(() => {});
-
+    // No `call.catch(() => {})` guard here, deliberately: the losing side now
+    // REJECTS (aborted) instead of hanging, but `Promise.race` attaches its
+    // own handlers to `call`, so that late rejection is handled-and-ignored,
+    // not unhandled. Same finding as `latency-budget.ts` — see the note there.
     try {
       return await Promise.race([call, timeout]);
     } catch (error) {
