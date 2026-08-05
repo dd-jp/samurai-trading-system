@@ -78,7 +78,7 @@ function makeConfig(overrides: Partial<VerdictConfig> = {}): VerdictConfig {
   return {
     automation_level: { crypto: 'manual', stocks: 'manual' },
     max_signal_age: { crypto: 5 * 60_000, stocks: 30 * 60_000 },
-    drift_tolerance: 1,
+    drift_tolerance_pct: { crypto: 0.01, stocks: 0.01 },
     human_timeout: 5 * 60_000,
     allow_extended_hours: false,
     flag_thresholds: { size_over: 10_000 },
@@ -183,6 +183,188 @@ describe('VerdictImpl.decide — drift gate', () => {
 
     expect(decision.status).toBe('no_go');
     expect(decision.no_go_reason).toBe('drift');
+  });
+
+  /**
+   * #381's core: `drift_tolerance` used to be an ABSOLUTE price distance, and
+   * the checked-in paper value was 500 — sized for a six-figure BTC-USD.
+   *
+   * These cases are written so that the old shape and the new one give
+   * OPPOSITE answers, rather than merely re-asserting the new one. Revert
+   * `verdict/index.ts` gate 2 to `drift > config.drift_tolerance` with 500 and
+   * the first case goes green-to-red: a $200 equity 25% away from its entry
+   * would have been executed on.
+   */
+  describe('per-asset-class fractional tolerance (#381)', () => {
+    /** The paper profile's own value, so this tests the shipped calibration. */
+    const PAPER_PCT = { crypto: 0.005, stocks: 0.005 };
+
+    it('fires on a $200 equity that the old absolute 500 could never have caught', async () => {
+      const verdict = new VerdictImpl();
+      const entry = 200;
+      const price = 250; // $50 away — a 25% move, and stale by any reading.
+
+      // The old shape, stated as an executable fact rather than a claim: 50 is
+      // nowhere near 500, so the absolute gate would have passed this through.
+      expect(Math.abs(price - entry)).toBeLessThan(500);
+
+      const input = makeInput({
+        risk_decision: makeRiskDecision({
+          order_intent: makeIntent({ instrument: 'AAPL', asset_class: 'stocks', entry }),
+        }),
+        marketData: makeMarketData(makeMark({ price })),
+        config: makeConfig({ drift_tolerance_pct: PAPER_PCT }),
+      });
+
+      const decision = await verdict.decide(input);
+
+      expect(decision.status).toBe('no_go');
+      expect(decision.no_go_reason).toBe('drift');
+    });
+
+    it("preserves BTC-USD's calibration: 0.5% of a six-figure entry still passes", async () => {
+      const verdict = new VerdictImpl();
+      const entry = 100_000;
+      // $400 of drift — inside the old absolute 500 AND inside 0.5% of entry,
+      // so the instrument that HAD a calibration keeps the same answer. This
+      // is the half of the change that must NOT move.
+      const input = makeInput({
+        risk_decision: makeRiskDecision({
+          order_intent: makeIntent({
+            instrument: 'BTC-USD',
+            asset_class: 'crypto',
+            entry,
+          }),
+        }),
+        marketData: makeMarketData(makeMark({ price: entry + 400 })),
+        config: makeConfig({ drift_tolerance_pct: PAPER_PCT }),
+      });
+
+      const decision = await verdict.decide(input);
+
+      expect(decision.status).toBe('go');
+    });
+
+    it('reads the fraction from the order asset class, not a single global number', async () => {
+      const verdict = new VerdictImpl();
+      // Same entry and same drift for both classes; only the dial differs. A
+      // gate that ignored `asset_class` would answer identically twice.
+      const config = makeConfig({ drift_tolerance_pct: { crypto: 0.5, stocks: 0.001 } });
+      const marketData = makeMarketData(makeMark({ price: 110 })); // 10% from entry 100
+
+      const stocks = await verdict.decide(
+        makeInput({
+          risk_decision: makeRiskDecision({
+            order_intent: makeIntent({ asset_class: 'stocks', entry: 100 }),
+          }),
+          marketData,
+          config,
+        }),
+      );
+      const crypto = await verdict.decide(
+        makeInput({
+          risk_decision: makeRiskDecision({
+            order_intent: makeIntent({
+              asset_class: 'crypto',
+              instrument: 'BTC-USD',
+              entry: 100,
+            }),
+          }),
+          marketData,
+          config,
+        }),
+      );
+
+      expect(stocks.no_go_reason).toBe('drift');
+      expect(crypto.status).toBe('go');
+    });
+
+    it('fails closed on a non-positive entry rather than computing a zero tolerance', async () => {
+      const verdict = new VerdictImpl();
+      // `entry * pct` is 0 here, which would reject everything — but a
+      // NEGATIVE entry would invert the comparison into a gate that passes on
+      // unbounded drift. Both are refused by the same explicit guard, so the
+      // safe answer does not depend on which side of zero the bad value is.
+      const input = makeInput({
+        risk_decision: makeRiskDecision({ order_intent: makeIntent({ entry: 0 }) }),
+        marketData: makeMarketData(makeMark({ price: 0 })), // zero drift
+        config: makeConfig({ drift_tolerance_pct: PAPER_PCT }),
+      });
+
+      const decision = await verdict.decide(input);
+
+      expect(decision.status).toBe('no_go');
+      expect(decision.no_go_reason).toBe('drift');
+    });
+  });
+});
+
+/**
+ * The staleness/market-open interaction the paper profile said to "re-check
+ * rather than assume" before widening the universe to equities (#381).
+ *
+ * The claim under test is not "stale equity orders are rejected" — everything
+ * rejects them. It is WHICH gate rejects them, because the two gates catch
+ * different situations and only one of them can catch the dangerous one.
+ */
+describe('VerdictImpl.decide — staleness vs market-open, for equities (#381)', () => {
+  it('rejects a stale overnight equity signal on STALENESS, not market_closed', async () => {
+    const verdict = new VerdictImpl();
+    // Decided in yesterday's session, evaluated against a shut market: both
+    // gates would fire, and gate 1 runs first, so this is the reason an
+    // operator reads in the soak log. Pinned so the ordering is a decision
+    // rather than a surprise.
+    const input = makeInput({
+      risk_decision: makeRiskDecision({
+        order_intent: makeIntent({
+          decision_timestamp: new Date('2026-07-14T19:59:00Z'),
+        }),
+      }),
+      tradingCalendar: makeTradingCalendar(false),
+    });
+
+    const decision = await verdict.decide(input);
+
+    expect(decision.status).toBe('no_go');
+    expect(decision.no_go_reason).toBe('staleness');
+  });
+
+  it('leaves market_closed to catch the case staleness cannot: a FRESH mark, shut session', async () => {
+    const verdict = new VerdictImpl();
+    // The tick that started at 15:59 ET and reached Verdict after the close.
+    // The mark is seconds old, so the staleness bound has nothing to say — and
+    // this is exactly the input that would otherwise be submitted into a
+    // closed market. `allow_extended_hours: false` is what makes the calendar
+    // authoritative here.
+    const input = makeInput({
+      risk_decision: makeRiskDecision({
+        order_intent: makeIntent({ decision_timestamp: new Date('2026-07-15T13:59:30Z') }),
+      }),
+      tradingCalendar: makeTradingCalendar(false),
+    });
+
+    const decision = await verdict.decide(input);
+
+    expect(decision.status).toBe('no_go');
+    expect(decision.no_go_reason).toBe('market_closed');
+  });
+
+  it('gives an equity signal far more headroom than one debate can consume', async () => {
+    const verdict = new VerdictImpl();
+    // `LATENCY_BUDGET_MS.stocks` bounds a debate at 60s and
+    // `decision_timestamp` is the quote's own `observed_at`, so the pipeline
+    // that produces the signal cannot approach a 15-minute bound. 10 minutes
+    // — an order of magnitude past that budget — still passes.
+    const input = makeInput({
+      config: makeConfig({ max_signal_age: { crypto: 5 * 60_000, stocks: 15 * 60_000 } }),
+      risk_decision: makeRiskDecision({
+        order_intent: makeIntent({ decision_timestamp: new Date('2026-07-15T13:50:00Z') }),
+      }),
+    });
+
+    const decision = await verdict.decide(input);
+
+    expect(decision.status).toBe('go');
   });
 });
 

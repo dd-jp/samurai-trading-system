@@ -98,10 +98,22 @@ export class VerdictImpl implements Verdict {
       return noGo('staleness', idempotencyKey, now);
     }
 
-    // Gate 2: drift — current price vs the bracket's entry.
+    // Gate 2: drift — current price vs the bracket's entry, as a FRACTION of
+    // that entry (#381). Absolute price distance cannot be set correctly for
+    // more than one instrument at a time; see `VerdictConfig.drift_tolerance_pct`.
+    //
+    // Fails closed on a non-positive entry: `entry * pct` would be zero or
+    // negative there, which would either reject everything or — worse, for a
+    // negative entry — invert the comparison into a gate that passes on
+    // unbounded drift. A bracket with no positive entry price is not a bracket
+    // this gate can reason about, so it is refused rather than waved through.
     const mark = await marketData.getMark(orderIntent.instrument, now);
+    if (!(orderIntent.entry > 0)) {
+      return noGo('drift', idempotencyKey, now);
+    }
     const drift = Math.abs(mark.price - orderIntent.entry);
-    if (drift > config.drift_tolerance) {
+    const driftTolerance = orderIntent.entry * config.drift_tolerance_pct[orderIntent.asset_class];
+    if (drift > driftTolerance) {
       return noGo('drift', idempotencyKey, now);
     }
 

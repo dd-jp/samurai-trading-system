@@ -282,7 +282,7 @@ describe('buildVerdictStep', () => {
   const VERDICT_CONFIG: VerdictConfig = {
     automation_level: { crypto: 'auto', stocks: 'auto' },
     max_signal_age: { crypto: 60_000, stocks: 60_000 },
-    drift_tolerance: 5,
+    drift_tolerance_pct: { crypto: 0.05, stocks: 0.05 },
     human_timeout: 60_000,
     allow_extended_hours: true,
     flag_thresholds: { size_over: 1000 },

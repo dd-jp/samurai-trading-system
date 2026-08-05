@@ -99,7 +99,8 @@ interface VerdictDecision {
 interface VerdictConfig {
   automation_level: Record<'crypto' | 'stocks', 'manual' | 'semi_auto' | 'auto'>;
   max_signal_age: Record<'crypto' | 'stocks', number>;   // staleness bound
-  drift_tolerance: number;                                // max price drift from entry
+  drift_tolerance_pct: Record<'crypto' | 'stocks', number>; // max price drift from entry,
+                                                          // as a FRACTION of entry (#381)
   human_timeout: number;                                  // → no-go on expiry
   flag_thresholds: {                                      // what "flagged" means in semi_auto
     size_over: number;
@@ -112,7 +113,7 @@ interface VerdictConfig {
 
 Ordered; first failure short-circuits to `no_go`:
 1. **Staleness** — signal age = `clock.now() − order.decision_timestamp`; if > `max_signal_age[asset_class]` → no-go (`staleness`). (`decision_timestamp` is a required field on `OrderIntent` — see cross-spec note below.)
-2. **Drift** — |current price − entry| > `drift_tolerance` → no-go (`drift`).
+2. **Drift** — |current price − entry| > `entry * drift_tolerance_pct[asset_class]` → no-go (`drift`). **Fractional, not an absolute price distance** ([#381](https://github.com/dd-jp/samurai-trading-system/issues/381)): an absolute bound cannot be set correctly for more than one instrument at once, and its failure is asymmetric — a value sized for a six-figure BTC-USD is a multiple of a $200 equity, so the gate can never fire and an arbitrarily stale bracket executes. Per-asset-class *absolute* values were rejected for the same reason one level down: SPY and a $20 name cannot share a dollar bound either. A non-positive `entry` fails closed (`drift`) rather than computing a zero or inverted tolerance.
 3. **Idempotency dedup** — existing order/fill for this key in the store → no-go (`dedup`).
 4. **Market-open** (stocks) — closed + no extended-hours → no-go (`market_closed`).
 5. **Fire-time kill-switch / breaker re-check** — tripped → no-go (`breaker`).

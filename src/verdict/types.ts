@@ -56,8 +56,42 @@ export interface VerdictConfig {
   automation_level: Record<'crypto' | 'stocks', 'manual' | 'semi_auto' | 'auto'>;
   /** Staleness bound: max signal age before no-go, per asset class. */
   max_signal_age: Record<'crypto' | 'stocks', number>;
-  /** Max tolerated |current price - entry| before no-go. */
-  drift_tolerance: number;
+  /**
+   * Drift bound as a **fraction of the bracket's own entry price**, per asset
+   * class: the gate fires when `|mark.price - entry| > entry * this`. So
+   * `0.005` is "half a percent away from where we decided to enter",
+   * whatever the instrument costs.
+   *
+   * ## Why fractional, and why this field was renamed (#381)
+   *
+   * This replaces `drift_tolerance`, which was an **absolute price distance**
+   * in the instrument's own currency. That shape cannot be set correctly for
+   * more than one instrument at a time, and the failure is asymmetric in the
+   * dangerous direction: a value sized for a six-figure BTC-USD (500, i.e.
+   * ~0.5%) is 250% of a $200 equity, so the gate could never fire and Verdict
+   * would execute on an arbitrarily stale bracket.
+   *
+   * Per-asset-class **absolute** values were the other candidate and were
+   * rejected: they only move the same bug one level down. A single absolute
+   * number for `stocks` is still incommensurable *within* the equity class —
+   * `SMOKE_TEST_UNIVERSE`'s successor holds SPY (~$600) alongside names an
+   * order of magnitude cheaper, and one dollar figure cannot be half a percent
+   * of both. A fraction is the only shape that is correct for an instrument
+   * whose price the config author never saw, which is the property a universe
+   * that changes without a code change (`DEFAULT_UNIVERSE`) actually needs.
+   *
+   * **Renamed rather than reinterpreted, deliberately.** Had the fractional
+   * reading been given to the old `drift_tolerance` name, a config still
+   * carrying the checked-in `500` would have meant 50,000% — a gate that
+   * silently never fires, which is exactly the hazard being fixed. The rename
+   * makes such a config a compile error instead.
+   *
+   * Kept per-asset-class rather than collapsed to one fraction because the
+   * tolerable drift is paired with the staleness window it sits behind, and
+   * `max_signal_age` already differs by class. The two dials are read
+   * together.
+   */
+  drift_tolerance_pct: Record<'crypto' | 'stocks', number>;
   /** HITL response window; a non-response past this defaults to no-go. */
   human_timeout: number;
   /** Stocks-only: closed session still passes the market-open gate. */

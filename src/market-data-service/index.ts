@@ -32,6 +32,8 @@ export type {
   AlpacaSourceOptions,
 } from './sources/alpaca-source.js';
 export { AlpacaDataSource } from './sources/alpaca-source.js';
+export type { AssetClassRoutingSourceConfig } from './sources/asset-class-routing-source.js';
+export { AssetClassRoutingDataSource } from './sources/asset-class-routing-source.js';
 export type {
   CcxtClient,
   CcxtOhlcv,

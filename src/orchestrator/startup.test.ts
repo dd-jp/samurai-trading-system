@@ -188,7 +188,24 @@ describe('startFromEnvironment — the shipped paper profile', () => {
     try {
       const started = entries.find((entry) => entry.message === 'orchestrator started');
       expect(started).toBeDefined();
-      expect(started?.payload).toMatchObject({ mode: 'paper', universe: ['BTC-USD'] });
+      // #381's first acceptance criterion, asserted where an operator actually
+      // reads it: the startup line names the FULL ADR-0001 universe, not the
+      // BTC-USD smoke set it used to log. This is the end-to-end check that
+      // the profile's universe survives `startFromEnvironment` — a live paper
+      // run that logs `universe: ["BTC-USD"]` is the bug this replaces.
+      expect(started?.payload).toMatchObject({
+        mode: 'paper',
+        universe: ['SPY', 'QQQ', 'AAPL', 'TSLA', 'BTC-USD', 'ETH-USD'],
+      });
+
+      // ...and the equity half is genuinely wired, not merely listed. The
+      // volatility breaker warns "no instruments configured for asset class"
+      // once per class it cannot read, which is exactly what a live paper run
+      // emitted for `stocks` before this change.
+      const inertClassWarn = entries.find((entry) =>
+        entry.message.includes('no instruments configured for asset class'),
+      );
+      expect(inertClassWarn).toBeUndefined();
     } finally {
       // The loop, the heartbeat and the fill poll are all armed by `start()`;
       // leaving them running would leak timers into the rest of the suite.

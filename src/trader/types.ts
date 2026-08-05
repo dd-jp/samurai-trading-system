@@ -65,7 +65,21 @@ export interface TraderConfig {
    * size until the broker abstraction lands (Execution, epic #57).
    */
   min_viable_notional: number;
-  time_in_force: string;
+  /**
+   * Order time-in-force, **per asset class** (#381).
+   *
+   * One value cannot serve both, and this is a venue constraint rather than a
+   * tuning knob. Alpaca's crypto venue accepts `gtc`/`ioc` only and rejects
+   * `day` at submission; equities take `day`, which is also the reading that
+   * matches an instrument whose session ends — a `day` order on a 24/7 venue
+   * has no day to expire at, which is why `gtc` is the portable crypto choice
+   * across ccxt/Kraken too, not merely the Alpaca-shaped one.
+   *
+   * Was a single `string` until the paper universe widened past BTC-USD
+   * alone; the profile carried a `gtc` override precisely because the flat
+   * field could not express both.
+   */
+  time_in_force: Record<'crypto' | 'stocks', string>;
   /**
    * #74: minimum conviction rise (current debate minus the position's
    * stored `conviction`) that qualifies a same-direction hold for a bounded
@@ -89,7 +103,7 @@ export const DEFAULT_TRADER_CONFIG: TraderConfig = {
   non_converged_haircut: 0.5,
   reward_risk_multiple: 2.0,
   min_viable_notional: 10,
-  time_in_force: 'day',
+  time_in_force: { crypto: 'gtc', stocks: 'day' },
   scale_in_conviction_delta: 0.1,
 };
 

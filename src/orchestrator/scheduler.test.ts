@@ -106,6 +106,48 @@ describe('UniverseScheduler.nextTick', () => {
     expect(calls).toBe(1);
   });
 
+  /**
+   * The overnight properties a 14-day unattended soak depends on (#381). The
+   * calendar gate was inert while the universe was crypto-only; with four
+   * equities in it, it runs for ~16 hours of every weekday, and two ways of
+   * "working" would still ruin the soak.
+   */
+  describe('a closed session over a 14-day soak', () => {
+    it('keeps ticking crypto rather than starving the loop', () => {
+      // The gate FILTERS the plan; it does not skip the tick. If a closed
+      // session produced an empty plan the loop would idle for 16h a day and
+      // BTC-USD/ETH-USD would go untraded overnight, which is the half of the
+      // universe that trades overnight at all.
+      const plan = makeScheduler().nextTick(clockAt(MARKET_CLOSED));
+
+      expect(plan.instruments).not.toHaveLength(0);
+      expect(plan.instruments.every((i) => i.asset_class === 'crypto')).toBe(true);
+    });
+
+    it('emits nothing per skipped instrument — the filter is silent by construction', () => {
+      // `SchedulerConfig` has no logger and `nextTick` takes none, so there is
+      // no seam through which a per-instrument "market closed" line could be
+      // emitted every 60s for 16 hours a day. Asserted structurally because
+      // that is what actually holds: a future logger added here would fail
+      // this test rather than quietly filling the soak's log file.
+      const scheduler = makeScheduler();
+      const closedPlan = scheduler.nextTick(clockAt(MARKET_CLOSED));
+
+      expect(Object.keys(scheduler)).not.toContain('logger');
+      expect(closedPlan.instruments).toHaveLength(2);
+    });
+
+    it('re-admits the equities on the next open tick without any re-arming', () => {
+      // Stateless, so a session reopening needs no reset call that an
+      // unattended run has nobody to make.
+      const scheduler = makeScheduler();
+
+      expect(assets(scheduler.nextTick(clockAt(MARKET_CLOSED)).instruments)).toHaveLength(2);
+      expect(assets(scheduler.nextTick(clockAt(MARKET_OPEN)).instruments)).toHaveLength(6);
+      expect(assets(scheduler.nextTick(clockAt(MARKET_CLOSED)).instruments)).toHaveLength(2);
+    });
+  });
+
   it('iterates the configured universe, not a hardcoded one', () => {
     const scheduler = makeScheduler({
       universe: [

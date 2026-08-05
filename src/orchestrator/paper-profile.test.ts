@@ -8,7 +8,7 @@
  * then rejects or halts everything is indistinguishable, at a glance, from a
  * clean run that decided not to trade (`SMOKE_TEST_UNIVERSE`'s doc comment).
  */
-import { InMemoryDebateLogStore } from '../debate-engine/index.js';
+import { InMemoryDebateLogStore, LATENCY_BUDGET_MS } from '../debate-engine/index.js';
 import {
   InMemoryClosedTradeStore,
   InMemoryTuningStore,
@@ -29,6 +29,93 @@ describe('paperStartingProfile', () => {
     for (const key of REQUIRED_INJECTED_CONFIG) {
       expect(profile[key]).toBeDefined();
     }
+  });
+
+  /**
+   * #381 — the profile now names the universe it was tuned for, and the five
+   * dials that were only ever correct for one crypto instrument.
+   */
+  describe('the full ADR-0001 universe', () => {
+    it('supplies DEFAULT_UNIVERSE, so a paper start is not the smoke set by omission', () => {
+      // `ProductionConfig.universe` defaults to `SMOKE_TEST_UNIVERSE` and
+      // nothing used to override it, which is why a live paper run logged
+      // `universe: ["BTC-USD"]`. The profile is where that is answered,
+      // because which instruments a paper run trades is a tuning decision of
+      // the same kind as every other value in this file.
+      const { universe } = paperStartingProfile('paper');
+
+      expect(universe?.map((instrument) => instrument.asset)).toEqual([
+        'SPY',
+        'QQQ',
+        'AAPL',
+        'TSLA',
+        'BTC-USD',
+        'ETH-USD',
+      ]);
+    });
+
+    it('covers both asset classes, so no per-class dial reads as inert', () => {
+      // The startup warn this removes: "no instruments configured for asset
+      // class; volatility breaker reads 0 (inert) for this class {stocks}".
+      const { universe } = paperStartingProfile('paper');
+      const classes = new Set(universe?.map((instrument) => instrument.asset_class));
+
+      expect([...classes].sort()).toEqual(['crypto', 'stocks']);
+    });
+
+    it('sizes drift tolerance as a fraction, so a $200 equity has a real gate', () => {
+      // The absolute 500 this replaces was 250% of a $200 instrument — a
+      // staleness gate that could never fire. Asserted as the resulting
+      // dollar bound rather than as the fraction, because the bound is the
+      // thing that was wrong.
+      const { verdictConfig } = paperStartingProfile('paper');
+
+      const equityBound = 200 * verdictConfig.drift_tolerance_pct.stocks;
+      expect(equityBound).toBeLessThan(5);
+      expect(equityBound).toBeGreaterThan(0);
+
+      // ...and BTC-USD keeps the calibration the absolute value encoded: 500
+      // at a ~$100k entry, which is what 0.5% re-expresses.
+      expect(100_000 * verdictConfig.drift_tolerance_pct.crypto).toBeCloseTo(500, 10);
+    });
+
+    it('keeps size_over inert, because manual short-circuits before flags are read', () => {
+      // `size_over: 0` is unit-incommensurable across fractional BTC and
+      // whole-share SPY, and widening the universe made that worse rather
+      // than better. It stays harmless only while `automation_level` is
+      // `manual` for BOTH classes — `shouldEngageHitl` returns true on that
+      // check before `isFlagged` is ever called. Pinned so turning either
+      // class to `semi_auto` fails here first.
+      const { verdictConfig } = paperStartingProfile('paper');
+
+      expect(verdictConfig.automation_level.crypto).toBe('manual');
+      expect(verdictConfig.automation_level.stocks).toBe('manual');
+      expect(verdictConfig.flag_thresholds.size_over).toBe(0);
+    });
+
+    it('leaves the stocks staleness bound well clear of one debate latency budget', () => {
+      // `LATENCY_BUDGET_MS.stocks` is 60s and `decision_timestamp` is the
+      // quote's own `observed_at`, so the signal-producing pipeline cannot
+      // approach this bound. If it ever could, every equity order would
+      // no-go on staleness and the soak would silently trade crypto only.
+      const { verdictConfig } = paperStartingProfile('paper');
+
+      expect(verdictConfig.max_signal_age.stocks).toBeGreaterThan(10 * LATENCY_BUDGET_MS.stocks);
+    });
+
+    it('correlates over a window Alpaca can serve on tick 1, so #303 is not reachable here', () => {
+      // The #303 warm-up blind spot needs a pair with fewer than `min_bars`
+      // overlapping returns. `MarketDataServiceImpl.getBars` fetches from the
+      // source on every call rather than accumulating locally, so a cold
+      // first tick pulls the whole window from Alpaca's archive — and every
+      // instrument in `DEFAULT_UNIVERSE` has years of daily history. This
+      // pins the relationship the decision rests on: the window is a daily
+      // one, and short enough that a long-listed instrument always clears it.
+      const { correlationConfig } = paperStartingProfile('paper');
+
+      expect(correlationConfig.window.timeframe).toBe('1d');
+      expect(correlationConfig.min_bars).toBeLessThan(correlationConfig.window.lookback);
+    });
   });
 
   it('refuses live mode — these values are uncalibrated starting points', () => {
@@ -95,13 +182,17 @@ describe('paperStartingProfile', () => {
     );
   });
 
-  it("uses a time-in-force Alpaca's crypto venue accepts", () => {
-    // `SMOKE_TEST_UNIVERSE` is BTC-USD. Alpaca crypto orders take `gtc`/`ioc`;
-    // `day` (DEFAULT_TRADER_CONFIG's value, an equities default) is rejected
-    // at submission — a boot that dies on its first order is not a boot.
+  it('uses a time-in-force each venue accepts, per asset class (#381)', () => {
+    // Alpaca crypto orders take `gtc`/`ioc` and reject `day` at submission;
+    // equities take `day`. A boot that dies on its first order is not a boot,
+    // and with a two-asset-class universe a single value guarantees one of the
+    // two halves dies. Both are asserted here, not just crypto's, because the
+    // failure this pins is precisely "the value that was right for the old
+    // universe is wrong for the new one".
     const { traderConfig } = paperStartingProfile('paper');
 
-    expect(['gtc', 'ioc']).toContain(traderConfig.time_in_force);
+    expect(['gtc', 'ioc']).toContain(traderConfig.time_in_force.crypto);
+    expect(traderConfig.time_in_force.stocks).toBe('day');
   });
 
   it('requires a human on every trade, per the staged-deployment dial', () => {

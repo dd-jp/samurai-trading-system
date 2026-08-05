@@ -228,7 +228,7 @@ async function buildBracket(
     entry,
     stop: entry - direction * stopDistance,
     target: entry + direction * config.reward_risk_multiple * stopDistance,
-    time_in_force: config.time_in_force,
+    time_in_force: config.time_in_force[mark.asset_class],
     decision_timestamp: decisionBar,
     metadata: {
       debate_id: debate.debate_id,
@@ -292,7 +292,7 @@ async function buildExitIntent(
     entry: mark.price,
     stop: mark.price,
     target: mark.price,
-    time_in_force: config.time_in_force,
+    time_in_force: config.time_in_force[mark.asset_class],
     decision_timestamp: decisionBar,
     metadata: {
       debate_id: debate.debate_id,

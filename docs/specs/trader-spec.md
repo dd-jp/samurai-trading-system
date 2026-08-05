@@ -121,7 +121,11 @@ interface OrderIntent {
   entry: number;                 // limit/entry price
   stop: number;
   target: number;
-  time_in_force: string;
+  time_in_force: string;         // the RESOLVED per-order value. Its source,
+                                 // `TraderConfig.time_in_force`, is per asset class
+                                 // (#381): Alpaca crypto accepts `gtc`/`ioc` and
+                                 // rejects `day`, equities take `day`, so one value
+                                 // cannot serve a universe spanning both.
   decision_timestamp: Date;      // the bar/decision time (retained from the idempotency-key
                                  // hash input). Downstream (Verdict) needs it for the
                                  // signal-staleness gate; the hash alone doesn't expose it.
