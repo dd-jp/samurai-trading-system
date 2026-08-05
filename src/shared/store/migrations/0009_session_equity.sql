@@ -23,8 +23,19 @@
 -- ISO-8601 UTC (`toISOString()`), matching `closed_trades.closed_at`: the
 -- realized-PnL filter is a TEXT `closed_at > open_at` comparison, which is only
 -- correct because both sides are written fixed-width, zero-padded, and Z-suffixed.
+--
+-- `observed_at_boundary` records whether the writing process was actually
+-- running when the session opened, and it is DURABLE rather than in-process on
+-- purpose. #332 calls a snapshot cold when the DB is fresh "or [on] a restart
+-- with the boundary already passed" — and after such a restart the row on disk
+-- is indistinguishable from a properly observed one: `open_at` already equals
+-- the current session start, so nothing about the row itself reveals that the
+-- equity in it was sampled hours into the session, below whatever the true open
+-- was. A process-memory flag would answer correctly until the crash that makes
+-- the question matter, so the verdict is written down instead.
 CREATE TABLE session_equity (
-  asset_class  TEXT PRIMARY KEY CHECK(asset_class IN ('crypto', 'stocks', 'portfolio')),
-  open_equity  REAL NOT NULL,
-  open_at      TEXT NOT NULL
+  asset_class          TEXT PRIMARY KEY CHECK(asset_class IN ('crypto', 'stocks', 'portfolio')),
+  open_equity          REAL NOT NULL,
+  open_at              TEXT NOT NULL,
+  observed_at_boundary INTEGER NOT NULL CHECK(observed_at_boundary IN (0, 1))
 );

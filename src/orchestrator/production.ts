@@ -810,6 +810,11 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
         // holidays or half-days for a config to express.
         calendars: { crypto: new AlwaysOpenCalendar(), stocks: tradingCalendar },
         mode: config.mode,
+        // Composition happens at startup, so "now" here IS the process start.
+        // It decides whether a session boundary was crossed under a running
+        // process (a real open) or had already passed when this one came up
+        // (a mid-session base) — #332's two cold-start cases.
+        startedAt: config.clock.now(),
         logger: config.logger ?? new JsonLogger(),
       }),
     // #277's provider, wired by default now that AccountStateProvider (#276)

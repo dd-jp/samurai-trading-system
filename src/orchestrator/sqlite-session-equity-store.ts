@@ -19,11 +19,21 @@ export interface SessionEquitySnapshot {
   open_equity: number;
   /** The session start instant this snapshot is anchored to — never the write time. */
   open_at: Date;
+  /**
+   * Was the writing process running when this session opened?
+   *
+   * `false` means the equity was sampled somewhere inside the session rather
+   * than at its start, so it is a mid-session base and not a true open. The
+   * flag is durable because a restart cannot otherwise tell the two apart —
+   * see the migration comment.
+   */
+  observed_at_boundary: boolean;
 }
 
 interface SessionEquityRow {
   open_equity: number;
   open_at: string;
+  observed_at_boundary: number;
 }
 
 interface RealizedRow {
@@ -36,12 +46,18 @@ export class SqliteSessionEquityStore {
   /** The stored snapshot for `key`, or null before one has ever been written. */
   get(key: SessionEquityKey): SessionEquitySnapshot | null {
     const row = this.db
-      .prepare('SELECT open_equity, open_at FROM session_equity WHERE asset_class = ?')
+      .prepare(
+        'SELECT open_equity, open_at, observed_at_boundary FROM session_equity WHERE asset_class = ?',
+      )
       .get(key) as SessionEquityRow | undefined;
 
     if (row === undefined) return null;
 
-    return { open_equity: row.open_equity, open_at: new Date(row.open_at) };
+    return {
+      open_equity: row.open_equity,
+      open_at: new Date(row.open_at),
+      observed_at_boundary: row.observed_at_boundary === 1,
+    };
   }
 
   /**
@@ -53,7 +69,12 @@ export class SqliteSessionEquityStore {
    * reconstructed. Recording the boundary keeps that drift legible in the data
    * instead of baking an arbitrary observation time in as if it were the open.
    */
-  put(key: SessionEquityKey, equity: number, sessionStart: Date): void {
+  put(
+    key: SessionEquityKey,
+    equity: number,
+    sessionStart: Date,
+    observedAtBoundary: boolean,
+  ): void {
     if (!Number.isFinite(equity)) {
       throw new Error(
         `SqliteSessionEquityStore.put: open_equity must be finite, got ${equity} for '${key}'. ` +
@@ -63,13 +84,14 @@ export class SqliteSessionEquityStore {
 
     this.db
       .prepare(
-        `INSERT INTO session_equity (asset_class, open_equity, open_at)
-         VALUES (?, ?, ?)
+        `INSERT INTO session_equity (asset_class, open_equity, open_at, observed_at_boundary)
+         VALUES (?, ?, ?, ?)
          ON CONFLICT(asset_class) DO UPDATE SET
            open_equity = excluded.open_equity,
-           open_at = excluded.open_at`,
+           open_at = excluded.open_at,
+           observed_at_boundary = excluded.observed_at_boundary`,
       )
-      .run(key, equity, sessionStart.toISOString());
+      .run(key, equity, sessionStart.toISOString(), observedAtBoundary ? 1 : 0);
   }
 
   /**

@@ -71,6 +71,17 @@ export interface AlpacaAccountStateProviderInput {
    */
   mode: 'live' | 'paper' | 'backtest';
   /**
+   * When this process started. Decides whether a snapshot it writes counts as
+   * a real session open: the process can only have observed the boundary if it
+   * was already running at it (`startedAt <= sessionStart`).
+   *
+   * This is what separates a normal advance — process up, boundary crossed
+   * under it, snapshot taken on the next tick — from #332's second cold-start
+   * case, "a restart with the boundary already passed", where the same advance
+   * would otherwise write a mid-session equity and call it the open.
+   */
+  startedAt: Date;
+  /**
    * How far back to walk for the loss streak. A streak longer than this
    * window is reported as this many losses — the breaker's threshold is a
    * small integer, so the cap only ever affects a number already far past it.
@@ -84,11 +95,11 @@ const MS_PER_DAY = 24 * 60 * 60 * 1_000;
 
 export class AlpacaAccountStateProvider implements AccountStateProvider {
   /**
-   * Keys whose snapshot this process seeded mid-session rather than observed at
-   * a boundary. In `live` these stay unknown until a real boundary crossing
-   * supersedes the seed — see `sessionBasisFor`.
+   * `key@open_at` pairs already warned about, so a mid-session base is
+   * announced once per session rather than once per tick. Purely about log
+   * volume — the trust verdict itself lives in the table, not here.
    */
-  private readonly coldSeeded = new Set<SessionEquityKey>();
+  private readonly warnedSessions = new Set<string>();
 
   constructor(private readonly input: AlpacaAccountStateProviderInput) {}
 
@@ -139,16 +150,6 @@ export class AlpacaAccountStateProvider implements AccountStateProvider {
       : this.input.sessionEquity.realizedSince(key, openAt);
   }
 
-  /** The unknown a live cold seed yields, until a real boundary supersedes it. */
-  private coldSeedUnknown(key: SessionEquityKey): SessionBasis {
-    return {
-      known: false,
-      reason:
-        `daily PnL for '${key}' is unknown: its session-open equity was seeded mid-session ` +
-        'on a live cold start, so no equity was ever observed at this session boundary',
-    };
-  }
-
   /**
    * Advances the stored snapshot across a session boundary, then reports the
    * basis for the current session.
@@ -159,29 +160,39 @@ export class AlpacaAccountStateProvider implements AccountStateProvider {
    * further tick inside the same session compares equal and leaves the snapshot
    * alone, so the open is captured once per session rather than drifting
    * forward on every tick.
+   *
+   * Whether the resulting snapshot counts as a real session open is a separate
+   * question from whether it is current, and it is answered once — at write
+   * time, from `startedAt` — then persisted. #332 treats BOTH "no row at all"
+   * and "a restart with the boundary already passed" as cold starts; the second
+   * arrives here as an ordinary stale-row advance, and only `startedAt` tells
+   * it apart from the healthy case.
    */
   private sessionBasisFor(key: SessionEquityKey, equity: number, asOf: Date): SessionBasis {
     const sessionStart = this.calendarFor(key).sessionStart(asOf);
     const stored = this.input.sessionEquity.get(key);
 
-    if (stored === null) {
-      return this.coldStart(key, equity, sessionStart);
-    }
+    // The process can only have seen the open if it was already up at it. A
+    // fresh DB is never an observation either: nothing sampled equity then, so
+    // the row is being invented now regardless of how long this process has run.
+    const observedAtBoundary =
+      stored !== null && this.input.startedAt.getTime() <= sessionStart.getTime();
 
-    let openEquity = stored.open_equity;
-    let openAt = stored.open_at;
+    let { open_equity: openEquity, open_at: openAt } = stored ?? {
+      open_equity: equity,
+      open_at: sessionStart,
+    };
+    let trustworthy = stored?.observed_at_boundary ?? false;
 
-    if (openAt.getTime() < sessionStart.getTime()) {
-      this.input.sessionEquity.put(key, equity, sessionStart);
+    if (stored === null || openAt.getTime() < sessionStart.getTime()) {
+      this.input.sessionEquity.put(key, equity, sessionStart, observedAtBoundary);
       openEquity = equity;
       openAt = sessionStart;
-      // A boundary actually observed by this process supersedes any earlier
-      // mid-session seed: from here the snapshot is a real session open.
-      this.coldSeeded.delete(key);
+      trustworthy = observedAtBoundary;
     }
 
-    if (this.coldSeeded.has(key)) {
-      return this.coldSeedUnknown(key);
+    if (!trustworthy) {
+      return this.midSessionBase(key, openEquity, openAt, sessionStart);
     }
 
     // A non-positive denominator would make the fraction Infinity or NaN, and
@@ -189,63 +200,92 @@ export class AlpacaAccountStateProvider implements AccountStateProvider {
     // read as "no loss" through an account that has none of itself left. There
     // is no honest percentage against a zero base, so say so.
     if (!(openEquity > 0)) {
-      return {
-        known: false,
-        reason:
-          `daily PnL for '${key}' is unknown: session-open equity was ${openEquity}, ` +
-          'and a percentage change against a non-positive base has no meaning',
-      };
+      return this.nonPositiveBase(key, openEquity);
     }
 
     return { known: true, open_equity: openEquity, realized_pnl: this.realizedFor(key, openAt) };
   }
 
+  private nonPositiveBase(key: SessionEquityKey, openEquity: number): SessionBasis {
+    return {
+      known: false,
+      reason:
+        `daily PnL for '${key}' is unknown: session-open equity was ${openEquity}, ` +
+        'and a percentage change against a non-positive base has no meaning',
+    };
+  }
+
   /**
-   * No snapshot at all — a fresh DB, or a restart whose first tick lands after
-   * a boundary this process never saw.
+   * The snapshot in force was sampled inside the session, not at its start —
+   * a fresh DB, or a restart that came up after the boundary had passed.
    *
-   * Both modes seed the row, so the boundary machinery converges from the next
-   * crossing onward. They differ in what they *report* for the session already
-   * in progress, whose true open equity is simply not recoverable:
+   * The true open equity is not recoverable: historical `cash` is stored
+   * nowhere, so there is nothing to reconstruct it from. What differs by mode
+   * is what gets reported for the session already in progress:
    *
-   * - `paper`/`backtest` — report it against the seed and log a `warn`. The
-   *   cost of being wrong is a mis-sized paper trade.
-   * - `live` — report unknown, for the remainder of this session. The cost of
-   *   being wrong is real money traded through a daily-loss breaker that cannot
-   *   see the loss, so an unknown that blocks entries beats a plausible number
-   *   measured from the wrong base.
+   * - `paper`/`backtest` — report it against the mid-session base and warn.
+   *   The cost of being wrong is a mis-sized paper trade.
+   * - `live` — report unknown. The cost of being wrong is real money traded
+   *   through a daily-loss breaker measuring from a base captured *after* the
+   *   loss it exists to catch, which reads as a flat day. An unknown that
+   *   blocks entries beats a plausible number from the wrong base.
+   *
+   * Both paths converge at the next boundary this process is up for, which
+   * writes a genuine open and clears the flag.
    */
-  private coldStart(key: SessionEquityKey, equity: number, sessionStart: Date): SessionBasis {
-    this.input.sessionEquity.put(key, equity, sessionStart);
+  private midSessionBase(
+    key: SessionEquityKey,
+    openEquity: number,
+    openAt: Date,
+    sessionStart: Date,
+  ): SessionBasis {
+    const once = `${key}@${sessionStart.toISOString()}`;
+    const firstTime = !this.warnedSessions.has(once);
+    if (firstTime) this.warnedSessions.add(once);
 
     if (this.input.mode === 'live') {
-      this.coldSeeded.add(key);
+      if (firstTime) {
+        this.input.logger.log({
+          trace_id: 'account-state',
+          stage: 'orchestrator',
+          level: 'warn',
+          message:
+            `daily PnL for '${key}' is UNKNOWN: no equity was observed at the session start ` +
+            `${sessionStart.toISOString()} (fresh store, or a restart after the boundary had ` +
+            'passed), and live mode will not measure a daily loss from a mid-session base. ' +
+            'It stays unknown until the next boundary this process is running for (#332)',
+        });
+      }
+      return {
+        known: false,
+        reason:
+          `daily PnL for '${key}' is unknown: its session-open equity was sampled mid-session, ` +
+          `not at the session start ${sessionStart.toISOString()}`,
+      };
+    }
+
+    if (firstTime) {
       this.input.logger.log({
         trace_id: 'account-state',
         stage: 'orchestrator',
         level: 'warn',
         message:
-          `daily PnL for '${key}' is UNKNOWN and will block new entries: no session-open ` +
-          `equity was recorded for the session starting ${sessionStart.toISOString()}, and ` +
-          'live mode will not measure a daily loss from a mid-session seed (#332)',
+          `session-open equity for '${key}' is a mid-session base (${openEquity}) rather than ` +
+          `an observation at ${sessionStart.toISOString()}, so this session's daily PnL is ` +
+          `measured from it (${this.input.mode} mode; live would report unknown)`,
       });
-      return this.coldSeedUnknown(key);
     }
 
-    this.input.logger.log({
-      trace_id: 'account-state',
-      stage: 'orchestrator',
-      level: 'warn',
-      message:
-        `seeded session-open equity for '${key}' from current equity ${equity} at ` +
-        `${sessionStart.toISOString()} — no snapshot existed, so this session's daily PnL is ` +
-        `measured from a mid-session base (${this.input.mode} mode; live would report unknown)`,
-    });
+    // Same non-positive guard as the trusted path: a zero base is Infinity or
+    // NaN, which compares false in the breaker and reads as no loss at all.
+    if (!(openEquity > 0)) {
+      return this.nonPositiveBase(key, openEquity);
+    }
 
     return {
       known: true,
-      open_equity: equity,
-      realized_pnl: this.realizedFor(key, sessionStart),
+      open_equity: openEquity,
+      realized_pnl: this.realizedFor(key, openAt),
     };
   }
 

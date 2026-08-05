@@ -129,6 +129,9 @@ function makeProvider(
     logger: makeLogger(),
     calendars: { crypto: new AlwaysOpenCalendar(), stocks: new UsEquityRegularHoursCalendar() },
     mode: 'paper',
+    // Well before every boundary these fixtures use — the healthy case, where
+    // the process was already running when the session opened.
+    startedAt: new Date('2026-07-01T00:00:00.000Z'),
     ...overrides,
   });
 }
@@ -186,13 +189,14 @@ describe('SqliteSessionEquityStore', () => {
     try {
       expect(sessionEquity.get('crypto')).toBeNull();
 
-      sessionEquity.put('crypto', 100_000, new Date(CRYPTO_OPEN));
+      sessionEquity.put('crypto', 100_000, new Date(CRYPTO_OPEN), true);
       expect(sessionEquity.get('crypto')).toEqual({
         open_equity: 100_000,
         open_at: new Date(CRYPTO_OPEN),
+        observed_at_boundary: true,
       });
 
-      sessionEquity.put('crypto', 90_000, new Date('2026-08-02T00:00:00.000Z'));
+      sessionEquity.put('crypto', 90_000, new Date('2026-08-02T00:00:00.000Z'), true);
       expect(sessionEquity.get('crypto')?.open_equity).toBe(90_000);
     } finally {
       cleanup();
@@ -202,9 +206,9 @@ describe('SqliteSessionEquityStore', () => {
   it('keeps the three keys independent', () => {
     const { sessionEquity, cleanup } = openStore();
     try {
-      sessionEquity.put('crypto', 1, new Date(CRYPTO_OPEN));
-      sessionEquity.put('stocks', 2, new Date(STOCKS_OPEN));
-      sessionEquity.put('portfolio', 3, new Date(CRYPTO_OPEN));
+      sessionEquity.put('crypto', 1, new Date(CRYPTO_OPEN), true);
+      sessionEquity.put('stocks', 2, new Date(STOCKS_OPEN), true);
+      sessionEquity.put('portfolio', 3, new Date(CRYPTO_OPEN), true);
 
       expect(sessionEquity.get('crypto')?.open_equity).toBe(1);
       expect(sessionEquity.get('stocks')?.open_equity).toBe(2);
@@ -266,7 +270,7 @@ describe('SqliteSessionEquityStore', () => {
   it('refuses a non-finite open equity rather than writing a denominator', () => {
     const { sessionEquity, cleanup } = openStore();
     try {
-      expect(() => sessionEquity.put('crypto', Number.NaN, new Date(CRYPTO_OPEN))).toThrow(
+      expect(() => sessionEquity.put('crypto', Number.NaN, new Date(CRYPTO_OPEN), true)).toThrow(
         'must be finite',
       );
     } finally {
@@ -435,7 +439,7 @@ describe('AlpacaAccountStateProvider — session boundaries (#332)', () => {
     const harness = openStore();
     try {
       // Yesterday's session, at a different equity.
-      harness.sessionEquity.put('crypto', 80_000, new Date('2026-07-31T00:00:00.000Z'));
+      harness.sessionEquity.put('crypto', 80_000, new Date('2026-07-31T00:00:00.000Z'), true);
 
       const provider = makeProvider(harness, {
         client: makeClient(makeAccount({ equity: '100000' })),
@@ -445,6 +449,7 @@ describe('AlpacaAccountStateProvider — session boundaries (#332)', () => {
       expect(harness.sessionEquity.get('crypto')).toEqual({
         open_equity: 100_000,
         open_at: new Date(CRYPTO_OPEN),
+        observed_at_boundary: true,
       });
       expect(daily_basis.crypto).toEqual({
         known: true,
@@ -459,7 +464,7 @@ describe('AlpacaAccountStateProvider — session boundaries (#332)', () => {
   it('leaves the snapshot alone on a later tick inside the same session', async () => {
     const harness = openStore();
     try {
-      harness.sessionEquity.put('crypto', 80_000, new Date(CRYPTO_OPEN));
+      harness.sessionEquity.put('crypto', 80_000, new Date(CRYPTO_OPEN), true);
 
       const provider = makeProvider(harness, {
         client: makeClient(makeAccount({ equity: '100000' })),
@@ -510,7 +515,11 @@ describe('AlpacaAccountStateProvider — cold start (#332)', () => {
     const harness = openStore();
     try {
       const logger = makeLogger();
-      const provider = makeProvider(harness, { mode: 'paper', logger });
+      const provider = makeProvider(harness, {
+        mode: 'paper',
+        logger,
+        startedAt: SATURDAY_NOON_UTC,
+      });
 
       const { daily_basis } = await provider.getAccountState(SATURDAY_NOON_UTC);
 
@@ -521,7 +530,7 @@ describe('AlpacaAccountStateProvider — cold start (#332)', () => {
       });
       const warnings = logger.entries.filter((entry) => entry.level === 'warn');
       expect(warnings.length).toBeGreaterThanOrEqual(3);
-      expect(warnings[0]?.message).toContain('seeded session-open equity');
+      expect(warnings[0]?.message).toContain('mid-session base');
     } finally {
       harness.cleanup();
     }
@@ -531,7 +540,11 @@ describe('AlpacaAccountStateProvider — cold start (#332)', () => {
     const harness = openStore();
     try {
       const logger = makeLogger();
-      const provider = makeProvider(harness, { mode: 'live', logger });
+      const provider = makeProvider(harness, {
+        mode: 'live',
+        logger,
+        startedAt: SATURDAY_NOON_UTC,
+      });
 
       const { daily_basis } = await provider.getAccountState(SATURDAY_NOON_UTC);
 
@@ -553,12 +566,9 @@ describe('AlpacaAccountStateProvider — cold start (#332)', () => {
   it('keeps the live cold-start unknown for the rest of that session', async () => {
     const harness = openStore();
     try {
-      const provider = makeProvider(harness, { mode: 'live' });
+      const provider = makeProvider(harness, { mode: 'live', startedAt: SATURDAY_NOON_UTC });
 
       await provider.getAccountState(SATURDAY_NOON_UTC);
-      // Later the same crypto session: the row now exists and its open_at
-      // already equals this session's start, so nothing distinguishes it from
-      // a real observation except that this process knows it seeded it.
       const later = await provider.getAccountState(new Date('2026-08-01T18:00:00Z'));
 
       expect(later.daily_basis.crypto.known).toBe(false);
@@ -567,10 +577,62 @@ describe('AlpacaAccountStateProvider — cold start (#332)', () => {
     }
   });
 
+  it('stays unknown in live across a RESTART inside the same session', async () => {
+    const harness = openStore();
+    try {
+      // First process cold-seeds at Saturday noon and dies.
+      await makeProvider(harness, { mode: 'live', startedAt: SATURDAY_NOON_UTC }).getAccountState(
+        SATURDAY_NOON_UTC,
+      );
+
+      // A second process comes up at 19:00, still inside the same crypto
+      // session. The row on disk now has open_at == this session's start, so
+      // nothing about its shape distinguishes it from a real observation — only
+      // the persisted verdict does. A process-memory flag would have forgotten,
+      // and this figure would read as a flat day against a base captured after
+      // whatever the account had already lost.
+      const restarted = makeProvider(harness, {
+        mode: 'live',
+        startedAt: new Date('2026-08-01T19:00:00Z'),
+        client: makeClient(makeAccount({ equity: '90000' })),
+      });
+      const after = await restarted.getAccountState(new Date('2026-08-01T19:30:00Z'));
+
+      expect(after.daily_basis.crypto.known).toBe(false);
+      expect(harness.sessionEquity.get('crypto')?.observed_at_boundary).toBe(false);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('treats a restart that missed the boundary as a cold start, not a clean advance', async () => {
+    const harness = openStore();
+    try {
+      // A snapshot from Friday's crypto session, properly observed then.
+      harness.sessionEquity.put('crypto', 100_000, new Date('2026-07-31T00:00:00.000Z'), true);
+
+      // The process was down over the boundary and comes up Saturday noon. The
+      // stale row advances — but the equity written is a mid-session sample,
+      // not Saturday's open, so it must NOT inherit the old row's trust.
+      const provider = makeProvider(harness, { mode: 'live', startedAt: SATURDAY_NOON_UTC });
+      const { daily_basis } = await provider.getAccountState(SATURDAY_NOON_UTC);
+
+      expect(daily_basis.crypto.known).toBe(false);
+      expect(harness.sessionEquity.get('crypto')).toEqual({
+        open_equity: 100_000,
+        open_at: new Date(CRYPTO_OPEN),
+        observed_at_boundary: false,
+      });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
   it('becomes known in live once a real boundary crossing supersedes the seed', async () => {
     const harness = openStore();
     try {
-      const provider = makeProvider(harness, { mode: 'live' });
+      // Started Saturday noon: it missed Saturday's open, but is up for Sunday's.
+      const provider = makeProvider(harness, { mode: 'live', startedAt: SATURDAY_NOON_UTC });
 
       await provider.getAccountState(SATURDAY_NOON_UTC);
       // Sunday: a boundary this process actually observed, so the snapshot is
@@ -593,7 +655,7 @@ describe('AlpacaAccountStateProvider — cold start (#332)', () => {
   it('reports unknown rather than Infinity when session-open equity is non-positive', async () => {
     const harness = openStore();
     try {
-      harness.sessionEquity.put('crypto', 0, new Date(CRYPTO_OPEN));
+      harness.sessionEquity.put('crypto', 0, new Date(CRYPTO_OPEN), true);
 
       const { daily_basis } = await makeProvider(harness).getAccountState(SATURDAY_NOON_UTC);
 
