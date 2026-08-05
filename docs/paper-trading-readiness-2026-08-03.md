@@ -8,6 +8,27 @@
 
 ---
 
+## Tier 0 — Blocks any LIVE run (does not block paper)
+
+> Added 2026-08-05 by [#332](https://github.com/dd-jp/samurai-trading-system/issues/332). This tier is about **real money**, not the paper soak. Nothing here blocks a paper tick; everything here must be closed before the first live capital goes in.
+
+### 0. Daily-loss limit can be unenforced for a whole live session — **[#333](https://github.com/dd-jp/samurai-trading-system/issues/333) IS A LIVE-GO BLOCKER**
+
+**Do not run live capital until #333 lands, or until an explicit no-live-go gate refuses to start in `live` mode while any class's daily figure is unknown.**
+
+#332 made the daily PnL figure honest: when it cannot be computed, it says so instead of returning a `0` that reads as a flat day. What it does **not** yet do is act on that.
+
+- **What changed.** Before #332, `daily_pnl_pct` came from Alpaca's `last_equity` and always produced *some* number, which could trip the daily-loss breaker. After #332, a figure that cannot be computed is a typed unknown. `CircuitBreakers.evaluate` arms an **advisory** `daily_pnl_unknown` name — visible in `armed_breakers` and the audit trail — but does **not** set `portfolio_tripped`.
+- **Consequence.** In `live`, an unknown daily figure **permits new entries**. The daily-loss limit is then unenforced for the remainder of that session.
+- **When it happens.** Whenever no equity was observed at the session boundary: a fresh store, or — far more likely in practice — **a process restart after the boundary has already passed**. CLAUDE.md lists crash-restart as a Key Constraint, and the deployment target is a MacBook subject to auto-updates, power and WiFi drops. This is an expected event, not an exotic one.
+- **Blast radius.** A full session (a UTC day for crypto; a close-to-close day for stocks) trading real money with no daily-loss circuit breaker.
+- **Why it was left this way.** Escalating unknown into a halt is #333's two-tier daily-loss work, which owns the re-arm semantics. Arming a halt that this breaker cannot itself clear would strand the system halted with no path back, so the breaker half was deliberately not fabricated in #332.
+- **Why it is acceptable *now*.** Live is not running, and the 14-day soak ([#238](https://github.com/dd-jp/samurai-trading-system/issues/238)) runs in `paper`, where the figure is seeded from a mid-session base with a `warn` and the breaker stays live throughout. The exposure is strictly a live-mode one.
+
+**Closing condition:** #333 escalates `daily_pnl_unknown` into a block on new entries in `live` (exits must stay ungated, as with every other breaker) — or a startup gate refuses `live` while the figure is unknown.
+
+---
+
 ## Tier 1 — Blocks the first meaningful paper tick
 
 ### 1. `ingestFills()` and `reconcile()` have no scheduled caller — NO ISSUE EXISTS
@@ -63,6 +84,8 @@ Consequence: whatever supplies `peak_equity` resets on restart, the high-water m
 `last_equity` is no longer read. Equity at each class's session boundary (`TradingCalendar.sessionStart`, [#331](https://github.com/dd-jp/samurai-trading-system/issues/331)) is persisted locally in `session_equity` (migration `0009`), and `PortfolioView.daily_pnl` now carries a per-class figure — crypto from 00:00 UTC, stocks from the prior 16:00 ET close, plus a UTC portfolio-level one.
 
 **Carry-over for the soak:** a daily figure that cannot be computed (fresh store, or a restart after the boundary passed) is reported *unknown* rather than `0` in `live`, and arms an advisory `daily_pnl_unknown` breaker — but it does **not** yet halt new entries. That escalation is [#333](https://github.com/dd-jp/samurai-trading-system/issues/333). In `paper` — the soak's mode — the figure is seeded from a mid-session base with a `warn`, so the breaker stays live throughout.
+
+⚠️ **That carry-over is a live-go blocker, tracked as Tier 0 item 0 above.** It does not affect this doc's paper-readiness verdict, but do not read "RESOLVED" here as "safe to run live".
 
 ### 6. `intent_type: 'exit'` dead-ends — **#74**
 
