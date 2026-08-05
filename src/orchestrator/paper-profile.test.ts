@@ -15,9 +15,11 @@ import {
   runDailyCycle,
 } from '../feedback-loop/index.js';
 import { SimulatedClock } from '../shared/index.js';
+import { openSharedStore } from '../shared/store/index.js';
 import { DEFAULT_TRADER_CONFIG } from '../trader/index.js';
 import { REQUIRED_INJECTED_CONFIG } from './index.js';
 import { PAPER_ACCOUNT_EQUITY_ANCHOR, paperStartingProfile } from './paper-profile.js';
+import { SqliteDailyEquityMetricsSource } from './production/daily-equity-metrics-source.js';
 import { DEFAULT_FEEDBACK_INTERVAL_MS } from './production.js';
 
 describe('paperStartingProfile', () => {
@@ -196,12 +198,50 @@ describe('paperStartingProfile', () => {
       expect(feedback?.intervalMs).toBeUndefined();
     });
 
-    it('leaves metrics unset so the #345 warn keeps firing', () => {
-      // `computeMetrics` needs a `DailyMetricsSource`, which needs a live
-      // equity return series this repo does not persist. Stubbing one here
-      // would turn "the four kill-lines were never checked" into something
-      // that reads like "the four kill-lines passed".
-      expect(paperStartingProfile('paper').feedback?.metrics).toBeUndefined();
+    it('supplies metrics, so computeMetrics has a production caller (#379)', () => {
+      // The inversion of the #345 posture, decided in #379: leaving this unset
+      // made a sixth fully-tested mechanism nothing calls. What makes it safe
+      // is the source's own 60-observation gate (ADR-0006 §5), not the
+      // omission — see the two store-level cases in production.test.ts.
+      expect(paperStartingProfile('paper').feedback?.metrics).toBeDefined();
+    });
+
+    it('supplies the real series-backed source, not a stub that fabricates a suite', () => {
+      const metrics = paperStartingProfile('paper').feedback?.metrics;
+      if (metrics === undefined) throw new Error('no metrics block');
+
+      // A factory, because this file holds no stores — the composition root
+      // owns the handle and calls it (#379). Resolving it here with a real
+      // in-memory handle pins BOTH halves: that the profile defers, and that
+      // what it defers to is the gated `SqliteDailyEquityMetricsSource` rather
+      // than something that would make "never checked" read as "did not
+      // breach".
+      if (typeof metrics.source !== 'function') {
+        throw new Error('metrics.source must be a factory: the profile opens no database');
+      }
+      const db = openSharedStore(':memory:');
+      try {
+        const source = metrics.source({
+          db,
+          trades: { getClosedTradesBetween: () => [] },
+          logger: { log: () => undefined },
+        });
+        expect(source).toBeInstanceOf(SqliteDailyEquityMetricsSource);
+        // Empty series: the gate refuses, which is the state every soak-length
+        // run is in.
+        expect(source.getDailyMetrics()).toBeUndefined();
+      } finally {
+        db.close();
+      }
+    });
+
+    it('leaves backtest_reference_sharpe inert at 0, keeping #375 unarmed', () => {
+      // #375: no backtest of anything this system trades has ever run, so
+      // there is no frozen Sharpe to compare against. A plausible number here
+      // would arm `autoTighten` — which WRITES every risk threshold — against
+      // a reference nobody measured. `<= 0` makes `liveBacktestDivergence`
+      // refuse to manufacture a breach.
+      expect(paperStartingProfile('paper').feedback?.metrics?.backtest_reference_sharpe).toBe(0);
     });
 
     it('refuses live mode for the feedback block too, not only the eight', () => {

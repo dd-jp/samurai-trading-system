@@ -82,6 +82,11 @@
  * which this file's `AlpacaAccountStateProvider` samples on every tick. It
  * refuses to produce a suite below a justified minimum observation count,
  * because a breach WRITES risk thresholds and a Sharpe over ~10 days is noise.
+ * **A paper run now supplies that source too (#379)**, as a factory this root
+ * resolves against its own handle — so the detector has a production caller
+ * rather than one more tested mechanism waiting to be remembered. It is still
+ * never defaulted here: an omitted `metrics` block leaves the detector off and
+ * says so at startup.
  * A breach alerts through `ProductionConfig.breachAlerts` and never kills:
  * kill/rework stays a human decision, and there is no kill primitive here.
  * `onTradeClose` IS wired (#237, superseding this file's earlier note that it
@@ -173,7 +178,7 @@ import type {
   RiskConfig,
 } from '../risk-manager/index.js';
 import { type BreakerConfig, CircuitBreakers } from '../risk-manager/index.js';
-import type { Clock } from '../shared/index.js';
+import type { Clock, ClosedTradeStore } from '../shared/index.js';
 import { TokenBucket } from '../shared/index.js';
 import type { SharedStore as SqliteHandle } from '../shared/store/index.js';
 import type { TraderConfig } from '../trader/index.js';
@@ -502,6 +507,13 @@ export interface FeedbackCycleConfig {
    * unconditional (the sampler always runs, because equity not recorded on the
    * day is unrecoverable); evaluation is opt-in.
    *
+   * **The paper profile opts in (#379).** `paperStartingProfile` supplies the
+   * `SqliteDailyEquityMetricsSource` factory, so the shipped entrypoint arms the
+   * detector — a decision taken in the open, in a reviewable checked-in file,
+   * and safe because the source's own 60-observation gate keeps every kill-line
+   * inert for ~a quarter of trading. That is still not a default: a caller
+   * building its own `ProductionConfig` gets nothing here unless it asks.
+   *
    * Omit it and the detector does not run. That is announced at startup at
    * `warn` rather than left to be discovered — a paper run can degrade exactly
    * the way these lines exist to catch, and silence is the bug #327 closes.
@@ -509,9 +521,52 @@ export interface FeedbackCycleConfig {
   metrics?: DailyMetricsConfig;
 }
 
+/**
+ * The stores a real `DailyMetricsSource` needs but a checked-in profile cannot
+ * hold (#379).
+ *
+ * `paperStartingProfile` supplies tuning VALUES and opens no database — which is
+ * what lets it be imported, diffed and reviewed without side effects, and why
+ * #345 recorded "wiring it belongs to the composition root". The only real
+ * `DailyMetricsSource` in the repo (`SqliteDailyEquityMetricsSource`) needs the
+ * shared handle, so the profile names the decision as a factory and this root,
+ * which owns the handle, calls it.
+ *
+ * `trades` is handed over rather than re-opened so the metrics source and the
+ * tuning cycle read closed trades through one instance (code-review 2026-08-01,
+ * H7) — and typed as the `ClosedTradeStore` port rather than restated
+ * structurally, so the two cannot drift.
+ */
+export interface DailyMetricsSourceDeps {
+  /**
+   * The shared handle, not a pre-built equity store: the root's own
+   * `SqliteDailyEquityStore` lives inside the DEFAULT `accountState` branch and
+   * does not exist when a caller injects its own provider, so handing one over
+   * would be handing over a sometimes-absent object. It is a read-only reader
+   * over an append-only table, so a second instance cannot disagree with the
+   * sampler.
+   */
+  db: SqliteHandle;
+  /** The root's own instance — the same reader `runDailyCycle` attributes over. */
+  trades: ClosedTradeStore;
+  logger: Logger;
+}
+
+/** Deferred construction of a `DailyMetricsSource` — see `DailyMetricsSourceDeps`. */
+export type DailyMetricsSourceFactory = (deps: DailyMetricsSourceDeps) => DailyMetricsSource;
+
 export interface DailyMetricsConfig {
-  /** Supplies the day's already-computed suite, or `undefined` for "none this cycle". */
-  source: DailyMetricsSource;
+  /**
+   * Supplies the day's already-computed suite, or `undefined` for "none this
+   * cycle".
+   *
+   * Either a built source or a factory this root resolves ONCE at construction
+   * (#379) — never per cycle, for `feedbackStores`' reason. The factory form
+   * exists so a config file that holds no stores can still make the decision;
+   * the two are otherwise identical, and supplying either arms the detector
+   * just as explicitly.
+   */
+  source: DailyMetricsSource | DailyMetricsSourceFactory;
   /**
    * The frozen selected config's backtest Sharpe — the divergence check's
    * baseline. Supplied for the same reason the suite is: no selected-config
@@ -547,6 +602,22 @@ export interface DailyMetricsConfig {
    * this value from that record instead of taking it as config.
    */
   backtest_reference_sharpe: number;
+}
+
+/**
+ * Resolves the two forms `DailyMetricsConfig.source` accepts (#379).
+ *
+ * The discriminator is `typeof === 'function'`. A function object could in
+ * principle also carry a `getDailyMetrics` property and satisfy both arms, but
+ * nothing in the repo constructs one and the factory reading wins — which is
+ * the safe way round: a factory misread as a source would be invoked never,
+ * silently, and the detector would look armed while doing nothing.
+ */
+function resolveDailyMetricsSource(
+  source: DailyMetricsSource | DailyMetricsSourceFactory,
+  deps: DailyMetricsSourceDeps,
+): DailyMetricsSource {
+  return typeof source === 'function' ? source(deps) : source;
 }
 
 const DEFAULT_TICK_INTERVAL_MS = 60_000;
@@ -1176,11 +1247,25 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     new LoggingLoosenApprovalChannel(logger);
 
   /**
-   * Latch for the inert-divergence warn (#327 item 3). The condition is a
-   * property of the frozen config, not of the day, so it is true on every
-   * cycle — an unattended daily timer would otherwise repeat it forever.
+   * The detector's source, built once at construction (#379) — never per cycle,
+   * for `feedbackStores`' reason, and never per tick: nothing about it is
+   * per-day. `undefined` here means exactly what it meant before, that no
+   * detector was asked for.
+   *
+   * A factory is called eagerly rather than at first cycle deliberately: the
+   * first cycle is up to 24h away, and a construction error (e.g.
+   * `minReturnObservations` below the floor, which
+   * `SqliteDailyEquityMetricsSource` refuses) must fail the start it belongs to
+   * rather than surface a day later inside a caught timer callback.
    */
-  let warnedInertDivergence = false;
+  const metricsSource =
+    config.feedback?.metrics === undefined
+      ? undefined
+      : resolveDailyMetricsSource(config.feedback.metrics.source, {
+          db: config.db,
+          trades: feedbackStores.trades,
+          logger,
+        });
 
   /**
    * `computeMetrics`'s production caller (#327) — the thing that makes the
@@ -1194,8 +1279,12 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
    * every time, because a cycle that checked nothing must never look like a
    * cycle that found nothing.
    */
-  const runMetricsCheck = (metrics: DailyMetricsConfig, feedbackConfig: FeedbackConfig): void => {
-    const sample = metrics.source.getDailyMetrics();
+  const runMetricsCheck = (
+    source: DailyMetricsSource,
+    metrics: DailyMetricsConfig,
+    feedbackConfig: FeedbackConfig,
+  ): void => {
+    const sample = source.getDailyMetrics();
     if (sample === undefined) {
       logger.log({
         trace_id: 'feedback-cycle',
@@ -1208,21 +1297,6 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         payload: { kill_lines_evaluated: 0 },
       });
       return;
-    }
-
-    if (metrics.backtest_reference_sharpe <= 0 && !warnedInertDivergence) {
-      warnedInertDivergence = true;
-      logger.log({
-        trace_id: 'feedback-cycle',
-        stage: 'feedback-loop',
-        level: 'warn',
-        message:
-          'backtest_reference_sharpe <= 0 — live_backtest_divergence_over_max is INERT and can ' +
-          'never breach. A non-positive reference has no meaningful relative drop, so the check ' +
-          'returns 0 by design; set FeedbackCycleConfig.metrics.backtest_reference_sharpe to the ' +
-          "frozen selected config's backtest Sharpe to arm it. Warned once per process.",
-        payload: { backtest_reference_sharpe: metrics.backtest_reference_sharpe },
-      });
     }
 
     const report = computeMetrics({
@@ -1284,8 +1358,8 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       // failure cannot erase the record that the tuning cycle itself
       // succeeded: the 'complete' line is already written by then, and the
       // catch below adds a 'failed' line rather than replacing it.
-      if (feedback.metrics !== undefined) {
-        runMetricsCheck(feedback.metrics, feedback.config);
+      if (feedback.metrics !== undefined && metricsSource !== undefined) {
+        runMetricsCheck(metricsSource, feedback.metrics, feedback.config);
       }
     } catch (error) {
       logger.log({
@@ -1332,9 +1406,10 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       // Every other feedback-loop startup problem in this function degrades to
       // a logged warn, so the difference needs saying rather than being left
       // to look like an oversight (PR #376 review). Those warns cover a
-      // MISSING FEATURE: `feedback` unset, or `metrics` unset because no
-      // `DailyMetricsSource` can be produced in-repo yet. Nothing is broken —
-      // a capability is absent, and announcing it is the whole fix.
+      // MISSING FEATURE: `feedback` unset, `metrics` unset (the paper profile
+      // sets it since #379, but a caller's own config need not), or a kill-line
+      // whose input nothing produces. Nothing is broken — a capability is
+      // absent, and announcing it is the whole fix.
       //
       // A throw out of this call is a different animal: it means the shared
       // store would not take a single-row insert. That same handle carries
@@ -1428,6 +1503,100 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
               'so arming it during a short soak evaluates nothing rather than acting on noise.',
             payload: { kill_lines: 'not_evaluated' },
           });
+        } else {
+          /**
+           * #379 — the wired case, announced for the same reason the unwired
+           * one is, and in the same place: at startup, once, before anything
+           * has run. A detector that will not produce a suite for a calendar
+           * quarter (the 60-observation gate, ADR-0006 §5) is not the same
+           * thing as a detector that ran and found nothing, and the first daily
+           * cycle is up to 24h away from here.
+           *
+           * `info`, not `warn`: this line says the wiring exists. What is
+           * *inert* despite the wiring is warned about immediately below —
+           * because removing the "metrics is not set" warn removed the only
+           * startup statement that the kill-lines were unevaluated, and
+           * replacing one silence with another is the thing #379 must not do.
+           */
+          logger.log({
+            trace_id: 'startup',
+            stage: 'feedback-loop',
+            level: 'info',
+            message:
+              'FeedbackCycleConfig.metrics is wired — computeMetrics runs on every daily cycle. ' +
+              'The source gates itself below its minimum observation count (ADR-0006 §5), so ' +
+              'early cycles report "no daily MetricsSuite" with the count rather than acting on ' +
+              'a Sharpe made of noise. Which kill-lines that suite can actually answer is ' +
+              'reported per cycle in `not_evaluated`, and at startup by the warns that follow.',
+            payload: { metrics_source: 'wired' },
+          });
+
+          /**
+           * The three revalidation-gated lines, stated at startup because
+           * nothing else does until a suite exists.
+           *
+           * `pbo_over_max`, `oos_sharpe_under_min` and `dsr_insignificant` are
+           * computed only from `DailyMetricsSample.revalidation` — a
+           * walk-forward/PBO snapshot produced by re-running Stage 2 validation,
+           * on its own cadence. `DailyMetricsSource` makes that field optional
+           * and the only in-repo implementation
+           * (`SqliteDailyEquityMetricsSource`) never sets it: it derives a
+           * DAILY suite from the equity series, which is a different thing.
+           *
+           * So a paper run evaluates none of the three, and that is the
+           * statement the old "metrics is not set" warn used to carry. It is
+           * unconditional here rather than conditioned on the sample, because
+           * the first sample is ~60 sessions out and a warn that arrives then
+           * is a warn nobody reads at the time it matters.
+           */
+          logger.log({
+            trace_id: 'startup',
+            stage: 'feedback-loop',
+            level: 'warn',
+            message:
+              'pbo_over_max, oos_sharpe_under_min and dsr_insignificant are evaluated ONLY from a ' +
+              'revalidation snapshot (DailyMetricsSample.revalidation), which no component in ' +
+              'this repo produces — SqliteDailyEquityMetricsSource derives a daily suite from ' +
+              'the equity series and never sets it. Expect these three in `not_evaluated` on ' +
+              'every cycle: they are un-run, NOT passed.',
+            payload: {
+              kill_lines_gated_on_revalidation: [
+                'pbo_over_max',
+                'oos_sharpe_under_min',
+                'dsr_insignificant',
+              ],
+            },
+          });
+
+          /**
+           * #375, kept visible where an operator will actually see it.
+           *
+           * This used to be announced on the first computed suite. With
+           * `metrics` unwired that was equivalent — the blanket "all four
+           * kill-lines stay unevaluated" warn above covered it — but wiring the
+           * source (#379) removes that warn while the gate keeps the first
+           * suite ~60 sessions away, so the divergence line's inertness would
+           * have gone unannounced for the whole soak. Stated here instead: once
+           * per process by construction, since `start()` runs once and the
+           * value is frozen config rather than a property of the day.
+           */
+          if (feedback.metrics.backtest_reference_sharpe <= 0) {
+            logger.log({
+              trace_id: 'startup',
+              stage: 'feedback-loop',
+              level: 'warn',
+              message:
+                'backtest_reference_sharpe <= 0 — live_backtest_divergence_over_max is INERT and ' +
+                'can never breach. A non-positive reference has no meaningful relative drop, so ' +
+                'the check returns 0 by design; set ' +
+                'FeedbackCycleConfig.metrics.backtest_reference_sharpe to the frozen selected ' +
+                "config's backtest Sharpe to arm it (#375). Warned once per process.",
+              payload: {
+                backtest_reference_sharpe: feedback.metrics.backtest_reference_sharpe,
+                kill_line: 'live_backtest_divergence_over_max',
+              },
+            });
+          }
         }
         feedbackHandle = setInterval(
           () => runFeedbackCycle(feedback),
