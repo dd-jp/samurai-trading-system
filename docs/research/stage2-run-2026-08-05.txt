@@ -1,0 +1,219 @@
+Stage 2: ingesting 6 MVP-universe symbols over 2021-08-06T18:17:07.694Z .. 2026-08-05T18:17:07.694Z
+  ingested SPY: 501 bars
+  ingested QQQ: 501 bars
+  ingested AAPL: 501 bars
+  ingested TSLA: 501 bars
+  ingested BTC-USD: 730 bars
+  ingested ETH-USD: 730 bars
+
+Stage 2: WARNING — requested 2021-08-06 but the data starts 2024-08-06. Running on the 2.00-year sample the provider actually served. MinBTL below is computed on THAT window, so a tighter trial cap here is a real constraint of the sample, not a spec change.
+
+Stage 2: running the 12-config trial grid across stocks + crypto...
+
+=== Stage 2: per-config metrics ===
+[stocks] eb1d8a627b39c6ee4f6657a872b0ae36fb8755b51ef56f2ccfa0a00c84f4e0f8 fastWindow=10 slowWindow=30 atrStopMult=2 atrTargetMult=3
+    window: sharpe=-0.281 sortino=-0.398 calmar=-0.221 max_drawdown=0.777 profit_factor=0.905 expectancy=-26.763 skew=0.161 kurtosis=30.785 turnover=338.104 exposure=0.932
+    fold sharpe=0.446
+    fold sharpe=-1.759
+    fold sharpe=0.298
+    fold sharpe=-0.205
+    fold sharpe=0.407
+[crypto] eb1d8a627b39c6ee4f6657a872b0ae36fb8755b51ef56f2ccfa0a00c84f4e0f8 fastWindow=10 slowWindow=30 atrStopMult=2 atrTargetMult=3
+    window: sharpe=-2.350 sortino=-2.781 calmar=-0.790 max_drawdown=0.994 profit_factor=0.426 expectancy=-356.203 skew=-1.589 kurtosis=22.976 turnover=248.054 exposure=0.934
+    fold sharpe=-3.233
+    fold sharpe=-3.301
+    fold sharpe=-4.644
+    fold sharpe=-4.273
+    fold sharpe=-3.596
+[stocks] 33264d64d33599cb7f0a8b0bd54418d83c35674a4333ce60d59eab75a753306e fastWindow=10 slowWindow=30 atrStopMult=1.5 atrTargetMult=2
+    window: sharpe=-0.457 sortino=-0.635 calmar=-0.252 max_drawdown=0.735 profit_factor=0.909 expectancy=-19.925 skew=0.092 kurtosis=21.810 turnover=538.161 exposure=0.933
+    fold sharpe=0.611
+    fold sharpe=-1.621
+    fold sharpe=0.146
+    fold sharpe=-0.812
+    fold sharpe=-0.733
+[crypto] 33264d64d33599cb7f0a8b0bd54418d83c35674a4333ce60d59eab75a753306e fastWindow=10 slowWindow=30 atrStopMult=1.5 atrTargetMult=2
+    window: sharpe=-5.431 sortino=-5.775 calmar=-0.933 max_drawdown=1.000 profit_factor=0.275 expectancy=-432.029 skew=-2.822 kurtosis=14.484 turnover=377.489 exposure=0.919
+    fold sharpe=-4.053
+    fold sharpe=-12.180
+    fold sharpe=-5.845
+    fold sharpe=-12.857
+    fold sharpe=-10.072
+[stocks] 09adb8372de8c0de8d38bdc9bb2ec76d59db115fc8c1cf5012d4fdcecb741bf0 fastWindow=10 slowWindow=30 atrStopMult=3 atrTargetMult=4
+    window: sharpe=0.218 sortino=0.348 calmar=-0.052 max_drawdown=0.643 profit_factor=1.086 expectancy=29.024 skew=2.379 kurtosis=38.583 turnover=224.014 exposure=0.936
+    fold sharpe=3.077
+    fold sharpe=-1.502
+    fold sharpe=2.145
+    fold sharpe=-0.864
+    fold sharpe=1.012
+[crypto] 09adb8372de8c0de8d38bdc9bb2ec76d59db115fc8c1cf5012d4fdcecb741bf0 fastWindow=10 slowWindow=30 atrStopMult=3 atrTargetMult=4
+    window: sharpe=-1.278 sortino=-1.652 calmar=-0.643 max_drawdown=0.965 profit_factor=0.544 expectancy=-287.765 skew=-0.308 kurtosis=33.658 turnover=183.972 exposure=0.945
+    fold sharpe=0.900
+    fold sharpe=-0.573
+    fold sharpe=-2.723
+    fold sharpe=-3.625
+    fold sharpe=-1.507
+[stocks] 26eccc85543740276c3296e936446ab598129041a77e97d5703f9ec9bfa57fc7 fastWindow=10 slowWindow=50 atrStopMult=2 atrTargetMult=3
+    window: sharpe=-0.677 sortino=-0.878 calmar=-0.334 max_drawdown=0.867 profit_factor=0.802 expectancy=-59.435 skew=-2.802 kurtosis=65.173 turnover=342.093 exposure=0.897
+    fold sharpe=-1.132
+    fold sharpe=-3.015
+    fold sharpe=1.192
+    fold sharpe=-0.378
+    fold sharpe=-0.714
+[crypto] 26eccc85543740276c3296e936446ab598129041a77e97d5703f9ec9bfa57fc7 fastWindow=10 slowWindow=50 atrStopMult=2 atrTargetMult=3
+    window: sharpe=-2.141 sortino=-2.531 calmar=-0.690 max_drawdown=0.977 profit_factor=0.491 expectancy=-322.999 skew=-2.257 kurtosis=27.401 turnover=195.813 exposure=0.896
+    fold sharpe=-2.580
+    fold sharpe=-2.115
+    fold sharpe=-4.253
+    fold sharpe=-6.740
+    fold sharpe=-4.659
+[stocks] d8f02e4bf99c3ad181ad41ceeee0713f38c5661396a18cfc93cdbdcc5a411b6e fastWindow=10 slowWindow=50 atrStopMult=1.5 atrTargetMult=2
+    window: sharpe=-0.905 sortino=-1.213 calmar=-0.310 max_drawdown=0.804 profit_factor=0.836 expectancy=-36.871 skew=-0.702 kurtosis=25.628 turnover=516.196 exposure=0.897
+    fold sharpe=-0.762
+    fold sharpe=-2.169
+    fold sharpe=0.224
+    fold sharpe=-1.375
+    fold sharpe=-2.498
+[crypto] d8f02e4bf99c3ad181ad41ceeee0713f38c5661396a18cfc93cdbdcc5a411b6e fastWindow=10 slowWindow=50 atrStopMult=1.5 atrTargetMult=2
+    window: sharpe=-5.426 sortino=-5.821 calmar=-0.875 max_drawdown=0.999 profit_factor=0.320 expectancy=-399.912 skew=-3.450 kurtosis=23.936 turnover=307.538 exposure=0.874
+    fold sharpe=-3.322
+    fold sharpe=-11.390
+    fold sharpe=-6.785
+    fold sharpe=-10.090
+    fold sharpe=-7.226
+[stocks] ae599cce85494ea9739b5d4a9e937734ae54e17b498ea9e35f61b3d8218233b3 fastWindow=10 slowWindow=50 atrStopMult=3 atrTargetMult=4
+    window: sharpe=-0.116 sortino=-0.175 calmar=-0.166 max_drawdown=0.650 profit_factor=0.954 expectancy=-15.203 skew=1.490 kurtosis=40.333 turnover=210.023 exposure=0.901
+    fold sharpe=1.326
+    fold sharpe=-1.546
+    fold sharpe=1.644
+    fold sharpe=-0.407
+    fold sharpe=-1.432
+[crypto] ae599cce85494ea9739b5d4a9e937734ae54e17b498ea9e35f61b3d8218233b3 fastWindow=10 slowWindow=50 atrStopMult=3 atrTargetMult=4
+    window: sharpe=-0.777 sortino=-1.038 calmar=-0.521 max_drawdown=0.881 profit_factor=0.661 expectancy=-220.716 skew=-0.154 kurtosis=51.935 turnover=129.655 exposure=0.897
+    fold sharpe=1.706
+    fold sharpe=0.479
+    fold sharpe=-1.918
+    fold sharpe=-4.465
+    fold sharpe=-2.851
+[stocks] b3465871eb92c0cdfbaaa907815ee0152eb67a88dc6322401b1d728fdc72964b fastWindow=20 slowWindow=30 atrStopMult=2 atrTargetMult=3
+    window: sharpe=-0.218 sortino=-0.294 calmar=-0.253 max_drawdown=0.700 profit_factor=0.932 expectancy=-19.057 skew=-2.397 kurtosis=66.916 turnover=358.055 exposure=0.934
+    fold sharpe=1.025
+    fold sharpe=-0.667
+    fold sharpe=0.850
+    fold sharpe=0.050
+    fold sharpe=-2.427
+[crypto] b3465871eb92c0cdfbaaa907815ee0152eb67a88dc6322401b1d728fdc72964b fastWindow=20 slowWindow=30 atrStopMult=2 atrTargetMult=3
+    window: sharpe=-3.313 sortino=-4.024 calmar=-0.674 max_drawdown=0.972 profit_factor=0.543 expectancy=-245.773 skew=-1.782 kurtosis=25.036 turnover=237.716 exposure=0.921
+    fold sharpe=-2.792
+    fold sharpe=-4.930
+    fold sharpe=-2.811
+    fold sharpe=-3.762
+    fold sharpe=-4.965
+[stocks] 3e2580768b4df07689c29162b5a0c6ac93e48c591d37b39a2e521492554b225e fastWindow=20 slowWindow=30 atrStopMult=1.5 atrTargetMult=2
+    window: sharpe=-0.169 sortino=-0.228 calmar=-0.231 max_drawdown=0.640 profit_factor=0.948 expectancy=-11.099 skew=-1.410 kurtosis=31.157 turnover=556.115 exposure=0.938
+    fold sharpe=0.718
+    fold sharpe=0.335
+    fold sharpe=1.241
+    fold sharpe=-1.238
+    fold sharpe=-2.855
+[crypto] 3e2580768b4df07689c29162b5a0c6ac93e48c591d37b39a2e521492554b225e fastWindow=20 slowWindow=30 atrStopMult=1.5 atrTargetMult=2
+    window: sharpe=-6.820 sortino=-7.375 calmar=-0.875 max_drawdown=0.999 profit_factor=0.331 expectancy=-358.450 skew=-3.215 kurtosis=21.172 turnover=345.520 exposure=0.895
+    fold sharpe=-3.537
+    fold sharpe=-10.280
+    fold sharpe=-5.049
+    fold sharpe=-7.301
+    fold sharpe=-10.730
+[stocks] 87bd3470662a308b6e8f15148fbc51de522cc69ccd5df2ff0133cccaa94db20f fastWindow=20 slowWindow=30 atrStopMult=3 atrTargetMult=4
+    window: sharpe=0.324 sortino=0.513 calmar=0.032 max_drawdown=0.510 profit_factor=1.141 expectancy=42.273 skew=1.616 kurtosis=37.713 turnover=242.010 exposure=0.937
+    fold sharpe=1.903
+    fold sharpe=-0.030
+    fold sharpe=2.887
+    fold sharpe=0.040
+    fold sharpe=-2.119
+[crypto] 87bd3470662a308b6e8f15148fbc51de522cc69ccd5df2ff0133cccaa94db20f fastWindow=20 slowWindow=30 atrStopMult=3 atrTargetMult=4
+    window: sharpe=-1.008 sortino=-1.351 calmar=-0.490 max_drawdown=0.826 profit_factor=0.719 expectancy=-145.494 skew=-0.510 kurtosis=44.402 turnover=171.916 exposure=0.928
+    fold sharpe=1.099
+    fold sharpe=-2.789
+    fold sharpe=0.294
+    fold sharpe=-3.624
+    fold sharpe=-2.792
+[stocks] c4f582f0c76ab46582d3120b6d065f3c36cbc56b1c5dc70e7d53936958f7e58c fastWindow=20 slowWindow=50 atrStopMult=2 atrTargetMult=3
+    window: sharpe=-0.504 sortino=-0.650 calmar=-0.303 max_drawdown=0.901 profit_factor=0.819 expectancy=-58.383 skew=-2.844 kurtosis=60.325 turnover=318.087 exposure=0.895
+    fold sharpe=-0.636
+    fold sharpe=-2.662
+    fold sharpe=0.814
+    fold sharpe=-0.653
+    fold sharpe=-1.691
+[crypto] c4f582f0c76ab46582d3120b6d065f3c36cbc56b1c5dc70e7d53936958f7e58c fastWindow=20 slowWindow=50 atrStopMult=2 atrTargetMult=3
+    window: sharpe=-1.213 sortino=-1.505 calmar=-0.567 max_drawdown=0.953 profit_factor=0.640 expectancy=-205.396 skew=-1.616 kurtosis=28.423 turnover=195.924 exposure=0.908
+    fold sharpe=-2.401
+    fold sharpe=-5.546
+    fold sharpe=-3.582
+    fold sharpe=-7.186
+    fold sharpe=-4.464
+[stocks] 8fc991ac2f80bcae8463dd92e1d8822b5f536af27d5e361c1bbbf679e3439951 fastWindow=20 slowWindow=50 atrStopMult=1.5 atrTargetMult=2
+    window: sharpe=-0.620 sortino=-0.832 calmar=-0.277 max_drawdown=0.852 profit_factor=0.849 expectancy=-35.611 skew=-0.684 kurtosis=21.159 turnover=496.217 exposure=0.901
+    fold sharpe=-0.620
+    fold sharpe=-3.336
+    fold sharpe=1.744
+    fold sharpe=-2.817
+    fold sharpe=-2.747
+[crypto] 8fc991ac2f80bcae8463dd92e1d8822b5f536af27d5e361c1bbbf679e3439951 fastWindow=20 slowWindow=50 atrStopMult=1.5 atrTargetMult=2
+    window: sharpe=-3.099 sortino=-3.383 calmar=-0.828 max_drawdown=0.997 profit_factor=0.358 expectancy=-352.274 skew=-3.733 kurtosis=32.275 turnover=291.883 exposure=0.879
+    fold sharpe=-4.005
+    fold sharpe=-12.878
+    fold sharpe=-5.051
+    fold sharpe=-9.400
+    fold sharpe=-8.262
+[stocks] b9cc5ba502b3e96134e29f6092cece8a41a4d0f29de184be283a6341e8d30341 fastWindow=20 slowWindow=50 atrStopMult=3 atrTargetMult=4
+    window: sharpe=-0.078 sortino=-0.112 calmar=-0.140 max_drawdown=0.760 profit_factor=0.956 expectancy=-15.917 skew=0.204 kurtosis=37.688 turnover=194.066 exposure=0.889
+    fold sharpe=0.677
+    fold sharpe=-2.191
+    fold sharpe=2.171
+    fold sharpe=-0.787
+    fold sharpe=-1.625
+[crypto] b9cc5ba502b3e96134e29f6092cece8a41a4d0f29de184be283a6341e8d30341 fastWindow=20 slowWindow=50 atrStopMult=3 atrTargetMult=4
+    window: sharpe=-0.178 sortino=-0.233 calmar=-0.271 max_drawdown=0.837 profit_factor=0.877 expectancy=-66.499 skew=-2.499 kurtosis=67.149 turnover=115.624 exposure=0.906
+    fold sharpe=6.851
+    fold sharpe=-4.565
+    fold sharpe=0.521
+    fold sharpe=-5.707
+    fold sharpe=-3.177
+
+=== Stage 2: kill-line checks (OOS Sharpe) ===
+[stocks] eb1d8a627b39c6ee4f6657a872b0ae36fb8755b51ef56f2ccfa0a00c84f4e0f8 oos_sharpe=-0.163 window_sharpe=-0.281 passes=false
+[crypto] eb1d8a627b39c6ee4f6657a872b0ae36fb8755b51ef56f2ccfa0a00c84f4e0f8 oos_sharpe=-3.810 window_sharpe=-2.350 passes=false
+[stocks] 33264d64d33599cb7f0a8b0bd54418d83c35674a4333ce60d59eab75a753306e oos_sharpe=-0.482 window_sharpe=-0.457 passes=false
+[crypto] 33264d64d33599cb7f0a8b0bd54418d83c35674a4333ce60d59eab75a753306e oos_sharpe=-9.001 window_sharpe=-5.431 passes=false
+[stocks] 09adb8372de8c0de8d38bdc9bb2ec76d59db115fc8c1cf5012d4fdcecb741bf0 oos_sharpe=0.774 window_sharpe=0.218 passes=true
+[crypto] 09adb8372de8c0de8d38bdc9bb2ec76d59db115fc8c1cf5012d4fdcecb741bf0 oos_sharpe=-1.506 window_sharpe=-1.278 passes=false
+[stocks] 26eccc85543740276c3296e936446ab598129041a77e97d5703f9ec9bfa57fc7 oos_sharpe=-0.809 window_sharpe=-0.677 passes=false
+[crypto] 26eccc85543740276c3296e936446ab598129041a77e97d5703f9ec9bfa57fc7 oos_sharpe=-4.069 window_sharpe=-2.141 passes=false
+[stocks] d8f02e4bf99c3ad181ad41ceeee0713f38c5661396a18cfc93cdbdcc5a411b6e oos_sharpe=-1.316 window_sharpe=-0.905 passes=false
+[crypto] d8f02e4bf99c3ad181ad41ceeee0713f38c5661396a18cfc93cdbdcc5a411b6e oos_sharpe=-7.763 window_sharpe=-5.426 passes=false
+[stocks] ae599cce85494ea9739b5d4a9e937734ae54e17b498ea9e35f61b3d8218233b3 oos_sharpe=-0.083 window_sharpe=-0.116 passes=false
+[crypto] ae599cce85494ea9739b5d4a9e937734ae54e17b498ea9e35f61b3d8218233b3 oos_sharpe=-1.410 window_sharpe=-0.777 passes=false
+[stocks] b3465871eb92c0cdfbaaa907815ee0152eb67a88dc6322401b1d728fdc72964b oos_sharpe=-0.234 window_sharpe=-0.218 passes=false
+[crypto] b3465871eb92c0cdfbaaa907815ee0152eb67a88dc6322401b1d728fdc72964b oos_sharpe=-3.852 window_sharpe=-3.313 passes=false
+[stocks] 3e2580768b4df07689c29162b5a0c6ac93e48c591d37b39a2e521492554b225e oos_sharpe=-0.360 window_sharpe=-0.169 passes=false
+[crypto] 3e2580768b4df07689c29162b5a0c6ac93e48c591d37b39a2e521492554b225e oos_sharpe=-7.379 window_sharpe=-6.820 passes=false
+[stocks] 87bd3470662a308b6e8f15148fbc51de522cc69ccd5df2ff0133cccaa94db20f oos_sharpe=0.536 window_sharpe=0.324 passes=true
+[crypto] 87bd3470662a308b6e8f15148fbc51de522cc69ccd5df2ff0133cccaa94db20f oos_sharpe=-1.563 window_sharpe=-1.008 passes=false
+[stocks] c4f582f0c76ab46582d3120b6d065f3c36cbc56b1c5dc70e7d53936958f7e58c oos_sharpe=-0.966 window_sharpe=-0.504 passes=false
+[crypto] c4f582f0c76ab46582d3120b6d065f3c36cbc56b1c5dc70e7d53936958f7e58c oos_sharpe=-4.636 window_sharpe=-1.213 passes=false
+[stocks] 8fc991ac2f80bcae8463dd92e1d8822b5f536af27d5e361c1bbbf679e3439951 oos_sharpe=-1.555 window_sharpe=-0.620 passes=false
+[crypto] 8fc991ac2f80bcae8463dd92e1d8822b5f536af27d5e361c1bbbf679e3439951 oos_sharpe=-7.919 window_sharpe=-3.099 passes=false
+[stocks] b9cc5ba502b3e96134e29f6092cece8a41a4d0f29de184be283a6341e8d30341 oos_sharpe=-0.351 window_sharpe=-0.078 passes=false
+[crypto] b9cc5ba502b3e96134e29f6092cece8a41a4d0f29de184be283a6341e8d30341 oos_sharpe=-1.215 window_sharpe=-0.178 passes=false
+
+=== Stage 2: MinBTL ===
+n_distinct_trials=12 exceeded=true {"limit":7,"distinct_configs":12,"exceeded":true}
+
+=== Stage 2: PBO ===
+{"error":"pbo_requires_even_fold_count","asset_class":"stocks","detail":"pbo() requires an even fold count >= 4 (CSCV symmetric train/test partitioning); the spec's walk-forward split produces 5 folds per config for asset class 'stocks'. Walk-forward folds are also not a symmetric CSCV partition (anchored, growing train side), so this is a structural conflict between the trial design and overfitting.ts's PBO precondition, not merely an odd number to round up."}
+{"error":"pbo_requires_even_fold_count","asset_class":"crypto","detail":"pbo() requires an even fold count >= 4 (CSCV symmetric train/test partitioning); the spec's walk-forward split produces 5 folds per config for asset class 'crypto'. Walk-forward folds are also not a symmetric CSCV partition (anchored, growing train side), so this is a structural conflict between the trial design and overfitting.ts's PBO precondition, not merely an odd number to round up."}
+
+=== Stage 2: DSR ===
+{"error":"dsr_requires_per_period_sharpe_not_exposed_by_metrics_suite","detail":"deflatedSharpe() requires the non-annualized per-period Sharpe (mean/stdev of the raw periodic returns). MetricsSuite.sharpe is Lo (2002)-adjusted annualized Sharpe (metrics.ts: `sharpe: (mean / stdev) * annualization`, where `annualization` folds in sample autocorrelation) — it is not a naive x sqrt(periodsPerYear) away from the raw per-period statistic, and EvalReport/MetricsSuite exposes neither the raw return series nor the Lo annualization factor needed to invert it correctly. Computing DSR honestly needs a new seam (e.g. a raw per-period Sharpe field, or the annualization factor, on MetricsSuite/EvalReport) — out of this ticket's 'no new math, consumer only' scope."}
+
+=== Stage 2 VERDICT: KILL/INCOMPLETE ===

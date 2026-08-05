@@ -102,6 +102,44 @@ interface ReplayContext {
   capitalPerTrade: number;
 }
 
+/**
+ * The sub-window of `requested` that EVERY symbol actually has bars for.
+ *
+ * Intersected, not unioned: the grid replays one universe per asset class, and
+ * a fold whose range predates a symbol's first bar is what produced the
+ * `toReturnSeries: no bars in the sample` abort on the first live run. Taking
+ * the latest first-bar and earliest last-bar across symbols gives the range
+ * where the whole universe is present.
+ *
+ * A symbol with NO bars at all is a hard failure, not a narrowing: silently
+ * dropping it would change what the verdict is a verdict ABOUT.
+ */
+export function effectiveWindow(
+  store: { bars: (symbol: string, window: DateRange) => Array<{ close_time: Date }> },
+  requested: DateRange,
+): DateRange {
+  let start = requested.start;
+  let end = requested.end;
+
+  for (const symbol of [...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS]) {
+    const bars = store.bars(symbol, requested);
+    const first = bars[0];
+    const last = bars[bars.length - 1];
+    if (first === undefined || last === undefined) {
+      throw new Error(
+        `runStage2: ${symbol} has no bars in ${requested.start.toISOString()} .. ` +
+          `${requested.end.toISOString()}, so the 12-config grid cannot be evaluated over the ` +
+          'MVP universe. Check the symbol is served by this Polygon plan before reading any ' +
+          'verdict — a grid missing a symbol is not the grid the Stage 2 gate is defined on.',
+      );
+    }
+    if (first.close_time.getTime() > start.getTime()) start = first.close_time;
+    if (last.close_time.getTime() < end.getTime()) end = last.close_time;
+  }
+
+  return { start, end };
+}
+
 /** One asset class's fixed symbol/periodsPerYear pairing this script drives. */
 function makeAssetClass(
   ctx: ReplayContext,
@@ -150,9 +188,35 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
     print(`  ingested ${symbol}: ${barCount} bars`);
   }
 
+  // The window the data can actually support, which is NOT always the window
+  // asked for: a Polygon plan serves a bounded history, and the first real run
+  // of this script (2026-08-05) asked for 5 years and received 2 — 501 stock
+  // bars, earliest 2024-08-05. Replaying the requested window against that
+  // produced `toReturnSeries: no bars in the sample` from inside the first
+  // fold, an opaque failure four layers down from its cause.
+  //
+  // So the effective window is INTERSECTED across symbols and everything
+  // downstream — replay, folds, and crucially MinBTL — runs on it. MinBTL's
+  // trial cap is a function of sample length, so computing it over a window
+  // the data does not cover would overstate how many configs the sample can
+  // support, which is the one number in this verdict that exists to prevent
+  // exactly that kind of overfitting.
+  const effective = effectiveWindow(store, window);
+  if (effective.start.getTime() > window.start.getTime()) {
+    print('');
+    print(
+      `Stage 2: WARNING — requested ${window.start.toISOString().slice(0, 10)} but the data ` +
+        `starts ${effective.start.toISOString().slice(0, 10)}. Running on the ` +
+        `${((effective.end.getTime() - effective.start.getTime()) / (365 * 86_400_000)).toFixed(2)}` +
+        '-year sample the provider actually served. MinBTL below is computed on THAT window, so ' +
+        'a tighter trial cap here is a real constraint of the sample, not a spec change.',
+    );
+    print('');
+  }
+
   const costModel = new CostModelImpl(deps.costConfig ?? PESSIMISTIC_COST_CONFIG);
   const configTrialLog = new InMemoryConfigTrialLog();
-  const ctx: ReplayContext = { store, costModel, window, capitalPerTrade };
+  const ctx: ReplayContext = { store, costModel, window: effective, capitalPerTrade };
 
   const stocks = makeAssetClass(ctx, 'stocks', STOCK_SYMBOLS, STOCK_PERIODS_PER_YEAR);
   const crypto = makeAssetClass(ctx, 'crypto', CRYPTO_SYMBOLS, CRYPTO_PERIODS_PER_YEAR);
@@ -160,7 +224,7 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
   print('Stage 2: running the 12-config trial grid across stocks + crypto...');
   const results = await runTrialGrid({
     assetClasses: [stocks, crypto],
-    window,
+    window: effective,
     averageCapital,
     configTrialLog,
   });
@@ -168,7 +232,7 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
   const verdict = renderStage2Verdict({
     results,
     distinctTrialCount: configTrialLog.distinctTrialCount(),
-    window,
+    window: effective,
   });
 
   printReport(results, verdict, print);

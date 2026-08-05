@@ -1,5 +1,11 @@
 import type { PolygonAggregate, PolygonClient } from '../cost-model-backtest/index.js';
-import { CRYPTO_SYMBOLS, defaultFiveYearWindow, runStage2, STOCK_SYMBOLS } from './run-stage2.js';
+import {
+  CRYPTO_SYMBOLS,
+  defaultFiveYearWindow,
+  effectiveWindow,
+  runStage2,
+  STOCK_SYMBOLS,
+} from './run-stage2.js';
 
 const DAY_MS = 86_400_000;
 
@@ -81,15 +87,17 @@ describe('runStage2', () => {
     }
   });
 
-  it('ingests every symbol even when the fake client returns no data, then fails fast rather than rendering a hollow verdict', async () => {
+  it('ingests every symbol even when the fake client returns no data, then names the empty symbol rather than rendering a hollow verdict', async () => {
     const window = defaultFiveYearWindow(new Date(Date.UTC(2024, 0, 1)));
     const calls: string[] = [];
 
-    // No bars ingested means the replay driver produces zero trades, which
-    // `runTrialGrid` deliberately aborts on rather than returning a
-    // partial/misleading result set (trial-execution.ts's fail-fast
-    // rationale) — this asserts every symbol was still *attempted* before
-    // that failure, i.e. ingestion itself does not silently skip anything.
+    // Before the effective-window check this surfaced as
+    // `runTrialGrid: failed on config_hash=...` wrapping
+    // `toReturnSeries: no bars in the sample` — the real failure four layers
+    // down from its cause, which is exactly how the first live run presented.
+    // Now it names the symbol and says why a partial grid is not the grid the
+    // gate is defined on. Every symbol is still *attempted* first: ingestion
+    // does not silently skip anything.
     await expect(
       runStage2({
         polygonClient: {
@@ -101,8 +109,74 @@ describe('runStage2', () => {
         window,
         print: () => {},
       }),
-    ).rejects.toThrow(/runTrialGrid: failed on config_hash=/);
+    ).rejects.toThrow(/runStage2: SPY has no bars in/);
 
     expect(calls.sort()).toEqual([...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS].sort());
+  });
+});
+
+/**
+ * The first live run (2026-08-05) asked for 5 years and the Polygon plan
+ * served 2 — see docs/research/08-stage2-verdict-first-real-run-2026-08-05.md.
+ * MinBTL's trial cap is a function of sample LENGTH, so a verdict rendered
+ * over a window the data does not cover overstates how many configs the
+ * sample supports: the exact overfitting that number exists to catch.
+ */
+describe('effectiveWindow', () => {
+  const REQUESTED = {
+    start: new Date(Date.UTC(2021, 0, 1)),
+    end: new Date(Date.UTC(2026, 0, 1)),
+  };
+
+  function storeWith(coverage: Record<string, { first: Date; last: Date }>) {
+    return {
+      bars(symbol: string) {
+        const span = coverage[symbol];
+        if (span === undefined) return [];
+        return [{ close_time: span.first }, { close_time: span.last }];
+      },
+    };
+  }
+
+  it('narrows to the range every symbol actually covers', () => {
+    const coverage = Object.fromEntries(
+      [...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS].map((symbol) => [
+        symbol,
+        { first: new Date(Date.UTC(2024, 7, 6)), last: new Date(Date.UTC(2026, 0, 1)) },
+      ]),
+    );
+    // One symbol starts later still — the intersection has to follow the
+    // LATEST first bar, or its folds replay over a period it has no data for.
+    coverage.TSLA = { first: new Date(Date.UTC(2025, 0, 1)), last: new Date(Date.UTC(2026, 0, 1)) };
+
+    const effective = effectiveWindow(storeWith(coverage), REQUESTED);
+
+    expect(effective.start.toISOString()).toBe('2025-01-01T00:00:00.000Z');
+    expect(effective.end.toISOString()).toBe('2026-01-01T00:00:00.000Z');
+  });
+
+  it('leaves the requested window alone when the data covers it', () => {
+    const coverage = Object.fromEntries(
+      [...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS].map((symbol) => [
+        symbol,
+        { first: REQUESTED.start, last: REQUESTED.end },
+      ]),
+    );
+
+    expect(effectiveWindow(storeWith(coverage), REQUESTED)).toEqual(REQUESTED);
+  });
+
+  it('refuses a universe with a symbol that has no bars at all', () => {
+    const coverage = Object.fromEntries(
+      [...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS]
+        .filter((symbol) => symbol !== 'ETH-USD')
+        .map((symbol) => [symbol, { first: REQUESTED.start, last: REQUESTED.end }]),
+    );
+
+    // Narrowing past a missing symbol would change what the verdict is a
+    // verdict ABOUT, so this is a hard failure rather than a smaller universe.
+    expect(() => effectiveWindow(storeWith(coverage), REQUESTED)).toThrow(
+      /runStage2: ETH-USD has no bars in/,
+    );
   });
 });
