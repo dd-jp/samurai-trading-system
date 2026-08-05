@@ -187,6 +187,45 @@ describe('raising maxConcurrentInstruments no longer removes the only throttle (
     expect(llmClient.calls).toBe(2 * (LLM_CALLS_PER_ROUND + 1));
   });
 
+  /**
+   * THE MUTATION THIS KILLS, and it also survived the first round: hard-code
+   * `asset_class: 'crypto'` in `tick-runner.ts` instead of threading
+   * `signal.asset_class`. Every stage still ran and every test still passed,
+   * while every stock debate was billed against the CRYPTO budget — so the two
+   * per-class ceilings would have been one ceiling wearing two names, and
+   * `LATENCY_BUDGET_MS` (crypto 15s vs stocks 60s) would inherit the same bug
+   * the moment #374 wires it.
+   *
+   * The per-class assertion above exercises `steps.debate` directly, which
+   * cannot see this: the runner is the layer that chooses what to pass.
+   */
+  it('bills each instrument against ITS OWN class through the real runner', async () => {
+    const rateLimiter = new RateLimiter(CLOCK, budget());
+    const { runner } = tickRunnerOver(countingLlmClient(), rateLimiter);
+
+    await runTickPlan(
+      {
+        tick_time: NOW,
+        instruments: [
+          { asset: 'BTC-USD', asset_class: 'crypto' },
+          { asset: 'AAPL', asset_class: 'stocks' },
+        ],
+      },
+      runner,
+      CLOCK,
+      {
+        max_concurrent_instruments: 1,
+        logger: recordingLogger().logger,
+        auditLog: noopAuditLog(),
+        currentTickStore: noopCurrentTickStore(),
+      },
+    );
+
+    const snapshot = rateLimiter.snapshot();
+    expect(snapshot.crypto?.debatesUsed).toBe(1);
+    expect(snapshot.stocks?.debatesUsed).toBe(1);
+  });
+
   it('degrades the refused instruments instead of failing the whole tick', async () => {
     // A throw would propagate through `runTickPlan`'s `Promise.all` to
     // `startTickLoop`'s catch, discarding every OTHER instrument's pass too —
@@ -292,6 +331,67 @@ describe('the reserved worst case matches what a debate can actually spend', () 
   });
 });
 
+describe('the composition root paces the broker from ops config (#299)', () => {
+  let db: SharedStore;
+
+  beforeEach(() => {
+    db = openSharedStore(':memory:');
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    db.close();
+  });
+
+  /**
+   * THE MUTATION THIS KILLS, and it survived the first round of this suite:
+   * put a `new TokenBucket({capacity: 10, refillPerSecond: 1.5})` literal back
+   * in `production.ts` and ignore the resolved config. Every test still
+   * passed, so `SAMURAI_PACING_ALPACA_*` would have been a knob the operator
+   * could set and the process would silently ignore — #299's own defect class
+   * (a rate limit that is a property of the code rather than of the account),
+   * reintroduced by the fix meant to close it.
+   *
+   * Observed through the bucket's BEHAVIOUR rather than by reading a field,
+   * because the field is private and asserting on a copy of the config would
+   * survive exactly this mutation.
+   */
+  it('honours an injected venue pacing rather than a compiled-in default', async () => {
+    const components = buildProductionComponents(
+      stubConfig(db, {
+        llmClient: countingLlmClient(),
+        // Capacity 1, and a refill so slow the second call cannot be minted
+        // inside the window this test advances. The default capacity is 10, so
+        // a root ignoring this config would let both calls straight through.
+        venuePacing: {
+          alpaca: { capacity: 1, refillPerSecond: 0.001 },
+          ccxt: { capacity: 1, refillPerSecond: 1 },
+          ibkr: { capacity: 5, refillPerSecond: 5 },
+        },
+      }),
+    );
+
+    const first = components.broker.submitBracket(bracketRequest('key-1'));
+    const second = components.broker.submitBracket(bracketRequest('key-2'));
+    let secondSettled = false;
+    void second.then(() => {
+      secondSettled = true;
+    });
+
+    await first;
+    await vi.advanceTimersByTimeAsync(200);
+
+    // The single token went to the first call; the second is parked behind a
+    // refill this deployment's config made ~1000s long.
+    expect(secondSettled).toBe(false);
+
+    // Drained so the pending promise does not outlive the test.
+    await vi.advanceTimersByTimeAsync(1_000_000);
+    await second;
+  });
+});
+
 describe('paperStartingProfile supplies the budget (#388)', () => {
   it('carries a per-asset-class budget with the call budget tied to the worst case', () => {
     const { rateLimiterConfig } = paperStartingProfile('paper');
@@ -331,6 +431,20 @@ describe('paperStartingProfile supplies the budget (#388)', () => {
 // ---------------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------------
+
+function bracketRequest(client_order_id: string) {
+  return {
+    client_order_id,
+    instrument: 'BTC-USD',
+    asset_class: 'crypto' as const,
+    side: 'buy' as const,
+    size: 1,
+    entry: 100,
+    stop: 95,
+    target: 110,
+    time_in_force: 'gtc',
+  };
+}
 
 function sixInstrumentPlan(): TickPlan {
   return {
@@ -401,9 +515,19 @@ function stubConfig(db: SharedStore, overrides: Partial<ProductionConfig>): Prod
     mode: 'paper',
     logger: recordingLogger().logger,
     alpacaBrokerClient: {
-      submitOrder: vi.fn(),
-      cancelOrder: vi.fn(),
-      getOrder: vi.fn(),
+      submitOrder: vi.fn(async () => ({
+        id: 'alpaca-order-1',
+        client_order_id: 'k',
+        status: 'accepted',
+        legs: [],
+      })),
+      cancelOrder: vi.fn(async () => undefined),
+      getOrder: vi.fn(async () => ({
+        id: 'alpaca-order-1',
+        client_order_id: 'k',
+        status: 'accepted',
+        legs: [],
+      })),
       listOrders: vi.fn(async () => []),
       listFills: vi.fn(async () => []),
     } as unknown as ProductionConfig['alpacaBrokerClient'],
