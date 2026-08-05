@@ -30,6 +30,19 @@ const CPCV_TEST_GROUPS = 2;
 const WALK_FORWARD_FOLDS = 5;
 
 /**
+ * Purged k-fold groups for the CSCV pass (#406). Six, matching `CPCV_GROUPS`
+ * — the same partition of the window, held out one group at a time instead of
+ * `CPCV_TEST_GROUPS` at a time.
+ *
+ * Even and >= 4 by construction, which is exactly `pbo()`'s precondition: CSCV
+ * partitions the *folds* into symmetric train/test halves itself (C(6,3) = 20
+ * partitions), so what it needs from here is a fold set it can halve, not a
+ * pre-combined one. Feeding it `cpcv`'s 15 two-group splits instead would
+ * combine the groups twice over.
+ */
+const CSCV_FOLDS = 6;
+
+/**
  * `embargo` is in **bars**, per the spec's `BacktestConfig.validation.embargo`.
  * Bars are not dates, and this generator is handed a `DateRange` with no
  * timeline to resolve them against, so the caller states the bar duration.
@@ -42,16 +55,31 @@ export interface SplitOptions {
   barMs: number;
 }
 
+/** The partitioning schemes. `cscv` is the PBO input — see `cscvSplits`. */
+export type SplitScheme = 'walk_forward' | 'cpcv' | 'cscv';
+
 export function generateSplits(
   window: DateRange,
-  scheme: 'walk_forward' | 'cpcv',
+  scheme: SplitScheme,
   options: SplitOptions,
 ): Split[] {
   assertUsableWindow(window, options);
 
-  return scheme === 'walk_forward'
-    ? walkForwardSplits(window, options)
-    : cpcvSplits(window, options);
+  // Exhaustive switch rather than a ternary: a ternary silently routes every
+  // scheme it does not name to the else branch, so widening the union would
+  // have quietly scored `cscv` as CPCV.
+  switch (scheme) {
+    case 'walk_forward':
+      return walkForwardSplits(window, options);
+    case 'cpcv':
+      return cpcvSplits(window, options);
+    case 'cscv':
+      return cscvSplits(window, options);
+    default: {
+      const unreachable: never = scheme;
+      throw new Error(`generateSplits: unknown scheme ${String(unreachable)}.`);
+    }
+  }
 }
 
 /**
@@ -106,6 +134,48 @@ function cpcvSplits(window: DateRange, options: SplitOptions): Split[] {
     }
 
     splits.push({ train, test });
+  }
+
+  return splits;
+}
+
+/**
+ * Purged k-fold (López de Prado, AFML ch. 7) — the partition CSCV, and so
+ * `pbo()`, is defined over. Six contiguous groups; fold `f` tests group `f` and
+ * trains on the other five, purged and embargoed around the held-out group.
+ *
+ * **One contiguous test range per fold, deliberately.** That is what separates
+ * this from the `cpcv` scheme, whose *k*-group test side `eval-executor.ts`
+ * still refuses to score: `MetricsSuite.exposure` takes its denominator from a
+ * single `TradeSeries.window`, so a test side spanning a gap under-reports
+ * exposure. Holding out one group at a time sidesteps that entirely — the
+ * sample *is* the range — rather than working around it. This is why the
+ * stage-2 spec's "CPCV scoring — out of scope" note does not bar this pass;
+ * the reason behind that note does not apply here.
+ *
+ * Every fold is scored out-of-sample against the same window as every other,
+ * which is what makes the configs x folds matrix `pbo()` ranks over a genuine
+ * comparison rather than an artifact of unequal samples.
+ */
+function cscvSplits(window: DateRange, options: SplitOptions): Split[] {
+  const groups = partition(window, CSCV_FOLDS);
+  const embargoMs = options.embargo * options.barMs;
+  const splits: Split[] = [];
+
+  for (let fold = 0; fold < CSCV_FOLDS; fold++) {
+    const test = at(groups, fold);
+    const train = groups
+      .filter((_, index) => index !== fold)
+      .flatMap((group) => purge(group, [test], embargoMs));
+
+    if (train.length === 0) {
+      throw new Error(
+        `generateSplits: embargo of ${options.embargo} bars purges the entire training set of ` +
+          `CSCV fold ${fold}. Use a longer window or a smaller embargo.`,
+      );
+    }
+
+    splits.push({ train, test: [test] });
   }
 
   return splits;

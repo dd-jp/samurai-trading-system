@@ -99,8 +99,8 @@ export class EvalExecutorImpl implements EvalExecutor {
  *
  * `MetricsSuite.exposure` is "fraction of the sample with a position open",
  * and `computeMetrics` takes that denominator from the single
- * `TradeSeries.window`. A walk-forward test side is one contiguous range, so
- * the window is exactly the sample. A CPCV test side is *k* disjoint groups
+ * `TradeSeries.window`. A walk-forward or CSCV test side is one contiguous
+ * range, so the window is exactly the sample. A CPCV test side is *k* disjoint groups
  * (splits.ts: `CPCV_TEST_GROUPS = 2`), and the only single range spanning them
  * also spans the untested gap between them — which would silently inflate the
  * exposure denominator and under-report exposure on every CPCV split.
@@ -110,6 +110,10 @@ export class EvalExecutorImpl implements EvalExecutor {
  * of sample ranges, which changes a #89 contract and every caller of it — out
  * of scope for this ticket, whose acceptance criteria are walk-forward. Split
  * *generation* for CPCV is unaffected and still works (#89).
+ *
+ * The `cscv` scheme (#406) holds out one group at a time, so its test side is
+ * a single range and this restriction never bites — which is how the PBO
+ * matrix gets built without extending `TradeSeries` first.
  */
 function testRangeOf(test: readonly DateRange[]): DateRange {
   const range = test[0];
@@ -122,7 +126,8 @@ function testRangeOf(test: readonly DateRange[]): DateRange {
       `EvalExecutor: cannot score a split with ${test.length} disjoint test ranges (CPCV). ` +
         'MetricsSuite.exposure is measured against a single contiguous TradeSeries.window, so ' +
         'spanning the gap between test groups would under-report exposure. Scoring CPCV needs ' +
-        'TradeSeries to carry a list of sample ranges; use scheme "walk_forward" until it does.',
+        'TradeSeries to carry a list of sample ranges; use scheme "walk_forward" or "cscv" ' +
+        'until it does.',
     );
   }
 

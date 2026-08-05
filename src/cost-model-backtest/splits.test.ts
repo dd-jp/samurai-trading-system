@@ -106,6 +106,72 @@ describe('generateSplits', () => {
     });
   });
 
+  describe('cscv', () => {
+    it("produces an even fold count >= 4 — pbo()'s precondition, which walk-forward cannot meet", () => {
+      const splits = generateSplits(WINDOW, 'cscv', NO_EMBARGO);
+
+      expect(splits).toHaveLength(6);
+      expect(splits.length % 2).toBe(0);
+      expect(splits.length).toBeGreaterThanOrEqual(4);
+      // The contrast that motivates the scheme (#406).
+      expect(generateSplits(WINDOW, 'walk_forward', NO_EMBARGO).length % 2).toBe(1);
+    });
+
+    it('gives every fold a single contiguous test range, so the exposure denominator stays honest', () => {
+      // This is what separates it from `cpcv`, whose k-group test side
+      // `eval-executor.ts` refuses to score.
+      for (const split of generateSplits(WINDOW, 'cscv', NO_EMBARGO)) {
+        expect(split.test).toHaveLength(1);
+      }
+      expect(
+        generateSplits(WINDOW, 'cpcv', NO_EMBARGO).some((split) => split.test.length > 1),
+      ).toBe(true);
+    });
+
+    it('tests every part of the window exactly once, including the first group', () => {
+      const splits = generateSplits(WINDOW, 'cscv', NO_EMBARGO);
+      const tested = splits.map((split) => split.test[0]);
+
+      // Walk-forward never tests the first group — it is train-only in every
+      // fold. CSCV does, which is both why it adds a sixth observation per
+      // config and why that fold carries the indicator warm-up.
+      expect(tested[0]?.start.getTime()).toBe(WINDOW.start.getTime());
+      expect(tested.at(-1)?.end.getTime()).toBe(WINDOW.end.getTime());
+
+      for (let index = 1; index < tested.length; index++) {
+        expect(tested[index]?.start.getTime()).toBe(tested[index - 1]?.end.getTime());
+      }
+    });
+
+    it('never leaves a held-out group inside its own training set', () => {
+      for (const split of generateSplits(WINDOW, 'cscv', NO_EMBARGO)) {
+        for (const train of split.train) {
+          expect(overlaps(train, split.test[0])).toBe(false);
+        }
+      }
+    });
+
+    it('purges and embargoes on both sides of the held-out group', () => {
+      const embargo = 10;
+      const splits = generateSplits(WINDOW, 'cscv', { embargo, barMs: DAY_MS });
+      // Fold 2 has train groups on both sides of it, so both edges are testable.
+      const split = splits[2];
+      const test = split?.test[0];
+
+      for (const train of split?.train ?? []) {
+        if (train.end.getTime() <= (test?.start.getTime() ?? 0)) {
+          expect((test?.start.getTime() ?? 0) - train.end.getTime()).toBeGreaterThanOrEqual(
+            embargo * DAY_MS,
+          );
+        } else {
+          expect(train.start.getTime() - (test?.end.getTime() ?? 0)).toBeGreaterThanOrEqual(
+            embargo * DAY_MS,
+          );
+        }
+      }
+    });
+  });
+
   describe('rejects unusable inputs rather than emitting a silently-degraded split', () => {
     it('throws when the window is inverted', () => {
       expect(() =>

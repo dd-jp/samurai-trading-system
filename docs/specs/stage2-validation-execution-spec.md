@@ -175,6 +175,8 @@ Uses existing seams unchanged: `overfitting.ts`'s DSR/PBO/MinBTL functions, `Con
 ## Out of Scope
 
 - **CPCV scoring** — `eval-executor.ts` already defers this (the exposure denominator can't handle disjoint test ranges yet); not this spec's job to extend `TradeSeries` to carry multiple sample ranges. Walk-forward alone satisfies Stage 2's exit condition per the staged-deployment research doc.
+
+  **Amended 2026-08-05 (#406).** Walk-forward alone turned out *not* to satisfy the exit condition: it produces 5 anchored folds, and the kill line's PBO term needs the symmetric partition `pbo()` is defined over, so PBO was uncomputable on every run. A `cscv` split scheme was added — purged 6-fold, one group held out at a time — and `runTrialGrid` scores it as an opt-in second pass. This does *not* reverse the exclusion above: the reason CPCV is out of scope is the disjoint-test-range exposure denominator, and CSCV's single contiguous test range per fold never meets it. CPCV scoring remains deferred, and `TradeSeries` is unchanged.
 - **Comparing LLM-debate performance against the mechanical baseline** — a separate question for later (Stage 3/paper-trading territory), not part of proving the harness works.
 - **Stage 3/4 (paper trading launch, live capital deployment)** — covered by ADR-0004 and wayfinder map #224, not here.
 - **Shared SQLite store schema design** — a separate, not-yet-charted effort; this execution's data store is intentionally decoupled from it.
