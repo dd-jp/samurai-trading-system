@@ -86,44 +86,58 @@ export const VENUE_DOCUMENTED_CEILING_PER_SECOND: Partial<Record<VenueKey, numbe
  */
 export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
   /**
-   * The two numbers here are set on DIFFERENT AXES for different reasons and
+   * The three numbers here are set on DIFFERENT AXES for different reasons and
    * have different evidence behind them. Stating that split was a PR #390
    * review finding: the old comment cited Alpaca's sustained figure and let it
    * read as if it justified the burst too, which it does not.
    *
-   * **`refillPerSecond: 1.5` — SUSTAINED, CEILING VERIFIED.** 45% of the
-   * documented 200 req/min = 3.33/s account ceiling (cited above), not 100%,
-   * and the missing 55% is not caution — it is the market-data client, which
-   * shares the same per-account budget and is NOT paced by any bucket today
-   * (#391). Sizing the broker at the ceiling would mean the first data-side
-   * retry burst earns the 429 for the order path. Sustained 1.5/s = 90/min.
+   * **ONE BUCKET, TWO CONSUMERS (#391).** This config now paces the broker
+   * adapter AND `market-data-service/sources/alpaca-http-client.ts`, which
+   * share Alpaca's per-ACCOUNT 200 req/min. Before #391 only the broker was
+   * paced, and the headroom left for the unpaced data client was reserved by
+   * simply running the broker at 45% of the ceiling — headroom a consumer
+   * that could exceed it freely was expected to respect.
    *
-   * **`capacity: 10` — BURST, and NO PUBLISHED ALPACA BURST LIMIT COULD BE
+   * **`refillPerSecond: 2.5` — SUSTAINED, CEILING VERIFIED / RATE UNVERIFIED.**
+   * RE-DERIVED, not inherited (#391's fourth criterion): with both consumers
+   * inside the budget there is no unpaced third party to leave 55% for, so
+   * the split is now a deliberate 75% of the documented 200 req/min = 3.33/s
+   * ceiling — 2.5/s = 150/min. The remaining 25% is margin for what this
+   * bucket still does NOT pace: `withRetry`'s own retry attempts, and any
+   * future consumer on the same key. This is an OPERATING rate under a
+   * verified ceiling, not a figure Alpaca publishes — it has not been
+   * measured against a real account under load.
+   *
+   * **`capacity: 14` — BURST, and NO PUBLISHED ALPACA BURST LIMIT COULD BE
    * ESTABLISHED.** Alpaca's own support page states only "200 requests per
    * minute, per account" with no burst qualifier; secondary write-ups describe
-   * that as a rolling 60-second window (under which a burst of 10 is
-   * immaterial — 10 of 200), but that is not Alpaca's wording and is not
-   * relied on here. So, per this module's own honesty rule, the number is
-   * DERIVED FROM OUR WORKLOAD rather than from a venue figure:
-   * `AlpacaBrokerAdapter.fetchNewFills` issues one `getOrder` per open bracket
-   * through this bucket, and the ADR-0001 universe is 6 instruments, so one
-   * fill-poll sweep is up to 6 acquisitions, plus a concurrent `submitBracket`
-   * from the tick path = 7. `10` is the smallest round number covering a full
-   * sweep with headroom; `5` would pace a single ordinary sweep of the
-   * CURRENT universe. Pinned against the universe size by a test, so widening
+   * that as a rolling 60-second window, but that is not Alpaca's wording and
+   * is not relied on here. So, per this module's own honesty rule, the number
+   * is DERIVED FROM OUR WORKLOAD — specifically from the worst moment, which
+   * is a COLD START rather than steady state: `TokenBucket` begins full, and
+   * on a fresh process the bar cache is empty, so all 6 ADR-0001 instruments
+   * fetch bars at once (6) while `reconcile()` sweeps open brackets with one
+   * `getOrder` each (up to 6), plus a `submitBracket` from the first tick (1).
+   * 13, rounded to 14. Pinned against the universe size by a test, so widening
    * the universe again cannot silently outgrow the burst.
+   *
+   * **`reserveForPriority: 6` — WORKLOAD-DERIVED.** The tokens market data may
+   * not spend. One full fill-poll sweep of the 6-instrument universe is 6
+   * `getOrder` calls, so this guarantees the order path can always complete a
+   * sweep — and place a leg — without waiting behind a bar burst. Market data
+   * is therefore capped at `capacity - reserve` = 8 back-to-back calls.
    *
    * Why an unverified burst is an acceptable risk where an unverified
    * SUSTAINED rate would not be: exceeding a burst allowance returns 429,
    * which `withRetry` already handles and the bucket then paces; a BAN comes
-   * from sustained abuse, and on that axis this value is deliberately at 45%
-   * of a verified ceiling.
+   * from sustained abuse, and on that axis this value stays a quarter clear of
+   * a verified ceiling.
    *
    * Alpaca's published figure does not distinguish paper from live, and the
    * paper host is the one the soak uses; nothing was found that documents a
    * separate paper allowance, so the same ceiling is applied to both.
    */
-  alpaca: { capacity: 10, refillPerSecond: 1.5 },
+  alpaca: { capacity: 14, refillPerSecond: 2.5, reserveForPriority: 6 },
   /**
    * UNVERIFIED, and kept conservative on purpose.
    *
@@ -150,7 +164,7 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
    * over N brackets costs ~N seconds. The day a venue and tier are chosen,
    * `SAMURAI_PACING_CCXT_*` closes that window without a code change.
    */
-  ccxt: { capacity: 1, refillPerSecond: 1 },
+  ccxt: { capacity: 1, refillPerSecond: 1, reserveForPriority: 0 },
   /**
    * CEILING VERIFIED (50 msg/s, cited above), OPERATING RATE UNVERIFIED.
    *
@@ -167,7 +181,7 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
    * pacing violation is answered with a DISCONNECT, and this adapter's
    * disconnects happen while the venue holds live bracket legs.
    */
-  ibkr: { capacity: 5, refillPerSecond: 5 },
+  ibkr: { capacity: 5, refillPerSecond: 5, reserveForPriority: 0 },
 };
 
 /** The environment variables that override one venue's bucket. */
@@ -175,12 +189,14 @@ export function venuePacingEnvVars(venue: VenueKey): {
   capacity: string;
   refillPerSecond: string;
   ceilingPerSecond: string;
+  reserveForPriority: string;
 } {
   const prefix = `SAMURAI_PACING_${venue.toUpperCase()}`;
   return {
     capacity: `${prefix}_CAPACITY`,
     refillPerSecond: `${prefix}_REFILL_PER_SEC`,
     ceilingPerSecond: `${prefix}_CEILING_PER_SEC`,
+    reserveForPriority: `${prefix}_PRIORITY_RESERVE`,
   };
 }
 
@@ -286,8 +302,45 @@ export function resolveVenuePacing(env: NodeJS.ProcessEnv = process.env): VenueP
         ceiling: resolveCeiling(env, venue, names.ceilingPerSecond),
         ceilingEnvVar: names.ceilingPerSecond,
       }),
+      reserveForPriority: resolveReserve(env, names, fallback),
     };
   }
 
   return resolved;
+}
+
+/**
+ * The tokens `acquireBackground()` may not spend (#391).
+ *
+ * Validated against the RESOLVED capacity rather than the default, because
+ * the failure it prevents is silent and total: a reserve at or above capacity
+ * means a background caller can never reach `1 + reserve` tokens on a bucket
+ * that refills to `capacity`, so every market-data call parks forever and the
+ * process looks like a quiet market rather than a stopped one. Same posture as
+ * `capacity`'s own `min: 1` check — a configuration that cannot release a call
+ * is refused at startup, not paced.
+ */
+function resolveReserve(
+  env: NodeJS.ProcessEnv,
+  names: ReturnType<typeof venuePacingEnvVars>,
+  fallback: TokenBucketConfig,
+): number {
+  const capacity = readPositive(env, names.capacity, fallback.capacity, {
+    min: 1,
+    minLabel: 'at least 1 (a bucket under one token never releases a call)',
+  });
+  const reserve = readPositive(env, names.reserveForPriority, fallback.reserveForPriority ?? 0, {
+    min: 0,
+    minLabel: 'at least 0',
+  });
+
+  if (reserve > capacity - 1) {
+    throw new Error(
+      `${names.reserveForPriority}=${reserve} leaves no token for background callers under a ` +
+        `capacity of ${capacity}: a background acquire needs 1 + reserve tokens, so market-data ` +
+        'calls would park forever and the run would look like a quiet market rather than a ' +
+        `stopped one. Use at most ${capacity - 1}, or raise ${names.capacity}.`,
+    );
+  }
+  return reserve;
 }

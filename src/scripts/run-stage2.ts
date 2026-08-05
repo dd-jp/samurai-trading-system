@@ -195,7 +195,18 @@ interface ReplayContext {
  * where the whole universe is present.
  *
  * A symbol with NO bars at all is a hard failure, not a narrowing: silently
- * dropping it would change what the verdict is a verdict ABOUT.
+ * dropping it would change what the verdict is a verdict ABOUT. So is an
+ * EMPTY intersection (start >= end), which is what disjoint coverage across
+ * symbols produces — one symbol's history ending before another's begins.
+ * Returning an inverted range there would hand replay/folds/MinBTL a window
+ * they cannot sample, reproducing the same opaque `toReturnSeries` abort this
+ * function exists to prevent, just one layer further down.
+ *
+ * Bar bounds are computed by min/max rather than by taking `bars[0]` and
+ * `bars.at(-1)`: `Stage2HistoricalStore.bars` does `ORDER BY close_time ASC`
+ * today, but the structural parameter type above cannot state that, and a
+ * store that ever returned bars unordered would silently mis-narrow the
+ * window rather than fail.
  */
 export function effectiveWindow(
   store: { bars: (symbol: string, window: DateRange) => Array<{ close_time: Date }> },
@@ -206,8 +217,12 @@ export function effectiveWindow(
 
   for (const symbol of [...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS]) {
     const bars = store.bars(symbol, requested);
-    const first = bars[0];
-    const last = bars[bars.length - 1];
+    let first: Date | undefined;
+    let last: Date | undefined;
+    for (const bar of bars) {
+      if (first === undefined || bar.close_time.getTime() < first.getTime()) first = bar.close_time;
+      if (last === undefined || bar.close_time.getTime() > last.getTime()) last = bar.close_time;
+    }
     if (first === undefined || last === undefined) {
       throw new Error(
         `runStage2: ${symbol} has no bars in ${requested.start.toISOString()} .. ` +
@@ -216,8 +231,20 @@ export function effectiveWindow(
           'verdict — a grid missing a symbol is not the grid the Stage 2 gate is defined on.',
       );
     }
-    if (first.close_time.getTime() > start.getTime()) start = first.close_time;
-    if (last.close_time.getTime() < end.getTime()) end = last.close_time;
+
+    if (first.getTime() > start.getTime()) start = first;
+    if (last.getTime() < end.getTime()) end = last;
+  }
+
+  if (start.getTime() >= end.getTime()) {
+    throw new Error(
+      `runStage2: the MVP universe has no window every symbol covers — the intersection of ` +
+        `per-symbol coverage across ${requested.start.toISOString()} .. ` +
+        `${requested.end.toISOString()} collapsed to ${start.toISOString()} .. ` +
+        `${end.toISOString()}. At least one symbol's history ends before another's begins, so ` +
+        'there is no sample the 12-config grid can be evaluated on. Widen the requested window ' +
+        'or check which symbol this Polygon plan is serving short.',
+    );
   }
 
   return { start, end };
@@ -274,7 +301,7 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
   // The window the data can actually support, which is NOT always the window
   // asked for: a Polygon plan serves a bounded history, and the first real run
   // of this script (2026-08-05) asked for 5 years and received 2 — 501 stock
-  // bars, earliest 2024-08-05. Replaying the requested window against that
+  // bars, earliest 2024-08-06. Replaying the requested window against that
   // produced `toReturnSeries: no bars in the sample` from inside the first
   // fold, an opaque failure four layers down from its cause.
   //
@@ -284,12 +311,30 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
   // the data does not cover would overstate how many configs the sample can
   // support, which is the one number in this verdict that exists to prevent
   // exactly that kind of overfitting.
+  // Warn when EITHER boundary moved, naming which. A provider whose history
+  // lags the request narrows the END instead of the start (stale or partial
+  // vendor data), and warning only on the start would let that shrink the
+  // sample invisibly — the run output would read as a full-window run.
   const effective = effectiveWindow(store, window);
-  if (effective.start.getTime() > window.start.getTime()) {
+  const narrowedStart = effective.start.getTime() > window.start.getTime();
+  const narrowedEnd = effective.end.getTime() < window.end.getTime();
+  if (narrowedStart || narrowedEnd) {
+    const narrowing: string[] = [];
+    if (narrowedStart) {
+      narrowing.push(
+        `requested a start of ${window.start.toISOString().slice(0, 10)} but the data starts ` +
+          `${effective.start.toISOString().slice(0, 10)}`,
+      );
+    }
+    if (narrowedEnd) {
+      narrowing.push(
+        `requested an end of ${window.end.toISOString().slice(0, 10)} but the data ends ` +
+          `${effective.end.toISOString().slice(0, 10)}`,
+      );
+    }
     print('');
     print(
-      `Stage 2: WARNING — requested ${window.start.toISOString().slice(0, 10)} but the data ` +
-        `starts ${effective.start.toISOString().slice(0, 10)}. Running on the ` +
+      `Stage 2: WARNING — ${narrowing.join('; ')}. Running on the ` +
         `${((effective.end.getTime() - effective.start.getTime()) / (365 * 86_400_000)).toFixed(2)}` +
         '-year sample the provider actually served. MinBTL below is computed on THAT window, so ' +
         'a tighter trial cap here is a real constraint of the sample, not a spec change.',

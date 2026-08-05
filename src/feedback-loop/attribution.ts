@@ -14,7 +14,7 @@
 import type { AnalystContribution, Direction } from '../debate-engine/index.js';
 import type { ClosedTrade, DebateLogStore } from '../shared/index.js';
 import { getContributionsForAttribution } from './debate-attribution-lookup.js';
-import type { FeedbackConfig, TunableDial } from './types.js';
+import type { TunableDial } from './types.js';
 
 /** Accumulated signed credit for one analyst across the cycle's window. */
 export interface AnalystCredit {
@@ -59,38 +59,52 @@ function stanceAgreement(stance: Direction, direction: Direction): number {
 }
 
 /**
- * Signed, influence-weighted credit one analyst earns from one trade.
+ * Signed credit one analyst earns from one trade: `agreement × R`. Backing a
+ * winner (+1 × +R) and opposing a loser (−1 × −R) both come out positive.
  *
- * `agreement × R` is the "was it right" term: backing a winner (+1 × +R) and
- * opposing a loser (−1 × −R) both come out positive. Scaling by
- * `influence_score` is the "did it drive the outcome" term.
+ * ## Why `influence_score` is NOT a factor here (#370, decided 2026-08-05)
  *
- * Shadow credit (spec story 3) adds a small extra term when the analyst was
- * right but too quiet to sway the debate, so a quietly-correct analyst can
- * climb back instead of being pinned by its own low influence. It is
- * upside-only: being quietly WRONG is already punished lightly by the low
- * influence weight, and double-penalising it would drive such an analyst to
- * the floor and keep it there.
+ * It used to scale this term as the "did it drive the outcome" half, with a
+ * shadow-credit top-up for a right-but-quiet analyst. Two findings retired
+ * that design rather than one:
+ *
+ *  1. **The formula and this consumer disagreed on sign.**
+ *     `computeInfluenceScore` (debate-engine/analyst-contribution.ts) measures
+ *     how often an analyst CHANGED stance across rounds — i.e. how much it was
+ *     persuaded. Weighting credit by it paid analysts for being moved while
+ *     the doc here claimed it paid them for moving others. A follower and a
+ *     driver scored identically.
+ *  2. **It is 0 in practice.** Debates converge in round one, and the score is
+ *     0 for fewer than two recorded stances. So the influence term contributed
+ *     nothing and shadow credit — which fires only below the influence ceiling
+ *     — silently carried the entire signal, at a tenth of its magnitude and
+ *     upside-only. Weighting was running on a dead input scaled by a constant.
+ *
+ * Correctness alone is what this system can honestly measure today. It is
+ * signed both ways, so a wrong analyst is now penalised at the same magnitude
+ * a right one is rewarded, where the old shadow-only path effectively floored
+ * losers at 0.
+ *
+ * `influence_score` is still COMPUTED and still written to the debate log — it
+ * remains a fair observation of stance movement, and re-arming it as a credit
+ * factor is open work. It is simply no longer allowed to weight an analyst.
+ *
+ * Magnitude is safe by construction: `impliedWeight` squashes mean credit
+ * through `tanh` onto the dial's band and `guardrails.ts` caps the per-cycle
+ * step, so removing a ≤1.0 scaling factor cannot produce an out-of-band target
+ * or a larger step than the operator allowed.
  */
 export function creditForContribution(
   contribution: AnalystContribution,
   r: number,
   direction: Direction,
-  config: Pick<FeedbackConfig, 'shadow_credit' | 'shadow_influence_ceiling'>,
 ): number {
   const agreement = stanceAgreement(contribution.final_position, direction);
   if (agreement === 0) {
     return 0;
   }
 
-  const correctness = agreement * r;
-  const influenceCredit = contribution.influence_score * correctness;
-
-  const wasRight = correctness > 0;
-  const wasQuiet = contribution.influence_score <= config.shadow_influence_ceiling;
-  const shadowCredit = wasRight && wasQuiet ? config.shadow_credit * correctness : 0;
-
-  return influenceCredit + shadowCredit;
+  return agreement * r;
 }
 
 /**
@@ -103,7 +117,6 @@ export function creditForContribution(
 export function accumulateCredit(
   trades: readonly ClosedTrade[],
   debateLog: DebateLogStore,
-  config: Pick<FeedbackConfig, 'shadow_credit' | 'shadow_influence_ceiling'>,
 ): Map<string, AnalystCredit> {
   const credits = new Map<string, AnalystCredit>();
 
@@ -124,7 +137,7 @@ export function accumulateCredit(
         total_credit: 0,
         trade_count: 0,
       };
-      existing.total_credit += creditForContribution(contribution, r, direction, config);
+      existing.total_credit += creditForContribution(contribution, r, direction);
       existing.trade_count += 1;
       credits.set(contribution.analyst_id, existing);
     }

@@ -898,8 +898,17 @@ export function buildDefaultAlpacaBrokerClient(
  * money-safety decision to make here — only the asset-class path root, which
  * `AlpacaDataSource` needs fixed at construction.
  */
-export function buildDefaultAlpacaDataClient(assetClass: 'crypto' | 'stocks'): AlpacaDataClient {
-  return new AlpacaHttpDataClient({ assetClass });
+export function buildDefaultAlpacaDataClient(
+  assetClass: 'crypto' | 'stocks',
+  /**
+   * The account's shared outbound bucket (#391). Optional so existing callers
+   * and tests keep working unpaced; the composition root always passes the
+   * same instance it gave the broker adapter, because Alpaca's 200 req/min is
+   * per ACCOUNT — two buckets would be two budgets against one limit.
+   */
+  rateLimiter?: TokenBucket,
+): AlpacaDataClient {
+  return new AlpacaHttpDataClient({ assetClass, rateLimiter });
 }
 
 /**
@@ -940,6 +949,8 @@ export function buildAlpacaDataSource(
   config: Pick<ProductionConfig, 'alpacaDataClient' | 'dataSourceAssetClass'>,
   universe: readonly UniverseInstrument[],
   tradingCalendar: TradingCalendar,
+  /** The account's shared outbound bucket (#391) — see `buildDefaultAlpacaDataClient`. */
+  rateLimiter?: TokenBucket,
 ): DataSource {
   const present = universeAssetClasses(universe);
   // An empty universe has no class to derive — `'crypto'` remains the
@@ -949,13 +960,16 @@ export function buildAlpacaDataSource(
     present.length > 0 ? present : [config.dataSourceAssetClass ?? 'crypto'];
 
   const sourceFor = (assetClass: AssetClass): AlpacaDataSource =>
-    new AlpacaDataSource(config.alpacaDataClient ?? buildDefaultAlpacaDataClient(assetClass), {
-      asset_class: assetClass,
-      // Authoritative for equities only: `AlpacaDataSource` substitutes
-      // `AlwaysOpenCalendar` for a crypto source regardless of what is passed
-      // (alpaca-source.ts), because a 24/7 venue has no session to gate on.
-      calendar: tradingCalendar,
-    });
+    new AlpacaDataSource(
+      config.alpacaDataClient ?? buildDefaultAlpacaDataClient(assetClass, rateLimiter),
+      {
+        asset_class: assetClass,
+        // Authoritative for equities only: `AlpacaDataSource` substitutes
+        // `AlwaysOpenCalendar` for a crypto source regardless of what is passed
+        // (alpaca-source.ts), because a 24/7 venue has no session to gate on.
+        calendar: tradingCalendar,
+      },
+    );
 
   const single = classes.length === 1 ? classes[0] : undefined;
   if (single !== undefined) {
@@ -1123,8 +1137,19 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     config.alpacaBrokerClient ??
     buildDefaultAlpacaBrokerClient(config.mode, config.logger ?? new JsonLogger());
 
+  // Outbound pacing per venue, from ops config rather than a literal here
+  // (#299). Hoisted above the market-data wiring by #391: ONE Alpaca bucket
+  // for the whole root, shared by the broker adapter and the market-data
+  // client, because the 200 req/min limit is per ACCOUNT and two buckets would
+  // be two budgets against one limit. The broker takes `acquire()`; market
+  // data takes `acquireBackground()` and leaves `reserveForPriority` tokens
+  // it may not spend, so a bar sweep cannot park an order behind the refill.
+  const venuePacing = config.venuePacing ?? resolveVenuePacing();
+  const alpacaBucket = new TokenBucket(venuePacing.alpaca);
+
   const universe = config.universe ?? SMOKE_TEST_UNIVERSE;
-  const dataSource = config.dataSource ?? buildAlpacaDataSource(config, universe, tradingCalendar);
+  const dataSource =
+    config.dataSource ?? buildAlpacaDataSource(config, universe, tradingCalendar, alpacaBucket);
   const marketData: MarketDataService = new MarketDataServiceImpl(
     dataSource,
     clock,
@@ -1155,18 +1180,17 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     { setup_store: new SqliteSetupStore(config.db) },
     logger,
   );
-  // Outbound pacing per venue, from ops config rather than a literal here
-  // (#299): `resolveVenuePacing` starts from `DEFAULT_VENUE_PACING` — which
-  // carries each value's provenance and, where the venue publishes one, a
-  // documented ceiling it refuses to let an override exceed — and applies any
+  // `resolveVenuePacing` starts from `DEFAULT_VENUE_PACING` — which carries
+  // each value's provenance and, where the venue publishes one, a documented
+  // ceiling it refuses to let an override exceed — and applies any
   // `SAMURAI_PACING_ALPACA_*` the deployment set. A rate limit is a property
   // of the account, so it belongs beside the credentials, not in the code.
-  const venuePacing = config.venuePacing ?? resolveVenuePacing();
+  // The bucket itself is built once, above the market-data wiring (#391).
   const broker =
     config.broker ??
     new AlpacaBrokerAdapter({
       client: brokerClient,
-      rateLimiter: new TokenBucket(venuePacing.alpaca),
+      rateLimiter: alpacaBucket,
       // #287: without a durable bracket index the adapter starts every run
       // blind, and `fetchNewFills` polls nothing for lots that were already
       // filling when the process died. The in-memory default is only ever

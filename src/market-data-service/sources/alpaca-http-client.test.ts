@@ -1,3 +1,4 @@
+import { TokenBucket } from '../../shared/index.js';
 import {
   AlpacaDataProviderError,
   AlpacaDataUnderfetchError,
@@ -913,5 +914,80 @@ describe('AlpacaHttpDataClient — sparse-symbol underfetch (#292)', () => {
     const first = rangeOf(fetchMock.mock.calls[0]);
     const second = rangeOf(fetchMock.mock.calls[1]);
     expect(second.start).toBeLessThan(first.start);
+  });
+});
+
+/**
+ * #391: this client and the broker adapter spend ONE per-account budget, so
+ * the bucket is shared and market-data calls take the background path — they
+ * may be late, but they may not delay an order.
+ */
+describe('AlpacaHttpDataClient — outbound pacing (#391)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  function client(rateLimiter: TokenBucket): AlpacaHttpDataClient {
+    return new AlpacaHttpDataClient({
+      assetClass: 'stocks',
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+      rateLimiter,
+    });
+  }
+
+  it('takes a token per request, and leaves the priority reserve for the order path', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ bars: dailyBars(1), symbol: 'AAPL' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    // Capacity 3 with 2 reserved: exactly one background call may proceed.
+    const bucket = new TokenBucket({ capacity: 3, refillPerSecond: 1, reserveForPriority: 2 });
+    const subject = client(bucket);
+
+    await subject.getBars('AAPL', '1d', new Date('2026-07-03T00:00:00Z'), 1, 'allow');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // The second call has to wait for a refill: only the reserve remains, and
+    // that belongs to the broker.
+    let second = false;
+    const pending = subject
+      .getBars('AAPL', '1d', new Date('2026-07-03T00:00:00Z'), 1, 'allow')
+      .then(() => {
+        second = true;
+      });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(second).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await pending;
+    expect(second).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('is unpaced when no bucket is supplied — every existing caller is unaffected', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ bars: dailyBars(1), symbol: 'AAPL' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const subject = new AlpacaHttpDataClient({
+      assetClass: 'stocks',
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+    });
+
+    await subject.getBars('AAPL', '1d', new Date('2026-07-03T00:00:00Z'), 1, 'allow');
+    await subject.getBars('AAPL', '1d', new Date('2026-07-03T00:00:00Z'), 1, 'allow');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
