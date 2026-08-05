@@ -265,6 +265,166 @@ describe('buildDebateStep', () => {
 });
 
 /**
+ * The latency budget at the composition point (#374). `enforceLatencyBudget`
+ * had no production caller, so a debate that never came back held the tick for
+ * as long as the provider took — unbounded, on a 14-day unattended soak.
+ *
+ * These tests drive the STEP, not the budget module (which has its own unit
+ * tests): the thing #374 was about is that the two were never connected, and
+ * only a test through `buildDebateStep` can fail if they come apart again.
+ */
+describe('buildDebateStep latency budget (#374)', () => {
+  /**
+   * Answers normally for the first `stallAfterCalls` calls, then hangs until
+   * the debate's `AbortSignal` fires — a provider that accepted the request
+   * and stopped answering, which is the shape the budget exists for.
+   */
+  function stallingLlmClient(options: { stallAfterCalls: number; converged?: boolean }): {
+    client: LlmClient;
+    callCount: () => number;
+  } {
+    const { stallAfterCalls, converged = false } = options;
+    const inner = fakeLlmClient({ converged });
+    let calls = 0;
+
+    return {
+      callCount: () => calls,
+      client: {
+        async complete<T>(request: LlmRequest<T>) {
+          calls++;
+          if (calls > stallAfterCalls) {
+            return await new Promise<never>((_resolve, reject) => {
+              request.signal?.addEventListener('abort', () =>
+                reject(request.signal?.reason ?? new Error('aborted')),
+              );
+            });
+          }
+          return await inner.complete(request);
+        },
+      },
+    };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('returns on budget instead of waiting for a debate that never answers', async () => {
+    const { client } = stallingLlmClient({ stallAfterCalls: 0 });
+    const step = buildDebateStep(client, new InMemoryDebateLogStore(), unlimited());
+
+    const pending = step({
+      trace_id: 'trace-1',
+      instrument: 'AAPL',
+      views: [makeView()],
+      asset_class: 'stocks',
+      clock: CLOCK,
+    });
+
+    // Nothing completed a round, so this is the low-confidence fallback —
+    // deliberately unactionable: confidence 0 is under any conviction floor,
+    // so the tick short-circuits at Trader with no_trade.
+    await vi.advanceTimersByTimeAsync(60_000);
+    const result = await pending;
+
+    expect(result.timed_out).toEqual({ budget_ms: 60_000, elapsed_ms: 60_000 });
+    expect(result.converged).toBe(false);
+    expect(result.rounds_completed).toBe(0);
+    expect(result.confidence).toBe(0);
+    expect(result.contributions).toEqual([]);
+  });
+
+  it('returns the partial synthesis, not the bare fallback, when a round completed', async () => {
+    // Round 1 completes without converging (3 calls: bull, bear, mediator);
+    // round 2's bull then stalls. Without `getCurrentState` exposed through
+    // the persona closure, that round-1 synthesis would be thrown away and
+    // this would come back as the empty fallback above.
+    const { client, callCount } = stallingLlmClient({ stallAfterCalls: 3 });
+    const store = new InMemoryDebateLogStore();
+    const step = buildDebateStep(client, store, unlimited());
+    const views = [makeView()];
+
+    const pending = step({
+      trace_id: 'trace-1',
+      instrument: 'AAPL',
+      views,
+      asset_class: 'stocks',
+      clock: CLOCK,
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    const result = await pending;
+
+    expect(result.timed_out).toEqual({ budget_ms: 60_000, elapsed_ms: 60_000 });
+    expect(result.converged).toBe(false);
+    expect(result.rounds_completed).toBe(1);
+    expect(result.synthesis).toBe('bull case wins');
+    expect(result.direction).toBe('bullish');
+    expect(result.contributions).toHaveLength(1);
+    expect(result.contributions[0]?.analyst_id).toBe('technical-1');
+    // Non-converged results must carry a reason downstream can act on; the
+    // once-per-debate disagreement call never ran, so the summary is empty
+    // and the adapter names the actual cause instead.
+    expect(result.open_items).toEqual(['debate did not converge before the latency budget fired']);
+
+    // The timed-out debate is still a resolved debate, so it gets its row.
+    expect(store.getByDebateId(result.debate_id)).toBeDefined();
+
+    // Cancellation, not just abandonment (#347): no further persona call is
+    // issued after the budget fires.
+    const atTimeout = callCount();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(callCount()).toBe(atTimeout);
+  });
+
+  it('uses the crypto budget for a crypto instrument', async () => {
+    const { client } = stallingLlmClient({ stallAfterCalls: 0 });
+    const step = buildDebateStep(client, new InMemoryDebateLogStore(), unlimited());
+
+    const pending = step({
+      trace_id: 'trace-1',
+      instrument: 'BTC-USD',
+      views: [makeView()],
+      asset_class: 'crypto',
+      clock: CLOCK,
+    });
+
+    // 15s, not 60s — the per-asset-class lookup #374 called out as the
+    // reason this could not be a one-line wire.
+    await vi.advanceTimersByTimeAsync(15_000);
+    const result = await pending;
+
+    expect(result.timed_out).toEqual({ budget_ms: 15_000, elapsed_ms: 15_000 });
+  });
+
+  it('logs the timeout on the debate stage so an operator can see the budget fire', async () => {
+    const { client } = stallingLlmClient({ stallAfterCalls: 0 });
+    const { logger, entries } = recordingLogger();
+    const step = buildDebateStep(client, new InMemoryDebateLogStore(), unlimited(), logger);
+
+    const pending = step({
+      trace_id: 'trace-1',
+      instrument: 'AAPL',
+      views: [makeView()],
+      asset_class: 'stocks',
+      clock: CLOCK,
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await pending;
+
+    const timeout = entries.find((entry) => entry.message === 'debate.timeout');
+    expect(timeout).toBeDefined();
+    expect(timeout?.stage).toBe('debate');
+    expect(timeout?.trace_id).toBe('trace-1');
+  });
+});
+
+/**
  * The instrumentation half of #326, exercised end to end rather than at the
  * seam: a REAL `AnthropicLlmClient` over a fake wire client, writing through a
  * REAL `SqliteLlmSpendStore` into a real (`:memory:`) database, driven by
