@@ -235,4 +235,89 @@ describe('runDebate', () => {
 
     expect(first.debate_id).toBe(second.debate_id);
   });
+
+  describe('cancellation (#347)', () => {
+    it('threads the signal into every round context so personas can cancel their own call', async () => {
+      const controller = new AbortController();
+      const seen: (AbortSignal | undefined)[] = [];
+      const record = (context: RoundContext) => {
+        seen.push(context.signal);
+      };
+
+      await runDebate(
+        makeInput(),
+        {
+          bull: {
+            argue: async (context) => {
+              record(context);
+              return { persona: 'bull', round: context.round, argument: 'b' };
+            },
+          },
+          bear: {
+            argue: async (context) => {
+              record(context);
+              return { persona: 'bear', round: context.round, argument: 'b' };
+            },
+          },
+          mediator: {
+            assess: async (context): Promise<MediatorAssessment> => {
+              record(context);
+              return { converged: true, stances: [], synthesis: makeSynthesis() };
+            },
+          },
+          clock: new SimulatedClock(new Date('2026-07-14T09:00:00Z')),
+        },
+        { signal: controller.signal },
+      );
+
+      expect(seen).toEqual([controller.signal, controller.signal, controller.signal]);
+    });
+
+    it('issues strictly fewer persona calls when the signal aborts mid-debate', async () => {
+      const controller = new AbortController();
+      const calls: string[] = [];
+      const personas = {
+        // Bear aborts the debate the moment it is asked — standing in for the
+        // latency budget firing while bear's LLM call is in flight.
+        bull: stubDebater('bull', calls),
+        bear: {
+          argue: vi.fn(async (context: RoundContext) => {
+            calls.push(`bear:${context.round}`);
+            controller.abort();
+            return { persona: 'bear' as const, round: context.round, argument: 'bear argument' };
+          }),
+        },
+        mediator: stubMediator([], calls),
+        clock: new SimulatedClock(new Date('2026-07-14T09:00:00Z')),
+      };
+
+      await expect(
+        runDebate(makeInput(), personas, { signal: controller.signal }),
+      ).rejects.toMatchObject({ name: 'AbortError' });
+
+      // Two calls, not the nine an uncancelled 3-round debate would make: the
+      // mediator is never asked, and neither are rounds 2 and 3.
+      expect(calls).toEqual(['bull:1', 'bear:1']);
+      expect(personas.mediator.assess).not.toHaveBeenCalled();
+    });
+
+    it('makes no persona call at all when handed an already-aborted signal', async () => {
+      const calls: string[] = [];
+
+      await expect(
+        runDebate(
+          makeInput(),
+          {
+            bull: stubDebater('bull', calls),
+            bear: stubDebater('bear', calls),
+            mediator: stubMediator([1], calls),
+            clock: new SimulatedClock(new Date('2026-07-14T09:00:00Z')),
+          },
+          { signal: AbortSignal.abort() },
+        ),
+      ).rejects.toMatchObject({ name: 'AbortError' });
+
+      expect(calls).toEqual([]);
+    });
+  });
 });

@@ -1,6 +1,7 @@
 import type { AnthropicMessageResponse, AnthropicMessagesClient } from './anthropic-client.js';
 import { AnthropicLlmClient } from './anthropic-client.js';
 import {
+  LlmCancelledError,
   LlmMalformedResponseError,
   LlmProviderError,
   LlmRateLimitError,
@@ -58,6 +59,11 @@ describe('AnthropicLlmClient', () => {
     expect(result.raw_text).toBe('good');
     expect(wire.createMessage).toHaveBeenCalledWith(
       expect.objectContaining({ model: 'claude-sonnet-5', max_tokens: 1024 }),
+      // Second argument since #347: the per-call transport options, which
+      // always carry a signal (the client's own timeout signal even when the
+      // caller supplied none) so a slow call can be aborted rather than left
+      // dangling.
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
 
@@ -400,5 +406,149 @@ describe('AnthropicLlmClient spend metering', () => {
     });
 
     await expect(client.complete(request())).resolves.toMatchObject({ data: { value: 'good' } });
+  });
+
+  describe('cancellation (#347)', () => {
+    it('rejects with LlmCancelledError without calling out when the signal is already aborted', async () => {
+      const wire: AnthropicMessagesClient = {
+        createMessage: vi.fn().mockResolvedValue(textResponse('good')),
+      };
+      const client = new AnthropicLlmClient(wire, {
+        model: 'claude-sonnet-5',
+        max_tokens: 1024,
+        timeoutMs: 1_000,
+        retry: NO_RETRY,
+      });
+
+      await expect(
+        client.complete({ ...request(), signal: AbortSignal.abort() }),
+      ).rejects.toBeInstanceOf(LlmCancelledError);
+      // The point of the ticket: a cancelled request costs nothing.
+      expect(wire.createMessage).not.toHaveBeenCalled();
+    });
+
+    it('forwards a signal to the wire client, composed with its own timeout', async () => {
+      const wire: AnthropicMessagesClient = {
+        createMessage: vi.fn().mockResolvedValue(textResponse('good')),
+      };
+      const client = new AnthropicLlmClient(wire, {
+        model: 'claude-sonnet-5',
+        max_tokens: 1024,
+        timeoutMs: 1_000,
+        retry: NO_RETRY,
+      });
+      const controller = new AbortController();
+
+      await client.complete({ ...request(), signal: controller.signal });
+
+      const options = (wire.createMessage as ReturnType<typeof vi.fn>).mock.calls[0][1];
+      expect(options.signal).toBeInstanceOf(AbortSignal);
+      // Composed, not the caller's own: the per-call timeout must be able to
+      // abort the request too. Aborting the caller's still aborts the composite.
+      expect(options.signal).not.toBe(controller.signal);
+      controller.abort();
+      expect(options.signal.aborted).toBe(true);
+    });
+
+    it('reports a mid-flight cancellation as LlmCancelledError, not a provider fault, and does not retry', async () => {
+      const wire: AnthropicMessagesClient = {
+        createMessage: vi.fn(
+          (_request: unknown, options?: { signal?: AbortSignal }) =>
+            new Promise<AnthropicMessageResponse>((_resolve, reject) => {
+              options?.signal?.addEventListener('abort', () => reject(options.signal?.reason));
+            }),
+        ),
+      };
+      const client = new AnthropicLlmClient(wire, {
+        model: 'claude-sonnet-5',
+        max_tokens: 1024,
+        timeoutMs: 60_000,
+        // Retries deliberately ENABLED: a cancellation that classified as
+        // retryable would spend exactly what the cancellation exists to save.
+        retry: { maxAttempts: 3, baseDelayMs: 10, maxDelayMs: 10 },
+      });
+      const controller = new AbortController();
+
+      const promise = client.complete({ ...request(), signal: controller.signal });
+      const rejects = expect(promise).rejects.toBeInstanceOf(LlmCancelledError);
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await rejects;
+
+      expect(wire.createMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the underlying failure as `cause` when relabelling a cancellation', async () => {
+      // The relabel branch fires on ANY error that surfaces once the signal is
+      // aborted, so a genuine provider failure racing the abort must not be
+      // thrown away — a cost fix is a bad reason to lose an outage's evidence.
+      const providerFailure = Object.assign(new Error('rate limited'), { status: 429 });
+      const wire: AnthropicMessagesClient = {
+        createMessage: vi.fn(
+          (_request: unknown, options?: { signal?: AbortSignal }) =>
+            new Promise<AnthropicMessageResponse>((_resolve, reject) => {
+              options?.signal?.addEventListener('abort', () => reject(providerFailure));
+            }),
+        ),
+      };
+      const client = new AnthropicLlmClient(wire, {
+        model: 'claude-sonnet-5',
+        max_tokens: 1024,
+        timeoutMs: 60_000,
+        retry: NO_RETRY,
+      });
+      const controller = new AbortController();
+
+      const promise = client.complete({ ...request(), signal: controller.signal });
+      const rejects = expect(promise).rejects.toMatchObject({
+        name: 'LlmCancelledError',
+        cause: expect.objectContaining({ message: 'rate limited' }),
+      });
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      await rejects;
+    });
+
+    it('aborts its own in-flight request when the per-call timeout fires', async () => {
+      let seen: AbortSignal | undefined;
+      const wire: AnthropicMessagesClient = {
+        createMessage: vi.fn((_request: unknown, options?: { signal?: AbortSignal }) => {
+          seen = options?.signal;
+          return new Promise<AnthropicMessageResponse>(() => {});
+        }),
+      };
+      const client = new AnthropicLlmClient(wire, {
+        model: 'claude-sonnet-5',
+        max_tokens: 1024,
+        timeoutMs: 1_000,
+        retry: NO_RETRY,
+      });
+
+      const promise = client.complete(request());
+      const rejects = expect(promise).rejects.toBeInstanceOf(LlmTimeoutError);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await rejects;
+
+      // Before #347 a timed-out call was left running — and, since
+      // `LlmTimeoutError` is retryable, was retried underneath itself.
+      expect(seen?.aborted).toBe(true);
+    });
+
+    it('clears the per-call timeout timer when the call answers in time', async () => {
+      const wire: AnthropicMessagesClient = {
+        createMessage: vi.fn().mockResolvedValue(textResponse('good')),
+      };
+      const client = new AnthropicLlmClient(wire, {
+        model: 'claude-sonnet-5',
+        max_tokens: 1024,
+        timeoutMs: 30_000,
+        retry: NO_RETRY,
+      });
+
+      await client.complete(request());
+
+      // One leaked 30s timer per LLM call, every call, for the whole soak.
+      expect(vi.getTimerCount()).toBe(0);
+    });
   });
 });

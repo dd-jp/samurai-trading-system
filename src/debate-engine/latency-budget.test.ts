@@ -1,5 +1,6 @@
 import type { DebateLogger } from './debate-logger.js';
 import {
+  DebateBudgetExceededError,
   enforceLatencyBudget,
   LATENCY_BUDGET_MS,
   type PartialDebateState,
@@ -243,6 +244,162 @@ describe('enforceLatencyBudget', () => {
         budget_ms: 60_000,
       }),
     );
+  });
+
+  it('hands the debate a signal that is not aborted while it is within budget', async () => {
+    const logger = makeLogger();
+    let seen: AbortSignal | undefined;
+
+    const promise = enforceLatencyBudget({
+      assetClass: 'crypto',
+      trace_id: 'trace-1',
+      debate_id: 'debate-1',
+      produceResult: (signal) => {
+        seen = signal;
+        return resolvesAfter(5_000, makeResult());
+      },
+      getCurrentState: () => undefined,
+      logger,
+    });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await promise;
+
+    expect(seen).toBeInstanceOf(AbortSignal);
+    expect(seen?.aborted).toBe(false);
+  });
+
+  it('aborts the debate signal when the budget fires (#347)', async () => {
+    const logger = makeLogger();
+    let seen: AbortSignal | undefined;
+
+    const promise = enforceLatencyBudget({
+      assetClass: 'crypto',
+      trace_id: 'trace-1',
+      debate_id: 'debate-1',
+      produceResult: (signal) => {
+        seen = signal;
+        return new Promise(() => {});
+      },
+      getCurrentState: () => undefined,
+      logger,
+    });
+
+    await vi.advanceTimersByTimeAsync(LATENCY_BUDGET_MS.crypto);
+    await promise;
+
+    expect(seen?.aborted).toBe(true);
+    expect(seen?.reason).toBeInstanceOf(DebateBudgetExceededError);
+    expect(seen?.reason.budget_ms).toBe(LATENCY_BUDGET_MS.crypto);
+  });
+
+  it('aborts before reading the partial state, so no further work can be recorded', async () => {
+    const logger = makeLogger();
+    let seen: AbortSignal | undefined;
+    let abortedWhenStateRead: boolean | undefined;
+
+    const promise = enforceLatencyBudget({
+      assetClass: 'crypto',
+      trace_id: 'trace-1',
+      debate_id: 'debate-1',
+      produceResult: (signal) => {
+        seen = signal;
+        return new Promise(() => {});
+      },
+      getCurrentState: () => {
+        abortedWhenStateRead = seen?.aborted;
+        return makePartialState();
+      },
+      logger,
+    });
+
+    await vi.advanceTimersByTimeAsync(LATENCY_BUDGET_MS.crypto);
+    const result = await promise;
+
+    // The decision this ticket had to make: what a partially-completed round
+    // contributes. Answer — exactly what it contributed before. Cancelling
+    // stops the NEXT call; it never rewrites what already completed, so the
+    // partial synthesis is still used and the caller-visible fallback is
+    // unchanged.
+    expect(abortedWhenStateRead).toBe(true);
+    expect(result.synthesis).toBe(makePartialState().synthesis);
+  });
+
+  it('clears the budget timer when the debate wins the race', async () => {
+    const logger = makeLogger();
+
+    const promise = enforceLatencyBudget({
+      assetClass: 'stocks',
+      trace_id: 'trace-1',
+      debate_id: 'debate-1',
+      produceResult: () => resolvesAfter(1_000, makeResult()),
+      getCurrentState: () => undefined,
+      logger,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await promise;
+
+    // One unfired 60s timer per tick, held for the whole soak, is its own leak.
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('swallows the cancelled debate rejection without logging anything extra', async () => {
+    const logger = makeLogger();
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+
+    try {
+      const promise = enforceLatencyBudget({
+        assetClass: 'crypto',
+        trace_id: 'trace-1',
+        debate_id: 'debate-1',
+        // The realistic shape post-#347: the debate rejects when its signal
+        // aborts, AFTER the budget has already returned the fallback.
+        produceResult: (signal) =>
+          new Promise((_resolve, reject) => {
+            signal.addEventListener('abort', () => reject(signal.reason));
+          }),
+        getCurrentState: () => undefined,
+        logger,
+      });
+
+      await vi.advanceTimersByTimeAsync(LATENCY_BUDGET_MS.crypto);
+      const result = await promise;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(result.timed_out).toBeDefined();
+      // A deliberate cancellation is not a fault: one `logTimeout`, nothing else.
+      expect(logger.logTimeout).toHaveBeenCalledTimes(1);
+      expect(logger.logAnalystFailure).not.toHaveBeenCalled();
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', unhandled);
+    }
+  });
+
+  it('still propagates a debate failure that arrives before the budget fires', async () => {
+    const logger = makeLogger();
+
+    const promise = enforceLatencyBudget({
+      assetClass: 'crypto',
+      trace_id: 'trace-1',
+      debate_id: 'debate-1',
+      produceResult: () =>
+        new Promise((_resolve, reject) => {
+          setTimeout(() => reject(new Error('mediator exploded')), 1_000);
+        }),
+      getCurrentState: () => undefined,
+      logger,
+    });
+
+    // The swallow handler must not turn a real pre-timeout failure into a
+    // silent hang — that path is unchanged from before #347. The assertion is
+    // attached BEFORE time advances so the rejection is never momentarily
+    // unhandled (which vitest reports as an unhandled error).
+    const rejects = expect(promise).rejects.toThrow('mediator exploded');
+    await vi.advanceTimersByTimeAsync(1_000);
+    await rejects;
   });
 
   it('does not log a timeout event when the debate completes in time', async () => {

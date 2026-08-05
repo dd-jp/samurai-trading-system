@@ -21,9 +21,14 @@ export { JsonDebateLogger } from './debate-logger.js';
 export type { DisagreementAnalysis, DisagreementConflict } from './disagreement-detector.js';
 export { detectDisagreements } from './disagreement-detector.js';
 export type { PartialDebateState } from './latency-budget.js';
-export { enforceLatencyBudget, LATENCY_BUDGET_MS } from './latency-budget.js';
+export {
+  DebateBudgetExceededError,
+  enforceLatencyBudget,
+  LATENCY_BUDGET_MS,
+} from './latency-budget.js';
 export type {
   AnthropicLlmClientConfig,
+  AnthropicMessageOptions,
   AnthropicMessageRequest,
   AnthropicMessageResponse,
   AnthropicMessagesClient,
@@ -37,6 +42,7 @@ export {
 } from './llm/anthropic-http-client.js';
 export type { LlmError } from './llm/errors.js';
 export {
+  LlmCancelledError,
   LlmMalformedResponseError,
   LlmProviderError,
   LlmRateLimitError,
@@ -79,6 +85,7 @@ export type {
   MediatorSynthesis,
   RoundContext,
   RoundStance,
+  RunDebateOptions,
 } from './round-orchestrator.js';
 export { MAX_ROUNDS, runDebate } from './round-orchestrator.js';
 export { SqliteDebateLogStore } from './sqlite-debate-log-store.js';

@@ -36,6 +36,14 @@ export interface RoundContext {
   views: AnalystView[];
   round: number;
   priorArguments: DebateArgument[];
+  /**
+   * Cancels this round's work (#347). Carried on the context rather than added
+   * to `DebaterPersona.argue`/`MediatorPersona.assess` as a parameter, so the
+   * two port interfaces — and every fake implementing them — are unchanged: a
+   * persona that wants to be cancellable reads `context.signal` and forwards
+   * it to its LLM client; one that ignores it still compiles and still runs.
+   */
+  signal?: AbortSignal | undefined;
 }
 
 /** One persona's contribution to a single round. */
@@ -111,6 +119,25 @@ export interface DebateInput {
   bar: Date;
 }
 
+/** Per-run knobs that are not debate INPUT (nothing here is hashed into `debate_id`). */
+export interface RunDebateOptions {
+  /**
+   * Cancels the debate (#347). Checked before EVERY persona call and threaded
+   * into each `RoundContext`, so an aborted debate issues no further LLM calls
+   * — belt (the loop refuses to start the next call) and braces (the client
+   * aborts the one already in flight). The check is what makes the guarantee
+   * hold even for an `LlmClient` that ignores `LlmRequest.signal`.
+   *
+   * `throwIfAborted` rather than a quiet `break`: a cancelled debate has no
+   * result worth returning, and the one caller that cancels
+   * (`enforceLatencyBudget`) has already produced its fallback and is no
+   * longer listening. Returning a truncated `DebateResult` here would instead
+   * race that fallback and risk a second, contradictory result reaching the
+   * Trader.
+   */
+  signal?: AbortSignal | undefined;
+}
+
 /**
  * Runs the round-robin debate to convergence or the hard cap and returns the
  * compact Trader-facing `DebateResult`. The ephemeral round-by-round state is
@@ -119,9 +146,11 @@ export interface DebateInput {
 export async function runDebate(
   input: DebateInput,
   personas: DebatePersonas,
+  options: RunDebateOptions = {},
 ): Promise<DebateResult> {
   const { views, instrument, bar } = input;
   const { bull, bear, mediator, clock } = personas;
+  const { signal } = options;
 
   const startedAt = clock.now().getTime();
   const priorArguments: DebateArgument[] = [];
@@ -131,13 +160,16 @@ export async function runDebate(
   let lastAssessment: MediatorAssessment | undefined;
 
   for (let round = 1; round <= MAX_ROUNDS; round++) {
-    const bullContext: RoundContext = { views, round, priorArguments };
+    signal?.throwIfAborted();
+    const bullContext: RoundContext = { views, round, priorArguments, signal };
     priorArguments.push(await bull.argue(bullContext));
 
-    const bearContext: RoundContext = { views, round, priorArguments };
+    signal?.throwIfAborted();
+    const bearContext: RoundContext = { views, round, priorArguments, signal };
     priorArguments.push(await bear.argue(bearContext));
 
-    const mediatorContext: RoundContext = { views, round, priorArguments };
+    signal?.throwIfAborted();
+    const mediatorContext: RoundContext = { views, round, priorArguments, signal };
     const assessment = await mediator.assess(mediatorContext);
 
     roundsCompleted = round;

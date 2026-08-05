@@ -35,6 +35,7 @@
 
 import { fetchWithTimeout } from '../../shared/http/fetch-with-timeout.js';
 import type {
+  AnthropicMessageOptions,
   AnthropicMessageRequest,
   AnthropicMessageResponse,
   AnthropicMessagesClient,
@@ -143,7 +144,17 @@ export class AnthropicHttpMessagesClient implements AnthropicMessagesClient {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
-  async createMessage(request: AnthropicMessageRequest): Promise<AnthropicMessageResponse> {
+  /**
+   * `options.signal` (#347) is the cancellation seam the debate's latency
+   * budget reaches through: it is handed to `fetchWithTimeout`, which composes
+   * it with its own timeout signal via `AbortSignal.any`, so the real socket
+   * closes when the caller cancels. This is the layer at which "aborted, not
+   * merely ignored" is true — every layer above only forwards it.
+   */
+  async createMessage(
+    request: AnthropicMessageRequest,
+    options: AnthropicMessageOptions = {},
+  ): Promise<AnthropicMessageResponse> {
     const response = await fetchWithTimeout(
       `${this.baseUrl}/v1/messages`,
       {
@@ -154,6 +165,7 @@ export class AnthropicHttpMessagesClient implements AnthropicMessagesClient {
           'anthropic-version': ANTHROPIC_VERSION,
         },
         body: JSON.stringify(request),
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
       },
       this.timeoutMs,
     );

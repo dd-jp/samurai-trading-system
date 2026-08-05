@@ -10,6 +10,7 @@
 
 import { withRetry } from '../../shared/index.js';
 import {
+  LlmCancelledError,
   LlmMalformedResponseError,
   LlmProviderError,
   LlmRateLimitError,
@@ -65,8 +66,29 @@ export interface AnthropicMessageResponse {
   model?: string;
 }
 
+/**
+ * Per-call transport options (#347). Separate from `AnthropicMessageRequest`,
+ * which is the wire body — a signal is not something to serialize and send.
+ */
+export interface AnthropicMessageOptions {
+  /** Aborts the underlying request. Wire clients that can honour it should. */
+  signal?: AbortSignal | undefined;
+}
+
 export interface AnthropicMessagesClient {
-  createMessage(request: AnthropicMessageRequest): Promise<AnthropicMessageResponse>;
+  /**
+   * `options` is a second, OPTIONAL parameter rather than a field on the
+   * request body: TypeScript lets an implementation declare fewer parameters
+   * than the interface, so every existing wire double in this suite
+   * (`createMessage(request)`) still satisfies this interface unchanged. That
+   * matters because `AnthropicMessagesClient` is deliberately structural — any
+   * SDK client or fake can satisfy it — and a required parameter would have
+   * broken all of them for a capability only the real HTTP client can honour.
+   */
+  createMessage(
+    request: AnthropicMessageRequest,
+    options?: AnthropicMessageOptions,
+  ): Promise<AnthropicMessageResponse>;
 }
 
 export interface AnthropicLlmClientConfig {
@@ -144,12 +166,21 @@ export class AnthropicLlmClient implements LlmClient {
   ) {}
 
   complete<T>(request: LlmRequest<T>): Promise<LlmResponse<T>> {
+    // Checked before the retry loop, not inside it: a request whose signal is
+    // already aborted must cost nothing at all. This is the guard that makes
+    // "no further LLM calls after the budget fires" (#347) hold even for a
+    // call the round loop had already begun to dispatch.
+    if (request.signal?.aborted === true) {
+      return Promise.reject(
+        new LlmCancelledError('LLM call cancelled before dispatch: caller signal already aborted'),
+      );
+    }
     return withRetry(() => this.attempt(request), this.config.retry, isRetryable);
   }
 
   private async attempt<T>(request: LlmRequest<T>): Promise<LlmResponse<T>> {
     const start = Date.now();
-    const response = await this.callWithTimeout(renderMessageContent(request));
+    const response = await this.callWithTimeout(renderMessageContent(request), request.signal);
     const latency_ms = Date.now() - start;
 
     // Metered BEFORE the parse gate below, because a malformed response was
@@ -199,23 +230,79 @@ export class AnthropicLlmClient implements LlmClient {
     }
   }
 
-  private callWithTimeout(content: string): Promise<AnthropicMessageResponse> {
+  /**
+   * Races the wire call against `config.timeoutMs` — and, since #347, CANCELS
+   * the loser instead of abandoning it. Three things changed here, all of them
+   * live on the production path (this timeout fires on every slow call, not
+   * only on a timed-out debate):
+   *
+   *  - The per-call timeout now aborts its own in-flight request. Before, a
+   *    timed-out call kept running and was RETRIED underneath itself
+   *    (`LlmTimeoutError` is retryable), so one slow call could hold two or
+   *    three concurrent requests open against the provider's rate limit and
+   *    bill for all of them while at most one answer was ever read.
+   *  - `callerSignal` (the debate's latency budget) is combined with that
+   *    timeout via `AbortSignal.any`, so either can cancel the request.
+   *  - The timer is cleared once the race settles. It used to leak one
+   *    unfired timer per LLM call, forever — a real leak at soak scale.
+   */
+  private async callWithTimeout(
+    content: string,
+    callerSignal?: AbortSignal,
+  ): Promise<AnthropicMessageResponse> {
+    const timeoutController = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
     const timeout = new Promise<never>((_, reject) => {
-      setTimeout(() => {
-        reject(new LlmTimeoutError(`LLM call exceeded ${this.config.timeoutMs}ms`));
+      timer = setTimeout(() => {
+        const expired = new LlmTimeoutError(`LLM call exceeded ${this.config.timeoutMs}ms`);
+        // Abort first, reject second: the point of the ticket is that the
+        // request stops, not merely that the caller stops waiting. The same
+        // error object is the abort reason, so a wire client that surfaces
+        // `signal.reason` and this race report the identical failure.
+        timeoutController.abort(expired);
+        reject(expired);
       }, this.config.timeoutMs);
     });
 
+    const signal =
+      callerSignal === undefined
+        ? timeoutController.signal
+        : AbortSignal.any([callerSignal, timeoutController.signal]);
+
     const call = this.client
-      .createMessage({
-        model: this.config.model,
-        max_tokens: this.config.max_tokens,
-        messages: [{ role: 'user', content }],
-      })
+      .createMessage(
+        {
+          model: this.config.model,
+          max_tokens: this.config.max_tokens,
+          messages: [{ role: 'user', content }],
+        },
+        { signal },
+      )
       .catch((error) => {
         throw classifyProviderError(error);
       });
 
-    return Promise.race([call, timeout]);
+    // No `call.catch(() => {})` guard here, deliberately: the losing side now
+    // REJECTS (aborted) instead of hanging, but `Promise.race` attaches its
+    // own handlers to `call`, so that late rejection is handled-and-ignored,
+    // not unhandled. Same finding as `latency-budget.ts` — see the note there.
+    try {
+      return await Promise.race([call, timeout]);
+    } catch (error) {
+      // A caller-initiated abort surfaces from `fetch` as a generic
+      // `AbortError`, which `classifyProviderError` can only call an
+      // `LlmProviderError` — i.e. a counterfeit provider fault. Attributed
+      // here instead, where the caller's signal is in scope.
+      if (callerSignal?.aborted === true) {
+        // `cause` carries the original: this branch fires on ANY failure that
+        // surfaces once the signal is aborted, so a real 429 or 500 racing the
+        // abort would otherwise be silently relabelled and lost.
+        throw new LlmCancelledError('LLM call cancelled by caller while in flight', error);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }

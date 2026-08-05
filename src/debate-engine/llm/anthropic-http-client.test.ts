@@ -167,4 +167,32 @@ describe('AnthropicHttpMessagesClient', () => {
     await vi.advanceTimersByTimeAsync(500);
     await assertion;
   });
+
+  it('aborts the underlying fetch when the caller cancels (#347)', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      capturedSignal = init.signal as AbortSignal;
+      return new Promise((_resolve, reject) => {
+        capturedSignal?.addEventListener('abort', () => reject(capturedSignal?.reason));
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AnthropicHttpMessagesClient({ apiKey: FAKE_KEY, timeoutMs: 60_000 });
+    const controller = new AbortController();
+    const promise = client.createMessage(
+      { model: 'm', max_tokens: 1, messages: [] },
+      { signal: controller.signal },
+    );
+    // The caller's own reason survives the `AbortSignal.any` composition, which
+    // is what lets the layer above tell a deliberate cancel from a timeout.
+    const assertion = expect(promise).rejects.toThrow('budget blown');
+
+    controller.abort(new Error('budget blown'));
+    await vi.advanceTimersByTimeAsync(0);
+    await assertion;
+
+    // Demonstrated at the fetch layer: the request was aborted, not ignored.
+    expect(capturedSignal?.aborted).toBe(true);
+  });
 });

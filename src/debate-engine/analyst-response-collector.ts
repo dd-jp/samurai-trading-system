@@ -90,7 +90,21 @@ export function validateAnalystView(
   return { valid: true, view: view as AnalystView };
 }
 
-/** Races one analyst's response against the shared timeout. Never rejects. */
+/**
+ * Races one analyst's response against the shared timeout. Never rejects.
+ *
+ * NOT CANCELLED, deliberately — assessed as part of #347, which fixed the same
+ * `Promise.race` + `setTimeout` shape in `latency-budget.ts`. There the loser
+ * is a chain this code STARTS, so it can be handed an `AbortSignal`; here it
+ * is `expected.response`, an opaque promise the CALLER already has in flight.
+ * This module issues no call and holds no client, so it has nothing to abort,
+ * and whether a straggling analyst is even a billed call is the caller's
+ * property — a caller that does not exist yet (`collectAnalystViews` has no
+ * production consumer as of #347; the Analyst stage is out of scope per
+ * debate-engine-spec.md "Out of Scope: Analyst Stage Design").
+ *
+ * The TIMER was a real leak — one unfired timer per analyst — and is cleared.
+ */
 function raceWithTimeout(expected: ExpectedAnalyst, timeoutMs: number): Promise<RaceOutcome> {
   const { analyst_id, analyst_type } = expected;
 
@@ -104,11 +118,12 @@ function raceWithTimeout(expected: ExpectedAnalyst, timeoutMs: number): Promise<
     }),
   );
 
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const timedOut = new Promise<RaceOutcome>((resolve) => {
-    setTimeout(() => resolve({ analyst_id, analyst_type, status: 'timeout' }), timeoutMs);
+    timer = setTimeout(() => resolve({ analyst_id, analyst_type, status: 'timeout' }), timeoutMs);
   });
 
-  return Promise.race([settled, timedOut]);
+  return Promise.race([settled, timedOut]).finally(() => clearTimeout(timer));
 }
 
 /**

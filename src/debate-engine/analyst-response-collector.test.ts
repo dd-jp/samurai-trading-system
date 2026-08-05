@@ -101,6 +101,9 @@ describe('collectAnalystViews', () => {
     expect(result.views).toHaveLength(2);
     expect(result.failures).toHaveLength(0);
     expect(result.expected_count).toBe(2);
+    // #347: the per-analyst timeout timer is cleared once the analyst answers.
+    // It used to be left pending — one unfired timer per analyst per tick.
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('proceeds with responders when quorum is met after a straggler times out', async () => {

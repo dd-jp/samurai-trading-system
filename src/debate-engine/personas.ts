@@ -36,6 +36,13 @@ export interface PersonaInput {
   trace_id: string;
   analyst_views: AnalystView[];
   debate_state?: Record<string, unknown>;
+  /**
+   * Cancels this persona's LLM call (#347). Forwarded verbatim to
+   * `LlmClient.complete`; the persona itself has no cancellation logic of its
+   * own, it is only a link in the chain from the debate's latency budget down
+   * to `fetch`.
+   */
+  signal?: AbortSignal | undefined;
 }
 
 /** Additional input the mediator arbitrates over (spec: "arbitrates between bull and bear"). */
@@ -140,6 +147,7 @@ export async function runBullPersona(
     prompt,
     context: buildContext(input),
     parseResponse: parsePersonaResponse,
+    signal: input.signal,
   });
   return response.data;
 }
@@ -162,6 +170,7 @@ export async function runBearPersona(
     prompt,
     context: buildContext(input),
     parseResponse: parsePersonaResponse,
+    signal: input.signal,
   });
   return response.data;
 }
@@ -196,6 +205,7 @@ export async function runMediatorPersona(
     prompt,
     context: buildContext(input),
     parseResponse: parseMediatorResponse,
+    signal: input.signal,
   });
   return response.data;
 }
