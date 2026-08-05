@@ -96,6 +96,16 @@ export class RateLimiter {
    * than throwing: an exhausted budget is an expected, recoverable
    * condition (spec: "return an error without proceeding"), not an
    * invariant violation. Grants no partial reservation on rejection.
+   *
+   * **TOTAL over `AssetClass`, and callers depend on it.** Every value the
+   * type admits yields a `ReserveResult`; none throws. A class with no
+   * `perAssetClass` entry falls back to `default` (`configFor`). This is load
+   * bearing rather than incidental: `buildDebateStep` calls this outside its
+   * try/catch, and `SequentialTickRunner` does not catch a stage throw — so a
+   * throw here would discard the whole tick pass instead of one instrument.
+   * Pinned by "RateLimiter.reserve is total over AssetClass" in the tests.
+   * Keep it that way: signal an unsatisfiable budget with `granted: false`,
+   * never by throwing.
    */
   reserve(assetClass: AssetClass, worstCaseLlmCalls: number): ReserveResult {
     const config = this.configFor(assetClass);

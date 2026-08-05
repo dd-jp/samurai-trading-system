@@ -9,6 +9,63 @@ function makeConfig(overrides: Partial<RateLimiterConfig['default']> = {}): Rate
   };
 }
 
+/**
+ * `reserve` is TOTAL over `AssetClass` — it returns a `ReserveResult` for every
+ * value the type admits and never throws.
+ *
+ * This is not a general robustness test; it is the specific guarantee
+ * `buildDebateStep` relies on to call `reserve` OUTSIDE its try/catch (PR #390
+ * review). `SequentialTickRunner` does not catch a stage throw, so anything
+ * that throws there discards the whole tick pass rather than one instrument —
+ * the exact failure the refusal path is designed to avoid. If `reserve` could
+ * throw on a reachable input, that protection would sit one line too late.
+ *
+ * The case worth pinning hardest is an asset class with no `perAssetClass`
+ * entry, because a wrong asset class reaching this path is not hypothetical:
+ * mutation M11 (`tick-runner` hard-coding `asset_class: 'crypto'`) was exactly
+ * that, and it survived a green suite. What these tests establish is that such
+ * a value FALLS BACK to `default` rather than throwing — which is also why M11
+ * was silent rather than loud.
+ */
+describe('RateLimiter.reserve is total over AssetClass', () => {
+  const assetClasses = ['crypto', 'stocks'] as const;
+
+  it.each(
+    assetClasses,
+  )('returns a result for %s when only `default` is configured', (assetClass) => {
+    const limiter = new RateLimiter(new SimulatedClock(start), makeConfig());
+
+    expect(() => limiter.reserve(assetClass, 4)).not.toThrow();
+    expect(limiter.reserve(assetClass, 4)).toEqual({ granted: true });
+  });
+
+  it('falls back to `default` for a class absent from perAssetClass, rather than throwing', () => {
+    const limiter = new RateLimiter(new SimulatedClock(start), {
+      default: { windowMs: 60_000, maxLlmCalls: 10, maxDebates: 3 },
+      perAssetClass: { crypto: { windowMs: 60_000, maxLlmCalls: 99, maxDebates: 99 } },
+    });
+
+    // `stocks` has no entry. It must be governed by `default` (maxDebates 3),
+    // not error and not inherit crypto's 99.
+    expect(limiter.reserve('stocks', 4)).toEqual({ granted: true });
+    limiter.reserve('stocks', 4);
+    limiter.reserve('stocks', 4);
+    expect(limiter.reserve('stocks', 4).granted).toBe(false);
+  });
+
+  it('does not throw on recordCall for a class absent from perAssetClass', () => {
+    const limiter = new RateLimiter(new SimulatedClock(start), {
+      default: { windowMs: 60_000, maxLlmCalls: 10, maxDebates: 3 },
+      perAssetClass: { crypto: { windowMs: 60_000, maxLlmCalls: 99, maxDebates: 99 } },
+    });
+
+    // Shares `currentWindow` with `reserve`, and runs INSIDE the debate via
+    // `RateLimitedLlmClient` — a throw here would fail the debate mid-flight.
+    expect(() => limiter.recordCall('stocks')).not.toThrow();
+    expect(limiter.snapshot().stocks?.llmCallsUsed).toBe(1);
+  });
+});
+
 describe('RateLimiter', () => {
   it('grants reserve() when worst-case budget is available', () => {
     const limiter = new RateLimiter(new SimulatedClock(start), makeConfig());

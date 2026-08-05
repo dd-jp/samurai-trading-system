@@ -390,6 +390,23 @@ export function buildDebateStep(
     // checks that the worst case still fits the remaining call budget, which
     // is what stops a debate starting only to be cut off mid-round with three
     // rounds already billed.
+    //
+    // DELIBERATELY OUTSIDE the try/catch below, which is safe because `reserve`
+    // is TOTAL over `AssetClass`: it returns a `ReserveResult` for every value
+    // the type admits and throws on none of them. An asset class with no
+    // `perAssetClass` entry falls back to `default` rather than erroring —
+    // pinned by "RateLimiter.reserve is total over AssetClass" in
+    // rate-limiter.test.ts, which exists for this call site specifically
+    // (PR #390 review).
+    //
+    // The only inputs that CAN make it throw are a null config, a config with
+    // no `default`, or a `Clock` that does not return a `Date` — each of which
+    // requires defeating TypeScript, and each of which is a total, permanent
+    // startup misconfiguration rather than a per-tick condition. Catching them
+    // here would be actively worse than not: it would convert "this process is
+    // misconfigured" into "this instrument silently never trades", which for a
+    // 14-day unattended soak is indistinguishable from a quiet market. That
+    // failure must stay loud.
     const reservation = rateLimiter.reserve(asset_class, WORST_CASE_LLM_CALLS_PER_DEBATE);
     if (!reservation.granted) {
       logger?.log({
