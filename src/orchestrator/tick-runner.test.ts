@@ -489,7 +489,28 @@ describe('SequentialTickRunner.runInstrument — risk warnings surfacing (#303)'
     expect(warns[0].payload).toEqual({
       instrument: 'AAPL',
       warnings: ['correlation_warmup:MSFT', 'correlation_warmup:TSLA'],
+      advisory: true,
     });
+  });
+
+  /**
+   * `advisory: true` is the field a generic log pipeline filters on. Level
+   * alone is not enough: a monitor that pages on `level:warn` has no other way
+   * to tell an advisory apart from a stuck fill or a kill-threshold breach.
+   */
+  it('marks the line advisory so a monitor paging on level:warn can exclude it by field', async () => {
+    const intent = makeIntent();
+    const steps = makeSteps({
+      risk: vi.fn(async () => ({
+        ...approvedRisk(intent),
+        warnings: ['correlation_warmup:MSFT'],
+      })),
+    });
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    expect(warnEntries(ctx)[0].payload).toMatchObject({ advisory: true });
   });
 
   /**
@@ -552,6 +573,130 @@ describe('SequentialTickRunner.runInstrument — risk warnings surfacing (#303)'
     const warns = warnEntries(ctx);
     expect(warns).toHaveLength(1);
     expect(warns[0].message).toContain('macro_risk_flag:RU');
+  });
+
+  /**
+   * The #381 day-1 soak, costed. `DEFAULT_TICK_INTERVAL_MS` is 60s, so six
+   * instruments repeating a warn every tick is ~8,640 warn lines a day — and
+   * with `min_bars: 20` on a `1d` timeframe the condition does not clear
+   * inside a 14-day run, so that is essentially the whole soak's warn volume.
+   * An operator who sees thousands of identical warns stops reading warns,
+   * and then misses the stuck fill. Same defect #362 fixed at startup.
+   *
+   * So the warn marks a CHANGE, not a state. The state itself is already in
+   * the log every tick: `record('risk', ...)` writes the whole `RiskDecision`,
+   * `warnings` included, to its `info` payload. Nothing is lost by going quiet.
+   */
+  it('warns once per instrument on first sight, then stays quiet while the warning set is unchanged', async () => {
+    const intent = makeIntent();
+    const universe = ['SPY', 'QQQ', 'AAPL', 'TSLA', 'BTC-USD', 'ETH-USD'];
+    const steps = makeSteps({
+      risk: vi.fn(async () => ({
+        ...approvedRisk(intent),
+        warnings: ['correlation_warmup:QQQ', 'correlation_warmup:ETH-USD'],
+      })),
+    });
+    const ctx = makeCtx();
+    const runner = new SequentialTickRunner(steps);
+
+    // Three ticks over the whole universe — 18 instrument-passes.
+    for (let tick = 0; tick < 3; tick++) {
+      for (const asset of universe) {
+        await runner.runInstrument({ asset, asset_class: 'stocks' }, ctx);
+      }
+    }
+
+    // Six warns, not eighteen: one per instrument, on its first sight.
+    const warns = warnEntries(ctx);
+    expect(warns).toHaveLength(universe.length);
+    expect(warns.map((entry) => entry.payload.instrument).sort()).toEqual([...universe].sort());
+  });
+
+  it('warns again when the warning set actually changes for that instrument', async () => {
+    const intent = makeIntent();
+    let warnings = ['correlation_warmup:MSFT', 'correlation_warmup:TSLA'];
+    const steps = makeSteps({
+      risk: vi.fn(async () => ({ ...approvedRisk(intent), warnings: [...warnings] })),
+    });
+    const ctx = makeCtx();
+    const runner = new SequentialTickRunner(steps);
+
+    await runner.runInstrument(SIGNAL, ctx);
+    await runner.runInstrument(SIGNAL, ctx); // unchanged — suppressed
+    warnings = ['correlation_warmup:MSFT']; // TSLA gained coverage
+    await runner.runInstrument(SIGNAL, ctx);
+
+    const warns = warnEntries(ctx);
+    expect(warns).toHaveLength(2);
+    expect(warns[1].payload.warnings).toEqual(['correlation_warmup:MSFT']);
+  });
+
+  /**
+   * If the warn simply stopped, an operator would have no positive
+   * confirmation that coverage completed — only an absence, which is
+   * indistinguishable from the reader having broken. One transition line
+   * closes that. It is `info`, not `warn`: good news must never page.
+   */
+  it('confirms at info when the warnings clear, rather than just going silent', async () => {
+    const intent = makeIntent();
+    let warnings = ['correlation_warmup:MSFT'];
+    const steps = makeSteps({
+      risk: vi.fn(async () => ({ ...approvedRisk(intent), warnings: [...warnings] })),
+    });
+    const ctx = makeCtx();
+    const runner = new SequentialTickRunner(steps);
+
+    await runner.runInstrument(SIGNAL, ctx);
+    warnings = [];
+    await runner.runInstrument(SIGNAL, ctx);
+
+    expect(warnEntries(ctx)).toHaveLength(1); // no warn for the clear
+    const log = ctx.logger.log as ReturnType<typeof vi.fn>;
+    const cleared = log.mock.calls
+      .map((call) => call[0])
+      .filter((entry) => entry.level === 'info' && entry.payload?.advisory === true);
+    expect(cleared).toHaveLength(1);
+    expect(cleared[0]).toMatchObject({ stage: 'risk', level: 'info' });
+    expect(cleared[0].payload).toMatchObject({ instrument: 'AAPL', advisory: true, warnings: [] });
+  });
+
+  it('does not emit a cleared line for an instrument that never warned', async () => {
+    const ctx = makeCtx();
+    const runner = new SequentialTickRunner(makeSteps());
+
+    await runner.runInstrument(SIGNAL, ctx);
+    await runner.runInstrument(SIGNAL, ctx);
+
+    const log = ctx.logger.log as ReturnType<typeof vi.fn>;
+    const advisory = log.mock.calls
+      .map((call) => call[0])
+      .filter((entry) => entry.payload?.advisory === true);
+    expect(advisory).toEqual([]);
+  });
+
+  it('tracks each instrument independently, so one instrument does not mask another', async () => {
+    const intent = makeIntent();
+    const byInstrument: Record<string, string[]> = {
+      AAPL: ['correlation_warmup:MSFT'],
+      TSLA: ['correlation_warmup:MSFT'],
+    };
+    let current = 'AAPL';
+    const steps = makeSteps({
+      risk: vi.fn(async () => ({
+        ...approvedRisk(intent),
+        warnings: byInstrument[current] ?? [],
+      })),
+    });
+    const ctx = makeCtx();
+    const runner = new SequentialTickRunner(steps);
+
+    current = 'AAPL';
+    await runner.runInstrument({ asset: 'AAPL', asset_class: 'stocks' }, ctx);
+    current = 'TSLA';
+    await runner.runInstrument({ asset: 'TSLA', asset_class: 'stocks' }, ctx);
+
+    // Same warning text, different instruments — both must be raised.
+    expect(warnEntries(ctx).map((entry) => entry.payload.instrument)).toEqual(['AAPL', 'TSLA']);
   });
 
   it('stays silent when the decision carries no warnings', async () => {
