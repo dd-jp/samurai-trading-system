@@ -950,6 +950,61 @@ function buildProfileConfigs(): Pick<
   };
 
   return {
+    /**
+     * The universe a paper run trades (#381) — ADR-0001's default set, and
+     * #238's first acceptance criterion.
+     *
+     * A tuning decision of the same kind as everything else in this file, not
+     * a deployment one like the alert transports: it is what the risk caps,
+     * the drift tolerances and the volatility baselines above are set
+     * *against*. `ProductionConfig.universe` still defaults to
+     * `SMOKE_TEST_UNIVERSE`, so a programmatic caller inherits nothing by
+     * omission and the smoke run's explicit override (smoke-run.ts) still
+     * wins.
+     *
+     * ## What six instruments cost per day, and why it is not 6x
+     *
+     * The naive reading is that six instruments is six times the debate spend
+     * of one. It is closer to **1.6x**, and the reason is worth writing down
+     * because it also answers whether the tick loop can keep up:
+     * `startTickLoop` is a `setTimeout` CHAIN, not a fixed-cadence
+     * `setInterval` — the next tick is scheduled only once the previous pass
+     * has finished. With `maxConcurrentInstruments: 1` a pass runs its
+     * instruments sequentially, so widening the universe stretches the
+     * effective cadence instead of multiplying the tick count. Nothing stacks,
+     * nothing is skipped, and the "tick skipped: previous tick still running"
+     * warn stays unreachable.
+     *
+     * Arithmetic, at `LATENCY_BUDGET_MS` (crypto 15s, stocks 60s) and
+     * `DEFAULT_TICK_INTERVAL_MS` (60s):
+     *
+     * - Session hours (6.5h): a pass is 4x60s + 2x15s = 270s, so a cycle is
+     *   ~330s -> ~71 cycles -> ~426 debates.
+     * - Outside the session (17.5h): a pass is 2x15s = 30s, cycle ~90s ->
+     *   ~700 cycles -> ~1,400 debates.
+     * - Weekday total ~1,800 debates; a weekend day is crypto-only, ~1,900.
+     *
+     * At `DEFAULT_ANTHROPIC_MODEL` (claude-haiku-4-5, $1/M in and $5/M out)
+     * and 3 LLM calls per round over 1-3 rounds (`MAX_ROUNDS`, early exit on
+     * convergence), a debate is roughly $0.012-$0.045. So **~$45/day, with a
+     * defensible range of $25-$90, and ~$650 over the 14-day soak** —
+     * against ~$29/day for BTC-USD alone today.
+     *
+     * Two things that make the range wide rather than the estimate precise,
+     * both stated rather than smoothed over: debates that complete FASTER than
+     * the budget cost more per day, not less (a shorter pass means more
+     * cycles), and no soak has yet produced a real per-debate token
+     * distribution — `llm_spend` (#367) is what will replace this arithmetic
+     * with a measurement.
+     *
+     * The rate-limit posture (#299) is unchanged by widening, and it is worth
+     * being precise about what carries it: `maxConcurrentInstruments: 1` caps
+     * in-flight debates at one, so at most one LLM call is ever outstanding no
+     * matter how many instruments are in the plan. `RateLimiter`
+     * (debate-engine/rate-limiter.ts) is NOT what holds this — it is built and
+     * tested but has no production caller, which is a separate gap and not one
+     * this ticket closes.
+     */
     universe: DEFAULT_UNIVERSE,
     traderConfig,
     riskConfig,
