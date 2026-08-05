@@ -1,5 +1,6 @@
 import { detectDisagreements } from './disagreement-detector.js';
 import { LlmMalformedResponseError, LlmTimeoutError } from './llm/errors.js';
+import { BARE_JSON_INSTRUCTION } from './llm/json-response.js';
 import { MockLlmClient } from './llm/mock-client.js';
 import type { AnalystView } from './types.js';
 
@@ -103,6 +104,57 @@ describe('detectDisagreements', () => {
     expect(result.method).toBe('directional_fallback');
     expect(result.summary).toBe('No directional disagreement among analysts.');
     expect(result.conflicts).toEqual([]);
+  });
+
+  /**
+   * Issue #361: the pinned model fences its JSON, so this detector was
+   * silently degrading to `directional_fallback` on every debate — reporting
+   * "we compared directions" where a real semantic assessment was available.
+   */
+  it('reads a markdown-fenced LLM response as a semantic result (#361)', async () => {
+    const mock = new MockLlmClient();
+    mock.enqueueText(
+      '```json\n{"summary": "Same direction, contradictory reasons.", "conflicts": [{"analysts": ["a1", "a2"], "nature": "Both bullish, incompatible theses."}]}\n```',
+    );
+    const views = [
+      makeView({ analyst_id: 'a1', direction: 'bullish' }),
+      makeView({ analyst_id: 'a2', direction: 'bullish' }),
+    ];
+
+    const result = await detectDisagreements(views, mock);
+
+    expect(result.method).toBe('semantic');
+    expect(result.summary).toBe('Same direction, contradictory reasons.');
+    expect(result.conflicts).toEqual([
+      { analysts: ['a1', 'a2'], nature: 'Both bullish, incompatible theses.' },
+    ]);
+  });
+
+  it('sends the shared bare-JSON instruction on the wire (#361, PR #363 review)', async () => {
+    const mock = new MockLlmClient();
+    mock.enqueueText(JSON.stringify({ summary: 'ok', conflicts: [] }));
+    const views = [
+      makeView({ analyst_id: 'a1', direction: 'bullish' }),
+      makeView({ analyst_id: 'a2', direction: 'bearish' }),
+    ];
+
+    await detectDisagreements(views, mock);
+
+    expect(mock.requests).toHaveLength(1);
+    expect(mock.requests[0]?.prompt).toContain(BARE_JSON_INSTRUCTION);
+  });
+
+  it('still falls back on a fenced response truncated mid-emit (#361)', async () => {
+    const mock = new MockLlmClient();
+    mock.enqueueText('```json\n{"summary": "Same direction, contradi');
+    const views = [
+      makeView({ analyst_id: 'a1', direction: 'bullish' }),
+      makeView({ analyst_id: 'a2', direction: 'bullish' }),
+    ];
+
+    const result = await detectDisagreements(views, mock);
+
+    expect(result.method).toBe('directional_fallback');
   });
 
   it('falls back when the LLM response is well-formed JSON but the wrong shape', async () => {

@@ -1,4 +1,5 @@
 import { LlmMalformedResponseError } from './llm/errors.js';
+import { BARE_JSON_INSTRUCTION } from './llm/json-response.js';
 import { MockLlmClient } from './llm/mock-client.js';
 import { runBearPersona, runBullPersona, runMediatorPersona } from './personas.js';
 import type { AnalystView } from './types.js';
@@ -55,6 +56,106 @@ describe('runBullPersona', () => {
     await expect(
       runBullPersona(client, { trace_id: 'trace-1', analyst_views: [makeView()] }),
     ).rejects.toThrow(LlmMalformedResponseError);
+  });
+});
+
+/**
+ * Issue #361: the pinned `claude-haiku-4-5-20251001` wraps its JSON in a
+ * markdown fence on every call, which halted the pipeline at `stage=debate`.
+ * Fixtures are the shapes captured verbatim from live one-shot calls with the
+ * exact prompts these functions send.
+ */
+describe('markdown-fenced responses (#361)', () => {
+  it('accepts a fenced Bull response', async () => {
+    const client = new MockLlmClient();
+    client.enqueueText('```json\n{"stance": "bullish", "rationale": "Oversold bounce."}\n```');
+
+    const result = await runBullPersona(client, {
+      trace_id: 'trace-1',
+      analyst_views: [makeView()],
+    });
+
+    expect(result).toEqual({ stance: 'bullish', rationale: 'Oversold bounce.' });
+  });
+
+  it('accepts a fenced Bear response', async () => {
+    const client = new MockLlmClient();
+    client.enqueueText('```json\n{"stance": "bearish", "rationale": "Momentum failing."}\n```');
+
+    const result = await runBearPersona(client, {
+      trace_id: 'trace-1',
+      analyst_views: [makeView()],
+    });
+
+    expect(result).toEqual({ stance: 'bearish', rationale: 'Momentum failing.' });
+  });
+
+  it('accepts a fenced Mediator response followed by trailing prose', async () => {
+    const client = new MockLlmClient();
+    client.enqueueText(
+      '```json\n{"stance": "neutral", "rationale": "Split.", "converged": false}\n```\n\n**Mediator Note:** commentary the schema never asked for.',
+    );
+
+    const result = await runMediatorPersona(client, {
+      trace_id: 'trace-1',
+      analyst_views: [makeView()],
+      bullResponse: { stance: 'bullish', rationale: 'Up.' },
+      bearResponse: { stance: 'bearish', rationale: 'Down.' },
+    });
+
+    expect(result).toEqual({ stance: 'neutral', rationale: 'Split.', converged: false });
+  });
+
+  it('still fails loudly on a fenced response truncated mid-emit', async () => {
+    const client = new MockLlmClient();
+    client.enqueueText('```json\n{"stance": "bullish", "rationale": "Oversold bou');
+
+    await expect(
+      runBullPersona(client, { trace_id: 'trace-1', analyst_views: [makeView()] }),
+    ).rejects.toThrow(LlmMalformedResponseError);
+  });
+
+  it('still fails loudly when the object closed but the fence never did', async () => {
+    // The nastiest truncation: `max_tokens` lands after the closing brace but
+    // before the closing fence. The interior is *parseable*, so a parser that
+    // unwrapped an unterminated fence would accept this and hand a position
+    // the model never finished asserting to the Trader (#288/#319 family).
+    const client = new MockLlmClient();
+    client.enqueueText('```json\n{"stance": "bullish", "rationale": "Oversold bounce."}\n');
+
+    await expect(
+      runBullPersona(client, { trace_id: 'trace-1', analyst_views: [makeView()] }),
+    ).rejects.toThrow(LlmMalformedResponseError);
+  });
+
+  it('still fails loudly on a refusal', async () => {
+    const client = new MockLlmClient();
+    client.enqueueText('I cannot provide trading advice.');
+
+    await expect(
+      runBullPersona(client, { trace_id: 'trace-1', analyst_views: [makeView()] }),
+    ).rejects.toThrow(LlmMalformedResponseError);
+  });
+
+  it('instructs every persona to emit bare JSON with no code fence', async () => {
+    const client = new MockLlmClient();
+    client.enqueueText(JSON.stringify({ stance: 'bullish', rationale: 'ok' }));
+    client.enqueueText(JSON.stringify({ stance: 'bearish', rationale: 'ok' }));
+    client.enqueueText(JSON.stringify({ stance: 'neutral', rationale: 'ok', converged: true }));
+
+    const input = { trace_id: 'trace-1', analyst_views: [makeView()] };
+    await runBullPersona(client, input);
+    await runBearPersona(client, input);
+    await runMediatorPersona(client, {
+      ...input,
+      bullResponse: { stance: 'bullish', rationale: 'Up.' },
+      bearResponse: { stance: 'bearish', rationale: 'Down.' },
+    });
+
+    expect(client.requests).toHaveLength(3);
+    for (const request of client.requests) {
+      expect(request.prompt).toContain(BARE_JSON_INSTRUCTION);
+    }
   });
 });
 

@@ -10,6 +10,7 @@
  * over `AnalystView[]`, same "builder ahead of orchestration" posture as
  * `analyst-contribution.ts`.
  */
+import { BARE_JSON_INSTRUCTION, unwrapFencedJson } from './llm/json-response.js';
 import type { LlmClient } from './llm/types.js';
 import type { AnalystView, Direction } from './types.js';
 
@@ -45,6 +46,11 @@ const PROMPT = [
   '',
   'Respond with JSON only, matching this shape:',
   '{"summary": string, "conflicts": [{"analysts": string[], "nature": string}]}',
+  // #361: the pinned model fenced this payload on every call, so the parse
+  // below always threw and this detector silently degraded to
+  // `directional_fallback` — reporting "we only compared directions" when a
+  // real semantic assessment had in fact been produced.
+  BARE_JSON_INSTRUCTION,
   '',
   'If there are no conflicts, respond with an empty "conflicts" array and a',
   'summary noting agreement.',
@@ -67,7 +73,7 @@ function parseDisagreementResponse(
 ): { valid: true; data: RawDisagreementResponse } | { valid: false; reason: string } {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(rawText);
+    parsed = JSON.parse(unwrapFencedJson(rawText));
   } catch {
     return { valid: false, reason: 'response is not valid JSON' };
   }
