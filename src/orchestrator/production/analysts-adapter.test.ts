@@ -154,6 +154,143 @@ describe('buildAnalystsStep', () => {
       expect(entries).toEqual([]);
     });
 
+    /**
+     * PR #360 review thread. `failure.reason` is an upstream-controlled string:
+     * `classifyAlpacaDataResponse` bakes the provider's RESPONSE BODY into the
+     * message, and `classifyAlpacaDataNetworkError` bakes an arbitrary
+     * `error.message` in with no cap at all. No live path puts a credential
+     * there today (Alpaca authenticates by header, never by URL; the Telegram
+     * token — the one credential this system carries IN a URL — is unreachable
+     * from an analyst, which depends only on MarketDataService and the
+     * in-memory MarketIntelligenceStore). But "no path today" is not a property
+     * this log line should depend on, so the reason is bounded and known
+     * credential-carrying syntaxes are masked before it is written.
+     *
+     * Mirrors the `TelegramBotApiClient` "never leaks the bot token" tests
+     * rather than introducing a second convention.
+     */
+    describe('credential safety (PR #360 review)', () => {
+      const FAKE_BOT_TOKEN = '1234567:test-fake-bot-token-AAHrandomlookingsuffix';
+
+      it('masks a Telegram-shaped bot token in a failure reason', async () => {
+        const { logger, entries } = captureLogger();
+        const runAnalysts = vi.fn(async () => ({
+          views: [],
+          analyst_count: 1,
+          skipped: true,
+          failures: [
+            {
+              analyst_type: 'technical',
+              role: 'mandatory',
+              reason: `network error: request to https://api.telegram.org/bot${FAKE_BOT_TOKEN}/sendMessage failed`,
+            },
+          ],
+        }));
+        const orchestrator = { runAnalysts } as unknown as AnalystOrchestrator;
+
+        const step = buildAnalystsStep(orchestrator, logger);
+        await step({
+          trace_id: 'trace-9',
+          signal: { asset: 'BTC-USD', asset_class: 'crypto' },
+          clock: CLOCK,
+        });
+
+        const serialized = JSON.stringify(entries);
+        expect(serialized).not.toContain(FAKE_BOT_TOKEN);
+        expect(serialized).toContain('[REDACTED]');
+        // Still says which analyst died and that it was a network error.
+        expect(serialized).toContain('technical');
+        expect(serialized).toContain('network error');
+      });
+
+      it('masks key=value and Bearer credential syntaxes', async () => {
+        const { logger, entries } = captureLogger();
+        const runAnalysts = vi.fn(async () => ({
+          views: [],
+          analyst_count: 1,
+          skipped: true,
+          failures: [
+            {
+              analyst_type: 'technical',
+              role: 'mandatory',
+              reason:
+                'Alpaca API error: 403 {"apiKey":"sk-live-SUPERSECRET1","auth":"Bearer tok-SUPERSECRET2","api_secret=SUPERSECRET3"}',
+            },
+          ],
+        }));
+        const orchestrator = { runAnalysts } as unknown as AnalystOrchestrator;
+
+        const step = buildAnalystsStep(orchestrator, logger);
+        await step({
+          trace_id: 'trace-9',
+          signal: { asset: 'BTC-USD', asset_class: 'crypto' },
+          clock: CLOCK,
+        });
+
+        const serialized = JSON.stringify(entries);
+        expect(serialized).not.toContain('SUPERSECRET1');
+        expect(serialized).not.toContain('SUPERSECRET2');
+        expect(serialized).not.toContain('SUPERSECRET3');
+        expect(serialized).toContain('403');
+      });
+
+      it('bounds an unbounded upstream reason instead of writing it whole', async () => {
+        const { logger, entries } = captureLogger();
+        const runAnalysts = vi.fn(async () => ({
+          views: [],
+          analyst_count: 1,
+          skipped: true,
+          failures: [
+            { analyst_type: 'technical', role: 'mandatory', reason: `boom ${'x'.repeat(50_000)}` },
+          ],
+        }));
+        const orchestrator = { runAnalysts } as unknown as AnalystOrchestrator;
+
+        const step = buildAnalystsStep(orchestrator, logger);
+        await step({
+          trace_id: 'trace-9',
+          signal: { asset: 'BTC-USD', asset_class: 'crypto' },
+          clock: CLOCK,
+        });
+
+        const serialized = JSON.stringify(entries);
+        expect(serialized.length).toBeLessThan(2_000);
+        expect(serialized).toContain('truncated');
+        expect(serialized).toContain('boom');
+      });
+
+      /**
+       * The guard must not undo item 4. A real mandatory-analyst failure — the
+       * exact string the live paper run produced — has to survive intact, or we
+       * are back to a quorum skip with no stated cause.
+       */
+      it('leaves a real indicator-width failure completely untouched', async () => {
+        const { logger, entries } = captureLogger();
+        const realReason =
+          'computeIndicator: sma(14) needs 14 bars but received 13. Computing it anyway would ' +
+          'present a value derived from 13 bars as a 14-period one — a fabricated indicator, ' +
+          'not a degraded one, and every stop sized from it is mispriced.';
+        const runAnalysts = vi.fn(async () => ({
+          views: [],
+          analyst_count: 1,
+          skipped: true,
+          failures: [{ analyst_type: 'technical', role: 'mandatory', reason: realReason }],
+        }));
+        const orchestrator = { runAnalysts } as unknown as AnalystOrchestrator;
+
+        const step = buildAnalystsStep(orchestrator, logger);
+        await step({
+          trace_id: 'trace-9',
+          signal: { asset: 'BTC-USD', asset_class: 'crypto' },
+          clock: CLOCK,
+        });
+
+        const [entry] = entries as [LogEntry];
+        expect(entry.message).toContain(realReason);
+        expect(entry.message).not.toContain('[REDACTED]');
+      });
+    });
+
     it('is optional — an omitted logger keeps the pre-existing 1-arg call working', async () => {
       const runAnalysts = vi.fn(async () => ({
         views: [],
