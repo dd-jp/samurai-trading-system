@@ -99,9 +99,9 @@ A malformed value is refused at startup rather than defaulted. An **unwritable**
 Retention is deliberately short. These files are the *diagnostic* record; the durable trade record (every signal, order and fill, and so the UK CGT disposal history) is SQLite, and nothing in it depends on a log generation surviving.
 
 
-**Attended vs unattended (`SAMURAI_ALERTS`).** Three escalations — the dead-man's-switch heartbeat, an orphaned `go` verdict found at restart, and a fill the venue will not price — are the only warning an operator gets that the system has stopped or is stuck.
+**Attended vs unattended (`SAMURAI_ALERTS`).** Four operator alerts — the dead-man's-switch heartbeat, an orphaned `go` verdict found at restart, a fill the venue will not price, and a kill-threshold breach — are the only warning an operator gets that the system has stopped or is stuck.
 
-- `SAMURAI_ALERTS=telegram` pushes all three to the trade channel. **This is the posture an unattended run requires**, and the only one appropriate for the 14-day soak.
+- `SAMURAI_ALERTS=telegram` pushes all four to Telegram: the three escalations to `TELEGRAM_CHAT_ID`, and the heartbeat to `TELEGRAM_HEARTBEAT_CHAT_ID` on its own (#342), so muting the beat cannot mute an escalation. **This is the posture an unattended run requires**, and the only one appropriate for the 14-day soak.
 - `SAMURAI_ALERTS=log-only` writes them to stdout instead. Legitimate for an **attended** run — local development, a supervised smoke test, a backtest — where somebody is reading the log stream. It logs a `warn` at startup saying so.
 
 There is deliberately no default. A process that silently fell back to log-only would look healthy right up until the day it stopped and nobody noticed.

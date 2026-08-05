@@ -164,7 +164,15 @@ export type AlertChannels = Pick<ProductionConfig, (typeof ALERT_CHANNEL_FIELDS)
 export function resolveAlertsMode(injected: Partial<ProductionConfig>): AlertsMode | undefined {
   if (ALERT_CHANNEL_FIELDS.every((field) => injected[field] !== undefined)) return undefined;
 
-  const raw = process.env[ENV_VAR];
+  // Trimmed for the same reason the chat ids below are: `SAMURAI_ALERTS=telegram\n`
+  // out of an env file is the mode the operator typed, and refusing it produced
+  // "must be one of telegram|log-only" about a value that reads as `telegram`
+  // on screen — fail-loud, but not actionable. Nothing dangerous is reachable
+  // by this trim: both post-trim outcomes are still values the operator wrote,
+  // and a whitespace-only value trims to `''`, matches neither mode, and is
+  // refused exactly as before. (`SAMURAI_MODE` deliberately does NOT trim —
+  // see `parseMode` in index.ts.)
+  const raw = process.env[ENV_VAR]?.trim();
   const mode = ALERTS_MODES.find((candidate) => candidate === raw);
   if (mode !== undefined) return mode;
 
@@ -190,10 +198,10 @@ export function resolveAlertsMode(injected: Partial<ProductionConfig>): AlertsMo
  * defaults, and a second set built here would be two places to keep in sync
  * for no behavioural difference. The `warn` is the point of the branch.
  *
- * `telegram` builds ONE `TelegramBotApiClient` shared by all three adapters —
- * not one each: they share a bot token, a retry budget and Telegram's ~30
- * messages/second ceiling, and three clients would each believe they owned the
- * whole allowance.
+ * `telegram` builds ONE `TelegramBotApiClient` shared by all four adapters
+ * (breach joined the original three in #327) — not one each: they share a bot
+ * token, a retry budget and Telegram's ~30 messages/second ceiling, and four
+ * clients would each believe they owned the whole allowance.
  */
 export function buildAlertChannels(deps: {
   alertsMode: AlertsMode;
@@ -325,13 +333,31 @@ function requireHeartbeatChatId(escalationChatId: string): string {
  * exists so that a programmatic caller reaching `buildAlertChannels` directly
  * still fails with a legible message instead of posting to `chat_id: undefined`.
  * Names the variable only — never its value.
+ *
+ * **Trims, and that is load-bearing** (kimi-3-review on #353). This is the one
+ * place both chat ids are read, so normalizing here is what makes the
+ * same-chat refusal above compare like with like: with a raw `===`, a single
+ * trailing newline out of an env file — `TELEGRAM_HEARTBEAT_CHAT_ID=-100…\n` —
+ * slipped past the guard while still addressing the escalation chat, silently
+ * recreating #342 with the guard reporting safe. Same class of bug as
+ * #293/#320, where a whitespace-sensitive `startsWith` let
+ * `' https://api.alpaca.markets'` walk past a live-host guard; same
+ * resolution: normalize once, compare normalized, hand the normalized value
+ * onward. The second half matters on its own — a `chat_id` carrying a newline
+ * is a Bot API 400 on every send, discovered days into an unattended soak.
+ *
+ * Whitespace-only counts as unset rather than as an error, the rule
+ * `rotating-file-sink.ts`'s `nonEmpty` and `missingCredentialEnvVars` also
+ * apply. Not shared code with either: this is one `.trim()` at a single read
+ * point, and importing a credential rule out of the log-sink module would be
+ * the wrong dependency edge for the sake of three characters.
  */
 function requireEnv(name: (typeof TELEGRAM_ALERT_ENV_VARS)[number]): string {
-  const value = process.env[name] ?? '';
+  const value = (process.env[name] ?? '').trim();
   if (value.length === 0) {
     throw new Error(
       `Orchestrator cannot start: ${ENV_VAR}=telegram was selected but ${name} is not set ` +
-        '(an empty value counts as missing). Set it, or re-run with ' +
+        '(an empty or whitespace-only value counts as missing). Set it, or re-run with ' +
         `${ENV_VAR}=log-only to accept log-only alerting for an attended run.`,
     );
   }
