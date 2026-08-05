@@ -7,7 +7,16 @@ wayfinder map [#154](../../issues/154).
 Supersedes the input-availability half of
 [06-stage2-overfitting-verdict.md](06-stage2-overfitting-verdict.md) (2026-07-29), which reported
 "no verdict — the inputs do not exist yet". They exist now. The two structural gaps that document
-identified are **unchanged and still block PBO and DSR**.
+identified were unchanged at the time of this run; both were closed later the same day by
+[#406](../../issues/406) — see
+[12-stage2-pbo-dsr-first-computation-2026-08-05.md](12-stage2-pbo-dsr-first-computation-2026-08-05.md).
+
+> **Sharpe magnitudes here are understated ([#420](../../issues/420)).** This run scored each asset
+> class over a timeline containing the other class's bars, which pads the return series with zeros
+> and scales the per-period Sharpe by roughly `sqrt(n_real / n_union)` — about 0.64× for stocks,
+> 0.78× for crypto. Fixed after the fact and not re-run here, because this document's conclusions
+> are about cost attribution and data availability rather than about a Sharpe level. The corrected
+> figures are in `12-…md`.
 
 Raw run output: [stage2-run-2026-08-05.txt](stage2-run-2026-08-05.txt).
 

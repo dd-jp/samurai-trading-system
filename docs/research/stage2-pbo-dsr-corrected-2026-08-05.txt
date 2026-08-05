@@ -1,0 +1,268 @@
+Stage 2: ingesting 6 MVP-universe symbols over 2021-08-06T18:17:07.694Z .. 2026-08-05T18:17:07.694Z
+  ingested SPY: 501 bars
+  ingested QQQ: 501 bars
+  ingested AAPL: 501 bars
+  ingested TSLA: 501 bars
+  ingested BTC-USD: 730 bars
+  ingested ETH-USD: 730 bars
+
+Stage 2: WARNING — requested a start of 2021-08-06 but the data starts 2024-08-06; requested an end of 2026-08-05 but the data ends 2026-08-05. Running on the 2.00-year sample the provider actually served. MinBTL below is computed on THAT window, so a tighter trial cap here is a real constraint of the sample, not a spec change.
+
+Stage 2: running the 12-config trial grid across stocks + crypto...
+
+=== Stage 2: per-config metrics ===
+[stocks] eb1d8a627b39c6ee4f6657a872b0ae36fb8755b51ef56f2ccfa0a00c84f4e0f8 fastWindow=10 slowWindow=30 atrStopMult=2 atrTargetMult=3
+    window: sharpe=0.848 sortino=1.338 calmar=0.079 max_drawdown=0.642 profit_factor=1.131 expectancy=32.393 skew=0.929 kurtosis=11.039 turnover=338.009 exposure=0.932
+    dsr inputs: per_period_sharpe=0.0256 annualization_factor=33.127 observations=500
+    fold sharpe=3.285
+    fold sharpe=-3.422
+    fold sharpe=2.352
+    fold sharpe=1.371
+    fold sharpe=4.520
+    cscv folds: 3.249 3.285 -3.422 2.352 1.371 4.520
+[crypto] eb1d8a627b39c6ee4f6657a872b0ae36fb8755b51ef56f2ccfa0a00c84f4e0f8 fastWindow=10 slowWindow=30 atrStopMult=2 atrTargetMult=3
+    window: sharpe=-0.147 sortino=-0.240 calmar=-0.406 max_drawdown=0.764 profit_factor=0.979 expectancy=-8.214 skew=2.196 kurtosis=21.002 turnover=248.002 exposure=0.934
+    dsr inputs: per_period_sharpe=-0.0033 annualization_factor=45.021 observations=729
+    fold sharpe=-0.580
+    fold sharpe=2.499
+    fold sharpe=-1.493
+    fold sharpe=-2.081
+    fold sharpe=2.763
+    cscv folds: -0.662 -0.580 2.499 -1.493 -2.081 2.763
+[stocks] 33264d64d33599cb7f0a8b0bd54418d83c35674a4333ce60d59eab75a753306e fastWindow=10 slowWindow=30 atrStopMult=1.5 atrTargetMult=2
+    window: sharpe=2.229 sortino=3.560 calmar=0.732 max_drawdown=0.428 profit_factor=1.195 expectancy=36.940 skew=0.898 kurtosis=7.849 turnover=538.016 exposure=0.933
+    dsr inputs: per_period_sharpe=0.0462 annualization_factor=48.207 observations=500
+    fold sharpe=6.169
+    fold sharpe=-1.680
+    fold sharpe=2.769
+    fold sharpe=1.840
+    fold sharpe=3.420
+    cscv folds: 2.755 6.169 -1.680 2.769 1.840 3.420
+[crypto] 33264d64d33599cb7f0a8b0bd54418d83c35674a4333ce60d59eab75a753306e fastWindow=10 slowWindow=30 atrStopMult=1.5 atrTargetMult=2
+    window: sharpe=-2.372 sortino=-3.507 calmar=-0.708 max_drawdown=0.900 profit_factor=0.804 expectancy=-72.220 skew=1.074 kurtosis=9.379 turnover=377.975 exposure=0.919
+    dsr inputs: per_period_sharpe=-0.0436 annualization_factor=54.360 observations=729
+    fold sharpe=-0.888
+    fold sharpe=-3.601
+    fold sharpe=-0.400
+    fold sharpe=-7.016
+    fold sharpe=-0.220
+    cscv folds: -3.004 -0.888 -3.601 -0.400 -7.016 -0.220
+[stocks] 09adb8372de8c0de8d38bdc9bb2ec76d59db115fc8c1cf5012d4fdcecb741bf0 fastWindow=10 slowWindow=30 atrStopMult=3 atrTargetMult=4
+    window: sharpe=1.917 sortino=3.399 calmar=0.551 max_drawdown=0.595 profit_factor=1.311 expectancy=93.124 skew=2.174 kurtosis=15.761 turnover=224.003 exposure=0.936
+    dsr inputs: per_period_sharpe=0.0463 annualization_factor=41.383 observations=500
+    fold sharpe=8.774
+    fold sharpe=-2.893
+    fold sharpe=6.387
+    fold sharpe=-1.151
+    fold sharpe=4.867
+    cscv folds: -0.245 8.774 -2.893 6.387 -1.151 4.867
+[crypto] 09adb8372de8c0de8d38bdc9bb2ec76d59db115fc8c1cf5012d4fdcecb741bf0 fastWindow=10 slowWindow=30 atrStopMult=3 atrTargetMult=4
+    window: sharpe=0.610 sortino=1.090 calmar=-0.027 max_drawdown=0.677 profit_factor=1.138 expectancy=56.371 skew=3.058 kurtosis=28.761 turnover=183.999 exposure=0.945
+    dsr inputs: per_period_sharpe=0.0177 annualization_factor=34.563 observations=729
+    fold sharpe=6.668
+    fold sharpe=6.162
+    fold sharpe=-0.694
+    fold sharpe=-1.335
+    fold sharpe=3.704
+    cscv folds: -4.810 6.668 6.162 -0.694 -1.335 3.704
+[stocks] 26eccc85543740276c3296e936446ab598129041a77e97d5703f9ec9bfa57fc7 fastWindow=10 slowWindow=50 atrStopMult=2 atrTargetMult=3
+    window: sharpe=-0.065 sortino=-0.091 calmar=-0.376 max_drawdown=0.729 profit_factor=0.991 expectancy=-2.453 skew=-0.692 kurtosis=20.328 turnover=342.011 exposure=0.897
+    dsr inputs: per_period_sharpe=-0.0018 annualization_factor=36.637 observations=500
+    fold sharpe=-0.488
+    fold sharpe=-5.778
+    fold sharpe=4.623
+    fold sharpe=0.753
+    fold sharpe=0.762
+    cscv folds: 0.040 -0.488 -5.778 4.623 0.753 0.762
+[crypto] 26eccc85543740276c3296e936446ab598129041a77e97d5703f9ec9bfa57fc7 fastWindow=10 slowWindow=50 atrStopMult=2 atrTargetMult=3
+    window: sharpe=0.367 sortino=0.593 calmar=-0.187 max_drawdown=0.654 profit_factor=1.062 expectancy=25.826 skew=1.769 kurtosis=18.844 turnover=195.991 exposure=0.896
+    dsr inputs: per_period_sharpe=0.0091 annualization_factor=40.386 observations=729
+    fold sharpe=-0.620
+    fold sharpe=1.911
+    fold sharpe=-1.717
+    fold sharpe=-0.035
+    fold sharpe=1.452
+    cscv folds: 2.124 -0.620 1.911 -1.717 -0.035 1.452
+[stocks] d8f02e4bf99c3ad181ad41ceeee0713f38c5661396a18cfc93cdbdcc5a411b6e fastWindow=10 slowWindow=50 atrStopMult=1.5 atrTargetMult=2
+    window: sharpe=1.085 sortino=1.652 calmar=0.077 max_drawdown=0.483 profit_factor=1.100 expectancy=19.439 skew=0.493 kurtosis=8.378 turnover=516.019 exposure=0.897
+    dsr inputs: per_period_sharpe=0.0241 annualization_factor=44.954 observations=500
+    fold sharpe=2.081
+    fold sharpe=-0.568
+    fold sharpe=2.905
+    fold sharpe=2.379
+    fold sharpe=-1.065
+    cscv folds: 1.432 2.081 -0.568 2.905 2.379 -1.065
+[crypto] d8f02e4bf99c3ad181ad41ceeee0713f38c5661396a18cfc93cdbdcc5a411b6e fastWindow=10 slowWindow=50 atrStopMult=1.5 atrTargetMult=2
+    window: sharpe=-1.438 sortino=-2.124 calmar=-0.616 max_drawdown=0.743 profit_factor=0.890 expectancy=-41.418 skew=1.089 kurtosis=15.093 turnover=307.978 exposure=0.874
+    dsr inputs: per_period_sharpe=-0.0217 annualization_factor=66.312 observations=729
+    fold sharpe=-1.540
+    fold sharpe=-4.460
+    fold sharpe=-0.797
+    fold sharpe=-3.610
+    fold sharpe=1.914
+    cscv folds: 0.930 -1.540 -4.460 -0.797 -3.610 1.914
+[stocks] ae599cce85494ea9739b5d4a9e937734ae54e17b498ea9e35f61b3d8218233b3 fastWindow=10 slowWindow=50 atrStopMult=3 atrTargetMult=4
+    window: sharpe=0.905 sortino=1.486 calmar=0.052 max_drawdown=0.513 profit_factor=1.140 expectancy=41.789 skew=1.657 kurtosis=15.891 turnover=210.004 exposure=0.901
+    dsr inputs: per_period_sharpe=0.0219 annualization_factor=41.264 observations=500
+    fold sharpe=4.517
+    fold sharpe=-2.948
+    fold sharpe=5.341
+    fold sharpe=0.096
+    fold sharpe=-2.179
+    cscv folds: 1.860 4.517 -2.948 5.341 0.096 -2.179
+[crypto] ae599cce85494ea9739b5d4a9e937734ae54e17b498ea9e35f61b3d8218233b3 fastWindow=10 slowWindow=50 atrStopMult=3 atrTargetMult=4
+    window: sharpe=0.769 sortino=1.390 calmar=0.174 max_drawdown=0.645 profit_factor=1.279 expectancy=123.258 skew=3.677 kurtosis=42.883 turnover=129.984 exposure=0.897
+    dsr inputs: per_period_sharpe=0.0263 annualization_factor=29.180 observations=729
+    fold sharpe=7.246
+    fold sharpe=6.242
+    fold sharpe=-0.522
+    fold sharpe=-2.507
+    fold sharpe=0.448
+    cscv folds: -0.410 7.246 6.242 -0.522 -2.507 0.448
+[stocks] b3465871eb92c0cdfbaaa907815ee0152eb67a88dc6322401b1d728fdc72964b fastWindow=20 slowWindow=30 atrStopMult=2 atrTargetMult=3
+    window: sharpe=1.031 sortino=1.535 calmar=0.155 max_drawdown=0.505 profit_factor=1.161 expectancy=40.043 skew=-0.454 kurtosis=20.214 turnover=358.009 exposure=0.934
+    dsr inputs: per_period_sharpe=0.0307 annualization_factor=33.567 observations=500
+    fold sharpe=5.390
+    fold sharpe=1.143
+    fold sharpe=3.196
+    fold sharpe=1.906
+    fold sharpe=-2.264
+    cscv folds: -2.541 5.390 1.143 3.196 1.906 -2.264
+[crypto] b3465871eb92c0cdfbaaa907815ee0152eb67a88dc6322401b1d728fdc72964b fastWindow=20 slowWindow=30 atrStopMult=2 atrTargetMult=3
+    window: sharpe=1.867 sortino=3.195 calmar=0.905 max_drawdown=0.421 profit_factor=1.305 expectancy=104.037 skew=1.894 kurtosis=16.553 turnover=237.986 exposure=0.921
+    dsr inputs: per_period_sharpe=0.0412 annualization_factor=45.284 observations=729
+    fold sharpe=-0.448
+    fold sharpe=4.353
+    fold sharpe=7.565
+    fold sharpe=1.030
+    fold sharpe=-1.104
+    cscv folds: 2.633 -0.448 4.353 7.565 1.030 -1.104
+[stocks] 3e2580768b4df07689c29162b5a0c6ac93e48c591d37b39a2e521492554b225e fastWindow=20 slowWindow=30 atrStopMult=1.5 atrTargetMult=2
+    window: sharpe=1.347 sortino=2.077 calmar=1.301 max_drawdown=0.400 profit_factor=1.252 expectancy=46.180 skew=0.049 kurtosis=8.555 turnover=556.015 exposure=0.938
+    dsr inputs: per_period_sharpe=0.0605 annualization_factor=22.249 observations=500
+    fold sharpe=6.674
+    fold sharpe=4.910
+    fold sharpe=5.085
+    fold sharpe=-0.119
+    fold sharpe=-1.952
+    cscv folds: -0.970 6.674 4.910 5.085 -0.119 -1.952
+[crypto] 3e2580768b4df07689c29162b5a0c6ac93e48c591d37b39a2e521492554b225e fastWindow=20 slowWindow=30 atrStopMult=1.5 atrTargetMult=2
+    window: sharpe=0.013 sortino=0.020 calmar=-0.409 max_drawdown=0.626 profit_factor=1.001 expectancy=0.360 skew=1.114 kurtosis=10.781 turnover=345.977 exposure=0.895
+    dsr inputs: per_period_sharpe=0.0002 annualization_factor=63.049 observations=729
+    fold sharpe=-1.211
+    fold sharpe=-6.970
+    fold sharpe=3.394
+    fold sharpe=0.127
+    fold sharpe=-3.794
+    cscv folds: 2.325 -1.211 -6.970 3.394 0.127 -3.794
+[stocks] 87bd3470662a308b6e8f15148fbc51de522cc69ccd5df2ff0133cccaa94db20f fastWindow=20 slowWindow=30 atrStopMult=3 atrTargetMult=4
+    window: sharpe=1.401 sortino=2.454 calmar=1.264 max_drawdown=0.389 profit_factor=1.376 expectancy=101.378 skew=1.661 kurtosis=14.213 turnover=242.003 exposure=0.937
+    dsr inputs: per_period_sharpe=0.0579 annualization_factor=24.190 observations=500
+    fold sharpe=6.418
+    fold sharpe=2.589
+    fold sharpe=8.121
+    fold sharpe=1.080
+    fold sharpe=-3.373
+    cscv folds: -1.994 6.418 2.589 8.121 1.080 -3.373
+[crypto] 87bd3470662a308b6e8f15148fbc51de522cc69ccd5df2ff0133cccaa94db20f fastWindow=20 slowWindow=30 atrStopMult=3 atrTargetMult=4
+    window: sharpe=2.121 sortino=4.006 calmar=2.033 max_drawdown=0.435 profit_factor=1.630 expectancy=204.623 skew=2.800 kurtosis=28.940 turnover=171.996 exposure=0.928
+    dsr inputs: per_period_sharpe=0.0638 annualization_factor=33.221 observations=729
+    fold sharpe=7.238
+    fold sharpe=2.964
+    fold sharpe=8.478
+    fold sharpe=-1.669
+    fold sharpe=1.527
+    cscv folds: 2.089 7.238 2.964 8.478 -1.669 1.527
+[stocks] c4f582f0c76ab46582d3120b6d065f3c36cbc56b1c5dc70e7d53936958f7e58c fastWindow=20 slowWindow=50 atrStopMult=2 atrTargetMult=3
+    window: sharpe=-0.015 sortino=-0.020 calmar=-0.328 max_drawdown=0.771 profit_factor=0.998 expectancy=-0.531 skew=-0.785 kurtosis=18.266 turnover=318.009 exposure=0.895
+    dsr inputs: per_period_sharpe=-0.0004 annualization_factor=40.088 observations=500
+    fold sharpe=1.218
+    fold sharpe=-5.303
+    fold sharpe=3.701
+    fold sharpe=1.373
+    fold sharpe=-2.406
+    cscv folds: 5.520 1.218 -5.303 3.701 1.373 -2.406
+[crypto] c4f582f0c76ab46582d3120b6d065f3c36cbc56b1c5dc70e7d53936958f7e58c fastWindow=20 slowWindow=50 atrStopMult=2 atrTargetMult=3
+    window: sharpe=1.482 sortino=2.646 calmar=1.149 max_drawdown=0.517 profit_factor=1.399 expectancy=151.636 skew=2.374 kurtosis=20.895 turnover=195.996 exposure=0.908
+    dsr inputs: per_period_sharpe=0.0510 annualization_factor=29.061 observations=729
+    fold sharpe=2.825
+    fold sharpe=1.473
+    fold sharpe=2.688
+    fold sharpe=-0.166
+    fold sharpe=1.375
+    cscv folds: 6.508 2.825 1.473 2.688 -0.166 1.375
+[stocks] 8fc991ac2f80bcae8463dd92e1d8822b5f536af27d5e361c1bbbf679e3439951 fastWindow=20 slowWindow=50 atrStopMult=1.5 atrTargetMult=2
+    window: sharpe=0.757 sortino=1.154 calmar=0.102 max_drawdown=0.525 profit_factor=1.103 expectancy=20.991 skew=0.413 kurtosis=6.418 turnover=496.019 exposure=0.901
+    dsr inputs: per_period_sharpe=0.0254 annualization_factor=29.800 observations=500
+    fold sharpe=2.544
+    fold sharpe=-2.095
+    fold sharpe=7.412
+    fold sharpe=-2.889
+    fold sharpe=-2.607
+    cscv folds: 5.189 2.544 -2.095 7.412 -2.889 -2.607
+[crypto] 8fc991ac2f80bcae8463dd92e1d8822b5f536af27d5e361c1bbbf679e3439951 fastWindow=20 slowWindow=50 atrStopMult=1.5 atrTargetMult=2
+    window: sharpe=0.144 sortino=0.226 calmar=-0.293 max_drawdown=0.729 profit_factor=1.017 expectancy=5.798 skew=1.474 kurtosis=18.405 turnover=291.994 exposure=0.879
+    dsr inputs: per_period_sharpe=0.0029 annualization_factor=49.391 observations=729
+    fold sharpe=-0.755
+    fold sharpe=-11.449
+    fold sharpe=2.754
+    fold sharpe=-2.839
+    fold sharpe=-1.587
+    cscv folds: 6.774 -0.755 -11.449 2.754 -2.839 -1.587
+[stocks] b9cc5ba502b3e96134e29f6092cece8a41a4d0f29de184be283a6341e8d30341 fastWindow=20 slowWindow=50 atrStopMult=3 atrTargetMult=4
+    window: sharpe=0.511 sortino=0.791 calmar=0.010 max_drawdown=0.612 profit_factor=1.125 expectancy=41.229 skew=0.787 kurtosis=13.636 turnover=194.006 exposure=0.889
+    dsr inputs: per_period_sharpe=0.0202 annualization_factor=25.315 observations=500
+    fold sharpe=3.035
+    fold sharpe=-4.219
+    fold sharpe=6.256
+    fold sharpe=-0.693
+    fold sharpe=-3.183
+    cscv folds: 6.045 3.035 -4.219 6.256 -0.693 -3.183
+[crypto] b9cc5ba502b3e96134e29f6092cece8a41a4d0f29de184be283a6341e8d30341 fastWindow=20 slowWindow=50 atrStopMult=3 atrTargetMult=4
+    window: sharpe=1.041 sortino=1.831 calmar=1.559 max_drawdown=0.524 profit_factor=1.771 expectancy=283.022 skew=2.045 kurtosis=34.971 turnover=115.982 exposure=0.906
+    dsr inputs: per_period_sharpe=0.0633 annualization_factor=16.430 observations=729
+    fold sharpe=18.905
+    fold sharpe=0.399
+    fold sharpe=5.022
+    fold sharpe=-5.250
+    fold sharpe=-0.254
+    cscv folds: 6.584 18.905 0.399 5.022 -5.250 -0.254
+
+=== Stage 2: kill-line checks (OOS Sharpe) ===
+[stocks] eb1d8a627b39c6ee4f6657a872b0ae36fb8755b51ef56f2ccfa0a00c84f4e0f8 oos_sharpe=1.621 window_sharpe=0.848 passes=true
+[crypto] eb1d8a627b39c6ee4f6657a872b0ae36fb8755b51ef56f2ccfa0a00c84f4e0f8 oos_sharpe=0.222 window_sharpe=-0.147 passes=false
+[stocks] 33264d64d33599cb7f0a8b0bd54418d83c35674a4333ce60d59eab75a753306e oos_sharpe=2.504 window_sharpe=2.229 passes=true
+[crypto] 33264d64d33599cb7f0a8b0bd54418d83c35674a4333ce60d59eab75a753306e oos_sharpe=-2.425 window_sharpe=-2.372 passes=false
+[stocks] 09adb8372de8c0de8d38bdc9bb2ec76d59db115fc8c1cf5012d4fdcecb741bf0 oos_sharpe=3.197 window_sharpe=1.917 passes=true
+[crypto] 09adb8372de8c0de8d38bdc9bb2ec76d59db115fc8c1cf5012d4fdcecb741bf0 oos_sharpe=2.901 window_sharpe=0.610 passes=true
+[stocks] 26eccc85543740276c3296e936446ab598129041a77e97d5703f9ec9bfa57fc7 oos_sharpe=-0.026 window_sharpe=-0.065 passes=false
+[crypto] 26eccc85543740276c3296e936446ab598129041a77e97d5703f9ec9bfa57fc7 oos_sharpe=0.198 window_sharpe=0.367 passes=false
+[stocks] d8f02e4bf99c3ad181ad41ceeee0713f38c5661396a18cfc93cdbdcc5a411b6e oos_sharpe=1.146 window_sharpe=1.085 passes=true
+[crypto] d8f02e4bf99c3ad181ad41ceeee0713f38c5661396a18cfc93cdbdcc5a411b6e oos_sharpe=-1.699 window_sharpe=-1.438 passes=false
+[stocks] ae599cce85494ea9739b5d4a9e937734ae54e17b498ea9e35f61b3d8218233b3 oos_sharpe=0.965 window_sharpe=0.905 passes=true
+[crypto] ae599cce85494ea9739b5d4a9e937734ae54e17b498ea9e35f61b3d8218233b3 oos_sharpe=2.181 window_sharpe=0.769 passes=true
+[stocks] b3465871eb92c0cdfbaaa907815ee0152eb67a88dc6322401b1d728fdc72964b oos_sharpe=1.874 window_sharpe=1.031 passes=true
+[crypto] b3465871eb92c0cdfbaaa907815ee0152eb67a88dc6322401b1d728fdc72964b oos_sharpe=2.279 window_sharpe=1.867 passes=true
+[stocks] 3e2580768b4df07689c29162b5a0c6ac93e48c591d37b39a2e521492554b225e oos_sharpe=2.920 window_sharpe=1.347 passes=true
+[crypto] 3e2580768b4df07689c29162b5a0c6ac93e48c591d37b39a2e521492554b225e oos_sharpe=-1.691 window_sharpe=0.013 passes=false
+[stocks] 87bd3470662a308b6e8f15148fbc51de522cc69ccd5df2ff0133cccaa94db20f oos_sharpe=2.967 window_sharpe=1.401 passes=true
+[crypto] 87bd3470662a308b6e8f15148fbc51de522cc69ccd5df2ff0133cccaa94db20f oos_sharpe=3.708 window_sharpe=2.121 passes=true
+[stocks] c4f582f0c76ab46582d3120b6d065f3c36cbc56b1c5dc70e7d53936958f7e58c oos_sharpe=-0.283 window_sharpe=-0.015 passes=false
+[crypto] c4f582f0c76ab46582d3120b6d065f3c36cbc56b1c5dc70e7d53936958f7e58c oos_sharpe=1.639 window_sharpe=1.482 passes=true
+[stocks] 8fc991ac2f80bcae8463dd92e1d8822b5f536af27d5e361c1bbbf679e3439951 oos_sharpe=0.473 window_sharpe=0.757 passes=false
+[crypto] 8fc991ac2f80bcae8463dd92e1d8822b5f536af27d5e361c1bbbf679e3439951 oos_sharpe=-2.775 window_sharpe=0.144 passes=false
+[stocks] b9cc5ba502b3e96134e29f6092cece8a41a4d0f29de184be283a6341e8d30341 oos_sharpe=0.239 window_sharpe=0.511 passes=false
+[crypto] b9cc5ba502b3e96134e29f6092cece8a41a4d0f29de184be283a6341e8d30341 oos_sharpe=3.764 window_sharpe=1.041 passes=true
+
+=== Stage 2: MinBTL ===
+n_distinct_trials=12 exceeded=true {"limit":7,"distinct_configs":12,"exceeded":true}
+
+=== Stage 2: PBO ===
+{"result":{"pbo":0.65,"verdict":"reject"},"asset_class":"stocks"}
+{"result":{"pbo":0.3,"verdict":"reject"},"asset_class":"crypto"}
+
+=== Stage 2: DSR ===
+{"result":{"config_hash":"09adb8372de8c0de8d38bdc9bb2ec76d59db115fc8c1cf5012d4fdcecb741bf0","n_distinct_trials":12,"per_period_sharpe":0.04632964686827252,"observations":500,"dsr":0.2549510903080972,"passes_dsr_line":false},"asset_class":"stocks"}
+{"result":{"config_hash":"b9cc5ba502b3e96134e29f6092cece8a41a4d0f29de184be283a6341e8d30341","n_distinct_trials":12,"per_period_sharpe":0.0633486565842295,"observations":729,"dsr":0.5190769229706513,"passes_dsr_line":false},"asset_class":"crypto"}
+
+=== Stage 2 VERDICT: KILL/INCOMPLETE ===
