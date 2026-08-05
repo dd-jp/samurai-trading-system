@@ -27,7 +27,13 @@
  * still load-bearing for `fetchNewFills`, which polls only what is in it. See
  * `state` on the input below for why the cache had to be persisted anyway.
  */
-import { type Clock, type OrderState, SystemClock, TokenBucket } from '../../shared/index.js';
+import {
+  type Clock,
+  DEFAULT_VENUE_PACING,
+  type OrderState,
+  SystemClock,
+  TokenBucket,
+} from '../../shared/index.js';
 import { sanitizeBrokerError } from '../broker-error.js';
 import {
   type BrokerStateStore,
@@ -125,12 +131,40 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   /** client_order_id -> the bracket parent's Alpaca order id. */
   private readonly brackets = new Map<string, string>();
   /**
-   * Alpaca's documented ceiling is 200 requests/minute per key — 3.33/second —
-   * so the sustained rate is set BELOW it at 3/second, with a burst of 5 for
-   * the short flurry a bracket submit or a reconcile sweep issues back-to-back.
-   * A placeholder default pending tuning against the real account's tier
-   * (#299), not a transcription of the venue's limit; it errs under the ceiling
-   * because the cost of being wrong is a throttled key mid-sweep.
+   * #299 moved the NUMBER out of this file into `DEFAULT_VENUE_PACING.alpaca`
+   * (shared/http/venue-pacing.ts), overridable per deployment via
+   * `SAMURAI_PACING_ALPACA_*` — a rate limit is a property of the account, not
+   * of this class, and two operators on different tiers cannot both be right
+   * about a literal compiled in here.
+   *
+   * **`DEFAULT_VENUE_PACING.alpaca` is a FALLBACK for direct construction, and
+   * it CHANGED in #299: 5 burst / 3.0 sustained -> 10 burst / 1.5 sustained.**
+   * The production composition root always passes `rateLimiter` explicitly
+   * (`production.ts`, from `resolveVenuePacing()`), so this default is not what
+   * a running system paces on — but a consumer constructing the adapter
+   * directly now gets twice the burst and half the sustained rate of the
+   * previous in-file literal, which is worth knowing before relying on either.
+   * Both in-repo callers inject their own limiter; nothing depends on this
+   * shape today.
+   *
+   * The two numbers moved in opposite directions on purpose, because they are
+   * set on different axes with different evidence:
+   *
+   * - SUSTAINED 1.5/s is 45% of Alpaca's documented 200 requests/minute PER
+   *   ACCOUNT ceiling (verified at alpaca.markets/support/usage-limit-api-calls
+   *   = 3.33/s), which `resolveVenuePacing` enforces as an upper bound on any
+   *   override. It is not just under the ceiling because the market-data client
+   *   draws on the same per-account budget and is paced by no bucket (#391).
+   * - BURST 10 has NO documented Alpaca figure behind it — none could be found
+   *   — so it is derived from our own workload instead: `fetchNewFills` issues
+   *   one `getOrder` per open bracket through this bucket, so a sweep of the
+   *   ADR-0001 universe plus a concurrent `submitBracket` is
+   *   `DEFAULT_UNIVERSE.length + 1`, which a test pins the capacity against.
+   *
+   * Why an unverified burst is a tolerable risk where an unverified sustained
+   * rate would not be: over-burst returns a 429, which `withRetry` handles and
+   * the bucket then paces, whereas a BAN comes from sustained abuse — the axis
+   * that has a verified ceiling and sits at 45% of it.
    */
   private readonly rateLimiter: TokenBucket;
   private readonly state: BrokerStateStore;
@@ -138,7 +172,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   private readonly unpricedFillAgeOutMs: number;
 
   constructor(private readonly input: AlpacaBrokerAdapterInput) {
-    this.rateLimiter = input.rateLimiter ?? new TokenBucket({ capacity: 5, refillPerSecond: 3 });
+    this.rateLimiter = input.rateLimiter ?? new TokenBucket(DEFAULT_VENUE_PACING.alpaca);
     this.state = input.state ?? new InMemoryBrokerStateStore();
     this.clock = input.clock ?? new SystemClock();
     this.unpricedFillAgeOutMs = input.unpricedFillAgeOutMs ?? DEFAULT_UNPRICED_FILL_AGE_OUT_MS;

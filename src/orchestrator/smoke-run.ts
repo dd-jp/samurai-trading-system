@@ -105,7 +105,13 @@
  */
 import { pathToFileURL } from 'node:url';
 import { CostModelImpl } from '../cost-model-backtest/index.js';
-import type { LlmClient, LlmRequest, LlmResponse } from '../debate-engine/index.js';
+import type {
+  LlmClient,
+  LlmRequest,
+  LlmResponse,
+  RateLimiterSnapshot,
+} from '../debate-engine/index.js';
+import { RateLimiter } from '../debate-engine/index.js';
 import type { AlpacaClient } from '../execution/index.js';
 import { SimulatedBrokerAdapter } from '../execution/index.js';
 import type { Bar } from '../market-data-service/index.js';
@@ -483,6 +489,28 @@ export function evaluateSmokeGate(
      * and never name the cause.
      */
     alpacaWireClientReached?: boolean;
+    /**
+     * `RateLimiter.snapshot()` after the run — how many LLM calls the process's
+     * limiter actually metered (#388).
+     *
+     * Checked here, alongside `alpacaWireClientReached`, and for the same
+     * reason: it is an effect of the run that no table records. #388 WAS a
+     * fully-implemented, fully-unit-tested component with no production
+     * caller, and every one of 1800+ unit tests passed throughout — the same
+     * shape as #364, whose `debate_log` assertion in this gate is the only
+     * check that has ever caught it. A limiter that metered nothing while
+     * debates were resolving is that defect, exactly.
+     *
+     * **REQUIRED, unlike `alpacaWireClientReached` above.** That asymmetry is
+     * the point and was found by mutation: with this optional, deleting the
+     * one line in `runSmoke` that passes it left the check vacuously true —
+     * `yarn smoke` exited 0 and the entire suite stayed green. A backstop that
+     * can be switched off by omitting an argument is #388's own defect class
+     * reproduced inside the fix for #388. Required makes forgetting it a
+     * COMPILE error, the same structural argument that makes `RateLimiter` a
+     * required positional on `buildDebateStep`.
+     */
+    llmRateLimiterSnapshot: RateLimiterSnapshot;
   },
 ): SmokeGateResult {
   const failures: string[] = [];
@@ -521,6 +549,24 @@ export function evaluateSmokeGate(
         'against debate_log) has no input and the debate itself is unreconstructable after the ' +
         'fact (audit_log holds digests only). This is the #364 defect exactly',
     );
+  }
+
+  // Requirement 3b (#388): the debate that produced that row went through the
+  // rate limiter. Hung off `debates.length` rather than standing alone so that
+  // a run which never debated fails on the check above, naming the real cause.
+  if (debates.length > 0) {
+    const totals = Object.values(options.llmRateLimiterSnapshot);
+    const llmCallsUsed = totals.reduce((sum, entry) => sum + entry.llmCallsUsed, 0);
+    const debatesUsed = totals.reduce((sum, entry) => sum + entry.debatesUsed, 0);
+    if (debatesUsed === 0 || llmCallsUsed === 0) {
+      failures.push(
+        `debates resolved (${debates.length} row(s) in debate_log) but the LLM RateLimiter ` +
+          `metered ${debatesUsed} debate(s) and ${llmCallsUsed} call(s) — so it is constructed ` +
+          'beside the LLM path rather than in it. This is the #388 defect exactly: the ' +
+          'component was implemented, tested and exported while nothing in production ever ' +
+          'called it, and the whole unit suite passed the entire time',
+      );
+    }
   }
 
   if (!verdicts.some((verdict) => verdict.status === 'go')) {
@@ -754,6 +800,11 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       config: profile.executionConfig.simulated,
     });
     const alpacaBrokerClient = new UnreachableAlpacaClient();
+    // Built here rather than left to the composition root for one reason: the
+    // gate has to READ it afterwards (#388). Same config the root would have
+    // used — `profile.rateLimiterConfig` — so this override changes who holds
+    // the reference, not what the limiter permits.
+    const llmRateLimiter = new RateLimiter(clock, profile.rateLimiterConfig);
 
     const orchestrator = await startFromEnvironment({
       // The same checked-in tuning values `yarn orchestrator` runs on, at the
@@ -776,6 +827,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       broker,
       dataSource,
       llmClient: new ConstantResponseLlmClient(),
+      llmRateLimiter,
       // See the class docs: both of these exist because the composition root's
       // defaults reach Alpaca over the network.
       accountState: new FixedAccountStateProvider(),
@@ -823,6 +875,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     const gate = evaluateSmokeGate(observations, {
       minTicks: targetTicks,
       alpacaWireClientReached: alpacaBrokerClient.reached,
+      llmRateLimiterSnapshot: llmRateLimiter.snapshot(),
     });
     return { observations, gate, report: formatSmokeReport(observations, gate) };
   } finally {

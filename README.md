@@ -84,6 +84,20 @@ The orchestrator refuses to start rather than guess at any of these. It names ev
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ALLOWED_USER_IDS` | | Required only when `SAMURAI_ALERTS=telegram`. `TELEGRAM_CHAT_ID` is the **escalation** chat: orphaned `go` verdicts, stuck unpriced fills, kill-threshold breaches. Keep it unmuted. |
 | `TELEGRAM_HEARTBEAT_CHAT_ID` | | Required when `SAMURAI_ALERTS=telegram`, and must be a **different** chat from `TELEGRAM_CHAT_ID`. The dead-man's-switch heartbeat posts here every 15 minutes and nothing else does, so muting it cannot silence an escalation. Startup refuses the two being equal. |
 
+#### Optional — venue pacing
+
+Each broker adapter paces its own outbound calls through a token bucket, so the system stops issuing the request that earns a 429 rather than only retrying after one. The checked-in defaults are in `src/shared/http/venue-pacing.ts`, where every value carries its provenance — whether the figure is the venue's published limit (cited by URL) or a conservative placeholder that could not be verified.
+
+They are overridable because **a rate limit is a property of the account, not of the code**: two operators on different tiers cannot both be right about a compiled-in literal. `<VENUE>` is `ALPACA`, `CCXT` or `IBKR`.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SAMURAI_PACING_<VENUE>_CAPACITY` | Alpaca `10`, ccxt `1`, IBKR `5` | Burst: how many calls may go out back-to-back from a full bucket. Must be at least `1` — a bucket that can never mint a whole token parks every call forever. |
+| `SAMURAI_PACING_<VENUE>_REFILL_PER_SEC` | Alpaca `1.5`, ccxt `1`, IBKR `5` | Sustained rate once the burst is spent. Refused if it exceeds the venue's documented ceiling. |
+| `SAMURAI_PACING_<VENUE>_CEILING_PER_SEC` | Alpaca `3.33` (200/min), IBKR `50`, ccxt none | The ceiling the refill rate is checked against — i.e. what **this account** is documented as entitled to. Set it only when the venue has granted an allowance above its published figure; raising it is a deliberate act, separate from tuning throughput, because pacing above a real limit earns 429s and, sustained, a banned key. |
+
+Alpaca's published limit is **200 requests per minute per account**, shared by the broker calls and the market-data calls, which is why the broker's sustained default is set at ~45% of it rather than just under it.
+
 #### Optional — durable log sink
 
 `yarn orchestrator` writes the structured log to stdout **and** to a rotating file, so a run started without a shell redirect still leaves a diagnostic trace behind. All three variables are optional; the defaults are the intended configuration.

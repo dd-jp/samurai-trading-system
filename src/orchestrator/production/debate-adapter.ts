@@ -69,6 +69,7 @@ import {
   type MediatorAssessment,
   type MediatorPersona,
   type PersonaResponse,
+  type RateLimiter,
   type RoundContext,
   type RoundStance,
   runBearPersona,
@@ -83,6 +84,7 @@ import {
   sanitizeLogText,
 } from '../../shared/index.js';
 import type { TickSteps } from '../types.js';
+import { RateLimitedLlmClient } from './rate-limited-llm-client.js';
 
 /**
  * Builds one debate's bull/bear/mediator port set over a shared LLM client.
@@ -284,6 +286,69 @@ function persistDebateLog(params: {
   store.writeLog(buildDebateLog(result, instrument, bar, clock.now()));
 }
 
+/**
+ * The worst case `RateLimiter.reserve` is asked to cover for one debate, and
+ * the number the paper profile's `maxLlmCalls` is sized in multiples of.
+ *
+ * DERIVED from the code, not chosen: `runDebate` runs at most `MAX_ROUNDS`
+ * rounds, each issuing exactly the bull/bear/mediator triple built above, plus
+ * the single `detectDisagreements` call the final round makes
+ * (debate-engine-spec.md: disagreement detection "runs once per debate (not
+ * per round), so the LLM cost is bounded"). Pinned against `MAX_ROUNDS` by a
+ * test so a change to the round cap cannot silently under-reserve.
+ */
+export const LLM_CALLS_PER_ROUND = 3;
+export const WORST_CASE_LLM_CALLS_PER_DEBATE = MAX_ROUNDS * LLM_CALLS_PER_ROUND + 1;
+
+/**
+ * What a debate the rate limiter refused to admit returns (#388).
+ *
+ * ## Why a result rather than a throw
+ *
+ * `SequentialTickRunner` does not catch a stage throw; it propagates to
+ * `runTickPlan`'s `Promise.all`, and `startTickLoop` logs "tick failed" for
+ * the WHOLE pass. So throwing here would let one instrument's exhausted budget
+ * discard every other instrument's tick — the opposite of what shedding load
+ * is for. Returning a resolved, deliberately unactionable result degrades the
+ * one instrument and leaves the rest of the pass alone.
+ *
+ * ## Why it is safe to hand downstream
+ *
+ * `confidence: 0` is below any sane `conviction_floor` (`0.55` in
+ * `DEFAULT_TRADER_CONFIG`), so `Trader.decide` returns `null` and the tick
+ * short-circuits at `trader` with `no_trade` — the fail-safe direction, and
+ * the same shape `enforceLatencyBudget`'s `LOW_CONFIDENCE_FALLBACK` already
+ * hands back for a debate that ran out of time. `direction: 'neutral'` and the
+ * explicit `open_items` entry mean the `audit_log` row names the cause rather
+ * than looking like a debate that genuinely found nothing.
+ *
+ * ## Why NO `debate_log` row
+ *
+ * Same reasoning as a debate that throws partway (see `persistDebateLog`):
+ * there is no debate to log. Writing one would permanently occupy the
+ * content-hashed `debate_id` primary key — blocking the real row if the same
+ * bar is retried once budget frees up — and would hand
+ * `feedback-loop/attribution.ts` an empty `contributions` array, which
+ * `accumulateCredit` cannot distinguish from a real debate in which no analyst
+ * took a stance.
+ */
+export function rateLimitedDebateResult(debate_id: string, reason: string): DebateResult {
+  return {
+    synthesis: `Debate not started: ${reason}`,
+    position: 'No position — the debate was not admitted under the LLM rate-limit budget.',
+    confidence: 0,
+    contributions: [],
+    disagreement_summary: 'Debate not started; no disagreement was assessed.',
+    open_items: [`debate not started: ${reason}`],
+    converged: false,
+    rounds_completed: 0,
+    latency_ms: 0,
+    direction: 'neutral',
+    debate_id,
+    rate_limited: { reason },
+  };
+}
+
 export function buildDebateStep(
   llmClient: LlmClient,
   /**
@@ -292,9 +357,20 @@ export function buildDebateStep(
    * composition root silently drop it again.
    */
   debateLog: DebateLogStore,
+  /**
+   * Required for exactly the same reason, and #388 is the proof it was needed:
+   * `RateLimiter` was implemented, tested and exported, and constructed
+   * nowhere in production. An optional parameter here would leave the
+   * composition root free to drop it again and leave the system back on
+   * `maxConcurrentInstruments: 1` as its only, incidental throttle.
+   *
+   * Positional and third so the omission is a COMPILE error rather than a
+   * silently unpaced run.
+   */
+  rateLimiter: RateLimiter,
   logger?: Logger,
 ): TickSteps['debate'] {
-  return async ({ trace_id, instrument, views, clock }) => {
+  return async ({ trace_id, instrument, asset_class, views, clock }) => {
     // Hoisted out of the `runDebate` call: the SAME `Date` must go into
     // `debate_id`'s hash and into the row's `bar_timestamp`, or the row
     // claims a bar coordinate its own primary key does not encode.
@@ -306,7 +382,57 @@ export function buildDebateStep(
     // hash `runDebate` applies to the same three inputs, so this cannot drift
     // from the id on the resulting row — asserted in debate-adapter.test.ts.
     const debate_id = computeDebateId(instrument, bar, views);
-    const personas = buildDebatePersonas(llmClient, trace_id, clock, debate_id);
+
+    // ADMISSION, once, before anything is spent (#388). `reserve` is
+    // synchronous and never parks the caller — see `RateLimitedLlmClient` for
+    // why waiting was rejected — so this either lets the debate run at full
+    // speed or refuses it outright. It books the debate against the window AND
+    // checks that the worst case still fits the remaining call budget, which
+    // is what stops a debate starting only to be cut off mid-round with three
+    // rounds already billed.
+    //
+    // DELIBERATELY OUTSIDE the try/catch below, which is safe because `reserve`
+    // is TOTAL over `AssetClass`: it returns a `ReserveResult` for every value
+    // the type admits and throws on none of them. An asset class with no
+    // `perAssetClass` entry falls back to `default` rather than erroring —
+    // pinned by "RateLimiter.reserve is total over AssetClass" in
+    // rate-limiter.test.ts, which exists for this call site specifically
+    // (PR #390 review).
+    //
+    // The only inputs that CAN make it throw are a null config, a config with
+    // no `default`, or a `Clock` that does not return a `Date` — each of which
+    // requires defeating TypeScript, and each of which is a total, permanent
+    // startup misconfiguration rather than a per-tick condition. Catching them
+    // here would be actively worse than not: it would convert "this process is
+    // misconfigured" into "this instrument silently never trades", which for a
+    // 14-day unattended soak is indistinguishable from a quiet market. That
+    // failure must stay loud.
+    const reservation = rateLimiter.reserve(asset_class, WORST_CASE_LLM_CALLS_PER_DEBATE);
+    if (!reservation.granted) {
+      logger?.log({
+        trace_id,
+        stage: 'debate',
+        level: 'warn',
+        message:
+          `debate: ${instrument} not started — ${sanitizeLogText(reservation.reason)}. No LLM ` +
+          'call was made and no debate_log row is written; the tick will short-circuit at ' +
+          'Trader with no_trade. Persistent refusals mean rateLimiterConfig is sized under the ' +
+          "universe's real debate rate, not that the market is quiet.",
+        payload: { instrument, asset_class, debate_id },
+      });
+      return rateLimitedDebateResult(debate_id, reservation.reason);
+    }
+
+    // METERING, per call, for the debate just admitted. Wrapped here rather
+    // than once at the composition root because the limiter's counters are
+    // per-asset-class and `LlmRequest` carries no instrument — this is the
+    // innermost layer that still knows which class to bill.
+    const personas = buildDebatePersonas(
+      new RateLimitedLlmClient(llmClient, rateLimiter, asset_class),
+      trace_id,
+      clock,
+      debate_id,
+    );
 
     let result: DebateResult;
     try {

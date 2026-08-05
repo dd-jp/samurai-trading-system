@@ -40,10 +40,65 @@ export interface RateLimiterConfig {
 
 export type ReserveResult = { granted: true } | { granted: false; reason: string };
 
+/**
+ * What `RateLimiter.snapshot()` returns. Named rather than spelled inline at
+ * each site: `smoke-run.ts`'s gate option declares the same shape, and a
+ * hand-copied structural type across a module boundary diverges silently the
+ * first time `WindowState` is renamed.
+ */
+export type RateLimiterSnapshot = Partial<
+  Record<AssetClass, { llmCallsUsed: number; debatesUsed: number }>
+>;
+
 interface WindowState {
   windowStart: number;
   llmCallsUsed: number;
   debatesUsed: number;
+}
+
+/**
+ * One budget's shape, checked at construction. `where` names the field so a
+ * misconfigured `perAssetClass.stocks` does not report as a bad `default`.
+ *
+ * `windowMs` must be strictly positive: at zero, `currentWindow`'s
+ * `now - windowStart < config.windowMs` is never true, so every call mints a
+ * fresh window and the limiter silently enforces NOTHING — a budget that reads
+ * as configured while permitting unlimited spend, which is worse than an
+ * obviously absent one. The two counters may be zero (a deliberate "admit
+ * nothing" setting) but not negative or fractional.
+ */
+function assertBudget(budget: RateLimitConfig | undefined, where: string): void {
+  if (budget === null || budget === undefined) {
+    throw new Error(
+      `RateLimiter: config.${where} is required — a limiter with no budget for an asset class ` +
+        'would throw on the first debate of that class rather than at startup.',
+    );
+  }
+  /**
+   * `bound: 'positive'` means strictly greater than zero; `'non-negative'`
+   * allows zero.
+   *
+   * Spelled as a named bound rather than as `value < Number.MIN_VALUE` for
+   * strictness, which is what this did first. That expression is CORRECT — 0 is
+   * less than 5e-324, so zero was always rejected — but a reviewer read it as
+   * admitting zero and filed it as a bug (PR #390). Code whose correctness
+   * hinges on recognising the smallest denormal double is code that will be
+   * misread again, so the intent is now stated instead of encoded.
+   */
+  const check = (name: keyof RateLimitConfig, bound: 'positive' | 'non-negative') => {
+    const value = budget[name];
+    const belowBound = bound === 'positive' ? !(value > 0) : !(value >= 0);
+    if (typeof value !== 'number' || !Number.isFinite(value) || belowBound) {
+      throw new Error(
+        `RateLimiter: config.${where}.${name} must be a finite ${bound} number; got ${String(value)}.`,
+      );
+    }
+  };
+  // Strictly positive — see the doc above for why 0 disables enforcement.
+  check('windowMs', 'positive');
+  // Zero is a legitimate "admit nothing" setting for both counters.
+  check('maxLlmCalls', 'non-negative');
+  check('maxDebates', 'non-negative');
 }
 
 /**
@@ -56,7 +111,52 @@ export class RateLimiter {
   private readonly config: RateLimiterConfig;
   private readonly windows = new Map<AssetClass, WindowState>();
 
+  /**
+   * Validates its own preconditions at CONSTRUCTION (PR #390 review), which is
+   * what turns `reserve`'s "cannot throw" from a documented assumption into an
+   * enforced one.
+   *
+   * `reserve` is relied on to be total over `AssetClass` — `buildDebateStep`
+   * calls it outside its try/catch precisely because of that, and
+   * `SequentialTickRunner` does not catch a stage throw. But that totality only
+   * held as long as the config shape was well formed, and the shape was
+   * guaranteed by TypeScript alone. Probing the throw surface for an earlier
+   * review found exactly three ways to break it, all of them requiring a cast
+   * or a JS caller: a null config, a config with no `default`, and a `Clock`
+   * that does not return a `Date`. All three are checked here.
+   *
+   * **Construction, not per debate, and the distinction is the whole point.**
+   * Each of these is a total, permanent misconfiguration — a null clock is
+   * broken for every instrument on every tick for the life of the process. A
+   * check at the debate stage would convert "this process is misconfigured"
+   * into "this instrument silently never trades", which across a 14-day
+   * unattended soak is indistinguishable from a quiet market: the heartbeat
+   * keeps beating and nothing trades. Failing at boot fails loudly, before any
+   * timer exists and before any capital is at risk — the same posture as
+   * `paperStartingProfile('live')` throwing, and as #376 moving seeding ahead
+   * of the tick loops so a throw cannot leave live timers behind.
+   */
   constructor(clock: Clock, config: RateLimiterConfig) {
+    if (clock === null || clock === undefined || typeof clock.now !== 'function') {
+      throw new Error('RateLimiter: clock is required and must implement now(): Date.');
+    }
+    // Called once, here, rather than trusted: `currentWindow` does
+    // `this.clock.now().getTime()` on every reserve/recordCall, so a clock that
+    // returns anything else throws on the FIRST debate rather than at startup.
+    // Both in-repo implementations are pure, so calling it costs nothing.
+    if (!(clock.now() instanceof Date)) {
+      throw new Error('RateLimiter: clock.now() must return a Date.');
+    }
+    if (config === null || config === undefined) {
+      throw new Error('RateLimiter: config is required.');
+    }
+    assertBudget(config.default, 'default');
+    for (const [assetClass, budget] of Object.entries(config.perAssetClass ?? {})) {
+      // `?? {}` covers an absent map; an entry explicitly present but undefined
+      // would fall back to `default` at read time, so it is not an error here.
+      if (budget !== undefined) assertBudget(budget, `perAssetClass.${assetClass}`);
+    }
+
     this.clock = clock;
     this.config = config;
   }
@@ -86,6 +186,16 @@ export class RateLimiter {
    * than throwing: an exhausted budget is an expected, recoverable
    * condition (spec: "return an error without proceeding"), not an
    * invariant violation. Grants no partial reservation on rejection.
+   *
+   * **TOTAL over `AssetClass`, and callers depend on it.** Every value the
+   * type admits yields a `ReserveResult`; none throws. A class with no
+   * `perAssetClass` entry falls back to `default` (`configFor`). This is load
+   * bearing rather than incidental: `buildDebateStep` calls this outside its
+   * try/catch, and `SequentialTickRunner` does not catch a stage throw — so a
+   * throw here would discard the whole tick pass instead of one instrument.
+   * Pinned by "RateLimiter.reserve is total over AssetClass" in the tests.
+   * Keep it that way: signal an unsatisfiable budget with `granted: false`,
+   * never by throwing.
    */
   reserve(assetClass: AssetClass, worstCaseLlmCalls: number): ReserveResult {
     const config = this.configFor(assetClass);
@@ -113,5 +223,35 @@ export class RateLimiter {
   recordCall(assetClass: AssetClass): void {
     const window = this.currentWindow(assetClass);
     window.llmCallsUsed += 1;
+  }
+
+  /**
+   * What this limiter has actually seen, per asset class, in the window each
+   * class is currently in. Read-only; it opens no way to grant or spend
+   * budget.
+   *
+   * Added by #388 for one reason worth naming, because "expose internals for a
+   * test" would be a bad one. #388 IS this class having no production caller,
+   * and the check that would have caught that is not a unit test — every unit
+   * test passed while nothing constructed it. It is `yarn smoke`'s gate, which
+   * asserts on observable effects of a real process (see #364's `debate_log`
+   * assertion, whose mutation was invisible to all 1600+ unit tests). A
+   * counter that stays at zero after a run that debated is the only cheap,
+   * direct evidence that the limiter is in the LLM path rather than merely
+   * constructed beside it.
+   *
+   * Deliberately NOT `currentWindow`-driven: reading must not roll a window
+   * over or create one for a class that has never been used, or the observer
+   * would change what it observes.
+   */
+  snapshot(): RateLimiterSnapshot {
+    const result: RateLimiterSnapshot = {};
+    for (const [assetClass, window] of this.windows) {
+      result[assetClass] = {
+        llmCallsUsed: window.llmCallsUsed,
+        debatesUsed: window.debatesUsed,
+      };
+    }
+    return result;
   }
 }

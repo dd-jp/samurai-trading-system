@@ -92,7 +92,10 @@ export class SequentialTickRunner implements TickRunner {
     }
 
     markStage('debate');
-    const debateInput = { trace_id, instrument, views, clock };
+    // `asset_class` comes straight off the `Signal` the scheduler produced
+    // (#388): the Debate Engine's rate-limit budget and latency budget are
+    // both keyed on it, and this is the only layer that holds it as fact.
+    const debateInput = { trace_id, instrument, asset_class: signal.asset_class, views, clock };
     const debate = await this.steps.debate(debateInput);
     record('debate', debate.direction, debateInput, debate);
 

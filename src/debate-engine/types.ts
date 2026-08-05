@@ -103,4 +103,20 @@ export interface DebateResult {
     /** Actual elapsed wall-clock time when termination fired, in milliseconds. */
     elapsed_ms: number;
   };
+  /**
+   * Present only when `RateLimiter` refused to admit the debate at all (#388)
+   * — no round ran and no LLM call was made. Absent on every debate that
+   * actually started, including one the latency budget later cut short.
+   *
+   * A sibling of `timed_out` rather than a variant of it, because the two are
+   * genuinely different events with different remedies: `timed_out` means the
+   * provider was slow, this means we chose not to spend. Distinguishable
+   * downstream matters — a soak whose debates are mostly `rate_limited` is
+   * mis-configured, whereas one whose debates mostly `timed_out` has a
+   * provider problem.
+   */
+  rate_limited?: {
+    /** `ReserveResult`'s own refusal text: which budget was exhausted, and by how much. */
+    reason: string;
+  };
 }
