@@ -110,8 +110,12 @@ level at which the verdict flips.
 > **Read this ladder as a sensitivity diagnostic, NOT as a forecast of the calibrated result.**
 > `scaleCostConfig` multiplies all four coefficients uniformly, and a real calibration does not move
 > them uniformly — for crypto it moves two of them in *opposite* directions. Spread and slippage
-> come down hard (0.25 ATR of half-spread against a real BTC/ETH quoted spread of order a basis
-> point). But the fixture's `commissionRate: 0.001` is 10bps per leg, which is *lower* than the
+> come down hard (0.25 ATR of half-spread against a real BTC/ETH quoted spread that the
+> calibration in [10-cost-model-calibration-2026-08-05.md](10-cost-model-calibration-2026-08-05.md)
+> went on to measure at a median of 11.72 bps for BTC and 13.34 bps for ETH — still far below the
+> fixture, though an order of magnitude above the "about a basis point" this paragraph originally
+> guessed at before those quotes were sampled). But the fixture's `commissionRate: 0.001` is 10bps
+> per leg, which is *lower* than the
 > published base-tier taker fees at the venues under consideration — so calibration would push
 > commission **up**. The calibrated point therefore sits off this ladder entirely, and "×0.25 →
 > 11/24" is a property of a synthetic uniform scale, not the number to expect after calibrating.

@@ -148,6 +148,14 @@ range — otherwise the fold boundaries, and so the pass count, would shift on e
 pitfall P6 in the companion document, and the first calibrated run was made before it was applied;
 the entrypoint now passes the pinned window.
 
+**The archived log predates the pin — check the header before treating it as reproducible.**
+[stage2-calibrated-run-2026-08-05.txt](stage2-calibrated-run-2026-08-05.txt) line 1 records a
+requested window of `2021-08-06T20:17:26.360Z .. 2026-08-05T20:17:26.360Z`, i.e. a
+`new Date()`-relative range, and not `STAGE2_PINNED_WINDOW`'s `18:17:07.694Z` — a different instant
+from the decomposition run archived beside it. The effective window after intersection is
+2024-08-06 .. 2026-08-05 either way, so the table above stands, but a re-run under the pin will not
+reproduce that log header byte-for-byte. Re-archive it the next time this is run for real.
+
 12/24 sits between the frictionless bound (16/24) and the uniform ×0.25 rung (11/24) — consistent
 with both, and a useful sanity check that the calibration did not overshoot into fantasy.
 
