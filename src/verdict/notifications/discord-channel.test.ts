@@ -41,6 +41,8 @@ function makeRiskDecision(): RiskDecision {
     binding_constraint: null,
     reasons: [],
     risk_snapshot: { exposure: {}, drawdown_pct: 0, armed_breakers: [] },
+    warnings: [],
+    next_breaker_state: [],
   };
 }
 
@@ -62,7 +64,7 @@ describe('DiscordChannel.notify', () => {
     const client: DiscordClient = { sendMessage: vi.fn().mockResolvedValue(undefined) };
     const channel = new DiscordChannel(client, 'channel-456');
 
-    await channel.notify(makeDecision(), makeRiskDecision(), 'trace-1');
+    await channel.notify(makeDecision(), makeRiskDecision());
 
     expect(client.sendMessage).toHaveBeenCalledTimes(1);
     expect(client.sendMessage).toHaveBeenCalledWith(

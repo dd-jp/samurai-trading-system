@@ -256,7 +256,11 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * throws out of the client and is left to propagate, exactly as that
    * contract wants.
    */
-  async getOrder(clientOrderId: string): Promise<NormalizedOrder | null> {
+  // `_instrument` is unused here but declared to match `BrokerAdapter.getOrder`
+  // — Alpaca looks an order up by client id alone, while a symbol-keyed venue
+  // (ccxt) cannot. Omitting it left callers unable to pass the argument the
+  // port says to pass.
+  async getOrder(clientOrderId: string, _instrument: string): Promise<NormalizedOrder | null> {
     const order = await this.call('getOrder', () =>
       this.input.client.getOrderByClientOrderId(clientOrderId),
     );

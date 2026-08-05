@@ -1,0 +1,45 @@
+// Type-checks the test suite, which `tsconfig.json` deliberately excludes.
+//
+// `tsconfig.json` is the BUILD config: it excludes `**/*.test.ts` so `dist/`
+// carries no test code. Vitest transpiles without type-checking and sets no
+// `typecheck` block, so before this file existed the 40k lines under
+// `**/*.test.ts` — over half the repo — were never seen by the compiler. A
+// fixture that had drifted from its domain type, or a mock whose method
+// signature no longer matched the port it doubles, compiled and ran anyway.
+//
+// Kept as a second config rather than by widening `tsconfig.json`'s `include`
+// so the build's emit surface stays exactly the shipped code. Run via
+// `yarn typecheck`, which runs both.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // `vitest.config.ts` sets `globals: true`, so `describe`/`it`/`expect` are
+    // ambient in the suite and unresolvable without this. The build config
+    // deliberately stays on `["node"]` — shipped code must not see them.
+    "types": ["node", "vitest/globals"],
+    // Relaxed HERE ONLY; production keeps it on. Test bodies index fixtures
+    // they built and length-asserted two lines earlier
+    // (`expect(x).toHaveLength(2); x[0].id`). Measured: with the rule on this
+    // config reported 193 errors, 66 of them from the rule itself across 15
+    // files, none a real defect. Silencing each needs a `biome-ignore
+    // lint/style/noNonNullAssertion` line per site under this repo's style
+    // (see decide.test.ts:461) — ~130 lines of noise in the files this config
+    // exists to make trustworthy. The failure mode also differs: an unchecked
+    // index in production propagates `undefined` silently; in a test it
+    // throws and fails loudly. The signal this config is for — fixture and
+    // port drift — is unaffected, and that first pass found 126 of those.
+    "noUncheckedIndexedAccess": false,
+    // Irrelevant when nothing is emitted, and `declaration` + `noEmit`
+    // is a config error under `isolatedModules`.
+    "declaration": false,
+    "sourceMap": false
+  },
+  // BOTH keys are required. `extends` inherits `exclude` from the base, and
+  // `exclude` filters what `include` matched — so widening `include` alone
+  // leaves `**/*.test.ts` excluded and this config silently checks nothing.
+  // Verified by injecting `const x: number = 'nope'` into a `.test.ts` and
+  // confirming it fails here; without the `exclude` override it did not.
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

@@ -249,10 +249,9 @@ describe('buildDebateStep', () => {
       close_reason: 'target',
     };
 
-    const credits = accumulateCredit([trade], store, {
-      shadow_credit: 0.1,
-      shadow_influence_ceiling: 0.2,
-    });
+    // Two arguments, not three: #370 removed the shadow-credit config
+    // parameter along with the dials themselves. The call kept passing one.
+    const credits = accumulateCredit([trade], store);
 
     // Before #364 this map was empty for every trade in the soak: no row, so
     // `getContributionsForAttribution` returned undefined and the trade was

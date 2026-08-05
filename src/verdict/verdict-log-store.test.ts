@@ -42,6 +42,8 @@ function makeInput(overrides: Partial<VerdictInput> = {}): VerdictInput {
       binding_constraint: null,
       reasons: [],
       risk_snapshot: { exposure: {}, drawdown_pct: 0, armed_breakers: [] },
+      warnings: [],
+      next_breaker_state: [],
     },
     clock: { now: () => new Date('2026-07-15T14:00:00Z') },
     marketData: undefined as never,
@@ -93,6 +95,8 @@ describe('buildVerdictLog', () => {
         binding_constraint: null,
         reasons: [],
         risk_snapshot: { exposure: {}, drawdown_pct: 0, armed_breakers: [] },
+        warnings: [],
+        next_breaker_state: [],
       },
     });
     const decision = makeDecision({ status: 'no_go', order: null, no_go_reason: 'drift' });
@@ -127,6 +131,8 @@ describe('buildVerdictLog', () => {
         binding_constraint: null,
         reasons: [],
         risk_snapshot: { exposure: {}, drawdown_pct: 0, armed_breakers: [] },
+        warnings: [],
+        next_breaker_state: [],
       },
     });
 

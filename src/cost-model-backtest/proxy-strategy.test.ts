@@ -29,6 +29,8 @@ function buildTrendingBars(count: number, start: number, step: number): Bar[] {
       high,
       low,
       close,
+      volume: 1_000,
+      source: 'fixture',
     });
   }
   return bars;
@@ -47,6 +49,8 @@ function buildFlatBars(count: number, price: number): Bar[] {
       high: price,
       low: price,
       close: price,
+      volume: 1_000,
+      source: 'fixture',
     });
   }
   return bars;

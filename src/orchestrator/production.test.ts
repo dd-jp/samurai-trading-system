@@ -71,7 +71,19 @@ function recordingLogger(): Logger & { entries: Parameters<Logger['log']>[0][] }
  * because the codebase ships no implementation of them (see production.ts's
  * doc comment) — not because a real one is being avoided here.
  */
-function stubConfig(db: SqliteHandle, overrides: Partial<ProductionConfig> = {}): ProductionConfig {
+/**
+ * `ProductionConfig` with the seams this stub ALWAYS supplies marked
+ * non-optional.
+ *
+ * They are optional on `ProductionConfig` because the composition root builds
+ * a default when they are absent — but this fixture always passes them, and
+ * assertions below read `config.alpacaBrokerClient.submitOrder` directly.
+ * Narrowing once here beats six non-null assertions at the call sites.
+ */
+type StubConfig = ProductionConfig &
+  Required<Pick<ProductionConfig, 'alpacaBrokerClient' | 'heartbeatChannel'>>;
+
+function stubConfig(db: SqliteHandle, overrides: Partial<ProductionConfig> = {}): StubConfig {
   const submitOrder = vi.fn(async () => ({
     id: 'alpaca-order-1',
     client_order_id: 'k',
@@ -79,6 +91,13 @@ function stubConfig(db: SqliteHandle, overrides: Partial<ProductionConfig> = {})
     legs: [],
   }));
 
+  // Cast on the way out, not on the literal: `exactOptionalPropertyTypes`
+  // makes `{ ...base, ...overrides }` unassignable to `StubConfig`, because
+  // `Partial<ProductionConfig>` permits a caller to pass an explicit
+  // `approvals: undefined` and erase a required field. No caller does, and
+  // typing `overrides` loosely enough to say so would defeat the point of the
+  // parameter. The fields below are still checked — the cast only covers the
+  // spread.
   return {
     db,
     clock: new SimulatedClock(START),
@@ -94,7 +113,7 @@ function stubConfig(db: SqliteHandle, overrides: Partial<ProductionConfig> = {})
       })),
       listOrders: vi.fn(async () => []),
       listFills: vi.fn(async () => []),
-    } as unknown as ProductionConfig['alpacaBrokerClient'],
+    } as unknown as NonNullable<ProductionConfig['alpacaBrokerClient']>,
     alpacaDataClient: {
       getBars: vi.fn(async (): Promise<AlpacaBar[]> => []),
       getLatestQuote: vi.fn(
@@ -105,7 +124,10 @@ function stubConfig(db: SqliteHandle, overrides: Partial<ProductionConfig> = {})
     heartbeatChannel: { postHeartbeat: vi.fn(async () => undefined) },
     approvals: {
       requestApproval: vi.fn(
-        async (_request: ApprovalRequest): Promise<ApprovalOutcome> => ({ status: 'timeout' }),
+        // `ApprovalOutcome` is the bare union `'approved' | 'rejected' |
+        // 'timeout'`, not an object with a `status` — the `as unknown as`
+        // below was masking a stub that returned a shape the port never had.
+        async (_request: ApprovalRequest): Promise<ApprovalOutcome> => 'timeout',
       ),
     } as unknown as ProductionConfig['approvals'],
     orphanAlerts: { postOrphanAlert: vi.fn(async () => undefined) },
@@ -114,17 +136,30 @@ function stubConfig(db: SqliteHandle, overrides: Partial<ProductionConfig> = {})
       getAccountState: vi.fn(async () => ({
         cash: 100_000,
         peak_equity: 100_000,
+        // `as const`: `SessionBasis` discriminates on `known: true | false`,
+        // and without it the literal widens to `boolean` and matches neither.
         daily_basis: {
           crypto: { known: true, open_equity: 100_000, realized_pnl: 0 },
           stocks: { known: true, open_equity: 100_000, realized_pnl: 0 },
           portfolio: { known: true, open_equity: 100_000, realized_pnl: 0 },
-        },
+        } as const,
         consecutive_losses: 0,
       })),
     },
     volatility: {
+      // `VolatilityReading` is per-asset-class (`{ crypto, stocks }`); the
+      // former `{ atr_percentile: 0.5 }` shape has not existed for some time
+      // and only survived because the `as VolatilityReading` cast silenced it.
+      //
+      // That cast was not merely untidy — it made the volatility breaker
+      // INERT for every test in this file. With neither `crypto` nor `stocks`
+      // present, both readings were `undefined` and every comparison against
+      // the trip threshold was false, so the composed-tick chain below has
+      // never actually run that breaker. These values sit under
+      // `baseline × multiplier` (0.05 × 3 crypto, 0.02 × 3 stocks) so the
+      // breaker now genuinely evaluates and genuinely stays armed.
       getVolatilityReading: vi.fn(
-        async (): Promise<VolatilityReading> => ({ atr_percentile: 0.5 }) as VolatilityReading,
+        async (): Promise<VolatilityReading> => ({ crypto: 0.02, stocks: 0.01 }),
       ),
     },
     traderConfig: {} as ProductionConfig['traderConfig'],
@@ -136,7 +171,7 @@ function stubConfig(db: SqliteHandle, overrides: Partial<ProductionConfig> = {})
     costConfig: {} as ProductionConfig['costConfig'],
     ciiConsumerConfig: { pollIntervalMs: 600_000 },
     ...overrides,
-  };
+  } as StubConfig;
 }
 
 /** A minimal but structurally complete `go` — enough for Execution to reach the broker. */
@@ -470,7 +505,8 @@ describe('composed tick chain (integration)', () => {
       bars,
       { price: 160, observed_at: START, source: 'fixture' },
       'crypto',
-      { bid: 159.5, ask: 160.5, observed_at: START, source: 'fixture' },
+      // `Quote` carries no `source` — that field belongs to `Mark`.
+      { bid: 159.5, ask: 160.5, observed_at: START },
     );
 
     const llmClient = new MockLlmClient();
@@ -549,6 +585,80 @@ describe('composed tick chain (integration)', () => {
       status: 'go',
       instrument: 'BTC-USD',
     });
+  });
+
+  /**
+   * The other side of the boundary the test above sits on, and the reason both
+   * halves exist.
+   *
+   * Until `tsconfig.test.json` type-checked this file, `stubConfig` supplied
+   * `{ atr_percentile: 0.5 } as VolatilityReading` — a shape the type has not
+   * had for some time. `VolatilityReading` is `{ crypto, stocks }`, so BOTH
+   * real fields were `undefined`, every comparison against
+   * `baseline x multiplier` was false, and the volatility breaker had never
+   * once evaluated in the composed chain. The test above passed on a breaker
+   * that could not fire.
+   *
+   * Fixing the shape alone would only have proven the breaker stays armed on a
+   * calm reading. This proves it can actually stop a tick: `breakers.test.ts`
+   * covers the trip in isolation, but nothing covered it through the wiring,
+   * which is exactly the gap that let the inert stub survive.
+   */
+  it('stops the composed chain at risk when the volatility breaker trips', async () => {
+    const clock = new SimulatedClock(START);
+    const hourMs = 60 * 60 * 1_000;
+    const bars = [
+      ...fixtureBars('BTC-USD', '1h', 60, hourMs),
+      ...fixtureBars('BTC-USD', '1m', 60, 60_000),
+      ...fixtureBars('BTC-USD', '1d', 40, 24 * hourMs),
+    ];
+    const dataSource = new FixtureDataSource(
+      bars,
+      { price: 160, observed_at: START, source: 'fixture' },
+      'crypto',
+      { bid: 159.5, ask: 160.5, observed_at: START },
+    );
+
+    const llmClient = new MockLlmClient();
+    for (let i = 0; i < 40; i += 1) {
+      llmClient.enqueueText(
+        JSON.stringify({ stance: 'bullish', rationale: 'fixture rationale', converged: true }),
+      );
+    }
+
+    const config = stubConfig(db, {
+      ...REAL_CONFIGS,
+      clock,
+      dataSource,
+      llmClient,
+      // 0.5 against a `{ crypto: 0.05 } x 3` ceiling — far over the line.
+      volatility: {
+        getVolatilityReading: vi.fn(
+          async (): Promise<VolatilityReading> => ({ crypto: 0.5, stocks: 0.5 }),
+        ),
+      },
+    });
+
+    const { steps } = buildProductionComponents(config);
+    const persistence = buildPersistence(db);
+
+    const outcome = await new SequentialTickRunner(steps).runInstrument(
+      { asset: 'BTC-USD', asset_class: 'crypto' },
+      {
+        clock,
+        trace_id: 'trace-vol-trip',
+        logger: recordingLogger(),
+        auditLog: persistence.auditLog,
+        currentTickStore: persistence.currentTickStore,
+      },
+    );
+
+    const stages = persistence.auditLog.getByTraceId('trace-vol-trip').map((row) => row.stage);
+
+    // Risk is reached and is where it ends: no verdict, no execution.
+    expect(stages).toEqual(['analysts', 'debate', 'trader', 'risk']);
+    expect(outcome.final_stage).toBe('risk');
+    expect(outcome.execution_result).toBeUndefined();
   });
 });
 
@@ -1441,8 +1551,6 @@ describe('buildProductionOrchestrator', () => {
       return {
         attribution_window_ms: 24 * 60 * 60 * 1_000,
         weights: dial,
-        shadow_credit: 0.1,
-        shadow_influence_ceiling: 0.2,
         strategy_params: {},
         risk_thresholds: { max_position_size: dial },
         kill_thresholds: {
@@ -1482,7 +1590,10 @@ describe('buildProductionOrchestrator', () => {
               getDailyMetrics: () =>
                 'sample' in overrides
                   ? overrides.sample
-                  : { daily: SUITE, revalidation: undefined },
+                  : // `revalidation` omitted rather than set to `undefined`:
+                    // it is optional on `DailyMetricsSample` and nothing here
+                    // supplies a default to override.
+                    { daily: SUITE },
             },
             backtest_reference_sharpe: overrides.backtest_reference_sharpe ?? 1.5,
           },

@@ -46,8 +46,6 @@ function makeConfig(overrides: Partial<FeedbackConfig> = {}): FeedbackConfig {
   return {
     attribution_window_ms: 24 * 60 * 60 * 1000,
     weights: makeDial(),
-    shadow_credit: 0.1,
-    shadow_influence_ceiling: 0.2,
     strategy_params: {},
     risk_thresholds: { max_position_size: makeDial() },
     kill_thresholds: {
@@ -60,7 +58,20 @@ function makeConfig(overrides: Partial<FeedbackConfig> = {}): FeedbackConfig {
   };
 }
 
-function makeInput(overrides: Partial<MetricsInput> = {}): {
+/**
+ * Deliberately NOT `Partial<MetricsInput>`. Under `exactOptionalPropertyTypes`
+ * a `Partial` of an optional property rejects an explicitly-passed
+ * `undefined`, but that is precisely how three tests below say "no
+ * revalidation this cycle" — the default below supplies one, and the spread
+ * has to be able to take it back out. Omitting the key instead would silently
+ * leave `makeRevalidation()` in place and make those tests assert the
+ * opposite of what they are named for.
+ */
+type MetricsInputOverrides = Omit<Partial<MetricsInput>, 'revalidation'> & {
+  revalidation?: MetricsInput['revalidation'] | undefined;
+};
+
+function makeInput(overrides: MetricsInputOverrides = {}): {
   input: MetricsInput;
   tuning: SqliteTuningStore;
   adjustments: SqliteAdjustmentLog;
@@ -70,7 +81,12 @@ function makeInput(overrides: Partial<MetricsInput> = {}): {
   const adjustments = openAdjustmentLog();
   const alerts = new InMemoryBreachAlertChannel();
 
-  const input: MetricsInput = {
+  // Cast on the spread, not the fields: `exactOptionalPropertyTypes` rejects
+  // `{ ...base, ...overrides }` as a `MetricsInput` precisely because
+  // `overrides` may carry `revalidation: undefined` — which is the whole point
+  // of `MetricsInputOverrides` above. Everything before the spread is still
+  // type-checked against `MetricsInput`.
+  const input = {
     clock: makeClock(),
     daily: makeSuite(),
     backtest_reference_sharpe: 1.5,
@@ -80,7 +96,7 @@ function makeInput(overrides: Partial<MetricsInput> = {}): {
     config: makeConfig(),
     alerts,
     ...overrides,
-  };
+  } as MetricsInput;
 
   return { input, tuning, adjustments, alerts };
 }

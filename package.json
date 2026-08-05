@@ -10,12 +10,12 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && yarn build:migrations",
     "build:migrations": "node --eval \"require('node:fs').cpSync('src/shared/store/migrations','dist/shared/store/migrations',{recursive:true})\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "typecheck": "tsc --noEmit",
     "orchestrator": "yarn build && node --env-file=.env.local dist/orchestrator/index.js",
     "smoke": "yarn build && node dist/orchestrator/smoke-run.js",
     "dashboard": "yarn build && node --env-file=.env.local dist/dashboard/index.js"

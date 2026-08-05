@@ -52,11 +52,11 @@ export interface TradingCalendar {
 
 /** Crypto: 24/7, no session boundaries (spec Module: Ingestion & Sources). */
 export class AlwaysOpenCalendar implements TradingCalendar {
-  isOpen(): boolean {
+  isOpen(_instant: Date): boolean {
     return true;
   }
 
-  isTradingDay(): boolean {
+  isTradingDay(_instant: Date): boolean {
     return true;
   }
 

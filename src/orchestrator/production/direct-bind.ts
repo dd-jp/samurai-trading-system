@@ -151,10 +151,23 @@ async function computeCurrentPortfolioAndBreakers(deps: BreakerStateDeps, clock:
   return { portfolio, breakers };
 }
 
+/**
+ * The single member `buildRiskStep` actually calls, rather than the whole
+ * `CiiConsumer` class.
+ *
+ * Depending on the class made every test double structurally impossible —
+ * `CiiConsumer` carries private `cache`, `inFlight`, `provider` and `clock`
+ * fields, so a `{ getScores }` stub can never satisfy it and the only way to
+ * exercise `buildRiskStep` was to construct a real consumer with a real
+ * provider. `Pick` rather than a fresh interface so a change to the class's
+ * signature still propagates here instead of quietly diverging.
+ */
+export type CiiScoreSource = Pick<CiiConsumer, 'getScores'>;
+
 export interface RiskStepDeps extends BreakerStateDeps {
   config: RiskConfig;
   correlationConfig: CorrelationConfig;
-  ciiConsumer: CiiConsumer;
+  ciiConsumer: CiiScoreSource;
 }
 
 export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {

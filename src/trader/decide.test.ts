@@ -5,7 +5,13 @@
  * asserting on the returned OrderIntent (or null). There is no LLM to mock.
  */
 import type { DebateResult } from '../debate-engine/index.js';
-import type { Bar, BarWindow, Mark, MarketDataService } from '../market-data-service/index.js';
+import type {
+  Bar,
+  BarWindow,
+  IndicatorValue,
+  Mark,
+  MarketDataService,
+} from '../market-data-service/index.js';
 import type { Clock, OpenPosition } from '../shared/index.js';
 import { decide } from './decide.js';
 import type { AssetClass, TraderConfig, TraderInput } from './types.js';
@@ -82,6 +88,32 @@ class FixtureMarketData implements MarketDataService {
       source: 'fixture',
       asset_class: this.assetClass,
     };
+  }
+
+  /**
+   * The three `MarketDataService` members `decide` must never reach for, and
+   * the reason they are present at all: the `implements` clause above went
+   * unchecked until `tsconfig.test.json` existed, so this double claimed to
+   * satisfy a five-method port while supplying two.
+   *
+   * They throw rather than return a plausible value on purpose. `decide.ts`
+   * deliberately fetches bars and computes the ATR itself instead of routing
+   * through `getIndicator`, because `getIndicator` hardcodes its own
+   * timeframe and would silently pin ATR to 1h whatever `atr_timeframe`
+   * says — see the comment at that call site. A stub returning a number
+   * would let that regression back in quietly; one that throws fails the
+   * suite the moment `decide` starts using it.
+   */
+  async getIndicator(): Promise<IndicatorValue> {
+    throw new Error('FixtureMarketData.getIndicator: decide must compute ATR from getBars');
+  }
+
+  async getSpreadEstimate(): Promise<number | null> {
+    throw new Error('FixtureMarketData.getSpreadEstimate: not part of the Trader path');
+  }
+
+  async getADV(): Promise<number> {
+    throw new Error('FixtureMarketData.getADV: not part of the Trader path');
   }
 }
 
@@ -462,6 +494,35 @@ describe('decide — skip paths', () => {
     corrupt[7]!.high = Number.NaN;
 
     const intent = await decide(traderInput({ marketData: new FixtureMarketData(corrupt) }));
+
+    expect(intent).toBeNull();
+  });
+
+  it('returns null when the mark price is not finite, rather than pricing off NaN', async () => {
+    // The sibling case to the corrupt-ATR test above, on the input that was
+    // NOT defended: the ATR is fine and the bars are fine, but the QUOTE is
+    // corrupt. `AlpacaHttpDataClient` casts the wire body
+    // (`as CryptoLatestQuoteResponse`) without validating that `ap`/`bp` are
+    // numbers, so a null field arrives here as a NaN `mark.price`.
+    //
+    // NaN then defeats the same three guards the ATR comment lists —
+    // `Math.max(atr, NaN)` is NaN, `stopDistance <= 0` is false, `size *
+    // entry < min_viable_notional` is false — and lands in an EMITTED intent
+    // whose entry, stop AND target are all NaN.
+    const intent = await decide(
+      traderInput({ marketData: new FixtureMarketData(bars(15, 2), 'stocks', Number.NaN) }),
+    );
+
+    expect(intent).toBeNull();
+  });
+
+  it('returns null when equity is not finite, rather than sizing off NaN', async () => {
+    // The third NaN inlet. `equity` is supplied by the caller from an account
+    // read, so a malformed broker response reaches sizing the same way a
+    // malformed quote reaches pricing. `size` is the choke point every
+    // numeric input funnels through — guarding it covers this case and any
+    // later one, which the per-input `entry` check alone would not.
+    const intent = await decide(traderInput({ equity: Number.NaN }));
 
     expect(intent).toBeNull();
   });

@@ -7,8 +7,9 @@
  * no setters, and the snapshot function calls only get-* methods.
  */
 import type { MetricsSuite } from '../cost-model-backtest/index.js';
+import type { AnalystContribution } from '../debate-engine/index.js';
 import type { Mark } from '../market-data-service/index.js';
-import type { AnalystContribution, DebateLog, OpenPosition } from '../shared/index.js';
+import type { DebateLog, OpenPosition } from '../shared/index.js';
 import { buildSnapshot } from './snapshot.js';
 import type {
   AttributionSummary,
@@ -90,6 +91,17 @@ const EMPTY_SPEND_WINDOW = {
   cache_creation_input_tokens: 0,
   calls: 0,
   unpriced_calls: 0,
+  // Added by #326 (per-decision cost/latency percentiles). The fixture never
+  // followed the type, so every assertion in this file was checking a spend
+  // window shape the dashboard had stopped producing.
+  per_debate: {
+    debates: 0,
+    unattributed_calls: 0,
+    cost_usd_p50: 0,
+    cost_usd_p95: 0,
+    llm_latency_ms_p50: 0,
+    llm_latency_ms_p95: 0,
+  },
 };
 
 function fakeStore(overrides: Partial<DashboardQueryStore> = {}): DashboardQueryStore {

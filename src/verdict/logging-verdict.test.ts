@@ -1,3 +1,4 @@
+import type { Mock } from 'vitest';
 import {
   AlwaysOpenCalendar,
   type Mark,
@@ -58,6 +59,8 @@ function makeRiskDecision(overrides: Partial<RiskDecision> = {}): RiskDecision {
     binding_constraint: null,
     reasons: [],
     risk_snapshot: { exposure: {}, drawdown_pct: 0, armed_breakers: [] },
+    warnings: [],
+    next_breaker_state: [],
     ...overrides,
   };
 }
@@ -122,8 +125,11 @@ function makeApprovals(outcome: ApprovalOutcome = 'approved'): ApprovalChannel {
  * class's now-removed `getByTraceId` would test implementation surface the
  * port never promised.
  */
-function makeStore(): VerdictLogStore & { writeLog: ReturnType<typeof vi.fn> } {
-  return { writeLog: vi.fn() };
+function makeStore(): VerdictLogStore & { writeLog: Mock<(entry: VerdictLog) => void> } {
+  // Typed `vi.fn`, not bare: an untyped mock is `Mock<Procedure>`, which does
+  // not satisfy the port's `writeLog(entry: VerdictLog): void` in the
+  // intersection above.
+  return { writeLog: vi.fn<(entry: VerdictLog) => void>() };
 }
 
 /** The row most recently written for `trace_id`, or undefined if none was. */

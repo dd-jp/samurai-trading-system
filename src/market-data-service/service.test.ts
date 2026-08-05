@@ -108,8 +108,12 @@ describe('MarketDataServiceImpl.getBars — per-bar-interval caching (#391)', ()
       return this.inner.fetchMark(instrument, asOf, mode);
     }
 
-    async fetchQuote(instrument: string, asOf: Date): Promise<Quote | undefined> {
-      return this.inner.fetchQuote(instrument, asOf);
+    // `Quote | null`, matching `DataSource.fetchQuote` — null is how the port
+    // says "no bid/ask available", and `undefined` is not the same signal.
+    // `fetchQuote` is also optional on the port, so the inner source may not
+    // have one; a source that cannot quote reports null rather than throwing.
+    async fetchQuote(instrument: string, asOf: Date): Promise<Quote | null> {
+      return (await this.inner.fetchQuote?.(instrument, asOf)) ?? null;
     }
   }
 

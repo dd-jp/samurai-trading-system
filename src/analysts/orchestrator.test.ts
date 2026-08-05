@@ -1,3 +1,4 @@
+import type { AnalystView } from '../debate-engine/index.js';
 import type { Bar } from '../market-data-service/index.js';
 import {
   FixtureDataSource,
@@ -8,7 +9,7 @@ import { MarketIntelligenceStore } from '../market-intelligence/index.js';
 import type { Clock } from '../shared/index.js';
 import { openSharedStore } from '../shared/store/index.js';
 import { AnalystOrchestrator } from './orchestrator.js';
-import type { Analyst, AnalystInput, AnalystView, AssetClass, Signal } from './types.js';
+import type { Analyst, AnalystInput, AssetClass, Signal } from './types.js';
 
 class ManualClock implements Clock {
   constructor(private time: Date) {}

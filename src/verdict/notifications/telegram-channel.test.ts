@@ -41,6 +41,8 @@ function makeRiskDecision(): RiskDecision {
     binding_constraint: null,
     reasons: [],
     risk_snapshot: { exposure: {}, drawdown_pct: 0, armed_breakers: [] },
+    warnings: [],
+    next_breaker_state: [],
   };
 }
 
@@ -71,7 +73,7 @@ describe('TelegramChannel.notify', () => {
     const client = makeClient();
     const channel = new TelegramChannel(client, 'chat-123');
 
-    await channel.notify(makeDecision(), makeRiskDecision(), 'trace-1');
+    await channel.notify(makeDecision(), makeRiskDecision());
 
     expect(client.sendMessage).toHaveBeenCalledTimes(1);
     const [chatId, text] = (client.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0] as [

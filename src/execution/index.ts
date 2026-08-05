@@ -16,6 +16,7 @@ export {
   AlpacaBrokerTimeoutError,
 } from './adapters/alpaca-broker-errors.js';
 export type {
+  AlpacaAccount,
   AlpacaBracketOrderRequest,
   AlpacaClient,
   AlpacaOrder,

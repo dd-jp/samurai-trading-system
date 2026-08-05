@@ -69,6 +69,15 @@ function makeClient(overrides: Partial<AlpacaClient> = {}): AlpacaClient {
   return {
     submitOrder: vi.fn().mockResolvedValue(acceptedOrder()),
     getOrder: vi.fn().mockResolvedValue(acceptedOrder()),
+    // The two members this double never declared. `getOrderByClientOrderId`
+    // rejects rather than resolving null: the port documents null as
+    // "Alpaca AUTHORITATIVELY knows no such order", which reconcile acts on by
+    // marking a lot `rejected`. A default that answered null would let a test
+    // that reaches this path silently assert the position was never placed.
+    getOrderByClientOrderId: vi
+      .fn()
+      .mockRejectedValue(new Error('makeClient: override getOrderByClientOrderId to use it')),
+    getAccount: vi.fn().mockRejectedValue(new Error('makeClient: override getAccount to use it')),
     ...overrides,
   };
 }
@@ -441,7 +450,13 @@ describe('AlpacaBrokerAdapter outbound call discipline', () => {
     const client = makeClient();
     const rateLimiter = permissiveLimiter();
     const acquire = vi.spyOn(rateLimiter, 'acquire');
-    const adapter = new AlpacaBrokerAdapter({ client, rateLimiter });
+    // The one construction in this file that had forgotten `unpricedFillAlerts`
+    // — the very thing the port comment above says "cannot exist".
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter,
+      unpricedFillAlerts: recordingAlerts(),
+    });
 
     await adapter.submitBracket(makeBracket());
     await adapter.fetchNewFills(new Date(0));

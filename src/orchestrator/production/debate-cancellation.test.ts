@@ -15,7 +15,7 @@
  * driven.
  */
 
-import type { AnalystView, DebateLogger } from '../../debate-engine/index.js';
+import type { AnalystView, DebateLogger, DebatePersonas } from '../../debate-engine/index.js';
 import {
   AnthropicHttpMessagesClient,
   AnthropicLlmClient,
@@ -24,7 +24,7 @@ import {
   runDebate,
 } from '../../debate-engine/index.js';
 import type { Clock } from '../../shared/index.js';
-import { buildDebatePersonas, type DebatePersonas } from './debate-adapter.js';
+import { buildDebatePersonas } from './debate-adapter.js';
 
 const FAKE_KEY = 'test-fake-anthropic-key';
 

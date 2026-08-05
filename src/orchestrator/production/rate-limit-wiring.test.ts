@@ -152,7 +152,7 @@ describe('the LLM rate limiter is in the production path (#388)', () => {
       buildProductionComponents(
         stubConfig(db, {
           llmClient: countingLlmClient(),
-          rateLimiterConfig: {} as unknown as ProductionConfig['rateLimiterConfig'],
+          rateLimiterConfig: {} as unknown as NonNullable<ProductionConfig['rateLimiterConfig']>,
         }),
       ),
     ).toThrow(/config\.default is required/);
@@ -165,11 +165,14 @@ describe('the LLM rate limiter is in the production path (#388)', () => {
     // by the broker wire client never being touched.
     const config = stubConfig(db, {
       llmClient: countingLlmClient(),
-      rateLimiterConfig: {} as unknown as ProductionConfig['rateLimiterConfig'],
+      rateLimiterConfig: {} as unknown as NonNullable<ProductionConfig['rateLimiterConfig']>,
     });
 
     expect(() => buildProductionComponents(config)).toThrow();
-    expect(config.alpacaBrokerClient?.listOrders).not.toHaveBeenCalled();
+    // `submitOrder`, not `listOrders`: the latter is not on `AlpacaClient` at
+    // all, so the old assertion read an `undefined` off the stub and asserted
+    // that it had not been called — vacuously true whatever the wiring did.
+    expect(config.alpacaBrokerClient.submitOrder).not.toHaveBeenCalled();
   });
 
   it('still constructs a finite budget when no rateLimiterConfig is supplied', async () => {
@@ -610,7 +613,11 @@ function noopCurrentTickStore(): CurrentTickStore {
  * The narrowest `ProductionConfig` that reaches a bound `steps.debate`. Every
  * transport is a stub; nothing here opens a socket or spends a token.
  */
-function stubConfig(db: SharedStore, overrides: Partial<ProductionConfig>): ProductionConfig {
+/** As `production.test.ts`: the seams this stub always supplies, narrowed so
+ *  assertions can read them without a non-null assertion at every call site. */
+type StubConfig = ProductionConfig & Required<Pick<ProductionConfig, 'alpacaBrokerClient'>>;
+
+function stubConfig(db: SharedStore, overrides: Partial<ProductionConfig>): StubConfig {
   return {
     db,
     clock: new SimulatedClock(NOW),
@@ -658,5 +665,5 @@ function stubConfig(db: SharedStore, overrides: Partial<ProductionConfig>): Prod
     costConfig: {} as ProductionConfig['costConfig'],
     ciiConsumerConfig: {} as ProductionConfig['ciiConsumerConfig'],
     ...overrides,
-  } as ProductionConfig;
+  } as StubConfig;
 }

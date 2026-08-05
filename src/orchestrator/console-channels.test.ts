@@ -34,7 +34,7 @@ describe('LoggingOrphanAlertChannel', () => {
       trace_id: 'trace-1',
       idempotency_key: 'key-aapl-1355',
       instrument: 'AAPL',
-      timestamp: new Date('2026-08-03T12:00:00Z'),
+      verdict_timestamp: new Date('2026-08-03T12:00:00Z'),
     });
 
     // An orphaned `go` is the one state that can hide a real position.

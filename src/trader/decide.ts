@@ -193,7 +193,16 @@ async function buildBracket(
   const atr = atrFor(bars, config.atr_lookback);
   if (atr === null) return null;
 
+  // The same NaN argument `atrFor` documents, applied to the OTHER priced
+  // input. `atrFor` guards the bars; nothing guarded the quote. Alpaca's
+  // latest-quote body is cast, not validated (`alpaca-http-client.ts`, `as
+  // CryptoLatestQuoteResponse`), so a null `ap`/`bp` on the wire arrives here
+  // as a NaN `mark.price` — and NaN then walks through every guard below,
+  // because every comparison against it is false. Checked at the inlet rather
+  // than only at `size` so the skip names the input that was bad.
   const entry = mark.price;
+  if (!Number.isFinite(entry)) return null;
+
   const volFloor = config.vol_floor_fraction * entry;
   const effectiveVol = Math.max(atr, volFloor);
   const stopDistance = config.atr_k * effectiveVol;
@@ -207,6 +216,13 @@ async function buildBracket(
   // Module: Non-Convergence & Skip Policy).
   const riskFraction = baseRiskFraction * nonConvergedHaircut * NO_PRECEDENT_COSINE_MULTIPLIER;
   const size = (equity * riskFraction) / stopDistance;
+
+  // Backstop covering every numeric inlet at once, including `equity`, which
+  // comes from an account read this module does not validate. The per-input
+  // checks above say WHICH input was bad; this one guarantees that no future
+  // inlet can reach an emitted intent unchecked. Must precede the min-notional
+  // line: `NaN < min_viable_notional` is false, so that check passes NaN.
+  if (!Number.isFinite(size)) return null;
 
   if (size * entry < config.min_viable_notional) return null;
 

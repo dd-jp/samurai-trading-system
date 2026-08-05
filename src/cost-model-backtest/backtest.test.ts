@@ -69,6 +69,10 @@ function newTickContext(signal: Signal, clock: Clock): TickContext {
     trace_id: `${signal.asset}@${clock.now().toISOString()}`,
     logger: { log: () => {} },
     auditLog: { record: () => {} },
+    // The backtest harness has no live tick to publish; the dashboard's
+    // current_tick row is a live-run concern. Inert, not omitted, so the
+    // context stays structurally complete.
+    currentTickStore: { upsert: () => {}, delete: () => {}, get: () => undefined },
   };
 }
 
