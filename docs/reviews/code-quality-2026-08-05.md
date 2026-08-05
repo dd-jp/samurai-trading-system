@@ -6,6 +6,10 @@ Axes requested: duplication, performance, efficiency. **Report only — no code 
 
 Findings ranked by (live-money risk × effort to fix). An "Examined, not a defect" section at the end records what was checked and deliberately left alone — read it before acting on anything above, because several patterns that look like duplication are load-bearing.
 
+**Not covered.** This audit did not sweep for dead code or exported-but-never-called mechanisms — that is a correctness axis, not a duplication/performance one, and it deserves its own pass. Nor did it review spec conformance or security. Absence from this report is not evidence of absence in the code.
+
+**Location note.** `docs/reviews/` is a new directory, not in CLAUDE.md's docs convention table. Relocate if another home fits better.
+
 ---
 
 ## Baseline health
@@ -37,9 +41,23 @@ This is a well-kept codebase. Comment density is unusually high and the comments
 const body = (await response.json()) as PolygonAggregatesResponse;   // :128
 ```
 
-`RawAlpacaBar` declares `o/h/l/c/v: number`, and nothing checks that at runtime. Grepping the whole market-data path for `Number.isFinite` / `typeof` / `Array.isArray` over parsed bodies returns only presence checks (`=== undefined`, `?? []`) — never type or finiteness checks. `normalizing-data-source.ts` validates bar *counts*, not bar *values*.
+`RawAlpacaBar` declares `o/h/l/c/v: number` and `RawAlpacaQuote` declares `ap/bp: number`; nothing checks either at runtime. `toAlpacaBar` (`:210`) is a bare field-for-field passthrough — no guard of any kind. `normalizing-data-source.ts` validates bar *counts*, not bar *values*.
 
-**Failure path:** Alpaca returns `"c": null` or a stringified number for one bar → `toAlpacaBar` passes it through → `computeIndicator` produces `NaN` → ATR is `NaN` → risk sizing divides by it → an order is sized on garbage. `strict` mode cannot catch this; the cast tells the compiler to stop looking.
+**The ATR path is already defended.** `trader/decide.ts:114` returns `null` from `atrFor` unless `Number.isFinite(atr)`, and `decide` bails on that. Credit where due — that hole is closed.
+
+**The price path is not.** `decide.ts:196-200`:
+
+```ts
+const entry = mark.price;                                  // never checked finite
+const volFloor = config.vol_floor_fraction * entry;
+const effectiveVol = Math.max(atr, volFloor);
+const stopDistance = config.atr_k * effectiveVol;
+if (stopDistance <= 0) return null;                        // NaN <= 0 is FALSE — guard passes
+```
+
+`mark.price` traces back to `RawAlpacaQuote.ap`/`bp` at `alpaca-http-client.ts:615,635`, cast and never validated. If Alpaca returns `"ap": null` for one quote, `entry` is `NaN`, `volFloor` is `NaN`, `Math.max(atr, NaN)` is `NaN`, `stopDistance` is `NaN` — **and `NaN <= 0` evaluates false, so the one guard on that line lets it through.** A `NaN`-priced `OrderIntent` proceeds to Risk, which contains no finiteness check at all.
+
+`strict` mode cannot catch this; the cast tells the compiler to stop looking.
 
 **Fix.** One narrow-parse function per wire type, at the cast site, replacing the assertion:
 
@@ -58,7 +76,9 @@ function parseRawBar(raw: unknown, context: string): RawAlpacaBar {
 }
 ```
 
-Throwing an existing `*ProviderError` means the existing retry/classification path already handles it — no new plumbing. Do the same for `PolygonAggregatesResponse` and the Anthropic response body. Effort: ~1 day including tests. No dependency needed; a schema library (zod/valibot) would work but is not required for four shapes.
+Throwing an existing `*ProviderError` means the existing retry/classification path already handles it — no new plumbing. Do the same for `RawAlpacaQuote`, `PolygonAggregatesResponse`, and the Anthropic response body. Effort: ~1 day including tests. No dependency needed; a schema library (zod/valibot) would work but is not required for four shapes.
+
+**Cheap belt-and-braces regardless:** add `if (!Number.isFinite(entry)) return null;` next to the existing `atr === null` bail in `decide.ts`, mirroring the guard that already protects ATR. Ten minutes, and it closes the specific path above even before the wire validation lands.
 
 ### H2. The test suite is never type-checked
 
@@ -68,7 +88,11 @@ Throwing an existing `*ProviderError` means the existing retry/classification pa
 "exclude": ["node_modules", "dist", "**/*.test.ts"]
 ```
 
-`tsc` skips every `.test.ts`. Vitest transpiles without type-checking. So **40,023 lines of test code — 53% of the repo — have zero type coverage.** A test that constructs a stale `OrderIntent`, or a mock whose method signature no longer matches its port, compiles and passes silently. For a system whose safety argument rests on its tests, that is the wrong side of the trade.
+`tsc` skips every `.test.ts`. Vitest transpiles without type-checking, and `vitest.config.ts` sets no `typecheck` block.
+
+**Checked for a second entry point and found none:** `tsconfig.json` is the only tsconfig in the repo; `package.json` invokes `tsc` exactly once (`build`, against that config); the sole CI workflow (`.github/workflows/ai-review.yml`) runs `pip install openai` and `python .github/scripts/run_review.py` — no `tsc`, no `typecheck`, no `vitest --typecheck` anywhere under `.github/`.
+
+So **40,023 lines of test code — 53% of the repo — have zero type coverage.** A test that constructs a stale `OrderIntent`, or a mock whose method signature no longer matches its port, compiles and passes silently. For a system whose safety argument rests on its tests, that is the wrong side of the trade.
 
 **Fix.** Keep the build config lean, add a checking config:
 
@@ -104,24 +128,33 @@ Each independently defines the identical five-part shape:
 
 **The separation itself is correct and documented** — the two Alpaca APIs must not couple their classification, and the doc comments say so explicitly. What is duplicated is the *mechanism*, not the *decision*.
 
-**Fix.** A factory in `shared/http/` that mints a distinct nominal hierarchy per vendor:
+**Fix — extract the logic, keep the classes hand-written.** Three small helpers in `shared/http/`, alongside the `truncateForError` / `parseRetryAfterMs` that already live there:
 
 ```ts
-// shared/http/vendor-errors.ts
-export function createVendorErrors<N extends string>(name: N, label: string) {
-  class TimeoutError extends Error { constructor(m: string) { super(m); this.name = `${name}TimeoutError`; } }
-  class RateLimitError extends Error { constructor(m: string, readonly retryAfterMs?: number) { ... } }
-  class ProviderError extends Error { constructor(m: string, readonly status?: number) { ... } }
-  return {
-    TimeoutError, RateLimitError, ProviderError,
-    isRetryable: (e: unknown) => ...,
-    classifyResponse: async (res: Response, ctx: string) => ...,   // 429/408/504/else
-    classifyThrown: (e: unknown, ctx: string) => ...,              // DOMException TimeoutError
-  };
+// shared/http/read-error-body.ts — verbatim in all four files today
+export async function readErrorDetail(response: Response): Promise<string> {
+  let bodyText: string;
+  try { bodyText = await response.text(); } catch { bodyText = ''; }
+  return bodyText.length > 0 ? truncateForError(bodyText) : response.statusText;
+}
+
+// shared/http/classify-status.ts
+export type HttpErrorKind = 'rate-limit' | 'timeout' | 'provider';
+export function classifyStatus(status: number): HttpErrorKind {
+  if (status === 429) return 'rate-limit';
+  if (status === 408 || status === 504) return 'timeout';
+  return 'provider';
+}
+
+// shared/http/is-timeout-abort.ts
+export function isTimeoutAbort(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'TimeoutError';
 }
 ```
 
-Each vendor module keeps its own file, its own exported names, and its own doc comment explaining why it is separate — it just stops re-typing the bodies. Removes ~250 lines. Vendors that deviate (Telegram reads `parameters.retry_after` from the JSON body; Alpaca-data adds a non-retryable `SparseHistory` case) keep those as local extensions rather than forking the whole hierarchy. Effort: ~half a day.
+Each vendor module then keeps its own three error classes, its own union, its own exported names, and its own doc comment explaining why it stays separate — its `classifyXResponse` just shrinks from ~15 lines to ~4. Vendors that deviate (Telegram reads `parameters.retry_after` out of the JSON body; Alpaca-data adds a non-retryable `SparseHistory` case) keep those locally. Removes ~120 lines. Effort: ~2 hours.
+
+**Deliberately *not* recommending a `createVendorErrors(name)` factory** that mints the classes too. It would cut more lines, but classes returned from a function are not usable as type names — every consumer would have to write `InstanceType<typeof AlpacaDataErrors.TimeoutError>` instead of `AlpacaDataTimeoutError`, and the per-vendor union types get worse in the same way. The three classes per vendor are 12 lines of boilerplate that read fine; the fifteen-line classifier bodies are the part that actually costs something to keep in sync.
 
 ### M2. `ClosedTradeRow` + `fromClosedTradeRow` triplicated byte-for-byte
 
@@ -167,7 +200,7 @@ Effort: under an hour total.
 
 ## Medium — performance and efficiency
 
-**Framing first.** This system is not throughput-bound. Six instruments on a scheduled tick, 1,925 tests in 9.3s, SQLite on local disk. Per the project's own conclusion recorded in memory ("Cadence Is The Cost Lever"), the dominant cost is **LLM call count × tick cadence**, not CPU or SQL. Nothing below will move the P&L. They are listed because they are cheap to fix and two of them are quadratic, which stops being free as the universe widens.
+**Framing first.** This system is not throughput-bound. Six instruments on a scheduled tick, 1,925 tests in 9.3s, SQLite on local disk. The dominant cost driver is **LLM call count × tick cadence**, not CPU or SQL — no amount of query tuning touches that, and only cadence does. Nothing below will move the P&L. They are listed because they are cheap to fix and two of them are quadratic, which stops being free as the universe widens.
 
 ### P1. `ingest-fills` is O(positions × fills)
 
@@ -251,7 +284,9 @@ The `production/` subdirectory already exists (`debate-adapter.ts`, `account-sta
 - `production/defaults.ts` — `buildDefaultLlmClient`, `buildDefaultAlpacaBrokerClient`, `buildDefaultAlpacaDataClient`, `buildAlpacaDataSource`
 - `production.ts` — retains `buildProductionComponents` / `buildProductionTickRunner` / `buildProductionOrchestrator` / `startTickLoop`
 
-Re-export from `production.ts` so no import site changes. Effort: ~half a day, mechanical, but touches the highest-risk file in the repo — do it on its own branch with the 2,058-line test as the gate. Note the project's own recorded lesson ("No-Caller Defect Pattern": the dominant bug class is tested mechanisms nothing calls, found in the composition root) — a 1,891-line composition root is exactly the surface that produces that class.
+Re-export from `production.ts` so no import site changes. Effort: ~half a day, mechanical, but touches the highest-risk file in the repo — do it on its own branch with the 2,058-line test as the gate.
+
+The payoff is not aesthetic. A composition root this size is exactly where a wired-but-never-called mechanism hides: the component is built, its unit tests pass, and nothing in the 270-line `buildProductionComponents` actually reaches it. Smaller, single-purpose builder modules make that omission visible at review.
 
 `paper-profile.ts` (1,248) and `smoke-run.ts` (907) are the next two; both are configuration-as-code and less urgent.
 
@@ -293,13 +328,14 @@ Recorded so nobody re-opens these.
 
 | # | Item | Effort | Why this order |
 | --- | --- | --- | --- |
+| 0 | **H1 quick guard** — `Number.isFinite(entry)` bail in `decide.ts` | 10 min | Closes the verified `NaN`-price path today |
 | 1 | **H2** typecheck the tests | 30 min + backlog | Every later refactor is safer once the compiler sees the tests |
 | 2 | **H1** validate wire JSON | ~1 day | Only finding that can put a wrong number into an order |
 | 3 | **M2** shared `ClosedTradeRow` | 1 hr | Provably identical; zero risk |
 | 4 | **M4** small dupes | 1 hr | Trivial |
 | 5 | **P1** `ingest-fills` bucketing | 30 min | Quadratic, isolated |
 | 6 | **M3** shared test fixtures | ~half day | Needs H2 first to catch migration slips |
-| 7 | **M1** vendor error factory | ~half day | Largest line reduction (~250) |
+| 7 | **M1** shared HTTP error helpers | 2 hrs | ~120 lines, four files stop drifting |
 | 8 | **L2** name the `SELECT` columns | 2 hrs | Turns silent drift into loud failure |
 | 9 | **P3** batch dashboard marks (+ cache those statements) | 1 hr | Only place P4 is worth doing |
 | 10 | **L3** silence test logs | 1 hr | Makes failures readable |
