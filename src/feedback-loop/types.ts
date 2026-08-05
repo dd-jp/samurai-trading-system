@@ -334,25 +334,32 @@ export interface MetricsReport {
  * Where a live run gets the `MetricsSuite` that `computeMetrics` evaluates
  * (#327).
  *
- * A supplied port, not a computation here, and deliberately so. The
- * validation library's own `computeMetrics(returns, trades)` needs a
- * `ReturnSeries` — evenly spaced periodic equity returns — and this repo
- * persists no such series: `account_state` (migration 0006) holds
- * `peak_equity`, a high-water scalar, and that migration's own comment
- * records `daily_open_equity` as an OPEN decision (GAP-8). Deriving a return
- * series from realized `ClosedTrade` PnL instead would use the wrong
- * denominator and be unevenly spaced.
+ * A supplied port, not a computation here. It stayed one for a while because
+ * the validation library's `computeMetrics(returns, trades)` needs a
+ * `ReturnSeries` — evenly spaced periodic equity returns — and nothing
+ * persisted such a series: `account_state` (migration 0006) holds
+ * `peak_equity`, a high-water scalar, and that migration's own comment recorded
+ * `daily_open_equity` as an OPEN decision (GAP-8). Deriving returns from
+ * realized `ClosedTrade` PnL instead would use the wrong denominator and be
+ * unevenly spaced.
  *
- * That matters more than tidiness, because a breach does not merely report:
- * `autoTighten` WRITES every risk threshold toward its extreme and appends to
- * the `AdjustmentLog`. Stepping real risk config off an invented series is a
- * worse failure than the silence it would paper over.
+ * **#345 closed that.** `daily_equity` (migration 0011) persists one immutable
+ * equity observation per portfolio session — per UTC day, so exactly evenly
+ * spaced — and `SqliteDailyEquityMetricsSource` (orchestrator/production)
+ * derives a real `ReturnSeries` from it. See ADR-0006.
  *
- * So the suite is supplied by the operator/Stage-2 harness, exactly as
- * `FeedbackConfig`'s tuned values and `LoosenApprovalChannel` already are.
- * Returning `undefined` is a first-class answer meaning "no suite this
- * cycle"; the orchestrator says so out loud rather than booking it as a
- * passing check.
+ * The port survives that, rather than being replaced by a direct computation,
+ * because a breach does not merely report: `autoTighten` WRITES every risk
+ * threshold toward its extreme and appends to the `AdjustmentLog`. Deciding
+ * whether the sample can carry that weight is a policy question — the
+ * implementation refuses below a justified minimum observation count — and
+ * keeping it behind a port is what lets the answer be "not this cycle" without
+ * anything downstream having to understand why.
+ *
+ * So: returning `undefined` is a first-class answer meaning "no suite this
+ * cycle", not an error. The orchestrator says so out loud rather than booking
+ * it as a passing check. Backtest and Stage-2 harnesses supply their own
+ * implementations, exactly as they do for `LoosenApprovalChannel`.
  */
 export interface DailyMetricsSource {
   getDailyMetrics(): DailyMetricsSample | undefined;

@@ -75,10 +75,13 @@
  * `computeMetrics` — the kill-line detector — runs in that same timer, after
  * the tuning cycle, whenever `FeedbackCycleConfig.metrics` supplies a
  * `DailyMetricsSource` (#327). Before that ticket it had no production caller
- * at all, so all four kill-lines were unreachable in a paper run. The suite
- * is *supplied* rather than computed here because no live equity return
- * series is persisted — see `DailyMetricsSource` for why inventing one would
- * be worse than the silence, given that a breach WRITES risk thresholds.
+ * at all, so all four kill-lines were unreachable in a paper run. The suite is
+ * *supplied* through that port rather than computed inline, but a real
+ * implementation of it now exists: `SqliteDailyEquityMetricsSource` derives a
+ * live `ReturnSeries` from `daily_equity` (migration 0011, #345, ADR-0006),
+ * which this file's `AlpacaAccountStateProvider` samples on every tick. It
+ * refuses to produce a suite below a justified minimum observation count,
+ * because a breach WRITES risk thresholds and a Sharpe over ~10 days is noise.
  * A breach alerts through `ProductionConfig.breachAlerts` and never kills:
  * kill/rework stays a human decision, and there is no kill primitive here.
  * `onTradeClose` IS wired (#237, superseding this file's earlier note that it
@@ -216,6 +219,7 @@ import { withOnTradeClose } from './production/on-trade-close-hookup.js';
 import { MarketDataVolatilityReadingProvider } from './production/volatility-reading-provider.js';
 import { UniverseScheduler } from './scheduler.js';
 import { SqliteAccountStateStore } from './sqlite-account-state-store.js';
+import { SqliteDailyEquityStore } from './sqlite-daily-equity-store.js';
 import { SqliteSessionEquityStore } from './sqlite-session-equity-store.js';
 import { runTickPlan } from './tick-loop.js';
 import { SequentialTickRunner } from './tick-runner.js';
@@ -484,14 +488,22 @@ export interface FeedbackCycleConfig {
   intervalMs?: number;
   /**
    * What makes `computeMetrics` — and with it the four kill-lines — actually
-   * run each cycle (#327). Optional for one honest reason, spelled out in
-   * `DailyMetricsSource`'s doc: no live equity return series is persisted, so
-   * the `MetricsSuite` cannot be produced in-repo and must be supplied.
+   * run each cycle (#327).
    *
-   * Omit it and the kill-line detector does not run. That is announced at
-   * startup at `warn` rather than left to be discovered — a paper run can
-   * degrade exactly the way these lines exist to catch, and silence is the
-   * bug #327 closes.
+   * Still optional, but no longer unsatisfiable: since #345 a real
+   * implementation exists — `new SqliteDailyEquityMetricsSource({ equity: new
+   * SqliteDailyEquityStore(db), trades, logger })` over the `daily_equity`
+   * series this composition root already samples every tick (ADR-0006).
+   *
+   * Deliberately NOT defaulted here. Wiring it is a decision about whether this
+   * deployment wants the kill-line detector armed, and defaulting it would arm
+   * it by omission — the mirror image of the bug #327 closed. Capture is
+   * unconditional (the sampler always runs, because equity not recorded on the
+   * day is unrecoverable); evaluation is opt-in.
+   *
+   * Omit it and the detector does not run. That is announced at startup at
+   * `warn` rather than left to be discovered — a paper run can degrade exactly
+   * the way these lines exist to catch, and silence is the bug #327 closes.
    */
   metrics?: DailyMetricsConfig;
 }
@@ -510,6 +522,28 @@ export interface DailyMetricsConfig {
    * to manufacture a breach off a broken reference — which makes
    * `live_backtest_divergence_over_max` inert. That is warned about once, not
    * silently tolerated.
+   *
+   * ## Still unsourced after #345 — deliberately. Follow-up: #375
+   *
+   * #345 sourced the live half of this comparison: `daily_equity` (migration
+   * 0011) persists the equity series and `SqliteDailyEquityMetricsSource`
+   * derives a real `ReturnSeries` from it, so `daily.sharpe` is now a measured
+   * figure. The BASELINE it is measured against is still not, and #345 left it
+   * that way on purpose rather than inventing one.
+   *
+   * There is no selected-config record to freeze a Sharpe from, because there
+   * has been no backtest of anything this system trades:
+   * `docs/specs/stage2-validation-execution-spec.md` owns the standing fact that
+   * "the machinery has never been run against a real strategy". Supplying a
+   * plausible number here would not make the line work — it would arm a
+   * detector that calls `autoTighten`, which WRITES every risk threshold toward
+   * its extreme, against a reference nobody measured.
+   *
+   * So `live_backtest_divergence_over_max` remains inert by default, loudly
+   * (see the `warn` in `runMetricsCheck` and `MetricsReport.not_evaluated`), and
+   * arming it is #375's job: run Stage 2 against a real strategy, close
+   * `SqliteConfigTrialLog`'s `config_json` gap, persist the selection, and read
+   * this value from that record instead of taking it as config.
    */
   backtest_reference_sharpe: number;
 }
@@ -864,6 +898,13 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
         // Per-class session-open equity snapshots (#332) — the local
         // replacement for Alpaca's blended `last_equity` (GAP-8).
         sessionEquity: new SqliteSessionEquityStore(config.db),
+        // The append-only daily equity series (#345). Wired unconditionally,
+        // and on the same boundary as the snapshot above, because a return
+        // series cannot be backfilled: equity not sampled on the day is gone.
+        // Capture starts from the first tick of the first run; whether it is
+        // ever EVALUATED is a separate, gated decision that lives in
+        // `SqliteDailyEquityMetricsSource`.
+        dailyEquity: new SqliteDailyEquityStore(config.db),
         // The existing ClosedTrade reader, per spec story 25 — no new
         // realized-PnL ledger is built when one already exists.
         closedTrades: new SqliteClosedTradeStore(config.db),
@@ -1330,9 +1371,11 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
             level: 'warn',
             message:
               'FeedbackCycleConfig.metrics is not set — the daily cycle will tune dials but ' +
-              'computeMetrics will NEVER run, so all four kill-lines stay unevaluated. No ' +
-              'MetricsSuite can be produced in-repo today (no equity return series is ' +
-              'persisted; see DailyMetricsSource), so it must be supplied.',
+              'computeMetrics will NEVER run, so all four kill-lines stay unevaluated. A ' +
+              'MetricsSuite CAN be produced in-repo since #345: supply ' +
+              'SqliteDailyEquityMetricsSource over the daily_equity series this process is ' +
+              'already recording every tick (ADR-0006). It self-gates below 60 observations, ' +
+              'so arming it during a short soak evaluates nothing rather than acting on noise.',
             payload: { kill_lines: 'not_evaluated' },
           });
         }

@@ -36,6 +36,10 @@ const TABLES = [
   // `llm_spend` (0010) — locally-metered Anthropic token spend, the stand-in
   // for the credit-balance endpoint Anthropic does not publish.
   'llm_spend',
+  // `daily_equity` (0011) — the append-only daily equity series `computeMetrics`
+  // derives a live `ReturnSeries` from (#345). Samples the same boundary
+  // `session_equity` above does; unlike it, never overwrites a row.
+  'daily_equity',
 ];
 
 /**
@@ -44,7 +48,7 @@ const TABLES = [
  * That prose number silently drifted twice (it read "twenty" and "twenty-one"
  * simultaneously while the schema held 22), so it is pinned here.
  */
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 23;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 24;
 
 const tempDirs: string[] = [];
 
@@ -106,6 +110,7 @@ describe('openSharedStore', () => {
       { version: 8 },
       { version: 9 },
       { version: 10 },
+      { version: 11 },
     ]);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
@@ -119,6 +124,7 @@ describe('openSharedStore', () => {
       { version: 8 },
       { version: 9 },
       { version: 10 },
+      { version: 11 },
     ]);
   });
 

@@ -10,6 +10,7 @@ import {
 import type { ClosedTrade } from '../../shared/index.js';
 import { openSharedStore, type SharedStore } from '../../shared/store/index.js';
 import { SqliteAccountStateStore } from '../sqlite-account-state-store.js';
+import { SqliteDailyEquityStore } from '../sqlite-daily-equity-store.js';
 import { SqliteSessionEquityStore } from '../sqlite-session-equity-store.js';
 import type { LogEntry, Logger } from '../types.js';
 import {
@@ -34,6 +35,7 @@ const FRIDAY_EVENING = '2026-07-31T22:00:00.000Z';
 interface Harness {
   store: SqliteAccountStateStore;
   sessionEquity: SqliteSessionEquityStore;
+  dailyEquity: SqliteDailyEquityStore;
   db: SharedStore;
   cleanup: () => void;
 }
@@ -44,6 +46,7 @@ function openStore(): Harness {
   return {
     store: new SqliteAccountStateStore(db),
     sessionEquity: new SqliteSessionEquityStore(db),
+    dailyEquity: new SqliteDailyEquityStore(db),
     db,
     cleanup: () => rmSync(dir, { recursive: true, force: true }),
   };
@@ -141,6 +144,7 @@ function makeProvider(
     client: makeClient(),
     store: harness.store,
     sessionEquity: harness.sessionEquity,
+    dailyEquity: harness.dailyEquity,
     closedTrades: makeTradeReader([]),
     logger: makeLogger(),
     calendars: { crypto: new AlwaysOpenCalendar(), stocks: new UsEquityRegularHoursCalendar() },
@@ -760,6 +764,176 @@ describe('AlpacaAccountStateProvider — calendar wiring', () => {
       expect(crypto.sessionStart).toHaveBeenCalledTimes(2);
       expect(stocks.sessionStart).toHaveBeenCalledTimes(1);
       expect(harness.sessionEquity.get('portfolio')?.open_at).toEqual(cryptoStart);
+    } finally {
+      harness.cleanup();
+    }
+  });
+});
+
+/**
+ * The daily equity series (#345). Sampled by this provider rather than by a
+ * timer of its own, so the series and the daily-loss breaker can never disagree
+ * about where a day begins — both reach `TradingCalendar.sessionStart` (#331)
+ * through the same call.
+ *
+ * Every test drives time through `asOf` and `startedAt`. Nothing here waits on
+ * a wall clock.
+ */
+describe('AlpacaAccountStateProvider — daily equity series', () => {
+  const DAY_1 = new Date('2026-08-01T00:00:00.000Z');
+  const DAY_2 = new Date('2026-08-02T00:00:00.000Z');
+
+  it('records one observation per UTC day, anchored to the boundary not the sample time', async () => {
+    const harness = openStore();
+    try {
+      const client = makeClient(makeAccount({ equity: '100000' }));
+      await makeProvider(harness, { client }).getAccountState(new Date('2026-08-01T09:17:00.000Z'));
+
+      const series = harness.dailyEquity.all();
+      expect(series).toHaveLength(1);
+      // Anchored to the session start. Storing the observation time instead
+      // would space consecutive rows by however long each tick happened to
+      // take, and an unevenly spaced series is not a `ReturnSeries` at all.
+      expect(series[0]?.session_start).toEqual(DAY_1);
+      expect(series[0]?.recorded_at).toEqual(new Date('2026-08-01T09:17:00.000Z'));
+      expect(series[0]?.equity).toBe(100_000);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('is evenly spaced across a boundary — one row per day, exactly 24h apart', async () => {
+    const harness = openStore();
+    try {
+      const provider = makeProvider(harness, {
+        client: makeClient(makeAccount({ equity: '100000' })),
+      });
+      // Many ticks inside day 1, then several inside day 2.
+      for (const at of ['00:00:30', '06:00:00', '23:59:00']) {
+        await provider.getAccountState(new Date(`2026-08-01T${at}.000Z`));
+      }
+      for (const at of ['00:00:30', '11:00:00']) {
+        await provider.getAccountState(new Date(`2026-08-02T${at}.000Z`));
+      }
+
+      const series = harness.dailyEquity.all();
+      expect(series.map((o) => o.session_start)).toEqual([DAY_1, DAY_2]);
+      // The property the whole ticket rests on.
+      expect(
+        (series[1]?.session_start.getTime() as number) -
+          (series[0]?.session_start.getTime() as number),
+      ).toBe(24 * 60 * 60 * 1_000);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('keeps the first sample of a day as equity moves through it', async () => {
+    const harness = openStore();
+    try {
+      await makeProvider(harness, {
+        client: makeClient(makeAccount({ equity: '100000' })),
+      }).getAccountState(new Date('2026-08-01T00:00:30.000Z'));
+      await makeProvider(harness, {
+        client: makeClient(makeAccount({ equity: '61000' })),
+      }).getAccountState(new Date('2026-08-01T20:00:00.000Z'));
+
+      expect(harness.dailyEquity.all()).toHaveLength(1);
+      // A daily OPEN, not a rolling intraday mark.
+      expect(harness.dailyEquity.all()[0]?.equity).toBe(100_000);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('samples only the portfolio boundary — the stocks close must not enter the series', async () => {
+    const harness = openStore();
+    try {
+      // Saturday noon UTC: the stock session opened Friday 20:00 UTC, the
+      // crypto/portfolio one at Saturday 00:00 UTC. Only the latter is evenly
+      // spaced — the stock boundary skips weekends, so a Friday→Monday step is
+      // three days wide and cannot be annualized as a single period.
+      await makeProvider(harness).getAccountState(SATURDAY_NOON_UTC);
+
+      const series = harness.dailyEquity.all();
+      expect(series).toHaveLength(1);
+      expect(series[0]?.session_start.toISOString()).toBe(CRYPTO_OPEN);
+      expect(series.map((o) => o.session_start.toISOString())).not.toContain(STOCKS_OPEN);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('survives a restart mid-session without losing or overwriting the day', async () => {
+    const harness = openStore();
+    try {
+      await makeProvider(harness, {
+        client: makeClient(makeAccount({ equity: '100000' })),
+        startedAt: new Date('2026-07-31T00:00:00.000Z'),
+      }).getAccountState(new Date('2026-08-01T00:00:30.000Z'));
+
+      // A NEW process, started after the boundary had already passed, over the
+      // same store — #332's second cold-start case.
+      await makeProvider(harness, {
+        client: makeClient(makeAccount({ equity: '55000' })),
+        startedAt: new Date('2026-08-01T14:00:00.000Z'),
+      }).getAccountState(new Date('2026-08-01T14:00:10.000Z'));
+
+      const series = harness.dailyEquity.all();
+      expect(series).toHaveLength(1);
+      // The genuine open, not the restarted process's mid-session figure.
+      expect(series[0]?.equity).toBe(100_000);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('fills the day even when the process comes up mid-session', async () => {
+    const harness = openStore();
+    try {
+      // A process runs through day 1, then stops.
+      await makeProvider(harness, {
+        client: makeClient(makeAccount({ equity: '100000' })),
+      }).getAccountState(new Date('2026-08-01T00:00:30.000Z'));
+      // Day 2 opens while nothing is running; a process comes up hours later.
+      // The row must still be written, or a hole appears that breaks the
+      // spacing of every observation after it — and equity that was never
+      // recorded on the day cannot be backfilled.
+      await makeProvider(harness, {
+        client: makeClient(makeAccount({ equity: '104000' })),
+        startedAt: new Date('2026-08-02T10:00:00.000Z'),
+      }).getAccountState(new Date('2026-08-02T10:00:05.000Z'));
+      // A second restart the same day — must not add a row or change the one there.
+      await makeProvider(harness, {
+        client: makeClient(makeAccount({ equity: '90000' })),
+        startedAt: new Date('2026-08-02T18:00:00.000Z'),
+      }).getAccountState(new Date('2026-08-02T18:00:05.000Z'));
+
+      const series = harness.dailyEquity.all();
+      expect(series.map((o) => o.session_start)).toEqual([DAY_1, DAY_2]);
+      expect(series[1]?.equity).toBe(104_000);
+      // Flagged honestly: nothing observed day 2's actual open.
+      expect(series[1]?.observed_at_boundary).toBe(false);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('flags an observation taken by a process that WAS running at the boundary', async () => {
+    const harness = openStore();
+    try {
+      const provider = makeProvider(harness, {
+        client: makeClient(makeAccount({ equity: '100000' })),
+        startedAt: new Date('2026-08-01T09:00:00.000Z'),
+      });
+      // Day 1 sampled mid-session (this process started inside it).
+      await provider.getAccountState(new Date('2026-08-01T09:00:05.000Z'));
+      // Day 2's boundary passes under the same running process.
+      await provider.getAccountState(new Date('2026-08-02T00:00:20.000Z'));
+
+      const series = harness.dailyEquity.all();
+      expect(series[0]?.observed_at_boundary).toBe(false);
+      expect(series[1]?.observed_at_boundary).toBe(true);
     } finally {
       harness.cleanup();
     }
