@@ -238,6 +238,53 @@ describe('computePortfolioView — pass-through fields', () => {
     expect(view.consecutive_losses).toBe(3);
   });
 
+  it('adds the unrealized mark-to-market term without fetching any mark twice', async () => {
+    const marketData = makeMarketData({ AAPL: 110, 'BTC-USD': 40_000 });
+    const input = makeInput({
+      marketData,
+      positions: [
+        // +10/share on 100 shares = +1,000 unrealized.
+        makePosition({ instrument: 'AAPL', asset_class: 'stocks', avg_entry_price: 100 }),
+        // A second lot in the same instrument, to prove the dedupe holds.
+        makePosition({
+          idempotency_key: 'AAPL-2',
+          instrument: 'AAPL',
+          asset_class: 'stocks',
+          filled_size: 50,
+          avg_entry_price: 90,
+        }),
+        // Short 2 BTC entered at 50k, now 40k = +20,000 unrealized.
+        makePosition({
+          idempotency_key: 'BTC-1',
+          instrument: 'BTC-USD',
+          asset_class: 'crypto',
+          side: 'sell',
+          filled_size: 2,
+          avg_entry_price: 50_000,
+        }),
+      ],
+      daily_basis: {
+        crypto: { known: true, open_equity: 100_000, realized_pnl: 0 },
+        stocks: { known: true, open_equity: 100_000, realized_pnl: -500 },
+        portfolio: { known: true, open_equity: 100_000, realized_pnl: -500 },
+      },
+    });
+
+    const view = await computePortfolioView(input);
+
+    // stocks unrealized = (110-100)*100 + (110-90)*50 = 1,000 + 1,000 = 2,000
+    // → (-500 + 2,000) / 100,000
+    expect(view.daily_pnl.stocks).toEqual({ known: true, pct: 0.015 });
+    // crypto is short: (40,000-50,000) * 2 * -1 = +20,000 → 20,000/100,000
+    expect(view.daily_pnl.crypto).toEqual({ known: true, pct: 0.2 });
+    // portfolio spans both unrealized terms: (-500 + 22,000) / 100,000
+    expect(view.daily_pnl.portfolio).toEqual({ known: true, pct: 0.215 });
+
+    // #332's explicit constraint: the daily-PnL math reuses the marks the
+    // exposure math already fetched — one call per unique instrument, no more.
+    expect(marketData.getMark).toHaveBeenCalledTimes(2);
+  });
+
   it('carries an unknown basis through as unknown, never as a zero percentage', async () => {
     const input = makeInput({
       daily_basis: {
