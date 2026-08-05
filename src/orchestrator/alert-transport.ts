@@ -240,19 +240,37 @@ export function buildAlertChannels(deps: {
     logger: deps.logger,
   });
 
+  // The heartbeat clause is branched, not boilerplate: on the injected path
+  // this module reads no heartbeat chat id and builds no adapter, so claiming
+  // the beat goes to `TELEGRAM_HEARTBEAT_CHAT_ID` would name a destination no
+  // heartbeat reaches. This line is what an operator checks their alerting
+  // against before an unattended soak, and a confidently wrong destination is
+  // worse than no claim at all.
+  const heartbeatClause =
+    heartbeatChatId === undefined
+      ? 'The heartbeat is not routed here at all: ProductionConfig.heartbeatChannel was ' +
+        `supplied by the caller, so where the beat goes is that channel's decision and ` +
+        `${TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR} is neither read nor required (#342).`
+      : `The heartbeat goes to ${TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR} instead (#342), so that ` +
+        'muting the beat cannot mute an escalation.';
+
   deps.logger.log({
     trace_id: 'startup',
     stage: 'orchestrator',
     level: 'info',
     message:
       `${ENV_VAR}=telegram — orphaned go verdicts, stuck unpriced fills and kill-threshold ` +
-      'breaches will be pushed to the escalation chat (TELEGRAM_CHAT_ID). The heartbeat goes to ' +
-      `${TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR} instead (#342), so that muting the beat cannot ` +
-      'mute an escalation — keep the escalation chat unmuted. No approval poll is started here; ' +
-      'HITL approvals still resolve through ProductionConfig.approvals (#275).',
+      `breaches will be pushed to the escalation chat (TELEGRAM_CHAT_ID). ${heartbeatClause} ` +
+      'Keep the escalation chat unmuted. No approval poll is started here; HITL approvals ' +
+      'still resolve through ProductionConfig.approvals (#275).',
     // Never the token, and never either chat id: none is a secret worth a log
-    // line, and the token is a bearer credential for the entire bot.
-    payload: { alerts: 'telegram' },
+    // line, and the token is a bearer credential for the entire bot. The
+    // heartbeat field is the machine-readable form of the clause above — two
+    // values, because there are two real paths.
+    payload: {
+      alerts: 'telegram',
+      heartbeat: heartbeatChatId === undefined ? 'caller-supplied' : 'separate-chat',
+    },
   });
 
   return {

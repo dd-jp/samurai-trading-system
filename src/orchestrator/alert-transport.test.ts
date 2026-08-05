@@ -475,6 +475,51 @@ describe('buildAlertChannels — heartbeat destination is separate from escalati
     expect(channels.orphanAlerts).toBeInstanceOf(TradeChannelOrphanAlert);
   });
 
+  it('does not claim the heartbeat chat when the caller supplied its own channel', () => {
+    // The startup line is what an operator checks their alerting against
+    // before a 14-day soak, so it must not name a destination no beat reaches.
+    // On this path TELEGRAM_HEARTBEAT_CHAT_ID is never read and no
+    // `TradeChannelHeartbeat` is built — the injected channel decides where the
+    // beat goes, and this module cannot know where that is.
+    configureTelegramEnv();
+    delete process.env.TELEGRAM_HEARTBEAT_CHAT_ID;
+    const logger = recordingLogger();
+
+    buildAlertChannels({
+      alertsMode: 'telegram',
+      injected: { heartbeatChannel: { postHeartbeat: vi.fn(async () => {}) } },
+      db: openSharedStore(':memory:'),
+      logger,
+    });
+
+    const entry = logger.entries.find((e) => e.message.includes(`${'SAMURAI_ALERTS'}=telegram`));
+    expect(entry?.payload).toMatchObject({ heartbeat: 'caller-supplied' });
+    // The variable may be MENTIONED (saying it is not read is useful); what it
+    // must not do is assert the beat is going there.
+    expect(entry?.message).not.toMatch(/heartbeat goes to TELEGRAM_HEARTBEAT_CHAT_ID/);
+    expect(entry?.message).toContain('ProductionConfig.heartbeatChannel');
+    // The escalation half of the line is unchanged and still true.
+    expect(entry?.message).toContain('TELEGRAM_CHAT_ID');
+  });
+
+  it('claims the heartbeat chat only when it is the one actually wired', () => {
+    // The other side of the branch above: when this module built the channel,
+    // the line names the destination it gave it.
+    configureTelegramEnv();
+    const logger = recordingLogger();
+
+    buildAlertChannels({
+      alertsMode: 'telegram',
+      injected: {},
+      db: openSharedStore(':memory:'),
+      logger,
+    });
+
+    const entry = logger.entries.find((e) => e.message.includes(`${'SAMURAI_ALERTS'}=telegram`));
+    expect(entry?.payload).toMatchObject({ heartbeat: 'separate-chat' });
+    expect(entry?.message).toMatch(/heartbeat goes to TELEGRAM_HEARTBEAT_CHAT_ID/);
+  });
+
   it('logs the separation without disclosing either chat id or the token', () => {
     configureTelegramEnv();
     const logger = recordingLogger();
