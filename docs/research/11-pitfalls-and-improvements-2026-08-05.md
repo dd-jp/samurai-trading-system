@@ -145,14 +145,14 @@ purchase decision.
 
 ## Improvements, in priority order
 
-### I1 — Size the grid from the sample, not from an assumption *(blocking the gate)*
+### I1 — Size the grid from the sample, not from an assumption *(blocking the gate — [#405](../../issues/405))*
 
 Compute the MinBTL cap **first**, then generate at most that many configs — or fail loudly before
 running 12 trials the sample cannot support. Today the cap is computed at the end and reported as a
 verdict field, after the work is done. This is the single binding constraint on Stage 2 and the
 cheapest thing left to fix.
 
-### I2 — Build the PBO and DSR seams *(blocking three kill-lines)*
+### I2 — Build the PBO and DSR seams *(blocking three kill-lines — [#406](../../issues/406))*
 
 Expose the raw per-period Sharpe (or the Lo annualization factor) on `MetricsSuite`/`EvalReport`,
 and add a CSCV-shaped partitioning pass alongside walk-forward. Blocks #384 and #375. Needed
