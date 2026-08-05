@@ -563,11 +563,14 @@ function buildProfileConfigs(): Pick<
   | 'ciiConsumerConfig'
   | 'feedback'
 > &
-  // `Required`, not another `Pick` member: `ProductionConfig.rateLimiterConfig`
-  // is optional (it has a documented fallback for a programmatic caller), but
-  // the profile's whole job is to leave nothing to a fallback nobody chose —
-  // so the type says this profile always carries one.
-  Required<Pick<ProductionConfig, 'rateLimiterConfig'>> {
+  // `Required`, not another `Pick` member: each of these is optional on
+  // `ProductionConfig` (they have documented fallbacks for a programmatic
+  // caller), but the profile's whole job is to leave nothing to a fallback
+  // nobody chose — so the type says this profile always carries them.
+  // `llmBudgetUsd` and `tickIntervalMs` joined `rateLimiterConfig` here under
+  // ADR-0008: a soak that inherited the 60s default interval, or no ceiling at
+  // all, would silently cost ~13x its budget.
+  Required<Pick<ProductionConfig, 'rateLimiterConfig' | 'llmBudgetUsd' | 'tickIntervalMs'>> {
   const traderConfig: TraderConfig = {
     // SPEC — `DEFAULT_TRADER_CONFIG` (src/trader/types.ts) is the one set of
     // sizing constants already checked in and already justified against
@@ -1022,6 +1025,52 @@ function buildProfileConfigs(): Pick<
 
   return {
     /**
+     * DECIDED (David, 2026-08-06) — the 14-day soak may spend **$50 total** on
+     * LLM calls. See ADR-0008. Enforced by `SqliteSpendCap` over the
+     * cumulative `llm_spend` total; it does not refill.
+     *
+     * This is a hard ceiling *behind* the cadence choice below, not instead of
+     * it. Cadence is sized to land under the budget; the cap is what makes the
+     * figure a guarantee rather than a forecast, because the only spend
+     * estimate this repo has is indicative and the cycle arithmetic
+     * (`pass duration + interval`) makes proportional scaling an upper bound
+     * on the saving, not a promise. It also covers what cadence cannot: a
+     * retry storm, a debate running more rounds than expected, or a price
+     * change at the provider.
+     */
+    llmBudgetUsd: 50,
+    /**
+     * DERIVED from the budget above — 15 minutes, up from the 60s
+     * `DEFAULT_TICK_INTERVAL_MS`.
+     *
+     * The arithmetic, from #400's resolution comment (which counted
+     * instrument-passes/day at 60s as 2 × 1,440 crypto + 4 × 390 stocks =
+     * 4,440, against the ~$45/day estimate in this file):
+     *
+     *   60s   -> 4,440 passes/day -> ~$45/day  -> ~$630 / 14d
+     *   15min ->   296 passes/day -> ~$3.0/day -> ~$42  / 14d
+     *
+     * 15 min rather than the ~12.6 min the budget divides to exactly: the
+     * saving is an upper bound (see `llmBudgetUsd`), so the margin is
+     * deliberate, and a round number is easier to reason about in a soak log.
+     *
+     * **This is NOT #400's decision, and does not overturn it.** David chose
+     * crypto 2 min / stocks 5 min there, for a run whose budget is a live
+     * budget. Those are per-asset-class cadences and the gating that makes
+     * them expressible is #397's Phase 1, which is not built — today there is
+     * one base interval for every instrument. So this single value is what a
+     * $50 paper soak reduces to on the machinery that exists. A live run
+     * supplies its own `tickIntervalMs` (and, once #397 lands, its own
+     * per-class cadences) from a composition root with a live budget.
+     *
+     * No dial needs retuning to go slower: #400 established that
+     * `max_signal_age` and `drift_tolerance_pct` both measure WITHIN-pass
+     * intervals (`decision_timestamp` is the pass's own `mark.observed_at`,
+     * and `getMark` re-fetches unconditionally with no TTL cache), so the tick
+     * interval never enters either gate's arithmetic.
+     */
+    tickIntervalMs: 15 * 60_000,
+    /**
      * `SPEC` — the universe a paper run trades (#381). ADR-0001 names this
      * exact set ("default universe SPY/QQQ/AAPL/TSLA/BTC-USD/ETH-USD",
      * CLAUDE.md's broker plan), orchestrator-spec.md story 3 makes it the
@@ -1205,10 +1254,11 @@ function buildProfileConfigs(): Pick<
  * The refusal is not belt-and-braces caution; it follows from what these
  * values are. The volatility breaker's baseline is uncalibrated to the point
  * of being inert, every notional cap is a fraction of an *assumed* paper
- * account balance, `drift_tolerance` is sized for one instrument, and the HITL
- * gate resolves through a channel that fabricates consent. Each of those is a
- * fine trade for a supervised paper run and none of them is acceptable against
- * real money.
+ * account balance, `drift_tolerance` is sized for one instrument, and its
+ * cadence and LLM budget are sized for a $50 paper soak rather than for a run
+ * that is trying to make money. Each of those is a fine trade for a paper run
+ * and none of them is acceptable against real money — the more so since
+ * ADR-0007, which removed the human gate that used to sit behind them.
  *
  * This does not make live unreachable — it makes it explicit.
  * `startFromEnvironment(injected)` still accepts any `ProductionConfig` a live
@@ -1234,7 +1284,7 @@ export function paperStartingProfile(
     | 'ciiConsumerConfig'
     | 'feedback'
   > &
-  Required<Pick<ProductionConfig, 'rateLimiterConfig'>> {
+  Required<Pick<ProductionConfig, 'rateLimiterConfig' | 'llmBudgetUsd' | 'tickIntervalMs'>> {
   if (mode === 'live') {
     throw new Error(
       'Orchestrator cannot start: SAMURAI_MODE=live was requested, but the shipped entrypoint ' +

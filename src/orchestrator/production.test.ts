@@ -440,8 +440,13 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
 
     buildProductionComponents(configWithoutLlmClient({ logger }));
 
-    const warning = logger.entries.find((entry) => entry.level === 'warn');
-    expect(warning?.message).toMatch(/live AnthropicHttpMessagesClient/);
+    // Found by CONTENT, not by being the first warn: the root emits several
+    // startup warnings (the spend cap adds one), and position is not a
+    // property this test is about.
+    const warning = logger.entries.find((entry) =>
+      entry.message.includes('AnthropicHttpMessagesClient'),
+    );
+    expect(warning?.level).toBe('warn');
     expect(warning?.payload).toMatchObject({ model: DEFAULT_ANTHROPIC_MODEL });
   });
 
@@ -452,7 +457,9 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
 
     buildProductionComponents(configWithoutLlmClient({ logger }));
 
-    const warning = logger.entries.find((entry) => entry.level === 'warn');
+    const warning = logger.entries.find((entry) =>
+      entry.message.includes('AnthropicHttpMessagesClient'),
+    );
     expect(warning?.payload).toMatchObject({ model: 'claude-custom-model' });
   });
 

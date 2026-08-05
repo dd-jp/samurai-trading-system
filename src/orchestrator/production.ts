@@ -126,6 +126,8 @@ import {
   RateLimiter,
   SqliteDebateLogStore,
   SqliteLlmSpendStore,
+  SqliteSpendCap,
+  UNCAPPED_SPEND,
 } from '../debate-engine/index.js';
 import type {
   AlpacaClient as AlpacaBrokerClient,
@@ -476,6 +478,18 @@ export interface ProductionConfig {
    * each number written out beside it.
    */
   rateLimiterConfig?: RateLimiterConfig;
+  /**
+   * Total USD this process may spend on LLM calls before it stops starting new
+   * debates (ADR-0008). Cumulative over the whole `llm_spend` table, and it
+   * does NOT refill — see `SqliteSpendCap`.
+   *
+   * Optional so that the many programmatic callers and tests that issue no
+   * live calls need not care, but absence is warned about loudly at startup
+   * rather than treated as a default: an unattended run with no ceiling is the
+   * failure this exists to prevent. `paperStartingProfile` supplies the soak's
+   * checked-in figure.
+   */
+  llmBudgetUsd?: number;
   /**
    * Overrides the `RateLimiter` this module would otherwise build from
    * `rateLimiterConfig` — same rationale as `broker`/`llmClient`.
@@ -1171,6 +1185,34 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   });
 
   const logger = config.logger ?? new JsonLogger();
+
+  /**
+   * The hard dollar ceiling (ADR-0008). Distinct from `llmRateLimiter`, which
+   * bounds CALLS PER WINDOW and refills with time: this bounds TOTAL DOLLARS
+   * and never refills. A run can be comfortably inside its rate limit and
+   * still spend a fortnight's budget in three days, which is exactly what the
+   * cadence-only plan risked.
+   *
+   * Absent means uncapped, and that is warned about rather than defaulted
+   * silently — the same posture `SAMURAI_ALERTS` takes. An unattended run
+   * (#238) with no ceiling is the case this exists for, so if it is ever
+   * missing there, the log says so in as many words.
+   */
+  const spendCap =
+    config.llmBudgetUsd === undefined
+      ? (logger.log({
+          trace_id: 'startup',
+          stage: 'orchestrator',
+          level: 'warn',
+          message:
+            'ProductionConfig.llmBudgetUsd is not set — LLM spend is UNCAPPED. Nothing will ' +
+            'stop this process billing without bound; the rate limiter bounds calls per ' +
+            'window, not total dollars, and it refills. Correct for a short attended run; an ' +
+            'unattended soak (#238) must set a budget.',
+          payload: { llm_budget_usd: null },
+        }),
+        UNCAPPED_SPEND)
+      : new SqliteSpendCap(config.db, config.llmBudgetUsd, logger);
   // Hooked once, shared everywhere below (see `ProductionComponents.executionStore`'s
   // doc): `getOpenPositions`, Verdict's `positionStore` and Execution's
   // `store` all read/write through this same instance, so `onTradeClose`
@@ -1321,6 +1363,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       config.llmClient ?? buildDefaultLlmClient(logger, new SqliteLlmSpendStore(config.db, logger)),
       new SqliteDebateLogStore(config.db),
       llmRateLimiter,
+      spendCap,
       logger,
     ),
     trader: buildTraderStep({ ...breakerStateDeps, config: config.traderConfig }),
