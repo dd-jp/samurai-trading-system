@@ -179,4 +179,45 @@ describe('effectiveWindow', () => {
       /runStage2: ETH-USD has no bars in/,
     );
   });
+
+  it('refuses a universe whose per-symbol coverage does not overlap at all', () => {
+    // Disjoint coverage: every symbol has bars, so the per-symbol guard above
+    // passes, but one ends before another begins. Left unguarded this returns
+    // start > end and replay/folds/MinBTL run on an inverted window — the same
+    // opaque downstream failure the intersection exists to prevent.
+    const coverage = Object.fromEntries(
+      [...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS].map((symbol) => [
+        symbol,
+        { first: new Date(Date.UTC(2021, 0, 1)), last: new Date(Date.UTC(2023, 0, 1)) },
+      ]),
+    );
+    coverage['BTC-USD'] = {
+      first: new Date(Date.UTC(2024, 0, 1)),
+      last: new Date(Date.UTC(2026, 0, 1)),
+    };
+
+    expect(() => effectiveWindow(storeWith(coverage), REQUESTED)).toThrow(
+      /no window every symbol covers/,
+    );
+  });
+
+  it('finds the bar bounds regardless of the order the store returns them in', () => {
+    // `Stage2HistoricalStore` orders by close_time ASC, but the structural
+    // parameter type cannot say so. Taking bars[0]/bars.at(-1) would narrow to
+    // the wrong range here instead of failing.
+    const descending = {
+      bars(symbol: string) {
+        const span =
+          symbol === 'TSLA'
+            ? { first: new Date(Date.UTC(2025, 0, 1)), last: new Date(Date.UTC(2026, 0, 1)) }
+            : { first: new Date(Date.UTC(2024, 7, 6)), last: new Date(Date.UTC(2026, 0, 1)) };
+        return [{ close_time: span.last }, { close_time: span.first }];
+      },
+    };
+
+    const effective = effectiveWindow(descending, REQUESTED);
+
+    expect(effective.start.toISOString()).toBe('2025-01-01T00:00:00.000Z');
+    expect(effective.end.toISOString()).toBe('2026-01-01T00:00:00.000Z');
+  });
 });
