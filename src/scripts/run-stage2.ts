@@ -46,8 +46,8 @@ export const STOCK_SYMBOLS = ['SPY', 'QQQ', 'AAPL', 'TSLA'] as const;
 export const CRYPTO_SYMBOLS = ['BTC-USD', 'ETH-USD'] as const;
 
 const FIVE_YEARS_MS = 5 * 365 * 86_400_000;
-const DEFAULT_CAPITAL_PER_TRADE = 10_000;
-const DEFAULT_AVERAGE_CAPITAL = 10_000;
+export const DEFAULT_CAPITAL_PER_TRADE = 10_000;
+export const DEFAULT_AVERAGE_CAPITAL = 10_000;
 
 /**
  * Pessimistic cost-model defaults — mirrors `cost-model.test.ts`'s
