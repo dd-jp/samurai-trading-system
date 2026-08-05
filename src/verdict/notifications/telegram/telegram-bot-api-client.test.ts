@@ -59,7 +59,7 @@ function makeClient(
 ): ClientHarness {
   const queued = overrides.updates ?? [];
   let poll = 0;
-  const fetchMock = vi.fn(async (url: string) => {
+  const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
     if (String(url).includes('/getUpdates')) {
       return okResponse(queued[poll++] ?? []);
     }
@@ -72,7 +72,11 @@ function makeClient(
     botToken: FAKE_TOKEN,
     allowedUserIds: String(ALLOWED_ID),
     auditLog,
-    alertChatId: overrides.alertChatId,
+    // Spread rather than assigned: `alertChatId` is optional, and under
+    // `exactOptionalPropertyTypes` passing an explicit `undefined` is not the
+    // same as omitting it. Callers that leave it out must produce a config
+    // with no `alertChatId` key at all.
+    ...(overrides.alertChatId === undefined ? {} : { alertChatId: overrides.alertChatId }),
     logger: { log: () => {} },
     retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
   });
@@ -170,7 +174,7 @@ describe('TelegramBotApiClient construction (boot-time validation)', () => {
     // onward. Verified by observing the *outbound request URL*, not by
     // asserting on `#botToken` directly (private), and never by logging the
     // fake token's value in a failure message.
-    const fetchMock = vi.fn(async () => okResponse());
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => okResponse());
     vi.stubGlobal('fetch', fetchMock);
 
     const client = new TelegramBotApiClient({
@@ -188,7 +192,7 @@ describe('TelegramBotApiClient construction (boot-time validation)', () => {
   it('trims a bot token sourced from process.env.TELEGRAM_BOT_TOKEN (#355)', async () => {
     const previous = process.env.TELEGRAM_BOT_TOKEN;
     process.env.TELEGRAM_BOT_TOKEN = `\t${FAKE_TOKEN} `;
-    const fetchMock = vi.fn(async () => okResponse());
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => okResponse());
     vi.stubGlobal('fetch', fetchMock);
     try {
       const client = new TelegramBotApiClient({

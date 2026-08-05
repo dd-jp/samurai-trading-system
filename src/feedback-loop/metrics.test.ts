@@ -69,7 +69,7 @@ function makeConfig(overrides: Partial<FeedbackConfig> = {}): FeedbackConfig {
  * leave `makeRevalidation()` in place and make those tests assert the
  * opposite of what they are named for.
  */
-type MetricsInputOverrides = Partial<MetricsInput> & {
+type MetricsInputOverrides = Omit<Partial<MetricsInput>, 'revalidation'> & {
   revalidation?: MetricsInput['revalidation'] | undefined;
 };
 
@@ -83,7 +83,12 @@ function makeInput(overrides: MetricsInputOverrides = {}): {
   const adjustments = openAdjustmentLog();
   const alerts = new InMemoryBreachAlertChannel();
 
-  const input: MetricsInput = {
+  // Cast on the spread, not the fields: `exactOptionalPropertyTypes` rejects
+  // `{ ...base, ...overrides }` as a `MetricsInput` precisely because
+  // `overrides` may carry `revalidation: undefined` — which is the whole point
+  // of `MetricsInputOverrides` above. Everything before the spread is still
+  // type-checked against `MetricsInput`.
+  const input = {
     clock: makeClock(),
     daily: makeSuite(),
     backtest_reference_sharpe: 1.5,
@@ -93,7 +98,7 @@ function makeInput(overrides: MetricsInputOverrides = {}): {
     config: makeConfig(),
     alerts,
     ...overrides,
-  };
+  } as MetricsInput;
 
   return { input, tuning, adjustments, alerts };
 }

@@ -81,6 +81,14 @@ function makeBroker(
       return [];
     },
     async resizeProtectiveLegs(): Promise<void> {},
+    // Throws rather than returning null: the port documents null as
+    // "AUTHORITATIVELY never placed", which `reconcile` acts on by marking the
+    // lot `rejected`. A stub that answered null would make this double lie in
+    // exactly the direction that buries a live position. `execute()` never
+    // calls it, so reaching this is itself the bug.
+    async getOrder(): Promise<never> {
+      throw new Error('makeBroker.getOrder: execute() does not reconcile');
+    },
   };
 }
 
@@ -154,8 +162,16 @@ describe('ExecutionImpl.execute', () => {
 
     await new ExecutionImpl(makeInput({ store, broker })).execute(makeGo());
 
-    expect(stateAtSubmit).not.toBeNull();
-    expect(stateAtSubmit?.order_state).toBe('pending');
+    // Re-widened deliberately. `stateAtSubmit` is only ever assigned inside
+    // the broker callback, which the compiler cannot order relative to this
+    // read, so its control-flow analysis still holds the initialiser's `null`
+    // and `stateAtSubmit?.order_state` narrows to `never`. The runtime value
+    // is the position captured mid-submit; the assertion below is what proves
+    // it.
+    const captured = stateAtSubmit as OpenPosition | null;
+
+    expect(captured).not.toBeNull();
+    expect(captured?.order_state).toBe('pending');
     expect(store.writeLog).toEqual(['write-ahead:key-aapl-1355', 'update:key-aapl-1355:submitted']);
   });
 
@@ -378,6 +394,8 @@ describe('ExecutionImpl.execute', () => {
       submitBracket: vi.fn().mockRejectedValue(new Error('connection reset')),
       fetchNewFills: vi.fn().mockResolvedValue([]),
       resizeProtectiveLegs: vi.fn().mockResolvedValue(undefined),
+      // See `makeBroker`: never null, and never reached on this path.
+      getOrder: vi.fn().mockRejectedValue(new Error('getOrder: not part of execute()')),
     };
 
     const result = await new ExecutionImpl(makeInput({ store, broker })).execute(makeGo());
