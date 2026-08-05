@@ -126,14 +126,32 @@ export interface SessionBasisByClass {
  * Computed outside `evaluate()` by `computeCorrelationEstimate` (correlation.ts)
  * and consumed here as pre-built data, mirroring `PortfolioView`/`BreakerState`.
  *
- * An instrument pair with insufficient overlapping history is simply absent
+ * An instrument pair with insufficient overlapping history is still absent
  * from `correlations` rather than assigned a value — that omission IS the
  * warm-up fallback: the pipeline treats an absent entry as "not correlated"
- * rather than guessing.
+ * rather than guessing. What #303 adds is that the omission is now NAMED, in
+ * `insufficient_history`, so "we measured no correlation" and "we could not
+ * measure" stop being the same observation to the caller. The fallback
+ * behaviour is unchanged; only its visibility is.
  */
 export interface CorrelationEstimate {
   /** Keyed by the OTHER instrument; value is its correlation with the intent's instrument. */
   correlations: Record<string, number>;
+  /**
+   * Held instruments dropped from `correlations` because the PAIR's
+   * overlapping return history was under `CorrelationConfig.min_bars` (#303).
+   *
+   * A statement about the pair, not about the named instrument: overlap is
+   * `min(target, other)`, so the thin side may be the intent's own instrument
+   * — a brand-new listing being sized against a portfolio of long-established
+   * holdings names every one of them here. Read an entry as "correlation with
+   * X is unmeasurable", never as "X is new".
+   *
+   * Advisory only: the concentration check still cannot bind on these pairs,
+   * so an entry here is a statement about what is UNKNOWN, never an input to
+   * a trim. Present-but-empty means every held pair was measurable.
+   */
+  insufficient_history: string[];
 }
 
 /**

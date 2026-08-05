@@ -89,6 +89,23 @@ function ciiWarnings(instrument: string, cii: Record<string, number>, threshold:
   return [`macro_risk_flag:${country}`];
 }
 
+/**
+ * Correlation warm-up warning (#303). Step 6 treats an instrument absent from
+ * `correlation.correlations` as not correlated — the warm-up fallback
+ * documented in risk-manager-spec.md, "Module: Correlation Warm-up
+ * Visibility". That is unchanged here: this produces advisory tags only and
+ * is never consulted by a trim or a reject.
+ *
+ * What it fixes is the conflation. An empty `correlations` map is produced
+ * both by a portfolio of genuinely independent holdings and by a portfolio
+ * with no overlapping history at all — the day-1-of-a-soak case, where the
+ * concentration cap is silently inert precisely while the first positions go
+ * on. `insufficient_history` names the second case so the decision states it.
+ */
+function correlationWarmupWarnings(insufficientHistory: string[]): string[] {
+  return insufficientHistory.map((instrument) => `correlation_warmup:${instrument}`);
+}
+
 function snapshot(portfolio: PortfolioView, breakers: BreakerState): RiskDecision['risk_snapshot'] {
   return {
     exposure: {
@@ -124,7 +141,10 @@ export class RiskManagerImpl implements RiskManager {
 
   evaluate(input: RiskInput): RiskDecision {
     const { intent, portfolio, breakers, correlation, cii, critic, next_breaker_state } = input;
-    const warnings = ciiWarnings(intent.instrument, cii, this.config.cii_threshold);
+    const warnings = [
+      ...ciiWarnings(intent.instrument, cii, this.config.cii_threshold),
+      ...correlationWarmupWarnings(correlation.insufficient_history),
+    ];
 
     if (intent.intent_type === 'exit') {
       return {
@@ -224,7 +244,10 @@ export class RiskManagerImpl implements RiskManager {
 
     // Step 6: concentration check (v2 dynamic correlation matrix, #50).
     // Instruments absent from `correlation.correlations` are treated as not
-    // correlated — that's the warm-up fallback, not a special case here.
+    // correlated — that's the warm-up fallback, not a special case here. #303
+    // deliberately did NOT change that: an under-`min_bars` pair still cannot
+    // bind this cap. It is surfaced as a `correlation_warmup:` warning above
+    // instead, so the inertness is stated rather than inferred from silence.
     const correlatedInstruments = Object.entries(correlation.correlations)
       .filter(([, corr]) => Math.abs(corr) >= this.config.concentration.threshold)
       .map(([instrument]) => instrument);

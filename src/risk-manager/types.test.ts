@@ -119,9 +119,22 @@ describe('CorrelationEstimate', () => {
   it('matches the pairwise-correlation shape, keyed by the other instrument', () => {
     const estimate: CorrelationEstimate = {
       correlations: { MSFT: 0.82, 'BTC-USD': -0.05 },
+      insufficient_history: [],
     };
 
     expectTypeOf(estimate).toMatchTypeOf<CorrelationEstimate>();
+  });
+
+  /** #303: the uncovered pairs are carried alongside, not folded into the map. */
+  it('carries under-min_bars pairs in insufficient_history, separate from correlations', () => {
+    const estimate: CorrelationEstimate = {
+      correlations: { MSFT: 0.82 },
+      insufficient_history: ['ETH-USD'],
+    };
+
+    expectTypeOf(estimate).toMatchTypeOf<CorrelationEstimate>();
+    expect(estimate.correlations['ETH-USD']).toBeUndefined();
+    expect(estimate.insufficient_history).toContain('ETH-USD');
   });
 });
 
@@ -160,7 +173,7 @@ describe('RiskInput', () => {
         },
         { tier: 'kill_switch', tripped: false, tripped_at: null, reset_at: null, reason: null },
       ],
-      correlation: { correlations: {} },
+      correlation: { correlations: {}, insufficient_history: [] },
       cii: {},
       mode: 'live',
     };
