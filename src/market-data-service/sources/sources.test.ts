@@ -1,3 +1,4 @@
+import { formingCandleClient } from '../forming-candle-client.js';
 import {
   AlwaysOpenCalendar,
   type TradingCalendar,
@@ -263,33 +264,9 @@ describe("the window's short-read policy reaches the source client (#292)", () =
 });
 
 describe('raw fetch requests one extra bar for the forming candle (#362)', () => {
-  /**
-   * Generates exactly `limit` sequential hourly candles ending at the
-   * CURRENT (forming) hour relative to `asOf` — the most recent one always
-   * has `close_time > asOf`, so `completedBars` always drops exactly one of
-   * them. A source that requested only `limit = lookback` would therefore
-   * always land one bar short; this is the exact shape of the reported bug
-   * (`sma(14) needs 14 bars but received 13`).
-   */
-  function formingCandleClient(): AlpacaClient {
-    return {
-      getBars: async (_symbol, _timeframe, requestAsOf, limit): Promise<AlpacaBar[]> => {
-        const hourFloor = new Date(requestAsOf);
-        hourFloor.setUTCMinutes(0, 0, 0);
-        const bars: AlpacaBar[] = [];
-        for (let i = limit - 1; i >= 0; i--) {
-          const openTime = new Date(hourFloor.getTime() - i * 3_600_000);
-          bars.push({ t: openTime.toISOString(), o: 100, h: 101, l: 99, c: 100, v: 10 });
-        }
-        return bars;
-      },
-      getLatestQuote: async () => ({ t: '2026-07-15T18:30:00.000Z', ap: 100, bp: 100 }),
-    };
-  }
-
   it('still returns the caller-requested count of completed bars when the newest raw candle is forming', async () => {
     const asOf = new Date('2026-07-15T18:30:00Z'); // mid-hour: 18:00 candle is still forming
-    const source = new AlpacaDataSource(formingCandleClient(), { asset_class: 'crypto' });
+    const source = new AlpacaDataSource(formingCandleClient(asOf), { asset_class: 'crypto' });
 
     const bars = await source.fetchBars('BTC-USD', { timeframe: '1h', lookback: 14 }, asOf);
 

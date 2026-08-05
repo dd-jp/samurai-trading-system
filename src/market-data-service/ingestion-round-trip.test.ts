@@ -5,6 +5,7 @@
  */
 import type { Clock } from '../shared/index.js';
 import { openSharedStore } from '../shared/store/index.js';
+import { formingCandleClient } from './forming-candle-client.js';
 import { InsufficientBarsError } from './indicators.js';
 import { MarketDataServiceImpl } from './service.js';
 import { createDataSource, type DataSourceConfig } from './source-factory.js';
@@ -192,33 +193,12 @@ describe('swapping DataSource is a config change, not a code change', () => {
 describe('cold start: first tick with an empty store (#362)', () => {
   const COLD_ASOF = new Date('2026-07-15T18:30:00Z'); // mid-hour: current candle is forming
 
-  /**
-   * A source whose bar count actually tracks the requested `limit`, unlike
-   * this file's other fixtures (fixed arrays the mocks return regardless of
-   * args). The most recent candle always opens at `asOf`'s own hour, so it
-   * is always still forming and always dropped by `completedBars` — exactly
-   * the shape of the reported bug: a cold, empty store has nothing else to
-   * fall back on, so a fetch that lands one bar short surfaces immediately
-   * as `InsufficientBarsError` instead of self-healing on a later tick.
-   */
-  function coldStartAlpacaClient(): AlpacaClient {
-    return {
-      getBars: async (_symbol, _timeframe, asOf, limit): Promise<AlpacaBar[]> => {
-        const hourFloor = new Date(asOf);
-        hourFloor.setUTCMinutes(0, 0, 0);
-        return Array.from({ length: limit }, (_, index) => {
-          const i = limit - 1 - index;
-          const openTime = new Date(hourFloor.getTime() - i * 3_600_000);
-          return { t: openTime.toISOString(), o: 100, h: 101, l: 99, c: 100 + index, v: 10 };
-        });
-      },
-      getLatestQuote: async () => ({ t: COLD_ASOF.toISOString(), ap: 100, bp: 100 }),
-    };
-  }
-
   it('produces a usable sma(14) on the very first tick, no "needs 14 but received 13"', async () => {
+    // formingCandleClient: a cold, empty store has nothing else to fall back
+    // on, so a fetch that lands one bar short surfaces immediately as
+    // `InsufficientBarsError` instead of self-healing on a later tick.
     const service = new MarketDataServiceImpl(
-      new AlpacaDataSource(coldStartAlpacaClient(), { asset_class: 'crypto' }),
+      new AlpacaDataSource(formingCandleClient(COLD_ASOF), { asset_class: 'crypto' }),
       new ManualClock(COLD_ASOF),
       'live',
       new SqliteMarketDataStore(openSharedStore(':memory:')), // empty store: genuine cold start

@@ -173,11 +173,7 @@ async function buildBracket(
       // widening the fetch — or dropping `atr_timeframe` — fails a test
       // rather than silently repricing every stop.
       //
-      // This `+ 1` is COMPLETED bars ATR needs, not a fetch-width cushion —
-      // do not read it as covering issue #362's forming-bar margin too. That
-      // margin (`FORMING_BAR_FETCH_MARGIN`, ingestion.ts) is applied
-      // underneath this call, inside `NormalizingDataSource.fetchBars`, on
-      // top of whatever `lookback` a caller asks for — this call included.
+      // A separate fetch-width margin is applied underneath in fetchBars; see #362.
       { timeframe: config.atr_timeframe, lookback: config.atr_lookback + 1 },
       asOf,
     ),

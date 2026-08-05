@@ -13,12 +13,7 @@ export { FixtureDataSource } from './fixture-data-source.js';
 export { buildIndicatorCacheKey, IndicatorCache } from './indicator-cache.js';
 export { computeIndicator, InsufficientBarsError, minimumBarsFor } from './indicators.js';
 export type { NormalizeContext, RawCandle } from './ingestion.js';
-export {
-  completedBars,
-  deriveBacktestMark,
-  FORMING_BAR_FETCH_MARGIN,
-  normalizeBars,
-} from './ingestion.js';
+export { completedBars, deriveBacktestMark, normalizeBars } from './ingestion.js';
 export { MarketDataServiceImpl } from './service.js';
 export type { DataSourceConfig } from './source-factory.js';
 export { createDataSource } from './source-factory.js';
