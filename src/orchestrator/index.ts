@@ -80,6 +80,7 @@ export { digest } from './digest.js';
 export { Heartbeat, type HeartbeatChannel } from './heartbeat.js';
 export { TradeChannelHeartbeat } from './heartbeat-channel.js';
 export { buildEntrypointLogger, formatLogLine, JsonLogger, type LogLineSink } from './logger.js';
+export { TradeChannelLoosenApproval } from './loosen-approval-channel.js';
 export { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
 export {
   type OrphanAlertChannel,
@@ -108,6 +109,7 @@ export {
   buildProductionOrchestrator,
   buildProductionTickRunner,
   type DailyMetricsConfig,
+  DEFAULT_FEEDBACK_INTERVAL_MS,
   DEFAULT_HEARTBEAT_INTERVAL_MS,
   type FeedbackCycleConfig,
   type ProductionComponents,

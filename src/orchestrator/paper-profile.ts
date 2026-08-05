@@ -2,7 +2,17 @@
  * The checked-in **paper starting profile** (ticket #323) — the eight
  * per-stage config objects `REQUIRED_INJECTED_CONFIG` demands, so that
  * `yarn orchestrator` reaches a running tick loop instead of throwing at the
- * seams guard.
+ * seams guard — plus, since #366, the optional ninth: the Feedback Loop's
+ * `FeedbackConfig`.
+ *
+ * The ninth is here for the same reason as the eight and no other. It was left
+ * out of #323 as "optional", which in practice meant nothing supplied it and
+ * stage 6 of a 6-stage pipeline never ran: a paper soak (#238) produced trades
+ * and fills for 14 days and attributed no weight, tuned no dial and evaluated
+ * no kill-line. `ProductionConfig.feedback`'s own doc named the reason —
+ * "`FeedbackConfig`'s values are tuned in paper trading" — which is the exact
+ * rationale that puts the other eight in this file. See `buildFeedbackConfig`
+ * for what does and does not actually move during a soak.
  *
  * ## These are STARTING POINTS, not tuned values
  *
@@ -59,14 +69,20 @@
  * inbound HITL round trip rather than an alert, and wiring it through Telegram
  * is #275's remaining half. See `verdictConfig.automation_level` below for
  * what that means for the `manual` setting in practice.
+ *
+ * The Feedback Loop's `LoosenApprovalChannel` is emphatically NOT that
+ * exception, despite the similar name: it returns `void` and collects no
+ * answer, so #366 resolved it from `SAMURAI_ALERTS` like the outbound four and
+ * the `feedback` block below names no transport either.
  */
 import type { CostConfig } from '../cost-model-backtest/index.js';
 import type { ExecutionConfig } from '../execution/index.js';
+import type { FeedbackConfig, TunableDial } from '../feedback-loop/index.js';
 import type { CiiConsumerConfig } from '../market-intelligence/index.js';
 import type { BreakerConfig, CorrelationConfig, RiskConfig } from '../risk-manager/index.js';
 import { DEFAULT_TRADER_CONFIG, type TraderConfig } from '../trader/index.js';
 import type { VerdictConfig } from '../verdict/index.js';
-import type { ProductionConfig } from './production.js';
+import { DEFAULT_FEEDBACK_INTERVAL_MS, type ProductionConfig } from './production.js';
 
 /**
  * The equity the notional caps below are expressed against.
@@ -120,9 +136,237 @@ export const PAPER_ACCOUNT_EQUITY_ANCHOR = 100_000;
 const UNCALIBRATED_VOLATILITY_BASELINE = 1_000_000;
 
 /**
- * The eight required config objects. Not exported directly — callers go
- * through `paperStartingProfile(mode)` so the live-mode refusal cannot be
- * bypassed by importing the values, and so each call gets its own copy.
+ * The analyst-weight band (#366).
+ *
+ * `DERIVED`, and the derivation is `impliedWeight`'s (feedback-loop/attribution.ts):
+ * a cycle's target is `midpoint + halfBand * tanh(meanCredit)`, so the band's
+ * MIDPOINT is what an analyst with a genuinely even record is pulled toward.
+ * Centring the band on 1.0 is therefore the only choice under which "no
+ * evidence either way" means "no re-weighting" — a weight is a multiplier, and
+ * a band of, say, `[0.1, 0.9]` would quietly drag every analyst toward 0.5 on
+ * an even record and call it attribution.
+ *
+ * Half a multiple either side satisfies the spec's two-sided bound directly
+ * (story 4: no analyst "swings wildly, drops to zero permanently, or
+ * dominates") — the worst-performing lens keeps half its say, the best gets
+ * half again, and neither can be silenced or take over.
+ */
+const PAPER_ANALYST_WEIGHT_FLOOR = 0.5;
+const PAPER_ANALYST_WEIGHT_CEILING = 1.5;
+
+/**
+ * How many consecutive daily cycles it must take to move a weight across the
+ * whole band — the number `weights.max_step` is derived from, rather than a
+ * step size chosen first and rationalised after.
+ *
+ * `DERIVED` from the soak window: 20 > the 14 days of #238, so no soak-length
+ * run can produce a weight trajectory decided by its first few trades. Stated
+ * as a count of cycles because that is the property spec story 4 is about
+ * ("no analyst swings wildly"); the step size is the arithmetic consequence.
+ */
+const PAPER_ANALYST_WEIGHT_TRAVERSE_CYCLES = 20;
+
+/**
+ * `FeedbackConfig` for the paper soak (#366) — Stage 6's starting values, in
+ * the same file and under the same convention as the other eight.
+ *
+ * ## What actually moves during a soak, and what does not
+ *
+ * Being precise about this matters more here than anywhere else in the file,
+ * because #366 exists to stop the Feedback Loop *looking* alive while learning
+ * nothing. With this block wired, the daily cycle runs, but only one of its
+ * three dials has a populated store behind it today:
+ *
+ * - **Analyst weights** — attribution's own dial. `runDailyCycle` steps only
+ *   analysts that already have an `analyst_weights` row ("seeding it is the
+ *   weight store's job, not a tuning cycle's", daily-cycle.ts), and nothing in
+ *   the repo writes that table yet. So the cycle reads real closed trades and
+ *   real debate rows (#364 gave `debate_log` a writer) and attributes them —
+ *   and then finds no row to step. Nothing reads the weights either: the
+ *   Debate Engine does not consult them, only the dashboard displays them.
+ *   Tracked as
+ *   [#371](https://github.com/dd-jp/samurai-trading-system/issues/371), the
+ *   same shape of follow-on #345 is for `metrics`. **Not fixed here** — a
+ *   seeder is a decision about which analysts exist and at what prior, which
+ *   is not a starting *value* this file can invent.
+ * - **Strategy params / risk thresholds** — moved only by `proposals`, and the
+ *   profile supplies none, because nothing in the repo produces one. See the
+ *   two empty records below for why they are empty rather than pre-declared.
+ *
+ * What #366 does buy immediately is that the timer runs, the cycle is
+ * exercised daily against real data, `computeMetrics`' absence is announced
+ * (#345), and every dial's bounds are now checked in and reviewable rather
+ * than absent. That is the difference between a stage that is wired and idle
+ * and a stage that does not exist.
+ */
+function buildFeedbackConfig(): FeedbackConfig {
+  /**
+   * `DERIVED` from `DEFAULT_FEEDBACK_INTERVAL_MS` (24h), which is why it is
+   * written as a multiple of it: two cadences, not "48 hours".
+   *
+   * Longer than the cadence on purpose, and this is the one value here whose
+   * failure mode is silent data loss. The cycle attributes `(now − window,
+   * now]` (daily-cycle.ts), and its timer is a plain `setInterval` started at
+   * process start — so a restart re-phases the schedule. With `window ===
+   * interval`, a process restarted 5h into a cycle leaves a 5h hole that no
+   * later cycle ever covers: those trades are never attributed to anyone. A
+   * two-cadence window absorbs a re-phasing of up to one full cadence, which
+   * is every single-restart case.
+   *
+   * It does NOT fix the neighbouring problem, and this value should not be
+   * read as claiming to: `setInterval` fires no cycle at t=0, so a process
+   * that restarts more often than once a day never completes a cycle at all,
+   * and no window length changes that. Widening the window is the wrong lever
+   * for it — an immediate-first-run or a persisted last-cycle timestamp is the
+   * right one, and neither exists yet.
+   *
+   * Overlap is safe, which is what makes the trade one-sided: attribution
+   * computes a TARGET from the window's mean credit and steps toward it
+   * (`impliedWeight`), it does not accumulate an increment — so re-reading
+   * yesterday's trades today is a two-day rolling average, not double-counting.
+   * The 14-day soak's low trade count (#238, `SMOKE_TEST_UNIVERSE` is BTC-USD
+   * alone) argues the same way: a 24h window would be empty on most days.
+   */
+  const attribution_window_ms = 2 * DEFAULT_FEEDBACK_INTERVAL_MS;
+
+  const weights: TunableDial = {
+    /**
+     * `DERIVED` from the band, and written as the derivation rather than as
+     * the 0.05 it evaluates to — the same reason `riskConfig`'s caps are
+     * fractions of `PAPER_ACCOUNT_EQUITY_ANCHOR` instead of rounded literals:
+     * re-scaling the band must not silently change how many cycles a traverse
+     * takes.
+     *
+     * A twentieth of the band, so crossing it end to end needs at least
+     * `PAPER_ANALYST_WEIGHT_TRAVERSE_CYCLES` consecutive cycles — one per day,
+     * so longer than the 14-day soak (#238) itself. That is the intended
+     * relationship, not a coincidence: spec story 4 asks that "no analyst
+     * swings wildly", and the soak must not be able to produce a weight
+     * trajectory dominated by its first few trades.
+     */
+    max_step:
+      (PAPER_ANALYST_WEIGHT_CEILING - PAPER_ANALYST_WEIGHT_FLOOR) /
+      PAPER_ANALYST_WEIGHT_TRAVERSE_CYCLES,
+    floor: PAPER_ANALYST_WEIGHT_FLOOR,
+    ceiling: PAPER_ANALYST_WEIGHT_CEILING,
+    /**
+     * `DERIVED` — descriptive only for a weight. `runDailyCycle` passes
+     * `gate_loosening: false` for weights (they "tune freely within bounds"),
+     * so this only labels the `Adjustment.direction` written to the audit log.
+     * `decrease` because less influence for a lens is the safer direction, the
+     * same reading `TunableDial`'s doc gives for `max_position_size`.
+     */
+    tighten_is: 'decrease',
+  };
+
+  return {
+    attribution_window_ms,
+    weights,
+    /**
+     * `UNSOURCED` — spec story 3 asks only for "small" shadow credit. 0.1 is
+     * read on `influence_score`'s own 0.0-1.0 scale (`computeInfluenceScore`,
+     * debate-engine/analyst-contribution.ts): the term is
+     * `shadow_credit * correctness` against an influence term of
+     * `influence_score * correctness`, so this says a quietly-correct analyst
+     * is credited as if it had held 0.1 of the debate's influence.
+     *
+     * Worth knowing before tuning it: `computeInfluenceScore` is a
+     * stance-CHANGE metric, and scores 0 for an analyst that never shifted
+     * position across rounds — the common case. So in practice this term, not
+     * the influence-weighted one, carries most of the attribution signal in a
+     * paper soak. It is upside-only (attribution.ts), so it cannot deepen a
+     * wrong analyst's penalty; the risk of raising it is that a quiet correct
+     * call counts for as much as a loud one.
+     */
+    shadow_credit: 0.1,
+    /**
+     * `UNSOURCED` — the `influence_score` at or below which an analyst counts
+     * as "quiet". 0.2 on the same 0.0-1.0 scale, i.e. an analyst that shifted
+     * stance in at most one round transition in five. Deliberately near the
+     * bottom: shadow credit exists so a quietly-correct analyst can climb
+     * back, and a generous ceiling would hand it to analysts that did sway the
+     * debate and are already paid for it by the influence term.
+     */
+    shadow_influence_ceiling: 0.2,
+    /**
+     * `DERIVED` — empty, and empty is a decision rather than an omission.
+     *
+     * A dial here is consulted for exactly one thing: routing a
+     * `TuningProposal`. Nothing in the repo produces one (the only proposer
+     * the spec names is #93's defensive auto-tighten, which is
+     * `computeMetrics`' own path and does not go through `proposals`), and
+     * this profile supplies none. `strategy_params` is also unwritten by any
+     * component, so a declared dial would find no current value to step from.
+     *
+     * Pre-declaring bounds for plausible-sounding names would be worse than
+     * useless: `runDailyCycle` throws on a proposal whose dial is undeclared
+     * — "an unbounded dial cannot be tuned" — and that fail-loud is the
+     * guardrail. Names invented here would silently satisfy it for a proposer
+     * that has not been written, against a keyspace no writer has agreed to.
+     */
+    strategy_params: {},
+    /**
+     * `DERIVED` — empty, for `strategy_params`' reason plus one of its own.
+     *
+     * `computeMetrics`' `autoTighten` iterates THIS record on a kill-threshold
+     * breach, so an empty one means a breach tightens nothing. That is not a
+     * hole this ticket opens: `metrics` is deliberately unset (#345), so
+     * `computeMetrics` never runs at all yet, and the `risk_thresholds` table
+     * has no writer either, so `autoTighten` would skip every declared dial as
+     * `current === undefined` regardless.
+     *
+     * It IS the thing to fix first when #345 lands. The blocker is a naming
+     * contract, not a number: the spec's own cross-spec note ("Consumers must
+     * read live from the store") records that the Risk Manager still reads
+     * static `RiskConfig`, so which `risk_thresholds` key corresponds to which
+     * `RiskConfig` field has never been fixed by any writer. Guessing that
+     * mapping here would put safety-limit bounds under keys nothing honours.
+     */
+    risk_thresholds: {},
+    kill_thresholds: {
+      /**
+       * `SPEC` — feedback-loop-spec.md story 13 states the line literally
+       * ("PBO > 0.05"), CONTEXT.md's overfitting note repeats it ("kill if PBO
+       * > 0.05"), and `PboVerdict`'s own reject line in
+       * cost-model-backtest/validation-types.ts is the same 0.05. This is FL's
+       * copy of a number three places already agree on.
+       */
+      max_pbo: 0.05,
+      /** `SPEC` — feedback-loop-spec.md story 13: "OOS/paper Sharpe < 0.5". */
+      min_oos_sharpe: 0.5,
+      /**
+       * `SPEC`-adjacent — story 13 says "DSR insignificant" and leaves the
+       * significance level to config. The Deflated Sharpe is a probability
+       * that the observed Sharpe survives multiple-testing deflation, so
+       * "insignificant" is the complement of a confidence level: 0.95 is the
+       * conventional 5% one, and matches how DSR is reported in the
+       * literature the validation library follows.
+       */
+      min_deflated_sharpe: 0.95,
+      /**
+       * `UNSOURCED` — story 13 names "live-vs-backtest divergence" without a
+       * fraction. A FRACTIONAL DROP, not a Sharpe difference:
+       * `liveBacktestDivergence` returns `(reference − live) / reference`
+       * (feedback-loop/metrics.ts), so 0.5 breaches when live Sharpe has
+       * halved against the frozen backtest reference. Halving is a defensible
+       * reading of "the edge may be gone" and is well outside the sampling
+       * noise of a short window, which a tighter line would sit inside.
+       *
+       * Inert for now regardless, and loudly so: the check needs
+       * `metrics.backtest_reference_sharpe`, which arrives with #345. Until
+       * then `computeMetrics` does not run and the orchestrator says so at
+       * startup.
+       */
+      max_live_backtest_divergence: 0.5,
+    },
+  };
+}
+
+/**
+ * The eight required config objects, plus the optional ninth seam (#366). Not
+ * exported directly — callers go through `paperStartingProfile(mode)` so the
+ * live-mode refusal cannot be bypassed by importing the values, and so each
+ * call gets its own copy.
  */
 function buildProfileConfigs(): Pick<
   ProductionConfig,
@@ -134,6 +378,7 @@ function buildProfileConfigs(): Pick<
   | 'breakerConfig'
   | 'costConfig'
   | 'ciiConsumerConfig'
+  | 'feedback'
 > {
   const traderConfig: TraderConfig = {
     // SPEC — `DEFAULT_TRADER_CONFIG` (src/trader/types.ts) is the one set of
@@ -465,6 +710,17 @@ function buildProfileConfigs(): Pick<
     breakerConfig,
     costConfig,
     ciiConsumerConfig,
+    /**
+     * The ninth seam (#366), and the only optional one here.
+     *
+     * Values only, exactly like the other eight: no `approvals` transport and
+     * no `intervalMs`, so the composition root's `SAMURAI_ALERTS`-selected
+     * channel and its 24h default apply. `metrics` is deliberately absent —
+     * `computeMetrics` needs a `DailyMetricsSource` that does not exist yet
+     * (#345), and the orchestrator warns about that at startup rather than
+     * letting a stub make "never checked" look like "did not breach".
+     */
+    feedback: { config: buildFeedbackConfig() },
   };
 }
 
@@ -501,6 +757,7 @@ export function paperStartingProfile(
     | 'breakerConfig'
     | 'costConfig'
     | 'ciiConsumerConfig'
+    | 'feedback'
   > {
   if (mode === 'live') {
     throw new Error(

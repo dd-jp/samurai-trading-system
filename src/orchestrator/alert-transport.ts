@@ -106,6 +106,7 @@ import type { SharedStore as SqliteHandle } from '../shared/store/index.js';
 import { TelegramBotApiClient } from '../verdict/index.js';
 import { TradeChannelBreachAlert } from './breach-alert-channel.js';
 import { TradeChannelHeartbeat } from './heartbeat-channel.js';
+import { TradeChannelLoosenApproval } from './loosen-approval-channel.js';
 import { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
 import type { ProductionConfig } from './production.js';
 import { SqliteAuditLog } from './sqlite-audit-log.js';
@@ -120,18 +121,27 @@ export type AlertsMode = (typeof ALERTS_MODES)[number];
 
 /**
  * The `ProductionConfig` fields this module owns — the outbound operator
- * escalations, and nothing else. `approvals` is deliberately absent: it is an
- * inbound round trip, not an alert, and wiring it is #275's remaining half.
+ * escalations, and nothing else. Verdict's `approvals` is deliberately absent:
+ * it is an inbound round trip (`requestApproval` returns an *answer*), not an
+ * alert, and wiring it is #275's remaining half.
  *
  * `breachAlerts` joined the list in #327: a kill-threshold breach is the
  * fourth outbound escalation, and it had the same shape of hole as the
  * original three — a real channel type with no transport selected for it.
+ *
+ * `loosenApprovals` joined in #366, and belongs here despite the name for the
+ * reason `approvals` does not: `LoosenApprovalChannel.requestLoosenApproval`
+ * returns `void`. It is a one-way push telling a human that the Feedback Loop
+ * refused to relax a risk threshold on its own — no answer is collected, no
+ * poll is started, and nothing this process does depends on a reply. That makes
+ * it the fifth outbound escalation, not a second HITL round trip.
  */
 export const ALERT_CHANNEL_FIELDS = [
   'heartbeatChannel',
   'orphanAlerts',
   'unpricedFillAlerts',
   'breachAlerts',
+  'loosenApprovals',
 ] as const satisfies readonly (keyof ProductionConfig)[];
 
 /**
@@ -216,8 +226,9 @@ export function buildAlertChannels(deps: {
       level: 'warn',
       message:
         `${ENV_VAR}=log-only — every operator alert (heartbeat, orphaned go verdict, stuck ` +
-        'unpriced fill, kill-threshold breach) is a log line, and nothing will reach a phone. ' +
-        `Correct for an ATTENDED run only; an unattended soak (#238) needs ${ENV_VAR}=telegram.`,
+        'unpriced fill, kill-threshold breach, proposed risk-threshold loosening) is a log ' +
+        'line, and nothing will reach a phone. Correct for an ATTENDED run only; an unattended ' +
+        `soak (#238) needs ${ENV_VAR}=telegram.`,
       payload: { alerts: 'log-only' },
     });
     return {};
@@ -267,10 +278,12 @@ export function buildAlertChannels(deps: {
     stage: 'orchestrator',
     level: 'info',
     message:
-      `${ENV_VAR}=telegram — orphaned go verdicts, stuck unpriced fills and kill-threshold ` +
-      `breaches will be pushed to the escalation chat (TELEGRAM_CHAT_ID). ${heartbeatClause} ` +
-      'Keep the escalation chat unmuted. No approval poll is started here; HITL approvals ' +
-      'still resolve through ProductionConfig.approvals (#275).',
+      `${ENV_VAR}=telegram — orphaned go verdicts, stuck unpriced fills, kill-threshold ` +
+      'breaches and proposed risk-threshold loosenings will be pushed to the escalation chat ' +
+      `(TELEGRAM_CHAT_ID). ${heartbeatClause} ` +
+      'Keep the escalation chat unmuted. No approval poll is started here: HITL approvals ' +
+      'still resolve through ProductionConfig.approvals (#275), and a loosening request is ' +
+      'outbound-only — replying to it approves nothing, and the threshold stays put (#366).',
     // Never the token, and never either chat id: none is a secret worth a log
     // line, and the token is a bearer credential for the entire bot. The
     // heartbeat field is the machine-readable form of the clause above — two
@@ -293,6 +306,12 @@ export function buildAlertChannels(deps: {
       : {}),
     ...(deps.injected.breachAlerts === undefined
       ? { breachAlerts: new TradeChannelBreachAlert(telegram, chatId, deps.logger) }
+      : {}),
+    // #366. The escalation chat, not the heartbeat chat: a proposed loosening
+    // is a decision waiting on the operator, and the whole point of #342's
+    // split is that decisions do not share a destination with the beat.
+    ...(deps.injected.loosenApprovals === undefined
+      ? { loosenApprovals: new TradeChannelLoosenApproval(telegram, chatId, deps.logger) }
       : {}),
   };
 }
