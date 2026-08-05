@@ -16,10 +16,11 @@ import {
   type RateLimiterConfig,
 } from '../../debate-engine/index.js';
 import type { AssetClass, Clock, LogEntry, Logger } from '../../shared/index.js';
-import { SimulatedClock } from '../../shared/index.js';
+import { DEFAULT_VENUE_PACING, SimulatedClock } from '../../shared/index.js';
 import { openSharedStore, type SharedStore } from '../../shared/store/index.js';
 import { paperStartingProfile } from '../paper-profile.js';
 import { buildProductionComponents, type ProductionConfig } from '../production.js';
+import { DEFAULT_UNIVERSE } from '../scheduler.js';
 import { runTickPlan } from '../tick-loop.js';
 import { SequentialTickRunner } from '../tick-runner.js';
 import type { AuditLog, CurrentTickStore, TickPlan, TickSteps } from '../types.js';
@@ -391,6 +392,30 @@ describe('the composition root paces the broker from ops config (#299)', () => {
   });
 });
 
+/**
+ * #299's burst value has no published Alpaca figure behind it (see
+ * `DEFAULT_VENUE_PACING.alpaca`), so it is derived from OUR workload instead —
+ * and a derivation stated only in a comment is the drift shape this repo keeps
+ * hitting. This makes it structural: widen the universe again and this fails
+ * rather than silently under-sizing the burst.
+ */
+describe("Alpaca's burst covers one fill-poll sweep of the configured universe (#299)", () => {
+  it('has capacity for a getOrder per open bracket plus a concurrent submit', () => {
+    // `AlpacaBrokerAdapter.fetchNewFills` issues exactly one `getOrder` per
+    // open bracket, each through the token bucket; worst case is one bracket
+    // per instrument, with a `submitBracket` from the tick path alongside.
+    const worstCaseSweep = DEFAULT_UNIVERSE.length + 1;
+
+    expect(DEFAULT_VENUE_PACING.alpaca.capacity).toBeGreaterThanOrEqual(worstCaseSweep);
+  });
+
+  it('keeps the sustained rate under the documented account ceiling', () => {
+    // The axis that actually carries ban risk, and the one with a verified
+    // figure behind it (200/min = 3.33/s).
+    expect(DEFAULT_VENUE_PACING.alpaca.refillPerSecond).toBeLessThanOrEqual(200 / 60);
+  });
+});
+
 describe('paperStartingProfile supplies the budget (#388)', () => {
   it('carries a per-asset-class budget with the call budget tied to the worst case', () => {
     const { rateLimiterConfig } = paperStartingProfile('paper');
@@ -420,6 +445,24 @@ describe('paperStartingProfile supplies the budget (#388)', () => {
     // #385 measured ~1.33 crypto debates/min at peak and ~0.73 stock/min.
     expect(perMinute(rateLimiterConfig.perAssetClass?.crypto)).toBeGreaterThan(1.33 * 2);
     expect(perMinute(rateLimiterConfig.perAssetClass?.stocks)).toBeGreaterThan(1.6 * 1.5);
+  });
+
+  /**
+   * `default` governs any `AssetClass` with no `perAssetClass` entry, and the
+   * rule is that an unrecognised class is the MOST constrained thing in the
+   * system. Derived with `Math.min` in the profile, pinned here — a
+   * hand-written `default` would silently invert this the first time someone
+   * tuned one class's budget upward (PR #390 review).
+   */
+  it('keeps `default` at or below every per-class budget', () => {
+    const { rateLimiterConfig } = paperStartingProfile('paper');
+    const perClass = Object.values(rateLimiterConfig.perAssetClass ?? {});
+
+    expect(perClass.length).toBeGreaterThan(0);
+    for (const entry of perClass) {
+      expect(rateLimiterConfig.default.maxDebates).toBeLessThanOrEqual(entry.maxDebates);
+      expect(rateLimiterConfig.default.maxLlmCalls).toBeLessThanOrEqual(entry.maxLlmCalls);
+    }
   });
 
   it('still refuses to be a live profile', () => {

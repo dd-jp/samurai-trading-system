@@ -555,6 +555,14 @@ function llmBudget(maxDebates: number): RateLimitConfig {
 const LLM_BUDGET_WINDOW_MS = 300_000;
 
 /**
+ * Debates per window, per asset class. Named because `rateLimiterConfig`'s
+ * `default` is computed from them (`Math.min`) rather than restating one of
+ * them — see that field's comment. Both are ~3x #385's measured cadence.
+ */
+const CRYPTO_MAX_DEBATES_PER_WINDOW = 20;
+const STOCKS_MAX_DEBATES_PER_WINDOW = 15;
+
+/**
  * The eight required config objects, plus the optional ninth seam (#366). Not
  * exported directly — callers go through `paperStartingProfile(mode)` so the
  * live-mode refusal cannot be bypassed by importing the values, and so each
@@ -1149,17 +1157,26 @@ function buildProfileConfigs(): Pick<
      * `maxDebates * 10 calls * ~$0.004/call`, i.e. under $1 per 5-minute
      * window per class in the worst case, against ~$45/day measured.
      *
-     * **`default` — UNSOURCED.** No third asset class exists
-     * (`AssetClass` is `crypto | stocks`), so this is unreachable today. It
-     * mirrors the tighter of the two rather than being generous, on the
-     * principle that an unrecognised asset class should be the most
-     * constrained thing in the system, not the least.
+     * **`default` — DERIVED, not chosen.** No third asset class exists
+     * (`AssetClass` is `crypto | stocks`), so this is unreachable today. The
+     * rule it encodes is that an unrecognised asset class should be the most
+     * constrained thing in the system, not the least — and `RateLimiter`'s
+     * `configFor` falls back to it for any class with no entry, so it really
+     * would govern a new one.
+     *
+     * COMPUTED with `Math.min` rather than written out and asserted to match
+     * (PR #390 review). "This mirrors the tighter class" is precisely the kind
+     * of invariant that stops being true the moment someone tunes one budget:
+     * raise `STOCKS_MAX_DEBATES` above crypto's and a hand-written `default`
+     * silently becomes the LOOSEST entry — the exact inversion of the rule it
+     * claims to follow, with the comment still swearing otherwise. Deriving it
+     * makes the claim structural.
      */
     rateLimiterConfig: {
-      default: llmBudget(15),
+      default: llmBudget(Math.min(CRYPTO_MAX_DEBATES_PER_WINDOW, STOCKS_MAX_DEBATES_PER_WINDOW)),
       perAssetClass: {
-        crypto: llmBudget(20),
-        stocks: llmBudget(15),
+        crypto: llmBudget(CRYPTO_MAX_DEBATES_PER_WINDOW),
+        stocks: llmBudget(STOCKS_MAX_DEBATES_PER_WINDOW),
       },
     },
     /**

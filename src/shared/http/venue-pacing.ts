@@ -86,21 +86,38 @@ export const VENUE_DOCUMENTED_CEILING_PER_SECOND: Partial<Record<VenueKey, numbe
  */
 export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
   /**
-   * CEILING VERIFIED (200 req/min = 3.33/s, cited above), OPERATING RATE
-   * DERIVED — unchanged from the value `production.ts` already wired, now with
-   * its arithmetic written down instead of assumed.
+   * The two numbers here are set on DIFFERENT AXES for different reasons and
+   * have different evidence behind them. Stating that split was a PR #390
+   * review finding: the old comment cited Alpaca's sustained figure and let it
+   * read as if it justified the burst too, which it does not.
    *
-   * `refillPerSecond: 1.5` is 45% of the documented account ceiling, not 100%,
+   * **`refillPerSecond: 1.5` — SUSTAINED, CEILING VERIFIED.** 45% of the
+   * documented 200 req/min = 3.33/s account ceiling (cited above), not 100%,
    * and the missing 55% is not caution — it is the market-data client, which
-   * shares the same per-account 200/min and is NOT paced by any bucket today
-   * (see the module doc: the ceiling is per account, and #386 is adding a
-   * bounded widen-and-retry on that unpaced path). Sizing the broker at the
-   * ceiling would mean the first data-side retry burst earns the 429 for the
-   * order path.
+   * shares the same per-account budget and is NOT paced by any bucket today
+   * (#391). Sizing the broker at the ceiling would mean the first data-side
+   * retry burst earns the 429 for the order path. Sustained 1.5/s = 90/min.
    *
-   * `capacity: 10` is the burst a single trade actually needs back-to-back: a
-   * bracket submit plus its fill poll, with headroom for a reconcile sweep
-   * landing on the same instant. Sustained 1.5/s = 90/min.
+   * **`capacity: 10` — BURST, and NO PUBLISHED ALPACA BURST LIMIT COULD BE
+   * ESTABLISHED.** Alpaca's own support page states only "200 requests per
+   * minute, per account" with no burst qualifier; secondary write-ups describe
+   * that as a rolling 60-second window (under which a burst of 10 is
+   * immaterial — 10 of 200), but that is not Alpaca's wording and is not
+   * relied on here. So, per this module's own honesty rule, the number is
+   * DERIVED FROM OUR WORKLOAD rather than from a venue figure:
+   * `AlpacaBrokerAdapter.fetchNewFills` issues one `getOrder` per open bracket
+   * through this bucket, and the ADR-0001 universe is 6 instruments, so one
+   * fill-poll sweep is up to 6 acquisitions, plus a concurrent `submitBracket`
+   * from the tick path = 7. `10` is the smallest round number covering a full
+   * sweep with headroom; `5` would pace a single ordinary sweep of the
+   * CURRENT universe. Pinned against the universe size by a test, so widening
+   * the universe again cannot silently outgrow the burst.
+   *
+   * Why an unverified burst is an acceptable risk where an unverified
+   * SUSTAINED rate would not be: exceeding a burst allowance returns 429,
+   * which `withRetry` already handles and the bucket then paces; a BAN comes
+   * from sustained abuse, and on that axis this value is deliberately at 45%
+   * of a verified ceiling.
    *
    * Alpaca's published figure does not distinguish paper from live, and the
    * paper host is the one the soak uses; nothing was found that documents a
