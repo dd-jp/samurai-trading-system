@@ -43,8 +43,13 @@ export function computeMetrics(returns: ReturnSeries, trades: TradeSeries): Metr
   const downside = downsideDeviation(r);
   const max_drawdown = maxDrawdown(r);
 
+  // The DSR inputs (#406). `per_period_sharpe` is the statistic
+  // `deflatedSharpe()` is defined against; `sharpe` below is it times
+  // `annualization`, so the two can never disagree about the same sample.
+  const per_period_sharpe = mean / stdev;
+
   return {
-    sharpe: (mean / stdev) * annualization,
+    sharpe: per_period_sharpe * annualization,
     sortino: downside === 0 ? Number.POSITIVE_INFINITY : (mean / downside) * annualization,
     calmar:
       max_drawdown === 0
@@ -57,6 +62,9 @@ export function computeMetrics(returns: ReturnSeries, trades: TradeSeries): Metr
     kurtosis: excessKurtosis(r),
     turnover: turnover(trades),
     exposure: exposure(trades),
+    per_period_sharpe,
+    annualization_factor: annualization,
+    observations: r.length,
   };
 }
 

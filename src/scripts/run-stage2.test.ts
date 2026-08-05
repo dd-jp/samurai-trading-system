@@ -67,10 +67,21 @@ describe('runStage2', () => {
     // PBO is attempted per asset class present (2 outcomes for stocks+crypto).
     expect(verdict.pbo).toHaveLength(2);
 
-    // DSR is always a typed refusal today (see stage2-verdict.ts module doc).
-    expect(verdict.dsr_note.error).toBe(
-      'dsr_requires_per_period_sharpe_not_exposed_by_metrics_suite',
-    );
+    // DSR is attempted per asset class present, and — since #406 — actually
+    // computed. This is the assertion that catches the seam existing but
+    // nothing calling it: `runStage2` must opt into the CSCV pass and hand the
+    // per-period Sharpe through, or these fall back to typed refusals.
+    expect(verdict.dsr).toHaveLength(2);
+    for (const outcome of verdict.dsr) {
+      expect(
+        'result' in outcome ? 'computed' : `refused: ${outcome.error} — ${outcome.detail}`,
+      ).toBe('computed');
+    }
+    for (const outcome of verdict.pbo) {
+      expect(
+        'result' in outcome ? 'computed' : `refused: ${outcome.error} — ${outcome.detail}`,
+      ).toBe('computed');
+    }
 
     // The full report was printed: per-config metrics, kill-line, MinBTL, PBO,
     // DSR, and the final pass/kill line.

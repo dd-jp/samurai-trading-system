@@ -266,6 +266,13 @@ const DAILY_METRICS: MetricsSuite = {
   kurtosis: 2.8,
   turnover: 3.6,
   exposure: 0.42,
+  // The DSR inputs (#406). Consistent with `sharpe` above rather than
+  // arbitrary: 0.1146 x 15.87 = 1.82, and 252 observations is a year of daily
+  // bars — a fixture that contradicted its own Sharpe would be a confusing
+  // thing to develop the dashboard against.
+  per_period_sharpe: 0.1146,
+  annualization_factor: 15.87,
+  observations: 252,
 };
 
 /**

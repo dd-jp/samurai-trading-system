@@ -200,6 +200,9 @@ const ZERO_METRICS: Omit<MetricsSuite, 'profit_factor' | 'expectancy'> = {
   kurtosis: 0,
   turnover: 0,
   exposure: 0,
+  per_period_sharpe: 0,
+  annualization_factor: 0,
+  observations: 0,
 };
 
 export class SqliteQueryStore implements DashboardQueryStore {

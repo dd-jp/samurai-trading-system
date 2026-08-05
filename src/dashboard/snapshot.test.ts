@@ -31,6 +31,9 @@ const METRICS: MetricsSuite = {
   kurtosis: 3.0,
   turnover: 2.5,
   exposure: 0.4,
+  per_period_sharpe: 0.0945,
+  annualization_factor: 15.87,
+  observations: 252,
 };
 
 function makePosition(overrides: Partial<OpenPosition> = {}): OpenPosition {

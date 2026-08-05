@@ -85,6 +85,11 @@ factor is exposed, so it cannot be inverted. DSR has therefore never been comput
 anchored, growing-train folds. Not an off-by-one — anchored walk-forward is not a CSCV partition at
 all. Two independent statistical gates, both blocked by a design mismatch rather than a bug.
 
+**Resolved 2026-08-05 (#406, I2 below).** Both seams were supplied at the source rather than worked
+around. The lesson stands and is the reason this entry is kept: a seam whose consumer is never
+written against it can be fully tested and still be unusable — `deflatedSharpe()` and `pbo()` were
+both 117/117 green while neither could be called.
+
 ### P8 — The trial budget was fixed before the sample size was known
 
 **Symptom:** the 12-config grid was sized on an assumed 5-year sample (MinBTL cap ~45). The real
@@ -141,6 +146,27 @@ because the numbers were checked against the floor by hand after the run.
 the real model. It is a wrong *description*, which is worse in a document meant to justify a
 purchase decision.
 
+### P13 — A shared store used as a per-asset-class timeline *([#420](../../issues/420))*
+
+**Symptom:** the moment `MetricsSuite.observations` was added (#406) and printed, every row of the
+Stage 2 report — stocks and crypto alike — read **1,229 observations** over the same 2-year window.
+Stocks trade ~504 days in that window, crypto ~730, and 504 + 730 ≈ 1,229.
+
+`run-stage2.ts` passes `timeline: ctx.store` to every `ReplayDriver`, and
+`Stage2HistoricalStore.barTimestamps` is `SELECT DISTINCT close_time FROM stage2_bars` with no
+symbol filter. The `universe` *is* correctly scoped per asset class, so only the right instruments
+trade — but the return series is built over the union of both classes' bars, padded with structural
+zeros wherever the other class had a bar. Per-period Sharpe is scaled by roughly `sqrt(n_old/n_new)`
+(~0.64× for stocks), and `periodsPerYear` no longer describes the series it annualizes.
+
+**Generalises to:** an object that satisfies several ports at once (`barSource`, `timeline`,
+`registry` are all `ctx.store` here) being handed to a consumer that needed only a *slice* of it.
+Nothing type-checks the scope, because the type is right — it is the *contents* that are too wide.
+
+**Same family as P2 and P12,** and caught the same way: not by review, but by a number finally
+appearing in the output. Two asset classes had reported an identical sample length for as long as
+the report existed.
+
 ---
 
 ## Improvements, in priority order
@@ -152,11 +178,19 @@ running 12 trials the sample cannot support. Today the cap is computed at the en
 verdict field, after the work is done. This is the single binding constraint on Stage 2 and the
 cheapest thing left to fix.
 
-### I2 — Build the PBO and DSR seams *(blocking three kill-lines — [#406](../../issues/406))*
+### I2 — Build the PBO and DSR seams *(DONE 2026-08-05 — [#406](../../issues/406))*
 
 Expose the raw per-period Sharpe (or the Lo annualization factor) on `MetricsSuite`/`EvalReport`,
 and add a CSCV-shaped partitioning pass alongside walk-forward. Blocks #384 and #375. Needed
 regardless of any strategy decision.
+
+**Done.** `MetricsSuite` now carries `per_period_sharpe` / `annualization_factor` /
+`observations`, and `generateSplits` gained a purged 6-fold `cscv` scheme. Both statistics
+computed on real data for the first time, and both reject: PBO 0.65 (stocks) / 0.35 (crypto)
+against a 0.05 line, DSR 0.254 / 0.519 against 0.95. See
+[12-stage2-pbo-dsr-first-computation-2026-08-05.md](12-stage2-pbo-dsr-first-computation-2026-08-05.md)
+— the finding is that the 12-of-24 pass rate does not survive selection accounting, which makes
+I1 necessary rather than sufficient.
 
 ### I3 — Feed real spread into `MarketState.spread` and retire the fallback
 

@@ -154,13 +154,15 @@ export type {
   ReplayRunResult,
 } from './replay-driver.js';
 export { ReplayDriver } from './replay-driver.js';
-export type { SplitOptions } from './splits.js';
+export type { SplitOptions, SplitScheme } from './splits.js';
 export { generateSplits } from './splits.js';
 export { SqliteConfigTrialLog } from './sqlite-config-trial-log.js';
 export type { PolygonAggregate, PolygonClient } from './stage2-historical-store.js';
 export { Stage2HistoricalStore } from './stage2-historical-store.js';
 export type {
   ConfigKillLineCheck,
+  DsrOutcome,
+  DsrResult,
   NotComputableReason,
   PboOutcome,
   Stage2Verdict,
@@ -169,6 +171,7 @@ export { KILL_LINE, killLineChecks, renderStage2Verdict } from './stage2-verdict
 export type { SeriesOptions } from './trade-derivation.js';
 export { assertCostModelPriced, toReturnSeries, toTradeSeries } from './trade-derivation.js';
 export type {
+  CscvOutcome,
   ReplayRunner,
   TrialGridAssetClass,
   TrialGridEntry,

@@ -42,6 +42,11 @@ describe('computeMetrics', () => {
         'skew',
         'sortino',
         'turnover',
+        // The DSR inputs (#406) — part of the same contract: they describe the
+        // sample `sharpe` was computed on, so they travel with it.
+        'per_period_sharpe',
+        'annualization_factor',
+        'observations',
       ].sort(),
     );
 
@@ -49,6 +54,48 @@ describe('computeMetrics', () => {
       expect(value, `${field} must be a number`).toBeTypeOf('number');
       expect(Number.isNaN(value), `${field} must not be NaN`).toBe(false);
     }
+  });
+
+  describe('the DSR inputs (#406)', () => {
+    /**
+     * The three fields are redundant with `sharpe` by construction, which is
+     * what makes them safe to consume — and what makes drift between them
+     * silent. Pinning the identity is the only thing that keeps them honest.
+     */
+    it('reports a per-period Sharpe that reproduces the annualized one exactly', () => {
+      const metrics = computeMetrics(series(FLAT_ISH), trades([trade()]));
+
+      expect(metrics.per_period_sharpe * metrics.annualization_factor).toBeCloseTo(
+        metrics.sharpe,
+        12,
+      );
+    });
+
+    it('reports a per-period Sharpe that is NOT the annualized one — the bug this seam exists to prevent', () => {
+      const metrics = computeMetrics(series(FLAT_ISH), trades([trade()]));
+
+      // Handing `sharpe` to deflatedSharpe() was the pre-#406 trap: it inflates
+      // the statistic by the annualization factor and silently flatters DSR.
+      expect(metrics.annualization_factor).toBeGreaterThan(1);
+      expect(Math.abs(metrics.sharpe)).toBeGreaterThan(Math.abs(metrics.per_period_sharpe));
+    });
+
+    it('counts observations from the scored sample, not from the trades or the window', () => {
+      expect(computeMetrics(series(FLAT_ISH), trades([trade()])).observations).toBe(
+        FLAT_ISH.length,
+      );
+      expect(computeMetrics(series(FLAT_ISH.slice(0, 5)), trades([trade()])).observations).toBe(5);
+    });
+
+    it('is unaffected by periodsPerYear in the per-period Sharpe, and affected in the factor', () => {
+      // The annualization base is the one thing that separates the two, so the
+      // stock/crypto split (252 vs 365) must move the factor and nothing else.
+      const stocks = computeMetrics(series(FLAT_ISH, 252), trades([trade()]));
+      const crypto = computeMetrics(series(FLAT_ISH, 365), trades([trade()]));
+
+      expect(crypto.per_period_sharpe).toBeCloseTo(stocks.per_period_sharpe, 12);
+      expect(crypto.annualization_factor).not.toBeCloseTo(stocks.annualization_factor, 6);
+    });
   });
 
   describe('sharpe — Lo (2002) annualization', () => {
