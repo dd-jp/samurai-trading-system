@@ -76,8 +76,21 @@ describe('RateLimiter refuses a misconfigured budget at construction', () => {
    */
   it('refuses windowMs: 0, which would silently disable enforcement', () => {
     expect(() => new RateLimiter(clock, makeConfig({ windowMs: 0 }))).toThrow(
-      /default\.windowMs must be a finite number/,
+      /default\.windowMs must be a finite positive number/,
     );
+  });
+
+  it('refuses a negative windowMs too', () => {
+    expect(() => new RateLimiter(clock, makeConfig({ windowMs: -1 }))).toThrow(
+      /default\.windowMs must be a finite positive number/,
+    );
+  });
+
+  it('refuses a negative counter, while still allowing zero', () => {
+    expect(() => new RateLimiter(clock, makeConfig({ maxLlmCalls: -1 }))).toThrow(
+      /default\.maxLlmCalls must be a finite non-negative number/,
+    );
+    expect(() => new RateLimiter(clock, makeConfig({ maxLlmCalls: 0 }))).not.toThrow();
   });
 
   it('accepts a budget of zero debates — "admit nothing" is a valid setting', () => {

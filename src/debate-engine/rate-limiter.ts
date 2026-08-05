@@ -74,18 +74,31 @@ function assertBudget(budget: RateLimitConfig | undefined, where: string): void 
         'would throw on the first debate of that class rather than at startup.',
     );
   }
-  const check = (name: keyof RateLimitConfig, min: number) => {
+  /**
+   * `bound: 'positive'` means strictly greater than zero; `'non-negative'`
+   * allows zero.
+   *
+   * Spelled as a named bound rather than as `value < Number.MIN_VALUE` for
+   * strictness, which is what this did first. That expression is CORRECT — 0 is
+   * less than 5e-324, so zero was always rejected — but a reviewer read it as
+   * admitting zero and filed it as a bug (PR #390). Code whose correctness
+   * hinges on recognising the smallest denormal double is code that will be
+   * misread again, so the intent is now stated instead of encoded.
+   */
+  const check = (name: keyof RateLimitConfig, bound: 'positive' | 'non-negative') => {
     const value = budget[name];
-    if (typeof value !== 'number' || !Number.isFinite(value) || value < min) {
+    const belowBound = bound === 'positive' ? !(value > 0) : !(value >= 0);
+    if (typeof value !== 'number' || !Number.isFinite(value) || belowBound) {
       throw new Error(
-        `RateLimiter: config.${where}.${name} must be a finite number >= ${min}; got ${String(value)}.`,
+        `RateLimiter: config.${where}.${name} must be a finite ${bound} number; got ${String(value)}.`,
       );
     }
   };
   // Strictly positive — see the doc above for why 0 disables enforcement.
-  check('windowMs', Number.MIN_VALUE);
-  check('maxLlmCalls', 0);
-  check('maxDebates', 0);
+  check('windowMs', 'positive');
+  // Zero is a legitimate "admit nothing" setting for both counters.
+  check('maxLlmCalls', 'non-negative');
+  check('maxDebates', 'non-negative');
 }
 
 /**
