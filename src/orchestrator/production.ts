@@ -381,7 +381,12 @@ export interface ProductionConfig {
    * has a reading without one more required seam.
    */
   volatilityIndicator?: IndicatorSpec;
-  /** Session calendar for stock gating (scheduler + Verdict gate). */
+  /**
+   * Session calendar for stock gating (scheduler + Verdict gate) — AND, since
+   * #332, the boundary the stocks daily-PnL figure resets on via
+   * `sessionStart`. One calendar answers both by design (#331): an override is
+   * authoritative for when stock sessions begin, not merely for when to tick.
+   */
   tradingCalendar?: TradingCalendar;
   /** Sticky breaker rows recovered from a prior process, if any. */
   initialBreakerState?: readonly PersistedBreakerState[];
@@ -808,6 +813,24 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
         // ET close. `tradingCalendar` is the equity one (it gates market-hours
         // scheduling), so only it is overridable here — a crypto session has no
         // holidays or half-days for a config to express.
+        //
+        // SHARING `tradingCalendar` WITH THE SCHEDULER IS DELIBERATE, not an
+        // oversight, and it is why this is typed `TradingCalendar` rather than
+        // narrowed to `UsEquityRegularHoursCalendar`. #331 put `sessionStart` on
+        // the port precisely so the accounting boundary and the session gating
+        // move together: "the boundary lives on the calendar rather than being
+        // duplicated in each consumer" (trading-calendar.ts). The default is
+        // weekday-only and reports a session start for holiday Mondays that
+        // never traded; when the real holiday/session table lands it is injected
+        // HERE, through this same field, and the daily-PnL boundary must follow
+        // it. Narrowing the type would pin this consumer to the placeholder
+        // implementation and guarantee the two silently disagree on every
+        // holiday — the divergence the port exists to prevent.
+        //
+        // The cost is that an override is authoritative for BOTH. That is the
+        // contract: `sessionStart` is a required member, so a substitute cannot
+        // omit it by accident, and any calendar answering it is by definition
+        // asserting when this account's stock sessions begin.
         calendars: { crypto: new AlwaysOpenCalendar(), stocks: tradingCalendar },
         mode: config.mode,
         // Composition happens at startup, so "now" here IS the process start.

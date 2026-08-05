@@ -89,11 +89,27 @@ function makeTradeReader(trades: ClosedTrade[]): ClosedTradeReader {
   return { getClosedTradesBetween: vi.fn().mockReturnValue(trades) };
 }
 
-/** Writes a `closed_trades` row directly — the realized numerator is read in SQL. */
+/**
+ * Writes a `closed_trades` row directly — the realized numerator is read in SQL.
+ *
+ * `closedAt` is a `Date`, not a string, and normalized through `toISOString()`
+ * here rather than trusted from the caller. `closed_at` is a TEXT column and the
+ * realized-PnL filter is a lexicographic `closed_at > open_at`, which is only
+ * chronological when both sides are written in the SAME fixed-width form. A `Z`
+ * suffix alone does not guarantee that: `'2026-08-01T10:00:00Z'` and
+ * `'2026-08-01T10:00:00.000Z'` are the same instant, yet the second sorts BEFORE
+ * the first (they diverge at `.` vs `Z`, and `.` is 0x2E against 0x5A). Taking a
+ * `Date` makes the mis-formatted fixture unrepresentable instead of relying on
+ * every future caller to hand-write the millisecond form.
+ *
+ * Production is already consistent: `SqliteExecutionStore.writeClosedTrade` and
+ * `SqliteSessionEquityStore.put` both go through `toISOString()`.
+ */
 function insertClosedTrade(
   db: SharedStore,
-  args: { key: string; assetClass: 'crypto' | 'stocks'; pnl: number; closedAt: string },
+  args: { key: string; assetClass: 'crypto' | 'stocks'; pnl: number; closedAt: Date },
 ): void {
+  const closedAt = args.closedAt.toISOString();
   db.prepare(
     `INSERT INTO closed_trades (
        idempotency_key, debate_id, instrument, asset_class, side,
@@ -111,8 +127,8 @@ function insertClosedTrade(
     10,
     args.pnl,
     0,
-    args.closedAt,
-    args.closedAt,
+    closedAt,
+    closedAt,
     'stop',
   );
 }
@@ -225,31 +241,58 @@ describe('SqliteSessionEquityStore', () => {
         key: 'before',
         assetClass: 'crypto',
         pnl: -999,
-        closedAt: '2026-07-31T23:00:00.000Z',
+        closedAt: new Date('2026-07-31T23:00:00.000Z'),
       });
       insertClosedTrade(db, {
         key: 'at-boundary',
         assetClass: 'crypto',
         pnl: -111,
-        closedAt: CRYPTO_OPEN,
+        closedAt: new Date(CRYPTO_OPEN),
       });
       insertClosedTrade(db, {
         key: 'after',
         assetClass: 'crypto',
         pnl: -50,
-        closedAt: '2026-08-01T06:00:00.000Z',
+        closedAt: new Date('2026-08-01T06:00:00.000Z'),
       });
       insertClosedTrade(db, {
         key: 'other-class',
         assetClass: 'stocks',
         pnl: 700,
-        closedAt: '2026-08-01T06:00:00.000Z',
+        closedAt: new Date('2026-08-01T06:00:00.000Z'),
       });
 
       // Strict `>`: a trade closing exactly at the boundary belongs to the
       // session that just ended, not the one opening.
       expect(sessionEquity.realizedSince('crypto', new Date(CRYPTO_OPEN))).toBe(-50);
       expect(sessionEquity.realizedSinceAllClasses(new Date(CRYPTO_OPEN))).toBe(650);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('discriminates the boundary to the millisecond, both sides same-width', () => {
+    const { sessionEquity, db, cleanup } = openStore();
+    try {
+      const boundary = new Date(CRYPTO_OPEN);
+      insertClosedTrade(db, {
+        key: 'one-ms-before',
+        assetClass: 'crypto',
+        pnl: -700,
+        closedAt: new Date(boundary.getTime() - 1),
+      });
+      insertClosedTrade(db, {
+        key: 'one-ms-after',
+        assetClass: 'crypto',
+        pnl: -3,
+        closedAt: new Date(boundary.getTime() + 1),
+      });
+
+      // `closed_at > open_at` is lexicographic over TEXT, so this only holds
+      // because both sides are written through `toISOString()` — same width,
+      // zero-padded, Z-suffixed. A `Z`-suffixed but second-precision timestamp
+      // would sort AFTER its own millisecond form and land on the wrong side.
+      expect(sessionEquity.realizedSince('crypto', boundary)).toBe(-3);
     } finally {
       cleanup();
     }
@@ -388,13 +431,13 @@ describe('AlpacaAccountStateProvider — session boundaries (#332)', () => {
         key: 'crypto-friday-evening',
         assetClass: 'crypto',
         pnl: -5_000,
-        closedAt: FRIDAY_EVENING,
+        closedAt: new Date(FRIDAY_EVENING),
       });
       insertClosedTrade(harness.db, {
         key: 'stocks-friday-evening',
         assetClass: 'stocks',
         pnl: -3_000,
-        closedAt: FRIDAY_EVENING,
+        closedAt: new Date(FRIDAY_EVENING),
       });
 
       const provider = makeProvider(harness);
@@ -488,13 +531,13 @@ describe('AlpacaAccountStateProvider — session boundaries (#332)', () => {
         key: 'crypto-sat',
         assetClass: 'crypto',
         pnl: -100,
-        closedAt: '2026-08-01T06:00:00.000Z',
+        closedAt: new Date('2026-08-01T06:00:00.000Z'),
       });
       insertClosedTrade(harness.db, {
         key: 'stocks-sat',
         assetClass: 'stocks',
         pnl: -20,
-        closedAt: '2026-08-01T06:00:00.000Z',
+        closedAt: new Date('2026-08-01T06:00:00.000Z'),
       });
 
       const { daily_basis } = await makeProvider(harness).getAccountState(SATURDAY_NOON_UTC);
