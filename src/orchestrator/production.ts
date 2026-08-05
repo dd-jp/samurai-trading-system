@@ -113,11 +113,17 @@
 import { AnalystOrchestrator } from '../analysts/index.js';
 import type { CostConfig } from '../cost-model-backtest/index.js';
 import { CostModelImpl } from '../cost-model-backtest/index.js';
-import type { AnthropicLlmClientConfig, LlmClient, LlmSpendSink } from '../debate-engine/index.js';
+import type {
+  AnthropicLlmClientConfig,
+  LlmClient,
+  LlmSpendSink,
+  RateLimiterConfig,
+} from '../debate-engine/index.js';
 import {
   AnthropicHttpMessagesClient,
   AnthropicLlmClient,
   DEFAULT_ANTHROPIC_MODEL,
+  RateLimiter,
   SqliteDebateLogStore,
   SqliteLlmSpendStore,
 } from '../debate-engine/index.js';
@@ -179,8 +185,8 @@ import type {
   RiskConfig,
 } from '../risk-manager/index.js';
 import { type BreakerConfig, CircuitBreakers } from '../risk-manager/index.js';
-import type { AssetClass, Clock, ClosedTradeStore } from '../shared/index.js';
-import { TokenBucket } from '../shared/index.js';
+import type { AssetClass, Clock, ClosedTradeStore, VenuePacingConfig } from '../shared/index.js';
+import { resolveVenuePacing, TokenBucket } from '../shared/index.js';
 import type { SharedStore as SqliteHandle } from '../shared/store/index.js';
 import type { TraderConfig } from '../trader/index.js';
 import { SqliteSetupStore } from '../trader/index.js';
@@ -209,7 +215,7 @@ import type {
 } from './orphan-verdict-scan.js';
 import { AlpacaAccountStateProvider } from './production/account-state.js';
 import { buildAnalystsStep } from './production/analysts-adapter.js';
-import { buildDebateStep } from './production/debate-adapter.js';
+import { buildDebateStep, WORST_CASE_LLM_CALLS_PER_DEBATE } from './production/debate-adapter.js';
 import {
   type AccountStateProvider,
   buildExecutionStep,
@@ -440,8 +446,55 @@ export interface ProductionConfig {
    * usefully go.
    */
   fillPollIntervalMs?: number;
-  /** Bounds concurrent instrument passes within one tick (LLM rate limit). Default 1. */
+  /**
+   * Bounds concurrent instrument passes within one tick. Default 1.
+   *
+   * **No longer the system's only LLM throttle (#388).** It used to be, by
+   * accident: a cap of 1 meant at most one debate in flight and therefore at
+   * most one LLM call outstanding, which looked like rate limiting but was a
+   * property of a concurrency default. Raising this — the obvious thing to try
+   * when tick cadence becomes the bottleneck across a six-instrument universe
+   * — removed the protection entirely, with nothing behind it.
+   * `rateLimiterConfig` is now what holds the line, per asset class and per
+   * time window, and it is unaffected by this number.
+   */
   maxConcurrentInstruments?: number;
+  /**
+   * Per-asset-class LLM budget for the Debate Engine's `RateLimiter` (#388) —
+   * the debates-per-window and calls-per-window ceiling every debate is
+   * admitted against, and metered through, at `buildDebateStep`.
+   *
+   * Optional with a documented fallback (`DEFAULT_LLM_RATE_LIMIT_CONFIG`)
+   * rather than a `REQUIRED_INJECTED_CONFIG` entry, because the thing #388 was
+   * actually about — the component having no caller — is prevented
+   * structurally instead: `buildDebateStep` takes a `RateLimiter` as a
+   * REQUIRED positional argument, so there is no way to compose a debate step
+   * without one. What this field chooses is the size of the budget, not
+   * whether there is one.
+   *
+   * `paperStartingProfile` supplies it explicitly, with the arithmetic behind
+   * each number written out beside it.
+   */
+  rateLimiterConfig?: RateLimiterConfig;
+  /**
+   * Overrides the `RateLimiter` this module would otherwise build from
+   * `rateLimiterConfig` — same rationale as `broker`/`llmClient`.
+   *
+   * Exists for one caller in particular: `smoke-run.ts` holds the instance so
+   * its gate can assert the limiter actually saw the run's LLM calls. That
+   * assertion is the only automated check that can catch this component
+   * reverting to having no caller, since a unit suite of 1800+ tests passed
+   * for months while it had none.
+   */
+  llmRateLimiter?: RateLimiter;
+  /**
+   * Per-venue outbound pacing for the broker adapters' token buckets (#299).
+   * Defaults to `resolveVenuePacing()`, i.e. `DEFAULT_VENUE_PACING` with any
+   * `SAMURAI_PACING_<VENUE>_*` override applied and validated against the
+   * venue's documented ceiling. Injected only by tests that need a bucket
+   * that does not pace at wall-clock speed.
+   */
+  venuePacing?: VenuePacingConfig;
   /**
    * Feedback Loop's daily batch (ADR-0004 §3: wired at this composition
    * point, deliberately *not* as a `TickSteps` member — it runs on its own
@@ -751,6 +804,32 @@ export function buildDefaultLlmClient(logger: Logger, spendSink?: LlmSpendSink):
 }
 
 /**
+ * The LLM budget used when `ProductionConfig.rateLimiterConfig` is omitted
+ * (#388) — a backstop for a programmatic caller, NOT the soak's numbers.
+ * `paperStartingProfile` supplies its own, sized against the real universe,
+ * and that is what `yarn orchestrator` and `yarn smoke` run on.
+ *
+ * Deliberately generous rather than tight. This limiter is a CEILING that
+ * catches a misconfiguration or a runaway loop, not a scheduler: a budget that
+ * bites during normal operation would shed debates the operator wanted, and
+ * the tick cadence is what paces ordinary spend. So the default is set well
+ * above what a single-instrument process can reach in a minute (a 60s tick
+ * chain cannot start more than a handful of debates per window) while still
+ * being finite, which is the whole difference from today's `undefined`.
+ *
+ * `maxLlmCalls` is `maxDebates * WORST_CASE_LLM_CALLS_PER_DEBATE` exactly: any
+ * less and the call budget, not the debate budget, becomes the binding
+ * constraint, which would refuse debates while reporting the wrong reason.
+ */
+export const DEFAULT_LLM_RATE_LIMIT_CONFIG: RateLimiterConfig = {
+  default: {
+    windowMs: 60_000,
+    maxDebates: 30,
+    maxLlmCalls: 30 * WORST_CASE_LLM_CALLS_PER_DEBATE,
+  },
+};
+
+/**
  * The default broker wire client, with the Alpaca environment DERIVED FROM
  * `mode` rather than left to `AlpacaHttpBrokerClient`'s own default (#293).
  *
@@ -966,6 +1045,15 @@ export interface ProductionComponents {
    * `reconcile()`/`ingestFills()` from the same object the tick step uses.
    */
   executionDeps: ExecutionStepDeps;
+  /**
+   * The LLM budget every debate in this process is admitted against and
+   * metered through (#388) — the instance inside `steps.debate`, not a copy.
+   *
+   * Exposed so `yarn smoke`'s gate can assert it recorded the run's calls. A
+   * component that is constructed and never consulted is the exact defect
+   * #388 is, and it is invisible to a unit suite by construction.
+   */
+  llmRateLimiter: RateLimiter;
 }
 
 /**
@@ -1035,14 +1123,18 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     { setup_store: new SqliteSetupStore(config.db) },
     logger,
   );
-  // Token bucket sized under Alpaca's 200 req/min (execution-spec.md story
-  // 16): burst covers a bracket submit plus a fill poll, sustained rate stays
-  // at ~90/min so the data-side calls sharing the account limit fit too.
+  // Outbound pacing per venue, from ops config rather than a literal here
+  // (#299): `resolveVenuePacing` starts from `DEFAULT_VENUE_PACING` — which
+  // carries each value's provenance and, where the venue publishes one, a
+  // documented ceiling it refuses to let an override exceed — and applies any
+  // `SAMURAI_PACING_ALPACA_*` the deployment set. A rate limit is a property
+  // of the account, so it belongs beside the credentials, not in the code.
+  const venuePacing = config.venuePacing ?? resolveVenuePacing();
   const broker =
     config.broker ??
     new AlpacaBrokerAdapter({
       client: brokerClient,
-      rateLimiter: new TokenBucket({ capacity: 10, refillPerSecond: 1.5 }),
+      rateLimiter: new TokenBucket(venuePacing.alpaca),
       // #287: without a durable bracket index the adapter starts every run
       // blind, and `fetchNewFills` polls nothing for lots that were already
       // filling when the process died. The in-memory default is only ever
@@ -1158,6 +1250,15 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     mode: config.mode,
   };
 
+  // The LLM budget, constructed ONCE for the process and shared by every
+  // instrument's debate (#388). One instance is the whole point: a limiter per
+  // debate, or per instrument, would count each one's window separately and
+  // enforce nothing across the universe — which is the shape the incidental
+  // `maxConcurrentInstruments: 1` throttle already had.
+  const llmRateLimiter =
+    config.llmRateLimiter ??
+    new RateLimiter(clock, config.rateLimiterConfig ?? DEFAULT_LLM_RATE_LIMIT_CONFIG);
+
   const steps: TickSteps = {
     // `logger` here is what makes an analyst failure visible at all — see the
     // adapter's doc comment (issue #358 item 4).
@@ -1172,6 +1273,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     debate: buildDebateStep(
       config.llmClient ?? buildDefaultLlmClient(logger, new SqliteLlmSpendStore(config.db, logger)),
       new SqliteDebateLogStore(config.db),
+      llmRateLimiter,
       logger,
     ),
     trader: buildTraderStep({ ...breakerStateDeps, config: config.traderConfig }),
@@ -1199,7 +1301,16 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     execution: buildExecutionStep(executionDeps),
   };
 
-  return { steps, marketData, broker, analysts, circuitBreakers, executionStore, executionDeps };
+  return {
+    steps,
+    marketData,
+    broker,
+    analysts,
+    circuitBreakers,
+    executionStore,
+    executionDeps,
+    llmRateLimiter,
+  };
 }
 
 /**

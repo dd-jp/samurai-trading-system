@@ -90,6 +90,7 @@ import type { BreakerConfig, CorrelationConfig, RiskConfig } from '../risk-manag
 import { DEFAULT_TRADER_CONFIG, type TraderConfig } from '../trader/index.js';
 import type { VerdictConfig } from '../verdict/index.js';
 import { SqliteDailyEquityMetricsSource } from './production/daily-equity-metrics-source.js';
+import { WORST_CASE_LLM_CALLS_PER_DEBATE } from './production/debate-adapter.js';
 import {
   type DailyMetricsConfig,
   DEFAULT_FEEDBACK_INTERVAL_MS,
@@ -537,6 +538,26 @@ function buildDailyMetrics(): DailyMetricsConfig {
 }
 
 /**
+ * One asset class's LLM budget, expressed in the only unit an operator should
+ * have to think about: debates per window. The call budget follows from it (see
+ * `rateLimiterConfig`'s comment for why they are tied rather than independent).
+ */
+function llmBudget(maxDebates: number): {
+  windowMs: number;
+  maxDebates: number;
+  maxLlmCalls: number;
+} {
+  return {
+    windowMs: LLM_BUDGET_WINDOW_MS,
+    maxDebates,
+    maxLlmCalls: maxDebates * WORST_CASE_LLM_CALLS_PER_DEBATE,
+  };
+}
+
+/** Five minutes — see `rateLimiterConfig`'s comment for why not one. */
+const LLM_BUDGET_WINDOW_MS = 300_000;
+
+/**
  * The eight required config objects, plus the optional ninth seam (#366). Not
  * exported directly — callers go through `paperStartingProfile(mode)` so the
  * live-mode refusal cannot be bypassed by importing the values, and so each
@@ -554,7 +575,12 @@ function buildProfileConfigs(): Pick<
   | 'costConfig'
   | 'ciiConsumerConfig'
   | 'feedback'
-> {
+> &
+  // `Required`, not another `Pick` member: `ProductionConfig.rateLimiterConfig`
+  // is optional (it has a documented fallback for a programmatic caller), but
+  // the profile's whole job is to leave nothing to a fallback nobody chose —
+  // so the type says this profile always carries one.
+  Required<Pick<ProductionConfig, 'rateLimiterConfig'>> {
   const traderConfig: TraderConfig = {
     // SPEC — `DEFAULT_TRADER_CONFIG` (src/trader/types.ts) is the one set of
     // sizing constants already checked in and already justified against
@@ -1045,13 +1071,16 @@ function buildProfileConfigs(): Pick<
      * distribution — `llm_spend` (#367) is what will replace this arithmetic
      * with a measurement.
      *
-     * The rate-limit posture (#299) is unchanged by widening, and it is worth
-     * being precise about what carries it: `maxConcurrentInstruments: 1` caps
-     * in-flight debates at one, so at most one LLM call is ever outstanding no
-     * matter how many instruments are in the plan. `RateLimiter`
-     * (debate-engine/rate-limiter.ts) is NOT what holds this — it is built and
-     * tested but has no production caller, which is a separate gap and not one
-     * this ticket closes.
+     * The rate-limit posture used to rest entirely on this: with
+     * `maxConcurrentInstruments: 1` at most one LLM call is ever outstanding
+     * no matter how many instruments are in the plan, and `RateLimiter`
+     * (debate-engine/rate-limiter.ts) was built, tested and never constructed
+     * in production. **#388 closed that**: `rateLimiterConfig` below is now
+     * wired at the composition root and every debate is admitted through it,
+     * so raising `maxConcurrentInstruments` no longer removes the only
+     * throttle. The arithmetic in this comment is unchanged — the concurrency
+     * cap still governs the SHAPE of the spend; the limiter is the ceiling
+     * underneath it.
      */
     universe: DEFAULT_UNIVERSE,
     traderConfig,
@@ -1062,6 +1091,66 @@ function buildProfileConfigs(): Pick<
     breakerConfig,
     costConfig,
     ciiConsumerConfig,
+    /**
+     * The LLM budget every debate is admitted against (#388) — the component
+     * that closes the gap the `universe` comment above describes, where the
+     * only throttle in the system was `maxConcurrentInstruments: 1`.
+     *
+     * **What this is for.** It is a CEILING, not a scheduler. Ordinary spend is
+     * paced by the tick cadence; this exists so that a misconfiguration (the
+     * obvious one being raising `maxConcurrentInstruments`), a stuck retry
+     * loop, or a universe widened again cannot turn into unbounded billing
+     * before anyone notices. Sized to sit clear of normal operation and to
+     * bite well before the day's cost multiplies.
+     *
+     * **`windowMs: 300_000` — DERIVED.** Five minutes rather than one.
+     * `RateLimiter` uses a FIXED window, not a sliding one, so at the counts
+     * involved here (single digits per minute) a 60s window would refuse
+     * legitimate debates purely on where a boundary happened to fall. Five
+     * minutes holds enough events for the boundary to stop mattering while
+     * still catching a runaway within minutes rather than hours.
+     *
+     * **`maxDebates` — DERIVED from #385's measured cadence**, at roughly 3x
+     * headroom over it, per asset class:
+     *
+     * - crypto (BTC-USD, ETH-USD; trades 24/7) peaks OUTSIDE the equity
+     *   session, where a pass is 2x15s and a cycle ~90s — 2 debates per 90s =
+     *   1.33/min. `20` per 5 minutes is 4/min, ~3x that.
+     * - stocks (SPY, QQQ, AAPL, TSLA; session hours only) run one 330s cycle
+     *   of 4 debates = 0.73/min. `15` per 5 minutes is 3/min, ~4x that.
+     *
+     * The extra headroom is deliberate and is what makes this survive the
+     * change that motivated #388: raising `maxConcurrentInstruments` to 6
+     * collapses a stock pass from 270s to ~60s, roughly doubling the stock
+     * debate rate to ~1.6/min — still comfortably under 3/min, so the dial can
+     * be raised for latency without the ceiling firing, and cannot be raised
+     * far enough to remove it.
+     *
+     * **`maxLlmCalls = maxDebates * WORST_CASE_LLM_CALLS_PER_DEBATE` —
+     * DERIVED, and deliberately redundant.** `reserve` admits a debate only if
+     * its worst case (3 rounds x 3 persona calls + 1 disagreement call = 10)
+     * still fits, so setting the call budget to exactly that product makes
+     * `maxDebates` the single binding dial: an operator changes one number and
+     * gets the behaviour they expected. Sizing the call budget any LOWER would
+     * make it bind first, refusing debates while `ReserveResult.reason` blamed
+     * the wrong budget; sizing it higher would leave it unable to bind at all.
+     * The money ceiling this implies is what matters:
+     * `maxDebates * 10 calls * ~$0.004/call`, i.e. under $1 per 5-minute
+     * window per class in the worst case, against ~$45/day measured.
+     *
+     * **`default` — UNSOURCED.** No third asset class exists
+     * (`AssetClass` is `crypto | stocks`), so this is unreachable today. It
+     * mirrors the tighter of the two rather than being generous, on the
+     * principle that an unrecognised asset class should be the most
+     * constrained thing in the system, not the least.
+     */
+    rateLimiterConfig: {
+      default: llmBudget(15),
+      perAssetClass: {
+        crypto: llmBudget(20),
+        stocks: llmBudget(15),
+      },
+    },
     /**
      * The ninth seam (#366), and the only optional one here.
      *
@@ -1111,7 +1200,8 @@ export function paperStartingProfile(
     | 'costConfig'
     | 'ciiConsumerConfig'
     | 'feedback'
-  > {
+  > &
+  Required<Pick<ProductionConfig, 'rateLimiterConfig'>> {
   if (mode === 'live') {
     throw new Error(
       'Orchestrator cannot start: SAMURAI_MODE=live was requested, but the shipped entrypoint ' +

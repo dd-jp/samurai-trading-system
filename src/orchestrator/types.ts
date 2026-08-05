@@ -132,6 +132,22 @@ export interface TickSteps {
   debate(input: {
     trace_id: string;
     instrument: string;
+    /**
+     * The instrument's asset class, forwarded from the tick's `Signal` (#388).
+     *
+     * Added because the Debate Engine's two per-asset-class budgets are keyed
+     * on it and neither could be wired without it: `RateLimiter`'s
+     * `perAssetClass` limits (now live, see `debate-adapter.ts`) and
+     * `LATENCY_BUDGET_MS`'s crypto-15s/stocks-60s hard timeout (still unwired
+     * — latency-budget.ts names "an asset-class decision per instrument" as
+     * one of the two things blocking it, and this is that decision).
+     *
+     * Carried on the step input rather than resolved from a universe map
+     * inside the adapter: the runner already holds `Signal.asset_class` as
+     * authoritative fact, and a second lookup table keyed on instrument name
+     * is a place for the two to disagree.
+     */
+    asset_class: AssetClass;
     views: AnalystView[];
     clock: Clock;
   }): Promise<DebateResult>;

@@ -22,7 +22,7 @@
  * this process — so after a restart every execution IBKR reported was silently
  * dropped as "not ours", and the lot's fills were lost.
  */
-import { type OrderState, TokenBucket } from '../shared/index.js';
+import { DEFAULT_VENUE_PACING, type OrderState, TokenBucket } from '../shared/index.js';
 import { sanitizeBrokerError } from './broker-error.js';
 import {
   type BrokerStateStore,
@@ -147,12 +147,17 @@ export class IbkrBrokerAdapter implements BrokerAdapter {
   /**
    * Optional so existing wiring keeps working, but the default is deliberately
    * not "unlimited" — an unpaced adapter is the C2 finding. TWS pacing
-   * violations are counted per rolling second and answered with a disconnect,
-   * which for this adapter means the venue holding a live bracket stops taking
-   * calls; 5/second is a conservative placeholder well under that, pending
-   * tuning against a real TWS gateway (whose limits vary by account and
-   * connection) — tracked as #299, which also moves these out of compile-time
-   * constants into the ops config that holds the credentials they pace.
+   * violations are answered with a DISCONNECT, which for this adapter means
+   * the venue holding a live bracket stops taking calls.
+   *
+   * #299 moved the NUMBER out of this file into `DEFAULT_VENUE_PACING.ibkr`
+   * (shared/http/venue-pacing.ts), overridable per deployment via
+   * `SAMURAI_PACING_IBKR_*`. That module cites IBKR's documented 50 msg/s
+   * ceiling — which `resolveVenuePacing` now enforces as an upper bound on any
+   * override — and is explicit that the 5/s we actually run at is a
+   * conservative 10% of it, untuned against a real TWS gateway (whose pacing
+   * varies by account, connection and request kind) rather than a figure IBKR
+   * publishes.
    *
    * `state` is optional for the same compatibility reason, but the two
    * defaults are not equivalent: the rate-limit default is merely
@@ -162,7 +167,7 @@ export class IbkrBrokerAdapter implements BrokerAdapter {
    */
   constructor(
     private readonly client: IbkrBrokerClient,
-    rateLimiter: TokenBucket = new TokenBucket({ capacity: 5, refillPerSecond: 5 }),
+    rateLimiter: TokenBucket = new TokenBucket(DEFAULT_VENUE_PACING.ibkr),
     state: BrokerStateStore = new InMemoryBrokerStateStore(),
   ) {
     this.rateLimiter = rateLimiter;

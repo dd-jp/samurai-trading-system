@@ -9,16 +9,31 @@ import {
   AnthropicLlmClient,
   computeDebateId,
   InMemoryDebateLogStore,
+  RateLimiter,
   SqliteDebateLogStore,
   SqliteLlmSpendStore,
 } from '../../debate-engine/index.js';
 import { accumulateCredit } from '../../feedback-loop/index.js';
-import type { Clock, ClosedTrade, LogEntry, Logger } from '../../shared/index.js';
+import type { AssetClass, Clock, ClosedTrade, LogEntry, Logger } from '../../shared/index.js';
 import { openSharedStore, type SharedStore } from '../../shared/store/index.js';
 import { buildDebateStep } from './debate-adapter.js';
 
 const NOW = new Date('2026-07-28T14:00:00Z');
 const CLOCK: Clock = { now: () => NOW };
+
+/**
+ * A budget large enough never to bite, for the tests in this file that are
+ * about the debate itself rather than about admission. The refusal path has
+ * its own tests in `rate-limit-wiring.test.ts`.
+ */
+function unlimited(): RateLimiter {
+  return new RateLimiter(CLOCK, {
+    default: { windowMs: 60_000, maxLlmCalls: 10_000, maxDebates: 10_000 },
+  });
+}
+
+/** The asset class every fixture instrument in this file is treated as. */
+const ASSET_CLASS: AssetClass = 'stocks';
 
 /** Retries are orthogonal to attribution; one attempt keeps the spend row count exact. */
 const NO_RETRY = { maxAttempts: 1, baseDelayMs: 10, maxDelayMs: 10 };
@@ -77,13 +92,14 @@ function recordingLogger(): { logger: Logger; entries: LogEntry[] } {
 
 describe('buildDebateStep', () => {
   it('presents the one-argument TickSteps.debate shape and returns a converged DebateResult', async () => {
-    const step = buildDebateStep(fakeLlmClient(), new InMemoryDebateLogStore());
+    const step = buildDebateStep(fakeLlmClient(), new InMemoryDebateLogStore(), unlimited());
     const views = [makeView()];
 
     const result = await step({
       trace_id: 'trace-1',
       instrument: 'AAPL',
       views,
+      asset_class: ASSET_CLASS,
       clock: CLOCK,
     });
 
@@ -100,12 +116,13 @@ describe('buildDebateStep', () => {
   it('writes exactly one debate_log row for a completed debate (#364)', async () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteDebateLogStore(db);
-    const step = buildDebateStep(fakeLlmClient(), store);
+    const step = buildDebateStep(fakeLlmClient(), store, unlimited());
 
     const result = await step({
       trace_id: 'trace-1',
       instrument: 'AAPL',
       views: [makeView()],
+      asset_class: ASSET_CLASS,
       clock: CLOCK,
     });
 
@@ -128,12 +145,13 @@ describe('buildDebateStep', () => {
 
   it('writes a row for a debate that resolves WITHOUT converging (hard-cap termination)', async () => {
     const store = new InMemoryDebateLogStore();
-    const step = buildDebateStep(fakeLlmClient({ converged: false }), store);
+    const step = buildDebateStep(fakeLlmClient({ converged: false }), store, unlimited());
 
     const result = await step({
       trace_id: 'trace-1',
       instrument: 'BTC-USD',
       views: [makeView()],
+      asset_class: ASSET_CLASS,
       clock: CLOCK,
     });
 
@@ -147,11 +165,22 @@ describe('buildDebateStep', () => {
   it('writes NO row when the debate throws partway, and logs the miss', async () => {
     const store = new InMemoryDebateLogStore();
     const { logger, entries } = recordingLogger();
-    const step = buildDebateStep(fakeLlmClient({ failOnMediator: true }), store, logger);
+    const step = buildDebateStep(
+      fakeLlmClient({ failOnMediator: true }),
+      store,
+      unlimited(),
+      logger,
+    );
     const views = [makeView()];
 
     await expect(
-      step({ trace_id: 'trace-1', instrument: 'AAPL', views, clock: CLOCK }),
+      step({
+        trace_id: 'trace-1',
+        instrument: 'AAPL',
+        views,
+        asset_class: ASSET_CLASS,
+        clock: CLOCK,
+      }),
     ).rejects.toThrow('llm transport blew up mid-debate');
 
     // debate_id is recomputable from (instrument, bar, views) even though the
@@ -168,8 +197,14 @@ describe('buildDebateStep', () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteDebateLogStore(db);
     const { logger, entries } = recordingLogger();
-    const step = buildDebateStep(fakeLlmClient(), store, logger);
-    const input = { trace_id: 'trace-1', instrument: 'AAPL', views: [makeView()], clock: CLOCK };
+    const step = buildDebateStep(fakeLlmClient(), store, unlimited(), logger);
+    const input = {
+      trace_id: 'trace-1',
+      instrument: 'AAPL',
+      views: [makeView()],
+      asset_class: ASSET_CLASS,
+      clock: CLOCK,
+    };
 
     const first = await step(input);
     // Same clock, same views, same instrument → the same content-hash
@@ -188,12 +223,13 @@ describe('buildDebateStep', () => {
   it("produces rows the Feedback Loop's attribution reader can consume end to end", async () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteDebateLogStore(db);
-    const step = buildDebateStep(fakeLlmClient(), store);
+    const step = buildDebateStep(fakeLlmClient(), store, unlimited());
 
     const result = await step({
       trace_id: 'trace-1',
       instrument: 'AAPL',
       views: [makeView()],
+      asset_class: ASSET_CLASS,
       clock: CLOCK,
     });
 
@@ -281,7 +317,7 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
       { model: 'claude-haiku-4-5', max_tokens: 100, timeoutMs: 60_000, retry: NO_RETRY },
       new SqliteLlmSpendStore(db),
     );
-    return buildDebateStep(llm, new SqliteDebateLogStore(db));
+    return buildDebateStep(llm, new SqliteDebateLogStore(db), unlimited());
   }
 
   function spendRows(db: SharedStore): SpendRow[] {
@@ -309,6 +345,7 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
       trace_id: 'trace-1',
       instrument: 'AAPL',
       views,
+      asset_class: ASSET_CLASS,
       clock: CLOCK,
     });
 
@@ -324,7 +361,13 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
     const db = openSharedStore(':memory:');
     const views = [makeView(), makeView({ analyst_id: 'sentiment-1', direction: 'bearish' })];
 
-    await meteredStep(db)({ trace_id: 'trace-1', instrument: 'AAPL', views, clock: CLOCK });
+    await meteredStep(db)({
+      trace_id: 'trace-1',
+      instrument: 'AAPL',
+      views,
+      asset_class: ASSET_CLASS,
+      clock: CLOCK,
+    });
 
     // The acceptance criterion, expressed as the SQL an operator would write:
     // per-decision cost and LLM time, joined to the decision itself.
@@ -355,7 +398,13 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
     db.prepare('DROP TABLE llm_spend').run();
     const views = [makeView(), makeView({ analyst_id: 'sentiment-1', direction: 'bearish' })];
 
-    const result = await step({ trace_id: 'trace-1', instrument: 'AAPL', views, clock: CLOCK });
+    const result = await step({
+      trace_id: 'trace-1',
+      instrument: 'AAPL',
+      views,
+      asset_class: ASSET_CLASS,
+      clock: CLOCK,
+    });
 
     expect(result.direction).toBe('bullish');
     expect(result.converged).toBe(true);
@@ -376,12 +425,13 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
         },
       },
     );
-    const step = buildDebateStep(llm, new SqliteDebateLogStore(db));
+    const step = buildDebateStep(llm, new SqliteDebateLogStore(db), unlimited());
 
     const result = await step({
       trace_id: 'trace-1',
       instrument: 'AAPL',
       views: [makeView(), makeView({ analyst_id: 'sentiment-1', direction: 'bearish' })],
+      asset_class: ASSET_CLASS,
       clock: CLOCK,
     });
 
@@ -417,10 +467,16 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
       new SqliteLlmSpendStore(db),
     );
     const views = [makeView()];
-    const step = buildDebateStep(llm, new SqliteDebateLogStore(db));
+    const step = buildDebateStep(llm, new SqliteDebateLogStore(db), unlimited());
 
     await expect(
-      step({ trace_id: 'trace-1', instrument: 'AAPL', views, clock: CLOCK }),
+      step({
+        trace_id: 'trace-1',
+        instrument: 'AAPL',
+        views,
+        asset_class: ASSET_CLASS,
+        clock: CLOCK,
+      }),
     ).rejects.toThrow('llm transport blew up mid-debate');
 
     const rows = spendRows(db);

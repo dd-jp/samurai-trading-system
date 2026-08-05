@@ -114,4 +114,34 @@ export class RateLimiter {
     const window = this.currentWindow(assetClass);
     window.llmCallsUsed += 1;
   }
+
+  /**
+   * What this limiter has actually seen, per asset class, in the window each
+   * class is currently in. Read-only; it opens no way to grant or spend
+   * budget.
+   *
+   * Added by #388 for one reason worth naming, because "expose internals for a
+   * test" would be a bad one. #388 IS this class having no production caller,
+   * and the check that would have caught that is not a unit test — every unit
+   * test passed while nothing constructed it. It is `yarn smoke`'s gate, which
+   * asserts on observable effects of a real process (see #364's `debate_log`
+   * assertion, whose mutation was invisible to all 1600+ unit tests). A
+   * counter that stays at zero after a run that debated is the only cheap,
+   * direct evidence that the limiter is in the LLM path rather than merely
+   * constructed beside it.
+   *
+   * Deliberately NOT `currentWindow`-driven: reading must not roll a window
+   * over or create one for a class that has never been used, or the observer
+   * would change what it observes.
+   */
+  snapshot(): Partial<Record<AssetClass, { llmCallsUsed: number; debatesUsed: number }>> {
+    const result: Partial<Record<AssetClass, { llmCallsUsed: number; debatesUsed: number }>> = {};
+    for (const [assetClass, window] of this.windows) {
+      result[assetClass] = {
+        llmCallsUsed: window.llmCallsUsed,
+        debatesUsed: window.debatesUsed,
+      };
+    }
+    return result;
+  }
 }

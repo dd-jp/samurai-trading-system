@@ -14,6 +14,14 @@ export type { RetryConfig } from './http/retry.js';
 export { withRetry } from './http/retry.js';
 export type { TokenBucketConfig } from './http/token-bucket.js';
 export { TokenBucket } from './http/token-bucket.js';
+export type { VenueKey, VenuePacingConfig } from './http/venue-pacing.js';
+export {
+  DEFAULT_VENUE_PACING,
+  resolveVenuePacing,
+  VENUE_DOCUMENTED_CEILING_PER_SECOND,
+  VENUE_KEYS,
+  venuePacingEnvVars,
+} from './http/venue-pacing.js';
 export { sanitizeLogText } from './sanitize-log-text.js';
 export type {
   AssetClass,

@@ -26,7 +26,7 @@
  * construction, and `syncBrackets` knows how to finish an arming episode a
  * previous process started (`recoverArming`).
  */
-import { type OrderState, TokenBucket } from '../shared/index.js';
+import { DEFAULT_VENUE_PACING, type OrderState, TokenBucket } from '../shared/index.js';
 import { sanitizeBrokerError } from './broker-error.js';
 import {
   type BrokerBracketPhase,
@@ -168,13 +168,16 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
   /**
    * `rateLimiter` is optional so existing wiring keeps working, but the
    * default is NOT "unlimited" — an adapter with no pacing is the C2 finding.
-   * 1 order/second is the free-tier order rate Kraken/Coinbase publish for the
-   * cheapest tier, so it is the conservative floor that cannot be wrong in the
-   * dangerous direction. A placeholder pending real per-venue tuning (#299):
-   * an exchange-specific limit belongs with the exchange's credentials, i.e.
-   * in ops wiring, not hard-coded here. #299 also records this default's known
-   * cost — at 1/second the two protective legs in `armLegs` serialize, placing
-   * them ≥1s apart and widening the unprotected-lot window.
+   *
+   * #299 moved the NUMBER out of this file: it now comes from
+   * `DEFAULT_VENUE_PACING.ccxt` (shared/http/venue-pacing.ts), which carries
+   * its provenance and is overridable per deployment via
+   * `SAMURAI_PACING_CCXT_*` — a rate limit is a property of the account, not
+   * of this class. That module also records why the ccxt figure is still
+   * conservative and labelled UNVERIFIED (no venue, no tier, no account), and
+   * the known cost of leaving it there: at 1/second the two protective legs in
+   * `armLegs` serialize, placing them ≥1s apart and widening the
+   * unprotected-lot window.
    *
    * `state` is optional for the same compatibility reason, but note the
    * asymmetry: the rate-limit default is merely conservative, whereas the
@@ -183,7 +186,7 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
    */
   constructor(
     private readonly client: CcxtBrokerClient,
-    rateLimiter: TokenBucket = new TokenBucket({ capacity: 1, refillPerSecond: 1 }),
+    rateLimiter: TokenBucket = new TokenBucket(DEFAULT_VENUE_PACING.ccxt),
     state: BrokerStateStore = new InMemoryBrokerStateStore(),
   ) {
     this.rateLimiter = rateLimiter;
