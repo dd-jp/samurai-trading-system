@@ -186,8 +186,10 @@ interface Heartbeat {
 }
 ```
 
-- Reuses Verdict's already-provisioned Telegram/Discord trade channel (verdict-spec story 14) — a different message type on the same channel, not a new integration.
-- The alert signal is **silence**, not content: an external watchdog (a separate cron/monitor, out of scope here) checks last-heartbeat-age and alerts if it grows stale. The Orchestrator does not monitor itself.
+- Reuses Verdict's already-provisioned Telegram/Discord transport (verdict-spec story 14) — a different message type over the same client, not a new integration.
+- **Not the same destination, though (#342).** The heartbeat posts to its own chat (`TELEGRAM_HEARTBEAT_CHAT_ID`), never the escalation chat (`TELEGRAM_CHAT_ID`) that carries orphaned `go` verdicts, stuck unpriced fills and kill-threshold breaches; startup refuses the two being equal. A liveness ping repeating forever in the escalation chat is what drives an operator to mute it, and a muted escalation chat is the failure the escalations exist to prevent. The property the composition root guarantees: **muting or losing the heartbeat stream cannot silence an escalation.**
+- Cadence defaults to **15 minutes** (`DEFAULT_HEARTBEAT_INTERVAL_MS`), sized as the external watchdog's staleness threshold rather than as a tick — not the 60s originally shipped, which put ~20,000 messages into the alert chat over a 14-day soak.
+- The alert signal is **silence**, not content: an external watchdog (a separate cron/monitor, out of scope here) checks last-heartbeat-age and alerts if it grows stale. The Orchestrator does not monitor itself — an in-process watchdog cannot detect its own process's death, which is why inverting the heartbeat to alert only on absence (the shape a dead-man's switch ultimately wants, and zero steady-state volume) needs a process this repo does not ship.
 
 ### Module: Determinism & Backtest
 

@@ -53,6 +53,7 @@ import {
   buildAlertChannels,
   resolveAlertsMode,
   TELEGRAM_ALERT_ENV_VARS,
+  TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR,
 } from './alert-transport.js';
 import { buildEntrypointLogger, JsonLogger } from './logger.js';
 import { paperStartingProfile } from './paper-profile.js';
@@ -72,6 +73,7 @@ export {
   buildAlertChannels,
   resolveAlertsMode,
   TELEGRAM_ALERT_ENV_VARS,
+  TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR,
 } from './alert-transport.js';
 export { TradeChannelBreachAlert } from './breach-alert-channel.js';
 export { digest } from './digest.js';
@@ -106,6 +108,7 @@ export {
   buildProductionOrchestrator,
   buildProductionTickRunner,
   type DailyMetricsConfig,
+  DEFAULT_HEARTBEAT_INTERVAL_MS,
   type FeedbackCycleConfig,
   type ProductionComponents,
   type ProductionConfig,
@@ -238,8 +241,21 @@ const CREDENTIAL_REQUIREMENTS: readonly {
     // alongside it — the mode is what decides whether these are credentials
     // this run needs or variables it will never read. `log-only` (and a caller
     // that injected every channel, which resolves to `undefined`) needs none.
-    vars: TELEGRAM_ALERT_ENV_VARS,
+    vars: TELEGRAM_ALERT_ENV_VARS.filter((name) => name !== TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR),
     unusedByThisRun: ({ alertsMode }) => alertsMode !== 'telegram',
+  },
+  {
+    // #342. The heartbeat's own chat, split out from the three above for one
+    // reason: it is the only one an injected channel makes unnecessary. A
+    // caller that passed `heartbeatChannel` has already chosen where the beat
+    // goes, and nothing in `buildAlertChannels` will read this variable — so
+    // demanding it would be the same "keys it will never use" complaint the
+    // Alpaca and Anthropic entries above exist to avoid. The escalation chat
+    // stays required either way; that is the destination this exists to keep
+    // free of heartbeats.
+    vars: [TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR],
+    unusedByThisRun: ({ injected, alertsMode }) =>
+      alertsMode !== 'telegram' || injected.heartbeatChannel !== undefined,
   },
 ];
 
@@ -294,7 +310,11 @@ function assertCredentialsPresent(
           'SAMURAI_ALERTS=log-only to accept log-only alerting for an ATTENDED run instead ' +
           '(not for an unattended soak). TELEGRAM_ALLOWED_USER_IDS is on that list because ' +
           'TelegramBotApiClient validates the HITL approval allowlist at construction, not ' +
-          'because this process polls for approvals — see alert-transport.ts. '
+          'because this process polls for approvals — see alert-transport.ts. ' +
+          `${TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR} must name a DIFFERENT chat from ` +
+          'TELEGRAM_CHAT_ID (#342): the heartbeat posts forever on a fixed interval, and ' +
+          'sharing the escalation chat is what drives an operator to mute the one channel ' +
+          'that carries orphaned go verdicts, stuck lots and kill-threshold breaches. '
         : '') +
       'Note that `node dist/orchestrator/index.js` does not read any .env file on its own — ' +
       'use `node --env-file=.env.local dist/orchestrator/index.js` or export the variables.',

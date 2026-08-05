@@ -266,6 +266,12 @@ export interface ProductionConfig {
    * explicitly-named `log-only`. This field stays the port rather than a
    * Telegram/Discord client, so a programmatic caller can still inject its
    * own; see alert-transport.ts.
+   *
+   * Under `telegram` the beat goes to `TELEGRAM_HEARTBEAT_CHAT_ID` — a chat of
+   * its own, never the escalation chat the other three alerts share (#342), so
+   * that muting a stream which repeats every 15 minutes forever cannot mute an
+   * escalation. Injecting this field opts out of that variable entirely: the
+   * caller has chosen the destination itself.
    */
   heartbeatChannel?: HeartbeatChannel;
   /**
@@ -379,7 +385,11 @@ export interface ProductionConfig {
   initialBreakerState?: readonly PersistedBreakerState[];
   /** Wall-clock gap between tick starts. Default 60s. */
   tickIntervalMs?: number;
-  /** Heartbeat cadence, independent of the tick cadence. Default 60s. */
+  /**
+   * Heartbeat cadence, independent of the tick cadence. Default 15 minutes
+   * (`DEFAULT_HEARTBEAT_INTERVAL_MS`, #342 — see its doc for why that number
+   * rather than the 60s this shipped with).
+   */
   heartbeatIntervalMs?: number;
   /**
    * Gap between fill polls (`ingestFills()`), measured from the end of one
@@ -456,7 +466,28 @@ export interface DailyMetricsConfig {
 }
 
 const DEFAULT_TICK_INTERVAL_MS = 60_000;
-const DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000;
+/**
+ * 15 minutes (#342), not the 60s this shipped with.
+ *
+ * The number is the **external watchdog's staleness threshold**, not a volume
+ * target: the heartbeat's whole purpose is that something outside this process
+ * notices its silence, so the cadence only has to be tight enough that "no beat
+ * for 2 intervals" is still a timely alarm. Half an hour of undetected death on
+ * an unattended paper soak (#238) is well inside a useful detection window, and
+ * a tighter beat buys detection latency nobody is awake to use.
+ *
+ * What 60s cost, by contrast, was the alerting channel itself: ~20,000
+ * heartbeats over the 14-day soak into the chat that also carries the orphaned
+ * go verdict, the stuck unpriced lot and the kill-threshold breach — until the
+ * operator mutes it. 15 minutes plus the separate destination
+ * `TELEGRAM_HEARTBEAT_CHAT_ID` gives (alert-transport.ts) is the pair that fixes
+ * that; neither alone is sufficient.
+ *
+ * Still a default, not a constant: `ProductionConfig.heartbeatIntervalMs`
+ * overrides it, and the smoke gate (smoke-run.ts) sets its own 100ms so the
+ * timer actually fires inside a one-second run.
+ */
+export const DEFAULT_HEARTBEAT_INTERVAL_MS = 15 * 60_000;
 const DEFAULT_FILL_POLL_INTERVAL_MS = 15_000;
 /**
  * ATR(14): the conventional realized-volatility read, and the same shape

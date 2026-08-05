@@ -81,7 +81,8 @@ The orchestrator refuses to start rather than guess at any of these. It names ev
 | `SAMURAI_ALERTS` | `telegram` / `log-only` — **required, no default** | Where operator alerts go. |
 | `ALPACA_API_KEY`, `ALPACA_API_SECRET` | | Broker + market data. |
 | `ANTHROPIC_API_KEY` | | LLM debate. |
-| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ALLOWED_USER_IDS` | | Required only when `SAMURAI_ALERTS=telegram`. |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ALLOWED_USER_IDS` | | Required only when `SAMURAI_ALERTS=telegram`. `TELEGRAM_CHAT_ID` is the **escalation** chat: orphaned `go` verdicts, stuck unpriced fills, kill-threshold breaches. Keep it unmuted. |
+| `TELEGRAM_HEARTBEAT_CHAT_ID` | | Required when `SAMURAI_ALERTS=telegram`, and must be a **different** chat from `TELEGRAM_CHAT_ID`. The dead-man's-switch heartbeat posts here every 15 minutes and nothing else does, so muting it cannot silence an escalation. Startup refuses the two being equal. |
 
 #### Optional — durable log sink
 

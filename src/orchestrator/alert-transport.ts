@@ -22,8 +22,9 @@
  * dangerous configuration is refused rather than defaulted. So:
  *
  * - `SAMURAI_ALERTS=telegram` — push notifications. The posture an unattended
- *   run requires. Demands `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` and
- *   `TELEGRAM_ALLOWED_USER_IDS`; startup fails naming whichever are absent.
+ *   run requires. Demands `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`,
+ *   `TELEGRAM_ALLOWED_USER_IDS` and `TELEGRAM_HEARTBEAT_CHAT_ID` (#342, below);
+ *   startup fails naming whichever are absent.
  * - `SAMURAI_ALERTS=log-only` — the log-only stand-ins. A legitimate, and
  *   explicitly acknowledged, choice for an **attended** run: a local dev run, a
  *   supervised smoke test, a backtest. It is logged at `warn` every time,
@@ -39,6 +40,35 @@
  * already made the decision explicitly. Injecting *some* of them does not
  * exempt the rest — that would be the same silent-by-omission hole one level
  * down.
+ *
+ * ## The heartbeat gets its own chat (#342)
+ *
+ * The heartbeat is not an escalation and must not share a destination with
+ * one. At the 60s cadence #96 shipped, the dead-man's-switch alone puts ~20,000
+ * messages into the alert chat over the 14-day soak (#238) — and the
+ * predictable response to 20,000 notifications is to mute the chat. That mutes
+ * the orphaned go verdict (#209), the stuck unpriced lot (#298) and the
+ * kill-threshold breach (#93) with it: the exact failure #322 exists to
+ * prevent, reintroduced as alert fatigue instead of as missing wiring.
+ *
+ * So `TELEGRAM_HEARTBEAT_CHAT_ID` is required alongside the other three under
+ * `telegram`, and must NOT equal `TELEGRAM_CHAT_ID` — both are refused at boot
+ * rather than warned about, since a warning about a chat the operator is about
+ * to mute is a warning in the wrong chat. The property this buys, which
+ * alert-transport.test.ts asserts directly: **muting or losing the heartbeat
+ * stream cannot silence an escalation**, because the two share no destination.
+ * A caller that injected its own `heartbeatChannel` is asked for neither — it
+ * has already chosen where heartbeats go.
+ *
+ * The other half of #342 is cadence, and it lives in production.ts:
+ * `DEFAULT_HEARTBEAT_INTERVAL_MS` is 15 minutes, an external watchdog's
+ * staleness threshold rather than a tick.
+ *
+ * What this is NOT is the right long-run shape. A dead-man's switch properly
+ * inverts: an external watchdog alerts on the ABSENCE of a beat, and steady-
+ * state volume is zero. That watchdog cannot live in this process — the thing
+ * it must detect is this process dying — so it stays out of scope here, and
+ * the separate chat is what makes the current shape survivable meanwhile.
  *
  * ## Why the allowlist is required for outbound-only alerts
  *
@@ -104,11 +134,21 @@ export const ALERT_CHANNEL_FIELDS = [
   'breachAlerts',
 ] as const satisfies readonly (keyof ProductionConfig)[];
 
+/**
+ * The heartbeat's own chat (#342) — named separately because it is the one
+ * variable on the list below that a caller can be exempted from: injecting a
+ * `heartbeatChannel` means nothing here posts a heartbeat, so nothing here
+ * needs a chat to post it to. `missingCredentialEnvVars` (index.ts) keys its
+ * exemption off this constant.
+ */
+export const TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR = 'TELEGRAM_HEARTBEAT_CHAT_ID';
+
 /** What `SAMURAI_ALERTS=telegram` needs in the environment. See the module doc for the allowlist. */
 export const TELEGRAM_ALERT_ENV_VARS = [
   'TELEGRAM_BOT_TOKEN',
   'TELEGRAM_CHAT_ID',
   'TELEGRAM_ALLOWED_USER_IDS',
+  TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR,
 ] as const;
 
 /** The alert channels, as `buildProductionOrchestrator` takes them. */
@@ -176,6 +216,13 @@ export function buildAlertChannels(deps: {
   }
 
   const chatId = requireEnv('TELEGRAM_CHAT_ID');
+  // #342. Resolved before the client is constructed, so a misconfigured pair
+  // fails with nothing built. `undefined` only when the caller supplied its own
+  // heartbeat channel — then no chat id is read, and the equality refusal below
+  // does not apply to a decision this module did not make.
+  const heartbeatChatId =
+    deps.injected.heartbeatChannel === undefined ? requireHeartbeatChatId(chatId) : undefined;
+
   // The bot token and the allowlist are read by the client itself, from the
   // same variables — not re-read here, so there is exactly one place that
   // touches the token and exactly one that validates the allowlist.
@@ -198,18 +245,20 @@ export function buildAlertChannels(deps: {
     stage: 'orchestrator',
     level: 'info',
     message:
-      `${ENV_VAR}=telegram — heartbeat, orphaned go verdicts, stuck unpriced fills and ` +
-      'kill-threshold breaches will be pushed to the trade channel. No approval poll is started ' +
-      'here; HITL approvals still resolve through ProductionConfig.approvals (#275).',
-    // Never the token, and never the chat id: neither is a secret worth a log
+      `${ENV_VAR}=telegram — orphaned go verdicts, stuck unpriced fills and kill-threshold ` +
+      'breaches will be pushed to the escalation chat (TELEGRAM_CHAT_ID). The heartbeat goes to ' +
+      `${TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR} instead (#342), so that muting the beat cannot ` +
+      'mute an escalation — keep the escalation chat unmuted. No approval poll is started here; ' +
+      'HITL approvals still resolve through ProductionConfig.approvals (#275).',
+    // Never the token, and never either chat id: none is a secret worth a log
     // line, and the token is a bearer credential for the entire bot.
     payload: { alerts: 'telegram' },
   });
 
   return {
-    ...(deps.injected.heartbeatChannel === undefined
-      ? { heartbeatChannel: new TradeChannelHeartbeat(telegram, chatId) }
-      : {}),
+    ...(heartbeatChatId === undefined
+      ? {}
+      : { heartbeatChannel: new TradeChannelHeartbeat(telegram, heartbeatChatId) }),
     ...(deps.injected.orphanAlerts === undefined
       ? { orphanAlerts: new TradeChannelOrphanAlert(telegram, chatId) }
       : {}),
@@ -220,6 +269,36 @@ export function buildAlertChannels(deps: {
       ? { breachAlerts: new TradeChannelBreachAlert(telegram, chatId, deps.logger) }
       : {}),
   };
+}
+
+/**
+ * The heartbeat's destination (#342), refused when it is absent or when it is
+ * the escalation chat.
+ *
+ * The equality case is refused rather than warned about for the same reason the
+ * ticket exists: the warning would be delivered to the chat the operator is
+ * about to mute. There is no default to fall back to either — the only chat id
+ * this process could invent is `TELEGRAM_CHAT_ID`, which is precisely the
+ * configuration being rejected.
+ *
+ * Names variables, never values: a chat id is not a bearer credential, but it
+ * identifies the operator's private channel and has no business in a startup
+ * error that goes to stderr.
+ */
+function requireHeartbeatChatId(escalationChatId: string): string {
+  const heartbeatChatId = requireEnv(TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR);
+  if (heartbeatChatId === escalationChatId) {
+    throw new Error(
+      `Orchestrator cannot start: ${TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR} is the same chat as ` +
+        'TELEGRAM_CHAT_ID. The heartbeat needs a destination of its own: it posts on a fixed ' +
+        'interval forever (~1,300 messages over a 14-day soak, #238), and pointed at the ' +
+        'escalation chat it drives the operator to mute the one channel that carries orphaned ' +
+        'go verdicts, stuck unpriced fills and kill-threshold breaches (#342). Create a second ' +
+        `chat for the beat and set ${TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR} to it, or re-run with ` +
+        `${ENV_VAR}=log-only to accept log-only alerting for an attended run.`,
+    );
+  }
+  return heartbeatChatId;
 }
 
 /**

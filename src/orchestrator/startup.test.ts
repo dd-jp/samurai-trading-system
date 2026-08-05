@@ -46,6 +46,8 @@ const MUTATED_ENV_VARS = [
   'TELEGRAM_BOT_TOKEN',
   'TELEGRAM_CHAT_ID',
   'TELEGRAM_ALLOWED_USER_IDS',
+  // #342: the heartbeat's own destination, separate from the escalation chat.
+  'TELEGRAM_HEARTBEAT_CHAT_ID',
 ] as const;
 
 const savedEnv = new Map<string, string | undefined>();
@@ -60,6 +62,7 @@ beforeEach(() => {
   delete process.env.TELEGRAM_BOT_TOKEN;
   delete process.env.TELEGRAM_CHAT_ID;
   delete process.env.TELEGRAM_ALLOWED_USER_IDS;
+  delete process.env.TELEGRAM_HEARTBEAT_CHAT_ID;
 });
 
 afterEach(() => {
@@ -280,6 +283,14 @@ describe('startFromEnvironment — the shipped paper profile', () => {
 
     expect(error.message).toContain('TELEGRAM_CHAT_ID');
     expect(error.message).toContain('TELEGRAM_ALLOWED_USER_IDS');
+    // #342: the heartbeat's separate destination is named in the same breath,
+    // rather than discovered one variable later. Matched inside the
+    // parenthesised MISSING list rather than anywhere in the message — the
+    // advice paragraph that follows also mentions the variable, and asserting
+    // on that would pass even if the pre-flight stopped requiring it.
+    expect(error.message).toMatch(
+      /required credential\(s\) are not set \([^)]*TELEGRAM_HEARTBEAT_CHAT_ID[^)]*\)/,
+    );
     expect(error.message).not.toContain(sentinel);
     // The token IS set, so it must not be reported as missing.
     expect(error.message).not.toContain('TELEGRAM_BOT_TOKEN');
@@ -288,11 +299,12 @@ describe('startFromEnvironment — the shipped paper profile', () => {
   it('boots with the real push transport under SAMURAI_ALERTS=telegram', async () => {
     // The other half of #322: the unattended posture actually assembles.
     // Nothing here reaches Telegram — the client is constructed, no poll loop
-    // is started, and `stop()` runs long before the first 60s heartbeat.
+    // is started, and `stop()` runs long before the first 15-minute heartbeat.
     process.env.SAMURAI_ALERTS = 'telegram';
     process.env.TELEGRAM_BOT_TOKEN = 'dummy-token-not-a-credential';
     process.env.TELEGRAM_CHAT_ID = '-1001234567890';
     process.env.TELEGRAM_ALLOWED_USER_IDS = '42';
+    process.env.TELEGRAM_HEARTBEAT_CHAT_ID = '-1009876543210';
 
     const entries: Parameters<Logger['log']>[0][] = [];
     const logger: Logger = { log: (entry) => entries.push(entry) };
@@ -329,7 +341,10 @@ describe('startFromEnvironment — the shipped paper profile', () => {
 
         expect(fetchStub).toHaveBeenCalledTimes(1);
         const [, init] = fetchStub.mock.calls[0] as [string, { body: string }];
-        expect(JSON.parse(init.body)).toMatchObject({ chat_id: '-1001234567890' });
+        // #342: the HEARTBEAT chat, not the escalation chat. This is the
+        // end-to-end half of the separation — a shipped entrypoint that still
+        // pointed both at TELEGRAM_CHAT_ID would fail here.
+        expect(JSON.parse(init.body)).toMatchObject({ chat_id: '-1009876543210' });
       } finally {
         vi.unstubAllGlobals();
       }

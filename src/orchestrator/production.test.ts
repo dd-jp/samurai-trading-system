@@ -38,6 +38,7 @@ import {
   buildProductionComponents,
   buildProductionOrchestrator,
   buildProductionTickRunner,
+  DEFAULT_HEARTBEAT_INTERVAL_MS,
   DEFAULT_LLM_CLIENT_CONFIG,
   type ProductionConfig,
   SMOKE_TEST_UNIVERSE,
@@ -750,6 +751,32 @@ describe('buildProductionOrchestrator', () => {
     await vi.advanceTimersByTimeAsync(3_000);
 
     expect(config.heartbeatChannel.postHeartbeat).toHaveBeenCalledTimes(3);
+    await orchestrator.stop();
+  });
+
+  it('defaults the heartbeat to the soak cadence, not the tick cadence (#342)', async () => {
+    // #342: at 60s the dead-man's-switch posts ~20k messages over the 14-day
+    // soak (#238) and the operator mutes the chat. The default is the external
+    // watchdog's staleness threshold — 15 minutes — and `heartbeatIntervalMs`
+    // stays the knob for anything that wants it tighter.
+    expect(DEFAULT_HEARTBEAT_INTERVAL_MS).toBe(15 * 60_000);
+
+    const config = stubConfig(db, { tickIntervalMs: 100_000 });
+    // No `heartbeatIntervalMs` — the default is what is under test.
+    expect(config.heartbeatIntervalMs).toBeUndefined();
+    const orchestrator = buildProductionOrchestrator(config);
+    vi.spyOn(orchestrator.tickRunner, 'runInstrument').mockResolvedValue({
+      trace_id: 't',
+      final_stage: 'analysts',
+    });
+
+    await orchestrator.start();
+    // A minute in — where the old default had already posted once.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(config.heartbeatChannel.postHeartbeat).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_HEARTBEAT_INTERVAL_MS - 60_000);
+    expect(config.heartbeatChannel.postHeartbeat).toHaveBeenCalledTimes(1);
     await orchestrator.stop();
   });
 

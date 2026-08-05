@@ -124,6 +124,7 @@ describe('missingCredentialEnvVars', () => {
     'TELEGRAM_BOT_TOKEN',
     'TELEGRAM_CHAT_ID',
     'TELEGRAM_ALLOWED_USER_IDS',
+    'TELEGRAM_HEARTBEAT_CHAT_ID',
   ] as const;
   const saved: Record<string, string | undefined> = {};
 
@@ -211,11 +212,28 @@ describe('missingCredentialEnvVars', () => {
       'TELEGRAM_BOT_TOKEN',
       'TELEGRAM_CHAT_ID',
       'TELEGRAM_ALLOWED_USER_IDS',
+      'TELEGRAM_HEARTBEAT_CHAT_ID',
     ]);
     expect(missingCredentialEnvVars({}, 'log-only')).not.toContain('TELEGRAM_BOT_TOKEN');
     // `undefined` — the caller injected every alert channel, so no transport
     // credential is needed either.
     expect(missingCredentialEnvVars({}, undefined)).not.toContain('TELEGRAM_BOT_TOKEN');
+  });
+
+  it('drops the heartbeat chat id when the caller injected its own heartbeat channel (#342)', () => {
+    // The separate destination exists so an operator can mute the heartbeat
+    // without muting escalations. A caller supplying its own channel has
+    // already decided where heartbeats go, so demanding the variable would be
+    // asking for one this run never reads — the same precision the Alpaca and
+    // Anthropic entries above apply.
+    expect(missingCredentialEnvVars({ heartbeatChannel: {} as never }, 'telegram')).not.toContain(
+      'TELEGRAM_HEARTBEAT_CHAT_ID',
+    );
+    // ...and the escalation chat is still required: that is the channel the
+    // injected heartbeat does not cover.
+    expect(missingCredentialEnvVars({ heartbeatChannel: {} as never }, 'telegram')).toContain(
+      'TELEGRAM_CHAT_ID',
+    );
   });
 });
 
