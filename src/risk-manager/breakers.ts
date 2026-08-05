@@ -165,9 +165,26 @@ export class CircuitBreakers {
       armed.push(this.killSwitchReason ? `kill_switch:${this.killSwitchReason}` : 'kill_switch');
     }
 
-    const dailyLossTripped = portfolio.daily_pnl_pct <= -this.config.daily_loss_pct;
+    // Portfolio-level figure, UTC-bounded (#332). Narrowed explicitly rather
+    // than compared directly: an unknown must never reach the threshold test,
+    // where a coerced `0 <= -daily_loss_pct` would read a figure nobody has as
+    // a flat day and leave this breaker un-tripped through a real loss.
+    const dailyPnl = portfolio.daily_pnl.portfolio;
+    const dailyLossTripped = dailyPnl.known && dailyPnl.pct <= -this.config.daily_loss_pct;
     if (dailyLossTripped) {
       armed.push('daily_loss_soft');
+    }
+    // Unknown is surfaced, not silently skipped — the #293/#320/#324/#342
+    // posture: a degraded state must be visible in the audit trail and the
+    // operator's breaker summary rather than reached quietly.
+    //
+    // It is NOT set as `portfolio_tripped` here. Turning "unknown" into a halt
+    // is the two-tier daily-loss halting of #333, which owns that decision and
+    // its re-arm semantics; arming a name this breaker cannot itself clear
+    // would strand the system halted with no path back. So this arms an
+    // advisory marker only, and #333 escalates it to a block on new entries.
+    if (!dailyPnl.known) {
+      armed.push('daily_pnl_unknown');
     }
 
     const consecutiveLossTripped =

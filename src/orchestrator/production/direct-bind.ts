@@ -35,6 +35,7 @@ import type {
   CircuitBreakers,
   PersistedBreakerState,
   RiskConfig,
+  SessionBasisByClass,
   VolatilityReading,
 } from '../../risk-manager/index.js';
 import {
@@ -72,7 +73,12 @@ export interface AccountStateProvider {
   getAccountState(asOf: Date): Promise<{
     cash: number;
     peak_equity: number;
-    daily_pnl_pct: number;
+    /**
+     * Session-open equity and realized PnL per class (#332) — not a finished
+     * percentage. `computePortfolioView` adds the unrealized term and divides,
+     * so the marks it already holds are not fetched a second time.
+     */
+    daily_basis: SessionBasisByClass;
     consecutive_losses: number;
   }>;
 }
@@ -137,7 +143,7 @@ async function computeCurrentPortfolioAndBreakers(deps: BreakerStateDeps, clock:
     asOf,
     cash: account.cash,
     peak_equity: account.peak_equity,
-    daily_pnl_pct: account.daily_pnl_pct,
+    daily_basis: account.daily_basis,
     consecutive_losses: account.consecutive_losses,
   });
   const breakerInput: BreakerEvalInput = { portfolio, volatility, mode: deps.mode, clock };

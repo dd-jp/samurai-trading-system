@@ -94,13 +94,20 @@ export interface AlpacaAccount {
   /** Total account value including open positions — the high-water mark's input. */
   equity: string;
   /**
-   * Equity at the previous trading day's close.
+   * NOT READ, and typed so that reading it cannot compile (#332).
    *
-   * NOTE (cross-verify 2026-07-31, GAP-8): whether this boundary is scoped to
-   * the US stock trading day is UNVERIFIED against a live account. For a 24/7
-   * crypto instrument that boundary may not match risk-manager-spec.md's
-   * stated "UTC day" semantics for `daily_pnl_pct`. Open decision — see
-   * `AlpacaAccountStateProvider`.
+   * Alpaca still sends this on the wire; the parse is a generic cast over
+   * `res.json()`, so the field arrives at runtime and is simply ignored. What
+   * `?: never` buys is the compile-time half: `never` has no values, so any
+   * attempt to use it as the `string` it actually is fails to typecheck, and an
+   * object literal supplying it fails too. A bare comment saying "do not
+   * reintroduce this" is documentation, not enforcement — the same reasoning
+   * that made `DailyPnl` a tagged union rather than `number | null`.
+   *
+   * Why it must not be read: one blended `last_equity` carries ONE reset
+   * boundary for a portfolio that has two, and per #260 that boundary was never
+   * verified against a live account. The daily figure is derived locally from
+   * `session_equity` snapshots instead (GAP-8, resolved).
    */
-  last_equity: string;
+  last_equity?: never;
 }

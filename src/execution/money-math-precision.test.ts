@@ -479,7 +479,11 @@ describe('money-math precision (ADR-0005)', () => {
       asOf: NOW,
       cash: Number(cash),
       peak_equity: 2_000_000,
-      daily_pnl_pct: 0,
+      daily_basis: {
+        crypto: { known: true, open_equity: 2_000_000, realized_pnl: 0 },
+        stocks: { known: true, open_equity: 2_000_000, realized_pnl: 0 },
+        portfolio: { known: true, open_equity: 2_000_000, realized_pnl: 0 },
+      },
       consecutive_losses: 0,
     });
 

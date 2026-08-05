@@ -40,6 +40,42 @@ export interface PersistedBreakerState {
 }
 
 /**
+ * Session-scoped daily PnL, as a fraction (-0.05 is a 5% loss) — or an
+ * explicit "not known" (#332).
+ *
+ * A discriminated union, NOT `number | null`, and deliberately so. The daily
+ * loss breaker's test is `pct <= -config.daily_loss_pct`; JavaScript coerces
+ * both `null` and `undefined` in that comparison (`null <= -0.05` evaluates
+ * `0 <= -0.05` → `false`), so a nullable number would read an unknown figure as
+ * *flat* and silently leave the breaker un-tripped through a real loss. With a
+ * tagged union there is no numeric coercion path at all: `pct` is unreachable
+ * until `known` has been narrowed, which makes "unknown treated as zero" a
+ * compile error at every consumer rather than a runtime near-miss.
+ *
+ * `reason` is operator-facing — it names why the figure is absent, so a halted
+ * session is diagnosable without reading code.
+ */
+export type DailyPnl =
+  | { readonly known: true; readonly pct: number }
+  | { readonly known: false; readonly reason: string };
+
+/**
+ * Daily PnL per session boundary (#332). The three figures are measured from
+ * DIFFERENT boundaries — crypto from 00:00 UTC, stocks from the prior 16:00 ET
+ * close, portfolio from 00:00 UTC — each against its own class's equity at that
+ * boundary.
+ *
+ * They therefore do NOT sum to one another, by design, and no invariant should
+ * be asserted between them: `crypto + stocks === portfolio` is false whenever a
+ * stock trade closes between Friday 16:00 ET and Saturday 00:00 UTC.
+ */
+export interface DailyPnlByClass {
+  readonly crypto: DailyPnl;
+  readonly stocks: DailyPnl;
+  readonly portfolio: DailyPnl;
+}
+
+/**
  * Accounting view over the shared store (#78). Consumed here read-only —
  * the pipeline never computes exposure/drawdown itself.
  */
@@ -50,8 +86,37 @@ export interface PortfolioView {
   exposure_by_instrument: Record<string, number>;
   exposure_by_class: { crypto: number; stocks: number };
   gross_exposure: number;
-  daily_pnl_pct: number;
+  /**
+   * Replaces the former single `daily_pnl_pct: number`, which was Alpaca's
+   * blended `last_equity` figure on an unverified boundary (GAP-8, #332).
+   */
+  daily_pnl: DailyPnlByClass;
   consecutive_losses: number;
+}
+
+/**
+ * What the account layer knows about one session's starting point (#332), fed
+ * to `computePortfolioView` so it can finish the division.
+ *
+ * The split of labour is deliberate: the account provider owns the durable
+ * snapshot and the realized sum (it has the store and the calendars);
+ * `computePortfolioView` owns the unrealized term, because it has already
+ * fetched the marks and must not fetch them a second time.
+ */
+export type SessionBasis =
+  | {
+      readonly known: true;
+      /** Portfolio equity at this class's session open — the denominator. */
+      readonly open_equity: number;
+      /** Realized PnL net of fees, for this class, since that open. */
+      readonly realized_pnl: number;
+    }
+  | { readonly known: false; readonly reason: string };
+
+export interface SessionBasisByClass {
+  readonly crypto: SessionBasis;
+  readonly stocks: SessionBasis;
+  readonly portfolio: SessionBasis;
 }
 
 /**

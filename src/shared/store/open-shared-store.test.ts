@@ -28,7 +28,20 @@ const TABLES = [
   'broker_brackets',
   'broker_observed_fills',
   'broker_unpriced_fills',
+  // `session_equity` (0009) very nearly repeated `account_state`'s omission
+  // above, which is why the assertion below is now an exact set rather than a
+  // one-directional "every listed table exists": that form is blind to a table
+  // nobody listed, so it could never have caught either miss.
+  'session_equity',
 ];
+
+/**
+ * Mirrors shared-sqlite-store-spec.md's "Consolidated Schema" count, which the
+ * Non-Collision Verification section asserts it has checked every table in.
+ * That prose number silently drifted twice (it read "twenty" and "twenty-one"
+ * simultaneously while the schema held 22), so it is pinned here.
+ */
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 22;
 
 const tempDirs: string[] = [];
 
@@ -60,6 +73,19 @@ describe('openSharedStore', () => {
       expect(names.has(table), `missing table ${table}`).toBe(true);
     }
     expect(names.has('schema_migrations')).toBe(true);
+
+    // Exact set, both directions. A migration that adds a table without adding
+    // it here now FAILS rather than passing unnoticed — the gap that let
+    // `account_state` (0006) and `session_equity` (0009) both ship unlisted.
+    // `sqlite_sequence` is SQLite's own AUTOINCREMENT bookkeeping, created
+    // implicitly, so it is excluded rather than declared.
+    const declared = new Set([...TABLES, 'schema_migrations']);
+    const unexpected = [...names].filter(
+      (name) => !declared.has(name) && name !== 'sqlite_sequence',
+    );
+    expect(unexpected, `tables in the DB but not declared in TABLES: ${unexpected}`).toEqual([]);
+
+    expect(TABLES).toHaveLength(CONSOLIDATED_SCHEMA_TABLE_COUNT);
   });
 
   it('records applied versions and re-migrating is a no-op', () => {
@@ -75,6 +101,7 @@ describe('openSharedStore', () => {
       { version: 6 },
       { version: 7 },
       { version: 8 },
+      { version: 9 },
     ]);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
@@ -86,6 +113,7 @@ describe('openSharedStore', () => {
       { version: 6 },
       { version: 7 },
       { version: 8 },
+      { version: 9 },
     ]);
   });
 

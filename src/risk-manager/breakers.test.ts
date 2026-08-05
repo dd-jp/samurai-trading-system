@@ -1,7 +1,13 @@
 import type { Clock } from '../shared/index.js';
 import type { BreakerConfig, BreakerEvalInput } from './breakers.js';
 import { CircuitBreakers } from './breakers.js';
-import type { PortfolioView } from './types.js';
+import type { DailyPnlByClass, PortfolioView } from './types.js';
+
+/** Every class at the same known figure — the daily-loss breaker reads `portfolio`. */
+function pnl(pct: number): DailyPnlByClass {
+  const known = { known: true, pct } as const;
+  return { crypto: known, stocks: known, portfolio: known };
+}
 
 function makeClock(iso: string): Clock {
   return { now: () => new Date(iso) };
@@ -15,7 +21,7 @@ function makePortfolio(overrides: Partial<PortfolioView> = {}): PortfolioView {
     exposure_by_instrument: {},
     exposure_by_class: { crypto: 0, stocks: 0 },
     gross_exposure: 0,
-    daily_pnl_pct: 0,
+    daily_pnl: pnl(0),
     consecutive_losses: 0,
     ...overrides,
   };
@@ -62,25 +68,76 @@ describe('CircuitBreakers', () => {
     const breakers = new CircuitBreakers(makeConfig({ daily_loss_pct: 3 }));
 
     const belowThreshold = breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ daily_pnl_pct: -2 }) }),
+      makeInput({ portfolio: makePortfolio({ daily_pnl: pnl(-2) }) }),
     );
     expect(belowThreshold.portfolio_tripped).toBe(false);
 
     const atThreshold = breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ daily_pnl_pct: -3.5 }) }),
+      makeInput({ portfolio: makePortfolio({ daily_pnl: pnl(-3.5) }) }),
     );
     expect(atThreshold.portfolio_tripped).toBe(true);
     expect(atThreshold.armed_breakers).toContain('daily_loss_soft');
   });
 
-  it('auto-resets the daily-loss breaker once daily_pnl_pct recovers (soft, stateless)', () => {
+  it('auto-resets the daily-loss breaker once daily PnL recovers (soft, stateless)', () => {
     const breakers = new CircuitBreakers(makeConfig({ daily_loss_pct: 3 }));
-    breakers.evaluate(makeInput({ portfolio: makePortfolio({ daily_pnl_pct: -5 }) }));
+    breakers.evaluate(makeInput({ portfolio: makePortfolio({ daily_pnl: pnl(-5) }) }));
 
     const recovered = breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ daily_pnl_pct: 0 }) }),
+      makeInput({ portfolio: makePortfolio({ daily_pnl: pnl(0) }) }),
     );
     expect(recovered.portfolio_tripped).toBe(false);
+  });
+
+  it('arms daily_pnl_unknown, without halting, when the daily figure is unknown', () => {
+    const breakers = new CircuitBreakers(makeConfig({ daily_loss_pct: 3 }));
+    const unknown = { known: false, reason: 'no session-open equity observed' } as const;
+
+    const state = breakers.evaluate(
+      makeInput({
+        portfolio: makePortfolio({
+          daily_pnl: { crypto: unknown, stocks: unknown, portfolio: unknown },
+        }),
+      }),
+    );
+
+    // Visible in the audit trail and the operator's breaker summary — the
+    // #293/#320/#324/#342 posture that a degraded state is never reached
+    // quietly.
+    expect(state.armed_breakers).toContain('daily_pnl_unknown');
+    // But NOT a halt: escalating unknown to a block on new entries is #333's
+    // two-tier daily-loss work, which owns the re-arm semantics. Arming a name
+    // this breaker cannot itself clear would strand the system halted.
+    expect(state.portfolio_tripped).toBe(false);
+    expect(state.armed_breakers).not.toContain('daily_loss_soft');
+  });
+
+  it('does not read an unknown daily figure as a flat day', () => {
+    const breakers = new CircuitBreakers(makeConfig({ daily_loss_pct: 0.05 }));
+    const unknown = { known: false, reason: 'restart after the boundary' } as const;
+
+    const state = breakers.evaluate(
+      makeInput({
+        portfolio: makePortfolio({
+          daily_pnl: { crypto: unknown, stocks: unknown, portfolio: unknown },
+        }),
+      }),
+    );
+
+    // A `null`/`undefined` here would coerce to 0 in `pct <= -0.05` and be
+    // indistinguishable from a genuinely flat session. The union makes the
+    // absence explicit instead.
+    expect(state.armed_breakers).toEqual(['daily_pnl_unknown']);
+  });
+
+  it('leaves daily_pnl_unknown unarmed when the figure is known', () => {
+    const breakers = new CircuitBreakers(makeConfig({ daily_loss_pct: 3 }));
+
+    const state = breakers.evaluate(
+      makeInput({ portfolio: makePortfolio({ daily_pnl: pnl(-1) }) }),
+    );
+
+    expect(state.armed_breakers).not.toContain('daily_pnl_unknown');
   });
 
   it('trips the consecutive-loss cooldown at the portfolio tier at the configured count', () => {

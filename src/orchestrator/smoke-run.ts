@@ -114,6 +114,7 @@ import {
   MarketDataServiceImpl,
   SqliteMarketDataStore,
 } from '../market-data-service/index.js';
+import type { SessionBasisByClass } from '../risk-manager/index.js';
 import { SimulatedClock } from '../shared/index.js';
 import { openSharedStore, type SharedStore as SqliteHandle } from '../shared/store/index.js';
 import {
@@ -271,13 +272,19 @@ export class FixedAccountStateProvider implements AccountStateProvider {
   async getAccountState(): Promise<{
     cash: number;
     peak_equity: number;
-    daily_pnl_pct: number;
+    daily_basis: SessionBasisByClass;
     consecutive_losses: number;
   }> {
+    // A flat session, stated as such: `open_equity` equals current equity and
+    // nothing has realized, so every class's daily PnL computes to exactly 0.
+    // Deliberately `known`, not unknown — an unknown figure arms
+    // `daily_pnl_unknown` and would make a healthy smoke run look degraded.
+    const flat = { known: true, open_equity: this.equity, realized_pnl: 0 } as const;
+
     return {
       cash: this.equity,
       peak_equity: this.equity,
-      daily_pnl_pct: 0,
+      daily_basis: { crypto: flat, stocks: flat, portfolio: flat },
       consecutive_losses: 0,
     };
   }

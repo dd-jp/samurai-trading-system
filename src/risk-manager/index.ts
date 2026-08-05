@@ -46,6 +46,8 @@ export { computePortfolioView } from './portfolio-view.js';
 export type {
   BreakerState,
   CorrelationEstimate,
+  DailyPnl,
+  DailyPnlByClass,
   PersistedBreakerState,
   PortfolioView,
   RiskConfig,
@@ -55,6 +57,8 @@ export type {
   RiskDecision,
   RiskInput,
   RiskManager,
+  SessionBasis,
+  SessionBasisByClass,
 } from './types.js';
 
 /**

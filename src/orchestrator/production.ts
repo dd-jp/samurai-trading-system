@@ -143,6 +143,7 @@ import type {
 import {
   AlpacaDataSource,
   AlpacaHttpDataClient,
+  AlwaysOpenCalendar,
   MarketDataServiceImpl,
   SqliteMarketDataStore,
   type TradingCalendar,
@@ -206,6 +207,7 @@ import { withOnTradeClose } from './production/on-trade-close-hookup.js';
 import { MarketDataVolatilityReadingProvider } from './production/volatility-reading-provider.js';
 import { UniverseScheduler } from './scheduler.js';
 import { SqliteAccountStateStore } from './sqlite-account-state-store.js';
+import { SqliteSessionEquityStore } from './sqlite-session-equity-store.js';
 import { runTickPlan } from './tick-loop.js';
 import { SequentialTickRunner } from './tick-runner.js';
 import type { Logger, Scheduler, TickRunner, TickSteps, UniverseInstrument } from './types.js';
@@ -379,7 +381,12 @@ export interface ProductionConfig {
    * has a reading without one more required seam.
    */
   volatilityIndicator?: IndicatorSpec;
-  /** Session calendar for stock gating (scheduler + Verdict gate). */
+  /**
+   * Session calendar for stock gating (scheduler + Verdict gate) — AND, since
+   * #332, the boundary the stocks daily-PnL figure resets on via
+   * `sessionStart`. One calendar answers both by design (#331): an override is
+   * authoritative for when stock sessions begin, not merely for when to tick.
+   */
   tradingCalendar?: TradingCalendar;
   /** Sticky breaker rows recovered from a prior process, if any. */
   initialBreakerState?: readonly PersistedBreakerState[];
@@ -796,9 +803,41 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       new AlpacaAccountStateProvider({
         client: brokerClient,
         store: new SqliteAccountStateStore(config.db),
+        // Per-class session-open equity snapshots (#332) — the local
+        // replacement for Alpaca's blended `last_equity` (GAP-8).
+        sessionEquity: new SqliteSessionEquityStore(config.db),
         // The existing ClosedTrade reader, per spec story 25 — no new
         // realized-PnL ledger is built when one already exists.
         closedTrades: new SqliteClosedTradeStore(config.db),
+        // Two calendars: crypto resets at 00:00 UTC, stocks at the prior 16:00
+        // ET close. `tradingCalendar` is the equity one (it gates market-hours
+        // scheduling), so only it is overridable here — a crypto session has no
+        // holidays or half-days for a config to express.
+        //
+        // SHARING `tradingCalendar` WITH THE SCHEDULER IS DELIBERATE, not an
+        // oversight, and it is why this is typed `TradingCalendar` rather than
+        // narrowed to `UsEquityRegularHoursCalendar`. #331 put `sessionStart` on
+        // the port precisely so the accounting boundary and the session gating
+        // move together: "the boundary lives on the calendar rather than being
+        // duplicated in each consumer" (trading-calendar.ts). The default is
+        // weekday-only and reports a session start for holiday Mondays that
+        // never traded; when the real holiday/session table lands it is injected
+        // HERE, through this same field, and the daily-PnL boundary must follow
+        // it. Narrowing the type would pin this consumer to the placeholder
+        // implementation and guarantee the two silently disagree on every
+        // holiday — the divergence the port exists to prevent.
+        //
+        // The cost is that an override is authoritative for BOTH. That is the
+        // contract: `sessionStart` is a required member, so a substitute cannot
+        // omit it by accident, and any calendar answering it is by definition
+        // asserting when this account's stock sessions begin.
+        calendars: { crypto: new AlwaysOpenCalendar(), stocks: tradingCalendar },
+        mode: config.mode,
+        // Composition happens at startup, so "now" here IS the process start.
+        // It decides whether a session boundary was crossed under a running
+        // process (a real open) or had already passed when this one came up
+        // (a mid-session base) — #332's two cold-start cases.
+        startedAt: config.clock.now(),
         logger: config.logger ?? new JsonLogger(),
       }),
     // #277's provider, wired by default now that AccountStateProvider (#276)
