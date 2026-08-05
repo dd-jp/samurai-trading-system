@@ -1255,6 +1255,14 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // debate, or per instrument, would count each one's window separately and
   // enforce nothing across the universe — which is the shape the incidental
   // `maxConcurrentInstruments: 1` throttle already had.
+  //
+  // Note it takes THIS root's `clock`, which is what advances its fixed window.
+  // `startFromEnvironment` supplies `SystemClock`, so a live or paper process
+  // rolls the window on real time. A caller that injects a FROZEN clock (the
+  // offline smoke run does) gets one window for the whole run and must keep
+  // its debate count under `maxDebates` — true today at 3 ticks against 20,
+  // and the reason that gate asserts on the limiter rather than ignoring it.
+
   const llmRateLimiter =
     config.llmRateLimiter ??
     new RateLimiter(clock, config.rateLimiterConfig ?? DEFAULT_LLM_RATE_LIMIT_CONFIG);
