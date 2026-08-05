@@ -84,6 +84,64 @@ describe('SqliteSpendCap', () => {
     expect(entries.at(-1)?.level).toBe('error');
   });
 
+  it('escalates the breach ONCE, not on every subsequent refusal', () => {
+    // The cap does not refill, so every tick after the breach refuses
+    // identically. At a 15-minute cadence that is ~1,000 identical alerts over
+    // the rest of a 14-day run, which is how an operator learns to mute the
+    // channel that also carries kill-threshold breaches.
+    spend(db, 60, 'over-budget');
+    const breaches: string[] = [];
+    const cap = new SqliteSpendCap(db, 50, undefined, (v) => breaches.push(v.reason ?? ''));
+
+    cap.check();
+    cap.check();
+    cap.check();
+
+    expect(breaches).toHaveLength(1);
+    expect(breaches[0]).toContain('LLM spend cap reached');
+  });
+
+  it('escalates the fail-closed refusal too, not only a spent budget', () => {
+    // An unreadable llm_spend also stops the system trading, and unlike a
+    // spent budget it is not something the operator meant to happen. Silence
+    // on this path would be worse, not better.
+    db.prepare('DROP TABLE llm_spend').run();
+    const breaches: string[] = [];
+    const cap = new SqliteSpendCap(db, 50, undefined, (v) => breaches.push(v.reason ?? ''));
+
+    cap.check();
+
+    expect(breaches).toEqual(['spend cap unreadable (fail-closed)']);
+  });
+
+  it('still refuses when the alert channel throws', () => {
+    // The refusal is the load-bearing part and is already decided by the time
+    // the alert fires. A transport that throws must not turn "the budget is
+    // spent" into an unhandled rejection inside the tick.
+    spend(db, 60, 'over-budget');
+    const { logger, entries } = recordingLogger();
+    const cap = new SqliteSpendCap(db, 50, logger, () => {
+      throw new Error('telegram is down');
+    });
+
+    expect(cap.check().admitted).toBe(false);
+    expect(entries.at(-1)?.message).toContain('nothing reached an operator');
+  });
+
+  it('does not admit anything while announcing the opening total', () => {
+    // `startingTotal()` is a read for the startup line. If it ever mutated the
+    // announced-breach latch, an already-breached store would announce at boot
+    // and then never escalate again.
+    spend(db, 60, 'over-budget');
+    const breaches: string[] = [];
+    const cap = new SqliteSpendCap(db, 50, undefined, (v) => breaches.push(v.reason ?? ''));
+
+    const opening = cap.startingTotal();
+
+    expect(opening.admitted).toBe(false);
+    expect(breaches).toHaveLength(1);
+  });
+
   it('refuses a budget that could never admit anything, at construction', () => {
     // A zero or negative ceiling refuses every debate and reads as a dead
     // pipeline rather than as a misconfiguration. Fail at the point the

@@ -1097,6 +1097,17 @@ function buildProfileConfigs(): Pick<
      *
      * ## What six instruments cost per day, and why it is not 6x (DERIVED)
      *
+     * > **STALE SINCE ADR-0008 (2026-08-06), and kept because ADR-0008 cites
+     * > it as its own source.** Everything below is computed at the 60s
+     * > `DEFAULT_TICK_INTERVAL_MS`. This profile now sets
+     * > `tickIntervalMs: 15 * 60_000`, so the ~$45/day figure is the BEFORE
+     * > number, not what a soak on this profile costs — that is ~$3/day, ~$42
+     * > over 14 days, and it is capped at $50 by `llmBudgetUsd` regardless.
+     * > The *reasoning* below is what survived the change and is why the cap
+     * > exists: the cycle is `pass duration + interval`, so spend does not
+     * > scale linearly with cadence and no arithmetic here can promise a
+     * > dollar figure.
+     *
      * The naive reading is that six instruments is six times the debate spend
      * of one. It is closer to **1.6x**, and the reason is worth writing down
      * because it also answers whether the tick loop can keep up:
@@ -1184,7 +1195,17 @@ function buildProfileConfigs(): Pick<
      * still catching a runaway within minutes rather than hours.
      *
      * **`maxDebates` — DERIVED from #385's measured cadence**, at roughly 3x
-     * headroom over it, per asset class:
+     * headroom over it, per asset class.
+     *
+     * > **The cadence these were derived from is 15x faster than the one this
+     * > profile now runs (ADR-0008: `tickIntervalMs` 60s -> 15 min).** Left
+     * > unchanged deliberately: this budget is a RUNAWAY guard, and an
+     * > oversized ceiling is permissive rather than wrong — it refuses only
+     * > pathological rates, which is exactly its job. Retuning it down to the
+     * > new cadence would make it a second, redundant cost control and put it
+     * > in conflict with `llmBudgetUsd`, which is the actual budget. Read the
+     * > arithmetic below as "the rate at which something has gone wrong", not
+     * > as a description of the soak's cadence.
      *
      * - crypto (BTC-USD, ETH-USD; trades 24/7) peaks OUTSIDE the equity
      *   session, where a pass is 2x15s and a cycle ~90s — 2 debates per 90s =

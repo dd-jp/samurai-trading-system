@@ -59,6 +59,35 @@ Open positions are unaffected by a breach: bracket legs remain live
 venue-side, and Execution, reconcile and fill ingestion all keep running. Only
 new debates stop.
 
+**A breach escalates, once.** It is routed through the existing
+`BreachAlertChannel` — the same channel the Feedback Loop's kill-threshold
+breaches use — so on `SAMURAI_ALERTS=telegram` it reaches a phone. This is not
+optional polish: a 14-day unattended run with no human approval gate that
+silently stops trading on day 4 is *indistinguishable from a quiet market*,
+because the heartbeat keeps beating and the ticks keep completing with no
+trade. That is the same argument
+[#431](https://github.com/dd-jp/samurai-trading-system/issues/431) makes about
+a silently-skipping analyst stage. The fail-closed path escalates too — an
+unreadable `llm_spend` also stops the system, and unlike a spent budget it is
+not something the operator meant to happen.
+
+Once, not per refusal: the cap does not refill, so every subsequent tick
+refuses identically, and at a 15-minute cadence that would be ~1,000 identical
+alerts over the remainder of the run — which is how an operator learns to mute
+a channel that also carries kill-threshold breaches.
+
+**The window is the whole `llm_spend` table, and that has a cost worth
+stating.** A per-process baseline was considered and rejected: it would hand a
+fresh budget to every restart, and a 14-day soak on a MacBook (CLAUDE.md lists
+crash-restart as a Key Constraint) *will* restart. Whole-table is the only
+definition that survives that. The price is that spend from earlier runs
+against the same database file counts — and on this machine that is not
+hypothetical: `data/samurai-development.sqlite` already held **196 calls /
+$0.38** when this ADR was written, from prior experimentation. So the root
+announces the opening total at startup (`LLM spend cap armed: $X of $50 already
+recorded … $Y remaining`) rather than letting an operator assume zero. **Start
+the soak from a fresh store if it is meant to have the full budget.**
+
 ### 2. Cadence: 15 minutes for the paper soak
 
 `paperStartingProfile` now carries `tickIntervalMs: 15 * 60_000`, up from the

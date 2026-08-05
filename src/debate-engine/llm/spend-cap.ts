@@ -72,10 +72,32 @@ export const UNCAPPED_SPEND: SpendCap = {
  * budget means.
  */
 export class SqliteSpendCap implements SpendCap {
+  /**
+   * Fired ONCE, on the first refusal. Not per refusal: the cap does not
+   * refill, so every subsequent tick refuses identically — at a 15-minute
+   * cadence that would be ~1,000 identical alerts over the rest of a 14-day
+   * run, which is how an operator learns to mute the channel.
+   */
+  #breachAnnounced = false;
+
   constructor(
     private readonly db: SharedStore,
     private readonly budgetUsd: number,
     private readonly logger?: Logger,
+    /**
+     * Escalation for a breach. Optional only so the many tests and
+     * programmatic callers need not supply one — but a breach with nowhere to
+     * go is the failure this exists to prevent, so the composition root always
+     * passes it.
+     *
+     * **Why this is not just a log line.** A budget breach stops the system
+     * trading, permanently, until an operator acts. On an unattended run with
+     * no human approval gate (ADR-0007), a silent stop on day 4 is
+     * indistinguishable from a quiet market: the heartbeat keeps beating and
+     * the ticks keep completing with no trade. That is the same argument
+     * issue #431 makes about a silently-skipping analyst stage.
+     */
+    private readonly onBreach?: (verdict: SpendCapVerdict) => void,
   ) {
     if (!Number.isFinite(budgetUsd) || budgetUsd <= 0) {
       throw new Error(
@@ -84,6 +106,21 @@ export class SqliteSpendCap implements SpendCap {
           'omit the cap entirely (UNCAPPED_SPEND) if that is what is wanted.',
       );
     }
+  }
+
+  /**
+   * What this database has already spent, for the startup line.
+   *
+   * The cap's window is the WHOLE table (see the class doc), which is correct
+   * across the restarts a 14-day soak will have — a per-process baseline would
+   * hand every restart a fresh budget. The cost of that choice is that spend
+   * from earlier runs against the same database counts too, and on this
+   * machine that is not hypothetical: `data/samurai-development.sqlite` held
+   * 196 calls / $0.38 before this cap existed. So the root announces the
+   * starting total rather than leaving the operator to assume zero.
+   */
+  startingTotal(): SpendCapVerdict {
+    return this.check();
   }
 
   check(): SpendCapVerdict {
@@ -107,35 +144,69 @@ export class SqliteSpendCap implements SpendCap {
           `No trade will be taken until this is fixed: ${message}`,
         payload: { budget_usd: this.budgetUsd },
       });
-      return {
+      return this.#refuse({
         admitted: false,
         spent_usd: Number.NaN,
         budget_usd: this.budgetUsd,
         reason: 'spend cap unreadable (fail-closed)',
-      };
+      });
     }
 
     if (!Number.isFinite(spent)) {
       // A non-finite SUM means a corrupt `cost_usd` row. Comparing it would
       // make `spent > budget` false and admit forever, so the guard reads as
       // enforced while enforcing nothing — this repo's dominant defect shape.
-      return {
+      return this.#refuse({
         admitted: false,
         spent_usd: spent,
         budget_usd: this.budgetUsd,
         reason: 'llm_spend total is not a finite number (fail-closed)',
-      };
+      });
     }
 
     if (spent >= this.budgetUsd) {
-      return {
+      return this.#refuse({
         admitted: false,
         spent_usd: spent,
         budget_usd: this.budgetUsd,
         reason: `LLM spend cap reached: $${spent.toFixed(2)} of $${this.budgetUsd.toFixed(2)} spent`,
-      };
+      });
     }
 
     return { admitted: true, spent_usd: spent, budget_usd: this.budgetUsd };
+  }
+
+  /**
+   * Escalates the first refusal and returns it unchanged.
+   *
+   * Covers BOTH refusal paths — budget reached and fail-closed — because an
+   * operator needs to hear about an unreadable `llm_spend` at least as much as
+   * a spent budget: both stop the system trading, and only one of them is
+   * something they meant to happen.
+   *
+   * `onBreach` failures are swallowed to a `warn`. An alert transport that
+   * throws must not convert "the budget is spent" into an unhandled rejection
+   * inside the tick — the refusal itself is the load-bearing part, and it has
+   * already been decided by the time this runs.
+   */
+  #refuse(verdict: SpendCapVerdict): SpendCapVerdict {
+    if (this.#breachAnnounced) return verdict;
+    this.#breachAnnounced = true;
+
+    try {
+      this.onBreach?.(verdict);
+    } catch (error) {
+      this.logger?.log({
+        trace_id: 'spend-cap',
+        stage: 'debate',
+        level: 'warn',
+        message:
+          'LLM spend cap breached, and the breach alert channel threw — the refusal stands, ' +
+          `but nothing reached an operator: ${error instanceof Error ? error.message : String(error)}`,
+        payload: { budget_usd: verdict.budget_usd, spent_usd: verdict.spent_usd },
+      });
+    }
+
+    return verdict;
   }
 }

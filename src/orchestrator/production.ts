@@ -1054,6 +1054,15 @@ export interface ProductionOrchestrator {
 /** Everything composed from in-repo code, built exactly once per process. */
 export interface ProductionComponents {
   steps: TickSteps;
+  /**
+   * The operator escalation channel, exposed because TWO consumers need the
+   * same instance: the Feedback Loop's kill-threshold breach, and the LLM
+   * spend cap's breach (ADR-0008), which is constructed inside this function.
+   * Returning it beats building a second one in `buildProductionOrchestrator`
+   * — two channels would be two places for an injected override to be applied
+   * to only one of them.
+   */
+  breachAlerts: BreachAlertChannel;
   marketData: MarketDataService;
   broker: BrokerAdapter;
   analysts: AnalystOrchestrator;
@@ -1187,6 +1196,14 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   const logger = config.logger ?? new JsonLogger();
 
   /**
+   * Hoisted above `spendCap` (below) rather than left beside the Feedback
+   * Loop's stores: the LLM spend cap escalates its breach through this same
+   * channel, and a breach that only reaches the log stream is invisible on an
+   * unattended run. It depends on nothing but `logger`, so the move is free.
+   */
+  const breachAlerts = config.breachAlerts ?? new LoggingBreachAlertChannel(logger);
+
+  /**
    * The hard dollar ceiling (ADR-0008). Distinct from `llmRateLimiter`, which
    * bounds CALLS PER WINDOW and refills with time: this bounds TOTAL DOLLARS
    * and never refills. A run can be comfortably inside its rate limit and
@@ -1212,7 +1229,47 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
           payload: { llm_budget_usd: null },
         }),
         UNCAPPED_SPEND)
-      : new SqliteSpendCap(config.db, config.llmBudgetUsd, logger);
+      : new SqliteSpendCap(config.db, config.llmBudgetUsd, logger, () =>
+          breachAlerts.postBreachAlert({
+            breaches: ['llm_spend_cap'],
+            reported_at: clock.now(),
+          }),
+        );
+
+  /**
+   * Announce what this database has ALREADY spent, because the cap's window is
+   * the whole `llm_spend` table and the operator's mental model is "$50 for
+   * this run".
+   *
+   * The whole-table window is the right choice — a per-process baseline would
+   * hand a fresh budget to every restart, and a 14-day soak on a MacBook will
+   * restart. But it means prior runs against the same file count, and that is
+   * not hypothetical: `data/samurai-development.sqlite` held 196 calls / $0.38
+   * before this cap existed. Silence here would let an operator assume zero
+   * and be wrong by however much they had already spent.
+   */
+  if (spendCap instanceof SqliteSpendCap) {
+    const opening = spendCap.startingTotal();
+    logger.log({
+      trace_id: 'startup',
+      stage: 'orchestrator',
+      level: opening.admitted ? 'info' : 'error',
+      message: opening.admitted
+        ? `LLM spend cap armed: $${opening.spent_usd.toFixed(2)} of ` +
+          `$${opening.budget_usd.toFixed(2)} already recorded in this database, ` +
+          `$${(opening.budget_usd - opening.spent_usd).toFixed(2)} remaining. The window is the ` +
+          'whole llm_spend table, so spend from earlier runs against this file counts. Start ' +
+          'from a fresh store if this run is meant to have the full budget.'
+        : `LLM spend cap is ALREADY BREACHED at startup: ${opening.reason}. No debate will be ` +
+          'admitted and the run will take no new trade. Raise llmBudgetUsd or start from a ' +
+          'fresh store.',
+      payload: {
+        spent_usd: opening.spent_usd,
+        budget_usd: opening.budget_usd,
+        admitted: opening.admitted,
+      },
+    });
+  }
   // Hooked once, shared everywhere below (see `ProductionComponents.executionStore`'s
   // doc): `getOpenPositions`, Verdict's `positionStore` and Execution's
   // `store` all read/write through this same instance, so `onTradeClose`
@@ -1398,6 +1455,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
 
   return {
     steps,
+    breachAlerts,
     marketData,
     broker,
     analysts,
@@ -1555,7 +1613,6 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     tuning: new SqliteTuningStore(config.db, clock),
     adjustments: new SqliteAdjustmentLog(config.db),
   };
-  const breachAlerts = config.breachAlerts ?? new LoggingBreachAlertChannel(logger);
   /**
    * #366. Resolved once, outside the timer callback, for `feedbackStores`'
    * reason — and read in the same precedence order the alert channels use: an
@@ -1636,7 +1693,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       // `kill_thresholds` are the four lines, and its `risk_thresholds` are
       // what a breach auto-tightens.
       config: feedbackConfig,
-      alerts: breachAlerts,
+      alerts: components.breachAlerts,
     });
 
     logger.log({
