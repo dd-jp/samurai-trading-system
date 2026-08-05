@@ -6,10 +6,9 @@ import type {
   AdjustmentLog,
   BreachAlertChannel,
   FeedbackConfig,
-  TuningStore,
 } from '../../feedback-loop/index.js';
 import { computeMetrics } from '../../feedback-loop/index.js';
-import type { ClosedTrade } from '../../shared/index.js';
+import type { ClosedTrade, TuningStore } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { SqliteDailyEquityStore } from '../sqlite-daily-equity-store.js';
 import type { LogEntry, Logger } from '../types.js';

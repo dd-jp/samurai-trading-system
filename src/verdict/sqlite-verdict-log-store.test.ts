@@ -5,9 +5,10 @@
  * store-level getter — this store deliberately has none; see its doc
  * comment for why.
  */
+
+import type { VerdictLog } from '../shared/index.js';
 import { openSharedStore, type SharedStore } from '../shared/store/index.js';
 import { SqliteVerdictLogStore } from './sqlite-verdict-log-store.js';
-import type { VerdictLog } from './verdict-log-store.js';
 
 function makeLog(overrides: Partial<VerdictLog> = {}): VerdictLog {
   return {

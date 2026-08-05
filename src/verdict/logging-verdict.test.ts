@@ -58,6 +58,8 @@ function makeRiskDecision(overrides: Partial<RiskDecision> = {}): RiskDecision {
     binding_constraint: null,
     reasons: [],
     risk_snapshot: { exposure: {}, drawdown_pct: 0, armed_breakers: [] },
+    warnings: [],
+    next_breaker_state: [],
     ...overrides,
   };
 }

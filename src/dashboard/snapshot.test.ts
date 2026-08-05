@@ -7,8 +7,9 @@
  * no setters, and the snapshot function calls only get-* methods.
  */
 import type { MetricsSuite } from '../cost-model-backtest/index.js';
+import type { AnalystContribution } from '../debate-engine/index.js';
 import type { Mark } from '../market-data-service/index.js';
-import type { AnalystContribution, DebateLog, OpenPosition } from '../shared/index.js';
+import type { DebateLog, OpenPosition } from '../shared/index.js';
 import { buildSnapshot } from './snapshot.js';
 import type {
   AttributionSummary,

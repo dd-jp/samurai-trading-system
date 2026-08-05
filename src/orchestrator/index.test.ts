@@ -34,7 +34,10 @@ describe('startFromEnvironment', () => {
   it('refuses to start with nothing wired, naming every missing dependency', async () => {
     await expect(startFromEnvironment()).rejects.toThrow(/cannot start/i);
 
-    const error = await startFromEnvironment().then(resolvedUnexpectedly, (e: unknown) => e as Error);
+    const error = await startFromEnvironment().then(
+      resolvedUnexpectedly,
+      (e: unknown) => e as Error,
+    );
     for (const key of REQUIRED_INJECTED_CONFIG) {
       expect(error.message).toContain(key);
     }
@@ -122,7 +125,10 @@ describe('startFromEnvironment', () => {
     // was describing a codebase that no longer exists. An error message that
     // is confidently out of date is worse than a terse one: it sends an
     // operator looking for work that is already done.
-    const error = await startFromEnvironment().then(resolvedUnexpectedly, (e: unknown) => e as Error);
+    const error = await startFromEnvironment().then(
+      resolvedUnexpectedly,
+      (e: unknown) => e as Error,
+    );
 
     expect(error.message).not.toMatch(/still have no implementation/i);
     expect(error.message).toContain('TelegramBotApiClient');

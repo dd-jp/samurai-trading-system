@@ -103,6 +103,7 @@ function approvedRisk(intent: OrderIntent): RiskDecision {
     reasons: [],
     warnings: [],
     risk_snapshot: { exposure: {}, drawdown_pct: 0, armed_breakers: [] },
+    next_breaker_state: [],
   };
 }
 
@@ -115,6 +116,7 @@ function rejectedRisk(): RiskDecision {
     reasons: ['circuit_breaker:portfolio: new entries halted'],
     warnings: [],
     risk_snapshot: { exposure: {}, drawdown_pct: 0, armed_breakers: ['portfolio'] },
+    next_breaker_state: [],
   };
 }
 
