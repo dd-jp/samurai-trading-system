@@ -23,8 +23,13 @@ export {
   AlpacaDataTimeoutError,
   AlpacaDataUnderfetchError,
 } from './sources/alpaca-data-errors.js';
-export type { AlpacaHttpDataClientOptions } from './sources/alpaca-http-client.js';
-export { AlpacaHttpDataClient } from './sources/alpaca-http-client.js';
+export type { AlpacaDataFeed, AlpacaHttpDataClientOptions } from './sources/alpaca-http-client.js';
+export {
+  ALPACA_DATA_FEED_ENV_VAR,
+  AlpacaHttpDataClient,
+  DEFAULT_ALPACA_DATA_FEED,
+  resolveAlpacaDataFeed,
+} from './sources/alpaca-http-client.js';
 export type {
   AlpacaBar,
   AlpacaClient,

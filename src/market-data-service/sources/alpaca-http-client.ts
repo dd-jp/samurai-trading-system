@@ -258,9 +258,74 @@ function lookupCryptoKey<T>(
   return byKey[originalSymbol];
 }
 
+/**
+ * Equity market-data feed. **Stocks only** — Alpaca's crypto endpoints take no
+ * `feed` parameter, and passing one there is meaningless.
+ *
+ * `iex` by default, and that default is load-bearing rather than cautious
+ * (#381). Verified against the live API on 2026-08-05, read-only:
+ *
+ * ```
+ * end=now   feed=default  403  subscription does not permit querying recent SIP data
+ * end=T-14m feed=default  403  subscription does not permit querying recent SIP data
+ * end=T-16m feed=default  200
+ * end=now   feed=iex      200
+ * ```
+ *
+ * Alpaca's default equity feed is SIP, and a Basic (free) subscription — which
+ * is what an Alpaca paper account has — is refused SIP data from the last 15
+ * minutes. `MarketDataServiceImpl.getBars` always passes `asOf = clock.now()`,
+ * so **every** equity bars request in the pipeline lands inside that window:
+ * the trader's ATR(14) on `atr_timeframe`, the correlation window, the ADV
+ * window. On the default feed the widened universe would 403 on all four
+ * equities on every tick — a failure that looks like four instruments quietly
+ * finding no setup, which is the #358 shape exactly.
+ *
+ * `iex` is served in real time to the same subscription and needs no clock
+ * games (the alternative — backdating `end` by 15 minutes — would silently
+ * make every equity decision act on stale bars while reporting them as
+ * current). An operator holding a SIP subscription sets `ALPACA_DATA_FEED=sip`;
+ * the default has to be the one that works on the account the project has.
+ *
+ * The cost is real and is not hidden: IEX is a single venue with a small share
+ * of consolidated volume, so equity bar volumes are a fraction of the true tape
+ * and the ADV-derived market-impact term reads low. That is a calibration
+ * caveat for the soak, not a correctness bug — and it is strictly better than
+ * no equity bars at all.
+ */
+export type AlpacaDataFeed = 'iex' | 'sip';
+
+/** Default equity feed — see `AlpacaDataFeed` for why it is not Alpaca's own default. */
+export const DEFAULT_ALPACA_DATA_FEED: AlpacaDataFeed = 'iex';
+
+/** The operator's override. Read once, at construction. */
+export const ALPACA_DATA_FEED_ENV_VAR = 'ALPACA_DATA_FEED';
+
+/**
+ * Unrecognised values are refused rather than passed to the wire: a typo'd
+ * `ALPACA_DATA_FEED=sipp` would otherwise be forwarded, rejected by Alpaca as
+ * a query error, and read as a data outage on every equity tick.
+ */
+export function resolveAlpacaDataFeed(raw: string | undefined): AlpacaDataFeed {
+  const value = (raw ?? '').trim();
+  if (value.length === 0) return DEFAULT_ALPACA_DATA_FEED;
+  if (value === 'iex' || value === 'sip') return value;
+  throw new Error(
+    `AlpacaHttpDataClient: ${ALPACA_DATA_FEED_ENV_VAR} must be 'iex' or 'sip' (got '${value}'). ` +
+      "Leave it unset for 'iex', which is what a Basic Alpaca subscription can read in real " +
+      "time; 'sip' requires a paid data subscription and 403s on recent data without one.",
+  );
+}
+
 export interface AlpacaHttpDataClientOptions {
   /** Routes requests through the `/v2/stocks/...` or `/v1beta3/crypto/us/...` path root. */
   assetClass: 'crypto' | 'stocks';
+  /**
+   * Equity feed. Defaults to `ALPACA_DATA_FEED`, then to
+   * `DEFAULT_ALPACA_DATA_FEED` — see `AlpacaDataFeed` for why that is `iex`.
+   * Ignored for crypto.
+   */
+  feed?: AlpacaDataFeed;
   /** Defaults to `process.env.ALPACA_API_KEY`. Never logged or thrown into an error message. */
   apiKey?: string;
   /** Defaults to `process.env.ALPACA_API_SECRET`. Never logged or thrown into an error message. */
@@ -275,6 +340,7 @@ export interface AlpacaHttpDataClientOptions {
 /** Real HTTP market-data `AlpacaClient` against Alpaca's Market Data API v2. */
 export class AlpacaHttpDataClient implements AlpacaClient {
   private readonly assetClass: 'crypto' | 'stocks';
+  private readonly feed: AlpacaDataFeed;
   private readonly apiKey: string;
   private readonly apiSecret: string;
   private readonly baseUrl: string;
@@ -297,6 +363,9 @@ export class AlpacaHttpDataClient implements AlpacaClient {
       );
     }
     this.assetClass = options.assetClass;
+    // Resolved at construction, not per request: an unrecognised env value must
+    // fail the process at wiring time rather than on the first equity tick.
+    this.feed = options.feed ?? resolveAlpacaDataFeed(process.env[ALPACA_DATA_FEED_ENV_VAR]);
     this.apiKey = apiKey;
     this.apiSecret = apiSecret;
     this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
@@ -400,6 +469,11 @@ export class AlpacaHttpDataClient implements AlpacaClient {
         }
         pageToken = body.next_page_token ?? undefined;
       } else {
+        // Stocks only — Alpaca's crypto endpoints take no `feed`. Without this
+        // every equity bars request 403s, because `end` is always `clock.now()`
+        // and a Basic subscription cannot read SIP data under 15 minutes old.
+        // See `AlpacaDataFeed` for the live status codes.
+        params.set('feed', this.feed);
         const body = (await this.requestJson(
           `${this.baseUrl}/${ALPACA_STOCKS_API_VERSION}/stocks/${encodeURIComponent(
             symbol,
@@ -499,10 +573,15 @@ export class AlpacaHttpDataClient implements AlpacaClient {
       return { t: quote.t, ap: quote.ap, bp: quote.bp };
     }
 
+    // Passed explicitly even though this endpoint already defaults to IEX for a
+    // Basic subscription: the mark and the bars an indicator is computed from
+    // must come from the same tape, or an ATR-derived stop is priced against a
+    // venue the mark never saw.
+    const quoteParams = new URLSearchParams({ feed: this.feed });
     const body = (await this.requestJson(
       `${this.baseUrl}/${ALPACA_STOCKS_API_VERSION}/stocks/${encodeURIComponent(
         symbol,
-      )}/quotes/latest`,
+      )}/quotes/latest?${quoteParams.toString()}`,
       'getLatestQuote',
     )) as StocksLatestQuoteResponse;
     if (body.quote === undefined) {

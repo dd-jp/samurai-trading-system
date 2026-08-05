@@ -1920,6 +1920,36 @@ describe('buildProductionOrchestrator', () => {
       expect(source).toBeInstanceOf(AlpacaDataSource);
     });
 
+    it('serves an all-equity universe from the STOCKS source, not the crypto default', async () => {
+      // Found by mutation testing: asserting `universeAssetClasses` in
+      // isolation left `buildAlpacaDataSource` free to keep the old
+      // `?? 'crypto'` hardcode for the single-class branch, and the whole
+      // suite stayed green while an all-equity universe was served from the
+      // crypto path root — #358 exactly.
+      //
+      // Observed through the normalized `Mark`, because that is the only place
+      // a source's asset class is visible from outside: `NormalizingDataSource`
+      // stamps `asset_class` from the config it was constructed with.
+      const source = buildAlpacaDataSource(
+        {
+          alpacaDataClient: {
+            getBars: vi.fn(async (): Promise<AlpacaBar[]> => []),
+            getLatestQuote: vi.fn(
+              async (): Promise<AlpacaQuote> => ({ t: START.toISOString(), ap: 100, bp: 99 }),
+            ),
+          },
+        },
+        [
+          { asset: 'SPY', asset_class: 'stocks' },
+          { asset: 'AAPL', asset_class: 'stocks' },
+        ],
+        calendar,
+      );
+
+      const mark = await source.fetchMark('SPY', START, 'live');
+      expect(mark.asset_class).toBe('stocks');
+    });
+
     it("derives the asset class from the universe rather than defaulting to 'crypto'", () => {
       // The old default was `'crypto'` regardless of what was being traded, so
       // an all-equity universe would have been served entirely from the crypto
