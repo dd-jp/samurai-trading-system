@@ -82,6 +82,10 @@ export function runDailyCycle(input: DailyCycleInput): DailyCycleResult {
   for (const credit of credits.values()) {
     // An analyst with a debate record but no weight row yet has nothing to
     // step from; seeding it is the weight store's job, not a tuning cycle's.
+    // That job has an owner since #371 — `seedAnalystWeights`, called by the
+    // composition root at startup — so this skip is now the "an analyst the
+    // root does not build appeared in a debate log" case, not the everyday
+    // one it used to be.
     const from = weights[credit.analyst_id];
     if (from === undefined) {
       continue;

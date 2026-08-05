@@ -53,6 +53,48 @@ describe('SqliteTuningStore — analyst weights', () => {
 
     expect(store.getAnalystWeights()).toEqual({ bull: 0.6, bear: 0.4 });
   });
+
+  /**
+   * #371 (PR #376 review) — `seedAnalystWeight` is the one write on this class
+   * that is NOT an upsert. First-write-wins, in one statement, so a second
+   * process booting against the same database cannot flatten a tuned weight
+   * no matter when it looked at the table.
+   */
+  describe('seedAnalystWeight', () => {
+    it('inserts and reports having done so when the analyst has no row', () => {
+      const { db, store } = makeStore();
+
+      expect(store.seedAnalystWeight('bull', 1)).toBe(true);
+      expect(db.prepare('SELECT * FROM analyst_weights').all()).toEqual([
+        { analyst_id: 'bull', weight: 1, updated_at: NOW.toISOString() },
+      ]);
+    });
+
+    it('leaves an existing row exactly as it was, value and timestamp', () => {
+      const later = new Date('2026-07-20T00:00:00Z');
+      const { db, store } = makeStore(makeClock(NOW));
+      store.setAnalystWeight('bull', 1.25);
+
+      // A later boot, with a later clock, trying to seed the same analyst.
+      const laterStore = new SqliteTuningStore(db, makeClock(later));
+      expect(laterStore.seedAnalystWeight('bull', 1)).toBe(false);
+
+      // `updated_at` matters as much as `weight`: it is the only record of
+      // when the loop last moved this dial, so a no-op seed must not stamp it.
+      expect(db.prepare('SELECT * FROM analyst_weights').all()).toEqual([
+        { analyst_id: 'bull', weight: 1.25, updated_at: NOW.toISOString() },
+      ]);
+    });
+
+    it('does not touch the other two dial tables', () => {
+      const { db, store } = makeStore();
+
+      store.seedAnalystWeight('bull', 1);
+
+      expect(db.prepare('SELECT COUNT(*) AS n FROM strategy_params').get()).toEqual({ n: 0 });
+      expect(db.prepare('SELECT COUNT(*) AS n FROM risk_thresholds').get()).toEqual({ n: 0 });
+    });
+  });
 });
 
 describe('SqliteTuningStore — strategy params', () => {

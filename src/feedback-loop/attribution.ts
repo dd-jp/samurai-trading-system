@@ -134,6 +134,21 @@ export function accumulateCredit(
 }
 
 /**
+ * The dial's midpoint — where an analyst with no evidence either way belongs.
+ *
+ * Exported because two callers must agree on it exactly (#371): this is both
+ * `impliedWeight`'s fixed point (`tanh(0) === 0`) and the value
+ * `seedAnalystWeights` writes for an analyst with no record at all. Two
+ * independent spellings of `(floor + ceiling) / 2` would let a future
+ * asymmetric band silently disagree about where "neutral" is — and a seed
+ * away from the fixed point makes the first cycles a drift back to the
+ * middle rather than a response to evidence.
+ */
+export function bandMidpoint(dial: TunableDial): number {
+  return (dial.floor + dial.ceiling) / 2;
+}
+
+/**
  * The performance-implied weight an analyst's record argues for — the target
  * a cycle steps TOWARD, never lands on (guardrails.ts caps the step).
  *
@@ -149,7 +164,6 @@ export function accumulateCredit(
  */
 export function impliedWeight(credit: AnalystCredit, dial: TunableDial): number {
   const meanCredit = credit.total_credit / credit.trade_count;
-  const midpoint = (dial.floor + dial.ceiling) / 2;
   const halfBand = (dial.ceiling - dial.floor) / 2;
-  return midpoint + halfBand * Math.tanh(meanCredit);
+  return bandMidpoint(dial) + halfBand * Math.tanh(meanCredit);
 }

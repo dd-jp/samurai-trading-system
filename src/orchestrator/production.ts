@@ -144,6 +144,7 @@ import {
   SqliteAdjustmentLog,
   SqliteClosedTradeStore,
   SqliteTuningStore,
+  seedAnalystWeights,
 } from '../feedback-loop/index.js';
 import type {
   AlpacaClient as AlpacaDataClient,
@@ -1323,6 +1324,53 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       // logged and stepped over.
       await runStartupReconcile({ execution: reconcileExecution, logger });
 
+      // #371, and deliberately HERE — beside reconcile, before the tick loop,
+      // the fill poll and the heartbeat all start.
+      //
+      // ## This path fails fast on purpose, unlike its siblings below
+      //
+      // Every other feedback-loop startup problem in this function degrades to
+      // a logged warn, so the difference needs saying rather than being left
+      // to look like an oversight (PR #376 review). Those warns cover a
+      // MISSING FEATURE: `feedback` unset, or `metrics` unset because no
+      // `DailyMetricsSource` can be produced in-repo yet. Nothing is broken —
+      // a capability is absent, and announcing it is the whole fix.
+      //
+      // A throw out of this call is a different animal: it means the shared
+      // store would not take a single-row insert. That same handle carries
+      // open positions, fills, closed trades and the broker's bracket index,
+      // so a process that cannot write to it must not go on to place orders
+      // against it — the exact reasoning `runStartupReconcile` above is
+      // already allowed to propagate on, and for the same store. Catching
+      // here would buy a soak that trades with an unwritable database and no
+      // weight rows, which is both halves of #366/#371 dead again plus a live
+      // broker. So it propagates out of `start()`, before anything has traded.
+      //
+      // No defensive check on `feedback.config.weights` either: `FeedbackConfig
+      // .weights` is a required `TunableDial`, so an absent one is reachable
+      // only by casting past the compiler. Guarding a state the type system
+      // already forbids would just hide the cast.
+      if (config.feedback !== undefined) {
+        // `runDailyCycle` steps only analysts that already have an
+        // `analyst_weights` row, so before this every cycle attributed real
+        // trades and then skipped every analyst — an empty table and a soak
+        // that "ran cleanly" while learning nothing. First-write-wins in the
+        // store, so the restarts a 14-day soak (#238) will see cannot flatten
+        // what the loop has learned; see `seedAnalystWeights`.
+        const seedResult = seedAnalystWeights({
+          tuning: feedbackStores.tuning,
+          analyst_ids: components.analysts.analystIds(),
+          dial: config.feedback.config.weights,
+        });
+        logger.log({
+          trace_id: 'startup',
+          stage: 'feedback-loop',
+          level: 'info',
+          message: 'analyst weight rows ready for the daily cycle',
+          payload: { seeded: seedResult.seeded, already_tuned: seedResult.existing },
+        });
+      }
+
       heartbeatHandle = setInterval(() => {
         void heartbeat.emit(clock);
       }, config.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS);
@@ -1364,6 +1412,8 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
           payload: { feedback_cycle: 'not_started' },
         });
       } else {
+        // The weight rows this cycle will step were seeded above, before any
+        // of the loops started (#371).
         if (feedback.metrics === undefined) {
           logger.log({
             trace_id: 'startup',

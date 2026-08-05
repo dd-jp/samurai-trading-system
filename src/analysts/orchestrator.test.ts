@@ -240,4 +240,44 @@ describe('AnalystOrchestrator', () => {
       { analyst_type: 'sentiment', role: 'optional', reason: 'sentiment unavailable' },
     ]);
   });
+
+  /**
+   * #371 — what the composition root seeds `analyst_weights` from.
+   */
+  describe('analystIds', () => {
+    it('names every persona the default orchestrator builds', () => {
+      const { marketData, marketIntelligence } = buildDeps('stocks');
+      const orchestrator = new AnalystOrchestrator({
+        market_data: marketData,
+        market_intelligence: marketIntelligence,
+      });
+
+      expect(orchestrator.analystIds().sort()).toEqual(['fundamental', 'sentiment', 'technical']);
+    });
+
+    /**
+     * The load-bearing assumption, pinned against the REAL personas: the id
+     * `analystIds()` reports is the `analyst_id` the persona actually emits,
+     * which is the key the debate log records and `accumulateCredit`
+     * accumulates under. If a persona ever emitted a different `analyst_id`
+     * than its `analyst_type`, the seeder would write a row under a key the
+     * daily cycle never looks up — and `runDailyCycle` would silently go back
+     * to skipping that analyst forever, which is the whole bug #371 closes.
+     */
+    it('reports the id each real persona emits its view under', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('stocks');
+      const orchestrator = new AnalystOrchestrator({
+        market_data: marketData,
+        market_intelligence: marketIntelligence,
+      });
+      const signal: Signal = { asset: INSTRUMENT, asset_class: 'stocks' };
+
+      const result = await orchestrator.runAnalysts('trace-1', signal, clock);
+
+      expect(result.failures).toEqual([]);
+      expect(result.views.map((view) => view.analyst_id).sort()).toEqual(
+        orchestrator.analystIds().sort(),
+      );
+    });
+  });
 });

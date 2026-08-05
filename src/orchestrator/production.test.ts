@@ -16,8 +16,9 @@ import {
   AnthropicLlmClient,
   DEFAULT_ANTHROPIC_MODEL,
   MockLlmClient,
+  SqliteDebateLogStore,
 } from '../debate-engine/index.js';
-import { SimulatedBrokerAdapter } from '../execution/index.js';
+import { SimulatedBrokerAdapter, SqliteExecutionStore } from '../execution/index.js';
 import type { DailyMetricsSample, FeedbackConfig } from '../feedback-loop/index.js';
 import { SqliteTuningStore } from '../feedback-loop/index.js';
 import type { AlpacaBar, AlpacaQuote, Bar } from '../market-data-service/index.js';
@@ -859,7 +860,15 @@ describe('buildProductionOrchestrator', () => {
       heartbeatIntervalMs: 100_000,
       feedback: {
         intervalMs: 1_000,
-        config: {} as never,
+        // Only the `weights` band is filled in, because the startup seeder
+        // (#371) reads it before the first cycle — the `{}` this used to be
+        // was a cast past a required field, not a valid config. Everything
+        // else stays empty on purpose: this case is about the TIMER firing,
+        // and `runDailyCycle`'s own throw on the rest is caught and logged as
+        // one of the two `feedback-cycle` entries asserted below.
+        config: {
+          weights: { max_step: 0.05, floor: 0.5, ceiling: 1.5, tighten_is: 'decrease' },
+        } as unknown as FeedbackConfig,
         approvals: { requestLoosenApproval: vi.fn() } as never,
       },
     });
@@ -873,8 +882,12 @@ describe('buildProductionOrchestrator', () => {
 
     // No `metrics` block, so the kill-line detector is still inert — and says
     // so at startup rather than leaving it to be discovered (#327).
+    // Narrowed to the WARNS since #371: startup also emits an `info` naming
+    // the analyst-weight rows the seeder wrote. The property this case is
+    // about is that the metrics warn is the only degraded-mode warning left.
     const metricsWarn = logger.entries.filter(
-      (entry) => entry.trace_id === 'startup' && entry.stage === 'feedback-loop',
+      (entry) =>
+        entry.trace_id === 'startup' && entry.stage === 'feedback-loop' && entry.level === 'warn',
     );
     expect(metricsWarn).toHaveLength(1);
     expect(metricsWarn[0]?.level).toBe('warn');
@@ -1098,6 +1111,216 @@ describe('buildProductionOrchestrator', () => {
       expect(topLevel).not.toHaveBeenCalled();
 
       await orchestrator.stop();
+    });
+
+    /**
+     * #371 — the cycle #366 started could not move an analyst weight, because
+     * `analyst_weights` had no writer: `runDailyCycle` steps only an analyst
+     * it can already read a row for, so every cycle attributed real trades and
+     * then `continue`d past every analyst forever.
+     *
+     * These drive the whole path through the REAL stores — Execution's
+     * `closed_trades` writer, the Debate Engine's `debate_log` writer, the
+     * SQLite tuning store and adjustment log — off the checked-in paper
+     * profile. Nothing is hand-placed in `analyst_weights`: if the seeder is
+     * removed, there is no row and the weight cannot move.
+     */
+    describe('analyst weight seeding (#371)', () => {
+      const DEBATE_ID = 'debate-371';
+      /** One `max_step` of the profile's band: (1.5 − 0.5) / 20. */
+      const ONE_STEP = 0.05;
+
+      /**
+       * A winning long, and the debate that produced it, written through the
+       * stores that own those tables.
+       *
+       * R = realized_pnl_net / (|entry − stop| × filled_size) = 200/100 = +2,
+       * the analyst backed it (`final_position: 'bullish'` against a `buy`),
+       * and its influence is above `shadow_influence_ceiling` (0.2), so credit
+       * is the influence term alone: 0.5 × 2 = +1. `impliedWeight` squashes
+       * that to 1.0 + 0.5·tanh(1) ≈ 1.38 — well past one `max_step`, so the
+       * cycle's move is the cap, which is what makes the expected value exact.
+       */
+      async function seedRealTradeAndDebate(): Promise<void> {
+        new SqliteDebateLogStore(db).writeLog({
+          debate_id: DEBATE_ID,
+          instrument: 'BTC-USD',
+          bar_timestamp: new Date(START.getTime() - 2 * 60 * 60 * 1_000),
+          contributions: [
+            {
+              analyst_id: 'technical',
+              analyst_type: 'technical',
+              stance_during_debate: ['bullish', 'bullish'],
+              final_position: 'bullish',
+              rationale: 'trend intact',
+              influence_score: 0.5,
+            },
+          ],
+          direction: 'bullish',
+          rounds: 2,
+          created_at: new Date(START.getTime() - 2 * 60 * 60 * 1_000),
+        });
+
+        await new SqliteExecutionStore(db).writeClosedTrade({
+          idempotency_key: 'lot-371',
+          debate_id: DEBATE_ID,
+          instrument: 'BTC-USD',
+          asset_class: 'crypto',
+          side: 'buy',
+          entry: 100,
+          stop: 90,
+          filled_size: 10,
+          realized_pnl_net: 200,
+          fees_total: 1,
+          opened_at: new Date(START.getTime() - 3 * 60 * 60 * 1_000),
+          // Inside the profile's 48h attribution window, at or before `now`.
+          closed_at: new Date(START.getTime() - 1 * 60 * 60 * 1_000),
+          close_reason: 'target',
+        });
+      }
+
+      function paperConfigWithFastCycle(): ReturnType<typeof paperProfileConfig> {
+        const profileFeedback = paperStartingProfile('paper').feedback;
+        if (profileFeedback === undefined) {
+          throw new Error('paperStartingProfile supplied no feedback block');
+        }
+        return paperProfileConfig({
+          feedback: { ...profileFeedback, intervalMs: 1_000 },
+        });
+      }
+
+      it('seeds every analyst neutral at startup, then steps the one with a record', async () => {
+        await seedRealTradeAndDebate();
+        const { config, logger } = paperConfigWithFastCycle();
+        const orchestrator = buildProductionOrchestrator(config);
+        const tuning = new SqliteTuningStore(db, new SimulatedClock(START));
+
+        await orchestrator.start();
+
+        // Seeded before the first cycle, for every analyst the root builds —
+        // including the two this debate never mentions.
+        expect(tuning.getAnalystWeights()).toEqual({
+          technical: 1,
+          fundamental: 1,
+          sentiment: 1,
+        });
+
+        await vi.advanceTimersByTimeAsync(1_500);
+
+        // THE assertion #371 exists for: a weight actually moved, off real
+        // closed trades joined to a real debate log row.
+        const weights = tuning.getAnalystWeights();
+        expect(weights.technical).toBeCloseTo(1 + ONE_STEP, 10);
+        // No debate record, no evidence, no move — the analysts that did not
+        // trade stay exactly where they were seeded.
+        expect(weights.fundamental).toBe(1);
+        expect(weights.sentiment).toBe(1);
+
+        // ...and it is in the audit trail, not just in the dial.
+        const adjustment = db
+          .prepare(
+            `SELECT dial_type, dial_name, from_value, to_value, reason
+               FROM dial_adjustments WHERE dial_type = 'analyst_weight'`,
+          )
+          .get() as
+          | {
+              dial_type: string;
+              dial_name: string;
+              from_value: number;
+              to_value: number;
+              reason: string;
+            }
+          | undefined;
+        expect(adjustment?.dial_name).toBe('technical');
+        expect(adjustment?.from_value).toBe(1);
+        expect(adjustment?.to_value).toBeCloseTo(1 + ONE_STEP, 10);
+        expect(adjustment?.reason).toBe('attribution');
+
+        expect(
+          logger.entries.find(
+            (entry) => entry.message === 'analyst weight rows ready for the daily cycle',
+          )?.payload,
+        ).toEqual({
+          seeded: ['technical', 'fundamental', 'sentiment'],
+          already_tuned: [],
+        });
+
+        await orchestrator.stop();
+      });
+
+      /**
+       * The fail-fast decision, made testable rather than left as prose (PR
+       * #376 review). A store that will not take the seed insert is a BROKEN
+       * store — the same handle carries open positions, fills and the broker's
+       * bracket index — so `start()` must reject before anything can trade,
+       * not log a warn and go on placing orders. This asserts both halves:
+       * the rejection, and that no loop was running by then.
+       */
+      it('refuses to start at all when the store cannot take the seed', async () => {
+        const { config } = paperProfileConfig({
+          feedback: { config: paperStartingProfile('paper').feedback?.config as FeedbackConfig },
+          tickIntervalMs: 100,
+          heartbeatIntervalMs: 100,
+        });
+        // A store that answers every other startup read but cannot be written
+        // — the shape a broken/partially-migrated database actually has.
+        db.prepare('DROP TABLE analyst_weights').run();
+
+        const orchestrator = buildProductionOrchestrator(config);
+
+        await expect(orchestrator.start()).rejects.toThrow(/analyst_weights/);
+
+        // Nothing was started before it failed: past several heartbeat
+        // intervals, the heartbeat has never fired, so neither the fill poll
+        // nor the tick loop (both registered after it) can be running either.
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(config.heartbeatChannel?.postHeartbeat).not.toHaveBeenCalled();
+
+        await orchestrator.stop();
+      });
+
+      /**
+       * The restart case, end to end. Over a 14-day soak (#238) the process
+       * WILL restart; a seeder that rewrote its neutral value on boot would
+       * erase every step the loop had made and leave the run reporting tuning
+       * activity while permanently re-flattening itself.
+       */
+      it('does not reset a tuned weight when the process restarts', async () => {
+        await seedRealTradeAndDebate();
+
+        const first = buildProductionOrchestrator(paperConfigWithFastCycle().config);
+        await first.start();
+        await vi.advanceTimersByTimeAsync(1_500);
+        await first.stop();
+
+        const tuning = new SqliteTuningStore(db, new SimulatedClock(START));
+        const tuned = tuning.getAnalystWeights().technical;
+        expect(tuned).toBeCloseTo(1 + ONE_STEP, 10);
+
+        // Second process, same database.
+        const { config, logger } = paperConfigWithFastCycle();
+        const second = buildProductionOrchestrator(config);
+        await second.start();
+
+        // Immediately after startup and before the new process's first cycle:
+        // the tuned value survived, and the seeder says it wrote nothing.
+        expect(tuning.getAnalystWeights().technical).toBe(tuned);
+        expect(
+          logger.entries.find(
+            (entry) => entry.message === 'analyst weight rows ready for the daily cycle',
+          )?.payload,
+        ).toEqual({
+          seeded: [],
+          already_tuned: ['technical', 'fundamental', 'sentiment'],
+        });
+
+        // And the second process's cycle carries on from where the first
+        // stopped — a second step, not a repeat of the first.
+        await vi.advanceTimersByTimeAsync(1_500);
+        expect(tuning.getAnalystWeights().technical).toBeCloseTo(1 + 2 * ONE_STEP, 10);
+
+        await second.stop();
+      });
     });
   });
 

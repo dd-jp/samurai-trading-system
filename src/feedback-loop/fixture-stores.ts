@@ -49,6 +49,20 @@ export class InMemoryTuningStore implements TuningStore {
     return { ...this.weights };
   }
 
+  /**
+   * First-write-wins, mirroring `SqliteTuningStore.seedAnalystWeight` (#371).
+   * Single-threaded here, so the atomicity the SQLite version needs is free —
+   * what a fixture must preserve is the SEMANTIC: an existing row is never
+   * overwritten, and the return value says who wrote it.
+   */
+  seedAnalystWeight(analyst_id: string, weight: number): boolean {
+    if (this.weights[analyst_id] !== undefined) {
+      return false;
+    }
+    this.weights[analyst_id] = weight;
+    return true;
+  }
+
   setAnalystWeight(analyst_id: string, weight: number): void {
     this.weights[analyst_id] = weight;
   }
