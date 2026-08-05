@@ -146,6 +146,27 @@ because the numbers were checked against the floor by hand after the run.
 the real model. It is a wrong *description*, which is worse in a document meant to justify a
 purchase decision.
 
+### P13 — A shared store used as a per-asset-class timeline *([#420](../../issues/420))*
+
+**Symptom:** the moment `MetricsSuite.observations` was added (#406) and printed, every row of the
+Stage 2 report — stocks and crypto alike — read **1,229 observations** over the same 2-year window.
+Stocks trade ~504 days in that window, crypto ~730, and 504 + 730 ≈ 1,229.
+
+`run-stage2.ts` passes `timeline: ctx.store` to every `ReplayDriver`, and
+`Stage2HistoricalStore.barTimestamps` is `SELECT DISTINCT close_time FROM stage2_bars` with no
+symbol filter. The `universe` *is* correctly scoped per asset class, so only the right instruments
+trade — but the return series is built over the union of both classes' bars, padded with structural
+zeros wherever the other class had a bar. Per-period Sharpe is scaled by roughly `sqrt(n_old/n_new)`
+(~0.64× for stocks), and `periodsPerYear` no longer describes the series it annualizes.
+
+**Generalises to:** an object that satisfies several ports at once (`barSource`, `timeline`,
+`registry` are all `ctx.store` here) being handed to a consumer that needed only a *slice* of it.
+Nothing type-checks the scope, because the type is right — it is the *contents* that are too wide.
+
+**Same family as P2 and P12,** and caught the same way: not by review, but by a number finally
+appearing in the output. Two asset classes had reported an identical sample length for as long as
+the report existed.
+
 ---
 
 ## Improvements, in priority order

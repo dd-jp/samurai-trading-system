@@ -5,6 +5,14 @@ verdict + write-up"), Verdict module of
 [stage2-validation-execution-spec.md](../specs/stage2-validation-execution-spec.md), wayfinder
 map [#154](../../issues/154).
 
+> **Superseded on the two structural gaps (2026-08-05, [#406](../../issues/406)).** This document
+> reports DSR and PBO as blocked by design mismatches — `MetricsSuite` exposing only the annualized
+> Sharpe, and walk-forward folds not being a CSCV partition. Both seams have since been built, and
+> both statistics now compute against real data. See
+> [12-stage2-pbo-dsr-first-computation-2026-08-05.md](12-stage2-pbo-dsr-first-computation-2026-08-05.md).
+> The reasoning below for *why* they were blocked is still accurate and worth reading; the
+> conclusion that they cannot be computed is not.
+
 ## Headline verdict
 
 > **Stage 2 gate: NOT PASSED. Verdict cannot be rendered.** This is a "no verdict" result, not a
