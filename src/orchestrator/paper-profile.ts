@@ -53,10 +53,17 @@
  *   reasons during paper trading), so `riskConfig.cii_threshold` is never
  *   compared against a real score either.
  *
- * ## Transports are NOT here
+ * ## Values, one factory, and no transports
  *
- * This profile supplies config values only, and deliberately names no
- * transport. That is not the same as leaving them unwired:
+ * This profile supplies config values and opens nothing — no database, no
+ * socket, no file. The single exception since #379 is `feedback.metrics.source`,
+ * which is a FACTORY: the kill-line detector's source needs the shared SQLite
+ * handle, so this file names the class and the decision and the composition
+ * root, which owns the handle, constructs it. Nothing here runs at import time
+ * either way; see `buildDailyMetrics`.
+ *
+ * Transports are a different matter, and deliberately absent. That is not the
+ * same as leaving them unwired:
  * [#322](https://github.com/dd-jp/samurai-trading-system/issues/322) resolves
  * the three outbound alert channels (`heartbeatChannel`, `orphanAlerts`,
  * `unpricedFillAlerts`) from `SAMURAI_ALERTS` in `startFromEnvironment`, so a
@@ -84,8 +91,8 @@ import { DEFAULT_TRADER_CONFIG, type TraderConfig } from '../trader/index.js';
 import type { VerdictConfig } from '../verdict/index.js';
 import { SqliteDailyEquityMetricsSource } from './production/daily-equity-metrics-source.js';
 import {
+  type DailyMetricsConfig,
   DEFAULT_FEEDBACK_INTERVAL_MS,
-  type FeedbackCycleConfig,
   type ProductionConfig,
 } from './production.js';
 import { SqliteDailyEquityStore } from './sqlite-daily-equity-store.js';
@@ -461,7 +468,7 @@ function buildFeedbackConfig(): FeedbackConfig {
  * the class and the decision, the composition root — which owns the handle —
  * calls it once at construction and passes its own `ClosedTradeStore` in.
  */
-function buildDailyMetrics(): NonNullable<FeedbackCycleConfig['metrics']> {
+function buildDailyMetrics(): DailyMetricsConfig {
   return {
     source: ({ db, trades, logger }) =>
       new SqliteDailyEquityMetricsSource({

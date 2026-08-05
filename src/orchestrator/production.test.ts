@@ -984,14 +984,43 @@ describe('buildProductionOrchestrator', () => {
         ),
       ).toHaveLength(0);
 
-      // ...and the armed state is announced rather than left silent: the first
+      // ...and the wiring is announced rather than left silent: the first
       // cycle is 24h away and the first SUITE is a quarter away, so an
       // operator reading startup gets the state from the log, not by inference.
-      const armed = logger.entries.find(
-        (entry) => (entry.payload as { kill_lines?: string } | undefined)?.kill_lines === 'armed',
+      const wired = logger.entries.find(
+        (entry) =>
+          (entry.payload as { metrics_source?: string } | undefined)?.metrics_source === 'wired',
       );
-      expect(armed?.level).toBe('info');
-      expect(armed?.trace_id).toBe('startup');
+      expect(wired?.level).toBe('info');
+      expect(wired?.trace_id).toBe('startup');
+
+      await orchestrator.stop();
+    });
+
+    it('says at startup that the other three kill-lines have no revalidation input', async () => {
+      const { config, logger } = paperProfileConfig();
+      const orchestrator = buildProductionOrchestrator(config);
+
+      await orchestrator.start();
+      await vi.advanceTimersByTimeAsync(3 * 25 * 60 * 60 * 1_000);
+
+      // The half of the removed "metrics is not set" warn that #375 does not
+      // cover. `SqliteDailyEquityMetricsSource` never supplies a revalidation
+      // snapshot, so pbo/oos-sharpe/dsr are un-run on every cycle — wiring
+      // `metrics` must not turn that from stated into merely true.
+      const gated = logger.entries.filter((entry) =>
+        entry.message.includes('evaluated ONLY from a revalidation snapshot'),
+      );
+      expect(gated).toHaveLength(1);
+      expect(gated[0]?.level).toBe('warn');
+      expect(gated[0]?.trace_id).toBe('startup');
+      expect(gated[0]?.payload).toMatchObject({
+        kill_lines_gated_on_revalidation: [
+          'pbo_over_max',
+          'oos_sharpe_under_min',
+          'dsr_insignificant',
+        ],
+      });
 
       await orchestrator.stop();
     });
