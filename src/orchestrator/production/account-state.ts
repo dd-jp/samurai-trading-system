@@ -41,6 +41,7 @@ import type { TradingCalendar } from '../../market-data-service/index.js';
 import type { SessionBasis, SessionBasisByClass } from '../../risk-manager/index.js';
 import type { ClosedTrade } from '../../shared/index.js';
 import type { SqliteAccountStateStore } from '../sqlite-account-state-store.js';
+import type { SqliteDailyEquityStore } from '../sqlite-daily-equity-store.js';
 import type { SessionEquityKey, SqliteSessionEquityStore } from '../sqlite-session-equity-store.js';
 import type { Logger } from '../types.js';
 import type { AccountStateProvider } from './direct-bind.js';
@@ -54,6 +55,19 @@ export interface AlpacaAccountStateProviderInput {
   client: AlpacaClient;
   store: SqliteAccountStateStore;
   sessionEquity: SqliteSessionEquityStore;
+  /**
+   * The append-only daily equity series (#345, migration 0011).
+   *
+   * REQUIRED, not optional, and that is the point of the ticket. A return
+   * series cannot be backfilled — equity that was never recorded on the day is
+   * gone — so a deployment that quietly composed this provider without a series
+   * writer would spend the whole soak looking healthy and end it with nothing to
+   * compute metrics from. An optional field makes that omission invisible; a
+   * required one makes it a compile error.
+   *
+   * Written on the `portfolio` boundary only (see `sessionBasisFor`).
+   */
+  dailyEquity: SqliteDailyEquityStore;
   closedTrades: ClosedTradeReader;
   logger: Logger;
   /**
@@ -177,6 +191,27 @@ export class AlpacaAccountStateProvider implements AccountStateProvider {
     // the row is being invented now regardless of how long this process has run.
     const observedAtBoundary =
       stored !== null && this.input.startedAt.getTime() <= sessionStart.getTime();
+
+    // #345 — the same boundary, sampled into a series instead of over itself.
+    //
+    // `portfolio` only. The three keys share this method but not this concern:
+    // `stocks` rides the 16:00 ET close, which skips weekends and holidays, so
+    // its consecutive boundaries are not evenly spaced and a Sharpe annualized
+    // over them is wrong by construction. `crypto` is the same UTC midnight as
+    // `portfolio` and would duplicate every row (the two keys always carry
+    // identical `open_equity`/`open_at` — see `calendarFor`). So the series is
+    // anchored to the portfolio-level UTC day, exactly 86,400,000 ms per step.
+    //
+    // Attempted on EVERY tick rather than only inside the advance branch below,
+    // and idempotent because `append` is `DO NOTHING` on conflict. Tying it to
+    // the advance would lose a day in the one case that matters most: a process
+    // that comes up mid-session finds `session_equity` already current for this
+    // session, takes no advance, and would leave a hole in the series that can
+    // never be filled. A late sample flagged `observed_at_boundary = 0` is worth
+    // more than a gap — the gap breaks the spacing of everything after it.
+    if (key === 'portfolio') {
+      this.input.dailyEquity.append(sessionStart, equity, asOf, observedAtBoundary);
+    }
 
     let { open_equity: openEquity, open_at: openAt } = stored ?? {
       open_equity: equity,

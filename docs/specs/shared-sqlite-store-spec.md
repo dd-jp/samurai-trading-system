@@ -464,6 +464,42 @@ CREATE TABLE session_equity (
   open_at              TEXT NOT NULL,
   observed_at_boundary INTEGER NOT NULL CHECK(observed_at_boundary IN (0, 1))
 );
+
+-- Append-only daily equity series (feedback-loop-spec.md, #345,
+-- 0011_daily_equity.sql) -- the evenly spaced periodic observations
+-- computeMetrics derives a live ReturnSeries from. One row per PORTFOLIO
+-- session, i.e. per UTC day.
+--
+-- Deliberately NOT session_equity above, which is the same boundary sampled
+-- OVER ITSELF: that table is keyed asset_class PRIMARY KEY and upserts with
+-- ON CONFLICT DO UPDATE, so it holds three rows and each boundary destroys the
+-- previous session's open. Correct for the live daily-loss denominator, useless
+-- as history. Widening it to a composite key would change what
+-- SqliteSessionEquityStore.get(key) means for the breaker that trades real
+-- money, so the series is a second table sampling the same boundary instead.
+--
+-- The PORTFOLIO boundary (00:00 UTC) is what makes the series admissible as a
+-- ReturnSeries: consecutive UTC midnights are exactly 86,400,000 ms apart, so
+-- periodsPerYear is 365 with no approximation. The stocks boundary (prior 16:00
+-- ET close) skips weekends and holidays -- a Friday->Monday step is three days
+-- wide -- and annualizing those as single periods is wrong by construction.
+--
+-- session_start is the boundary instant, never the sample time. ON CONFLICT DO
+-- NOTHING, never DO UPDATE: equity is sampled on the first tick after the
+-- boundary, so the first observation of a session is closest to the true open
+-- and a later tick must not overwrite it. That is also what makes a restart
+-- harmless -- the returning process finds the row and leaves it alone.
+--
+-- observed_at_boundary carries session_equity's honesty flag for the same
+-- reason. Such rows are KEPT (the spacing is still exactly one day, and
+-- dropping them would punch a hole in an otherwise usable run), but the flag
+-- stays queryable so a suspicious return can be traced to a late sample.
+CREATE TABLE daily_equity (
+  session_start        TEXT PRIMARY KEY,
+  equity               REAL NOT NULL,
+  recorded_at          TEXT NOT NULL,
+  observed_at_boundary INTEGER NOT NULL CHECK(observed_at_boundary IN (0, 1))
+);
 ```
 
 ### Non-Collision Verification
@@ -480,6 +516,7 @@ CREATE TABLE session_equity (
 - **`cii_snapshots`** (#182) — `country_code` is a plain `TEXT` code (WorldMonitor country codes, e.g. `'RU'`), disjoint from every other table's keying convention; not the same value space as `asset_class`'s `crypto`/`stocks` enum despite both being country/market-adjacent classifiers. `(country_code, captured_at)` composite PK is the append-only-history pattern already used by `bars`' `(instrument, timeframe, open_time)`. No divergence.
 - **`account_state`** (transport-layer-spec.md, 2026-07-31) — `key` is its own single-row PK (`'default'`), disjoint from every other table's keying convention; no other table carries a bare running-max scalar like `peak_equity`. No divergence.
 - **`session_equity`** (transport-layer-spec.md, #332) — `asset_class` as a PK is unique to this table; every other `asset_class` column is a non-key attribute (`closed_trades`, `open_positions`, `latest_mark`) and carries the same `'crypto'`/`'stocks'` domain, widened here by a third `'portfolio'` member that exists nowhere else. `open_equity`/`open_at`/`observed_at_boundary` appear in no other table. No divergence.
+- **`daily_equity`** (feedback-loop-spec.md, #345) — one deliberate near-miss with `session_equity` directly above, resolved by keying rather than left to be inferred. Both carry an equity figure anchored to a `TradingCalendar.sessionStart` boundary, and `observed_at_boundary` is intentionally the *same* name with the *same* meaning in both (it answers the identical question: was the writing process running when this session opened). What differs is the key and the write mode: `session_equity` is keyed `asset_class` and upserts `DO UPDATE`, holding only the session in force; `daily_equity` is keyed `session_start` and appends `DO NOTHING`, holding every session forever. `equity`/`recorded_at`/`session_start` appear in no other table — note `session_start` is a column here and a *method* on `TradingCalendar`, not a column anywhere else, and `recorded_at` is distinct from `session_equity`'s `open_at` precisely because this table stores both the anchor and the sample time rather than folding them together. No divergence.
 - **`broker_brackets` / `broker_observed_fills`** (#287, 2026-08-04) — three deliberate near-misses, all resolved by naming rather than left to be inferred:
   - **`client_order_id` vs `idempotency_key`** — the same VALUE (`NativeBracketRequest.client_order_id` is set from the OrderIntent's idempotency key), a different NAME. These two tables are written from below the `SharedStore` seam, where the concept is the broker-native idempotency handle rather than the pipeline's decision key — the same distinction `NormalizedFill.client_order_id` already draws in code. Renaming it `idempotency_key` here would imply the adapter knows about a pipeline concept it deliberately does not.
   - **`entry_price`/`stop_price`/`target_price` vs `open_positions.avg_entry_price`/`stop`/`target`** — named APART on purpose, because they mean different things: these are the prices the bracket was REQUESTED at and never change, whereas `open_positions.stop`/`target` are the live protective levels that get resized on partial fill. Reusing `stop`/`target` would invite exactly the wrong join.

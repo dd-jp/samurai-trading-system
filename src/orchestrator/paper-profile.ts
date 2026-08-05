@@ -353,9 +353,12 @@ function buildFeedbackConfig(): FeedbackConfig {
        * noise of a short window, which a tighter line would sit inside.
        *
        * Inert for now regardless, and loudly so: the check needs
-       * `metrics.backtest_reference_sharpe`, which arrives with #345. Until
-       * then `computeMetrics` does not run and the orchestrator says so at
-       * startup.
+       * `metrics.backtest_reference_sharpe`, and #345 did NOT source it —
+       * see #375. #345 sourced only the live half of the comparison
+       * (`daily_equity`, ADR-0006); the frozen backtest baseline still has no
+       * persisted record, because Stage 2 has never run against a real
+       * strategy. `computeMetrics` records the line in `not_evaluated` and the
+       * orchestrator warns once per process.
        */
       max_live_backtest_divergence: 0.5,
     },
@@ -715,10 +718,16 @@ function buildProfileConfigs(): Pick<
      *
      * Values only, exactly like the other eight: no `approvals` transport and
      * no `intervalMs`, so the composition root's `SAMURAI_ALERTS`-selected
-     * channel and its 24h default apply. `metrics` is deliberately absent —
-     * `computeMetrics` needs a `DailyMetricsSource` that does not exist yet
-     * (#345), and the orchestrator warns about that at startup rather than
-     * letting a stub make "never checked" look like "did not breach".
+     * channel and its 24h default apply.
+     *
+     * `metrics` is still absent, and since #345 that is a scope statement
+     * rather than an impossibility. A real `DailyMetricsSource` now exists
+     * (`SqliteDailyEquityMetricsSource`, ADR-0006), but it needs the `db`
+     * handle — and this function returns VALUES, no stores. Wiring it belongs
+     * to the composition root, which deliberately does not default it: arming
+     * the kill-line detector is a decision, not a fallback. The orchestrator
+     * warns at startup rather than letting a stub make "never checked" look
+     * like "did not breach".
      */
     feedback: { config: buildFeedbackConfig() },
   };

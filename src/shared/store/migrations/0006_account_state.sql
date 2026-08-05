@@ -26,6 +26,15 @@
 -- rows would each need a dummy high-water mark or a nullable one — and a NULL
 -- denominator reads as zero drawdown forever, eroding the very crash-safety
 -- invariant this table exists to hold.
+--
+-- GAP-8's REMAINING half — a daily open equity SERIES rather than the current
+-- session's scalar — is resolved by #345 in `daily_equity` (migration 0011),
+-- for the same reason and a second one. `session_equity` upserts `DO UPDATE`,
+-- so each boundary destroys the previous session's open; it is the live
+-- denominator, never a history. `daily_equity` appends `DO NOTHING`, one
+-- immutable row per UTC day, and is what `computeMetrics` derives an evenly
+-- spaced `ReturnSeries` from. See docs/adr/0006-daily-equity-return-series.md.
+-- GAP-8 is now closed in full: nothing further is reserved here.
 CREATE TABLE account_state (
   key           TEXT PRIMARY KEY,
   peak_equity   REAL NOT NULL,

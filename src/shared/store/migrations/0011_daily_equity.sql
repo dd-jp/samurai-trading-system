@@ -1,0 +1,71 @@
+-- An append-only DAILY EQUITY SERIES (#345) — the evenly spaced periodic
+-- observations that `computeMetrics(returns, trades)` needs and that nothing in
+-- this repo could produce.
+--
+-- ## Why this is not `session_equity` (migration 0009)
+--
+-- 0009 already owns the *boundary* this table samples on, and that boundary is
+-- reused verbatim (`TradingCalendar.sessionStart`, #331). What 0009 cannot do is
+-- be a series: `session_equity` is keyed `asset_class PRIMARY KEY` and its
+-- writer upserts with `ON CONFLICT DO UPDATE`, so it holds exactly three rows
+-- and every session boundary DESTROYS the previous session's open. That is
+-- correct for what it is — the live denominator of `daily_pnl_pct`, which only
+-- ever needs the current session — and useless as history.
+--
+-- Widening 0009 to a composite key instead would silently change its semantics:
+-- `SqliteSessionEquityStore.get(key)` would stop meaning "the session in force"
+-- and every daily-loss breaker read would have to learn to pick a row. The
+-- breaker is the one path where a wrong answer trades real money, so the series
+-- is a second table that samples the same boundary rather than a mutation of
+-- the table the breaker depends on.
+--
+-- ## Why the PORTFOLIO boundary, and why that makes it evenly spaced
+--
+-- One row per portfolio session, and the portfolio session is the UTC day
+-- (`AlwaysOpenCalendar.sessionStart` — 00:00 UTC), per #332's rule that the
+-- portfolio-level figure is the UTC one because the account holds crypto that
+-- never stops trading.
+--
+-- That choice is what makes the series admissible as a `ReturnSeries` at all.
+-- `ReturnSeries` requires observations "evenly spaced at `periodsPerYear`"
+-- (validation-types.ts), and consecutive UTC midnights are exactly 86,400,000 ms
+-- apart, every day of the year — so `periodsPerYear` is 365 with no
+-- approximation. The *stocks* boundary (prior 16:00 ET close) is not evenly
+-- spaced in wall-clock: it skips weekends and holidays, and a Friday→Monday step
+-- is three days wide. A Sharpe annualized as if those were single periods is
+-- wrong by construction, so the stock boundary is deliberately NOT the series'
+-- anchor.
+--
+-- Evenness still has to be CHECKED rather than assumed, because a process that
+-- is down across a midnight leaves a hole: rows either side of it are 48h apart
+-- while still looking like consecutive rows. `session_start` being the primary
+-- key is what makes the hole detectable — the reader walks the trailing run and
+-- stops at the first step that is not exactly one day.
+--
+-- ## Append-only, first write wins
+--
+-- The writer uses `ON CONFLICT(session_start) DO NOTHING`, never DO UPDATE.
+-- Equity is sampled on the first tick *after* the boundary, so the first
+-- observation of a session is the closest one to the true open; a later tick in
+-- the same session must not overwrite it with a mid-session figure. This is also
+-- what makes the series survive a restart: a process coming back up inside a
+-- session finds the row already there and leaves it alone.
+--
+-- `observed_at_boundary` carries the same honesty flag `session_equity` does and
+-- for the same reason (see 0009): 0 means the process was NOT running when this
+-- session opened, so the equity was sampled somewhere inside the session rather
+-- than at its start. It is durable because a restart cannot otherwise tell the
+-- two apart. The series reader keeps such rows — the spacing is still exactly
+-- one day and dropping them would punch a hole in an otherwise usable run — but
+-- the flag stays queryable so a suspicious return can be traced to a late
+-- sample rather than to the market.
+--
+-- ISO-8601 UTC (`toISOString()`), matching `session_equity.open_at` and
+-- `closed_trades.closed_at`: fixed-width, zero-padded and Z-suffixed, so the
+-- TEXT `ORDER BY session_start` the reader depends on is chronological order.
+CREATE TABLE daily_equity (
+  session_start        TEXT PRIMARY KEY,
+  equity               REAL NOT NULL,
+  recorded_at          TEXT NOT NULL,
+  observed_at_boundary INTEGER NOT NULL CHECK(observed_at_boundary IN (0, 1))
+);
