@@ -6,6 +6,7 @@ import {
   LlmRateLimitError,
   LlmTimeoutError,
 } from './errors.js';
+import type { LlmSpendRecord } from './spend-sink.js';
 import type { LlmRequest } from './types.js';
 
 interface ParsedData {
@@ -237,5 +238,167 @@ describe('AnthropicLlmClient', () => {
 
     await expect(client.complete(request())).rejects.toBeInstanceOf(LlmProviderError);
     expect(wire.createMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Spend metering. The client's job here is narrow — hand the wire's `usage`
+ * block to the sink — but three of the cases below are the ones that silently
+ * produce a wrong dashboard figure if they regress.
+ */
+describe('AnthropicLlmClient spend metering', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function recordingSink(): { records: LlmSpendRecord[]; record: (e: LlmSpendRecord) => void } {
+    const records: LlmSpendRecord[] = [];
+    return { records, record: (entry) => records.push(entry) };
+  }
+
+  function usageResponse(text: string, overrides: Partial<AnthropicMessageResponse> = {}) {
+    return {
+      content: [{ type: 'text', text }],
+      usage: { input_tokens: 120, output_tokens: 30 },
+      ...overrides,
+    } satisfies AnthropicMessageResponse;
+  }
+
+  it('meters a successful call with the usage block from the wire', async () => {
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockResolvedValue(usageResponse('good')),
+    };
+    const sink = recordingSink();
+    const client = new AnthropicLlmClient(
+      wire,
+      { model: 'claude-haiku-4-5', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      sink,
+    );
+
+    await client.complete(request());
+
+    expect(sink.records).toHaveLength(1);
+    expect(sink.records[0]?.usage).toEqual({ input_tokens: 120, output_tokens: 30 });
+    expect(sink.records[0]?.model).toBe('claude-haiku-4-5');
+  });
+
+  it('meters a MALFORMED response too — it was still generated and still billed', async () => {
+    // Metering only well-formed responses would understate spend by exactly
+    // the calls most likely to be retried, i.e. it would be most wrong when
+    // spend matters most.
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockResolvedValue(usageResponse('bad')),
+    };
+    const sink = recordingSink();
+    const client = new AnthropicLlmClient(
+      wire,
+      { model: 'claude-haiku-4-5', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      sink,
+    );
+
+    await expect(client.complete(request())).rejects.toBeInstanceOf(LlmMalformedResponseError);
+    expect(sink.records).toHaveLength(1);
+  });
+
+  it('prefers the model the wire says served the request over the one configured', async () => {
+    // A server-side fallback can reroute a refused request to a differently
+    // priced model; billing the requested model would price the wrong one.
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockResolvedValue(usageResponse('good', { model: 'claude-opus-4-8' })),
+    };
+    const sink = recordingSink();
+    const client = new AnthropicLlmClient(
+      wire,
+      { model: 'claude-haiku-4-5', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      sink,
+    );
+
+    await client.complete(request());
+    expect(sink.records[0]?.model).toBe('claude-opus-4-8');
+  });
+
+  it('records nothing when the wire client returns no usage block', async () => {
+    // Most test doubles in this suite return `content` alone; metering must
+    // not invent zeros for them.
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockResolvedValue(textResponse('good')),
+    };
+    const sink = recordingSink();
+    const client = new AnthropicLlmClient(
+      wire,
+      { model: 'claude-haiku-4-5', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      sink,
+    );
+
+    await client.complete(request());
+    expect(sink.records).toHaveLength(0);
+  });
+
+  it('records once per attempt, so a retried call is billed twice', async () => {
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi
+        .fn()
+        .mockResolvedValueOnce(usageResponse('bad'))
+        .mockResolvedValueOnce(usageResponse('good')),
+    };
+    const sink = recordingSink();
+    const client = new AnthropicLlmClient(
+      wire,
+      {
+        model: 'claude-haiku-4-5',
+        max_tokens: 100,
+        timeoutMs: 1000,
+        retry: { maxAttempts: 2, baseDelayMs: 100, maxDelayMs: 1_000 },
+      },
+      sink,
+    );
+
+    // Fake timers are on for this suite, so the backoff must be advanced
+    // explicitly — same pattern as the retry tests above.
+    const promise = client.complete(request());
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+    // Each attempt is separately billed by the provider, so each is separately
+    // metered — collapsing them would understate a retry-heavy run.
+    expect(sink.records).toHaveLength(2);
+  });
+
+  it('does not let a throwing sink fail the LLM call (PR #367 review)', async () => {
+    // `LlmSpendSink` is a public interface, so the "never throws" contract
+    // cannot be trusted per-implementation — a metering side effect must not
+    // be able to abort a completed, already-billed call or trigger a retry.
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockResolvedValue(usageResponse('good')),
+    };
+    const client = new AnthropicLlmClient(
+      wire,
+      { model: 'claude-haiku-4-5', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      {
+        record: () => {
+          throw new Error('disk full');
+        },
+      },
+    );
+
+    await expect(client.complete(request())).resolves.toMatchObject({ data: { value: 'good' } });
+    expect(wire.createMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('meters nothing by default, so a client built without a sink is unchanged', async () => {
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockResolvedValue(usageResponse('good')),
+    };
+    const client = new AnthropicLlmClient(wire, {
+      model: 'claude-haiku-4-5',
+      max_tokens: 100,
+      timeoutMs: 1000,
+      retry: NO_RETRY,
+    });
+
+    await expect(client.complete(request())).resolves.toMatchObject({ data: { value: 'good' } });
   });
 });

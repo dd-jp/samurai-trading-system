@@ -242,3 +242,84 @@ describe('SqliteQueryStore', () => {
     expect(store.getAttribution(NOW)).toEqual({});
   });
 });
+
+describe('SqliteQueryStore.getLlmSpend', () => {
+  /** Writes straight to `llm_spend`; `SqliteLlmSpendStore` has its own suite. */
+  function seedSpend(db: SharedStore, cost: number | null, at: Date): void {
+    db.prepare(
+      `INSERT INTO llm_spend (
+         trace_id, stage, model, input_tokens, output_tokens,
+         cache_creation_input_tokens, cache_read_input_tokens, cost_usd, timestamp
+       ) VALUES ('t', 'debate', 'claude-haiku-4-5', 100, 20, 5, 50, ?, ?)`,
+    ).run(cost, at.toISOString());
+  }
+
+  function hoursBefore(hours: number): Date {
+    return new Date(NOW.getTime() - hours * 60 * 60 * 1000);
+  }
+
+  it('returns zeroed windows on an empty table rather than throwing or returning null', () => {
+    const store = new SqliteQueryStore(makeDb());
+    const spend = store.getLlmSpend(NOW);
+
+    // A fresh DB is the normal first-run state; the tile must render $0.00,
+    // not blow up the whole snapshot.
+    expect(spend.last_24h).toEqual({
+      cost_usd: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+      calls: 0,
+      unpriced_calls: 0,
+    });
+  });
+
+  it('scopes each rolling window to its own cutoff', () => {
+    const db = makeDb();
+    seedSpend(db, 1, hoursBefore(1)); // inside 24h, 7d and all-time
+    seedSpend(db, 2, hoursBefore(48)); // inside 7d and all-time only
+    seedSpend(db, 4, hoursBefore(24 * 30)); // all-time only
+
+    const spend = new SqliteQueryStore(db).getLlmSpend(NOW);
+    expect(spend.last_24h.calls).toBe(1);
+    expect(spend.last_24h.cost_usd).toBeCloseTo(1, 10);
+    expect(spend.last_7d.calls).toBe(2);
+    expect(spend.last_7d.cost_usd).toBeCloseTo(3, 10);
+    expect(spend.all_time.calls).toBe(3);
+    expect(spend.all_time.cost_usd).toBeCloseTo(7, 10);
+  });
+
+  it('excludes rows written after asOf, matching every other read on this store', () => {
+    const db = makeDb();
+    seedSpend(db, 1, new Date(NOW.getTime() + 60_000));
+
+    expect(new SqliteQueryStore(db).getLlmSpend(NOW).all_time.calls).toBe(0);
+  });
+
+  it('counts unpriced calls separately and leaves them out of the dollar total', () => {
+    const db = makeDb();
+    seedSpend(db, 1.5, hoursBefore(1));
+    seedSpend(db, null, hoursBefore(2));
+
+    const window = new SqliteQueryStore(db).getLlmSpend(NOW).last_24h;
+    // Both calls are counted and both contribute tokens; only the priced one
+    // contributes dollars. `unpriced_calls` is what stops the figure being
+    // read as a complete total.
+    expect(window.calls).toBe(2);
+    expect(window.unpriced_calls).toBe(1);
+    expect(window.cost_usd).toBeCloseTo(1.5, 10);
+    expect(window.input_tokens).toBe(200);
+  });
+
+  it('sums the cache token columns so the tile can show the real token mix', () => {
+    const db = makeDb();
+    seedSpend(db, 1, hoursBefore(1));
+    seedSpend(db, 1, hoursBefore(2));
+
+    const window = new SqliteQueryStore(db).getLlmSpend(NOW).last_24h;
+    expect(window.cache_read_input_tokens).toBe(100);
+    expect(window.cache_creation_input_tokens).toBe(10);
+    expect(window.output_tokens).toBe(40);
+  });
+});

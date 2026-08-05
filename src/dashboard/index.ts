@@ -6,8 +6,17 @@
  * File-path convention follows shared-sqlite-store-spec.md's "one file per
  * environment": `data/samurai-{env}.sqlite` at repo root, selected via
  * `NODE_ENV` (defaults to `development`).
+ *
+ * Also starts the provider-status poller (provider-status.ts) for the Alpaca
+ * balance and Polygon health tiles. Those are live third-party reads rather
+ * than store reads, deliberately — see that module's header. Credentials are
+ * OPTIONAL here: a missing key degrades the affected tile to `not_configured`
+ * and never blocks startup, because the rest of the dashboard is still worth
+ * serving without it.
  */
+import { AlpacaHttpBrokerClient } from '../execution/index.js';
 import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
+import { ProviderStatusPoller } from './provider-status.js';
 import { createDashboardServer } from './server.js';
 import { SqliteQueryStore } from './sqlite-query-store.js';
 
@@ -16,8 +25,46 @@ const host = process.env.HOST ?? '127.0.0.1';
 // Same resolver the orchestrator uses: the dashboard reads the file the
 // orchestrator writes, so the two must not derive its name independently.
 const db = openSharedStore(sharedStorePath());
-const server = createDashboardServer({ port, host, store: new SqliteQueryStore(db) });
+
+/**
+ * Paper unless `SAMURAI_MODE=live`, matching `buildDefaultBrokerClient`'s rule
+ * (#293) rather than `AlpacaHttpBrokerClient`'s own default: live is reached
+ * only by naming it. This client is used for exactly one read
+ * (`GET /v2/account`) and never places an order — but it is still pointed at
+ * the same environment the orchestrator trades in, because a paper balance
+ * displayed while live positions are open would be worse than no balance.
+ */
+function buildAlpacaClient(): AlpacaHttpBrokerClient | undefined {
+  try {
+    return new AlpacaHttpBrokerClient({
+      environment: process.env.SAMURAI_MODE === 'live' ? 'live' : 'paper',
+    });
+  } catch (error) {
+    // The constructor throws when the keys are absent. That is fatal for the
+    // orchestrator and merely a missing tile here, so it is caught rather than
+    // propagated — the operator still gets positions, verdicts and metrics off
+    // the store.
+    console.warn(
+      `Alpaca balance tile disabled: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return undefined;
+  }
+}
+
+const providers = new ProviderStatusPoller({ alpaca: buildAlpacaClient() });
+
+const server = createDashboardServer({
+  port,
+  host,
+  store: new SqliteQueryStore(db),
+  providers,
+});
 
 await server.start();
+// Started after the server is listening, and not awaited: the first poll makes
+// two network calls, and holding the page hostage to a slow third party would
+// invert the priority — the store-backed views need no provider at all.
+void providers.start();
+
 console.log(`Samurai dashboard → ${server.url}`);
 console.log('Read-only operator view. Ctrl+C to stop.');

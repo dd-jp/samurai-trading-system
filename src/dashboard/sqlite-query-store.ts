@@ -38,6 +38,8 @@ import type { SharedStore } from '../shared/store/index.js';
 import type {
   AttributionSummary,
   DashboardQueryStore,
+  LlmSpendSummary,
+  LlmSpendWindow,
   TickStatus,
   VerdictAuditEntry,
 } from './types.js';
@@ -340,6 +342,52 @@ export class SqliteQueryStore implements DashboardQueryStore {
       source: row.source,
       asset_class: row.asset_class,
     };
+  }
+
+  /**
+   * Three windows in three aggregate queries rather than one scan summed in
+   * JS: `llm_spend` grows one row per LLM call and is never pruned, so a
+   * 14-day soak's all-time window is the one read here that could get large.
+   * SQLite aggregates it against `idx_llm_spend_timestamp` without
+   * materialising the rows.
+   *
+   * `SUM(cost_usd)` skips NULLs by definition, which is exactly the intended
+   * semantics — unpriced calls contribute tokens but no dollars — and
+   * `unpriced_calls` is counted alongside so the omission is visible rather
+   * than silently understating the total.
+   */
+  getLlmSpend(asOf: Date): LlmSpendSummary {
+    const until = asOf.toISOString();
+    const dayAgo = new Date(asOf.getTime() - 24 * 60 * 60 * 1000).toISOString();
+    const weekAgo = new Date(asOf.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    return {
+      last_24h: this.spendBetween(dayAgo, until),
+      last_7d: this.spendBetween(weekAgo, until),
+      // Open-ended lower bound rather than a sentinel date: an ISO TEXT
+      // comparison against '' is true for every well-formed timestamp, but
+      // relying on that is a trick the next reader has to decode.
+      all_time: this.spendBetween(null, until),
+    };
+  }
+
+  private spendBetween(fromIso: string | null, untilIso: string): LlmSpendWindow {
+    const where =
+      fromIso === null ? 'WHERE timestamp <= ?' : 'WHERE timestamp > ? AND timestamp <= ?';
+    const params = fromIso === null ? [untilIso] : [fromIso, untilIso];
+    const row = this.db
+      .prepare(
+        `SELECT
+           COALESCE(SUM(cost_usd), 0)                    AS cost_usd,
+           COALESCE(SUM(input_tokens), 0)                AS input_tokens,
+           COALESCE(SUM(output_tokens), 0)               AS output_tokens,
+           COALESCE(SUM(cache_read_input_tokens), 0)     AS cache_read_input_tokens,
+           COALESCE(SUM(cache_creation_input_tokens), 0) AS cache_creation_input_tokens,
+           COUNT(*)                                      AS calls,
+           COALESCE(SUM(cost_usd IS NULL), 0)            AS unpriced_calls
+         FROM llm_spend ${where}`,
+      )
+      .get(...params) as LlmSpendWindow;
+    return row;
   }
 }
 

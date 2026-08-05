@@ -15,7 +15,9 @@ import {
   LlmRateLimitError,
   LlmTimeoutError,
 } from './errors.js';
+import type { AnthropicUsage } from './pricing.js';
 import { wrapUntrusted } from './prompt-safety.js';
+import { type LlmSpendSink, NULL_SPEND_SINK } from './spend-sink.js';
 import type { LlmClient, LlmRequest, LlmResponse, LlmRetryConfig } from './types.js';
 
 /**
@@ -43,6 +45,24 @@ export interface AnthropicMessageRequest {
 /** The subset of the Messages API response this client reads (text content blocks). */
 export interface AnthropicMessageResponse {
   content: Array<{ type: string; text?: string }>;
+  /**
+   * Token counts, fed to the local spend meter (llm/spend-sink.ts). Optional
+   * because `AnthropicMessagesClient` is a structural interface any wire
+   * client may satisfy — the many test doubles in this suite return `content`
+   * alone, and requiring `usage` would break every one of them for a field
+   * nothing trading-critical reads.
+   *
+   * The real API always sends it; `AnthropicHttpMessagesClient` casts the
+   * whole body through, so it arrives at runtime without extra parsing.
+   */
+  usage?: AnthropicUsage;
+  /**
+   * The model that actually served the request, which is not always the model
+   * requested — a server-side fallback can reroute a refused request to a
+   * different (differently priced) model. Preferred over `config.model` when
+   * pricing, so the meter bills what ran rather than what was asked for.
+   */
+  model?: string;
 }
 
 export interface AnthropicMessagesClient {
@@ -115,6 +135,12 @@ export class AnthropicLlmClient implements LlmClient {
   constructor(
     private readonly client: AnthropicMessagesClient,
     private readonly config: AnthropicLlmClientConfig,
+    /**
+     * Where token usage is metered. Defaults to `NULL_SPEND_SINK` so every
+     * existing construction site — tests, backtests, anything without a shared
+     * store — keeps working unchanged and simply meters nothing.
+     */
+    private readonly spendSink: LlmSpendSink = NULL_SPEND_SINK,
   ) {}
 
   complete<T>(request: LlmRequest<T>): Promise<LlmResponse<T>> {
@@ -123,9 +149,16 @@ export class AnthropicLlmClient implements LlmClient {
 
   private async attempt<T>(request: LlmRequest<T>): Promise<LlmResponse<T>> {
     const start = Date.now();
-    const rawText = await this.callWithTimeout(renderMessageContent(request));
+    const response = await this.callWithTimeout(renderMessageContent(request));
     const latency_ms = Date.now() - start;
 
+    // Metered BEFORE the parse gate below, because a malformed response was
+    // still generated and still billed. Recording only well-formed responses
+    // would make the meter understate spend by exactly the calls most likely
+    // to be retried — i.e. it would be most wrong when it matters most.
+    this.recordSpend(request, response);
+
+    const rawText = extractText(response);
     const parsed = request.parseResponse(rawText);
     if (!parsed.valid) {
       throw new LlmMalformedResponseError(parsed.reason);
@@ -134,7 +167,39 @@ export class AnthropicLlmClient implements LlmClient {
     return { data: parsed.data, raw_text: rawText, latency_ms };
   }
 
-  private callWithTimeout(content: string): Promise<string> {
+  /**
+   * Note what is NOT metered: a call that times out or throws never reaches
+   * here, so its tokens are missing from the total even though the provider
+   * may have generated (and billed) them. There is no usage block to read on a
+   * failed call — the information does not exist client-side — so this is a
+   * known floor on the figure, not an oversight. Retries are each counted
+   * separately, which is correct: each attempt is separately billed.
+   */
+  private recordSpend<T>(request: LlmRequest<T>, response: AnthropicMessageResponse): void {
+    if (response.usage === undefined) return;
+    try {
+      this.spendSink.record({
+        trace_id: request.context.trace_id ?? 'unattributed',
+        stage: request.context.stage ?? 'debate',
+        model: response.model ?? this.config.model,
+        usage: response.usage,
+        timestamp: new Date(),
+      });
+    } catch {
+      // The sink contract says `record` must not throw, and the SQLite
+      // implementation honours it — but `LlmSpendSink` is a public interface
+      // any caller may implement, so trusting that contract per-implementation
+      // leaves the guarantee one bad sink away from failing a trading call.
+      // Enforced here, at the boundary, where it actually holds.
+      //
+      // Silent by necessity: this class has no logger, and adding one to carry
+      // a metering failure would widen a hot constructor for a message the
+      // SQLite sink already logs for itself. The observable symptom — a spend
+      // total that stops rising — is on the dashboard either way.
+    }
+  }
+
+  private callWithTimeout(content: string): Promise<AnthropicMessageResponse> {
     const timeout = new Promise<never>((_, reject) => {
       setTimeout(() => {
         reject(new LlmTimeoutError(`LLM call exceeded ${this.config.timeoutMs}ms`));
@@ -147,7 +212,6 @@ export class AnthropicLlmClient implements LlmClient {
         max_tokens: this.config.max_tokens,
         messages: [{ role: 'user', content }],
       })
-      .then(extractText)
       .catch((error) => {
         throw classifyProviderError(error);
       });

@@ -43,6 +43,16 @@ export {
   LlmTimeoutError,
 } from './llm/errors.js';
 export { MockLlmClient } from './llm/mock-client.js';
+export type { AnthropicUsage, ModelRate } from './llm/pricing.js';
+export {
+  CACHE_READ_MULTIPLIER,
+  CACHE_WRITE_MULTIPLIER,
+  MODEL_RATES,
+  priceUsage,
+  rateFor,
+} from './llm/pricing.js';
+export type { LlmSpendRecord, LlmSpendSink } from './llm/spend-sink.js';
+export { NULL_SPEND_SINK, SqliteLlmSpendStore } from './llm/spend-sink.js';
 export type {
   LlmClient,
   LlmRequest,
