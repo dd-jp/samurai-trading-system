@@ -89,6 +89,57 @@ describe('CircuitBreakers', () => {
     expect(recovered.portfolio_tripped).toBe(false);
   });
 
+  it('arms daily_pnl_unknown, without halting, when the daily figure is unknown', () => {
+    const breakers = new CircuitBreakers(makeConfig({ daily_loss_pct: 3 }));
+    const unknown = { known: false, reason: 'no session-open equity observed' } as const;
+
+    const state = breakers.evaluate(
+      makeInput({
+        portfolio: makePortfolio({
+          daily_pnl: { crypto: unknown, stocks: unknown, portfolio: unknown },
+        }),
+      }),
+    );
+
+    // Visible in the audit trail and the operator's breaker summary — the
+    // #293/#320/#324/#342 posture that a degraded state is never reached
+    // quietly.
+    expect(state.armed_breakers).toContain('daily_pnl_unknown');
+    // But NOT a halt: escalating unknown to a block on new entries is #333's
+    // two-tier daily-loss work, which owns the re-arm semantics. Arming a name
+    // this breaker cannot itself clear would strand the system halted.
+    expect(state.portfolio_tripped).toBe(false);
+    expect(state.armed_breakers).not.toContain('daily_loss_soft');
+  });
+
+  it('does not read an unknown daily figure as a flat day', () => {
+    const breakers = new CircuitBreakers(makeConfig({ daily_loss_pct: 0.05 }));
+    const unknown = { known: false, reason: 'restart after the boundary' } as const;
+
+    const state = breakers.evaluate(
+      makeInput({
+        portfolio: makePortfolio({
+          daily_pnl: { crypto: unknown, stocks: unknown, portfolio: unknown },
+        }),
+      }),
+    );
+
+    // A `null`/`undefined` here would coerce to 0 in `pct <= -0.05` and be
+    // indistinguishable from a genuinely flat session. The union makes the
+    // absence explicit instead.
+    expect(state.armed_breakers).toEqual(['daily_pnl_unknown']);
+  });
+
+  it('leaves daily_pnl_unknown unarmed when the figure is known', () => {
+    const breakers = new CircuitBreakers(makeConfig({ daily_loss_pct: 3 }));
+
+    const state = breakers.evaluate(
+      makeInput({ portfolio: makePortfolio({ daily_pnl: pnl(-1) }) }),
+    );
+
+    expect(state.armed_breakers).not.toContain('daily_pnl_unknown');
+  });
+
   it('trips the consecutive-loss cooldown at the portfolio tier at the configured count', () => {
     const breakers = new CircuitBreakers(makeConfig({ max_consecutive_losses: 4 }));
 

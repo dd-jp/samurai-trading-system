@@ -9,7 +9,7 @@
  * `audit_log` persists `input_digest`/`output_digest` only: it can prove a
  * stage ran and that its I/O hashed to X, and can reconstruct no value at all.
  * Everything diagnostic — LLM warn lines, latency-budget overruns,
- * `daily_pnl_pct` assumption warnings, alert-transport failures, fill-sync
+ * session-open-equity cold-start warnings, alert-transport failures, fill-sync
  * errors — exists *only* as a structured log line. Before this file that line
  * went to stdout and nowhere else, so a `yarn orchestrator` run without a
  * shell redirect discarded it. "Why did it do that on day 6" is the single

@@ -130,7 +130,22 @@ interface PortfolioView {
   exposure_by_instrument: Record<string, number>;
   exposure_by_class: { crypto: number; stocks: number };
   gross_exposure: number;
-  daily_pnl_pct: number;         // since session start (UTC day crypto / market-day stocks)
+  // Since session start, per class: UTC day for crypto, market day for stocks,
+  // plus a UTC portfolio-level figure. Resolved GAP-8 / #332 — this replaces a
+  // single `daily_pnl_pct: number` sourced from Alpaca's blended `last_equity`.
+  //
+  // `DailyPnl` is a tagged union, not `number | null`: the daily-loss breaker's
+  // test is `pct <= -daily_loss_pct`, and a nullable number coerces there
+  // (`null <= -0.05` evaluates `0 <= -0.05`), reading an unknown figure as a
+  // flat day and leaving the breaker un-tripped through a real loss.
+  //
+  // The three figures are measured from DIFFERENT boundaries against DIFFERENT
+  // denominators, so they do not sum to one another. No invariant relates them.
+  daily_pnl: {
+    crypto: DailyPnl;
+    stocks: DailyPnl;
+    portfolio: DailyPnl;
+  };
   consecutive_losses: number;
 }
 ```

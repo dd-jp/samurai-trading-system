@@ -56,9 +56,13 @@ Already ticketed, but its severity should be read as Tier 1 rather than a follow
 
 Consequence: whatever supplies `peak_equity` resets on restart, the high-water mark resets with it, `drawdown_pct` reads low, and the portfolio-drawdown circuit breaker silently under-trips — the exact failure GAP-7 was written to prevent. This is a **spec-vs-code divergence, not just a missing feature** (D2 below).
 
-### 5. `daily_pnl_pct` semantics unresolved — **needs your decision** (cross-verify GAP-8)
+### 5. `daily_pnl_pct` semantics — **RESOLVED** ([#332](https://github.com/dd-jp/samurai-trading-system/issues/332), cross-verify GAP-8)
 
-Open since 2026-07-31 and unchanged. `risk-manager-spec.md` wants session-scoped (UTC day for crypto, market day for stocks); Alpaca's `GET /v2/account` gives one blended `last_equity` whose actual reset boundary is **unverified against a live account**. Since `SMOKE_TEST_UNIVERSE` is BTC-USD — crypto, 24/7 — the first paper run lands squarely on the ambiguous side. Flagging rather than guessing, as the cross-verify explicitly asks.
+~~Open since 2026-07-31 and unchanged.~~ Resolved on the local-snapshot side. `risk-manager-spec.md` wanted session-scoped semantics (UTC day for crypto, market day for stocks); Alpaca's `GET /v2/account` gave one blended `last_equity` whose actual reset boundary was **never verified against a live account** — and with `SMOKE_TEST_UNIVERSE` set to BTC-USD (crypto, 24/7), the first paper run landed squarely on the ambiguous side.
+
+`last_equity` is no longer read. Equity at each class's session boundary (`TradingCalendar.sessionStart`, [#331](https://github.com/dd-jp/samurai-trading-system/issues/331)) is persisted locally in `session_equity` (migration `0009`), and `PortfolioView.daily_pnl` now carries a per-class figure — crypto from 00:00 UTC, stocks from the prior 16:00 ET close, plus a UTC portfolio-level one.
+
+**Carry-over for the soak:** a daily figure that cannot be computed (fresh store, or a restart after the boundary passed) is reported *unknown* rather than `0` in `live`, and arms an advisory `daily_pnl_unknown` breaker — but it does **not** yet halt new entries. That escalation is [#333](https://github.com/dd-jp/samurai-trading-system/issues/333). In `paper` — the soak's mode — the figure is seeded from a mid-session base with a `warn`, so the breaker stays live throughout.
 
 ### 6. `intent_type: 'exit'` dead-ends — **#74**
 

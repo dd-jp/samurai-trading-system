@@ -65,7 +65,7 @@ Runs pending migrations, returns a typed handle. Components receive it via const
 
 ### Module: Consolidated Schema
 
-Every `CREATE TABLE` the store needs, collected from the eleven specs that implicitly define them plus the three that had no schema anywhere until this map resolved them (`verdict_log` and `breaker_state` were added later, per #206 and #203 respectively). `cii_snapshots` was added later still, per #182 (`0003_cii_snapshots.sql`). `account_state` was added later still, per the transport-layer-spec.md cross-verify pass (2026-07-31), closing a gap where `AccountStateProvider`'s `peak_equity` had no durable home. `broker_brackets` and `broker_observed_fills` were added last, per [#287](https://github.com/dd-jp/samurai-trading-system/issues/287) (`0007_broker_adapter_state.sql`), closing the gap where every live `BrokerAdapter` held money-critical venue state in process-local memory. `broker_unpriced_fills` was added last of all, per [#298](https://github.com/dd-jp/samurai-trading-system/issues/298) (`0008_broker_unpriced_fills.sql`), giving a permanently-unpriced fill a durable age-out clock so it escalates to an operator instead of leaving a lot stuck in silence. Field-level non-collision was re-verified across all twenty-one tables (see **Non-Collision Verification** below).
+Every `CREATE TABLE` the store needs, collected from the eleven specs that implicitly define them plus the three that had no schema anywhere until this map resolved them (`verdict_log` and `breaker_state` were added later, per #206 and #203 respectively). `cii_snapshots` was added later still, per #182 (`0003_cii_snapshots.sql`). `account_state` was added later still, per the transport-layer-spec.md cross-verify pass (2026-07-31), closing a gap where `AccountStateProvider`'s `peak_equity` had no durable home. `session_equity` was added per [#332](https://github.com/dd-jp/samurai-trading-system/issues/332) (`0009_session_equity.sql`), resolving GAP-8 by giving the session-scoped daily-PnL denominator a durable per-class home instead of reading Alpaca's blended `last_equity`. `broker_brackets` and `broker_observed_fills` were added last, per [#287](https://github.com/dd-jp/samurai-trading-system/issues/287) (`0007_broker_adapter_state.sql`), closing the gap where every live `BrokerAdapter` held money-critical venue state in process-local memory. `broker_unpriced_fills` was added last of all, per [#298](https://github.com/dd-jp/samurai-trading-system/issues/298) (`0008_broker_unpriced_fills.sql`), giving a permanently-unpriced fill a durable age-out clock so it escalates to an operator instead of leaving a lot stuck in silence. Field-level non-collision was re-verified across all twenty-one tables (see **Non-Collision Verification** below).
 
 **Market Data Service** — owner: `docs/specs/market-data-service-spec.md`
 
@@ -435,6 +435,35 @@ CREATE TABLE account_state (
   peak_equity   REAL NOT NULL,
   updated_at    TEXT NOT NULL
 );
+
+-- Per-asset-class session-open equity (transport-layer-spec.md, #332,
+-- 0009_session_equity.sql) -- the denominator of risk-manager-spec.md's
+-- session-scoped daily PnL. One row per class plus a portfolio-level row.
+--
+-- Deliberately NOT columns on account_state: that table is keyed
+-- one-row-per-account around a NOT NULL peak_equity, so three per-class rows
+-- would each need a dummy or nullable high-water mark, and a NULL denominator
+-- reads as zero drawdown forever -- the exact crash-safety invariant
+-- account_state exists to hold.
+--
+-- open_at is the SESSION START INSTANT, never the write time: the snapshot is
+-- taken at the first tick after a boundary (historical cash is stored nowhere,
+-- so the equity at the boundary itself cannot be reconstructed), and recording
+-- the boundary keeps that drift visible rather than baking it in. ISO-8601 UTC,
+-- matching closed_trades.closed_at -- the realized-PnL filter is a TEXT
+-- `closed_at > open_at` comparison and depends on both sides being written the
+-- same fixed-width, Z-suffixed way.
+--
+-- observed_at_boundary records whether the writing process was actually running
+-- when the session opened, and is durable rather than in-process because a
+-- restart cannot otherwise tell a real open from a mid-session sample: after a
+-- restart the row's open_at already equals the current session start.
+CREATE TABLE session_equity (
+  asset_class          TEXT PRIMARY KEY CHECK(asset_class IN ('crypto', 'stocks', 'portfolio')),
+  open_equity          REAL NOT NULL,
+  open_at              TEXT NOT NULL,
+  observed_at_boundary INTEGER NOT NULL CHECK(observed_at_boundary IN (0, 1))
+);
 ```
 
 ### Non-Collision Verification
@@ -450,6 +479,7 @@ CREATE TABLE account_state (
 - **`dial_adjustments` was missing `reason`** (#197) — `Adjustment.reason` (feedback-loop-spec.md's "Module: Guardrailed Tuning") was already a required field consumed by `daily-cycle.ts`/`metrics.ts`; the original DDL bullet dropped it, the same class of gap as `latest_mark`/`asset_class` above. **Fixed above**, plus a real migration (`0002_dial_adjustments_reason.sql`, `ALTER TABLE ... ADD COLUMN reason TEXT NOT NULL DEFAULT ''`) since `0001_init.sql` had already shipped without it.
 - **`cii_snapshots`** (#182) — `country_code` is a plain `TEXT` code (WorldMonitor country codes, e.g. `'RU'`), disjoint from every other table's keying convention; not the same value space as `asset_class`'s `crypto`/`stocks` enum despite both being country/market-adjacent classifiers. `(country_code, captured_at)` composite PK is the append-only-history pattern already used by `bars`' `(instrument, timeframe, open_time)`. No divergence.
 - **`account_state`** (transport-layer-spec.md, 2026-07-31) — `key` is its own single-row PK (`'default'`), disjoint from every other table's keying convention; no other table carries a bare running-max scalar like `peak_equity`. No divergence.
+- **`session_equity`** (transport-layer-spec.md, #332) — `asset_class` as a PK is unique to this table; every other `asset_class` column is a non-key attribute (`closed_trades`, `open_positions`, `latest_mark`) and carries the same `'crypto'`/`'stocks'` domain, widened here by a third `'portfolio'` member that exists nowhere else. `open_equity`/`open_at`/`observed_at_boundary` appear in no other table. No divergence.
 - **`broker_brackets` / `broker_observed_fills`** (#287, 2026-08-04) — three deliberate near-misses, all resolved by naming rather than left to be inferred:
   - **`client_order_id` vs `idempotency_key`** — the same VALUE (`NativeBracketRequest.client_order_id` is set from the OrderIntent's idempotency key), a different NAME. These two tables are written from below the `SharedStore` seam, where the concept is the broker-native idempotency handle rather than the pipeline's decision key — the same distinction `NormalizedFill.client_order_id` already draws in code. Renaming it `idempotency_key` here would imply the adapter knows about a pipeline concept it deliberately does not.
   - **`entry_price`/`stop_price`/`target_price` vs `open_positions.avg_entry_price`/`stop`/`target`** — named APART on purpose, because they mean different things: these are the prices the bracket was REQUESTED at and never change, whereas `open_positions.stop`/`target` are the live protective levels that get resized on partial fill. Reusing `stop`/`target` would invite exactly the wrong join.
@@ -503,6 +533,7 @@ Debate Engine       → debate_log
 Verdict             → verdict_log
 Orchestrator        → audit_log, current_tick
 Transport Layer     → account_state (AccountStateProvider, peak_equity)
+Transport Layer     → session_equity (AccountStateProvider, per-class daily PnL basis)
 ```
 
 Every stage above reads/writes through the one `SharedStore` handle from `openSharedStore(dbPath)`, injected at each stage's construction.
