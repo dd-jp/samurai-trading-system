@@ -263,7 +263,13 @@ function makeAssetClass(
     makeRunner: () =>
       new ReplayDriver({
         barSource: ctx.store,
-        timeline: ctx.store,
+        // Scoped to this asset class's symbols, not the whole store (#420).
+        // The store's own `barTimestamps` is the union across every ingested
+        // instrument, and stock/crypto daily bars close at different UTC
+        // times — so an unscoped timeline steps a stock replay through every
+        // crypto bar too, padding the return series with zeros and understating
+        // the per-period Sharpe by roughly sqrt(n_real / n_union).
+        timeline: ctx.store.timelineFor(symbols),
         registry: ctx.store,
         costModel: ctx.costModel,
         clock: new SimulatedClock(ctx.window.start),
