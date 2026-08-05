@@ -94,6 +94,18 @@ export interface AlpacaAccount {
   /** Total account value including open positions — the high-water mark's input. */
   equity: string;
   /**
+   * DISPLAY ONLY — the operator dashboard's balance tile, never a sizing input.
+   *
+   * Optional because nothing in the trading path may depend on it: position
+   * size comes from the Risk Manager's own equity model, and letting a broker-
+   * reported buying-power figure reach sizing would silently import Alpaca's
+   * margin multiplier (2x or 4x on a PDT account) into decisions this system
+   * is supposed to make from its own capital base. Marked optional so a client
+   * that does not surface it still satisfies the interface, and so its absence
+   * on the dashboard degrades to "—" rather than a crash.
+   */
+  buying_power?: string;
+  /**
    * NOT READ, and typed so that reading it cannot compile (#332).
    *
    * Alpaca still sends this on the wire; the parse is a generic cast over

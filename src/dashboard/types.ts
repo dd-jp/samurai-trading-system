@@ -19,6 +19,7 @@ import type { Direction } from '../debate-engine/index.js';
 import type { Mark } from '../market-data-service/index.js';
 import type { AssetClass } from '../orchestrator/index.js';
 import type { DebateLog, OpenPosition } from '../shared/index.js';
+import type { ProviderStatusPanel, ProviderStatusReader } from './provider-status.js';
 
 /**
  * Coarse in-progress indicator sourced from the Orchestrator's `current_tick`
@@ -118,6 +119,41 @@ export interface AnalystPerformanceRow {
 export type MetricsSuiteWire = MetricsSuite;
 
 /**
+ * Locally-metered Anthropic spend over one time window, from `llm_spend`
+ * (migrations/0010_llm_spend.sql). Not an account balance and not an invoice:
+ * Anthropic publishes no balance endpoint, so this is what THIS bot spent,
+ * counted from the `usage` block on each Messages API response.
+ */
+export interface LlmSpendWindow {
+  /**
+   * USD across PRICED calls only. `unpriced_calls` is the honest caveat that
+   * travels with it — a model missing from the rate table contributes tokens
+   * here but no dollars, so a non-zero `unpriced_calls` means this figure is a
+   * floor rather than a total.
+   */
+  cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+  calls: number;
+  /** Calls whose model was not in the rate table; excluded from `cost_usd`. */
+  unpriced_calls: number;
+}
+
+/**
+ * Rolling windows rather than calendar days: a UTC-day bucket would disagree
+ * with the operator's wall clock, and this system already has one hard-won
+ * lesson (#332, `session_equity`) about blended reset boundaries nobody
+ * verified. "Last 24 hours" needs no boundary to be right about.
+ */
+export interface LlmSpendSummary {
+  last_24h: LlmSpendWindow;
+  last_7d: LlmSpendWindow;
+  all_time: LlmSpendWindow;
+}
+
+/**
  * The single payload `GET /api/snapshot` returns. Exactly the four CLI views
  * plus the coarse tick-in-progress line, projected to JSON-friendly shapes.
  */
@@ -130,6 +166,23 @@ export interface DashboardSnapshot {
   verdicts: VerdictRow[];
   analysts: AnalystPerformanceRow[];
   metrics: MetricsSuiteWire;
+  /**
+   * Third-party provider tiles. Three providers, three different realities,
+   * and the shapes differ because the underlying facts do rather than for
+   * presentational convenience:
+   *
+   *  - `alpaca` is a real broker balance (`GET /v2/account`), polled live.
+   *  - `polygon` is reachability only — Polygon sells a subscription and
+   *    exposes no balance, credits, or quota endpoint.
+   *  - `llm_spend` is a locally-metered Anthropic total, because Anthropic
+   *    publishes no credit-balance endpoint either (`/v1/organizations/balance`
+   *    is a 404) and its only monetary API needs an Admin key + Organization.
+   *
+   * Flattening these into one uniform "balance" field would require inventing
+   * two numbers that do not exist.
+   */
+  providers: ProviderStatusPanel;
+  llm_spend: LlmSpendSummary;
 }
 
 /**
@@ -139,7 +192,11 @@ export interface DashboardSnapshot {
  * Decisions").
  */
 export interface DashboardSnapshotBuilder {
-  buildSnapshot(store: DashboardQueryStore, asOf: Date): DashboardSnapshot;
+  buildSnapshot(
+    store: DashboardQueryStore,
+    asOf: Date,
+    providers?: ProviderStatusReader,
+  ): DashboardSnapshot;
 }
 
 /**
@@ -156,4 +213,11 @@ export interface DashboardQueryStore {
   getAttribution(asOf: Date): Record<string, AttributionSummary>;
   getDailyMetrics(asOf: Date): MetricsSuite;
   getMark(instrument: string, asOf: Date): Mark;
+  /**
+   * Locally-metered Anthropic spend. Belongs on this interface, unlike the
+   * Alpaca/Polygon tiles, because `llm_spend` genuinely IS a shared-store
+   * table written by another component (the debate engine's LLM client) — the
+   * same relationship this store has to `open_positions` or `verdict_log`.
+   */
+  getLlmSpend(asOf: Date): LlmSpendSummary;
 }

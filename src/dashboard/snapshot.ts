@@ -12,6 +12,7 @@
  * (`RECENT_DEBATES_LIMIT` / `RECENT_VERDICTS_LIMIT`), no config surface yet.
  */
 import type { OpenPosition } from '../shared/index.js';
+import { NULL_PROVIDER_STATUS, type ProviderStatusReader } from './provider-status.js';
 import type { DashboardQueryStore, DashboardSnapshot, PositionRow } from './types.js';
 
 /** Matches the CLI views' default recent-history window; no config surface yet. */
@@ -30,7 +31,19 @@ function unrealizedPnl(position: OpenPosition, markPrice: number): number {
   return diff * position.filled_size;
 }
 
-export function buildSnapshot(store: DashboardQueryStore, asOf: Date): DashboardSnapshot {
+/**
+ * `providers` defaults to `NULL_PROVIDER_STATUS` (every tile
+ * `not_configured`) rather than being required, so a dashboard started without
+ * third-party credentials — and every existing test that calls this with two
+ * arguments — keeps working. The reader is injected rather than called
+ * directly because it is the one input here that is live, timer-refreshed
+ * state; taking it as a parameter is what preserves this function's purity.
+ */
+export function buildSnapshot(
+  store: DashboardQueryStore,
+  asOf: Date,
+  providers: ProviderStatusReader = NULL_PROVIDER_STATUS,
+): DashboardSnapshot {
   const positions = store.getOpenPositions(asOf).map<PositionRow>((position) => {
     const mark = store.getMark(position.instrument, asOf);
     return {
@@ -93,5 +106,7 @@ export function buildSnapshot(store: DashboardQueryStore, asOf: Date): Dashboard
     verdicts,
     analysts,
     metrics,
+    providers: providers.readProviderStatus(),
+    llm_spend: store.getLlmSpend(asOf),
   };
 }

@@ -98,12 +98,13 @@
 import { AnalystOrchestrator } from '../analysts/index.js';
 import type { CostConfig } from '../cost-model-backtest/index.js';
 import { CostModelImpl } from '../cost-model-backtest/index.js';
-import type { AnthropicLlmClientConfig, LlmClient } from '../debate-engine/index.js';
+import type { AnthropicLlmClientConfig, LlmClient, LlmSpendSink } from '../debate-engine/index.js';
 import {
   AnthropicHttpMessagesClient,
   AnthropicLlmClient,
   DEFAULT_ANTHROPIC_MODEL,
   SqliteDebateLogStore,
+  SqliteLlmSpendStore,
 } from '../debate-engine/index.js';
 import type {
   AlpacaClient as AlpacaBrokerClient,
@@ -551,7 +552,7 @@ export const DEFAULT_LLM_CLIENT_CONFIG: Omit<AnthropicLlmClientConfig, 'model'> 
  * so an in-flight request is not left dangling after the outer race settles.
  */
 /** Exported for `production.test.ts` — lets the test assert the constructed client's actual shape (instance type, model, retry/timeout config) rather than only the startup warn log's side effect (PR #284 review). */
-export function buildDefaultLlmClient(logger: Logger): LlmClient {
+export function buildDefaultLlmClient(logger: Logger, spendSink?: LlmSpendSink): LlmClient {
   const model = process.env.ANTHROPIC_MODEL ?? DEFAULT_ANTHROPIC_MODEL;
   // Loud, not silent: omitting `ProductionConfig.llmClient` now means a real,
   // billed Anthropic API call per debate round rather than a required seam
@@ -570,7 +571,13 @@ export function buildDefaultLlmClient(logger: Logger): LlmClient {
     model,
   };
   const client = new AnthropicHttpMessagesClient();
-  return new AnthropicLlmClient(client, config);
+  // `spendSink` is only ever supplied on this default path, and deliberately
+  // so: a `ProductionConfig.llmClient` override is a test double or a
+  // non-Anthropic provider, and metering one against an Anthropic price table
+  // would produce a confidently wrong dollar figure. An overridden client
+  // meters nothing, and the dashboard's spend tile reads $0 — visibly empty
+  // rather than quietly fictional.
+  return new AnthropicLlmClient(client, config, spendSink);
 }
 
 /**
@@ -871,7 +878,9 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // `logger` here is what makes an analyst failure visible at all — see the
     // adapter's doc comment (issue #358 item 4).
     analysts: buildAnalystsStep(analysts, logger),
-    debate: buildDebateStep(config.llmClient ?? buildDefaultLlmClient(logger)),
+    debate: buildDebateStep(
+      config.llmClient ?? buildDefaultLlmClient(logger, new SqliteLlmSpendStore(config.db, logger)),
+    ),
     trader: buildTraderStep({ ...breakerStateDeps, config: config.traderConfig }),
     risk: buildRiskStep({
       ...breakerStateDeps,

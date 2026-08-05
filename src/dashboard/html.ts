@@ -106,6 +106,19 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   .metric { background: var(--panel); padding: 10px 14px; }
   .metric .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
   .metric .value { font-family: var(--mono); font-size: 16px; margin-top: 2px; }
+  .prov-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 1px; background: var(--border); }
+  .prov { background: var(--panel); padding: 12px 14px; }
+  .prov .name { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); display: flex; align-items: center; gap: 7px; }
+  .prov .figure { font-family: var(--mono); font-size: 18px; margin-top: 6px; }
+  .prov .sub { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .prov .note { font-size: 11px; color: var(--muted); margin-top: 7px; font-style: italic; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .dot-ok { background: var(--green); }
+  .dot-warn { background: var(--amber); }
+  .dot-bad { background: var(--red); }
+  .dot-off { background: var(--muted); }
+  .caveat { color: var(--amber); }
+  @media (max-width: 900px) { .prov-grid { grid-template-columns: 1fr; } }
   .full { grid-column: 1 / -1; }
   .hitl { color: var(--amber); font-size: 11px; margin-left: 6px; }
   .reason { color: var(--muted); font-size: 12px; }
@@ -121,6 +134,10 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
 </header>
 <div class="tick-banner" id="tick-banner" style="display:none;"></div>
 <main>
+  <section class="panel full">
+    <h2>Providers <span class="count">live probe · 60s</span></h2>
+    <div class="prov-grid" id="providers"></div>
+  </section>
   <section class="panel">
     <h2>Open Positions <span class="count" id="pos-count"></span></h2>
     <div id="positions"></div>
@@ -221,6 +238,70 @@ function renderAnalysts(data) {
   el.innerHTML = '<table><thead><tr><th>Analyst</th><th>Weight</th><th>Rolling R</th><th>Window</th></tr></thead><tbody>' + rows + '</tbody></table>';
 }
 
+// Only Alpaca has a balance. Polygon publishes no balance/credits endpoint at
+// all, and Anthropic publishes no credit-balance endpoint either, so those two
+// tiles show the honest substitutes — reachability, and locally-metered spend —
+// and say so on the tile rather than dressing them up as balances.
+const STATE_DOT = { ok: 'dot-ok', rate_limited: 'dot-warn', unauthorized: 'dot-bad',
+                    forbidden: 'dot-bad', error: 'dot-bad', not_configured: 'dot-off' };
+
+function usd(n) {
+  if (n === null || n === undefined || Number.isNaN(n)) return '—';
+  return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function compact(n) {
+  if (n === null || n === undefined) return '—';
+  return Number(n).toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 1 });
+}
+// Provider 'detail' strings carry third-party error text straight into innerHTML.
+// Escaped rather than trusted: the rest of this page renders values this system
+// wrote, and these are the only ones it did not.
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c]);
+}
+function provHeader(label, state) {
+  return '<div class="name"><span class="dot ' + (STATE_DOT[state] || 'dot-off') + '"></span>' + label + '</div>';
+}
+
+function renderProviders(p, spend) {
+  const a = p.alpaca;
+  // The balance renders only when the probe actually succeeded — a last-known
+  // figure beside a failed probe reads as current, which on money is the one
+  // wrong answer that looks like a right one.
+  const alpacaOk = a.state === 'ok' && a.balance;
+  const alpacaFigure = alpacaOk ? usd(a.balance.equity)
+    : '<span class="caveat">' + esc(a.state.replace('_', ' ')) + '</span>';
+  const alpacaSub = alpacaOk
+    ? 'cash ' + usd(a.balance.cash) +
+      (a.balance.buying_power !== null ? ' · bp ' + usd(a.balance.buying_power) : '')
+    : esc(a.detail);
+  const alpacaTile = '<div class="prov">' + provHeader('Alpaca · equity', a.state) +
+    '<div class="figure">' + alpacaFigure + '</div>' +
+    '<div class="sub">' + alpacaSub + '</div>' +
+    '<div class="note">' + (a.observed_at ? 'probed ' + timeAgo(a.observed_at) : 'not probed yet') +
+    '</div></div>';
+
+  const g = p.polygon;
+  const polygonTile = '<div class="prov">' + provHeader('Polygon · status', g.state) +
+    '<div class="figure">' + esc(g.state.replace('_', ' ')) + '</div>' +
+    '<div class="sub">' + esc(g.detail) + '</div>' +
+    '<div class="note">no balance API — subscription plan, health only</div></div>';
+
+  const w = spend.last_24h;
+  const unpriced = w.unpriced_calls > 0
+    ? '<div class="sub caveat">' + w.unpriced_calls + ' unpriced call(s) — figure is a floor</div>'
+    : '';
+  const anthropicTile = '<div class="prov">' + provHeader('Anthropic · spend 24h', 'ok') +
+    '<div class="figure">' + usd(w.cost_usd) + '</div>' +
+    '<div class="sub">' + w.calls + ' calls · ' + compact(w.input_tokens) + ' in / ' +
+      compact(w.output_tokens) + ' out · 7d ' + usd(spend.last_7d.cost_usd) +
+      ' · all ' + usd(spend.all_time.cost_usd) + '</div>' + unpriced +
+    '<div class="note">no balance API — metered locally, this bot only</div></div>';
+
+  document.getElementById('providers').innerHTML = alpacaTile + polygonTile + anthropicTile;
+}
+
 function renderTick(t) {
   const el = document.getElementById('tick-banner');
   if (!t) { el.style.display = 'none'; return; }
@@ -236,6 +317,7 @@ async function poll() {
     lastOk = Date.now();
     document.getElementById('pulse').classList.remove('stale');
     document.getElementById('meta').textContent = 'as of ' + new Date(s.as_of).toLocaleTimeString() + ' · ' + new Date(s.generated_at).toLocaleTimeString();
+    renderProviders(s.providers, s.llm_spend);
     renderTick(s.tick_status);
     renderPositions(s.positions);
     renderMetrics(s.metrics);

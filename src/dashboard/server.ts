@@ -15,6 +15,7 @@
  */
 import { createServer, type Server } from 'node:http';
 import { DASHBOARD_HTML } from './html.js';
+import { NULL_PROVIDER_STATUS, type ProviderStatusReader } from './provider-status.js';
 import { buildSnapshot } from './snapshot.js';
 import type { DashboardQueryStore } from './types.js';
 
@@ -22,6 +23,16 @@ export interface DashboardServerOptions {
   port: number;
   host: string;
   store: DashboardQueryStore;
+  /**
+   * Live Alpaca/Polygon tiles. Optional — omitted, the snapshot reports both
+   * as `not_configured`, which keeps this server constructible in tests and in
+   * a credential-less environment.
+   *
+   * Note the handler only ever calls `readProviderStatus()`, a synchronous
+   * read of the poller's last result. No request ever awaits a third-party
+   * API, so a hung provider cannot stall a page load.
+   */
+  providers?: ProviderStatusReader;
 }
 
 export interface DashboardServer {
@@ -42,6 +53,7 @@ const HTML_HEADERS = { 'Content-Type': 'text/html; charset=utf-8' } as const;
 
 export function createDashboardServer(opts: DashboardServerOptions): DashboardServer {
   const { host, store } = opts;
+  const providers = opts.providers ?? NULL_PROVIDER_STATUS;
   const requestedPort = opts.port;
 
   const server: Server = createServer((req, res) => {
@@ -61,7 +73,7 @@ export function createDashboardServer(opts: DashboardServerOptions): DashboardSe
 
     if (path === '/api/snapshot') {
       try {
-        const snapshot = buildSnapshot(store, new Date());
+        const snapshot = buildSnapshot(store, new Date(), providers);
         res.writeHead(200, JSON_HEADERS).end(JSON.stringify(snapshot));
       } catch (err) {
         res

@@ -22,6 +22,7 @@ import type { DebateLog, OpenPosition } from '../shared/index.js';
 import type {
   AttributionSummary,
   DashboardQueryStore,
+  LlmSpendSummary,
   TickStatus,
   VerdictAuditEntry,
 } from './types.js';
@@ -267,6 +268,42 @@ const DAILY_METRICS: MetricsSuite = {
   exposure: 0.42,
 };
 
+/**
+ * Spend fixtures. `last_24h` carries a non-zero `unpriced_calls` on purpose:
+ * it is the case a fixture set is most likely to omit and the one the UI most
+ * needs to prove it renders, since a silently-dropped unpriced call is how a
+ * spend total understates itself.
+ */
+const LLM_SPEND_24H = {
+  cost_usd: 0.4183,
+  input_tokens: 214_500,
+  output_tokens: 38_200,
+  cache_read_input_tokens: 96_000,
+  cache_creation_input_tokens: 12_800,
+  calls: 142,
+  unpriced_calls: 3,
+};
+
+const LLM_SPEND_7D = {
+  cost_usd: 2.9106,
+  input_tokens: 1_502_300,
+  output_tokens: 271_400,
+  cache_read_input_tokens: 688_100,
+  cache_creation_input_tokens: 84_600,
+  calls: 991,
+  unpriced_calls: 3,
+};
+
+const LLM_SPEND_ALL = {
+  cost_usd: 6.7742,
+  input_tokens: 3_488_900,
+  output_tokens: 630_050,
+  cache_read_input_tokens: 1_602_400,
+  cache_creation_input_tokens: 196_700,
+  calls: 2_310,
+  unpriced_calls: 3,
+};
+
 export class InMemoryQueryStore implements DashboardQueryStore {
   getRecentDebates(limit: number, _asOf: Date): DebateLog[] {
     return RECENT_DEBATES.slice(0, limit);
@@ -302,6 +339,14 @@ export class InMemoryQueryStore implements DashboardQueryStore {
       throw new Error(`no mark fixture for instrument "${instrument}"`);
     }
     return { ...mark };
+  }
+
+  getLlmSpend(_asOf: Date): LlmSpendSummary {
+    return {
+      last_24h: { ...LLM_SPEND_24H },
+      last_7d: { ...LLM_SPEND_7D },
+      all_time: { ...LLM_SPEND_ALL },
+    };
   }
 }
 

@@ -23,6 +23,23 @@ import type { AnalystView } from '../types.js';
 export interface LlmRequestContext {
   analyst_views: AnalystView[];
   debate_state?: Record<string, unknown>;
+  /**
+   * Attribution for the local spend meter (llm/spend-sink.ts) — which tick and
+   * which stage this call should be billed against on the dashboard.
+   *
+   * Optional, and currently supplied by nobody. `detectDisagreements` (the
+   * only `complete()` call site today) has no `trace_id` in scope, and
+   * threading one there means changing its signature and every caller's — a
+   * ripple well beyond what a spend tile is worth. The meter records
+   * `'unattributed'` when these are absent, which costs only the ability to
+   * slice spend by tick; the TOTAL, which is what the dashboard shows, is
+   * exact either way.
+   *
+   * Declared now rather than later so that wiring attribution is a one-line
+   * change at each call site instead of a second migration.
+   */
+  trace_id?: string;
+  stage?: string;
 }
 
 /**

@@ -82,6 +82,16 @@ function makeDebate(overrides: Partial<DebateLog> = {}): DebateLog {
   };
 }
 
+const EMPTY_SPEND_WINDOW = {
+  cost_usd: 0,
+  input_tokens: 0,
+  output_tokens: 0,
+  cache_read_input_tokens: 0,
+  cache_creation_input_tokens: 0,
+  calls: 0,
+  unpriced_calls: 0,
+};
+
 function fakeStore(overrides: Partial<DashboardQueryStore> = {}): DashboardQueryStore {
   return {
     getRecentDebates: () => [],
@@ -92,6 +102,11 @@ function fakeStore(overrides: Partial<DashboardQueryStore> = {}): DashboardQuery
     getAttribution: () => ({}),
     getDailyMetrics: () => ({ ...METRICS }),
     getMark: () => makeMark(0),
+    getLlmSpend: () => ({
+      last_24h: { ...EMPTY_SPEND_WINDOW },
+      last_7d: { ...EMPTY_SPEND_WINDOW },
+      all_time: { ...EMPTY_SPEND_WINDOW },
+    }),
     ...overrides,
   };
 }

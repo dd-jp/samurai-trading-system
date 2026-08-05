@@ -33,6 +33,9 @@ const TABLES = [
   // one-directional "every listed table exists": that form is blind to a table
   // nobody listed, so it could never have caught either miss.
   'session_equity',
+  // `llm_spend` (0010) — locally-metered Anthropic token spend, the stand-in
+  // for the credit-balance endpoint Anthropic does not publish.
+  'llm_spend',
 ];
 
 /**
@@ -41,7 +44,7 @@ const TABLES = [
  * That prose number silently drifted twice (it read "twenty" and "twenty-one"
  * simultaneously while the schema held 22), so it is pinned here.
  */
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 22;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 23;
 
 const tempDirs: string[] = [];
 
@@ -102,6 +105,7 @@ describe('openSharedStore', () => {
       { version: 7 },
       { version: 8 },
       { version: 9 },
+      { version: 10 },
     ]);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
@@ -114,6 +118,7 @@ describe('openSharedStore', () => {
       { version: 7 },
       { version: 8 },
       { version: 9 },
+      { version: 10 },
     ]);
   });
 
