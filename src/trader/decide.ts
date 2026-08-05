@@ -172,6 +172,8 @@ async function buildBracket(
       // ("fetches exactly atr_lookback + 1 bars ...") pins THIS window, so
       // widening the fetch — or dropping `atr_timeframe` — fails a test
       // rather than silently repricing every stop.
+      //
+      // A separate fetch-width margin is applied underneath in fetchBars; see #362.
       { timeframe: config.atr_timeframe, lookback: config.atr_lookback + 1 },
       asOf,
     ),

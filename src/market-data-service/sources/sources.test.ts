@@ -1,3 +1,4 @@
+import { formingCandleClient } from '../forming-candle-client.js';
 import {
   AlwaysOpenCalendar,
   type TradingCalendar,
@@ -250,11 +251,26 @@ describe("the window's short-read policy reaches the source client (#292)", () =
       { asset_class: 'stocks' },
     );
 
+    // `WINDOW.lookback + 1`, not `WINDOW.lookback` (issue #362): the raw
+    // fetch is widened by `FORMING_BAR_FETCH_MARGIN` so a forming candle
+    // dropped by `completedBars` still leaves `WINDOW.lookback` completed.
     await source.fetchBars('AAPL', { ...WINDOW, partial: 'allow' }, ASOF);
-    expect(getBars).toHaveBeenLastCalledWith('AAPL', '1h', ASOF, WINDOW.lookback, 'allow');
+    expect(getBars).toHaveBeenLastCalledWith('AAPL', '1h', ASOF, WINDOW.lookback + 1, 'allow');
 
     // Unset means "no opt-in" — the client applies its own fail-loud default.
     await source.fetchBars('AAPL', WINDOW, ASOF);
-    expect(getBars).toHaveBeenLastCalledWith('AAPL', '1h', ASOF, WINDOW.lookback, undefined);
+    expect(getBars).toHaveBeenLastCalledWith('AAPL', '1h', ASOF, WINDOW.lookback + 1, undefined);
+  });
+});
+
+describe('raw fetch requests one extra bar for the forming candle (#362)', () => {
+  it('still returns the caller-requested count of completed bars when the newest raw candle is forming', async () => {
+    const asOf = new Date('2026-07-15T18:30:00Z'); // mid-hour: 18:00 candle is still forming
+    const source = new AlpacaDataSource(formingCandleClient(asOf), { asset_class: 'crypto' });
+
+    const bars = await source.fetchBars('BTC-USD', { timeframe: '1h', lookback: 14 }, asOf);
+
+    expect(bars).toHaveLength(14);
+    expect(bars.every((bar) => bar.close_time.getTime() <= asOf.getTime())).toBe(true);
   });
 });

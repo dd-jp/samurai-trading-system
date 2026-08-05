@@ -7,7 +7,13 @@
  * source supplies only what is genuinely source-specific: mapping its wire
  * payload to `RawCandle` / a live mark observation.
  */
-import { completedBars, deriveBacktestMark, normalizeBars, type RawCandle } from '../ingestion.js';
+import {
+  completedBars,
+  deriveBacktestMark,
+  FORMING_BAR_FETCH_MARGIN,
+  normalizeBars,
+  type RawCandle,
+} from '../ingestion.js';
 import type { TradingCalendar } from '../trading-calendar.js';
 import type { Bar, BarWindow, DataSource, Mark } from '../types.js';
 
@@ -48,12 +54,20 @@ export abstract class NormalizingDataSource implements DataSource {
   /** Map the source's streaming quote/trade payload into an observation. */
   protected abstract fetchLiveObservation(instrument: string): Promise<LiveObservation>;
 
+  /**
+   * Requests `window.lookback + FORMING_BAR_FETCH_MARGIN` raw candles, not
+   * `window.lookback` — the most recent one may still be forming at `asOf`
+   * (issue #362; see `FORMING_BAR_FETCH_MARGIN`'s doc comment). `completedBars`
+   * below is still asked for the caller's ORIGINAL `window.lookback`: the
+   * margin only widens the raw request so that, once the forming candle (if
+   * any) is filtered out, the caller still gets the count it asked for.
+   */
   async fetchBars(instrument: string, window: BarWindow, asOf: Date): Promise<Bar[]> {
     const candles = await this.fetchRawCandles(
       instrument,
       window.timeframe,
       asOf,
-      window.lookback,
+      window.lookback + FORMING_BAR_FETCH_MARGIN,
       window.partial,
     );
     const bars = normalizeBars(candles, {

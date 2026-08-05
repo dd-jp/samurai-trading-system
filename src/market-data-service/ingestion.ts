@@ -85,6 +85,21 @@ export function completedBars(bars: readonly Bar[], asOf: Date, lookback: number
 }
 
 /**
+ * Extra RAW candles requested beyond the completed-bar count a caller needs
+ * (issue #362): the newest candle can still be forming at `asOf`, and
+ * `completedBars` correctly drops it, so a `lookback`-sized raw fetch can
+ * land one completed bar short. Applied once, in
+ * `NormalizingDataSource.fetchBars`; `completedBars` still receives the
+ * caller's ORIGINAL `lookback`, unwidened.
+ *
+ * Unrelated to `minimumBarsFor`'s `period + 1` for rsi/atr — that's how many
+ * COMPLETED bars an indicator's own math needs. A caller that already widens
+ * its own lookback for that (`trader/decide.ts`'s `atr_lookback + 1`) still
+ * needs THIS margin on top, not as a substitute.
+ */
+export const FORMING_BAR_FETCH_MARGIN = 1;
+
+/**
  * Backtest mark derivation, shared by every source: the close of the last
  * completed bar, observed at that bar's close_time (spec Module: Marks).
  *
