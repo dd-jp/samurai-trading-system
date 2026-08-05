@@ -179,7 +179,7 @@ import type {
   RiskConfig,
 } from '../risk-manager/index.js';
 import { type BreakerConfig, CircuitBreakers } from '../risk-manager/index.js';
-import type { Clock, ClosedTradeStore } from '../shared/index.js';
+import type { AssetClass, Clock, ClosedTradeStore } from '../shared/index.js';
 import { TokenBucket } from '../shared/index.js';
 import type { SharedStore as SqliteHandle } from '../shared/store/index.js';
 import type { TraderConfig } from '../trader/index.js';
@@ -832,9 +832,7 @@ export function buildDefaultAlpacaDataClient(assetClass: 'crypto' | 'stocks'): A
  * universe means the market-data wiring cannot disagree with the tick plan
  * about what is being traded — which is the disagreement #358 was.
  */
-export function universeAssetClasses(
-  universe: readonly UniverseInstrument[],
-): ('crypto' | 'stocks')[] {
+export function universeAssetClasses(universe: readonly UniverseInstrument[]): AssetClass[] {
   return (['crypto', 'stocks'] as const).filter((assetClass) =>
     universe.some((instrument) => instrument.asset_class === assetClass),
   );
@@ -865,20 +863,41 @@ export function buildAlpacaDataSource(
   tradingCalendar: TradingCalendar,
 ): DataSource {
   const present = universeAssetClasses(universe);
-  // An explicit override still wins for the single-class case, and an empty
-  // universe has no class to derive — `'crypto'` remains the historical
-  // default there rather than throwing on a degenerate-but-harmless config.
-  const classes = present.length > 0 ? present : [config.dataSourceAssetClass ?? 'crypto'];
+  // An empty universe has no class to derive — `'crypto'` remains the
+  // historical default there rather than throwing on a degenerate-but-harmless
+  // config.
+  const classes: AssetClass[] =
+    present.length > 0 ? present : [config.dataSourceAssetClass ?? 'crypto'];
 
-  const sourceFor = (assetClass: 'crypto' | 'stocks'): AlpacaDataSource =>
+  const sourceFor = (assetClass: AssetClass): AlpacaDataSource =>
     new AlpacaDataSource(config.alpacaDataClient ?? buildDefaultAlpacaDataClient(assetClass), {
       asset_class: assetClass,
+      // Authoritative for equities only: `AlpacaDataSource` substitutes
+      // `AlwaysOpenCalendar` for a crypto source regardless of what is passed
+      // (alpaca-source.ts), because a 24/7 venue has no session to gate on.
       calendar: tradingCalendar,
     });
 
   const single = classes.length === 1 ? classes[0] : undefined;
   if (single !== undefined) {
-    return sourceFor(config.dataSourceAssetClass ?? single);
+    const override = config.dataSourceAssetClass;
+    // A `dataSourceAssetClass` that CONTRADICTS the universe is refused, not
+    // obeyed. Obeying it is the same misroute the mixed-universe branch below
+    // throws on — an all-equity universe forced to `'crypto'` sends every bars
+    // request to `/v1beta3/crypto/us/...` and 404s silently (#358) — and this
+    // function's whole premise is that the market-data wiring cannot disagree
+    // with the tick plan. The override stays useful for the case it was added
+    // for: an EMPTY universe, which asserts nothing to contradict.
+    if (override !== undefined && present.length > 0 && override !== single) {
+      throw new Error(
+        `Orchestrator cannot start: ProductionConfig.dataSourceAssetClass is '${override}', but ` +
+          `the configured universe holds only '${single}' instruments. Market-data endpoints are ` +
+          'per asset class (/v2/stocks vs /v1beta3/crypto/us), so honouring the override would ' +
+          'send every request to the wrong API root and 404 silently, which is issue #358. Drop ' +
+          'the override — it is derived from the universe — or change the universe to match it.',
+      );
+    }
+    return sourceFor(single);
   }
 
   if (config.alpacaDataClient !== undefined) {

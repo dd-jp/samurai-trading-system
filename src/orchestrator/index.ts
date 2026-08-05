@@ -18,7 +18,9 @@
  * `buildProductionOrchestrator` binds all six real stages into one
  * `SequentialTickRunner` (four direct binds from #234, the Analysts/Debate
  * adapter shims from #235), constructs the SQLite-backed stores, the
- * `UniverseScheduler` over a narrow smoke-test universe, the `Heartbeat`,
+ * `UniverseScheduler` over the configured universe (`DEFAULT_UNIVERSE` for a
+ * paper start since #381; `SMOKE_TEST_UNIVERSE` remains the default for a
+ * caller that supplies none), the `Heartbeat`,
  * and the `OrphanVerdictScanner`, and owns the start/stop of the tick loop.
  * (This supersedes the earlier note here that no composition root could
  * exist until #83/#86/#71 landed — all three are closed and merged.)

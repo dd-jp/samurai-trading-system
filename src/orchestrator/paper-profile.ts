@@ -153,6 +153,32 @@ export const PAPER_ACCOUNT_EQUITY_ANCHOR = 100_000;
  * warned that the breaker read 0 (inert) for the class on every start. That
  * warning is gone, and the tier is now genuinely armed for both classes —
  * still inert at this baseline, but inert by CHOICE rather than by absence.
+ *
+ * ## Known gap, measured and filed, NOT fixed here
+ *
+ * [#386](https://github.com/dd-jp/samurai-trading-system/issues/386): the
+ * equity ATR read currently THROWS while the US session is shut, and for
+ * roughly the first three hours after the open — `atr(14) needs 15 bars but
+ * received 12`. `AlpacaHttpDataClient` enforces its bar-count guarantee on the
+ * RAW wire payload, and `normalizeBars` then drops the out-of-session bars
+ * (IEX serves pre/post-market hours) after the guard has already passed. So
+ * `BUFFER_MULTIPLIER`'s 5-day window holds 26 raw hourly SPY bars but only 12
+ * in-session ones.
+ *
+ * The consequence for a soak, stated plainly rather than discovered on day 3:
+ * `MarketDataVolatilityReadingProvider` reads over the whole configured
+ * universe every tick, ungated by the calendar, so overnight each equity read
+ * throws and folds in as `FAILURE_READING = Infinity` — which ARMS the soft
+ * `volatility_halt:stocks` tier for ~16 hours a day and logs an error per
+ * instrument per tick. It fails loudly and it halts entries rather than sizing
+ * them wrongly, which is the safe direction; it is still noise a 14-day
+ * unattended run should not have to absorb.
+ *
+ * Not fixed under #381 deliberately: the broken guarantee is a
+ * market-data-service contract (`NormalizingDataSource.fetchBars` vs the
+ * client's underfetch retry) with its own test surface, and this ticket's
+ * scope is the profile's dials and the universe. Guessing at a bar-count
+ * contract from inside a config file is how a risk gate ends up wrong.
  */
 const UNCALIBRATED_VOLATILITY_BASELINE = 1_000_000;
 
@@ -962,8 +988,12 @@ function buildProfileConfigs(): Pick<
 
   return {
     /**
-     * The universe a paper run trades (#381) — ADR-0001's default set, and
-     * #238's first acceptance criterion.
+     * `SPEC` — the universe a paper run trades (#381). ADR-0001 names this
+     * exact set ("default universe SPY/QQQ/AAPL/TSLA/BTC-USD/ETH-USD",
+     * CLAUDE.md's broker plan), orchestrator-spec.md story 3 makes it the
+     * scheduler's default, and #238's first acceptance criterion is running it
+     * before the soak starts. `DEFAULT_UNIVERSE` (scheduler.ts) is the checked-in
+     * copy; spread by reference so a second list cannot drift from it.
      *
      * A tuning decision of the same kind as everything else in this file, not
      * a deployment one like the alert transports: it is what the risk caps,
@@ -973,7 +1003,16 @@ function buildProfileConfigs(): Pick<
      * omission and the smoke run's explicit override (smoke-run.ts) still
      * wins.
      *
-     * ## What six instruments cost per day, and why it is not 6x
+     * **Not a member of `REQUIRED_INJECTED_CONFIG`** (orchestrator/index.ts),
+     * which still lists the eight tuning objects and nothing else. That list
+     * is a guard against a caller forgetting a config the process cannot
+     * invent; a universe it CAN default. So a bespoke composition root that
+     * satisfies the guard field by field, rather than spreading this profile,
+     * silently keeps `SMOKE_TEST_UNIVERSE` — deliberate (the narrow default is
+     * the safe one) but worth knowing before wondering why a run trades one
+     * instrument.
+     *
+     * ## What six instruments cost per day, and why it is not 6x (DERIVED)
      *
      * The naive reading is that six instruments is six times the debate spend
      * of one. It is closer to **1.6x**, and the reason is worth writing down
@@ -1081,8 +1120,9 @@ export function paperStartingProfile(
         'runs on the PAPER STARTING PROFILE (src/orchestrator/paper-profile.ts) — a set of ' +
         'deliberately untuned starting values. Its volatility breaker baseline is uncalibrated ' +
         'and effectively inert, its exposure caps assume a $100,000 paper account, its drift ' +
-        'tolerance is sized for BTC-USD alone, and its HITL gate resolves through a channel that ' +
-        'auto-approves. None of that may decide a real-money trade. To trade live, call ' +
+        'tolerance is a fraction nobody has yet observed against a real fill, and its HITL gate ' +
+        'resolves through a channel that auto-approves. It also names the six instruments it ' +
+        'trades. None of that may decide a real-money trade. To trade live, call ' +
         'startFromEnvironment() from your own composition root with a config you have tuned ' +
         'against paper results — see ProductionConfig in src/orchestrator/production.ts.',
     );

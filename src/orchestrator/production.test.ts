@@ -1973,6 +1973,36 @@ describe('buildProductionOrchestrator', () => {
       ).toThrow(/#358|both/);
     });
 
+    it('refuses a dataSourceAssetClass that contradicts the universe', () => {
+      // Found in review: the mixed-universe branch throws, but a CONTRADICTING
+      // single-class override used to be obeyed silently — an all-equity
+      // universe forced to 'crypto' sends every bars request to
+      // /v1beta3/crypto/us and 404s, which is the same #358 misroute one branch
+      // over. Both directions are refused now.
+      expect(() =>
+        buildAlpacaDataSource(
+          { dataSourceAssetClass: 'crypto' },
+          [{ asset: 'SPY', asset_class: 'stocks' }],
+          calendar,
+        ),
+      ).toThrow(/#358|contradict|holds only/);
+    });
+
+    it('still accepts a dataSourceAssetClass that agrees with the universe', () => {
+      expect(() =>
+        buildAlpacaDataSource({ dataSourceAssetClass: 'crypto' }, SMOKE_TEST_UNIVERSE, calendar),
+      ).not.toThrow();
+    });
+
+    it('still honours the override for an EMPTY universe, which contradicts nothing', () => {
+      // The case the field was added for and the only one left where it
+      // decides anything: no instrument asserts an asset class, so there is
+      // nothing for the override to disagree with.
+      expect(() =>
+        buildAlpacaDataSource({ dataSourceAssetClass: 'stocks' }, [], calendar),
+      ).not.toThrow();
+    });
+
     it('still honours an injected client for a single-asset-class universe', () => {
       // The narrow case every existing test and the smoke run rely on.
       expect(() =>
