@@ -79,17 +79,18 @@ describe('paperStartingProfile', () => {
       expect(100_000 * verdictConfig.drift_tolerance_pct.crypto).toBeCloseTo(500, 10);
     });
 
-    it('keeps size_over inert, because manual short-circuits before flags are read', () => {
+    it('keeps size_over inert, because auto short-circuits before flags are read', () => {
       // `size_over: 0` is unit-incommensurable across fractional BTC and
       // whole-share SPY, and widening the universe made that worse rather
       // than better. It stays harmless only while `automation_level` is
-      // `manual` for BOTH classes — `shouldEngageHitl` returns true on that
-      // check before `isFlagged` is ever called. Pinned so turning either
-      // class to `semi_auto` fails here first.
+      // `auto` for BOTH classes — `shouldEngageHitl` returns false on that
+      // check before `isFlagged` is ever called (it short-circuited on
+      // `manual` before ADR-0007, on the opposite branch of the same check).
+      // Pinned so turning either class to `semi_auto` fails here first.
       const { verdictConfig } = paperStartingProfile('paper');
 
-      expect(verdictConfig.automation_level.crypto).toBe('manual');
-      expect(verdictConfig.automation_level.stocks).toBe('manual');
+      expect(verdictConfig.automation_level.crypto).toBe('auto');
+      expect(verdictConfig.automation_level.stocks).toBe('auto');
       expect(verdictConfig.flag_thresholds.size_over).toBe(0);
     });
 
@@ -195,13 +196,32 @@ describe('paperStartingProfile', () => {
     expect(traderConfig.time_in_force.stocks).toBe('day');
   });
 
-  it('requires a human on every trade, per the staged-deployment dial', () => {
-    // verdict-spec.md "Notes & Rationale": start `manual` (a human confirms
-    // every trade during paper / tiny-live), open up as trust is earned.
+  it('puts no human on any trade, per ADR-0007', () => {
+    // ADR-0007 (David, 2026-08-06) replaces verdict-spec.md's original
+    // manual -> semi_auto -> auto staging with `auto` from the start, in
+    // paper AND live: `VerdictImpl.decide` awaits `requestApproval` inside
+    // the instrument pass and `max_concurrent_instruments` is 1, so a human
+    // in this loop serializes the whole universe behind one tap.
+    //
+    // Pinned for `paper` only because `live` cannot be asked: this profile
+    // refuses to build in live mode at all (see the guard at the bottom of
+    // paper-profile.ts), so a live composition root supplies its own tuned
+    // `VerdictConfig`. ADR-0007's decision applies there too, but this file
+    // is not where it can be enforced.
     const { verdictConfig } = paperStartingProfile('paper');
 
-    expect(verdictConfig.automation_level.crypto).toBe('manual');
-    expect(verdictConfig.automation_level.stocks).toBe('manual');
+    expect(verdictConfig.automation_level.crypto).toBe('auto');
+    expect(verdictConfig.automation_level.stocks).toBe('auto');
+  });
+
+  it('refuses live mode naming the missing stop, not the retired approval channel', () => {
+    // The refusal message is what an operator reads when they try to go live.
+    // It used to cite "a channel that auto-approves" as a reason; ADR-0007
+    // removed the human gate entirely, so the honest reason is now that the
+    // breakers are the only stop and three of them cannot fire (#384, #375,
+    // #333). Pinned so the message cannot drift back to describing a gate
+    // this system no longer has.
+    expect(() => paperStartingProfile('live')).toThrow('#384, #375 and #333');
   });
 
   it('bounds the hard drawdown breaker at the documented target, as a fraction', () => {

@@ -192,13 +192,13 @@ import type { TraderConfig } from '../trader/index.js';
 import { SqliteSetupStore } from '../trader/index.js';
 import type { ApprovalChannel, VerdictConfig } from '../verdict/index.js';
 import {
-  ConsoleApprovalChannel,
   LoggingBreachAlertChannel,
   LoggingHeartbeatChannel,
   LoggingLoosenApprovalChannel,
   LoggingOrphanAlertChannel,
   LoggingUnpricedFillAlertChannel,
   ParkedCiiScoreProvider,
+  UnwiredApprovalChannel,
 } from './console-channels.js';
 import {
   FILL_SYNC_TRACE_ID,
@@ -1338,9 +1338,14 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // second connection with a divergent view of the same table.
       positionStore: executionStore,
       config: config.verdictConfig,
-      // Log-only stand-in when unwired (#275): it auto-approves, and its
-      // constructor refuses to exist in live mode.
-      approvals: config.approvals ?? new ConsoleApprovalChannel(logger, config.mode),
+      // Unreachable by design since ADR-0007: `automation_level` is `auto` for
+      // both classes, so gate 6 short-circuits and this is never called. It
+      // THROWS rather than auto-approving, so that turning the dial back
+      // without wiring a transport fails loudly instead of fabricating
+      // consent — and, unlike `ConsoleApprovalChannel`, it constructs in
+      // `live`, because refusing there would block a live start over a gate
+      // that never fires.
+      approvals: config.approvals ?? new UnwiredApprovalChannel(),
       // Backs LoggingVerdict's verdict_log write (#302) — the same handle
       // every other Sqlite* store in this function reads/writes through.
       store: config.db,

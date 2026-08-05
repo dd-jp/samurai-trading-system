@@ -260,6 +260,41 @@ export class ConsoleApprovalChannel implements ApprovalChannel {
 }
 
 /**
+ * The composition root's default `ApprovalChannel` since ADR-0007 made
+ * `automation_level` fully `auto` — and it exists to be **unreachable**.
+ *
+ * Under `auto`, `shouldEngageHitl` short-circuits to `false` before gate 6, so
+ * `requestApproval` is never called and no approval transport is needed in any
+ * mode. That is why this class, unlike `ConsoleApprovalChannel`, does not
+ * refuse to be constructed in `live`: refusing there would block a live start
+ * over a gate that never fires.
+ *
+ * What it will not do is silently stand in for a human if the dial is ever
+ * turned back. `ConsoleApprovalChannel` auto-approves, which is safe only
+ * while nothing real depends on the answer; the moment `manual` or
+ * `semi_auto` is set with no transport wired, an auto-approving default means
+ * the gate reads as enforced and enforces nothing — this repo's dominant
+ * defect class. So this one throws instead, naming both causes and both fixes.
+ * The throw propagates out of `VerdictImpl.decide` and fails that instrument's
+ * pass loudly rather than fabricating consent.
+ */
+export class UnwiredApprovalChannel implements ApprovalChannel {
+  async requestApproval(request: ApprovalRequest): Promise<ApprovalOutcome> {
+    throw new Error(
+      'Verdict gate 6 was reached, but no ApprovalChannel is wired. Since ADR-0007 the ' +
+        'automation dial is `auto` for both asset classes, under which this gate is ' +
+        'unreachable — so reaching it means `verdictConfig.automation_level` was set to ' +
+        '`manual` or `semi_auto` without also supplying `ProductionConfig.approvals`. Either ' +
+        'set the dial back to `auto`, or wire a real channel (TelegramApprovalGateway, which ' +
+        'is built and tested but has no production caller). Refusing rather than ' +
+        `auto-approving: trace ${request.trace_id}, ` +
+        `${request.order_intent.side} ${request.order_intent.size} ` +
+        `${request.order_intent.instrument}.`,
+    );
+  }
+}
+
+/**
  * The parked WorldMonitor CII feed (ADR-0002): always "no score".
  *
  * Not a stub standing in for something that should be here — the live

@@ -4,6 +4,7 @@ import {
   LoggingOrphanAlertChannel,
   LoggingUnpricedFillAlertChannel,
   ParkedCiiScoreProvider,
+  UnwiredApprovalChannel,
 } from './console-channels.js';
 import type { LogEntry, Logger } from './types.js';
 
@@ -105,6 +106,45 @@ describe('ConsoleApprovalChannel', () => {
     expect(logger.entries[0]?.level).toBe('warn');
     expect(logger.entries[0]?.message).toContain('no human reviewed');
     expect(logger.entries[0]?.trace_id).toBe('trace-1');
+  });
+});
+
+describe('UnwiredApprovalChannel', () => {
+  const request = {
+    order_intent: {
+      instrument: 'BTC-USD',
+      side: 'buy',
+      size: 0.1,
+      intent_type: 'entry',
+      idempotency_key: 'key-1',
+    },
+    risk_decision: {},
+    trace_id: 'trace-1',
+    timeout_ms: 1_000,
+  } as never;
+
+  it('throws rather than fabricating consent when gate 6 is reached', async () => {
+    // The whole point of this class over `ConsoleApprovalChannel`. Under
+    // ADR-0007's `auto` dial it is unreachable; reaching it means the dial was
+    // changed without wiring a transport, and auto-approving there would read
+    // as an enforced gate while enforcing nothing.
+    await expect(new UnwiredApprovalChannel().requestApproval(request)).rejects.toThrow(
+      'no ApprovalChannel is wired',
+    );
+  });
+
+  it('names the trade it refused, so the throw is diagnosable from one log line', async () => {
+    await expect(new UnwiredApprovalChannel().requestApproval(request)).rejects.toThrow(
+      'trace trace-1, buy 0.1 BTC-USD',
+    );
+  });
+
+  it('constructs in live mode, unlike ConsoleApprovalChannel', () => {
+    // Deliberate difference, not an oversight: this channel takes no mode and
+    // refuses nothing at construction, because refusing in `live` would block
+    // a live start over a gate that `auto` never reaches. The safety lives in
+    // `requestApproval` throwing, which is mode-independent.
+    expect(() => new UnwiredApprovalChannel()).not.toThrow();
   });
 });
 

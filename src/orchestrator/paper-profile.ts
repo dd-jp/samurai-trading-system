@@ -661,22 +661,45 @@ function buildProfileConfigs(): Pick<
 
   const verdictConfig: VerdictConfig = {
     /**
-     * SPEC — verdict-spec.md "Notes & Rationale": "start `manual` (human
-     * confirms every real-money trade during paper / tiny-live), move to
-     * `semi_auto` ..., then `auto` once live KPIs hold and trust is earned."
+     * DECIDED (David, 2026-08-06) — `auto` for both classes, in **paper and
+     * live**. See ADR-0007. This deliberately overrides verdict-spec.md's
+     * "Notes & Rationale" staging ("start `manual` ..., then `auto` once live
+     * KPIs hold"); that sentence has been amended rather than left to
+     * contradict this value.
      *
-     * Worth being explicit about what `manual` means *today*, because it is
-     * not what the spec sentence implies: with no real approval transport
-     * wired (#275's remaining half — #322 wired the outbound alert channels,
-     * which are a different seam), the composition root falls back to
-     * `ConsoleApprovalChannel`, which auto-approves and logs a `warn` naming
-     * the trade and stating that no human reviewed it. So `manual` currently
-     * buys an exercised HITL code path and an audit trail of machine consent
-     * — not consent. It is still the right setting: it is what a real channel
-     * will slot into unchanged, and `ConsoleApprovalChannel` refuses to be
-     * constructed in live mode at all.
+     * **The reason is throughput, and it is a measured one, not a preference.**
+     * `runTickPlan` runs instruments at `max_concurrent_instruments`, which is
+     * `1` (tick-loop.ts, and see `maxConcurrentInstruments` in production.ts
+     * for why raising it is not free), and `VerdictImpl.decide` *awaits*
+     * `approvals.requestApproval` inside the instrument pass. So a single
+     * pending approval blocks every other instrument for up to
+     * `human_timeout`. At the soak's cadence one un-answered tap costs the
+     * whole universe a full cycle. A human in this loop is a serialization
+     * point, not a safety net.
+     *
+     * **What this removes, stated plainly.** Gate 6 is now unreachable: the
+     * dial short-circuits `shouldEngageHitl` to `false` before `isFlagged` is
+     * consulted, so no trade is ever routed to a human, and
+     * `ProductionConfig.approvals` is never called. `flag_thresholds` and
+     * `human_timeout` below are inert by construction — kept, with the flag
+     * plumbing, so that turning the dial back is a config edit rather than a
+     * re-implementation.
+     *
+     * **What must therefore hold before LIVE capital, and does not yet.** With
+     * no human gate the circuit breakers are the *only* stop, and three of
+     * them do not currently work:
+     *
+     * - #384 — three of four kill-lines can never fire; nothing produces
+     *   `DailyMetricsSample.revalidation`.
+     * - #375 — the divergence kill-line has no persisted backtest Sharpe.
+     * - #333 — in `live`, a daily PnL figure that cannot be computed (any
+     *   restart after the session boundary) leaves the daily-loss breaker
+     *   unenforced for the rest of the session.
+     *
+     * Those three are the live-go gate for a fully-automatic system. None of
+     * them blocks the paper soak, where the breaker stays live throughout.
      */
-    automation_level: { crypto: 'manual', stocks: 'manual' },
+    automation_level: { crypto: 'auto', stocks: 'auto' },
     /**
      * UNSOURCED (milliseconds; spec puts exact thresholds out of scope).
      *
@@ -1217,9 +1240,11 @@ export function paperStartingProfile(
       'Orchestrator cannot start: SAMURAI_MODE=live was requested, but the shipped entrypoint ' +
         'runs on the PAPER STARTING PROFILE (src/orchestrator/paper-profile.ts) — a set of ' +
         'deliberately untuned starting values. Its volatility breaker baseline is uncalibrated ' +
-        'and effectively inert, its exposure caps assume a $100,000 paper account, its drift ' +
-        'tolerance is a fraction nobody has yet observed against a real fill, and its HITL gate ' +
-        'resolves through a channel that auto-approves. It also names the six instruments it ' +
+        'and effectively inert, its exposure caps assume a $100,000 paper account, and its ' +
+        'drift tolerance is a fraction nobody has yet observed against a real fill. Since ' +
+        'ADR-0007 it also runs with NO human gate at all (automation_level: auto for both ' +
+        'classes), which makes the circuit breakers the only stop — and #384, #375 and #333 ' +
+        'mean three of them cannot currently fire. It also names the six instruments it ' +
         'trades. None of that may decide a real-money trade. To trade live, call ' +
         'startFromEnvironment() from your own composition root with a config you have tuned ' +
         'against paper results — see ProductionConfig in src/orchestrator/production.ts.',

@@ -809,14 +809,20 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     const orchestrator = await startFromEnvironment({
       // The same checked-in tuning values `yarn orchestrator` runs on, at the
       // same `mode: 'paper'` — so the HITL gate resolves through
-      // `automation_level: 'manual'` into `ConsoleApprovalChannel` exactly as
-      // it will during the soak. `mode: 'backtest'` was the alternative and
-      // was rejected deliberately: it bypasses Verdict's gate 6 outright
-      // (verdict/index.ts), which would leave the pre-soak gate validating a
-      // path the soak never takes. `paper` keeps the gate in the chain, and
-      // `ConsoleApprovalChannel` resolves it deterministically (it auto-
-      // approves and logs a `warn` naming the trade, and refuses to exist in
-      // live mode at all).
+      // `automation_level: 'auto'` exactly as it will during the soak.
+      // `mode: 'backtest'` was the alternative and was rejected deliberately:
+      // it bypasses Verdict's gate 6 outright (verdict/index.ts), which would
+      // leave the pre-soak gate validating a path the soak never takes.
+      //
+      // **This is now the enforcement check for ADR-0007, and it works by
+      // omission.** No `approvals` is injected here, so the composition root
+      // installs its `UnwiredApprovalChannel` default — which THROWS if gate 6
+      // is ever reached. A smoke run that transacts is therefore positive
+      // evidence that the `auto` dial short-circuits before any approval is
+      // requested, on the real composition root rather than in a unit test.
+      // Flip either class off `auto` without wiring a transport and this gate
+      // fails loudly instead of auto-approving, which is exactly the failure
+      // mode `ConsoleApprovalChannel` used to hide here.
       ...profile,
       db,
       clock,
