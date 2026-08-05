@@ -5,7 +5,7 @@ import { CircuitBreakers } from '../../risk-manager/index.js';
 import type { Clock, OpenPosition, OrderIntent } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import type { TraderConfig } from '../../trader/index.js';
-import type { VerdictConfig, VerdictDecision } from '../../verdict/index.js';
+import type { ApprovalOutcome, VerdictConfig, VerdictDecision } from '../../verdict/index.js';
 import { OrphanVerdictScanner } from '../orphan-verdict-scan.js';
 import { SqliteAuditLog } from '../sqlite-audit-log.js';
 import { SqliteCurrentTickStore } from '../sqlite-current-tick-store.js';
@@ -46,6 +46,7 @@ const FAKE_MARKET_DATA = {
     price: 100,
     observed_at: NOW,
     asset_class: 'stocks' as const,
+    source: 'fixture',
   })),
   getSpreadEstimate: vi.fn(async () => null),
   getADV: vi.fn(async () => 1000),
@@ -55,11 +56,14 @@ const FAKE_ACCOUNT_STATE = {
   getAccountState: vi.fn(async () => ({
     cash: 10_000,
     peak_equity: 10_000,
+    // `as const` because `SessionBasis` is a discriminated union on
+    // `known: true | false`; without it `known` widens to `boolean` and the
+    // literal no longer selects a branch.
     daily_basis: {
       crypto: { known: true, open_equity: 10_000, realized_pnl: 0 },
       stocks: { known: true, open_equity: 10_000, realized_pnl: 0 },
       portfolio: { known: true, open_equity: 10_000, realized_pnl: 0 },
-    },
+    } as const,
     consecutive_losses: 0,
   })),
 };
@@ -100,7 +104,8 @@ describe('buildTraderStep', () => {
       non_converged_haircut: 0.5,
       reward_risk_multiple: 2,
       min_viable_notional: 10,
-      time_in_force: 'day',
+      scale_in_conviction_delta: 0.1,
+      time_in_force: { crypto: 'gtc', stocks: 'day' },
     };
     const step = buildTraderStep({
       marketData: FAKE_MARKET_DATA,
@@ -143,7 +148,8 @@ describe('buildTraderStep', () => {
       non_converged_haircut: 0.5,
       reward_risk_multiple: 2,
       min_viable_notional: 10,
-      time_in_force: 'day',
+      scale_in_conviction_delta: 0.1,
+      time_in_force: { crypto: 'gtc', stocks: 'day' },
     };
     const step = buildTraderStep({
       marketData: FAKE_MARKET_DATA,
@@ -262,7 +268,7 @@ describe('buildRiskStep', () => {
             crypto: { known: true, open_equity: 1_000_000, realized_pnl: 0 },
             stocks: { known: true, open_equity: 1_000_000, realized_pnl: 0 },
             portfolio: { known: true, open_equity: 1_000_000, realized_pnl: 0 },
-          },
+          } as const,
           consecutive_losses: 0,
         })),
       },
@@ -333,7 +339,7 @@ describe('buildVerdictStep', () => {
       tradingCalendar: { isOpen: () => true, hasSession: () => true } as never,
       positionStore: { findByKey: vi.fn(async () => false) },
       config: VERDICT_CONFIG,
-      approvals: { requestApproval: vi.fn(async () => 'approved') },
+      approvals: { requestApproval: vi.fn(async (): Promise<ApprovalOutcome> => 'approved') },
       marketData: FAKE_MARKET_DATA,
       circuitBreakers: new CircuitBreakers({
         daily_loss_pct: 0.05,
@@ -399,7 +405,7 @@ describe('buildVerdictStep', () => {
       tradingCalendar: { isOpen: () => true, hasSession: () => true } as never,
       positionStore: { findByKey: vi.fn(async () => false) },
       config: VERDICT_CONFIG,
-      approvals: { requestApproval: vi.fn(async () => 'approved') },
+      approvals: { requestApproval: vi.fn(async (): Promise<ApprovalOutcome> => 'approved') },
       marketData: FAKE_MARKET_DATA,
       circuitBreakers: new CircuitBreakers({
         daily_loss_pct: 0.05,
