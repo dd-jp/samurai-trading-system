@@ -66,7 +66,13 @@ export interface AlpacaBalanceWire {
 }
 
 export interface ProviderTile {
-  provider: 'alpaca' | 'polygon' | 'anthropic';
+  /**
+   * Only the two providers this poller probes. Anthropic is deliberately NOT
+   * a member: it has no probe and no tile here, because there is nothing to
+   * probe — its dashboard figure comes from the `llm_spend` table instead.
+   * Listing it would advertise a tile this module never produces.
+   */
+  provider: 'alpaca' | 'polygon';
   state: ProviderState;
   /** Short human-readable cause. Never contains a credential. */
   detail: string;
@@ -150,6 +156,13 @@ function parseMoney(value: string | undefined): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/**
+ * Last-resort rejection sink for the poll timer. Intentionally silent: the
+ * only way to reach it is a bug in a probe's own error handling, and the tile
+ * that bug produces is already the operator-visible symptom.
+ */
+function swallow(): void {}
+
 /** Maps an HTTP status onto the operator-facing cause. */
 function stateForStatus(status: number): ProviderState {
   if (status === 401) return 'unauthorized';
@@ -209,9 +222,14 @@ export class ProviderStatusPoller implements ProviderStatusReader {
    * holding the process open on shutdown.
    */
   async start(): Promise<void> {
-    await this.pollOnce();
+    // Both probes resolve rather than reject by construction, so `swallow`
+    // should never fire. It is here because the caller uses `void start()` —
+    // an unhandled rejection in that position terminates the Node process, and
+    // taking the dashboard down over a status light would be an absurd way to
+    // lose the operator surface. Belt on top of the braces, deliberately.
+    await this.pollOnce().catch(swallow);
     this.timer = setInterval(() => {
-      void this.pollOnce();
+      void this.pollOnce().catch(swallow);
     }, this.intervalMs);
     this.timer.unref?.();
   }
