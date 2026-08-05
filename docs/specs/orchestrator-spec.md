@@ -101,6 +101,14 @@ interface TickPlan {
 - Bound concurrency across instruments.
 - Only call Execution on a Verdict `go`.
 
+**2026-08-05 — the pipeline is SEVEN stages.** [Wayfinder: Devil's Advocate](https://github.com/dd-jp/samurai-trading-system/issues/291) added `invalidation` between `trader` and `risk` (devils-advocate-spec.md):
+
+- `TickSteps` gains a seventh function, `invalidation`, returning an outcome union or `null`. **`null` means skipped, not failed** — the stage runs only when the Trader returned an `entry` or `scale_in` intent, reusing the Trader's own actionability gate. An `exit` intent skips it, so the system can never block its own way out of a position.
+- `TickStage` and `current_tick.stage` gain `'invalidation'`. The latter carries a hard SQL `CHECK` over the six existing names and needs a **table-rebuild migration**; `audit_log.stage` is unconstrained and needs none.
+- The stage's result is threaded onto `RiskInput.invalidation?` — pre-built data, the same seam ADR-0003 uses for the red-team critic. **The stage never terminates the tick itself**: `final_stage: 'invalidation'` covers only the skip and fail-open paths, never a reject. Every trade-killing decision goes through Risk's ordered pipeline so that causes are not misattributed.
+- **The thesis-invalidated alert fires from the runner, not from Risk.** `RiskManager.evaluate()` is pure and synchronous and stays that way. The runner already reports `RiskDecision.warnings` through an advisory channel after the risk step; this alert is that function's sibling, reading `binding_constraint` for a `thesis_invalidated:*` prefix and posting to an `InvalidationRejectAlertChannel` gated by the existing `AlertsMode` config. Unbreached advisory conditions never alert.
+- Composition-root note: the stage needs a **second, metered** Anthropic client (`claude-sonnet-5`, `effort: 'medium'`, `max_tokens: 4096`) built alongside the default one — not a `ProductionConfig.llmClient` override, which omits the spend sink and would zero the dashboard's spend tile for this stage.
+
 **Key Interfaces**
 
 ```typescript

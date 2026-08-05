@@ -336,9 +336,9 @@ This spec assumes LLMs for disagreement detection and mediator synthesis. Which 
 
 ### Integration with Pipeline
 
-The Debate Engine sits between Analysts and Trader in the 6-stage pipeline:
+The Debate Engine sits between Analysts and Trader in the 7-stage pipeline (`Invalidation` added 2026-08-05 — see devils-advocate-spec.md; it consumes this spec's `DebateResult.synthesis`/`position`/`open_items` as the thesis it attacks):
 ```
-Analysts → Debate Engine → Trader → Risk Manager → Verdict → Execution
+Analysts → Debate Engine → Trader → Invalidation → Risk Manager → Verdict → Execution
          (this spec)
 ```
 

@@ -502,6 +502,34 @@ CREATE TABLE daily_equity (
 );
 ```
 
+#### `invalidation_log` (2026-08-05, [Wayfinder: Devil's Advocate](https://github.com/dd-jp/samurai-trading-system/issues/291))
+
+```sql
+CREATE TABLE invalidation_log (
+  id                TEXT PRIMARY KEY,
+  instrument        TEXT NOT NULL,
+  -- MUST be floored to the instrument's bar boundary; see the retrieval note below.
+  bar_timestamp     TEXT NOT NULL,
+  trace_id          TEXT NOT NULL,          -- audit join only, NOT a retrieval key
+  debate_id         TEXT,                   -- nullable by contract: thesis_source is {debate_id} | null
+  status            TEXT NOT NULL CHECK(status IN ('evaluated','no_conditions','unavailable')),
+  thesis_restated   TEXT,
+  -- RAW model emission: every condition as emitted, each tagged accepted/dropped:<reason>,
+  -- plus its tri-state evaluation where evaluated. NOT the post-validator list.
+  conditions_json   TEXT NOT NULL,
+  created_at        TEXT NOT NULL
+);
+CREATE UNIQUE INDEX invalidation_log_coord ON invalidation_log(instrument, bar_timestamp);
+```
+
+**Retrieval is by `(instrument, bar_timestamp)`, never by an id.** A replay mints fresh `trace_id` and `debate_id` values, so neither can bridge a live row to a replayed lookup. The id column is row identity; the unique index is the lookup path — the same arrangement `debate_log` already relies on.
+
+**`bar_timestamp` must be floored to the bar boundary on write, and this does not happen today.** The equivalent write on the debate path stores `clock.now()` unfloored, so a live tick at 14:32:07 files under 14:32:07 while a replay stepping bar boundaries looks up 14:30:00 and misses every row. Under the backtest harness the simulated clock sits exactly on the bar close and the bug is invisible. Fixing it on this table does not fix `debate_log`, which has the same defect.
+
+**Why the raw emission rather than the validated list.** The validator is deterministic code and re-runs on replay; the model emission is the nondeterministic artifact and is what must be stored. Storing the post-validator list would freeze a determinable transform into the row, so a replay of a window predating a validator fix would silently carry the old bug. It is also what makes validator-drop reasons inspectable on the dashboard.
+
+**`current_tick.stage` needs a table-rebuild migration.** Its `CHECK` enumerates the six original stage names and must gain `'invalidation'`; SQLite cannot alter a `CHECK` in place. `audit_log.stage` is unconstrained `TEXT` and needs no migration.
+
 ### Non-Collision Verification
 
 `cross-spec-contracts.md`'s "shared-store table non-collision" spot-check was clean at the table-name level; re-verified here at the field level across all twenty-two tables above:

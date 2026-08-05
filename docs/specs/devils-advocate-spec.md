@@ -211,7 +211,20 @@ Deterministic, runs between emission and Risk, part of the stage. Three drop rul
 
 - **Unknown indicator** — the named indicator is not one the Market Data Service computes.
 - **Out-of-range threshold** — the threshold falls outside the indicator's valid range (an RSI condition thresholded at 140 can never be anything but permanently breached or permanently not).
-- **Direction incoherent with the intent** — a condition that would fire when the thesis is *working* rather than failing. For a long entry, "close < SMA" is coherent; "close > SMA" is the thesis succeeding and must not be able to block the trade.
+- **Direction incoherent with the intent** — a condition that would fire when the thesis is *working* rather than failing.
+
+**This third rule is the only one that is not mechanical from the type alone, and it must not be implemented as a side↔comparator mapping.** The naive version — "a long entry may only carry `<` conditions" — is wrong, and the [prototype](../prototypes/devils-advocate-btc-thesis-2026-08-04.md) already contains the counterexample: `sentiment_was_the_top` is a `>` condition on social-item count attached to a *long* thesis, and it is coherent, because sentiment is reflexive and a spike without price follow-through indicates a local top. Price-like observables invert with side; reflexive ones do not.
+
+The rule therefore requires **per-observable direction semantics**, declared in code as part of the observable vocabulary rather than inferred:
+
+| Observable | Which direction means "thesis failing" |
+| --- | --- |
+| `mark`, and price-like indicators (`sma`, `ema`) | Opposite the intent's side — below for a long, above for a short. |
+| Momentum indicators (`rsi`) | Opposite the intent's side. |
+| `bars` / `volume_ratio` | Always `<` — conviction is falsified by *thinning* participation regardless of side. |
+| `mi_context` counts | Not side-determined. Both directions are admissible; this rule does not drop on direction. |
+
+An observable whose semantics are undeclared is **not** dropped by this rule — it falls through to the other two. Silently dropping on an unmapped observable would make adding a vocabulary entry a trade-blocking event.
 
 A dropped condition is **dropped, not breached**. If dropping empties the list, the stage reports `no_conditions` — one code path for "nothing checkable came out", regardless of whether the model emitted nothing or emitted only garbage.
 
@@ -223,7 +236,11 @@ Each surviving condition is evaluated against the same clock-gated seams the res
 
 ### Module: Risk Manager Integration
 
-`RiskInput` gains `invalidation?: InvalidationResult`, sitting beside `critic?` and consumed the same way — as pre-built data produced outside `evaluate()`. The check pipeline gains a step that hard-rejects when the breached list is non-empty, setting:
+`RiskInput` gains `invalidation?: InvalidationResult`, sitting beside `critic?` and consumed the same way — as pre-built data produced outside `evaluate()`.
+
+**How the three-status outcome narrows to that optional field**, which is otherwise the easiest thing in this spec to implement wrongly: only `evaluated` carries an `InvalidationResult`, so `no_conditions` and `unavailable` **both** map to `undefined` on `RiskInput`. That collapse is correct for enforcement — neither licenses a reject — but it means **Risk cannot distinguish them, and must not be asked to.** The distinction that prompt-safety criterion 2 depends on lives entirely in `invalidation_log` and in the warn/alert path, *before* the narrowing. An implementer who maps both to `undefined` and stops there has satisfied Risk and silently defeated criterion 2; the `no_conditions` warn must be emitted and persisted by the stage regardless of what Risk sees.
+
+The check pipeline gains a step that hard-rejects when the breached list is non-empty, setting:
 
 ```
 binding_constraint: 'thesis_invalidated:<condition_kind>'
@@ -263,6 +280,8 @@ Split by nondeterminism source:
 - **Validation and evaluation re-run** — they are deterministic code, with no replay branch.
 
 Mechanically this is an injected `InvalidationEmissionSource` port with live-LLM and replay-from-log implementations, rather than a `mode` branch inside the stage body. This is what makes validator and evaluator provably identical on both paths.
+
+**Evaluation states may legitimately differ between a live run and its replay, and this is not a defect.** Evaluation reads `asOf` = the intent's decision time; the log row's coordinate is `bar_timestamp`, floored to the bar boundary. Live these are different instants — a tick at 14:32:07 evaluates at 14:32:07 but files under 14:30:00 — whereas under the backtest harness the simulated clock sits exactly on the bar close, making them identical. So a replay re-evaluates at the bar boundary and can reach a different tri-state than the live run did, on the same logged emission. That follows directly from re-running evaluation rather than replaying it, which is the point of the split; it is called out here because a reader will otherwise expect replay to reproduce live states and file the difference as a bug.
 
 **A log miss yields `unavailable`** — the same fail-open marker as a vendor outage, reusing existing state rather than inventing more. A live LLM call inside a replayed path is disqualified outright on determinism grounds, and restricting backtests to already-ticked windows would kill historical backtesting.
 
