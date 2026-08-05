@@ -802,32 +802,43 @@ function buildProfileConfigs(): Pick<
      * overlap rather than trusting a thin estimate (correlation.ts treats an
      * omitted pair as "not correlated" — the documented warm-up fallback).
      *
-     * ## Live from day 1 of a widened universe, and #303 does not gate it
+     * ## Live from day 1 of a widened universe, and what #303 does about it
      *
      * This was inert while the universe held one instrument. It is not any
-     * more (#381). The obvious worry is
+     * more (#381), and the accompanying worry was
      * [#303](https://github.com/dd-jp/samurai-trading-system/issues/303) — an
-     * under-`min_bars` pair is omitted and therefore reads as *uncorrelated*
-     * to the concentration check, so a warming-up portfolio looks perfectly
-     * diversified. That is a real blind spot and #303 remains open.
+     * under-`min_bars` pair is omitted, therefore reads as *uncorrelated* to
+     * the concentration check, and a warming-up portfolio looks perfectly
+     * diversified.
      *
-     * **It is not reachable by this universe, which is why widening does not
-     * wait on it.** The warm-up fallback fires on a shortage of *bars*, and
-     * the bars do not come from history this process accumulated:
+     * **#303 landed first, in #383**, so this profile carries its fix rather
+     * than a decision about it: `insufficient_history` now names the dropped
+     * pairs and `evaluate()` raises a `correlation_warmup:` advisory per
+     * uncovered pair. No limit moved, so nothing here needed re-tuning.
+     *
+     * ## One correction, because it changes how the soak is read
+     *
+     * #383's rationale states that "on day 1 all fifteen pairs are under
+     * `min_bars`". **Measured against the live Alpaca paper account
+     * (read-only, 2026-08-05), that is not what happens**: all six
+     * `DEFAULT_UNIVERSE` instruments return a full 30 daily bars on the very
+     * first request, i.e. 29 overlapping returns against `min_bars: 20`.
+     *
+     * The reason is that the window is not accumulated locally.
      * `MarketDataServiceImpl.getBars` calls `DataSource.fetchBars` on every
      * request and persists the result (service.ts), so a cold first tick pulls
-     * 30 daily candles straight from Alpaca's archive. Every instrument in
-     * `DEFAULT_UNIVERSE` has traded for years, so all fifteen pairs clear
-     * `min_bars: 20` on the very first tick. A day-1 blind spot would need an
-     * instrument younger than ~30 trading days, which is a universe decision,
-     * not a soak-timing one.
+     * the whole window straight from Alpaca's archive — and every instrument
+     * here has traded for years. A genuine day-1 warm-up gap needs an
+     * instrument younger than ~30 trading days, which is a universe decision
+     * rather than a soak-timing one.
      *
-     * The decision recorded, so it is not re-litigated mid-soak: **#303 is
-     * carried into the soak rather than blocking it.** If it lands first that
-     * is strictly better and costs nothing; if it does not, the soak is not
-     * running blind, because the condition that triggers it is absent. What
-     * WOULD make it urgent is adding a newly-listed instrument here — at
-     * which point #303 becomes a prerequisite of that change, not of this one.
+     * This does not make #383 pointless — distinguishing "absent" from
+     * "measured at zero" is right regardless, and `RiskDecision.warnings` had
+     * no production reader at all before it. It does mean the expected volume
+     * of `correlation_warmup:` lines in a soak is **near zero, not fifteen per
+     * tick**. Worth stating precisely: an operator told to expect a flood
+     * would read a genuine warm-up warning as noise, which is the failure the
+     * ticket was trying to prevent.
      */
     window: { timeframe: '1d', lookback: 30 },
     min_bars: 20,
