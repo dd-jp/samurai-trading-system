@@ -1,0 +1,13 @@
+Sampling 24 dates across 2024-08-06 .. 2026-08-05
+
+=== Measured spread, at the bar close ===
+[stocks] SPY      days=17 (atr=16) quotes=8046 median=0.30bps p90=0.51bps spread/ATR median=0.0022 p90=0.0053
+[stocks] QQQ      days=17 (atr=16) quotes=8162 median=0.39bps p90=0.69bps spread/ATR median=0.0022 p90=0.0033
+[stocks] AAPL     days=17 (atr=16) quotes=8221 median=1.49bps p90=2.57bps spread/ATR median=0.0051 p90=0.0111
+[stocks] TSLA     days=17 (atr=16) quotes=8453 median=3.24bps p90=4.97bps spread/ATR median=0.0063 p90=0.0107
+[crypto] BTC-USD  days=23 (atr=23) quotes=2705 median=11.72bps p90=14.70bps spread/ATR median=0.0340 p90=0.0520
+[crypto] ETH-USD  days=22 (atr=22) quotes=1030 median=13.34bps p90=15.14bps spread/ATR median=0.0220 p90=0.0299
+
+=== Fitted spreadVolatilityCoefficient (from medians) ===
+  stocks: 0.0037   (fixture: 0.1)
+  crypto: 0.0280   (fixture: 0.5)

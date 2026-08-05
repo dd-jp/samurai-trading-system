@@ -71,6 +71,75 @@ export const PESSIMISTIC_COST_CONFIG: CostConfig = {
   },
 };
 
+/**
+ * Cost config calibrated against measured market data and published fee
+ * schedules (2026-08-05). See
+ * `docs/research/10-cost-model-calibration-2026-08-05.md`.
+ *
+ * Every number below has a stated basis. That is the whole point: the fixture
+ * above did not, and the gross-vs-net decomposition (#403) showed it was
+ * single-handedly responsible for the Stage 2 KILL — charging crypto 211bps a
+ * round trip, an adverse move of 0.45 ATR per fill against 3-4 ATR targets.
+ *
+ * **spreadVolatilityCoefficient — MEASURED.** `run-spread-calibration.ts`
+ * sampled 36,617 real Alpaca quotes across 24 dates spanning the same 2-year
+ * window the grid replays, taken in the five minutes before each bar's close
+ * (where the replay actually fills) and stopping short of the bell so
+ * closing-auction artifacts are excluded. Per-symbol median spread/ATR14:
+ * SPY 0.0022, QQQ 0.0022, AAPL 0.0051, TSLA 0.0063, BTC 0.0340, ETH 0.0220.
+ * The fitted per-asset-class medians are the values used here. The fixture's
+ * 0.1 / 0.5 were 27x and 18x those.
+ *
+ * **commissionRate — PUBLISHED.** Crypto is Alpaca's base-tier TAKER fee of
+ * 0.25% (docs.alpaca.markets/docs/crypto-fees, retrieved 2026-08-05); taker,
+ * not maker, because `ReplayDriver` issues market orders. Note this is the one
+ * term the old fixture set too LOW, at 0.001. US equities are commission-free
+ * at Alpaca, with only SEC/FINRA-TAF/CAT regulatory fees passed through on
+ * sells, so this is 0 — whereupon `CostModelImpl`'s structural 1bp floor
+ * applies anyway, which is already more than the real pass-through. The floor
+ * is left to do that job rather than a fabricated rate being written here.
+ *
+ * **slippageCoefficient — ASSUMPTION, and flagged as one.** Slippage cannot be
+ * measured without live fills, and inventing a coefficient is the exact defect
+ * this calibration exists to remove. So it is *derived* from the measured
+ * spread instead: set to `spreadVolatilityCoefficient / 4`, i.e. half of the
+ * half-spread, a conservative buffer on top of the modeled crossing cost. The
+ * fraction is a judgement call, not a measurement. Replace it with the real
+ * figure once the paper soak (#238) has produced live fills to compare
+ * modeled against realized — which is also the divergence check the Feedback
+ * Loop already wants (cross-spec GAP-F).
+ *
+ * **impactK — UNCHANGED, deliberately.** Market impact totalled 54 currency
+ * units out of 62,393 in the worst decomposition row: negligible at
+ * $10k-per-trade in this universe. There is no measurement basis to revise it
+ * and no benefit to loosening it, so the fixture's pessimistic value stands.
+ */
+export const CALIBRATED_COST_CONFIG: CostConfig = {
+  crypto: {
+    spreadVolatilityCoefficient: 0.028,
+    commissionRate: 0.0025,
+    slippageCoefficient: 0.007,
+    impactK: 0.1,
+  },
+  stocks: {
+    spreadVolatilityCoefficient: 0.0037,
+    commissionRate: 0,
+    slippageCoefficient: 0.000925,
+    impactK: 0.05,
+  },
+};
+
+/**
+ * Which cost config a direct run uses. `SAMURAI_STAGE2_COST_CONFIG=pessimistic`
+ * re-runs against the old fixture for comparison; the calibrated one is the
+ * default because it is the one with a stated basis for every number.
+ */
+export function costConfigFromEnv(env: NodeJS.ProcessEnv = process.env): CostConfig {
+  return env.SAMURAI_STAGE2_COST_CONFIG?.trim() === 'pessimistic'
+    ? PESSIMISTIC_COST_CONFIG
+    : CALIBRATED_COST_CONFIG;
+}
+
 /** Default window: the last 5 years, ending "now" — the spec's Starter-tier depth. */
 export function defaultFiveYearWindow(now: Date = new Date()): DateRange {
   return { start: new Date(now.getTime() - FIVE_YEARS_MS), end: now };
@@ -306,7 +375,10 @@ function printReport(
  */
 if (import.meta.url === `file://${process.argv[1]}`) {
   const polygonClient = new HttpPolygonClient();
-  runStage2({ polygonClient }).catch((error: unknown) => {
+  // Stated explicitly at the entrypoint rather than by changing `runStage2`'s
+  // own default, so every existing caller and test keeps the cost config it
+  // was written against and only a direct run picks up the calibrated one.
+  runStage2({ polygonClient, costConfig: costConfigFromEnv() }).catch((error: unknown) => {
     console.error('Stage 2 run failed:', error);
     process.exitCode = 1;
   });
