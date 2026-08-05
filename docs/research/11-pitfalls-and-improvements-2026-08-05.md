@@ -85,6 +85,11 @@ factor is exposed, so it cannot be inverted. DSR has therefore never been comput
 anchored, growing-train folds. Not an off-by-one — anchored walk-forward is not a CSCV partition at
 all. Two independent statistical gates, both blocked by a design mismatch rather than a bug.
 
+**Resolved 2026-08-05 (#406, I2 below).** Both seams were supplied at the source rather than worked
+around. The lesson stands and is the reason this entry is kept: a seam whose consumer is never
+written against it can be fully tested and still be unusable — `deflatedSharpe()` and `pbo()` were
+both 117/117 green while neither could be called.
+
 ### P8 — The trial budget was fixed before the sample size was known
 
 **Symptom:** the 12-config grid was sized on an assumed 5-year sample (MinBTL cap ~45). The real
@@ -152,11 +157,19 @@ running 12 trials the sample cannot support. Today the cap is computed at the en
 verdict field, after the work is done. This is the single binding constraint on Stage 2 and the
 cheapest thing left to fix.
 
-### I2 — Build the PBO and DSR seams *(blocking three kill-lines — [#406](../../issues/406))*
+### I2 — Build the PBO and DSR seams *(DONE 2026-08-05 — [#406](../../issues/406))*
 
 Expose the raw per-period Sharpe (or the Lo annualization factor) on `MetricsSuite`/`EvalReport`,
 and add a CSCV-shaped partitioning pass alongside walk-forward. Blocks #384 and #375. Needed
 regardless of any strategy decision.
+
+**Done.** `MetricsSuite` now carries `per_period_sharpe` / `annualization_factor` /
+`observations`, and `generateSplits` gained a purged 6-fold `cscv` scheme. Both statistics
+computed on real data for the first time, and both reject: PBO 0.65 (stocks) / 0.35 (crypto)
+against a 0.05 line, DSR 0.254 / 0.519 against 0.95. See
+[12-stage2-pbo-dsr-first-computation-2026-08-05.md](12-stage2-pbo-dsr-first-computation-2026-08-05.md)
+— the finding is that the 12-of-24 pass rate does not survive selection accounting, which makes
+I1 necessary rather than sufficient.
 
 ### I3 — Feed real spread into `MarketState.spread` and retire the fallback
 
