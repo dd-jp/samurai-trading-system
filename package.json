@@ -15,6 +15,7 @@
     "test:watch": "vitest",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "orchestrator": "yarn build && node --env-file=.env.local dist/orchestrator/index.js",
     "smoke": "yarn build && node dist/orchestrator/smoke-run.js",
     "dashboard": "yarn build && node --env-file=.env.local dist/dashboard/index.js"

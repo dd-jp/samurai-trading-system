@@ -1,0 +1,58 @@
+name: CI (lint, typecheck, build, test)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+# A newer push to the same PR makes the in-flight run's result irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    # Install plus all four checks is ~2 minutes; anything approaching this
+    # is hung, and GitHub's default would let it burn 6 hours of runner time.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+
+      # Yarn 4.18.0 comes from the packageManager field via Corepack — this
+      # repo vendors no Yarn binary under .yarn/. Corepack must be enabled
+      # before any yarn invocation, which is also why setup-node's
+      # `cache: yarn` isn't used: its cache probe shells out to `yarn config`
+      # before this step has run.
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        id: install
+        run: yarn install --immutable
+
+      # Every check runs even after an earlier one fails, so a lint break
+      # doesn't hide a test break; the job still fails if any of them fail.
+      # Gating on the install's outcome keeps a failed install from producing
+      # four cascading "command not found" failures instead of one clear one.
+      - name: Lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: yarn lint
+
+      - name: Typecheck
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: yarn typecheck
+
+      - name: Build
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: yarn build
+
+      - name: Test
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: yarn test
