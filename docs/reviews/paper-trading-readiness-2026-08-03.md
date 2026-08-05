@@ -4,6 +4,16 @@
 
 **Short answer:** the stage logic is essentially complete and tracks its specs. What is missing is *between* the stages — nothing schedules the fill-ingestion loop, and nothing constructs the composition root's 16 required dependencies. A paper run today would submit orders and then never learn what happened to them.
 
+> **Partly superseded 2026-08-05 by [spec-conformance-2026-08-05.md](spec-conformance-2026-08-05.md).**
+> That audit is the spec-by-spec half this one explicitly did not do (see Method below), and it
+> re-verified the wiring findings here against current `main`. **Closed since:** Tier-1 item 1
+> (`ingestFills()`/`reconcile()` are now scheduled — `orchestrator/fill-sync.ts`, driven from
+> `buildProductionOrchestrator.start()`), Tier-1 item 3 (`startFromEnvironment` builds its
+> required seams; `AlpacaAccountStateProvider` closes `accountState`), Tier-2 item 4 and
+> divergence D2 (`account_state` exists — migration `0006`). **Still open:** D3, which that
+> audit carries as F-8. Read this file for the wiring history; read the newer one for what is
+> currently divergent.
+
 **Method / limits.** Read: the composition root (`orchestrator/production.ts`, `production/direct-bind.ts`, `orchestrator/index.ts`), `execution/` in full, `ingest-fills.ts`, `reconcile.ts`, the migration set, `cross-verify-2026-07-31.md`, and a repo-wide TODO/placeholder/stub sweep. **Not read:** the 19 specs in full (~500KB) — so the divergence half of the question is answered from targeted checks against the most recent cross-verification, not from an exhaustive spec-by-spec audit. Where I did not verify something, it says so.
 
 ---

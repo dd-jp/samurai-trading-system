@@ -105,7 +105,7 @@ Throwing an existing `*ProviderError` means the existing retry/classification pa
 
 `tsc` skips every `.test.ts`. Vitest transpiles without type-checking, and `vitest.config.ts` sets no `typecheck` block.
 
-**Checked for a second entry point and found none:** `tsconfig.json` is the only tsconfig in the repo; `package.json` invokes `tsc` exactly once (`build`, against that config); the sole CI workflow (`.github/workflows/ai-review.yml`) runs `pip install openai` and `python .github/scripts/run_review.py` — no `tsc`, no `typecheck`, no `vitest --typecheck` anywhere under `.github/`.
+**Checked for a second entry point and found none** *(as of `9d67044`, the commit audited)*: `tsconfig.json` was the only tsconfig in the repo; `package.json` invoked `tsc` exactly once (`build`, against that config); the sole CI workflow (`.github/workflows/ai-review.yml`) ran `pip install openai` and `python .github/scripts/run_review.py` — no `tsc`, no `typecheck`, no `vitest --typecheck` anywhere under `.github/`.
 
 So **40,023 lines of test code — 53% of the repo — have zero type coverage.** A test that constructs a stale `OrderIntent`, or a mock whose method signature no longer matches its port, compiles and passes silently. For a system whose safety argument rests on its tests, that is the wrong side of the trade.
 
@@ -139,7 +139,12 @@ and `"typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json"`.
 
 Three fixes went into production code rather than tests, because the port was the problem: `buildRiskStep` now takes `CiiScoreSource` (`Pick<CiiConsumer, 'getScores'>`) instead of the concrete class, whose private `cache`/`inFlight`/`provider`/`clock` made a structural double impossible; `AlpacaBrokerAdapter.getOrder` and `AlwaysOpenCalendar.isOpen`/`isTradingDay` now declare the parameters their ports pass.
 
-**CI does not run it.** `.github/workflows/ai-review.yml` is the only workflow and it runs a Python review script. `yarn typecheck` is local-only until that changes — worth a CI step, or the backlog rebuilds.
+**CI now gates on it.** This report originally flagged `yarn typecheck` as local-only. `#407` (`ci.yml`, "CI (lint, typecheck, build, test)") landed on `main` in the meantime and runs `yarn lint` / `yarn typecheck` / `yarn build` / `yarn test` on every PR. Since `yarn typecheck` here is the two-config version, **CI now type-checks the test suite** — the backlog cannot rebuild silently.
+
+That gate immediately earned itself. Merging `main` back into this branch surfaced **9 further errors in code written after the audit**, all invisible to `main`'s own `typecheck` (which was `tsc --noEmit`, i.e. the test-excluding config):
+
+- `#370` removed `shadow_credit` / `shadow_influence_ceiling` from `FeedbackConfig` and dropped `accumulateCredit`'s third parameter — but **five** test fixtures still set the dials and one call still passed the argument. `paper-profile.test.ts` even asserts the fields are gone, while its siblings kept constructing them.
+- `service.test.ts`'s `CountingDataSource` declared `fetchQuote` returning `Quote | undefined` against a port that returns `Quote | null`, and called the optional method unguarded. `null` is the port's "no bid/ask available" signal; `undefined` is not the same thing.
 
 ---
 

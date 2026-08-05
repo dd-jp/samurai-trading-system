@@ -362,32 +362,14 @@ function buildFeedbackConfig(): FeedbackConfig {
   return {
     attribution_window_ms,
     weights,
-    /**
-     * `UNSOURCED` — spec story 3 asks only for "small" shadow credit. 0.1 is
-     * read on `influence_score`'s own 0.0-1.0 scale (`computeInfluenceScore`,
-     * debate-engine/analyst-contribution.ts): the term is
-     * `shadow_credit * correctness` against an influence term of
-     * `influence_score * correctness`, so this says a quietly-correct analyst
-     * is credited as if it had held 0.1 of the debate's influence.
-     *
-     * Worth knowing before tuning it: `computeInfluenceScore` is a
-     * stance-CHANGE metric, and scores 0 for an analyst that never shifted
-     * position across rounds — the common case. So in practice this term, not
-     * the influence-weighted one, carries most of the attribution signal in a
-     * paper soak. It is upside-only (attribution.ts), so it cannot deepen a
-     * wrong analyst's penalty; the risk of raising it is that a quiet correct
-     * call counts for as much as a loud one.
+    /*
+     * `shadow_credit` / `shadow_influence_ceiling` are gone (#370). Both were
+     * `influence_score` compensation knobs, and attribution no longer reads
+     * `influence_score`: a stance-CHANGE metric that scores 0 for an analyst
+     * that never shifted — the common case — was weighting every analyst by a
+     * constant, with shadow credit quietly carrying the whole signal at a
+     * tenth of its magnitude. Credit is now correctness alone.
      */
-    shadow_credit: 0.1,
-    /**
-     * `UNSOURCED` — the `influence_score` at or below which an analyst counts
-     * as "quiet". 0.2 on the same 0.0-1.0 scale, i.e. an analyst that shifted
-     * stance in at most one round transition in five. Deliberately near the
-     * bottom: shadow credit exists so a quietly-correct analyst can climb
-     * back, and a generous ceiling would hand it to analysts that did sway the
-     * debate and are already paid for it by the influence term.
-     */
-    shadow_influence_ceiling: 0.2,
     /**
      * `DERIVED` — empty, and empty is a decision rather than an omission.
      *

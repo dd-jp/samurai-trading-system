@@ -46,8 +46,8 @@ export const STOCK_SYMBOLS = ['SPY', 'QQQ', 'AAPL', 'TSLA'] as const;
 export const CRYPTO_SYMBOLS = ['BTC-USD', 'ETH-USD'] as const;
 
 const FIVE_YEARS_MS = 5 * 365 * 86_400_000;
-const DEFAULT_CAPITAL_PER_TRADE = 10_000;
-const DEFAULT_AVERAGE_CAPITAL = 10_000;
+export const DEFAULT_CAPITAL_PER_TRADE = 10_000;
+export const DEFAULT_AVERAGE_CAPITAL = 10_000;
 
 /**
  * Pessimistic cost-model defaults — mirrors `cost-model.test.ts`'s
@@ -71,10 +71,93 @@ export const PESSIMISTIC_COST_CONFIG: CostConfig = {
   },
 };
 
+/**
+ * Cost config calibrated against measured market data and published fee
+ * schedules (2026-08-05). See
+ * `docs/research/10-cost-model-calibration-2026-08-05.md`.
+ *
+ * Every number below has a stated basis. That is the whole point: the fixture
+ * above did not, and the gross-vs-net decomposition (#403) showed it was
+ * single-handedly responsible for the Stage 2 KILL — charging crypto 211bps a
+ * round trip, an adverse move of 0.45 ATR per fill against 3-4 ATR targets.
+ *
+ * **spreadVolatilityCoefficient — MEASURED.** `run-spread-calibration.ts`
+ * sampled 36,617 real Alpaca quotes across 24 dates spanning the same 2-year
+ * window the grid replays, taken in the five minutes before each bar's close
+ * (where the replay actually fills) and stopping short of the bell so
+ * closing-auction artifacts are excluded. Per-symbol median spread/ATR14:
+ * SPY 0.0022, QQQ 0.0022, AAPL 0.0051, TSLA 0.0063, BTC 0.0340, ETH 0.0220.
+ * The fitted per-asset-class medians are the values used here. The fixture's
+ * 0.1 / 0.5 were 27x and 18x those.
+ *
+ * **commissionRate — PUBLISHED.** Crypto is Alpaca's base-tier TAKER fee of
+ * 0.25% (docs.alpaca.markets/docs/crypto-fees, retrieved 2026-08-05); taker,
+ * not maker, because `ReplayDriver` issues market orders. Note this is the one
+ * term the old fixture set too LOW, at 0.001. US equities are commission-free
+ * at Alpaca, with only SEC/FINRA-TAF/CAT regulatory fees passed through on
+ * sells, so this is 0 — whereupon `CostModelImpl`'s structural 1bp floor
+ * applies anyway, which is already more than the real pass-through. The floor
+ * is left to do that job rather than a fabricated rate being written here.
+ *
+ * **slippageCoefficient — ASSUMPTION, and flagged as one.** Slippage cannot be
+ * measured without live fills, and inventing a coefficient is the exact defect
+ * this calibration exists to remove. So it is *derived* from the measured
+ * spread instead: set to `spreadVolatilityCoefficient / 4`, i.e. half of the
+ * half-spread, a conservative buffer on top of the modeled crossing cost. The
+ * fraction is a judgement call, not a measurement. Replace it with the real
+ * figure once the paper soak (#238) has produced live fills to compare
+ * modeled against realized — which is also the divergence check the Feedback
+ * Loop already wants (cross-spec GAP-F).
+ *
+ * **impactK — UNCHANGED, deliberately.** Market impact totalled 54 currency
+ * units out of 62,393 in the worst decomposition row: negligible at
+ * $10k-per-trade in this universe. There is no measurement basis to revise it
+ * and no benefit to loosening it, so the fixture's pessimistic value stands.
+ */
+export const CALIBRATED_COST_CONFIG: CostConfig = {
+  crypto: {
+    spreadVolatilityCoefficient: 0.028,
+    commissionRate: 0.0025,
+    slippageCoefficient: 0.007,
+    impactK: 0.1,
+  },
+  stocks: {
+    spreadVolatilityCoefficient: 0.0037,
+    commissionRate: 0,
+    slippageCoefficient: 0.000925,
+    impactK: 0.05,
+  },
+};
+
+/**
+ * Which cost config a direct run uses. `SAMURAI_STAGE2_COST_CONFIG=pessimistic`
+ * re-runs against the old fixture for comparison; the calibrated one is the
+ * default because it is the one with a stated basis for every number.
+ */
+export function costConfigFromEnv(env: NodeJS.ProcessEnv = process.env): CostConfig {
+  return env.SAMURAI_STAGE2_COST_CONFIG?.trim() === 'pessimistic'
+    ? PESSIMISTIC_COST_CONFIG
+    : CALIBRATED_COST_CONFIG;
+}
+
 /** Default window: the last 5 years, ending "now" — the spec's Starter-tier depth. */
 export function defaultFiveYearWindow(now: Date = new Date()): DateRange {
   return { start: new Date(now.getTime() - FIVE_YEARS_MS), end: now };
 }
+
+/**
+ * The exact window the 2026-08-05 verdict requested, to the millisecond.
+ *
+ * A direct run uses this rather than `defaultFiveYearWindow()`, which reads
+ * `new Date()` and therefore shifts the effective window — and with it every
+ * walk-forward fold boundary — on each new day. A gate verdict that cannot be
+ * reproduced tomorrow is not evidence, and the first real Stage 2 run was
+ * recorded before that was noticed.
+ */
+export const STAGE2_PINNED_WINDOW: DateRange = {
+  start: new Date('2021-08-06T18:17:07.694Z'),
+  end: new Date('2026-08-05T18:17:07.694Z'),
+};
 
 export interface RunStage2Deps {
   polygonClient: PolygonClient;
@@ -100,6 +183,71 @@ interface ReplayContext {
   costModel: CostModelImpl;
   window: DateRange;
   capitalPerTrade: number;
+}
+
+/**
+ * The sub-window of `requested` that EVERY symbol actually has bars for.
+ *
+ * Intersected, not unioned: the grid replays one universe per asset class, and
+ * a fold whose range predates a symbol's first bar is what produced the
+ * `toReturnSeries: no bars in the sample` abort on the first live run. Taking
+ * the latest first-bar and earliest last-bar across symbols gives the range
+ * where the whole universe is present.
+ *
+ * A symbol with NO bars at all is a hard failure, not a narrowing: silently
+ * dropping it would change what the verdict is a verdict ABOUT. So is an
+ * EMPTY intersection (start >= end), which is what disjoint coverage across
+ * symbols produces — one symbol's history ending before another's begins.
+ * Returning an inverted range there would hand replay/folds/MinBTL a window
+ * they cannot sample, reproducing the same opaque `toReturnSeries` abort this
+ * function exists to prevent, just one layer further down.
+ *
+ * Bar bounds are computed by min/max rather than by taking `bars[0]` and
+ * `bars.at(-1)`: `Stage2HistoricalStore.bars` does `ORDER BY close_time ASC`
+ * today, but the structural parameter type above cannot state that, and a
+ * store that ever returned bars unordered would silently mis-narrow the
+ * window rather than fail.
+ */
+export function effectiveWindow(
+  store: { bars: (symbol: string, window: DateRange) => Array<{ close_time: Date }> },
+  requested: DateRange,
+): DateRange {
+  let start = requested.start;
+  let end = requested.end;
+
+  for (const symbol of [...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS]) {
+    const bars = store.bars(symbol, requested);
+    let first: Date | undefined;
+    let last: Date | undefined;
+    for (const bar of bars) {
+      if (first === undefined || bar.close_time.getTime() < first.getTime()) first = bar.close_time;
+      if (last === undefined || bar.close_time.getTime() > last.getTime()) last = bar.close_time;
+    }
+    if (first === undefined || last === undefined) {
+      throw new Error(
+        `runStage2: ${symbol} has no bars in ${requested.start.toISOString()} .. ` +
+          `${requested.end.toISOString()}, so the 12-config grid cannot be evaluated over the ` +
+          'MVP universe. Check the symbol is served by this Polygon plan before reading any ' +
+          'verdict — a grid missing a symbol is not the grid the Stage 2 gate is defined on.',
+      );
+    }
+
+    if (first.getTime() > start.getTime()) start = first;
+    if (last.getTime() < end.getTime()) end = last;
+  }
+
+  if (start.getTime() >= end.getTime()) {
+    throw new Error(
+      `runStage2: the MVP universe has no window every symbol covers — the intersection of ` +
+        `per-symbol coverage across ${requested.start.toISOString()} .. ` +
+        `${requested.end.toISOString()} collapsed to ${start.toISOString()} .. ` +
+        `${end.toISOString()}. At least one symbol's history ends before another's begins, so ` +
+        'there is no sample the 12-config grid can be evaluated on. Widen the requested window ' +
+        'or check which symbol this Polygon plan is serving short.',
+    );
+  }
+
+  return { start, end };
 }
 
 /** One asset class's fixed symbol/periodsPerYear pairing this script drives. */
@@ -150,9 +298,53 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
     print(`  ingested ${symbol}: ${barCount} bars`);
   }
 
+  // The window the data can actually support, which is NOT always the window
+  // asked for: a Polygon plan serves a bounded history, and the first real run
+  // of this script (2026-08-05) asked for 5 years and received 2 — 501 stock
+  // bars, earliest 2024-08-06. Replaying the requested window against that
+  // produced `toReturnSeries: no bars in the sample` from inside the first
+  // fold, an opaque failure four layers down from its cause.
+  //
+  // So the effective window is INTERSECTED across symbols and everything
+  // downstream — replay, folds, and crucially MinBTL — runs on it. MinBTL's
+  // trial cap is a function of sample length, so computing it over a window
+  // the data does not cover would overstate how many configs the sample can
+  // support, which is the one number in this verdict that exists to prevent
+  // exactly that kind of overfitting.
+  // Warn when EITHER boundary moved, naming which. A provider whose history
+  // lags the request narrows the END instead of the start (stale or partial
+  // vendor data), and warning only on the start would let that shrink the
+  // sample invisibly — the run output would read as a full-window run.
+  const effective = effectiveWindow(store, window);
+  const narrowedStart = effective.start.getTime() > window.start.getTime();
+  const narrowedEnd = effective.end.getTime() < window.end.getTime();
+  if (narrowedStart || narrowedEnd) {
+    const narrowing: string[] = [];
+    if (narrowedStart) {
+      narrowing.push(
+        `requested a start of ${window.start.toISOString().slice(0, 10)} but the data starts ` +
+          `${effective.start.toISOString().slice(0, 10)}`,
+      );
+    }
+    if (narrowedEnd) {
+      narrowing.push(
+        `requested an end of ${window.end.toISOString().slice(0, 10)} but the data ends ` +
+          `${effective.end.toISOString().slice(0, 10)}`,
+      );
+    }
+    print('');
+    print(
+      `Stage 2: WARNING — ${narrowing.join('; ')}. Running on the ` +
+        `${((effective.end.getTime() - effective.start.getTime()) / (365 * 86_400_000)).toFixed(2)}` +
+        '-year sample the provider actually served. MinBTL below is computed on THAT window, so ' +
+        'a tighter trial cap here is a real constraint of the sample, not a spec change.',
+    );
+    print('');
+  }
+
   const costModel = new CostModelImpl(deps.costConfig ?? PESSIMISTIC_COST_CONFIG);
   const configTrialLog = new InMemoryConfigTrialLog();
-  const ctx: ReplayContext = { store, costModel, window, capitalPerTrade };
+  const ctx: ReplayContext = { store, costModel, window: effective, capitalPerTrade };
 
   const stocks = makeAssetClass(ctx, 'stocks', STOCK_SYMBOLS, STOCK_PERIODS_PER_YEAR);
   const crypto = makeAssetClass(ctx, 'crypto', CRYPTO_SYMBOLS, CRYPTO_PERIODS_PER_YEAR);
@@ -160,7 +352,7 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
   print('Stage 2: running the 12-config trial grid across stocks + crypto...');
   const results = await runTrialGrid({
     assetClasses: [stocks, crypto],
-    window,
+    window: effective,
     averageCapital,
     configTrialLog,
   });
@@ -168,7 +360,7 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
   const verdict = renderStage2Verdict({
     results,
     distinctTrialCount: configTrialLog.distinctTrialCount(),
-    window,
+    window: effective,
   });
 
   printReport(results, verdict, print);
@@ -242,7 +434,14 @@ function printReport(
  */
 if (import.meta.url === `file://${process.argv[1]}`) {
   const polygonClient = new HttpPolygonClient();
-  runStage2({ polygonClient }).catch((error: unknown) => {
+  // Stated explicitly at the entrypoint rather than by changing `runStage2`'s
+  // own default, so every existing caller and test keeps the cost config it
+  // was written against and only a direct run picks up the calibrated one.
+  runStage2({
+    polygonClient,
+    costConfig: costConfigFromEnv(),
+    window: STAGE2_PINNED_WINDOW,
+  }).catch((error: unknown) => {
     console.error('Stage 2 run failed:', error);
     process.exitCode = 1;
   });

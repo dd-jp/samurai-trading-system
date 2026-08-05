@@ -1551,8 +1551,6 @@ describe('buildProductionOrchestrator', () => {
       return {
         attribution_window_ms: 24 * 60 * 60 * 1_000,
         weights: dial,
-        shadow_credit: 0.1,
-        shadow_influence_ceiling: 0.2,
         strategy_params: {},
         risk_thresholds: { max_position_size: dial },
         kill_thresholds: {

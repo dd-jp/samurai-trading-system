@@ -451,6 +451,32 @@ describe("Alpaca's burst covers one fill-poll sweep of the configured universe (
     // figure behind it (200/min = 3.33/s).
     expect(DEFAULT_VENUE_PACING.alpaca.refillPerSecond).toBeLessThanOrEqual(200 / 60);
   });
+
+  /**
+   * #391 put the market-data client inside the same bucket, so the burst is no
+   * longer sized by the fill sweep alone — the worst moment is a COLD START,
+   * where `TokenBucket` begins full, the bar cache is empty and every
+   * instrument fetches at once while `reconcile()` sweeps.
+   */
+  it('has capacity for a cold-start bar sweep alongside the order path', () => {
+    const coldStart =
+      DEFAULT_UNIVERSE.length + // one bars fetch per instrument, cache empty
+      DEFAULT_UNIVERSE.length + // reconcile: one getOrder per open bracket
+      1; // a submitBracket from the first tick
+
+    expect(DEFAULT_VENUE_PACING.alpaca.capacity).toBeGreaterThanOrEqual(coldStart);
+  });
+
+  it('reserves enough for the order path to complete a full sweep under a data burst', () => {
+    // The reserve is what market data may NOT spend, so it has to cover one
+    // fill-poll sweep of the universe — otherwise a bar burst can still park a
+    // getOrder behind the refill, which is the starvation #391 forbids.
+    const reserve = DEFAULT_VENUE_PACING.alpaca.reserveForPriority ?? 0;
+
+    expect(reserve).toBeGreaterThanOrEqual(DEFAULT_UNIVERSE.length);
+    // And it must leave something for market data, or bar fetches park forever.
+    expect(reserve).toBeLessThan(DEFAULT_VENUE_PACING.alpaca.capacity);
+  });
 });
 
 describe('paperStartingProfile supplies the budget (#388)', () => {

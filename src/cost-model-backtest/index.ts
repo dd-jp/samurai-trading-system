@@ -123,6 +123,12 @@ export type { BacktestDeps } from './backtest.js';
 export { BacktestHarness } from './backtest.js';
 export type { ConfigTrialLog } from './config-trial-log.js';
 export { InMemoryConfigTrialLog } from './config-trial-log.js';
+export type { RunCostAttribution, TradeCostAttribution } from './cost-attribution.js';
+export {
+  attributeRunCosts,
+  attributeTradeCost,
+  GrossOfCostsTradeSource,
+} from './cost-attribution.js';
 export { CostModelImpl } from './cost-model.js';
 export type { EvalExecutorDeps } from './eval-executor.js';
 export { EvalExecutorImpl } from './eval-executor.js';

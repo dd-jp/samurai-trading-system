@@ -46,8 +46,6 @@ function makeConfig(overrides: Partial<FeedbackConfig> = {}): FeedbackConfig {
   return {
     attribution_window_ms: 24 * 60 * 60 * 1000,
     weights: makeDial(),
-    shadow_credit: 0.1,
-    shadow_influence_ceiling: 0.2,
     strategy_params: {},
     risk_thresholds: { max_position_size: makeDial() },
     kill_thresholds: {
