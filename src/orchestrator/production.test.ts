@@ -41,6 +41,7 @@ import {
   buildProductionComponents,
   buildProductionOrchestrator,
   buildProductionTickRunner,
+  type DailyMetricsConfig,
   DEFAULT_HEARTBEAT_INTERVAL_MS,
   DEFAULT_LLM_CLIENT_CONFIG,
   type FeedbackCycleConfig,
@@ -1688,6 +1689,26 @@ describe('buildProductionOrchestrator', () => {
     it('at the gate: computeMetrics runs, and a breach reaches the real stores', async () => {
       // One more observation than returns required — n observations give n−1.
       seedDailyEquity(MIN_RETURN_OBSERVATIONS + 1);
+      // A real closed trade inside the derived window, so the suite's
+      // trade-derived fields have something to be derived FROM. Found by
+      // mutation: handing the source an empty trade reader passed every other
+      // assertion here while silently zeroing turnover, exposure, profit
+      // factor and expectancy — the half of the suite an operator reads back.
+      await new SqliteExecutionStore(db).writeClosedTrade({
+        idempotency_key: 'closed-in-window',
+        debate_id: 'debate-1',
+        instrument: 'BTC-USD',
+        asset_class: 'crypto',
+        side: 'buy',
+        entry: 100,
+        stop: 90,
+        filled_size: 10,
+        realized_pnl_net: 50,
+        fees_total: 2,
+        opened_at: new Date(SERIES_START + 10 * MS_PER_DAY),
+        closed_at: new Date(SERIES_START + 11 * MS_PER_DAY),
+        close_reason: 'target',
+      });
       const { config, logger, tuning, postBreachAlert } = armedConfig();
       const orchestrator = buildProductionOrchestrator(config);
 
@@ -1697,9 +1718,11 @@ describe('buildProductionOrchestrator', () => {
       // It ran: a real suite, derived from the real series.
       const computed = logger.entries.find((e) => e.message.includes('daily metrics computed'));
       if (computed === undefined) throw new Error('computeMetrics did not run');
-      expect(Number.isFinite((computed.payload as { daily: MetricsSuite }).daily.sharpe)).toBe(
-        true,
-      );
+      const daily = (computed.payload as { daily: MetricsSuite }).daily;
+      expect(Number.isFinite(daily.sharpe)).toBe(true);
+      // The closed trade above reached the suite: turnover is trade-derived,
+      // so a zero here means the source was handed no trade reader at all.
+      expect(daily.turnover).toBeGreaterThan(0);
       expect(logger.entries.filter((e) => e.message.includes('insufficient observations'))).toEqual(
         [],
       );
@@ -1715,6 +1738,31 @@ describe('buildProductionOrchestrator', () => {
       expect(autoTightenRows()).toBe(1);
 
       await orchestrator.stop();
+    });
+
+    it('builds the source ONCE, at construction, so a bad one fails the start', () => {
+      // Found by mutation: resolving the factory inside the cycle instead of
+      // here passed every other test. It is not equivalent. The source's own
+      // constructor refuses a `minReturnObservations` below the floor
+      // (ADR-0006 §5), and a config error of that kind must stop the process
+      // it belongs to — resolved per cycle it would instead surface up to 24h
+      // later, inside the timer's catch, as one more "daily feedback cycle
+      // failed" line in an unattended soak.
+      const { config } = armedConfig();
+      const feedback = config.feedback as NonNullable<ProductionConfig['feedback']>;
+      const construct = vi.fn(() => {
+        throw new Error('metrics source refused its config');
+      });
+      const bad = {
+        ...config,
+        feedback: {
+          ...feedback,
+          metrics: { ...(feedback.metrics as DailyMetricsConfig), source: construct },
+        },
+      };
+
+      expect(() => buildProductionOrchestrator(bad)).toThrow(/refused its config/);
+      expect(construct).toHaveBeenCalledTimes(1);
     });
 
     it('logs the refusal once per CYCLE, not once per tick', async () => {
