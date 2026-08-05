@@ -7,7 +7,7 @@ Read this on every session start.
 - **Codename:** Samurai
 - **Goal:** Live-money multi-agent trading system covering crypto AND stocks
 - **Owner:** David (Deepak)
-- **Architecture:** 6-stage pipeline — Analysts → Debate → Trader → Risk → Verdict → Feedback Loop
+- **Architecture:** 7-stage pipeline — Analysts → Debate → Trader → Invalidation → Risk → Verdict → Feedback Loop (`invalidation` added 2026-08-05, see `docs/specs/devils-advocate-spec.md`)
 - **Status:** Design phase complete (12 components charted, specced, cross-verified; 49 GitHub tickets published). Project scaffolded — TypeScript, npm, vitest, Biome. Implementation not yet started (see `src/` for the skeleton, `docs/specs/` for what fills it in).
 - **Language:** TypeScript (Node 22+). Resolved in [ADR-0001](docs/adr/0001-technical-foundation-hybrid.md) — no hard dependency on the Python repos mined for patterns.
 

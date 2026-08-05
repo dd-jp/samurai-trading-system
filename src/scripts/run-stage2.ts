@@ -263,7 +263,13 @@ function makeAssetClass(
     makeRunner: () =>
       new ReplayDriver({
         barSource: ctx.store,
-        timeline: ctx.store,
+        // Scoped to this asset class's symbols, not the whole store (#420).
+        // The store's own `barTimestamps` is the union across every ingested
+        // instrument, and stock/crypto daily bars close at different UTC
+        // times — so an unscoped timeline steps a stock replay through every
+        // crypto bar too, padding the return series with zeros and understating
+        // the per-period Sharpe by roughly sqrt(n_real / n_union).
+        timeline: ctx.store.timelineFor(symbols),
         registry: ctx.store,
         costModel: ctx.costModel,
         clock: new SimulatedClock(ctx.window.start),
@@ -355,6 +361,10 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
     window: effective,
     averageCapital,
     configTrialLog,
+    // The gate run is the one caller that needs the CSCV pass: without it PBO
+    // has no configs x folds matrix to rank across and the verdict can only
+    // refuse (#406). Costs a second evaluate() per pair over the same replay.
+    includeCscvPass: true,
   });
 
   const verdict = renderStage2Verdict({
@@ -390,8 +400,22 @@ function printReport(
         `skew=${m.skew.toFixed(3)} kurtosis=${m.kurtosis.toFixed(3)} ` +
         `turnover=${m.turnover.toFixed(3)} exposure=${m.exposure.toFixed(3)}`,
     );
+    print(
+      `    dsr inputs: per_period_sharpe=${m.per_period_sharpe.toFixed(4)} ` +
+        `annualization_factor=${m.annualization_factor.toFixed(3)} ` +
+        `observations=${m.observations}`,
+    );
     for (const split of result.report.splits) {
       print(`    fold sharpe=${split.metrics.sharpe.toFixed(3)}`);
+    }
+    if (result.cscv !== undefined) {
+      print(
+        `    cscv folds: ${
+          'error' in result.cscv
+            ? `UNAVAILABLE (${result.cscv.error})`
+            : result.cscv.report.splits.map((s) => s.metrics.sharpe.toFixed(3)).join(' ')
+        }`,
+      );
     }
   }
 
@@ -420,7 +444,9 @@ function printReport(
 
   print('');
   print('=== Stage 2: DSR ===');
-  print(JSON.stringify(verdict.dsr_note));
+  for (const outcome of verdict.dsr) {
+    print(JSON.stringify(outcome));
+  }
 
   print('');
   print(`=== Stage 2 VERDICT: ${verdict.overall_pass ? 'PASS' : 'KILL/INCOMPLETE'} ===`);

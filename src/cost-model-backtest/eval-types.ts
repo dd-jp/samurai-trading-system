@@ -30,6 +30,7 @@
  */
 
 import type { ClosedTrade, Fill } from '../shared/index.js';
+import type { SplitScheme } from './splits.js';
 import type { DateRange } from './universe.js';
 import type { MetricsSuite, Split } from './validation-types.js';
 
@@ -72,7 +73,8 @@ export interface EvalOptions {
   window: DateRange;
   averageCapital: number;
   periodsPerYear: number;
-  scheme: 'walk_forward' | 'cpcv';
+  /** Passed through to `generateSplits`; `cscv` is the PBO matrix's source. */
+  scheme: SplitScheme;
   embargo: number;
   barMs: number;
 }

@@ -65,6 +65,27 @@ Reconciles the accumulated additions from all 10 specs + the 3 newly-charted com
 - Atomic bracket + one-cancels-other exit semantics guaranteed at the boundary (native OCA on IBKR/Alpaca; Execution-managed emulation on ccxt).
 - **Idempotency key = `hash(instrument + bar/timestamp)`** (trader-spec/CONTEXT/verdict authoritative — NOT `debate_id`; `trader-map.md:30` `debate_id +` prefix is stale, spec is canonical).
 
+## 8. `InvalidationResult` — crosses the `invalidation` → `risk` boundary
+
+Added 2026-08-05 from [Wayfinder: Devil's Advocate](https://github.com/dd-jp/samurai-trading-system/issues/291). **Owner:** Devil's Advocate / invalidation stage (devils-advocate-spec.md). **Consumer:** Risk Manager.
+
+- **The pipeline is SEVEN stages**, not six: `analysts → debate → trader → invalidation → risk → verdict → execution`. `TickStage` and `current_tick.stage` both gain `'invalidation'`; the latter's SQL `CHECK` over six names requires a table-rebuild migration.
+- **Canonical shape:**
+  ```
+  InvalidationCondition { id, observable, comparator: '<'|'<='|'>'|'>=', threshold: number, rationale: string }
+  InvalidationObservable = { kind:'indicator', spec: IndicatorSpec }
+                         | { kind:'mark' }
+                         | { kind:'bars', window: BarWindow, measure:'volume_ratio' }
+                         | { kind:'mi_context', window_ms: number, measure:'news_count'|'social_count' }
+  EvaluatedCondition   { condition, state: 'breached'|'not_breached'|'unevaluable' }
+  InvalidationResult   { thesis_restated, thesis_source: {debate_id}|null, conditions: EvaluatedCondition[] }
+  ```
+- **Reuses `IndicatorSpec` verbatim** (§3) rather than inventing a parallel way to name an indicator. **No** model-assigned severity, weight, or confidence — conditions are predicates. **No** `thesis_holds`; consumers derive it.
+- **`thesis_source` is nullable by contract** — `{ debate_id }` when read from `DebateResult.synthesis`, null when inferred from telemetry. It therefore **cannot** be a primary key, which is why `invalidation_log` is keyed on content, not on `debate_id`.
+- **Transport into Risk:** `RiskInput.invalidation?: InvalidationResult`, pre-built outside `evaluate()` — the same seam ADR-0003 uses for `RiskInput.critic?`. Risk stays deterministic given its inputs. A non-empty breached list is a hard reject with `binding_constraint: 'thesis_invalidated:<condition_kind>'`.
+- **Narrowing rule — load-bearing:** the stage's outcome union has three statuses (`evaluated` / `no_conditions` / `unavailable`) and only `evaluated` carries an `InvalidationResult`. The other two both arrive at Risk as `undefined`. **Risk cannot and must not distinguish them**; that distinction survives in `invalidation_log` and the warn/alert path only. It is a prompt-safety property, not a convenience — see devils-advocate-spec.md.
+- **`invalidation_log` retrieval is by `(instrument, bar_timestamp)`, NOT by any generated id**, because a replay mints fresh `trace_id`/`debate_id` values and cannot bridge to live rows. `bar_timestamp` must be **floored to the instrument's bar boundary**. Note this is a live defect on the `debate_log` write path too, which stores `clock.now()` unfloored.
+
 ---
 
 ## OPEN GAPS (found in this pass — resolve before / during `/to-tickets`)

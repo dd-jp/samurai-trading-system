@@ -156,7 +156,24 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
     }));
   }
 
-  /** `ReplayTimeline.barTimestamps` — the union of every ingested instrument's close times. */
+  /**
+   * `ReplayTimeline.barTimestamps` — the union of **every** ingested
+   * instrument's close times, across all asset classes.
+   *
+   * **Almost certainly not what a replay wants (#420).** A replay trades one
+   * asset class, and stock and crypto daily bars close at different UTC times,
+   * so this union is close to their *sum*: over a 2-year window it returns
+   * ~1,229 timestamps where stocks have ~504 bars and crypto ~730. Driving a
+   * stock replay off it pads the return series with a zero on every
+   * crypto-only bar, which scales the per-period Sharpe by roughly
+   * `sqrt(n_real / n_union)` and leaves `periodsPerYear` describing a cadence
+   * the series no longer has.
+   *
+   * Use `timelineFor(symbols)` for anything scored per asset class. This
+   * method is kept because `ReplayTimeline` is a single-method interface the
+   * store legitimately satisfies, and a whole-universe timeline is still the
+   * right answer for a whole-universe question.
+   */
   async barTimestamps(window: DateRange): Promise<readonly Date[]> {
     const rows = this.db
       .prepare(
@@ -168,6 +185,70 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
       .all(window.start.toISOString(), window.end.toISOString()) as { close_time: string }[];
 
     return rows.map((row) => new Date(row.close_time));
+  }
+
+  /**
+   * A `ReplayTimeline` scoped to `symbols` — the close times of those
+   * instruments only (#420).
+   *
+   * This is the timeline a per-asset-class replay must step. `ReplayDriver`
+   * already scopes its `universe` correctly, so only the right instruments
+   * ever trade; the defect this fixes was that the *timeline* was not scoped
+   * with it, and the return series is built one slot per stepped bar.
+   */
+  timelineFor(symbols: readonly string[]): ReplayTimeline {
+    if (symbols.length === 0) {
+      throw new Error(
+        'Stage2HistoricalStore.timelineFor: at least one symbol is required — an empty scope ' +
+          'yields an empty timeline, which fails much later as "no bars in the sample".',
+      );
+    }
+
+    return {
+      barTimestamps: async (window: DateRange): Promise<readonly Date[]> =>
+        this.barTimestampsFor(symbols, window),
+    };
+  }
+
+  /** The close times of `symbols` only, ascending. See `timelineFor`. */
+  private barTimestampsFor(
+    symbols: readonly string[],
+    window: DateRange,
+  ): Promise<readonly Date[]> {
+    const placeholders = symbols.map(() => '?').join(', ');
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT close_time
+           FROM stage2_bars
+          WHERE instrument IN (${placeholders})
+            AND close_time >= ? AND close_time <= ?
+          ORDER BY close_time ASC`,
+      )
+      .all(...symbols, window.start.toISOString(), window.end.toISOString()) as {
+      close_time: string;
+    }[];
+
+    if (rows.length === 0) {
+      // Name the cause here rather than let it surface four layers up as
+      // `toReturnSeries: no bars in the sample` (pitfall P3).
+      const ingested = (
+        this.db.prepare('SELECT DISTINCT instrument FROM stage2_bars').all() as {
+          instrument: string;
+        }[]
+      ).map((row) => row.instrument);
+
+      const unknown = symbols.filter((symbol) => !ingested.includes(symbol));
+
+      throw new Error(
+        `Stage2HistoricalStore.timelineFor: no bars for [${symbols.join(', ')}] between ` +
+          `${window.start.toISOString()} and ${window.end.toISOString()}. ` +
+          (unknown.length > 0
+            ? `Never ingested: [${unknown.join(', ')}]. Ingested: [${ingested.join(', ')}].`
+            : 'Those symbols are ingested but have no bars inside this window.'),
+      );
+    }
+
+    return Promise.resolve(rows.map((row) => new Date(row.close_time)));
   }
 
   /** `InstrumentRegistry.membershipDuring` — see class doc for the "nothing delisted" posture. */

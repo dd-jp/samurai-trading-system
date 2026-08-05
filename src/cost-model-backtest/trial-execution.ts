@@ -51,8 +51,13 @@ import type { DateRange } from './universe.js';
 /** One bar's duration — the spec's `barMs`=1 day, fixed for the grid run. */
 const DAY_MS = 86_400_000;
 
-/** The spec's fixed embargo, in bars, for the 5-fold walk-forward split. */
-const WALK_FORWARD_EMBARGO_BARS = 50;
+/**
+ * The spec's fixed embargo, in bars, for the 5-fold walk-forward split — sized
+ * to the largest `slowWindow` in the grid. The CSCV pass (#406) purges with the
+ * same number: it partitions the same window over the same bars, and a second
+ * embargo would be a second, undocumented knob.
+ */
+const EMBARGO_BARS = 50;
 
 /**
  * This path has no stochastic consumer (`types.ts`: the only seeded mode is
@@ -134,12 +139,31 @@ export interface TrialGridAssetClass {
   makeRunner: () => ReplayRunner;
 }
 
+/**
+ * The CSCV pass's result for one (config, asset class) pair — the report, or
+ * the reason it could not be produced.
+ *
+ * A refusal rather than a throw, and the one place in this module that does
+ * not fail fast. The walk-forward pass answers the OOS-Sharpe kill line and
+ * must abort the grid if it breaks (see the `catch` in `runTrialGrid`); the
+ * CSCV pass only feeds PBO, and its extra fold is the window's *first* group
+ * — the one the walk-forward scheme trains on and never tests. That group
+ * carries the indicator warm-up (`slowWindow` up to 50 bars plus
+ * `atrWindow`), so it can legitimately contain no closed trades, which makes
+ * `computeMetrics` throw on a zero-variance return series. Losing PBO for one
+ * asset class is a reportable gap; losing the whole gate run to it is not.
+ */
+export type CscvOutcome = { report: EvalReport } | { error: string };
+
 /** One (config, asset class) pair's scored result. */
 export interface TrialGridResult {
   config_hash: string;
   config: ProxyStrategyConfig;
   asset_class: 'crypto' | 'stocks';
+  /** The walk-forward pass — the OOS-Sharpe kill line's source. Always present. */
   report: EvalReport;
+  /** The CSCV pass — PBO's source. Present only when `includeCscvPass` was set. */
+  cscv?: CscvOutcome;
 }
 
 export interface TrialGridRunDeps {
@@ -154,6 +178,21 @@ export interface TrialGridRunDeps {
    * so tests can isolate this module's wiring from a real replay+eval run.
    */
   makeEvaluator?: (run: ReplayRunResult) => EvalExecutor;
+  /**
+   * Also score every pair under the `cscv` scheme, populating
+   * `TrialGridResult.cscv` — the configs x folds matrix `pbo()` needs (#406).
+   *
+   * Opt-in, defaulting to off, because it costs a second `evaluate()` per
+   * (config, asset class) pair. The Stage 2 gate run wants it; the cost
+   * decomposition and its sensitivity ladder re-run the whole grid several
+   * times over and read only `killLineChecks`, so paying for it there would
+   * double that work for a number nothing reads.
+   *
+   * The replay is *not* re-run — both passes score the same
+   * `ReplayRunResult`, so the strategy's trades are identical and only the
+   * partitioning differs. That is what makes the two passes comparable.
+   */
+  includeCscvPass?: boolean;
 }
 
 /**
@@ -185,19 +224,32 @@ export async function runTrialGrid(deps: TrialGridRunDeps): Promise<TrialGridRes
 
     for (const assetClass of deps.assetClasses) {
       let report: EvalReport;
+      let cscv: CscvOutcome | undefined;
       try {
         const runner = assetClass.makeRunner();
         const run = await runner.run(config, deps.window);
         const evaluator = makeEvaluator(run);
 
-        report = await evaluator.evaluate({
+        const evalOptions = {
           window: deps.window,
           averageCapital: deps.averageCapital,
           periodsPerYear: assetClass.periodsPerYear,
-          scheme: 'walk_forward',
-          embargo: WALK_FORWARD_EMBARGO_BARS,
+          embargo: EMBARGO_BARS,
           barMs: DAY_MS,
-        });
+        };
+
+        report = await evaluator.evaluate({ ...evalOptions, scheme: 'walk_forward' });
+
+        if (deps.includeCscvPass === true) {
+          // Refuse rather than throw — see `CscvOutcome`. Scoped tightly to
+          // the second evaluate() so it cannot swallow a walk-forward or
+          // replay failure, both of which must still abort the grid.
+          try {
+            cscv = { report: await evaluator.evaluate({ ...evalOptions, scheme: 'cscv' }) };
+          } catch (cause) {
+            cscv = { error: cause instanceof Error ? cause.message : String(cause) };
+          }
+        }
       } catch (cause) {
         // Deliberately fail-fast, not fail-soft: catching here and continuing
         // to the next config would silently shrink the grid below 12
@@ -222,7 +274,16 @@ export async function runTrialGrid(deps: TrialGridRunDeps): Promise<TrialGridRes
         );
       }
 
-      results.push({ config_hash, config, asset_class: assetClass.asset_class, report });
+      results.push({
+        config_hash,
+        config,
+        asset_class: assetClass.asset_class,
+        report,
+        // Spread rather than `cscv: cscv` — `exactOptionalPropertyTypes` makes
+        // an explicit `undefined` a different thing from an absent key, and
+        // "the pass was not requested" is absence.
+        ...(cscv === undefined ? {} : { cscv }),
+      });
 
       // Exactly once per config, regardless of how many asset classes it is
       // scored against — see this module's header ("12 configs, not 12

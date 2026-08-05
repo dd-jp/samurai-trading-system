@@ -42,7 +42,63 @@ function fakePolygonClient(startMs: number): PolygonClient {
   };
 }
 
+/**
+ * Like `fakePolygonClient`, but crypto bars close half a day off the stock
+ * close — as they really do, since crypto has no session and stock daily bars
+ * close at the US equity bell.
+ *
+ * **This asymmetry is what the original fixture lacked, and why #420 survived
+ * every test.** With all six symbols on identical timestamps, the whole-store
+ * union is indistinguishable from either asset class's own timeline, so a
+ * replay driven off the wrong one produces exactly the right answer.
+ */
+function fakeTwoCadencePolygonClient(startMs: number): PolygonClient {
+  return {
+    async fetchAggregates(symbol) {
+      const isCrypto = (CRYPTO_SYMBOLS as readonly string[]).includes(symbol);
+      const offset = isCrypto ? DAY_MS / 2 : 0;
+      return trendingAggregates(startMs + offset);
+    },
+  };
+}
+
 describe('runStage2', () => {
+  it('scores each asset class over its own bars, not the union of both (#420)', async () => {
+    const start = Date.UTC(2020, 0, 1);
+    const window = { start: new Date(start), end: new Date(start + 500 * DAY_MS) };
+
+    const verdict = await runStage2({
+      polygonClient: fakeTwoCadencePolygonClient(start),
+      window,
+      print: () => {},
+    });
+
+    const observationsFor = (asset_class: 'crypto' | 'stocks'): number[] => {
+      const outcome = verdict.dsr.find((entry) => entry.asset_class === asset_class);
+      if (outcome === undefined || !('result' in outcome)) {
+        throw new Error(`expected a computed DSR for ${asset_class}`);
+      }
+      return [outcome.result.observations];
+    };
+
+    const [stocks] = observationsFor('stocks');
+    const [crypto] = observationsFor('crypto');
+
+    // Each class has 500 bars whose close times never coincide with the other's,
+    // so the union is ~1000 and either class alone is ~500. Ranges rather than
+    // exact counts because a bar's close is its open + 1 day, so the window's
+    // last open falls outside it.
+    expect(stocks).toBeGreaterThan(450);
+    expect(stocks).toBeLessThan(550);
+    expect(crypto).toBeGreaterThan(450);
+    expect(crypto).toBeLessThan(550);
+
+    // The regression guard proper: before the fix both read the whole-store
+    // union (~1000) — an identical, doubled count for two asset classes whose
+    // bars do not coincide.
+    expect(stocks + crypto).toBeGreaterThan(900);
+  });
+
   it('ingests all 6 MVP-universe symbols, runs the 12-config grid, and renders a verdict', async () => {
     const start = Date.UTC(2020, 0, 1);
     const client = fakePolygonClient(start);
@@ -67,10 +123,21 @@ describe('runStage2', () => {
     // PBO is attempted per asset class present (2 outcomes for stocks+crypto).
     expect(verdict.pbo).toHaveLength(2);
 
-    // DSR is always a typed refusal today (see stage2-verdict.ts module doc).
-    expect(verdict.dsr_note.error).toBe(
-      'dsr_requires_per_period_sharpe_not_exposed_by_metrics_suite',
-    );
+    // DSR is attempted per asset class present, and — since #406 — actually
+    // computed. This is the assertion that catches the seam existing but
+    // nothing calling it: `runStage2` must opt into the CSCV pass and hand the
+    // per-period Sharpe through, or these fall back to typed refusals.
+    expect(verdict.dsr).toHaveLength(2);
+    for (const outcome of verdict.dsr) {
+      expect(
+        'result' in outcome ? 'computed' : `refused: ${outcome.error} — ${outcome.detail}`,
+      ).toBe('computed');
+    }
+    for (const outcome of verdict.pbo) {
+      expect(
+        'result' in outcome ? 'computed' : `refused: ${outcome.error} — ${outcome.detail}`,
+      ).toBe('computed');
+    }
 
     // The full report was printed: per-config metrics, kill-line, MinBTL, PBO,
     // DSR, and the final pass/kill line.

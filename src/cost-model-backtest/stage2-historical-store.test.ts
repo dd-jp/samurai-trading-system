@@ -97,6 +97,103 @@ describe('Stage2HistoricalStore', () => {
     }
   });
 
+  describe('timelineFor — the per-asset-class scope (#420)', () => {
+    /**
+     * The defect this closes: stock and crypto daily bars close at different
+     * UTC times, so the unscoped union is close to their *sum*. A stock replay
+     * driven off it steps every crypto bar too, and the return series gets a
+     * zero in each of those slots.
+     */
+    async function twoClassStore(): Promise<{
+      store: Stage2HistoricalStore;
+      window: { start: Date; end: Date };
+    }> {
+      const start = Date.UTC(2020, 0, 1);
+      // Crypto closes 12h off the stock close, so no timestamp coincides.
+      const client = fakeClient({
+        SPY: aggregates(3, start, 100),
+        QQQ: aggregates(3, start, 200),
+        'BTC-USD': aggregates(3, start + DAY_MS / 2, 300),
+      });
+      const store = new Stage2HistoricalStore(client);
+      const window = { start: new Date(start), end: new Date(start + 10 * DAY_MS) };
+
+      await store.ingest('SPY', window);
+      await store.ingest('QQQ', window);
+      await store.ingest('BTC-USD', window);
+
+      return { store, window };
+    }
+
+    it('returns only the scoped symbols close times, not the whole-store union', async () => {
+      const { store, window } = await twoClassStore();
+
+      const union = await store.barTimestamps(window);
+      const stocks = await store.timelineFor(['SPY', 'QQQ']).barTimestamps(window);
+      const crypto = await store.timelineFor(['BTC-USD']).barTimestamps(window);
+
+      // 3 stock closes + 3 crypto closes, none coinciding — the union really is
+      // the sum, which is exactly why the unscoped timeline was wrong.
+      expect(union).toHaveLength(6);
+      expect(stocks).toHaveLength(3);
+      expect(crypto).toHaveLength(3);
+      expect(stocks.length + crypto.length).toBe(union.length);
+    });
+
+    it('de-duplicates across symbols within the scope and returns ascending times', async () => {
+      const { store, window } = await twoClassStore();
+
+      // SPY and QQQ share all three close times.
+      const stocks = await store.timelineFor(['SPY', 'QQQ']).barTimestamps(window);
+
+      expect(stocks).toHaveLength(3);
+      const times = stocks.map((t) => t.getTime());
+      for (let index = 1; index < times.length; index++) {
+        expect(times[index]).toBeGreaterThan(times[index - 1] as number);
+      }
+    });
+
+    it('honours the window bounds', async () => {
+      const { store } = await twoClassStore();
+      const start = Date.UTC(2020, 0, 1);
+
+      const narrow = await store
+        .timelineFor(['SPY'])
+        .barTimestamps({ start: new Date(start), end: new Date(start + DAY_MS + 1) });
+
+      // Only the first bar closes inside a window ending just after day 1.
+      expect(narrow).toHaveLength(1);
+    });
+
+    it('refuses an empty scope rather than yielding an empty timeline', async () => {
+      const { store } = await twoClassStore();
+
+      expect(() => store.timelineFor([])).toThrow(/at least one symbol/);
+    });
+
+    it('names the un-ingested symbol instead of failing four layers up', async () => {
+      const { store, window } = await twoClassStore();
+
+      // Without this, the failure surfaces as `toReturnSeries: no bars in the
+      // sample` with no clue which symbol was missing (pitfall P3).
+      await expect(store.timelineFor(['ETH-USD']).barTimestamps(window)).rejects.toThrow(
+        /Never ingested: \[ETH-USD\]/,
+      );
+    });
+
+    it('distinguishes an un-ingested symbol from an empty window', async () => {
+      const { store } = await twoClassStore();
+      const farFuture = {
+        start: new Date(Date.UTC(2030, 0, 1)),
+        end: new Date(Date.UTC(2030, 1, 1)),
+      };
+
+      await expect(store.timelineFor(['SPY']).barTimestamps(farFuture)).rejects.toThrow(
+        /ingested but have no bars inside this window/,
+      );
+    });
+  });
+
   it('reports every ingested symbol as currently listed (no fabricated delisting data)', async () => {
     const start = Date.UTC(2020, 0, 1);
     const client = fakeClient({ SPY: aggregates(3, start, 100) });

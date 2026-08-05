@@ -130,6 +130,9 @@ function fakeMetrics() {
     kurtosis: 0,
     turnover: 1,
     exposure: 0.5,
+    per_period_sharpe: 0.063,
+    annualization_factor: 15.87,
+    observations: 1000,
   };
 }
 
@@ -301,6 +304,114 @@ describe('runTrialGrid — orchestration wiring (fakes, no real replay/eval)', (
 
     expect(evaluator.calls.every((call) => call.averageCapital === 25_000)).toBe(true);
     expect(evaluator.calls.every((call) => call.window === WINDOW)).toBe(true);
+  });
+
+  it('does not run the CSCV pass unless asked — the decomposition must not pay for it', async () => {
+    const evaluator = new RecordingEvaluator();
+    const { assetClass } = makeAssetClass('stocks', STOCK_PERIODS_PER_YEAR);
+
+    const results = await runTrialGrid({
+      assetClasses: [assetClass],
+      window: WINDOW,
+      averageCapital: 10_000,
+      configTrialLog: new InMemoryConfigTrialLog(),
+      makeEvaluator: () => evaluator,
+    });
+
+    expect(evaluator.calls).toHaveLength(12);
+    expect(evaluator.calls.every((call) => call.scheme === 'walk_forward')).toBe(true);
+    expect(results.every((result) => result.cscv === undefined)).toBe(true);
+  });
+
+  it('runs a second CSCV pass per pair when includeCscvPass is set, over the same replay', async () => {
+    const evaluator = new RecordingEvaluator();
+    const { assetClass, runners } = makeAssetClass('stocks', STOCK_PERIODS_PER_YEAR);
+
+    const results = await runTrialGrid({
+      assetClasses: [assetClass],
+      window: WINDOW,
+      averageCapital: 10_000,
+      configTrialLog: new InMemoryConfigTrialLog(),
+      makeEvaluator: () => evaluator,
+      includeCscvPass: true,
+    });
+
+    // Two evaluations per config, but still one replay each: re-running the
+    // replay would give the two passes different trades to score.
+    expect(evaluator.calls).toHaveLength(24);
+    expect(runners).toHaveLength(12);
+    expect(evaluator.calls.filter((call) => call.scheme === 'walk_forward')).toHaveLength(12);
+    expect(evaluator.calls.filter((call) => call.scheme === 'cscv')).toHaveLength(12);
+
+    // Everything except the scheme must match, or the two passes would not be
+    // scoring the same thing.
+    for (const call of evaluator.calls) {
+      expect(call.embargo).toBe(50);
+      expect(call.barMs).toBe(86_400_000);
+      expect(call.averageCapital).toBe(10_000);
+      expect(call.window).toBe(WINDOW);
+    }
+
+    expect(results.every((result) => result.cscv !== undefined && 'report' in result.cscv)).toBe(
+      true,
+    );
+  });
+
+  it('records a CSCV failure as a refusal instead of aborting the grid', async () => {
+    // A barren fold makes computeMetrics throw. The walk-forward pass answers
+    // the kill line and must still abort the grid; the CSCV pass only feeds
+    // PBO, so losing it is a reportable gap, not a lost gate run.
+    const evaluator: EvalExecutor = {
+      evaluate: async (options: EvalOptions): Promise<EvalReport> => {
+        if (options.scheme === 'cscv') {
+          throw new Error('computeMetrics: return series has zero variance');
+        }
+        return {
+          window: fakeMetrics(),
+          splits: Array.from({ length: 5 }, () => ({
+            split: { train: [WINDOW], test: [WINDOW] },
+            metrics: fakeMetrics(),
+          })),
+        };
+      },
+    };
+    const { assetClass } = makeAssetClass('stocks', STOCK_PERIODS_PER_YEAR);
+
+    const results = await runTrialGrid({
+      assetClasses: [assetClass],
+      window: WINDOW,
+      averageCapital: 10_000,
+      configTrialLog: new InMemoryConfigTrialLog(),
+      makeEvaluator: () => evaluator,
+      includeCscvPass: true,
+    });
+
+    expect(results).toHaveLength(12);
+    for (const result of results) {
+      expect(result.cscv).toEqual({ error: 'computeMetrics: return series has zero variance' });
+      // The walk-forward pass is untouched — the kill line still has its input.
+      expect(result.report.splits).toHaveLength(5);
+    }
+  });
+
+  it('still aborts the grid when the walk-forward pass fails, CSCV pass or not', async () => {
+    const evaluator: EvalExecutor = {
+      evaluate: async (): Promise<EvalReport> => {
+        throw new Error('walk-forward exploded');
+      },
+    };
+    const { assetClass } = makeAssetClass('stocks', STOCK_PERIODS_PER_YEAR);
+
+    await expect(
+      runTrialGrid({
+        assetClasses: [assetClass],
+        window: WINDOW,
+        averageCapital: 10_000,
+        configTrialLog: new InMemoryConfigTrialLog(),
+        makeEvaluator: () => evaluator,
+        includeCscvPass: true,
+      }),
+    ).rejects.toThrow(/aborting grid/);
   });
 
   it('refuses to run with no asset classes — nothing to evaluate', async () => {

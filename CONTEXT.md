@@ -7,7 +7,7 @@ No implementation details here. Just terms, relationships, invariants.
 
 ## Concepts
 
-### Agent Roles (6-stage pipeline)
+### Agent Roles (7-stage pipeline)
 
 **Analyst**
 An agent persona that examines market data through a specific lens (technical, fundamental, sentiment, etc.). Multiple analysts run in parallel. Each produces a view, not a recommendation. Stateless per tick — holds no memory across ticks. A pure function of its inputs: given data (from Market Intelligence and the Market Data Service) plus its current weight, it emits a weight-blind raw view. Any rolling/windowed features it needs are supplied by upstream data services, never computed and held inside the analyst.
@@ -15,8 +15,14 @@ An agent persona that examines market data through a specific lens (technical, f
 **Trader**
 The agent that consolidates analyst views and proposes a concrete action (entry, exit, size, instrument). Operates AFTER debate, not before.
 
+**Invalidation** (also: **Devil's Advocate**)
+Stage between Trader and Risk. Runs only on an actionable `entry`/`scale_in` intent. Reads the debate's thesis and states 3-5 typed, machine-checkable **invalidation conditions** — the conditions under which the thesis is *wrong* — each bound to a service that already exists. It then evaluates its own conditions against live data and hands the result to Risk. Distinct from the Bear persona, which argues the pessimistic case in prose: the insight overlaps, but only structure is checkable. The LLM names what to check; deterministic code does the checking, so a model cannot produce a breach — only propose a condition.
+
+**Invalidation condition**
+A predicate: an observable (indicator, mark, bar window, or market-intelligence count), a comparator, and a numeric threshold, plus free-text rationale. Carries **no** severity, weight, or confidence. Evaluates tri-state — `breached` / `not_breached` / `unevaluable` — where `unevaluable` is derived mechanically from stale context or insufficient bars, never judged. A condition **already breached at entry** means the thesis was falsified before the trade was placed.
+
 **Risk Manager**
-Gate between Trader and Verdict. Applies position-size caps, max drawdown circuit breakers, portfolio exposure limits. Can override Trader's recommendation with a hard "no."
+Gate between Invalidation and Verdict. Applies position-size caps, max drawdown circuit breakers, portfolio exposure limits. Can override Trader's recommendation with a hard "no." Also hard-rejects when the invalidation stage reports a non-empty breached list.
 
 **Verdict**
 The final go/no-go decision after Risk approval. Triggers execution.

@@ -100,6 +100,33 @@ export interface MetricsSuite {
   skew: number;
   /** Sample **excess** kurtosis (0 = normal) — a DSR input. */
   kurtosis: number;
+  /**
+   * The **non-annualized** Sharpe — mean/stdev of the raw periodic returns,
+   * before `annualization_factor` is applied. `sharpe === per_period_sharpe ×
+   * annualization_factor` by construction.
+   *
+   * Carried because `deflatedSharpe()` is defined against the per-period
+   * statistic and cannot be handed `sharpe`: the Lo (2002) factor folds in
+   * sample autocorrelation, so it is not a naive ×√periodsPerYear away and
+   * cannot be inverted from the suite. Before this field existed, DSR was
+   * structurally uncomputable on every run (#406, and P7 in
+   * docs/research/11-pitfalls-and-improvements-2026-08-05.md).
+   *
+   * It lives here, rather than behind a `sharpeDecomposition()` export, so it
+   * cannot desync from the sample it describes — see `observations`.
+   */
+  per_period_sharpe: number;
+  /** The Lo (2002) factor ξ(q) applied to reach `sharpe`. Always > 0. */
+  annualization_factor: number;
+  /**
+   * Number of return observations in the sample — DSR's `sampleLen`.
+   *
+   * Computed inside `computeMetrics` on purpose: a caller assembling it
+   * separately could hand `deflatedSharpe` a length from a different slice
+   * than the Sharpe it deflates, which is exactly the silent mis-deflation the
+   * statistic exists to prevent.
+   */
+  observations: number;
   /** Traded notional / average capital over the sample. */
   turnover: number;
   /** Fraction of the sample with a position open. */

@@ -131,6 +131,24 @@ interface MetricsReport {
 - **Bounded step** toward the performance-implied weight (e.g. realized hit-rate/expectancy), capped per daily cycle.
 - **Floors/caps:** no analyst weight reaches 0 permanently or dominates.
 
+#### Deliberately unscored components — what this module does NOT measure
+
+Added 2026-08-05 ([#359](https://github.com/dd-jp/samurai-trading-system/issues/359)). Stated positively rather than left inferable: `influence_score` was removed from the credit formula the day before ([#370](https://github.com/dd-jp/samurai-trading-system/issues/370)), and the analyst-weight dial has no consumer applying it to a trading decision yet ([#377](https://github.com/dd-jp/samurai-trading-system/issues/377)) — so a reader arriving here cannot easily tell what this module claims to measure.
+
+**The Feedback Loop scores analysts. It does not score debate machinery, and it does not score any component whose actions produce no closed trade.**
+
+| Component | Why it is unscored |
+| --- | --- |
+| **Bull / Bear / Mediator personas** | `AnalystContribution` keys on `analyst_id`; personas carry no entry in it and never have. FL cannot see them. |
+| **Risk Critic** (ADR-0003) | An LLM pass with trim-and-hard-reject authority that nothing scores. Its rejects, like the invalidation stage's, produce no `ClosedTrade`. |
+| **`invalidation` stage** | See below. |
+
+**Why the `invalidation` stage cannot be scored**, since it is the case most likely to be re-proposed: attribution reads exactly one input, the window's closed trades. The stage's only action is a Risk hard-reject, which short-circuits before Verdict and never fills. Every tick on which the stage *acted* is therefore invisible here by construction, and the ticks where it is visible are those on which it stayed silent — credit there would be credit for not acting. Folding it into a dial fails twice over besides: analyst-weight credit is `agreement × R` and requires a signed directional stance the stage deliberately has none of, and the risk-threshold flavour has no continuous dial to tune because the reject rule is a boolean over a non-empty breached list.
+
+**Named reopening trigger — the one fact that would change this:** rejected intents acquiring **observable outcomes** (a counterfactual observer that carries a rejected intent through to a synthetic close). Until that exists, attribution for these components is not *unbuilt* — it is *unmeasurable*, and the distinction is what this entry exists to preserve.
+
+**Known sample bias, accepted.** The invalidation gate removes from this module's attribution sample exactly the trades whose theses were already falsified — i.e. those most likely to lose — so the analyst most prone to breached-on-arrival theses is the one it shields most. Risk's other rejects censor the sample too, but on exposure caps, uncorrelated with thesis quality; this one is correlated by design. Magnitude is small while rejects stay rare. Convergence implications are [#402](https://github.com/dd-jp/samurai-trading-system/issues/402)'s.
+
 ### Module: Guardrailed Tuning
 
 - Tunes analyst weights, strategy params, and risk thresholds — all within human-set hard floors/ceilings.

@@ -1539,6 +1539,9 @@ describe('buildProductionOrchestrator', () => {
       kurtosis: 0.5,
       turnover: 0.3,
       exposure: 0.4,
+      per_period_sharpe: 0.0126,
+      annualization_factor: 15.87,
+      observations: 252,
     };
 
     function feedbackConfig(): FeedbackConfig {

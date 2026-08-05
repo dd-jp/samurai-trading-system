@@ -263,6 +263,13 @@ interface MetricsSuite {                  // reported together — never one num
 
 - **Seed + injected clock ⇒ reproducible run.** Seed recorded in `BacktestReport`; slippage stochastic mode draws only from the seeded RNG.
 - **Conditional on the analyst response cache.** Trader / Debate / Risk / Verdict / FL are already deterministic. The Analysts are LLM; end-to-end reproducibility rests on the **analysts' temperature-0 + input-hash response cache** (analysts-spec). Determinism is guaranteed *given the analyst cache*, not asserted over live LLM calls.
+- **The `invalidation` stage splits by nondeterminism source** (2026-08-05, [Wayfinder: Devil's Advocate](https://github.com/dd-jp/samurai-trading-system/issues/291); devils-advocate-spec.md). The stage is a second LLM call in the chain and is handled differently from the analyst cache:
+  - **The emission replays from `invalidation_log`; validation and evaluation re-run.** Mechanically this is an injected `InvalidationEmissionSource` port with live-LLM and replay-from-log implementations, rather than a `mode` branch inside the stage — which is what makes the validator and evaluator provably identical on both paths, so a validator fix applies to replayed windows instead of being baked into old rows.
+  - **Lookup is by `(instrument, bar_timestamp)`, not by id** — a replay mints fresh `trace_id`/`debate_id` values and cannot bridge to live rows.
+  - **A log miss yields the `unavailable` fail-open marker.** A live LLM call inside a replayed path is disqualified on determinism grounds (ADR-0003), and restricting backtests to already-ticked windows would kill historical backtesting.
+  - **Consequence, and it belongs in the report rather than in a metric:** over a cold window the stage is permanently inert, so the run's trade count is an **upper bound** on the live system's. `BacktestReport` gains an `invalidation_replay` attestation, and — per this spec's standing position that an attestation a caller can ignore is worthless — it must be one consumers cannot silently pool across warm and cold windows.
+  - **Replayed evaluation states may legitimately differ from live ones.** Evaluation reads `asOf` = the intent's decision time while the row is filed at the floored bar boundary; live those differ, under the harness they coincide. That follows from re-running evaluation rather than replaying it, and is not a reproducibility defect.
+  - Only the `BacktestHarness` path can run this stage at all: Stage-2's `ReplayDriver` refuses by construction to import the Trader, Risk Manager, or Verdict, enforced by a test over its import list.
 
 ## Testing Decisions
 

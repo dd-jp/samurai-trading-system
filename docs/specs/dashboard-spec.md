@@ -37,6 +37,18 @@ Key architectural decisions:
 3. As an operator, I want to see the most recent completed debates (per-analyst contributions, direction, conviction), so that I can review why a recent trade idea was accepted or rejected.
 4. As an operator, I want a coarse "tick in progress for {instrument}" status line when the Orchestrator is mid-pass, so that I have *some* visibility into an in-flight cycle, even though the Debate Engine's round-by-round state isn't persisted (decision #10).
 
+#### Invalidation panel (surface widening, 2026-08-05)
+
+Added by [Wayfinder: Devil's Advocate](https://github.com/dd-jp/samurai-trading-system/issues/291) as a **required** section of devils-advocate-spec.md. This is a deliberate widening of the frozen positions/debates/verdicts/performance surface, resolving three prior deferrals that had all pointed here (the validator's dropped conditions, the reject alerts, and the drop counts).
+
+4a. As an operator, I want the restated thesis and its invalidation conditions with evaluation states shown on the debate detail view, so that I can judge whether the pass understood the trade it was attacking.
+4b. As an operator, I want validator-**dropped** conditions listed with their drop reasons, so that prompt quality is inspectable rather than silently degrading.
+4c. As an operator, I want `no_conditions` and `unavailable` rendered as **distinct** states, so that "the pass found nothing falsifiable" is never displayed as "the pass could not run".
+
+Driven by `invalidation_log`, joined on `(instrument, bar_timestamp)`. Showing dropped conditions is the entire reason that table stores the raw emission rather than the post-validator list.
+
+**Limitation that must be shown, not hidden:** the panel reports what the pass *said* and what was breached at emit. It cannot report that **Risk acted on it** — a Risk reject short-circuits before Verdict, so there is no verdict row, and nothing persists `RiskDecision` ([#328](https://github.com/dd-jp/samurai-trading-system/issues/328)). A reject is inferable from a non-empty breached list but is not recorded, and the panel must not imply a certainty it does not have.
+
 ### Verdicts
 
 5. As an operator, I want a chronological verdict history (go/no-go, the gate that fired, any HITL override), so that I can audit every decision the pipeline made, not just the ones that resulted in a trade.

@@ -10,6 +10,14 @@ Raw output: [spread-calibration-2026-08-05.txt](spread-calibration-2026-08-05.tx
 [stage2-calibrated-run-2026-08-05.txt](stage2-calibrated-run-2026-08-05.txt).
 Code: `src/scripts/run-spread-calibration.ts`, `CALIBRATED_COST_CONFIG` in `src/scripts/run-stage2.ts`.
 
+> **Sharpe magnitudes here are understated ([#420](../../issues/420)).** This run scored each asset
+> class over a timeline containing the other class's bars, padding the return series with zeros and
+> scaling the per-period Sharpe by roughly `sqrt(n_real / n_union)` — about 0.64× for stocks, 0.78×
+> for crypto. Fixed after the fact; on the corrected timeline the pass count is **14 of 24**, not 12.
+> Not re-run here, because everything below is about *cost attribution* — the ratios between cost
+> components, which the defect scaled identically on both sides. See
+> [12-stage2-pbo-dsr-first-computation-2026-08-05.md](12-stage2-pbo-dsr-first-computation-2026-08-05.md).
+
 ## Headline
 
 > **Calibrated, the grid goes from 2 of 24 to 12 of 24 pairs clearing the 0.5 OOS Sharpe line — and
