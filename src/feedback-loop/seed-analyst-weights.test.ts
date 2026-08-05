@@ -10,6 +10,7 @@
  * actually happens: a SECOND `SqliteTuningStore` over the SAME database
  * handle, not a second call on the same object.
  */
+import type { TuningStore } from '../shared/index.js';
 import { SimulatedClock } from '../shared/index.js';
 import { openSharedStore, type SharedStore } from '../shared/store/index.js';
 import { seedAnalystWeights } from './seed-analyst-weights.js';
@@ -125,6 +126,72 @@ describe('seedAnalystWeights', () => {
       .prepare('SELECT updated_at FROM analyst_weights WHERE analyst_id = ?')
       .get('technical') as { updated_at: string };
     expect(row.updated_at).toBe(START.toISOString());
+  });
+
+  /**
+   * The concurrency case, not the sequential-restart one (PR #376 review).
+   *
+   * Two processes overlap across a restart — the old one still finishing, the
+   * new one booting — and both look at `analyst_weights` before either has
+   * written. A caller-side "read the map, then write the gaps" is idempotent
+   * only under a single serialized boot: with a read that predates the other
+   * process's tune, the seeder would write its neutral value over a weight
+   * the loop had already moved, silently and to a value indistinguishable
+   * from a healthy seed.
+   *
+   * `StaleReadTuningStore` is that interleaving, made deterministic: reads
+   * answer from a snapshot taken BEFORE the concurrent boot seeded and tuned,
+   * while writes go to the real database. The only thing that can save the
+   * tuned weight here is the write itself refusing.
+   */
+  it('cannot clobber a tuned weight through a stale read of the table', () => {
+    /** Reads from a pre-tune snapshot; every write goes to the live store. */
+    class StaleReadTuningStore implements TuningStore {
+      constructor(
+        private readonly live: SqliteTuningStore,
+        private readonly snapshot: Record<string, number>,
+      ) {}
+      getAnalystWeights(): Record<string, number> {
+        return { ...this.snapshot };
+      }
+      setAnalystWeight(analyst_id: string, weight: number): void {
+        this.live.setAnalystWeight(analyst_id, weight);
+      }
+      seedAnalystWeight(analyst_id: string, weight: number): boolean {
+        return this.live.seedAnalystWeight(analyst_id, weight);
+      }
+      getStrategyParams(): Record<string, number> {
+        return this.live.getStrategyParams();
+      }
+      setStrategyParam(name: string, value: number): void {
+        this.live.setStrategyParam(name, value);
+      }
+      getRiskThresholds(): Record<string, number> {
+        return this.live.getRiskThresholds();
+      }
+      setRiskThreshold(name: string, value: number): void {
+        this.live.setRiskThreshold(name, value);
+      }
+    }
+
+    const live = openStore(db);
+    // What the second process saw when it looked: an empty table.
+    const staleSnapshot = live.getAnalystWeights();
+    expect(staleSnapshot).toEqual({});
+
+    // Meanwhile the first process seeds and its cycle tunes.
+    seedAnalystWeights({ tuning: live, analyst_ids: ['technical'], dial: BAND });
+    live.setAnalystWeight('technical', 1.25);
+
+    // The second process now writes, still believing the table is empty.
+    const result = seedAnalystWeights({
+      tuning: new StaleReadTuningStore(live, staleSnapshot),
+      analyst_ids: ['technical'],
+      dial: BAND,
+    });
+
+    expect(live.getAnalystWeights()).toEqual({ technical: 1.25 });
+    expect(result).toEqual({ seeded: [], existing: ['technical'] });
   });
 
   it('ignores a duplicate analyst id rather than reporting it twice', () => {

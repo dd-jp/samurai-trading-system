@@ -22,13 +22,23 @@
  * that has legitimately tuned back to the midpoint is indistinguishable by
  * value from an untouched seed, and rewriting it would also destroy
  * `updated_at` — the only record of when the loop last moved that dial.
+ *
+ * And that test belongs to the WRITE, not to this function (PR #376 review).
+ * This deliberately does not read the weight map and then write the gaps: two
+ * processes overlapping across a restart — which is what a 14-day soak's
+ * restarts actually produce — can both read "absent" before either writes,
+ * and the loser then flattens a tuned weight back to the midpoint. Nothing
+ * would surface that: the value looks exactly like a healthy seed. So each id
+ * goes through `TuningStore.seedAnalystWeight`, one first-write-wins
+ * statement (`ON CONFLICT DO NOTHING` in SQLite), and the idempotence is a
+ * property of the store rather than of this caller's discipline.
  */
 import type { TuningStore } from '../shared/index.js';
 import { bandMidpoint } from './attribution.js';
 import type { TunableDial } from './types.js';
 
 export interface SeedAnalystWeightsInput {
-  /** The live store. Read once, then written only for ids it has no row for. */
+  /** The live store. Written through `seedAnalystWeight` only — never read. */
   tuning: TuningStore;
   /**
    * The analysts the composition root actually builds, by the `analyst_id`
@@ -57,7 +67,6 @@ export interface SeedAnalystWeightsResult {
  * which ids fell on each side. Safe to call on every boot.
  */
 export function seedAnalystWeights(input: SeedAnalystWeightsInput): SeedAnalystWeightsResult {
-  const existingWeights = input.tuning.getAnalystWeights();
   // `bandMidpoint`, shared with `impliedWeight` rather than re-derived here:
   // the seed must be the exact value a genuinely even record is pulled toward
   // (`tanh(0) === 0`), or the first cycles are a drift back to the middle
@@ -78,13 +87,16 @@ export function seedAnalystWeights(input: SeedAnalystWeightsInput): SeedAnalystW
     }
     seen.add(analyst_id);
 
-    if (existingWeights[analyst_id] !== undefined) {
+    // The store decides, not a check up here: `seedAnalystWeight` is
+    // first-write-wins in one statement, so there is no window between
+    // "is it there?" and "write it" for a concurrently-booting process to
+    // tune a weight inside. The boolean is the store's own answer to which
+    // side this id fell on.
+    if (input.tuning.seedAnalystWeight(analyst_id, neutral)) {
+      seeded.push(analyst_id);
+    } else {
       existing.push(analyst_id);
-      continue;
     }
-
-    input.tuning.setAnalystWeight(analyst_id, neutral);
-    seeded.push(analyst_id);
   }
 
   return { seeded, existing };

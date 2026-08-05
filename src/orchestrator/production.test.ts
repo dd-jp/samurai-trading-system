@@ -1249,6 +1249,37 @@ describe('buildProductionOrchestrator', () => {
       });
 
       /**
+       * The fail-fast decision, made testable rather than left as prose (PR
+       * #376 review). A store that will not take the seed insert is a BROKEN
+       * store — the same handle carries open positions, fills and the broker's
+       * bracket index — so `start()` must reject before anything can trade,
+       * not log a warn and go on placing orders. This asserts both halves:
+       * the rejection, and that no loop was running by then.
+       */
+      it('refuses to start at all when the store cannot take the seed', async () => {
+        const { config } = paperProfileConfig({
+          feedback: { config: paperStartingProfile('paper').feedback?.config as FeedbackConfig },
+          tickIntervalMs: 100,
+          heartbeatIntervalMs: 100,
+        });
+        // A store that answers every other startup read but cannot be written
+        // — the shape a broken/partially-migrated database actually has.
+        db.prepare('DROP TABLE analyst_weights').run();
+
+        const orchestrator = buildProductionOrchestrator(config);
+
+        await expect(orchestrator.start()).rejects.toThrow(/analyst_weights/);
+
+        // Nothing was started before it failed: past several heartbeat
+        // intervals, the heartbeat has never fired, so neither the fill poll
+        // nor the tick loop (both registered after it) can be running either.
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(config.heartbeatChannel?.postHeartbeat).not.toHaveBeenCalled();
+
+        await orchestrator.stop();
+      });
+
+      /**
        * The restart case, end to end. Over a 14-day soak (#238) the process
        * WILL restart; a seeder that rewrote its neutral value on boot would
        * erase every step the loop had made and leave the run reporting tuning

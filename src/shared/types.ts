@@ -394,6 +394,25 @@ export interface TuningStore {
   /** Keyed by `analyst_id`, matching `AnalystContribution.analyst_id`. */
   getAnalystWeights(): Record<string, number>;
   setAnalystWeight(analyst_id: string, weight: number): void;
+  /**
+   * Writes a STARTING weight for an analyst that has none, and does nothing
+   * at all to one that already has a row. Returns whether this call was the
+   * one that wrote it (#371).
+   *
+   * A separate operation rather than a caller's `getAnalystWeights()` check
+   * followed by `setAnalystWeight`, because first-write-wins has to be a
+   * property of the WRITE. A read-then-write is only idempotent under a
+   * single serialized boot: two processes against the same database — the
+   * overlap a restart during a 14-day soak (#238) actually produces — can
+   * both read "absent" before either writes, and the second one then flattens
+   * a weight the first has already tuned. Silently, and to a value that looks
+   * exactly like a healthy seed.
+   *
+   * Same first-write-wins shape (and the same reason) as
+   * `SqliteVerdictLogStore.writeLog`'s `ON CONFLICT DO NOTHING`: the row that
+   * exists is the record, and a later write must not be able to erase it.
+   */
+  seedAnalystWeight(analyst_id: string, weight: number): boolean;
   getStrategyParams(): Record<string, number>;
   setStrategyParam(name: string, value: number): void;
   getRiskThresholds(): Record<string, number>;

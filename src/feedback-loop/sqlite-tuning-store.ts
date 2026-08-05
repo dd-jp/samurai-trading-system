@@ -59,6 +59,36 @@ export class SqliteTuningStore implements TuningStore {
     this.kvSet(ANALYST_WEIGHTS, analyst_id, weight);
   }
 
+  /**
+   * First-write-wins insert, atomic in SQLite rather than in the caller
+   * (#371, PR review). `ON CONFLICT DO NOTHING` — deliberately NOT the
+   * `DO UPDATE` every other write on this class uses, and the same choice
+   * `SqliteVerdictLogStore.writeLog` makes for the same reason: the existing
+   * row is the record.
+   *
+   * Two processes overlapping across a restart (#238) is the case a caller-side
+   * "read the map, write the missing ones" cannot cover — both can observe an
+   * absent row before either writes, and last-write-wins then resets a tuned
+   * weight to its starting value. `DO NOTHING` makes that unrepresentable:
+   * whoever inserts first owns the row, and every later seed is a no-op that
+   * leaves both `weight` and `updated_at` untouched.
+   *
+   * `changes` is 0 on the conflict path and 1 on the insert, which is exactly
+   * "did I seed it" — reported back so startup can log what it wrote without
+   * a second read that would race all over again.
+   */
+  seedAnalystWeight(analyst_id: string, weight: number): boolean {
+    const result = this.db
+      .prepare(
+        `INSERT INTO ${ANALYST_WEIGHTS.table}
+           (${ANALYST_WEIGHTS.keyColumn}, ${ANALYST_WEIGHTS.valueColumn}, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(${ANALYST_WEIGHTS.keyColumn}) DO NOTHING`,
+      )
+      .run(analyst_id, weight, this.clock.now().toISOString());
+    return result.changes === 1;
+  }
+
   getStrategyParams(): Record<string, number> {
     return this.kvGetAll(STRATEGY_PARAMS);
   }
