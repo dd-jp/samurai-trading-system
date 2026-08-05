@@ -137,12 +137,34 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * of this class, and two operators on different tiers cannot both be right
    * about a literal compiled in here.
    *
-   * That module cites Alpaca's documented ceiling (200 requests/minute PER
-   * ACCOUNT, verified at alpaca.markets/support/usage-limit-api-calls =
-   * 3.33/s), which `resolveVenuePacing` now enforces as an upper bound on any
-   * override, and explains why the sustained default sits at 1.5/s rather than
-   * just under the ceiling: the market-data client draws on the same
-   * per-account budget and is not paced by any bucket.
+   * **`DEFAULT_VENUE_PACING.alpaca` is a FALLBACK for direct construction, and
+   * it CHANGED in #299: 5 burst / 3.0 sustained -> 10 burst / 1.5 sustained.**
+   * The production composition root always passes `rateLimiter` explicitly
+   * (`production.ts`, from `resolveVenuePacing()`), so this default is not what
+   * a running system paces on — but a consumer constructing the adapter
+   * directly now gets twice the burst and half the sustained rate of the
+   * previous in-file literal, which is worth knowing before relying on either.
+   * Both in-repo callers inject their own limiter; nothing depends on this
+   * shape today.
+   *
+   * The two numbers moved in opposite directions on purpose, because they are
+   * set on different axes with different evidence:
+   *
+   * - SUSTAINED 1.5/s is 45% of Alpaca's documented 200 requests/minute PER
+   *   ACCOUNT ceiling (verified at alpaca.markets/support/usage-limit-api-calls
+   *   = 3.33/s), which `resolveVenuePacing` enforces as an upper bound on any
+   *   override. It is not just under the ceiling because the market-data client
+   *   draws on the same per-account budget and is paced by no bucket (#391).
+   * - BURST 10 has NO documented Alpaca figure behind it — none could be found
+   *   — so it is derived from our own workload instead: `fetchNewFills` issues
+   *   one `getOrder` per open bracket through this bucket, so a sweep of the
+   *   ADR-0001 universe plus a concurrent `submitBracket` is
+   *   `DEFAULT_UNIVERSE.length + 1`, which a test pins the capacity against.
+   *
+   * Why an unverified burst is a tolerable risk where an unverified sustained
+   * rate would not be: over-burst returns a 429, which `withRetry` handles and
+   * the bucket then paces, whereas a BAN comes from sustained abuse — the axis
+   * that has a verified ceiling and sits at 45% of it.
    */
   private readonly rateLimiter: TokenBucket;
   private readonly state: BrokerStateStore;
