@@ -25,7 +25,7 @@ describe('resolveVenuePacing', () => {
       SAMURAI_PACING_CCXT_REFILL_PER_SEC: '2.5',
     });
 
-    expect(resolved.ccxt).toEqual({ capacity: 4, refillPerSecond: 2.5 });
+    expect(resolved.ccxt).toEqual({ capacity: 4, refillPerSecond: 2.5, reserveForPriority: 0 });
     expect(resolved.alpaca).toEqual(DEFAULT_VENUE_PACING.alpaca);
     expect(resolved.ibkr).toEqual(DEFAULT_VENUE_PACING.ibkr);
   });
@@ -35,6 +35,7 @@ describe('resolveVenuePacing', () => {
 
     expect(resolved.alpaca).toEqual({
       capacity: DEFAULT_VENUE_PACING.alpaca.capacity,
+      reserveForPriority: DEFAULT_VENUE_PACING.alpaca.reserveForPriority,
       refillPerSecond: 2,
     });
   });
@@ -84,6 +85,7 @@ describe('resolveVenuePacing', () => {
     expect(resolveVenuePacing({ SAMURAI_PACING_CCXT_REFILL_PER_SEC: '25' }).ccxt).toEqual({
       capacity: DEFAULT_VENUE_PACING.ccxt.capacity,
       refillPerSecond: 25,
+      reserveForPriority: 0,
     });
   });
 
@@ -100,6 +102,7 @@ describe('resolveVenuePacing', () => {
       capacity: 'SAMURAI_PACING_ALPACA_CAPACITY',
       refillPerSecond: 'SAMURAI_PACING_ALPACA_REFILL_PER_SEC',
       ceilingPerSecond: 'SAMURAI_PACING_ALPACA_CEILING_PER_SEC',
+      reserveForPriority: 'SAMURAI_PACING_ALPACA_PRIORITY_RESERVE',
     });
   });
 

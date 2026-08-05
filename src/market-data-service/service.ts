@@ -8,6 +8,7 @@
 import type { Clock } from '../shared/index.js';
 import { buildIndicatorCacheKey, IndicatorCache } from './indicator-cache.js';
 import { computeIndicator } from './indicators.js';
+import { timeframeToMs } from './timeframe.js';
 import type {
   Bar,
   BarWindow,
@@ -29,6 +30,12 @@ const DEFAULT_INDICATOR_TIMEFRAME = '1h';
 
 export class MarketDataServiceImpl implements MarketDataService {
   private readonly indicatorCache = new IndicatorCache();
+  /**
+   * `instrument|timeframe` -> the bar interval its last fetch was made in
+   * (#391). In-process and restart-clean, like `indicatorCache`: a fresh
+   * process refetches, which is the conservative direction.
+   */
+  private readonly lastBarFetch = new Map<string, number>();
 
   constructor(
     private readonly dataSource: DataSource,
@@ -44,18 +51,32 @@ export class MarketDataServiceImpl implements MarketDataService {
    * value. Every caller (direct, `getIndicator`, `getADV`) is therefore
    * reading the real bulk cache, not an in-memory structure.
    *
-   * Still calls `dataSource.fetchBars` once per call rather than serving
-   * straight from `store.readBars` on a row-count match: a persisted cache
-   * that already holds >= `lookback` bars for an *older* `asOf` would satisfy
-   * that count check while missing every bar ingested since — a stepping
-   * backtest replay (same lookback, advancing `asOf` tick by tick) would
-   * silently serve stale data with no way to detect the gap short of asking
-   * the source. Skipping the fetch needs the store to track "freshest bar
-   * ingested" per (instrument, timeframe), which #194 does not add; until it
-   * does, this trades the "not re-fetched per call" half of the Tier-2 spec
-   * intent (Module: Caching) for correctness. `store.readBars` still serves
-   * every response, and `appendBars`'s idempotency makes the redundant fetch
-   * cheap to persist.
+   * ## Skipping the fetch within one bar interval (#391)
+   *
+   * A repeat call inside the SAME bar interval cannot learn anything new — no
+   * bar has closed since — so it serves from the store and makes no HTTP call.
+   * That is what makes six instruments affordable on Alpaca's per-account
+   * budget: without it, every tick re-fetched every instrument's whole window
+   * even though at most one new bar exists per interval.
+   *
+   * The freshness test is deliberately NOT "the store holds >= lookback rows".
+   * That check was rejected when this method was written, and correctly: a
+   * store holding enough rows for an OLDER `asOf` satisfies it while missing
+   * every bar since. The test here is instead "we already fetched this
+   * (instrument, timeframe) during the bar interval `asOf` falls in", recorded
+   * per process — so the cache can never serve data more than one interval
+   * stale, and it needs no "freshest bar ingested" column (#194 does not add
+   * one).
+   *
+   * A hit ALSO requires the store to actually return `lookback` rows. Callers
+   * ask for different depths of the same series — `DEFAULT_VOLATILITY_INDICATOR`
+   * uses 15 while the technical analyst uses 20 — so a shallow first fetch must
+   * not satisfy a deeper later one within the same hour.
+   *
+   * DISABLED in backtest. Replay steps `asOf` on its own terms and may step
+   * within an interval; point-in-time determinism (spec: Module: Point-in-Time
+   * Enforcement) is worth more than the saved call in a mode that makes no
+   * network requests anyway.
    *
    * Filtering to `close_time <= asOf` happens twice by construction: once
    * before the write (so a source that leaks a forming candle never persists
@@ -67,10 +88,50 @@ export class MarketDataServiceImpl implements MarketDataService {
     window: BarWindow,
     asOf: Date = this.clock.now(),
   ): Promise<Bar[]> {
+    const cached = this.cachedBars(instrument, window, asOf);
+    if (cached !== undefined) {
+      return cached;
+    }
+
     const fetched = await this.dataSource.fetchBars(instrument, window, asOf);
     const completed = fetched.filter((bar) => bar.close_time.getTime() <= asOf.getTime());
     this.store.appendBars(completed);
+    this.recordFetch(instrument, window, asOf);
     return this.store.readBars(instrument, window.timeframe, asOf, window.lookback);
+  }
+
+  /** The bar interval `asOf` falls in — the cache's unit of freshness. */
+  private barIndex(timeframe: string, asOf: Date): number {
+    return Math.floor(asOf.getTime() / timeframeToMs(timeframe));
+  }
+
+  private barCacheKey(instrument: string, timeframe: string): string {
+    return `${instrument}|${timeframe}`;
+  }
+
+  /**
+   * The stored window, if this (instrument, timeframe) was already fetched in
+   * `asOf`'s bar interval AND the store can satisfy this call's `lookback`.
+   */
+  private cachedBars(instrument: string, window: BarWindow, asOf: Date): Bar[] | undefined {
+    if (this.mode === 'backtest') {
+      return undefined;
+    }
+
+    const fetchedAt = this.lastBarFetch.get(this.barCacheKey(instrument, window.timeframe));
+    if (fetchedAt === undefined || fetchedAt !== this.barIndex(window.timeframe, asOf)) {
+      return undefined;
+    }
+
+    const rows = this.store.readBars(instrument, window.timeframe, asOf, window.lookback);
+    return rows.length >= window.lookback ? rows : undefined;
+  }
+
+  private recordFetch(instrument: string, window: BarWindow, asOf: Date): void {
+    this.lastBarFetch.set(
+      this.barCacheKey(instrument, window.timeframe),
+      this.barIndex(window.timeframe, asOf),
+    );
   }
 
   /**
