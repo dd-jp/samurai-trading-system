@@ -85,6 +85,39 @@ export function completedBars(bars: readonly Bar[], asOf: Date, lookback: number
 }
 
 /**
+ * How many extra RAW candles a source-fetch requests beyond the completed-
+ * bar count a caller actually needs (issue #362).
+ *
+ * At most one candle can be "forming" for any given `asOf`: the interval
+ * `asOf` currently falls inside. This function's own filter correctly drops
+ * it — its `close_time` is derived as `open_time + timeframe`, which lands
+ * after `asOf` while that interval is still open. But a caller that asks a
+ * source for EXACTLY the completed-bar count it needs gets that forming
+ * candle counted against its own budget, and comes back one short. Cheapest
+ * to see on a cold start / empty store, where there is no accumulated
+ * history to absorb the shortfall: `sma(14) needs 14 bars but received 13`
+ * on the very first tick, self-healing only once the store holds enough
+ * history that one short fetch no longer matters.
+ *
+ * Applied exactly once, in `NormalizingDataSource.fetchBars` — the one
+ * choke point every source (ccxt/IBKR/Alpaca) funnels a raw fetch through —
+ * rather than at each call site, so it cannot drift the way #361/PR #363's
+ * hand-copied prompt string did. `completedBars` itself is still asked for
+ * the caller's ORIGINAL `lookback`, not the widened one: the margin only
+ * loosens the raw request, never what a caller receives back.
+ *
+ * UNRELATED to `minimumBarsFor`'s `period + 1` for rsi/atr
+ * (indicators.ts) — that is how many COMPLETED bars an indicator's own
+ * math needs (seeding a predecessor close/range); this is how many RAW
+ * bars to request so a fetch actually DELIVERS the completed-bar count a
+ * caller already decided on. Both happen to read as "+1" today; a caller
+ * that already widens its own `lookback` for indicator math (e.g.
+ * `trader/decide.ts`'s `atr_lookback + 1`) still needs THIS margin on top —
+ * it is not a substitute, and the two must not be merged into one number.
+ */
+export const FORMING_BAR_FETCH_MARGIN = 1;
+
+/**
  * Backtest mark derivation, shared by every source: the close of the last
  * completed bar, observed at that bar's close_time (spec Module: Marks).
  *
