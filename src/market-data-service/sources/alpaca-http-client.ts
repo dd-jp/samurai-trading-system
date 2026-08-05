@@ -132,6 +132,17 @@ const PAGE_SIZE = 1_000;
  * session (a fraction of the 24h day); crypto bars are 24/7 so the buffer is
  * pure headroom there. Getting this too small silently returns fewer than
  * `limit` bars instead of a loud failure, so it errs wide.
+ *
+ * **This is an optimization, not the guarantee (issue #386).** Raising it was
+ * the candidate fix for #386 and was REJECTED: no value of it can be a
+ * guarantee, because it is sized in calendar time against a session density it
+ * cannot see, and any value that covered hourly equity bars would over-fetch
+ * for crypto and daily ones while still being a calibration that happens to
+ * work for one feed and one timeframe. The COMPLETED, IN-SESSION count is
+ * guaranteed one layer up instead — see `NormalizingDataSource.fetchBars` for
+ * the full account. What this multiplier still buys is requests: the wider it
+ * is, the more often that layer is satisfied on its first attempt. Getting it
+ * wrong now costs a round trip, not a wrong number.
  */
 const BUFFER_MULTIPLIER = 8;
 /**

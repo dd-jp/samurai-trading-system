@@ -154,30 +154,28 @@ export const PAPER_ACCOUNT_EQUITY_ANCHOR = 100_000;
  * warning is gone, and the tier is now genuinely armed for both classes —
  * still inert at this baseline, but inert by CHOICE rather than by absence.
  *
- * ## Known gap, measured and filed, NOT fixed here
+ * ## The gap this note used to describe, now CLOSED
  *
  * [#386](https://github.com/dd-jp/samurai-trading-system/issues/386): the
- * equity ATR read currently THROWS while the US session is shut, and for
- * roughly the first three hours after the open — `atr(14) needs 15 bars but
- * received 12`. `AlpacaHttpDataClient` enforces its bar-count guarantee on the
- * RAW wire payload, and `normalizeBars` then drops the out-of-session bars
- * (IEX serves pre/post-market hours) after the guard has already passed. So
- * `BUFFER_MULTIPLIER`'s 5-day window holds 26 raw hourly SPY bars but only 12
- * in-session ones.
+ * equity ATR read used to THROW while the US session was shut, and for roughly
+ * the first three hours after the open — `atr(14) needs 15 bars but received
+ * 12`, because the bar-count guarantee was enforced on the RAW wire payload
+ * and normalization then dropped the out-of-session bars. See
+ * `NormalizingDataSource.fetchBars` for the mechanism. What it cost THIS
+ * profile: overnight the soft `volatility_halt:stocks` tier was armed for ~16
+ * hours a day and four `error` lines were logged per tick, ~5,700 a day.
  *
- * The consequence for a soak, stated plainly rather than discovered on day 3:
- * `MarketDataVolatilityReadingProvider` reads over the whole configured
- * universe every tick, ungated by the calendar, so overnight each equity read
- * throws and folds in as `FAILURE_READING = Infinity` — which ARMS the soft
- * `volatility_halt:stocks` tier for ~16 hours a day and logs an error per
- * instrument per tick. It fails loudly and it halts entries rather than sizing
- * them wrongly, which is the safe direction; it is still noise a 14-day
- * unattended run should not have to absorb.
+ * Fixed in two halves, both #386, and note which one carries the correctness:
+ * `NormalizingDataSource.fetchBars` now enforces the count on the COMPLETED,
+ * IN-SESSION bars — widening the raw request until it holds, or throwing
+ * `InSessionUnderfetchError` — and `MarketDataVolatilityReadingProvider` no
+ * longer reads a class whose venue is shut. The second removes the overnight
+ * noise; only the first fixes the Trader's near-open sizing, which reads the
+ * same ATR DURING the session where no calendar gate can help it.
  *
- * Not fixed under #381 deliberately: the broken guarantee is a
- * market-data-service contract (`NormalizingDataSource.fetchBars` vs the
- * client's underfetch retry) with its own test surface, and this ticket's
- * scope is the profile's dials and the universe. Guessing at a bar-count
+ * Not fixed under #381 deliberately: the broken guarantee was a
+ * market-data-service contract with its own test surface, and that ticket's
+ * scope was the profile's dials and the universe. Guessing at a bar-count
  * contract from inside a config file is how a risk gate ends up wrong.
  */
 const UNCALIBRATED_VOLATILITY_BASELINE = 1_000_000;

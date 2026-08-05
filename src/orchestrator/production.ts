@@ -983,6 +983,18 @@ export interface ProductionComponents {
 export function buildProductionComponents(config: ProductionConfig): ProductionComponents {
   const clock = config.clock;
   const tradingCalendar = config.tradingCalendar ?? new UsEquityRegularHoursCalendar();
+  /**
+   * ONE calendar pair, shared by every consumer that needs to know when a
+   * venue is open — the daily-PnL boundary (#331/#332) and the volatility
+   * reading (#386). Built once rather than per call site: two literals would
+   * be two `AlwaysOpenCalendar` instances and, worse, two places for a future
+   * override to be applied to only one of them, which is exactly the silent
+   * disagreement `TradingCalendar`'s doc comment exists to prevent.
+   */
+  const sessionCalendars: Record<AssetClass, TradingCalendar> = {
+    crypto: new AlwaysOpenCalendar(),
+    stocks: tradingCalendar,
+  };
 
   // One broker wire client for the whole root: the order adapter and the
   // account-state provider both talk to Alpaca's Trading API, and two clients
@@ -1105,7 +1117,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
         // contract: `sessionStart` is a required member, so a substitute cannot
         // omit it by accident, and any calendar answering it is by definition
         // asserting when this account's stock sessions begin.
-        calendars: { crypto: new AlwaysOpenCalendar(), stocks: tradingCalendar },
+        calendars: sessionCalendars,
         mode: config.mode,
         // Composition happens at startup, so "now" here IS the process start.
         // It decides whether a session boundary was crossed under a running
@@ -1122,6 +1134,11 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
         marketData,
         universe,
         volatility_indicator: config.volatilityIndicator ?? DEFAULT_VOLATILITY_INDICATOR,
+        // Literally the same objects the scheduler gates its tick plan on and
+        // the daily-PnL boundary resets on, for the same reason (#386): a
+        // second session opinion here would arm `volatility_halt:stocks`
+        // overnight for a class the tick plan had already excluded.
+        calendars: sessionCalendars,
         logger: config.logger ?? new JsonLogger(),
       }),
     getOpenPositions: () => executionStore.getOpenPositions(),
