@@ -34,6 +34,14 @@ export interface MediatorResponse extends PersonaResponse {
 /** What every persona needs: the analyst views under debate, plus tracing/state context. */
 export interface PersonaInput {
   trace_id: string;
+  /**
+   * The debate this persona call belongs to (#326) — forwarded to the spend
+   * meter so every call a debate makes is attributable to that decision.
+   * Optional because a persona is callable standalone (that is the point of
+   * personas.ts being plain functions), in which case the call meters as
+   * unattributed rather than being refused.
+   */
+  debate_id?: string | undefined;
   analyst_views: AnalystView[];
   debate_state?: Record<string, unknown>;
   /**
@@ -123,10 +131,21 @@ function renderAnalystViews(views: AnalystView[]): string {
   return wrapUntrusted(rendered);
 }
 
+/**
+ * Attribution rides along in `context.attribution` (#326) so the spend meter
+ * can bill each persona call to the debate that issued it. That envelope never
+ * reaches the prompt (`anthropic-client.ts:promptContextOf`), so a persona's
+ * model input is byte-for-byte what it was before this existed.
+ */
 function buildContext(input: PersonaInput): LlmRequestContext {
-  return input.debate_state === undefined
-    ? { analyst_views: input.analyst_views }
-    : { analyst_views: input.analyst_views, debate_state: input.debate_state };
+  const base: LlmRequestContext = {
+    analyst_views: input.analyst_views,
+    attribution: { trace_id: input.trace_id, stage: 'debate', debate_id: input.debate_id },
+  };
+  if (input.debate_state !== undefined) {
+    base.debate_state = input.debate_state;
+  }
+  return base;
 }
 
 /** Bull persona: argues for optimistic interpretation, emphasizes positive signals. */

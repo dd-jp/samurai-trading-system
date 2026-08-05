@@ -253,6 +253,19 @@ function compact(n) {
   if (n === null || n === undefined) return '—';
   return Number(n).toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 1 });
 }
+// One decision costs cents, not dollars (#326). The two decimals 'usd' uses
+// would render every per-debate figure as '$0.03' and hide the difference
+// between a median debate and a p95 one — the whole point of showing both.
+function usdPrecise(n) {
+  if (n === null || n === undefined || Number.isNaN(n)) return '—';
+  return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+}
+// LLM latency runs to tens of seconds per debate; ms would be an unreadable
+// five-digit number on a tile read at a glance.
+function secs(ms) {
+  if (ms === null || ms === undefined || Number.isNaN(ms)) return '—';
+  return (Number(ms) / 1000).toFixed(1) + 's';
+}
 // Provider 'detail' strings carry third-party error text straight into innerHTML.
 // Escaped rather than trusted: the rest of this page renders values this system
 // wrote, and these are the only ones it did not.
@@ -299,7 +312,35 @@ function renderProviders(p, spend) {
       ' · all ' + usd(spend.all_time.cost_usd) + '</div>' + unpriced +
     '<div class="note">no balance API — metered locally, this bot only</div></div>';
 
-  document.getElementById('providers').innerHTML = alpacaTile + polygonTile + anthropicTile;
+  // Per-DECISION cost and LLM latency (#326). A separate tile rather than more
+  // sub-text on the spend one: the window total answers "what is this costing
+  // me", this answers "what does one decision cost, and is the third round
+  // earning its latency" — the question the paper soak exists to settle.
+  //
+  // The 24h window, matching the tile beside it. Zero debates is the normal
+  // pre-first-debate state and renders as a caveat rather than as '$0.0000 /
+  // 0.0s', which would read as a decision that cost nothing.
+  const d = spend.last_24h.per_debate;
+  const perDebateFigure = d.debates > 0
+    ? usdPrecise(d.cost_usd_p50) + ' <span class="sub">p50</span>'
+    : '<span class="caveat">no debates yet</span>';
+  const perDebateSub = d.debates > 0
+    ? d.debates + ' debates · cost p95 ' + usdPrecise(d.cost_usd_p95) +
+      ' · llm time p50 ' + secs(d.llm_latency_ms_p50) + ' / p95 ' + secs(d.llm_latency_ms_p95)
+    : 'no metered debate in the last 24h';
+  // Same posture as the unpriced caveat above: an omission the figures depend
+  // on is shown, not swallowed.
+  const unattributed = d.unattributed_calls > 0
+    ? '<div class="sub caveat">' + d.unattributed_calls +
+      ' call(s) not attributed to a debate — excluded from these percentiles</div>'
+    : '';
+  const perDebateTile = '<div class="prov">' + provHeader('Anthropic · per decision 24h', 'ok') +
+    '<div class="figure">' + perDebateFigure + '</div>' +
+    '<div class="sub">' + perDebateSub + '</div>' + unattributed +
+    '<div class="note">llm time is summed per-call latency, not debate wall clock</div></div>';
+
+  document.getElementById('providers').innerHTML =
+    alpacaTile + polygonTile + anthropicTile + perDebateTile;
 }
 
 function renderTick(t) {

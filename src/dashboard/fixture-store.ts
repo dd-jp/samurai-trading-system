@@ -272,7 +272,14 @@ const DAILY_METRICS: MetricsSuite = {
  * Spend fixtures. `last_24h` carries a non-zero `unpriced_calls` on purpose:
  * it is the case a fixture set is most likely to omit and the one the UI most
  * needs to prove it renders, since a silently-dropped unpriced call is how a
- * spend total understates itself.
+ * spend total understates itself. `per_debate.unattributed_calls` is non-zero
+ * for the same reason (#326) — it is the caveat that travels with the
+ * percentiles, and a fixture that never exercises it lets the UI ship without
+ * a place to show it.
+ *
+ * p95 sits well above p50 in every window, deliberately: LLM latency is
+ * long-tailed and a fixture set with p50 == p95 would let a percentile bug
+ * that collapses the two render as plausible.
  */
 const LLM_SPEND_24H = {
   cost_usd: 0.4183,
@@ -282,6 +289,14 @@ const LLM_SPEND_24H = {
   cache_creation_input_tokens: 12_800,
   calls: 142,
   unpriced_calls: 3,
+  per_debate: {
+    debates: 14,
+    unattributed_calls: 2,
+    cost_usd_p50: 0.0281,
+    cost_usd_p95: 0.0472,
+    llm_latency_ms_p50: 8_400,
+    llm_latency_ms_p95: 19_700,
+  },
 };
 
 const LLM_SPEND_7D = {
@@ -292,6 +307,14 @@ const LLM_SPEND_7D = {
   cache_creation_input_tokens: 84_600,
   calls: 991,
   unpriced_calls: 3,
+  per_debate: {
+    debates: 98,
+    unattributed_calls: 2,
+    cost_usd_p50: 0.0274,
+    cost_usd_p95: 0.0511,
+    llm_latency_ms_p50: 8_150,
+    llm_latency_ms_p95: 21_300,
+  },
 };
 
 const LLM_SPEND_ALL = {
@@ -302,6 +325,14 @@ const LLM_SPEND_ALL = {
   cache_creation_input_tokens: 196_700,
   calls: 2_310,
   unpriced_calls: 3,
+  per_debate: {
+    debates: 229,
+    unattributed_calls: 2,
+    cost_usd_p50: 0.0269,
+    cost_usd_p95: 0.0538,
+    llm_latency_ms_p50: 8_050,
+    llm_latency_ms_p95: 22_900,
+  },
 };
 
 export class InMemoryQueryStore implements DashboardQueryStore {

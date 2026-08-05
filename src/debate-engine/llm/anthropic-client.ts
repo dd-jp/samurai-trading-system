@@ -19,7 +19,14 @@ import {
 import type { AnthropicUsage } from './pricing.js';
 import { wrapUntrusted } from './prompt-safety.js';
 import { type LlmSpendSink, NULL_SPEND_SINK } from './spend-sink.js';
-import type { LlmClient, LlmRequest, LlmResponse, LlmRetryConfig } from './types.js';
+import {
+  LLM_CONTEXT_FIELD_KIND,
+  type LlmClient,
+  type LlmRequest,
+  type LlmRequestContext,
+  type LlmResponse,
+  type LlmRetryConfig,
+} from './types.js';
 
 /**
  * Only failure modes the spec calls out as transient are retried (timeout,
@@ -107,8 +114,43 @@ export interface AnthropicLlmClientConfig {
  * (#208, prompt-safety.ts) is what makes the mitigation hold on the actual
  * wire content sent to the provider, not just on `personas.ts`'s `prompt`.
  */
+/**
+ * The half of `LlmRequestContext` the model is allowed to see, selected by
+ * READING `LLM_CONTEXT_FIELD_KIND` rather than by naming fields (PR #387
+ * review).
+ *
+ * An allowlist derived from the classification map, not a denylist of
+ * attribution names. The distinction is the whole point: a denylist is correct
+ * only while someone remembers to extend it, and the field it forgets is
+ * silently billed to the operator on every call. Here, a new context field is
+ * unrepresentable until it is classified — the map's `satisfies Record<keyof
+ * LlmRequestContext, ...>` refuses to compile otherwise — and only fields
+ * classified `'prompt'` are ever serialized.
+ *
+ * Top-level keys only. `JSON.stringify`'s own replacer-array parameter would
+ * do this in one argument but applies at EVERY level of nesting, which would
+ * silently gut `debate_state` (an open `Record<string, unknown>` whose inner
+ * keys this layer must not interpret).
+ */
+function promptContextOf(context: LlmRequestContext): Record<string, unknown> {
+  const promptContext: Record<string, unknown> = {};
+  for (const [field, kind] of Object.entries(LLM_CONTEXT_FIELD_KIND)) {
+    if (kind !== 'prompt') {
+      continue;
+    }
+    const value = context[field as keyof LlmRequestContext];
+    // Absent optional fields stay absent rather than serializing as `null` —
+    // `JSON.stringify` drops `undefined` values anyway, so this only keeps the
+    // rendered prompt byte-identical to what it was before this indirection.
+    if (value !== undefined) {
+      promptContext[field] = value;
+    }
+  }
+  return promptContext;
+}
+
 function renderMessageContent<T>(request: LlmRequest<T>): string {
-  const contextJson = JSON.stringify(request.context, null, 2);
+  const contextJson = JSON.stringify(promptContextOf(request.context), null, 2);
   return `${request.prompt}\n\nContext:\n${wrapUntrusted(contextJson)}`;
 }
 
@@ -187,7 +229,7 @@ export class AnthropicLlmClient implements LlmClient {
     // still generated and still billed. Recording only well-formed responses
     // would make the meter understate spend by exactly the calls most likely
     // to be retried — i.e. it would be most wrong when it matters most.
-    this.recordSpend(request, response);
+    this.recordSpend(request, response, latency_ms);
 
     const rawText = extractText(response);
     const parsed = request.parseResponse(rawText);
@@ -205,15 +247,28 @@ export class AnthropicLlmClient implements LlmClient {
    * failed call — the information does not exist client-side — so this is a
    * known floor on the figure, not an oversight. Retries are each counted
    * separately, which is correct: each attempt is separately billed.
+   *
+   * `latency_ms` (#326) is the SAME number returned to the caller on
+   * `LlmResponse` — measured once, around `callWithTimeout`, and passed in
+   * rather than re-measured here, so the persisted figure and the logged one
+   * can never disagree. It is recorded even for a response that goes on to
+   * fail the parse gate below, for the same reason the tokens are: the call
+   * took that long and cost that much whether or not the answer was usable.
    */
-  private recordSpend<T>(request: LlmRequest<T>, response: AnthropicMessageResponse): void {
+  private recordSpend<T>(
+    request: LlmRequest<T>,
+    response: AnthropicMessageResponse,
+    latency_ms: number,
+  ): void {
     if (response.usage === undefined) return;
     try {
       this.spendSink.record({
-        trace_id: request.context.trace_id ?? 'unattributed',
-        stage: request.context.stage ?? 'debate',
+        trace_id: request.context.attribution?.trace_id ?? 'unattributed',
+        stage: request.context.attribution?.stage ?? 'debate',
+        debate_id: request.context.attribution?.debate_id,
         model: response.model ?? this.config.model,
         usage: response.usage,
+        latency_ms,
         timestamp: new Date(),
       });
     } catch {

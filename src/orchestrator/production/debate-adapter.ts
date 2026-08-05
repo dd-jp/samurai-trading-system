@@ -96,6 +96,17 @@ export function buildDebatePersonas(
   llmClient: LlmClient,
   trace_id: string,
   clock: Clock,
+  /**
+   * The debate every LLM call made through these personas is billed to (#326).
+   * Computed by the caller BEFORE the debate runs — `computeDebateId` is a
+   * pure hash of (instrument, bar, views), all three of which
+   * `buildDebateStep` already holds — so the spend rows carry the same id the
+   * `debate_log` row will, and a per-decision cost is a plain join.
+   *
+   * Optional so that the existing tests constructing personas without one keep
+   * working; those calls simply meter as unattributed.
+   */
+  debate_id?: string,
 ): DebatePersonas {
   let lastBull: PersonaResponse | undefined;
   let lastBear: PersonaResponse | undefined;
@@ -105,6 +116,7 @@ export function buildDebatePersonas(
     async argue(context) {
       const response = await runBullPersona(llmClient, {
         trace_id,
+        debate_id,
         analyst_views: context.views,
         signal: context.signal,
       });
@@ -117,6 +129,7 @@ export function buildDebatePersonas(
     async argue(context) {
       const response = await runBearPersona(llmClient, {
         trace_id,
+        debate_id,
         analyst_views: context.views,
         signal: context.signal,
       });
@@ -135,6 +148,7 @@ export function buildDebatePersonas(
 
       const response = await runMediatorPersona(llmClient, {
         trace_id,
+        debate_id,
         analyst_views: context.views,
         bullResponse: lastBull,
         bearResponse: lastBear,
@@ -155,7 +169,10 @@ export function buildDebatePersonas(
 
       const isFinalRound = response.converged || context.round === MAX_ROUNDS;
       const disagreement = isFinalRound
-        ? await detectDisagreements(context.views, llmClient, context.signal)
+        ? await detectDisagreements(context.views, llmClient, context.signal, {
+            trace_id,
+            debate_id,
+          })
         : { summary: '', conflicts: [], method: 'directional_fallback' as const };
 
       const confidence = computeConvictionScore(context.views, accumulatedStances);
@@ -278,11 +295,18 @@ export function buildDebateStep(
   logger?: Logger,
 ): TickSteps['debate'] {
   return async ({ trace_id, instrument, views, clock }) => {
-    const personas = buildDebatePersonas(llmClient, trace_id, clock);
     // Hoisted out of the `runDebate` call: the SAME `Date` must go into
     // `debate_id`'s hash and into the row's `bar_timestamp`, or the row
     // claims a bar coordinate its own primary key does not encode.
     const bar = clock.now();
+    // Computed here, ahead of the debate, rather than read off the eventual
+    // `DebateResult` (#326): the personas need it to attribute their spend
+    // rows while the debate is still running, and a debate that THROWS partway
+    // still billed for the calls it made. `computeDebateId` is the same pure
+    // hash `runDebate` applies to the same three inputs, so this cannot drift
+    // from the id on the resulting row — asserted in debate-adapter.test.ts.
+    const debate_id = computeDebateId(instrument, bar, views);
+    const personas = buildDebatePersonas(llmClient, trace_id, clock, debate_id);
 
     let result: DebateResult;
     try {

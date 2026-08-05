@@ -74,6 +74,27 @@ describe('detectDisagreements', () => {
     expect(mock.requests[0].context.analyst_views).toEqual(views);
   });
 
+  it('attributes its call to the debate that asked for it (#326)', async () => {
+    // This is the once-per-debate call the spec deliberately bounds. Left
+    // unattributed it would leave a fixed slice of every debate's bill out of
+    // the per-decision cost figure — the one number this instrumentation
+    // exists to produce.
+    const mock = new MockLlmClient();
+    mock.enqueueText(JSON.stringify({ summary: 'ok', conflicts: [] }));
+    const views = [makeView({ analyst_id: 'a1' }), makeView({ analyst_id: 'a2' })];
+
+    await detectDisagreements(views, mock, undefined, {
+      trace_id: 'trace-7',
+      debate_id: 'debate-abc',
+    });
+
+    expect(mock.requests[0].context.attribution).toEqual({
+      trace_id: 'trace-7',
+      stage: 'debate',
+      debate_id: 'debate-abc',
+    });
+  });
+
   it('falls back to directional comparison on LLM timeout', async () => {
     const mock = new MockLlmClient();
     mock.enqueueError(new LlmTimeoutError('timed out'));

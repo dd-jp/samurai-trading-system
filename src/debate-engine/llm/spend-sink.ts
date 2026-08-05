@@ -27,10 +27,32 @@ import { type AnthropicUsage, priceUsage } from './pricing.js';
 /** One metered API call, as handed to the sink. */
 export interface LlmSpendRecord {
   trace_id: string;
-  /** Which pipeline stage issued the call, for attributing an unexpected bill. */
+  /**
+   * Which pipeline stage issued the call, for attributing an unexpected bill.
+   *
+   * Today this is always `'debate'`, and that is a fact about the system
+   * rather than a gap in the plumbing: the debate personas
+   * (`debate-engine/personas.ts`) and `detectDisagreements` are the ONLY
+   * `LlmClient.complete()` call sites in the codebase. The three analysts
+   * (technical, fundamental, sentiment) are deterministic numeric scorers —
+   * `sentiment-analyst.ts` says so in its own header: "over the
+   * primary/context inputs, not an LLM call" — so there is no Analyst-stage
+   * spend to record. The column stays because the day an analyst becomes
+   * LLM-backed, its calls must not silently land in the debate's cost.
+   */
   stage: string;
+  /**
+   * The debate this call belongs to — the join key to `debate_log.debate_id`
+   * (#326, migrations/0012). Absent for a call issued outside a debate, and
+   * for any caller that does not thread it; such calls are counted as
+   * `unattributed_calls` on the dashboard rather than silently folded into
+   * some other debate's total.
+   */
+  debate_id?: string | undefined;
   model: string;
   usage: AnthropicUsage;
+  /** Wall-clock time for this one API call, as measured by the client. */
+  latency_ms: number;
   timestamp: Date;
 }
 
@@ -63,21 +85,27 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
       this.db
         .prepare(
           `INSERT INTO llm_spend (
-             trace_id, stage, model,
+             trace_id, stage, debate_id, model,
              input_tokens, output_tokens,
              cache_creation_input_tokens, cache_read_input_tokens,
-             cost_usd, timestamp
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             cost_usd, latency_ms, timestamp
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           entry.trace_id,
           entry.stage,
+          // `?? null`, not the raw `undefined`: better-sqlite3 refuses to bind
+          // `undefined` ("Invalid value"), so an unattributed call would throw
+          // into the swallowing catch below and lose the row entirely — a
+          // metering bug that would look exactly like a quiet dashboard.
+          entry.debate_id ?? null,
           entry.model,
           entry.usage.input_tokens,
           entry.usage.output_tokens,
           entry.usage.cache_creation_input_tokens ?? 0,
           entry.usage.cache_read_input_tokens ?? 0,
           cost,
+          entry.latency_ms,
           entry.timestamp.toISOString(),
         );
     } catch (error) {

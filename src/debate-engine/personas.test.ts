@@ -40,6 +40,35 @@ describe('runBullPersona', () => {
     expect(client.requests[0]?.context.analyst_views).toEqual(views);
   });
 
+  it('carries spend attribution on the request context (#326)', async () => {
+    const client = new MockLlmClient();
+    client.enqueueText(JSON.stringify({ stance: 'bullish', rationale: 'Momentum favors upside.' }));
+
+    await runBullPersona(client, {
+      trace_id: 'trace-1',
+      debate_id: 'debate-abc',
+      analyst_views: [makeView()],
+    });
+
+    // Without these three the spend meter cannot say which decision a persona
+    // call was made for, and every per-debate cost figure is NULL-keyed.
+    expect(client.requests[0]?.context.attribution).toEqual({
+      trace_id: 'trace-1',
+      stage: 'debate',
+      debate_id: 'debate-abc',
+    });
+  });
+
+  it('omits debate_id for a persona invoked outside a debate rather than inventing one', async () => {
+    const client = new MockLlmClient();
+    client.enqueueText(JSON.stringify({ stance: 'bullish', rationale: 'Momentum favors upside.' }));
+
+    await runBullPersona(client, { trace_id: 'trace-1', analyst_views: [makeView()] });
+
+    expect(client.requests[0]?.context.attribution?.debate_id).toBeUndefined();
+    expect(client.requests[0]?.context.attribution?.trace_id).toBe('trace-1');
+  });
+
   it('throws LlmMalformedResponseError on invalid JSON', async () => {
     const client = new MockLlmClient();
     client.enqueueText('not json');

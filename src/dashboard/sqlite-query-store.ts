@@ -38,6 +38,7 @@ import type { SharedStore } from '../shared/store/index.js';
 import type {
   AttributionSummary,
   DashboardQueryStore,
+  LlmPerDebateStats,
   LlmSpendSummary,
   LlmSpendWindow,
   TickStatus,
@@ -383,12 +384,106 @@ export class SqliteQueryStore implements DashboardQueryStore {
            COALESCE(SUM(cache_read_input_tokens), 0)     AS cache_read_input_tokens,
            COALESCE(SUM(cache_creation_input_tokens), 0) AS cache_creation_input_tokens,
            COUNT(*)                                      AS calls,
-           COALESCE(SUM(cost_usd IS NULL), 0)            AS unpriced_calls
+           COALESCE(SUM(cost_usd IS NULL), 0)            AS unpriced_calls,
+           COALESCE(SUM(debate_id IS NULL), 0)           AS unattributed_calls
          FROM llm_spend ${where}`,
       )
-      .get(...params) as LlmSpendWindow;
-    return row;
+      .get(...params) as Omit<LlmSpendWindow, 'per_debate'> & { unattributed_calls: number };
+
+    const { unattributed_calls, ...window } = row;
+    return { ...window, per_debate: this.perDebateBetween(where, params, unattributed_calls) };
   }
+
+  /**
+   * Per-DECISION cost and LLM latency (#326).
+   *
+   * One `GROUP BY debate_id` inside the window, then percentiles in JS. The
+   * grouping is bounded by the number of DEBATES in the window rather than the
+   * number of calls (~10 calls per debate), and SQLite still drives it off
+   * `idx_llm_spend_timestamp` — the same range scan `spendBetween` already
+   * pays for. Percentiles are computed here rather than in SQL because SQLite
+   * ships no percentile function and the alternatives (a self-join on rank, or
+   * a window function over the whole scan) are both slower and far harder to
+   * read than sorting an array of debate totals.
+   *
+   * Rows with `debate_id IS NULL` are excluded from the grouping — folding
+   * them into one pseudo-debate would invent a single enormous outlier that
+   * drags p95 up by construction. They are reported as `unattributed_calls`
+   * instead.
+   *
+   * A debate with NO measured latency at all (every row predating migration
+   * 0012) is counted in `debates` and priced normally, but is left OUT of the
+   * latency sample entirely — `SUM(latency_ms)` is deliberately NOT wrapped in
+   * `COALESCE`, so such a debate arrives as NULL rather than as 0. Coalescing
+   * it would seat an unmeasured debate in the sample as an instantaneous one
+   * and pull both percentiles down, which is the precise failure mode the
+   * nullable column exists to prevent. (`SUM` skips NULLs within a debate, so
+   * a debate with SOME measured calls still totals the calls it did measure.)
+   */
+  private perDebateBetween(
+    where: string,
+    params: string[],
+    unattributed_calls: number,
+  ): LlmPerDebateStats {
+    const rows = this.db
+      .prepare(
+        `SELECT
+           COALESCE(SUM(cost_usd), 0) AS cost_usd,
+           SUM(latency_ms)            AS llm_latency_ms
+         FROM llm_spend ${where} AND debate_id IS NOT NULL
+         GROUP BY debate_id`,
+      )
+      .all(...params) as Array<{ cost_usd: number; llm_latency_ms: number | null }>;
+
+    const costs = rows.map((row) => row.cost_usd).sort(ascending);
+    const latencies = rows
+      .map((row) => row.llm_latency_ms)
+      .filter((latency): latency is number => latency !== null)
+      .sort(ascending);
+
+    return {
+      debates: rows.length,
+      unattributed_calls,
+      cost_usd_p50: percentile(costs, 0.5),
+      cost_usd_p95: percentile(costs, 0.95),
+      llm_latency_ms_p50: percentile(latencies, 0.5),
+      llm_latency_ms_p95: percentile(latencies, 0.95),
+    };
+  }
+}
+
+/**
+ * `Array.prototype.sort` compares STRINGIFIED elements by default, which
+ * orders [9, 10, 100] as [10, 100, 9] and would silently corrupt every
+ * percentile below. Named rather than inlined so the reason it exists is not
+ * mistaken for noise.
+ */
+function ascending(a: number, b: number): number {
+  return a - b;
+}
+
+/**
+ * Nearest-rank percentile over an ASCENDING-sorted array: the smallest value
+ * at or above `fraction` of the way through. No interpolation — an
+ * interpolated p95 reports a duration no debate actually took, and on an
+ * operator surface a real observation beats a smoother one. p95 of a handful
+ * of debates is therefore the slowest of them, which is the honest answer
+ * when the sample is that small.
+ *
+ * Empty input returns 0: a window with no debates has no percentile, and the
+ * tile renders 0 beside `debates: 0` rather than the caller having to unwrap
+ * a null.
+ *
+ * Exported for its own unit tests — the arithmetic is small, load-bearing,
+ * and exactly the kind that looks right while being off by one.
+ */
+export function percentile(sortedAscending: readonly number[], fraction: number): number {
+  if (sortedAscending.length === 0) {
+    return 0;
+  }
+  const rank = Math.ceil(fraction * sortedAscending.length);
+  const index = Math.min(Math.max(rank, 1), sortedAscending.length) - 1;
+  return sortedAscending[index] as number;
 }
 
 function profitFactor(trades: readonly ClosedTrade[]): number {
