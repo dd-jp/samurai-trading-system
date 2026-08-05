@@ -9,6 +9,7 @@
  * and termination (#34) build on top of these, not the other way around.
  */
 
+import { unwrapFencedJson } from './llm/json-response.js';
 import { wrapUntrusted } from './llm/prompt-safety.js';
 import type { LlmClient, LlmRequestContext } from './llm/types.js';
 import type { AnalystView, Direction } from './types.js';
@@ -63,7 +64,11 @@ function parsePersonaResponse(
 ): { valid: true; data: PersonaResponse } | { valid: false; reason: string } {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(rawText);
+    // `unwrapFencedJson` (#361) tolerates exactly one shape the pinned model
+    // emits on every call — a markdown code fence around the object. It is
+    // not a prose extractor: a refusal, a preamble, or a truncated response
+    // is handed through untouched and still fails here.
+    parsed = JSON.parse(unwrapFencedJson(rawText));
   } catch {
     return { valid: false, reason: 'malformed persona response: not valid JSON' };
   }
@@ -81,7 +86,7 @@ function parseMediatorResponse(
 ): { valid: true; data: MediatorResponse } | { valid: false; reason: string } {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(rawText);
+    parsed = JSON.parse(unwrapFencedJson(rawText));
   } catch {
     return { valid: false, reason: 'malformed mediator response: not valid JSON' };
   }
@@ -93,6 +98,20 @@ function parseMediatorResponse(
   }
   return { valid: true, data: parsed };
 }
+
+/**
+ * Anti-fence instruction appended to every persona prompt (issue #361). The
+ * pinned `claude-haiku-4-5-20251001` wrapped its JSON in a markdown fence on
+ * every call, and the mediator additionally appended a free-text note after
+ * the closing fence — both of which broke `JSON.parse` and halted the tick at
+ * `stage=debate`. This is the cooperative half of the fix; `unwrapFencedJson`
+ * (llm/json-response.ts) is the deterministic half, because a prompt
+ * instruction is a request, not a guarantee.
+ */
+const BARE_JSON_INSTRUCTION = [
+  'Output the raw JSON object only: no markdown code fence, no ``` characters,',
+  'no preamble, and no commentary after the closing brace.',
+].join('\n');
 
 /**
  * Renders AnalystViews into a compact text block shared by all persona
@@ -126,6 +145,7 @@ export async function runBullPersona(
     'You are the Bull persona in a trading debate. Argue for the optimistic',
     'interpretation of the following analyst views, emphasizing positive',
     'signals and opportunities. Respond as JSON: {"stance": "bullish"|"bearish"|"neutral", "rationale": string}.',
+    BARE_JSON_INSTRUCTION,
     '',
     renderAnalystViews(input.analyst_views),
   ].join('\n');
@@ -147,6 +167,7 @@ export async function runBearPersona(
     'You are the Bear persona in a trading debate. Argue for the pessimistic',
     'interpretation of the following analyst views, emphasizing risks and',
     'downside. Respond as JSON: {"stance": "bullish"|"bearish"|"neutral", "rationale": string}.',
+    BARE_JSON_INSTRUCTION,
     '',
     renderAnalystViews(input.analyst_views),
   ].join('\n');
@@ -177,6 +198,7 @@ export async function runMediatorPersona(
     'Bull and Bear arguments below, evaluate whether material disagreement',
     'remains, and signal convergence if the debate can terminate. Respond as',
     'JSON: {"stance": "bullish"|"bearish"|"neutral", "rationale": string, "converged": boolean}.',
+    BARE_JSON_INSTRUCTION,
     '',
     wrapUntrusted(bullBearBlock),
     '',
