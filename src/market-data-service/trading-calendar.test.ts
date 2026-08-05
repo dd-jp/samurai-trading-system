@@ -145,7 +145,12 @@ describe('UsEquityRegularHoursCalendar', () => {
     });
 
     it('resolves a Saturday to the prior Friday close', () => {
-      // Sat 2026-07-18 13:00 EDT (17:00 UTC) -> Fri 2026-07-17 16:00 EDT.
+      // Sat 2026-07-18 17:00 EDT (21:00 UTC) — deliberately PAST Saturday's own
+      // notional 16:00, so only the weekday check can rule Saturday out.
+      expect(calendar.sessionStart(new Date('2026-07-18T21:00:00Z'))).toEqual(
+        new Date('2026-07-17T20:00:00Z'),
+      );
+      // Sat 2026-07-18 13:00 EDT (17:00 UTC), before it.
       expect(calendar.sessionStart(new Date('2026-07-18T17:00:00Z'))).toEqual(
         new Date('2026-07-17T20:00:00Z'),
       );
