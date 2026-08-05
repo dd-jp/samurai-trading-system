@@ -229,6 +229,11 @@ coverage/
 *.sqlite
 *.sqlite3
 *.db
+# WAL mode leaves two sidecars next to the database. `*.sqlite` does not match
+# them, so a live paper run left `data/` showing up as untracked and one
+# `git add .` away from committing real run state (#358).
+*.sqlite-shm
+*.sqlite-wal
 
 # Durable structured-log sink (#325). The whole directory, not just *.log:
 # rotated generations are named `orchestrator.log.1`, which `*.log` does not

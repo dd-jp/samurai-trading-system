@@ -20,11 +20,23 @@
  * failure mode behind it teaches readers that the broker client's option is
  * also ceremonial.
  *
- * **Crypto/equity is a path-root split, not a query parameter** (spec):
+ * **Crypto/equity is a path-root split, not a query parameter** (spec) — and
+ * the two roots are on DIFFERENT API VERSIONS (issue #358):
  *   - equities: `GET /v2/stocks/{symbol}/bars`, `GET /v2/stocks/{symbol}/quotes/latest`
- *   - crypto:   `GET /v2/crypto/us/bars`,        `GET /v2/crypto/us/latest/quotes`
+ *   - crypto:   `GET /v1beta3/crypto/us/bars`,  `GET /v1beta3/crypto/us/latest/quotes`
  * (`symbols=` query param for the multi-symbol crypto endpoints, `symbol`
  * embedded in the path for the single-symbol equity endpoints.)
+ *
+ * The crypto root shipped as `/v2/crypto/us/...` — a guess from the #260
+ * research note, and wrong. `/v2` 404s for crypto; `/v1beta3` is the live root.
+ * Because `MarketDataServiceImpl.getBars` fetches before it appends, the 404
+ * threw away every bar before anything was written, the mandatory technical
+ * analyst failed, and the tick surfaced as a quiet `analysts: quorum_skip` —
+ * a hard outage wearing the costume of a considered no-trade. Nothing in a
+ * unit test could catch it, so `ALPACA_CRYPTO_API_VERSION` /
+ * `ALPACA_STOCKS_API_VERSION` below are pinned by name in
+ * `alpaca-http-client.test.ts` ("API version segment (issue #358)") against the
+ * live status codes recorded there.
  *
  * The neither-broker-nor-data-source-currently-passes-`asset_class`-to-the-
  * client shape (`AlpacaClient.getBars`/`getLatestQuote` take no asset-class
@@ -34,15 +46,14 @@
  * composition code is expected to construct one client per `AlpacaDataSource`
  * (which is itself already one-per-asset-class, see `AlpacaSourceOptions.asset_class`).
  *
- * **Crypto symbol format — UNVERIFIED.** This repo's universe uses
- * `BTC-USD`; Alpaca's crypto endpoints are believed (public docs, not
- * confirmed against a live account) to use a slash (`BTC/USD`). `toAlpacaCryptoSymbol`
- * does that translation for the request, and the response-key lookup falls
- * back to the raw untranslated symbol, then to whatever single key the
- * `bars`/`quotes` object actually carries, so a wrong guess about the exact
- * separator degrades to "still works" rather than "silently returns empty" —
- * but the format itself needs confirming against a real paper account before
- * this is trusted (see this ticket's PR description).
+ * **Crypto symbol format — VERIFIED (2026-08-05, issue #358).** This repo's
+ * universe uses `BTC-USD`; Alpaca's crypto endpoints use a slash (`BTC/USD`),
+ * and `toAlpacaCryptoSymbol` does that translation. Confirmed against a live
+ * paper account: `symbols=BTC/USD` returns `200` with the response keyed by
+ * exactly the string sent, and any other separator is rejected outright —
+ * `symbols=BTC-USD` is a `400` carrying
+ * `{"message":"invalid symbol: BTC-USD does not match ^[A-Z]+x?/[A-Z]+$"}`.
+ * That regex is the whole story: the wire format is not a guess any more.
  *
  * **Timeframe translation.** This codebase's canonical timeframe strings are
  * `'1m' | '5m' | '1h' | '1d'` (`timeframe.ts`'s `timeframeToMs`/
@@ -89,6 +100,24 @@ import {
 import type { AlpacaBar, AlpacaClient, AlpacaQuote } from './alpaca-source.js';
 
 const DEFAULT_BASE_URL = 'https://data.alpaca.markets';
+/**
+ * Alpaca versions its two data roots independently, and crypto is NOT on `/v2`
+ * (issue #358). Verified against the live API with paper credentials on
+ * 2026-08-05 — the `404`s are the reason these are named constants rather than
+ * inline path literals, and the reason the test file asserts on the segment:
+ *
+ *   GET /v2/crypto/us/bars                -> 404
+ *   GET /v1beta3/crypto/us/bars           -> 200
+ *   GET /v2/crypto/us/latest/quotes       -> 404
+ *   GET /v1beta3/crypto/us/latest/quotes  -> 200
+ *   GET /v2/stocks/{symbol}/bars          -> 200
+ *   GET /v2/stocks/{symbol}/quotes/latest -> 200
+ *
+ * Re-verify against a live account before changing either — the whole point of
+ * this ticket is that the docs were not sufficient evidence.
+ */
+const ALPACA_CRYPTO_API_VERSION = 'v1beta3';
+const ALPACA_STOCKS_API_VERSION = 'v2';
 const DEFAULT_TIMEOUT_MS = 10_000;
 /** Same sizing as the broker client — one Alpaca key's ~200 req/min budget is shared across both APIs. */
 const DEFAULT_RETRY_CONFIG: RetryConfig = { maxAttempts: 3, baseDelayMs: 250, maxDelayMs: 4_000 };
@@ -192,11 +221,32 @@ export function toAlpacaCryptoSymbol(symbol: string): string {
 }
 
 /**
- * Looks up a keyed crypto response object first by the translated Alpaca
- * symbol, falling back to the original untranslated symbol, and finally to
- * the response's only key (if it has exactly one) — so an unverified
- * separator guess degrades to "still works for a single-symbol request"
- * rather than silently returning nothing.
+ * Looks up a keyed crypto response object by the translated Alpaca symbol,
+ * falling back to the original untranslated symbol. **Matches by name only —
+ * it will not guess** (issue #358 item 3).
+ *
+ * There used to be a third fallback: "if the response has exactly one key, use
+ * whatever it is, whatever it is called." It was written to make the then-
+ * unverified `BTC/USD` separator guess degrade gracefully instead of silently
+ * returning nothing. Live verification retired that argument on both ends:
+ *
+ *  - It could never have fired for the case it was written for. A wrong
+ *    separator is a hard `400` (`invalid symbol: BTC-USD does not match
+ *    ^[A-Z]+x?/[A-Z]+$`), so there is no body to fall back inside of. And on a
+ *    correct request Alpaca echoes the key back verbatim, so the first lookup
+ *    always hits — the legitimate single-symbol case never needed it.
+ *  - What it could do is hand back a DIFFERENT instrument's bars under the
+ *    requested instrument's name. Every request this client makes is
+ *    single-symbol, so `keys.length === 1` is true on essentially every
+ *    response: the guard was never a guard. Prices flow from here into
+ *    indicators, stops, and position sizing; serving ETH's prices as BTC's is
+ *    strictly worse than serving none, because none is loud (a missing key
+ *    becomes `AlpacaDataUnderfetchError` in `getBars`, a thrown
+ *    `AlpacaDataProviderError` in `getLatestQuote`) and wrong is not.
+ *
+ * That is the general rule this ticket exists to enforce: an unverified guess
+ * must fail loudly, never degrade into something indistinguishable from a
+ * considered decision.
  */
 function lookupCryptoKey<T>(
   byKey: Record<string, T | undefined> | undefined,
@@ -205,13 +255,11 @@ function lookupCryptoKey<T>(
 ): T | undefined {
   if (byKey === undefined) return undefined;
   if (byKey[alpacaSymbol] !== undefined) return byKey[alpacaSymbol];
-  if (byKey[originalSymbol] !== undefined) return byKey[originalSymbol];
-  const keys = Object.keys(byKey);
-  return keys.length === 1 ? byKey[keys[0] as string] : undefined;
+  return byKey[originalSymbol];
 }
 
 export interface AlpacaHttpDataClientOptions {
-  /** Routes requests through the `/v2/stocks/...` or `/v2/crypto/us/...` path root. */
+  /** Routes requests through the `/v2/stocks/...` or `/v1beta3/crypto/us/...` path root. */
   assetClass: 'crypto' | 'stocks';
   /** Defaults to `process.env.ALPACA_API_KEY`. Never logged or thrown into an error message. */
   apiKey?: string;
@@ -344,7 +392,7 @@ export class AlpacaHttpDataClient implements AlpacaClient {
       if (this.assetClass === 'crypto') {
         params.set('symbols', alpacaSymbol);
         const body = (await this.requestJson(
-          `${this.baseUrl}/v2/crypto/us/bars?${params.toString()}`,
+          `${this.baseUrl}/${ALPACA_CRYPTO_API_VERSION}/crypto/us/bars?${params.toString()}`,
           'getBars',
         )) as CryptoBarsResponse;
         for (const raw of lookupCryptoKey(body.bars, alpacaSymbol, symbol) ?? []) {
@@ -353,7 +401,9 @@ export class AlpacaHttpDataClient implements AlpacaClient {
         pageToken = body.next_page_token ?? undefined;
       } else {
         const body = (await this.requestJson(
-          `${this.baseUrl}/v2/stocks/${encodeURIComponent(symbol)}/bars?${params.toString()}`,
+          `${this.baseUrl}/${ALPACA_STOCKS_API_VERSION}/stocks/${encodeURIComponent(
+            symbol,
+          )}/bars?${params.toString()}`,
           'getBars',
         )) as StocksBarsResponse;
         for (const raw of body.bars ?? []) out.push(toAlpacaBar(raw));
@@ -437,7 +487,7 @@ export class AlpacaHttpDataClient implements AlpacaClient {
       const alpacaSymbol = toAlpacaCryptoSymbol(symbol);
       const params = new URLSearchParams({ symbols: alpacaSymbol });
       const body = (await this.requestJson(
-        `${this.baseUrl}/v2/crypto/us/latest/quotes?${params.toString()}`,
+        `${this.baseUrl}/${ALPACA_CRYPTO_API_VERSION}/crypto/us/latest/quotes?${params.toString()}`,
         'getLatestQuote',
       )) as CryptoLatestQuoteResponse;
       const quote = lookupCryptoKey(body.quotes, alpacaSymbol, symbol);
@@ -450,7 +500,9 @@ export class AlpacaHttpDataClient implements AlpacaClient {
     }
 
     const body = (await this.requestJson(
-      `${this.baseUrl}/v2/stocks/${encodeURIComponent(symbol)}/quotes/latest`,
+      `${this.baseUrl}/${ALPACA_STOCKS_API_VERSION}/stocks/${encodeURIComponent(
+        symbol,
+      )}/quotes/latest`,
       'getLatestQuote',
     )) as StocksLatestQuoteResponse;
     if (body.quote === undefined) {

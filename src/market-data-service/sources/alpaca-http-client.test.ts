@@ -246,7 +246,7 @@ describe('AlpacaHttpDataClient — crypto', () => {
     vi.unstubAllGlobals();
   });
 
-  it('getBars hits the /v2/crypto/us/bars path root with the slash-translated symbols= param', async () => {
+  it('getBars hits the /v1beta3/crypto/us/bars path root with the slash-translated symbols= param', async () => {
     const bar = { t: '2026-07-01T00:00:00Z', o: 30000, h: 31000, l: 29000, c: 30500, v: 10 };
     const fetchMock = vi
       .fn()
@@ -270,7 +270,7 @@ describe('AlpacaHttpDataClient — crypto', () => {
 
     expect(result).toEqual([{ t: bar.t, o: 30000, h: 31000, l: 29000, c: 30500, v: 10 }]);
     const [url] = fetchMock.mock.calls[0] as [string];
-    expect(url).toMatch(/^https:\/\/data\.alpaca\.markets\/v2\/crypto\/us\/bars\?/);
+    expect(url).toMatch(/^https:\/\/data\.alpaca\.markets\/v1beta3\/crypto\/us\/bars\?/);
     expect(url).toContain('symbols=BTC%2FUSD');
   });
 
@@ -299,7 +299,7 @@ describe('AlpacaHttpDataClient — crypto', () => {
     expect(result).toEqual([{ t: bar.t, o: 30000, h: 31000, l: 29000, c: 30500, v: 10 }]);
   });
 
-  it('getLatestQuote hits /v2/crypto/us/latest/quotes and unwraps the slash-keyed quote', async () => {
+  it('getLatestQuote hits /v1beta3/crypto/us/latest/quotes and unwraps the slash-keyed quote', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
         quotes: { 'BTC/USD': { t: '2026-07-01T00:00:00Z', ap: 30100, bp: 30000 } },
@@ -316,7 +316,7 @@ describe('AlpacaHttpDataClient — crypto', () => {
 
     expect(result).toEqual({ t: '2026-07-01T00:00:00Z', ap: 30100, bp: 30000 });
     const [url] = fetchMock.mock.calls[0] as [string];
-    expect(url).toMatch(/^https:\/\/data\.alpaca\.markets\/v2\/crypto\/us\/latest\/quotes\?/);
+    expect(url).toMatch(/^https:\/\/data\.alpaca\.markets\/v1beta3\/crypto\/us\/latest\/quotes\?/);
     expect(url).toContain('symbols=BTC%2FUSD');
   });
 
@@ -331,6 +331,137 @@ describe('AlpacaHttpDataClient — crypto', () => {
     });
 
     await expect(client.getLatestQuote('ETH-USD')).rejects.toBeInstanceOf(AlpacaDataProviderError);
+  });
+
+  /**
+   * Issue #358 item 3. The old `lookupCryptoKey` had a third fallback — "if the
+   * response carries exactly one key, use it whatever it is" — justified as
+   * making an unverified separator guess degrade gracefully. Live verification
+   * (2026-08-05) killed that justification: a wrong separator is a hard
+   * `400 {"message":"invalid symbol: BTC-USD does not match ^[A-Z]+x?/[A-Z]+$"}`,
+   * never a body keyed differently, so the fallback could never fire for the
+   * case it was written for. What it COULD do is serve one instrument's prices
+   * under another instrument's name — the worst possible silent failure in a
+   * system that sizes stops off these numbers.
+   */
+  it('does NOT serve a different symbol from a single-key crypto bars response', async () => {
+    const bar = { t: '2026-07-01T00:00:00Z', o: 30000, h: 31000, l: 29000, c: 30500, v: 10 };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ bars: { 'ETH/USD': [bar] }, next_page_token: null }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpDataClient({
+      assetClass: 'crypto',
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+    });
+
+    await expect(
+      client.getBars('BTC-USD', '1m', new Date('2026-07-02T00:00:00Z'), 5),
+    ).rejects.toBeInstanceOf(AlpacaDataUnderfetchError);
+  });
+
+  it('does NOT serve a different symbol from a single-key crypto quotes response', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        quotes: { 'ETH/USD': { t: '2026-07-01T00:00:00Z', ap: 30100, bp: 30000 } },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpDataClient({
+      assetClass: 'crypto',
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+    });
+
+    await expect(client.getLatestQuote('BTC-USD')).rejects.toBeInstanceOf(AlpacaDataProviderError);
+  });
+});
+
+/**
+ * Issue #358 regression pin. The client shipped crypto against `/v2/crypto/us/...`,
+ * which does not exist (`404`); the working root is `/v1beta3/crypto/us/...`.
+ * Nothing in the request shape hinted at it, and the failure surfaced as a quiet
+ * `analysts: quorum_skip` rather than an error, so it took a live paper run to
+ * find. These assertions pin the VERSION SEGMENT specifically — a future edit to
+ * the path templates cannot silently move it again.
+ *
+ * Verified against the live Alpaca API with paper credentials on 2026-08-05:
+ *   GET /v2/crypto/us/bars                -> 404
+ *   GET /v1beta3/crypto/us/bars           -> 200
+ *   GET /v2/crypto/us/latest/quotes       -> 404
+ *   GET /v1beta3/crypto/us/latest/quotes  -> 200
+ *   GET /v2/stocks/{symbol}/bars          -> 200
+ *   GET /v2/stocks/{symbol}/quotes/latest -> 200
+ */
+describe('AlpacaHttpDataClient — API version segment (issue #358)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  /** The path segment straight after the host — the thing that was wrong. */
+  function versionSegmentOf(call: unknown): string {
+    const [url] = call as [string];
+    return new URL(url).pathname.split('/')[1] as string;
+  }
+
+  function clientFor(assetClass: 'crypto' | 'stocks'): AlpacaHttpDataClient {
+    return new AlpacaHttpDataClient({ assetClass, apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+  }
+
+  it('routes crypto bars through /v1beta3, never /v2', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ bars: { 'BTC/USD': dailyBars(5) }, next_page_token: null }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await clientFor('crypto').getBars('BTC-USD', '1d', new Date('2026-07-03T00:00:00Z'), 5);
+
+    expect(versionSegmentOf(fetchMock.mock.calls[0])).toBe('v1beta3');
+  });
+
+  it('routes crypto latest quotes through /v1beta3, never /v2', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        quotes: { 'BTC/USD': { t: '2026-07-01T00:00:00Z', ap: 30100, bp: 30000 } },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await clientFor('crypto').getLatestQuote('BTC-USD');
+
+    expect(versionSegmentOf(fetchMock.mock.calls[0])).toBe('v1beta3');
+  });
+
+  it('keeps equity bars on /v2 (verified live — the equity paths were already right)', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ bars: dailyBars(5), next_page_token: null }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await clientFor('stocks').getBars('AAPL', '1d', new Date('2026-07-03T00:00:00Z'), 5);
+
+    expect(versionSegmentOf(fetchMock.mock.calls[0])).toBe('v2');
+  });
+
+  it('keeps equity latest quotes on /v2 (verified live)', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ quote: { t: '2026-07-01T00:00:00Z', ap: 1, bp: 1 } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await clientFor('stocks').getLatestQuote('AAPL');
+
+    expect(versionSegmentOf(fetchMock.mock.calls[0])).toBe('v2');
   });
 });
 
