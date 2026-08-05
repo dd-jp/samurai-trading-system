@@ -586,6 +586,80 @@ describe('composed tick chain (integration)', () => {
       instrument: 'BTC-USD',
     });
   });
+
+  /**
+   * The other side of the boundary the test above sits on, and the reason both
+   * halves exist.
+   *
+   * Until `tsconfig.test.json` type-checked this file, `stubConfig` supplied
+   * `{ atr_percentile: 0.5 } as VolatilityReading` — a shape the type has not
+   * had for some time. `VolatilityReading` is `{ crypto, stocks }`, so BOTH
+   * real fields were `undefined`, every comparison against
+   * `baseline x multiplier` was false, and the volatility breaker had never
+   * once evaluated in the composed chain. The test above passed on a breaker
+   * that could not fire.
+   *
+   * Fixing the shape alone would only have proven the breaker stays armed on a
+   * calm reading. This proves it can actually stop a tick: `breakers.test.ts`
+   * covers the trip in isolation, but nothing covered it through the wiring,
+   * which is exactly the gap that let the inert stub survive.
+   */
+  it('stops the composed chain at risk when the volatility breaker trips', async () => {
+    const clock = new SimulatedClock(START);
+    const hourMs = 60 * 60 * 1_000;
+    const bars = [
+      ...fixtureBars('BTC-USD', '1h', 60, hourMs),
+      ...fixtureBars('BTC-USD', '1m', 60, 60_000),
+      ...fixtureBars('BTC-USD', '1d', 40, 24 * hourMs),
+    ];
+    const dataSource = new FixtureDataSource(
+      bars,
+      { price: 160, observed_at: START, source: 'fixture' },
+      'crypto',
+      { bid: 159.5, ask: 160.5, observed_at: START },
+    );
+
+    const llmClient = new MockLlmClient();
+    for (let i = 0; i < 40; i += 1) {
+      llmClient.enqueueText(
+        JSON.stringify({ stance: 'bullish', rationale: 'fixture rationale', converged: true }),
+      );
+    }
+
+    const config = stubConfig(db, {
+      ...REAL_CONFIGS,
+      clock,
+      dataSource,
+      llmClient,
+      // 0.5 against a `{ crypto: 0.05 } x 3` ceiling — far over the line.
+      volatility: {
+        getVolatilityReading: vi.fn(
+          async (): Promise<VolatilityReading> => ({ crypto: 0.5, stocks: 0.5 }),
+        ),
+      },
+    });
+
+    const { steps } = buildProductionComponents(config);
+    const persistence = buildPersistence(db);
+
+    const outcome = await new SequentialTickRunner(steps).runInstrument(
+      { asset: 'BTC-USD', asset_class: 'crypto' },
+      {
+        clock,
+        trace_id: 'trace-vol-trip',
+        logger: recordingLogger(),
+        auditLog: persistence.auditLog,
+        currentTickStore: persistence.currentTickStore,
+      },
+    );
+
+    const stages = persistence.auditLog.getByTraceId('trace-vol-trip').map((row) => row.stage);
+
+    // Risk is reached and is where it ends: no verdict, no execution.
+    expect(stages).toEqual(['analysts', 'debate', 'trader', 'risk']);
+    expect(outcome.final_stage).toBe('risk');
+    expect(outcome.execution_result).toBeUndefined();
+  });
 });
 
 describe('startTickLoop', () => {
