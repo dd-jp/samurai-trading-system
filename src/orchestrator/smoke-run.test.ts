@@ -46,6 +46,7 @@ function transactedObservations(): SmokeObservations {
       },
       { trace_id: 'trace-2', stages: [{ stage: 'analysts', decision: 'quorum_met' }] },
     ],
+    debates: [{ debate_id: 'debate-1', instrument: 'BTC-USD', direction: 'bullish', rounds: 1 }],
     verdicts: [{ trace_id: 'trace-1', instrument: 'BTC-USD', status: 'go', no_go_reason: null }],
     positions: [
       {
@@ -97,6 +98,7 @@ describe('evaluateSmokeGate', () => {
         { trace_id: 'trace-1', stages: [{ stage: 'analysts', decision: 'quorum_skip' }] },
         { trace_id: 'trace-2', stages: [{ stage: 'analysts', decision: 'quorum_skip' }] },
       ],
+      debates: [],
       verdicts: [],
       positions: [],
       fills: [],
@@ -108,6 +110,19 @@ describe('evaluateSmokeGate', () => {
     expect(gate.failures.some((failure) => failure.includes('no tick got past Analysts'))).toBe(
       true,
     );
+  });
+
+  /**
+   * The #364 defect, expressed as a gate condition: every other observation
+   * in a run like this is green — ticks reached Debate, a `go` was recorded,
+   * a lot filled — and `debate_log` is still empty, because the store had no
+   * caller. Nothing else in this gate could see that.
+   */
+  it('fails when a debate ran but no debate_log row was written (#364)', () => {
+    const gate = evaluateSmokeGate({ ...transactedObservations(), debates: [] }, { minTicks: 2 });
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('no row in debate_log'))).toBe(true);
   });
 
   it('fails when no GO verdict was recorded, naming the no-go reasons seen', () => {
@@ -214,6 +229,7 @@ describe('formatSmokeReport', () => {
   it('lists every unmet requirement on a failure', () => {
     const observations: SmokeObservations = {
       ticks: [],
+      debates: [],
       verdicts: [],
       positions: [],
       fills: [],
@@ -455,6 +471,7 @@ describe('runSmoke (end-to-end, real composition root)', () => {
   it('goes red on the quorum-skip run the real binary produces today', () => {
     const observations: SmokeObservations = {
       ticks: [{ trace_id: 't', stages: [{ stage: 'analysts', decision: 'quorum_skip' }] }],
+      debates: [],
       verdicts: [],
       positions: [],
       fills: [],
@@ -464,7 +481,7 @@ describe('runSmoke (end-to-end, real composition root)', () => {
     const gate = evaluateSmokeGate(observations, { minTicks: 1 });
 
     expect(gate.passed).toBe(false);
-    expect(gate.failures).toHaveLength(5);
+    expect(gate.failures).toHaveLength(6);
     expect(gate.failures.some((failure) => failure.includes('no tick got past Analysts'))).toBe(
       true,
     );
