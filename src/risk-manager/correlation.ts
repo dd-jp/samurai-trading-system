@@ -13,11 +13,18 @@
  * `MarketDataService.getBars(instrument, window, asOf)`, which is
  * no-lookahead by construction (same guarantee the accounting view relies
  * on for marks). A pair with fewer than `min_bars` overlapping returns is
- * still omitted from `correlations` — that omission is the warm-up fallback
- * (risk-manager-map.md AC3), not a fabricated correlation — but it is also
- * listed in `insufficient_history` (#303), so a caller can distinguish a pair
- * measured at ~0 from a pair that could not be measured at all. Option (b) of
- * #303: no limit moves, the blindness merely stops being silent.
+ * still omitted from `correlations` — that omission is the warm-up fallback,
+ * not a fabricated correlation — but it is also listed in
+ * `insufficient_history` (#303), so a caller can distinguish a pair measured
+ * at ~0 from a pair that could not be measured at all. Option (b) of #303: no
+ * limit moves, the blindness merely stops being silent.
+ *
+ * Both halves — why an under-`min_bars` pair is skipped, and why the skip is
+ * now named — are specified in risk-manager-spec.md, "Module: Correlation
+ * Warm-up Visibility" (and its Resolved Decisions entry). Earlier revisions
+ * of this comment cited "risk-manager-map.md AC3"; that anchor never existed
+ * (the map predates #50 and still describes v1 static buckets), so the
+ * pointer was corrected rather than carried forward — #303.
  */
 import type { Bar, BarWindow, MarketDataService } from '../market-data-service/index.js';
 import type { CorrelationEstimate } from './types.js';

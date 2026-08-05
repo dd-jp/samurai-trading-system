@@ -531,6 +531,29 @@ describe('SequentialTickRunner.runInstrument — risk warnings surfacing (#303)'
     expect(warns[0].message).toContain('correlation_warmup:BTC-USD');
   });
 
+  /**
+   * The reader is warning-agnostic, not correlation-specific. `macro_risk_flag`
+   * has been produced since #205 and, like the warm-up tag, had no reader — it
+   * rode along in the risk stage's `info` payload. This pins that the same fix
+   * surfaces it, so the claim is checked rather than assumed.
+   */
+  it('surfaces a CII macro_risk_flag through the same reader (#205, unraised until now)', async () => {
+    const intent = makeIntent();
+    const steps = makeSteps({
+      risk: vi.fn(async () => ({
+        ...approvedRisk(intent),
+        warnings: ['macro_risk_flag:RU'],
+      })),
+    });
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const warns = warnEntries(ctx);
+    expect(warns).toHaveLength(1);
+    expect(warns[0].message).toContain('macro_risk_flag:RU');
+  });
+
   it('stays silent when the decision carries no warnings', async () => {
     const ctx = makeCtx();
 

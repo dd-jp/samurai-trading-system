@@ -91,9 +91,10 @@ function ciiWarnings(instrument: string, cii: Record<string, number>, threshold:
 
 /**
  * Correlation warm-up warning (#303). Step 6 treats an instrument absent from
- * `correlation.correlations` as not correlated — the documented warm-up
- * fallback (risk-manager-map.md AC3). That is unchanged here: this produces
- * advisory tags only and is never consulted by a trim or a reject.
+ * `correlation.correlations` as not correlated — the warm-up fallback
+ * documented in risk-manager-spec.md, "Module: Correlation Warm-up
+ * Visibility". That is unchanged here: this produces advisory tags only and
+ * is never consulted by a trim or a reject.
  *
  * What it fixes is the conflation. An empty `correlations` map is produced
  * both by a portfolio of genuinely independent holdings and by a portfolio
