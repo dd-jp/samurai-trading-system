@@ -34,21 +34,25 @@ jobs:
         run: corepack enable
 
       - name: Install dependencies
+        id: install
         run: yarn install --immutable
 
       # Every check runs even after an earlier one fails, so a lint break
-      # doesn't hide a test break. The job still fails if any step fails.
+      # doesn't hide a test break; the job still fails if any of them fail.
+      # Gating on the install's outcome keeps a failed install from producing
+      # four cascading "command not found" failures instead of one clear one.
       - name: Lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: yarn lint
 
       - name: Typecheck
-        if: '!cancelled()'
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: yarn typecheck
 
       - name: Build
-        if: '!cancelled()'
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: yarn build
 
       - name: Test
-        if: '!cancelled()'
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: yarn test
