@@ -229,7 +229,9 @@ describe('debate cancellation (#347)', () => {
     const personas = buildDebatePersonas(buildLlmClient(), 'trace-1', CLOCK);
 
     const promise = runBudgetedDebate(personas, logger);
-    await vi.advanceTimersByTimeAsync(LATENCY_BUDGET_MS.crypto);
+    // Exactly the 10s the ten calls take — stopping SHORT of the 15s budget, so
+    // the budget timer is still pending unless it was explicitly cleared.
+    await vi.advanceTimersByTimeAsync(10_000);
     await promise;
     await vi.advanceTimersByTimeAsync(0);
 

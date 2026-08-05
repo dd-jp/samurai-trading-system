@@ -119,14 +119,17 @@ export async function enforceLatencyBudget(params: {
     }),
   );
 
-  // A cancelled debate REJECTS, and it rejects after this function has already
-  // returned its fallback — so nothing is awaiting it. Attaching this handler
-  // is what stops a deliberate cancellation from surfacing as an unhandled
-  // rejection (fatal under `--unhandled-rejections=strict`, and noise in the
-  // soak log either way). It does not swallow a pre-timeout failure: the race
-  // below still sees, and still propagates, a rejection that arrives first.
-  debate.catch(() => {});
-
+  // NOTE on the rejection nobody awaits. Post-#347 a cancelled debate REJECTS,
+  // and it does so after this function has already returned its fallback. That
+  // is NOT an unhandled rejection: `Promise.race` attaches handlers to every
+  // promise passed to it, so the late rejection is handled-and-ignored rather
+  // than escaping to `process.on('unhandledRejection')` (fatal under
+  // `--unhandled-rejections=strict`, and soak-log noise either way). An
+  // explicit `debate.catch(() => {})` was written here first and then removed:
+  // mutation-testing showed no test could tell the difference, because there
+  // is no difference. Pinned by latency-budget.test.ts's "swallows the
+  // cancelled debate rejection" case, which asserts on a real
+  // `unhandledRejection` listener.
   const result = await Promise.race([
     debate,
     new Promise<{ status: 'timed_out' }>((resolve) => {
