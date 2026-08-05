@@ -155,6 +155,18 @@ const PAPER_ANALYST_WEIGHT_FLOOR = 0.5;
 const PAPER_ANALYST_WEIGHT_CEILING = 1.5;
 
 /**
+ * How many consecutive daily cycles it must take to move a weight across the
+ * whole band — the number `weights.max_step` is derived from, rather than a
+ * step size chosen first and rationalised after.
+ *
+ * `DERIVED` from the soak window: 20 > the 14 days of #238, so no soak-length
+ * run can produce a weight trajectory decided by its first few trades. Stated
+ * as a count of cycles because that is the property spec story 4 is about
+ * ("no analyst swings wildly"); the step size is the arithmetic consequence.
+ */
+const PAPER_ANALYST_WEIGHT_TRAVERSE_CYCLES = 20;
+
+/**
  * `FeedbackConfig` for the paper soak (#366) — Stage 6's starting values, in
  * the same file and under the same convention as the other eight.
  *
@@ -198,7 +210,15 @@ function buildFeedbackConfig(): FeedbackConfig {
    * process start — so a restart re-phases the schedule. With `window ===
    * interval`, a process restarted 5h into a cycle leaves a 5h hole that no
    * later cycle ever covers: those trades are never attributed to anyone. A
-   * two-cadence window closes any hole a single restart can open.
+   * two-cadence window absorbs a re-phasing of up to one full cadence, which
+   * is every single-restart case.
+   *
+   * It does NOT fix the neighbouring problem, and this value should not be
+   * read as claiming to: `setInterval` fires no cycle at t=0, so a process
+   * that restarts more often than once a day never completes a cycle at all,
+   * and no window length changes that. Widening the window is the wrong lever
+   * for it — an immediate-first-run or a persisted last-cycle timestamp is the
+   * right one, and neither exists yet.
    *
    * Overlap is safe, which is what makes the trade one-sided: attribution
    * computes a TARGET from the window's mean credit and steps toward it
@@ -211,14 +231,22 @@ function buildFeedbackConfig(): FeedbackConfig {
 
   const weights: TunableDial = {
     /**
-     * `DERIVED` from the band: 0.05 is 1/20th of the 1.0-wide band, so
-     * traversing it end to end takes at least 20 consecutive cycles — 20 days,
-     * longer than the 14-day soak (#238) itself. That is the intended
+     * `DERIVED` from the band, and written as the derivation rather than as
+     * the 0.05 it evaluates to — the same reason `riskConfig`'s caps are
+     * fractions of `PAPER_ACCOUNT_EQUITY_ANCHOR` instead of rounded literals:
+     * re-scaling the band must not silently change how many cycles a traverse
+     * takes.
+     *
+     * A twentieth of the band, so crossing it end to end needs at least
+     * `PAPER_ANALYST_WEIGHT_TRAVERSE_CYCLES` consecutive cycles — one per day,
+     * so longer than the 14-day soak (#238) itself. That is the intended
      * relationship, not a coincidence: spec story 4 asks that "no analyst
      * swings wildly", and the soak must not be able to produce a weight
      * trajectory dominated by its first few trades.
      */
-    max_step: 0.05,
+    max_step:
+      (PAPER_ANALYST_WEIGHT_CEILING - PAPER_ANALYST_WEIGHT_FLOOR) /
+      PAPER_ANALYST_WEIGHT_TRAVERSE_CYCLES,
     floor: PAPER_ANALYST_WEIGHT_FLOOR,
     ceiling: PAPER_ANALYST_WEIGHT_CEILING,
     /**

@@ -9,7 +9,6 @@
  * is recorded as false); `production.test.ts`'s "#366" describe asserts the
  * half that matters more — that the dial in the store really did not move.
  */
-import { describe, expect, it, vi } from 'vitest';
 import type { LoosenApprovalRequest } from '../feedback-loop/index.js';
 import type { DiscordClient, TelegramClient } from '../verdict/index.js';
 import { LoggingLoosenApprovalChannel } from './console-channels.js';

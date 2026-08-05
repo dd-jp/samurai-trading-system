@@ -41,6 +41,7 @@ import {
   buildProductionTickRunner,
   DEFAULT_HEARTBEAT_INTERVAL_MS,
   DEFAULT_LLM_CLIENT_CONFIG,
+  type FeedbackCycleConfig,
   type ProductionConfig,
   SMOKE_TEST_UNIVERSE,
   startTickLoop,
@@ -898,7 +899,15 @@ describe('buildProductionOrchestrator', () => {
     /** Long enough that the tick/heartbeat timers stay out of the way. */
     const QUIET = 48 * 60 * 60 * 1_000;
 
-    function paperProfileConfig(overrides: Partial<ProductionConfig> = {}): ProductionConfig {
+    /**
+     * Returns the logger alongside the config rather than making each caller
+     * dig it back out of `config.logger` behind a cast — the recording type is
+     * the thing every case here asserts on.
+     */
+    function paperProfileConfig(overrides: Partial<ProductionConfig> = {}): {
+      config: ProductionConfig;
+      logger: ReturnType<typeof recordingLogger>;
+    } {
       const logger = recordingLogger();
       const config = stubConfig(db, {
         ...paperStartingProfile('paper'),
@@ -907,12 +916,11 @@ describe('buildProductionOrchestrator', () => {
         heartbeatIntervalMs: QUIET,
         ...overrides,
       });
-      return config;
+      return { config, logger };
     }
 
     it('starts the daily cycle, with neither not_started nor a missing-feedback warn', async () => {
-      const config = paperProfileConfig();
-      const logger = config.logger as ReturnType<typeof recordingLogger>;
+      const { config, logger } = paperProfileConfig();
       const orchestrator = buildProductionOrchestrator(config);
 
       await orchestrator.start();
@@ -939,8 +947,7 @@ describe('buildProductionOrchestrator', () => {
     });
 
     it('keeps the metrics warn firing, so #345 stays visible instead of swallowed', async () => {
-      const config = paperProfileConfig();
-      const logger = config.logger as ReturnType<typeof recordingLogger>;
+      const { config, logger } = paperProfileConfig();
       const orchestrator = buildProductionOrchestrator(config);
 
       await orchestrator.start();
@@ -967,39 +974,45 @@ describe('buildProductionOrchestrator', () => {
      */
     function loosenConfig(overrides: Partial<ProductionConfig> = {}): {
       config: ProductionConfig;
+      feedback: FeedbackCycleConfig;
+      logger: ReturnType<typeof recordingLogger>;
       tuning: SqliteTuningStore;
     } {
-      const profile = paperStartingProfile('paper');
+      const profileFeedback = paperStartingProfile('paper').feedback;
+      if (profileFeedback === undefined) {
+        // Narrowed rather than cast: an absent block is the bug #366 fixes, so
+        // it must fail here loudly instead of being asserted away.
+        throw new Error('paperStartingProfile supplied no feedback block');
+      }
+
       const tuning = new SqliteTuningStore(db, new SimulatedClock(START));
       tuning.setRiskThreshold('max_position_size', 5_000);
 
-      const config = paperProfileConfig({
-        feedback: {
-          intervalMs: 1_000,
-          config: {
-            ...profile.feedback?.config,
-            risk_thresholds: {
-              max_position_size: {
-                max_step: 500,
-                floor: 1_000,
-                ceiling: 10_000,
-                tighten_is: 'decrease',
-              },
+      const feedback: FeedbackCycleConfig = {
+        intervalMs: 1_000,
+        config: {
+          ...profileFeedback.config,
+          risk_thresholds: {
+            max_position_size: {
+              max_step: 500,
+              floor: 1_000,
+              ceiling: 10_000,
+              tighten_is: 'decrease',
             },
-          } as FeedbackConfig,
-          // Raising a loss-bounding cap: the move the loop may never make on
-          // its own authority.
-          proposals: [{ kind: 'risk_threshold', name: 'max_position_size', target: 6_000 }],
+          },
         },
-        ...overrides,
-      });
+        // Raising a loss-bounding cap: the move the loop may never make on
+        // its own authority.
+        proposals: [{ kind: 'risk_threshold', name: 'max_position_size', target: 6_000 }],
+      };
 
-      return { config, tuning };
+      const { config, logger } = paperProfileConfig({ feedback, ...overrides });
+
+      return { config, feedback, logger, tuning };
     }
 
     it('refuses to loosen a risk threshold nobody approved — the dial does not move', async () => {
-      const { config, tuning } = loosenConfig();
-      const logger = config.logger as ReturnType<typeof recordingLogger>;
+      const { config, logger, tuning } = loosenConfig();
       const orchestrator = buildProductionOrchestrator(config);
 
       await orchestrator.start();
@@ -1029,8 +1042,7 @@ describe('buildProductionOrchestrator', () => {
     });
 
     it('falls back to the log-only channel and says the threshold stayed put', async () => {
-      const { config } = loosenConfig();
-      const logger = config.logger as ReturnType<typeof recordingLogger>;
+      const { config, logger } = loosenConfig();
       const orchestrator = buildProductionOrchestrator(config);
 
       await orchestrator.start();
@@ -1071,10 +1083,12 @@ describe('buildProductionOrchestrator', () => {
     it('still lets an explicit per-cycle approvals override win', async () => {
       const perCycle = vi.fn();
       const topLevel = vi.fn();
-      const { config } = loosenConfig({ loosenApprovals: { requestLoosenApproval: topLevel } });
+      const { config, feedback } = loosenConfig({
+        loosenApprovals: { requestLoosenApproval: topLevel },
+      });
       const orchestrator = buildProductionOrchestrator({
         ...config,
-        feedback: { ...config.feedback, approvals: { requestLoosenApproval: perCycle } } as never,
+        feedback: { ...feedback, approvals: { requestLoosenApproval: perCycle } },
       });
 
       await orchestrator.start();
