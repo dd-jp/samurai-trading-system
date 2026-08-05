@@ -12,7 +12,7 @@ import {
   LlmTimeoutError,
 } from './errors.js';
 import type { LlmSpendRecord } from './spend-sink.js';
-import type { LlmRequest } from './types.js';
+import { LLM_CONTEXT_FIELD_KIND, type LlmRequest, type LlmRequestContext } from './types.js';
 
 interface ParsedData {
   value: string;
@@ -333,9 +333,11 @@ describe('AnthropicLlmClient spend metering', () => {
     );
 
     const attributed = request();
-    attributed.context.trace_id = 'trace-9';
-    attributed.context.stage = 'debate';
-    attributed.context.debate_id = 'debate-xyz';
+    attributed.context.attribution = {
+      trace_id: 'trace-9',
+      stage: 'debate',
+      debate_id: 'debate-xyz',
+    };
     await client.complete(attributed);
 
     expect(sink.records[0]?.trace_id).toBe('trace-9');
@@ -364,31 +366,90 @@ describe('AnthropicLlmClient spend metering', () => {
     expect(sink.records[0]?.trace_id).toBe('unattributed');
   });
 
-  it('does not send attribution to the model — a cost ticket must not cost tokens', async () => {
-    const wire: AnthropicMessagesClient = {
-      createMessage: vi.fn().mockResolvedValue(usageResponse('good')),
-    };
-    const client = new AnthropicLlmClient(wire, {
-      model: 'claude-haiku-4-5',
-      max_tokens: 100,
-      timeoutMs: 1000,
-      retry: NO_RETRY,
+  /**
+   * The prompt/meter split, driven off `LLM_CONTEXT_FIELD_KIND` itself rather
+   * than off a second hand-written list of field names (PR #387 review). The
+   * map is the single source of truth; these tests assert the RUNTIME
+   * behaviour matches every classification in it, so the map cannot rot into
+   * a comment that no longer describes what ships.
+   *
+   * The compiler already refuses to let a new `LlmRequestContext` field exist
+   * unclassified. These cover the other half: that a classification, once
+   * made, is actually honoured on the wire.
+   */
+  describe('prompt/meter split', () => {
+    async function sentContent(context: Partial<LlmRequestContext>): Promise<string> {
+      const wire: AnthropicMessagesClient = {
+        createMessage: vi.fn().mockResolvedValue(usageResponse('good')),
+      };
+      const client = new AnthropicLlmClient(wire, {
+        model: 'claude-haiku-4-5',
+        max_tokens: 100,
+        timeoutMs: 1000,
+        retry: NO_RETRY,
+      });
+      const withContext = request();
+      Object.assign(withContext.context, context);
+      await client.complete(withContext);
+      const sent = (wire.createMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+        | AnthropicMessageRequest
+        | undefined;
+      return sent?.messages[0]?.content ?? '';
+    }
+
+    it('classifies every context field as exactly one of prompt or meter', () => {
+      // Guards the map's own shape. `satisfies Record<keyof LlmRequestContext,
+      // ...>` makes tsc require every key; this makes the VALUES meaningful,
+      // so a typo'd kind cannot quietly behave like "meter" (send nothing).
+      const kinds = Object.values(LLM_CONTEXT_FIELD_KIND);
+      expect(kinds.length).toBeGreaterThan(0);
+      expect(kinds.every((kind) => kind === 'prompt' || kind === 'meter')).toBe(true);
+      expect(LLM_CONTEXT_FIELD_KIND.attribution).toBe('meter');
     });
 
-    const attributed = request();
-    attributed.context.trace_id = 'trace-should-not-ship';
-    attributed.context.stage = 'debate';
-    attributed.context.debate_id = 'debate-should-not-ship';
-    await client.complete(attributed);
+    it('sends no meter-classified field to the model — a cost ticket must not cost tokens', async () => {
+      const content = await sentContent({
+        attribution: {
+          trace_id: 'trace-should-not-ship',
+          stage: 'stage-should-not-ship',
+          debate_id: 'debate-should-not-ship',
+        },
+      });
 
-    const sent = (wire.createMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
-      | AnthropicMessageRequest
-      | undefined;
-    const content = sent?.messages[0]?.content ?? '';
-    expect(content).not.toContain('trace-should-not-ship');
-    expect(content).not.toContain('debate-should-not-ship');
-    // The real context still ships — this strips attribution, not the prompt.
-    expect(content).toContain('analyst_views');
+      // The envelope's KEY must not appear either: a serialized `"attribution":
+      // {}` would still bill input tokens on every call for nothing.
+      expect(content).not.toContain('attribution');
+      expect(content).not.toContain('trace-should-not-ship');
+      expect(content).not.toContain('stage-should-not-ship');
+      expect(content).not.toContain('debate-should-not-ship');
+    });
+
+    it('sends every prompt-classified field to the model', async () => {
+      // The other direction, and the one a too-eager strip would break: this
+      // excludes attribution, not context. `debate_state` is an open record,
+      // so its NESTED keys must survive too — a `JSON.stringify` replacer
+      // array would have silently gutted them.
+      const content = await sentContent({
+        debate_state: { round: 3, nested: { must_survive: 'yes' } },
+      });
+
+      expect(content).toContain('analyst_views');
+      expect(content).toContain('debate_state');
+      expect(content).toContain('must_survive');
+    });
+
+    it('renders a context carrying attribution byte-identically to one without it', async () => {
+      // Attribution is meant to be invisible to the model. If threading it
+      // changed the prompt at all, every persona's model input would have
+      // shifted underneath #326 — a behavioural change smuggled in by an
+      // observability ticket.
+      const withAttribution = await sentContent({
+        attribution: { trace_id: 'trace-9', stage: 'debate', debate_id: 'debate-xyz' },
+      });
+      const without = await sentContent({});
+
+      expect(withAttribution).toBe(without);
+    });
   });
 
   it('meters a MALFORMED response too — it was still generated and still billed', async () => {

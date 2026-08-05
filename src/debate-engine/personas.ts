@@ -132,21 +132,16 @@ function renderAnalystViews(views: AnalystView[]): string {
 }
 
 /**
- * Attribution (`trace_id`/`stage`/`debate_id`) rides along here (#326) so the
- * spend meter can bill each persona call to the debate that issued it. It is
- * stripped before the context reaches the prompt
- * (`anthropic-client.ts:renderMessageContent`), so a persona's model input is
- * byte-for-byte what it was before this existed.
+ * Attribution rides along in `context.attribution` (#326) so the spend meter
+ * can bill each persona call to the debate that issued it. That envelope never
+ * reaches the prompt (`anthropic-client.ts:promptContextOf`), so a persona's
+ * model input is byte-for-byte what it was before this existed.
  */
 function buildContext(input: PersonaInput): LlmRequestContext {
   const base: LlmRequestContext = {
     analyst_views: input.analyst_views,
-    trace_id: input.trace_id,
-    stage: 'debate',
+    attribution: { trace_id: input.trace_id, stage: 'debate', debate_id: input.debate_id },
   };
-  if (input.debate_id !== undefined) {
-    base.debate_id = input.debate_id;
-  }
   if (input.debate_state !== undefined) {
     base.debate_state = input.debate_state;
   }

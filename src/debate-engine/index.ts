@@ -60,12 +60,14 @@ export {
 export type { LlmSpendRecord, LlmSpendSink } from './llm/spend-sink.js';
 export { NULL_SPEND_SINK, SqliteLlmSpendStore } from './llm/spend-sink.js';
 export type {
+  LlmAttribution,
   LlmClient,
   LlmRequest,
   LlmRequestContext,
   LlmResponse,
   LlmRetryConfig,
 } from './llm/types.js';
+export { LLM_CONTEXT_FIELD_KIND } from './llm/types.js';
 export type { MediatorInput, MediatorResponse, PersonaInput, PersonaResponse } from './personas.js';
 export { runBearPersona, runBullPersona, runMediatorPersona } from './personas.js';
 export type {

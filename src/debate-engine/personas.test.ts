@@ -52,9 +52,11 @@ describe('runBullPersona', () => {
 
     // Without these three the spend meter cannot say which decision a persona
     // call was made for, and every per-debate cost figure is NULL-keyed.
-    expect(client.requests[0]?.context.trace_id).toBe('trace-1');
-    expect(client.requests[0]?.context.stage).toBe('debate');
-    expect(client.requests[0]?.context.debate_id).toBe('debate-abc');
+    expect(client.requests[0]?.context.attribution).toEqual({
+      trace_id: 'trace-1',
+      stage: 'debate',
+      debate_id: 'debate-abc',
+    });
   });
 
   it('omits debate_id for a persona invoked outside a debate rather than inventing one', async () => {
@@ -63,8 +65,8 @@ describe('runBullPersona', () => {
 
     await runBullPersona(client, { trace_id: 'trace-1', analyst_views: [makeView()] });
 
-    expect(client.requests[0]?.context.debate_id).toBeUndefined();
-    expect(client.requests[0]?.context.trace_id).toBe('trace-1');
+    expect(client.requests[0]?.context.attribution?.debate_id).toBeUndefined();
+    expect(client.requests[0]?.context.attribution?.trace_id).toBe('trace-1');
   });
 
   it('throws LlmMalformedResponseError on invalid JSON', async () => {

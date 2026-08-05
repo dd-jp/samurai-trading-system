@@ -175,9 +175,11 @@ export async function detectDisagreements(
       prompt: PROMPT,
       context: {
         analyst_views: views,
-        trace_id: attribution?.trace_id,
-        stage: 'debate',
-        debate_id: attribution?.debate_id,
+        attribution: {
+          trace_id: attribution?.trace_id,
+          stage: 'debate',
+          debate_id: attribution?.debate_id,
+        },
       },
       parseResponse: parseDisagreementResponse,
       signal,

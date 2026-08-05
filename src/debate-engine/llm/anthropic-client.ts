@@ -19,7 +19,14 @@ import {
 import type { AnthropicUsage } from './pricing.js';
 import { wrapUntrusted } from './prompt-safety.js';
 import { type LlmSpendSink, NULL_SPEND_SINK } from './spend-sink.js';
-import type { LlmClient, LlmRequest, LlmResponse, LlmRetryConfig } from './types.js';
+import {
+  LLM_CONTEXT_FIELD_KIND,
+  type LlmClient,
+  type LlmRequest,
+  type LlmRequestContext,
+  type LlmResponse,
+  type LlmRetryConfig,
+} from './types.js';
 
 /**
  * Only failure modes the spec calls out as transient are retried (timeout,
@@ -107,18 +114,43 @@ export interface AnthropicLlmClientConfig {
  * (#208, prompt-safety.ts) is what makes the mitigation hold on the actual
  * wire content sent to the provider, not just on `personas.ts`'s `prompt`.
  */
+/**
+ * The half of `LlmRequestContext` the model is allowed to see, selected by
+ * READING `LLM_CONTEXT_FIELD_KIND` rather than by naming fields (PR #387
+ * review).
+ *
+ * An allowlist derived from the classification map, not a denylist of
+ * attribution names. The distinction is the whole point: a denylist is correct
+ * only while someone remembers to extend it, and the field it forgets is
+ * silently billed to the operator on every call. Here, a new context field is
+ * unrepresentable until it is classified — the map's `satisfies Record<keyof
+ * LlmRequestContext, ...>` refuses to compile otherwise — and only fields
+ * classified `'prompt'` are ever serialized.
+ *
+ * Top-level keys only. `JSON.stringify`'s own replacer-array parameter would
+ * do this in one argument but applies at EVERY level of nesting, which would
+ * silently gut `debate_state` (an open `Record<string, unknown>` whose inner
+ * keys this layer must not interpret).
+ */
+function promptContextOf(context: LlmRequestContext): Record<string, unknown> {
+  const promptContext: Record<string, unknown> = {};
+  for (const [field, kind] of Object.entries(LLM_CONTEXT_FIELD_KIND)) {
+    if (kind !== 'prompt') {
+      continue;
+    }
+    const value = context[field as keyof LlmRequestContext];
+    // Absent optional fields stay absent rather than serializing as `null` —
+    // `JSON.stringify` drops `undefined` values anyway, so this only keeps the
+    // rendered prompt byte-identical to what it was before this indirection.
+    if (value !== undefined) {
+      promptContext[field] = value;
+    }
+  }
+  return promptContext;
+}
+
 function renderMessageContent<T>(request: LlmRequest<T>): string {
-  // Attribution (#326) is meter bookkeeping, not prompt content. Stripped
-  // before serialization so threading a trace id and a debate hash through
-  // `context` neither costs input tokens on every call nor feeds the model
-  // opaque identifiers it has no use for.
-  const {
-    trace_id: _trace_id,
-    stage: _stage,
-    debate_id: _debate_id,
-    ...promptContext
-  } = request.context;
-  const contextJson = JSON.stringify(promptContext, null, 2);
+  const contextJson = JSON.stringify(promptContextOf(request.context), null, 2);
   return `${request.prompt}\n\nContext:\n${wrapUntrusted(contextJson)}`;
 }
 
@@ -231,9 +263,9 @@ export class AnthropicLlmClient implements LlmClient {
     if (response.usage === undefined) return;
     try {
       this.spendSink.record({
-        trace_id: request.context.trace_id ?? 'unattributed',
-        stage: request.context.stage ?? 'debate',
-        debate_id: request.context.debate_id,
+        trace_id: request.context.attribution?.trace_id ?? 'unattributed',
+        stage: request.context.attribution?.stage ?? 'debate',
+        debate_id: request.context.attribution?.debate_id,
         model: response.model ?? this.config.model,
         usage: response.usage,
         latency_ms,

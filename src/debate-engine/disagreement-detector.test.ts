@@ -88,9 +88,11 @@ describe('detectDisagreements', () => {
       debate_id: 'debate-abc',
     });
 
-    expect(mock.requests[0].context.trace_id).toBe('trace-7');
-    expect(mock.requests[0].context.stage).toBe('debate');
-    expect(mock.requests[0].context.debate_id).toBe('debate-abc');
+    expect(mock.requests[0].context.attribution).toEqual({
+      trace_id: 'trace-7',
+      stage: 'debate',
+      debate_id: 'debate-abc',
+    });
   });
 
   it('falls back to directional comparison on LLM timeout', async () => {

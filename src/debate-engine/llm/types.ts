@@ -24,21 +24,43 @@ export interface LlmRequestContext {
   analyst_views: AnalystView[];
   debate_state?: Record<string, unknown>;
   /**
-   * Attribution for the local spend meter (llm/spend-sink.ts) — which tick and
-   * which stage this call should be billed against on the dashboard.
+   * Meter bookkeeping. NOT SENT TO THE MODEL — see `LlmAttribution`.
    *
-   * Declared by #367 for exactly this moment ("so that wiring attribution is a
-   * one-line change at each call site instead of a second migration"); #326
-   * supplies them. Still optional: `LlmRequest` is constructed by inline test
-   * doubles all over this suite, and the meter records `'unattributed'` when
-   * they are absent rather than refusing the call.
+   * A NESTED ENVELOPE rather than sibling `trace_id`/`stage`/`debate_id`
+   * fields (PR #387 review). Those were stripped from the prompt by a
+   * hand-maintained denylist inside `renderMessageContent`, which is the
+   * failure shape this repo keeps producing: a rule expressed as a list of
+   * names that nothing enforces. It had two live bugs waiting in it — the next
+   * attribution field added here would have silently shipped to the model and
+   * billed input tokens on every call (in a ticket whose whole purpose is
+   * controlling spend), and a legitimate prompt field that happened to be
+   * named `stage` would have been silently dropped before the model saw it.
    *
-   * NOT SENT TO THE MODEL. `AnthropicLlmClient.renderMessageContent`
-   * serializes `context` into the prompt, so these three fields are stripped
-   * there — a trace id and a content hash are meter bookkeeping, not prompt
-   * content, and putting them on the wire would be a cost ticket that costs
-   * tokens.
+   * With one envelope, the split is structural: everything inside is meter
+   * data and is excluded by construction, everything outside is prompt
+   * content. Adding an attribution field needs no change anywhere else, and
+   * `stage` is free to mean whatever a future prompt needs it to mean.
    */
+  attribution?: LlmAttribution;
+}
+
+/**
+ * Attribution for the local spend meter (llm/spend-sink.ts) — which tick,
+ * which stage, and which debate a call should be billed against on the
+ * dashboard.
+ *
+ * Declared by #367 for exactly this moment ("so that wiring attribution is a
+ * one-line change at each call site instead of a second migration"); #326
+ * supplies it. Every field stays optional: `LlmRequest` is constructed by
+ * inline test doubles all over this suite, and the meter records
+ * `'unattributed'` when they are absent rather than refusing the call.
+ *
+ * NOTHING IN HERE REACHES THE PROVIDER. `AnthropicLlmClient` serializes
+ * `context` into the prompt, and this envelope is excluded from that — a trace
+ * id and a content hash are bookkeeping, not prompt content, and putting them
+ * on the wire would make a cost ticket cost tokens.
+ */
+export interface LlmAttribution {
   trace_id?: string | undefined;
   stage?: string | undefined;
   /**
@@ -48,6 +70,29 @@ export interface LlmRequestContext {
    */
   debate_id?: string | undefined;
 }
+
+/**
+ * Which side of the prompt/meter line each `LlmRequestContext` field falls on,
+ * and the SINGLE SOURCE OF TRUTH for that split (PR #387 review).
+ *
+ * THIS IS THE COMPILER ENFORCEMENT, not documentation. `Record<keyof
+ * LlmRequestContext, ...>` requires EVERY key of the interface to appear here,
+ * so adding a field to `LlmRequestContext` without deciding whether the model
+ * should see it FAILS TO COMPILE. It is not possible to extend the context and
+ * forget — which is precisely what the previous denylist allowed.
+ *
+ * `AnthropicLlmClient` builds its prompt context by reading this map rather
+ * than by naming fields, so the classification is load-bearing at runtime and
+ * cannot rot into a stale comment. Deliberately declared in this
+ * (non-test) module: `tsconfig.json` excludes test files from `yarn build`, so
+ * a guard living in a `.test.ts` would not be typechecked by the build at all
+ * and the enforcement would be imaginary.
+ */
+export const LLM_CONTEXT_FIELD_KIND = {
+  analyst_views: 'prompt',
+  debate_state: 'prompt',
+  attribution: 'meter',
+} satisfies Record<keyof LlmRequestContext, 'prompt' | 'meter'>;
 
 /**
  * `parseResponse` validates and narrows the provider's raw text into the
