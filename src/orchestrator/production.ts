@@ -1049,9 +1049,16 @@ export interface ProductionComponents {
    * The LLM budget every debate in this process is admitted against and
    * metered through (#388) — the instance inside `steps.debate`, not a copy.
    *
-   * Exposed so `yarn smoke`'s gate can assert it recorded the run's calls. A
-   * component that is constructed and never consulted is the exact defect
-   * #388 is, and it is invisible to a unit suite by construction.
+   * Exposed so a caller can assert the limiter actually saw the run's calls,
+   * which is the only way to catch this component reverting to having no
+   * caller: that defect is invisible to a unit suite by construction.
+   *
+   * Note `yarn smoke` does NOT read this field — `startFromEnvironment`
+   * returns a `ProductionOrchestrator`, which has no such member, so the smoke
+   * run injects its own limiter through `ProductionConfig.llmRateLimiter` and
+   * holds that reference. The injection seam is the load-bearing one; this
+   * field is the equivalent for a caller that went through
+   * `buildProductionComponents` directly (rate-limit-wiring.test.ts).
    */
   llmRateLimiter: RateLimiter;
 }

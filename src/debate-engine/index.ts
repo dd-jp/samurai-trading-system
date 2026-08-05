@@ -74,6 +74,7 @@ export type {
   AssetClass,
   RateLimitConfig,
   RateLimiterConfig,
+  RateLimiterSnapshot,
   ReserveResult,
 } from './rate-limiter.js';
 export { RateLimiter } from './rate-limiter.js';

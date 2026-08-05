@@ -8,7 +8,6 @@
  * component: `RateLimiter` was implemented, unit-tested and exported, and
  * constructed nowhere in production, while every unit test passed.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AnalystView, LlmClient, LlmRequest } from '../../debate-engine/index.js';
 import {
   InMemoryDebateLogStore,

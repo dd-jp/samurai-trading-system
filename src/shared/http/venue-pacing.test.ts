@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_VENUE_PACING,
   resolveVenuePacing,
@@ -96,10 +95,50 @@ describe('resolveVenuePacing', () => {
     }
   });
 
-  it('names both env vars for a venue so an operator can be told what to set', () => {
+  it('names every env var for a venue so an operator can be told what to set', () => {
     expect(venuePacingEnvVars('alpaca')).toEqual({
       capacity: 'SAMURAI_PACING_ALPACA_CAPACITY',
       refillPerSecond: 'SAMURAI_PACING_ALPACA_REFILL_PER_SEC',
+      ceilingPerSecond: 'SAMURAI_PACING_ALPACA_CEILING_PER_SEC',
+    });
+  });
+
+  /**
+   * #299's premise is that "a rate limit is a property of the account, not of
+   * the code". A ceiling raisable only by editing a source constant would
+   * re-hardcode exactly that, in the one direction an operator needs it —
+   * Alpaca grants raised allowances on request. So the ceiling itself is ops
+   * config, and stating it is a separate deliberate act from tuning the rate.
+   */
+  describe('an account with a documented allowance above the published default', () => {
+    it('can raise the ceiling from the environment, with no code change', () => {
+      const resolved = resolveVenuePacing({
+        SAMURAI_PACING_ALPACA_CEILING_PER_SEC: '16.6',
+        SAMURAI_PACING_ALPACA_REFILL_PER_SEC: '10',
+      });
+
+      expect(resolved.alpaca.refillPerSecond).toBe(10);
+    });
+
+    it('still refuses a rate above the RAISED ceiling', () => {
+      expect(() =>
+        resolveVenuePacing({
+          SAMURAI_PACING_ALPACA_CEILING_PER_SEC: '16.6',
+          SAMURAI_PACING_ALPACA_REFILL_PER_SEC: '20',
+        }),
+      ).toThrow(/documented limit of 16.6/);
+    });
+
+    it('points the operator at the ceiling variable rather than at the source', () => {
+      expect(() => resolveVenuePacing({ SAMURAI_PACING_ALPACA_REFILL_PER_SEC: '10' })).toThrow(
+        /SAMURAI_PACING_ALPACA_CEILING_PER_SEC/,
+      );
+    });
+
+    it('refuses a nonsense ceiling rather than treating it as no ceiling', () => {
+      expect(() =>
+        resolveVenuePacing({ SAMURAI_PACING_ALPACA_CEILING_PER_SEC: 'unlimited' }),
+      ).toThrow(/SAMURAI_PACING_ALPACA_CEILING_PER_SEC/);
     });
   });
 });

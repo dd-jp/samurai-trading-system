@@ -105,7 +105,12 @@
  */
 import { pathToFileURL } from 'node:url';
 import { CostModelImpl } from '../cost-model-backtest/index.js';
-import type { LlmClient, LlmRequest, LlmResponse } from '../debate-engine/index.js';
+import type {
+  LlmClient,
+  LlmRequest,
+  LlmResponse,
+  RateLimiterSnapshot,
+} from '../debate-engine/index.js';
 import { RateLimiter } from '../debate-engine/index.js';
 import type { AlpacaClient } from '../execution/index.js';
 import { SimulatedBrokerAdapter } from '../execution/index.js';
@@ -116,7 +121,6 @@ import {
   SqliteMarketDataStore,
 } from '../market-data-service/index.js';
 import type { SessionBasisByClass } from '../risk-manager/index.js';
-import type { AssetClass } from '../shared/index.js';
 import { SimulatedClock } from '../shared/index.js';
 import { openSharedStore, type SharedStore as SqliteHandle } from '../shared/store/index.js';
 import {
@@ -506,9 +510,7 @@ export function evaluateSmokeGate(
      * COMPILE error, the same structural argument that makes `RateLimiter` a
      * required positional on `buildDebateStep`.
      */
-    llmRateLimiterSnapshot: Partial<
-      Record<AssetClass, { llmCallsUsed: number; debatesUsed: number }>
-    >;
+    llmRateLimiterSnapshot: RateLimiterSnapshot;
   },
 ): SmokeGateResult {
   const failures: string[] = [];

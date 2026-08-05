@@ -40,6 +40,16 @@ export interface RateLimiterConfig {
 
 export type ReserveResult = { granted: true } | { granted: false; reason: string };
 
+/**
+ * What `RateLimiter.snapshot()` returns. Named rather than spelled inline at
+ * each site: `smoke-run.ts`'s gate option declares the same shape, and a
+ * hand-copied structural type across a module boundary diverges silently the
+ * first time `WindowState` is renamed.
+ */
+export type RateLimiterSnapshot = Partial<
+  Record<AssetClass, { llmCallsUsed: number; debatesUsed: number }>
+>;
+
 interface WindowState {
   windowStart: number;
   llmCallsUsed: number;
@@ -134,8 +144,8 @@ export class RateLimiter {
    * over or create one for a class that has never been used, or the observer
    * would change what it observes.
    */
-  snapshot(): Partial<Record<AssetClass, { llmCallsUsed: number; debatesUsed: number }>> {
-    const result: Partial<Record<AssetClass, { llmCallsUsed: number; debatesUsed: number }>> = {};
+  snapshot(): RateLimiterSnapshot {
+    const result: RateLimiterSnapshot = {};
     for (const [assetClass, window] of this.windows) {
       result[assetClass] = {
         llmCallsUsed: window.llmCallsUsed,

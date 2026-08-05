@@ -24,8 +24,9 @@
  * - **`CEILING VERIFIED, RATE UNVERIFIED`** — the venue publishes a hard
  *   ceiling, but the rate this system should actually run at underneath it
  *   depends on an account/tier/connection that does not exist yet. The ceiling
- *   is enforced (see `VENUE_DOCUMENTED_CEILING_PER_SECOND`); the operating
- *   rate stays conservative and is flagged as untuned.
+ *   is enforced (see `VENUE_DOCUMENTED_CEILING_PER_SECOND`) and is itself
+ *   overridable per account (`SAMURAI_PACING_<VENUE>_CEILING_PER_SEC`); the
+ *   operating rate stays conservative and is flagged as untuned.
  * - **`UNVERIFIED`** — nothing about this venue's real limit could be
  *   established for the account in use, because there is no account and no
  *   venue decision. The conservative placeholder is KEPT and said to be a
@@ -47,6 +48,13 @@ export const VENUE_KEYS: readonly VenueKey[] = ['alpaca', 'ccxt', 'ibkr'];
  *
  * A venue absent from this map has no verified ceiling and is NOT given an
  * invented one — the operator is trusted and the default stays at a floor.
+ *
+ * These are the PUBLISHED figures, not a claim about what this deployment's
+ * account is entitled to. An account with a granted allowance above its
+ * venue's published rate states it with
+ * `SAMURAI_PACING_<VENUE>_CEILING_PER_SEC` rather than editing this map — see
+ * `resolveCeiling`, and #299's premise that a rate limit belongs to the
+ * account rather than to the code.
  */
 export const VENUE_DOCUMENTED_CEILING_PER_SECOND: Partial<Record<VenueKey, number>> = {
   /**
@@ -145,13 +153,47 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
   ibkr: { capacity: 5, refillPerSecond: 5 },
 };
 
-/** The two environment variables that override one venue's bucket. */
+/** The environment variables that override one venue's bucket. */
 export function venuePacingEnvVars(venue: VenueKey): {
   capacity: string;
   refillPerSecond: string;
+  ceilingPerSecond: string;
 } {
   const prefix = `SAMURAI_PACING_${venue.toUpperCase()}`;
-  return { capacity: `${prefix}_CAPACITY`, refillPerSecond: `${prefix}_REFILL_PER_SEC` };
+  return {
+    capacity: `${prefix}_CAPACITY`,
+    refillPerSecond: `${prefix}_REFILL_PER_SEC`,
+    ceilingPerSecond: `${prefix}_CEILING_PER_SEC`,
+  };
+}
+
+/**
+ * The ceiling this deployment's account is actually entitled to, which is the
+ * checked-in published figure unless the operator states otherwise.
+ *
+ * **Why this escape hatch exists (code review, spec axis).** #299's whole point
+ * is that "a rate limit is a property of the account, not of the code". A
+ * ceiling that can only be raised by editing `VENUE_DOCUMENTED_CEILING_PER_SECOND`
+ * re-hardcodes exactly that, in the one direction an operator would ever need
+ * it: Alpaca grants raised allowances on request, and an operator who has been
+ * granted one should not have to patch and redeploy to use it.
+ *
+ * It is a SEPARATE variable rather than simply dropping the check, because the
+ * two mistakes are not symmetric. Setting a rate above a published limit does
+ * not make the system faster — it earns 429s and, sustained, a banned key. So
+ * raising the ceiling stays a deliberate, separate act that says "my account is
+ * documented at this figure", rather than something an operator does by
+ * accident while tuning throughput.
+ */
+function resolveCeiling(env: NodeJS.ProcessEnv, venue: VenueKey, name: string): number | undefined {
+  const raw = (env[name] ?? '').trim();
+  if (raw.length === 0) return VENUE_DOCUMENTED_CEILING_PER_SECOND[venue];
+
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${name} must be a finite number greater than 0; got '${raw}'.`);
+  }
+  return value;
 }
 
 /**
@@ -171,7 +213,12 @@ function readPositive(
   env: NodeJS.ProcessEnv,
   name: string,
   fallback: number,
-  constraints: { min: number; minLabel: string; ceiling?: number | undefined },
+  constraints: {
+    min: number;
+    minLabel: string;
+    ceiling?: number | undefined;
+    ceilingEnvVar?: string;
+  },
 ): number {
   const raw = (env[name] ?? '').trim();
   if (raw.length === 0) return fallback;
@@ -187,8 +234,8 @@ function readPositive(
     throw new Error(
       `${name}=${value} exceeds the venue's documented limit of ${constraints.ceiling}/s. ` +
         'Pacing above a published rate limit does not make the system faster — it earns a 429 ' +
-        'and, sustained, a banned API key. Raise it only against a documented allowance for ' +
-        'this account, and update VENUE_DOCUMENTED_CEILING_PER_SECOND with the citation.',
+        'and, sustained, a banned API key. If THIS ACCOUNT has a documented allowance above ' +
+        `that figure, state it with ${constraints.ceilingEnvVar} — no code change needed.`,
     );
   }
   return value;
@@ -219,7 +266,8 @@ export function resolveVenuePacing(env: NodeJS.ProcessEnv = process.env): VenueP
       refillPerSecond: readPositive(env, names.refillPerSecond, fallback.refillPerSecond, {
         min: Number.MIN_VALUE,
         minLabel: 'greater than 0 (a non-positive rate parks every call forever)',
-        ceiling: VENUE_DOCUMENTED_CEILING_PER_SECOND[venue],
+        ceiling: resolveCeiling(env, venue, names.ceilingPerSecond),
+        ceilingEnvVar: names.ceilingPerSecond,
       }),
     };
   }

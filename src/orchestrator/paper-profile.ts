@@ -83,6 +83,7 @@
  * the `feedback` block below names no transport either.
  */
 import type { CostConfig } from '../cost-model-backtest/index.js';
+import type { RateLimitConfig } from '../debate-engine/index.js';
 import type { ExecutionConfig } from '../execution/index.js';
 import type { FeedbackConfig, TunableDial } from '../feedback-loop/index.js';
 import type { CiiConsumerConfig } from '../market-intelligence/index.js';
@@ -542,11 +543,7 @@ function buildDailyMetrics(): DailyMetricsConfig {
  * have to think about: debates per window. The call budget follows from it (see
  * `rateLimiterConfig`'s comment for why they are tied rather than independent).
  */
-function llmBudget(maxDebates: number): {
-  windowMs: number;
-  maxDebates: number;
-  maxLlmCalls: number;
-} {
+function llmBudget(maxDebates: number): RateLimitConfig {
   return {
     windowMs: LLM_BUDGET_WINDOW_MS,
     maxDebates,
@@ -1102,6 +1099,20 @@ function buildProfileConfigs(): Pick<
      * loop, or a universe widened again cannot turn into unbounded billing
      * before anyone notices. Sized to sit clear of normal operation and to
      * bite well before the day's cost multiplies.
+     *
+     * **It is a COST ceiling, not a transcription of Anthropic's rate limits,
+     * and the difference is worth stating plainly.** #388 asks to "confirm the
+     * venue-side limits it is configured against are real"; that was done for
+     * the broker side, where each figure is cited by URL in
+     * `shared/http/venue-pacing.ts`. It was NOT done here: Anthropic's
+     * per-tier requests-per-minute and tokens-per-minute limits vary by
+     * account and spend history, and no figure for THIS account was
+     * established. So these numbers are derived from #385's measured cadence
+     * and $/call, and nothing in them should be read as "Anthropic permits
+     * this rate". The provider's own 429 is still handled where it always was
+     * — `AnthropicLlmClient`'s retry/`LlmRateLimitError` path — and remains
+     * the authority on the provider's limit. Establishing the account's real
+     * tier figures and reconciling them with this budget is open work.
      *
      * **`windowMs: 300_000` — DERIVED.** Five minutes rather than one.
      * `RateLimiter` uses a FIXED window, not a sliding one, so at the counts
