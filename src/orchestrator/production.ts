@@ -868,7 +868,9 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   };
 
   const steps: TickSteps = {
-    analysts: buildAnalystsStep(analysts),
+    // `logger` here is what makes an analyst failure visible at all — see the
+    // adapter's doc comment (issue #358 item 4).
+    analysts: buildAnalystsStep(analysts, logger),
     debate: buildDebateStep(config.llmClient ?? buildDefaultLlmClient(logger)),
     trader: buildTraderStep({ ...breakerStateDeps, config: config.traderConfig }),
     risk: buildRiskStep({

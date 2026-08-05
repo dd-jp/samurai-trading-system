@@ -3,6 +3,16 @@
 Ticket: Research: Alpaca REST API surface for AlpacaClient (broker + data), part of
 [Live Transport Layer: Alpaca / Polygon / Anthropic / Telegram HTTP clients + account-state](https://github.com/dd-jp/samurai-trading-system/issues/259).
 
+> **CORRECTION 2026-08-05 ([#358](https://github.com/dd-jp/samurai-trading-system/issues/358)).**
+> The crypto rows in the Market Data table below are **wrong** and were implemented as
+> written. Alpaca's crypto data endpoints are on **`/v1beta3`**, not `/v2`:
+> `GET /v1beta3/crypto/us/bars` and `GET /v1beta3/crypto/us/latest/quotes` return `200`;
+> both paths under `/v2` return `404`. The equity rows (`/v2/stocks/...`) and the whole
+> Broker/Trading table are correct — re-verified live the same day. This is exactly the
+> failure mode the caveat below warned about, so treat that caveat as load-bearing rather
+> than boilerplate: it took a live paper run to catch, because the 404 surfaced as a quiet
+> `analysts: quorum_skip` rather than an error.
+
 **No live network access in this sandbox** — same boundary already documented for
 `PolygonClient` (#241) and Stage 2's real data run. This is written from training-data
 knowledge of Alpaca's public Trading API v2 and Market Data API v2, which have been

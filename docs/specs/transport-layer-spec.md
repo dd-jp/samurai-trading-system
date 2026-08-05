@@ -34,7 +34,7 @@ Cutting across all five: a shared error taxonomy, a shared (but per-client-confi
 ### AlpacaClient (market data)
 
 5. As the Market Data Service's `AlpacaDataSource`, I want `getBars`/`getLatestQuote` to hit Alpaca's real Market Data API v2, so that the MVP universe's bars/marks are real, not simulated.
-6. As the data source, I want crypto vs. equity requests routed by path-root (`/v2/crypto/us/...` vs `/v2/stocks/...`), not by a query parameter, so that the client matches Alpaca's actual routing.
+6. As the data source, I want crypto vs. equity requests routed by path-root (`/v1beta3/crypto/us/...` vs `/v2/stocks/...`), not by a query parameter, so that the client matches Alpaca's actual routing. **The two roots sit on different API versions** — corrected 2026-08-05 against the live API ([#358](https://github.com/dd-jp/samurai-trading-system/issues/358)); `/v2/crypto/us/...` 404s.
 
 ### AnthropicLlmClient (production wiring)
 
@@ -117,7 +117,7 @@ Both land in `src/shared/http/`.
 
 **No interface change.** `src/market-data-service/sources/alpaca-source.ts`'s `AlpacaClient` (`getBars`/`getLatestQuote`) maps onto Alpaca's Market Data API v2.
 
-- **Crypto/equity is a path-root split, not a query parameter:** `/v2/stocks/...` vs. `/v2/crypto/us/...`, selected by `AlpacaSourceOptions.asset_class`, which the data source already threads through to the client. The exact bar-endpoint path beneath each root is an **implementation-time verification note** — #260 confirmed the root split, not the full path.
+- **Crypto/equity is a path-root split, not a query parameter:** `/v2/stocks/...` vs. `/v1beta3/crypto/us/...`, selected by `AlpacaSourceOptions.asset_class`, which the data source already threads through to the client. **Verified live 2026-08-05 ([#358](https://github.com/dd-jp/samurai-trading-system/issues/358)):** `GET /v1beta3/crypto/us/bars` and `GET /v1beta3/crypto/us/latest/quotes` return `200`; the same two paths under `/v2` return `404`. `GET /v2/stocks/{symbol}/bars` and `GET /v2/stocks/{symbol}/quotes/latest` return `200` — the equity root was already right. Crypto responses are keyed by the slash symbol exactly as sent (`BTC/USD`), and any other separator is a `400`, not a differently-keyed body. The original "#260 confirmed the root split, not the full path" verification note was left unresolved through implementation and shipped as `/v2/crypto/us/...`, which silently disabled the entire default (crypto-only) paper pipeline; the version segment is now pinned by test in `alpaca-http-client.test.ts`.
 - **`getBars` pagination:** Alpaca's bars endpoint can page for a long lookback; deferred to implementation-time verification (check whether the MVP universe's actual windows ever hit a page boundary before building pagination-following logic) — an implementation-time check, not a design decision, per #260's research.
 - **Auth/credential-sharing with the broker client:** whether one Alpaca key pair covers both trading and market-data endpoints, or two separate pairs are needed, was not resolved by #260 and is an **implementation-time verification note**, not a decision made here.
 
