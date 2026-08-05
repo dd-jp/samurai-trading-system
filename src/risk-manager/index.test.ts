@@ -75,6 +75,7 @@ function makeBreakers(overrides: Partial<BreakerState> = {}): BreakerState {
 function makeCorrelation(overrides: Partial<CorrelationEstimate> = {}): CorrelationEstimate {
   return {
     correlations: {},
+    insufficient_history: [],
     ...overrides,
   };
 }
@@ -552,5 +553,135 @@ describe('RiskManagerImpl.evaluate — CII soft signal (#205)', () => {
     expect(decision.warnings).toEqual(['macro_risk_flag:RU']);
     expect(decision.status).toBe('rejected');
     expect(decision.binding_constraint).toBe('circuit_breaker:portfolio');
+  });
+});
+
+/**
+ * #303: the concentration check still treats an uncovered pair as "not
+ * correlated" — nothing about sizing moves. What changes is that the decision
+ * now SAYS so, so an absent correlation is no longer indistinguishable from a
+ * measured zero.
+ */
+describe('RiskManagerImpl.evaluate — correlation warm-up warning (#303)', () => {
+  it('warns for each held instrument with insufficient overlapping history', () => {
+    const manager = new RiskManagerImpl(makeConfig());
+    const input = makeInput({
+      intent: makeIntent({ instrument: 'AAPL' }),
+      portfolio: makePortfolio({ exposure_by_instrument: { MSFT: 4_000, TSLA: 3_000 } }),
+      correlation: makeCorrelation({ insufficient_history: ['MSFT', 'TSLA'] }),
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.warnings).toEqual(['correlation_warmup:MSFT', 'correlation_warmup:TSLA']);
+  });
+
+  it('does not warn when every held pair has enough history', () => {
+    const manager = new RiskManagerImpl(makeConfig());
+    const input = makeInput({
+      intent: makeIntent({ instrument: 'AAPL' }),
+      portfolio: makePortfolio({ exposure_by_instrument: { MSFT: 4_000 } }),
+      correlation: makeCorrelation({ correlations: { MSFT: 0.1 }, insufficient_history: [] }),
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.warnings).toEqual([]);
+  });
+
+  /**
+   * The distinction that #303 exists to draw: a measured 0.0 and an
+   * un-measurable pair both leave the concentration check inert, but only one
+   * of them is evidence of diversification.
+   */
+  it('distinguishes a measured near-zero correlation from an unmeasurable pair', () => {
+    const manager = new RiskManagerImpl(makeConfig());
+    const measured = manager.evaluate(
+      makeInput({
+        intent: makeIntent({ instrument: 'AAPL' }),
+        portfolio: makePortfolio({ exposure_by_instrument: { MSFT: 4_000 } }),
+        correlation: makeCorrelation({ correlations: { MSFT: 0.0 }, insufficient_history: [] }),
+      }),
+    );
+    const unmeasurable = manager.evaluate(
+      makeInput({
+        intent: makeIntent({ instrument: 'AAPL' }),
+        portfolio: makePortfolio({ exposure_by_instrument: { MSFT: 4_000 } }),
+        correlation: makeCorrelation({ correlations: {}, insufficient_history: ['MSFT'] }),
+      }),
+    );
+
+    expect(measured.warnings).toEqual([]);
+    expect(unmeasurable.warnings).toEqual(['correlation_warmup:MSFT']);
+    // ...and the sizing outcome is identical: this warning trims nothing.
+    expect(measured.order_intent?.size).toBe(unmeasurable.order_intent?.size);
+  });
+
+  /**
+   * #381's six-instrument widening on day 1 of the soak: every pair uncovered.
+   * The portfolio must not read as silently diversified.
+   */
+  it('flags every peer of a six-instrument day-1 portfolio rather than reading as diversified', () => {
+    const manager = new RiskManagerImpl(
+      makeConfig({ concentration: { cap: 9_000, threshold: 0.7 } }),
+    );
+    const peers = ['QQQ', 'AAPL', 'TSLA', 'BTC-USD', 'ETH-USD'];
+    const input = makeInput({
+      intent: makeIntent({ instrument: 'SPY', size: 100, entry: 100 }),
+      portfolio: makePortfolio({
+        exposure_by_instrument: Object.fromEntries(peers.map((p) => [p, 4_000])),
+      }),
+      correlation: makeCorrelation({ correlations: {}, insufficient_history: peers }),
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.status).toBe('approved');
+    // Unchanged behaviour: nothing trims, because nothing is KNOWN correlated.
+    expect(decision.binding_constraint).toBeNull();
+    expect(decision.order_intent?.size).toBe(100);
+    // ...but the blindness is now stated rather than implied by an empty map.
+    expect(decision.warnings).toEqual(peers.map((p) => `correlation_warmup:${p}`));
+  });
+
+  it('attaches the warm-up warning alongside a CII flag without displacing it', () => {
+    const manager = new RiskManagerImpl(makeConfig({ cii_threshold: 70 }));
+    const input = makeInput({
+      intent: makeIntent({ instrument: 'YNDX' }),
+      cii: { RU: 90 },
+      correlation: makeCorrelation({ insufficient_history: ['MSFT'] }),
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.warnings).toEqual(['macro_risk_flag:RU', 'correlation_warmup:MSFT']);
+  });
+
+  it('attaches the warm-up warning to a breaker rejection too', () => {
+    const manager = new RiskManagerImpl(makeConfig());
+    const input = makeInput({
+      intent: makeIntent({ instrument: 'AAPL' }),
+      breakers: makeBreakers({ portfolio_tripped: true }),
+      correlation: makeCorrelation({ insufficient_history: ['MSFT'] }),
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.status).toBe('rejected');
+    expect(decision.warnings).toEqual(['correlation_warmup:MSFT']);
+    expect(decision.binding_constraint).toBe('circuit_breaker:portfolio');
+  });
+
+  it('attaches the warm-up warning to an exit, which bypasses every entry gate', () => {
+    const manager = new RiskManagerImpl(makeConfig());
+    const input = makeInput({
+      intent: makeIntent({ instrument: 'AAPL', intent_type: 'exit' }),
+      correlation: makeCorrelation({ insufficient_history: ['MSFT'] }),
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.status).toBe('approved');
+    expect(decision.warnings).toEqual(['correlation_warmup:MSFT']);
   });
 });

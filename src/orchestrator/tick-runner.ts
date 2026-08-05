@@ -18,6 +18,11 @@
  * Every stage actually reached emits exactly one `logger.log` line and one
  * `auditLog.record` row, both carrying `trace_id` — a short-circuited stage
  * and everything after it produce no row (there is no decision to record).
+ * One exception, added by #303: a `RiskDecision` carrying advisory
+ * `warnings` emits a SECOND, `warn`-level line for the risk stage. It adds no
+ * audit row (the decision is already recorded) and never alters control flow;
+ * it exists so an advisory flag reaches an operator scanning for `warn`
+ * instead of being buried in an `info` payload nothing reads.
  *
  * The `current_tick` progress row the spec attaches to this module (#96):
  * upserted before each stage call, deleted on every normal terminal return.
@@ -92,6 +97,20 @@ export class SequentialTickRunner implements TickRunner {
     const riskInput = { trace_id, intent, clock };
     const riskDecision = await this.steps.risk(riskInput);
     record('risk', riskDecision.status, riskInput, riskDecision);
+    // #303: `RiskDecision.warnings` had no production reader — it rode along
+    // inside the `info` payload above and nothing ever raised it, so an
+    // advisory flag (CII macro risk, correlation warm-up) was representable
+    // but not observable. This is that reader. Advisory by contract: it never
+    // touches control flow, only the operator-visible log level.
+    if (riskDecision.warnings.length > 0) {
+      logger.log({
+        trace_id,
+        stage: 'risk',
+        level: 'warn',
+        message: `risk: advisory warnings — ${riskDecision.warnings.join(', ')}`,
+        payload: { warnings: riskDecision.warnings },
+      });
+    }
     if (riskDecision.status === 'rejected') {
       currentTickStore.delete(instrument);
       return { trace_id, final_stage: 'risk' };

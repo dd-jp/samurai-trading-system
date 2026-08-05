@@ -159,7 +159,7 @@ Ordered; each step trims or hard-rejects; **exits skip all entry gates and alway
 3. **Per-asset exposure cap** — trim so total exposure to the instrument ≤ limit.
 4. **Per-asset-class exposure cap** — trim so the crypto/stocks bucket ≤ limit.
 5. **Portfolio gross exposure cap** — trim so total gross ≤ limit.
-6. **Concentration check (dynamic correlation matrix)** — point-in-time pairwise Pearson correlation over trailing returns (`src/risk-manager/correlation.ts`), trim to fit the correlated-risk cap. (Implemented per backlog ticket #50 — the "v1 static buckets" description in earlier drafts of this spec was stale; corrected 2026-07-26 during #186's grilling.)
+6. **Concentration check (dynamic correlation matrix)** — point-in-time pairwise Pearson correlation over trailing returns (`src/risk-manager/correlation.ts`), trim to fit the correlated-risk cap. (Implemented per backlog ticket #50 — the "v1 static buckets" description in earlier drafts of this spec was stale; corrected 2026-07-26 during #186's grilling.) A pair with fewer than `min_bars` overlapping returns still cannot bind this cap — the warm-up fallback — but is now reported, see "Module: Correlation Warm-up Visibility" below.
 7. **Risk critic (advisory-authority)** — a single red-team LLM pass over the intent, narrative/qualitative risk only; may trim or hard-reject, same authority as the mechanical steps above. See "Module: Risk Critic" below. (Added per [ADR-0003](../adr/0003-risk-manager-critic-layer.md).)
 8. **Min-viable-size re-check** — if trimming pushed size below viable (respecting broker min order size), reject.
 
@@ -185,6 +185,18 @@ Adopted per [ADR-0002](../adr/0002-worldmonitor-mi-source.md) (WorldMonitor as a
 - **Fires on absolute CII level, not delta.** A sustained high-risk exposure warns every cycle it's evaluated, not just at the moment of a jump.
 - **Threshold ("CII > N") is an unpinned config value**, tuned in paper trading — same convention as every other Risk Manager threshold.
 - **Never overrides a circuit breaker or the check pipeline's approve/reject/trim outcome, no exceptions.** The CII check runs alongside the pipeline (informational), not as one of its ordered steps — it cannot trim, reject, or otherwise change `order_intent`.
+
+### Module: Correlation Warm-up Visibility
+
+Resolved 2026-08-05 via [#303](https://github.com/dd-jp/samurai-trading-system/issues/303) (raised as M11 in `code-review-2026-08-01.md` / L2 in `code-review-security-2026-08-01.md`). **Option (b) — surface it — was chosen.**
+
+The gap: check-pipeline step 6 reads an instrument absent from `CorrelationEstimate.correlations` as not correlated. That is the intended warm-up fallback (risk-manager-map.md AC3) — the alternative is fabricating a correlation from too little data. But *absent* and *measured at ~0* were the same observation to every caller, so a portfolio with no overlapping history at all was byte-for-byte indistinguishable from a genuinely diversified one. That window — a newly listed instrument, or day 1 of a run — is exactly when the system opens its first positions with the concentration cap silently inert. It stops being hypothetical with [#381](https://github.com/dd-jp/samurai-trading-system/issues/381)'s widening to the six-instrument ADR-0001 universe, where on day 1 every one of the fifteen pairs is under `min_bars`.
+
+- **`CorrelationEstimate.insufficient_history: string[]`** carries the held instruments dropped for want of overlap, alongside `correlations`. Populated by `computeCorrelationEstimate`; present-but-empty means every pair was measurable.
+- **`evaluate()` emits one `correlation_warmup:<instrument>` tag per uncovered pair** on the advisory `warnings` field — the same field, and the same never-gates-never-sizes contract, as the CII soft signal above. It appears on every decision path including exits and breaker rejections.
+- **No limit and no sizing behaviour changed.** An uncovered pair still cannot bind the concentration cap; the trim arithmetic is untouched. The change is purely one of visibility, which is what makes it verifiable and reversible.
+- **Consumer:** `SequentialTickRunner` (`src/orchestrator/tick-runner.ts`) raises a second, `warn`-level structured log line for the risk stage whenever a `RiskDecision` carries warnings. Before this, `RiskDecision.warnings` had **no production reader at all** — including the CII flag, live since #205 — it rode along inside the risk stage's `info` payload and nothing ever raised it.
+- **Options rejected.** *(a) document only* — a stated blind spot is not adequate handling when it is about to become six-instrument-wide on day 1 of the #238 soak. *(c) assume a conservative rho for uncovered pairs* — changes sizing on a guessed number, and no source exists for the assumed asset-class average it would need. Revisit (c) only once #182-style history collection gives a calibratable series, alongside the same v2 upgrade the CII sizing formula waits on.
 
 ### Module: Risk Critic
 
@@ -290,6 +302,7 @@ Wayfinder decisions for this stage live in [docs/wayfinder/risk-manager-map.md](
 - **Backtest determinism** — same code path; point-in-time via injected clock; mode-flagged auto-re-arm.
 - **Exit & kill-switch** — exits pass verbatim; kill halts new entries; forced liquidation out of scope.
 - **CII soft signal** (resolved 2026-07-23, see [ADR-0002](../adr/0002-worldmonitor-mi-source.md) and [#174](https://github.com/dd-jp/samurai-trading-system/issues/174)) — WorldMonitor's Country Instability Index enters as an advisory `warnings` field on `RiskDecision`, warning-only in v1 (no sizing), Samurai-owned static instrument→country mapping, fires on absolute level not delta, unpinned threshold, never overrides breakers or the pipeline outcome.
+- **Correlation warm-up visibility** (resolved 2026-08-05, see [#303](https://github.com/dd-jp/samurai-trading-system/issues/303)) — option (b): under-`min_bars` pairs are named in `CorrelationEstimate.insufficient_history` and surfaced as `correlation_warmup:<instrument>` advisory warnings, read by `SequentialTickRunner` as a `warn` log line. No limit or sizing behaviour changes; the warm-up fallback itself is unchanged. See "Module: Correlation Warm-up Visibility".
 - **Risk critic** (resolved 2026-07-26, see [ADR-0003](../adr/0003-risk-manager-critic-layer.md) and [#186](https://github.com/dd-jp/samurai-trading-system/issues/186)) — a single red-team LLM pass added as check-pipeline step 7, narrative/qualitative risk only, trim/hard-reject authority, replay-from-log for backtest determinism, runs on every gated intent single-pass with no rebuttal round.
 
 **Dependencies:** the portfolio-accounting view + shared position store (also used by the Trader, #48); the **Market Data Service** (current marks for mark-to-market — a second consumer alongside Analysts; still unbuilt, needs its own map); the Feedback Loop (Stage 6, not yet charted) which tunes limits; **Market Intelligence's WorldMonitor adapter** (CII soft signal, per ADR-0002); and the **shared SQLite store's `debate_id`-keyed log tables** (risk critic verdict persistence, per ADR-0003 and #162).

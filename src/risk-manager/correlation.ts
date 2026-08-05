@@ -13,8 +13,11 @@
  * `MarketDataService.getBars(instrument, window, asOf)`, which is
  * no-lookahead by construction (same guarantee the accounting view relies
  * on for marks). A pair with fewer than `min_bars` overlapping returns is
- * simply omitted from the output — that omission is the warm-up fallback
- * (risk-manager-map.md AC3), not a fabricated correlation.
+ * still omitted from `correlations` — that omission is the warm-up fallback
+ * (risk-manager-map.md AC3), not a fabricated correlation — but it is also
+ * listed in `insufficient_history` (#303), so a caller can distinguish a pair
+ * measured at ~0 from a pair that could not be measured at all. Option (b) of
+ * #303: no limit moves, the blindness merely stops being silent.
  */
 import type { Bar, BarWindow, MarketDataService } from '../market-data-service/index.js';
 import type { CorrelationEstimate } from './types.js';
@@ -98,13 +101,20 @@ export async function computeCorrelationEstimate(
 
   const targetReturns = returnsByInstrument.get(instrument) ?? [];
   const correlations: Record<string, number> = {};
+  const insufficient_history: string[] = [];
 
   for (const other of otherInstruments) {
     const otherReturns = returnsByInstrument.get(other) ?? [];
     const overlap = Math.min(targetReturns.length, otherReturns.length);
-    if (overlap < config.min_bars) continue;
+    if (overlap < config.min_bars) {
+      // #303: still omitted from `correlations` — the fallback is unchanged.
+      // Naming it here is what lets the caller tell "not correlated" apart
+      // from "not measurable", which the empty slot alone could not express.
+      insufficient_history.push(other);
+      continue;
+    }
     correlations[other] = pearsonCorrelation(targetReturns, otherReturns);
   }
 
-  return { correlations };
+  return { correlations, insufficient_history };
 }

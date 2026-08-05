@@ -101,6 +101,7 @@ function approvedRisk(intent: OrderIntent): RiskDecision {
     modifications: { original_size: intent.size, final_size: intent.size, stop_tightened: false },
     binding_constraint: null,
     reasons: [],
+    warnings: [],
     risk_snapshot: { exposure: {}, drawdown_pct: 0, armed_breakers: [] },
   };
 }
@@ -112,6 +113,7 @@ function rejectedRisk(): RiskDecision {
     modifications: null,
     binding_constraint: 'circuit_breaker:portfolio',
     reasons: ['circuit_breaker:portfolio: new entries halted'],
+    warnings: [],
     risk_snapshot: { exposure: {}, drawdown_pct: 0, armed_breakers: ['portfolio'] },
   };
 }
@@ -451,5 +453,67 @@ describe('SequentialTickRunner.runInstrument', () => {
     // The row is left exactly as it was before the throw — a stale progress
     // indicator, safely overwritten by the next tick's upsert, not cleared.
     expect(store.get('AAPL')).toMatchObject({ stage: 'debate', instrument: 'AAPL' });
+  });
+});
+
+/**
+ * #303: before this, `RiskDecision.warnings` had no production reader at all —
+ * it rode along inside the `info` payload of the risk stage line and nothing
+ * ever raised it. This is the consumer that observes it, and it is the reason
+ * the correlation warm-up gap is now visible to an operator rather than
+ * merely representable.
+ */
+describe('SequentialTickRunner.runInstrument — risk warnings surfacing (#303)', () => {
+  function warnEntries(ctx: TickContext) {
+    const log = ctx.logger.log as ReturnType<typeof vi.fn>;
+    return log.mock.calls.map((call) => call[0]).filter((entry) => entry.level === 'warn');
+  }
+
+  it('raises a warn-level line naming every warning an approved RiskDecision carries', async () => {
+    const intent = makeIntent();
+    const steps = makeSteps({
+      risk: vi.fn(async () => ({
+        ...approvedRisk(intent),
+        warnings: ['correlation_warmup:MSFT', 'correlation_warmup:TSLA'],
+      })),
+    });
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const warns = warnEntries(ctx);
+    expect(warns).toHaveLength(1);
+    expect(warns[0]).toMatchObject({ trace_id: TRACE_ID, stage: 'risk', level: 'warn' });
+    expect(warns[0].message).toContain('correlation_warmup:MSFT');
+    expect(warns[0].message).toContain('correlation_warmup:TSLA');
+    expect(warns[0].payload).toEqual({
+      warnings: ['correlation_warmup:MSFT', 'correlation_warmup:TSLA'],
+    });
+  });
+
+  it('raises the warning even when the decision is rejected and the tick short-circuits', async () => {
+    const steps = makeSteps({
+      risk: vi.fn(async () => ({
+        ...rejectedRisk(),
+        warnings: ['correlation_warmup:BTC-USD'],
+      })),
+    });
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const warns = warnEntries(ctx);
+    expect(warns).toHaveLength(1);
+    expect(warns[0].message).toContain('correlation_warmup:BTC-USD');
+  });
+
+  it('stays silent when the decision carries no warnings', async () => {
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(makeSteps()).runInstrument(SIGNAL, ctx);
+
+    expect(warnEntries(ctx)).toEqual([]);
+    // ...and the one-line-per-stage invariant is untouched on the quiet path.
+    expect(ctx.logger.log).toHaveBeenCalledTimes(6);
   });
 });
