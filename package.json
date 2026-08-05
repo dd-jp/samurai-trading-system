@@ -16,6 +16,7 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "orchestrator": "yarn build && node dist/orchestrator/index.js",
+    "smoke": "yarn build && node dist/orchestrator/smoke-run.js",
     "dashboard": "yarn build && node dist/dashboard/index.js"
   },
   "devDependencies": {
