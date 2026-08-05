@@ -612,6 +612,47 @@ describe('SequentialTickRunner.runInstrument — risk warnings surfacing (#303)'
     expect(warns.map((entry) => entry.payload.instrument).sort()).toEqual([...universe].sort());
   });
 
+  /**
+   * `insufficient_history` follows `Object.keys(exposure_by_instrument)`, whose
+   * insertion order follows `getOpenPositions()`'s `ORDER BY opened_at` — no
+   * tiebreak, and the order shifts whenever a position closes and reopens. An
+   * order-sensitive signature would read a reordering as a change and re-fire,
+   * defeating the suppression outright. The set is what matters, not its order.
+   */
+  it('treats a reordered but identical warning set as unchanged', async () => {
+    const intent = makeIntent();
+    let warnings = ['correlation_warmup:MSFT', 'correlation_warmup:TSLA'];
+    const steps = makeSteps({
+      risk: vi.fn(async () => ({ ...approvedRisk(intent), warnings: [...warnings] })),
+    });
+    const ctx = makeCtx();
+    const runner = new SequentialTickRunner(steps);
+
+    await runner.runInstrument(SIGNAL, ctx);
+    warnings = ['correlation_warmup:TSLA', 'correlation_warmup:MSFT']; // same set, reordered
+    await runner.runInstrument(SIGNAL, ctx);
+
+    expect(warnEntries(ctx)).toHaveLength(1);
+  });
+
+  it('keeps the payload in the order the risk manager produced, not sorted', async () => {
+    const intent = makeIntent();
+    const steps = makeSteps({
+      risk: vi.fn(async () => ({
+        ...approvedRisk(intent),
+        warnings: ['correlation_warmup:TSLA', 'correlation_warmup:MSFT'],
+      })),
+    });
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    expect(warnEntries(ctx)[0].payload.warnings).toEqual([
+      'correlation_warmup:TSLA',
+      'correlation_warmup:MSFT',
+    ]);
+  });
+
   it('warns again when the warning set actually changes for that instrument', async () => {
     const intent = makeIntent();
     let warnings = ['correlation_warmup:MSFT', 'correlation_warmup:TSLA'];

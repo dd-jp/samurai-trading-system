@@ -171,7 +171,14 @@ export class SequentialTickRunner implements TickRunner {
    * reasoning does not reach such a pipeline.
    */
   private reportAdvisoryWarnings(instrument: string, warnings: string[], ctx: TickContext): void {
-    const signature = warnings.join('|');
+    // Sorted copy: the signature compares SETS, not sequences.
+    // `insufficient_history` follows `Object.keys(exposure_by_instrument)`,
+    // whose insertion order follows `getOpenPositions()`'s `ORDER BY
+    // opened_at` — no tiebreak, and the order shifts whenever a position
+    // closes and reopens. Comparing raw order would read a reordering as a
+    // change and re-fire, defeating the suppression this method exists for.
+    // The payload keeps the original order; only the comparison is sorted.
+    const signature = [...warnings].sort().join('|');
     if (this.#lastAdvisory.get(instrument) === signature) return;
 
     const hadWarnings = (this.#lastAdvisory.get(instrument) ?? '') !== '';
