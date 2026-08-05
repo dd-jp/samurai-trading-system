@@ -93,23 +93,17 @@ export function validateAnalystView(
 /**
  * Races one analyst's response against the shared timeout. Never rejects.
  *
- * NOT CANCELLED, deliberately — checked as part of #347, which fixed the same
- * `Promise.race` + `setTimeout` shape in `latency-budget.ts`. The difference
- * is that there the loser is a chain this code STARTS (`produceResult` ->
- * `runDebate` -> billed LLM calls), so it can be handed an `AbortSignal`;
- * here the loser is `expected.response`, an opaque `Promise<AnalystView>` the
- * CALLER already has in flight before `collectAnalystViews` is entered. This
- * module never issues the call, holds no client, and has nothing to abort —
- * adding a signal parameter would only move the problem to a caller that does
- * not exist yet (`collectAnalystViews` is exported but, as of #347, called by
- * no production code; the Analyst stage that will call it is out of scope
- * here, per debate-engine-spec.md "Out of Scope: Analyst Stage Design").
- * Whether a straggling analyst is even a billed LLM call is that caller's
- * property, not this one's, so the honest move is to leave the seam alone and
- * say why rather than invent a cancellation contract nothing implements.
+ * NOT CANCELLED, deliberately — assessed as part of #347, which fixed the same
+ * `Promise.race` + `setTimeout` shape in `latency-budget.ts`. There the loser
+ * is a chain this code STARTS, so it can be handed an `AbortSignal`; here it
+ * is `expected.response`, an opaque promise the CALLER already has in flight.
+ * This module issues no call and holds no client, so it has nothing to abort,
+ * and whether a straggling analyst is even a billed call is the caller's
+ * property — a caller that does not exist yet (`collectAnalystViews` has no
+ * production consumer as of #347; the Analyst stage is out of scope per
+ * debate-engine-spec.md "Out of Scope: Analyst Stage Design").
  *
- * The TIMER, by contrast, was a real and unambiguous leak — one unfired timer
- * per analyst per collection — and is cleared below.
+ * The TIMER was a real leak — one unfired timer per analyst — and is cleared.
  */
 function raceWithTimeout(expected: ExpectedAnalyst, timeoutMs: number): Promise<RaceOutcome> {
   const { analyst_id, analyst_type } = expected;

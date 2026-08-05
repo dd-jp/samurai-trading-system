@@ -67,8 +67,15 @@ export class LlmProviderError extends Error {
  *     exactly the money the cancellation exists to save.
  */
 export class LlmCancelledError extends Error {
-  constructor(message: string) {
-    super(message);
+  /**
+   * The error the transport actually raised, when the cancellation was
+   * detected by inspecting the caller's signal rather than the error itself.
+   * Kept because that detection is a race: an abort landing at the same moment
+   * as a genuine 429 or 500 would otherwise DISCARD the real failure, and a
+   * cost bug is a bad reason to lose the evidence of an unrelated outage.
+   */
+  constructor(message: string, cause?: unknown) {
+    super(message, cause === undefined ? undefined : { cause });
     this.name = 'LlmCancelledError';
   }
 }

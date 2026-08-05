@@ -295,7 +295,10 @@ export class AnthropicLlmClient implements LlmClient {
       // `LlmProviderError` — i.e. a counterfeit provider fault. Attributed
       // here instead, where the caller's signal is in scope.
       if (callerSignal?.aborted === true) {
-        throw new LlmCancelledError('LLM call cancelled by caller while in flight');
+        // `cause` carries the original: this branch fires on ANY failure that
+        // surfaces once the signal is aborted, so a real 429 or 500 racing the
+        // abort would otherwise be silently relabelled and lost.
+        throw new LlmCancelledError('LLM call cancelled by caller while in flight', error);
       }
       throw error;
     } finally {

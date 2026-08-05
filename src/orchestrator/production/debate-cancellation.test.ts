@@ -15,11 +15,14 @@
  * driven.
  */
 
-import type { DebateLogger } from '../../debate-engine/debate-logger.js';
-import { enforceLatencyBudget, LATENCY_BUDGET_MS, runDebate } from '../../debate-engine/index.js';
-import { AnthropicLlmClient } from '../../debate-engine/llm/anthropic-client.js';
-import { AnthropicHttpMessagesClient } from '../../debate-engine/llm/anthropic-http-client.js';
-import type { AnalystView } from '../../debate-engine/types.js';
+import type { AnalystView, DebateLogger } from '../../debate-engine/index.js';
+import {
+  AnthropicHttpMessagesClient,
+  AnthropicLlmClient,
+  enforceLatencyBudget,
+  LATENCY_BUDGET_MS,
+  runDebate,
+} from '../../debate-engine/index.js';
 import type { Clock } from '../../shared/index.js';
 import { buildDebatePersonas, type DebatePersonas } from './debate-adapter.js';
 

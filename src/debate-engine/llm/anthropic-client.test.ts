@@ -478,6 +478,37 @@ describe('AnthropicLlmClient spend metering', () => {
       expect(wire.createMessage).toHaveBeenCalledTimes(1);
     });
 
+    it('keeps the underlying failure as `cause` when relabelling a cancellation', async () => {
+      // The relabel branch fires on ANY error that surfaces once the signal is
+      // aborted, so a genuine provider failure racing the abort must not be
+      // thrown away — a cost fix is a bad reason to lose an outage's evidence.
+      const providerFailure = Object.assign(new Error('rate limited'), { status: 429 });
+      const wire: AnthropicMessagesClient = {
+        createMessage: vi.fn(
+          (_request: unknown, options?: { signal?: AbortSignal }) =>
+            new Promise<AnthropicMessageResponse>((_resolve, reject) => {
+              options?.signal?.addEventListener('abort', () => reject(providerFailure));
+            }),
+        ),
+      };
+      const client = new AnthropicLlmClient(wire, {
+        model: 'claude-sonnet-5',
+        max_tokens: 1024,
+        timeoutMs: 60_000,
+        retry: NO_RETRY,
+      });
+      const controller = new AbortController();
+
+      const promise = client.complete({ ...request(), signal: controller.signal });
+      const rejects = expect(promise).rejects.toMatchObject({
+        name: 'LlmCancelledError',
+        cause: expect.objectContaining({ message: 'rate limited' }),
+      });
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      await rejects;
+    });
+
     it('aborts its own in-flight request when the per-call timeout fires', async () => {
       let seen: AbortSignal | undefined;
       const wire: AnthropicMessagesClient = {

@@ -4,11 +4,21 @@
  * stocks 60s. If the debate hasn't produced a result within budget, it is
  * force-terminated using whatever partial state is available.
  *
- * Blocked-by #34 (Round Structure & Termination Orchestrator) does not yet
- * exist, so this races an arbitrary `produceResult` promise rather than
- * reaching into round-orchestration internals — same ahead-of-#34 pattern
- * as `analyst-contribution.ts` (#36) and `debate-log-store.ts`. Once #34
- * lands, it calls `enforceLatencyBudget` around its own round loop.
+ * Blocked-by #34 (Round Structure & Termination Orchestrator) did not exist
+ * when this was written, so it races an arbitrary `produceResult` promise
+ * rather than reaching into round-orchestration internals — same
+ * ahead-of-#34 pattern as `analyst-contribution.ts` (#36) and
+ * `debate-log-store.ts`.
+ *
+ * STATUS as of #347: #34 has landed (`round-orchestrator.ts`) but nothing in
+ * production calls this yet — `buildDebateStep`
+ * (orchestrator/production/debate-adapter.ts) calls `runDebate` directly, with
+ * no budget around it. So the cancellation this module gained in #347 is a
+ * contract that is ready rather than a leak being stopped in the live tick;
+ * the live half of that ticket is `AnthropicLlmClient.callWithTimeout`, which
+ * abandoned its own timed-out requests on every slow call. Wiring the budget
+ * into the tick is its own change: it needs an asset-class decision per
+ * instrument and a `getCurrentState` the adapter does not expose today.
  *
  * Uses real `setTimeout` (not the injected `Clock`), matching
  * `analyst-response-collector.ts`'s timeout race — `Clock` is stepped
@@ -119,17 +129,11 @@ export async function enforceLatencyBudget(params: {
     }),
   );
 
-  // NOTE on the rejection nobody awaits. Post-#347 a cancelled debate REJECTS,
-  // and it does so after this function has already returned its fallback. That
-  // is NOT an unhandled rejection: `Promise.race` attaches handlers to every
-  // promise passed to it, so the late rejection is handled-and-ignored rather
-  // than escaping to `process.on('unhandledRejection')` (fatal under
-  // `--unhandled-rejections=strict`, and soak-log noise either way). An
-  // explicit `debate.catch(() => {})` was written here first and then removed:
-  // mutation-testing showed no test could tell the difference, because there
-  // is no difference. Pinned by latency-budget.test.ts's "swallows the
-  // cancelled debate rejection" case, which asserts on a real
-  // `unhandledRejection` listener.
+  // A cancelled debate rejects AFTER this function has returned its fallback,
+  // and no explicit swallow is needed for that: `Promise.race` attaches its own
+  // handlers to `debate`, so the late rejection is handled-and-ignored rather
+  // than reaching `process.on('unhandledRejection')`. Pinned by the
+  // "swallows the cancelled debate rejection" test, which listens for one.
   const result = await Promise.race([
     debate,
     new Promise<{ status: 'timed_out' }>((resolve) => {
