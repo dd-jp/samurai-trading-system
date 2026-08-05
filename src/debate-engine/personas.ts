@@ -9,7 +9,7 @@
  * and termination (#34) build on top of these, not the other way around.
  */
 
-import { unwrapFencedJson } from './llm/json-response.js';
+import { BARE_JSON_INSTRUCTION, unwrapFencedJson } from './llm/json-response.js';
 import { wrapUntrusted } from './llm/prompt-safety.js';
 import type { LlmClient, LlmRequestContext } from './llm/types.js';
 import type { AnalystView, Direction } from './types.js';
@@ -98,20 +98,6 @@ function parseMediatorResponse(
   }
   return { valid: true, data: parsed };
 }
-
-/**
- * Anti-fence instruction appended to every persona prompt (issue #361). The
- * pinned `claude-haiku-4-5-20251001` wrapped its JSON in a markdown fence on
- * every call, and the mediator additionally appended a free-text note after
- * the closing fence — both of which broke `JSON.parse` and halted the tick at
- * `stage=debate`. This is the cooperative half of the fix; `unwrapFencedJson`
- * (llm/json-response.ts) is the deterministic half, because a prompt
- * instruction is a request, not a guarantee.
- */
-const BARE_JSON_INSTRUCTION = [
-  'Output the raw JSON object only: no markdown code fence, no ``` characters,',
-  'no preamble, and no commentary after the closing brace.',
-].join('\n');
 
 /**
  * Renders AnalystViews into a compact text block shared by all persona

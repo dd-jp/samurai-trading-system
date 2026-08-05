@@ -10,7 +10,7 @@
  * over `AnalystView[]`, same "builder ahead of orchestration" posture as
  * `analyst-contribution.ts`.
  */
-import { unwrapFencedJson } from './llm/json-response.js';
+import { BARE_JSON_INSTRUCTION, unwrapFencedJson } from './llm/json-response.js';
 import type { LlmClient } from './llm/types.js';
 import type { AnalystView, Direction } from './types.js';
 
@@ -50,8 +50,7 @@ const PROMPT = [
   // below always threw and this detector silently degraded to
   // `directional_fallback` — reporting "we only compared directions" when a
   // real semantic assessment had in fact been produced.
-  'Output the raw JSON object only: no markdown code fence, no ``` characters,',
-  'no preamble, and no commentary after the closing brace.',
+  BARE_JSON_INSTRUCTION,
   '',
   'If there are no conflicts, respond with an empty "conflicts" array and a',
   'summary noting agreement.',

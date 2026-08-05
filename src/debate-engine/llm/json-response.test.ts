@@ -1,4 +1,4 @@
-import { unwrapFencedJson } from './json-response.js';
+import { BARE_JSON_INSTRUCTION, unwrapFencedJson } from './json-response.js';
 
 /**
  * Captured verbatim from a live `claude-haiku-4-5-20251001` call using the
@@ -17,6 +17,23 @@ const CAPTURED_BULL_RESPONSE =
  */
 const CAPTURED_MEDIATOR_RESPONSE =
   '```json\n{\n  "stance": "neutral",\n  "rationale": "Material disagreement persists.",\n  "converged": false\n}\n```\n\n**Mediator Note:** This is a classic early recovery vs. momentum persistence clash.';
+
+/**
+ * The prompt-side assertions in `personas.test.ts` and
+ * `disagreement-detector.test.ts` check that each rendered prompt *contains*
+ * `BARE_JSON_INSTRUCTION` — which proves the constant reaches the wire, but
+ * would stay green if the constant itself were gutted, since both sides move
+ * together. This is the one place the wording is pinned against literals, so
+ * "the instruction stopped asking for bare JSON" fails somewhere.
+ */
+describe('BARE_JSON_INSTRUCTION', () => {
+  it('asks for bare JSON: no fence, no preamble, no trailing commentary', () => {
+    expect(BARE_JSON_INSTRUCTION).toContain('no markdown code fence');
+    expect(BARE_JSON_INSTRUCTION).toContain('```');
+    expect(BARE_JSON_INSTRUCTION).toContain('no preamble');
+    expect(BARE_JSON_INSTRUCTION).toContain('no commentary after the closing brace');
+  });
+});
 
 describe('unwrapFencedJson', () => {
   it('returns bare JSON unchanged', () => {

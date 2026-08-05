@@ -40,6 +40,27 @@
  * dropping it loses nothing the callers model.
  */
 
+/**
+ * The cooperative half of the #361 fix: the instruction every prompt that
+ * expects a JSON reply appends, asking the model not to emit the fence (or the
+ * trailing commentary the mediator was observed adding after it).
+ *
+ * It lives here, next to `unwrapFencedJson`, because the two are one fix seen
+ * from both ends — this asks the model not to fence, that one copes when it
+ * fences anyway. Same posture as `prompt-safety.ts`'s `wrapUntrusted`: shared
+ * prompt text belongs in `llm/`, not hand-copied into each caller.
+ *
+ * Single definition on purpose (PR #363 review). It was briefly duplicated
+ * across `personas.ts`, `disagreement-detector.ts`, and the persona test; only
+ * one of those copies was pinned by an assertion, so the others could have
+ * drifted silently — and a prompt that quietly stops asking for bare JSON
+ * reintroduces the very halt this module exists to prevent.
+ */
+export const BARE_JSON_INSTRUCTION = [
+  'Output the raw JSON object only: no markdown code fence, no ``` characters,',
+  'no preamble, and no commentary after the closing brace.',
+].join('\n');
+
 const FENCE = '```';
 
 /** Bare info strings only (```json, ```JSON, ```). Anything else isn't a plain fenced block. */

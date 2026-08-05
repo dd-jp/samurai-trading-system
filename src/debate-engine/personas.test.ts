@@ -1,10 +1,8 @@
 import { LlmMalformedResponseError } from './llm/errors.js';
+import { BARE_JSON_INSTRUCTION } from './llm/json-response.js';
 import { MockLlmClient } from './llm/mock-client.js';
 import { runBearPersona, runBullPersona, runMediatorPersona } from './personas.js';
 import type { AnalystView } from './types.js';
-
-/** The #361 anti-fence instruction every persona prompt must carry. */
-const NO_FENCE_LINE = 'Output the raw JSON object only: no markdown code fence, no ``` characters,';
 
 function makeView(overrides: Partial<AnalystView> = {}): AnalystView {
   return {
@@ -156,7 +154,7 @@ describe('markdown-fenced responses (#361)', () => {
 
     expect(client.requests).toHaveLength(3);
     for (const request of client.requests) {
-      expect(request.prompt).toContain(NO_FENCE_LINE);
+      expect(request.prompt).toContain(BARE_JSON_INSTRUCTION);
     }
   });
 });
