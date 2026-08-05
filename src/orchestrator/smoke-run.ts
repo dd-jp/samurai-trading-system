@@ -1,5 +1,28 @@
 /**
- * Offline end-to-end smoke run (ticket #350) — the pre-soak gate.
+ * Offline end-to-end smoke run (ticket #350) — the pre-soak gate. See
+ * [ADR-0004](../../docs/adr/0004-production-composition-root.md) §5 and
+ * docs/specs/orchestrator-spec.md (story 19, "Testing Decisions" §
+ * "Composition root seam").
+ *
+ * ## Where this sits against the spec's two done-bars
+ *
+ * ADR-0004 §5 and orchestrator-spec.md story 19 define two: **wiring
+ * validated** (one clean automated tick end-to-end through all six stages
+ * against real Alpaca paper, correctly audit-logged) and **paper trading
+ * achieved** (the 14-day unattended soak, #238). The spec's Testing Decisions
+ * are explicit that the first is "the manual/CI-gated E2E check, not a unit
+ * test ... run once per environment, not on every commit".
+ *
+ * This run does **not** replace that bar and must not be read as clearing it:
+ * it never touches Alpaca, so it proves nothing about credentials, venue
+ * semantics or live market data. What it does is make the same six-stage
+ * assertion — every stage reached, a `go` recorded, an order submitted, a fill
+ * ingested — cheaply, offline, and on every commit, so the credentialed run
+ * and the soak start from a process that has already been seen to transact.
+ * It also satisfies the spec's determinism story ("same injected simulated
+ * clock + fixed universe -> byte-identical rows across two runs") at the
+ * composition-root level rather than the tick-runner level; see
+ * `smoke-run.test.ts`.
  *
  * ## What this is for
  *
@@ -596,6 +619,11 @@ export interface SmokeRunOptions {
    */
   fillPollIntervalMs?: number;
   /**
+   * Heartbeat cadence. Default 100ms, so the dead-man's-switch timer actually
+   * fires several times inside a ~1s run rather than being wired but inert.
+   */
+  heartbeatIntervalMs?: number;
+  /**
    * Hard wall-clock ceiling. Default 30s. The run stops and reports whatever it
    * reached rather than hanging — a gate that can hang is a gate nobody runs.
    */
@@ -606,6 +634,7 @@ export interface SmokeRunOptions {
 const DEFAULT_SMOKE_TICKS = 3;
 const DEFAULT_SMOKE_TICK_INTERVAL_MS = 250;
 const DEFAULT_SMOKE_FILL_POLL_INTERVAL_MS = 100;
+const DEFAULT_SMOKE_HEARTBEAT_INTERVAL_MS = 100;
 const DEFAULT_SMOKE_DEADLINE_MS = 30_000;
 /** How long to keep waiting for the fill poll once the tick target is met. */
 const FILL_GRACE_MS = 2_000;
@@ -639,6 +668,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
   const targetTicks = options.ticks ?? DEFAULT_SMOKE_TICKS;
   const tickIntervalMs = options.tickIntervalMs ?? DEFAULT_SMOKE_TICK_INTERVAL_MS;
   const fillPollIntervalMs = options.fillPollIntervalMs ?? DEFAULT_SMOKE_FILL_POLL_INTERVAL_MS;
+  const heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_SMOKE_HEARTBEAT_INTERVAL_MS;
   const deadlineMs = options.deadlineMs ?? DEFAULT_SMOKE_DEADLINE_MS;
   // Plain `JsonLogger` (stdout), never `buildEntrypointLogger()`: that one
   // opens the rotating file sink and creates `logs/`, and a gate should leave
@@ -716,9 +746,13 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       breachAlerts: new LoggingBreachAlertChannel(logger),
       tickIntervalMs,
       fillPollIntervalMs,
-      // Well past the run's own deadline: a heartbeat is a dead-man's switch
-      // for an unattended process, and this one is attended and short-lived.
-      heartbeatIntervalMs: deadlineMs,
+      // Fast enough to fire several times inside a ~1s run. The heartbeat is a
+      // dead-man's switch and this process is attended, so it is not what the
+      // gate asserts on — but it is one of the process-level timers #350 names,
+      // and a smoke run in which it never fired would leave `Heartbeat.emit`
+      // and its channel unexercised. Log-only here (see the channels above), so
+      // firing it costs nothing and pages nobody.
+      heartbeatIntervalMs,
       maxConcurrentInstruments: 1,
     });
 
