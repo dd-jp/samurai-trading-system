@@ -170,7 +170,13 @@ const PAPER_ANALYST_WEIGHT_CEILING = 1.5;
  *   weight store's job, not a tuning cycle's", daily-cycle.ts), and nothing in
  *   the repo writes that table yet. So the cycle reads real closed trades and
  *   real debate rows (#364 gave `debate_log` a writer) and attributes them —
- *   and then finds no row to step. **Tracked as a follow-on, not fixed here.**
+ *   and then finds no row to step. Nothing reads the weights either: the
+ *   Debate Engine does not consult them, only the dashboard displays them.
+ *   Tracked as
+ *   [#371](https://github.com/dd-jp/samurai-trading-system/issues/371), the
+ *   same shape of follow-on #345 is for `metrics`. **Not fixed here** — a
+ *   seeder is a decision about which analysts exist and at what prior, which
+ *   is not a starting *value* this file can invent.
  * - **Strategy params / risk thresholds** — moved only by `proposals`, and the
  *   profile supplies none, because nothing in the repo produces one. See the
  *   two empty records below for why they are empty rather than pre-declared.
