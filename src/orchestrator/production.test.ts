@@ -34,6 +34,7 @@ import { openSharedStore, type SharedStore as SqliteHandle } from '../shared/sto
 import { SqliteSetupStore } from '../trader/index.js';
 import type { ApprovalOutcome, ApprovalRequest, VerdictDecision } from '../verdict/index.js';
 import { paperStartingProfile } from './paper-profile.js';
+import { MIN_RETURN_OBSERVATIONS } from './production/daily-equity-metrics-source.js';
 import { buildPersistence } from './production/direct-bind.js';
 import {
   buildDefaultLlmClient,
@@ -47,6 +48,7 @@ import {
   SMOKE_TEST_UNIVERSE,
   startTickLoop,
 } from './production.js';
+import { SqliteDailyEquityStore } from './sqlite-daily-equity-store.js';
 import { SequentialTickRunner } from './tick-runner.js';
 import type { Logger, Scheduler, TickOutcome, TickPlan, TickRunner } from './types.js';
 
@@ -959,21 +961,60 @@ describe('buildProductionOrchestrator', () => {
       await orchestrator.stop();
     });
 
-    it('keeps the metrics warn firing, so #345 stays visible instead of swallowed', async () => {
+    it('no longer warns that metrics is unset — the profile supplies it (#379)', async () => {
       const { config, logger } = paperProfileConfig();
       const orchestrator = buildProductionOrchestrator(config);
 
       await orchestrator.start();
 
-      // The profile leaves `metrics` unset on purpose: `computeMetrics` needs
-      // a `DailyMetricsSource` that does not exist yet. Stubbing one would
-      // turn "the four kill-lines were never checked" into something that
-      // reads like "they passed" — so the warn must survive this ticket.
-      const warn = logger.entries.find((entry) =>
-        entry.message.includes('FeedbackCycleConfig.metrics'),
+      // The inversion #379 decided. #345 left `metrics` unset and this warn
+      // fired for the whole soak; the profile now supplies the real
+      // series-backed source, so a paper start must NOT report the detector as
+      // unwired.
+      expect(
+        logger.entries.filter((entry) =>
+          entry.message.includes('FeedbackCycleConfig.metrics is not set'),
+        ),
+      ).toHaveLength(0);
+      expect(
+        logger.entries.filter(
+          (entry) =>
+            (entry.payload as { kill_lines?: string } | undefined)?.kill_lines === 'not_evaluated',
+        ),
+      ).toHaveLength(0);
+
+      // ...and the armed state is announced rather than left silent: the first
+      // cycle is 24h away and the first SUITE is a quarter away, so an
+      // operator reading startup gets the state from the log, not by inference.
+      const armed = logger.entries.find(
+        (entry) => (entry.payload as { kill_lines?: string } | undefined)?.kill_lines === 'armed',
       );
-      expect(warn?.level).toBe('warn');
-      expect(warn?.payload).toMatchObject({ kill_lines: 'not_evaluated' });
+      expect(armed?.level).toBe('info');
+      expect(armed?.trace_id).toBe('startup');
+
+      await orchestrator.stop();
+    });
+
+    it('keeps #375 visible: the divergence kill-line is announced inert at startup', async () => {
+      const { config, logger } = paperProfileConfig();
+      const orchestrator = buildProductionOrchestrator(config);
+
+      await orchestrator.start();
+      // Three cadences. The announcement is a property of the frozen config,
+      // not of the day, so repeating it daily for 14 days would be noise.
+      await vi.advanceTimersByTimeAsync(3 * 25 * 60 * 60 * 1_000);
+
+      // This is the warn that would have been SWALLOWED by wiring `metrics`:
+      // it used to be emitted on the first computed suite, and the gate puts
+      // that ~60 sessions out, while the blanket "all four kill-lines stay
+      // unevaluated" warn that covered it is now correctly gone.
+      const inert = logger.entries.filter((entry) =>
+        entry.message.includes('live_backtest_divergence_over_max is INERT'),
+      );
+      expect(inert).toHaveLength(1);
+      expect(inert[0]?.level).toBe('warn');
+      expect(inert[0]?.trace_id).toBe('startup');
+      expect(inert[0]?.payload).toMatchObject({ backtest_reference_sharpe: 0 });
 
       await orchestrator.stop();
     });
@@ -1516,6 +1557,224 @@ describe('buildProductionOrchestrator', () => {
       expect(
         logger.entries.filter((e) => e.message === 'daily feedback cycle failed').length,
       ).toBeGreaterThanOrEqual(2);
+
+      await orchestrator.stop();
+    });
+  });
+
+  /**
+   * #379 — the paper profile now supplies `metrics`, so `computeMetrics` has a
+   * production caller for the first time.
+   *
+   * These drive the profile's OWN source (`SqliteDailyEquityMetricsSource`)
+   * over the real `daily_equity`, `dial_adjustments` and `risk_thresholds`
+   * tables, because the property that makes wiring it safe is a store-level
+   * one: below the gate nothing is computed and nothing is written. A stubbed
+   * source would assert the wiring and prove nothing about the gate, which is
+   * the entire safety argument (ADR-0006 §5).
+   */
+  describe('kill-line detector armed from the paper profile (#379)', () => {
+    const MS_PER_DAY = 24 * 60 * 60 * 1_000;
+    const SERIES_START = Date.UTC(2026, 0, 1);
+    /** One cadence for the daily timer, short enough to advance fake timers over. */
+    const CYCLE_MS = 1_000;
+
+    /**
+     * `count` observations on consecutive UTC midnights — the spacing
+     * `usableRun` requires — wobbling around 100k so the series has non-zero
+     * variance (a flat account has no Sharpe and the library rightly throws).
+     */
+    function seedDailyEquity(count: number): void {
+      const store = new SqliteDailyEquityStore(db);
+      for (let i = 0; i < count; i += 1) {
+        const at = new Date(SERIES_START + i * MS_PER_DAY);
+        store.append(at, 100_000 + (i % 7) * 250 - i * 3, at, true);
+      }
+    }
+
+    /**
+     * The profile's real feedback block, with two deliberate deviations —
+     * without them the auto-tighten path is unreachable and every "nothing was
+     * written" assertion below would pass vacuously:
+     *
+     * - a declared `risk_thresholds` dial with a seeded value, because the
+     *   profile declares none (nothing writes that table yet — see
+     *   paper-profile.ts);
+     * - a positive `backtest_reference_sharpe`, because the profile's 0 makes
+     *   the divergence line inert by design (#375).
+     *
+     * `metrics.source` is the profile's own factory, untouched. That is the
+     * thing under test.
+     */
+    function armedConfig(): {
+      config: ProductionConfig;
+      logger: ReturnType<typeof recordingLogger>;
+      tuning: SqliteTuningStore;
+      postBreachAlert: ReturnType<typeof vi.fn>;
+    } {
+      const profileFeedback = paperStartingProfile('paper').feedback;
+      if (profileFeedback?.metrics === undefined) {
+        throw new Error('paperStartingProfile supplied no metrics block');
+      }
+
+      const logger = recordingLogger();
+      const postBreachAlert = vi.fn();
+      const tuning = new SqliteTuningStore(db, new SimulatedClock(START));
+      tuning.setRiskThreshold('max_position_size', 5_000);
+
+      const config = stubConfig(db, {
+        logger,
+        tickIntervalMs: 100_000,
+        heartbeatIntervalMs: 100_000,
+        breachAlerts: { postBreachAlert },
+        feedback: {
+          intervalMs: CYCLE_MS,
+          config: {
+            ...profileFeedback.config,
+            risk_thresholds: {
+              max_position_size: {
+                max_step: 500,
+                floor: 1_000,
+                ceiling: 10_000,
+                tighten_is: 'decrease',
+              },
+            },
+          },
+          metrics: { ...profileFeedback.metrics, backtest_reference_sharpe: 100 },
+        },
+      });
+
+      return { config, logger, tuning, postBreachAlert };
+    }
+
+    /** Rows the defensive auto-tighten wrote — the only ones `computeMetrics` appends. */
+    function autoTightenRows(): number {
+      const row = db
+        .prepare('SELECT COUNT(*) AS n FROM dial_adjustments WHERE reason = ?')
+        .get('breach_auto_tighten') as { n: number };
+      return row.n;
+    }
+
+    it('below the gate: no suite, no autoTighten, no AdjustmentLog row', async () => {
+      // MIN observations yield MIN−1 returns — exactly one short of the gate.
+      seedDailyEquity(MIN_RETURN_OBSERVATIONS);
+      const { config, logger, tuning, postBreachAlert } = armedConfig();
+      const orchestrator = buildProductionOrchestrator(config);
+
+      await orchestrator.start();
+      await vi.advanceTimersByTimeAsync(CYCLE_MS + 500);
+
+      // The gate refused, and said why — with the count, so an operator can
+      // see the run approaching the threshold rather than merely being under
+      // it.
+      const refusal = logger.entries.filter((e) => e.message.includes('insufficient observations'));
+      expect(refusal).toHaveLength(1);
+      expect(refusal[0]?.level).toBe('warn');
+      expect(refusal[0]?.payload).toMatchObject({
+        usable_returns: MIN_RETURN_OBSERVATIONS - 1,
+        required: MIN_RETURN_OBSERVATIONS,
+      });
+      // Nothing was computed, so nothing may look computed.
+      expect(logger.entries.filter((e) => e.message === 'daily metrics computed')).toHaveLength(0);
+      expect(postBreachAlert).not.toHaveBeenCalled();
+      // THE two store assertions: the threshold is where it was seeded, and
+      // the audit log has no defensive-tighten row.
+      expect(tuning.getRiskThresholds().max_position_size).toBe(5_000);
+      expect(autoTightenRows()).toBe(0);
+
+      await orchestrator.stop();
+    });
+
+    it('at the gate: computeMetrics runs, and a breach reaches the real stores', async () => {
+      // One more observation than returns required — n observations give n−1.
+      seedDailyEquity(MIN_RETURN_OBSERVATIONS + 1);
+      const { config, logger, tuning, postBreachAlert } = armedConfig();
+      const orchestrator = buildProductionOrchestrator(config);
+
+      await orchestrator.start();
+      await vi.advanceTimersByTimeAsync(CYCLE_MS + 500);
+
+      // It ran: a real suite, derived from the real series.
+      const computed = logger.entries.find((e) => e.message.includes('daily metrics computed'));
+      if (computed === undefined) throw new Error('computeMetrics did not run');
+      expect(Number.isFinite((computed.payload as { daily: MetricsSuite }).daily.sharpe)).toBe(
+        true,
+      );
+      expect(logger.entries.filter((e) => e.message.includes('insufficient observations'))).toEqual(
+        [],
+      );
+
+      // ...and the effects landed, which is what distinguishes a wired
+      // detector from a called one: the live Sharpe is far under the 100
+      // reference, so divergence breaches, alerts, and tightens by one step.
+      expect(postBreachAlert).toHaveBeenCalledTimes(1);
+      expect(postBreachAlert.mock.calls[0]?.[0]).toMatchObject({
+        breaches: ['live_backtest_divergence_over_max'],
+      });
+      expect(tuning.getRiskThresholds().max_position_size).toBe(4_500);
+      expect(autoTightenRows()).toBe(1);
+
+      await orchestrator.stop();
+    });
+
+    it('logs the refusal once per CYCLE, not once per tick', async () => {
+      seedDailyEquity(MIN_RETURN_OBSERVATIONS);
+      const { config, logger } = armedConfig();
+      // Ticks an order of magnitude faster than the cycle: a per-tick log
+      // would put ~20,000 identical lines into an unattended 14-day soak
+      // (#238), which is how the heartbeat's own cadence bug (#342) presented.
+      const orchestrator = buildProductionOrchestrator({ ...config, tickIntervalMs: 100 });
+
+      await orchestrator.start();
+      await vi.advanceTimersByTimeAsync(3 * CYCLE_MS + 500);
+
+      expect(
+        logger.entries.filter((e) => e.message.includes('insufficient observations')),
+      ).toHaveLength(3);
+      // The orchestrator's own "nothing to check this cycle" line keeps the
+      // same cadence — one per cycle, never per tick.
+      expect(
+        logger.entries.filter((e) => e.message.includes('no daily MetricsSuite this cycle')),
+      ).toHaveLength(3);
+
+      await orchestrator.stop();
+    });
+
+    it('keeps the divergence line un-evaluated under the profile’s own inert reference (#375)', async () => {
+      seedDailyEquity(MIN_RETURN_OBSERVATIONS + 1);
+      const profileFeedback = paperStartingProfile('paper').feedback;
+      if (profileFeedback?.metrics === undefined) {
+        throw new Error('paperStartingProfile supplied no metrics block');
+      }
+      const logger = recordingLogger();
+      const postBreachAlert = vi.fn();
+      const config = stubConfig(db, {
+        logger,
+        tickIntervalMs: 100_000,
+        heartbeatIntervalMs: 100_000,
+        breachAlerts: { postBreachAlert },
+        // Unmodified this time: the profile's `backtest_reference_sharpe: 0`.
+        feedback: { ...profileFeedback, intervalMs: CYCLE_MS },
+      });
+      const orchestrator = buildProductionOrchestrator(config);
+
+      await orchestrator.start();
+      await vi.advanceTimersByTimeAsync(CYCLE_MS + 500);
+
+      // A computed suite that reports the divergence line as UN-RUN rather
+      // than passed — the distinction #327 exists for, and the one #379 must
+      // not swallow now that the "metrics is not set" warn is gone.
+      const computed = logger.entries.find((e) => e.message === 'daily metrics computed');
+      expect(computed?.payload).toMatchObject({
+        breaches: [],
+        not_evaluated: [
+          'pbo_over_max',
+          'oos_sharpe_under_min',
+          'dsr_insignificant',
+          'live_backtest_divergence_over_max',
+        ],
+      });
+      expect(postBreachAlert).not.toHaveBeenCalled();
 
       await orchestrator.stop();
     });

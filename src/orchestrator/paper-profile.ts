@@ -82,7 +82,13 @@ import type { CiiConsumerConfig } from '../market-intelligence/index.js';
 import type { BreakerConfig, CorrelationConfig, RiskConfig } from '../risk-manager/index.js';
 import { DEFAULT_TRADER_CONFIG, type TraderConfig } from '../trader/index.js';
 import type { VerdictConfig } from '../verdict/index.js';
-import { DEFAULT_FEEDBACK_INTERVAL_MS, type ProductionConfig } from './production.js';
+import { SqliteDailyEquityMetricsSource } from './production/daily-equity-metrics-source.js';
+import {
+  DEFAULT_FEEDBACK_INTERVAL_MS,
+  type FeedbackCycleConfig,
+  type ProductionConfig,
+} from './production.js';
+import { SqliteDailyEquityStore } from './sqlite-daily-equity-store.js';
 
 /**
  * The equity the notional caps below are expressed against.
@@ -194,10 +200,12 @@ const PAPER_ANALYST_WEIGHT_TRAVERSE_CYCLES = 20;
  *   two empty records below for why they are empty rather than pre-declared.
  *
  * What #366 does buy immediately is that the timer runs, the cycle is
- * exercised daily against real data, `computeMetrics`' absence is announced
- * (#345), and every dial's bounds are now checked in and reviewable rather
- * than absent. That is the difference between a stage that is wired and idle
- * and a stage that does not exist.
+ * exercised daily against real data, and every dial's bounds are now checked in
+ * and reviewable rather than absent. That is the difference between a stage
+ * that is wired and idle and a stage that does not exist.
+ *
+ * `computeMetrics` is no longer the exception either — see `buildDailyMetrics`
+ * (#379) for what arming it does and does not mean during a soak.
  */
 function buildFeedbackConfig(): FeedbackConfig {
   /**
@@ -360,13 +368,13 @@ function buildFeedbackConfig(): FeedbackConfig {
      * `DERIVED` — empty, for `strategy_params`' reason plus one of its own.
      *
      * `computeMetrics`' `autoTighten` iterates THIS record on a kill-threshold
-     * breach, so an empty one means a breach tightens nothing. That is not a
-     * hole this ticket opens: `metrics` is deliberately unset (#345), so
-     * `computeMetrics` never runs at all yet, and the `risk_thresholds` table
-     * has no writer either, so `autoTighten` would skip every declared dial as
-     * `current === undefined` regardless.
+     * breach, so an empty one means a breach tightens nothing. Since #379
+     * `computeMetrics` DOES run — but the `risk_thresholds` table still has no
+     * writer, so `autoTighten` would skip every dial declared here as
+     * `current === undefined` regardless. Declaring names against a store
+     * nothing populates would buy an audit trail of no-ops.
      *
-     * It IS the thing to fix first when #345 lands. The blocker is a naming
+     * It remains the thing to fix first. The blocker is a naming
      * contract, not a number: the spec's own cross-spec note ("Consumers must
      * read live from the store") records that the Risk Manager still reads
      * static `RiskConfig`, so which `risk_thresholds` key corresponds to which
@@ -413,6 +421,79 @@ function buildFeedbackConfig(): FeedbackConfig {
        */
       max_live_backtest_divergence: 0.5,
     },
+  };
+}
+
+/**
+ * The kill-line detector's input (#379) — what makes `computeMetrics` have a
+ * production caller at all.
+ *
+ * ## The decision, and why it is taken here
+ *
+ * #345 (PR #378) built the daily equity series, `SqliteDailyEquityMetricsSource`
+ * and the 60-observation gate, then deliberately left this unset: `autoTighten`
+ * WRITES every risk threshold and appends to the `AdjustmentLog`, so arming a
+ * detector deserved an explicit decision rather than arriving as a side effect
+ * of a ticket about persistence. [#379](https://github.com/dd-jp/samurai-trading-system/issues/379)
+ * is that decision, and it is to wire it.
+ *
+ * The reasoning is the pattern this repo keeps hitting — a fully-implemented,
+ * fully-tested mechanism that nothing calls (#327 `computeMetrics`, #364
+ * `debate_log`, #366 the daily cycle, #371 `analyst_weights`, #374
+ * `enforceLatencyBudget`). Left unset, this is the sixth: the startup warn
+ * would fire for the whole soak and every soak after it, and an operator would
+ * correctly read the run as one where the kill-lines are dead.
+ *
+ * **The safety control is the gate, not the omission.** ADR-0006 §5 sets it at
+ * 60 returns with a stated statistical argument (a near-flat account over 9
+ * returns reports an annualized Sharpe of 20.9), and
+ * `SqliteDailyEquityMetricsSource` refuses to have it lowered. That keeps every
+ * kill-line inert for roughly a calendar quarter whether or not this is wired —
+ * longer than any planned soak (#238) — so wiring it exercises the whole path
+ * in production without acting on noise, which beats an unexercised path
+ * someone arms later under time pressure. On paper money, an `autoTighten` after
+ * a genuine 60-session drawdown is the system working.
+ *
+ * ## A factory, because this file holds no stores
+ *
+ * The source needs the shared SQLite handle and this function returns values.
+ * `DailyMetricsSourceFactory` (production.ts) is the seam: the profile names
+ * the class and the decision, the composition root — which owns the handle —
+ * calls it once at construction and passes its own `ClosedTradeStore` in.
+ */
+function buildDailyMetrics(): NonNullable<FeedbackCycleConfig['metrics']> {
+  return {
+    source: ({ db, trades, logger }) =>
+      new SqliteDailyEquityMetricsSource({
+        // The series this process samples every tick on the portfolio's UTC-day
+        // boundary (ADR-0006 §2) — capture was already unconditional; this
+        // reads it.
+        equity: new SqliteDailyEquityStore(db),
+        // The root's own instance, not a second one over the same handle.
+        trades,
+        logger,
+        // `minReturnObservations` deliberately not overridden: the default IS
+        // ADR-0006 §5's floor, and the class refuses anything lower. Raising it
+        // toward 365 is the only defensible edit here, and it is one to make on
+        // evidence rather than in advance.
+      }),
+    /**
+     * `SPEC`-by-absence — 0, meaning INERT, and that is the whole point.
+     *
+     * `liveBacktestDivergence` refuses to manufacture a breach off a
+     * non-positive reference, so `live_backtest_divergence_over_max` is never
+     * evaluated; `computeMetrics` records it in `not_evaluated` and the
+     * orchestrator warns about it once at startup.
+     *
+     * Left that way per [#375](https://github.com/dd-jp/samurai-trading-system/issues/375),
+     * and this is NOT tidiness: there is no persisted backtest Sharpe to freeze
+     * because Stage 2 has never run against a real strategy
+     * (stage2-validation-execution-spec.md). A plausible-looking number here
+     * would arm a detector that writes risk thresholds against a reference
+     * nobody measured. The other three kill-lines are unaffected — they gate on
+     * a revalidation snapshot, not on this.
+     */
+    backtest_reference_sharpe: 0,
   };
 }
 
@@ -770,17 +851,11 @@ function buildProfileConfigs(): Pick<
      * Values only, exactly like the other eight: no `approvals` transport and
      * no `intervalMs`, so the composition root's `SAMURAI_ALERTS`-selected
      * channel and its 24h default apply.
-     *
-     * `metrics` is still absent, and since #345 that is a scope statement
-     * rather than an impossibility. A real `DailyMetricsSource` now exists
-     * (`SqliteDailyEquityMetricsSource`, ADR-0006), but it needs the `db`
-     * handle — and this function returns VALUES, no stores. Wiring it belongs
-     * to the composition root, which deliberately does not default it: arming
-     * the kill-line detector is a decision, not a fallback. The orchestrator
-     * warns at startup rather than letting a stub make "never checked" look
-     * like "did not breach".
      */
-    feedback: { config: buildFeedbackConfig() },
+    feedback: {
+      config: buildFeedbackConfig(),
+      metrics: buildDailyMetrics(),
+    },
   };
 }
 
