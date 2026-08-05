@@ -10,6 +10,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && yarn build:migrations",
     "build:migrations": "node --eval \"require('node:fs').cpSync('src/shared/store/migrations','dist/shared/store/migrations',{recursive:true})\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",

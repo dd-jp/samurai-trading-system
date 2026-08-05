@@ -299,6 +299,10 @@ describe('the gate protects autoTighten from a short series', () => {
       thresholds,
       getAnalystWeights: () => ({}),
       setAnalystWeight: () => {},
+      // Added by #371 (first-write-wins seeding). This double never grew it;
+      // `false` is the honest answer for a store that holds no weights — "this
+      // call was not the one that wrote it".
+      seedAnalystWeight: () => false,
       getStrategyParams: () => ({}),
       setStrategyParam: () => {},
       getRiskThresholds: () => ({ ...thresholds }),
@@ -326,6 +330,11 @@ describe('the gate protects autoTighten from a short series', () => {
   const config: FeedbackConfig = {
     attribution_window_ms: MS_PER_DAY,
     weights: { floor: 0, ceiling: 1, max_step: 0.1, tighten_is: 'decrease' },
+    // Shadow-credit dials, matching `paperStartingProfile`. This test predates
+    // them and never picked them up; the gate it exercises is unaffected by
+    // their values.
+    shadow_credit: 0.1,
+    shadow_influence_ceiling: 0.2,
     strategy_params: {},
     risk_thresholds: {
       max_position_pct: { floor: 0.01, ceiling: 1, max_step: 0.1, tighten_is: 'decrease' },

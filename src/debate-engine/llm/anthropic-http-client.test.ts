@@ -139,7 +139,11 @@ describe('AnthropicHttpMessagesClient', () => {
       json: async () => {
         throw new SyntaxError('Unexpected end of JSON input');
       },
-    } as Response);
+      // `as unknown as`: this is a deliberate four-field stand-in for `Response`,
+      // which the client only reads `ok`/`status`/`statusText`/`json` from. A
+      // direct `as Response` is not a legal assertion between types this far
+      // apart.
+    } as unknown as Response);
     vi.stubGlobal('fetch', fetchMock);
 
     const client = new AnthropicHttpMessagesClient({ apiKey: FAKE_KEY });
