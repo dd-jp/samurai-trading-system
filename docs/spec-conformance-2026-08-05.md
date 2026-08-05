@@ -10,9 +10,10 @@ built, unit-tested, and never reached in a running process** — Trader's cosine
 (F-1), the Feedback Loop's tuned dials (F-2), and Market Intelligence's entire ingestion side
 (F-3). They are not independent defects. Together they mean a 14-day soak would run a system
 that sizes every position at a fixed 0.75× "no precedent" haircut, learns nothing from any
-trade it closes, and takes two of its three analyst opinions from a store nothing ever writes
-to. **The soak would execute fine and its output would not be evidence about the specced
-design.** That is the decision this document is for.
+trade it closes, and takes its analyst opinions from a store nothing ever writes to — one of
+two on crypto, two of three on equities, including the *mandatory* one. **The soak would
+execute fine and its output would not be evidence about the specced design.** That is the
+decision this document is for.
 
 Nothing here is hidden or undocumented in the code — every one of these descopes is stated
 plainly in a comment at the site. The actionable delta is that **none of them is reflected in
@@ -30,8 +31,15 @@ question asked was "is it reachable from the composition root?", not "does the c
 The wiring inventory was built once from `src/orchestrator/production.ts`,
 `production/direct-bind.ts`, `orchestrator/index.ts` and `alert-transport.ts`.
 
-**Baseline.** `yarn build` clean. `yarn test` — 1923 passed, 1 failed, 1 skipped (1925). The
-failure is a flake, not a conformance defect (F-13).
+**Base commit.** `7862e3a` (*"run Stage 2 against real market data and record the verdict
+(#245) (#396)"*) — the tip of `origin/main` at the time of writing. This matters: an earlier
+pass of this audit ran against a base four commits older and produced one finding (MinBTL's
+trial cap computed from the requested rather than the ingested window) that #396 had already
+fixed. It was withdrawn rather than published. Every finding below was re-verified against
+`7862e3a` after rebasing.
+
+**Baseline.** `yarn build` clean. `yarn test` — **1943 passed, 1 skipped (1944), zero
+failures**. See F-12 for one flake observed on the older base that did not recur here.
 
 **Relationship to prior audits.** `docs/paper-trading-readiness-2026-08-03.md` deliberately
 did *not* read the specs ("Not read: the 19 specs in full … so the divergence half of the
@@ -228,30 +236,11 @@ via `broker.getOrder`. That is the first direction only; the second needs
 write-ahead that died before persisting, or a manual order — stays invisible to Risk's
 exposure caps indefinitely.
 
-### F-9 (MEDIUM) — Stage 2's MinBTL cap is computed from the requested window, not the data actually ingested
-
-stage2-validation-execution-spec.md story 3 is explicit: ingest a 5-year window *"so that the
-MinBTL trial cap (~45) is computed against a **real, not assumed**, sample length."*
-
-`stage2-verdict.ts:108` calls `minbtlGuard(deps.window, deps.distinctTrialCount)`, and
-`run-stage2.ts:136` sets `window = deps.window ?? defaultFiveYearWindow()`. The guard therefore
-derives its limit from the `DateRange` that was *asked for*. `run-stage2.ts:149` computes
-`barCount = store.bars(symbol, window).length` — the real sample length — and only logs it;
-that number never reaches the guard.
-
-**Failure scenario.** The provisioned Polygon key serves a 2-year lookback on the free tier
-(transport-layer-spec.md:165 records "Free tier = 5 calls/min, 2yr lookback"), against a
-5-year request. MinBTL then computes its trial ceiling as if five years of data existed,
-overstating how many independent configs the sample can support. The guard fails *optimistic*:
-it under-reports `exceeded`, which is the wrong direction for a gate whose whole job is
-catching an over-searched grid. The grid itself is conformant — `buildTrialGrid()` is exactly
-the specced 2 × 2 × 3 = 12 configs.
-
 ---
 
 ## Tier 3 — documentation drift (code is fine; the spec is stale)
 
-### F-10 — `llm_spend` exists in code and in no spec
+### F-9 — `llm_spend` exists in code and in no spec
 
 Migrations `0010_llm_spend.sql` and `0012_llm_spend_latency_debate_id.sql` create a
 `llm_spend` table, written by `SqliteLlmSpendStore` and read by the dashboard's spend tile
@@ -263,7 +252,7 @@ shared-sqlite-store-spec.md's "Module: Consolidated Schema" is the schema of rec
 of which appears in the spec. A consolidated schema that has quietly stopped being
 consolidated is how the next cross-spec pass starts missing collisions.
 
-### F-11 — cost-model-backtest-spec.md still names pybroker as the eval executor
+### F-10 — cost-model-backtest-spec.md still names pybroker as the eval executor
 
 The spec's "Module: Validation Library" states the walk-forward/CPCV split generation and
 eval-metric computation *"are executed via **pybroker**"*. There is no pybroker dependency and
@@ -278,22 +267,24 @@ harness reusing FL's daily-batch code path so weights evolve point-in-time) has 
 implementation — no `runDailyCycle` reference anywhere in `src/cost-model-backtest/`. Given
 F-2, nothing would read the resulting trajectory anyway.
 
-### F-12 — Verdict story 14 (fills and no-gos posted to the trade channel) unimplemented
+### F-11 — Verdict story 14 (fills and no-gos posted to the trade channel) unimplemented
 
 `NotifyingVerdict` (`src/verdict/notifying-verdict.ts`) has **zero callers** — no reference
 outside its own file and test. `direct-bind.ts` wires `LoggingVerdict` only, and records why:
 "#307 is the open ticket deciding whether one …". The operator gets no per-decision visibility
 over Telegram; only the 15-minute heartbeat and the four escalations flow.
 
-### F-13 — one flaky test in the suite
+### F-12 — one test observed flaking, once
 
 `production.test.ts > buildProductionOrchestrator > feedback cycle wiring for a paper soak
-(#366) > says at startup that the other three kill-lines have no revalidation input` times out
-at vitest's 5s default under full-suite load; the file passes 55/55 in isolation. Not a
-conformance defect, but it makes the suite non-deterministic, which is the wrong property for
-the gate a soak launches from.
+(#366) > says at startup that the other three kill-lines have no revalidation input` timed out
+at vitest's 5s default during a full-suite run on the older base; the file then passed 55/55
+in isolation, and the full suite passed clean on `7862e3a`. So this is a single observation,
+not a reproducible failure — recorded only because a 5s default on a test that shares a run
+with a 14s file is thin margin, and a non-deterministic suite is the wrong property for the
+gate a soak launches from.
 
-### F-14 — smaller items, verified but not worth their own section
+### F-13 — smaller items, verified but not worth their own section
 
 - **Polygon has no proactive rate limiter.** `venue-pacing.ts:38` covers `alpaca | ccxt |
   ibkr`; `http-polygon-client.ts` has no token bucket. Polygon's free tier is 5 calls/min —
@@ -308,36 +299,44 @@ the gate a soak launches from.
 
 ---
 
-## Verified clean
+## No divergence found
 
 Worth stating, because it is most of the system and the findings above would otherwise skew
-the picture:
+the picture. **Two different confidence levels are mixed here, and the difference matters.**
+Items marked ✓ were confirmed by reading the implementation or by a targeted reachability
+check. Items marked ○ are ones where a matching implementation exists and its tests pass, and
+that was taken as sufficient — the same inference this document's Method says is unreliable in
+this repo. Treat ○ as "nothing surfaced", not as "audited".
 
-- **Orchestrator** — scheduler/tick-runner/`current_tick`/audit-log/heartbeat all match spec,
-  including #342's 15-minute cadence and separate heartbeat chat. `RotatingFileSink` is wired
-  at `index.ts:129` (story 11).
-- **Execution** — two-layer dedup, write-ahead, state machine, partial-fill leg resizing,
-  ADR-0005's relative-epsilon close tolerance, `ClosedTrade` field set, per-lot scale-in. The
-  `reconcile`-before-`ingestFills` startup ordering is correct and awaited.
-- **Market Data Service** — `getBars`/`getIndicator`/`getMark` with `close_time <= asOf`,
-  backtest marks derived from bars and never from `latest_mark`, plus the `getSpreadEstimate`
-  and `getADV` helpers OPEN-GAP-A asked for.
-- **Debate Engine** — every specced module has an implementation (conviction score,
-  disagreement detection, round structure, latency budget, rate limiter, debate logger,
-  contributions, persona prompt-injection wrapping), and #388's `RateLimiter` is a *required
-  positional argument* to `buildDebateStep`, which is the right structural fix for this repo's
-  defect class.
-- **Transport layer** — `src/shared/http/` has the generalized retry, `fetchWithTimeout`,
-  token bucket and venue pacing the spec asked for; the retired `sendApprovalRequest` /
-  `requestApproval` dead code is gone; `AccountStateProvider` and
-  `MarketDataVolatilityReadingProvider` are built and wired by default.
-- **Backtest harness** — `backtest.ts` genuinely drives the orchestrator's `Scheduler` +
+- ✓ **Orchestrator** — `RotatingFileSink` is wired at `index.ts:129` (story 11, checked because
+  a log sink with no caller is exactly this repo's failure mode); heartbeat cadence is #342's
+  15 minutes with its own chat, read in `production.ts`. ○ scheduler / tick-runner /
+  `current_tick` / audit-log shapes match the spec's interfaces.
+- ✓ **Execution** — `reconcile`-before-`ingestFills` startup ordering is correct and awaited
+  (`production.ts:1653`, `fill-sync.ts`); `Fill.cost_breakdown` is persisted
+  (`sqlite-shared-store.ts:202`); the `exit` refusal is F-7. ○ two-layer dedup, write-ahead,
+  state machine, partial-fill leg resizing, ADR-0005's epsilon tolerance, per-lot scale-in —
+  spec-matching implementations with passing tests, not separately read.
+- ✓ **Market Data Service** — `getSpreadEstimate` and `getADV` exist on the port
+  (`types.ts:165,171`), closing OPEN-GAP-A. ○ the `close_time <= asOf` filter and
+  backtest-marks-from-bars rule.
+- ✓ **Debate Engine** — #388's `RateLimiter` is a *required positional argument* to
+  `buildDebateStep` (`debate-adapter.ts:352-372`), which is the right structural fix for this
+  repo's defect class, and #392 has since given the latency budget a live caller too.
+  ○ conviction score, disagreement detection, round structure, debate logger, contributions,
+  persona prompt-injection wrapping.
+- ✓ **Transport layer** — `src/shared/http/` has `retry.ts`, `fetch-with-timeout.ts`,
+  `token-bucket.ts`, `venue-pacing.ts`; the retired `sendApprovalRequest`/`requestApproval`
+  dead code is gone; `AccountStateProvider` and `MarketDataVolatilityReadingProvider` are
+  built and wired by default in `production.ts`. ○ per-client error taxonomies.
+- ✓ **Backtest harness** — `backtest.ts` genuinely drives the orchestrator's `Scheduler` +
   `TickRunner` rather than reimplementing the chain, which is the "same code path" guarantee
   the spec exists to provide.
-- **Stage 2** — the 12-config grid is exactly the specced cross-product; replay driver, trial
-  execution and verdict modules all present and matching (see F-9 for the one exception).
-- **Dashboard** — read-only by construction, two GET routes, 405 on non-GET, `127.0.0.1`
-  default. Code has outgrown the spec (F-10) rather than diverged from it.
+- ✓ **Stage 2** — `buildTrialGrid()` is exactly the specced 2 × 2 × 3 = 12 configs, and #396
+  now computes MinBTL over the window the data actually supports rather than the one
+  requested, which is what stage2 story 3 demands. ○ replay driver and trial execution.
+- ○ **Dashboard** — read-only by construction, two GET routes, 405 on non-GET, `127.0.0.1`
+  default. Code has outgrown the spec (F-9) rather than diverged from it.
 
 ---
 
@@ -363,12 +362,10 @@ Ordered by what unblocks a *meaningful* soak, not by effort.
    had an opinion. Option two is small and makes the soak's output honest.
 5. **Add the analyst retry + 2-consecutive-skip alert, and file the ticket** (F-4). The alert
    matters more than the retry for an unattended run.
-6. **Fix MinBTL's sample length** (F-9). Pass the ingested bar span, not the requested window.
-   Small, and it is a gate that currently fails optimistic.
-7. **Before live money only:** wire the Telegram approval gateway (F-6), produce the risk
+6. **Before live money only:** wire the Telegram approval gateway (F-6), produce the risk
    critic (F-5), and settle `submitFlatten`/`cancel`/`getOpenPositions` (F-8) — the last of
    which is a kill-switch capability, not a nicety.
-8. **Documentation sweep** (F-10, F-11): add `llm_spend` to the consolidated schema, amend the
+7. **Documentation sweep** (F-9, F-10): add `llm_spend` to the consolidated schema, amend the
    pybroker paragraph, and add phasing notes to risk-manager-spec (step 7), verdict-spec
    (HITL, story 14) and trader-spec (cosine) so the specs stop describing a system that does
    not exist.
