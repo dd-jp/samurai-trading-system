@@ -162,6 +162,60 @@ describe('TelegramBotApiClient construction (boot-time validation)', () => {
       expect((error as Error).message).not.toContain(FAKE_TOKEN);
     }
   });
+
+  it('trims leading/trailing whitespace from an explicitly-passed bot token (#355)', async () => {
+    // A trailing newline out of an env file must not land in the request URL —
+    // same class of bug as #342/#354's chat-id whitespace issue, and the same
+    // rule: normalize once, at the read point, and hand the normalized value
+    // onward. Verified by observing the *outbound request URL*, not by
+    // asserting on `#botToken` directly (private), and never by logging the
+    // fake token's value in a failure message.
+    const fetchMock = vi.fn(async () => okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new TelegramBotApiClient({
+      botToken: ` ${FAKE_TOKEN}\n`,
+      allowedUserIds: String(ALLOWED_ID),
+      auditLog: makeAuditLog(),
+      retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+    });
+    await client.sendMessage(CHAT_ID, 'hi');
+
+    const [[url]] = fetchMock.mock.calls;
+    expect(String(url)).toBe(`https://api.telegram.org/bot${FAKE_TOKEN}/sendMessage`);
+  });
+
+  it('trims a bot token sourced from process.env.TELEGRAM_BOT_TOKEN (#355)', async () => {
+    const previous = process.env.TELEGRAM_BOT_TOKEN;
+    process.env.TELEGRAM_BOT_TOKEN = `\t${FAKE_TOKEN} `;
+    const fetchMock = vi.fn(async () => okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const client = new TelegramBotApiClient({
+        allowedUserIds: String(ALLOWED_ID),
+        auditLog: makeAuditLog(),
+        retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+      });
+      await client.sendMessage(CHAT_ID, 'hi');
+
+      const [[url]] = fetchMock.mock.calls;
+      expect(String(url)).toBe(`https://api.telegram.org/bot${FAKE_TOKEN}/sendMessage`);
+    } finally {
+      if (previous === undefined) delete process.env.TELEGRAM_BOT_TOKEN;
+      else process.env.TELEGRAM_BOT_TOKEN = previous;
+    }
+  });
+
+  it('treats a whitespace-only bot token as not configured, matching the #354 rule', () => {
+    expect(
+      () =>
+        new TelegramBotApiClient({
+          botToken: '   \n\t  ',
+          allowedUserIds: String(ALLOWED_ID),
+          auditLog: makeAuditLog(),
+        }),
+    ).toThrow(/TELEGRAM_BOT_TOKEN/);
+  });
 });
 
 describe('TelegramBotApiClient.sendMessage', () => {

@@ -133,7 +133,13 @@ export interface CallbackAuditLog {
 }
 
 export interface TelegramBotApiClientOptions {
-  /** Defaults to `process.env.TELEGRAM_BOT_TOKEN`. Never logged, and never baked into an error message. */
+  /**
+   * Defaults to `process.env.TELEGRAM_BOT_TOKEN`. Never logged, and never
+   * baked into an error message. Trimmed at construction (#355, same rule as
+   * the chat ids and `SAMURAI_ALERTS` in #354): a trailing newline or space
+   * out of an env file must not reach the request URL, where it fails every
+   * send. Whitespace-only counts as not configured, same as unset.
+   */
   botToken?: string;
   /** Raw comma-separated allowlist; defaults to `process.env.TELEGRAM_ALLOWED_USER_IDS`. Validated at construction. */
   allowedUserIds?: string;
@@ -186,8 +192,12 @@ export class TelegramBotApiClient implements TelegramClient {
   #wake: (() => void) | undefined;
 
   constructor(options: TelegramBotApiClientOptions) {
-    const botToken = options.botToken ?? process.env.TELEGRAM_BOT_TOKEN;
-    if (botToken === undefined || botToken.trim() === '') {
+    // Trimmed at the read point, not just validated — same rule #354 applied
+    // to the chat ids and SAMURAI_ALERTS: whitespace-only counts as unset,
+    // and the *normalized* value is what's handed onward, so a trailing
+    // newline out of an env file never reaches the request URL below.
+    const botToken = (options.botToken ?? process.env.TELEGRAM_BOT_TOKEN)?.trim();
+    if (botToken === undefined || botToken === '') {
       throw new Error(
         'TelegramBotApiClient: TELEGRAM_BOT_TOKEN is not set. Provide it via the environment ' +
           '(.env.local) or pass { botToken } explicitly.',
