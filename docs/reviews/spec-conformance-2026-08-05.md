@@ -184,6 +184,21 @@ unconditionally, with no phasing language.
 
 ### F-6 (HIGH) — the HITL approval gate is built end-to-end and not connected
 
+> **RESOLVED 2026-08-06 as a deliberate descope — [ADR-0007](../adr/0007-fully-automatic-execution.md).**
+> The gate is not being connected. `automation_level` is now `auto` for both
+> asset classes in paper *and* live, because `Verdict.decide` awaits
+> `requestApproval` inside the instrument pass while `runTickPlan` runs
+> instruments one at a time — so one pending approval blocks the whole universe
+> for up to `human_timeout`. The finding below was correct; the fix chosen was
+> to remove the human, not to wire the transport.
+>
+> Two things changed rather than closed. The composition root's fallback is now
+> `UnwiredApprovalChannel`, which **throws** instead of auto-approving, so the
+> "reads as enforced, enforces nothing" hazard is gone. And the exposure named
+> in the last sentence below — *"the mechanism stays unexercised right up to the
+> day it must work"* — is now permanent by decision, which is why #384, #375 and
+> #333 became the live-go gate: the breakers are the only stop left.
+
 verdict-spec.md stories 10–13 and "Module: Human-in-the-Loop" are the staged-deployment
 control: a per-asset-class `manual`/`semi_auto`/`auto` dial with Telegram approve/reject. The
 parts are all there and individually tested — `SignedApprovalChannel`,
