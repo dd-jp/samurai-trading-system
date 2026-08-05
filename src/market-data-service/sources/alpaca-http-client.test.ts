@@ -4,7 +4,10 @@ import {
   isRetryableAlpacaDataError,
 } from './alpaca-data-errors.js';
 import {
+  ALPACA_DATA_FEED_ENV_VAR,
   AlpacaHttpDataClient,
+  DEFAULT_ALPACA_DATA_FEED,
+  resolveAlpacaDataFeed,
   toAlpacaCryptoSymbol,
   toAlpacaTimeframe,
 } from './alpaca-http-client.js';
@@ -232,7 +235,14 @@ describe('AlpacaHttpDataClient — equities', () => {
 
     expect(result).toEqual({ t: '2026-07-01T00:00:00Z', ap: 101, bp: 100 });
     const [url] = fetchMock.mock.calls[0] as [string];
-    expect(url).toBe('https://data.alpaca.markets/v2/stocks/AAPL/quotes/latest');
+    // `?feed=` since #381 — the mark must come from the same tape as the bars
+    // an indicator is computed over. Path asserted separately from the query so
+    // this stays a path test.
+    const parsed = new URL(url);
+    expect(`${parsed.origin}${parsed.pathname}`).toBe(
+      'https://data.alpaca.markets/v2/stocks/AAPL/quotes/latest',
+    );
+    expect(parsed.searchParams.get('feed')).toBe('iex');
   });
 });
 
@@ -462,6 +472,191 @@ describe('AlpacaHttpDataClient — API version segment (issue #358)', () => {
     await clientFor('stocks').getLatestQuote('AAPL');
 
     expect(versionSegmentOf(fetchMock.mock.calls[0])).toBe('v2');
+  });
+});
+
+/**
+ * The equity data feed (#381) — pinned by name against live status codes, for
+ * the same reason the API version segment above is.
+ *
+ * Verified read-only against a live paper account on 2026-08-05:
+ *
+ * ```
+ * GET /v2/stocks/AAPL/bars?...&end=now                  -> 403 "subscription does not
+ * GET /v2/stocks/AAPL/bars?...&end=T-14m                -> 403  permit querying recent
+ * GET /v2/stocks/AAPL/bars?...&end=T-16m                -> 200  SIP data"
+ * GET /v2/stocks/AAPL/bars?...&end=now&feed=iex         -> 200
+ * GET /v2/stocks/quotes/latest?symbols=AAPL&feed=sip    -> 403
+ * ```
+ *
+ * `MarketDataServiceImpl.getBars` always passes `asOf = clock.now()`, so
+ * without the parameter every equity bars call in a paper run is the first
+ * line — a 403 that reaches the tick as "the technical analyst found nothing",
+ * exactly the #358 costume. No unit test could have caught the original; these
+ * at least stop the parameter being dropped again.
+ */
+describe('AlpacaHttpDataClient — equity data feed (#381)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  function feedOf(call: unknown): string | null {
+    const [url] = call as [string];
+    return new URL(url).searchParams.get('feed');
+  }
+
+  it('sends feed=iex on equity bars by default, so a recent end does not 403', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ bars: dailyBars(5), next_page_token: null }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new AlpacaHttpDataClient({
+      assetClass: 'stocks',
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+    }).getBars('AAPL', '1d', new Date('2026-07-03T00:00:00Z'), 5);
+
+    expect(feedOf(fetchMock.mock.calls[0])).toBe('iex');
+  });
+
+  it('sends the same feed on equity latest quotes as on bars', async () => {
+    // A mark from one tape and an ATR from another prices a stop against a
+    // venue the mark never saw.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ quote: { t: '2026-07-01T00:00:00Z', ap: 1, bp: 1 } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new AlpacaHttpDataClient({
+      assetClass: 'stocks',
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+    }).getLatestQuote('AAPL');
+
+    expect(feedOf(fetchMock.mock.calls[0])).toBe('iex');
+  });
+
+  it('never sends feed on crypto — the crypto endpoints take no such parameter', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ bars: { 'BTC/USD': dailyBars(5) }, next_page_token: null }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new AlpacaHttpDataClient({
+      assetClass: 'crypto',
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+    }).getBars('BTC-USD', '1d', new Date('2026-07-03T00:00:00Z'), 5);
+
+    expect(feedOf(fetchMock.mock.calls[0])).toBeNull();
+  });
+
+  it('honours an explicit sip override for an account that has the subscription', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ bars: dailyBars(5), next_page_token: null }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new AlpacaHttpDataClient({
+      assetClass: 'stocks',
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+      feed: 'sip',
+    }).getBars('AAPL', '1d', new Date('2026-07-03T00:00:00Z'), 5);
+
+    expect(feedOf(fetchMock.mock.calls[0])).toBe('sip');
+  });
+
+  describe('the feed is resolved for stocks only', () => {
+    // `AlpacaHttpDataClientOptions.feed` documents itself as "Ignored for
+    // crypto", and the crypto endpoints take no such parameter. Resolving it
+    // for a crypto client would let a typo'd ALPACA_DATA_FEED kill a
+    // crypto-only process over a value it would never send.
+    const saved = process.env[ALPACA_DATA_FEED_ENV_VAR];
+    afterEach(() => {
+      if (saved === undefined) delete process.env[ALPACA_DATA_FEED_ENV_VAR];
+      else process.env[ALPACA_DATA_FEED_ENV_VAR] = saved;
+    });
+
+    it('does not read a malformed ALPACA_DATA_FEED for a crypto client', () => {
+      process.env[ALPACA_DATA_FEED_ENV_VAR] = 'sipp';
+
+      expect(
+        () =>
+          new AlpacaHttpDataClient({
+            assetClass: 'crypto',
+            apiKey: FAKE_KEY,
+            apiSecret: FAKE_SECRET,
+          }),
+      ).not.toThrow();
+    });
+
+    it('still refuses a malformed ALPACA_DATA_FEED for a stocks client, at construction', () => {
+      // The fail-fast half, and the reason laziness costs nothing: the throw
+      // moves to the client that would actually use the value, so the typo is
+      // caught at boot the moment equities enter the universe — never as a
+      // wrong feed, since only `iex`/`sip` resolve at all.
+      process.env[ALPACA_DATA_FEED_ENV_VAR] = 'sipp';
+
+      expect(
+        () =>
+          new AlpacaHttpDataClient({
+            assetClass: 'stocks',
+            apiKey: FAKE_KEY,
+            apiSecret: FAKE_SECRET,
+          }),
+      ).toThrow(ALPACA_DATA_FEED_ENV_VAR);
+    });
+
+    it('a crypto client with a malformed feed still fetches bars', async () => {
+      // Construction not throwing is only half the claim; the client must
+      // actually work, and must still send no `feed`.
+      process.env[ALPACA_DATA_FEED_ENV_VAR] = 'sipp';
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ bars: { 'BTC/USD': dailyBars(5) }, next_page_token: null }),
+        );
+      vi.stubGlobal('fetch', fetchMock);
+
+      const client = new AlpacaHttpDataClient({
+        assetClass: 'crypto',
+        apiKey: FAKE_KEY,
+        apiSecret: FAKE_SECRET,
+      });
+      await client.getBars('BTC-USD', '1d', new Date('2026-07-03T00:00:00Z'), 5);
+
+      expect(feedOf(fetchMock.mock.calls[0])).toBeNull();
+    });
+  });
+
+  describe('resolveAlpacaDataFeed', () => {
+    it('defaults to the feed a Basic subscription can actually read', () => {
+      expect(resolveAlpacaDataFeed(undefined)).toBe(DEFAULT_ALPACA_DATA_FEED);
+      expect(resolveAlpacaDataFeed('')).toBe('iex');
+      expect(resolveAlpacaDataFeed('   ')).toBe('iex');
+      expect(DEFAULT_ALPACA_DATA_FEED).toBe('iex');
+    });
+
+    it('accepts both documented feeds', () => {
+      expect(resolveAlpacaDataFeed('iex')).toBe('iex');
+      expect(resolveAlpacaDataFeed('sip')).toBe('sip');
+    });
+
+    it('refuses an unrecognised value rather than forwarding it to the wire', () => {
+      // Forwarded, a typo would come back as a query error and read as a data
+      // outage on every equity tick.
+      expect(() => resolveAlpacaDataFeed('sipp')).toThrow(ALPACA_DATA_FEED_ENV_VAR);
+      expect(() => resolveAlpacaDataFeed('IEX')).toThrow(/iex/);
+    });
   });
 });
 

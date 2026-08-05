@@ -169,7 +169,7 @@ describe('decide — entry bracket', () => {
     expect(intent?.stop).toBe(ENTRY_PRICE - EXPECTED_STOP_DISTANCE);
     expect(intent?.target).toBe(ENTRY_PRICE + 2 * EXPECTED_STOP_DISTANCE);
     expect(intent?.size).toBeCloseTo(EXPECTED_SIZE, 10);
-    expect(intent?.time_in_force).toBe(DEFAULT_TRADER_CONFIG.time_in_force);
+    expect(intent?.time_in_force).toBe(DEFAULT_TRADER_CONFIG.time_in_force.stocks);
     expect(intent?.idempotency_key).toMatch(/^[0-9a-f]{64}$/);
   });
 
@@ -262,6 +262,48 @@ describe('decide — asset-class risk scaling', () => {
     expect(crypto.asset_class).toBe('crypto');
     expect(crypto.size).toBeLessThan(stocks.size);
     expect(Math.abs(crypto.entry - crypto.stop)).toBe(Math.abs(stocks.entry - stocks.stop));
+  });
+});
+
+/**
+ * `time_in_force` is a venue constraint, not a tuning knob, and the two venues
+ * disagree (#381). Alpaca's crypto endpoint accepts `gtc`/`ioc` and rejects
+ * `day`; equities take `day`. With a universe spanning both, a single value
+ * guarantees that one asset class has every order rejected at submission —
+ * which looks like a strategy that never trades, not like a config error.
+ */
+describe('decide — per-asset-class time in force', () => {
+  it('stamps an equity intent with the equities value', async () => {
+    const intent = await decide(
+      traderInput({ marketData: new FixtureMarketData(bars(15, 2), 'stocks') }),
+    );
+
+    expect(intent?.time_in_force).toBe('day');
+  });
+
+  it("stamps a crypto intent with a value Alpaca's crypto venue accepts", async () => {
+    const intent = await decide(
+      traderInput({ marketData: new FixtureMarketData(bars(15, 2), 'crypto') }),
+    );
+
+    expect(intent?.time_in_force).toBe('gtc');
+    expect(intent?.time_in_force).not.toBe('day');
+  });
+
+  it('reads the value off the intent asset class, not a fixed field', async () => {
+    // Swap the two values and the stamped result must swap too. A resolver
+    // that ignored `asset_class` — or one left reading a flat field — answers
+    // identically for both and fails here.
+    const config = configWith({ time_in_force: { crypto: 'day', stocks: 'gtc' } });
+    const stocks = await decide(
+      traderInput({ config, marketData: new FixtureMarketData(bars(15, 2), 'stocks') }),
+    );
+    const crypto = await decide(
+      traderInput({ config, marketData: new FixtureMarketData(bars(15, 2), 'crypto') }),
+    );
+
+    expect(stocks?.time_in_force).toBe('gtc');
+    expect(crypto?.time_in_force).toBe('day');
   });
 });
 

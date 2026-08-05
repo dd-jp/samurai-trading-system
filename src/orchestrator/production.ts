@@ -161,6 +161,7 @@ import {
   AlpacaDataSource,
   AlpacaHttpDataClient,
   AlwaysOpenCalendar,
+  AssetClassRoutingDataSource,
   MarketDataServiceImpl,
   SqliteMarketDataStore,
   type TradingCalendar,
@@ -178,7 +179,7 @@ import type {
   RiskConfig,
 } from '../risk-manager/index.js';
 import { type BreakerConfig, CircuitBreakers } from '../risk-manager/index.js';
-import type { Clock, ClosedTradeStore } from '../shared/index.js';
+import type { AssetClass, Clock, ClosedTradeStore } from '../shared/index.js';
 import { TokenBucket } from '../shared/index.js';
 import type { SharedStore as SqliteHandle } from '../shared/store/index.js';
 import type { TraderConfig } from '../trader/index.js';
@@ -355,16 +356,28 @@ export interface ProductionConfig {
 
   // --- Optional composition knobs ---
   /**
-   * Defaults to `SMOKE_TEST_UNIVERSE`. Widening to `DEFAULT_UNIVERSE` also
-   * needs a multi-asset-class data source (see `dataSourceAssetClass`).
+   * Defaults to `SMOKE_TEST_UNIVERSE` — a default that is now only right for
+   * a programmatic caller. The shipped paper entrypoint supplies
+   * `DEFAULT_UNIVERSE` through `paperStartingProfile` (#381); this default
+   * stays narrow so a test or a bespoke composition root cannot inherit six
+   * live instruments by omission.
+   *
+   * A mixed universe no longer needs anything extra: `buildAlpacaDataSource`
+   * derives the asset classes from this list and builds one
+   * `AlpacaDataSource` per class behind an `AssetClassRoutingDataSource`.
    */
   universe?: readonly UniverseInstrument[];
   /**
-   * `AlpacaDataSource` normalizes for exactly one asset class (its calendar
-   * is chosen at construction), so a single instance cannot serve a mixed
-   * universe. Defaults to `'crypto'`, matching `SMOKE_TEST_UNIVERSE`. A
-   * routing data source that fans across asset classes is a follow-up, not
-   * something to invent under a wiring ticket.
+   * Forces the asset class of a **single-class** market-data source, for the
+   * case where the universe cannot say (it is empty) or the caller wants to
+   * override what it says.
+   *
+   * No longer the answer to "which endpoint root?" for a mixed universe, and
+   * no longer defaulted to `'crypto'` in practice: `buildAlpacaDataSource`
+   * reads the classes off `universe` and routes per instrument when it spans
+   * both (#381). The follow-up this field's doc used to defer to — "a routing
+   * data source that fans across asset classes" — is that function plus
+   * `AssetClassRoutingDataSource`.
    */
   dataSourceAssetClass?: 'crypto' | 'stocks';
   /**
@@ -810,6 +823,101 @@ export function buildDefaultAlpacaDataClient(assetClass: 'crypto' | 'stocks'): A
   return new AlpacaHttpDataClient({ assetClass });
 }
 
+/**
+ * The asset classes a universe actually spans, in a stable order.
+ *
+ * Derived rather than configured: `dataSourceAssetClass` used to be the
+ * operator's answer to "which endpoint root?", defaulted to `'crypto'` to match
+ * `SMOKE_TEST_UNIVERSE`, and had no way to say "both". Reading it off the
+ * universe means the market-data wiring cannot disagree with the tick plan
+ * about what is being traded — which is the disagreement #358 was.
+ */
+export function universeAssetClasses(universe: readonly UniverseInstrument[]): AssetClass[] {
+  return (['crypto', 'stocks'] as const).filter((assetClass) =>
+    universe.some((instrument) => instrument.asset_class === assetClass),
+  );
+}
+
+/**
+ * The market-data source for `universe`, which is one `AlpacaDataSource` per
+ * asset class the universe holds — routed per instrument when it holds both
+ * (#381).
+ *
+ * A single source cannot serve a mixed universe: `AlpacaDataSource` fixes its
+ * asset class and calendar at construction, and `AlpacaHttpDataClient` fixes
+ * the API path root there too (`/v2/stocks/...` vs `/v1beta3/crypto/us/...`).
+ * See `AssetClassRoutingDataSource` for the full rationale and for why an
+ * unroutable instrument throws instead of defaulting.
+ *
+ * `config.alpacaDataClient` is refused for a mixed universe rather than
+ * silently applied to both halves. It is a single-asset-class wire client by
+ * construction, so honouring it would mean sending four equities to whichever
+ * root that one client was built with — the exact silent-404 shape this
+ * function exists to prevent. A caller wanting full control over a mixed
+ * universe injects `config.dataSource` instead, which is checked first and
+ * never reaches here.
+ */
+export function buildAlpacaDataSource(
+  config: Pick<ProductionConfig, 'alpacaDataClient' | 'dataSourceAssetClass'>,
+  universe: readonly UniverseInstrument[],
+  tradingCalendar: TradingCalendar,
+): DataSource {
+  const present = universeAssetClasses(universe);
+  // An empty universe has no class to derive — `'crypto'` remains the
+  // historical default there rather than throwing on a degenerate-but-harmless
+  // config.
+  const classes: AssetClass[] =
+    present.length > 0 ? present : [config.dataSourceAssetClass ?? 'crypto'];
+
+  const sourceFor = (assetClass: AssetClass): AlpacaDataSource =>
+    new AlpacaDataSource(config.alpacaDataClient ?? buildDefaultAlpacaDataClient(assetClass), {
+      asset_class: assetClass,
+      // Authoritative for equities only: `AlpacaDataSource` substitutes
+      // `AlwaysOpenCalendar` for a crypto source regardless of what is passed
+      // (alpaca-source.ts), because a 24/7 venue has no session to gate on.
+      calendar: tradingCalendar,
+    });
+
+  const single = classes.length === 1 ? classes[0] : undefined;
+  if (single !== undefined) {
+    const override = config.dataSourceAssetClass;
+    // A `dataSourceAssetClass` that CONTRADICTS the universe is refused, not
+    // obeyed. Obeying it is the same misroute the mixed-universe branch below
+    // throws on — an all-equity universe forced to `'crypto'` sends every bars
+    // request to `/v1beta3/crypto/us/...` and 404s silently (#358) — and this
+    // function's whole premise is that the market-data wiring cannot disagree
+    // with the tick plan. The override stays useful for the case it was added
+    // for: an EMPTY universe, which asserts nothing to contradict.
+    if (override !== undefined && present.length > 0 && override !== single) {
+      throw new Error(
+        `Orchestrator cannot start: ProductionConfig.dataSourceAssetClass is '${override}', but ` +
+          `the configured universe holds only '${single}' instruments. Market-data endpoints are ` +
+          'per asset class (/v2/stocks vs /v1beta3/crypto/us), so honouring the override would ' +
+          'send every request to the wrong API root and 404 silently, which is issue #358. Drop ' +
+          'the override — it is derived from the universe — or change the universe to match it.',
+      );
+    }
+    return sourceFor(single);
+  }
+
+  if (config.alpacaDataClient !== undefined) {
+    throw new Error(
+      'Orchestrator cannot start: ProductionConfig.alpacaDataClient was supplied for a universe ' +
+        'spanning both crypto and stocks. That client is built against ONE Alpaca market-data ' +
+        'path root (/v2/stocks vs /v1beta3/crypto/us), so one instance cannot serve both — ' +
+        'applying it to both halves would send one asset class to the wrong endpoint and 404 ' +
+        'silently, which is issue #358. Inject ProductionConfig.dataSource (an ' +
+        'AssetClassRoutingDataSource, or your own) to control a mixed universe, or narrow the ' +
+        'universe to a single asset class.',
+    );
+  }
+
+  return new AssetClassRoutingDataSource({
+    sources: { crypto: sourceFor('crypto'), stocks: sourceFor('stocks') },
+    assetClassOf: new Map(universe.map((i) => [i.asset, i.asset_class])),
+  });
+}
+
 /** The composed, still-stoppable process. Returned by `buildProductionOrchestrator`. */
 export interface ProductionOrchestrator {
   tickRunner: SequentialTickRunner;
@@ -883,13 +991,8 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     config.alpacaBrokerClient ??
     buildDefaultAlpacaBrokerClient(config.mode, config.logger ?? new JsonLogger());
 
-  const assetClass = config.dataSourceAssetClass ?? 'crypto';
-  const dataSource =
-    config.dataSource ??
-    new AlpacaDataSource(config.alpacaDataClient ?? buildDefaultAlpacaDataClient(assetClass), {
-      asset_class: assetClass,
-      calendar: tradingCalendar,
-    });
+  const universe = config.universe ?? SMOKE_TEST_UNIVERSE;
+  const dataSource = config.dataSource ?? buildAlpacaDataSource(config, universe, tradingCalendar);
   const marketData: MarketDataService = new MarketDataServiceImpl(
     dataSource,
     clock,
@@ -1017,7 +1120,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       config.volatility ??
       new MarketDataVolatilityReadingProvider({
         marketData,
-        universe: config.universe ?? SMOKE_TEST_UNIVERSE,
+        universe,
         volatility_indicator: config.volatilityIndicator ?? DEFAULT_VOLATILITY_INDICATOR,
         logger: config.logger ?? new JsonLogger(),
       }),

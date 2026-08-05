@@ -23,9 +23,12 @@ import type { DailyMetricsSample, FeedbackConfig } from '../feedback-loop/index.
 import { SqliteTuningStore } from '../feedback-loop/index.js';
 import type { AlpacaBar, AlpacaQuote, Bar } from '../market-data-service/index.js';
 import {
+  AlpacaDataSource,
+  AssetClassRoutingDataSource,
   FixtureDataSource,
   MarketDataServiceImpl,
   SqliteMarketDataStore,
+  UsEquityRegularHoursCalendar,
 } from '../market-data-service/index.js';
 import type { VolatilityReading } from '../risk-manager/index.js';
 import type { OrderIntent } from '../shared/index.js';
@@ -37,6 +40,7 @@ import { paperStartingProfile } from './paper-profile.js';
 import { MIN_RETURN_OBSERVATIONS } from './production/daily-equity-metrics-source.js';
 import { buildPersistence } from './production/direct-bind.js';
 import {
+  buildAlpacaDataSource,
   buildDefaultLlmClient,
   buildProductionComponents,
   buildProductionOrchestrator,
@@ -48,7 +52,9 @@ import {
   type ProductionConfig,
   SMOKE_TEST_UNIVERSE,
   startTickLoop,
+  universeAssetClasses,
 } from './production.js';
+import { DEFAULT_UNIVERSE } from './scheduler.js';
 import { SqliteDailyEquityStore } from './sqlite-daily-equity-store.js';
 import { SequentialTickRunner } from './tick-runner.js';
 import type { Logger, Scheduler, TickOutcome, TickPlan, TickRunner } from './types.js';
@@ -200,7 +206,7 @@ const REAL_CONFIGS = {
   verdictConfig: {
     automation_level: { crypto: 'auto', stocks: 'auto' },
     max_signal_age: { crypto: 3_600_000, stocks: 3_600_000 },
-    drift_tolerance: 100,
+    drift_tolerance_pct: { crypto: 0.5, stocks: 0.5 },
     human_timeout: 60_000,
     allow_extended_hours: true,
     flag_thresholds: { size_over: 1_000_000 },
@@ -927,6 +933,15 @@ describe('buildProductionOrchestrator', () => {
       const logger = recordingLogger();
       const config = stubConfig(db, {
         ...paperStartingProfile('paper'),
+        // Narrowed back to one asset class on purpose (#381). The profile now
+        // carries `DEFAULT_UNIVERSE`, which spans crypto AND stocks — and
+        // `stubConfig` injects a single `alpacaDataClient`, which
+        // `buildAlpacaDataSource` correctly REFUSES for a mixed universe (one
+        // wire client cannot serve both Alpaca path roots). These cases are
+        // about the feedback cycle, so they hold the market-data wiring at the
+        // shape they were written against; the widened universe and its
+        // routing source are asserted directly, elsewhere in this file.
+        universe: SMOKE_TEST_UNIVERSE,
         logger,
         tickIntervalMs: QUIET,
         heartbeatIntervalMs: QUIET,
@@ -1861,6 +1876,143 @@ describe('buildProductionOrchestrator', () => {
     const orchestrator = buildProductionOrchestrator(stubConfig(db));
     const tickPlan = orchestrator.scheduler.nextTick(new SimulatedClock(START));
     expect(tickPlan.instruments).toEqual([{ asset: 'BTC-USD', asset_class: 'crypto' }]);
+  });
+
+  /**
+   * Market-data wiring for a universe that spans both asset classes (#381).
+   *
+   * The hazard is #358's, and it is invisible in fixtures: a `FixtureDataSource`
+   * has no endpoint to get wrong, so a mixed universe pointed at one Alpaca
+   * path root passes every offline test and 404s on every equity call in
+   * production. These cases assert the composition, not the responses.
+   */
+  describe('buildAlpacaDataSource — mixed-universe market data', () => {
+    const calendar = new UsEquityRegularHoursCalendar();
+
+    // `AlpacaHttpDataClient` refuses to be constructed without credentials, and
+    // these cases build the real default clients on purpose — building them is
+    // the thing under test. Placeholders only; nothing here makes a request,
+    // and no real credential is read or written.
+    const savedKey = process.env.ALPACA_API_KEY;
+    const savedSecret = process.env.ALPACA_API_SECRET;
+    beforeEach(() => {
+      process.env.ALPACA_API_KEY = 'dummy-key-not-a-credential';
+      process.env.ALPACA_API_SECRET = 'dummy-secret-not-a-credential';
+    });
+    afterEach(() => {
+      if (savedKey === undefined) delete process.env.ALPACA_API_KEY;
+      else process.env.ALPACA_API_KEY = savedKey;
+      if (savedSecret === undefined) delete process.env.ALPACA_API_SECRET;
+      else process.env.ALPACA_API_SECRET = savedSecret;
+    });
+
+    it('routes per instrument when the universe spans crypto and stocks', () => {
+      const source = buildAlpacaDataSource({}, DEFAULT_UNIVERSE, calendar);
+
+      expect(source).toBeInstanceOf(AssetClassRoutingDataSource);
+    });
+
+    it('stays a single plain source when the universe holds one asset class', () => {
+      // No routing indirection where there is nothing to route — the smoke
+      // path keeps exactly the shape it had.
+      const source = buildAlpacaDataSource({}, SMOKE_TEST_UNIVERSE, calendar);
+
+      expect(source).toBeInstanceOf(AlpacaDataSource);
+    });
+
+    it('serves an all-equity universe from the STOCKS source, not the crypto default', async () => {
+      // Found by mutation testing: asserting `universeAssetClasses` in
+      // isolation left `buildAlpacaDataSource` free to keep the old
+      // `?? 'crypto'` hardcode for the single-class branch, and the whole
+      // suite stayed green while an all-equity universe was served from the
+      // crypto path root — #358 exactly.
+      //
+      // Observed through the normalized `Mark`, because that is the only place
+      // a source's asset class is visible from outside: `NormalizingDataSource`
+      // stamps `asset_class` from the config it was constructed with.
+      const source = buildAlpacaDataSource(
+        {
+          alpacaDataClient: {
+            getBars: vi.fn(async (): Promise<AlpacaBar[]> => []),
+            getLatestQuote: vi.fn(
+              async (): Promise<AlpacaQuote> => ({ t: START.toISOString(), ap: 100, bp: 99 }),
+            ),
+          },
+        },
+        [
+          { asset: 'SPY', asset_class: 'stocks' },
+          { asset: 'AAPL', asset_class: 'stocks' },
+        ],
+        calendar,
+      );
+
+      const mark = await source.fetchMark('SPY', START, 'live');
+      expect(mark.asset_class).toBe('stocks');
+    });
+
+    it("derives the asset class from the universe rather than defaulting to 'crypto'", () => {
+      // The old default was `'crypto'` regardless of what was being traded, so
+      // an all-equity universe would have been served entirely from the crypto
+      // path root. `universeAssetClasses` is what makes the wiring follow the
+      // tick plan.
+      expect(universeAssetClasses([{ asset: 'SPY', asset_class: 'stocks' }])).toEqual(['stocks']);
+      expect(universeAssetClasses(DEFAULT_UNIVERSE)).toEqual(['crypto', 'stocks']);
+      expect(universeAssetClasses([])).toEqual([]);
+    });
+
+    it('refuses a single alpacaDataClient for a mixed universe instead of misrouting half of it', () => {
+      // One wire client is built against one path root. Silently applying it to
+      // both halves is exactly the #358 outage, so this fails loudly at
+      // construction — before any order or any tick.
+      expect(() =>
+        buildAlpacaDataSource(
+          { alpacaDataClient: { getBars: vi.fn(), getLatestQuote: vi.fn() } },
+          DEFAULT_UNIVERSE,
+          calendar,
+        ),
+      ).toThrow(/#358|both/);
+    });
+
+    it('refuses a dataSourceAssetClass that contradicts the universe', () => {
+      // Found in review: the mixed-universe branch throws, but a CONTRADICTING
+      // single-class override used to be obeyed silently — an all-equity
+      // universe forced to 'crypto' sends every bars request to
+      // /v1beta3/crypto/us and 404s, which is the same #358 misroute one branch
+      // over. Both directions are refused now.
+      expect(() =>
+        buildAlpacaDataSource(
+          { dataSourceAssetClass: 'crypto' },
+          [{ asset: 'SPY', asset_class: 'stocks' }],
+          calendar,
+        ),
+      ).toThrow(/#358|contradict|holds only/);
+    });
+
+    it('still accepts a dataSourceAssetClass that agrees with the universe', () => {
+      expect(() =>
+        buildAlpacaDataSource({ dataSourceAssetClass: 'crypto' }, SMOKE_TEST_UNIVERSE, calendar),
+      ).not.toThrow();
+    });
+
+    it('still honours the override for an EMPTY universe, which contradicts nothing', () => {
+      // The case the field was added for and the only one left where it
+      // decides anything: no instrument asserts an asset class, so there is
+      // nothing for the override to disagree with.
+      expect(() =>
+        buildAlpacaDataSource({ dataSourceAssetClass: 'stocks' }, [], calendar),
+      ).not.toThrow();
+    });
+
+    it('still honours an injected client for a single-asset-class universe', () => {
+      // The narrow case every existing test and the smoke run rely on.
+      expect(() =>
+        buildAlpacaDataSource(
+          { alpacaDataClient: { getBars: vi.fn(), getLatestQuote: vi.fn() } },
+          SMOKE_TEST_UNIVERSE,
+          calendar,
+        ),
+      ).not.toThrow();
+    });
   });
 
   it('writes audit_log rows and clears current_tick through the real SQLite stores', async () => {

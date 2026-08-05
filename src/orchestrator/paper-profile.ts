@@ -95,6 +95,7 @@ import {
   DEFAULT_FEEDBACK_INTERVAL_MS,
   type ProductionConfig,
 } from './production.js';
+import { DEFAULT_UNIVERSE } from './scheduler.js';
 import { SqliteDailyEquityStore } from './sqlite-daily-equity-store.js';
 
 /**
@@ -144,7 +145,40 @@ export const PAPER_ACCOUNT_EQUITY_ANCHOR = 100_000;
  * fail-closed path. This value leaves ~4 orders of magnitude of headroom.
  *
  * **First thing to replace with real data.** A paper run's ATR distribution
- * makes this a calibrated number instead of a placeholder.
+ * makes this a calibrated number instead of a placeholder — and since #381
+ * widened the universe to `DEFAULT_UNIVERSE`, a soak finally produces the
+ * STOCKS half of that distribution too. Until now the equity baseline was not
+ * merely uncalibrated but unmeasurable: with no stock in the universe,
+ * `MarketDataVolatilityReadingProvider` had no instrument to aggregate and
+ * warned that the breaker read 0 (inert) for the class on every start. That
+ * warning is gone, and the tier is now genuinely armed for both classes —
+ * still inert at this baseline, but inert by CHOICE rather than by absence.
+ *
+ * ## Known gap, measured and filed, NOT fixed here
+ *
+ * [#386](https://github.com/dd-jp/samurai-trading-system/issues/386): the
+ * equity ATR read currently THROWS while the US session is shut, and for
+ * roughly the first three hours after the open — `atr(14) needs 15 bars but
+ * received 12`. `AlpacaHttpDataClient` enforces its bar-count guarantee on the
+ * RAW wire payload, and `normalizeBars` then drops the out-of-session bars
+ * (IEX serves pre/post-market hours) after the guard has already passed. So
+ * `BUFFER_MULTIPLIER`'s 5-day window holds 26 raw hourly SPY bars but only 12
+ * in-session ones.
+ *
+ * The consequence for a soak, stated plainly rather than discovered on day 3:
+ * `MarketDataVolatilityReadingProvider` reads over the whole configured
+ * universe every tick, ungated by the calendar, so overnight each equity read
+ * throws and folds in as `FAILURE_READING = Infinity` — which ARMS the soft
+ * `volatility_halt:stocks` tier for ~16 hours a day and logs an error per
+ * instrument per tick. It fails loudly and it halts entries rather than sizing
+ * them wrongly, which is the safe direction; it is still noise a 14-day
+ * unattended run should not have to absorb.
+ *
+ * Not fixed under #381 deliberately: the broken guarantee is a
+ * market-data-service contract (`NormalizingDataSource.fetchBars` vs the
+ * client's underfetch retry) with its own test surface, and this ticket's
+ * scope is the profile's dials and the universe. Guessing at a bar-count
+ * contract from inside a config file is how a risk gate ends up wrong.
  */
 const UNCALIBRATED_VOLATILITY_BASELINE = 1_000_000;
 
@@ -512,6 +546,7 @@ function buildDailyMetrics(): DailyMetricsConfig {
  */
 function buildProfileConfigs(): Pick<
   ProductionConfig,
+  | 'universe'
   | 'traderConfig'
   | 'riskConfig'
   | 'verdictConfig'
@@ -532,13 +567,14 @@ function buildProfileConfigs(): Pick<
     // Spread by reference, never copied — a second copy of these numbers
     // would drift from the trader's own default the first time either moves.
     ...DEFAULT_TRADER_CONFIG,
-    // DERIVED — venue constraint, not a tuning knob. `SMOKE_TEST_UNIVERSE` is
-    // BTC-USD (ADR-0004 §4), and Alpaca's crypto venue accepts `gtc`/`ioc`
-    // only; `day` (DEFAULT_TRADER_CONFIG's value, an equities default) is
-    // rejected at submission. Overriding here rather than changing the
-    // trader default keeps `day` correct for the equity universe this
-    // profile does not yet cover.
-    time_in_force: 'gtc',
+    // `time_in_force` is no longer overridden here (#381). It used to be
+    // pinned to `gtc` for BTC-USD because the field was a single string and
+    // the profile's universe was crypto-only; widening to `DEFAULT_UNIVERSE`
+    // made that override actively wrong for the four equities, which need
+    // `day`. The field is now per-asset-class on `TraderConfig` itself, and
+    // `DEFAULT_TRADER_CONFIG` carries the correct value for BOTH classes —
+    // so the venue constraint lives with the venue-shaped default rather
+    // than being re-stated by every profile that happens to hold crypto.
   };
 
   const riskConfig: RiskConfig = {
@@ -580,9 +616,15 @@ function buildProfileConfigs(): Pick<
       cap: 0.2 * PAPER_ACCOUNT_EQUITY_ANCHOR,
       /**
        * UNSOURCED — 0.7 is the conventional |r| boundary for "strongly
-       * correlated". Inert on today's single-instrument universe (the check
-       * needs at least one *other* held instrument), so it costs nothing to
-       * start strict and loosen on evidence.
+       * correlated". **No longer inert (#381):** it was dead only because the
+       * check needs at least one *other* held instrument and the universe
+       * held one. `DEFAULT_UNIVERSE` makes it load-bearing, and it will bind
+       * — SPY/QQQ are routinely correlated well above 0.7, as are BTC-USD and
+       * ETH-USD, so the concentration `cap` below is now a cap two clusters
+       * can actually reach. That is the intended behaviour, not a regression:
+       * a portfolio that is four ways long the same beta is the thing the
+       * check exists to notice. Still cheap to start strict and loosen on
+       * evidence.
        */
       threshold: 0.7,
     },
@@ -643,23 +685,74 @@ function buildProfileConfigs(): Pick<
      * re-prices 24/7, equities move in session structure — and an equity mark
      * is "legitimately old when the session is shut"
      * (`NormalizingDataSource.fetchMark`), which the market-open gate catches
-     * first anyway. No stock is in `SMOKE_TEST_UNIVERSE`; widening to
-     * equities should re-check that interaction rather than assume it.
+     * first anyway.
+     *
+     * ## The market-open interaction, re-checked (#381)
+     *
+     * The earlier note here said widening to equities "should re-check that
+     * interaction rather than assume it". Done, and the assumption was WRONG
+     * in its ordering while right in its safety:
+     *
+     * - **Nothing is waved through.** Gate 1 (staleness) runs *before* gate 4
+     *   (market-open), so when both would fire — an equity signal decided in
+     *   yesterday's session, evaluated against a shut market — the staleness
+     *   bound is what rejects it, at ~17 hours against a 15-minute bound. The
+     *   market-open gate never gets the chance to be the one that catches it.
+     *   Both answers are `no_go`; only the recorded `no_go_reason` differs.
+     * - **So the reason code is the thing to read carefully in a soak log,**
+     *   and it is pinned by test rather than left to be rediscovered:
+     *   `market_closed` appears only for the narrow case where the mark is
+     *   FRESH but the session shut between the decision and the gate — a tick
+     *   that started at 15:59 ET and reached Verdict after the close. That is
+     *   the case gate 4 uniquely catches, and it is the case that matters,
+     *   because a fresh mark is exactly the input a staleness bound cannot
+     *   reject.
+     * - **15 minutes is not tight against the pipeline that produces the
+     *   signal.** `LATENCY_BUDGET_MS.stocks` bounds one debate at 60s, and
+     *   `decision_timestamp` is the quote's `observed_at`, not the tick start
+     *   — so the budget, not the bound, is what a slow equity debate hits
+     *   first. The headroom is roughly an order of magnitude.
+     *
+     * `UniverseScheduler` is what keeps this rare rather than routine: stock
+     * instruments are filtered out of the `TickPlan` entirely while the
+     * calendar reports the session shut, so an equity mark is not normally
+     * fetched during a closed session at all.
      */
     max_signal_age: { crypto: 5 * 60_000, stocks: 15 * 60_000 },
     /**
-     * UNSOURCED, and the value most likely to be wrong: `drift_tolerance` is
-     * an **absolute price distance** (`|mark.price - order.entry|`,
-     * verdict/index.ts gate 2), not a fraction, so one number cannot serve
-     * BTC-USD and a $200 equity. 500 is sized for BTC-USD, the only
-     * instrument in `SMOKE_TEST_UNIVERSE` — roughly half a percent at a
-     * six-figure BTC, i.e. wider than a 60s tick's ordinary movement but
-     * still a real gate against firing on a stale bracket.
+     * UNSOURCED, and formerly "the value most likely to be wrong" — the
+     * absolute `drift_tolerance: 500`, sized for a six-figure BTC-USD and
+     * equal to 250% of a $200 equity, i.e. a staleness gate that could never
+     * fire on a stock. #381 replaced the field rather than the number; see
+     * `VerdictConfig.drift_tolerance_pct` for why fractional beat
+     * per-asset-class absolutes and why the name changed.
      *
-     * **Widening the universe to equities requires revisiting this**, and
-     * probably requires the field to become per-asset-class or fractional.
+     * **0.5% for crypto is a re-expression, not a re-guess.** It is what the
+     * checked-in 500 evaluated to at a ~$100,000 BTC-USD, so the one
+     * instrument with any paper history at all keeps the calibration it was
+     * given — and now keeps it as BTC's price moves, which the absolute
+     * form did not (500 is 0.5% at $100k and 0.25% at $200k, silently
+     * tightening the gate as the market rose).
+     *
+     * **Stocks starts equal to crypto deliberately, and that is the honest
+     * answer rather than a lazy one.** There is no equity observation in the
+     * repo to derive a second number from, and inventing one would be exactly
+     * the guessed risk gate this ticket exists to remove. What the
+     * per-asset-class SHAPE buys is that separating them later is a value
+     * edit rather than another type change — and there is a real reason to
+     * expect them to separate: tolerable drift pairs with the staleness
+     * window behind it, and `max_signal_age` already runs 5 min crypto
+     * against 15 min stocks, so an equity bracket is allowed to be three
+     * times older before it is judged. First thing to re-derive from soak
+     * data, alongside the volatility baseline.
+     *
+     * Sanity check on the magnitude in both directions, since neither is
+     * sourced: 0.5% is roughly 6x a minute's typical move in either class
+     * (S&P names and BTC-USD land within a factor of two of each other at
+     * per-minute horizon), so it is wide enough not to no-go every tick, and
+     * far tighter than the moves that make a bracket genuinely stale.
      */
-    drift_tolerance: 500,
+    drift_tolerance_pct: { crypto: 0.005, stocks: 0.005 },
     /**
      * UNSOURCED (milliseconds). Inert while `ConsoleApprovalChannel` resolves
      * synchronously; it becomes load-bearing the moment a real approval
@@ -670,8 +763,10 @@ function buildProfileConfigs(): Pick<
     human_timeout: 15 * 60_000,
     /**
      * DERIVED — `false` is the conservative side of a gate that only applies
-     * to stocks, and the smoke universe holds none. Extended-hours liquidity
-     * is exactly the regime the cost model is least calibrated for.
+     * to stocks. It stops being hypothetical with `DEFAULT_UNIVERSE` (#381):
+     * four equities now reach gate 4, and `false` is what makes
+     * `tradingCalendar.isOpen(now)` authoritative for them. Extended-hours
+     * liquidity is exactly the regime the cost model is least calibrated for.
      */
     allow_extended_hours: false,
     flag_thresholds: {
@@ -684,6 +779,18 @@ function buildProfileConfigs(): Pick<
        * at all — every trade is gated regardless). It only starts to matter
        * if the dial is turned to `semi_auto`, at which point it must be set
        * deliberately rather than inherited from here.
+       *
+       * **Re-confirmed inert after widening the universe (#381), and left
+       * that way on purpose.** The incommensurability got worse, not better —
+       * one `order.size` threshold now spans fractional BTC-USD and
+       * whole-share SPY — but the widening does not make it reachable:
+       * `shouldEngageHitl` short-circuits on `automation_level === 'manual'`
+       * *before* `isFlagged` is called, for both classes. Making it
+       * "meaningful" would mean inventing per-asset-class *notional* bounds
+       * for a routing decision no run can currently take, so the correct move
+       * is to leave it visibly inert and let the `semi_auto` change that
+       * needs it be the change that sets it. Pinned by test so the
+       * short-circuit cannot quietly stop holding.
        */
       size_over: 0,
     },
@@ -720,8 +827,44 @@ function buildProfileConfigs(): Pick<
      * window; `min_bars: 20` then omits any pair without roughly a month of
      * overlap rather than trusting a thin estimate (correlation.ts treats an
      * omitted pair as "not correlated" — the documented warm-up fallback).
-     * Inert on a single-instrument universe: correlation is computed against
-     * *other* held instruments, of which there are none.
+     *
+     * ## Live from day 1 of a widened universe, and what #303 does about it
+     *
+     * This was inert while the universe held one instrument. It is not any
+     * more (#381), and the accompanying worry was
+     * [#303](https://github.com/dd-jp/samurai-trading-system/issues/303) — an
+     * under-`min_bars` pair is omitted, therefore reads as *uncorrelated* to
+     * the concentration check, and a warming-up portfolio looks perfectly
+     * diversified.
+     *
+     * **#303 landed first, in #383**, so this profile carries its fix rather
+     * than a decision about it: `insufficient_history` now names the dropped
+     * pairs and `evaluate()` raises a `correlation_warmup:` advisory per
+     * uncovered pair. No limit moved, so nothing here needed re-tuning.
+     *
+     * ## One correction, because it changes how the soak is read
+     *
+     * #383's rationale states that "on day 1 all fifteen pairs are under
+     * `min_bars`". **Measured against the live Alpaca paper account
+     * (read-only, 2026-08-05), that is not what happens**: all six
+     * `DEFAULT_UNIVERSE` instruments return a full 30 daily bars on the very
+     * first request, i.e. 29 overlapping returns against `min_bars: 20`.
+     *
+     * The reason is that the window is not accumulated locally.
+     * `MarketDataServiceImpl.getBars` calls `DataSource.fetchBars` on every
+     * request and persists the result (service.ts), so a cold first tick pulls
+     * the whole window straight from Alpaca's archive — and every instrument
+     * here has traded for years. A genuine day-1 warm-up gap needs an
+     * instrument younger than ~30 trading days, which is a universe decision
+     * rather than a soak-timing one.
+     *
+     * This does not make #383 pointless — distinguishing "absent" from
+     * "measured at zero" is right regardless, and `RiskDecision.warnings` had
+     * no production reader at all before it. It does mean the expected volume
+     * of `correlation_warmup:` lines in a soak is **near zero, not fifteen per
+     * tick**. Worth stating precisely: an operator told to expect a flood
+     * would read a genuine warm-up warning as noise, which is the failure the
+     * ticket was trying to prevent.
      */
     window: { timeframe: '1d', lookback: 30 },
     min_bars: 20,
@@ -844,6 +987,75 @@ function buildProfileConfigs(): Pick<
   };
 
   return {
+    /**
+     * `SPEC` — the universe a paper run trades (#381). ADR-0001 names this
+     * exact set ("default universe SPY/QQQ/AAPL/TSLA/BTC-USD/ETH-USD",
+     * CLAUDE.md's broker plan), orchestrator-spec.md story 3 makes it the
+     * scheduler's default, and #238's first acceptance criterion is running it
+     * before the soak starts. `DEFAULT_UNIVERSE` (scheduler.ts) is the checked-in
+     * copy; spread by reference so a second list cannot drift from it.
+     *
+     * A tuning decision of the same kind as everything else in this file, not
+     * a deployment one like the alert transports: it is what the risk caps,
+     * the drift tolerances and the volatility baselines above are set
+     * *against*. `ProductionConfig.universe` still defaults to
+     * `SMOKE_TEST_UNIVERSE`, so a programmatic caller inherits nothing by
+     * omission and the smoke run's explicit override (smoke-run.ts) still
+     * wins.
+     *
+     * **Not a member of `REQUIRED_INJECTED_CONFIG`** (orchestrator/index.ts),
+     * which still lists the eight tuning objects and nothing else. That list
+     * is a guard against a caller forgetting a config the process cannot
+     * invent; a universe it CAN default. So a bespoke composition root that
+     * satisfies the guard field by field, rather than spreading this profile,
+     * silently keeps `SMOKE_TEST_UNIVERSE` — deliberate (the narrow default is
+     * the safe one) but worth knowing before wondering why a run trades one
+     * instrument.
+     *
+     * ## What six instruments cost per day, and why it is not 6x (DERIVED)
+     *
+     * The naive reading is that six instruments is six times the debate spend
+     * of one. It is closer to **1.6x**, and the reason is worth writing down
+     * because it also answers whether the tick loop can keep up:
+     * `startTickLoop` is a `setTimeout` CHAIN, not a fixed-cadence
+     * `setInterval` — the next tick is scheduled only once the previous pass
+     * has finished. With `maxConcurrentInstruments: 1` a pass runs its
+     * instruments sequentially, so widening the universe stretches the
+     * effective cadence instead of multiplying the tick count. Nothing stacks,
+     * nothing is skipped, and the "tick skipped: previous tick still running"
+     * warn stays unreachable.
+     *
+     * Arithmetic, at `LATENCY_BUDGET_MS` (crypto 15s, stocks 60s) and
+     * `DEFAULT_TICK_INTERVAL_MS` (60s):
+     *
+     * - Session hours (6.5h): a pass is 4x60s + 2x15s = 270s, so a cycle is
+     *   ~330s -> ~71 cycles -> ~426 debates.
+     * - Outside the session (17.5h): a pass is 2x15s = 30s, cycle ~90s ->
+     *   ~700 cycles -> ~1,400 debates.
+     * - Weekday total ~1,800 debates; a weekend day is crypto-only, ~1,900.
+     *
+     * At `DEFAULT_ANTHROPIC_MODEL` (claude-haiku-4-5, $1/M in and $5/M out)
+     * and 3 LLM calls per round over 1-3 rounds (`MAX_ROUNDS`, early exit on
+     * convergence), a debate is roughly $0.012-$0.045. So **~$45/day, with a
+     * defensible range of $25-$90, and ~$650 over the 14-day soak** —
+     * against ~$29/day for BTC-USD alone today.
+     *
+     * Two things that make the range wide rather than the estimate precise,
+     * both stated rather than smoothed over: debates that complete FASTER than
+     * the budget cost more per day, not less (a shorter pass means more
+     * cycles), and no soak has yet produced a real per-debate token
+     * distribution — `llm_spend` (#367) is what will replace this arithmetic
+     * with a measurement.
+     *
+     * The rate-limit posture (#299) is unchanged by widening, and it is worth
+     * being precise about what carries it: `maxConcurrentInstruments: 1` caps
+     * in-flight debates at one, so at most one LLM call is ever outstanding no
+     * matter how many instruments are in the plan. `RateLimiter`
+     * (debate-engine/rate-limiter.ts) is NOT what holds this — it is built and
+     * tested but has no production caller, which is a separate gap and not one
+     * this ticket closes.
+     */
+    universe: DEFAULT_UNIVERSE,
     traderConfig,
     riskConfig,
     verdictConfig,
@@ -891,6 +1103,7 @@ export function paperStartingProfile(
 ): Pick<ProductionConfig, 'mode'> &
   Pick<
     ProductionConfig,
+    | 'universe'
     | 'traderConfig'
     | 'riskConfig'
     | 'verdictConfig'
@@ -907,8 +1120,9 @@ export function paperStartingProfile(
         'runs on the PAPER STARTING PROFILE (src/orchestrator/paper-profile.ts) — a set of ' +
         'deliberately untuned starting values. Its volatility breaker baseline is uncalibrated ' +
         'and effectively inert, its exposure caps assume a $100,000 paper account, its drift ' +
-        'tolerance is sized for BTC-USD alone, and its HITL gate resolves through a channel that ' +
-        'auto-approves. None of that may decide a real-money trade. To trade live, call ' +
+        'tolerance is a fraction nobody has yet observed against a real fill, and its HITL gate ' +
+        'resolves through a channel that auto-approves. It also names the six instruments it ' +
+        'trades. None of that may decide a real-money trade. To trade live, call ' +
         'startFromEnvironment() from your own composition root with a config you have tuned ' +
         'against paper results — see ProductionConfig in src/orchestrator/production.ts.',
     );
