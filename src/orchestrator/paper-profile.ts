@@ -240,36 +240,45 @@ function buildFeedbackConfig(): FeedbackConfig {
    *
    * That is a gap against feedback-loop-spec.md story 5 ("As the Debate
    * Engine, I want to read the updated weights when applying them
-   * downstream"), and it is stated here rather than quietly closed with an
-   * invented mechanism, because the specs pin the plumbing and not the
-   * behaviour:
+   * downstream"). It is stated here rather than quietly closed with an
+   * invented mechanism — but the gap is TWO questions with two different
+   * statuses, and they must not be blurred into one:
    *
-   * - analysts-spec.md story 27 pins the TRANSPORT — the orchestrator reads
-   *   the weights map at tick start and passes it through for the Debate
-   *   Engine to apply — and is explicit that analysts stay weight-blind.
-   * - debate-engine-spec.md pins nothing about applying it. "Weighted debates
-   *   (some analysts have more influence based on track record)" is listed
-   *   under **Future Extensions — not in this spec**, and its scope section
-   *   says the Debate Engine "provides the data (per-analyst contributions,
-   *   influence scores) that enables weight adjustment, but the adjustment
-   *   logic itself is out of scope". No round-orchestration rule, conviction
-   *   formula or mediator step takes a weight as an input anywhere in it.
+   * 1. **The transport is DECIDED and unbuilt.** analysts-spec.md story 27 and
+   *    its "Decision: analysts are stateless per tick (from #42)" say the
+   *    orchestrator "reads the weights map at tick start and passes it through
+   *    in `AnalystRunResult.weights`", analysts staying weight-blind;
+   *    feedback-loop-spec.md's cross-spec note even asserts it as done
+   *    ("Analyst weights already follow this pattern — orchestrator reads at
+   *    tick start, #42"). It is not done: `AnalystRunResult` has no `weights`
+   *    field (analysts/types.ts records this), and `AnalystOrchestrator` never
+   *    touches the tuning store. A REAL, spec-pinned gap, and this file is not
+   *    where it is closed.
+   * 2. **The application is UNDECIDED.** debate-engine-spec.md lists "Weighted
+   *    debates (some analysts have more influence based on track record)"
+   *    under **Future Extensions — not in this spec**, and its scope section
+   *    says the Debate Engine "provides the data (per-analyst contributions,
+   *    influence scores) that enables weight adjustment, but the adjustment
+   *    logic itself is out of scope". No round-orchestration rule, conviction
+   *    formula or mediator step takes a weight as an input anywhere in it.
    *
-   * So "read the weights" has no single meaning to implement. Scaling an
-   * analyst's `confidence`, weighting a vote count at termination, biasing the
-   * mediator's prompt, and scaling `influence_score` are four different
-   * trading systems, and every one of them changes the direction and size of
-   * real orders from the day it ships. Choosing one here would put a guessed
-   * weighting mechanism into every debate of a 14-day soak, where its effect
-   * would be indistinguishable from the market's — and a distortion nobody
-   * chose is worse than an honest gap, which is the same standard #327 and
-   * #366 were held to.
+   * (2) is why (1) was left alone here rather than built as the pass-through
+   * it is specified as. Scaling an analyst's `confidence`, weighting a vote
+   * count at termination, biasing the mediator's prompt and scaling
+   * `influence_score` are four different trading systems, and each changes the
+   * direction and size of real orders from the day it ships; a guessed
+   * mechanism distorting every debate of a 14-day soak — where its effect is
+   * indistinguishable from the market's — is worse than an honest gap, the
+   * same standard #327 and #366 were held to. And shipping the pipe alone
+   * moves the dead end one stage along: a `weights` field nothing applies,
+   * plus a store read on every tick, is the "wired and learning nothing" shape
+   * this ticket exists to stop repeating.
    *
-   * What the soak now produces is exactly what picking a mechanism needs:
-   * which analyst the loop promotes or demotes, by how much, and off which
-   * trades. Picking it is a wayfinder decision (CLAUDE.md Standing Pipeline
-   * Rule 1) against a debate-engine map + spec amendment, not a line of code
-   * in a starting-values file.
+   * What the soak now produces is exactly what deciding (2) needs: which
+   * analyst the loop promotes or demotes, by how much, and off which trades.
+   * That decision is a wayfinder one (CLAUDE.md Standing Pipeline Rule 1)
+   * against a debate-engine map + spec amendment; (1) then follows it in the
+   * same change, which is the point at which the transport earns its keep.
    */
   const weights: TunableDial = {
     /**

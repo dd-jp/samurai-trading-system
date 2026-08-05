@@ -7,6 +7,7 @@
 export {
   type AnalystCredit,
   accumulateCredit,
+  bandMidpoint,
   creditForContribution,
   impliedWeight,
   realizedR,

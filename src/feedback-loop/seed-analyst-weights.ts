@@ -24,6 +24,7 @@
  * `updated_at` — the only record of when the loop last moved that dial.
  */
 import type { TuningStore } from '../shared/index.js';
+import { bandMidpoint } from './attribution.js';
 import type { TunableDial } from './types.js';
 
 export interface SeedAnalystWeightsInput {
@@ -52,28 +53,18 @@ export interface SeedAnalystWeightsResult {
 }
 
 /**
- * The value an analyst with no record at all should start from: the band's
- * MIDPOINT, derived rather than written as the 1.0 the paper profile's
- * `[0.5, 1.5]` makes it.
- *
- * That is `impliedWeight`'s own fixed point (attribution.ts): a cycle targets
- * `midpoint + halfBand * tanh(meanCredit)`, so an analyst with a genuinely
- * even record is pulled toward the midpoint and no further. Seeding anywhere
- * else would make the first few cycles a drift back to the middle rather than
- * a response to evidence — and re-centring the band later would silently
- * reintroduce that drift if this were a literal.
- */
-function neutralWeight(dial: TunableDial): number {
-  return (dial.floor + dial.ceiling) / 2;
-}
-
-/**
  * Writes a neutral weight for every analyst that has no row yet, and returns
  * which ids fell on each side. Safe to call on every boot.
  */
 export function seedAnalystWeights(input: SeedAnalystWeightsInput): SeedAnalystWeightsResult {
   const existingWeights = input.tuning.getAnalystWeights();
-  const neutral = neutralWeight(input.dial);
+  // `bandMidpoint`, shared with `impliedWeight` rather than re-derived here:
+  // the seed must be the exact value a genuinely even record is pulled toward
+  // (`tanh(0) === 0`), or the first cycles are a drift back to the middle
+  // rather than a response to evidence. Derived, never the 1.0 the paper
+  // profile's `[0.5, 1.5]` band makes it — re-centring the band must move the
+  // seed with it.
+  const neutral = bandMidpoint(input.dial);
 
   const seeded: string[] = [];
   const existing: string[] = [];
