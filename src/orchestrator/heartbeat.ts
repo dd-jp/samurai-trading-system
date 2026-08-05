@@ -1,9 +1,16 @@
 /**
  * Dead-man's-switch heartbeat (#96) — see docs/specs/orchestrator-spec.md
- * (Module: Heartbeat). Posts a lightweight liveness message over the trade
+ * (Module: Heartbeat). Posts a lightweight liveness message to the heartbeat
  * channel on a fixed interval; the alert signal is silence, not content — an
  * external watchdog (out of scope here) checks last-heartbeat-age and alerts
  * if it grows stale. The Orchestrator does not monitor itself.
+ *
+ * That channel is a destination of its own, not the one the operator
+ * escalations use (#342, alert-transport.ts), and the interval defaults to 15
+ * minutes rather than 60s: this is the one alert that repeats forever whether
+ * or not anything is wrong, so it is the one that can make a human stop
+ * reading. Where it posts and how often are both the composition root's
+ * decisions — nothing here knows either.
  *
  * A failed post is logged, not thrown: a transient channel outage must not
  * crash the Orchestrator process, since a crash is exactly the failure mode
