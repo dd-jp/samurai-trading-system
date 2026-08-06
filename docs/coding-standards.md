@@ -58,6 +58,10 @@ No unconstructed adapter/client/store ships. Corollary of the smoke-assertion ru
 
 Any store operation making more than one dependent write wraps them in a single `better-sqlite3` transaction. A crash between un-transacted writes can be unrepairable when a dedup guard makes the retry path skip the work (fill-ingest, review 2026-08-06: `writeFill` → `updatePositionFill` → `writeClosedTrade` with `hasFill()` dedup).
 
+## Environment variables: an option with an env default, never a mid-wiring read
+
+Every env-derived value is an explicit option/config field whose default reads `process.env` at the option site — `options.apiKey ?? process.env.ALPACA_API_KEY` — documented in that option's doc comment. Entry points (`orchestrator/index.ts`, `dashboard/index.ts`, scripts) are the only places that do raw multi-variable env parsing. Composition and stage code never reach for `process.env` mid-wiring: a build function that needs an env decision takes a config field carrying the env default instead, so tests and programmatic callers can decide without touching the process environment. (Review 2026-08-06 D2 — `sentimentEnabled` is the worked example.)
+
 ## When in doubt
 
 Grep for existing patterns in sibling modules before introducing a new one. Match the file's existing style over a "better" abstraction.

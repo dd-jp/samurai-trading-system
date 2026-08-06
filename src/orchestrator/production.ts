@@ -521,6 +521,14 @@ export interface ProductionConfig {
    */
   llmBudgetUsd?: number;
   /**
+   * Whether the market-intelligence sentiment agent runs (D2, review
+   * 2026-08-06). Defaults from `SAMURAI_SENTIMENT` (`off` disables, anything
+   * else runs it) — the same option-with-env-default idiom every other
+   * env-derived value in this codebase uses; this field exists so tests and
+   * programmatic callers can decide without touching the process environment.
+   */
+  sentimentEnabled?: boolean;
+  /**
    * Overrides the `RateLimiter` this module would otherwise build from
    * `rateLimiterConfig` — same rationale as `broker`/`llmClient`.
    *
@@ -1561,7 +1569,8 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // every call into `llm_spend` under `stage: 'market_intelligence'`, so
   // ADR-0008's cap covers this stage too, and it checks that cap BEFORE
   // calling.
-  const sentimentEnabled = process.env.SAMURAI_SENTIMENT?.trim().toLowerCase() !== 'off';
+  const sentimentEnabled =
+    config.sentimentEnabled ?? process.env.SAMURAI_SENTIMENT?.trim().toLowerCase() !== 'off';
   // `tryNousCredentials` rather than `nousCredentials`: an unconfigured Nous
   // environment degrades this optional stage to no-agent instead of failing
   // the boot, which is how the absent `XAI_API_KEY` behaved before ADR-0009
