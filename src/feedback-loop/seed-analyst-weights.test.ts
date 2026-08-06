@@ -172,6 +172,9 @@ describe('seedAnalystWeights', () => {
       setRiskThreshold(name: string, value: number): void {
         this.live.setRiskThreshold(name, value);
       }
+      seedRiskThreshold(name: string, value: number): boolean {
+        return this.live.seedRiskThreshold(name, value);
+      }
     }
 
     const live = openStore(db);

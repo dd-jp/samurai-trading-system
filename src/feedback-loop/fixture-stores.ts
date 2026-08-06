@@ -82,6 +82,15 @@ export class InMemoryTuningStore implements TuningStore {
   setRiskThreshold(name: string, value: number): void {
     this.thresholds[name] = value;
   }
+
+  /** First-write-wins, mirroring `SqliteTuningStore.seedRiskThreshold` (#433). */
+  seedRiskThreshold(name: string, value: number): boolean {
+    if (this.thresholds[name] !== undefined) {
+      return false;
+    }
+    this.thresholds[name] = value;
+    return true;
+  }
 }
 
 export class InMemoryAdjustmentLog implements AdjustmentLog {

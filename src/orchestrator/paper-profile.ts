@@ -117,6 +117,35 @@ import { SqliteDailyEquityStore } from './sqlite-daily-equity-store.js';
 export const PAPER_ACCOUNT_EQUITY_ANCHOR = 100_000;
 
 /**
+ * The guardrail band for every `risk_thresholds` dial (#433), as fractions of
+ * the cap this profile ships. See `capDial` for why the ceiling is the shipped
+ * value and the floor is not zero.
+ */
+export const PAPER_RISK_THRESHOLD_FLOOR_FRACTION = 0.25;
+export const PAPER_RISK_THRESHOLD_STEP_FRACTION = 0.1;
+
+/**
+ * The notional caps, named once (#433).
+ *
+ * They are consumed in two places that must not drift: `riskConfig` below (the
+ * values a run starts from, and the seed for the `risk_thresholds` table) and
+ * `feedback.config.risk_thresholds` (the guardrail band those values may move
+ * within). Written as literals in both, an edit to one would silently leave
+ * the other bounding a cap that no longer exists — with the dial's ceiling
+ * then sitting above or below the value it is supposed to bound.
+ *
+ * Each fraction's justification stays at its `riskConfig` field, not here.
+ */
+export const PAPER_RISK_CAPS = {
+  max_position_size: 0.05 * PAPER_ACCOUNT_EQUITY_ANCHOR,
+  per_asset_cap: 0.1 * PAPER_ACCOUNT_EQUITY_ANCHOR,
+  per_asset_class_cap_crypto: 0.2 * PAPER_ACCOUNT_EQUITY_ANCHOR,
+  per_asset_class_cap_stocks: 0.4 * PAPER_ACCOUNT_EQUITY_ANCHOR,
+  portfolio_gross_cap: 0.5 * PAPER_ACCOUNT_EQUITY_ANCHOR,
+  concentration_cap: 0.2 * PAPER_ACCOUNT_EQUITY_ANCHOR,
+} as const;
+
+/**
  * `breakerConfig.volatility.baseline` is an **absolute ATR reading in price
  * units**, not a ratio: `MarketDataVolatilityReadingProvider` aggregates
  * `marketData.getIndicator(instrument, atr(14), now)` per asset class, and ATR
@@ -359,6 +388,35 @@ function buildFeedbackConfig(): FeedbackConfig {
     tighten_is: 'decrease',
   };
 
+  /**
+   * A guardrail band for one notional cap (#433), expressed relative to the
+   * value this profile ships — so the band re-scales with
+   * `PAPER_ACCOUNT_EQUITY_ANCHOR` instead of pinning absolute dollars that
+   * silently mean something different on a differently-funded account.
+   *
+   * `ceiling` is the shipped value itself, and that asymmetry is the safety
+   * posture, not an oversight: a kill-line breach may tighten a cap far below
+   * what the profile chose, and a human-approved recovery may walk it back UP
+   * to — never past — the value a human already reviewed here. Loosening
+   * beyond the checked-in profile is a config change, not a tuning step.
+   *
+   * `floor` at a quarter keeps the dial from tightening to zero: a cap of 0
+   * rejects every intent, which is indistinguishable from a broken pipeline
+   * and is the wrong way for a *tuning* mechanism to stop trading. Killing the
+   * run is the operator's call on the breach alert.
+   */
+  function capDial(shipped: number): TunableDial {
+    return {
+      // A tenth of the shipped cap, so a full ceiling-to-floor traverse needs
+      // at least 7.5 consecutive breaching cycles. Same reasoning as `weights`:
+      // no dial may be dominated by the first few days of a soak.
+      max_step: PAPER_RISK_THRESHOLD_STEP_FRACTION * shipped,
+      floor: PAPER_RISK_THRESHOLD_FLOOR_FRACTION * shipped,
+      ceiling: shipped,
+      tighten_is: 'decrease',
+    };
+  }
+
   return {
     attribution_window_ms,
     weights,
@@ -404,7 +462,23 @@ function buildFeedbackConfig(): FeedbackConfig {
      * `RiskConfig` field has never been fixed by any writer. Guessing that
      * mapping here would put safety-limit bounds under keys nothing honours.
      */
-    risk_thresholds: {},
+    /**
+     * `DERIVED` from `riskConfig`'s own caps — and no longer empty (#433).
+     *
+     * The blocker recorded here was a naming contract, not a number: nothing
+     * had ever fixed which `risk_thresholds` key drives which `RiskConfig`
+     * field, so declaring bounds "would put safety-limit bounds under keys
+     * nothing honours". `RISK_THRESHOLD_KEYS` (src/risk-manager/risk-thresholds.ts)
+     * is that contract, the composition root seeds the table from these same
+     * caps, and `RiskManagerImpl` reads them live at `evaluate()`. All three
+     * ends now agree, so the dials are declarable.
+     *
+     * Bounds come from `capDial`, relative to the shipped cap rather than
+     * absolute, so they re-scale with `PAPER_ACCOUNT_EQUITY_ANCHOR`.
+     */
+    risk_thresholds: Object.fromEntries(
+      Object.entries(PAPER_RISK_CAPS).map(([name, shipped]) => [name, capDial(shipped)]),
+    ),
     kill_thresholds: {
       /**
        * `SPEC` — feedback-loop-spec.md story 13 states the line literally
@@ -600,9 +674,9 @@ function buildProfileConfigs(): Pick<
     // would expect. Every one is well inside what an Alpaca paper account
     // could take, deliberately: the first run is testing wiring, not size.
     /** 5% of equity — the Trader's own 0.5-1% *risk* budget becomes a much larger *notional* once divided by a ~1-2% ATR stop, so this is the cap that actually binds first on BTC-USD. */
-    max_position_size: 0.05 * PAPER_ACCOUNT_EQUITY_ANCHOR,
+    max_position_size: PAPER_RISK_CAPS.max_position_size,
     /** 10% — one instrument may hold at most two max-size entries' worth. */
-    per_asset_cap: 0.1 * PAPER_ACCOUNT_EQUITY_ANCHOR,
+    per_asset_cap: PAPER_RISK_CAPS.per_asset_cap,
     /**
      * 20% crypto / 40% stocks. Asymmetric for the same reason
      * `asset_class_risk_multiplier` is (docs/research/02-staged-deployment-plan.md:
@@ -610,8 +684,8 @@ function buildProfileConfigs(): Pick<
      * held to half the equity share of the stock bucket.
      */
     per_asset_class_cap: {
-      crypto: 0.2 * PAPER_ACCOUNT_EQUITY_ANCHOR,
-      stocks: 0.4 * PAPER_ACCOUNT_EQUITY_ANCHOR,
+      crypto: PAPER_RISK_CAPS.per_asset_class_cap_crypto,
+      stocks: PAPER_RISK_CAPS.per_asset_class_cap_stocks,
     },
     /**
      * 50% gross. DERIVED, not arbitrary: anything above 100% is leverage,
@@ -619,7 +693,7 @@ function buildProfileConfigs(): Pick<
      * equity leaves the account able to absorb the full 20% drawdown limit
      * below without the caps and the breaker fighting each other.
      */
-    portfolio_gross_cap: 0.5 * PAPER_ACCOUNT_EQUITY_ANCHOR,
+    portfolio_gross_cap: PAPER_RISK_CAPS.portfolio_gross_cap,
     concentration: {
       /**
        * DERIVED — equal to the crypto asset-class cap: a cluster of
@@ -627,7 +701,7 @@ function buildProfileConfigs(): Pick<
        * single asset class may hold, which is the whole point of the check
        * (risk-manager-spec.md step 6).
        */
-      cap: 0.2 * PAPER_ACCOUNT_EQUITY_ANCHOR,
+      cap: PAPER_RISK_CAPS.concentration_cap,
       /**
        * UNSOURCED — 0.7 is the conventional |r| boundary for "strongly
        * correlated". **No longer inert (#381):** it was dead only because the

@@ -35,6 +35,7 @@ import type {
   CircuitBreakers,
   PersistedBreakerState,
   RiskConfig,
+  RiskThresholdSource,
   SessionBasisByClass,
   VolatilityReading,
 } from '../../risk-manager/index.js';
@@ -168,10 +169,17 @@ export interface RiskStepDeps extends BreakerStateDeps {
   config: RiskConfig;
   correlationConfig: CorrelationConfig;
   ciiConsumer: CiiScoreSource;
+  /**
+   * #433: the live `risk_thresholds` table, read at every `evaluate()`.
+   * Optional so a test or a backtest can stay on the static config, and
+   * supplied on the production path — without it, the Feedback Loop's
+   * defensive auto-tightening writes a row nothing honours.
+   */
+  thresholds?: RiskThresholdSource;
 }
 
 export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
-  const riskManager = new RiskManagerImpl(deps.config);
+  const riskManager = new RiskManagerImpl(deps.config, deps.thresholds);
 
   return async ({ trace_id, intent, clock }) => {
     const { portfolio, breakers } = await computeCurrentPortfolioAndBreakers(deps, clock);
