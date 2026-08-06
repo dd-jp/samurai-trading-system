@@ -18,7 +18,8 @@
     "lint:fix": "biome check --write .",
     "orchestrator": "yarn build && node --env-file=.env.local dist/orchestrator/index.js",
     "smoke": "yarn build && node dist/orchestrator/smoke-run.js",
-    "dashboard": "yarn build && node --env-file=.env.local dist/dashboard/index.js"
+    "dashboard": "yarn build && node --env-file=.env.local dist/dashboard/index.js",
+    "serve": "yarn build && node --env-file=.env.local dist/serve/index.js"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.3",

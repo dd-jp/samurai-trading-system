@@ -69,6 +69,13 @@ export class SequentialTickRunner implements TickRunner {
         input_digest: digest(input),
         output_digest: digest(output),
         timestamp: clock.now(),
+        // Migration 0013. Both were always in scope here and simply never
+        // persisted, which left every short-circuited tick unattributable to
+        // an instrument — `current_tick` covers only the in-flight tick and
+        // `verdict_log` only the ticks that reached Verdict, so a tick that
+        // stopped at Analysts or Risk belonged to nothing readable.
+        instrument,
+        asset_class: signal.asset_class,
       });
     };
 

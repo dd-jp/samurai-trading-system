@@ -58,6 +58,28 @@ Driven by `invalidation_log`, joined on `(instrument, bar_timestamp)`. Showing d
 6. As an operator, I want current per-analyst weights and their rolling attribution, so that I can see which analysts are earning trust and which are being tuned down.
 7. As an operator, I want the Feedback Loop's daily `MetricsSuite` (Sharpe, Sortino, Calmar, max drawdown, profit factor, expectancy, skew/kurtosis, turnover, exposure), so that I see the full metrics picture the research constraints require, not a single vanity number.
 
+### Pipeline (second view, 2026-08-06)
+
+Added by [Wayfinder: dashboard pipeline view](https://github.com/dd-jp/samurai-trading-system/issues/411). A **second tab** alongside everything above, which is unchanged and remains the default landing view. The four tables answer *what the system holds and what it decided*; this view answers *where each ticker is in the pipeline right now, and where the last one stopped*.
+
+**Primitive: the stage rail** ([#412](https://github.com/dd-jp/samurai-trading-system/issues/412)) — seven fixed stations, tickers as chips parked on the station they last reached. Chosen over ticker lanes (reads one ticker's journey well, system load badly) and a trace waterfall (reads latency well, at-a-glance state badly). The rail reads as the system-as-machine: **where the load is, and where ticks are dying.** Four chips piled on Risk is the diagnostic that makes the primitive worth choosing.
+
+12. As an operator, I want to see every ticker positioned on the stage it last reached, so that a pile-up at one stage is visible without reading a single row.
+13. As an operator, I want a stage that was **skipped** to read differently from one that **stopped** the tick, so that routine traffic is never displayed as a halt. `invalidation` runs only for `entry`/`scale_in` intents and never terminates a tick, so "skipped" is the common case there, not an anomaly.
+14. As an operator, I want a stage reached more than once in a trace to show its attempt count, so that a retry storm is visible rather than collapsed.
+15. As an operator, I want a dormant instrument (market closed, no tick) to read as idle rather than vanish, so that absence of activity is distinguishable from absence of the instrument.
+16. As an operator, I want to open one ticker and see that trace's full stage sequence and, for a completed debate, its per-analyst contributions — with the live case stating plainly that round-by-round state is not persisted (decision #10) rather than showing a spinner that will never resolve.
+
+**The rail's accepted cost, and where the detail went.** A chip is a single point, so one ticker's own journey is not readable across the rail — and stories 13 and 14 are *not renderable there at all*: a tick that skipped `invalidation` is not sitting at invalidation, and a stage retried before the chip moved on has no cell to badge. Both therefore live in the drill-down's stage strip, which under this primitive stops being supplementary detail and becomes the **sole per-stage record**. The strip must keep listing all seven stages with state, duration and decision, including the never-reached ones. This is a consequence of the primitive, accepted when it was chosen — the prototype that was chosen from said it out loud ("a single ticker's own journey is harder to follow").
+
+**Seven stages, not six.** `analysts → debate → trader → invalidation → risk → verdict → execution`. `invalidation` is specced and not yet built, so today no chip ever parks on that station and its heading says so; `audit_log.stage` is unconstrained TEXT, so the station fills in on its own the day the stage ships, and the caveat retires itself from the data rather than needing an edit.
+
+**Attribution — migration 0013.** This view is only possible because `audit_log` now carries `instrument`/`asset_class`. Before that, the sole trace_id → instrument links were `current_tick` (in-flight only, deleted at tick end) and `verdict_log` (only traces reaching Verdict), so **every short-circuited tick was attributable to no instrument at all** — a ticker that went quiet because Risk kept rejecting it looked identical to a closed market, and the Risk pile-up the rail exists to show would have been invisible. The writer already held both values; they were never persisted. `NULL` means "not attributable" (pre-migration rows, and the HITL callback path, which records under an existing trace_id with no `Signal` in scope) and must never be guessed onto a ticker.
+
+**Bounded by a window, not a count.** Each ticker shows its most recent trace within a 15-minute lookback, capped at 24 tickers. The window doubles as the staleness guard: a crash deliberately leaves `current_tick` behind (`tick-runner.ts` — a stale row must be visible, not tidied away), and without the window the view would report a dead tick as running indefinitely.
+
+**Constraints carried unchanged from v1:** read-only, poll-only on the existing 3s `/api/snapshot`, zero runtime dependencies, one payload rather than a second endpoint. Motion is confined to a single ring on whatever actually changed between two polls — **nothing travels across the page.** A chip that moved station disappears from the old one and appears at the new one already settled; there is no transit animation, because the poll never observed the transit, only two positions 3s apart, and animating the path between them would assert a continuity the data does not have. A tick shorter than the poll interval legitimately appears as a completed flash.
+
 ### Operation
 
 8. As an operator, I want to open one URL in a browser and see current state, so that I can check status without a terminal.
@@ -186,6 +208,8 @@ interface DashboardServer {
 - **A true in-flight/live debate-round view** — the Debate Engine's ephemeral operational round state isn't persisted (decision #10); only completed debates plus a coarse tick-status line are observable.
 - **Remote/public access, auth, HTTPS** — LAN-only opt-in via `HOST`, matching the single-MacBook deployment target. A hosted multi-user product is a different problem, not designed here.
 - **Alerting** — the dead-man's-switch heartbeat and trade notifications are the Orchestrator's/Verdict's concern (already specced); the Dashboard is a pull, not a push, mechanism.
+- **Trader/Risk drill-down in the Pipeline view** — those two stages persist no decision content anywhere (no `trader_log`, no `risk_log`; `audit_log` holds only a digest), so their cells report that a stage ran and nothing about what it decided. What gets persisted is owned by [#328](https://github.com/dd-jp/samurai-trading-system/issues/328); where it surfaces is reserved in [#417](https://github.com/dd-jp/samurai-trading-system/issues/417). The view shows an honest empty slot rather than inventing content.
+- **Per-tick history in the Pipeline view** — a chip holds one trace, the most recent inside the window. Chronological history across ticks is what the Verdict History table already provides; a second path to the same facts is maintenance cost, not a feature.
 
 ## Further Notes
 
