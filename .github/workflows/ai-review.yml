@@ -89,11 +89,39 @@ jobs:
           script: |
             const fs = require('fs');
             const payload = JSON.parse(fs.readFileSync('review_output.json', 'utf8'));
-            await github.rest.pulls.createReview({
+            const base = {
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: context.issue.number,
               event: payload.event,
               body: payload.summary_markdown,
-              comments: payload.comments,
-            });
+            };
+
+            try {
+              await github.rest.pulls.createReview({ ...base, comments: payload.comments });
+            } catch (error) {
+              // GitHub rejects the ENTIRE review if any one comment anchors to a
+              // line it cannot resolve — "Unprocessable Entity: Line could not be
+              // resolved". `commentable_lines` filters against our own
+              // `git diff`, which can disagree with GitHub's view of the PR, and
+              // when it does the whole reviewer job fails and the PR's checks go
+              // red for a reason that has nothing to do with the code.
+              //
+              // Retry once with the findings folded into the body instead. A
+              // review that reads slightly worse beats no review and a red check.
+              if (error.status !== 422) throw error;
+
+              const appendix = payload.comments
+                .map((c) => `- **${c.path}:${c.line}**: ${c.body}`)
+                .join('\n');
+              core.warning(
+                `Inline anchoring rejected by GitHub (422); reposting ${payload.comments.length} ` +
+                  'comment(s) in the review body.',
+              );
+              await github.rest.pulls.createReview({
+                ...base,
+                body:
+                  `${payload.summary_markdown}\n\n---\n_GitHub would not anchor these inline ` +
+                  `(line not resolvable in its diff view):_\n${appendix}`,
+              });
+            }
