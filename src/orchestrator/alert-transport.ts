@@ -103,7 +103,7 @@
  * its log-only defaults, which is what `log-only` mode resolves to.
  */
 import type { SharedStore as SqliteHandle } from '../shared/store/index.js';
-import { TelegramBotApiClient } from '../verdict/index.js';
+import { TelegramBotApiClient, TelegramChannel } from '../verdict/index.js';
 import { TradeChannelAnalystSkipAlert } from './analyst-skip-alert-channel.js';
 import { TradeChannelBreachAlert } from './breach-alert-channel.js';
 import { TradeChannelHeartbeat } from './heartbeat-channel.js';
@@ -148,6 +148,11 @@ export const ALERT_CHANNEL_FIELDS = [
   // failure it reports (the analyst stage skipping every tick) is invisible in
   // an unattended run precisely because nothing else changes when it happens.
   'analystSkipAlerts',
+  // #465 — the seventh. `NotifyingVerdict` existed and was constructed
+  // nowhere, so a `go` verdict reached the operator only if something
+  // downstream happened to alert. Filtered at the decorator so wiring it does
+  // not buy ~300 messages a day.
+  'verdictAlerts',
 ] as const satisfies readonly (keyof ProductionConfig)[];
 
 /**
@@ -317,6 +322,11 @@ export function buildAlertChannels(deps: {
     // split is that decisions do not share a destination with the beat.
     ...(deps.injected.loosenApprovals === undefined
       ? { loosenApprovals: new TradeChannelLoosenApproval(telegram, chatId, deps.logger) }
+      : {}),
+    // #465. The escalation chat rather than the heartbeat's: a trade that
+    // executed, or the system halting itself, is an event — not a beat.
+    ...(deps.injected.verdictAlerts === undefined
+      ? { verdictAlerts: new TelegramChannel(telegram, chatId) }
       : {}),
     // #431. The escalation chat: "no decision is being produced at all" is the
     // most consequential thing this process can report, and it must not sit in

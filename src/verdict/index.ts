@@ -258,6 +258,7 @@ export {
 export { TradeChannel } from './notifications/composite-channel.js';
 export { DiscordChannel } from './notifications/discord-channel.js';
 export { formatApprovalRequest, formatDecisionMessage } from './notifications/format.js';
+export { isNotableVerdict } from './notifications/notable-verdict.js';
 export { parseAllowedUserIds } from './notifications/telegram/allowlist.js';
 export type {
   CorrelationTarget,
@@ -291,6 +292,7 @@ export type {
 } from './notifications/types.js';
 export type { ApprovalRequestSender } from './notifications/verified-approval-channel.js';
 export { SignedApprovalChannel } from './notifications/verified-approval-channel.js';
+export { NotifyingVerdict } from './notifying-verdict.js';
 export { SqliteVerdictLogStore } from './sqlite-verdict-log-store.js';
 export type {
   ApprovalChannel,

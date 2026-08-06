@@ -202,7 +202,7 @@ import type { SharedStore as SqliteHandle } from '../shared/store/index.js';
 import { SqliteRiskLogStore, SqliteTraderLogStore } from '../shared/store/index.js';
 import type { TraderConfig } from '../trader/index.js';
 import { SqliteSetupStore } from '../trader/index.js';
-import type { ApprovalChannel, VerdictConfig } from '../verdict/index.js';
+import type { ApprovalChannel, TradeChannelNotifier, VerdictConfig } from '../verdict/index.js';
 import { assertAutomationLevelSupported } from '../verdict/index.js';
 import {
   LoggingAnalystSkipAlertChannel,
@@ -575,6 +575,16 @@ export interface ProductionConfig {
    * where it was.
    */
   loosenApprovals?: LoosenApprovalChannel;
+  /**
+   * #465: where NOTABLE verdicts go. Absent = no verdict alerting, which is
+   * what `log-only` mode and every test get.
+   *
+   * Filtered, not firehosed — `isNotableVerdict` keeps `go` verdicts and the
+   * no-gos the system chose about itself, and drops the routine ones. Story 14
+   * asks for every no-go, and at ADR-0008's cadence that is ~300 messages a
+   * day; see `notable-verdict.ts` for why the line falls where it does.
+   */
+  verdictAlerts?: TradeChannelNotifier;
   logger?: Logger;
 }
 
@@ -1608,6 +1618,9 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     }),
     verdict: buildVerdictStep({
       ...breakerStateDeps,
+      // #465. Absent under `log-only` and in tests, so no verdict alerting;
+      // present under `telegram`, filtered to notable verdicts only.
+      ...(config.verdictAlerts === undefined ? {} : { verdictAlerts: config.verdictAlerts }),
       tradingCalendar,
       // Verdict's `PositionStore.findByKey` is a strict subset of Execution's
       // `SharedStore`; one store instance serves both rather than opening a

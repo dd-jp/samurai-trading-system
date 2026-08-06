@@ -979,6 +979,12 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       breachAlerts: new LoggingBreachAlertChannel(logger),
       loosenApprovals: new LoggingLoosenApprovalChannel(logger),
       analystSkipAlerts: new LoggingAnalystSkipAlertChannel(logger),
+      // #465 — the seventh channel. `resolveAlertsMode` exempts a caller that
+      // supplies EVERY field in `ALERT_CHANNEL_FIELDS` from needing
+      // SAMURAI_ALERTS, so adding a field to that list makes this injection
+      // incomplete and the smoke run demands the variable. A log-only notifier
+      // keeps the offline run self-contained.
+      verdictAlerts: { notify: async () => {} },
       tickIntervalMs,
       fillPollIntervalMs,
       // Fast enough to fire several times inside a ~1s run. The heartbeat is a

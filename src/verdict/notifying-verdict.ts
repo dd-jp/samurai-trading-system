@@ -8,6 +8,7 @@
  * no-op auto-approve there) rather than branching on `mode` here.
  */
 
+import { isNotableVerdict } from './notifications/notable-verdict.js';
 import type { TradeChannelNotifier } from './notifications/types.js';
 import type { Verdict, VerdictDecision, VerdictInput } from './types.js';
 
@@ -22,7 +23,16 @@ export class NotifyingVerdict implements Verdict {
 
   async decide(input: VerdictInput): Promise<VerdictDecision> {
     const decision = await this.#inner.decide(input);
-    await this.#notifier.notify(decision, input.risk_decision, input.trace_id);
+
+    // FILTERED as of #465. Story 14's "fills and no-gos" predates ADR-0007
+    // (no human in the loop) and ADR-0008 (the cadence that sets the volume);
+    // together they make "every no-go" ~300 messages a day, which is alert
+    // fatigue by construction. `isNotableVerdict` keeps the events an operator
+    // would want to be interrupted for and drops the pipeline working
+    // normally. Everything still lands in `verdict_log` via `LoggingVerdict`.
+    if (isNotableVerdict(decision)) {
+      await this.#notifier.notify(decision, input.risk_decision, input.trace_id);
+    }
     return decision;
   }
 }

@@ -63,8 +63,18 @@ import type {
 import type { SharedStore as VerdictLogDb } from '../../shared/store/index.js';
 import type { TraderConfig } from '../../trader/index.js';
 import { decide } from '../../trader/index.js';
-import type { ApprovalChannel, PositionStore, VerdictConfig } from '../../verdict/index.js';
-import { LoggingVerdict, SqliteVerdictLogStore, VerdictImpl } from '../../verdict/index.js';
+import type {
+  ApprovalChannel,
+  PositionStore,
+  TradeChannelNotifier,
+  VerdictConfig,
+} from '../../verdict/index.js';
+import {
+  LoggingVerdict,
+  NotifyingVerdict,
+  SqliteVerdictLogStore,
+  VerdictImpl,
+} from '../../verdict/index.js';
 import { OrphanVerdictScanner } from '../orphan-verdict-scan.js';
 import { SqliteAuditLog } from '../sqlite-audit-log.js';
 import { SqliteCurrentTickStore } from '../sqlite-current-tick-store.js';
@@ -307,6 +317,13 @@ export interface VerdictStepDeps extends BreakerStateDeps {
   config: VerdictConfig;
   approvals: ApprovalChannel;
   /**
+   * #465: where notable verdicts go. Absent = no verdict alerting, which is
+   * `log-only` mode and every test. `NotifyingVerdict` filters before sending
+   * — see `notable-verdict.ts` for why every no-go would be ~300 messages a
+   * day at ADR-0008's cadence.
+   */
+  verdictAlerts?: TradeChannelNotifier;
+  /**
    * Backs the `LoggingVerdict` decorator's `verdict_log` write (#302). Same
    * shared handle every other Sqlite* store in this composition root reads/
    * writes through — see `buildPersistence` below. `VerdictLogDb` is this
@@ -326,7 +343,12 @@ export interface VerdictStepDeps extends BreakerStateDeps {
  * only the one #302 needs.
  */
 export function buildVerdictStep(deps: VerdictStepDeps): TickSteps['verdict'] {
-  const verdict = new LoggingVerdict(new VerdictImpl(), new SqliteVerdictLogStore(deps.store));
+  // #465: `NotifyingVerdict` OUTSIDE `LoggingVerdict`, so the row is written
+  // before anyone is told. A notification about a verdict that failed to
+  // persist would point an operator at a `verdict_log` entry that is not there.
+  const logging = new LoggingVerdict(new VerdictImpl(), new SqliteVerdictLogStore(deps.store));
+  const verdict =
+    deps.verdictAlerts === undefined ? logging : new NotifyingVerdict(logging, deps.verdictAlerts);
 
   return async ({ trace_id, risk_decision, clock }) => {
     // Gate 5's fire-time re-check needs current breaker state, not the

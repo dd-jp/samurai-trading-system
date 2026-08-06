@@ -139,7 +139,16 @@ function makeInput(overrides: Partial<VerdictInput> = {}): VerdictInput {
 }
 
 describe('NotifyingVerdict.decide', () => {
-  it('posts exactly one channel notification for a no-go decision (staleness, no HITL reached)', async () => {
+  it('stays SILENT on a routine no-go (staleness) — #465', async () => {
+    // Reversed by #465, deliberately. verdict-spec.md story 14 asks for every
+    // no-go on the trade channel, and that predates ADR-0007 (no human in the
+    // loop) and ADR-0008 (the cadence). Together they make "every no-go" ~300
+    // Telegram messages a day: alert fatigue by construction, and the failure
+    // #342 split the heartbeat chat to avoid.
+    //
+    // The decision is still returned and still written to `verdict_log` by
+    // `LoggingVerdict` — this changes what INTERRUPTS someone, not what is
+    // recorded.
     const notifier = makeNotifier();
     const verdict = new NotifyingVerdict(new VerdictImpl(), notifier);
     const input = makeInput({
@@ -152,8 +161,7 @@ describe('NotifyingVerdict.decide', () => {
 
     expect(decision.status).toBe('no_go');
     expect(decision.no_go_reason).toBe('staleness');
-    expect(notifier.notify).toHaveBeenCalledTimes(1);
-    expect(notifier.notify).toHaveBeenCalledWith(decision, input.risk_decision, 'trace-1');
+    expect(notifier.notify).not.toHaveBeenCalled();
   });
 
   it('posts exactly one channel notification for a go decision reached via HITL', async () => {
