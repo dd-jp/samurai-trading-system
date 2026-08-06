@@ -202,10 +202,9 @@ export class XaiGrokClient implements GrokSentimentClient {
 
       const body = (await response.json()) as XaiResponse;
       const toolSteps = this.#countToolSteps(body);
-      const items =
-        this.#retrieved(body, instrument, toolSteps)
-          ? this.#parseItems(body, instrument, asOf)
-          : [];
+      const items = this.#retrieved(body, instrument, toolSteps)
+        ? this.#parseItems(body, instrument, asOf)
+        : [];
 
       return {
         items,
