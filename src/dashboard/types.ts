@@ -95,6 +95,21 @@ export interface DebateRow {
     analyst_type: string;
     final_position: Direction;
     influence_score: number;
+    /**
+     * Each analyst's position round by round (#427).
+     *
+     * `debate_log.contributions_json` has always carried it; this wire shape
+     * projected only where an analyst ENDED UP, so the drawer could show the
+     * outcome of a debate but not how it got there — and an analyst that
+     * started bearish and was talked around is a different signal from one
+     * that never moved. Both rendered identically.
+     *
+     * Optional because a row written before the field was projected, or by a
+     * debate that recorded no per-round stance, genuinely has none — and an
+     * empty strip is the honest rendering of that rather than a fabricated
+     * flat line.
+     */
+    stance_during_debate?: Direction[];
   }[];
 }
 
