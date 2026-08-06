@@ -644,10 +644,18 @@ describe('sizeTrialGridToSample', () => {
 
     expect(kept[0]).toBe(0);
     expect(kept[kept.length - 1]).toBe(full.length - 1);
-    // Strictly increasing and genuinely spread: no two retained configs are
-    // adjacent in the full grid at this cap.
+    // "Spread" has to be asserted as spread, not merely as increasing:
+    // strictly-increasing indices are equally true of a head-truncation
+    // (0,1,2,…), which is the behaviour this test exists to rule out. The
+    // property that actually distinguishes them is EVEN spacing — every gap
+    // within one of the ideal step. (Not "no two adjacent": at this cap the
+    // ideal step is under 2, so some gaps are legitimately 1. A truncation
+    // fails on the `kept[last]` assertion above, and on the ceiling here.)
+    const step = (full.length - 1) / (kept.length - 1);
     for (let i = 1; i < kept.length; i++) {
-      expect(kept[i] as number).toBeGreaterThan(kept[i - 1] as number);
+      const gap = (kept[i] as number) - (kept[i - 1] as number);
+      expect(gap).toBeGreaterThanOrEqual(Math.floor(step));
+      expect(gap).toBeLessThanOrEqual(Math.ceil(step));
     }
   });
 
