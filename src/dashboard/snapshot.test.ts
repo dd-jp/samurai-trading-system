@@ -109,7 +109,7 @@ const EMPTY_SPEND_WINDOW = {
 };
 
 function fakeStore(overrides: Partial<DashboardQueryStore> = {}): DashboardQueryStore {
-  return {
+  const store: Omit<DashboardQueryStore, 'getMarks'> = {
     getRecentDebates: () => [],
     getTickStatus: () => null,
     getOpenPositions: () => [],
@@ -125,6 +125,17 @@ function fakeStore(overrides: Partial<DashboardQueryStore> = {}): DashboardQuery
     }),
     getPipelineActivity: () => ({ universe: [], events: [], live: [] }),
     ...overrides,
+  };
+
+  return {
+    ...store,
+    // Defaults to delegating to whatever `getMark` the test supplied, so the
+    // many tests that control the mark that way keep controlling it now that
+    // `buildSnapshot` reads marks in a batch.
+    getMarks:
+      overrides.getMarks ??
+      ((instruments, asOf) =>
+        new Map(instruments.map((instrument) => [instrument, store.getMark(instrument, asOf)]))),
   };
 }
 

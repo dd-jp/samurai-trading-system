@@ -322,21 +322,48 @@ export class SqliteQueryStore implements DashboardQueryStore {
     };
   }
 
-  getMark(instrument: string, _asOf: Date): Mark {
+  getMark(instrument: string, asOf: Date): Mark {
+    // Delegates so there is exactly one place that decides what a mark is and
+    // what a missing one does.
+    return this.getMarks([instrument], asOf).get(instrument) as Mark;
+  }
+
+  getMarks(instruments: readonly string[], _asOf: Date): Map<string, Mark> {
+    const marks = new Map<string, Mark>();
+    if (instruments.length === 0) return marks;
+
     // `latest_mark` upserts one row per instrument (no history) — the only
     // truth available is the latest known mark, regardless of `asOf`.
-    const row = this.db.prepare(`SELECT * FROM latest_mark WHERE instrument = ?`).get(instrument) as
-      | LatestMarkRow
-      | undefined;
-    if (row === undefined) {
-      throw new Error(`SqliteQueryStore.getMark: no mark for instrument "${instrument}"`);
+    //
+    // The placeholder list is built from `instruments.length`, never from the
+    // instrument strings themselves, so the values stay bound parameters.
+    const placeholders = instruments.map(() => '?').join(', ');
+    const rows = this.db
+      .prepare(
+        `SELECT instrument, price, observed_at, source, asset_class
+           FROM latest_mark
+          WHERE instrument IN (${placeholders})`,
+      )
+      .all(...instruments) as LatestMarkRow[];
+
+    for (const row of rows) {
+      marks.set(row.instrument, {
+        price: row.price,
+        observed_at: new Date(row.observed_at),
+        source: row.source,
+        asset_class: row.asset_class,
+      });
     }
-    return {
-      price: row.price,
-      observed_at: new Date(row.observed_at),
-      source: row.source,
-      asset_class: row.asset_class,
-    };
+
+    // Per-instrument, in request order, so a missing mark fails exactly as the
+    // old per-position loop did rather than silently rendering a priceless row.
+    for (const instrument of instruments) {
+      if (!marks.has(instrument)) {
+        throw new Error(`SqliteQueryStore.getMark: no mark for instrument "${instrument}"`);
+      }
+    }
+
+    return marks;
   }
 
   /**
