@@ -12,7 +12,6 @@ import {
   RateLimiter,
   SqliteDebateLogStore,
   SqliteLlmSpendStore,
-  SqliteSpendCap,
   UNCAPPED_SPEND,
 } from '../../debate-engine/index.js';
 import { accumulateCredit } from '../../feedback-loop/index.js';

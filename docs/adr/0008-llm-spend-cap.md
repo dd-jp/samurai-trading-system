@@ -76,6 +76,15 @@ refuses identically, and at a 15-minute cadence that would be ~1,000 identical
 alerts over the remainder of the run — which is how an operator learns to mute
 a channel that also carries kill-threshold breaches.
 
+**Once per refusal *kind*, though — not once per process.** The two kinds share
+an exit path but are unrelated conditions, and one is transient while the other
+is permanent. Under a single latch, one `SQLITE_BUSY` would fire the fault
+alert, mark the breach announced, and then recover; when spend later crossed
+the ceiling the refusal would short-circuit on the already-set latch and reach
+nobody. A momentary lock on day 1 would buy the silent stop on day 10 that the
+paragraph above exists to rule out, so a transient fault must not be able to
+consume the budget breach's one alert.
+
 **The window is the whole `llm_spend` table, and that has a cost worth
 stating.** A per-process baseline was considered and rejected: it would hand a
 fresh budget to every restart, and a 14-day soak on a MacBook (CLAUDE.md lists

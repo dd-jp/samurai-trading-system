@@ -64,21 +64,40 @@ export const UNCAPPED_SPEND: SpendCap = {
 /**
  * The cap over `llm_spend`, the same table `SqliteLlmSpendStore` writes.
  *
- * The window is the whole table, deliberately: the soak runs against a fresh
- * database, so "everything this database has ever spent" and "what this run
- * has spent" are the same figure, and a total is the one definition that
- * cannot drift from what the operator was promised. A rolling window would
- * silently re-admit spend after a quiet period, which is not what a fortnight's
- * budget means.
+ * The window is the whole table, deliberately — but NOT because the two
+ * figures coincide. They do not: `data/samurai-development.sqlite` already held
+ * 196 calls / $0.38 before this cap existed, so "everything this database has
+ * ever spent" is strictly more than "what this run has spent". The reason to
+ * take the total anyway is that the alternative is worse. A per-process
+ * baseline would hand a fresh $50 to every restart, and a 14-day soak on a
+ * MacBook will restart — that turns a fortnight's ceiling into a per-crash
+ * allowance. A rolling window fails the same way, silently re-admitting spend
+ * after a quiet period.
+ *
+ * The cost of the choice is that the operator's "$50 for this run" and the
+ * cap's arithmetic can disagree at boot, so `startingTotal()` exists to make
+ * the opening figure loud rather than leaving it assumed to be zero.
  */
 export class SqliteSpendCap implements SpendCap {
   /**
-   * Fired ONCE, on the first refusal. Not per refusal: the cap does not
-   * refill, so every subsequent tick refuses identically — at a 15-minute
-   * cadence that would be ~1,000 identical alerts over the rest of a 14-day
-   * run, which is how an operator learns to mute the channel.
+   * Fired ONCE per refusal KIND. Not per refusal: the cap does not refill, so
+   * every subsequent tick refuses identically — at a 15-minute cadence that
+   * would be ~1,000 identical alerts over the rest of a 14-day run, which is
+   * how an operator learns to mute the channel.
+   *
+   * **Why two latches and not one boolean.** The two refusal kinds are
+   * unrelated conditions that happen to share an exit path, and one is
+   * transient while the other is permanent. A single `SQLITE_BUSY` — at boot,
+   * or for one tick mid-run — would fire the fault alert, set a shared latch,
+   * and then recover. Ten days later spend crosses the ceiling, the refusal
+   * short-circuits on the already-set latch, and the operator hears nothing:
+   * the system stops trading for the rest of the soak while the heartbeat
+   * keeps beating and ticks keep completing with no trade. That is precisely
+   * the silent stop this escalation was added to prevent, so a transient fault
+   * must not be able to consume the budget breach's one alert.
    */
-  #breachAnnounced = false;
+  #budgetAnnounced = false;
+  #faultAnnounced = false;
 
   constructor(
     private readonly db: SharedStore,
@@ -118,6 +137,15 @@ export class SqliteSpendCap implements SpendCap {
    * machine that is not hypothetical: `data/samurai-development.sqlite` held
    * 196 calls / $0.38 before this cap existed. So the root announces the
    * starting total rather than leaving the operator to assume zero.
+   *
+   * **This is not a pure read: it escalates, and that is deliberate.** It is
+   * `check()` under a name that says why the root is calling it, so a database
+   * that is already over the ceiling raises the breach alert at boot rather
+   * than one tick later. Boot is the better moment — the operator is most
+   * likely still watching, and the run is about to spend a fortnight taking no
+   * trade. Since the latches are per-kind, spending the budget alert here
+   * cannot mask anything: the only condition it suppresses is the identical
+   * budget breach it just reported.
    */
   startingTotal(): SpendCapVerdict {
     return this.check();
@@ -144,7 +172,7 @@ export class SqliteSpendCap implements SpendCap {
           `No trade will be taken until this is fixed: ${message}`,
         payload: { budget_usd: this.budgetUsd },
       });
-      return this.#refuse({
+      return this.#refuse('fault', {
         admitted: false,
         spent_usd: Number.NaN,
         budget_usd: this.budgetUsd,
@@ -156,7 +184,7 @@ export class SqliteSpendCap implements SpendCap {
       // A non-finite SUM means a corrupt `cost_usd` row. Comparing it would
       // make `spent > budget` false and admit forever, so the guard reads as
       // enforced while enforcing nothing — this repo's dominant defect shape.
-      return this.#refuse({
+      return this.#refuse('fault', {
         admitted: false,
         spent_usd: spent,
         budget_usd: this.budgetUsd,
@@ -165,7 +193,7 @@ export class SqliteSpendCap implements SpendCap {
     }
 
     if (spent >= this.budgetUsd) {
-      return this.#refuse({
+      return this.#refuse('budget', {
         admitted: false,
         spent_usd: spent,
         budget_usd: this.budgetUsd,
@@ -177,21 +205,27 @@ export class SqliteSpendCap implements SpendCap {
   }
 
   /**
-   * Escalates the first refusal and returns it unchanged.
+   * Escalates the first refusal OF ITS KIND and returns it unchanged.
    *
    * Covers BOTH refusal paths — budget reached and fail-closed — because an
    * operator needs to hear about an unreadable `llm_spend` at least as much as
    * a spent budget: both stop the system trading, and only one of them is
-   * something they meant to happen.
+   * something they meant to happen. They latch independently; see the field
+   * doc for why sharing one boolean loses the alert that matters most.
    *
    * `onBreach` failures are swallowed to a `warn`. An alert transport that
    * throws must not convert "the budget is spent" into an unhandled rejection
    * inside the tick — the refusal itself is the load-bearing part, and it has
    * already been decided by the time this runs.
    */
-  #refuse(verdict: SpendCapVerdict): SpendCapVerdict {
-    if (this.#breachAnnounced) return verdict;
-    this.#breachAnnounced = true;
+  #refuse(kind: 'budget' | 'fault', verdict: SpendCapVerdict): SpendCapVerdict {
+    if (kind === 'budget') {
+      if (this.#budgetAnnounced) return verdict;
+      this.#budgetAnnounced = true;
+    } else {
+      if (this.#faultAnnounced) return verdict;
+      this.#faultAnnounced = true;
+    }
 
     try {
       this.onBreach?.(verdict);

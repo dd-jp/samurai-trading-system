@@ -118,6 +118,7 @@ import type {
   LlmClient,
   LlmSpendSink,
   RateLimiterConfig,
+  SpendCap,
 } from '../debate-engine/index.js';
 import {
   AnthropicHttpMessagesClient,
@@ -1215,26 +1216,28 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * (#238) with no ceiling is the case this exists for, so if it is ever
    * missing there, the log says so in as many words.
    */
-  const spendCap =
-    config.llmBudgetUsd === undefined
-      ? (logger.log({
-          trace_id: 'startup',
-          stage: 'orchestrator',
-          level: 'warn',
-          message:
-            'ProductionConfig.llmBudgetUsd is not set — LLM spend is UNCAPPED. Nothing will ' +
-            'stop this process billing without bound; the rate limiter bounds calls per ' +
-            'window, not total dollars, and it refills. Correct for a short attended run; an ' +
-            'unattended soak (#238) must set a budget.',
-          payload: { llm_budget_usd: null },
-        }),
-        UNCAPPED_SPEND)
-      : new SqliteSpendCap(config.db, config.llmBudgetUsd, logger, () =>
-          breachAlerts.postBreachAlert({
-            breaches: ['llm_spend_cap'],
-            reported_at: clock.now(),
-          }),
-        );
+  let spendCap: SpendCap;
+  if (config.llmBudgetUsd === undefined) {
+    logger.log({
+      trace_id: 'startup',
+      stage: 'orchestrator',
+      level: 'warn',
+      message:
+        'ProductionConfig.llmBudgetUsd is not set — LLM spend is UNCAPPED. Nothing will ' +
+        'stop this process billing without bound; the rate limiter bounds calls per ' +
+        'window, not total dollars, and it refills. Correct for a short attended run; an ' +
+        'unattended soak (#238) must set a budget.',
+      payload: { llm_budget_usd: null },
+    });
+    spendCap = UNCAPPED_SPEND;
+  } else {
+    spendCap = new SqliteSpendCap(config.db, config.llmBudgetUsd, logger, () =>
+      breachAlerts.postBreachAlert({
+        breaches: ['llm_spend_cap'],
+        reported_at: clock.now(),
+      }),
+    );
+  }
 
   /**
    * Announce what this database has ALREADY spent, because the cap's window is

@@ -19,6 +19,24 @@ function spend(db: SharedStore, costUsd: number, id: string): void {
   ).run(`trace-${id}`, `debate-${id}`, costUsd, new Date().toISOString());
 }
 
+/**
+ * A store whose FIRST read throws `SQLITE_BUSY` and whose every later read
+ * succeeds — a lock contended for one tick, then gone. Only `prepare` is
+ * stubbed because that is the whole of the cap's contact with the store.
+ */
+function lockedOnce(db: SharedStore): SharedStore {
+  let locked = true;
+  return {
+    prepare(sql: string) {
+      if (locked) {
+        locked = false;
+        throw new Error('SQLITE_BUSY: database is locked');
+      }
+      return db.prepare(sql);
+    },
+  } as unknown as SharedStore;
+}
+
 describe('SqliteSpendCap', () => {
   let db: SharedStore;
 
@@ -128,10 +146,41 @@ describe('SqliteSpendCap', () => {
     expect(entries.at(-1)?.message).toContain('nothing reached an operator');
   });
 
-  it('does not admit anything while announcing the opening total', () => {
-    // `startingTotal()` is a read for the startup line. If it ever mutated the
-    // announced-breach latch, an already-breached store would announce at boot
-    // and then never escalate again.
+  it('does not let a transient read fault consume the budget breach alert', () => {
+    // THE REGRESSION THIS PINS: one shared `#breachAnnounced` boolean for both
+    // refusal kinds. A single SQLITE_BUSY — at boot or for one tick mid-run —
+    // fired the fault alert, set the latch, and then the database recovered.
+    // Ten days later spend crossed the ceiling, the refusal short-circuited on
+    // the already-set latch, and NOTHING reached the operator: the soak stops
+    // trading for its remaining days while the heartbeat keeps beating and
+    // ticks keep completing with no trade. Indistinguishable from a quiet
+    // market, which is the exact failure this escalation exists to prevent.
+    const breaches: string[] = [];
+    const cap = new SqliteSpendCap(lockedOnce(db), 50, undefined, (v) =>
+      breaches.push(v.reason ?? ''),
+    );
+
+    expect(cap.check().admitted).toBe(false);
+    expect(breaches).toEqual(['spend cap unreadable (fail-closed)']);
+
+    // The lock clears and the cap goes back to admitting.
+    expect(cap.check().admitted).toBe(true);
+
+    // Now the budget genuinely runs out. This alert must still fire.
+    spend(db, 60, 'over-budget');
+
+    expect(cap.check().admitted).toBe(false);
+    expect(breaches).toHaveLength(2);
+    expect(breaches[1]).toContain('LLM spend cap reached');
+  });
+
+  it('announces the opening total, escalating at boot if already breached', () => {
+    // `startingTotal()` is `check()` under a name that says why the root calls
+    // it, so a store that is already over the ceiling raises the alert at boot
+    // rather than one tick later — the operator is most likely still watching,
+    // and the run is about to spend a fortnight taking no trade. Safe to spend
+    // the budget latch here precisely because the latches are per-kind: the
+    // only thing it suppresses is the identical breach it just reported.
     spend(db, 60, 'over-budget');
     const breaches: string[] = [];
     const cap = new SqliteSpendCap(db, 50, undefined, (v) => breaches.push(v.reason ?? ''));
