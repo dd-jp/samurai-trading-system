@@ -65,6 +65,8 @@ function transactedObservations(): SmokeObservations {
     cosineSetups: [{ debate_id: 'debate-1', instrument: 'BTC-USD' }],
     riskThresholds: [{ name: 'max_position_size', value: 5_000 }],
     analystWeights: [{ analyst_id: 'technical' }],
+    traderDecisions: [{ trace_id: 'trace-1', instrument: 'BTC-USD', intent_type: 'entry' }],
+    riskDecisions: [{ trace_id: 'trace-1', instrument: 'BTC-USD', status: 'approved' }],
   };
 }
 
@@ -96,6 +98,53 @@ describe('evaluateSmokeGate', () => {
       evaluateSmokeGate(observations, { minTicks: 2, llmRateLimiterSnapshot: meteredSnapshot() })
         .passed,
     ).toBe(true);
+  });
+
+  it('fails when a debate reached the Trader but trader_log is empty (#328)', () => {
+    const observations = transactedObservations();
+    observations.traderDecisions = [];
+    observations.riskDecisions = [];
+
+    const gate = evaluateSmokeGate(observations, {
+      minTicks: 2,
+      llmRateLimiterSnapshot: meteredSnapshot(),
+    });
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.join(' ')).toContain('no row in trader_log');
+  });
+
+  it('fails when the Trader produced an intent but risk_log is empty (#328)', () => {
+    // A rejected intent never reaches Verdict, so with this unwired a
+    // rejection has no durable record anywhere — which is why the check is
+    // anchored on the Trader having written, not on a trade having happened.
+    const observations = transactedObservations();
+    observations.riskDecisions = [];
+
+    const gate = evaluateSmokeGate(observations, {
+      minTicks: 2,
+      llmRateLimiterSnapshot: meteredSnapshot(),
+    });
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.join(' ')).toContain('no row in risk_log');
+  });
+
+  it('does not demand a trader_log row when no debate resolved (#328)', () => {
+    // The anchor that keeps the check honest: a run where nothing debated never
+    // reached the Trader, so demanding a row would fail for a reason that is
+    // not the one this check exists to catch. Same anchoring as cosine_setups.
+    const observations = transactedObservations();
+    observations.debates = [];
+    observations.traderDecisions = [];
+    observations.riskDecisions = [];
+
+    const gate = evaluateSmokeGate(observations, {
+      minTicks: 2,
+      llmRateLimiterSnapshot: meteredSnapshot(),
+    });
+
+    expect(gate.failures.join(' ')).not.toContain('trader_log');
   });
 
   it('fails when the loop ran fewer ticks than asked for', () => {
@@ -314,6 +363,8 @@ describe('formatSmokeReport', () => {
       cosineSetups: [],
       riskThresholds: [],
       analystWeights: [],
+      traderDecisions: [],
+      riskDecisions: [],
     };
     const report = formatSmokeReport(
       observations,
@@ -559,6 +610,8 @@ describe('runSmoke (end-to-end, real composition root)', () => {
       cosineSetups: [],
       riskThresholds: [],
       analystWeights: [],
+      traderDecisions: [],
+      riskDecisions: [],
     };
 
     const gate = evaluateSmokeGate(observations, {

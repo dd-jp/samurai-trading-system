@@ -19,6 +19,9 @@ const TABLES = [
   'debate_log',
   'breaker_state',
   'verdict_log',
+  // #328 — the Trader/Risk decision records, migration 0016.
+  'trader_log',
+  'risk_log',
   'audit_log',
   'current_tick',
   'cii_snapshots',
@@ -52,7 +55,7 @@ const TABLES = [
  * That prose number silently drifted twice (it read "twenty" and "twenty-one"
  * simultaneously while the schema held 22), so it is pinned here.
  */
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 25;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 27;
 
 const tempDirs: string[] = [];
 
@@ -119,6 +122,7 @@ describe('openSharedStore', () => {
       { version: 13 },
       { version: 14 },
       { version: 15 },
+      { version: 16 },
     ]);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
@@ -137,6 +141,7 @@ describe('openSharedStore', () => {
       { version: 13 },
       { version: 14 },
       { version: 15 },
+      { version: 16 },
     ]);
   });
 

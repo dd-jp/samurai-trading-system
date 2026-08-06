@@ -13,4 +13,5 @@ export {
   type StoreMode,
   sharedStorePath,
 } from './open-shared-store.js';
+export { SqliteRiskLogStore, SqliteTraderLogStore } from './sqlite-decision-record-stores.js';
 export { isUniqueConstraintError } from './sqlite-utils.js';
