@@ -157,8 +157,10 @@ export { ReplayDriver } from './replay-driver.js';
 export type { SplitOptions, SplitScheme } from './splits.js';
 export { generateSplits } from './splits.js';
 export { SqliteConfigTrialLog } from './sqlite-config-trial-log.js';
+export { SqliteStage2SelectionStore } from './sqlite-stage2-selection-store.js';
 export type { PolygonAggregate, PolygonClient } from './stage2-historical-store.js';
 export { Stage2HistoricalStore } from './stage2-historical-store.js';
+export { type Stage2Selection, selectionsFrom } from './stage2-selection.js';
 export type {
   ConfigKillLineCheck,
   DsrOutcome,

@@ -33,13 +33,17 @@ import {
   ReplayDriver,
   renderStage2Verdict,
   runTrialGrid,
+  SqliteStage2SelectionStore,
   STOCK_PERIODS_PER_YEAR,
   Stage2HistoricalStore,
+  type Stage2Selection,
   type Stage2Verdict,
+  selectionsFrom,
   type TrialGridAssetClass,
   type TrialGridResult,
 } from '../cost-model-backtest/index.js';
 import { SimulatedClock } from '../shared/index.js';
+import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
 
 /** The fixed MVP universe (CLAUDE.md "Broker Plan" / spec "User Stories"). */
 export const STOCK_SYMBOLS = ['SPY', 'QQQ', 'AAPL', 'TSLA'] as const;
@@ -169,6 +173,18 @@ export interface RunStage2Deps {
   costConfig?: CostConfig;
   /** Sink for the printed report — defaults to `console.log`. */
   print?: (line: string) => void;
+  /**
+   * Where the run's selected config is frozen (#375, #384) — the SHARED store,
+   * not the scratch one `dbPath` opens: the Feedback Loop reads it at runtime,
+   * and a verdict written to a research scratch file would be a verdict nobody
+   * can act on.
+   *
+   * Optional: a caller that supplies none is doing a dry run, and writing to a
+   * database it did not ask for would be the surprising behaviour.
+   */
+  selections?: { record(selection: Stage2Selection): void };
+  /** Stamps the selection; defaults to wall clock. Injected so a test can pin it. */
+  now?: () => Date;
 }
 
 /**
@@ -375,6 +391,35 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
 
   printReport(results, verdict, print);
 
+  /**
+   * Freeze the selection (#375, #384).
+   *
+   * Without this the run is a printout: the trial log was in-memory, so
+   * nothing survived the process that computed it, and the Feedback Loop had
+   * neither a backtest Sharpe to measure divergence against nor a
+   * `revalidation` snapshot to evaluate PBO/OOS-Sharpe/DSR with. Four
+   * kill-lines out of four were unevaluable for exactly that reason.
+   *
+   * Optional, and absent in the unit tests: a caller that supplies no store is
+   * doing a dry run, and writing to a database it did not ask for would be the
+   * surprising behaviour.
+   */
+  if (deps.selections !== undefined) {
+    const frozen = selectionsFrom({
+      verdict,
+      results,
+      window: effective,
+      selectedAt: deps.now?.() ?? new Date(),
+    });
+    for (const selection of frozen) deps.selections.record(selection);
+    print(
+      frozen.length === 0
+        ? 'Stage 2: nothing to freeze — no config was evaluated, so the kill-lines stay inert.'
+        : `Stage 2: froze ${frozen.length} selection(s) — the Feedback Loop can now evaluate ` +
+            'the divergence and revalidation kill-lines against this run.',
+    );
+  }
+
   return verdict;
 }
 
@@ -463,10 +508,17 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // Stated explicitly at the entrypoint rather than by changing `runStage2`'s
   // own default, so every existing caller and test keeps the cost config it
   // was written against and only a direct run picks up the calibrated one.
+  // The SHARED store, not the scratch `dbPath` this script opens for bars
+  // (#375, #384): the Feedback Loop reads the frozen selection at runtime, and
+  // a verdict written to a research scratch file is a verdict nobody can act
+  // on. A direct run is the only caller that freezes; `runStage2`'s own tests
+  // pass no store and stay a dry run.
+  const shared = openSharedStore(sharedStorePath());
   runStage2({
     polygonClient,
     costConfig: costConfigFromEnv(),
     window: STAGE2_PINNED_WINDOW,
+    selections: new SqliteStage2SelectionStore(shared),
   }).catch((error: unknown) => {
     console.error('Stage 2 run failed:', error);
     process.exitCode = 1;
