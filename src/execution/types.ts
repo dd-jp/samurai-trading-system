@@ -45,4 +45,4 @@ export type {
   ReconcileReport,
   SimulatedAdapterConfig,
 } from './types/execution.js';
-export type { SharedStore } from './types/store.js';
+export type { LotAdvance, SharedStore } from './types/store.js';

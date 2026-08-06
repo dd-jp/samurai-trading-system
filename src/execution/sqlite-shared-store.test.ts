@@ -210,13 +210,13 @@ describe('SqliteExecutionStore', () => {
     });
   });
 
-  describe('fills', () => {
-    it('hasFill/writeFill/getFills dedup and round-trip against real persisted rows', async () => {
+  describe('applyLotAdvance', () => {
+    it('persists fills with hasFill/getFills dedup and round-trip against real rows', async () => {
       const { store } = makeStore();
       await store.writeAheadPosition(makePosition());
 
       expect(await store.hasFill('fill-1')).toBe(false);
-      await store.writeFill(makeFill());
+      await store.applyLotAdvance({ idempotency_key: 'key-1', fills: [makeFill()] });
       expect(await store.hasFill('fill-1')).toBe(true);
 
       const fills = await store.getFills('key-1');
@@ -227,18 +227,21 @@ describe('SqliteExecutionStore', () => {
     it('preserves cost_breakdown for Simulated-adapter fills and omits it otherwise', async () => {
       const { store } = makeStore();
       await store.writeAheadPosition(makePosition());
-      await store.writeFill(
-        makeFill({
-          broker_fill_id: 'fill-sim',
-          cost_breakdown: {
-            spread_cost: 0.1,
-            commission: 0.2,
-            slippage: 0.05,
-            market_impact: 0.01,
-          },
-        }),
-      );
-      await store.writeFill(makeFill({ broker_fill_id: 'fill-real' }));
+      await store.applyLotAdvance({
+        idempotency_key: 'key-1',
+        fills: [
+          makeFill({
+            broker_fill_id: 'fill-sim',
+            cost_breakdown: {
+              spread_cost: 0.1,
+              commission: 0.2,
+              slippage: 0.05,
+              market_impact: 0.01,
+            },
+          }),
+          makeFill({ broker_fill_id: 'fill-real' }),
+        ],
+      });
 
       const [sim, real] = await store.getFills('key-1');
       expect(sim?.cost_breakdown).toEqual({
@@ -253,24 +256,31 @@ describe('SqliteExecutionStore', () => {
     it('returns fills in ingestion order', async () => {
       const { store } = makeStore();
       await store.writeAheadPosition(makePosition());
-      await store.writeFill(makeFill({ broker_fill_id: 'fill-a' }));
-      await store.writeFill(makeFill({ broker_fill_id: 'fill-b' }));
-      await store.writeFill(makeFill({ broker_fill_id: 'fill-c' }));
+      await store.applyLotAdvance({
+        idempotency_key: 'key-1',
+        fills: [makeFill({ broker_fill_id: 'fill-a' }), makeFill({ broker_fill_id: 'fill-b' })],
+      });
+      await store.applyLotAdvance({
+        idempotency_key: 'key-1',
+        fills: [makeFill({ broker_fill_id: 'fill-c' })],
+      });
 
       const fills = await store.getFills('key-1');
       expect(fills.map((f) => f.broker_fill_id)).toEqual(['fill-a', 'fill-b', 'fill-c']);
     });
-  });
 
-  describe('updatePositionFill', () => {
-    it('persists a fill-driven advance of the lot', async () => {
+    it('persists the fill-driven lot state alongside the fills', async () => {
       const { store } = makeStore();
       await store.writeAheadPosition(makePosition());
 
-      await store.updatePositionFill('key-1', {
-        filled_size: 5,
-        avg_entry_price: 100,
-        order_state: 'partially_filled',
+      await store.applyLotAdvance({
+        idempotency_key: 'key-1',
+        fills: [makeFill()],
+        position_update: {
+          filled_size: 5,
+          avg_entry_price: 100,
+          order_state: 'partially_filled',
+        },
       });
 
       const [position] = await store.getOpenPositions();
@@ -280,15 +290,49 @@ describe('SqliteExecutionStore', () => {
         order_state: 'partially_filled',
       });
     });
-  });
 
-  describe('writeClosedTrade', () => {
-    it('writes the realized record exactly once; a second write for the same lot is rejected', async () => {
+    it('writes the realized record exactly once; a second close for the same lot is rejected', async () => {
       const { store } = makeStore();
       await store.writeAheadPosition(makePosition());
 
-      await store.writeClosedTrade(makeClosedTrade());
-      await expect(store.writeClosedTrade(makeClosedTrade())).rejects.toThrow();
+      await store.applyLotAdvance({
+        idempotency_key: 'key-1',
+        fills: [],
+        closed_trade: makeClosedTrade(),
+      });
+      await expect(
+        store.applyLotAdvance({
+          idempotency_key: 'key-1',
+          fills: [],
+          closed_trade: makeClosedTrade(),
+        }),
+      ).rejects.toThrow();
+    });
+
+    it('is atomic: when the close is rejected, the same advance leaves no fill rows behind', async () => {
+      const { store } = makeStore();
+      await store.writeAheadPosition(makePosition());
+      await store.applyLotAdvance({
+        idempotency_key: 'key-1',
+        fills: [],
+        closed_trade: makeClosedTrade(),
+      });
+
+      // Re-advance carrying both a new fill and a (duplicate) close: the close
+      // rejection must roll the fill back too, or a crash-shaped partial write
+      // becomes persistable state.
+      await expect(
+        store.applyLotAdvance({
+          idempotency_key: 'key-1',
+          fills: [makeFill({ broker_fill_id: 'fill-after-close' })],
+          position_update: { filled_size: 5, avg_entry_price: 100, order_state: 'closed' },
+          closed_trade: makeClosedTrade(),
+        }),
+      ).rejects.toThrow();
+
+      expect(await store.hasFill('fill-after-close')).toBe(false);
+      const [position] = await store.getOpenPositions();
+      expect(position?.filled_size).toBe(0);
     });
   });
 });

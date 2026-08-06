@@ -1,4 +1,4 @@
-import type { SharedStore } from '../../execution/index.js';
+import type { LotAdvance, SharedStore } from '../../execution/index.js';
 import type { OnTradeCloseInput } from '../../feedback-loop/index.js';
 import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../../shared/index.js';
 import { FixtureSetupStore } from '../../trader/index.js';
@@ -32,13 +32,18 @@ function makeTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {
   };
 }
 
+/** The flat-lot advance shape `ingestFills()` emits — fills plus the close. */
+function closingAdvance(trade: ClosedTrade): LotAdvance {
+  return { idempotency_key: trade.idempotency_key, fills: [], closed_trade: trade };
+}
+
 /**
  * Records every call it receives — enough to prove `withOnTradeClose` is a
- * transparent pass-through on every method except `writeClosedTrade`, and
- * that `writeClosedTrade` itself still reaches the underlying store.
+ * transparent pass-through on every method except `applyLotAdvance`, and
+ * that `applyLotAdvance` itself still reaches the underlying store.
  */
 class FakeSharedStore implements SharedStore {
-  writeClosedTradeCalls: ClosedTrade[] = [];
+  applyLotAdvanceCalls: LotAdvance[] = [];
   shouldThrow = false;
 
   async findByKey(_idempotency_key: string): Promise<boolean> {
@@ -55,19 +60,14 @@ class FakeSharedStore implements SharedStore {
   async hasFill(_broker_fill_id: string): Promise<boolean> {
     return false;
   }
-  async writeFill(_fill: Fill): Promise<void> {}
   async getFills(_idempotency_key: string): Promise<Fill[]> {
     return [];
   }
-  async updatePositionFill(
-    _idempotency_key: string,
-    _update: { filled_size: number; avg_entry_price: number; order_state: OrderState },
-  ): Promise<void> {}
-  async writeClosedTrade(trade: ClosedTrade): Promise<void> {
+  async applyLotAdvance(advance: LotAdvance): Promise<void> {
     if (this.shouldThrow) {
       throw new Error('boom');
     }
-    this.writeClosedTradeCalls.push(trade);
+    this.applyLotAdvanceCalls.push(advance);
   }
 }
 
@@ -84,26 +84,30 @@ describe('withOnTradeClose', () => {
     onTradeCloseMock.mockReset();
   });
 
-  it('invokes onTradeClose exactly once when writeClosedTrade succeeds', async () => {
+  it('invokes onTradeClose exactly once when an advance carrying a close succeeds', async () => {
     const store = new FakeSharedStore();
     const logger = new FakeLogger();
     const input: OnTradeCloseInput = { setup_store: new FixtureSetupStore() };
     const decorated = withOnTradeClose(store, input, logger);
     const trade = makeTrade();
+    const advance = closingAdvance(trade);
 
-    await decorated.writeClosedTrade(trade);
+    await decorated.applyLotAdvance(advance);
 
-    expect(store.writeClosedTradeCalls).toEqual([trade]);
+    expect(store.applyLotAdvanceCalls).toEqual([advance]);
     expect(onTradeCloseMock).toHaveBeenCalledTimes(1);
     expect(onTradeCloseMock).toHaveBeenCalledWith(trade, trade.idempotency_key, input);
     expect(logger.entries).toEqual([]);
   });
 
-  it('never invokes onTradeClose when writeClosedTrade is never called', () => {
+  it('never invokes onTradeClose for an advance that carries no close', async () => {
     const store = new FakeSharedStore();
     const input: OnTradeCloseInput = { setup_store: new FixtureSetupStore() };
-    withOnTradeClose(store, input, new FakeLogger());
+    const decorated = withOnTradeClose(store, input, new FakeLogger());
 
+    await decorated.applyLotAdvance({ idempotency_key: 'key-1', fills: [] });
+
+    expect(store.applyLotAdvanceCalls).toHaveLength(1);
     expect(onTradeCloseMock).not.toHaveBeenCalled();
   });
 
@@ -113,7 +117,7 @@ describe('withOnTradeClose', () => {
     const input: OnTradeCloseInput = { setup_store: new FixtureSetupStore() };
     const decorated = withOnTradeClose(store, input, new FakeLogger());
 
-    await expect(decorated.writeClosedTrade(makeTrade())).rejects.toThrow('boom');
+    await expect(decorated.applyLotAdvance(closingAdvance(makeTrade()))).rejects.toThrow('boom');
     expect(onTradeCloseMock).not.toHaveBeenCalled();
   });
 
@@ -129,9 +133,9 @@ describe('withOnTradeClose', () => {
 
     // Resolves (does not reject) even though onTradeClose threw — the
     // closed_trades write already succeeded and must not be reported as failed.
-    await expect(decorated.writeClosedTrade(trade)).resolves.toBeUndefined();
+    await expect(decorated.applyLotAdvance(closingAdvance(trade))).resolves.toBeUndefined();
 
-    expect(store.writeClosedTradeCalls).toEqual([trade]);
+    expect(store.applyLotAdvanceCalls).toHaveLength(1);
     expect(onTradeCloseMock).toHaveBeenCalledTimes(1);
     expect(logger.entries).toHaveLength(1);
     expect(logger.entries[0]).toMatchObject({ level: 'error', trace_id: trade.idempotency_key });

@@ -82,6 +82,15 @@ function makeClosedTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {
   };
 }
 
+/** Seed a closed trade through the store's one write path (`applyLotAdvance`). */
+function seedClosedTrade(execStore: SqliteExecutionStore, trade: ClosedTrade): Promise<void> {
+  return execStore.applyLotAdvance({
+    idempotency_key: trade.idempotency_key,
+    fills: [],
+    closed_trade: trade,
+  });
+}
+
 describe('SqliteQueryStore', () => {
   it('reads open positions, excluding terminal states, filtered by asOf', async () => {
     const db = makeDb();
@@ -193,12 +202,14 @@ describe('SqliteQueryStore', () => {
   it('computes profit_factor and expectancy from closed trades in the trailing day, leaving unsourced fields at 0', async () => {
     const db = makeDb();
     const execStore = new SqliteExecutionStore(db);
-    await execStore.writeClosedTrade(makeClosedTrade({ realized_pnl_net: 50 }));
-    await execStore.writeClosedTrade(
+    await seedClosedTrade(execStore, makeClosedTrade({ realized_pnl_net: 50 }));
+    await seedClosedTrade(
+      execStore,
       makeClosedTrade({ idempotency_key: 'key-closed-2', realized_pnl_net: -20 }),
     );
     // Outside the trailing-24h window — must be excluded.
-    await execStore.writeClosedTrade(
+    await seedClosedTrade(
+      execStore,
       makeClosedTrade({
         idempotency_key: 'key-closed-3',
         realized_pnl_net: 1000,
@@ -221,7 +232,7 @@ describe('SqliteQueryStore', () => {
     const debateStore = new SqliteDebateLogStore(db);
 
     debateStore.writeLog(makeDebateLog());
-    await execStore.writeClosedTrade(makeClosedTrade({ realized_pnl_net: 50 })); // R = 50 / (5*10) = 1
+    await seedClosedTrade(execStore, makeClosedTrade({ realized_pnl_net: 50 })); // R = 50 / (5*10) = 1
 
     const store = new SqliteQueryStore(db, 30);
     const attribution = store.getAttribution(NOW);
@@ -238,7 +249,7 @@ describe('SqliteQueryStore', () => {
   it('excludes attribution for trades whose debate log row is missing', async () => {
     const db = makeDb();
     const execStore = new SqliteExecutionStore(db);
-    await execStore.writeClosedTrade(makeClosedTrade());
+    await seedClosedTrade(execStore, makeClosedTrade());
 
     const store = new SqliteQueryStore(db);
     expect(store.getAttribution(NOW)).toEqual({});

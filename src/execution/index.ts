@@ -68,6 +68,7 @@ export type {
   ExecutionConfig,
   ExecutionInput,
   ExecutionResult,
+  LotAdvance,
   NativeBracketRequest,
   NormalizedFill,
   NormalizedOrder,

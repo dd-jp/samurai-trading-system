@@ -25,20 +25,20 @@
  * for the whole composition root to share.
  */
 
-import type { SharedStore } from '../../execution/index.js';
+import type { LotAdvance, SharedStore } from '../../execution/index.js';
 import type { OnTradeCloseInput } from '../../feedback-loop/index.js';
 import { onTradeClose } from '../../feedback-loop/index.js';
-import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../../shared/index.js';
+import type { Fill, OpenPosition, OrderState } from '../../shared/index.js';
 import type { Logger } from '../types.js';
 
 /**
- * Wraps a `SharedStore` so every successful `writeClosedTrade` call also
- * invokes `onTradeClose` as a side effect. Every other method is a pure
- * pass-through — `writeClosedTrade`'s own contract (write once, on
- * round-trip-to-flat, per `SqliteExecutionStore`'s doc) is unchanged; this
- * only adds a side effect after the underlying write succeeds. If the
- * underlying write throws (e.g. the double-close guard), `onTradeClose` is
- * never invoked.
+ * Wraps a `SharedStore` so every successful `applyLotAdvance` that carries a
+ * `closed_trade` also invokes `onTradeClose` as a side effect. Every other
+ * method is a pure pass-through — the advance's own contract (atomic; the
+ * close written once, on round-trip-to-flat, per `SqliteExecutionStore`'s
+ * doc) is unchanged; this only adds a side effect after the underlying write
+ * succeeds. If the underlying write throws (e.g. the double-close guard),
+ * `onTradeClose` is never invoked.
  *
  * `onTradeClose` itself can throw (`SqliteSetupStore.labelSetup` throws when
  * there is no pending setup row for the trade's `debate_id` — expected for
@@ -76,17 +76,12 @@ export function withOnTradeClose(
 
     hasFill: (broker_fill_id: string): Promise<boolean> => store.hasFill(broker_fill_id),
 
-    writeFill: (fill: Fill): Promise<void> => store.writeFill(fill),
-
     getFills: (idempotency_key: string): Promise<Fill[]> => store.getFills(idempotency_key),
 
-    updatePositionFill: (
-      idempotency_key: string,
-      update: { filled_size: number; avg_entry_price: number; order_state: OrderState },
-    ): Promise<void> => store.updatePositionFill(idempotency_key, update),
-
-    writeClosedTrade: async (trade: ClosedTrade): Promise<void> => {
-      await store.writeClosedTrade(trade);
+    applyLotAdvance: async (advance: LotAdvance): Promise<void> => {
+      await store.applyLotAdvance(advance);
+      const trade = advance.closed_trade;
+      if (trade === undefined) return;
       try {
         onTradeClose(trade, trade.idempotency_key, input);
       } catch (error) {

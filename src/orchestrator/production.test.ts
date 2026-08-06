@@ -383,20 +383,24 @@ describe('buildProductionComponents', () => {
       const vector = { debate_features: [0.7, 1, 1, 0.1], market_features: [0.3, 0.5] };
       setupStore.writeSetup('debate-close-1', vector, new Date('2026-07-29T09:00:00Z'));
 
-      await components.executionStore.writeClosedTrade({
+      await components.executionStore.applyLotAdvance({
         idempotency_key: 'key-close-1',
-        debate_id: 'debate-close-1',
-        instrument: 'BTC-USD',
-        asset_class: 'crypto',
-        side: 'buy',
-        entry: 100,
-        stop: 90,
-        filled_size: 10,
-        realized_pnl_net: 200, // R = 2
-        fees_total: 1,
-        opened_at: new Date('2026-07-29T09:30:00Z'),
-        closed_at: new Date('2026-07-29T10:00:00Z'),
-        close_reason: 'target',
+        fills: [],
+        closed_trade: {
+          idempotency_key: 'key-close-1',
+          debate_id: 'debate-close-1',
+          instrument: 'BTC-USD',
+          asset_class: 'crypto',
+          side: 'buy',
+          entry: 100,
+          stop: 90,
+          filled_size: 10,
+          realized_pnl_net: 200, // R = 2
+          fees_total: 1,
+          opened_at: new Date('2026-07-29T09:30:00Z'),
+          closed_at: new Date('2026-07-29T10:00:00Z'),
+          close_reason: 'target',
+        },
       });
 
       const neighbors = setupStore.findNeighbors(vector, new Date('2026-07-29T11:00:00Z'));
@@ -1413,21 +1417,25 @@ describe('buildProductionOrchestrator', () => {
           created_at: new Date(START.getTime() - 2 * 60 * 60 * 1_000),
         });
 
-        await new SqliteExecutionStore(db).writeClosedTrade({
+        await new SqliteExecutionStore(db).applyLotAdvance({
           idempotency_key: 'lot-371',
-          debate_id: DEBATE_ID,
-          instrument: 'BTC-USD',
-          asset_class: 'crypto',
-          side: 'buy',
-          entry: 100,
-          stop: 90,
-          filled_size: 10,
-          realized_pnl_net: 200,
-          fees_total: 1,
-          opened_at: new Date(START.getTime() - 3 * 60 * 60 * 1_000),
-          // Inside the profile's 48h attribution window, at or before `now`.
-          closed_at: new Date(START.getTime() - 1 * 60 * 60 * 1_000),
-          close_reason: 'target',
+          fills: [],
+          closed_trade: {
+            idempotency_key: 'lot-371',
+            debate_id: DEBATE_ID,
+            instrument: 'BTC-USD',
+            asset_class: 'crypto',
+            side: 'buy',
+            entry: 100,
+            stop: 90,
+            filled_size: 10,
+            realized_pnl_net: 200,
+            fees_total: 1,
+            opened_at: new Date(START.getTime() - 3 * 60 * 60 * 1_000),
+            // Inside the profile's 48h attribution window, at or before `now`.
+            closed_at: new Date(START.getTime() - 1 * 60 * 60 * 1_000),
+            close_reason: 'target',
+          },
         });
       }
 
@@ -1908,20 +1916,24 @@ describe('buildProductionOrchestrator', () => {
       // mutation: handing the source an empty trade reader passed every other
       // assertion here while silently zeroing turnover, exposure, profit
       // factor and expectancy — the half of the suite an operator reads back.
-      await new SqliteExecutionStore(db).writeClosedTrade({
+      await new SqliteExecutionStore(db).applyLotAdvance({
         idempotency_key: 'closed-in-window',
-        debate_id: 'debate-1',
-        instrument: 'BTC-USD',
-        asset_class: 'crypto',
-        side: 'buy',
-        entry: 100,
-        stop: 90,
-        filled_size: 10,
-        realized_pnl_net: 50,
-        fees_total: 2,
-        opened_at: new Date(SERIES_START + 10 * MS_PER_DAY),
-        closed_at: new Date(SERIES_START + 11 * MS_PER_DAY),
-        close_reason: 'target',
+        fills: [],
+        closed_trade: {
+          idempotency_key: 'closed-in-window',
+          debate_id: 'debate-1',
+          instrument: 'BTC-USD',
+          asset_class: 'crypto',
+          side: 'buy',
+          entry: 100,
+          stop: 90,
+          filled_size: 10,
+          realized_pnl_net: 50,
+          fees_total: 2,
+          opened_at: new Date(SERIES_START + 10 * MS_PER_DAY),
+          closed_at: new Date(SERIES_START + 11 * MS_PER_DAY),
+          close_reason: 'target',
+        },
       });
       const { config, logger, tuning, postBreachAlert } = armedConfig();
       const orchestrator = buildProductionOrchestrator(config);
