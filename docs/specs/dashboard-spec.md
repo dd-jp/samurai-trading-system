@@ -12,14 +12,16 @@ Every other component in this system writes to the shared SQLite store — posit
 
 ## Solution
 
-The Dashboard is a **thin, read-only presentation layer** with **zero new backend logic and zero new write path**. It queries the same shared SQLite store every other component already writes to, through the same `QueryStore` read interface the CLI originally defined, and serves one page: a single-page HTML app that polls a JSON snapshot endpoint for positions, debates, verdicts, and per-analyst performance. It can never place, block, or modify a trade — its blast radius is exactly "an operator reads something."
+The Dashboard is a **thin, read-only presentation layer** with **zero new backend logic and zero new write path**. It queries the same shared SQLite store every other component already writes to, through the same `QueryStore` read interface the CLI originally defined, and serves one page: a single-page HTML app that polls a JSON snapshot endpoint for positions, debates, verdicts, per-analyst performance, third-party provider status with LLM spend, and the pipeline stage rail. It can never place, block, or modify a trade — its blast radius is exactly "an operator reads something."
+
+*One qualification on "zero new backend logic", added when the provider panel was retro-documented: the Alpaca/Polygon tiles are **live outbound probes** on their own 60s poller, not store reads. They are read-only `GET`s that cannot touch an order, so the blast-radius claim above is unaffected — but the dashboard is no longer purely a reader of SQLite, and a reviewer should know that before assuming it makes no network calls.*
 
 One process, one command (`npm run dashboard`), two `GET` routes: `/` (the HTML page) and `/api/snapshot` (the JSON payload the page polls). No separate frontend build/serve step, no push/streaming, no framework SPA — a static page and one endpoint, pipeable to `curl` for scripting if needed.
 
 Key architectural decisions:
 - **Direct SQLite reads via `QueryStore`, no new message bus or subscription layer** — simplest thing that works for a single-operator, single-host tool.
 - **Client-side polling refresh** — the page re-fetches `/api/snapshot` on an interval; no real-time push.
-- **Four views matching the DoD wording** — positions, debates, verdicts, performance — collapsed into one JSON payload (`DashboardSnapshot`), not four separate calls.
+- **Four views matching the DoD wording** — positions, debates, verdicts, performance — collapsed into one JSON payload (`DashboardSnapshot`), not four separate calls. **Two surfaces have since been added to that same payload, not to new endpoints:** the provider/LLM-spend panel (`providers`, `llm_spend` — see "Module: Provider Status & LLM Spend") and the Pipeline view (`pipeline`, #411). One payload stays the rule; a second endpoint would let the views disagree about `as_of`.
 - **"Pending debates" scope reduction, explicitly flagged** — the Debate Engine doesn't persist in-flight round state (decision #10, unchanged); the snapshot shows recent completed debates plus a coarse "tick in progress" line from the Orchestrator, not a live debate-round view.
 - **No interactivity beyond viewing** — no manual overrides, no kill-switch, no config editing in v1.
 - **LAN-only opt-in, no auth** — binds `127.0.0.1` by default; reachability from another device on the operator's LAN is an explicit `HOST` env var opt-in, not a default. No auth layer, no HTTPS, no public exposure.
@@ -53,10 +55,21 @@ Driven by `invalidation_log`, joined on `(instrument, bar_timestamp)`. Showing d
 
 5. As an operator, I want a chronological verdict history (go/no-go, the gate that fired, any HITL override), so that I can audit every decision the pipeline made, not just the ones that resulted in a trade.
 
+*`hitl_override` is a real column on `VerdictRow` and is still rendered, but since [ADR-0007](../adr/0007-fully-automatic-execution.md) it is **always false in live data** — the automation dial is `auto` for both asset classes and `Verdict.decide` never reaches the approval path. Keep the field: it is the audit record that no human touched a trade, which is exactly the thing a fully automatic system should be able to prove. An unexpectedly `true` value would mean the dial moved, which `assertAutomationLevelSupported` now refuses at boot.*
+
 ### Performance
 
 6. As an operator, I want current per-analyst weights and their rolling attribution, so that I can see which analysts are earning trust and which are being tuned down.
 7. As an operator, I want the Feedback Loop's daily `MetricsSuite` (Sharpe, Sortino, Calmar, max drawdown, profit factor, expectancy, skew/kurtosis, turnover, exposure), so that I see the full metrics picture the research constraints require, not a single vanity number.
+
+### Providers & LLM Spend (retro-documented 2026-08-06)
+
+**This section documents shipped code that predated it.** `providers` and `llm_spend` have been on `DashboardSnapshot` since [#326](https://github.com/dd-jp/samurai-trading-system/issues/326)/[#367](https://github.com/dd-jp/samurai-trading-system/issues/367) (`src/dashboard/provider-status.ts`, `src/dashboard/types.ts`, rendered by `renderProviders` in `src/dashboard/html.ts`) while this spec still described four views and no spend surface. Written down now so the spec stops understating what the page shows — particularly with [ADR-0008](../adr/0008-llm-spend-cap.md)'s $50/14-day cap live, which makes the spend tile a budget instrument, not a curiosity.
+
+17. As an operator, I want my live Alpaca account balance on the page, so that I can see the broker's own view of equity without opening Alpaca.
+18. As an operator, I want to know whether Polygon is reachable, so that a dead market-data key is visible as itself rather than as an inexplicably quiet pipeline.
+19. As an operator, I want locally-metered LLM spend over 24h/7d/all-time, so that I can see the ADR-0008 budget being consumed while there is still time to act on it.
+20. As an operator, I want per-*decision* cost and LLM latency at p50/p95, so that I can answer "what does one debate cost me, and is round 3 earning its latency?" rather than only "what did today cost".
 
 ### Pipeline (second view, 2026-08-06)
 
@@ -164,6 +177,31 @@ function buildSnapshot(store: DashboardQueryStore, asOf: Date): DashboardSnapsho
 - Unrealized PnL computed the same way the CLI originally specified: `(mark − entry) × filled_size` for buys, `(entry − mark) × filled_size` for sells — always `filled_size`, never `requested_size`.
 - All `Date` fields are serialized to ISO strings at this boundary — `buildSnapshot` is the single place that crosses the HTTP/JSON boundary; nothing downstream of the wire sees a `Date` object.
 - Composes `getRecentDebates` (completed history) with `getTickStatus` (the coarse in-progress line) — see the "pending debates" scope-reduction decision in the map.
+
+### Module: Provider Status & LLM Spend
+
+**Retro-documented from shipped code** (`src/dashboard/provider-status.ts`, `LlmSpendSummary`/`LlmSpendWindow`/`LlmPerDebateStats` in `src/dashboard/types.ts`, `renderProviders` in `src/dashboard/html.ts`).
+
+**Three providers, three different shapes — because the facts differ, not for presentational convenience.**
+
+- **Alpaca** — a real broker balance (`GET /v2/account`), polled live. `AlpacaTile.balance` is `null` unless `state === 'ok'`: a stale balance shown next to a failed probe reads as current, which is worse than showing nothing.
+- **Polygon** — **reachability only.** Polygon sells a subscription and exposes no balance, credits, or quota endpoint, so the tile reports whether the key works and nothing more.
+- **LLM spend** — **locally metered**, not an account balance and not an invoice. The provider publishes no credit-balance endpoint reachable with a plain API key, so this is what *this bot* spent, counted from the `usage` block on each response into the `llm_spend` table (migration `0010_llm_spend.sql`).
+
+**Flattening these into one uniform "balance" field would require inventing two numbers that do not exist.** That is the reason the panel is three shapes.
+
+**Where each lives, and why they are not on one interface.** `getLlmSpend` sits on `DashboardQueryStore` because `llm_spend` genuinely *is* a shared-store table written by another component (the debate engine's LLM client) — the same relationship this store has to `open_positions` or `verdict_log`. The Alpaca and Polygon tiles come from a separate injected `ProviderStatusReader`, because they are live third-party probes, not store reads. Its poller runs on its own `DEFAULT_POLL_INTERVAL_MS` (60s) rather than the page's 3s poll: both probes cost a real API call, and a balance only changes when a fill lands.
+
+**Honest caveats travel with the numbers, always.**
+- `unpriced_calls` — calls whose model is absent from the rate table contribute tokens but no dollars, so a non-zero count means `cost_usd` is a **floor, not a total**. This is the same failure ADR-0008's startup refusal of unpriced models exists to prevent, surfaced after the fact.
+- `unattributed_calls` — calls with no `debate_id` are in the window total but in **none** of the per-debate figures.
+- Rows written before migration `0012` have a `NULL` `latency_ms` and are excluded from the latency sum rather than counted as zero, so an old row cannot drag a percentile toward zero.
+
+**Rolling windows, not calendar days** (`last_24h` / `last_7d` / `all_time`). A UTC-day bucket would disagree with the operator's wall clock; this system already has one hard-won lesson (#332, `session_equity`) about blended reset boundaries nobody verified. "Last 24 hours" needs no boundary to be right about.
+
+**p50/p95 across debates, never a mean.** LLM latency is long-tailed — a retried call adds a whole extra attempt — and a mean over that tail reports a duration no debate actually experienced. Note the field name is literal: `llm_latency_ms_*` is **time spent inside LLM calls**, not the debate's wall-clock elapsed time. The two differ whenever calls overlap or a call is retried; `llm_spend` has no debate start/end, so time-in-provider is the only figure it can honestly report.
+
+**Known stale label (code follow-up, not a spec decision).** The rendered tile header still reads `Anthropic · spend 24h`, and several doc comments in `types.ts` still say "Anthropic". Since [ADR-0009](../adr/0009-single-provider-nous.md) all LLM traffic goes through **Nous**, so the label names a provider this system no longer talks to. This is the same mechanical rename as `AnthropicMessagesClient`/`AnthropicLlmClient`, deliberately deferred out of the cutover diff so it would not bury that diff's two silent-failure fixes — `nous-messages-client.ts` records it as "left as a follow-up" with **no issue number**, so it is a known follow-up rather than a tracked one, and this sentence is currently the closest thing it has to a ticket. The numbers are correct; only the word is wrong.
 
 ### Module: HTTP Server
 
