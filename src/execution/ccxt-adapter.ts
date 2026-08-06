@@ -137,7 +137,13 @@ type BracketPhase = BrokerBracketPhase;
 interface EmulatedBracket {
   request: NativeBracketRequest;
   phase: BracketPhase;
-  entryOrderId: string;
+  /**
+   * Null ONLY in the `submitting` phase (#312), where the venue call has not
+   * yet returned an id — or returned one that was lost to a crash. Every other
+   * phase is reached by way of a resolved id, so a null here outside
+   * `submitting` is a bug rather than a state.
+   */
+  entryOrderId: string | null;
   stopOrderId: string | null;
   targetOrderId: string | null;
   /**
@@ -230,10 +236,18 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
    * writes native-bracket venues, so one appearing under `venue = 'ccxt'`
    * would be a schema-level surprise, and a bracket without its request cannot
    * re-place a leg anyway.
+   *
+   * A null `entry_order_id` is NOT a reason to skip as of #312 — that is
+   * exactly the write-ahead row, and skipping it would discard the record of
+   * an order that may be live at the venue, which is the whole gap the
+   * write-ahead closes. Such a row must be in `submitting`; any other phase
+   * with a null id is a phase-machine bug rather than a state, so it is
+   * skipped loudly-by-omission the same way a request-less row is.
    */
   private rehydrate(): void {
     for (const record of this.state.loadBrackets('ccxt')) {
-      if (record.request === null || record.entry_order_id === null) continue;
+      if (record.request === null) continue;
+      if (record.entry_order_id === null && record.phase !== 'submitting') continue;
 
       this.brackets.set(record.client_order_id, {
         request: { client_order_id: record.client_order_id, ...record.request },
@@ -430,17 +444,18 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
       return this.ackFor(existing);
     }
 
-    const entry = await this.call('submitBracket', () =>
-      this.client.createOrder(order.instrument, 'limit', order.side, order.size, order.entry, {
-        clientOrderId: order.client_order_id,
-        timeInForce: order.time_in_force,
-      }),
-    );
-
+    // WRITE-AHEAD (#312). Journalled BEFORE the venue call, mirroring what
+    // `execute.ts` already does one level up with `writeAheadPosition`:
+    // persist intent, then reconcile the venue's answer into it.
+    //
+    // Without this a crash between `createOrder` and the journal left a LIVE
+    // venue order with no local bracket — the emulation would hold nothing to
+    // arm protective legs from, and the lot would sit unprotected with nothing
+    // aware of it.
     const bracket: EmulatedBracket = {
       request: order,
-      phase: 'pending_entry',
-      entryOrderId: entry.id,
+      phase: 'submitting',
+      entryOrderId: null,
       stopOrderId: null,
       targetOrderId: null,
       armedQty: null,
@@ -449,6 +464,34 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
       inFlight: false,
     };
     this.brackets.set(order.client_order_id, bracket);
+    this.persist(bracket);
+
+    let entry: Awaited<ReturnType<CcxtBrokerClient['createOrder']>>;
+    try {
+      entry = await this.call('submitBracket', () =>
+        this.client.createOrder(order.instrument, 'limit', order.side, order.size, order.entry, {
+          clientOrderId: order.client_order_id,
+          timeInForce: order.time_in_force,
+        }),
+      );
+    } catch (cause) {
+      // The DB row STAYS at `submitting`; only the in-memory entry goes.
+      //
+      // The row must stay because a thrown call does not prove the venue did
+      // not receive the order — a timeout after the exchange accepted it looks
+      // identical from here — and deleting it would recreate the exact gap
+      // this write-ahead closes. `resolveSubmitting` asks the venue later.
+      //
+      // The in-memory entry must go because the dedup check at the top of this
+      // method returns `ackFor(existing)`, and acking a bracket whose order may
+      // not exist is a lie to the caller. Dropping it means a retry re-issues
+      // `createOrder`, which the venue itself dedups on `clientOrderId`.
+      this.brackets.delete(order.client_order_id);
+      throw cause;
+    }
+
+    bracket.phase = 'pending_entry';
+    bracket.entryOrderId = entry.id;
     this.persist(bracket);
 
     return this.ackFor(bracket);
@@ -479,6 +522,14 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
       // stuck that way must not starve every other bracket's OCO cancel for
       // the rest of the process's life.
       try {
+        // #312. A `submitting` bracket is a write-ahead row whose venue call
+        // never confirmed — a crash between the journal and `createOrder`'s
+        // answer, or a throw that could equally have been a timeout AFTER the
+        // exchange accepted. The venue is the only authority on which.
+        if (bracket.phase === 'submitting') {
+          await this.resolveSubmitting(bracket);
+          continue;
+        }
         if (bracket.phase === 'pending_entry') {
           await this.advanceEntry(bracket);
           continue;
@@ -552,7 +603,7 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
     }
 
     const entry = await this.call('getOrder', () =>
-      this.client.fetchOrder(bracket.entryOrderId, instrument),
+      this.client.fetchOrder(CcxtBrokerAdapter.entryIdOf(bracket), instrument),
     );
 
     return {
@@ -622,10 +673,63 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
   }
 
   /** `pending_entry` → `arming` → `armed`, or → `resolved` if the entry died. */
+  /**
+   * Resolves a write-ahead bracket against the venue (#312).
+   *
+   * Three outcomes, and the middle one is why this exists:
+   *
+   * - The venue HAS the order → adopt its id and continue as `pending_entry`.
+   *   This is the crash case the write-ahead was for: a live order that would
+   *   otherwise have had no local bracket to arm protective legs from.
+   * - The venue AUTHORITATIVELY has no such order → the `createOrder` never
+   *   landed. Nothing exists to protect, so the bracket is `resolved` and the
+   *   row stops being reprocessed every poll.
+   * - The venue CANNOT say → `fetchOrderByClientOrderId` throws rather than
+   *   returning a false null, and the throw propagates to the per-bracket
+   *   isolation above. The bracket stays `submitting` and is retried next
+   *   poll. Guessing here would either abandon a live order or resurrect one
+   *   that does not exist.
+   */
+  private async resolveSubmitting(bracket: EmulatedBracket): Promise<void> {
+    const { client_order_id, instrument } = bracket.request;
+    const order = await this.call('resolveSubmitting', () =>
+      this.client.fetchOrderByClientOrderId(client_order_id, instrument),
+    );
+
+    if (order === null) {
+      bracket.phase = 'resolved';
+      this.persist(bracket);
+      return;
+    }
+
+    bracket.phase = 'pending_entry';
+    bracket.entryOrderId = order.id;
+    this.persist(bracket);
+  }
+
+  /**
+   * The entry id, refusing rather than casting when it is absent (#312).
+   *
+   * `entryOrderId` is nullable only in `submitting`, and every caller here
+   * runs in a later phase — so a null is a bug in the phase machine, not a
+   * state to handle. Throwing names it; a `as string` would send `undefined`
+   * to the venue as an order id and get an opaque 400 back.
+   */
+  private static entryIdOf(bracket: EmulatedBracket): string {
+    if (bracket.entryOrderId === null) {
+      throw new Error(
+        `ccxt: bracket ${bracket.request.client_order_id} is in phase '${bracket.phase}' with ` +
+          "no entry order id. Only 'submitting' may have one, and it is resolved before any " +
+          'other phase is entered — this is a phase-machine bug, not a venue condition.',
+      );
+    }
+    return bracket.entryOrderId;
+  }
+
   private async advanceEntry(bracket: EmulatedBracket): Promise<void> {
     const { request } = bracket;
     const entry = await this.call('fetchEntryStatus', () =>
-      this.client.fetchOrder(bracket.entryOrderId, request.instrument),
+      this.client.fetchOrder(CcxtBrokerAdapter.entryIdOf(bracket), request.instrument),
     );
 
     // Claim the transition before any further await, so an overlapping poll

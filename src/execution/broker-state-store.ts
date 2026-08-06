@@ -28,7 +28,17 @@ import type { NativeBracketRequest, NormalizedFill } from './types.js';
 export type BrokerVenue = 'ccxt' | 'ibkr' | 'alpaca';
 
 /** ccxt's emulated lifecycle; always `'armed'` on a native-bracket venue. */
-export type BrokerBracketPhase = 'pending_entry' | 'arming' | 'armed' | 'resolved';
+/**
+ * `submitting` is the write-ahead phase (#312): journalled BEFORE the venue
+ * call, so a crash between `createOrder` and the journal leaves a row naming
+ * the order that may exist rather than a live venue order nothing knows about.
+ *
+ * It is deliberately NOT `pending_entry` with a null `entry_order_id` — that
+ * is indistinguishable from an ordinary bracket whose id has not been recorded
+ * yet, since `recordBracketOrderIds` COALESCEs and a null there already means
+ * "no news".
+ */
+export type BrokerBracketPhase = 'submitting' | 'pending_entry' | 'arming' | 'armed' | 'resolved';
 
 /**
  * One persisted bracket. See the migration for per-venue column applicability
