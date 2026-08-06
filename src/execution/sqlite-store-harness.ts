@@ -20,28 +20,17 @@
  */
 
 import type { ClosedTrade, OpenPosition, OrderState } from '../shared/index.js';
-import { type SharedStore as Db, openSharedStore } from '../shared/store/index.js';
+import {
+  type ClosedTradeRow,
+  type SharedStore as Db,
+  fromClosedTradeRow,
+  openSharedStore,
+} from '../shared/store/index.js';
 import {
   fromPositionRow,
   type OpenPositionRow,
   SqliteExecutionStore,
 } from './sqlite-shared-store.js';
-
-interface ClosedTradeRow {
-  idempotency_key: string;
-  debate_id: string;
-  instrument: string;
-  asset_class: 'crypto' | 'stocks';
-  side: 'buy' | 'sell';
-  entry: number;
-  stop: number;
-  filled_size: number;
-  realized_pnl_net: number;
-  fees_total: number;
-  opened_at: string;
-  closed_at: string;
-  close_reason: 'stop' | 'target' | 'exit';
-}
 
 export class TestExecutionStore extends SqliteExecutionStore {
   readonly writeLog: string[] = [];
@@ -89,22 +78,4 @@ export class TestExecutionStore extends SqliteExecutionStore {
 export function openTestExecutionStore(): { db: Db; store: TestExecutionStore } {
   const db = openSharedStore(':memory:');
   return { db, store: new TestExecutionStore(db) };
-}
-
-function fromClosedTradeRow(row: ClosedTradeRow): ClosedTrade {
-  return {
-    idempotency_key: row.idempotency_key,
-    debate_id: row.debate_id,
-    instrument: row.instrument,
-    asset_class: row.asset_class,
-    side: row.side,
-    entry: row.entry,
-    stop: row.stop,
-    filled_size: row.filled_size,
-    realized_pnl_net: row.realized_pnl_net,
-    fees_total: row.fees_total,
-    opened_at: new Date(row.opened_at),
-    closed_at: new Date(row.closed_at),
-    close_reason: row.close_reason,
-  };
 }

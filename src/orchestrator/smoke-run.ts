@@ -121,6 +121,7 @@ import {
   SqliteMarketDataStore,
 } from '../market-data-service/index.js';
 import type { SessionBasisByClass } from '../risk-manager/index.js';
+import { delay } from '../shared/http/delay.js';
 import { SimulatedClock } from '../shared/index.js';
 import { openSharedStore, type SharedStore as SqliteHandle } from '../shared/store/index.js';
 import {
@@ -858,8 +859,6 @@ const DEFAULT_SMOKE_DEADLINE_MS = 30_000;
 const FILL_GRACE_MS = 2_000;
 /** Store-polling granularity for the two waits below. */
 const OBSERVE_INTERVAL_MS = 25;
-
-const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Polls the store until `done` or the deadline — never a fixed sleep. */
 async function waitUntil(check: () => boolean, deadline: number): Promise<void> {

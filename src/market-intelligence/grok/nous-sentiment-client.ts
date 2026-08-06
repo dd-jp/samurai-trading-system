@@ -10,15 +10,55 @@
  * ## What this is NOT
  *
  * It is not live retrieval. The model answers from what it was trained on;
- * nothing here searches X. That was already true of the xAI client this
+ * nothing here searches X.
+ *
+ * A correction to what this comment first said, because the history decides how
+ * much was given up. It read: "That was already true of the xAI client this
  * replaces — it posted to plain `/chat/completions` with no Live Search
  * parameters — so the cutover changes the provider, not the honesty of the
- * signal. What the cutover does close off is the FIX: xAI's Live Search rides
- * on `POST /v1/responses`, and Nous proxies `chat/completions` only. A real
- * retrieval source for this stage is a separate piece of work, not a model
- * swap. The `source: 'twitter'` tag and the `grok` agent id are kept as-is
- * because they are persisted in `market_intelligence` rows and renaming them
- * is a migration, not a rename.
+ * signal." That describes the ORIGINAL #464 client. It was not true of the
+ * client actually replaced: #474 had already moved it to `POST /v1/responses`
+ * with `tools: [{ type: 'x_search' }]`, which does retrieve, and had added a
+ * FAIL-CLOSED GUARD — any response carrying no evidence of retrieval (no
+ * citations, no tool step) was discarded with an `error` log rather than
+ * ingested. So the cutover did change the honesty of the signal: it traded
+ * working retrieval, and the guard protecting it, for single-provider
+ * simplicity.
+ *
+ * That may still be the right call — it is one HTTP path instead of two, and
+ * ADR-0009 owns that decision. But the cost should be recorded accurately:
+ * xAI's Live Search rides on `POST /v1/responses` and Nous proxies
+ * `chat/completions` only, so this path CANNOT retrieve, and restoring a real
+ * retrieval source is separate work rather than a model swap.
+ *
+ * THE CONSEQUENCE, which is the part that reaches money: items parsed here are
+ * written as `source: 'twitter'` and read by the sentiment and fundamental
+ * analysts, which feed the Debate Engine, which sizes trades. The analysts
+ * cannot tell a model's recollection from a live crowd read. The prompt below
+ * also asks for sentiment "As of" a recent date the model has no data for,
+ * which is the shape that invites confident confabulation. Tracked in #485 with
+ * three options; until one is chosen, treat every `twitter` row as un-retrieved.
+ *
+ * MEASURED 2026-08-06, which NARROWS the confabulation worry above without
+ * removing it. Exercised for the first time against live Nous credentials, this
+ * stage returns `{"items":[]}` on every call, and empty is the CORRECT answer,
+ * not a defect. Holding the production system prompt verbatim and varying only
+ * the user message, the result was empty with today's date, with no date, and
+ * with a date well inside the training corpus — so it is not a cutoff effect.
+ * The driver is the prompt's own anti-fabrication clause, which is currently
+ * doing the work the "As of" shape would otherwise undermine: delete that
+ * clause and the same model immediately produces fluent invented sentiment.
+ * Asked directly, it confirms it has no live X access in this API call. So
+ * empty `market_intelligence` rows during the soak are expected and should not
+ * be chased. The model is PINNED to `x-ai/grok-4.5` rather than the floating
+ * `~x-ai/grok-latest` alias precisely because of the residual risk: while the
+ * answer is empty, corpus recency buys nothing, and a future model behind a
+ * floating alias could begin returning invented sentiment with no test to catch
+ * it, since nothing asserts on content. ADR-0009 carries the full table.
+ *
+ * The `source: 'twitter'` tag and the `grok` agent id are kept as-is because
+ * they are persisted in `market_intelligence` rows and renaming them is a
+ * migration, not a rename.
  *
  * ## Structured output, and what happens when it isn't
  *

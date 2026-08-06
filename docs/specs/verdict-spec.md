@@ -6,21 +6,26 @@
 
 ## Problem Statement
 
-Risk has approved an order intent — but approval happened a moment ago, against a snapshot that may already be stale, by a system that (early in its life) has not yet earned the right to commit real money unsupervised. Firing every Risk-approved order blindly ignores two realities: signals decay between decision and execution, and the first real-money trades deserve a human's eyes. There needs to be one final, deliberate gate between "the system wants to trade" and "money moves."
+> **Read this before the rest of the document.** [ADR-0007](../adr/0007-fully-automatic-execution.md) (2026-08-06) set `automation_level` to `auto` for both asset classes **in paper and live**, so **no trade is ever routed to a human**. The human-in-the-loop material throughout this spec — the dial, the flag sources, `human_timeout`, the whole Telegram approval chain — is **retained and inert**. Where this document says Verdict "routes to a human", read it as "would route, if the dial could be moved off `auto`" — and **it cannot**: `assertAutomationLevelSupported` (`src/verdict/index.ts`) **throws on every production boot** if either asset class is set to `manual` or `semi_auto`, because the gate is not merely unused but unsound (gates 1 and 2 run before the approval `await` and are never re-checked, so an approval returning after a 15-minute `human_timeout` submits at a price older than `max_signal_age.crypto` allows). Re-enabling is therefore a **code change gated on async approval (#434)**, not a config edit. See "Staged-Deployment Alignment" below.
 
-The Verdict stage (Stage 5) is that gate. It takes Risk's approved `RiskDecision`, applies a last round of freshness and safety checks, optionally routes the trade to a human for approval (configurable by deployment stage), and emits a final go/no-go. Only a `go` reaches Execution. It is where the staged-deployment discipline ("deploy small, confirm, then scale") and the "tuition money" caution live.
+Risk has approved an order intent — but approval happened a moment ago, against a snapshot that may already be stale. Firing every Risk-approved order blindly ignores that signals decay between decision and execution. There needs to be one final, deliberate gate between "the system wants to trade" and "money moves."
+
+*(The original framing added a second reason — that the first real-money trades deserve a human's eyes. ADR-0007 rejected it structurally, not on appetite: `Verdict.decide` awaits `approvals.requestApproval` **inside** the instrument pass, and `runTickPlan` runs instruments at `max_concurrent_instruments: 1`, so one trade awaiting a human tap blocks the whole universe for up to `human_timeout`. A human in this loop is a serialization point, not a safety net.)*
+
+The Verdict stage (Stage 5) is that gate. It takes Risk's approved `RiskDecision`, applies a last round of freshness and safety checks, and emits a final go/no-go. Only a `go` reaches Execution. The human-approval path exists in the code and is unreachable at the shipped dial setting.
 
 ## Solution
 
-Verdict is a **deterministic decision gate** (no LLM, no broker calls). Given a Risk-approved intent plus current market data and config, it runs: a **staleness/drift** check, three **automated final checks** (idempotency dedup, market-open, fire-time kill-switch/breaker re-check), and — for flagged trades or early deployment stages — a **human-in-the-loop approval** gate via Telegram/Discord. Any failed gate produces a `no_go` with a reason; a passed gate (auto or human-approved) produces a `go` carrying the order to a thin Execution boundary. The human gate is a per-asset-class dial (`manual`/`semi_auto`/`auto`) turned as the system earns trust. Every decision is logged.
+Verdict is a **deterministic decision gate** (no LLM, no broker calls). Given a Risk-approved intent plus current market data and config, it runs: a **staleness/drift** check and three **automated final checks** (idempotency dedup, market-open, fire-time kill-switch/breaker re-check). A **human-in-the-loop approval** gate via Telegram/Discord sits behind those as a per-asset-class dial (`manual`/`semi_auto`/`auto`) — **set to `auto` for both classes since ADR-0007, so it never fires**. Any failed gate produces a `no_go` with a reason; a passed gate produces a `go` carrying the order to a thin Execution boundary. Every decision is logged.
 
 Key architectural decisions:
 - **Final go/no-go gate; decide-only** — Verdict never calls the broker; a thin Execution boundary acts on `go`.
-- **Human-in-the-loop, configurable by deployment stage + trade flags** — timeout → no-go (fail-safe).
+- **Fully automatic since ADR-0007** — `automation_level: auto` for crypto and stocks, paper and live. The circuit breakers, not a human, are the only stop.
+- **Human-in-the-loop, configurable by deployment stage + trade flags** — timeout → no-go (fail-safe). **Built, tested, and inert**; `shouldEngageHitl` short-circuits on the dial before any flag source is consulted.
 - **Staleness + drift gate** — no-go if the signal aged out or price drifted past the entry.
 - **Three automated final checks** — idempotency dedup, market-open (stocks), fire-time breaker/kill-switch re-check.
-- **Telegram + Discord trade channel** for approvals + notifications.
-- **Deterministic / backtestable** — HITL bypassed-but-recorded in backtest.
+- **Telegram + Discord trade channel** for notifications (and for approvals, if the dial is ever moved).
+- **Deterministic / backtestable** — HITL bypassed-but-recorded in backtest (and now bypassed in live too, by the dial).
 
 ## User Stories
 
@@ -43,6 +48,8 @@ Key architectural decisions:
 9. As the Verdict stage, I want to re-check the kill-switch and breaker state at fire time, so that state changes since Risk approved (especially after HITL delay) still block the trade.
 
 ### Human-in-the-Loop
+
+**Stories 10–13 are built and inert since [ADR-0007](../adr/0007-fully-automatic-execution.md).** They are retained as the record of what the approval chain does, not as a description of live behaviour — the dial is `auto` for both classes, and story 10's "configurable per asset class" is now false in the only direction that matters: `assertAutomationLevelSupported` throws at boot on any non-`auto` value.
 
 10. As the operator, I want a human-approval gate configurable per asset class (manual/semi_auto/auto), so that I can require approval in early deployment and open up as trust grows.
 11. As the operator, I want the gate to engage for flagged trades (non-converged, no-precedent, near-limit, size over threshold) in semi_auto, so that only risky trades interrupt me.
@@ -204,7 +211,11 @@ Per CONTEXT.md:
 >
 > The reason is structural, not a change of appetite: `Verdict.decide` *awaits* `approvals.requestApproval` **inside** the instrument pass, and `runTickPlan` runs instruments at `max_concurrent_instruments: 1`. One trade awaiting a human tap therefore blocks the entire universe for up to `human_timeout`. A human in this loop is a serialization point, not a safety net.
 >
-> The dial, the flag plumbing, `human_timeout` and the whole Telegram approval chain are **retained and inert**, so turning this back is a config edit rather than a re-implementation. If it is ever turned back, note that gates 1 (staleness) and 2 (drift) run *before* gate 6 and are never re-evaluated after it — a `semi_auto` that is actually sound needs a post-approval re-check, which does not exist today. ADR-0007 records async approval (Verdict returns `pending`; a poller resumes it) as the only version worth building.
+> The dial, the flag plumbing, `human_timeout` and the whole Telegram approval chain are **retained and inert**.
+>
+> **Turning it back is no longer a config edit — the code refuses.** An earlier revision of this paragraph said it was, and that was wrong: a comment guards nothing, and the dial is a config value flipped by someone who has not read the comment. `assertAutomationLevelSupported` (`src/verdict/index.ts`) now **throws at production boot** whenever either asset class is `manual` or `semi_auto`, naming the reason and the blocking ticket. Both engaging levels are covered, not just `semi_auto` — `manual` reaches the same `await` through the same two already-evaluated gates. Unlike an in-branch re-check this is not a guard on an unreachable path (#430): it runs on every boot.
+>
+> The reason it refuses: gates 1 (staleness) and 2 (drift) run *before* gate 6 and are never re-evaluated after it, so an approval returning after `human_timeout` (15 min) submits at a price last checked longer ago than `max_signal_age.crypto` (5 min) permits — a gate that reads as a freshness guarantee is not one. ADR-0007 records async approval (Verdict returns `pending`; a poller resumes it) as the only version worth building, which also removes the human from the instrument pass — the actual reason the gate was dropped. **Land [#434](https://github.com/dd-jp/samurai-trading-system/issues/434) before re-enabling anything here.**
 >
 > **What replaces the gate:** nothing. The circuit breakers are now the only stop, which makes #384, #375 and #333 the live-go gate — see ADR-0007 "Consequences".
 

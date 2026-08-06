@@ -42,7 +42,7 @@ The Market Intelligence layer runs three specialized agents that operate continu
 
 **DeepResearch Agent** — Professional news aggregation (Bloomberg, Reuters, SEC filings, earnings reports). High credibility, regulatory compliance, fact-checked sources.
 
-**Grok Agent** — Social media sentiment analysis (Twitter/X, Reddit). Real-time retail sentiment, viral narratives, market psychology.
+**Grok Agent** — X/Twitter sentiment, asked of a model rather than retrieved. Retail sentiment and market psychology **as the model recalls them from training**, on a 4-hour bucket — not a real-time stream, not Reddit. *(Originally: "Social media sentiment analysis (Twitter/X, Reddit). Real-time retail sentiment, viral narratives, market psychology." See the retrieval note above and Module: Grok Agent.)*
 
 **WorldMonitor Agent** — Geopolitical/macro intelligence (news convergence detection, prediction-market tracking, regional signals) via the WorldMonitor MIT-licensed SDK. Adopted per [ADR-0002](../adr/0002-worldmonitor-mi-source.md); embeds only the MIT SDK/API, never WorldMonitor's AGPL platform code, never self-hosted. Also the source of the **Country Instability Index (CII)**, consumed separately as a Risk Manager soft signal (see `docs/specs/risk-manager-spec.md`), not by this layer's conflict resolution.
 
@@ -63,7 +63,7 @@ The Market Intelligence layer runs three specialized agents that operate continu
 ### Agent Operation
 
 1. As the Market Intelligence system, I want the DeepResearch agent to continuously monitor professional news sources, so that I have validated, high-credibility market context
-2. As the Market Intelligence system, I want the Grok agent to continuously monitor social media sentiment, so that I have real-time retail sentiment and viral narratives
+2. As the Market Intelligence system, I want the Grok agent to refresh each instrument's X/Twitter sentiment once per 4-hour bucket, so that analysts have a retail-sentiment read without a per-tick LLM cost — **accepting that it is the model's recollection, not a live monitor.** *(Originally: "continuously monitor social media sentiment ... real-time retail sentiment and viral narratives". Nothing monitors; see the retrieval note above.)*
 2a. As the Market Intelligence system, I want the WorldMonitor agent to continuously poll geopolitical/macro intelligence on its own decoupled cadence, so that I have regional and prediction-market context the other two agents don't cover
 3. As the Market Intelligence system, I want all three agents to run in parallel without blocking each other, so that one agent's delays don't impact the others
 4. As the Market Intelligence system, I want to detect convergence, triangulation, and absence signals across all three agents' outputs, so that downstream analysts receive confidence-scored, cross-verified intelligence instead of a single binary priority call
@@ -72,7 +72,7 @@ The Market Intelligence layer runs three specialized agents that operate continu
 ### Data Ingestion
 
 6. As the Market Intelligence system, I want to ingest news from multiple sources (Bloomberg, Reuters, SEC, earnings), so that I have comprehensive professional coverage
-7. As the Market Intelligence system, I want to ingest social data from Twitter/X and Reddit, so that I capture retail sentiment and viral narratives
+7. ~~As the Market Intelligence system, I want to ingest social data from Twitter/X and Reddit, so that I capture retail sentiment and viral narratives~~ — **not built and not on the current path.** No social ingestion exists; story 2 above is what ships in its place. Reinstating this story means adding a real retrieval source (see the retrieval note and Module: Grok Agent), which is separate work.
 7a. As the Market Intelligence system, I want to ingest geopolitical/macro intelligence from WorldMonitor, so that I capture regional risk and prediction-market signals
 8. As the Market Intelligence system, I want to normalize all sources to a consistent timestamp format (UTC), so that cross-source correlation works correctly
 9. As the Market Intelligence system, I want to tag data with asset class (crypto/stocks), so that downstream systems can filter appropriately
@@ -94,7 +94,7 @@ The Market Intelligence layer runs three specialized agents that operate continu
 
 ### Performance & Reliability
 
-19. As the Market Intelligence system, I want to operate within latency budgets (5s crypto, 30s stocks), so that intelligence is timely enough for trading decisions
+19. As the Market Intelligence system, I want to operate within latency budgets (5s crypto, 30s stocks), so that intelligence is timely enough for trading decisions. **These are per-agent latency budgets, not tick cadences** — do not read them as a trading-clock rate (see Module: WorldMonitor Agent). **The Grok agent is outside them:** it sits off the tick's critical path behind a 4-hour bucket, so its call latency does not bind.
 20. As the Market Intelligence system, I want to respect rate limits and back off gracefully, so that I don't get blocked by data sources
 21. As the Market Intelligence system, I want to continue operating if one agent fails, so that partial intelligence is better than no intelligence
 22. As the Market Intelligence system, I want to run without state persistence, so that I can restart cleanly after crashes
@@ -224,39 +224,29 @@ The prior `ConflictResolution` (binary DeepResearch-vs-Grok winner) is replaced 
 
 ### Module: Grok Agent
 
+Location: `src/market-intelligence/grok/` (`grok-agent.ts`, `nous-sentiment-client.ts` + matching `*.test.ts`).
+
+**This module ingests nothing. It asks one model one question.** The retrieval note at the top of this spec is the standing property, and this section is written to match it rather than to describe a pipeline that has never existed. **What runs is a single `chat/completions` call per instrument per bucket, answered from the model's training corpus.** Nothing here opens a stream, holds an API quota, or reaches x.com.
+
 **Responsibilities**
-- Continuously ingest social media data (Twitter/X, Reddit)
-- Analyze sentiment and detect viral narratives
-- Handle API rate limits gracefully
-- Detect rapid sentiment shifts that warrant high-priority flagging
+- Once per refresh bucket per instrument, ask the sentiment model for X/Twitter sentiment on that instrument.
+- Parse the model's JSON reply, validating field by field — it is **parsed, never trusted** (it is untrusted free text on the same footing as any other ingested content).
+- Normalise up to `MAX_ITEMS` (10) distinct themes into `IntelligenceItem`s and emit them; emit nothing rather than something on a failure.
 
-**Key Operations**
+**Cadence: a 4-hour bucket, not a poll.** `GROK_REFRESH_MS` is 4 hours (1/6th of the analysts' 24h context window). `floorToRefreshBucket` floors the current instant to its bucket and the agent keeps an in-memory `instrument → bucket-already-fetched` map, so **every pass inside a bucket reuses one call**. Across a six-instrument universe that is ~36 calls/day — roughly $1.60 over a 14-day soak against ADR-0008's $50 cap, which is why cost does not bind here and neither does latency (the stage sits off the tick's critical path). The map is deliberately in-memory: a restart refetches, which is correct.
 
-**Data Sources**
-- **Twitter/X**: Real-time stream of market-related tweets (API access, rate-limited)
-- **Reddit**: Posts from r/wallstreetbets, r/cryptocurrency, r/stocks (scraping or API)
-- **Telegram**: Crypto group chats (if accessible)
-- **Discord**: Trading community channels (if accessible)
+**Bucket-marking is asymmetric, deliberately.** A failed call marks the bucket anyway, so a transient failure does not become four hours of retry pressure. A `NO DATA for this window` reply does **not** mark it, so the next pass retries.
 
-**Ingestion Cadence**
-- All sources: Every 10 seconds (respect API rate limits)
-- Twitter/X: Respect rate limit (typically 300 requests per 15 minutes)
-- Reddit: Every 30 seconds (lower rate to avoid blocking)
+**Tagging — `source: 'twitter'`, `agent_id: 'grok'`, `type: 'sentiment'`.** Kept as-is even though nothing touches Twitter and the model may not be Grok: these values are persisted in `market_intelligence` rows and read by the sentiment and fundamental analysts, so changing them is a migration, not a rename. **They name the subject, not the method.**
 
-**Processing**
-- Fetch raw data from sources
-- Apply sentiment analysis (Grok model or similar)
-- Extract entities (tickers, companies, events)
-- Detect viral narratives (rapid mention count increase in short time window)
-- Detect sentiment shifts (mean ± 2σ from 1h rolling baseline)
-- Tag with `type: 'sentiment'` and `agent_id: 'grok'`
-- Emit AgentIntelligence to core
+**Model.** Resolved through the `sentiment` Nous role (ADR-0009) — `NOUS_SENTIMENT_MODEL` → `NOUS_MODEL` → `~x-ai/grok-latest`, a deliberately floating alias (the leading `~` is the portal's own marker; the id without it 404s). Floating is the point for a stage whose value is corpus recency. `x-ai/grok-4.5` is the pinned alternative.
 
 **Failure Handling**
-- Respect API rate limits (back off when receiving 429 responses)
-- If source is blocked or rate-limited for > 5 minutes, fall back to cached sentiment
-- If all sources fail, emit empty intelligence (don't block the pipeline)
-- Log all failures for monitoring
+- The prompt asks for sentiment "as of" a recent date the model has no data for, which is a **deliberate honesty probe** — a model that answers confidently anyway is recalling, not observing.
+- A `finish_reason: 'length'` is a hard failure by design (`nousChat`), not a truncated-but-usable answer, which is why `max_tokens` is sized generously enough that the model does not run out mid-JSON.
+- On any failure: emit empty intelligence, never block the pipeline — the same contract as DeepResearch/WorldMonitor. Log the failure.
+
+> **Superseded ingestion design, retained for provenance.** This module was originally specced as a continuous social ingestion pipeline: Twitter/X real-time stream (rate-limited, ~300 requests/15 min), Reddit (r/wallstreetbets, r/cryptocurrency, r/stocks), Telegram and Discord channels; polling every 10s (Reddit 30s); entity extraction; viral-narrative detection by mention-count spike; sentiment-shift detection at mean ± 2σ off a 1h rolling baseline; 429 back-off with a 5-minute fallback to cached sentiment. **None of that was built, and ADR-0009 closed the door on the retrieval half of it** — the direct-to-xAI client that could retrieve (`tools: [{ type: 'x_search' }]`, plus a fail-closed gate discarding any response with no citations and no tool step) was deleted, because under Nous's `chat/completions` that gate could only ever discard every response. Restoring live retrieval means adding a real retrieval source, which is separate work — **not a model swap.** Anything downstream that reads this stage as evidence of what is being said on X *right now* is reading it wrong.
 
 ### Module: WorldMonitor Agent
 
@@ -277,7 +267,7 @@ Adopted per [ADR-0002](../adr/0002-worldmonitor-mi-source.md). Location: `src/ma
 - **Not used:** WorldMonitor's MCP transport — it's designed for agent-driven tool discovery; this is a deterministic pipeline consumer, not an agent.
 
 **Ingestion Cadence**
-- **Decoupled from the trading tick loop**: poll every 5–15 minutes, cache, serve stale-tolerant to analysts between polls (One-Shot Hydration compliance, ADR-0002 §2 / §8). WorldMonitor's own data (geopolitical/macro) doesn't change on a 5s/30s trading clock.
+- **Decoupled from the trading tick loop**: poll every 5–15 minutes, cache, serve stale-tolerant to analysts between polls (One-Shot Hydration compliance, ADR-0002 §2 / §8). WorldMonitor's own data (geopolitical/macro) doesn't change on a trading clock. *(This originally said "a 5s/30s trading clock". No such cadence exists in code — `DEFAULT_TICK_INTERVAL_MS` is 60s and the paper profile runs at 15 minutes per [ADR-0008](../adr/0008-llm-spend-cap.md), which makes this poll roughly tick-rate rather than far slower. The decoupling argument is unaffected: it rests on the data not changing on a trading clock at all, and on the API quota, not on a specific tick rate. The 5s/30s figures are this stage's own **latency budgets** — see story 19 — a different quantity.)*
 - **Tier:** Pro ($39.99/mo) — covers this cadence comfortably (60 req/60s per-key MCP limit is far above a call every 5–15 min).
 
 **Processing**
@@ -647,6 +637,8 @@ Some data sources may not be available at launch:
 - Telegram/Discord may not be accessible (private groups)
 
 **Fallback plan**: Start with sources that are available (SEC EDGAR is free, Reddit scraping is possible, Twitter/X basic tier may work). Add paid sources as budget allows.
+
+*What actually happened, 2026-08-06: the fallback taken was none of these. No social source is subscribed at all — the sentiment stage asks a model what it recalls (ADR-0009), and the risks listed above are therefore moot rather than mitigated. The honest statement of the current position is that this stage has **no retrieval risk because it has no retrieval**, and correspondingly no live-observation value. The risks return in full the day a real retrieval source is added.*
 
 ### Future Extensions
 

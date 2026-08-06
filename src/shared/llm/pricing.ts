@@ -101,7 +101,12 @@ export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
    * `nous-config.ts`, which checks the model as CONFIGURED, and pricing the
    * call if the portal ever stops echoing a concrete id. In that second case
    * the number below goes stale silently, so it is set to the rate the alias
-   * resolves to today. `x-ai/grok-4.5` above is the pinned alternative.
+   * resolves to today.
+   *
+   * The alias is NOT the sentiment default — `DEFAULT_NOUS_MODELS.sentiment`
+   * pins `x-ai/grok-4.5` above (ADR-0009, after the 2026-08-06 measurement).
+   * This entry stays priced so the alias remains one env var away if live
+   * retrieval ever makes corpus recency pay again.
    */
   '~x-ai/grok-latest': { input: 1.6, output: 4.8 },
   // DeepSeek, via Nous.

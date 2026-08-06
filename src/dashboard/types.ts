@@ -343,6 +343,19 @@ export interface DashboardQueryStore {
   getDailyMetrics(asOf: Date): MetricsSuite;
   getMark(instrument: string, asOf: Date): Mark;
   /**
+   * Batched `getMark` — one query for a whole position list instead of one per
+   * position (the dashboard's N+1, which is per-HTTP-request rather than
+   * per-tick).
+   *
+   * Carries `getMark`'s contract per instrument, deliberately: it THROWS for a
+   * requested instrument with no mark rather than omitting the key. A missing
+   * mark must not degrade into a position rendered with no price on a
+   * live-money operator surface. Throws for the first such instrument in
+   * `instruments` order, so the failure is identical to what the per-position
+   * loop produced.
+   */
+  getMarks(instruments: readonly string[], asOf: Date): Map<string, Mark>;
+  /**
    * Locally-metered Anthropic spend. Belongs on this interface, unlike the
    * Alpaca/Polygon tiles, because `llm_spend` genuinely IS a shared-store
    * table written by another component (the debate engine's LLM client) — the
