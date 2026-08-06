@@ -77,6 +77,7 @@ export {
   TELEGRAM_ALERT_ENV_VARS,
   TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR,
 } from './alert-transport.js';
+export { TradeChannelAnalystSkipAlert } from './analyst-skip-alert-channel.js';
 export { TradeChannelBreachAlert } from './breach-alert-channel.js';
 export { digest } from './digest.js';
 export { Heartbeat, type HeartbeatChannel } from './heartbeat.js';
@@ -90,7 +91,13 @@ export {
   OrphanVerdictScanner,
 } from './orphan-verdict-scan.js';
 export { PAPER_ACCOUNT_EQUITY_ANCHOR, paperStartingProfile } from './paper-profile.js';
-export { buildAnalystsStep } from './production/analysts-adapter.js';
+export {
+  ALERT_AFTER_CONSECUTIVE_SKIPS,
+  ALERT_REPEAT_EVERY_SKIPS,
+  type AnalystSkipAlert,
+  type AnalystSkipAlertChannel,
+  buildAnalystsStep,
+} from './production/analysts-adapter.js';
 export { buildDebatePersonas, buildDebateStep } from './production/debate-adapter.js';
 export {
   type AccountStateProvider,

@@ -54,10 +54,72 @@ import type { AnalystFailure, AnalystOrchestrator } from '../../analysts/index.j
 import { type Logger, sanitizeLogText } from '../../shared/index.js';
 import type { TickSteps } from '../types.js';
 
+/**
+ * A run of consecutive quorum skips on one instrument (#431, analysts-spec.md
+ * story 25). Carries the count and the current reasons, because "the analyst
+ * stage has skipped N ticks in a row and here is why" is the whole message.
+ */
+export interface AnalystSkipAlert {
+  instrument: string;
+  /** How many ticks in a row have skipped, including this one. Always >= 2. */
+  consecutive_skips: number;
+  /** The mandatory failures behind THIS skip, already sanitized. */
+  failures: AnalystFailure[];
+  reported_at: Date;
+}
+
+/**
+ * Where a consecutive-skip alert goes. Declared beside its caller, like
+ * `OrphanAlertChannel` in orphan-verdict-scan.ts; `LoggingAnalystSkipAlertChannel`
+ * (console-channels.ts) and `TradeChannelAnalystSkipAlert`
+ * (analyst-skip-alert-channel.ts) implement it.
+ */
+export interface AnalystSkipAlertChannel {
+  postAnalystSkipAlert(alert: AnalystSkipAlert): Promise<void>;
+}
+
+/**
+ * analysts-spec.md story 25: "an active alert only after 2 consecutive skipped
+ * ticks, so that isolated blips stay quiet but systemic breakage reaches me."
+ */
+export const ALERT_AFTER_CONSECUTIVE_SKIPS = 2;
+
+/**
+ * How often the alert repeats while the stage stays broken, counted in further
+ * consecutive skips after the first alert.
+ *
+ * The spec asks for an alert at 2 and says nothing about what happens at 200.
+ * Firing once and going quiet is the literal reading, and it fails the case
+ * this ticket was actually filed for: a 14-day unattended soak where the single
+ * alert lands at hour 0.5, is missed, and nothing ever says it again — 14 days
+ * of silence that look exactly like a working system. Firing every tick is the
+ * other failure (alert fatigue, #342's lesson). Every 8th skip is ~2 hours at
+ * ADR-0008's 15-minute cadence: frequent enough to be noticed, rare enough to
+ * stay readable.
+ */
+export const ALERT_REPEAT_EVERY_SKIPS = 8;
+
+export interface AnalystsStepOptions {
+  /** Absent = no alerting, log-only. `production.ts` supplies its log-only default. */
+  skipAlerts?: AnalystSkipAlertChannel;
+}
+
 export function buildAnalystsStep(
   orchestrator: AnalystOrchestrator,
   logger?: Logger,
+  options: AnalystsStepOptions = {},
 ): TickSteps['analysts'] {
+  /**
+   * Consecutive skips per instrument, in memory.
+   *
+   * Restart-clean on purpose. The counter exists to distinguish an isolated
+   * blip from systemic breakage, and a process that just restarted has no
+   * evidence about the previous process's ticks. Persisting it would make the
+   * first tick after a crash-restart inherit a run it did not observe — and the
+   * crash itself is already alarmed by the heartbeat's silence.
+   */
+  const consecutiveSkips = new Map<string, number>();
+
   return async ({ trace_id, signal, clock }) => {
     const result = await orchestrator.runAnalysts(trace_id, signal, clock);
 
@@ -86,6 +148,70 @@ export function buildAnalystsStep(
       });
     }
 
+    // #431. The tick boundary is here, not inside `runAnalysts`, which knows
+    // nothing about consecutive ticks — `result.skipped` is this tick's answer
+    // and the counter is what turns a series of them into a signal.
+    if (result.skipped) {
+      const count = (consecutiveSkips.get(signal.asset) ?? 0) + 1;
+      consecutiveSkips.set(signal.asset, count);
+      if (shouldAlertAt(count)) {
+        await postSkipAlert(options.skipAlerts, logger, {
+          instrument: signal.asset,
+          consecutive_skips: count,
+          failures: result.failures.map((failure) => ({
+            analyst_type: failure.analyst_type,
+            role: failure.role,
+            reason: sanitizeLogText(failure.reason),
+          })),
+          reported_at: clock.now(),
+        });
+      }
+    } else {
+      // A single good tick clears the run: the alert is about CONSECUTIVE
+      // skips, so an intermittent failure must not accumulate its way to an
+      // alert over a week of otherwise healthy ticks.
+      consecutiveSkips.delete(signal.asset);
+    }
+
     return result.views;
   };
+}
+
+/** Fires at the threshold, then on a bounded repeat while the stage stays broken. */
+function shouldAlertAt(consecutiveSkips: number): boolean {
+  if (consecutiveSkips < ALERT_AFTER_CONSECUTIVE_SKIPS) return false;
+  return (consecutiveSkips - ALERT_AFTER_CONSECUTIVE_SKIPS) % ALERT_REPEAT_EVERY_SKIPS === 0;
+}
+
+/**
+ * Posts the alert, and never lets the transport take the tick down with it.
+ *
+ * A Telegram outage must not turn "the analysts skipped" into "the orchestrator
+ * threw": the tick has already produced its (empty) answer by this point, and
+ * the caller is about to act on it. The failure is logged at `error` so the
+ * un-delivered alert is at least on the record.
+ */
+async function postSkipAlert(
+  channel: AnalystSkipAlertChannel | undefined,
+  logger: Logger | undefined,
+  alert: AnalystSkipAlert,
+): Promise<void> {
+  if (channel === undefined) return;
+  try {
+    await channel.postAnalystSkipAlert(alert);
+  } catch (error) {
+    logger?.log({
+      trace_id: 'analyst-skip',
+      stage: 'analysts',
+      level: 'error',
+      message:
+        'analyst consecutive-skip alert could not be delivered — the analyst stage is still ' +
+        'skipping and nobody has been told',
+      payload: {
+        instrument: alert.instrument,
+        consecutive_skips: alert.consecutive_skips,
+        error: sanitizeLogText(error instanceof Error ? error.message : String(error)),
+      },
+    });
+  }
 }
