@@ -172,6 +172,7 @@ describe('technicalAnalyst', () => {
     const honest = computeIndicator(ZIGZAG.slice(-15), {
       indicator: 'rsi',
       params: { period: 14 },
+      timeframe: '1h',
       lookback: 15,
     });
     // The nearest computable stand-in for what it used to report. The exact
@@ -183,6 +184,7 @@ describe('technicalAnalyst', () => {
     const narrower = computeIndicator(ZIGZAG.slice(-14), {
       indicator: 'rsi',
       params: { period: 13 },
+      timeframe: '1h',
       lookback: 14,
     });
 

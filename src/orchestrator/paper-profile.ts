@@ -930,7 +930,14 @@ function buildProfileConfigs(): Pick<
        * detail: `atr()` spends the first bar seeding `previousClose`, so N
        * bars yield N-1 true ranges and a 14-period ATR needs 15.
        */
-      volatility_indicator: { indicator: 'atr', params: { period: 14 }, lookback: 15 },
+      volatility_indicator: {
+        indicator: 'atr',
+        params: { period: 14 },
+        // The breaker's realized-vol reading, on the same 1h bars every other
+        // indicator in the system uses (#315).
+        timeframe: '1h',
+        lookback: 15,
+      },
       /**
        * UNSOURCED — cost-model-backtest-spec.md sources `MarketState.adv`
        * from "an MDS ADV helper (bars-volume aggregation)" without pinning a

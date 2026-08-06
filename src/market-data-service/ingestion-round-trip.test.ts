@@ -206,7 +206,7 @@ describe('cold start: first tick with an empty store (#362)', () => {
 
     const sma = await service.getIndicator(
       'BTC-USD',
-      { indicator: 'sma', params: {}, lookback: 14 },
+      { indicator: 'sma', params: {}, timeframe: '1h', lookback: 14 },
       COLD_ASOF,
     );
 
@@ -238,7 +238,11 @@ describe('cold start: first tick with an empty store (#362)', () => {
     );
 
     await expect(
-      service.getIndicator('BTC-USD', { indicator: 'sma', params: {}, lookback: 14 }, COLD_ASOF),
+      service.getIndicator(
+        'BTC-USD',
+        { indicator: 'sma', params: {}, timeframe: '1h', lookback: 14 },
+        COLD_ASOF,
+      ),
     ).rejects.toThrow(InsufficientBarsError);
   });
 });

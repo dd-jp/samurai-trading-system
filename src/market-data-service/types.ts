@@ -78,6 +78,20 @@ export interface IndicatorSpec {
   indicator: string;
   params: Record<string, number>;
   lookback: number;
+  /**
+   * The bar timeframe the indicator is computed over (#315).
+   *
+   * REQUIRED, not optional-with-a-1h-default. `getIndicator` used to hardcode
+   * `'1h'`, so any non-1h consumer had to bypass the serving layer — and worse,
+   * routing one through anyway would have silently pinned it to 1h with no
+   * error, which for the Trader means silently changing every stop distance.
+   * An optional field defaulting to 1h reproduces exactly that trap for every
+   * caller who forgets it; a required one turns each into a compile error.
+   *
+   * Part of the cache key: the same indicator and lookback on a different
+   * timeframe is a different value and must not collide.
+   */
+  timeframe: string;
 }
 
 /** A computed indicator value, pinned to the bar it was last updated from. */

@@ -254,7 +254,15 @@ const REAL_CONFIGS = {
   },
   executionConfig: {
     simulated: {
-      volatility_indicator: { indicator: 'atr', params: { period: 14 }, lookback: 15 },
+      volatility_indicator: {
+        indicator: 'atr',
+        params: { period: 14 },
+        // Required since #315. Omitting it made `getIndicator` build a window
+        // with `timeframe: undefined`, which matches no stored bar, so the
+        // volatility read failed and the breaker halted the whole chain.
+        timeframe: '1h',
+        lookback: 15,
+      },
       adv_window: { timeframe: '1d', lookback: 20 },
     },
   },

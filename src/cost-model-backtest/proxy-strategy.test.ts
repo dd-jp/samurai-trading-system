@@ -107,6 +107,7 @@ describe('proxySignal', () => {
     const atrValue = computeIndicator(bars.slice(-(config.atrWindow + 1)), {
       indicator: 'atr',
       params: {},
+      timeframe: '1d',
       lookback: config.atrWindow,
     });
 
