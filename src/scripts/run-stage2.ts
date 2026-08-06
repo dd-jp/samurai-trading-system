@@ -163,6 +163,27 @@ export const STAGE2_PINNED_WINDOW: DateRange = {
   end: new Date('2026-08-05T18:17:07.694Z'),
 };
 
+/**
+ * Where a DIRECT run keeps its ingested bars (#495).
+ *
+ * Not `:memory:`, which is what a direct run silently got by passing no
+ * `dbPath` at all: every run started from an empty database and re-pulled the
+ * whole five-year window from the vendor. Persisting it is the load-bearing
+ * precondition for the free-data decision (#487) — a free, no-SLA source is
+ * only acceptable if history survives on disk so a dead vendor costs new bars
+ * alone.
+ *
+ * Deliberately NOT `sharedStorePath()`. This is research scratch with a
+ * private schema (`stage2_bars`, `stage2_listing`); the shared store holds
+ * live run state, and the two must not share a file. Same `data/` directory,
+ * so the existing `*.sqlite` gitignore rule already covers it.
+ *
+ * `runStage2`'s own default stays `:memory:` — that shape is deliberate (see
+ * `Stage2HistoricalStore`'s module docstring) and is what keeps tests from
+ * touching the filesystem or reading each other's bars.
+ */
+export const STAGE2_SCRATCH_DB_PATH = 'data/stage2-bars.sqlite';
+
 export interface RunStage2Deps {
   polygonClient: PolygonClient;
   window?: DateRange;
@@ -537,6 +558,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     polygonClient,
     costConfig: costConfigFromEnv(),
     window: STAGE2_PINNED_WINDOW,
+    // Stated here rather than by changing `runStage2`'s `:memory:` default, so
+    // only a direct run persists bars and every existing caller and test keeps
+    // the isolated in-memory store it was written against (#495).
+    dbPath: STAGE2_SCRATCH_DB_PATH,
     selections: new SqliteStage2SelectionStore(shared),
   }).catch((error: unknown) => {
     console.error('Stage 2 run failed:', error);
