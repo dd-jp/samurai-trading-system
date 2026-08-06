@@ -19,6 +19,7 @@
  * or rejecting.
  */
 import { countryForInstrument } from './cii-mapping.js';
+import { type RiskThresholdSource, resolveRiskConfig } from './risk-thresholds.js';
 import type {
   BreakerState,
   PortfolioView,
@@ -43,6 +44,13 @@ export { computeCorrelationEstimate } from './correlation.js';
 export { InMemoryRiskCriticStore } from './critic-store.js';
 export type { PortfolioAccountingInput } from './portfolio-view.js';
 export { computePortfolioView } from './portfolio-view.js';
+export {
+  RISK_THRESHOLD_KEYS,
+  type RiskThresholdKey,
+  type RiskThresholdSource,
+  resolveRiskConfig,
+  riskThresholdsFrom,
+} from './risk-thresholds.js';
 export type {
   BreakerState,
   CorrelationEstimate,
@@ -137,12 +145,30 @@ function trimToAllowed(
 }
 
 export class RiskManagerImpl implements RiskManager {
-  constructor(private readonly config: RiskConfig) {}
+  /**
+   * `thresholds` is the live `risk_thresholds` table (#433). Optional, because
+   * a backtest or a unit test has no store and the static config is the whole
+   * truth there — but on the production path it is supplied, and without it
+   * `autoTighten`'s defensive response to a kill-line breach changes no
+   * decision at all (feedback-loop-spec.md "Module: Guardrailed Tuning").
+   */
+  constructor(
+    private readonly config: RiskConfig,
+    private readonly thresholds?: RiskThresholdSource,
+  ) {}
 
   evaluate(input: RiskInput): RiskDecision {
     const { intent, portfolio, breakers, correlation, cii, critic, next_breaker_state } = input;
+
+    // Resolved per call, not per construction. That is the entire point of the
+    // ticket: a threshold the Feedback Loop tightened between two ticks has to
+    // bind on the second one, and a config frozen in the constructor cannot.
+    const { config } = this.thresholds
+      ? resolveRiskConfig(this.config, this.thresholds.getRiskThresholds())
+      : { config: this.config };
+
     const warnings = [
-      ...ciiWarnings(intent.instrument, cii, this.config.cii_threshold),
+      ...ciiWarnings(intent.instrument, cii, config.cii_threshold),
       ...correlationWarmupWarnings(correlation.insufficient_history),
     ];
 
@@ -195,7 +221,7 @@ export class RiskManagerImpl implements RiskManager {
     {
       const { notional: trimmed, changed } = trimToAllowed(
         notional,
-        this.config.max_position_size,
+        config.max_position_size,
         'per_trade_size_cap',
         reasons,
       );
@@ -208,7 +234,7 @@ export class RiskManagerImpl implements RiskManager {
       const existing = portfolio.exposure_by_instrument[intent.instrument] ?? 0;
       const { notional: trimmed, changed } = trimToAllowed(
         notional,
-        this.config.per_asset_cap - existing,
+        config.per_asset_cap - existing,
         'per_asset_exposure_cap',
         reasons,
       );
@@ -219,7 +245,7 @@ export class RiskManagerImpl implements RiskManager {
     // Step 4: per-asset-class exposure cap.
     {
       const existing = portfolio.exposure_by_class[intent.asset_class];
-      const cap = this.config.per_asset_class_cap[intent.asset_class];
+      const cap = config.per_asset_class_cap[intent.asset_class];
       const { notional: trimmed, changed } = trimToAllowed(
         notional,
         cap - existing,
@@ -234,7 +260,7 @@ export class RiskManagerImpl implements RiskManager {
     {
       const { notional: trimmed, changed } = trimToAllowed(
         notional,
-        this.config.portfolio_gross_cap - portfolio.gross_exposure,
+        config.portfolio_gross_cap - portfolio.gross_exposure,
         'portfolio_gross_exposure_cap',
         reasons,
       );
@@ -249,7 +275,7 @@ export class RiskManagerImpl implements RiskManager {
     // bind this cap. It is surfaced as a `correlation_warmup:` warning above
     // instead, so the inertness is stated rather than inferred from silence.
     const correlatedInstruments = Object.entries(correlation.correlations)
-      .filter(([, corr]) => Math.abs(corr) >= this.config.concentration.threshold)
+      .filter(([, corr]) => Math.abs(corr) >= config.concentration.threshold)
       .map(([instrument]) => instrument);
     if (correlatedInstruments.length > 0) {
       const correlatedSet = [intent.instrument, ...correlatedInstruments];
@@ -259,7 +285,7 @@ export class RiskManagerImpl implements RiskManager {
       );
       const { notional: trimmed, changed } = trimToAllowed(
         notional,
-        this.config.concentration.cap - existingCorrelatedExposure,
+        config.concentration.cap - existingCorrelatedExposure,
         'concentration_correlation_cap',
         reasons,
       );
@@ -270,9 +296,9 @@ export class RiskManagerImpl implements RiskManager {
     const finalSize = notional / intent.entry;
 
     // Step 7: min-viable-size re-check.
-    if (notional < this.config.min_viable_size) {
+    if (notional < config.min_viable_size) {
       reasons.push(
-        `min_viable_size: trimmed notional ${notional} below viable minimum ${this.config.min_viable_size}`,
+        `min_viable_size: trimmed notional ${notional} below viable minimum ${config.min_viable_size}`,
       );
       return {
         status: 'rejected',

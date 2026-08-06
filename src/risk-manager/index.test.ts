@@ -685,3 +685,100 @@ describe('RiskManagerImpl.evaluate — correlation warm-up warning (#303)', () =
     expect(decision.warnings).toEqual(['correlation_warmup:MSFT']);
   });
 });
+
+/**
+ * #433 — the enforcement, not the construction.
+ *
+ * `autoTighten` moved every risk threshold toward its guardrail bound on a
+ * kill-line breach, `AdjustmentLog` recorded it, and `RiskManagerImpl` went on
+ * evaluating against a `RiskConfig` frozen at construction. So the system's
+ * defensive response to "the edge may be gone" changed nothing about what it
+ * would trade. After ADR-0007 removed the human gate, that was one of the few
+ * self-defence mechanisms left.
+ */
+describe('RiskManagerImpl.evaluate — live risk thresholds (#433)', () => {
+  /** A `risk_thresholds` table whose contents a test can move between calls. */
+  function liveThresholds(initial: Record<string, number> = {}) {
+    const thresholds = { ...initial };
+    return {
+      source: { getRiskThresholds: () => ({ ...thresholds }) },
+      tighten(name: string, value: number) {
+        thresholds[name] = value;
+      },
+    };
+  }
+
+  it('binds the tightened cap, not the constructor one', () => {
+    const { source, tighten } = liveThresholds();
+    const manager = new RiskManagerImpl(makeConfig(), source);
+    // Default intent is 100 x $100 = $10,000 notional, well under the
+    // 1,000,000 default cap.
+    expect(manager.evaluate(makeInput()).modifications?.final_size).toBe(100);
+
+    tighten('max_position_size', 5_000);
+    const decision = manager.evaluate(makeInput());
+
+    expect(decision.modifications?.final_size).toBe(50);
+    // `binding_constraint` names the CHECK STEP, not the config field — the
+    // tuning key is `max_position_size`, the step is `per_trade_size_cap`.
+    expect(decision.binding_constraint).toBe('per_trade_size_cap');
+  });
+
+  it('picks up a tightening applied BETWEEN two evaluations', () => {
+    // The property a constructor-frozen config cannot have, stated directly:
+    // the Feedback Loop tightens once a day, and the next tick must feel it.
+    const { source, tighten } = liveThresholds();
+    const manager = new RiskManagerImpl(makeConfig(), source);
+
+    const before = manager.evaluate(makeInput());
+    tighten('portfolio_gross_cap', 2_000);
+    const after = manager.evaluate(makeInput());
+
+    expect(before.modifications?.final_size).toBe(100);
+    expect(after.modifications?.final_size).toBe(20);
+    expect(after.binding_constraint).toBe('portfolio_gross_exposure_cap');
+  });
+
+  it('tightens the per-asset-class cap through the nested field', () => {
+    const { source } = liveThresholds({ per_asset_class_cap_stocks: 4_000 });
+    const manager = new RiskManagerImpl(makeConfig(), source);
+
+    const decision = manager.evaluate(makeInput());
+
+    expect(decision.modifications?.final_size).toBe(40);
+    expect(decision.binding_constraint).toBe('per_asset_class_exposure_cap');
+  });
+
+  it('falls back to the static config for a threshold the table has no row for', () => {
+    const { source } = liveThresholds({ max_position_size: 5_000 });
+    const manager = new RiskManagerImpl(makeConfig({ per_asset_cap: 3_000 }), source);
+
+    const decision = manager.evaluate(makeInput());
+
+    // per_asset_cap (3,000, static) binds before max_position_size (5,000, live).
+    expect(decision.modifications?.final_size).toBe(30);
+    expect(decision.binding_constraint).toBe('per_asset_exposure_cap');
+  });
+
+  it('behaves exactly as before when no source is supplied', () => {
+    const withoutSource = new RiskManagerImpl(makeConfig({ max_position_size: 5_000 }));
+    const withEmptySource = new RiskManagerImpl(makeConfig({ max_position_size: 5_000 }), {
+      getRiskThresholds: () => ({}),
+    });
+
+    expect(withoutSource.evaluate(makeInput()).modifications?.final_size).toBe(
+      withEmptySource.evaluate(makeInput()).modifications?.final_size,
+    );
+  });
+
+  it('ignores a corrupt row rather than letting it disable the cap', () => {
+    // NaN compares false against every notional, so applying one would turn a
+    // cap into no cap at all — the opposite of what a tightening means.
+    const { source } = liveThresholds({ max_position_size: Number.NaN });
+    const manager = new RiskManagerImpl(makeConfig({ max_position_size: 5_000 }), source);
+
+    const decision = manager.evaluate(makeInput());
+
+    expect(decision.modifications?.final_size).toBe(50);
+  });
+});

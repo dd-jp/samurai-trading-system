@@ -187,8 +187,14 @@ import type {
   PersistedBreakerState,
   RiskConfig,
 } from '../risk-manager/index.js';
-import { type BreakerConfig, CircuitBreakers } from '../risk-manager/index.js';
-import type { AssetClass, Clock, ClosedTradeStore, VenuePacingConfig } from '../shared/index.js';
+import { type BreakerConfig, CircuitBreakers, riskThresholdsFrom } from '../risk-manager/index.js';
+import type {
+  AssetClass,
+  Clock,
+  ClosedTradeStore,
+  TuningStore,
+  VenuePacingConfig,
+} from '../shared/index.js';
 import { resolveVenuePacing, TokenBucket } from '../shared/index.js';
 import type { SharedStore as SqliteHandle } from '../shared/store/index.js';
 import type { TraderConfig } from '../trader/index.js';
@@ -1064,6 +1070,14 @@ export interface ProductionComponents {
    * to only one of them.
    */
   breachAlerts: BreachAlertChannel;
+  /**
+   * The tuning dials, exposed for `breachAlerts`' reason (#433): the Risk
+   * Manager READS `risk_thresholds` here at evaluate time and the Feedback
+   * Loop's daily cycle WRITES them, and the two halves of that dial are wired
+   * in different functions. Returning the instance beats constructing a second
+   * one in `buildProductionOrchestrator`.
+   */
+  tuning: TuningStore;
   marketData: MarketDataService;
   broker: BrokerAdapter;
   analysts: AnalystOrchestrator;
@@ -1201,6 +1215,15 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // realized R on close. Constructed here rather than inline below so the two
   // halves cannot drift into separate stores.
   const setupStore = new SqliteSetupStore(config.db);
+
+  /**
+   * Hoisted above the tick steps (#433). It used to be constructed down in
+   * `feedbackStores`, which was fine while the Feedback Loop was its only
+   * consumer — but the Risk Manager now READS `risk_thresholds` at evaluate
+   * time, and a threshold `autoTighten` writes has to be the same row Risk
+   * reads. One instance, both ends of the dial.
+   */
+  const tuningStore = new SqliteTuningStore(config.db, clock);
 
   /**
    * Hoisted above `spendCap` (below) rather than left beside the Feedback
@@ -1444,6 +1467,10 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       config: config.riskConfig,
       correlationConfig: config.correlationConfig,
       ciiConsumer,
+      // #433: the live dial. Without this Risk freezes its RiskConfig at
+      // construction and `autoTighten`'s response to a kill-line breach
+      // changes no decision.
+      thresholds: tuningStore,
     }),
     verdict: buildVerdictStep({
       ...breakerStateDeps,
@@ -1471,6 +1498,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   return {
     steps,
     breachAlerts,
+    tuning: tuningStore,
     marketData,
     broker,
     analysts,
@@ -1625,7 +1653,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   const feedbackStores = {
     trades: new SqliteClosedTradeStore(config.db),
     debate_log: new SqliteDebateLogStore(config.db),
-    tuning: new SqliteTuningStore(config.db, clock),
+    tuning: components.tuning,
     adjustments: new SqliteAdjustmentLog(config.db),
   };
   /**
@@ -1843,6 +1871,34 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
           payload: { seeded: seedResult.seeded, already_tuned: seedResult.existing },
         });
       }
+
+      /**
+       * #433, and NOT gated on `config.feedback`: the rows seeded here are the
+       * caps the Risk Manager reads at every `evaluate()`, whether or not a
+       * daily cycle ever runs. Seeding is also what makes `autoTighten`
+       * reachable at all — it steps a value it can already read and skips a
+       * dial whose `current` is undefined, so an unseeded table meant a
+       * kill-line breach tightened nothing.
+       *
+       * First-write-wins in the store, so a restart cannot re-open a cap the
+       * loop has already narrowed.
+       */
+      const thresholdSeeds = riskThresholdsFrom(config.riskConfig);
+      const seededThresholds = Object.entries(thresholdSeeds).filter(([name, value]) =>
+        components.tuning.seedRiskThreshold(name, value),
+      );
+      logger.log({
+        trace_id: 'startup',
+        stage: 'risk',
+        level: 'info',
+        message:
+          'risk threshold rows ready — the Risk Manager reads these live at evaluate time, ' +
+          'so a Feedback Loop tightening now binds on the next tick',
+        payload: {
+          seeded: seededThresholds.map(([name]) => name),
+          already_present: Object.keys(thresholdSeeds).length - seededThresholds.length,
+        },
+      });
 
       heartbeatHandle = setInterval(() => {
         void heartbeat.emit(clock);

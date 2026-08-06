@@ -417,4 +417,20 @@ export interface TuningStore {
   setStrategyParam(name: string, value: number): void;
   getRiskThresholds(): Record<string, number>;
   setRiskThreshold(name: string, value: number): void;
+  /**
+   * Writes a STARTING value for a risk threshold that has none, and does
+   * nothing to one that already has a row (#433). Returns whether this call
+   * wrote it.
+   *
+   * Same first-write-wins semantics as `seedAnalystWeight`, for the same
+   * reason and with more at stake: the row this seeds is a SAFETY LIMIT, and a
+   * restart that re-wrote it would undo every tightening `autoTighten` had
+   * applied since the last boot — silently re-opening the caps the system
+   * narrowed because it had detected its edge might be gone.
+   *
+   * Seeding at all is what makes `autoTighten` reachable: it steps a value it
+   * can already read and `continue`s past a dial whose `current` is undefined,
+   * so an unseeded table meant every breach tightened nothing.
+   */
+  seedRiskThreshold(name: string, value: number): boolean;
 }

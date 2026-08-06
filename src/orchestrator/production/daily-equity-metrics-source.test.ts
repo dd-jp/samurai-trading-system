@@ -303,6 +303,9 @@ describe('the gate protects autoTighten from a short series', () => {
       // `false` is the honest answer for a store that holds no weights — "this
       // call was not the one that wrote it".
       seedAnalystWeight: () => false,
+      // Same shape for #433's threshold seeding: this double is handed its
+      // thresholds at construction, so no call here is ever the one that wrote.
+      seedRiskThreshold: () => false,
       getStrategyParams: () => ({}),
       setStrategyParam: () => {},
       getRiskThresholds: () => ({ ...thresholds }),

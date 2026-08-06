@@ -156,6 +156,11 @@ Added 2026-08-05 ([#359](https://github.com/dd-jp/samurai-trading-system/issues/
 - Every adjustment logged + reversible.
 - **Consumers must read live from the store (cross-spec):** FL's tuning only takes effect if the Trader reads its strategy params, and the Risk Manager reads its thresholds, **from the mutable shared store at decision/eval time** — not from static config baked in at startup. Both specs describe these as "config, tuned in paper"; the cross-spec pass must confirm they read the live (FL-written) values. (Analyst weights already follow this pattern — orchestrator reads at tick start, #42.)
 
+- **Phasing of the three dials (#433).** They are at different stages, and the difference is deliberate rather than an oversight:
+  - **`analyst_weights`** — live at both ends since #371 (seeded at startup, stepped by the daily cycle, read at tick start).
+  - **`risk_thresholds`** — live at both ends since #433. `RISK_THRESHOLD_KEYS` (`src/risk-manager/risk-thresholds.ts`) fixes which key drives which `RiskConfig` field; the composition root seeds the table from the run's `RiskConfig`; `RiskManagerImpl.evaluate()` resolves the live values on every call. The keys are the six notional caps, all of which tighten by decreasing. `concentration.threshold`, `min_viable_size` and `cii_threshold` are deliberately excluded — see that module's doc for why each.
+  - **`strategy_params`** — **dead at both ends, and left that way on purpose.** Nothing in the repo produces a `TuningProposal` for one, and `buildTraderStep` passes a frozen `deps.config` into `decide()`. Building a reader for a writer that does not exist would add a live-config path exercising nothing, on the stage that sizes positions. It becomes worth doing when a proposer exists; until then the Trader's static config is the honest description of the system.
+
 ### Module: Setup Store Labelling
 
 - Event-driven on trade close: `R = realized_pnl_net ÷ (|entry − stop| × filled_size)`, label the matching setup (join by `idempotency_key` / `debate_id`). All operands are read from the `ClosedTrade` record Execution writes (freeze §4) — `filled_size`, never requested size.

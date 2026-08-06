@@ -105,6 +105,23 @@ export class SqliteTuningStore implements TuningStore {
     this.kvSet(RISK_THRESHOLDS, name, value);
   }
 
+  /**
+   * First-write-wins, exactly as `seedAnalystWeight` (#433). The stake is
+   * higher here: this row is a safety limit, and a restart that overwrote it
+   * would re-open a cap `autoTighten` had narrowed on a kill-line breach.
+   */
+  seedRiskThreshold(name: string, value: number): boolean {
+    const result = this.db
+      .prepare(
+        `INSERT INTO ${RISK_THRESHOLDS.table}
+           (${RISK_THRESHOLDS.keyColumn}, ${RISK_THRESHOLDS.valueColumn}, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(${RISK_THRESHOLDS.keyColumn}) DO NOTHING`,
+      )
+      .run(name, value, this.clock.now().toISOString());
+    return result.changes === 1;
+  }
+
   private kvGetAll(dial: DialTable): Record<string, number> {
     const rows = this.db
       .prepare(`SELECT ${dial.keyColumn} AS key, ${dial.valueColumn} AS value FROM ${dial.table}`)
