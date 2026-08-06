@@ -22,7 +22,7 @@ The Orchestrator is a **single TypeScript process** (ADR-0001: TS core, no LangG
 
 Key architectural decisions:
 - **Single process, single host** — matches the MacBook always-on deployment target; no message broker, no distributed scheduler.
-- **Fixed universe iteration, not a scanner (v1)** — Signal production is a configurable instrument list, not an opportunity-ranking engine.
+- ~~**Fixed universe iteration, not a scanner (v1)** — Signal production is a configurable instrument list, not an opportunity-ranking engine.~~ **Reversed 2026-08-07** by [universe-selector-spec.md](universe-selector-spec.md) (wayfinder map [#397](../../issues/397)). The Orchestrator still does not *rank* anything — ranking is an out-of-session job — but its active list is now supplied by an `ActiveUniverseProvider` at each session boundary rather than being a static config value. Instrument iteration within a tick is unchanged.
 - **Bounded concurrency across instruments** — protects the shared LLM rate limit (Analysts/Debate), independent of any single instrument's own latency budget.
 - **Trace ID as a cross-cutting envelope field** — not business data, threaded through every stage call and every log line.
 - **Audit spine = a table in the existing shared SQLite store** — not a separate JSONB/Supabase system; mines the JSONB *pattern* (rich per-decision snapshots), not the storage technology.
@@ -242,7 +242,7 @@ function buildProductionTickRunner(config: ProductionConfig): {
 ## Out of Scope
 
 - **Any stage's internal decision logic** — Analysts/Debate/Trader/Risk/Verdict/Execution each own their own domain logic per their specs; the Orchestrator only sequences calls.
-- **The opportunity-scanner / instrument-ranking engine** — v1 Signal production is a fixed configurable universe list; a smarter scanner that ranks/filters a larger universe is a v2 direction, explicitly deferred.
+- **The opportunity-scanner / instrument-ranking engine** — ~~v1 Signal production is a fixed configurable universe list; a smarter scanner that ranks/filters a larger universe is a v2 direction, explicitly deferred.~~ **No longer deferred, and still out of scope *here*:** the scanner is now specified as its own component in [universe-selector-spec.md](universe-selector-spec.md), an out-of-session job that writes a watchlist the Orchestrator reads at the next session boundary. What stays out of *this* spec is the ranking itself; what changes in this spec is that the active list comes from a provider rather than a config constant.
 - **The dashboard/CLI** (OPEN-GAP-B) — the Orchestrator produces the `audit_log` data a dashboard would read; building the dashboard itself is separate and unspecced.
 - **Multi-host / distributed deployment** — single-process, single-host only, matching the MacBook deployment target.
 - **The backtest harness's replay/validation logic** — the Orchestrator's tick loop is what the harness drives via the injected simulated clock; walk-forward/CPCV splitting and metrics computation stay in cost-model-backtest-spec.
