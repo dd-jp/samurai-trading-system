@@ -284,6 +284,16 @@ describe('paperStartingProfile', () => {
     expect(breakerConfig.max_drawdown_pct).toBe(0.2);
     expect(breakerConfig.daily_loss_pct).toBeGreaterThan(0);
     expect(breakerConfig.daily_loss_pct).toBeLessThan(breakerConfig.max_drawdown_pct);
+
+    // Same fraction convention for the per-class tier (#333) — and the same
+    // trap: these share ONE denominator with the portfolio figure (portfolio
+    // equity), so a `5` here would be 500% and the class tier would never trip,
+    // silently leaving only the account-wide floor in place.
+    for (const asset_class of ['crypto', 'stocks'] as const) {
+      const threshold = breakerConfig.daily_loss_pct_by_class[asset_class];
+      expect(threshold).toBeGreaterThan(0);
+      expect(threshold).toBeLessThan(breakerConfig.max_drawdown_pct);
+    }
   });
 
   it('leaves the volatility baseline finite, so the fail-closed sentinel still trips', () => {

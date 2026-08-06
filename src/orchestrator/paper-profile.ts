@@ -1006,6 +1006,26 @@ function buildProfileConfigs(): Pick<
      */
     daily_loss_pct: 0.05,
     /**
+     * UNSOURCED — DERIVED from `daily_loss_pct` above: the same 5%, per class.
+     *
+     * Equal to the portfolio figure rather than a fraction of it, and that is
+     * the point of decision 4 (#329): all three daily figures share ONE
+     * denominator, portfolio equity, so a 5% per-class loss and a 5% portfolio
+     * loss are the same number of dollars. What differs is only which trades
+     * are counted and over which session. Setting the per-class tier lower
+     * would halt a class before the account-wide floor it is measured on the
+     * same scale as, which is a tuning choice this profile has no evidence for.
+     *
+     * The tier still bites first in the case it exists for: one class down 5%
+     * while the other is up 4% leaves the portfolio at −1% and trading, and
+     * halts only the class that is bleeding. Same fraction convention as above.
+     *
+     * Values are paper-trading tuning (risk-manager-spec.md, "Out of Scope:
+     * Exact limit values") — this is a starting point to be measured, not a
+     * derived constant.
+     */
+    daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+    /**
      * SPEC — CONTEXT.md "Drawdown": "Live system target: max ~20-25%";
      * risk-manager-spec.md "Module: Circuit Breakers" ("~20-25% target per
      * CONTEXT.md"); docs/research/02-staged-deployment-plan.md's proceed

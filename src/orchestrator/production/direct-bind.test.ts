@@ -111,6 +111,7 @@ describe('buildTraderStep', () => {
       marketData: FAKE_MARKET_DATA,
       circuitBreakers: new CircuitBreakers({
         daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
         max_drawdown_pct: 0.2,
         max_consecutive_losses: 5,
         volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
@@ -156,6 +157,7 @@ describe('buildTraderStep', () => {
       marketData: FAKE_MARKET_DATA,
       circuitBreakers: new CircuitBreakers({
         daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
         max_drawdown_pct: 0.2,
         max_consecutive_losses: 5,
         volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
@@ -228,6 +230,7 @@ describe('buildRiskStep', () => {
       marketData: FAKE_MARKET_DATA,
       circuitBreakers: new CircuitBreakers({
         daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
         max_drawdown_pct: 0.2,
         max_consecutive_losses: 5,
         volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
@@ -249,6 +252,7 @@ describe('buildRiskStep', () => {
   it('rejects when the portfolio circuit breaker is already tripped (sticky state honored)', async () => {
     const circuitBreakers = new CircuitBreakers({
       daily_loss_pct: 0.05,
+      daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
       max_drawdown_pct: 0.2,
       max_consecutive_losses: 5,
       volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
@@ -345,6 +349,7 @@ describe('buildVerdictStep', () => {
       marketData: FAKE_MARKET_DATA,
       circuitBreakers: new CircuitBreakers({
         daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
         max_drawdown_pct: 0.2,
         max_consecutive_losses: 5,
         volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
@@ -411,6 +416,7 @@ describe('buildVerdictStep', () => {
       marketData: FAKE_MARKET_DATA,
       circuitBreakers: new CircuitBreakers({
         daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
         max_drawdown_pct: 0.2,
         max_consecutive_losses: 5,
         volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },

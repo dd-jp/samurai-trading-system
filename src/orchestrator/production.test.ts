@@ -255,6 +255,7 @@ const REAL_CONFIGS = {
   correlationConfig: { window: { timeframe: '1d', lookback: 30 }, min_bars: 5 },
   breakerConfig: {
     daily_loss_pct: 0.05,
+    daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
     max_drawdown_pct: 0.2,
     max_consecutive_losses: 5,
     volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },

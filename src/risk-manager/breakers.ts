@@ -38,8 +38,30 @@ export interface AutoReArmPolicy {
  * is the shape, not the numbers.
  */
 export interface BreakerConfig {
-  /** Soft, portfolio-level: cumulative daily PnL below -this% halts new entries. */
+  /**
+   * Soft, portfolio-level: cumulative daily PnL below -this% halts new entries
+   * ACCOUNT-WIDE. Measured over the portfolio UTC day (#332, decision 3) — the
+   * account-wide floor, kept alongside the per-class tier below rather than
+   * replaced by it, so surgical halting is added and not traded for.
+   */
   daily_loss_pct: number;
+  /**
+   * Soft, per-class: that class's daily PnL below -this% halts NEW ENTRIES IN
+   * THAT CLASS ONLY, joining `volatility_halt:<class>` in `asset_class_tripped`
+   * (#333, decision 4).
+   *
+   * Each figure is measured over its OWN session, and the two sessions are
+   * different: `crypto` from 00:00 UTC, `stocks` from the previous 16:00 ET
+   * close. That is why these thresholds are named by class rather than shared —
+   * a reader comparing against `crypto` here is comparing over a UTC day, and
+   * against `stocks` over a US equity session, without opening the spec.
+   *
+   * The DENOMINATOR, though, is portfolio equity for all three figures, so this
+   * threshold and `daily_loss_pct` sit on one scale and neither needs re-tuning
+   * against the other. Values themselves are paper-trading tuning and out of
+   * scope here (risk-manager-spec.md, "Out of Scope: Exact limit values").
+   */
+  daily_loss_pct_by_class: { crypto: number; stocks: number };
   /** Hard, portfolio-level: peak-to-trough drawdown at/above this% halts new entries. */
   max_drawdown_pct: number;
   /** Soft, portfolio-level: N losing trades in a row halts new entries. */
@@ -174,17 +196,39 @@ export class CircuitBreakers {
     if (dailyLossTripped) {
       armed.push('daily_loss_soft');
     }
-    // Unknown is surfaced, not silently skipped — the #293/#320/#324/#342
-    // posture: a degraded state must be visible in the audit trail and the
-    // operator's breaker summary rather than reached quietly.
+    // Unknown BLOCKS, as of #333 — it no longer arms an advisory marker only,
+    // and it is NOT mode-gated here even though decision 5 is a mode-gated
+    // decision. Rationale in risk-manager-spec.md, "Module: Circuit Breakers"
+    // ("Unknown daily figure blocks"); the one-line version is that
+    // `AccountStateProvider.nonPositiveBase` returns unknown in every mode, so
+    // a `paper` run can present one and this breaker must not assume otherwise.
     //
-    // It is NOT set as `portfolio_tripped` here. Turning "unknown" into a halt
-    // is the two-tier daily-loss halting of #333, which owns that decision and
-    // its re-arm semantics; arming a name this breaker cannot itself clear
-    // would strand the system halted with no path back. So this arms an
-    // advisory marker only, and #333 escalates it to a block on new entries.
-    if (!dailyPnl.known) {
-      armed.push('daily_pnl_unknown');
+    // A live cold start therefore blocks new entries until the next session
+    // boundary this process is up for, which after a mid-session restart can be
+    // the rest of the session. That is decision 5 as written — "live refuses
+    // new entries until a real snapshot exists" — and exits are unaffected,
+    // since `RiskManagerImpl` passes them before reaching this gate.
+    const dailyUnknown = !dailyPnl.known;
+    if (dailyUnknown) {
+      armed.push(`daily_pnl_unknown:portfolio (${dailyPnl.reason})`);
+    }
+
+    // The per-class tier (#333, decision 4). Each class is judged over its own
+    // session against its own threshold, and a breach halts THAT CLASS ONLY —
+    // crypto can stop while stocks keep trading. Same narrowing discipline and
+    // same unknown-blocks rule as the portfolio figure above.
+    const classTripped = { crypto: false, stocks: false };
+    for (const asset_class of ['crypto', 'stocks'] as const) {
+      const pnl = portfolio.daily_pnl[asset_class];
+      if (!pnl.known) {
+        classTripped[asset_class] = true;
+        armed.push(`daily_pnl_unknown:${asset_class} (${pnl.reason})`);
+        continue;
+      }
+      if (pnl.pct <= -this.config.daily_loss_pct_by_class[asset_class]) {
+        classTripped[asset_class] = true;
+        armed.push(`daily_loss_soft:${asset_class}`);
+      }
     }
 
     const consecutiveLossTripped =
@@ -208,13 +252,17 @@ export class CircuitBreakers {
     }
 
     const portfolioTripped =
-      this.hardTripped || this.killSwitchEngaged || dailyLossTripped || consecutiveLossTripped;
+      this.hardTripped ||
+      this.killSwitchEngaged ||
+      dailyLossTripped ||
+      dailyUnknown ||
+      consecutiveLossTripped;
 
     return {
       portfolio_tripped: portfolioTripped,
       asset_class_tripped: {
-        crypto: cryptoVolTripped,
-        stocks: stocksVolTripped,
+        crypto: cryptoVolTripped || classTripped.crypto,
+        stocks: stocksVolTripped || classTripped.stocks,
       },
       armed_breakers: armed,
     };

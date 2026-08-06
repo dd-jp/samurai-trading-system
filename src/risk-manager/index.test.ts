@@ -1,4 +1,5 @@
 import type { Clock, OrderIntent } from '../shared/index.js';
+import { CircuitBreakers } from './breakers.js';
 import { RiskManagerImpl } from './index.js';
 import type {
   BreakerState,
@@ -217,6 +218,42 @@ describe('RiskManagerImpl.evaluate — circuit-breaker gate', () => {
 
     expect(decision.status).toBe('rejected');
     expect(decision.binding_constraint).toBe('circuit_breaker:stocks');
+  });
+
+  it('blocks a new entry on an unknown daily figure, but still lets the exit out (#333)', () => {
+    // The end-to-end shape of decision 5, through the real `CircuitBreakers`
+    // rather than a hand-set `BreakerState`: an unknown daily figure has to
+    // stop new risk without trapping the account in what it already holds.
+    const unknown = { known: false, reason: 'no session-open equity observed' } as const;
+    const breakers = new CircuitBreakers({
+      daily_loss_pct: 0.05,
+      daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+      max_drawdown_pct: 0.2,
+      max_consecutive_losses: 4,
+      volatility: { baseline: { crypto: 2, stocks: 1 }, multiplier: 2 },
+      auto_rearm: { recovery_drawdown_pct: 0.1, max_days_tripped: 5 },
+    }).evaluate({
+      portfolio: makePortfolio({
+        daily_pnl: { crypto: unknown, stocks: unknown, portfolio: unknown },
+      }),
+      volatility: { crypto: 1, stocks: 0.5 },
+      mode: 'live',
+      clock: { now: () => new Date('2026-07-15T09:30:00Z') },
+    });
+
+    const manager = new RiskManagerImpl(makeConfig());
+
+    const entry = manager.evaluate(makeInput({ breakers }));
+    expect(entry.status).toBe('rejected');
+    expect(entry.binding_constraint).toBe('circuit_breaker:portfolio');
+    // The reason travels with the rejection — an operator must be able to tell
+    // "we do not know the daily figure" from "the daily loss limit was hit".
+    expect(entry.reasons.join(' ')).toContain('daily_pnl_unknown:portfolio');
+
+    const exit = manager.evaluate(
+      makeInput({ breakers, intent: makeIntent({ intent_type: 'exit' }) }),
+    );
+    expect(exit.status).toBe('approved');
   });
 
   it('does not trip on an unrelated asset-class breaker', () => {
