@@ -87,3 +87,23 @@ Recommendation: **delete; git history is the attic.** "Dual-target from day one"
 
 - Standards fallout → `docs/coding-standards.md` new sections (same commit as this review).
 - Code changes: per-item approval, ordered B1/B2 → A4/A5/A1 → A2/A3 → B4/B3 → C → D. Each lands with `yarn lint && yarn typecheck && yarn test` + `yarn smoke`; B1/B2 with failing-first tests.
+
+## Implementation outcome (approved and executed 2026-08-06/07, same branch)
+
+Every item landed as its own commit on this branch, each verified with typecheck + lint + the affected suites; the full suite (2,337 tests) and `yarn smoke` ran green at the end.
+
+- **B1 done** — `SqliteBreakerStateStore`; every breaker evaluation persists, boot loads; required step dep; smoke asserts both tier rows with red-path tests.
+- **B2 done** — the port's three single-write methods became one atomic `applyLotAdvance` (single write route); `withOnTradeClose` hooks the advance's `closed_trade`; protective-leg resize moved ahead of the persist.
+- **B3 done** — `risk_critic: skipped` recorded whenever no critic verdict is supplied.
+- **B4 done** — per-trace portfolio snapshot memo: trader computes, risk consumes; verdict deliberately stays fresh (gate 5's fire-time re-check is specced).
+- **A1 done** — 13s request spacing in `HttpPolygonClient`. **A3 done** — false comment replaced with the real isolation argument. **A4 done** — CLI entrypoint persists scratch bars to `data/stage2-bars.sqlite`, plus a warm-cache skip in `ingest()` (covered-window fetch skip, partial coverage still refetches). **A5 done** — probe interval 60s → 15 min. **A7 done** — 5s per-instrument mark TTL. **A6 deferred** as planned.
+- **A2 done** — `HttpTiingoClient` behind the same aggregates port (equities adjusted fields, crypto daily resample), `yarn ingest-history` one-time 5yr ingest. First real run needs `TIINGO_API_KEY` in `.env.local`.
+- **C done** — ccxt/ibkr broker adapters, the dead data-source branch, `InMemoryRiskCriticStore`, `TradeChannel`, the CII-snapshot chain and `TelegramApprovalGateway` deleted (~2,600 lines with their dead test sections). One correction: `formingCandleClient` was misfiled — it is a live test harness for #362 coverage (same convention as `FixtureSetupStore`) and stays.
+- **D1 partially done** — `production.ts` 2,294 → ~1,490 lines (`production/config.ts`, `production/defaults.ts`, re-exported). Grouping `ProductionConfig`'s 44 flat fields into sub-configs is a breaking config-shape change for every caller and the profile: **deferred to its own reviewed change**.
+- **D2 done, narrowed** — the audit's "three overlapping mechanisms" is in practice one consistent option-with-env-default idiom plus entrypoint parsing; the one composition-time outlier (`SAMURAI_SENTIMENT`) became `ProductionConfig.sentimentEnabled`, and the idiom is now codified in coding-standards.
+- **D3 done** — risk's Step 1–8 became `trippedBreakerTier` + a declared `ENTRY_CAP_GATES` array of named gates; feedback's dials became `tuneAnalystWeights` / `applyTuningProposals`. `evaluateSmokeGate` was left: its flat if-push chain is self-describing failure text, not header-comments-over-blocks.
+- **D4 done** — `PAPER_PROFILE_PROVENANCE`: 107 leaves classified (30 SPEC / 47 DERIVED / 30 UNSOURCED), completeness + drift tests, UNSOURCED pinned to an explicit list.
+- **D5 open — David's call.** The dashboard's reserved `invalidation` station is a deliberate, documented placeholder from the 2026-08-05 devils-advocate spec; building the stage is a feature ticket, deleting the station erases last week's deliberate design. Neither is a review-sweep fix.
+- **E done** — shared `scripts/stage2-support.ts` (`makeAssetClass` + the #420 rationale, one copy). The `mapOrderState` item evaporated with C.
+- **F done as a standard** — no blanket conversion, per the review's own recommendation.
+- **G standards enforced forward; retrofit deferred** — the no-casts-on-stubs rule is in coding-standards; sweeping the 73 existing cast sites and extracting the large shared fixtures is its own PR, done mechanically it would churn ~30 test files without changing what they prove.
