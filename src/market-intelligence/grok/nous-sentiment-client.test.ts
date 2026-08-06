@@ -29,7 +29,7 @@ function stubContent(content: string, overrides: Record<string, unknown> = {}) {
         statusText: 'OK',
         json: async () => ({
           choices: [{ message: { content }, finish_reason: 'stop' }],
-          model: 'deepseek/deepseek-v4-flash',
+          model: 'x-ai/grok-latest',
           usage: { prompt_tokens: 40, completion_tokens: 60 },
           ...overrides,
         }),
@@ -43,7 +43,7 @@ function client(logger?: Logger) {
   return new NousSentimentClient({
     apiKey: 'test-fake-nous-key',
     baseUrl: 'https://nous.test/v1',
-    model: 'deepseek/deepseek-v4-flash',
+    model: 'x-ai/grok-latest',
     ...(logger === undefined ? {} : { logger }),
   });
 }

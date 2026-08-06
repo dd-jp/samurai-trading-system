@@ -47,13 +47,22 @@ export const NOUS_MODEL_ENV_VAR = 'NOUS_MODEL';
  * cheapest point on it. `anthropic/claude-haiku-4.5` is the documented
  * fallback and is one env var away.
  *
- * `sentiment` — `deepseek/deepseek-v4-flash`. Off the tick's critical path
- * behind a 4-hour cache bucket, so latency barely matters and cheap is the
- * only sensible axis.
+ * `sentiment` — `x-ai/grok-latest`. The stage reads X/Twitter sentiment, and
+ * Grok is the model trained on that discourse, so it is the one most likely to
+ * have seen the conversation being asked about. Nothing here retrieves from X
+ * live (ADR-0009), which makes the training corpus the whole of the edge.
+ * Latency is irrelevant — the stage sits off the tick's critical path behind a
+ * 4-hour cache bucket — and so is cost at ~36 calls/day: roughly $1.60 across
+ * a 14-day soak against a $50 cap.
+ *
+ * `grok-latest` is a floating alias rather than a pinned version, deliberately:
+ * for a stage whose value is corpus recency, tracking the newest Grok is the
+ * point. The cost is that `pricing.ts` cannot follow a price change it cannot
+ * see — see the note on that entry. `x-ai/grok-4.5` is the pinned alternative.
  */
 export const DEFAULT_NOUS_MODELS = {
   debate: 'openai/gpt-5.6-luna',
-  sentiment: 'deepseek/deepseek-v4-flash',
+  sentiment: 'x-ai/grok-latest',
 } as const satisfies Record<NousRole, string>;
 
 export interface NousCredentials {

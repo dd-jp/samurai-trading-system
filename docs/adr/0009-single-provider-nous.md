@@ -42,10 +42,25 @@ non-SDK wire client could satisfy it.
 | Role | Model | Rate (in/out per M) |
 | --- | --- | --- |
 | `debate` | `openai/gpt-5.6-luna` | $0.10 / $0.60 |
-| `sentiment` | `deepseek/deepseek-v4-flash` | $0.07 / $0.14 |
+| `sentiment` | `x-ai/grok-latest` | $1.60 / $4.80 |
 
 Both are overridable per role: `NOUS_<ROLE>_MODEL` → `NOUS_MODEL` → the default
 above, with `NOUS_<ROLE>_API_KEY` → `NOUS_API_KEY` for the key.
+
+**Why Grok for sentiment.** The stage reads X/Twitter sentiment, and Grok is
+the model trained on that discourse — with no live retrieval available through
+Nous (see below), the training corpus *is* the edge, so the model that has seen
+X is the one worth asking. Latency does not bind (the stage sits off the tick's
+critical path behind a 4-hour bucket) and neither does cost: ~36 calls/day is
+roughly **$1.60 across a 14-day soak**, against a $50 cap.
+
+`grok-latest` is a floating alias rather than a pinned version, deliberately —
+for a stage whose value is corpus recency, tracking the newest Grok is the
+point. It is the only floating id in `MODEL_RATES`, and it carries a cost:
+priced at what the alias resolves to today (`x-ai/grok-4.5`'s $1.60/$4.80), a
+costlier successor would be metered at the old rate and the cap would
+UNDER-count. That is the direction that matters, and it is bounded and small at
+this volume. `x-ai/grok-4.5` is the pinned alternative, one env var away.
 
 **Why luna, and why the reason is not price.** The binding constraint on the
 debate is the 15s crypto latency budget (`debate-engine/latency-budget.ts`)

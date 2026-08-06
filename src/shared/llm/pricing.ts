@@ -81,10 +81,27 @@ export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
   // Google, via Nous.
   'google/gemini-3.1-pro-preview': { input: 1.6, output: 9.6 },
   'google/gemini-3.6-flash': { input: 1.2, output: 6 },
-  // xAI, via Nous. The market-intelligence agent (#464) ran against xAI
-  // directly before the single-provider cutover; this entry is what keeps the
-  // cap real if anyone points the sentiment role back at Grok.
+  // xAI, via Nous — the sentiment role's model. Grok is the defensible pick
+  // for X/Twitter sentiment because it is the model trained on that discourse,
+  // even though nothing here retrieves from X live (see ADR-0009).
   'x-ai/grok-4.5': { input: 1.6, output: 4.8 },
+  /**
+   * A FLOATING ALIAS, and the only one in this table. Every other key names a
+   * fixed model whose price changes only when the portal republishes it; this
+   * one silently becomes a different model, at a different price, whenever xAI
+   * ships a new Grok.
+   *
+   * Priced at `x-ai/grok-4.5`'s published rate — what the alias resolves to
+   * today. The exposure is that a costlier successor would be metered at the
+   * old rate and the cap would UNDER-count, which is the direction that
+   * matters: ADR-0008's ceiling would let more spend through than it thinks.
+   * Bounded and small at this stage's volume (~36 calls/day behind a 4h
+   * bucket), and stated rather than smoothed over.
+   *
+   * `x-ai/grok-4.5` above is the pinned alternative — one env var
+   * (`NOUS_SENTIMENT_MODEL`) if the drift ever matters more than the currency.
+   */
+  'x-ai/grok-latest': { input: 1.6, output: 4.8 },
   // DeepSeek, via Nous.
   'deepseek/deepseek-v4-pro': { input: 0.35, output: 0.7 },
   'deepseek/deepseek-v4-flash': { input: 0.07, output: 0.14 },
