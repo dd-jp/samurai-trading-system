@@ -308,15 +308,6 @@ describe('buildAnalystsStep', () => {
         }));
       }
 
-      function healthy() {
-        return vi.fn(async () => ({
-          views: [makeView()],
-          analyst_count: 2,
-          skipped: false,
-          failures: [],
-        }));
-      }
-
       function recordingChannel() {
         const posted: AnalystSkipAlert[] = [];
         return {
@@ -384,19 +375,43 @@ describe('buildAnalystsStep', () => {
 
       it('resets the run on a healthy tick, so intermittent failures never accumulate', async () => {
         const { posted, channel } = recordingChannel();
-        const runAnalysts = skipping();
-        const orchestrator = { runAnalysts } as unknown as AnalystOrchestrator;
-        const step = buildAnalystsStep(orchestrator, undefined, { skipAlerts: channel });
+        // ONE step, whose orchestrator's answer changes between calls — the
+        // counter lives in the step's closure, so a second `buildAnalystsStep`
+        // would start from zero and prove nothing about the reset.
+        let skips = true;
+        const runAnalysts = vi.fn(async () =>
+          skips
+            ? {
+                views: [],
+                analyst_count: 2,
+                skipped: true,
+                failures: [
+                  { analyst_type: 'technical', role: 'mandatory' as const, reason: 'http 404' },
+                ],
+              }
+            : { views: [makeView()], analyst_count: 2, skipped: false, failures: [] },
+        );
+        const step = buildAnalystsStep(
+          { runAnalysts } as unknown as AnalystOrchestrator,
+          undefined,
+          {
+            skipAlerts: channel,
+          },
+        );
 
-        await tick(step);
-        // One good tick between two skips: never two in a row, never an alert.
-        const healthyOrchestrator = { runAnalysts: healthy() } as unknown as AnalystOrchestrator;
-        const healthyStep = buildAnalystsStep(healthyOrchestrator, undefined, {
-          skipAlerts: channel,
-        });
-        await tick(healthyStep);
+        // skip, recover, skip, recover, skip — never two in a row, never an alert.
+        for (const skipping of [true, false, true, false, true]) {
+          skips = skipping;
+          await tick(step);
+        }
 
         expect(posted).toEqual([]);
+
+        // And the counter really is back at zero: two in a row now alerts at 2,
+        // not at some accumulated total.
+        skips = true;
+        await tick(step);
+        expect(posted.map((alert) => alert.consecutive_skips)).toEqual([2]);
       });
 
       it('counts each instrument separately', async () => {
