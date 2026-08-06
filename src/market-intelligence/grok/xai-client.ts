@@ -6,19 +6,53 @@
  * cap and the store write all live in `GrokAgent`, so this file's only job is
  * the wire.
  *
+ * ## The Responses API, because it is the only one that can search X
+ *
+ * This posts to `/v1/responses`, NOT `/v1/chat/completions`. That is not a
+ * style preference — it is the difference between live sentiment and the
+ * model's training recall:
+ *
+ *   - `/v1/chat/completions` documents its `tools` field as "Currently, only
+ *     FUNCTIONS are supported as a tool". Server-side tools are rejected there,
+ *     so a request to that endpoint retrieves nothing and Grok answers from
+ *     pre-training knowledge.
+ *   - `/v1/responses` documents the same field as "functions and web search",
+ *     and is where xAI's server-side `x_search` runs.
+ *
+ * The original #464 client posted `{ model, messages }` to chat/completions
+ * with no `tools` at all. It therefore returned MODEL RECALL formatted as
+ * sentiment — indistinguishable, downstream, from a genuine live read, which
+ * is precisely the fabrication #464 forbids. xAI retired the older
+ * `search_parameters` form of Live Search on 2026-01-12; server-side tools are
+ * the replacement, so there is no way to do this on the legacy endpoint.
+ *
+ * The Responses API also renames the prompt field: `input`, not `messages`.
+ *
+ * ## Retrieval evidence is REQUIRED, and its absence is an error
+ *
+ * A response carrying no sign that `x_search` actually ran is discarded with an
+ * `error` log rather than ingested. This is the whole safety property of the
+ * file. Without it, every way this can break — the tool being rejected, the
+ * endpoint 404ing into a compatibility shim, a future account without X-search
+ * entitlement — degrades to "plausible sentiment from training data", which is
+ * the one failure the analysts cannot detect and the debate would trade on.
+ *
+ * Fail-closed is deliberate: zero items reaches the analysts as
+ * `NO_DATA_MARKER`, the same honest degradation as an outage. A wrong answer on
+ * a money surface is worse than a visibly missing one — the same rule
+ * `pricing.ts` states for unpriced models.
+ *
  * ## Structured output, and what happens when it isn't
  *
  * The model is asked for JSON and the response is PARSED, never trusted. A
  * malformed body yields zero items rather than a throw with a half-decoded
- * payload, and zero items reaches the analysts as `NO_DATA_MARKER` — the same
- * degradation as an outage, which is correct: an answer we cannot read is not
- * an answer.
+ * payload.
  *
  * ## Secret handling
  *
  * The key rides in an `Authorization` header, never in a URL, and no error
- * message here interpolates the request — same rule as
- * `telegram-errors.ts`, for the same reason.
+ * message here interpolates the request — same rule as `telegram-errors.ts`,
+ * for the same reason.
  */
 import type { Logger } from '../../shared/index.js';
 import type { IntelligenceItem } from '../types.js';
@@ -31,14 +65,39 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 /** How many items one call may contribute. A prompt that returns 200 posts is spend, not signal. */
 const MAX_ITEMS = 10;
 
-interface XaiChoice {
-  message?: { content?: string };
+/**
+ * The Responses API's output envelope, typed only as far as this file reads it.
+ *
+ * Loose on purpose. xAI does not publish a full REST response schema for
+ * `/v1/responses`, so every field here is optional and every read is guarded —
+ * `#extractText` walks three known shapes rather than assuming one. Tightening
+ * this to a shape we have not seen would turn a cosmetic wire change into an
+ * outage.
+ */
+interface XaiOutputContent {
+  type?: string;
+  text?: string;
+}
+
+interface XaiOutputItem {
+  type?: string;
+  content?: XaiOutputContent[];
 }
 
 interface XaiResponse {
-  choices?: XaiChoice[];
+  /** Convenience field on the Responses API: the concatenated assistant text. */
+  output_text?: string;
+  output?: XaiOutputItem[];
+  /** The legacy chat/completions shape, read only so a compatibility shim cannot go unnoticed. */
+  choices?: { message?: { content?: string } }[];
+  citations?: unknown[];
   model?: string;
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    prompt_tokens?: number;
+    completion_tokens?: number;
+  };
 }
 
 /** The shape the prompt asks for. Validated field by field before it becomes an item. */
@@ -90,7 +149,7 @@ export class XaiGrokClient implements GrokSentimentClient {
     const timer = setTimeout(() => controller.abort(), this.#timeoutMs);
 
     try {
-      const response = await fetch(`${this.#baseUrl}/chat/completions`, {
+      const response = await fetch(`${this.#baseUrl}/responses`, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
@@ -99,11 +158,13 @@ export class XaiGrokClient implements GrokSentimentClient {
         signal: controller.signal,
         body: JSON.stringify({
           model: this.#model,
-          messages: [
+          // `input`, not `messages` — the Responses API's name for the prompt.
+          input: [
             {
               role: 'system',
               content:
-                'You summarise live X/Twitter sentiment for one financial instrument. Reply ' +
+                'You summarise live X/Twitter sentiment for one financial instrument. Use the ' +
+                'x_search tool to read actual recent posts — do not answer from memory. Reply ' +
                 'with JSON only: {"items":[{"headline":string,"sentiment":1|0|-1,' +
                 '"confidence":number 0-1,"summary":string}]}. Report at most ' +
                 `${MAX_ITEMS} distinct themes. If there is no meaningful discussion, reply ` +
@@ -115,6 +176,9 @@ export class XaiGrokClient implements GrokSentimentClient {
               content: `Instrument: ${instrument}. As of: ${asOf.toISOString()}.`,
             },
           ],
+          // The whole reason this client exists. Without it Grok answers from
+          // training data and the analysts consume recall as live sentiment.
+          tools: [{ type: 'x_search' }],
         }),
       });
 
@@ -125,20 +189,63 @@ export class XaiGrokClient implements GrokSentimentClient {
       }
 
       const body = (await response.json()) as XaiResponse;
-      const items = this.#parseItems(body, instrument, asOf);
+      const items = this.#retrieved(body, instrument)
+        ? this.#parseItems(body, instrument, asOf)
+        : [];
 
       return {
         items,
         model: body.model ?? this.#model,
         usage: {
-          input_tokens: body.usage?.prompt_tokens ?? 0,
-          output_tokens: body.usage?.completion_tokens ?? 0,
+          input_tokens: body.usage?.input_tokens ?? body.usage?.prompt_tokens ?? 0,
+          output_tokens: body.usage?.output_tokens ?? body.usage?.completion_tokens ?? 0,
         },
         latency_ms: Date.now() - started,
       };
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /**
+   * Whether this response shows evidence that `x_search` actually ran.
+   *
+   * Two accepted signals, because xAI publishes no response schema and either
+   * one alone would be brittle:
+   *
+   *   - a non-empty `citations` array — the documented carrier for what the
+   *     search returned;
+   *   - an output item whose `type` names a search/tool step, which is how the
+   *     Responses API reports server-side tool invocations inline.
+   *
+   * Everything else counts as unretrieved. The cost of being wrong in that
+   * direction is one window of `NO_DATA_MARKER`; the cost of being wrong in the
+   * other is the debate trading on fabricated sentiment, so the asymmetry
+   * decides which way this errs.
+   */
+  #retrieved(body: XaiResponse, instrument: string): boolean {
+    if (Array.isArray(body.citations) && body.citations.length > 0) return true;
+
+    const toolStep = body.output?.some(
+      (item) => typeof item.type === 'string' && /search|tool|web/i.test(item.type),
+    );
+    if (toolStep === true) return true;
+
+    this.#logger?.log({
+      trace_id: 'grok',
+      stage: 'market_intelligence',
+      level: 'error',
+      message:
+        `grok: the response for ${instrument} carried NO evidence that x_search ran — no ` +
+        'citations and no tool step in the output. Discarding it rather than ingesting it: ' +
+        'without retrieval this is the model answering from training data, which would reach ' +
+        'the analysts as live sentiment and is exactly the fabrication #464 forbids. Check that ' +
+        'the account is entitled to server-side x_search and that the request reached ' +
+        '/v1/responses (chat/completions accepts function tools ONLY and silently retrieves ' +
+        'nothing). The call still counted against the spend cap.',
+      payload: { instrument },
+    });
+    return false;
   }
 
   /**
@@ -149,8 +256,8 @@ export class XaiGrokClient implements GrokSentimentClient {
    * distinguishable from an outage by accident.
    */
   #parseItems(body: XaiResponse, instrument: string, asOf: Date): IntelligenceItem[] {
-    const content = body.choices?.[0]?.message?.content;
-    if (typeof content !== 'string' || content.trim() === '') return [];
+    const content = this.#extractText(body);
+    if (content === null || content.trim() === '') return [];
 
     let parsed: { items?: unknown };
     try {
@@ -175,6 +282,28 @@ export class XaiGrokClient implements GrokSentimentClient {
       if (item !== null) items.push(item);
     }
     return items;
+  }
+
+  /**
+   * The assistant text, from whichever of the three shapes carries it.
+   *
+   * `output_text` is the Responses API's convenience field; `output[].content[]`
+   * is its structured form; `choices[]` is the legacy chat/completions shape,
+   * read last so that a compatibility shim in front of the endpoint still
+   * yields data instead of silently reporting nothing.
+   */
+  #extractText(body: XaiResponse): string | null {
+    if (typeof body.output_text === 'string' && body.output_text !== '') return body.output_text;
+
+    const fromOutput = (body.output ?? [])
+      .flatMap((item) => item.content ?? [])
+      .map((part) => part.text)
+      .filter((text): text is string => typeof text === 'string' && text !== '')
+      .join('');
+    if (fromOutput !== '') return fromOutput;
+
+    const legacy = body.choices?.[0]?.message?.content;
+    return typeof legacy === 'string' && legacy !== '' ? legacy : null;
   }
 
   #toItem(

@@ -10,6 +10,24 @@ Samurai's trading decisions require comprehensive market context beyond raw pric
 
 The Market Intelligence layer exists to provide real-time, validated market context through specialized agents. It aggregates data from professional news sources, social media, and geopolitical/macro intelligence, detects convergence and disagreement across sources via an N-source convergence engine, and delivers structured intelligence to downstream analysts. It deliberately does **not** cover price/OHLCV or technical indicators — that is a separate Stage 0 concern (the Market Data Service; see Out of Scope). Market Intelligence is the news/sentiment half of Stage 0.
 
+## AS-BUILT NARROWING (#464, 2026-08-06) — read this before the rest
+
+This spec describes three agents and a Convergence Engine. **One agent is built.** The gap is deliberate, and recording it here is a requirement of #464 ("Amend it to record that the Convergence Engine is not built … rather than leaving seven modules described and unbuilt with no note"), which the implementing PR (#469) missed. Corrected by the post-hoc review of that PR.
+
+| Module below | Built? | Note |
+| --- | --- | --- |
+| Grok Agent | **Yes** | `src/market-intelligence/grok/` — live X sentiment only. No Reddit. |
+| DeepResearch Agent | No | Not scheduled. |
+| WorldMonitor Agent | Partial | CII snapshot capture exists (migration `0003`); the live SDK/API wiring is parked on cost until after paper trading (#182). |
+| Convergence Engine | **No** | With a single source there is nothing to converge. Not built, deliberately — not an oversight. |
+| Conflict Resolution (§ above) | N/A | Unreachable while one source exists. |
+
+**Consequences for anyone reading the modules below:** `ConvergenceSignal`, `StreamSnapshot`, the signal taxonomy and the confidence formulas are all **design, not code**. Analysts today read `IntelligenceItem[]` from one agent, and an empty read reaches them as `NO_DATA_MARKER` (#463) rather than as a neutral sentiment score.
+
+**Retrieval, and why the endpoint is load-bearing.** "Real-time stream of market-related tweets" (Module: Grok Agent) is served by xAI's server-side `x_search` tool on **`POST /v1/responses`**. It cannot be served by `/v1/chat/completions`, whose `tools` field accepts functions only — a request there retrieves nothing and Grok answers from training data, which would reach the analysts as live sentiment. The first implementation did exactly that; see `xai-client.ts`, which now requires evidence of retrieval (citations, or a tool step in the output) before any item is ingested and discards the response with an `error` log otherwise. xAI retired the older `search_parameters` form of Live Search on 2026-01-12.
+
+**Known gap in the #430 convention.** No `yarn smoke` assertion covers the Grok agent, because the smoke run is offline and keyless and the composition root gates `GrokAgent` on `XAI_API_KEY`. This mechanism's first real exercise is the soak itself. Treat early soak intelligence rows as the verification step they are.
+
 ## Solution
 
 The Market Intelligence layer runs three specialized agents that operate continuously:
