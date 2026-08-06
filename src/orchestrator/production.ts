@@ -188,7 +188,12 @@ import type {
   PersistedBreakerState,
   RiskConfig,
 } from '../risk-manager/index.js';
-import { type BreakerConfig, CircuitBreakers, riskThresholdsFrom } from '../risk-manager/index.js';
+import {
+  type BreakerConfig,
+  CircuitBreakers,
+  riskThresholdsFrom,
+  SqliteBreakerStateStore,
+} from '../risk-manager/index.js';
 import type {
   AssetClass,
   Clock,
@@ -1431,7 +1436,14 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
         : { unpricedFillAgeOutMs: config.unpricedFillAgeOutMs }),
       clock,
     });
-  const circuitBreakers = new CircuitBreakers(config.breakerConfig, config.initialBreakerState);
+  // The sticky breakers' durable home (#203, review 2026-08-06 B1): loaded
+  // here so a trip survives restart, written by every breaker evaluation on
+  // the tick path (direct-bind.ts `computeCurrentPortfolioAndBreakers`).
+  const breakerStateStore = new SqliteBreakerStateStore(config.db);
+  const circuitBreakers = new CircuitBreakers(
+    config.breakerConfig,
+    config.initialBreakerState ?? breakerStateStore.load(),
+  );
   // Parked by default (ADR-0002): the live WorldMonitor feed costs money per
   // call and the geopolitical tier is not what the first paper run tests.
   // `null` is already a documented answer on this port.
@@ -1447,6 +1459,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   const breakerStateDeps = {
     marketData,
     circuitBreakers,
+    breakerState: breakerStateStore,
     // Defaulted, not required (#276): the three sources this needs — Alpaca's
     // account ledger, the durable `account_state` table, and the existing
     // ClosedTrade store — all exist in-repo now, so an injected seam would be

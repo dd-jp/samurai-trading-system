@@ -32,6 +32,7 @@ import type { MarketDataService, TradingCalendar } from '../../market-data-servi
 import type { CiiConsumer } from '../../market-intelligence/index.js';
 import type {
   BreakerEvalInput,
+  BreakerStatePersistence,
   CircuitBreakers,
   PersistedBreakerState,
   RiskConfig,
@@ -186,6 +187,14 @@ export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
 interface BreakerStateDeps {
   marketData: MarketDataService;
   circuitBreakers: CircuitBreakers;
+  /**
+   * Where the sticky breakers' state lands after every evaluation, so a
+   * tripped hard-drawdown breaker or kill switch survives a restart (#203,
+   * review 2026-08-06 B1). Required, not optional: an omitted persistence
+   * seam is exactly the wired-but-skippable shape that left `breaker_state`
+   * unwritten for the life of the project.
+   */
+  breakerState: BreakerStatePersistence;
   accountState: AccountStateProvider;
   volatility: VolatilityReadingProvider;
   getOpenPositions: () => Promise<OpenPosition[]>;
@@ -210,6 +219,10 @@ async function computeCurrentPortfolioAndBreakers(deps: BreakerStateDeps, clock:
   });
   const breakerInput: BreakerEvalInput = { portfolio, volatility, mode: deps.mode, clock };
   const breakers = deps.circuitBreakers.evaluate(breakerInput);
+  // Persist the sticky tiers immediately: `evaluate` is where a trip becomes
+  // real, and a restart between this call and any later persist point would
+  // silently re-arm the one mechanism ADR-0007 left standing.
+  deps.breakerState.save(deps.circuitBreakers.getPersistedState());
   return { portfolio, breakers };
 }
 

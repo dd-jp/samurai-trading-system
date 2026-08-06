@@ -29,6 +29,12 @@ import {
   UnreachableAlpacaClient,
 } from './smoke-run.js';
 
+/** Both sticky tiers persisted untripped — what a healthy run leaves in `breaker_state` (B1). */
+const BOTH_TIERS = [
+  { tier: 'portfolio_drawdown', tripped: 0 },
+  { tier: 'kill_switch', tripped: 0 },
+];
+
 /** A fully transacted run — the shape every failure case below mutates one field of. */
 function transactedObservations(): SmokeObservations {
   return {
@@ -66,6 +72,7 @@ function transactedObservations(): SmokeObservations {
     riskThresholds: [{ name: 'max_position_size', value: 5_000 }],
     analystWeights: [{ analyst_id: 'technical' }],
     traderDecisions: [{ trace_id: 'trace-1', instrument: 'BTC-USD', intent_type: 'entry' }],
+    breakerStates: BOTH_TIERS,
     riskDecisions: [{ trace_id: 'trace-1', instrument: 'BTC-USD', status: 'approved' }],
   };
 }
@@ -364,6 +371,7 @@ describe('formatSmokeReport', () => {
       riskThresholds: [],
       analystWeights: [],
       traderDecisions: [],
+      breakerStates: BOTH_TIERS,
       riskDecisions: [],
     };
     const report = formatSmokeReport(
@@ -611,6 +619,7 @@ describe('runSmoke (end-to-end, real composition root)', () => {
       riskThresholds: [],
       analystWeights: [],
       traderDecisions: [],
+      breakerStates: BOTH_TIERS,
       riskDecisions: [],
     };
 
@@ -681,6 +690,23 @@ describe('evaluateSmokeGate — one assertion per wired mechanism (#430)', () =>
 
     expect(gate.passed).toBe(false);
     expect(gate.failures.some((failure) => failure.includes('analyst_weights'))).toBe(true);
+  });
+
+  it('fails when the sticky breaker state was never persisted (review 2026-08-06 B1)', () => {
+    const gate = gateFor({ ...transactedObservations(), breakerStates: [] });
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('breaker_state'))).toBe(true);
+  });
+
+  it('fails when only one sticky tier reached breaker_state', () => {
+    const gate = gateFor({
+      ...transactedObservations(),
+      breakerStates: [{ tier: 'portfolio_drawdown', tripped: 0 }],
+    });
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('breaker_state'))).toBe(true);
   });
 
   it('passes only when every mechanism left its own evidence', () => {

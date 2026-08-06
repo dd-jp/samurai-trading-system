@@ -51,6 +51,8 @@ export {
   resolveRiskConfig,
   riskThresholdsFrom,
 } from './risk-thresholds.js';
+export type { BreakerStatePersistence } from './sqlite-breaker-state-store.js';
+export { SqliteBreakerStateStore } from './sqlite-breaker-state-store.js';
 export type {
   BreakerState,
   CorrelationEstimate,

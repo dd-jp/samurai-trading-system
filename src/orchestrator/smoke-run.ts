@@ -431,6 +431,15 @@ export interface SmokeObservations {
    */
   traderDecisions: { trace_id: string; instrument: string; intent_type: string | null }[];
   riskDecisions: { trace_id: string; instrument: string; status: string }[];
+  /**
+   * From `breaker_state` — the sticky breakers' durable home (#203, review
+   * 2026-08-06 B1). Two rows (one per tier) exist only if the tick path's
+   * breaker evaluation persisted its state; an empty table means a tripped
+   * kill switch silently re-arms on restart — the exact gap the table was
+   * created to close and then sat unwritten behind for the life of the
+   * project.
+   */
+  breakerStates: { tier: string; tripped: number }[];
 }
 
 /**
@@ -502,6 +511,9 @@ export function readSmokeObservations(db: SqliteHandle): SmokeObservations {
     analystWeights: db
       .prepare('SELECT analyst_id FROM analyst_weights')
       .all() as SmokeObservations['analystWeights'],
+    breakerStates: db
+      .prepare('SELECT tier, tripped FROM breaker_state')
+      .all() as SmokeObservations['breakerStates'],
   };
 }
 
@@ -695,6 +707,16 @@ export function evaluateSmokeGate(
       'no row in analyst_weights — the startup seeder did not run, so `runDailyCycle` skips ' +
         'every analyst it cannot find a row for and the loop attributes nothing while reporting ' +
         'a clean run. This is the #371 defect',
+    );
+  }
+
+  const breakerTiers = new Set(observations.breakerStates.map((row) => row.tier));
+  if (!breakerTiers.has('portfolio_drawdown') || !breakerTiers.has('kill_switch')) {
+    failures.push(
+      'breaker_state is missing a tier row — the tick path never persisted the sticky ' +
+        "breakers' state, so a tripped hard-drawdown breaker or kill switch re-arms itself on " +
+        'restart. Under ADR-0007 the breakers are the only remaining stop; this table sat ' +
+        'unwritten behind a doc comment claiming "the caller persists this" (review 2026-08-06 B1)',
     );
   }
 
