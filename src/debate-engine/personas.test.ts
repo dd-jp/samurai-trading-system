@@ -89,7 +89,7 @@ describe('runBullPersona', () => {
 });
 
 /**
- * Issue #361: the pinned `claude-haiku-4-5-20251001` wraps its JSON in a
+ * Issue #361: the pinned `openai/gpt-5.6-luna` wraps its JSON in a
  * markdown fence on every call, which halted the pipeline at `stage=debate`.
  * Fixtures are the shapes captured verbatim from live one-shot calls with the
  * exact prompts these functions send.

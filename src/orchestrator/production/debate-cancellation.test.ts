@@ -1,7 +1,7 @@
 /**
  * End-to-end cancellation proof for #347 — the composed chain
  * `enforceLatencyBudget` -> `runDebate` -> `buildDebatePersonas` ->
- * `AnthropicLlmClient` -> `AnthropicHttpMessagesClient` -> `fetch`.
+ * `AnthropicLlmClient` -> `NousMessagesClient` -> `fetch`.
  *
  * The unit tests beside each module pin their own seam; this file is the only
  * place that proves the seams JOIN UP — that the signal `enforceLatencyBudget`
@@ -11,22 +11,22 @@
  * signal is dropped on the floor one layer down.
  *
  * No network and no wall-clock: `fetch` is stubbed (`vi.stubGlobal`, the same
- * seam `anthropic-http-client.test.ts` uses) and every duration is fake-timer
- * driven.
+ * seam `nous-chat.test.ts` uses) and every duration is fake-timer driven.
  */
 
 import type { AnalystView, DebateLogger, DebatePersonas } from '../../debate-engine/index.js';
 import {
-  AnthropicHttpMessagesClient,
   AnthropicLlmClient,
   enforceLatencyBudget,
   LATENCY_BUDGET_MS,
+  NousMessagesClient,
   runDebate,
 } from '../../debate-engine/index.js';
 import type { Clock } from '../../shared/index.js';
 import { buildDebatePersonas } from './debate-adapter.js';
 
-const FAKE_KEY = 'test-fake-anthropic-key';
+const FAKE_KEY = 'test-fake-nous-key';
+const FAKE_BASE_URL = 'https://nous.test/v1';
 
 /**
  * `converged: false` on purpose: the debate then runs the full 3-round cap,
@@ -84,7 +84,11 @@ function stubSlowFetch(ms: number): { signals: AbortSignal[]; calls: () => numbe
             ok: true,
             status: 200,
             statusText: 'OK',
-            json: async () => ({ content: [{ type: 'text', text: RESPONSE_TEXT }] }),
+            json: async () => ({
+              choices: [{ message: { content: RESPONSE_TEXT }, finish_reason: 'stop' }],
+              model: 'openai/gpt-5.6-luna',
+              usage: { prompt_tokens: 10, completion_tokens: 20 },
+            }),
           } as Response),
         ms,
       );
@@ -102,9 +106,9 @@ function buildLlmClient(): AnthropicLlmClient {
   return new AnthropicLlmClient(
     // 60s network backstop, well outside anything these tests exercise, so the
     // only thing that ever cancels a call here is the latency budget.
-    new AnthropicHttpMessagesClient({ apiKey: FAKE_KEY, timeoutMs: 60_000 }),
+    new NousMessagesClient({ apiKey: FAKE_KEY, baseUrl: FAKE_BASE_URL, timeoutMs: 60_000 }),
     {
-      model: 'claude-haiku-4-5-20251001',
+      model: 'openai/gpt-5.6-luna',
       max_tokens: 1024,
       timeoutMs: 60_000,
       retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },

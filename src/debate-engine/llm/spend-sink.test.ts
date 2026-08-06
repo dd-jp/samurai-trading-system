@@ -24,6 +24,7 @@ interface SpendRow {
   cache_creation_input_tokens: number;
   cache_read_input_tokens: number;
   cost_usd: number | null;
+  server_tool_calls: number;
   latency_ms: number | null;
   timestamp: string;
 }
@@ -38,7 +39,7 @@ describe('SqliteLlmSpendStore', () => {
     new SqliteLlmSpendStore(db).record({
       trace_id: 'trace-1',
       stage: 'debate',
-      model: 'claude-haiku-4-5-20251001',
+      model: 'openai/gpt-5.6-luna',
       usage: { input_tokens: 1_000_000, output_tokens: 1_000_000 },
       latency_ms: 1_234,
       timestamp: NOW,
@@ -48,7 +49,7 @@ describe('SqliteLlmSpendStore', () => {
     expect(row?.trace_id).toBe('trace-1');
     expect(row?.input_tokens).toBe(1_000_000);
     expect(row?.output_tokens).toBe(1_000_000);
-    expect(row?.cost_usd).toBeCloseTo(6, 10);
+    expect(row?.cost_usd).toBeCloseTo(0.7, 10);
     expect(row?.timestamp).toBe(NOW.toISOString());
   });
 
@@ -57,7 +58,7 @@ describe('SqliteLlmSpendStore', () => {
     new SqliteLlmSpendStore(db).record({
       trace_id: 'trace-1',
       stage: 'debate',
-      model: 'claude-haiku-4-5',
+      model: 'openai/gpt-5.6-luna',
       usage: { input_tokens: 10, output_tokens: 10 },
       latency_ms: 10,
       timestamp: NOW,
@@ -73,7 +74,7 @@ describe('SqliteLlmSpendStore', () => {
     new SqliteLlmSpendStore(db).record({
       trace_id: 'trace-1',
       stage: 'debate',
-      model: 'claude-unreleased-9',
+      model: 'vendor/unreleased-9',
       usage: { input_tokens: 4_242, output_tokens: 99 },
       latency_ms: 99,
       timestamp: NOW,
@@ -100,7 +101,7 @@ describe('SqliteLlmSpendStore', () => {
       store.record({
         trace_id: 'trace-1',
         stage: 'debate',
-        model: 'claude-haiku-4-5',
+        model: 'openai/gpt-5.6-luna',
         usage: { input_tokens: 1, output_tokens: 1 },
         latency_ms: 1,
         timestamp: NOW,
@@ -120,7 +121,7 @@ describe('SqliteLlmSpendStore', () => {
       trace_id: 'trace-1',
       stage: 'debate',
       debate_id: 'debate-abc',
-      model: 'claude-haiku-4-5',
+      model: 'openai/gpt-5.6-luna',
       usage: { input_tokens: 10, output_tokens: 10 },
       latency_ms: 4_321,
       timestamp: NOW,
@@ -142,7 +143,7 @@ describe('SqliteLlmSpendStore', () => {
       trace_id: 'trace-1',
       stage: 'debate',
       debate_id: 'debate-abc',
-      model: 'claude-haiku-4-5',
+      model: 'openai/gpt-5.6-luna',
       usage: { input_tokens: 1, output_tokens: 1 },
       latency_ms: 0,
       timestamp: NOW,
@@ -162,7 +163,7 @@ describe('SqliteLlmSpendStore', () => {
     new SqliteLlmSpendStore(db).record({
       trace_id: 'trace-1',
       stage: 'debate',
-      model: 'claude-haiku-4-5',
+      model: 'openai/gpt-5.6-luna',
       usage: { input_tokens: 7, output_tokens: 3 },
       latency_ms: 55,
       timestamp: NOW,
@@ -174,6 +175,90 @@ describe('SqliteLlmSpendStore', () => {
     expect(all[0]?.input_tokens).toBe(7);
   });
 
+  it('adds the server-side tool charge on top of tokens (#476)', () => {
+    // "Tool requests are priced based on two components: token usage and tool
+    // invocations." No client reports a non-zero count since ADR-0009 — Nous
+    // proxies `chat/completions`, which runs no server-side tool — so this
+    // exercises the path by hand. Kept live rather than deleted: the sink, the
+    // arithmetic and the `server_tool_calls` column are one unit, and an
+    // untested half is how a re-enabled tool silently under-charges the cap.
+    const db = openSharedStore(':memory:');
+    new SqliteLlmSpendStore(db).record({
+      trace_id: 'trace-1',
+      stage: 'market_intelligence',
+      model: 'x-ai/grok-4.5',
+      usage: { input_tokens: 1_000_000, output_tokens: 0 },
+      server_tool_calls: 4,
+      latency_ms: 10,
+      timestamp: NOW,
+    });
+
+    const [row] = rows(db);
+    // 1M input at $1.60/M, plus 4 invocations at $0.005 = $0.02.
+    expect(row?.cost_usd).toBeCloseTo(1.62, 10);
+    expect(row?.server_tool_calls).toBe(4);
+  });
+
+  it('records the tool cost even when the model is unpriced, and warns', () => {
+    // THE case #476 was filed for. Discarding a charge we know exactly, because
+    // a different charge is missing from the rate table, would under-count the
+    // cap — and a NULL is not diagnosable, whereas a small cost beside a
+    // non-zero invocation count is.
+    const db = openSharedStore(':memory:');
+    const entries: LogEntry[] = [];
+    new SqliteLlmSpendStore(db, { log: (entry) => void entries.push(entry) }).record({
+      trace_id: 'trace-1',
+      stage: 'market_intelligence',
+      model: 'x-ai/grok-from-the-future',
+      usage: { input_tokens: 1_000_000, output_tokens: 1_000_000 },
+      server_tool_calls: 2,
+      latency_ms: 10,
+      timestamp: NOW,
+    });
+
+    const [row] = rows(db);
+    expect(row?.cost_usd).toBeCloseTo(0.01, 10);
+    expect(row?.server_tool_calls).toBe(2);
+
+    const warn = entries.find((entry) => entry.level === 'warn');
+    expect(warn?.message).toContain('not in MODEL_RATES');
+    expect(warn?.message).toContain('understates the true cost');
+  });
+
+  it('leaves cost null for an unpriced model that used no tool', () => {
+    // The pre-existing semantic is preserved: unpriced stays NULL rather than
+    // becoming a 0 indistinguishable from a genuinely free call.
+    const db = openSharedStore(':memory:');
+    new SqliteLlmSpendStore(db).record({
+      trace_id: 'trace-1',
+      stage: 'debate',
+      model: 'anthropic/claude-unreleased-9',
+      usage: { input_tokens: 500, output_tokens: 500 },
+      latency_ms: 10,
+      timestamp: NOW,
+    });
+
+    expect(rows(db)[0]?.cost_usd).toBeNull();
+  });
+
+  it('defaults a plain completion to zero tool invocations', () => {
+    // A completion invokes no server-side tool, so it incurs no such charge.
+    // Zero is the honest value, not a placeholder.
+    const db = openSharedStore(':memory:');
+    new SqliteLlmSpendStore(db).record({
+      trace_id: 'trace-1',
+      stage: 'debate',
+      model: 'anthropic/claude-haiku-4.5',
+      usage: { input_tokens: 1_000_000, output_tokens: 0 },
+      latency_ms: 10,
+      timestamp: NOW,
+    });
+
+    const [row] = rows(db);
+    expect(row?.server_tool_calls).toBe(0);
+    expect(row?.cost_usd).toBeCloseTo(0.8, 10);
+  });
+
   it('does not require a logger to stay non-throwing', () => {
     const db = openSharedStore(':memory:');
     db.prepare('DROP TABLE llm_spend').run();
@@ -182,7 +267,7 @@ describe('SqliteLlmSpendStore', () => {
       store.record({
         trace_id: 'trace-1',
         stage: 'debate',
-        model: 'claude-haiku-4-5',
+        model: 'openai/gpt-5.6-luna',
         usage: { input_tokens: 1, output_tokens: 1 },
         latency_ms: 1,
         timestamp: NOW,

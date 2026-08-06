@@ -29,10 +29,11 @@
  * sums `cost_usd` and does not care which provider produced the row. Two
  * things make that real rather than decorative: `stage: 'market_intelligence'`
  * (the column exists precisely so a non-debate caller's spend cannot land in
- * the debate's total), and an xAI entry in `MODEL_RATES` — without a rate,
- * `priceUsage` returns `null`, the row lands unpriced, and the cap would sum
- * past it. A second provider spending outside the ceiling would make the
- * ceiling a fiction.
+ * the debate's total), and this role's model having a rate in `MODEL_RATES` —
+ * without one, `priceUsage` returns `null`, the row lands unpriced, and the
+ * cap would sum past it. `nousCredentials` refuses to build a client for an
+ * unpriced model for exactly that reason: a stage spending outside the ceiling
+ * would make the ceiling a fiction.
  *
  * ## Degradation
  *
@@ -68,6 +69,14 @@ export interface GrokSentimentClient {
     items: IntelligenceItem[];
     model: string;
     usage: { input_tokens: number; output_tokens: number };
+    /**
+     * Server-side tool invocations this call incurred (#476). A provider that
+     * runs a tool for you bills it per invocation on top of tokens, so the
+     * meter needs the count or the cap under-charges. Optional, and ABSENT
+     * from every client we have since ADR-0009: `NousSentimentClient` posts to
+     * `chat/completions`, which runs no server-side tool.
+     */
+    server_tool_calls?: number | undefined;
     latency_ms: number;
   }>;
 }
@@ -84,6 +93,8 @@ export interface GrokSpendSink {
       cache_creation_input_tokens?: number;
       cache_read_input_tokens?: number;
     };
+    /** Passed through so the tool half of a provider's bill reaches `cost_usd` (#476). */
+    server_tool_calls?: number | undefined;
     latency_ms: number;
     timestamp: Date;
   }): void;
@@ -125,12 +136,21 @@ export class GrokAgent {
   /**
    * Refreshes this instrument's sentiment if its bucket has rolled over.
    *
-   * Returns whether a call was actually issued, which is what the smoke gate
-   * asserts against — "the agent ran" and "the agent called xAI" are different
-   * claims, and only the second one costs money or produces data.
+   * Returns whether a call was actually issued — "the agent ran" and "the
+   * agent called the provider" are different claims, and only the second one
+   * costs money or produces data.
+   *
+   * NOT covered by `yarn smoke`, despite what an earlier version of this
+   * comment claimed. The smoke run is offline and keyless, so the composition
+   * root never builds a `GrokAgent` at all (`production.ts` needs Nous
+   * credentials before it constructs one, and `SAMURAI_SENTIMENT=off` skips it
+   * outright) and there is nothing for the gate to observe. That is a real
+   * hole in the #430 convention, not a decision: this mechanism's first live
+   * exercise will be the soak itself. See the note in
+   * `docs/specs/market-intelligence-spec.md`.
    *
    * NEVER THROWS. This is called from the tick path, and market intelligence
-   * is an optional input: an xAI outage must degrade the debate to
+   * is an optional input: a provider outage must degrade the debate to
    * `NO_DATA_MARKER`, not fail the tick that would otherwise have traded.
    */
   async refresh(trace_id: string, instrument: string, assetClass: AssetClass): Promise<boolean> {
@@ -167,6 +187,11 @@ export class GrokAgent {
         stage: 'market_intelligence',
         model: result.model,
         usage: result.usage,
+        // Undefined for every client we have (see the interface above), but
+        // passed through rather than dropped: a provider that bills tool
+        // invocations separately from tokens would otherwise be under-counted
+        // by the meter, silently, on every call.
+        server_tool_calls: result.server_tool_calls,
         latency_ms: result.latency_ms,
         timestamp: asOf,
       });

@@ -62,7 +62,7 @@ import type {
 // call site, not here at the interface).
 import type { SharedStore as VerdictLogDb } from '../../shared/store/index.js';
 import type { TraderConfig } from '../../trader/index.js';
-import { decide } from '../../trader/index.js';
+import { decideWithReason } from '../../trader/index.js';
 import type {
   ApprovalChannel,
   PositionStore,
@@ -137,7 +137,7 @@ export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
     // computeCurrentPortfolioAndBreakers, so this stays a single source
     // rather than a separately-injected scalar.
     const { portfolio } = await computeCurrentPortfolioAndBreakers(deps, clock);
-    const intent = await decide({
+    const { intent, skip_reason, atr } = await decideWithReason({
       trace_id,
       instrument,
       debate,
@@ -157,15 +157,21 @@ export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
       instrument,
       debate_id: debate.debate_id,
       intent_type: intent?.intent_type ?? null,
-      // `decide()` returns a bare null rather than a tagged reason, so the
-      // honest record is that it declined — not a reason invented here. The
-      // sizing/precedent columns being null alongside it says how far it got,
-      // which is the part that distinguishes "sized then rejected" from
-      // "never reached sizing".
-      skip_reason: intent === null ? 'decide() returned no intent' : null,
+      // The actual reason, since #475. This used to be the constant
+      // `'decide() returned no intent'` for all thirteen distinct skip paths,
+      // which made every quiet tick look identical: "the conviction floor is
+      // too high" and "the market data feed is returning NaN marks" wrote the
+      // same row. The sizing/precedent columns still say how far it got, which
+      // remains what distinguishes "sized then rejected" from "never reached
+      // sizing".
+      skip_reason,
       sizing: intent?.metadata.sizing ?? null,
       cosine_precedent: intent?.metadata.cosine_precedent ?? null,
-      atr: null,
+      // Real since #475. The column has existed since migration 0016 and was
+      // written as a hardcoded null — the value was computed inside
+      // `buildBracket` and never left it. It is what explains a stop distance,
+      // so without it a soak cannot tell a wide stop from a volatile instrument.
+      atr,
       entry: intent?.entry ?? null,
       stop: intent?.stop ?? null,
       size: intent?.size ?? null,
