@@ -124,6 +124,7 @@ import type { SessionBasisByClass } from '../risk-manager/index.js';
 import { SimulatedClock } from '../shared/index.js';
 import { openSharedStore, type SharedStore as SqliteHandle } from '../shared/store/index.js';
 import {
+  LoggingAnalystSkipAlertChannel,
   LoggingBreachAlertChannel,
   LoggingHeartbeatChannel,
   LoggingLoosenApprovalChannel,
@@ -849,6 +850,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       unpricedFillAlerts: new LoggingUnpricedFillAlertChannel(logger),
       breachAlerts: new LoggingBreachAlertChannel(logger),
       loosenApprovals: new LoggingLoosenApprovalChannel(logger),
+      analystSkipAlerts: new LoggingAnalystSkipAlertChannel(logger),
       tickIntervalMs,
       fillPollIntervalMs,
       // Fast enough to fire several times inside a ~1s run. The heartbeat is a

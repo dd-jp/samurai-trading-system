@@ -31,6 +31,7 @@ import type { CiiScoreProvider } from '../market-intelligence/index.js';
 import type { ApprovalChannel, ApprovalOutcome, ApprovalRequest } from '../verdict/index.js';
 import type { HeartbeatChannel } from './heartbeat.js';
 import type { OrphanAlertChannel, OrphanGoVerdict } from './orphan-verdict-scan.js';
+import type { AnalystSkipAlert, AnalystSkipAlertChannel } from './production/analysts-adapter.js';
 import type { Logger } from './types.js';
 
 /**
@@ -105,6 +106,46 @@ export class LoggingUnpricedFillAlertChannel implements UnpricedFillAlertChannel
       payload: {
         ...alert,
         first_seen_at: alert.first_seen_at.toISOString(),
+      },
+    });
+  }
+}
+
+/**
+ * A run of consecutive analyst quorum skips (#431), written to the log at
+ * `error`.
+ *
+ * `error` for `LoggingOrphanAlertChannel`'s reason: two skipped ticks in a row
+ * means the pipeline has produced no decision at all for this instrument, and
+ * after ADR-0007 removed the human approval gate there is nobody receiving a
+ * per-trade message who would notice the trades stopping. At ADR-0008's
+ * 15-minute cadence a silently-skipping analyst stage is nearly
+ * indistinguishable from a quiet market: the heartbeat keeps beating either way.
+ *
+ * Same caveat as the other log-only stand-ins: a log line nobody tails is not
+ * an alert. `TradeChannelAnalystSkipAlert` (analyst-skip-alert-channel.ts) is
+ * the reachable-from-a-phone implementation, selected by
+ * `SAMURAI_ALERTS=telegram`.
+ */
+export class LoggingAnalystSkipAlertChannel implements AnalystSkipAlertChannel {
+  constructor(private readonly logger: Logger) {}
+
+  async postAnalystSkipAlert(alert: AnalystSkipAlert): Promise<void> {
+    this.logger.log({
+      // Not a tick trace: the alert is about a RUN of ticks, so it belongs to
+      // none of them individually — the same synthetic-trace convention the
+      // heartbeat and orphan scan use.
+      trace_id: 'analyst-skip',
+      stage: 'analysts',
+      level: 'error',
+      message:
+        `analysts have skipped ${alert.consecutive_skips} consecutive ticks for ` +
+        `${alert.instrument} — no decision is being produced for it at all`,
+      payload: {
+        instrument: alert.instrument,
+        consecutive_skips: alert.consecutive_skips,
+        failures: alert.failures,
+        reported_at: alert.reported_at.toISOString(),
       },
     });
   }

@@ -7,9 +7,12 @@
  * (analysts-spec.md story 21, "no stale fallback"), an optional persona
  * failing just shrinks the set (story 22).
  *
- * Retry-on-failure and the 2-consecutive-skip alert (analysts-spec.md
- * "Module: Failure Handling") are not built here — no ticket covers them
- * yet, so each persona gets a single attempt this tick.
+ * Retry-on-failure is built here as of #431 (analysts-spec.md "Module:
+ * Failure Handling", story 19): one bounded retry with a short timeout for
+ * any failing persona, regardless of role. The other half of that module —
+ * the 2-consecutive-skip alert (story 25) — lives one level up in
+ * `buildAnalystsStep`, which is where the tick boundary and the alert
+ * transport both are.
  *
  * `analysts()` is the exact `TickSteps.analysts` shape (orchestrator/types.ts:
  * `(input: { trace_id, signal, clock }) => Promise<AnalystView[]>`), so an
@@ -29,16 +32,85 @@ import type { Analyst, AnalystFailure, AnalystRunResult, Signal } from './types.
 
 const ALL_PERSONAS: Analyst[] = [technicalAnalyst, fundamentalAnalyst, sentimentAnalyst];
 
+/**
+ * The "short timeout" of analysts-spec.md story 19, as a number.
+ *
+ * Sized against what a persona actually waits on, which is market data over
+ * HTTP, not an LLM: the personas are mechanical (technical reads indicators,
+ * fundamental returns a constant, sentiment reads an in-memory store). 10s is
+ * generous for that and still an order of magnitude under the 15-minute tick
+ * cadence of ADR-0008, so a hung upstream costs one tick's freshness rather
+ * than wedging the scheduler.
+ *
+ * The point of having a timeout at all is that `Promise.all` below has no
+ * deadline of its own: one persona whose fetch never settles hangs the whole
+ * analyst stage forever, and an unattended run has nobody to notice.
+ */
+export const DEFAULT_ANALYST_TIMEOUT_MS = 10_000;
+
+/** analysts-spec.md story 19: exactly one retry, so a blip is absorbed without a retry storm. */
+const ATTEMPTS_PER_PERSONA = 2;
+
 export interface AnalystOrchestratorDeps {
   market_intelligence: MarketIntelligenceStore;
   market_data: MarketDataService;
 }
 
+export interface AnalystOrchestratorOptions {
+  /** Per-attempt deadline. Defaults to `DEFAULT_ANALYST_TIMEOUT_MS`. */
+  timeout_ms?: number;
+}
+
+/** Marker for the timeout path, so the logged reason names it as a timeout rather than an error. */
+class AnalystTimeoutError extends Error {
+  constructor(analyst_type: string, timeout_ms: number) {
+    super(`${analyst_type} did not answer within ${timeout_ms}ms`);
+    this.name = 'AnalystTimeoutError';
+  }
+}
+
+/**
+ * Races `work` against a deadline. The timer is always cleared: an uncleared
+ * `setTimeout` keeps the Node event loop alive, which in a 15-minute-cadence
+ * process means a run that will not exit for as long as the longest timeout it
+ * ever armed.
+ *
+ * A timed-out attempt's promise keeps running in the background — there is no
+ * `AbortSignal` on the `Analyst` port to cancel it with. That is acceptable
+ * here and deliberately not papered over: the personas have no side effects,
+ * so a late arrival is discarded, not applied.
+ */
+async function withTimeout<T>(
+  work: Promise<T>,
+  timeout_ms: number,
+  analyst_type: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new AnalystTimeoutError(analyst_type, timeout_ms)),
+          timeout_ms,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export class AnalystOrchestrator {
+  private readonly timeoutMs: number;
+
   constructor(
     private readonly deps: AnalystOrchestratorDeps,
     private readonly personas: Analyst[] = ALL_PERSONAS,
-  ) {}
+    options: AnalystOrchestratorOptions = {},
+  ) {
+    this.timeoutMs = options.timeout_ms ?? DEFAULT_ANALYST_TIMEOUT_MS;
+  }
 
   /**
    * The `analyst_id`s this instance's personas emit views under (#371) — what
@@ -72,19 +144,36 @@ export class AnalystOrchestrator {
 
     const outcomes = await Promise.all(
       applicable.map(async (persona) => {
-        try {
-          const view = await persona.run({
-            trace_id,
-            signal,
-            clock,
-            market_intelligence: this.deps.market_intelligence,
-            market_data: this.deps.market_data,
-          });
-          return { persona, status: 'fulfilled' as const, view };
-        } catch (error) {
-          const reason = error instanceof Error ? error.message : String(error);
-          return { persona, status: 'rejected' as const, reason };
+        // One bounded retry, uniform across roles (analysts-spec.md story 19).
+        // Every failure mode funnels through here identically — timeout, thrown
+        // error, or malformed output surfacing as a throw — differing only in
+        // the reason string (story 20).
+        let lastReason = '';
+        for (let attempt = 1; attempt <= ATTEMPTS_PER_PERSONA; attempt++) {
+          try {
+            const view = await withTimeout(
+              persona.run({
+                trace_id,
+                signal,
+                clock,
+                market_intelligence: this.deps.market_intelligence,
+                market_data: this.deps.market_data,
+              }),
+              this.timeoutMs,
+              persona.analyst_type,
+            );
+            return { persona, status: 'fulfilled' as const, view };
+          } catch (error) {
+            lastReason = error instanceof Error ? error.message : String(error);
+          }
         }
+        // The reason says the retry happened, so a log line cannot be read as
+        // "failed once" when the persona actually failed twice.
+        return {
+          persona,
+          status: 'rejected' as const,
+          reason: `${lastReason} (after ${ATTEMPTS_PER_PERSONA} attempts)`,
+        };
       }),
     );
 

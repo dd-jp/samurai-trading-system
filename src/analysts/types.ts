@@ -5,9 +5,10 @@
  * persona (Technical) end-to-end. Ticket #71 adds Fundamental/Sentiment and
  * the `AnalystOrchestrator` (applicability filtering + role-dependent
  * quorum). Retry-on-failure and the 2-consecutive-skip alert
- * (analysts-spec.md "Module: Failure Handling") are not built here — no
- * ticket covers them yet, so a persona failure is reported after a single
- * attempt rather than a retried one.
+ * (analysts-spec.md "Module: Failure Handling") had no
+ * ticket covered them until #431, which added the bounded retry — a persona
+ * failure is now reported only after that retry is spent, and its `reason`
+ * says so.
  *
  * `AnalystView`/`Direction` are NOT redefined here: analysts-spec.md keeps
  * them in lockstep with the Debate Engine's copy (cross-spec-contracts.md

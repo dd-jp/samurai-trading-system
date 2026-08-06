@@ -104,6 +104,7 @@
  */
 import type { SharedStore as SqliteHandle } from '../shared/store/index.js';
 import { TelegramBotApiClient } from '../verdict/index.js';
+import { TradeChannelAnalystSkipAlert } from './analyst-skip-alert-channel.js';
 import { TradeChannelBreachAlert } from './breach-alert-channel.js';
 import { TradeChannelHeartbeat } from './heartbeat-channel.js';
 import { TradeChannelLoosenApproval } from './loosen-approval-channel.js';
@@ -142,6 +143,11 @@ export const ALERT_CHANNEL_FIELDS = [
   'unpricedFillAlerts',
   'breachAlerts',
   'loosenApprovals',
+  // #431 — the sixth. Same hole as the original three: a real channel type
+  // (analysts-spec.md story 25) with no transport selected for it, and the
+  // failure it reports (the analyst stage skipping every tick) is invisible in
+  // an unattended run precisely because nothing else changes when it happens.
+  'analystSkipAlerts',
 ] as const satisfies readonly (keyof ProductionConfig)[];
 
 /**
@@ -312,6 +318,12 @@ export function buildAlertChannels(deps: {
     // split is that decisions do not share a destination with the beat.
     ...(deps.injected.loosenApprovals === undefined
       ? { loosenApprovals: new TradeChannelLoosenApproval(telegram, chatId, deps.logger) }
+      : {}),
+    // #431. The escalation chat: "no decision is being produced at all" is the
+    // most consequential thing this process can report, and it must not sit in
+    // the chat #342 expects the operator to mute.
+    ...(deps.injected.analystSkipAlerts === undefined
+      ? { analystSkipAlerts: new TradeChannelAnalystSkipAlert(telegram, chatId) }
       : {}),
   };
 }

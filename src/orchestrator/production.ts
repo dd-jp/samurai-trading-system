@@ -201,6 +201,7 @@ import type { TraderConfig } from '../trader/index.js';
 import { SqliteSetupStore } from '../trader/index.js';
 import type { ApprovalChannel, VerdictConfig } from '../verdict/index.js';
 import {
+  LoggingAnalystSkipAlertChannel,
   LoggingBreachAlertChannel,
   LoggingHeartbeatChannel,
   LoggingLoosenApprovalChannel,
@@ -223,7 +224,7 @@ import type {
   OrphanVerdictScanner,
 } from './orphan-verdict-scan.js';
 import { AlpacaAccountStateProvider } from './production/account-state.js';
-import { buildAnalystsStep } from './production/analysts-adapter.js';
+import { type AnalystSkipAlertChannel, buildAnalystsStep } from './production/analysts-adapter.js';
 import { buildDebateStep, WORST_CASE_LLM_CALLS_PER_DEBATE } from './production/debate-adapter.js';
 import {
   type AccountStateProvider,
@@ -337,6 +338,16 @@ export interface ProductionConfig {
    * (#322) is what supplies it.
    */
   unpricedFillAlerts?: UnpricedFillAlertChannel;
+  /**
+   * Where a run of consecutive analyst quorum skips is escalated (#431,
+   * analysts-spec.md story 25). Defaults to `LoggingAnalystSkipAlertChannel`,
+   * with the same caveat as the others: an analyst stage that has skipped every
+   * tick for six hours is the failure an unattended soak cannot see any other
+   * way — the heartbeat keeps beating and a skipped tick at a 15-minute cadence
+   * looks like a quiet market. `TradeChannelAnalystSkipAlert` is what
+   * `SAMURAI_ALERTS=telegram` supplies.
+   */
+  analystSkipAlerts?: AnalystSkipAlertChannel;
   /**
    * How long a fill may stay unpriced before that escalation fires. Defaults to
    * `DEFAULT_UNPRICED_FILL_AGE_OUT_MS` (15 minutes) — see its doc for why that
@@ -1446,7 +1457,9 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   const steps: TickSteps = {
     // `logger` here is what makes an analyst failure visible at all — see the
     // adapter's doc comment (issue #358 item 4).
-    analysts: buildAnalystsStep(analysts, logger),
+    analysts: buildAnalystsStep(analysts, logger, {
+      skipAlerts: config.analystSkipAlerts ?? new LoggingAnalystSkipAlertChannel(logger),
+    }),
     // Two independent stores hang off this one step, both over `config.db`:
     // #367's `SqliteLlmSpendStore` meters what the debate COSTS (the
     // dashboard's spend tile), and #364's `SqliteDebateLogStore` records what

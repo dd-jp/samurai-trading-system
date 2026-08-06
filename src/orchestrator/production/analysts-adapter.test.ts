@@ -1,7 +1,7 @@
 import type { AnalystOrchestrator } from '../../analysts/index.js';
 import type { AnalystView } from '../../debate-engine/index.js';
 import type { Clock, LogEntry, Logger } from '../../shared/index.js';
-import { buildAnalystsStep } from './analysts-adapter.js';
+import { type AnalystSkipAlert, buildAnalystsStep } from './analysts-adapter.js';
 
 const NOW = new Date('2026-07-28T14:00:00Z');
 const CLOCK: Clock = { now: () => NOW };
@@ -288,6 +288,197 @@ describe('buildAnalystsStep', () => {
         const [entry] = entries as [LogEntry];
         expect(entry.message).toContain(realReason);
         expect(entry.message).not.toContain('[REDACTED]');
+      });
+    });
+
+    /**
+     * #431, analysts-spec.md story 25. The retry absorbs a blip; this is what
+     * catches the condition the retry cannot fix — a bad key, a data outage, a
+     * rate-limit wall — where every tick skips and, before this, nothing said
+     * so. The heartbeat keeps beating throughout, and at ADR-0008's 15-minute
+     * cadence one skipped tick per beat looks like a working system.
+     */
+    describe('consecutive-skip alert (#431)', () => {
+      function skipping() {
+        return vi.fn(async () => ({
+          views: [],
+          analyst_count: 2,
+          skipped: true,
+          failures: [{ analyst_type: 'technical', role: 'mandatory' as const, reason: 'http 404' }],
+        }));
+      }
+
+      function recordingChannel() {
+        const posted: AnalystSkipAlert[] = [];
+        return {
+          posted,
+          channel: {
+            postAnalystSkipAlert: async (alert: AnalystSkipAlert) => {
+              posted.push(alert);
+            },
+          },
+        };
+      }
+
+      function tick(step: ReturnType<typeof buildAnalystsStep>, asset = 'BTC-USD') {
+        return step({
+          trace_id: 'trace-9',
+          signal: { asset, asset_class: 'crypto' as const },
+          clock: CLOCK,
+        });
+      }
+
+      it('stays quiet on a single isolated skip', async () => {
+        const { posted, channel } = recordingChannel();
+        const orchestrator = { runAnalysts: skipping() } as unknown as AnalystOrchestrator;
+
+        await tick(buildAnalystsStep(orchestrator, undefined, { skipAlerts: channel }));
+
+        expect(posted).toEqual([]);
+      });
+
+      it('fires on the second consecutive skip, naming the instrument and the reasons', async () => {
+        const { posted, channel } = recordingChannel();
+        const orchestrator = { runAnalysts: skipping() } as unknown as AnalystOrchestrator;
+        const step = buildAnalystsStep(orchestrator, undefined, { skipAlerts: channel });
+
+        await tick(step);
+        await tick(step);
+
+        expect(posted).toHaveLength(1);
+        expect(posted[0]?.instrument).toBe('BTC-USD');
+        expect(posted[0]?.consecutive_skips).toBe(2);
+        expect(posted[0]?.reported_at).toEqual(NOW);
+        expect(posted[0]?.failures[0]?.reason).toContain('http 404');
+      });
+
+      it('does not re-alert on every subsequent skip', async () => {
+        const { posted, channel } = recordingChannel();
+        const orchestrator = { runAnalysts: skipping() } as unknown as AnalystOrchestrator;
+        const step = buildAnalystsStep(orchestrator, undefined, { skipAlerts: channel });
+
+        for (let i = 0; i < 5; i++) await tick(step);
+
+        expect(posted).toHaveLength(1);
+      });
+
+      it('repeats while the stage stays broken, so a missed first alert is not the only one', async () => {
+        const { posted, channel } = recordingChannel();
+        const orchestrator = { runAnalysts: skipping() } as unknown as AnalystOrchestrator;
+        const step = buildAnalystsStep(orchestrator, undefined, { skipAlerts: channel });
+
+        // 2 fires, then every ALERT_REPEAT_EVERY_SKIPS after: 2 and 10.
+        for (let i = 0; i < 10; i++) await tick(step);
+
+        expect(posted.map((alert) => alert.consecutive_skips)).toEqual([2, 10]);
+      });
+
+      it('resets the run on a healthy tick, so intermittent failures never accumulate', async () => {
+        const { posted, channel } = recordingChannel();
+        // ONE step, whose orchestrator's answer changes between calls — the
+        // counter lives in the step's closure, so a second `buildAnalystsStep`
+        // would start from zero and prove nothing about the reset.
+        let skips = true;
+        const runAnalysts = vi.fn(async () =>
+          skips
+            ? {
+                views: [],
+                analyst_count: 2,
+                skipped: true,
+                failures: [
+                  { analyst_type: 'technical', role: 'mandatory' as const, reason: 'http 404' },
+                ],
+              }
+            : { views: [makeView()], analyst_count: 2, skipped: false, failures: [] },
+        );
+        const step = buildAnalystsStep(
+          { runAnalysts } as unknown as AnalystOrchestrator,
+          undefined,
+          {
+            skipAlerts: channel,
+          },
+        );
+
+        // skip, recover, skip, recover, skip — never two in a row, never an alert.
+        for (const skipping of [true, false, true, false, true]) {
+          skips = skipping;
+          await tick(step);
+        }
+
+        expect(posted).toEqual([]);
+
+        // And the counter really is back at zero: two in a row now alerts at 2,
+        // not at some accumulated total.
+        skips = true;
+        await tick(step);
+        expect(posted.map((alert) => alert.consecutive_skips)).toEqual([2]);
+      });
+
+      it('counts each instrument separately', async () => {
+        const { posted, channel } = recordingChannel();
+        const orchestrator = { runAnalysts: skipping() } as unknown as AnalystOrchestrator;
+        const step = buildAnalystsStep(orchestrator, undefined, { skipAlerts: channel });
+
+        // One skip each: a fleet-wide blip is not two skips on one instrument.
+        await tick(step, 'BTC-USD');
+        await tick(step, 'ETH-USD');
+
+        expect(posted).toEqual([]);
+
+        await tick(step, 'BTC-USD');
+        expect(posted.map((alert) => alert.instrument)).toEqual(['BTC-USD']);
+      });
+
+      it('masks credential syntaxes in the alerted reasons too', async () => {
+        const { posted, channel } = recordingChannel();
+        const runAnalysts = vi.fn(async () => ({
+          views: [],
+          analyst_count: 1,
+          skipped: true,
+          failures: [
+            {
+              analyst_type: 'technical',
+              role: 'mandatory' as const,
+              reason: 'Alpaca API error: 403 {"apiKey":"sk-live-SUPERSECRET1"}',
+            },
+          ],
+        }));
+        const orchestrator = { runAnalysts } as unknown as AnalystOrchestrator;
+        const step = buildAnalystsStep(orchestrator, undefined, { skipAlerts: channel });
+
+        await tick(step);
+        await tick(step);
+
+        expect(JSON.stringify(posted)).not.toContain('SUPERSECRET1');
+      });
+
+      it('does not let a failed alert transport take the tick down', async () => {
+        const { logger, entries } = captureLogger();
+        const orchestrator = { runAnalysts: skipping() } as unknown as AnalystOrchestrator;
+        const step = buildAnalystsStep(orchestrator, logger, {
+          skipAlerts: {
+            postAnalystSkipAlert: async () => {
+              throw new Error('Telegram 502');
+            },
+          },
+        });
+
+        await tick(step);
+        await expect(tick(step)).resolves.toEqual([]);
+
+        const undelivered = entries.filter((entry) =>
+          entry.message.includes('could not be delivered'),
+        );
+        expect(undelivered).toHaveLength(1);
+        expect(undelivered[0]?.level).toBe('error');
+      });
+
+      it('is optional — no channel means log-only, and no throw', async () => {
+        const orchestrator = { runAnalysts: skipping() } as unknown as AnalystOrchestrator;
+        const step = buildAnalystsStep(orchestrator);
+
+        await tick(step);
+        await expect(tick(step)).resolves.toEqual([]);
       });
     });
 

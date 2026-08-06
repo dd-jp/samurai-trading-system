@@ -212,7 +212,9 @@ describe('AnalystOrchestrator', () => {
     expect(result.failures).toContainEqual({
       analyst_type: 'technical',
       role: 'mandatory',
-      reason: 'technical unavailable',
+      // #431: the reason now records that the retry was spent, so a log line
+      // cannot be read as "failed once" when it failed twice.
+      reason: 'technical unavailable (after 2 attempts)',
     });
 
     // The exact TickSteps.analysts shape must also report the skip as an empty array.
@@ -238,7 +240,11 @@ describe('AnalystOrchestrator', () => {
     expect(result.skipped).toBe(false);
     expect(result.views.map((v) => v.analyst_type).sort()).toEqual(['fundamental', 'technical']);
     expect(result.failures).toEqual([
-      { analyst_type: 'sentiment', role: 'optional', reason: 'sentiment unavailable' },
+      {
+        analyst_type: 'sentiment',
+        role: 'optional',
+        reason: 'sentiment unavailable (after 2 attempts)',
+      },
     ]);
   });
 
@@ -279,6 +285,146 @@ describe('AnalystOrchestrator', () => {
       expect(result.views.map((view) => view.analyst_id).sort()).toEqual(
         orchestrator.analystIds().sort(),
       );
+    });
+  });
+
+  /**
+   * #431, analysts-spec.md story 19: "retry a failing analyst exactly once with
+   * a short timeout ... so that transient blips are absorbed without retry
+   * storms." Before this the orchestrator gave each persona a single attempt
+   * and no deadline at all, so one market-data hiccup forfeited the whole tick
+   * and one hung request hung the stage forever.
+   */
+  describe('retry and timeout (#431)', () => {
+    /** Fails its first `failures` attempts, then succeeds. Records the attempt count. */
+    function flakyAnalyst(
+      analyst_type: string,
+      role: 'mandatory' | 'optional',
+      failures: number,
+    ): Analyst & { attempts: () => number } {
+      let attempts = 0;
+      return {
+        analyst_type,
+        role,
+        applies_to: () => true,
+        attempts: () => attempts,
+        async run(input: AnalystInput): Promise<AnalystView> {
+          attempts++;
+          if (attempts <= failures) throw new Error(`${analyst_type} blip ${attempts}`);
+          return {
+            trace_id: input.trace_id,
+            analyst_id: analyst_type,
+            analyst_type,
+            direction: 'bullish',
+            confidence: 0.5,
+            key_points: [],
+            timestamp: input.clock.now(),
+          };
+        },
+      };
+    }
+
+    /** Never settles — the failure mode a deadline exists for. */
+    function hangingAnalyst(analyst_type: string, role: 'mandatory' | 'optional'): Analyst {
+      return {
+        analyst_type,
+        role,
+        applies_to: () => true,
+        run: () => new Promise<AnalystView>(() => {}),
+      };
+    }
+
+    it('absorbs a transient blip on the retry instead of forfeiting the tick', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const flaky = flakyAnalyst('technical', 'mandatory', 1);
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence },
+        [flaky],
+      );
+
+      const result = await orchestrator.runAnalysts(
+        'trace-1',
+        { asset: INSTRUMENT, asset_class: 'crypto' },
+        clock,
+      );
+
+      expect(flaky.attempts()).toBe(2);
+      expect(result.skipped).toBe(false);
+      expect(result.failures).toEqual([]);
+      expect(result.views).toHaveLength(1);
+    });
+
+    it('gives up after exactly one retry — no retry storm', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const flaky = flakyAnalyst('technical', 'mandatory', 99);
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence },
+        [flaky],
+      );
+
+      const result = await orchestrator.runAnalysts(
+        'trace-1',
+        { asset: INSTRUMENT, asset_class: 'crypto' },
+        clock,
+      );
+
+      expect(flaky.attempts()).toBe(2);
+      expect(result.skipped).toBe(true);
+      expect(result.failures[0]?.reason).toContain('after 2 attempts');
+    });
+
+    it('bounds a persona that never answers, rather than hanging the stage', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence },
+        [hangingAnalyst('technical', 'mandatory')],
+        { timeout_ms: 5 },
+      );
+
+      const result = await orchestrator.runAnalysts(
+        'trace-1',
+        { asset: INSTRUMENT, asset_class: 'crypto' },
+        clock,
+      );
+
+      expect(result.skipped).toBe(true);
+      // Story 20: one failure path, differing only in the logged reason.
+      expect(result.failures[0]?.reason).toContain('did not answer within 5ms');
+    });
+
+    it('lets a healthy persona through unretried', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const healthy = flakyAnalyst('technical', 'mandatory', 0);
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence },
+        [healthy],
+      );
+
+      await orchestrator.runAnalysts(
+        'trace-1',
+        { asset: INSTRUMENT, asset_class: 'crypto' },
+        clock,
+      );
+
+      expect(healthy.attempts()).toBe(1);
+    });
+
+    it('retries an optional persona too — the policy is uniform across roles', async () => {
+      const { clock, marketData, marketIntelligence } = buildDeps('crypto');
+      const flaky = flakyAnalyst('sentiment', 'optional', 1);
+      const orchestrator = new AnalystOrchestrator(
+        { market_data: marketData, market_intelligence: marketIntelligence },
+        [flaky],
+      );
+
+      const result = await orchestrator.runAnalysts(
+        'trace-1',
+        { asset: INSTRUMENT, asset_class: 'crypto' },
+        clock,
+      );
+
+      expect(flaky.attempts()).toBe(2);
+      expect(result.failures).toEqual([]);
     });
   });
 });
