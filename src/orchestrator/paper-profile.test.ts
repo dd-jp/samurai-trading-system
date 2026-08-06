@@ -214,6 +214,56 @@ describe('paperStartingProfile', () => {
     expect(verdictConfig.automation_level.stocks).toBe('auto');
   });
 
+  /**
+   * ADR-0008's two knobs. Neither was pinned when they landed, which a review
+   * pass on #428 caught by (wrongly) reporting the cadence literal as a typo:
+   * the claim was false, but nothing in the suite could have contradicted it.
+   *
+   * A digit slip here is silent and expensive in exactly the way this repo's
+   * defect pattern predicts. `15 * 60_00` still compiles, still boots, still
+   * ticks, still passes every other test in this file — and burns a fortnight's
+   * budget in hours, after which the cap refuses every debate and the run looks
+   * like a market that went quiet on day 1.
+   */
+  describe('the $50 / 14-day soak budget (ADR-0008)', () => {
+    /**
+     * #400's instrument-pass arithmetic at the 60s `DEFAULT_TICK_INTERVAL_MS`
+     * (2 crypto × 1,440 + 4 stocks × 390), against the ~$45/day estimate
+     * `paper-profile.ts` carries. Restated rather than imported because the
+     * point is to check the shipped constants against the reasoning, and a
+     * derivation that imports its own conclusion checks nothing.
+     */
+    const PASSES_PER_DAY_AT_60S = 2 * 1_440 + 4 * 390;
+    const USD_PER_PASS = 45 / PASSES_PER_DAY_AT_60S;
+    const SOAK_DAYS = 14;
+
+    it('carries the budget and the cadence ADR-0008 fixed', () => {
+      const profile = paperStartingProfile('paper');
+
+      expect(profile.llmBudgetUsd).toBe(50);
+      expect(profile.tickIntervalMs).toBe(900_000);
+    });
+
+    it('runs slowly enough that a full 14 days of passes fits inside the budget', () => {
+      // The assertion that carries the meaning: not "the literal is 900,000"
+      // but "whatever the literal is, the soak it implies is affordable". This
+      // fails at ~$420 projected spend on the 90-second cadence a `60_00` slip
+      // would produce.
+      const profile = paperStartingProfile('paper');
+      const passesPerDay = PASSES_PER_DAY_AT_60S * (60_000 / profile.tickIntervalMs);
+
+      expect(passesPerDay * SOAK_DAYS * USD_PER_PASS).toBeLessThan(profile.llmBudgetUsd);
+    });
+
+    it('does not buy that affordability by ticking too slowly to trade', () => {
+      // The opposite slip. A cadence of hours is trivially inside budget and
+      // useless: the soak's deliverable is plumbing evidence, which needs
+      // passes. Bounds the other side so the test above cannot be satisfied by
+      // making the run inert.
+      expect(paperStartingProfile('paper').tickIntervalMs).toBeLessThanOrEqual(60 * 60_000);
+    });
+  });
+
   it('refuses live mode naming the missing stop, not the retired approval channel', () => {
     // The refusal message is what an operator reads when they try to go live.
     // It used to cite "a channel that auto-approves" as a reason; ADR-0007
