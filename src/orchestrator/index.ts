@@ -251,7 +251,18 @@ const CREDENTIAL_REQUIREMENTS: readonly {
       (injected.dataSource !== undefined || injected.alpacaDataClient !== undefined),
   },
   {
-    vars: ['ANTHROPIC_API_KEY'],
+    // ADR-0009: one provider, one base URL. The per-role overrides
+    // (`NOUS_DEBATE_API_KEY`, `NOUS_SENTIMENT_API_KEY`, and the `_MODEL`
+    // pair) are deliberately NOT listed — they are optional overrides on top
+    // of these two, and demanding them would make the common single-key setup
+    // fail a pre-flight it satisfies.
+    //
+    // Skipped when `llmClient` is injected, same as the Anthropic entry this
+    // replaces: a caller supplying its own client is not asked for keys it
+    // will never read. The market-intelligence agent shares these variables
+    // and degrades to no-agent when they are absent, so it does not widen the
+    // requirement.
+    vars: ['NOUS_API_KEY', 'NOUS_BASE_URL'],
     unusedByThisRun: ({ injected }) => injected.llmClient !== undefined,
   },
   {

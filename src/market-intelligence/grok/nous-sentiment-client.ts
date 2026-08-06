@@ -1,10 +1,24 @@
 /**
- * xAI-backed `GrokSentimentClient` (#464).
+ * Nous-backed `GrokSentimentClient`, replacing the direct-to-xAI client (#464)
+ * in the single-provider cutover — see docs/adr/0009-single-provider-nous.md.
  *
- * Asks Grok for live X/Twitter sentiment on one instrument and normalises the
+ * Asks a model for X/Twitter sentiment on one instrument and normalises the
  * answer into `IntelligenceItem[]`. Deliberately thin: the cadence, the spend
  * cap and the store write all live in `GrokAgent`, so this file's only job is
- * the wire.
+ * the wire — and now not even that, since `nousChat` owns the HTTP.
+ *
+ * ## What this is NOT
+ *
+ * It is not live retrieval. The model answers from what it was trained on;
+ * nothing here searches X. That was already true of the xAI client this
+ * replaces — it posted to plain `/chat/completions` with no Live Search
+ * parameters — so the cutover changes the provider, not the honesty of the
+ * signal. What the cutover does close off is the FIX: xAI's Live Search rides
+ * on `POST /v1/responses`, and Nous proxies `chat/completions` only. A real
+ * retrieval source for this stage is a separate piece of work, not a model
+ * swap. The `source: 'twitter'` tag and the `grok` agent id are kept as-is
+ * because they are persisted in `market_intelligence` rows and renaming them
+ * is a migration, not a rename.
  *
  * ## Structured output, and what happens when it isn't
  *
@@ -13,33 +27,25 @@
  * payload, and zero items reaches the analysts as `NO_DATA_MARKER` — the same
  * degradation as an outage, which is correct: an answer we cannot read is not
  * an answer.
- *
- * ## Secret handling
- *
- * The key rides in an `Authorization` header, never in a URL, and no error
- * message here interpolates the request — same rule as
- * `telegram-errors.ts`, for the same reason.
  */
+
 import type { Logger } from '../../shared/index.js';
+import { nousChat } from '../../shared/llm/nous-chat.js';
 import type { IntelligenceItem } from '../types.js';
 import type { GrokSentimentClient } from './grok-agent.js';
 
-const DEFAULT_BASE_URL = 'https://api.x.ai/v1';
-const DEFAULT_MODEL = 'grok-4';
 const DEFAULT_TIMEOUT_MS = 30_000;
+
+/**
+ * Response budget. Ten themes of a sentence or two each fits comfortably; the
+ * cap also has to be generous enough that the model does not run out mid-JSON,
+ * because a `finish_reason: 'length'` is a hard failure by design (`nousChat`)
+ * rather than something the 4-hour bucket quietly retries.
+ */
+const DEFAULT_MAX_TOKENS = 2048;
 
 /** How many items one call may contribute. A prompt that returns 200 posts is spend, not signal. */
 const MAX_ITEMS = 10;
-
-interface XaiChoice {
-  message?: { content?: string };
-}
-
-interface XaiResponse {
-  choices?: XaiChoice[];
-  model?: string;
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
-}
 
 /** The shape the prompt asks for. Validated field by field before it becomes an item. */
 interface RawSentiment {
@@ -49,96 +55,69 @@ interface RawSentiment {
   summary?: unknown;
 }
 
-export interface XaiGrokClientOptions {
-  /** Defaults to `process.env.XAI_API_KEY`. Never logged. */
-  apiKey?: string;
-  baseUrl?: string;
-  model?: string;
+export interface NousSentimentClientOptions {
+  apiKey: string;
+  baseUrl: string;
+  model: string;
   timeoutMs?: number;
+  maxTokens?: number;
   logger?: Logger;
 }
 
-export class XaiGrokClient implements GrokSentimentClient {
+export class NousSentimentClient implements GrokSentimentClient {
   readonly #apiKey: string;
   readonly #baseUrl: string;
   readonly #model: string;
   readonly #timeoutMs: number;
+  readonly #maxTokens: number;
   readonly #logger: Logger | undefined;
 
-  constructor(options: XaiGrokClientOptions = {}) {
-    const apiKey = (options.apiKey ?? process.env.XAI_API_KEY)?.trim();
-    if (apiKey === undefined || apiKey === '') {
-      // Refuses at CONSTRUCTION, not at the first call. The composition root
-      // only builds this when the key is present, so reaching here means the
-      // key vanished between the check and the build — better to fail the boot
-      // than to fail every fourth hour with an outage that looks like xAI's.
-      throw new Error(
-        'XaiGrokClient: XAI_API_KEY is not set. Provide it via the environment (.env.local) ' +
-          'or pass { apiKey } explicitly.',
-      );
-    }
-    this.#apiKey = apiKey;
-    this.#baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
-    this.#model = options.model ?? DEFAULT_MODEL;
+  constructor(options: NousSentimentClientOptions) {
+    this.#apiKey = options.apiKey;
+    this.#baseUrl = options.baseUrl;
+    this.#model = options.model;
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.#maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
     this.#logger = options.logger;
   }
 
   async fetchSentiment(instrument: string, asOf: Date) {
     const started = Date.now();
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.#timeoutMs);
 
-    try {
-      const response = await fetch(`${this.#baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${this.#apiKey}`,
-        },
-        signal: controller.signal,
-        body: JSON.stringify({
-          model: this.#model,
-          messages: [
-            {
-              role: 'system',
-              content:
-                'You summarise live X/Twitter sentiment for one financial instrument. Reply ' +
-                'with JSON only: {"items":[{"headline":string,"sentiment":1|0|-1,' +
-                '"confidence":number 0-1,"summary":string}]}. Report at most ' +
-                `${MAX_ITEMS} distinct themes. If there is no meaningful discussion, reply ` +
-                '{"items":[]} — an empty list is a valid and useful answer, and inventing ' +
-                'sentiment to fill the list is worse than reporting none.',
-            },
-            {
-              role: 'user',
-              content: `Instrument: ${instrument}. As of: ${asOf.toISOString()}.`,
-            },
-          ],
-        }),
-      });
+    const result = await nousChat(
+      {
+        apiKey: this.#apiKey,
+        baseUrl: this.#baseUrl,
+        timeoutMs: this.#timeoutMs,
+      },
+      {
+        model: this.#model,
+        max_tokens: this.#maxTokens,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You summarise X/Twitter sentiment for one financial instrument. Reply ' +
+              'with JSON only: {"items":[{"headline":string,"sentiment":1|0|-1,' +
+              '"confidence":number 0-1,"summary":string}]}. Report at most ' +
+              `${MAX_ITEMS} distinct themes. If there is no meaningful discussion, reply ` +
+              '{"items":[]} — an empty list is a valid and useful answer, and inventing ' +
+              'sentiment to fill the list is worse than reporting none.',
+          },
+          {
+            role: 'user',
+            content: `Instrument: ${instrument}. As of: ${asOf.toISOString()}.`,
+          },
+        ],
+      },
+    );
 
-      if (!response.ok) {
-        // Status only — the body can echo the request, and the request carries
-        // the key.
-        throw new Error(`xAI responded ${response.status}`);
-      }
-
-      const body = (await response.json()) as XaiResponse;
-      const items = this.#parseItems(body, instrument, asOf);
-
-      return {
-        items,
-        model: body.model ?? this.#model,
-        usage: {
-          input_tokens: body.usage?.prompt_tokens ?? 0,
-          output_tokens: body.usage?.completion_tokens ?? 0,
-        },
-        latency_ms: Date.now() - started,
-      };
-    } finally {
-      clearTimeout(timer);
-    }
+    return {
+      items: this.#parseItems(result.text, instrument, asOf),
+      model: result.model,
+      usage: result.usage,
+      latency_ms: Date.now() - started,
+    };
   }
 
   /**
@@ -148,9 +127,8 @@ export class XaiGrokClient implements GrokSentimentClient {
    * an answer we cannot decode is not an answer, and it must not be
    * distinguishable from an outage by accident.
    */
-  #parseItems(body: XaiResponse, instrument: string, asOf: Date): IntelligenceItem[] {
-    const content = body.choices?.[0]?.message?.content;
-    if (typeof content !== 'string' || content.trim() === '') return [];
+  #parseItems(content: string, instrument: string, asOf: Date): IntelligenceItem[] {
+    if (content.trim() === '') return [];
 
     let parsed: { items?: unknown };
     try {
@@ -209,7 +187,7 @@ export class XaiGrokClient implements GrokSentimentClient {
       stage: 'market_intelligence',
       level: 'warn',
       message:
-        `grok: could not parse the sentiment response for ${instrument}; reporting zero items. ` +
+        `sentiment: could not parse the response for ${instrument}; reporting zero items. ` +
         'The call still counted against the spend cap — it cost money and produced nothing.',
       payload: { instrument },
     });

@@ -156,7 +156,8 @@ describe('missingCredentialEnvVars', () => {
   const CREDENTIALS = [
     'ALPACA_API_KEY',
     'ALPACA_API_SECRET',
-    'ANTHROPIC_API_KEY',
+    'NOUS_API_KEY',
+    'NOUS_BASE_URL',
     'TELEGRAM_BOT_TOKEN',
     'TELEGRAM_CHAT_ID',
     'TELEGRAM_ALLOWED_USER_IDS',
@@ -186,7 +187,8 @@ describe('missingCredentialEnvVars', () => {
     expect(missingCredentialEnvVars({}, 'log-only')).toEqual([
       'ALPACA_API_KEY',
       'ALPACA_API_SECRET',
-      'ANTHROPIC_API_KEY',
+      'NOUS_API_KEY',
+      'NOUS_BASE_URL',
     ]);
   });
 
@@ -196,7 +198,8 @@ describe('missingCredentialEnvVars', () => {
     // already reject an empty string.
     process.env.ALPACA_API_KEY = '';
     process.env.ALPACA_API_SECRET = 'set';
-    process.env.ANTHROPIC_API_KEY = 'set';
+    process.env.NOUS_API_KEY = 'set';
+    process.env.NOUS_BASE_URL = 'set';
 
     expect(missingCredentialEnvVars({}, 'log-only')).toEqual(['ALPACA_API_KEY']);
   });
@@ -209,7 +212,8 @@ describe('missingCredentialEnvVars', () => {
     // defeating the whole point of naming every missing one at once.
     process.env.ALPACA_API_KEY = ' ';
     process.env.ALPACA_API_SECRET = '\n';
-    process.env.ANTHROPIC_API_KEY = 'set';
+    process.env.NOUS_API_KEY = 'set';
+    process.env.NOUS_BASE_URL = 'set';
 
     expect(missingCredentialEnvVars({}, 'log-only')).toEqual([
       'ALPACA_API_KEY',
@@ -260,7 +264,8 @@ describe('missingCredentialEnvVars', () => {
     expect(missingCredentialEnvVars({}, 'telegram')).toEqual([
       'ALPACA_API_KEY',
       'ALPACA_API_SECRET',
-      'ANTHROPIC_API_KEY',
+      'NOUS_API_KEY',
+      'NOUS_BASE_URL',
       'TELEGRAM_BOT_TOKEN',
       'TELEGRAM_CHAT_ID',
       'TELEGRAM_HEARTBEAT_CHAT_ID',

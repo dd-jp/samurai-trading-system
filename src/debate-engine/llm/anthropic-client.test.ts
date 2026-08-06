@@ -51,7 +51,7 @@ describe('AnthropicLlmClient', () => {
       createMessage: vi.fn().mockResolvedValue(textResponse('good')),
     };
     const client = new AnthropicLlmClient(wire, {
-      model: 'claude-sonnet-5',
+      model: 'anthropic/claude-sonnet-5',
       max_tokens: 1024,
       timeoutMs: 1_000,
       retry: NO_RETRY,
@@ -62,7 +62,7 @@ describe('AnthropicLlmClient', () => {
     expect(result.data).toEqual({ value: 'good' });
     expect(result.raw_text).toBe('good');
     expect(wire.createMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ model: 'claude-sonnet-5', max_tokens: 1024 }),
+      expect.objectContaining({ model: 'anthropic/claude-sonnet-5', max_tokens: 1024 }),
       // Second argument since #347: the per-call transport options, which
       // always carry a signal (the client's own timeout signal even when the
       // caller supplied none) so a slow call can be aborted rather than left
@@ -76,7 +76,7 @@ describe('AnthropicLlmClient', () => {
       createMessage: vi.fn().mockResolvedValue(textResponse('good')),
     };
     const client = new AnthropicLlmClient(wire, {
-      model: 'claude-sonnet-5',
+      model: 'anthropic/claude-sonnet-5',
       max_tokens: 1024,
       timeoutMs: 1_000,
       retry: NO_RETRY,
@@ -95,7 +95,7 @@ describe('AnthropicLlmClient', () => {
       createMessage: vi.fn().mockResolvedValue(textResponse('good')),
     };
     const client = new AnthropicLlmClient(wire, {
-      model: 'claude-sonnet-5',
+      model: 'anthropic/claude-sonnet-5',
       max_tokens: 1024,
       timeoutMs: 1_000,
       retry: NO_RETRY,
@@ -135,7 +135,7 @@ describe('AnthropicLlmClient', () => {
       createMessage: vi.fn().mockResolvedValue(textResponse('garbage')),
     };
     const client = new AnthropicLlmClient(wire, {
-      model: 'claude-sonnet-5',
+      model: 'anthropic/claude-sonnet-5',
       max_tokens: 1024,
       timeoutMs: 1_000,
       retry: NO_RETRY,
@@ -149,7 +149,7 @@ describe('AnthropicLlmClient', () => {
       createMessage: vi.fn().mockImplementation(() => new Promise(() => {})),
     };
     const client = new AnthropicLlmClient(wire, {
-      model: 'claude-sonnet-5',
+      model: 'anthropic/claude-sonnet-5',
       max_tokens: 1024,
       timeoutMs: 500,
       retry: NO_RETRY,
@@ -168,7 +168,7 @@ describe('AnthropicLlmClient', () => {
         .mockRejectedValue(Object.assign(new Error('rate limited'), { status: 429 })),
     };
     const client = new AnthropicLlmClient(wire, {
-      model: 'claude-sonnet-5',
+      model: 'anthropic/claude-sonnet-5',
       max_tokens: 1024,
       timeoutMs: 1_000,
       retry: NO_RETRY,
@@ -182,7 +182,7 @@ describe('AnthropicLlmClient', () => {
       createMessage: vi.fn().mockRejectedValue(new Error('server exploded')),
     };
     const client = new AnthropicLlmClient(wire, {
-      model: 'claude-sonnet-5',
+      model: 'anthropic/claude-sonnet-5',
       max_tokens: 1024,
       timeoutMs: 1_000,
       retry: NO_RETRY,
@@ -199,7 +199,7 @@ describe('AnthropicLlmClient', () => {
         .mockResolvedValueOnce(textResponse('good')),
     };
     const client = new AnthropicLlmClient(wire, {
-      model: 'claude-sonnet-5',
+      model: 'anthropic/claude-sonnet-5',
       max_tokens: 1024,
       timeoutMs: 1_000,
       retry: { maxAttempts: 2, baseDelayMs: 100, maxDelayMs: 1_000 },
@@ -221,7 +221,7 @@ describe('AnthropicLlmClient', () => {
         .mockResolvedValueOnce(textResponse('good')),
     };
     const client = new AnthropicLlmClient(wire, {
-      model: 'claude-sonnet-5',
+      model: 'anthropic/claude-sonnet-5',
       max_tokens: 1024,
       timeoutMs: 1_000,
       retry: { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 1_000 },
@@ -240,7 +240,7 @@ describe('AnthropicLlmClient', () => {
       createMessage: vi.fn().mockRejectedValue(new Error('server exploded')),
     };
     const client = new AnthropicLlmClient(wire, {
-      model: 'claude-sonnet-5',
+      model: 'anthropic/claude-sonnet-5',
       max_tokens: 1024,
       timeoutMs: 1_000,
       retry: { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 1_000 },
@@ -285,7 +285,7 @@ describe('AnthropicLlmClient spend metering', () => {
     const sink = recordingSink();
     const client = new AnthropicLlmClient(
       wire,
-      { model: 'claude-haiku-4-5', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      { model: 'openai/gpt-5.6-luna', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
       sink,
     );
 
@@ -293,7 +293,7 @@ describe('AnthropicLlmClient spend metering', () => {
 
     expect(sink.records).toHaveLength(1);
     expect(sink.records[0]?.usage).toEqual({ input_tokens: 120, output_tokens: 30 });
-    expect(sink.records[0]?.model).toBe('claude-haiku-4-5');
+    expect(sink.records[0]?.model).toBe('openai/gpt-5.6-luna');
   });
 
   it('meters the SAME latency it returns to the caller (#326)', async () => {
@@ -311,7 +311,7 @@ describe('AnthropicLlmClient spend metering', () => {
     const sink = recordingSink();
     const client = new AnthropicLlmClient(
       wire,
-      { model: 'claude-haiku-4-5', max_tokens: 100, timeoutMs: 10_000, retry: NO_RETRY },
+      { model: 'openai/gpt-5.6-luna', max_tokens: 100, timeoutMs: 10_000, retry: NO_RETRY },
       sink,
     );
 
@@ -328,7 +328,7 @@ describe('AnthropicLlmClient spend metering', () => {
     const sink = recordingSink();
     const client = new AnthropicLlmClient(
       wire,
-      { model: 'claude-haiku-4-5', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      { model: 'openai/gpt-5.6-luna', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
       sink,
     );
 
@@ -352,7 +352,7 @@ describe('AnthropicLlmClient spend metering', () => {
     const sink = recordingSink();
     const client = new AnthropicLlmClient(
       wire,
-      { model: 'claude-haiku-4-5', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      { model: 'openai/gpt-5.6-luna', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
       sink,
     );
 
@@ -383,7 +383,7 @@ describe('AnthropicLlmClient spend metering', () => {
         createMessage: vi.fn().mockResolvedValue(usageResponse('good')),
       };
       const client = new AnthropicLlmClient(wire, {
-        model: 'claude-haiku-4-5',
+        model: 'openai/gpt-5.6-luna',
         max_tokens: 100,
         timeoutMs: 1000,
         retry: NO_RETRY,
@@ -462,7 +462,7 @@ describe('AnthropicLlmClient spend metering', () => {
     const sink = recordingSink();
     const client = new AnthropicLlmClient(
       wire,
-      { model: 'claude-haiku-4-5', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      { model: 'openai/gpt-5.6-luna', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
       sink,
     );
 
@@ -474,17 +474,19 @@ describe('AnthropicLlmClient spend metering', () => {
     // A server-side fallback can reroute a refused request to a differently
     // priced model; billing the requested model would price the wrong one.
     const wire: AnthropicMessagesClient = {
-      createMessage: vi.fn().mockResolvedValue(usageResponse('good', { model: 'claude-opus-4-8' })),
+      createMessage: vi
+        .fn()
+        .mockResolvedValue(usageResponse('good', { model: 'anthropic/claude-opus-4.8' })),
     };
     const sink = recordingSink();
     const client = new AnthropicLlmClient(
       wire,
-      { model: 'claude-haiku-4-5', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      { model: 'openai/gpt-5.6-luna', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
       sink,
     );
 
     await client.complete(request());
-    expect(sink.records[0]?.model).toBe('claude-opus-4-8');
+    expect(sink.records[0]?.model).toBe('anthropic/claude-opus-4.8');
   });
 
   it('records nothing when the wire client returns no usage block', async () => {
@@ -496,7 +498,7 @@ describe('AnthropicLlmClient spend metering', () => {
     const sink = recordingSink();
     const client = new AnthropicLlmClient(
       wire,
-      { model: 'claude-haiku-4-5', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      { model: 'openai/gpt-5.6-luna', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
       sink,
     );
 
@@ -515,7 +517,7 @@ describe('AnthropicLlmClient spend metering', () => {
     const client = new AnthropicLlmClient(
       wire,
       {
-        model: 'claude-haiku-4-5',
+        model: 'openai/gpt-5.6-luna',
         max_tokens: 100,
         timeoutMs: 1000,
         retry: { maxAttempts: 2, baseDelayMs: 100, maxDelayMs: 1_000 },
@@ -542,7 +544,7 @@ describe('AnthropicLlmClient spend metering', () => {
     };
     const client = new AnthropicLlmClient(
       wire,
-      { model: 'claude-haiku-4-5', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      { model: 'openai/gpt-5.6-luna', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
       {
         record: () => {
           throw new Error('disk full');
@@ -559,7 +561,7 @@ describe('AnthropicLlmClient spend metering', () => {
       createMessage: vi.fn().mockResolvedValue(usageResponse('good')),
     };
     const client = new AnthropicLlmClient(wire, {
-      model: 'claude-haiku-4-5',
+      model: 'openai/gpt-5.6-luna',
       max_tokens: 100,
       timeoutMs: 1000,
       retry: NO_RETRY,
@@ -574,7 +576,7 @@ describe('AnthropicLlmClient spend metering', () => {
         createMessage: vi.fn().mockResolvedValue(textResponse('good')),
       };
       const client = new AnthropicLlmClient(wire, {
-        model: 'claude-sonnet-5',
+        model: 'anthropic/claude-sonnet-5',
         max_tokens: 1024,
         timeoutMs: 1_000,
         retry: NO_RETRY,
@@ -592,7 +594,7 @@ describe('AnthropicLlmClient spend metering', () => {
         createMessage: vi.fn().mockResolvedValue(textResponse('good')),
       };
       const client = new AnthropicLlmClient(wire, {
-        model: 'claude-sonnet-5',
+        model: 'anthropic/claude-sonnet-5',
         max_tokens: 1024,
         timeoutMs: 1_000,
         retry: NO_RETRY,
@@ -620,7 +622,7 @@ describe('AnthropicLlmClient spend metering', () => {
         ),
       };
       const client = new AnthropicLlmClient(wire, {
-        model: 'claude-sonnet-5',
+        model: 'anthropic/claude-sonnet-5',
         max_tokens: 1024,
         timeoutMs: 60_000,
         // Retries deliberately ENABLED: a cancellation that classified as
@@ -652,7 +654,7 @@ describe('AnthropicLlmClient spend metering', () => {
         ),
       };
       const client = new AnthropicLlmClient(wire, {
-        model: 'claude-sonnet-5',
+        model: 'anthropic/claude-sonnet-5',
         max_tokens: 1024,
         timeoutMs: 60_000,
         retry: NO_RETRY,
@@ -678,7 +680,7 @@ describe('AnthropicLlmClient spend metering', () => {
         }),
       };
       const client = new AnthropicLlmClient(wire, {
-        model: 'claude-sonnet-5',
+        model: 'anthropic/claude-sonnet-5',
         max_tokens: 1024,
         timeoutMs: 1_000,
         retry: NO_RETRY,
@@ -699,7 +701,7 @@ describe('AnthropicLlmClient spend metering', () => {
         createMessage: vi.fn().mockResolvedValue(textResponse('good')),
       };
       const client = new AnthropicLlmClient(wire, {
-        model: 'claude-sonnet-5',
+        model: 'anthropic/claude-sonnet-5',
         max_tokens: 1024,
         timeoutMs: 30_000,
         retry: NO_RETRY,

@@ -1239,11 +1239,17 @@ function buildProfileConfigs(): Pick<
      *   ~700 cycles -> ~1,400 debates.
      * - Weekday total ~1,800 debates; a weekend day is crypto-only, ~1,900.
      *
-     * At `DEFAULT_ANTHROPIC_MODEL` (claude-haiku-4-5, $1/M in and $5/M out)
-     * and 3 LLM calls per round over 1-3 rounds (`MAX_ROUNDS`, early exit on
-     * convergence), a debate is roughly $0.012-$0.045. So **~$45/day, with a
-     * defensible range of $25-$90, and ~$650 over the 14-day soak** —
-     * against ~$29/day for BTC-USD alone today.
+     * At the debate role's default model (`openai/gpt-5.6-luna`, $0.10/M in
+     * and $0.60/M out — ADR-0009) and 3 LLM calls per round over 1-3 rounds
+     * (`MAX_ROUNDS`, early exit on convergence), a debate is roughly
+     * $0.0015-$0.0055. So **~$5.4/day, with a defensible range of $3-$11, and
+     * ~$78 over the 14-day soak**.
+     *
+     * That is the arithmetic BEFORE ADR-0008's 15-minute cadence, which is
+     * what the numbers above are drawn against; the cadence was chosen when a
+     * debate cost roughly 8x this. ADR-0009 therefore reopens cadence as a
+     * lever — it does not pull it. Changing the interval is its own decision
+     * with its own evidence, not a side effect of a provider swap.
      *
      * Two things that make the range wide rather than the estimate precise,
      * both stated rather than smoothed over: debates that complete FASTER than

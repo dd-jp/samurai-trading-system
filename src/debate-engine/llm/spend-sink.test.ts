@@ -38,7 +38,7 @@ describe('SqliteLlmSpendStore', () => {
     new SqliteLlmSpendStore(db).record({
       trace_id: 'trace-1',
       stage: 'debate',
-      model: 'claude-haiku-4-5-20251001',
+      model: 'openai/gpt-5.6-luna',
       usage: { input_tokens: 1_000_000, output_tokens: 1_000_000 },
       latency_ms: 1_234,
       timestamp: NOW,
@@ -48,7 +48,7 @@ describe('SqliteLlmSpendStore', () => {
     expect(row?.trace_id).toBe('trace-1');
     expect(row?.input_tokens).toBe(1_000_000);
     expect(row?.output_tokens).toBe(1_000_000);
-    expect(row?.cost_usd).toBeCloseTo(6, 10);
+    expect(row?.cost_usd).toBeCloseTo(0.7, 10);
     expect(row?.timestamp).toBe(NOW.toISOString());
   });
 
@@ -57,7 +57,7 @@ describe('SqliteLlmSpendStore', () => {
     new SqliteLlmSpendStore(db).record({
       trace_id: 'trace-1',
       stage: 'debate',
-      model: 'claude-haiku-4-5',
+      model: 'openai/gpt-5.6-luna',
       usage: { input_tokens: 10, output_tokens: 10 },
       latency_ms: 10,
       timestamp: NOW,
@@ -73,7 +73,7 @@ describe('SqliteLlmSpendStore', () => {
     new SqliteLlmSpendStore(db).record({
       trace_id: 'trace-1',
       stage: 'debate',
-      model: 'claude-unreleased-9',
+      model: 'vendor/unreleased-9',
       usage: { input_tokens: 4_242, output_tokens: 99 },
       latency_ms: 99,
       timestamp: NOW,
@@ -100,7 +100,7 @@ describe('SqliteLlmSpendStore', () => {
       store.record({
         trace_id: 'trace-1',
         stage: 'debate',
-        model: 'claude-haiku-4-5',
+        model: 'openai/gpt-5.6-luna',
         usage: { input_tokens: 1, output_tokens: 1 },
         latency_ms: 1,
         timestamp: NOW,
@@ -120,7 +120,7 @@ describe('SqliteLlmSpendStore', () => {
       trace_id: 'trace-1',
       stage: 'debate',
       debate_id: 'debate-abc',
-      model: 'claude-haiku-4-5',
+      model: 'openai/gpt-5.6-luna',
       usage: { input_tokens: 10, output_tokens: 10 },
       latency_ms: 4_321,
       timestamp: NOW,
@@ -142,7 +142,7 @@ describe('SqliteLlmSpendStore', () => {
       trace_id: 'trace-1',
       stage: 'debate',
       debate_id: 'debate-abc',
-      model: 'claude-haiku-4-5',
+      model: 'openai/gpt-5.6-luna',
       usage: { input_tokens: 1, output_tokens: 1 },
       latency_ms: 0,
       timestamp: NOW,
@@ -162,7 +162,7 @@ describe('SqliteLlmSpendStore', () => {
     new SqliteLlmSpendStore(db).record({
       trace_id: 'trace-1',
       stage: 'debate',
-      model: 'claude-haiku-4-5',
+      model: 'openai/gpt-5.6-luna',
       usage: { input_tokens: 7, output_tokens: 3 },
       latency_ms: 55,
       timestamp: NOW,
@@ -182,7 +182,7 @@ describe('SqliteLlmSpendStore', () => {
       store.record({
         trace_id: 'trace-1',
         stage: 'debate',
-        model: 'claude-haiku-4-5',
+        model: 'openai/gpt-5.6-luna',
         usage: { input_tokens: 1, output_tokens: 1 },
         latency_ms: 1,
         timestamp: NOW,

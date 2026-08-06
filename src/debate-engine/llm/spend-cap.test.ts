@@ -15,7 +15,7 @@ function spend(db: SharedStore, costUsd: number, id: string): void {
        input_tokens, output_tokens,
        cache_creation_input_tokens, cache_read_input_tokens,
        cost_usd, latency_ms, timestamp
-     ) VALUES (?, 'debate', ?, 'claude-haiku-4-5-20251001', 100, 100, 0, 0, ?, 10, ?)`,
+     ) VALUES (?, 'debate', ?, 'openai/gpt-5.6-luna', 100, 100, 0, 0, ?, 10, ?)`,
   ).run(`trace-${id}`, `debate-${id}`, costUsd, new Date().toISOString());
 }
 

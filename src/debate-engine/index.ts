@@ -3,6 +3,19 @@
  * Implemented ticket-by-ticket starting with #24.
  */
 
+// Re-exported from `shared/llm` rather than owned here: the sentiment agent
+// prices against the same table, and `shared/llm/nous-config.ts` reads it to
+// refuse an unpriced model at startup. Kept on this barrel because the debate
+// engine's spend meter is still its principal consumer.
+export type { AnthropicUsage, ModelRate } from '../shared/llm/pricing.js';
+export {
+  CACHE_READ_MULTIPLIER,
+  CACHE_WRITE_MULTIPLIER,
+  MODEL_RATES,
+  pricedModels,
+  priceUsage,
+  rateFor,
+} from '../shared/llm/pricing.js';
 export type { DebateLog, DebateLogStore } from '../shared/types.js';
 export type { AnalystRoundStance } from './analyst-contribution.js';
 export { buildAnalystContributions } from './analyst-contribution.js';
@@ -39,12 +52,6 @@ export type {
   AnthropicMessagesClient,
 } from './llm/anthropic-client.js';
 export { AnthropicLlmClient } from './llm/anthropic-client.js';
-export type { AnthropicHttpClientOptions } from './llm/anthropic-http-client.js';
-export {
-  AnthropicApiError,
-  AnthropicHttpMessagesClient,
-  DEFAULT_ANTHROPIC_MODEL,
-} from './llm/anthropic-http-client.js';
 export type { LlmError } from './llm/errors.js';
 export {
   LlmCancelledError,
@@ -54,14 +61,8 @@ export {
   LlmTimeoutError,
 } from './llm/errors.js';
 export { MockLlmClient } from './llm/mock-client.js';
-export type { AnthropicUsage, ModelRate } from './llm/pricing.js';
-export {
-  CACHE_READ_MULTIPLIER,
-  CACHE_WRITE_MULTIPLIER,
-  MODEL_RATES,
-  priceUsage,
-  rateFor,
-} from './llm/pricing.js';
+export type { NousMessagesClientOptions } from './llm/nous-messages-client.js';
+export { NousMessagesClient } from './llm/nous-messages-client.js';
 export type { SpendCap, SpendCapVerdict } from './llm/spend-cap.js';
 export { SqliteSpendCap, UNCAPPED_SPEND } from './llm/spend-cap.js';
 export type { LlmSpendRecord, LlmSpendSink } from './llm/spend-sink.js';

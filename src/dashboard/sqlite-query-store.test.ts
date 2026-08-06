@@ -252,7 +252,7 @@ describe('SqliteQueryStore.getLlmSpend', () => {
       `INSERT INTO llm_spend (
          trace_id, stage, model, input_tokens, output_tokens,
          cache_creation_input_tokens, cache_read_input_tokens, cost_usd, timestamp
-       ) VALUES ('t', 'debate', 'claude-haiku-4-5', 100, 20, 5, 50, ?, ?)`,
+       ) VALUES ('t', 'debate', 'openai/gpt-5.6-luna', 100, 20, 5, 50, ?, ?)`,
     ).run(cost, at.toISOString());
   }
 
@@ -349,7 +349,7 @@ describe('SqliteQueryStore.getLlmSpend per-debate percentiles', () => {
       `INSERT INTO llm_spend (
          trace_id, stage, debate_id, model, input_tokens, output_tokens,
          cache_creation_input_tokens, cache_read_input_tokens, cost_usd, latency_ms, timestamp
-       ) VALUES ('t', 'debate', ?, 'claude-haiku-4-5', 100, 20, 5, 50, ?, ?, ?)`,
+       ) VALUES ('t', 'debate', ?, 'openai/gpt-5.6-luna', 100, 20, 5, 50, ?, ?, ?)`,
     ).run(call.debate_id, call.cost, call.latency, call.at.toISOString());
   }
 

@@ -20,9 +20,9 @@
  * trading decision.
  */
 
+import { type AnthropicUsage, priceUsage } from '../../shared/llm/pricing.js';
 import type { SharedStore } from '../../shared/store/index.js';
 import type { Logger } from '../../shared/types.js';
-import { type AnthropicUsage, priceUsage } from './pricing.js';
 
 /** One metered API call, as handed to the sink. */
 export interface LlmSpendRecord {

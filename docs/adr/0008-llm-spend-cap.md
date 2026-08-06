@@ -16,6 +16,14 @@ Two facts shaped how that can be achieved:
 1. **Model choice is not a lever.** Debates already run on
    `claude-haiku-4-5-20251001`, the cheapest model in `pricing.ts`. There is
    nothing cheaper to move to.
+
+   > **Amended by [ADR-0009](0009-single-provider-nous.md) (2026-08-06).** No
+   > longer true. That was a statement about a single-vendor price table;
+   > moving to the Nous portal reprices the question, and the debate now runs
+   > on `openai/gpt-5.6-luna` at roughly $5 per 14 days rather than $42. The
+   > rest of this ADR stands — the cap counts dollars against `llm_spend` and
+   > does not care which provider produced a row. ADR-0009 reopens cadence as
+   > a lever; it deliberately does not pull it.
 2. **Cadence is the only lever, and it is an imprecise one.** `startTickLoop`
    is a `setTimeout` **chain**, so a cycle is `pass duration + interval`, not a
    fixed period. Scaling spend proportionally with the interval is therefore an

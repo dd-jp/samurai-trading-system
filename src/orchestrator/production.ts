@@ -27,22 +27,22 @@
  * seam beats a fabricated implementation.
  *
  * Most of them have since been filled in: `AlpacaHttpBrokerClient` /
- * `AlpacaHttpDataClient` (#273/#286) and `AnthropicHttpMessagesClient` (#274)
- * are built here by default, and `TelegramBotApiClient` (#275) is built one
+ * `AlpacaHttpDataClient` (#273/#286) and `NousMessagesClient` (#274, retargeted
+ * at Nous by ADR-0009) are built here by default, and `TelegramBotApiClient` (#275) is built one
  * level up, in `startFromEnvironment`, and passed in as the three alert
  * channels below (#322 — see alert-transport.ts for why the *selection*
  * belongs at the entrypoint rather than here). `CiiScoreProvider` is the one
  * genuinely unimplemented transport left, deliberately parked (ADR-0002).
  *
- * The LLM provider is the one exception: since #274, `AnthropicHttpMessagesClient`
- * (debate-engine/llm/anthropic-http-client.ts) is a real, in-repo
+ * The LLM provider is the one exception: since #274, `NousMessagesClient`
+ * (debate-engine/llm/nous-messages-client.ts) is a real, in-repo
  * `AnthropicMessagesClient` implementation, so this module builds the
  * `AnthropicLlmClient` Debate/disagreement-detection close over by default —
  * `ProductionConfig.llmClient` is now an optional override (same shape as
- * `broker`/`dataSource` below), not a required seam. The default reads
- * `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL` from the environment (see
- * `buildDefaultLlmClient`), which logs a `warn` at build time so a live
- * client being constructed — real per-call spend — is never silent.
+ * `broker`/`dataSource` below), not a required seam. The default resolves its
+ * key, model and base URL through `nousCredentials('debate')` (see
+ * `buildDefaultLlmClient`), and logs a `warn` at build time so a live client
+ * being constructed — real per-call spend — is never silent.
  *
  * ## Two entry points, not one
  *
@@ -121,9 +121,8 @@ import type {
   SpendCap,
 } from '../debate-engine/index.js';
 import {
-  AnthropicHttpMessagesClient,
   AnthropicLlmClient,
-  DEFAULT_ANTHROPIC_MODEL,
+  NousMessagesClient,
   RateLimiter,
   SqliteDebateLogStore,
   SqliteLlmSpendStore,
@@ -182,7 +181,7 @@ import {
   type CiiScoreProvider,
   GrokAgent,
   MarketIntelligenceStore,
-  XaiGrokClient,
+  NousSentimentClient,
 } from '../market-intelligence/index.js';
 import type {
   CorrelationConfig,
@@ -198,6 +197,7 @@ import type {
   VenuePacingConfig,
 } from '../shared/index.js';
 import { resolveVenuePacing, TokenBucket } from '../shared/index.js';
+import { nousCredentials, tryNousCredentials } from '../shared/llm/index.js';
 import type { SharedStore as SqliteHandle } from '../shared/store/index.js';
 import { SqliteRiskLogStore, SqliteTraderLogStore } from '../shared/store/index.js';
 import type { TraderConfig } from '../trader/index.js';
@@ -426,13 +426,14 @@ export interface ProductionConfig {
   dataSource?: DataSource;
   /**
    * Overrides the `AnthropicLlmClient` this module would otherwise build
-   * around `AnthropicHttpMessagesClient` (#274) — same rationale as
-   * `broker`/`dataSource`, for tests (`MockLlmClient`) or a future non-
-   * Anthropic provider. When omitted, the default reads `ANTHROPIC_API_KEY`
-   * (required) and `ANTHROPIC_MODEL` (optional, defaults to
-   * `DEFAULT_ANTHROPIC_MODEL`) from the environment — and logs a `warn` via
+   * around `NousMessagesClient` (#274, retargeted by ADR-0009) — same
+   * rationale as `broker`/`dataSource`, for tests (`MockLlmClient`) or a
+   * future second provider. When omitted, the default resolves
+   * `NOUS_BASE_URL`, a key (`NOUS_DEBATE_API_KEY` or `NOUS_API_KEY`) and a
+   * model (`NOUS_DEBATE_MODEL`, `NOUS_MODEL`, else the role default) through
+   * `nousCredentials('debate')` — and logs a `warn` via
    * `ProductionConfig.logger` at build time, since this silently turns on
-   * real, billed Anthropic API calls whenever the key happens to be set.
+   * real, billed API calls whenever the key happens to be set.
    */
   llmClient?: LlmClient;
   /**
@@ -852,15 +853,17 @@ export const DEFAULT_LLM_CLIENT_CONFIG: Omit<AnthropicLlmClientConfig, 'model'> 
 };
 
 /**
- * The default `LlmClient`: `AnthropicHttpMessagesClient` (#274, real
- * `fetch`-based `AnthropicMessagesClient`) wrapped in the pre-existing
- * `AnthropicLlmClient` (retry/timeout/error-classification/prompt-safety
- * unchanged by this ticket). `ANTHROPIC_MODEL` overrides
- * `DEFAULT_ANTHROPIC_MODEL`; `ANTHROPIC_API_KEY` is read by
- * `AnthropicHttpMessagesClient` itself (and throws if absent) rather than
- * duplicated here.
+ * The default `LlmClient`: `NousMessagesClient` (#274, real `fetch`-based
+ * `AnthropicMessagesClient`, retargeted at Nous by ADR-0009) wrapped in the
+ * pre-existing `AnthropicLlmClient` (retry/timeout/error-classification/
+ * prompt-safety unchanged). Key, model and base URL come from
+ * `nousCredentials('debate')`, which throws — naming the variable that would
+ * fix it — when the key or base URL is absent, or when the model has no rate
+ * in `MODEL_RATES`. That last one is not fussiness: an unpriced call records a
+ * null `cost_usd`, and the spend cap sums nulls as zero, so an unrecognised
+ * model would silently remove ADR-0008's ceiling.
  *
- * `AnthropicHttpMessagesClient` keeps its own default `fetchWithTimeout`
+ * `NousMessagesClient` keeps its own default `fetchWithTimeout`
  * budget rather than being handed `config.timeoutMs` here: that value already
  * governs the outer race in `AnthropicLlmClient.callWithTimeout`, which starts
  * its timer strictly before `createMessage()` is even called, so it is the
@@ -872,28 +875,28 @@ export const DEFAULT_LLM_CLIENT_CONFIG: Omit<AnthropicLlmClientConfig, 'model'> 
  */
 /** Exported for `production.test.ts` — lets the test assert the constructed client's actual shape (instance type, model, retry/timeout config) rather than only the startup warn log's side effect (PR #284 review). */
 export function buildDefaultLlmClient(logger: Logger, spendSink?: LlmSpendSink): LlmClient {
-  const model = process.env.ANTHROPIC_MODEL ?? DEFAULT_ANTHROPIC_MODEL;
+  const { apiKey, baseUrl, model } = nousCredentials('debate');
   // Loud, not silent: omitting `ProductionConfig.llmClient` now means a real,
-  // billed Anthropic API call per debate round rather than a required seam
+  // billed API call per debate round rather than a required seam
   // (kimi-3-review on #284) — this is the one signal that the live default
-  // was built instead of a test/mock override.
+  // was built instead of a test/mock override. The model is in the payload
+  // because it is the field that decides both the bill and the behaviour.
   logger.log({
     trace_id: 'startup',
     stage: 'orchestrator',
     level: 'warn',
-    message:
-      'ProductionConfig.llmClient not supplied — building live AnthropicHttpMessagesClient default',
+    message: 'ProductionConfig.llmClient not supplied — building live NousMessagesClient default',
     payload: { model },
   });
   const config: AnthropicLlmClientConfig = {
     ...DEFAULT_LLM_CLIENT_CONFIG,
     model,
   };
-  const client = new AnthropicHttpMessagesClient();
+  const client = new NousMessagesClient({ apiKey, baseUrl });
   // `spendSink` is only ever supplied on this default path, and deliberately
-  // so: a `ProductionConfig.llmClient` override is a test double or a
-  // non-Anthropic provider, and metering one against an Anthropic price table
-  // would produce a confidently wrong dollar figure. An overridden client
+  // so: a `ProductionConfig.llmClient` override is a test double or another
+  // provider, and metering one against the Nous price table would produce a
+  // confidently wrong dollar figure. An overridden client
   // meters nothing, and the dashboard's spend tile reads $0 — visibly empty
   // rather than quietly fictional.
   return new AnthropicLlmClient(client, config, spendSink);
@@ -1529,20 +1532,32 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     mode: config.mode,
   };
 
-  // #464. Built ONLY when XAI_API_KEY is present. Absent is the honest
-  // default rather than a silent no-op: with no key the analysts keep
+  // #464, retargeted at Nous by ADR-0009. The off switch used to be the
+  // absence of XAI_API_KEY; under a single provider that no longer works,
+  // because the key this agent would use is the same one the debate requires.
+  // So the switch is explicit: SAMURAI_SENTIMENT=off. Anything else runs it.
+  //
+  // Off is an honest state rather than a silent no-op — the analysts keep
   // reporting NO_DATA_MARKER (#463), which says "never had an input" rather
   // than presenting the absence as a neutral read.
   //
   // Metering is what makes this affordable to leave on: the agent records
   // every call into `llm_spend` under `stage: 'market_intelligence'`, so
-  // ADR-0008's cap is cross-provider rather than Anthropic-only, and it checks
-  // that cap BEFORE calling.
+  // ADR-0008's cap covers this stage too, and it checks that cap BEFORE
+  // calling.
+  const sentimentEnabled = process.env.SAMURAI_SENTIMENT?.trim().toLowerCase() !== 'off';
+  // `tryNousCredentials` rather than `nousCredentials`: an unconfigured Nous
+  // environment degrades this optional stage to no-agent instead of failing
+  // the boot, which is how the absent `XAI_API_KEY` behaved before ADR-0009
+  // and what every test injecting its own `llmClient` relies on. An UNPRICED
+  // model still throws from in there — that is a hole in the spend cap, not a
+  // configuration gap.
+  const sentimentCredentials = sentimentEnabled ? tryNousCredentials('sentiment') : undefined;
   const grokAgent =
-    process.env.XAI_API_KEY?.trim() === undefined || process.env.XAI_API_KEY?.trim() === ''
+    sentimentCredentials === undefined
       ? undefined
       : new GrokAgent({
-          client: new XaiGrokClient({ logger }),
+          client: new NousSentimentClient({ ...sentimentCredentials, logger }),
           store: marketIntelligence,
           spendCap,
           spendSink: new SqliteLlmSpendStore(config.db, logger),
@@ -1556,9 +1571,11 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       stage: 'market_intelligence',
       level: 'warn',
       message:
-        'XAI_API_KEY is not set, so no market-intelligence agent is running. `sentiment` and ' +
-        '`fundamental` will report NO DATA on every tick — crypto debates run 1 real analyst ' +
-        'of 2 and equity debates 1 of 3. See #436/#464.',
+        (sentimentEnabled
+          ? 'Nous is not configured for the sentiment role, so no market-intelligence agent is running. '
+          : 'SAMURAI_SENTIMENT=off, so no market-intelligence agent is running. ') +
+        '`sentiment` and `fundamental` will report NO DATA on every tick — crypto debates run ' +
+        '1 real analyst of 2 and equity debates 1 of 3. See #436/#464.',
       payload: {},
     });
   }
@@ -1568,8 +1585,8 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // adapter's doc comment (issue #358 item 4).
     analysts: buildAnalystsStep(analysts, logger, {
       skipAlerts: config.analystSkipAlerts ?? new LoggingAnalystSkipAlertChannel(logger),
-      // #464: the only writer `MarketIntelligenceStore` has. Built ONLY when
-      // XAI_API_KEY is present — no key, no calls, and the analysts keep
+      // #464: the only writer `MarketIntelligenceStore` has. Absent under
+      // SAMURAI_SENTIMENT=off — no agent, no calls, and the analysts keep
       // reporting NO_DATA_MARKER (#463), which is the honest default rather
       // than a silent no-op. The agent's own 4h bucket makes calling it on
       // every pass cheap: it returns immediately unless the bucket rolled.

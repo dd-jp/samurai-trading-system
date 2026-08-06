@@ -238,4 +238,7 @@ export {
   type GrokSentimentClient,
   type GrokSpendSink,
 } from './grok/grok-agent.js';
-export { XaiGrokClient, type XaiGrokClientOptions } from './grok/xai-client.js';
+export {
+  NousSentimentClient,
+  type NousSentimentClientOptions,
+} from './grok/nous-sentiment-client.js';

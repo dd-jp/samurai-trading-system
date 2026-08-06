@@ -12,12 +12,7 @@
  */
 import type { MetricsSuite } from '../cost-model-backtest/index.js';
 import { CostModelImpl } from '../cost-model-backtest/index.js';
-import {
-  AnthropicLlmClient,
-  DEFAULT_ANTHROPIC_MODEL,
-  MockLlmClient,
-  SqliteDebateLogStore,
-} from '../debate-engine/index.js';
+import { AnthropicLlmClient, MockLlmClient, SqliteDebateLogStore } from '../debate-engine/index.js';
 import { SimulatedBrokerAdapter, SqliteExecutionStore } from '../execution/index.js';
 import type { DailyMetricsSample, FeedbackConfig } from '../feedback-loop/index.js';
 import { SqliteTuningStore } from '../feedback-loop/index.js';
@@ -33,6 +28,7 @@ import {
 import type { VolatilityReading } from '../risk-manager/index.js';
 import type { OrderIntent } from '../shared/index.js';
 import { SimulatedClock } from '../shared/index.js';
+import { DEFAULT_NOUS_MODELS } from '../shared/llm/index.js';
 import { openSharedStore, type SharedStore as SqliteHandle } from '../shared/store/index.js';
 import { SqliteSetupStore } from '../trader/index.js';
 import type { ApprovalOutcome, ApprovalRequest, VerdictDecision } from '../verdict/index.js';
@@ -415,26 +411,47 @@ describe('buildProductionComponents', () => {
  * being optional now takes when omitted (kimi-3-review on #284: MEDIUM-tier
  * wiring with no matching test at the time). Only the build-time seam is
  * exercised here (env parsing, missing-key throw, the startup `warn` log) —
- * the built `AnthropicHttpMessagesClient` itself never has `createMessage`
- * called, so no `fetch` stub is needed.
+ * the built `NousMessagesClient` itself never has `createMessage` called, so
+ * no `fetch` stub is needed.
  */
 describe('buildProductionComponents (default llmClient fallback)', () => {
   let db: SqliteHandle;
-  let previousApiKey: string | undefined;
-  let previousModel: string | undefined;
+  const NOUS_VARS = [
+    'NOUS_API_KEY',
+    'NOUS_BASE_URL',
+    'NOUS_MODEL',
+    'NOUS_DEBATE_API_KEY',
+    'NOUS_DEBATE_MODEL',
+    'NOUS_SENTIMENT_API_KEY',
+    'NOUS_SENTIMENT_MODEL',
+    'SAMURAI_SENTIMENT',
+  ] as const;
+  let previous: Partial<Record<(typeof NOUS_VARS)[number], string | undefined>> = {};
 
   beforeEach(() => {
     db = openSharedStore(':memory:');
-    previousApiKey = process.env.ANTHROPIC_API_KEY;
-    previousModel = process.env.ANTHROPIC_MODEL;
+    previous = {};
+    for (const name of NOUS_VARS) {
+      previous[name] = process.env[name];
+      delete process.env[name];
+    }
+    // The default configured state for these tests: a base URL and a shared
+    // key, so the debate client builds. Individual tests delete what they are
+    // about.
+    process.env.NOUS_BASE_URL = 'https://nous.test/v1';
+    process.env.NOUS_API_KEY = 'test-fake-nous-key';
+    // The sentiment agent shares these variables and would otherwise build a
+    // live client on every case here. It has its own tests.
+    process.env.SAMURAI_SENTIMENT = 'off';
   });
 
   afterEach(() => {
     db.close();
-    if (previousApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
-    else process.env.ANTHROPIC_API_KEY = previousApiKey;
-    if (previousModel === undefined) delete process.env.ANTHROPIC_MODEL;
-    else process.env.ANTHROPIC_MODEL = previousModel;
+    for (const name of NOUS_VARS) {
+      const value = previous[name];
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
   });
 
   function configWithoutLlmClient(overrides: Partial<ProductionConfig> = {}): ProductionConfig {
@@ -442,15 +459,31 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
     return rest;
   }
 
-  it('throws when ANTHROPIC_API_KEY is unset and llmClient is omitted', () => {
-    delete process.env.ANTHROPIC_API_KEY;
+  it('throws when no Nous key is set and llmClient is omitted', () => {
+    delete process.env.NOUS_API_KEY;
 
-    expect(() => buildProductionComponents(configWithoutLlmClient())).toThrow(/ANTHROPIC_API_KEY/);
+    expect(() => buildProductionComponents(configWithoutLlmClient())).toThrow(/NOUS_API_KEY/);
   });
 
-  it('logs a startup warn and defaults to DEFAULT_ANTHROPIC_MODEL when built live', () => {
-    process.env.ANTHROPIC_API_KEY = 'test-fake-anthropic-key';
-    delete process.env.ANTHROPIC_MODEL;
+  it('throws when NOUS_BASE_URL is unset — there is deliberately no default endpoint', () => {
+    delete process.env.NOUS_BASE_URL;
+
+    expect(() => buildProductionComponents(configWithoutLlmClient())).toThrow(/NOUS_BASE_URL/);
+  });
+
+  /**
+   * The one that matters for the money. An unpriced model records a null
+   * `cost_usd`, the spend cap sums nulls as zero, and ADR-0008's $50/14d
+   * ceiling silently stops existing. Refusing at build time is what keeps that
+   * from being a runtime surprise nobody sees.
+   */
+  it('refuses a model with no rate in MODEL_RATES, because unpriced means uncapped', () => {
+    process.env.NOUS_DEBATE_MODEL = 'vendor/not-a-real-model';
+
+    expect(() => buildProductionComponents(configWithoutLlmClient())).toThrow(/MODEL_RATES/);
+  });
+
+  it('logs a startup warn and defaults to the debate role model when built live', () => {
     const logger = recordingLogger();
 
     buildProductionComponents(configWithoutLlmClient({ logger }));
@@ -458,29 +491,30 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
     // Found by CONTENT, not by being the first warn: the root emits several
     // startup warnings (the spend cap adds one), and position is not a
     // property this test is about.
-    const warning = logger.entries.find((entry) =>
-      entry.message.includes('AnthropicHttpMessagesClient'),
-    );
+    const warning = logger.entries.find((entry) => entry.message.includes('NousMessagesClient'));
     expect(warning?.level).toBe('warn');
-    expect(warning?.payload).toMatchObject({ model: DEFAULT_ANTHROPIC_MODEL });
+    expect(warning?.payload).toMatchObject({ model: DEFAULT_NOUS_MODELS.debate });
   });
 
-  it('honors ANTHROPIC_MODEL as an override in the logged payload', () => {
-    process.env.ANTHROPIC_API_KEY = 'test-fake-anthropic-key';
-    process.env.ANTHROPIC_MODEL = 'claude-custom-model';
+  it('honors NOUS_DEBATE_MODEL as an override in the logged payload', () => {
+    process.env.NOUS_DEBATE_MODEL = 'anthropic/claude-haiku-4.5';
     const logger = recordingLogger();
 
     buildProductionComponents(configWithoutLlmClient({ logger }));
 
-    const warning = logger.entries.find((entry) =>
-      entry.message.includes('AnthropicHttpMessagesClient'),
-    );
-    expect(warning?.payload).toMatchObject({ model: 'claude-custom-model' });
+    const warning = logger.entries.find((entry) => entry.message.includes('NousMessagesClient'));
+    expect(warning?.payload).toMatchObject({ model: 'anthropic/claude-haiku-4.5' });
+  });
+
+  it('prefers the role-specific key over the shared one', () => {
+    delete process.env.NOUS_API_KEY;
+    process.env.NOUS_DEBATE_API_KEY = 'test-fake-debate-key';
+    const logger = recordingLogger();
+
+    expect(() => buildProductionComponents(configWithoutLlmClient({ logger }))).not.toThrow();
   });
 
   it('builds a real AnthropicLlmClient wrapping the live client, not just a log side effect', () => {
-    process.env.ANTHROPIC_API_KEY = 'test-fake-anthropic-key';
-    delete process.env.ANTHROPIC_MODEL;
     const logger = recordingLogger();
 
     const client = buildDefaultLlmClient(logger);

@@ -29,10 +29,11 @@
  * sums `cost_usd` and does not care which provider produced the row. Two
  * things make that real rather than decorative: `stage: 'market_intelligence'`
  * (the column exists precisely so a non-debate caller's spend cannot land in
- * the debate's total), and an xAI entry in `MODEL_RATES` — without a rate,
- * `priceUsage` returns `null`, the row lands unpriced, and the cap would sum
- * past it. A second provider spending outside the ceiling would make the
- * ceiling a fiction.
+ * the debate's total), and this role's model having a rate in `MODEL_RATES` —
+ * without one, `priceUsage` returns `null`, the row lands unpriced, and the
+ * cap would sum past it. `nousCredentials` refuses to build a client for an
+ * unpriced model for exactly that reason: a stage spending outside the ceiling
+ * would make the ceiling a fiction.
  *
  * ## Degradation
  *

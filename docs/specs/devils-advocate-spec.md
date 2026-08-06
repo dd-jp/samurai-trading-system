@@ -199,7 +199,7 @@ type InvalidationOutcome =
 
 **Model configuration** — a three-field per-component seam, not a single model string:
 
-- `model`: `claude-sonnet-5`
+- `model`: `anthropic/claude-sonnet-5` (Nous form, per [ADR-0009](../adr/0009-single-provider-nous.md))
 - `effort`: `'medium'` — this has no representation in the wire types today; the request type carries only `{model, max_tokens, messages}`, and `output_config.effort` must be threaded through both config and wire.
 - `max_tokens`: `4096` — **not** the inherited `1024`. Sonnet 5 runs adaptive thinking on an omitted `thinking` field, thinking and text share the `max_tokens` budget, and a truncated response throws a *retryable* malformed-response error whose retry truncates identically. At 1024 the pass would fail-open silently on every triggered tick.
 
@@ -387,4 +387,4 @@ The reason is mechanical rather than a judgement about merit: attribution reads 
 
 **The tier decision was made on structural grounds and says so.** The side-by-side model comparison this would ideally rest on was descoped when the prototype could not make live calls. `claude-sonnet-5` at `effort: 'medium'` is a starting point to be re-tuned once real calls and real spend attribution exist — which is exactly what the metered second client makes possible.
 
-**Pricing footnote:** the spend table carries `claude-sonnet-5` at published rates, while introductory pricing runs through 2026-08-31. The meter therefore *overstates* this stage's spend until September and is correct after. Noted so that "the dashboard says more than the invoice" is not debugged as a defect.
+**Pricing footnote:** superseded by [ADR-0009](../adr/0009-single-provider-nous.md). The spend table now carries `anthropic/claude-sonnet-5` at the **Nous portal's** rate ($1.60/$8.00), not Anthropic's list price, so the over-statement this footnote described no longer applies. The rate is a promotional one and this table is what has to change when it lapses.
