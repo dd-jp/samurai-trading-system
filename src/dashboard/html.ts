@@ -225,6 +225,9 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
        fading, and the header stops pulsing. */
     .pl-settle { animation: none; box-shadow: 0 0 0 2px rgba(74,168,255,0.6); }
     .pulse, .pulse.stale { animation: none; }
+    /* The live chip's dot stops pulsing but keeps its colour — the state is
+       carried by the blue, never by the movement. */
+    .pl-chip-in_flight .pl-dot { animation: none; }
   }
 
   /* ---------------- pipeline: drawer ---------------- */
