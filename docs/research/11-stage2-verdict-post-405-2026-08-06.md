@@ -20,6 +20,8 @@ Three fixes landed between the runs, and each moved the verdict's basis rather t
 | **Served** | **2024-08-07 → 2026-08-05 (1.99 years)** |
 | Stocks bars | 500 each (SPY, QQQ, AAPL, TSLA) |
 | Crypto bars | 729 each (BTC-USD, ETH-USD) |
+
+The observation counts below are one lower than the bar counts — 499 and 728 — because the first bar of a series is consumed producing the first return, so N bars yield N-1 returns. Not a typo and not a dropped bar.
 | Cost model | `CALIBRATED_COST_CONFIG` (measured spreads, #403) |
 
 The Polygon plan still serves two years against a five-year request. The run says so explicitly and computes MinBTL on the served window, so the tighter trial cap is a real constraint of the sample rather than a spec change.
