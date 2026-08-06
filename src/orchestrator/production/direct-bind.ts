@@ -258,9 +258,13 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
       .filter((country): country is string => country !== null);
     const cii = deps.ciiConsumer.getScores(heldCountries);
 
-    // Red-team critic (#204) is pre-fetched by critic.ts outside evaluate();
-    // not wired here — absent defaults to "pass" (mechanical steps remain
-    // the safety net), same as any other caller that doesn't run it.
+    // Red-team critic (#204), check-pipeline step 7, has NO PRODUCER anywhere
+    // in the tree — `critic.ts` does not exist; only `critic-store.ts` (the
+    // consumer side) does. The verdict is therefore always absent, which
+    // defaults to "pass", so nothing distinguishes "the critic passed" from
+    // "the critic was never consulted". The mechanical steps remain the safety
+    // net. Do not read this comment as "wiring pending" — the step has never
+    // run in any environment. See docs/reviews/triage-2026-08-06.md F-5.
     const decision = riskManager.evaluate({
       trace_id,
       intent,
