@@ -39,6 +39,23 @@
  * which is the shape that invites confident confabulation. Tracked in #485 with
  * three options; until one is chosen, treat every `twitter` row as un-retrieved.
  *
+ * MEASURED 2026-08-06, which NARROWS the confabulation worry above without
+ * removing it. Exercised for the first time against live Nous credentials, this
+ * stage returns `{"items":[]}` on every call, and empty is the CORRECT answer,
+ * not a defect. Holding the production system prompt verbatim and varying only
+ * the user message, the result was empty with today's date, with no date, and
+ * with a date well inside the training corpus — so it is not a cutoff effect.
+ * The driver is the prompt's own anti-fabrication clause, which is currently
+ * doing the work the "As of" shape would otherwise undermine: delete that
+ * clause and the same model immediately produces fluent invented sentiment.
+ * Asked directly, it confirms it has no live X access in this API call. So
+ * empty `market_intelligence` rows during the soak are expected and should not
+ * be chased. The model is PINNED to `x-ai/grok-4.5` rather than the floating
+ * `~x-ai/grok-latest` alias precisely because of the residual risk: while the
+ * answer is empty, corpus recency buys nothing, and a future model behind a
+ * floating alias could begin returning invented sentiment with no test to catch
+ * it, since nothing asserts on content. ADR-0009 carries the full table.
+ *
  * The `source: 'twitter'` tag and the `grok` agent id are kept as-is because
  * they are persisted in `market_intelligence` rows and renaming them is a
  * migration, not a rename.
