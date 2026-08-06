@@ -161,6 +161,18 @@ Conviction score is a hybrid combination:
 
 Exact formula and weighting TBD during implementation — will be refined in Stage 1 based on empirical testing. The score is meant to be a scalar measure of consensus strength that the Trader can use for position sizing and risk assessment.
 
+### Module: Weighted Debates (analyst track record)
+
+**Status: specified, not implemented.** Moved out of Future Extensions by David's resolution on [#377](https://github.com/dd-jp/samurai-trading-system/issues/377) (2026-08-06) — the Debate Engine reads `analyst_weights`. Implementation is [#435](https://github.com/dd-jp/samurai-trading-system/issues/435). This section exists so the three specs stop contradicting each other: analysts-spec.md (117, 188-189) and feedback-loop-spec.md (story 5) already describe this handoff, and this spec listing it as a "potential enhancement" was the odd one out.
+
+**The weighting model.** An analyst's weight is a scalar in the Feedback Loop's configured band, seeded neutral and stepped daily by attribution (`analyst_weights`, written by #371). It modulates the debate **mechanically, not by prompt**. Telling a persona "the technical analyst has been right 70% of the time" is unverifiable — the model may weigh it, ignore it, or overcorrect, and none of those are distinguishable from the outside. A mechanical weight is deterministic and therefore replayable, which ADR-0003 §2 requires of every LLM pass.
+
+**Seed behaviour must be identity.** With every analyst at the neutral seed, a weighted debate must produce byte-identical output to an unweighted one. Otherwise the first fortnight of any run silently differs from the unweighted baseline it is being compared against, and the comparison that justifies the mechanism is contaminated by the mechanism.
+
+**Open, and blocking implementation — the `debate_id` consequence.** `debate_id` is frozen in cross-spec-contracts.md §1 as `hash(instrument + bar + AnalystView set)`, *deterministic and stable across the no-persistence re-run-from-scratch* (#10), with three consumers: Trader/Verdict provenance, the cosine setup-store join, and the Feedback Loop's attribution join. If weights change a debate's output but do **not** enter that hash, two runs at different weights produce the same id with different results — replay-from-log then returns the wrong debate, and both joins silently mis-attribute. If weights **do** enter the hash, the id changes whenever attribution steps a weight, and "stable across a re-run from scratch" becomes conditional on reading the same weights back. Neither is free, and changing a frozen registry entry is a cross-spec decision, not an implementation detail. #435 must resolve this before it writes code.
+
+**Why implementation is deferred.** [ADR-0008](../adr/0008-llm-spend-cap.md) puts the paper soak on a 15-minute cadence for a $50/14-day budget: attribution runs over near-empty samples, so weights barely move from their seeds across a whole soak. Building the reader now ships a mechanism whose input is noise — and a mechanism running on nothing is indistinguishable from one that works, which is this repo's dominant defect class (#430). Implement when a cadence produces enough trades to move a weight.
+
 ### Module: Disagreement Detection
 
 **Approach**
@@ -389,7 +401,7 @@ This is a feature, not a bug — it surfaces uncertainty rather than hiding it.
 ### Future Extensions
 
 Potential enhancements (not in this spec):
-- Weighted debates (some analysts have more influence based on track record)
+- ~~Weighted debates~~ — promoted into the spec proper (see "Module: Weighted Debates") by David's resolution on #377, 2026-08-06. Left struck through rather than deleted so a reader who remembers it here is not left wondering whether it was dropped.
 - Multi-asset debates (analysts debate portfolio-level strategy, not just single instruments)
 - Historical debate replay (compare past debates to outcomes for weight tuning)
 - Human-in-the-loop overrides (manual intervention when confidence is too low)

@@ -263,8 +263,18 @@ const PAPER_ANALYST_WEIGHT_TRAVERSE_CYCLES = 20;
  *   and real debate rows (#364 gave `debate_log` a writer), attributes them,
  *   and steps the weight — recorded in `dial_adjustments` as an
  *   `analyst_weight` row. What still does NOT happen is anything reading those
- *   weights at debate time; that is a recorded decision, not an oversight —
- *   see the `weights` dial below.
+ *   weights at debate time.
+ *
+ *   That used to be recorded here as a settled decision. It no longer is:
+ *   David resolved #377 on 2026-08-06 the other way — the Debate Engine
+ *   SHOULD read `analyst_weights` — and debate-engine-spec.md now carries a
+ *   "Module: Weighted Debates" section saying so. The reader is #435, still
+ *   open, deliberately: at ADR-0008's 15-minute cadence attribution runs over
+ *   near-empty samples, so weights barely leave their seeds across a whole
+ *   soak, and a mechanism fed noise is indistinguishable from one that works
+ *   (#430). So this is a KNOWN GAP awaiting a cadence that produces trades,
+ *   not a decision that weights are unread by design. See the `weights` dial
+ *   below for what does move them.
  * - **Strategy params / risk thresholds** — moved only by `proposals`, and the
  *   profile supplies none, because nothing in the repo produces one. See the
  *   two empty records below for why they are empty rather than pre-declared.
