@@ -44,7 +44,17 @@ jobs:
 
       - name: Get PR diff
         run: |
-          git fetch origin ${{ github.base_ref }} --depth=1
+          # NOT `--depth=1`. `checkout` above already fetched full history
+          # (`fetch-depth: 0`), and a shallow re-fetch of the base truncates it
+          # again — after which `...` (which needs a MERGE BASE, not just the
+          # two tips) fails with `fatal: origin/main...HEAD: no merge base` and
+          # the whole review job exits 128 in under ten seconds.
+          #
+          # It only bites on a branch that has been REBASED: before that, the
+          # shallow tip happens to be an ancestor of HEAD and the merge base is
+          # found by luck. Every rebase-onto-main — which is the normal way to
+          # clear a conflict — broke both reviewers until this line changed.
+          git fetch origin ${{ github.base_ref }}
           git diff origin/${{ github.base_ref }}...HEAD > diff.txt
 
       - name: Set up Python
