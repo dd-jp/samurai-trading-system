@@ -8,15 +8,6 @@
  * Scope note: the repo populates its interfaces ticket-by-ticket — #91 is
  * `runDailyCycle`, #92 is `onTradeClose`, #93 is `computeMetrics`.
  */
-import type { MetricsSuite } from '../cost-model-backtest/index.js';
-import type {
-  Clock,
-  ClosedTrade,
-  ClosedTradeStore,
-  DebateLogStore,
-  SetupStore,
-  TuningStore,
-} from '../shared/index.js';
 
 export type {
   DailyCycleInput,

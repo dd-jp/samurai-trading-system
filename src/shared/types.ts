@@ -5,8 +5,6 @@
  * (starting with #24 Domain Types & Contracts); do not hand-roll competing
  * shapes in individual component files once a type is defined here.
  */
-import type { AnalystContribution, Direction } from '../debate-engine/index.js';
-
 export type {
   ClosedTradeStore,
   DebateLogStore,

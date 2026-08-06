@@ -9,9 +9,9 @@ import type {
   IndicatorSpec,
   MarketDataService,
 } from '../../market-data-service/index.js';
-import type { Clock, ClosedTrade, Fill, OpenPosition, OrderState } from '../../shared/index.js';
+import type { Clock, OrderState } from '../../shared/index.js';
 import type { VerdictDecision } from '../../verdict/index.js';
-import type { BrokerAdapter, NormalizedFill, NormalizedPosition } from './broker.js';
+import type { BrokerAdapter } from './broker.js';
 import type { SharedStore } from './store.js';
 
 /**

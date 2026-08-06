@@ -5,7 +5,7 @@
  * different reasons.
  */
 import type { MetricsSuite } from '../../cost-model-backtest/index.js';
-import type { Clock, ClosedTrade, TuningStore } from '../../shared/index.js';
+import type { Clock, TuningStore } from '../../shared/index.js';
 import type { AdjustmentLog, FeedbackConfig } from './tuning.js';
 
 /**

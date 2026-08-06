@@ -11,9 +11,7 @@ import type {
   SetupStore,
   TuningStore,
 } from '../../shared/index.js';
-import type { BreachAlertChannel, KillThresholds, MetricsReport } from './metrics.js';
 import type {
-  Adjustment,
   AdjustmentLog,
   FeedbackConfig,
   LoosenApprovalChannel,

@@ -4,7 +4,6 @@
  * changes when a consumer's needs change, a record when the domain does, and
  * they rarely move together.
  */
-import type { AssetClass } from './primitives.js';
 import type { ClosedTrade, DebateLog, SetupNeighbor, SetupVector, VerdictLog } from './records.js';
 
 /**

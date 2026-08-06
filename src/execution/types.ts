@@ -28,12 +28,6 @@
  * `OpenPosition` / `OrderState` are NOT redefined here — they are cross-spec
  * types owned by src/shared/types.ts (registry §4).
  */
-
-import type { CostModel } from '../cost-model-backtest/index.js';
-import type { BarWindow, IndicatorSpec, MarketDataService } from '../market-data-service/index.js';
-import type { Clock, ClosedTrade, Fill, OpenPosition, OrderState } from '../shared/index.js';
-import type { VerdictDecision } from '../verdict/index.js';
-
 export type {
   BrokerAck,
   BrokerAdapter,

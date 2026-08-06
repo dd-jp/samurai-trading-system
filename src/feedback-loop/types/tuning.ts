@@ -5,7 +5,6 @@
  * not dirty the file the metrics and kill-line consumers import. `types.ts`
  * remains a re-export barrel, so no import site changed.
  */
-import type { Clock } from '../../shared/index.js';
 // Type-only and therefore safe both ways: `metrics.ts` imports the dial shapes
 // back from here. A kill threshold is a bound ON a dial, so the two genuinely
 // reference each other.

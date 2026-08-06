@@ -269,7 +269,7 @@ describe('toReturnSeries bar attribution — binary search equivalence (#289)', 
     // The -1 path, which the binary search reaches by running off the end
     // rather than by `findIndex` returning -1. Same outcome, different route,
     // so it is worth pinning separately.
-    const closed_at = new Date(bars[bars.length - 1]!.getTime() + DAY);
+    const closed_at = new Date(bars[bars.length - 1].getTime() + DAY);
 
     expect(() =>
       toReturnSeries([closedTrade({ closed_at, realized_pnl_net: 1 })], bars, {

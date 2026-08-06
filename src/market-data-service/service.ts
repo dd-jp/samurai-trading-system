@@ -26,8 +26,6 @@ import type {
  * "Out of Scope: Exact parameters"). One default is used until that config
  * lands.
  */
-const DEFAULT_INDICATOR_TIMEFRAME = '1h';
-
 export class MarketDataServiceImpl implements MarketDataService {
   private readonly indicatorCache = new IndicatorCache();
   /**
