@@ -41,7 +41,6 @@ export { CircuitBreakers } from './breakers.js';
 export { countryForInstrument, trackedCountries } from './cii-mapping.js';
 export type { CorrelationConfig, CorrelationEstimateInput } from './correlation.js';
 export { computeCorrelationEstimate } from './correlation.js';
-export { InMemoryRiskCriticStore } from './critic-store.js';
 export type { PortfolioAccountingInput } from './portfolio-view.js';
 export { computePortfolioView } from './portfolio-view.js';
 export {

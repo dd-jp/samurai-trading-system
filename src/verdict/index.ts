@@ -255,7 +255,6 @@ export {
   signApprovalCallback,
   verifyApprovalCallback,
 } from './notifications/approval-callback-verifier.js';
-export { TradeChannel } from './notifications/composite-channel.js';
 export { DiscordChannel } from './notifications/discord-channel.js';
 export { formatApprovalRequest, formatDecisionMessage } from './notifications/format.js';
 export { isNotableVerdict } from './notifications/notable-verdict.js';
@@ -268,8 +267,6 @@ export {
   CorrelationTokenStore,
   tokenLogPrefix,
 } from './notifications/telegram/correlation-tokens.js';
-export type { TelegramApprovalGatewayOptions } from './notifications/telegram/telegram-approval-gateway.js';
-export { TelegramApprovalGateway } from './notifications/telegram/telegram-approval-gateway.js';
 export type {
   CallbackAuditLog,
   TelegramBotApiClientOptions,
