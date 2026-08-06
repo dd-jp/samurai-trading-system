@@ -462,6 +462,11 @@ export class InMemoryQueryStore implements DashboardQueryStore {
     return { ...mark };
   }
 
+  /** Same throw-on-missing contract as `getMark`, per instrument in request order. */
+  getMarks(instruments: readonly string[], asOf: Date): Map<string, Mark> {
+    return new Map(instruments.map((instrument) => [instrument, this.getMark(instrument, asOf)]));
+  }
+
   getLlmSpend(_asOf: Date): LlmSpendSummary {
     return {
       last_24h: { ...LLM_SPEND_24H },

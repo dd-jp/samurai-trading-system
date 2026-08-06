@@ -34,7 +34,11 @@ import { creditForContribution, realizedR } from '../feedback-loop/index.js';
 import type { Mark } from '../market-data-service/index.js';
 import type { AssetClass, TickStage } from '../orchestrator/index.js';
 import type { ClosedTrade, DebateLog, OpenPosition, OrderState } from '../shared/index.js';
-import type { SharedStore } from '../shared/store/index.js';
+import {
+  type ClosedTradeRow,
+  fromClosedTradeRow,
+  type SharedStore,
+} from '../shared/store/index.js';
 import { PIPELINE_STAGES, type PipelineStage } from './pipeline-types.js';
 import type {
   AttributionSummary,
@@ -132,22 +136,6 @@ interface AuditStageRow {
   asset_class: AssetClass | null;
 }
 
-interface ClosedTradeRow {
-  idempotency_key: string;
-  debate_id: string;
-  instrument: string;
-  asset_class: AssetClass;
-  side: 'buy' | 'sell';
-  entry: number;
-  stop: number;
-  filled_size: number;
-  realized_pnl_net: number;
-  fees_total: number;
-  opened_at: string;
-  closed_at: string;
-  close_reason: 'stop' | 'target' | 'exit';
-}
-
 /** `closed_trades` joined with its `debate_log` row, for `getAttribution`'s single-query read. */
 interface AttributionRow extends ClosedTradeRow {
   debate_contributions_json: string;
@@ -195,24 +183,6 @@ function fromVerdictLogRow(row: VerdictLogRow): VerdictAuditEntry {
     reason: row.no_go_reason ?? 'approved',
     hitl_override: row.hitl_override !== 0,
     timestamp: new Date(row.timestamp),
-  };
-}
-
-function fromClosedTradeRow(row: ClosedTradeRow): ClosedTrade {
-  return {
-    idempotency_key: row.idempotency_key,
-    debate_id: row.debate_id,
-    instrument: row.instrument,
-    asset_class: row.asset_class,
-    side: row.side,
-    entry: row.entry,
-    stop: row.stop,
-    filled_size: row.filled_size,
-    realized_pnl_net: row.realized_pnl_net,
-    fees_total: row.fees_total,
-    opened_at: new Date(row.opened_at),
-    closed_at: new Date(row.closed_at),
-    close_reason: row.close_reason,
   };
 }
 
@@ -352,21 +322,48 @@ export class SqliteQueryStore implements DashboardQueryStore {
     };
   }
 
-  getMark(instrument: string, _asOf: Date): Mark {
+  getMark(instrument: string, asOf: Date): Mark {
+    // Delegates so there is exactly one place that decides what a mark is and
+    // what a missing one does.
+    return this.getMarks([instrument], asOf).get(instrument) as Mark;
+  }
+
+  getMarks(instruments: readonly string[], _asOf: Date): Map<string, Mark> {
+    const marks = new Map<string, Mark>();
+    if (instruments.length === 0) return marks;
+
     // `latest_mark` upserts one row per instrument (no history) — the only
     // truth available is the latest known mark, regardless of `asOf`.
-    const row = this.db.prepare(`SELECT * FROM latest_mark WHERE instrument = ?`).get(instrument) as
-      | LatestMarkRow
-      | undefined;
-    if (row === undefined) {
-      throw new Error(`SqliteQueryStore.getMark: no mark for instrument "${instrument}"`);
+    //
+    // The placeholder list is built from `instruments.length`, never from the
+    // instrument strings themselves, so the values stay bound parameters.
+    const placeholders = instruments.map(() => '?').join(', ');
+    const rows = this.db
+      .prepare(
+        `SELECT instrument, price, observed_at, source, asset_class
+           FROM latest_mark
+          WHERE instrument IN (${placeholders})`,
+      )
+      .all(...instruments) as LatestMarkRow[];
+
+    for (const row of rows) {
+      marks.set(row.instrument, {
+        price: row.price,
+        observed_at: new Date(row.observed_at),
+        source: row.source,
+        asset_class: row.asset_class,
+      });
     }
-    return {
-      price: row.price,
-      observed_at: new Date(row.observed_at),
-      source: row.source,
-      asset_class: row.asset_class,
-    };
+
+    // Per-instrument, in request order, so a missing mark fails exactly as the
+    // old per-position loop did rather than silently rendering a priceless row.
+    for (const instrument of instruments) {
+      if (!marks.has(instrument)) {
+        throw new Error(`SqliteQueryStore.getMark: no mark for instrument "${instrument}"`);
+      }
+    }
+
+    return marks;
   }
 
   /**

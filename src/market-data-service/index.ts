@@ -15,6 +15,8 @@ export { computeIndicator, InsufficientBarsError, minimumBarsFor } from './indic
 export type { NormalizeContext, RawCandle } from './ingestion.js';
 export { completedBars, deriveBacktestMark, normalizeBars } from './ingestion.js';
 export { MarketDataServiceImpl } from './service.js';
+export type { DataSourceConfig } from './source-factory.js';
+export { createDataSource } from './source-factory.js';
 export {
   AlpacaDataProviderError,
   AlpacaDataRateLimitError,
@@ -37,6 +39,20 @@ export type {
 export { AlpacaDataSource } from './sources/alpaca-source.js';
 export type { AssetClassRoutingSourceConfig } from './sources/asset-class-routing-source.js';
 export { AssetClassRoutingDataSource } from './sources/asset-class-routing-source.js';
+export type {
+  CcxtClient,
+  CcxtOhlcv,
+  CcxtSourceOptions,
+  CcxtTicker,
+} from './sources/ccxt-source.js';
+export { CcxtDataSource } from './sources/ccxt-source.js';
+export type {
+  IbkrClient,
+  IbkrHistoricalBar,
+  IbkrLastTrade,
+  IbkrSourceOptions,
+} from './sources/ibkr-source.js';
+export { IbkrDataSource } from './sources/ibkr-source.js';
 export type { LiveObservation, SourceConfig } from './sources/normalizing-data-source.js';
 export {
   InSessionUnderfetchError,

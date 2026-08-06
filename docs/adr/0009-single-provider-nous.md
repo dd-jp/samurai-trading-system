@@ -42,30 +42,69 @@ non-SDK wire client could satisfy it.
 | Role | Model | Rate (in/out per M) |
 | --- | --- | --- |
 | `debate` | `anthropic/claude-haiku-4.5` | $0.80 / $4.00 |
-| `sentiment` | `~x-ai/grok-latest` | $1.60 / $4.80 (resolves to `x-ai/grok-4.5` today) |
+| `sentiment` | `x-ai/grok-4.5` | $1.60 / $4.80 |
 
 Both are overridable per role: `NOUS_<ROLE>_MODEL` → `NOUS_MODEL` → the default
 above, with `NOUS_<ROLE>_API_KEY` → `NOUS_API_KEY` for the key.
 
-**Why Grok for sentiment.** The stage reads X/Twitter sentiment, and Grok is
-the model trained on that discourse — with no live retrieval available through
-Nous (see below), the training corpus *is* the edge, so the model that has seen
-X is the one worth asking. Latency does not bind (the stage sits off the tick's
-critical path behind a 4-hour bucket) and neither does cost: ~36 calls/day is
-roughly **$1.60 across a 14-day soak**, against a $50 cap.
+**Why Grok for sentiment, and what it actually returns.** The stage reads
+X/Twitter sentiment, and Grok is the model trained on that discourse — with no
+live retrieval available through Nous (see below), the training corpus *is* the
+edge, so the model that has seen X is the one worth asking. Latency does not
+bind (the stage sits off the tick's critical path behind a 4-hour bucket) and
+neither does cost: at a measured ~$0.001 per call and ~36 calls/day, a 14-day
+soak is roughly **$0.50** against a $50 cap.
 
-The leading `~` is the portal's own marker for a floating alias — the id
-without it returns 404, confirmed against the live `/models` endpoint. Floating
-is deliberate: for a stage whose value is corpus recency, tracking the newest
-Grok is the point.
+**Measured, 2026-08-06: the stage returns `{"items":[]}` on every call, and
+that is the correct behaviour rather than a defect.** The first real exercise of
+this client — it had never made a live call under `XAI_API_KEY` either — went
+through `NousSentimentClient.fetchSentiment` against BTC-USD and AAPL and parsed
+zero items from a well-formed fenced `{"items":[]}`. Four further calls isolated
+the cause with the production system prompt held verbatim and only the user
+message varied:
 
-It stays honest on cost for a reason worth recording, because it validates the
+| user message | items |
+|---|---|
+| `Instrument: TSLA. As of: <today>.` | 0 |
+| `Instrument: TSLA. As of: <today>.` (repeat) | 0 |
+| `Instrument: TSLA.` (no date) | 0 |
+| `Instrument: TSLA. As of: 2025-06-01.` (inside corpus) | 0 |
+
+Empty regardless of date, so this is **not** a knowledge-cutoff effect. The
+driver is the prompt's own anti-fabrication clause — *"an empty list is a valid
+and useful answer, and inventing sentiment to fill the list is worse than
+reporting none"*. Drop that clause and the same model immediately produces
+fluent, plausible, entirely invented TSLA sentiment (*"traders highlight
+upcoming delivery numbers and robotaxi progress"*), and asked directly it
+confirms: *"I do not have live access to X/Twitter posts in this API call and am
+answering from training data."*
+
+So the stage's honest output, given no retrieval, is nothing. Analysts see
+`NO_DATA_MARKER` either way (#463), which is the same state they were in when
+`XAI_API_KEY` sat empty — the difference is that it is now a measured, explained
+state rather than an assumed one. **Do not treat empty intelligence rows during
+the soak as a bug.** The stage is left enabled so that the caller is exercised
+in a real process at ~$0.50, which is this repo's dominant defect class (tested
+mechanisms nothing calls); the moment a retrieval source exists, the wiring is
+already proven.
+
+**Pinned, not floating.** `~x-ai/grok-latest` (the leading `~` is the portal's
+marker for a floating alias; the bare id 404s, confirmed against `/models`) was
+the first choice, justified on corpus recency — track the newest Grok, because
+the corpus is the edge. The measurement above removes that upside: while the
+answer is `{"items":[]}`, a fresher corpus is worth nothing. What floating still
+carries is a live-money downside — a future model behind the alias could start
+returning invented sentiment into the analyst path, and **no test would catch
+it**, because empty is currently the correct answer and nothing asserts on
+content. So the default pins `x-ai/grok-4.5`. Revisit if retrieval ever becomes
+reachable, at which point recency starts paying again.
+
+The alias probe is still worth recording, because it validates the
 metered-model rule below: **Nous echoes the concrete model it resolved to.** A
 live probe of `~x-ai/grok-latest` came back as `model: "x-ai/grok-4.5"`, and
-`nousChat` meters against that echo whenever the table can price it. So the
-alias prices at whatever it actually ran on and follows xAI's next release with
-no code change; the alias's own rate is a fallback that should never be
-reached. `x-ai/grok-4.5` is the pinned alternative, one env var away.
+`nousChat` meters against that echo whenever the table can price it — so a
+floating alias, if ever used, prices at whatever actually ran. Both ids stay in
+`MODEL_RATES`.
 
 **Why haiku for the debate — decided by measurement, and it overturned the
 first answer.** `openai/gpt-5.6-luna` was chosen on the price list: cheapest

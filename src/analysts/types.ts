@@ -4,11 +4,11 @@
  * docs/specs/cross-spec-contracts.md. Ticket #70 shipped one stateless
  * persona (Technical) end-to-end. Ticket #71 adds Fundamental/Sentiment and
  * the `AnalystOrchestrator` (applicability filtering + role-dependent
- * quorum). Retry-on-failure and the 2-consecutive-skip alert
- * (analysts-spec.md "Module: Failure Handling") had no
- * ticket covered them until #431, which added the bounded retry — a persona
- * failure is now reported only after that retry is spent, and its `reason`
- * says so.
+ * quorum). Ticket #431 implemented analysts-spec.md's "Module: Failure
+ * Handling" — a persona failure is reported only after the bounded retry is
+ * spent, and its `reason` says so. The spec's companion 2-consecutive-skip
+ * alert sits in `orchestrator/production/analysts-adapter.ts`, which owns the
+ * per-instrument cross-tick counter this stateless layer cannot hold.
  *
  * `AnalystView`/`Direction` are NOT redefined here: analysts-spec.md keeps
  * them in lockstep with the Debate Engine's copy (cross-spec-contracts.md

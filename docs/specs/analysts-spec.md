@@ -149,6 +149,8 @@ interface AnalystRunResult {
 - **Fundamental** — primary: earnings/SEC filings/news (from Market Intelligence); context: contemporaneous price reaction (always). Mandatory. Stronger/slower LLM tier. Stocks-only.
 - **Sentiment** — primary: social signals (from Market Intelligence); context: contemporaneous price/volume, to normalize (always). Optional. Cheap/fast LLM tier.
 
+> **Status against code, and what ADR-0009 constrains.** The LLM tiering above is **unbuilt** — `src/analysts/` is pure rule-based logic today and makes no LLM call (see "Prompt Injection Mitigation" below). When it is built, it does not get to pick a provider: [ADR-0009](../adr/0009-single-provider-nous.md) routes **all** LLM traffic through Nous, so a tier here becomes a new entry in `NOUS_ROLES` and `DEFAULT_NOUS_MODELS` (`src/shared/llm/nous-config.ts`), resolved via `NOUS_<ROLE>_MODEL` → `NOUS_MODEL`, with the model priced in `MODEL_RATES` — an unpriced model is refused at startup because its calls record a null cost and [ADR-0008](../adr/0008-llm-spend-cap.md)'s cap sums nulls as zero. `NOUS_ROLES` is `['debate', 'sentiment']` today; neither is an analyst role. Note also that the cheap-tier assumption is not free: the ADR-0009 bake-off found the cheap tiers are cheap partly because they are queued, and tail latency, not median, is what a per-analyst budget has to survive.
+
 The context frames deliberately overlap (all three see price/volume). Overlap is allowed and expected — no de-duplication in Stage 1. Conflicting-but-overlapping conclusions are exactly what the Debate Engine's semantic disagreement detection exists to mediate.
 
 **Prompt Injection Mitigation — forward-looking convention** (#208)

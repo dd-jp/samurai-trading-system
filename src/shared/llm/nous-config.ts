@@ -67,23 +67,36 @@ export const NOUS_MODEL_ENV_VAR = 'NOUS_MODEL';
  * Every candidate above is one env var away (`NOUS_DEBATE_MODEL`) if a future
  * measurement disagrees.
  *
- * `sentiment` — `~x-ai/grok-latest`. The stage reads X/Twitter sentiment, and
- * Grok is the model trained on that discourse, so it is the one most likely to
- * have seen the conversation being asked about. Nothing here retrieves from X
- * live (ADR-0009), which makes the training corpus the whole of the edge.
+ * `sentiment` — `x-ai/grok-4.5`, PINNED. The stage reads X/Twitter sentiment
+ * and Grok is the model trained on that discourse, so it is the one most likely
+ * to have seen the conversation being asked about. Nothing here retrieves from
+ * X live (ADR-0009), which makes the training corpus the whole of the edge.
  * Latency is irrelevant — the stage sits off the tick's critical path behind a
- * 4-hour cache bucket — and so is cost at ~36 calls/day: roughly $1.60 across
- * a 14-day soak against a $50 cap.
+ * 4-hour bucket — and so is cost: measured ~$0.001/call, ~$0.50 across a 14-day
+ * soak against a $50 cap.
  *
- * The leading `~` is the portal's marker for a floating alias; the id without
- * it is a 404. Floating is deliberate — for a stage whose value is corpus
- * recency, tracking the newest Grok is the point — and it stays honest on cost
- * because Nous echoes the concrete model it resolved to, which is what the
- * meter prices against. `x-ai/grok-4.5` is the pinned alternative.
+ * MEASURED 2026-08-06: this stage returns `{"items":[]}` on every call, and
+ * that is CORRECT, not a defect. Holding the production system prompt verbatim
+ * and varying only the user message, the result was empty with today's date,
+ * with no date at all, and with a date well inside the training corpus — so it
+ * is not a cutoff effect. The driver is the prompt's own anti-fabrication
+ * clause; remove it and the same model fluently invents plausible sentiment.
+ * Asked directly, it confirms it has no live X access in this API call. Empty
+ * is the honest answer available without retrieval, so empty intelligence rows
+ * during the soak are expected. See ADR-0009 for the full table.
+ *
+ * `~x-ai/grok-latest` (the `~` is the portal's floating-alias marker; the bare
+ * id 404s) was the first pick, justified on corpus recency. The measurement
+ * kills that justification — a fresher corpus is worth nothing while the answer
+ * is empty — and leaves only the downside: a future model behind the alias
+ * could start returning INVENTED sentiment into a live-money analyst path, and
+ * no test would catch it, because empty is currently correct and nothing
+ * asserts on content. Hence the pin. Both ids stay priced, so the alias remains
+ * one env var away if retrieval ever makes recency pay again.
  */
 export const DEFAULT_NOUS_MODELS = {
   debate: 'anthropic/claude-haiku-4.5',
-  sentiment: '~x-ai/grok-latest',
+  sentiment: 'x-ai/grok-4.5',
 } as const satisfies Record<NousRole, string>;
 
 export interface NousCredentials {

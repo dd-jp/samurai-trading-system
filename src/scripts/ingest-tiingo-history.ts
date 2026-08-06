@@ -15,7 +15,12 @@
  * entitlement.
  */
 import { HttpTiingoClient, Stage2HistoricalStore } from '../cost-model-backtest/index.js';
-import { CRYPTO_SYMBOLS, STAGE2_PINNED_WINDOW, STOCK_SYMBOLS } from './run-stage2.js';
+import {
+  CRYPTO_SYMBOLS,
+  STAGE2_PINNED_WINDOW,
+  STAGE2_SCRATCH_DB_PATH,
+  STOCK_SYMBOLS,
+} from './run-stage2.js';
 
 export interface IngestHistoryDeps {
   client: HttpTiingoClient;
@@ -45,7 +50,7 @@ export async function ingestTiingoHistory(deps: IngestHistoryDeps): Promise<void
 if (import.meta.url === `file://${process.argv[1]}`) {
   ingestTiingoHistory({
     client: new HttpTiingoClient(),
-    dbPath: 'data/stage2-bars.sqlite',
+    dbPath: STAGE2_SCRATCH_DB_PATH,
   }).catch((error: unknown) => {
     console.error('Tiingo history ingest failed:', error);
     process.exitCode = 1;

@@ -3,8 +3,11 @@
  * Ticket #70: one stateless persona (Technical) end-to-end. Ticket #71:
  * the remaining personas (Fundamental, Sentiment) and the
  * `AnalystOrchestrator` (applicability filtering + role-dependent quorum).
- * Retry-on-failure and the 2-consecutive-skip alert are not implemented
- * here — no ticket covers them yet.
+ * Ticket #431 added both halves of analysts-spec.md's "Module: Failure
+ * Handling": the bounded retry lives here (`orchestrator.ts`), while the
+ * 2-consecutive-skip alert is necessarily one layer up in
+ * `orchestrator/production/analysts-adapter.ts` — the counter is per
+ * instrument across ticks, and this layer is stateless by design.
  */
 
 export { fundamentalAnalyst } from './fundamental-analyst.js';

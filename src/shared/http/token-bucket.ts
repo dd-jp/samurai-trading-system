@@ -15,6 +15,8 @@
  * cannot be tested without sleeping through real seconds.
  */
 
+import { delay } from './delay.js';
+
 export interface TokenBucketConfig {
   /** Burst size: how many calls may go out back-to-back from a full bucket. */
   capacity: number;
@@ -37,10 +39,6 @@ export interface TokenBucketConfig {
    * single consumer (ccxt, ibkr) — the reserve is inert unless configured.
    */
   reserveForPriority?: number;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export class TokenBucket {

@@ -35,11 +35,24 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
   const since = earliest(positions.map((position) => position.opened_at));
   const fills = await broker.fetchNewFills(since);
 
+  // Bucket once by lot rather than re-scanning the whole feed per position:
+  // `since` is the OLDEST live lot's `opened_at`, so a single stale open lot
+  // drags the feed's span across the whole process lifetime while `positions`
+  // grows with the universe. Within a bucket the feed's own order is
+  // preserved, which `advanceLot` relies on downstream.
+  const byLot = new Map<string, NormalizedFill[]>();
+  for (const fill of fills) {
+    const bucket = byLot.get(fill.client_order_id);
+    if (bucket === undefined) byLot.set(fill.client_order_id, [fill]);
+    else bucket.push(fill);
+  }
+
   for (const position of positions) {
-    await advanceLot(input, position, fills, now);
+    await advanceLot(input, position, byLot.get(position.idempotency_key) ?? [], now);
   }
 }
 
+/** `fills` is this lot's bucket already — keyed on `client_order_id` by the caller. */
 async function advanceLot(
   input: ExecutionInput,
   position: OpenPosition,
@@ -48,13 +61,11 @@ async function advanceLot(
 ): Promise<void> {
   const { broker, store } = input;
 
-  const lotFills = fills.filter(
-    (fill) =>
-      fill.client_order_id === position.idempotency_key &&
-      // No lookahead: in a backtest the feed is the whole simulated future,
-      // and a fill dated past T has not happened yet.
-      fill.timestamp.getTime() <= now.getTime(),
-  );
+  // No lookahead: in a backtest the feed is the whole simulated future, and a
+  // fill dated past T has not happened yet. This stays HERE rather than moving
+  // into the caller's bucketing pass — it is per-call semantics against this
+  // call's `now`, not a grouping key.
+  const lotFills = fills.filter((fill) => fill.timestamp.getTime() <= now.getTime());
 
   const newFills: Fill[] = [];
   let ingestedEntry = false;

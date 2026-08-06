@@ -522,6 +522,45 @@ CREATE TABLE invalidation_log (
 CREATE UNIQUE INDEX invalidation_log_coord ON invalidation_log(instrument, bar_timestamp);
 ```
 
+#### `llm_spend` (added retroactively 2026-08-06 — was in code since #367, never in this spec)
+
+Owned by the Debate Engine (`src/debate-engine/llm/spend-sink.ts` writes it; `spend-cap.ts` reads
+it, and the dashboard sums it). It backs [ADR-0008](../adr/0008-llm-spend-cap.md)'s $50/14-day
+cap, so it is money-critical despite being a telemetry table. Not part of the twenty-two-table
+non-collision pass below — it postdates it, and its column names (`input_tokens`, `cost_usd`,
+`latency_ms`) collide with nothing. Documented here late: the table
+shipped in `0010_llm_spend.sql` and was extended by `0012_llm_spend_latency_debate_id.sql`, but
+this consolidated schema never listed it — the gap this closes
+(`docs/reviews/triage-2026-08-06.md` F-9).
+
+`cost_usd` is deliberately nullable: NULL means "this model's price is unknown to us", which must
+stay distinguishable from a real zero, or an uncosted model would silently read as free against
+the cap. `timestamp` is ISO-8601 UTC TEXT like every other time column here — the dashboard's
+window filter is a lexicographic TEXT comparison, correct only because every writer is
+fixed-width, zero-padded and Z-suffixed.
+
+```sql
+CREATE TABLE llm_spend (
+  id                           INTEGER PRIMARY KEY AUTOINCREMENT,
+  trace_id                     TEXT    NOT NULL,
+  stage                        TEXT    NOT NULL,
+  model                        TEXT    NOT NULL,
+  input_tokens                 INTEGER NOT NULL DEFAULT 0,
+  output_tokens                INTEGER NOT NULL DEFAULT 0,
+  cache_creation_input_tokens  INTEGER NOT NULL DEFAULT 0,
+  cache_read_input_tokens      INTEGER NOT NULL DEFAULT 0,
+  cost_usd                     REAL,              -- NULL = price unknown, NOT zero
+  timestamp                    TEXT    NOT NULL,
+  -- Added by 0012 (#326): per-call latency and per-debate attribution.
+  latency_ms                   INTEGER,
+  debate_id                    TEXT
+);
+
+-- The operator surface's only access pattern is "sum the last N hours/days" —
+-- a range scan on `timestamp` alone.
+CREATE INDEX idx_llm_spend_timestamp ON llm_spend(timestamp);
+```
+
 **Retrieval is by `(instrument, bar_timestamp)`, never by an id.** A replay mints fresh `trace_id` and `debate_id` values, so neither can bridge a live row to a replayed lookup. The id column is row identity; the unique index is the lookup path — the same arrangement `debate_log` already relies on.
 
 **`bar_timestamp` must be floored to the bar boundary on write, and this does not happen today.** The equivalent write on the debate path stores `clock.now()` unfloored, so a live tick at 14:32:07 files under 14:32:07 while a replay stepping bar boundaries looks up 14:30:00 and misses every row. Under the backtest harness the simulated clock sits exactly on the bar close and the bug is invisible. Fixing it on this table does not fix `debate_log`, which has the same defect.
