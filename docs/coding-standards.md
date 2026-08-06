@@ -34,6 +34,30 @@ So the rule is structural rather than a reminder to be careful:
 - **Prove the assertion can fail.** Delete the effect from an otherwise-healthy observation set and confirm the gate goes red. PR #390 shipped three checks in one branch that all read as correct and enforced nothing (a config never read, a gate assertion made vacuous by a dropped argument, and `windowMs: 0` at which the limiter enforced nothing) — none was caught by review, all three by mutation.
 - **Prefer a required argument to an optional one.** `evaluateSmokeGate`'s `llmRateLimiterSnapshot` is required precisely because, while optional, deleting the one line that passed it left the check vacuously true and the whole suite green.
 
+## Comments state invariants, not changelogs
+
+Comments here carry *reasons* — that is an asset (ruled in `docs/reviews/code-quality-2026-08-05.md`) and must stay. But keep the invariant sentence and drop the how-it-got-here essay: ticket archaeology ("#322 changed X, then #342 …" — 144 issue refs in `production.ts` alone as of 2026-08-06) belongs to git and GitHub. Cite a ticket when it names *why the invariant holds*, not to narrate history. Test: if deleting the sentence loses no constraint on future edits, delete it.
+
+## A section-header comment is an unextracted function
+
+`// Step 3: per-asset exposure cap.` or `// --- Dial 2 ---` over a block — especially a bare `{ }` scope introduced just to contain locals — is a function that wasn't extracted. Extract it; the function name replaces the comment, and the numbering becomes call order. (Origin: `risk-manager/index.ts` `evaluate`, 8 numbered steps in 192 lines.)
+
+## Repeated classifications belong in types, not prose
+
+If comments apply the same taxonomy to many values (e.g. `paper-profile.ts`'s SPEC/DERIVED/UNSOURCED provenance labels), make it a typed field. Typed classification is greppable and assertable in a test ("no UNSOURCED value ships to live"); prose is neither.
+
+## Test stubs must type-check without casts
+
+No `as SomeType` / `as unknown as` / `@ts-expect-error` on fixtures. A wrong-shaped stub behind a cast silently disables the very check the test exists for — a mis-shaped `VolatilityReading` stub meant the volatility breaker never evaluated in the composed-tick test while the suite stayed green. Use `satisfies`, real builders, or shared fixtures.
+
+## Speculative implementations live in git history, not `src/`
+
+No unconstructed adapter/client/store ships. Corollary of the smoke-assertion rule above: code with no path from a composition root reads as capability and is this repo's dominant defect class. Wire it or delete it; restore from history when the real consumer arrives.
+
+## Multi-write store mutations are transactional
+
+Any store operation making more than one dependent write wraps them in a single `better-sqlite3` transaction. A crash between un-transacted writes can be unrepairable when a dedup guard makes the retry path skip the work (fill-ingest, review 2026-08-06: `writeFill` → `updatePositionFill` → `writeClosedTrade` with `hasFill()` dedup).
+
 ## When in doubt
 
 Grep for existing patterns in sibling modules before introducing a new one. Match the file's existing style over a "better" abstraction.
