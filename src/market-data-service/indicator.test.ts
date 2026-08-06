@@ -170,7 +170,7 @@ describe('MarketDataServiceImpl.getIndicator', () => {
       low: source.close + 999 + i,
     }));
     const { service } = buildService([...bars, ...fourHour], asOf);
-    const spec = { indicator: 'sma', params: {}, lookback: 5 };
+    const spec = { indicator: 'sma', params: {}, timeframe: '1h', lookback: 5 };
 
     const first = await service.getIndicator(INSTRUMENT, { ...spec, timeframe: '1h' }, asOf);
     const second = await service.getIndicator(INSTRUMENT, { ...spec, timeframe: '4h' }, asOf);
@@ -269,7 +269,7 @@ describe('computeIndicator — a period-N indicator is never computed over fewer
     indicator,
     required,
   }) => {
-    const spec = { indicator, params: { period: PERIOD }, lookback: required };
+    const spec = { indicator, params: { period: PERIOD }, timeframe: '1h', lookback: required };
 
     expect(minimumBarsFor(spec)).toBe(required);
     expect(() => computeIndicator(buildBars(required - 1, start), spec)).toThrow(
@@ -278,7 +278,7 @@ describe('computeIndicator — a period-N indicator is never computed over fewer
   });
 
   it.each(CASES)('computes $indicator at exactly its $required', ({ indicator, required }) => {
-    const spec = { indicator, params: { period: PERIOD }, lookback: required };
+    const spec = { indicator, params: { period: PERIOD }, timeframe: '1h', lookback: required };
 
     const value = computeIndicator(buildBars(required, start), spec);
 
@@ -297,6 +297,7 @@ describe('computeIndicator — a period-N indicator is never computed over fewer
     const twoRangeMean = computeIndicator(threeBars, {
       indicator: 'atr',
       params: { period: 2 },
+      timeframe: '1h',
       lookback: 3,
     });
     expect(twoRangeMean).toBeGreaterThan(0);

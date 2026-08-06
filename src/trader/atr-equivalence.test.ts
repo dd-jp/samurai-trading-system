@@ -73,7 +73,11 @@ function LEGACY_TRADER_ATR(bars: Bar[], lookback: number): number | null {
  * observe.
  */
 function mdsAtr(bars: Bar[], lookback: number): number {
-  return computeIndicator(bars, atrIndicatorSpec(lookback));
+  // The timeframe is inert for this equivalence — `computeIndicator` runs on
+  // the bars it is handed, and both sides of the comparison get the same ones.
+  // It is passed explicitly because #315 made it required, which is the point:
+  // a spec cannot claim a timeframe it was not built for.
+  return computeIndicator(bars, atrIndicatorSpec(lookback, '1h'));
 }
 
 /**

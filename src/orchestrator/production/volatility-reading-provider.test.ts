@@ -35,6 +35,7 @@ const CALENDARS: Record<AssetClass, TradingCalendar> = {
 const VOLATILITY_INDICATOR: IndicatorSpec = {
   indicator: 'atr',
   params: { period: 14 },
+  timeframe: '1h',
   lookback: 20,
 };
 
@@ -230,7 +231,12 @@ describe('MarketDataVolatilityReadingProvider', () => {
     const provider = new MarketDataVolatilityReadingProvider({
       marketData,
       universe,
-      volatility_indicator: { indicator: 'atr', params: { period: 14 }, lookback: 15 },
+      volatility_indicator: {
+        indicator: 'atr',
+        params: { period: 14 },
+        timeframe: '1h',
+        lookback: 15,
+      },
       calendars: CALENDARS,
       logger,
     });
