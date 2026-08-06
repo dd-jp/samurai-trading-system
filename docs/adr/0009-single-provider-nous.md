@@ -41,8 +41,8 @@ non-SDK wire client could satisfy it.
 
 | Role | Model | Rate (in/out per M) |
 | --- | --- | --- |
-| `debate` | `openai/gpt-5.6-luna` | $0.10 / $0.60 |
-| `sentiment` | `x-ai/grok-latest` | $1.60 / $4.80 |
+| `debate` | `anthropic/claude-haiku-4.5` | $0.80 / $4.00 |
+| `sentiment` | `~x-ai/grok-latest` | $1.60 / $4.80 (resolves to `x-ai/grok-4.5` today) |
 
 Both are overridable per role: `NOUS_<ROLE>_MODEL` → `NOUS_MODEL` → the default
 above, with `NOUS_<ROLE>_API_KEY` → `NOUS_API_KEY` for the key.
@@ -54,29 +54,57 @@ X is the one worth asking. Latency does not bind (the stage sits off the tick's
 critical path behind a 4-hour bucket) and neither does cost: ~36 calls/day is
 roughly **$1.60 across a 14-day soak**, against a $50 cap.
 
-`grok-latest` is a floating alias rather than a pinned version, deliberately —
-for a stage whose value is corpus recency, tracking the newest Grok is the
-point. It is the only floating id in `MODEL_RATES`, and it carries a cost:
-priced at what the alias resolves to today (`x-ai/grok-4.5`'s $1.60/$4.80), a
-costlier successor would be metered at the old rate and the cap would
-UNDER-count. That is the direction that matters, and it is bounded and small at
-this volume. `x-ai/grok-4.5` is the pinned alternative, one env var away.
+The leading `~` is the portal's own marker for a floating alias — the id
+without it returns 404, confirmed against the live `/models` endpoint. Floating
+is deliberate: for a stage whose value is corpus recency, tracking the newest
+Grok is the point.
 
-**Why luna, and why the reason is not price.** The binding constraint on the
-debate is the 15s crypto latency budget (`debate-engine/latency-budget.ts`)
-spread across three *sequential* persona calls — roughly 5s each. That rules
-out every reasoning and `-pro` tier, and the repo has already paid to learn it:
-`ai-review.yml` records kimi-k3 spending its entire `max_tokens` on hidden
-chain-of-thought and returning `finish_reason=length` with zero content, every
-time. The work itself is short strict JSON under 1024 tokens —
-instruction-following, not deep reasoning.
+It stays honest on cost for a reason worth recording, because it validates the
+metered-model rule below: **Nous echoes the concrete model it resolved to.** A
+live probe of `~x-ai/grok-latest` came back as `model: "x-ai/grok-4.5"`, and
+`nousChat` meters against that echo whenever the table can price it. So the
+alias prices at whatever it actually ran on and follows xAI's next release with
+no code change; the alias's own rate is a fallback that should never be
+reached. `x-ai/grok-4.5` is the pinned alternative, one env var away.
 
-Cost stops discriminating once the system leaves Anthropic list rates. Every
-candidate in the cheap band cuts ADR-0008's ~$42/14d by 8× or more; going from
-luna's ~$5 to deepseek-flash-0731's ~$0.15 buys nothing the system can spend.
-So luna is chosen as the **accuracy-leaning end of the cheap band**, not the
-cheapest point on it. `anthropic/claude-haiku-4.5` is the documented fallback
-and is one environment variable away.
+**Why haiku for the debate — decided by measurement, and it overturned the
+first answer.** `openai/gpt-5.6-luna` was chosen on the price list: cheapest
+frontier-family non-reasoning tier, ~$5/14d against haiku's ~$34. It did not
+survive contact with the portal.
+
+The binding constraint is the 15s crypto budget
+(`debate-engine/latency-budget.ts`), which covers the **whole debate** — the
+once-per-debate disagreement call plus three *sequential* persona calls, so
+four calls have to fit. What decides that is not median latency but the **tail**:
+one slow call cancels the debate.
+
+Two naive sampling rounds disagreed with each other by 2× on the same model,
+which is itself the finding — portal latency drifts over minutes, so any
+one-model-at-a-time benchmark measures the weather. Re-run with candidates
+rotated so load hit each equally (8 samples each, real detector prompt,
+2026-08-06):
+
+| model | p50 | max | 4 × max | fits 15s |
+|---|---|---|---|---|
+| `anthropic/claude-haiku-4.5` | 2902ms | 2962ms | 11.8s | **yes** |
+| `openai/gpt-5.4-mini` | 3521ms | 7531ms | 30.1s | no |
+| `openai/gpt-5.6-luna` | 3709ms | 5551ms | 22.2s | no |
+| `deepseek/deepseek-v4-flash` | 4874ms | 5866ms | 23.5s | no |
+
+All four returned valid JSON on all 8 samples, so **correctness did not
+separate them — the tail did.** Haiku's is essentially flat; every other
+candidate's is 1.5–2× its own median. The cheap tiers appear to be cheap partly
+because they are queued.
+
+So the accepted cost is ~$34 per 14 days, roughly two thirds of ADR-0008's $50
+cap, to buy latency headroom. That is the right trade when the alternative is
+debates that cancel mid-round. Reasoning and `-pro` tiers were excluded before
+sampling: `ai-review.yml` records kimi-k3 spending its entire `max_tokens` on
+hidden chain-of-thought and returning `finish_reason=length` with zero content,
+every time.
+
+Every candidate above is one environment variable away (`NOUS_DEBATE_MODEL`) if
+a later measurement disagrees.
 
 ## What this amends in ADR-0008
 
@@ -87,8 +115,14 @@ ADR-0008 states, as fact #1 under its Context:
 > nothing cheaper to move to.
 
 **That is no longer true.** It was true of a single-vendor price table; a
-multi-vendor portal reprices the whole question. Debate spend drops from
-roughly $42 per 14 days to roughly $5.
+multi-vendor portal reprices the whole question — the same Haiku the debate
+already ran on is $0.80/$4.00 here against Anthropic's own $1.00/$5.00, so
+debate spend drops from roughly $42 per 14 days to roughly $34 on an unchanged
+model, and the portal's cheaper tiers are available if latency ever allows one.
+
+The cut is smaller than it first looked, because model choice turned out to be
+bounded by the latency budget rather than by the price list — see the debate
+model note above.
 
 The rest of ADR-0008 stands unchanged and is the reason this cutover is safe:
 the cap is enforced in dollars against `llm_spend`, not in calls, so it does

@@ -1239,11 +1239,12 @@ function buildProfileConfigs(): Pick<
      *   ~700 cycles -> ~1,400 debates.
      * - Weekday total ~1,800 debates; a weekend day is crypto-only, ~1,900.
      *
-     * At the debate role's default model (`openai/gpt-5.6-luna`, $0.10/M in
-     * and $0.60/M out — ADR-0009) and 3 LLM calls per round over 1-3 rounds
-     * (`MAX_ROUNDS`, early exit on convergence), a debate is roughly
-     * $0.0015-$0.0055. So **~$5.4/day, with a defensible range of $3-$11, and
-     * ~$78 over the 14-day soak**.
+     * At the debate role's default model (`anthropic/claude-haiku-4.5`,
+     * $0.80/M in and $4.00/M out through Nous — ADR-0009) and 3 LLM calls per
+     * round over 1-3 rounds (`MAX_ROUNDS`, early exit on convergence), a debate
+     * is roughly $0.010-$0.036. So **~$36/day, with a defensible range of
+     * $20-$72, and ~$500 over the 14-day soak** — which is why the cap and the
+     * cadence below both bind.
      *
      * That is the arithmetic BEFORE ADR-0008's 15-minute cadence, which is
      * what the numbers above are drawn against; the cadence was chosen when a

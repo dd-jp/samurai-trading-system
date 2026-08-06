@@ -86,22 +86,24 @@ export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
   // even though nothing here retrieves from X live (see ADR-0009).
   'x-ai/grok-4.5': { input: 1.6, output: 4.8 },
   /**
-   * A FLOATING ALIAS, and the only one in this table. Every other key names a
-   * fixed model whose price changes only when the portal republishes it; this
-   * one silently becomes a different model, at a different price, whenever xAI
-   * ships a new Grok.
+   * A FLOATING ALIAS, and the only one in this table. The leading `~` is the
+   * portal's own marker for one — `x-ai/grok-latest` without it is a 404,
+   * confirmed against the live `/models` endpoint (2026-08-06).
    *
-   * Priced at `x-ai/grok-4.5`'s published rate — what the alias resolves to
-   * today. The exposure is that a costlier successor would be metered at the
-   * old rate and the cap would UNDER-count, which is the direction that
-   * matters: ADR-0008's ceiling would let more spend through than it thinks.
-   * Bounded and small at this stage's volume (~36 calls/day behind a 4h
-   * bucket), and stated rather than smoothed over.
+   * The rate here is a FALLBACK that should never be reached. Nous echoes the
+   * concrete model it resolved to in the response's `model` field —
+   * `~x-ai/grok-latest` came back as `x-ai/grok-4.5` on a live probe — and
+   * `nousChat` meters against that echo whenever this table can price it. So a
+   * call through the alias prices at whatever it actually ran on, and follows
+   * xAI's next release without a code change.
    *
-   * `x-ai/grok-4.5` above is the pinned alternative — one env var
-   * (`NOUS_SENTIMENT_MODEL`) if the drift ever matters more than the currency.
+   * This entry exists for two narrower jobs: satisfying the startup guard in
+   * `nous-config.ts`, which checks the model as CONFIGURED, and pricing the
+   * call if the portal ever stops echoing a concrete id. In that second case
+   * the number below goes stale silently, so it is set to the rate the alias
+   * resolves to today. `x-ai/grok-4.5` above is the pinned alternative.
    */
-  'x-ai/grok-latest': { input: 1.6, output: 4.8 },
+  '~x-ai/grok-latest': { input: 1.6, output: 4.8 },
   // DeepSeek, via Nous.
   'deepseek/deepseek-v4-pro': { input: 0.35, output: 0.7 },
   'deepseek/deepseek-v4-flash': { input: 0.07, output: 0.14 },

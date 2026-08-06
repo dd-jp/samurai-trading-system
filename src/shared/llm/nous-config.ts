@@ -36,18 +36,38 @@ export const NOUS_MODEL_ENV_VAR = 'NOUS_MODEL';
 /**
  * Defaults, chosen against the constraints each role actually has.
  *
- * `debate` — `openai/gpt-5.6-luna`. The binding constraint is the 15s crypto
- * latency budget (`debate-engine/latency-budget.ts`) spread across three
- * SEQUENTIAL persona calls, roughly 5s each, which rules out every reasoning
- * and `-pro` tier; the repo proved that failure mode with kimi-k3 in CI. The
- * work itself is short strict JSON under 1024 tokens — instruction-following,
- * not deep reasoning. Cost stops discriminating once the system leaves
- * Anthropic list rates (ADR-0008's ~$42 of a $50/14d cap drops to roughly $5),
- * so luna is the accuracy-leaning end of the cheap band rather than the
- * cheapest point on it. `anthropic/claude-haiku-4.5` is the documented
- * fallback and is one env var away.
+ * `debate` — `anthropic/claude-haiku-4.5`, chosen on MEASURED latency against
+ * the live portal, not on the price list.
  *
- * `sentiment` — `x-ai/grok-latest`. The stage reads X/Twitter sentiment, and
+ * The binding constraint is the 15s crypto budget
+ * (`debate-engine/latency-budget.ts`) covering the whole debate: the
+ * once-per-debate disagreement call plus three SEQUENTIAL persona calls, so
+ * four calls have to fit. What decides that is not median latency but the
+ * TAIL — one slow call cancels the debate.
+ *
+ * Interleaved sampling against the real detector prompt (8 rounds, candidates
+ * rotated so portal load hit each equally, 2026-08-06):
+ *
+ * | model                      | p50    | max    | 4 x max | fits 15s |
+ * |----------------------------|--------|--------|---------|----------|
+ * | anthropic/claude-haiku-4.5 | 2902ms | 2962ms | 11.8s   | yes      |
+ * | openai/gpt-5.4-mini        | 3521ms | 7531ms | 30.1s   | no       |
+ * | openai/gpt-5.6-luna        | 3709ms | 5551ms | 22.2s   | no       |
+ * | deepseek/deepseek-v4-flash | 4874ms | 5866ms | 23.5s   | no       |
+ *
+ * All four returned valid JSON on every sample (8/8 semantic), so correctness
+ * did not separate them; the tail did, and haiku's is almost flat while every
+ * other candidate's is 1.5-2x its own median. `openai/gpt-5.6-luna` was the
+ * pre-measurement pick on price and did not survive the measurement — the
+ * cheap tiers are cheap partly because they are queued.
+ *
+ * The cost is real and accepted: ~$34 per 14 days against ADR-0008's $50 cap,
+ * versus roughly $5 for luna. Buying latency headroom with two thirds of the
+ * budget is the right trade when the alternative is debates that cancel.
+ * Every candidate above is one env var away (`NOUS_DEBATE_MODEL`) if a future
+ * measurement disagrees.
+ *
+ * `sentiment` — `~x-ai/grok-latest`. The stage reads X/Twitter sentiment, and
  * Grok is the model trained on that discourse, so it is the one most likely to
  * have seen the conversation being asked about. Nothing here retrieves from X
  * live (ADR-0009), which makes the training corpus the whole of the edge.
@@ -55,14 +75,15 @@ export const NOUS_MODEL_ENV_VAR = 'NOUS_MODEL';
  * 4-hour cache bucket — and so is cost at ~36 calls/day: roughly $1.60 across
  * a 14-day soak against a $50 cap.
  *
- * `grok-latest` is a floating alias rather than a pinned version, deliberately:
- * for a stage whose value is corpus recency, tracking the newest Grok is the
- * point. The cost is that `pricing.ts` cannot follow a price change it cannot
- * see — see the note on that entry. `x-ai/grok-4.5` is the pinned alternative.
+ * The leading `~` is the portal's marker for a floating alias; the id without
+ * it is a 404. Floating is deliberate — for a stage whose value is corpus
+ * recency, tracking the newest Grok is the point — and it stays honest on cost
+ * because Nous echoes the concrete model it resolved to, which is what the
+ * meter prices against. `x-ai/grok-4.5` is the pinned alternative.
  */
 export const DEFAULT_NOUS_MODELS = {
-  debate: 'openai/gpt-5.6-luna',
-  sentiment: 'x-ai/grok-latest',
+  debate: 'anthropic/claude-haiku-4.5',
+  sentiment: '~x-ai/grok-latest',
 } as const satisfies Record<NousRole, string>;
 
 export interface NousCredentials {
