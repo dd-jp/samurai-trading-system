@@ -342,6 +342,18 @@ export class UnreachableAlpacaClient implements AlpacaClient {
   async getAccount(): Promise<never> {
     return this.refuse('getAccount');
   }
+
+  async submitMarketOrder(): Promise<never> {
+    return this.refuse('submitMarketOrder');
+  }
+
+  async cancelOrder(): Promise<never> {
+    return this.refuse('cancelOrder');
+  }
+
+  async getPositions(): Promise<never> {
+    return this.refuse('getPositions');
+  }
 }
 
 /** One tick's audit trail: the stages it reached and what each decided. */

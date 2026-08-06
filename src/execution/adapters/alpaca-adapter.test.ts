@@ -78,6 +78,16 @@ function makeClient(overrides: Partial<AlpacaClient> = {}): AlpacaClient {
       .fn()
       .mockRejectedValue(new Error('makeClient: override getOrderByClientOrderId to use it')),
     getAccount: vi.fn().mockRejectedValue(new Error('makeClient: override getAccount to use it')),
+    // #429's three. Rejecting by default for `getOrderByClientOrderId`'s
+    // reason: a flatten or a cancel that quietly resolved would let a test
+    // assert an intervention happened when nothing was asked of the venue.
+    submitMarketOrder: vi
+      .fn()
+      .mockRejectedValue(new Error('makeClient: override submitMarketOrder to use it')),
+    cancelOrder: vi.fn().mockRejectedValue(new Error('makeClient: override cancelOrder to use it')),
+    getPositions: vi
+      .fn()
+      .mockRejectedValue(new Error('makeClient: override getPositions to use it')),
     ...overrides,
   };
 }
@@ -914,5 +924,108 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
     const reported = error.errors.map((each: Error) => each.message).join('\n');
     expect(reported).not.toContain(secret);
     expect(reported).toContain('alert delivery failed for order alpaca-entry-1');
+  });
+});
+
+/**
+ * #429 — the intervention path. ADR-0007 removed the human approval gate, so
+ * an operator watching a position they disliked had no way to cancel a working
+ * order or flatten a lot; the only remaining stop was a set of circuit breakers
+ * three of which could not fire.
+ */
+describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
+  function adapterWith(client: AlpacaClient): AlpacaBrokerAdapter {
+    return new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+    });
+  }
+
+  it('flattens with a plain MARKET order, never a bracket', async () => {
+    const submitMarketOrder = vi.fn().mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1' });
+    const submitOrder = vi.fn();
+    const adapter = adapterWith(makeClient({ submitMarketOrder, submitOrder }));
+
+    const ack = await adapter.submitFlatten('AAPL', 'sell', 12, 'flatten-key');
+
+    expect(submitOrder).not.toHaveBeenCalled();
+    expect(submitMarketOrder).toHaveBeenCalledWith({
+      symbol: 'AAPL',
+      side: 'sell',
+      qty: '12',
+      // The one TIF Alpaca accepts for a market order on BOTH venues, and the
+      // right semantics for an emergency exit: fill now, leave nothing resting.
+      time_in_force: 'ioc',
+      client_order_id: 'flatten-key',
+    });
+    expect(ack.client_order_id).toBe('flatten-key');
+    expect(ack.broker_order_ids).toEqual(['flatten-1']);
+  });
+
+  it('cancels the order the venue holds under our client order id', async () => {
+    const cancelOrder = vi.fn().mockResolvedValue(undefined);
+    const adapter = adapterWith(
+      makeClient({
+        getOrderByClientOrderId: vi.fn().mockResolvedValue({ ...acceptedOrder(), id: 'venue-77' }),
+        cancelOrder,
+      }),
+    );
+
+    await adapter.cancel('key-1', 'AAPL');
+
+    // Resolved through the VENUE, not the local bracket map: that map is
+    // populated only by submitBracket in this process, so after a restart it
+    // is empty and answering from it would cancel nothing.
+    expect(cancelOrder).toHaveBeenCalledWith('venue-77');
+  });
+
+  it('resolves quietly when the venue has no such order', async () => {
+    const cancelOrder = vi.fn();
+    const adapter = adapterWith(
+      makeClient({
+        getOrderByClientOrderId: vi.fn().mockResolvedValue(null),
+        cancelOrder,
+      }),
+    );
+
+    await expect(adapter.cancel('key-gone', 'AAPL')).resolves.toBeUndefined();
+    expect(cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it('normalizes venue positions, signing the short side', async () => {
+    const adapter = adapterWith(
+      makeClient({
+        getPositions: vi.fn().mockResolvedValue([
+          { symbol: 'AAPL', qty: '10', side: 'long', avg_entry_price: '190.5' },
+          { symbol: 'TSLA', qty: '-4', side: 'short', avg_entry_price: '220' },
+        ]),
+      }),
+    );
+
+    expect(await adapter.getOpenPositions()).toEqual([
+      { instrument: 'AAPL', qty: 10, side: 'buy', avg_entry_price: 190.5 },
+      { instrument: 'TSLA', qty: -4, side: 'sell', avg_entry_price: 220 },
+    ]);
+  });
+
+  it('drops an unparseable row rather than reporting NaN', async () => {
+    // This feeds an exposure comparison, and NaN compares false against
+    // everything — a poisoned row would read as "no divergence", the one
+    // answer it must never give.
+    const adapter = adapterWith(
+      makeClient({
+        getPositions: vi.fn().mockResolvedValue([
+          { symbol: 'AAPL', qty: 'not-a-number', side: 'long', avg_entry_price: '190' },
+          { symbol: 'MSFT', qty: '0', side: 'long', avg_entry_price: '400' },
+          { symbol: 'TSLA', qty: '4', side: 'long', avg_entry_price: 'unpriced' },
+        ]),
+      }),
+    );
+
+    expect(await adapter.getOpenPositions()).toEqual([
+      // The only survivor, with an honest null where the price would not parse.
+      { instrument: 'TSLA', qty: 4, side: 'buy', avg_entry_price: null },
+    ]);
   });
 });

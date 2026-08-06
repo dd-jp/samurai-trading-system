@@ -51,7 +51,82 @@ export async function reconcile(input: ExecutionInput): Promise<ReconcileReport>
     if (divergence.action !== 'undetermined') corrected += 1;
   }
 
+  divergences.push(...(await findUnrecordedVenuePositions(input, positions)));
+
   return { checked: inFlight.length, corrected, divergences, timestamp: now };
+}
+
+/**
+ * The OTHER direction (#429). Everything above walks the STORE's lots and asks
+ * the venue about each, which can only ever find a lot the store knows about.
+ * execution-spec.md's requirement is symmetric — *"store shows a position the
+ * broker doesn't, **or vice-versa**"* — and the second half had no surface
+ * until `BrokerAdapter.getOpenPositions` existed.
+ *
+ * What it catches: a write-ahead that died before persisting, an order placed
+ * by hand, or a lot whose store record was lost. Such a position is invisible
+ * to Risk's exposure caps indefinitely, because Risk computes exposure from
+ * the store.
+ *
+ * **Nothing is written, deliberately.** An `OpenPosition` carries a
+ * `debate_id`, an entry bracket, a conviction and a stop; a venue position
+ * carries none of them. Adopting one would mean inventing all of it, and would
+ * insert an UNPROTECTED position — no stop, no target — into a system whose
+ * every other lot has a bracket, where `ingestFills` would then try to size
+ * protective legs that do not exist. Reporting it is the honest action; what to
+ * do about it is the operator's call.
+ *
+ * A venue that cannot answer is reported, not fatal: the store-side pass has
+ * already done real work by this point, and losing it because a positions
+ * endpoint was down would be the worse outcome.
+ */
+async function findUnrecordedVenuePositions(
+  input: ExecutionInput,
+  storePositions: readonly OpenPosition[],
+): Promise<ReconcileDivergence[]> {
+  const { broker } = input;
+
+  let venuePositions: Awaited<ReturnType<typeof broker.getOpenPositions>>;
+  try {
+    venuePositions = await broker.getOpenPositions();
+  } catch (error) {
+    return [
+      {
+        idempotency_key: '',
+        instrument: '',
+        store_state: 'pending',
+        broker_state: null,
+        action: 'undetermined',
+        reason:
+          'broker.getOpenPositions failed, so a position the venue holds and the store does ' +
+          `not would not have been seen this pass: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+      },
+    ];
+  }
+
+  // Compared per INSTRUMENT, not per lot: a venue reports one netted position
+  // where the store may hold several lots, so "the store has any open lot for
+  // this instrument" is the only comparison the two shapes support.
+  const known = new Set(storePositions.map((position) => position.instrument));
+
+  return venuePositions
+    .filter((venuePosition) => !known.has(venuePosition.instrument))
+    .map((venuePosition) => ({
+      // No idempotency key exists — this lot was never written under one, which
+      // is precisely the finding.
+      idempotency_key: '',
+      instrument: venuePosition.instrument,
+      store_state: 'pending' as const,
+      broker_state: null,
+      action: 'unrecorded' as const,
+      reason:
+        `venue holds ${venuePosition.qty} ${venuePosition.instrument} (${venuePosition.side}) ` +
+        'with no open lot in the store — this exposure is invisible to the Risk Manager. ' +
+        'Nothing was written: adopting it would mean inventing the bracket, stop and debate_id ' +
+        'it has none of. Reconcile it by hand.',
+    }));
 }
 
 /** Settle one lot against the venue. Null when store and broker agree. */

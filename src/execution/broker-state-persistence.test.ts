@@ -174,7 +174,19 @@ function makeCcxtFake(): CcxtFake {
   );
 
   return {
-    client: { createOrder, cancelOrder, fetchOrder, fetchOrderByClientOrderId },
+    client: {
+      createOrder,
+      cancelOrder,
+      fetchOrder,
+      fetchOrderByClientOrderId,
+      // #429. Throws rather than returning `[]`: an empty array is the claim
+      // "the venue holds nothing", and a fake that made it silently would let
+      // a reconciliation test assert no divergence against a venue it never
+      // actually asked.
+      fetchPositions: vi.fn(async () => {
+        throw new Error('test fake: override fetchPositions to use it');
+      }),
+    },
     orders,
     createOrder,
     cancelOrder,
@@ -478,7 +490,23 @@ function makeIbkrFake(executions: IbkrExecution[] = []) {
     filledQuantity: 0,
   }));
   return {
-    client: { placeBracketOrder, fetchExecutions, fetchOrderStatus },
+    client: {
+      placeBracketOrder,
+      fetchExecutions,
+      fetchOrderStatus,
+      // #429's three, throwing for `fetchPositions`' reason in the ccxt fake
+      // above: a silent answer would let a test claim an intervention path was
+      // exercised when the venue was never asked.
+      placeMarketOrder: vi.fn(async () => {
+        throw new Error('test fake: override placeMarketOrder to use it');
+      }),
+      cancelOrder: vi.fn(async () => {
+        throw new Error('test fake: override cancelOrder to use it');
+      }),
+      fetchPositions: vi.fn(async () => {
+        throw new Error('test fake: override fetchPositions to use it');
+      }),
+    },
     placeBracketOrder,
     fetchExecutions,
     fetchOrderStatus,

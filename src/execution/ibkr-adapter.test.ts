@@ -40,8 +40,23 @@ function makeClient(executions: IbkrExecution[] = []) {
     status: 'Submitted',
     filledQuantity: 0,
   }));
+  // #429's three, answering rather than throwing: unlike the wire-client fakes
+  // elsewhere, this factory backs the adapter's OWN tests for these methods.
+  const placeMarketOrder = vi.fn<IbkrBrokerClient['placeMarketOrder']>(async () => 'flatten-1');
+  const cancelOrder = vi.fn<IbkrBrokerClient['cancelOrder']>(async () => {});
+  const fetchPositions = vi.fn<IbkrBrokerClient['fetchPositions']>(async () => []);
   return {
-    client: { placeBracketOrder, fetchExecutions, fetchOrderStatus },
+    client: {
+      placeBracketOrder,
+      fetchExecutions,
+      fetchOrderStatus,
+      placeMarketOrder,
+      cancelOrder,
+      fetchPositions,
+    },
+    placeMarketOrder,
+    cancelOrder,
+    fetchPositions,
     placeBracketOrder,
     fetchExecutions,
     fetchOrderStatus,
@@ -206,5 +221,62 @@ describe('IbkrBrokerAdapter outbound call discipline', () => {
     );
     expect((error as BrokerError).message).not.toContain(secret);
     expect('cause' in (error as BrokerError)).toBe(false);
+  });
+});
+
+/** #429 — the intervention path. */
+describe('IbkrBrokerAdapter — intervention path (#429)', () => {
+  it('flattens with a market order and no OCA group', async () => {
+    const fake = makeClient();
+    const adapter = new IbkrBrokerAdapter(fake.client, permissiveLimiter());
+
+    const ack = await adapter.submitFlatten('AAPL', 'sell', 25, 'flatten-1');
+
+    expect(fake.placeBracketOrder).not.toHaveBeenCalled();
+    expect(fake.placeMarketOrder).toHaveBeenCalledWith({
+      clientOrderId: 'flatten-1',
+      symbol: 'AAPL',
+      action: 'SELL',
+      totalQuantity: 25,
+      tif: 'IOC',
+    });
+    expect(ack.broker_order_ids).toEqual(['flatten-1']);
+  });
+
+  it('cancels the parent, which TWS propagates through the OCA group', async () => {
+    const fake = makeClient();
+    const adapter = new IbkrBrokerAdapter(fake.client, permissiveLimiter());
+    await adapter.submitBracket(REQUEST);
+
+    await adapter.cancel(REQUEST.client_order_id, REQUEST.instrument);
+
+    expect(fake.cancelOrder).toHaveBeenCalledWith(IDS.parentOrderId);
+  });
+
+  it('resolves the parent through the venue after a restart', async () => {
+    // The local bracket map is populated by placeBracketOrder in this process,
+    // so a fresh adapter has nothing — answering from it would cancel nothing.
+    const fake = makeClient();
+    const adapter = new IbkrBrokerAdapter(fake.client, permissiveLimiter());
+
+    await adapter.cancel('idem-1', 'AAPL');
+
+    expect(fake.fetchOrderStatus).toHaveBeenCalledWith('idem-1');
+    expect(fake.cancelOrder).toHaveBeenCalledWith(IDS.parentOrderId);
+  });
+
+  it('normalizes positions, signing the short side and dropping a flat row', async () => {
+    const fake = makeClient();
+    fake.fetchPositions.mockResolvedValue([
+      { symbol: 'AAPL', position: 10, avgCost: 190 },
+      { symbol: 'TSLA', position: -4, avgCost: 220 },
+      { symbol: 'MSFT', position: 0, avgCost: 400 },
+    ]);
+    const adapter = new IbkrBrokerAdapter(fake.client, permissiveLimiter());
+
+    expect(await adapter.getOpenPositions()).toEqual([
+      { instrument: 'AAPL', qty: 10, side: 'buy', avg_entry_price: 190 },
+      { instrument: 'TSLA', qty: -4, side: 'sell', avg_entry_price: 220 },
+    ]);
   });
 });

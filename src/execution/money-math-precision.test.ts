@@ -263,6 +263,16 @@ class ScriptedBroker implements BrokerAdapter {
   async getOrder(): Promise<NormalizedOrder | null> {
     return null;
   }
+  /** #429's intervention path — this test drives fills only. */
+  async submitFlatten(): Promise<never> {
+    throw new Error('ScriptedBroker.submitFlatten: not part of the fill path');
+  }
+  async cancel(): Promise<never> {
+    throw new Error('ScriptedBroker.cancel: not part of the fill path');
+  }
+  async getOpenPositions(): Promise<never> {
+    throw new Error('ScriptedBroker.getOpenPositions: not part of the fill path');
+  }
 }
 
 function makeInput(broker: BrokerAdapter, store: TestExecutionStore): ExecutionInput {

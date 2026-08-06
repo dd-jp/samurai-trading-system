@@ -20,6 +20,7 @@ import type {
   NativeBracketRequest,
   NormalizedFill,
   NormalizedOrder,
+  NormalizedPosition,
 } from './types.js';
 
 const NOW = new Date('2026-07-15T14:00:00Z');
@@ -101,6 +102,8 @@ function makeBroker(): BrokerAdapter & {
   book: Map<string, NormalizedOrder>;
   submits: NativeBracketRequest[];
   failLookup: string | null;
+  venuePositions: NormalizedPosition[];
+  failPositions: string | null;
 } {
   return {
     book: new Map<string, NormalizedOrder>(),
@@ -134,6 +137,23 @@ function makeBroker(): BrokerAdapter & {
     },
 
     async resizeProtectiveLegs(): Promise<void> {},
+
+    // #429. `venuePositions` is what the venue holds; `failPositions` makes the
+    // positions endpoint unreachable, the case that must degrade to a report
+    // rather than lose the store-side pass that already ran.
+    venuePositions: [] as NormalizedPosition[],
+    failPositions: null as string | null,
+    async getOpenPositions(): Promise<NormalizedPosition[]> {
+      if (this.failPositions !== null) throw new Error(this.failPositions);
+      return this.venuePositions;
+    },
+
+    async submitFlatten(): Promise<never> {
+      throw new Error('makeBroker.submitFlatten: reconcile() does not flatten');
+    },
+    async cancel(): Promise<never> {
+      throw new Error('makeBroker.cancel: reconcile() does not cancel');
+    },
   };
 }
 
@@ -415,5 +435,80 @@ describe('reconcile — scope and safety', () => {
 
     expect(report).toMatchObject({ checked: 0, corrected: 0, divergences: [] });
     expect(report.timestamp).toEqual(NOW);
+  });
+});
+
+/**
+ * #429 — the other direction. Everything above walks the STORE's lots and asks
+ * the venue about each, which can only find what the store already knows.
+ * execution-spec.md's requirement is symmetric ("store shows a position the
+ * broker doesn't, **or vice-versa**") and the second half had no surface at all
+ * until `BrokerAdapter.getOpenPositions` existed. A lot the venue holds and the
+ * store never recorded is invisible to Risk's exposure caps indefinitely.
+ */
+describe('reconcile — a position the venue holds and the store does not (#429)', () => {
+  it('reports it, and writes nothing', async () => {
+    const { store } = openTestExecutionStore();
+    const broker = makeBroker();
+    broker.venuePositions = [
+      { instrument: 'ETH-USD', qty: 3, side: 'buy', avg_entry_price: 2_000 },
+    ];
+
+    const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(report.divergences).toHaveLength(1);
+    expect(report.divergences[0]).toMatchObject({
+      instrument: 'ETH-USD',
+      action: 'unrecorded',
+      broker_state: null,
+    });
+    expect(report.divergences[0]?.reason).toContain('invisible to the Risk Manager');
+    // Not a correction: nothing was written. Adopting would mean inventing the
+    // bracket, stop and debate_id the venue position has none of.
+    expect(report.corrected).toBe(0);
+    expect(await store.countAllPositions()).toBe(0);
+  });
+
+  it('stays quiet about an instrument the store already has an open lot for', async () => {
+    const { store } = openTestExecutionStore();
+    await store.writeAheadPosition(pendingPosition());
+    const broker = makeBroker();
+    const known = (await store.getOpenPositions())[0];
+    broker.venuePositions = [
+      { instrument: known?.instrument ?? '', qty: 1, side: 'buy', avg_entry_price: 100 },
+    ];
+
+    const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(report.divergences.filter((d) => d.action === 'unrecorded')).toEqual([]);
+  });
+
+  it('degrades to a report when the positions endpoint is down, without losing the store-side pass', async () => {
+    const { store } = openTestExecutionStore();
+    await store.writeAheadPosition(pendingPosition());
+    const broker = makeBroker();
+    broker.failPositions = 'venue positions unreachable';
+
+    const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    // The store-side lot was still settled — losing real work because a
+    // positions endpoint was down would be the worse outcome.
+    expect(report.corrected).toBe(1);
+    const undetermined = report.divergences.filter((d) => d.action === 'undetermined');
+    expect(undetermined).toHaveLength(1);
+    expect(undetermined[0]?.reason).toContain('venue positions unreachable');
+  });
+
+  it('reports every unrecorded instrument, not just the first', async () => {
+    const { store } = openTestExecutionStore();
+    const broker = makeBroker();
+    broker.venuePositions = [
+      { instrument: 'ETH-USD', qty: 3, side: 'buy', avg_entry_price: null },
+      { instrument: 'SOL-USD', qty: -10, side: 'sell', avg_entry_price: null },
+    ];
+
+    const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(report.divergences.map((d) => d.instrument).sort()).toEqual(['ETH-USD', 'SOL-USD']);
   });
 });

@@ -65,7 +65,9 @@ import type {
   AlpacaAccount,
   AlpacaBracketOrderRequest,
   AlpacaClient,
+  AlpacaMarketOrderRequest,
   AlpacaOrder,
+  AlpacaPosition,
 } from './alpaca-client.js';
 
 /** Which of Alpaca's two trading environments a client is permitted to reach. */
@@ -265,6 +267,60 @@ export class AlpacaHttpBrokerClient implements AlpacaClient {
       { method: 'POST', body: JSON.stringify({ ...request, type: 'limit' }) },
       'submitOrder',
     );
+  }
+
+  /**
+   * The flatten (#429). `type: 'market'` is the wire-only field here, exactly
+   * as `submitOrder` adds `type: 'limit'` — the request interface carries no
+   * price, which already implies a market order, but Alpaca's body requires
+   * the field.
+   */
+  async submitMarketOrder(request: AlpacaMarketOrderRequest): Promise<AlpacaOrder> {
+    return this.request<AlpacaOrder>(
+      '/v2/orders',
+      { method: 'POST', body: JSON.stringify({ ...request, type: 'market' }) },
+      'submitMarketOrder',
+    );
+  }
+
+  /**
+   * Cancel, made idempotent at the transport (#429).
+   *
+   * Alpaca answers `204` on an accepted cancel, `404` when it has no such
+   * order, and `422` when the order is no longer cancelable (already filled or
+   * cancelled). All three mean the same thing to the caller — there is nothing
+   * working under that id any more — so only a genuine transport or auth
+   * failure propagates. A cancel that threw on `422` would be a tool that
+   * fails precisely in the race it exists to handle.
+   *
+   * Uses `fetch` directly rather than `request<T>`: a `204` has no body, and
+   * `request` parses one unconditionally.
+   */
+  async cancelOrder(alpacaOrderId: string): Promise<void> {
+    const path = `/v2/orders/${encodeURIComponent(alpacaOrderId)}`;
+    await withRetry<void>(
+      async () => {
+        let response: Response;
+        try {
+          response = await fetchWithTimeout(
+            `${this.baseUrl}${path}`,
+            { method: 'DELETE', headers: this.headers({ method: 'DELETE' }) },
+            this.timeoutMs,
+          );
+        } catch (cause) {
+          throw classifyAlpacaBrokerNetworkError(cause, 'cancelOrder');
+        }
+
+        if (response.ok || response.status === 404 || response.status === 422) return;
+        throw await classifyAlpacaBrokerResponse(response, 'cancelOrder');
+      },
+      this.retry,
+      isRetryableAlpacaBrokerError,
+    );
+  }
+
+  async getPositions(): Promise<AlpacaPosition[]> {
+    return this.request<AlpacaPosition[]>('/v2/positions', { method: 'GET' }, 'getPositions');
   }
 
   async getAccount(): Promise<AlpacaAccount> {

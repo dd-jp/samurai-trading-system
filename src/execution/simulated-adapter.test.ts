@@ -248,3 +248,59 @@ describe('SimulatedBrokerAdapter.getOrder', () => {
     expect(await adapter.getOrder('never-submitted', bracket.instrument)).toBeNull();
   });
 });
+
+/** #429 — the intervention path, modelled the same way an entry is. */
+describe('SimulatedBrokerAdapter — intervention path (#429)', () => {
+  it('models a flatten fill and publishes it to the fill feed', async () => {
+    const adapter = makeAdapter();
+
+    const ack = await adapter.submitFlatten('AAPL', 'sell', 40, 'flatten-1');
+    const fills = await adapter.fetchNewFills(new Date(0));
+
+    expect(ack.client_order_id).toBe('flatten-1');
+    expect(fills.map((fill) => fill.broker_fill_id)).toContain('flatten-1:flatten');
+  });
+
+  it('dedups a repeated flatten under the same client order id', async () => {
+    const adapter = makeAdapter();
+
+    await adapter.submitFlatten('AAPL', 'sell', 40, 'flatten-1');
+    await adapter.submitFlatten('AAPL', 'sell', 40, 'flatten-1');
+
+    expect(await adapter.fetchNewFills(new Date(0))).toHaveLength(1);
+  });
+
+  it('nets positions per instrument rather than reporting one row per lot', async () => {
+    // A venue reports a position, not the lots that built it.
+    const adapter = makeAdapter();
+    await adapter.submitBracket(makeBracket({ client_order_id: 'a', size: 100 }));
+    await adapter.submitBracket(makeBracket({ client_order_id: 'b', size: 50 }));
+
+    expect(await adapter.getOpenPositions()).toEqual([
+      { instrument: 'AAPL', qty: 150, side: 'buy', avg_entry_price: null },
+    ]);
+  });
+
+  it('reports nothing for an instrument that has netted flat', async () => {
+    // Reporting qty 0 would make reconciliation see a holding the venue does
+    // not have — which is exactly the divergence it is looking for.
+    const adapter = makeAdapter();
+    await adapter.submitBracket(makeBracket({ client_order_id: 'a', size: 100 }));
+    await adapter.submitFlatten('AAPL', 'sell', 100, 'flatten-1');
+
+    expect(await adapter.getOpenPositions()).toEqual([]);
+  });
+
+  it('cancel is idempotent and forgets the lot protective legs', async () => {
+    const adapter = makeAdapter();
+    await adapter.submitBracket(makeBracket());
+    await adapter.resizeProtectiveLegs('key-aapl-1355', 100);
+
+    await adapter.cancel('key-aapl-1355', 'AAPL');
+    await expect(adapter.cancel('key-aapl-1355', 'AAPL')).resolves.toBeUndefined();
+    await expect(adapter.cancel('never-submitted', 'AAPL')).resolves.toBeUndefined();
+
+    expect(adapter.getProtectedQty('key-aapl-1355')).toBeNull();
+    expect(adapter.isCancelled('key-aapl-1355')).toBe(true);
+  });
+});

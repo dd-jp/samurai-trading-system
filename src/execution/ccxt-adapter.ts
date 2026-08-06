@@ -41,6 +41,7 @@ import type {
   NativeBracketRequest,
   NormalizedFill,
   NormalizedOrder,
+  NormalizedPosition,
 } from './types.js';
 
 /** The subset of ccxt's unified order status this adapter reasons about. */
@@ -94,6 +95,30 @@ export interface CcxtBrokerClient {
    * double-arms.
    */
   fetchOrderByClientOrderId(clientOrderId: string, symbol: string): Promise<CcxtOrder | null>;
+  /**
+   * Everything the venue believes it holds (#429).
+   *
+   * ccxt's unified `fetchPositions` is a derivatives surface; on the SPOT
+   * venues this adapter targets (Kraken, Coinbase Advanced) a holding is a
+   * non-zero base-currency balance, and the symbol it belongs to depends on
+   * the quote currency the account trades it against. Mapping that is a
+   * venue-specific act, so it belongs to the injected client — the same
+   * posture `fetchOrderByClientOrderId` takes, and for the same reason: this
+   * file shapes the contract, the client satisfies it however its venue
+   * allows. A client that cannot answer at all should throw rather than return
+   * `[]`, since an empty array means "the venue holds nothing", which is a
+   * claim, not an admission of ignorance.
+   */
+  fetchPositions(): Promise<CcxtPosition[]>;
+}
+
+/** One venue-side holding (#429). ccxt reports `contracts`/`side` on positions. */
+export interface CcxtPosition {
+  symbol: string;
+  /** Absolute size; `side` carries the direction, as ccxt reports it. */
+  contracts: number;
+  side: 'long' | 'short';
+  entryPrice: number | undefined;
 }
 
 /**
@@ -277,6 +302,115 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
     } catch (cause) {
       throw sanitizeBrokerError('ccxt', operation, cause);
     }
+  }
+
+  /**
+   * The flatten (#429) — a plain market order. No `stopPrice`, no sibling, no
+   * journal entry: a flatten has no legs to arm and no OCO to emulate, so it
+   * must not enter the bracket state machine that `syncBrackets` drives.
+   *
+   * `clientOrderId` goes to the venue as the dedup key, exactly as the entry's
+   * does, so a retried flatten is a venue-side no-op rather than a double exit.
+   */
+  async submitFlatten(
+    instrument: string,
+    side: 'buy' | 'sell',
+    size: number,
+    clientOrderId: string,
+  ): Promise<BrokerAck> {
+    const response = await this.call('submitFlatten', () =>
+      this.client.createOrder(instrument, 'market', side, size, undefined, {
+        clientOrderId,
+      }),
+    );
+
+    return {
+      client_order_id: clientOrderId,
+      broker_order_ids: [response.id],
+      order_state: mapOrderState(response),
+    };
+  }
+
+  /**
+   * Cancels the entry AND both emulated protective legs (#429).
+   *
+   * This is where ccxt differs from a native-bracket venue in a way that
+   * matters: there is no parent order whose cancellation takes its children
+   * with it. The stop and target are independent orders this adapter placed,
+   * and cancelling only the entry would leave a live stop resting against a
+   * position that no longer exists — which on a spot venue is an unsolicited
+   * sell waiting to happen.
+   *
+   * Every leg is attempted even if an earlier one fails, and a failure to
+   * cancel something the venue no longer has is not an error: an already-filled
+   * or already-cancelled leg is exactly the state a cancel is trying to reach.
+   * `Promise.allSettled`, not `all`, so one dead leg cannot abandon the others.
+   */
+  async cancel(clientOrderId: string, instrument: string): Promise<void> {
+    const bracket = this.brackets.get(clientOrderId);
+    const ids =
+      bracket === undefined
+        ? // Nothing in this process's emulation state or the durable journal.
+          // The entry may still exist under our client order id — a submit
+          // whose journal write never landed — so ask the venue rather than
+          // assume there is nothing to cancel.
+          await this.entryIdFromVenue(clientOrderId, instrument)
+        : [bracket.entryOrderId, bracket.stopOrderId, bracket.targetOrderId];
+
+    const results = await Promise.allSettled(
+      ids
+        .filter((id): id is string => id !== null)
+        .map((id) => this.call('cancel', () => this.client.cancelOrder(id, instrument))),
+    );
+
+    // Logged by the caller if it cares; not thrown. A cancel that rejects
+    // because the venue already has nothing under that id has achieved what
+    // was asked, and an operator reaching for cancel cannot know the venue's
+    // state at the instant they call.
+    void results;
+
+    this.brackets.delete(clientOrderId);
+  }
+
+  /** The entry id the venue holds under our client order id, or none. */
+  private async entryIdFromVenue(
+    clientOrderId: string,
+    instrument: string,
+  ): Promise<(string | null)[]> {
+    const order = await this.call('cancel', () =>
+      this.client.fetchOrderByClientOrderId(clientOrderId, instrument),
+    );
+    return order === null ? [] : [order.id];
+  }
+
+  /**
+   * Everything the venue believes it holds (#429) — the reconciliation
+   * direction `getOrder` cannot serve, since it can only answer about ids this
+   * system already knows.
+   *
+   * A non-finite or zero size is dropped rather than reported: this feeds an
+   * exposure comparison, and NaN compares false against everything, so a
+   * poisoned row would read as "no divergence" — the one answer it must never
+   * give.
+   */
+  async getOpenPositions(): Promise<NormalizedPosition[]> {
+    const positions = await this.call('getOpenPositions', () => this.client.fetchPositions());
+
+    return positions.flatMap((position) => {
+      if (!Number.isFinite(position.contracts) || position.contracts === 0) return [];
+      const signed = position.side === 'long' ? position.contracts : -position.contracts;
+      return [
+        {
+          instrument: position.symbol,
+          qty: signed,
+          side: position.side === 'long' ? ('buy' as const) : ('sell' as const),
+          avg_entry_price:
+            position.entryPrice !== undefined && Number.isFinite(position.entryPrice)
+              ? position.entryPrice
+              : null,
+        },
+      ];
+    });
   }
 
   /**

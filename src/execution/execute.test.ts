@@ -89,6 +89,18 @@ function makeBroker(
     async getOrder(): Promise<never> {
       throw new Error('makeBroker.getOrder: execute() does not reconcile');
     },
+    // #429's intervention path. `execute()` never reaches for it either, and
+    // these throw for `getOrder`'s reason: a double that quietly flattened or
+    // reported no positions would let a test claim an intervention happened.
+    async submitFlatten(): Promise<never> {
+      throw new Error('makeBroker.submitFlatten: execute() does not flatten');
+    },
+    async cancel(): Promise<never> {
+      throw new Error('makeBroker.cancel: execute() does not cancel');
+    },
+    async getOpenPositions(): Promise<never> {
+      throw new Error('makeBroker.getOpenPositions: execute() does not reconcile');
+    },
   };
 }
 
@@ -396,6 +408,11 @@ describe('ExecutionImpl.execute', () => {
       resizeProtectiveLegs: vi.fn().mockResolvedValue(undefined),
       // See `makeBroker`: never null, and never reached on this path.
       getOrder: vi.fn().mockRejectedValue(new Error('getOrder: not part of execute()')),
+      submitFlatten: vi.fn().mockRejectedValue(new Error('submitFlatten: not part of execute()')),
+      cancel: vi.fn().mockRejectedValue(new Error('cancel: not part of execute()')),
+      getOpenPositions: vi
+        .fn()
+        .mockRejectedValue(new Error('getOpenPositions: not part of execute()')),
     };
 
     const result = await new ExecutionImpl(makeInput({ store, broker })).execute(makeGo());
