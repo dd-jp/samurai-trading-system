@@ -34,7 +34,11 @@ import { creditForContribution, realizedR } from '../feedback-loop/index.js';
 import type { Mark } from '../market-data-service/index.js';
 import type { AssetClass, TickStage } from '../orchestrator/index.js';
 import type { ClosedTrade, DebateLog, OpenPosition, OrderState } from '../shared/index.js';
-import type { SharedStore } from '../shared/store/index.js';
+import {
+  type ClosedTradeRow,
+  fromClosedTradeRow,
+  type SharedStore,
+} from '../shared/store/index.js';
 import { PIPELINE_STAGES, type PipelineStage } from './pipeline-types.js';
 import type {
   AttributionSummary,
@@ -132,22 +136,6 @@ interface AuditStageRow {
   asset_class: AssetClass | null;
 }
 
-interface ClosedTradeRow {
-  idempotency_key: string;
-  debate_id: string;
-  instrument: string;
-  asset_class: AssetClass;
-  side: 'buy' | 'sell';
-  entry: number;
-  stop: number;
-  filled_size: number;
-  realized_pnl_net: number;
-  fees_total: number;
-  opened_at: string;
-  closed_at: string;
-  close_reason: 'stop' | 'target' | 'exit';
-}
-
 /** `closed_trades` joined with its `debate_log` row, for `getAttribution`'s single-query read. */
 interface AttributionRow extends ClosedTradeRow {
   debate_contributions_json: string;
@@ -195,24 +183,6 @@ function fromVerdictLogRow(row: VerdictLogRow): VerdictAuditEntry {
     reason: row.no_go_reason ?? 'approved',
     hitl_override: row.hitl_override !== 0,
     timestamp: new Date(row.timestamp),
-  };
-}
-
-function fromClosedTradeRow(row: ClosedTradeRow): ClosedTrade {
-  return {
-    idempotency_key: row.idempotency_key,
-    debate_id: row.debate_id,
-    instrument: row.instrument,
-    asset_class: row.asset_class,
-    side: row.side,
-    entry: row.entry,
-    stop: row.stop,
-    filled_size: row.filled_size,
-    realized_pnl_net: row.realized_pnl_net,
-    fees_total: row.fees_total,
-    opened_at: new Date(row.opened_at),
-    closed_at: new Date(row.closed_at),
-    close_reason: row.close_reason,
   };
 }
 
