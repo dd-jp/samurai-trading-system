@@ -9,13 +9,13 @@
  * implicitly, since a top-level start would hang the suite.
  */
 import {
+  assertStorePathMatchesMode,
   buildShutdownHandler,
   missingCredentialEnvVars,
   paperStartingProfile,
   REQUIRED_INJECTED_CONFIG,
   startFromEnvironment,
   storePathEncodesTradingMode,
-  warnIfStorePathIgnoresMode,
 } from './index.js';
 import type { Logger } from './types.js';
 
@@ -325,36 +325,43 @@ describe('storePathEncodesTradingMode', () => {
   });
 });
 
-describe('warnIfStorePathIgnoresMode', () => {
-  function recordingLogger(): Logger & { entries: Parameters<Logger['log']>[0][] } {
-    const entries: Parameters<Logger['log']>[0][] = [];
-    return { entries, log: (entry) => entries.push(entry) };
-  }
-
-  it('warns when the resolved filename cannot distinguish paper from live (#330)', () => {
-    const logger = recordingLogger();
-
-    warnIfStorePathIgnoresMode({ dbPath: 'data/samurai-production.sqlite', mode: 'paper', logger });
-
-    expect(logger.entries).toHaveLength(1);
-    const [entry] = logger.entries;
-    expect(entry?.level).toBe('warn');
-    // Both facts the operator needs to act: which mode this process believes
-    // it is in, and which file it is actually writing.
-    expect(entry?.payload).toMatchObject({
-      mode: 'paper',
-      db_file: 'samurai-production.sqlite',
-    });
-    expect(entry?.message).toContain('#330');
+describe('assertStorePathMatchesMode', () => {
+  it('passes for the mode-keyed path #330 made the norm', () => {
+    expect(() =>
+      assertStorePathMatchesMode({ dbPath: 'data/samurai-paper.sqlite', mode: 'paper' }),
+    ).not.toThrow();
+    expect(() =>
+      assertStorePathMatchesMode({ dbPath: 'data/samurai-live.sqlite', mode: 'live' }),
+    ).not.toThrow();
   });
 
-  it('stays silent once the path is keyed off mode', () => {
-    // This is the branch that retires the warning when #330 lands.
-    const logger = recordingLogger();
+  it('REFUSES when the file is another mode — the injected-mode hazard #330 named', () => {
+    // `sharedStorePath` reads SAMURAI_MODE, so a programmatic caller passing
+    // `mode: 'live'` on a host whose environment still says `paper` would write
+    // live state into the paper database. This was a warn while the path was
+    // keyed off NODE_ENV and every filename failed the check; now that it
+    // normally passes, the one case that fails it is already wrong.
+    expect(() =>
+      assertStorePathMatchesMode({ dbPath: 'data/samurai-paper.sqlite', mode: 'live' }),
+    ).toThrow(/cannot start/i);
+  });
 
-    warnIfStorePathIgnoresMode({ dbPath: 'data/samurai-paper.sqlite', mode: 'paper', logger });
+  it('names the mode and the file, and tells the operator which variable to set', () => {
+    const error = (() => {
+      try {
+        assertStorePathMatchesMode({ dbPath: '/home/me/data/samurai-paper.sqlite', mode: 'live' });
+      } catch (thrown) {
+        return thrown as Error;
+      }
+      throw new Error('expected a refusal');
+    })();
 
-    expect(logger.entries).toEqual([]);
+    expect(error.message).toContain("'live'");
+    expect(error.message).toContain('samurai-paper.sqlite');
+    expect(error.message).toContain('SAMURAI_MODE=live');
+    // Filename only — the path can carry a home directory, and a startup error
+    // is not the place to disclose one.
+    expect(error.message).not.toContain('/home/me');
   });
 });
 

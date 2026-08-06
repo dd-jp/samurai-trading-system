@@ -4,5 +4,13 @@
  * constructor injection and own their own tables.
  */
 export { MIGRATIONS_DIR, runMigrations } from './migrate.js';
-export { openSharedStore, type SharedStore, sharedStorePath } from './open-shared-store.js';
+export {
+  legacyStorePath,
+  openSharedStore,
+  resolveStoreMode,
+  type SharedStore,
+  STORE_MODES,
+  type StoreMode,
+  sharedStorePath,
+} from './open-shared-store.js';
 export { isUniqueConstraintError } from './sqlite-utils.js';

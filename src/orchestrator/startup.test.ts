@@ -9,7 +9,7 @@
  * runs AFTER the guard, so a broken default would surface as a deep stack
  * trace rather than the legible message the guard was written to give.
  */
-import { rmSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { openSharedStore } from '../shared/store/index.js';
 import { paperStartingProfile, startFromEnvironment } from './index.js';
 import type { Logger } from './types.js';
@@ -53,6 +53,11 @@ const MUTATED_ENV_VARS = [
   'ALPACA_API_SECRET',
   'ANTHROPIC_API_KEY',
   'NODE_ENV',
+  // #330 (PR #447 review): the store path is keyed off SAMURAI_MODE now, and
+  // the test below sets it. Restoring it at file scope for `NODE_ENV`'s reason
+  // — vitest reuses a worker across files, and a leaked mode would repoint
+  // every later store open in that worker.
+  'SAMURAI_MODE',
   // #322: every test in this file drives the real construction path, and that
   // path now refuses to start until the operator has said where alerts go.
   // Defaulted to `log-only` per test below; the Telegram three are cleared so
@@ -229,17 +234,17 @@ describe('startFromEnvironment — the shipped paper profile', () => {
     }
   });
 
-  it('warns at startup that the store path cannot separate paper from live (#330)', async () => {
-    // The wiring assertion for #330, distinct from `warnIfStorePathIgnoresMode`'s
-    // own unit tests: those prove the predicate, this proves `startFromEnvironment`
-    // actually calls it on the path it is about to open. Removing the call is
-    // invisible to the unit tests and fails here.
+  it('opens the file named after the TRADING MODE, whatever NODE_ENV says (#330)', async () => {
+    // The wiring assertion for #330, distinct from the predicate's own unit
+    // tests: those prove the rule, this proves `startFromEnvironment` resolves
+    // the path it is about to open from the mode. Re-keying it back to
+    // NODE_ENV is invisible to the unit tests and fails here.
     //
-    // `staging` rather than the ambient `test`: it is a real `STORE_ENVIRONMENTS`
-    // value that nothing else in the suite writes, so the file this creates
-    // cannot collide with another worker's. Restored by the file-level
-    // `afterEach`, which is why `NODE_ENV` is in `MUTATED_ENV_VARS`.
+    // `staging` is set precisely to show it does NOT reach the filename: before
+    // #330 this run wrote `samurai-staging.sqlite`, which is the file a later
+    // live run on the same host would have inherited paper state from.
     process.env.NODE_ENV = 'staging';
+    process.env.SAMURAI_MODE = 'paper';
 
     const entries: Parameters<Logger['log']>[0][] = [];
     const logger: Logger = { log: (entry) => entries.push(entry) };
@@ -252,17 +257,15 @@ describe('startFromEnvironment — the shipped paper profile', () => {
     });
 
     try {
-      const warning = entries.find((entry) => entry.message.includes('#330'));
-      expect(warning?.level).toBe('warn');
-      expect(warning?.payload).toMatchObject({
-        mode: 'paper',
-        db_file: 'samurai-staging.sqlite',
-      });
+      expect(existsSync('data/samurai-paper.sqlite')).toBe(true);
+      expect(existsSync('data/samurai-staging.sqlite')).toBe(false);
+      // And the warning this replaces is gone rather than merely quiet.
+      expect(entries.find((entry) => entry.message.includes('#330'))).toBeUndefined();
     } finally {
       await orchestrator.stop();
-      rmSync('data/samurai-staging.sqlite', { force: true });
-      rmSync('data/samurai-staging.sqlite-wal', { force: true });
-      rmSync('data/samurai-staging.sqlite-shm', { force: true });
+      rmSync('data/samurai-paper.sqlite', { force: true });
+      rmSync('data/samurai-paper.sqlite-wal', { force: true });
+      rmSync('data/samurai-paper.sqlite-shm', { force: true });
     }
   });
 

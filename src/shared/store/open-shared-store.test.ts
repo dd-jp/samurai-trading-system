@@ -1,8 +1,8 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runMigrations } from './migrate.js';
-import { openSharedStore, STORE_ENVIRONMENTS, sharedStorePath } from './open-shared-store.js';
+import { openSharedStore, STORE_MODES, sharedStorePath } from './open-shared-store.js';
 
 const TABLES = [
   'bars',
@@ -264,63 +264,120 @@ describe('openSharedStore', () => {
   });
 });
 
+/**
+ * #330 — the path is keyed off the TRADING MODE, not `NODE_ENV`.
+ *
+ * The hazard it closes is specific and is exactly the graduation this project
+ * plans: on one `NODE_ENV=production` host, flipping `SAMURAI_MODE` from
+ * `paper` to `live` used to leave both writing `samurai-production.sqlite`, so
+ * a live composition root inherited paper lots and fills as real state and
+ * computed risk caps and drawdown against them.
+ */
 describe('sharedStorePath', () => {
-  it('names one file per environment, the convention both entrypoints share', () => {
-    expect(sharedStorePath('production')).toBe('data/samurai-production.sqlite');
-    expect(sharedStorePath('development')).toBe('data/samurai-development.sqlite');
-    // Distinct files is the mechanism, not a detail: paper and live sharing a
-    // file would make cross-contamination possible.
-    expect(new Set(STORE_ENVIRONMENTS.map((env) => sharedStorePath(env))).size).toBe(
-      STORE_ENVIRONMENTS.length,
-    );
+  const savedMode = process.env.SAMURAI_MODE;
+
+  afterEach(() => {
+    if (savedMode === undefined) delete process.env.SAMURAI_MODE;
+    else process.env.SAMURAI_MODE = savedMode;
   });
 
-  it('reads NODE_ENV when called with no argument — both entrypoints rely on that', () => {
-    // vitest sets NODE_ENV=test, which is why `test` is allow-listed.
-    expect(sharedStorePath()).toBe('data/samurai-test.sqlite');
+  it('names one file per trading mode', () => {
+    expect(sharedStorePath('paper')).toBe('data/samurai-paper.sqlite');
+    expect(sharedStorePath('live')).toBe('data/samurai-live.sqlite');
+    expect(sharedStorePath('backtest')).toBe('data/samurai-backtest.sqlite');
   });
 
-  it('defaults to development when NODE_ENV is unset', () => {
+  it('gives paper and live distinct files — the mechanism, not a detail', () => {
+    // Two paths never share state, so paper/live cross-contamination is
+    // physically impossible rather than merely discouraged.
+    expect(new Set(STORE_MODES.map((mode) => sharedStorePath(mode))).size).toBe(STORE_MODES.length);
+  });
+
+  it('does NOT vary with NODE_ENV — that was the bug', () => {
+    process.env.SAMURAI_MODE = 'paper';
     const saved = process.env.NODE_ENV;
-    delete process.env.NODE_ENV;
     try {
-      expect(sharedStorePath()).toBe('data/samurai-development.sqlite');
+      process.env.NODE_ENV = 'production';
+      const inProduction = sharedStorePath();
+      process.env.NODE_ENV = 'staging';
+      expect(sharedStorePath()).toBe(inProduction);
     } finally {
       process.env.NODE_ENV = saved;
     }
   });
 
-  it('throws on an unrecognised environment rather than opening a different file', () => {
-    // The failure this prevents is silent: `prod` would open an empty
-    // data/samurai-prod.sqlite while real positions sit open at the broker.
-    for (const raw of ['prod', 'Production', 'PRODUCTION', '', 'live']) {
-      expect(() => sharedStorePath(raw)).toThrow(/must be one of/i);
-    }
+  it('reads SAMURAI_MODE when called with no argument — both entrypoints rely on that', () => {
+    process.env.SAMURAI_MODE = 'live';
+    expect(sharedStorePath()).toBe('data/samurai-live.sqlite');
   });
 
-  it('refuses a path-bearing environment instead of interpolating it', () => {
-    for (const raw of ['../../etc/passwd', 'production/../../x', 'a/b']) {
-      expect(() => sharedStorePath(raw)).toThrow(/must be one of/i);
+  it('refuses an unset or unrecognised mode rather than defaulting to paper', () => {
+    // A default of `paper` would be the #330 hazard inverted: a live run whose
+    // SAMURAI_MODE failed to export would open the paper database and trade
+    // real money against paper state.
+    for (const raw of [undefined, '', 'Paper', 'PAPER', 'production', 'a/b', '../../etc/passwd']) {
+      if (raw === undefined) delete process.env.SAMURAI_MODE;
+      else process.env.SAMURAI_MODE = raw;
+      expect(() => sharedStorePath()).toThrow(/must be one of/i);
     }
   });
 
   it('names the offending value so an operator can see the typo', () => {
-    expect(() => sharedStorePath('prod')).toThrow(/"prod"/);
+    process.env.SAMURAI_MODE = 'papr';
+    expect(() => sharedStorePath()).toThrow(/"papr"/);
+  });
+});
+
+describe('sharedStorePath — the pre-#330 database (migration story)', () => {
+  const savedMode = process.env.SAMURAI_MODE;
+  const savedEnv = process.env.NODE_ENV;
+  const savedCwd = process.cwd();
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'samurai-legacy-'));
+    mkdirSync(join(root, 'data'), { recursive: true });
+    process.chdir(root);
+    process.env.SAMURAI_MODE = 'paper';
+    process.env.NODE_ENV = 'production';
   });
 
-  it('resolves identically whether NODE_ENV is passed explicitly or read here', () => {
-    // Both entrypoints call it with no argument, but the equivalence is what
-    // makes that safe: the orchestrator writes the file the dashboard reads,
-    // so any divergence between the two call shapes is a silent split-brain.
-    for (const raw of [...STORE_ENVIRONMENTS, undefined]) {
-      const saved = process.env.NODE_ENV;
-      if (raw === undefined) delete process.env.NODE_ENV;
-      else process.env.NODE_ENV = raw;
-      try {
-        expect(sharedStorePath()).toBe(sharedStorePath(process.env.NODE_ENV ?? 'development'));
-      } finally {
-        process.env.NODE_ENV = saved;
-      }
-    }
+  afterEach(() => {
+    process.chdir(savedCwd);
+    rmSync(root, { recursive: true, force: true });
+    if (savedMode === undefined) delete process.env.SAMURAI_MODE;
+    else process.env.SAMURAI_MODE = savedMode;
+    process.env.NODE_ENV = savedEnv;
+  });
+
+  it('refuses to start against an empty store when a pre-#330 file is stranded', () => {
+    // Without this, the run opens a fresh database and sees none of the
+    // positions, fills or tuning history in the old one — while any real
+    // positions stay open at the broker.
+    writeFileSync(join(root, 'data', 'samurai-production.sqlite'), '');
+
+    expect(() => sharedStorePath()).toThrow(/samurai-production\.sqlite/);
+    expect(() => sharedStorePath()).toThrow(/mv data\/samurai-production\.sqlite/);
+  });
+
+  it('says nothing once the mode-keyed file exists', () => {
+    writeFileSync(join(root, 'data', 'samurai-production.sqlite'), '');
+    writeFileSync(join(root, 'data', 'samurai-paper.sqlite'), '');
+
+    expect(sharedStorePath()).toBe('data/samurai-paper.sqlite');
+  });
+
+  it('says nothing on a clean install with no legacy file at all', () => {
+    expect(sharedStorePath()).toBe('data/samurai-paper.sqlite');
+  });
+
+  it('refuses rather than renaming — moving live-money state is the operator call', () => {
+    writeFileSync(join(root, 'data', 'samurai-production.sqlite'), '');
+
+    expect(() => sharedStorePath()).toThrow();
+    // The old file is exactly where it was: only the operator knows whether it
+    // is paper history to carry forward or live state a paper run must not get.
+    expect(existsSync(join(root, 'data', 'samurai-production.sqlite'))).toBe(true);
+    expect(existsSync(join(root, 'data', 'samurai-paper.sqlite'))).toBe(false);
   });
 });
