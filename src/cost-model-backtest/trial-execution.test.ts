@@ -14,6 +14,7 @@ import {
   STOCK_PERIODS_PER_YEAR,
   sizeTrialGridToSample,
   type TrialGridAssetClass,
+  type TrialGridSizing,
 } from './trial-execution.js';
 import type { CostModel, CostModelResult, FillRequest, MarketState } from './types.js';
 import type { DateRange, InstrumentListing, InstrumentRegistry } from './universe.js';
@@ -214,6 +215,41 @@ describe('runTrialGrid — orchestration wiring (fakes, no real replay/eval)', (
     expect(cryptoEvaluator.calls).toHaveLength(12);
     expect(stockEvaluator.calls.every((call) => call.periodsPerYear === 252)).toBe(true);
     expect(cryptoEvaluator.calls.every((call) => call.periodsPerYear === 365)).toBe(true);
+  });
+
+  it('announces the sizing runTrialGrid actually used, before any trial runs', async () => {
+    // The point of the callback: the operator-facing "grid sized to N=..." line
+    // must be built from the sizing that constrained the search, not from a
+    // second computation that merely agrees with it. Asserting the announced
+    // `selected` is exactly what ran is what makes that non-negotiable.
+    const evaluator = new RecordingEvaluator();
+    const { assetClass } = makeAssetClass('stocks', STOCK_PERIODS_PER_YEAR);
+    const announced: TrialGridSizing[] = [];
+
+    const results = await runTrialGrid({
+      assetClasses: [assetClass],
+      // Deliberately NOT the module `WINDOW`, which is six years and wide
+      // enough that the cap never bites: this test is about the sizing, so it
+      // needs a window where the grid is actually cut.
+      window: { start: new Date(Date.UTC(2020, 0, 1)), end: new Date(Date.UTC(2022, 0, 1)) },
+      averageCapital: 10_000,
+      configTrialLog: new InMemoryConfigTrialLog(),
+      makeEvaluator: () => evaluator,
+      announceSizing: (sizing) => {
+        // Before, not after: a cap reported once the trials are spent is the
+        // ordering #405 exists to correct.
+        expect(evaluator.calls).toHaveLength(0);
+        announced.push(sizing);
+      },
+    });
+
+    expect(announced).toHaveLength(1);
+    const sizing = announced[0] as TrialGridSizing;
+    expect(sizing.requested).toBe(12);
+    expect(results).toHaveLength(sizing.selected.length);
+    expect(results.map((result) => result.config_hash)).toEqual(
+      sizing.selected.map((entry) => entry.config_hash),
+    );
   });
 
   it('runs the fixed 5-fold walk-forward split (barMs=1 day, embargo=50 bars) for every call', async () => {

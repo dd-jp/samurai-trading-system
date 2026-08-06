@@ -175,6 +175,30 @@ export function sizeTrialGridToSample(
   const years = (window.end.getTime() - window.start.getTime()) / MS_PER_YEAR;
   const requested = entries.length;
 
+  // A window too short to support even ONE configuration must REFUSE, not
+  // return an empty selection. `runTrialGrid` over zero configs completes
+  // without error and yields zero trials, and a Stage 2 verdict rendered over
+  // zero trials has no failing config to report — it reads as a pass. That is
+  // the single worst outcome this whole function exists to prevent: the cap is
+  // here to make the gate harder to pass, and a bug in it that makes the gate
+  // pass vacuously inverts its purpose.
+  //
+  // Stated honestly: this is UNREACHABLE as `minbtl` is written today — it
+  // starts its search at `limit = 1` and only ever increments
+  // (overfitting.ts:195), so it cannot return less. The guard is here because
+  // nothing in the `{ limit: number }` return type says that, the invariant is
+  // one refactor away from being lost, and the failure mode it protects
+  // against is silent rather than loud. `< 1` rather than `=== 0` for the same
+  // reason: MinBTL is a continuous expression underneath.
+  if (limit < 1) {
+    throw new Error(
+      `sizeTrialGridToSample: MinBTL supports ${limit} configs over a ` +
+        `${years.toFixed(2)}-year window, so no grid can be run against it. ` +
+        'Widen the window or ingest more history — a verdict over zero trials ' +
+        'is not a pass.',
+    );
+  }
+
   if (requested <= limit) {
     return { selected: entries, limit, requested, years };
   }
@@ -262,6 +286,18 @@ export interface TrialGridRunDeps {
    * partitioning differs. That is what makes the two passes comparable.
    */
   includeCscvPass?: boolean;
+  /**
+   * Called once with the sizing this run ACTUALLY used, before any trial runs.
+   *
+   * A callback rather than letting the caller size the grid itself and print
+   * from that: `run-stage2.ts` used to call `sizeTrialGridToSample` a second
+   * time purely to build its log line, so the number an operator reads and the
+   * number that constrained the search were two computations that agreed only
+   * by convention. They are pure and take the same window, so they cannot
+   * disagree today — but a verdict's audit trail should not rest on "cannot
+   * disagree today", and the divergence would be silent if it ever did.
+   */
+  announceSizing?: (sizing: TrialGridSizing) => void;
 }
 
 /**
@@ -287,6 +323,7 @@ export async function runTrialGrid(deps: TrialGridRunDeps): Promise<TrialGridRes
 
   // #405: sized from the sample BEFORE any trial runs, not graded afterwards.
   const sizing = sizeTrialGridToSample(buildTrialGrid(), deps.window);
+  deps.announceSizing?.(sizing);
   const grid = sizing.selected;
   const results: TrialGridResult[] = [];
 
