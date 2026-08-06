@@ -276,14 +276,19 @@ export function renderPipelineChip(
     reading = formatStageDuration(lane.total_ms);
   }
 
+  // The asset class is on the chip face, not only in the label: crypto ticks
+  // around the clock and stocks do not, so an idle chip means "market closed"
+  // for one and "something is wrong" for the other. Without the marker the
+  // two are indistinguishable, which is the failure #413 exists to prevent.
   const stationLabel = station === null ? 'no tick in window' : PIPELINE_STAGE_LABELS[station];
-  const label = `${lane.instrument} · ${stationLabel} · ${lane.outcome.replace('_', ' ')}`;
+  const label = `${lane.instrument} · ${lane.asset_class} · ${stationLabel} · ${lane.outcome.replace('_', ' ')}`;
   return (
     `<button type="button" class="pl-chip pl-chip-${lane.outcome}${settled}${selected}"` +
     ` data-instrument="${name}" data-stage="${station === null ? '' : station}"` +
     ` aria-expanded="${selected === '' ? 'false' : 'true'}"` +
     ` title="${escapePipelineText(label)}" aria-label="${escapePipelineText(label)}">` +
     `<span class="pl-dot"></span><span class="pl-tick">${name}</span>` +
+    `<span class="pl-class">${escapePipelineText(lane.asset_class)}</span>` +
     `<span class="pl-el">${escapePipelineText(reading)}</span></button>`
   );
 }

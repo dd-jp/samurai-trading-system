@@ -159,8 +159,8 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
      frame has to stay still for the chips' positions to mean anything. */
   .pl-scroll { overflow-x: auto; }
   .pl-rail {
-    display: grid; grid-template-columns: repeat(7, minmax(112px, 1fr));
-    gap: 0; padding: 18px 12px 4px; min-width: 840px;
+    display: grid; grid-template-columns: repeat(7, minmax(148px, 1fr));
+    gap: 0; padding: 18px 12px 4px; min-width: 1064px;
   }
   .pl-station { padding: 0 7px; }
   .pl-station-head {
@@ -186,6 +186,9 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   .pl-chip:hover { border-color: var(--blue); }
   .pl-chip.pl-selected { border-color: var(--blue); background: rgba(74,168,255,0.08); }
   .pl-tick { overflow: hidden; text-overflow: ellipsis; }
+  /* Crypto ticks 24/7 and stocks do not, so an idle chip reads differently by
+     class. Kept on the chip face rather than only in the tooltip. */
+  .pl-class { color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: 1px; }
   .pl-el { margin-left: auto; color: var(--muted); font-size: 11px; }
   .pl-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--muted); }
   /* The dot carries the outcome. Colour is never the only signal — the chip's
