@@ -48,3 +48,26 @@ This ADR is the canonical technical-foundation decision. It supersedes the confl
 - `~/Documents/Obsidian/Ideas/Samurai — Multi-Agent Trading System.md` (architecture still valid; infra now per this ADR)
 - `~/trading-system/SAMURAI-HANDOFF.md` (same)
 - `docs/trading-agent-handover.md` (greenfield-only infra now superseded by the hybrid)
+
+## Appendix: Broker/Data — historical OHLCV sourcing (2026-08-06)
+
+**Decision:** historical daily OHLCV for the MVP universe (SPY, QQQ, AAPL, TSLA, BTC-USD, ETH-USD) comes from a **four-source free stack**. No paid data tier is purchased. Decided on wayfinder map [#482](../../issues/482), locked in grilling ticket [#487](../../issues/487).
+
+| Leg | Role | Source | Key facts |
+| --- | --- | --- | --- |
+| Equities | Primary | **Alpaca free Basic**, `feed=sip&adjustment=raw` | 10.5y of true unadjusted daily bars (2016-01-04→), all 4 tickers in 2 requests, 200 req/min. Key already provisioned. **Pin `feed=sip`** — `feed=iex` silently returns a shallow archive. ([#483](../../issues/483), `docs/research/free-equities-ohlcv-2026-08-06.md`) |
+| Equities | Fallback | **Polygon free tier**, `adjusted=false` | Key already provisioned (free — nobody is billed). 2-year window, 5 req/min. `adjusted=false` closes match Alpaca `raw` exactly (max diff 0.0000 over 128 bars × 4 tickers). Increment-only role — never the backfill source. ([#487](../../issues/487), `docs/research/free-ohlcv-fallback-sources-2026-08-06.md`) |
+| Crypto | Primary | **Coinbase Exchange public candles** | No key, no account. BTC-USD to 2015-07-20, ETH-USD to 2016-05-18, zero gaps over the 5y window; 7 paginated ≤300-day requests per symbol. ([#484](../../issues/484), `docs/research/free-crypto-ohlcv-2026-08-06.md`) |
+| Crypto | Fallback | **Bitstamp** `/api/v2/ohlc` | No key. BTC 2011→, ETH 2017→, zero gaps over the window. ([#487](../../issues/487), `docs/research/free-ohlcv-fallback-sources-2026-08-06.md`) |
+
+**Why a stall is acceptable:** bars are cacheable, so a dead vendor costs *new* bars only, not history already stored — failover to the fallback covers the gap. This is the code fact that collapsed the paid-tier SLA argument (#487).
+
+**Rejected:** Alpaca crypto (volume column drops ~600× on 2023-06-15 — would inflate `getADV()` impact charges ~65×; prices fine, cross-check only), Kraken OHLC (720-candle hard cap, reconfirmed), CoinGecko, Gemini, Stooq, Yahoo (split-adjusted, not raw), TradingView (not a data source — its charting library requires the integrator to supply the feed).
+
+### Supersedes #157 (Polygon/Massive paid tiers)
+
+Decision ticket [#157](../../issues/157) chose **Polygon paid** for both asset classes — Stocks Starter $29/mo (5y) + Currencies Starter $49/mo (10y), $78/mo total. **Both legs are overturned:** equities by [#483](../../issues/483), crypto by [#484](../../issues/484), the reliability case by [#487](../../issues/487). Any document citing #157's paid tiers, the $78/mo figure, or "Polygon Stocks Starter / Currencies Starter" as the plan is describing the superseded state.
+
+#157 rested on a false premise: that Alpaca's free tier is **IEX-only**. That applies to Alpaca's *real-time* feed only — **historical SIP data is served on the free tier** (only the most recent 15 minutes is withheld). The premise appears in research #155 (`docs/research/03-historical-data-vendor-options.md`, corrected in-body 2026-08-06) and caused the wrong equities-leg decision.
+
+**Open, deliberately not charged against this decision:** whether Polygon Currencies volume is exchange-aggregated (the free key cannot reach crypto aggregates to test). Polygon and Alpaca equities volume already differ by up to ~8% despite identical prices, so source-switching shifts `getADV()` under either stack. Implementation follow-ups: [#495](../../issues/495) (stop re-fetching the full window every run), [#496](../../issues/496) (failover wiring), [#497](../../issues/497) (`CcxtDataSource` pagination + default source).
