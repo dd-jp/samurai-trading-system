@@ -42,6 +42,18 @@ export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
   'claude-sonnet-4-6': { input: 3, output: 15 },
   'claude-sonnet-4-5': { input: 3, output: 15 },
   'claude-haiku-4-5': { input: 1, output: 5 },
+  /**
+   * xAI, for the Grok market-intelligence agent (#464). Present so that
+   * ADR-0008's cap is CROSS-PROVIDER rather than Anthropic-only: the cap sums
+   * `cost_usd`, `priceUsage` returns null for an unrecognised model, and a
+   * null lands in the table unpriced — so without a rate here the cap would
+   * sum straight past every xAI call and the ceiling would be a fiction.
+   *
+   * PUBLISHED rates for grok-4 (x.ai/api, retrieved 2026-08-06). Prefix-keyed
+   * like the rest, so a dated snapshot prices without a code change.
+   */
+  'grok-4': { input: 3, output: 15 },
+  'grok-3': { input: 3, output: 15 },
 });
 
 /**

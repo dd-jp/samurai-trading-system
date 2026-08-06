@@ -180,7 +180,9 @@ import {
   CiiConsumer,
   type CiiConsumerConfig,
   type CiiScoreProvider,
+  GrokAgent,
   MarketIntelligenceStore,
+  XaiGrokClient,
 } from '../market-intelligence/index.js';
 import type {
   CorrelationConfig,
@@ -1270,13 +1272,15 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     new SqliteMarketDataStore(config.db),
   );
 
-  // `MarketIntelligenceStore` is deliberately empty at construction: it is an
-  // in-memory, restart-clean seam that DeepResearch/Grok agents ingest into
-  // (market-intelligence/index.ts), and no such agent runs in this process
-  // yet. Analysts that need intelligence degrade per their own spec rather
-  // than this module inventing items to seed it with.
+  // `MarketIntelligenceStore` starts empty and, as of #464, has a writer: the
+  // Grok agent below ingests into THIS instance. Constructed here rather than
+  // inline so the agent and the analysts cannot end up holding two different
+  // stores — the same reasoning as `setupStore` below, and the same defect
+  // (#432) that would otherwise recur.
+  const marketIntelligence = new MarketIntelligenceStore(clock);
+
   const analysts = new AnalystOrchestrator({
-    market_intelligence: new MarketIntelligenceStore(clock),
+    market_intelligence: marketIntelligence,
     market_data: marketData,
   });
 
@@ -1515,11 +1519,51 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     mode: config.mode,
   };
 
+  // #464. Built ONLY when XAI_API_KEY is present. Absent is the honest
+  // default rather than a silent no-op: with no key the analysts keep
+  // reporting NO_DATA_MARKER (#463), which says "never had an input" rather
+  // than presenting the absence as a neutral read.
+  //
+  // Metering is what makes this affordable to leave on: the agent records
+  // every call into `llm_spend` under `stage: 'market_intelligence'`, so
+  // ADR-0008's cap is cross-provider rather than Anthropic-only, and it checks
+  // that cap BEFORE calling.
+  const grokAgent =
+    process.env.XAI_API_KEY?.trim() === undefined || process.env.XAI_API_KEY?.trim() === ''
+      ? undefined
+      : new GrokAgent({
+          client: new XaiGrokClient({ logger }),
+          store: marketIntelligence,
+          spendCap,
+          spendSink: new SqliteLlmSpendStore(config.db, logger),
+          clock,
+          logger,
+        });
+
+  if (grokAgent === undefined) {
+    logger.log({
+      trace_id: 'startup',
+      stage: 'market_intelligence',
+      level: 'warn',
+      message:
+        'XAI_API_KEY is not set, so no market-intelligence agent is running. `sentiment` and ' +
+        '`fundamental` will report NO DATA on every tick — crypto debates run 1 real analyst ' +
+        'of 2 and equity debates 1 of 3. See #436/#464.',
+      payload: {},
+    });
+  }
+
   const steps: TickSteps = {
     // `logger` here is what makes an analyst failure visible at all — see the
     // adapter's doc comment (issue #358 item 4).
     analysts: buildAnalystsStep(analysts, logger, {
       skipAlerts: config.analystSkipAlerts ?? new LoggingAnalystSkipAlertChannel(logger),
+      // #464: the only writer `MarketIntelligenceStore` has. Built ONLY when
+      // XAI_API_KEY is present — no key, no calls, and the analysts keep
+      // reporting NO_DATA_MARKER (#463), which is the honest default rather
+      // than a silent no-op. The agent's own 4h bucket makes calling it on
+      // every pass cheap: it returns immediately unless the bucket rolled.
+      ...(grokAgent === undefined ? {} : { marketIntelligence: grokAgent }),
     }),
     // Two independent stores hang off this one step, both over `config.db`:
     // #367's `SqliteLlmSpendStore` meters what the debate COSTS (the

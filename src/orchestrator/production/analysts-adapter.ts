@@ -50,7 +50,7 @@
  * `computeIndicator: sma(14) needs 14 bars but received 13` must pass through
  * verbatim, and a test pins exactly that.
  */
-import type { AnalystFailure, AnalystOrchestrator } from '../../analysts/index.js';
+import type { AnalystFailure, AnalystOrchestrator, AssetClass } from '../../analysts/index.js';
 import { type Logger, sanitizeLogText } from '../../shared/index.js';
 import type { TickSteps } from '../types.js';
 
@@ -102,6 +102,26 @@ export const ALERT_REPEAT_EVERY_SKIPS = 8;
 export interface AnalystsStepOptions {
   /** Absent = no alerting, log-only. `production.ts` supplies its log-only default. */
   skipAlerts?: AnalystSkipAlertChannel;
+  /**
+   * #464: the Grok market-intelligence refresh, run BEFORE the analysts so
+   * `sentiment` and `fundamental` read a populated store rather than reporting
+   * `NO_DATA_MARKER`.
+   *
+   * Here rather than on its own timer for the same reason #397's cadence
+   * gating belongs in the Scheduler: a second timer would run independently of
+   * the tick's in-flight guard, and the agent's own 4h bucket already makes
+   * calling it every pass cheap — it returns immediately unless the bucket has
+   * rolled.
+   *
+   * Absent when `XAI_API_KEY` is unset, which is the honest default: no key,
+   * no calls, and the analysts keep saying NO DATA.
+   */
+  marketIntelligence?: MarketIntelligenceRefresh;
+}
+
+/** The one method the analysts step calls on `GrokAgent`. */
+export interface MarketIntelligenceRefresh {
+  refresh(trace_id: string, instrument: string, assetClass: AssetClass): Promise<boolean>;
 }
 
 export function buildAnalystsStep(
@@ -121,6 +141,12 @@ export function buildAnalystsStep(
   const consecutiveSkips = new Map<string, number>();
 
   return async ({ trace_id, signal, clock }) => {
+    // BEFORE the analysts, so a refreshed window is visible to the very tick
+    // that paid for it. `GrokAgent.refresh` never throws — market intelligence
+    // is an optional input, and an xAI outage must degrade the debate to
+    // NO_DATA_MARKER rather than fail a tick that would otherwise have traded.
+    await options.marketIntelligence?.refresh(trace_id, signal.asset, signal.asset_class);
+
     const result = await orchestrator.runAnalysts(trace_id, signal, clock);
 
     if (logger !== undefined && result.failures.length > 0) {

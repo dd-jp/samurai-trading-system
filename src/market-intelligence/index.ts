@@ -230,3 +230,12 @@ export class MarketIntelligenceStore {
     }
   }
 }
+export {
+  floorToRefreshBucket,
+  GROK_REFRESH_MS,
+  GrokAgent,
+  type GrokAgentDeps,
+  type GrokSentimentClient,
+  type GrokSpendSink,
+} from './grok/grok-agent.js';
+export { XaiGrokClient, type XaiGrokClientOptions } from './grok/xai-client.js';
