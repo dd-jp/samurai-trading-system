@@ -129,6 +129,37 @@ describe('XaiGrokClient retrieval evidence', () => {
     expect(result.usage).toEqual({ input_tokens: 100, output_tokens: 20 });
   });
 
+  it('counts tool invocations rather than assuming one, since xAI bills each (#476)', async () => {
+    // The Responses API runs an agentic loop: one request may search several
+    // times. Reporting a flat 1 would under-charge the cap on exactly the
+    // requests that cost the most.
+    install(
+      body({
+        output: [
+          { type: 'x_search_call' },
+          { type: 'x_search_call' },
+          { type: 'x_search_call' },
+          { type: 'message', content: [{ type: 'output_text', text: '{"items":[]}' }] },
+        ],
+      }),
+    );
+
+    const result = await new XaiGrokClient({ apiKey: 'k' }).fetchSentiment('BTC-USD', AS_OF);
+
+    expect(result.server_tool_calls).toBe(3);
+  });
+
+  it('reports zero invocations when the response shows none', async () => {
+    // Paired with the discard: no tool step means no tool charge, and the
+    // response is not ingested either.
+    install(body({ citations: [], output: undefined }));
+
+    const result = await new XaiGrokClient({ apiKey: 'k' }).fetchSentiment('BTC-USD', AS_OF);
+
+    expect(result.server_tool_calls).toBe(0);
+    expect(result.items).toEqual([]);
+  });
+
   it('accepts a tool step in the output as evidence when citations are absent', async () => {
     // The other accepted signal: the Responses API reports server-side tool
     // invocations inline. Either alone would be brittle, since xAI publishes no

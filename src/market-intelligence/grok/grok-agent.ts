@@ -68,6 +68,13 @@ export interface GrokSentimentClient {
     items: IntelligenceItem[];
     model: string;
     usage: { input_tokens: number; output_tokens: number };
+    /**
+     * Server-side tool invocations this call incurred (#476). xAI bills these
+     * per invocation on top of tokens, so the meter needs the count or the cap
+     * under-charges every Grok call. Optional because a client that uses no
+     * server-side tool has nothing to report.
+     */
+    server_tool_calls?: number | undefined;
     latency_ms: number;
   }>;
 }
@@ -84,6 +91,8 @@ export interface GrokSpendSink {
       cache_creation_input_tokens?: number;
       cache_read_input_tokens?: number;
     };
+    /** Passed through so the tool half of xAI's bill reaches `cost_usd` (#476). */
+    server_tool_calls?: number | undefined;
     latency_ms: number;
     timestamp: Date;
   }): void;
@@ -175,6 +184,9 @@ export class GrokAgent {
         stage: 'market_intelligence',
         model: result.model,
         usage: result.usage,
+        // xAI bills tool invocations separately from tokens, so a meter that
+        // dropped this would under-count every search the agent paid for.
+        server_tool_calls: result.server_tool_calls,
         latency_ms: result.latency_ms,
         timestamp: asOf,
       });

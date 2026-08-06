@@ -201,9 +201,11 @@ export class XaiGrokClient implements GrokSentimentClient {
       }
 
       const body = (await response.json()) as XaiResponse;
-      const items = this.#retrieved(body, instrument)
-        ? this.#parseItems(body, instrument, asOf)
-        : [];
+      const toolSteps = this.#countToolSteps(body);
+      const items =
+        this.#retrieved(body, instrument, toolSteps)
+          ? this.#parseItems(body, instrument, asOf)
+          : [];
 
       return {
         items,
@@ -212,6 +214,11 @@ export class XaiGrokClient implements GrokSentimentClient {
           input_tokens: body.usage?.input_tokens ?? body.usage?.prompt_tokens ?? 0,
           output_tokens: body.usage?.output_tokens ?? body.usage?.completion_tokens ?? 0,
         },
+        // Reported so the meter can price the tool half of the bill (#476).
+        // Counted, not assumed to be one: the Responses API runs an agentic
+        // loop, so a single request may search several times and xAI bills
+        // each invocation.
+        server_tool_calls: toolSteps,
         latency_ms: Date.now() - started,
       };
     } finally {
@@ -235,13 +242,9 @@ export class XaiGrokClient implements GrokSentimentClient {
    * other is the debate trading on fabricated sentiment, so the asymmetry
    * decides which way this errs.
    */
-  #retrieved(body: XaiResponse, instrument: string): boolean {
+  #retrieved(body: XaiResponse, instrument: string, toolSteps: number): boolean {
     if (Array.isArray(body.citations) && body.citations.length > 0) return true;
-
-    const toolStep = body.output?.some(
-      (item) => typeof item.type === 'string' && /search|tool|web/i.test(item.type),
-    );
-    if (toolStep === true) return true;
+    if (toolSteps > 0) return true;
 
     this.#logger?.log({
       trace_id: 'grok',
@@ -258,6 +261,20 @@ export class XaiGrokClient implements GrokSentimentClient {
       payload: { instrument },
     });
     return false;
+  }
+
+  /**
+   * How many server-side tool invocations this response reports.
+   *
+   * Serves two callers with one walk: `#retrieved` needs to know whether ANY
+   * ran, and the meter needs to know HOW MANY, because xAI bills per
+   * invocation and the Responses API's agentic loop may search more than once
+   * for a single request (#476).
+   */
+  #countToolSteps(body: XaiResponse): number {
+    return (body.output ?? []).filter(
+      (item) => typeof item.type === 'string' && /search|tool|web/i.test(item.type),
+    ).length;
   }
 
   /**

@@ -1,0 +1,36 @@
+-- Server-side tool invocations against `llm_spend` (#476).
+--
+-- WHY THIS COLUMN EXISTS. ADR-0008's $50/14-day ceiling is enforced by
+-- `SpendCap`, which does `SELECT COALESCE(SUM(cost_usd), 0) FROM llm_spend`.
+-- Until now every dollar in that sum came from tokens, because every metered
+-- call was an Anthropic completion and tokens were the whole bill.
+--
+-- The Grok market-intelligence agent (#464) breaks that assumption. xAI's own
+-- tools documentation states it plainly: "Tool requests are priced based on two
+-- components: token usage and tool invocations." The server-side `x_search`
+-- tool the agent depends on is billed PER INVOCATION, on top of tokens — so a
+-- meter that prices only tokens under-counts every single Grok call, and the
+-- ceiling quietly stops being a ceiling.
+--
+-- WHY A COLUMN AND NOT JUST MORE DOLLARS IN `cost_usd`. Both, in fact:
+-- `cost_usd` carries the tool charge so the cap stays honest, and this column
+-- records how many invocations produced it so the number is auditable. Without
+-- the count, a row whose cost exceeds what its token counts imply is
+-- indistinguishable from a pricing bug — and during an unattended soak, "the
+-- spend line looks wrong" needs to be answerable from the table rather than
+-- from re-deriving rates by hand.
+--
+-- THE RULE FOR AN UNPRICED MODEL, stated here because the next reader will ask.
+-- `priceUsage` returns NULL for a model missing from `MODEL_RATES`, and a NULL
+-- `cost_usd` means "unpriced" (see 0010_llm_spend.sql). Tool invocations are
+-- priced independently of any rate table — the charge is per call, not per
+-- token — so a call with an unrecognised model and a known invocation count
+-- still records the tool dollars it definitely cost, rather than discarding a
+-- number we have because a different one is missing. Such a row is recognisable
+-- exactly BY this column: `server_tool_calls > 0` alongside a cost too small to
+-- cover its tokens means the token half went unpriced.
+--
+-- DEFAULT 0 is the honest value for every existing row and for every Anthropic
+-- call: none of them invoked a server-side tool, so none of them incurred this
+-- charge. Backfill is a no-op by construction, not an approximation.
+ALTER TABLE llm_spend ADD COLUMN server_tool_calls INTEGER NOT NULL DEFAULT 0;

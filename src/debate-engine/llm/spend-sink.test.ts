@@ -24,6 +24,7 @@ interface SpendRow {
   cache_creation_input_tokens: number;
   cache_read_input_tokens: number;
   cost_usd: number | null;
+  server_tool_calls: number;
   latency_ms: number | null;
   timestamp: string;
 }
@@ -172,6 +173,87 @@ describe('SqliteLlmSpendStore', () => {
     expect(all).toHaveLength(1);
     expect(all[0]?.debate_id).toBeNull();
     expect(all[0]?.input_tokens).toBe(7);
+  });
+
+  it('adds the server-side tool charge on top of tokens (#476)', () => {
+    // xAI: "Tool requests are priced based on two components: token usage and
+    // tool invocations." Before this, the Grok agent's x_search calls were
+    // metered on tokens alone and every one of them under-charged the cap.
+    const db = openSharedStore(':memory:');
+    new SqliteLlmSpendStore(db).record({
+      trace_id: 'trace-1',
+      stage: 'market_intelligence',
+      model: 'grok-4.5',
+      usage: { input_tokens: 1_000_000, output_tokens: 0 },
+      server_tool_calls: 4,
+      latency_ms: 10,
+      timestamp: NOW,
+    });
+
+    const [row] = rows(db);
+    // 1M input at $2/M = $2.00, plus 4 invocations at $0.005 = $0.02.
+    expect(row?.cost_usd).toBeCloseTo(2.02, 10);
+    expect(row?.server_tool_calls).toBe(4);
+  });
+
+  it('records the tool cost even when the model is unpriced, and warns', () => {
+    // THE case #476 was filed for. Discarding a charge we know exactly, because
+    // a different charge is missing from the rate table, would under-count the
+    // cap — and a NULL is not diagnosable, whereas a small cost beside a
+    // non-zero invocation count is.
+    const db = openSharedStore(':memory:');
+    const entries: LogEntry[] = [];
+    new SqliteLlmSpendStore(db, { log: (entry) => void entries.push(entry) }).record({
+      trace_id: 'trace-1',
+      stage: 'market_intelligence',
+      model: 'grok-from-the-future',
+      usage: { input_tokens: 1_000_000, output_tokens: 1_000_000 },
+      server_tool_calls: 2,
+      latency_ms: 10,
+      timestamp: NOW,
+    });
+
+    const [row] = rows(db);
+    expect(row?.cost_usd).toBeCloseTo(0.01, 10);
+    expect(row?.server_tool_calls).toBe(2);
+
+    const warn = entries.find((entry) => entry.level === 'warn');
+    expect(warn?.message).toContain('not in MODEL_RATES');
+    expect(warn?.message).toContain('understates the true cost');
+  });
+
+  it('leaves cost null for an unpriced model that used no tool', () => {
+    // The pre-existing semantic is preserved: unpriced stays NULL rather than
+    // becoming a 0 indistinguishable from a genuinely free call.
+    const db = openSharedStore(':memory:');
+    new SqliteLlmSpendStore(db).record({
+      trace_id: 'trace-1',
+      stage: 'debate',
+      model: 'claude-unreleased-9',
+      usage: { input_tokens: 500, output_tokens: 500 },
+      latency_ms: 10,
+      timestamp: NOW,
+    });
+
+    expect(rows(db)[0]?.cost_usd).toBeNull();
+  });
+
+  it('defaults an Anthropic call to zero tool invocations', () => {
+    // A completion invokes no server-side tool, so it incurs no such charge.
+    // Zero is the honest value, not a placeholder.
+    const db = openSharedStore(':memory:');
+    new SqliteLlmSpendStore(db).record({
+      trace_id: 'trace-1',
+      stage: 'debate',
+      model: 'claude-haiku-4-5',
+      usage: { input_tokens: 1_000_000, output_tokens: 0 },
+      latency_ms: 10,
+      timestamp: NOW,
+    });
+
+    const [row] = rows(db);
+    expect(row?.server_tool_calls).toBe(0);
+    expect(row?.cost_usd).toBeCloseTo(1, 10);
   });
 
   it('does not require a logger to stay non-throwing', () => {

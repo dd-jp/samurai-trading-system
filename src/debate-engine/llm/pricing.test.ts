@@ -6,7 +6,14 @@
  * $0), and an unknown model being priced at 0 instead of `null` (would
  * understate the total while looking identical to a free call).
  */
-import { CACHE_READ_MULTIPLIER, CACHE_WRITE_MULTIPLIER, priceUsage, rateFor } from './pricing.js';
+import {
+  CACHE_READ_MULTIPLIER,
+  CACHE_WRITE_MULTIPLIER,
+  priceServerToolCalls,
+  priceUsage,
+  rateFor,
+  SERVER_TOOL_USD_PER_CALL,
+} from './pricing.js';
 
 describe('rateFor', () => {
   it('matches a dated snapshot id against its undated rate', () => {
@@ -101,8 +108,34 @@ describe('xAI rates (post-hoc review of #469)', () => {
   });
 
   it('returns null for a Grok id outside the table rather than guessing', () => {
-    // Documented in #476: the cap then sums past it. Null is correct here; the
-    // gap is that nothing alerts when a call that cost money goes unpriced.
+    // The token half only. Since #476 the TOOL half of such a call is still
+    // priced and recorded — see `priceServerToolCalls` and the sink.
     expect(priceUsage('grok-9', ONE_MILLION_EACH)).toBeNull();
+  });
+});
+
+describe('priceServerToolCalls (#476)', () => {
+  it('prices each invocation, because xAI bills tools on top of tokens', () => {
+    // "Tool requests are priced based on two components: token usage and tool
+    // invocations." A meter that priced only tokens under-counted every Grok
+    // call, and ADR-0008's ceiling quietly stopped being a ceiling.
+    expect(priceServerToolCalls(1)).toBeCloseTo(SERVER_TOOL_USD_PER_CALL, 10);
+    expect(priceServerToolCalls(200)).toBeCloseTo(1, 10);
+  });
+
+  it('never returns null, unlike priceUsage', () => {
+    // There is no rate table to miss: the charge is per invocation, so it is
+    // knowable for ANY model. That is what lets an unpriced model still record
+    // the tool dollars it definitely cost.
+    expect(priceServerToolCalls(0)).toBe(0);
+  });
+
+  it('treats a nonsense count as zero rather than poisoning cost_usd', () => {
+    // A NaN or negative reaching `cost_usd` would make `SpendCap` read the row
+    // as corrupt and refuse to compare — an accounting slip would become a
+    // halted cap.
+    expect(priceServerToolCalls(Number.NaN)).toBe(0);
+    expect(priceServerToolCalls(-3)).toBe(0);
+    expect(priceServerToolCalls(Number.POSITIVE_INFINITY)).toBe(0);
   });
 });
