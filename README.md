@@ -181,7 +181,9 @@ samurai-trading-system/
 ├── CLAUDE.md              # Project briefing (read every session)
 ├── CONTEXT.md             # Domain glossary
 ├── package.json
-└── tsconfig.json
+├── tsconfig.json          # Solution file — references the two below, for editors
+├── tsconfig.build.json    # Build/emit config: src/ only, no tests
+└── tsconfig.test.json     # Type-checks the test suite
 ```
 
 ## Documentation
