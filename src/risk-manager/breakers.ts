@@ -196,28 +196,18 @@ export class CircuitBreakers {
     if (dailyLossTripped) {
       armed.push('daily_loss_soft');
     }
-    // Unknown BLOCKS, as of #333 — it no longer arms an advisory marker only.
-    // Decision 5: a daily figure nobody has must stop new entries rather than
-    // read as a flat day. Safe to halt on because it is non-sticky like the
-    // rest of this tier: it clears the moment the figure is known again, at the
-    // next session boundary this process is up for. That is the "path back"
-    // whose absence is why #332 left this advisory.
+    // Unknown BLOCKS, as of #333 — it no longer arms an advisory marker only,
+    // and it is NOT mode-gated here even though decision 5 is a mode-gated
+    // decision. Rationale in risk-manager-spec.md, "Module: Circuit Breakers"
+    // ("Unknown daily figure blocks"); the one-line version is that
+    // `AccountStateProvider.nonPositiveBase` returns unknown in every mode, so
+    // a `paper` run can present one and this breaker must not assume otherwise.
     //
-    // NOT mode-gated here, deliberately, even though decision 5 is a mode-gated
-    // decision. There are two upstream paths to `known: false` and only one of
-    // them is about mode:
-    //
-    // - `AccountStateProvider.midSessionBase` IS mode-gated — `paper`/`backtest`
-    //   report against a mid-session base and warn; only `live` reports unknown.
-    //   That is decision 5's cold-start gate, and it already lives there.
-    // - `AccountStateProvider.nonPositiveBase` is NOT, in any mode: a percentage
-    //   against a zero or negative session-open equity has no meaning to gate.
-    //
-    // So a `paper` run CAN present an unknown, and this breaker must halt on it
-    // rather than assume the mode already filtered it out. Re-testing `mode`
-    // here would both gate the cold-start decision twice and hand the
-    // non-positive-base case a silent pass in exactly the mode where the
-    // account has none of itself left.
+    // A live cold start therefore blocks new entries until the next session
+    // boundary this process is up for, which after a mid-session restart can be
+    // the rest of the session. That is decision 5 as written — "live refuses
+    // new entries until a real snapshot exists" — and exits are unaffected,
+    // since `RiskManagerImpl` passes them before reaching this gate.
     const dailyUnknown = !dailyPnl.known;
     if (dailyUnknown) {
       armed.push(`daily_pnl_unknown:portfolio (${dailyPnl.reason})`);

@@ -147,6 +147,32 @@ describe('CircuitBreakers', () => {
     expect(state.portfolio_tripped).toBe(true);
   });
 
+  it('halts ONE class on an unknown of its OWN, leaving the other tradeable (#333)', () => {
+    // The surgical property for the unknown tier, which the all-three-unknown
+    // test above cannot show: an unknown is per-tier, not a global stop. Only
+    // crypto's figure is missing here, so only crypto is halted — stocks has a
+    // real number and keeps trading, and the portfolio floor is untouched.
+    const breakers = new CircuitBreakers(makeConfig());
+
+    const state = breakers.evaluate(
+      makeInput({
+        portfolio: makePortfolio({
+          daily_pnl: {
+            crypto: { known: false, reason: 'no crypto session-open equity observed' },
+            stocks: { known: true, pct: -1 },
+            portfolio: { known: true, pct: -1 },
+          },
+        }),
+      }),
+    );
+
+    expect(state.asset_class_tripped).toEqual({ crypto: true, stocks: false });
+    expect(state.portfolio_tripped).toBe(false);
+    expect(state.armed_breakers).toEqual([
+      'daily_pnl_unknown:crypto (no crypto session-open equity observed)',
+    ]);
+  });
+
   it('halts ONE class on its own daily-loss breach, leaving the other tradeable (#333)', () => {
     const breakers = new CircuitBreakers(
       makeConfig({ daily_loss_pct: 3, daily_loss_pct_by_class: { crypto: 5, stocks: 5 } }),
