@@ -45,7 +45,7 @@ import {
   countryForInstrument,
   RiskManagerImpl,
 } from '../../risk-manager/index.js';
-import type { Clock, OpenPosition } from '../../shared/index.js';
+import type { Clock, OpenPosition, SetupStore } from '../../shared/index.js';
 // Aliased: this module already imports a DIFFERENT `SharedStore` above (an
 // unrelated `execution/index.js` interface, `ExecutionStepDeps.store`'s
 // type) — the alias names which one `VerdictStepDeps.store` actually is,
@@ -98,6 +98,13 @@ export interface VolatilityReadingProvider {
 
 export interface TraderStepDeps extends BreakerStateDeps {
   config: TraderConfig;
+  /**
+   * #432: the same `SetupStore` instance `withOnTradeClose` labels through.
+   * `decide` writes the setup at decision time and the close hook labels it
+   * with the realized R — two halves of one table, so they must not be two
+   * independently-constructed stores.
+   */
+  setupStore: SetupStore;
 }
 
 export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
@@ -116,6 +123,7 @@ export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
       equity: portfolio.equity,
       config: deps.config,
       positionState: deps.getOpenPositions,
+      setupStore: deps.setupStore,
     });
   };
 }

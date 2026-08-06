@@ -14,6 +14,7 @@ import type {
 } from '../market-data-service/index.js';
 import type { Clock, OpenPosition } from '../shared/index.js';
 import { decide } from './decide.js';
+import { FixtureSetupStore } from './fixture-setup-store.js';
 import type { AssetClass, TraderConfig, TraderInput } from './types.js';
 import { DEFAULT_TRADER_CONFIG } from './types.js';
 
@@ -144,6 +145,7 @@ function traderInput(overrides: Partial<TraderInput> = {}): TraderInput {
     equity: EQUITY,
     config: DEFAULT_TRADER_CONFIG,
     positionState: async () => [],
+    setupStore: new FixtureSetupStore(),
     ...overrides,
   };
 }
@@ -707,5 +709,118 @@ describe('decide — position-aware branching (#74)', () => {
     );
 
     expect(intent).toBeNull();
+  });
+});
+
+/**
+ * #432. The mechanism (#75) and the store (#198) both existed; `decide` called
+ * neither, so every intent carried a hardcoded 0.75x and `cosine_setups` stayed
+ * empty for the life of the process. These pin the two call sites.
+ */
+describe('decide — cosine precedent wiring (#432)', () => {
+  it('writes the setup vector for an emitted intent', async () => {
+    const setupStore = new FixtureSetupStore();
+
+    const intent = await decide(traderInput({ setupStore }));
+
+    expect(intent).not.toBeNull();
+    const written = setupStore.getWritten();
+    expect(written).toHaveLength(1);
+    expect(written[0]?.debateId).toBe('debate-abc123');
+    expect(written[0]?.decidedAt).toEqual(DECISION_BAR);
+    expect(written[0]?.vector.debate_features).toHaveLength(4);
+    expect(written[0]?.vector.market_features).toHaveLength(3);
+  });
+
+  it('writes NO setup when the decision is a skip', async () => {
+    const setupStore = new FixtureSetupStore();
+    // Below the conviction floor: no intent, so nothing for the Feedback Loop
+    // to ever label. A row written here would sit unlabelled forever.
+    const debate = debateResult({ confidence: 0.1 });
+
+    const intent = await decide(traderInput({ debate, setupStore }));
+
+    expect(intent).toBeNull();
+    expect(setupStore.getWritten()).toHaveLength(0);
+  });
+
+  it('writes NO setup for an exit — a flatten is not a new setup', async () => {
+    const setupStore = new FixtureSetupStore();
+    const position = openPosition({ side: 'buy' });
+    const debate = debateResult({ direction: 'bearish', converged: true });
+
+    const intent = await decide(
+      traderInput({ debate, setupStore, positionState: async () => [position] }),
+    );
+
+    expect(intent?.intent_type).toBe('exit');
+    expect(setupStore.getWritten()).toHaveLength(0);
+  });
+
+  it('falls back to the 0.75x no-precedent default against an empty store', async () => {
+    const intent = await decide(traderInput({ setupStore: new FixtureSetupStore() }));
+
+    expect(intent?.metadata.sizing.cosine_multiplier).toBe(0.75);
+    expect(intent?.metadata.cosine_precedent).toEqual({
+      neighbor_count: 0,
+      weighted_mean_r: null,
+      no_precedent: true,
+    });
+  });
+
+  it('sizes UP off a profitable precedent instead of taking the 0.75x haircut', async () => {
+    // The neighbor is the vector this exact setup produces, so similarity is
+    // 1.0 by construction — taken from a first run rather than hand-built, so
+    // the test cannot drift away from the real feature layout.
+    const probe = new FixtureSetupStore();
+    const baseline = await decide(traderInput({ setupStore: probe }));
+    const vector = probe.getWritten()[0]?.vector;
+    if (vector === undefined) throw new Error('probe run wrote no setup');
+
+    const withPrecedent = new FixtureSetupStore([
+      { vector, r_multiple: 2, closed_at: new Date('2026-07-14T10:00:00Z') },
+    ]);
+    const intent = await decide(traderInput({ setupStore: withPrecedent }));
+
+    // r_multiple 2 saturates the multiplier to its 1.5x bound.
+    expect(intent?.metadata.sizing.cosine_multiplier).toBe(1.5);
+    expect(intent?.metadata.cosine_precedent).toEqual({
+      neighbor_count: 1,
+      weighted_mean_r: 2,
+      no_precedent: false,
+    });
+    // Applied, not merely recorded — multiplicative stacking is a spec
+    // invariant, so the size must move with the multiplier.
+    expect(intent?.size).toBeCloseTo((baseline?.size ?? 0) * (1.5 / 0.75), 10);
+  });
+
+  it('sizes DOWN off a losing precedent', async () => {
+    const probe = new FixtureSetupStore();
+    const baseline = await decide(traderInput({ setupStore: probe }));
+    const vector = probe.getWritten()[0]?.vector;
+    if (vector === undefined) throw new Error('probe run wrote no setup');
+
+    const withPrecedent = new FixtureSetupStore([
+      { vector, r_multiple: -2, closed_at: new Date('2026-07-14T10:00:00Z') },
+    ]);
+    const intent = await decide(traderInput({ setupStore: withPrecedent }));
+
+    expect(intent?.metadata.sizing.cosine_multiplier).toBe(0.5);
+    expect(intent?.size).toBeCloseTo((baseline?.size ?? 0) * (0.5 / 0.75), 10);
+  });
+
+  it('ignores a neighbor whose trade closed after the decision (point-in-time)', async () => {
+    const probe = new FixtureSetupStore();
+    await decide(traderInput({ setupStore: probe }));
+    const vector = probe.getWritten()[0]?.vector;
+    if (vector === undefined) throw new Error('probe run wrote no setup');
+
+    const future = new FixtureSetupStore([
+      { vector, r_multiple: 2, closed_at: new Date('2026-07-16T10:00:00Z') },
+    ]);
+    const intent = await decide(traderInput({ setupStore: future }));
+
+    expect(intent?.metadata.cosine_precedent.no_precedent).toBe(true);
+    expect(intent?.metadata.sizing.cosine_multiplier).toBe(0.75);
   });
 });
