@@ -34,6 +34,7 @@
  */
 
 import { fetchWithTimeout } from '../../shared/http/fetch-with-timeout.js';
+import { truncateForError } from '../../shared/http/response-errors.js';
 import type {
   AnthropicMessageOptions,
   AnthropicMessageRequest,
@@ -88,15 +89,6 @@ export class AnthropicApiError extends Error {
     this.status = status;
     this.body = body;
   }
-}
-
-/** Caps how much of a response body is ever baked into an error message (goes straight to logs). */
-const MAX_ERROR_BODY_CHARS = 500;
-
-function truncateForError(text: string): string {
-  return text.length > MAX_ERROR_BODY_CHARS
-    ? `${text.slice(0, MAX_ERROR_BODY_CHARS)}… (truncated, ${text.length} chars total)`
-    : text;
 }
 
 /** Best-effort extraction of the Anthropic API's `{ error: { type, message } }` envelope. */
