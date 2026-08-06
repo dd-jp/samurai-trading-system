@@ -599,7 +599,18 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
    * observed in.
    */
   private dropIngestedFills(): void {
-    if (this.state.pruneIngestedObservedFills('ccxt') === 0) return;
+    // Non-fatal by nature (PR #459 review). `fetchNewFills` was pure in-memory
+    // before this and could not fail on I/O; a transient SQLite error must not
+    // now reject the whole poll, because skipping a prune costs some rows for
+    // one cycle while dropping a poll costs the fills in it. Serve the mirror
+    // as it stands and try again next poll.
+    let pruned: number;
+    try {
+      pruned = this.state.pruneIngestedObservedFills('ccxt');
+    } catch {
+      return;
+    }
+    if (pruned === 0) return;
     // Load BEFORE clearing (PR #459 review). Truncating first and repopulating
     // after would leave the queue empty if the load threw, and the adapter
     // would then silently deliver no fills until the next restart — a worse

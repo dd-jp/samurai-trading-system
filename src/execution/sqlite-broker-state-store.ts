@@ -204,11 +204,26 @@ export class SqliteBrokerStateStore implements BrokerStateStore {
     // `fills` lives in this same database (one handle serves both, see
     // `openSharedStore`), and the alternative would have the caller loading
     // every ingested id into memory to hand back down.
+    // Matched on the FULL `fills` primary key — `(idempotency_key,
+    // broker_fill_id)` — not on `broker_fill_id` alone (PR #459 review).
+    // `fills` has no venue column, and `broker_fill_id` is venue-assigned, so
+    // two venues can issue the same id string. An id-only match would then let
+    // one venue's ingested fill prune ANOTHER venue's queue row that has not
+    // been ingested, losing it if the process dies before the next poll —
+    // precisely the crash this queue exists to survive.
+    //
+    // The join is exact because `client_order_id` IS the lot's
+    // `idempotency_key` (`NativeBracketRequest`: "Set to the OrderIntent's
+    // idempotency_key", and `execute.ts` does), and a lot belongs to one venue.
     const result = this.db
       .prepare(
         `DELETE FROM broker_observed_fills
          WHERE venue = ?
-           AND broker_fill_id IN (SELECT broker_fill_id FROM fills)`,
+           AND EXISTS (
+             SELECT 1 FROM fills
+             WHERE fills.idempotency_key = broker_observed_fills.client_order_id
+               AND fills.broker_fill_id = broker_observed_fills.broker_fill_id
+           )`,
       )
       .run(venue);
     return result.changes;

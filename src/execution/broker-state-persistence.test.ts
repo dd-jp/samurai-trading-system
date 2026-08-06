@@ -1048,4 +1048,42 @@ describe('pruneIngestedObservedFills (#313)', () => {
     expect(store.pruneIngestedObservedFills('ccxt')).toBe(1);
     expect(store.loadObservedFills('ibkr')).toHaveLength(1);
   });
+
+  it("does not let one venue's ingested fill prune another venue's uningested row", () => {
+    // `broker_fill_id` is VENUE-ASSIGNED, so two venues can hand out the same
+    // id string, and `fills` has no venue column to tell them apart. A prune
+    // matching on `broker_fill_id` alone would therefore let ibkr's ingested
+    // fill delete ccxt's queue row for a fill nobody has consumed — losing it
+    // if the process died before the next poll, which is the exact crash this
+    // queue exists to survive.
+    //
+    // The two rows share an id and differ in lot, which is what makes this
+    // discriminating: the earlier scoping test gives both venues the SAME lot,
+    // so it cannot tell whose row the ledger entry accounted for.
+    const { db } = openFileStore();
+    const store = new SqliteBrokerStateStore(db);
+
+    const sharedId = 'bf-collision';
+    store.saveObservedFill('ibkr', {
+      ...OBSERVED,
+      client_order_id: 'lot-ibkr',
+      broker_fill_id: sharedId,
+    });
+    store.saveObservedFill('ccxt', {
+      ...OBSERVED,
+      client_order_id: 'lot-ccxt',
+      broker_fill_id: sharedId,
+    });
+
+    // Only IBKR's has been ingested.
+    ingest(db, 'lot-ibkr', sharedId);
+
+    // ccxt's row must survive: nothing has consumed it.
+    expect(store.pruneIngestedObservedFills('ccxt')).toBe(0);
+    expect(store.loadObservedFills('ccxt')).toHaveLength(1);
+
+    // ...and ibkr's must still go, so the fix did not simply stop pruning.
+    expect(store.pruneIngestedObservedFills('ibkr')).toBe(1);
+    expect(store.loadObservedFills('ibkr')).toEqual([]);
+  });
 });
