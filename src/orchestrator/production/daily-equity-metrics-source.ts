@@ -135,11 +135,6 @@ export interface DailyEquityMetricsSourceInput {
   stage2Selections?: { getLatestPerAssetClass(): Stage2Selection[] };
   /** Needed to age a selection out; defaults to the system clock. */
   clock?: Clock;
-  /**
-   * How old a Stage 2 selection may be and still drive live kill-lines.
-   * Defaults to `DEFAULT_STAGE2_MAX_AGE_DAYS`.
-   */
-  stage2MaxAgeDays?: number;
 }
 
 /**
@@ -154,16 +149,23 @@ export interface DailyEquityMetricsSourceInput {
  *
  * Erring long rather than short is deliberate: expiring too eagerly silences
  * kill-lines that were working, which is the failure #384 is about.
+ *
+ * **Not configurable, on purpose** (PR #446 review). Two consumers read the
+ * same frozen selection — this source, for `revalidation`, and the composition
+ * root, for the divergence baseline — and a knob on one of them would let the
+ * two disagree about whether a selection is fresh, so three kill-lines could
+ * go inert while the fourth kept firing off the same row. Nothing configures
+ * it, and a knob that can desynchronise two halves of one verdict is worse
+ * than no knob.
  */
 export const DEFAULT_STAGE2_MAX_AGE_DAYS = 90;
 
 export class SqliteDailyEquityMetricsSource implements DailyMetricsSource {
   private readonly minReturnObservations: number;
-  private readonly stage2MaxAgeMs: number;
+  private readonly stage2MaxAgeMs = DEFAULT_STAGE2_MAX_AGE_DAYS * MS_PER_DAY;
   private inertNoted = false;
 
   constructor(private readonly input: DailyEquityMetricsSourceInput) {
-    this.stage2MaxAgeMs = (input.stage2MaxAgeDays ?? DEFAULT_STAGE2_MAX_AGE_DAYS) * MS_PER_DAY;
     const requested = input.minReturnObservations ?? MIN_RETURN_OBSERVATIONS;
     if (requested < MIN_RETURN_OBSERVATIONS) {
       throw new Error(
