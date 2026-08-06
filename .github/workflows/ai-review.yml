@@ -109,19 +109,41 @@ jobs:
               //
               // Retry once with the findings folded into the body instead. A
               // review that reads slightly worse beats no review and a red check.
-              if (error.status !== 422) throw error;
+              // Matched on the MESSAGE, not just the status. 422 also covers an
+              // invalid `event`, an oversized body and other validation faults,
+              // and retrying those without inline comments would "succeed"
+              // while masking a real bug behind a misleading warning.
+              const unresolvable =
+                error.status === 422 && /could not be resolved/i.test(error.message ?? '');
+              if (!unresolvable) throw error;
 
-              const appendix = payload.comments
-                .map((c) => `- **${c.path}:${c.line}**: ${c.body}`)
-                .join('\n');
+              // GitHub caps a review body at 65536 characters. An untruncated
+              // appendix can exceed that and raise the very 422 this fallback
+              // exists to handle — failing the job anyway, one step later.
+              const BODY_LIMIT = 65536;
+              const header =
+                `${payload.summary_markdown}\n\n---\n_GitHub would not anchor these inline ` +
+                '(line not resolvable in its diff view):_\n';
+              const lines = payload.comments.map((c) => `- **${c.path}:${c.line}**: ${c.body}`);
+
+              let body = header;
+              let dropped = 0;
+              for (const line of lines) {
+                // 120 chars of headroom for the truncation note appended below.
+                if (body.length + line.length + 120 > BODY_LIMIT) {
+                  dropped++;
+                  continue;
+                }
+                body += `${line}\n`;
+              }
+              if (dropped > 0) {
+                body += `\n_(${dropped} further comment(s) omitted — review body size limit.)_`;
+              }
+
               core.warning(
-                `Inline anchoring rejected by GitHub (422); reposting ${payload.comments.length} ` +
+                `Inline anchoring rejected by GitHub; reposting ` +
+                  `${payload.comments.length - dropped} of ${payload.comments.length} ` +
                   'comment(s) in the review body.',
               );
-              await github.rest.pulls.createReview({
-                ...base,
-                body:
-                  `${payload.summary_markdown}\n\n---\n_GitHub would not anchor these inline ` +
-                  `(line not resolvable in its diff view):_\n${appendix}`,
-              });
+              await github.rest.pulls.createReview({ ...base, body });
             }
