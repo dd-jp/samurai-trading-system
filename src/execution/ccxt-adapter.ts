@@ -575,7 +575,33 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
    * `ingestFills()` drained it is still delivered (#295).
    */
   async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
+    this.dropIngestedFills();
     return this.fills.filter((fill) => fill.timestamp.getTime() >= since.getTime());
+  }
+
+  /**
+   * Drops queue entries `ingestFills()` has already consumed, from the table
+   * and from the in-memory mirror (#313). BOTH grew without bound before this:
+   * `broker_observed_fills` is append-only, and `fetchNewFills` filters
+   * `this.fills` by `since` without ever removing anything, so a long-lived
+   * process re-scanned every fill it had ever seen on every poll and a restart
+   * re-pushed the entire history into the queue.
+   *
+   * Here rather than on a sweep timer because this is the one moment the
+   * queue is read: pruning where it is used needs no scheduling, cannot drift
+   * out of step with the poll, and costs one DELETE per poll on a table whose
+   * rows are all destined to be deleted anyway.
+   *
+   * The mirror is re-derived from the table rather than filtered in place, and
+   * that is safe in this direction only: `recordFill` writes the table BEFORE
+   * pushing to `this.fills`, so the table is always a superset of the mirror.
+   * The reload also restores `rowid` order, which is the order fills were
+   * observed in.
+   */
+  private dropIngestedFills(): void {
+    if (this.state.pruneIngestedObservedFills('ccxt') === 0) return;
+    this.fills.length = 0;
+    this.fills.push(...this.state.loadObservedFills('ccxt'));
   }
 
   /** `pending_entry` → `arming` → `armed`, or → `resolved` if the entry died. */

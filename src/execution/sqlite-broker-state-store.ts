@@ -194,6 +194,26 @@ export class SqliteBrokerStateStore implements BrokerStateStore {
     }));
   }
 
+  pruneIngestedObservedFills(venue: BrokerVenue): number {
+    // The queue row's only job is surviving a crash between observing a fill
+    // and ingesting it. Once `fills` holds the id that job is done, and a
+    // re-offer is caught by `SharedStore.hasFill` reading that same table —
+    // so this cannot reintroduce a double-count no matter how early it runs.
+    //
+    // Correlated subquery rather than a join or an id list from the caller:
+    // `fills` lives in this same database (one handle serves both, see
+    // `openSharedStore`), and the alternative would have the caller loading
+    // every ingested id into memory to hand back down.
+    const result = this.db
+      .prepare(
+        `DELETE FROM broker_observed_fills
+         WHERE venue = ?
+           AND broker_fill_id IN (SELECT broker_fill_id FROM fills)`,
+      )
+      .run(venue);
+    return result.changes;
+  }
+
   saveObservedFill(venue: BrokerVenue, fill: NormalizedFill): void {
     this.db
       .prepare(
