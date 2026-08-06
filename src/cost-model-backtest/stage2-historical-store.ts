@@ -99,6 +99,12 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
    * convention.
    */
   async ingest(symbol: string, window: DateRange): Promise<void> {
+    // Warm-cache skip (review 2026-08-06 A4): a persistent scratch file whose
+    // bars already span the window has nothing to learn from a refetch — the
+    // window is pinned, so the response would be byte-identical. Edge slack of
+    // a week absorbs weekends/holidays at each end; any partial coverage
+    // (e.g. a 2-year ingest now asked for 5) fails the check and refetches.
+    if (this.coversWindow(symbol, window)) return;
     const aggregates = await this.client.fetchAggregates(symbol, window);
 
     const insert = this.db.prepare(
@@ -129,6 +135,22 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
          ON CONFLICT(symbol) DO NOTHING`,
       )
       .run(symbol);
+  }
+
+  /** A week of slack per edge: daily bars never land ON a weekend/holiday boundary date. */
+  private coversWindow(symbol: string, window: DateRange): boolean {
+    const row = this.db
+      .prepare(
+        `SELECT MIN(open_time) AS earliest, MAX(open_time) AS latest
+           FROM stage2_bars WHERE instrument = ? AND timeframe = ?`,
+      )
+      .get(symbol, TIMEFRAME) as { earliest: string | null; latest: string | null };
+    if (row.earliest === null || row.latest === null) return false;
+    const edgeSlackMs = 7 * 24 * 60 * 60 * 1_000;
+    return (
+      new Date(row.earliest).getTime() <= window.start.getTime() + edgeSlackMs &&
+      new Date(row.latest).getTime() >= window.end.getTime() - edgeSlackMs
+    );
   }
 
   /**

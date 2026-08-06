@@ -141,6 +141,8 @@ export type {
 } from './eval-types.js';
 export type { HttpPolygonClientOptions } from './http-polygon-client.js';
 export { HttpPolygonClient, toPolygonTicker } from './http-polygon-client.js';
+export type { HttpTiingoClientOptions } from './http-tiingo-client.js';
+export { HttpTiingoClient, toTiingoCryptoTicker } from './http-tiingo-client.js';
 export type { LookaheadViolation } from './lookahead.js';
 export { LookaheadAuditor, LookaheadViolationError } from './lookahead.js';
 export { computeMetrics } from './metrics.js';
