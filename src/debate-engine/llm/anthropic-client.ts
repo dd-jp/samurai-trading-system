@@ -9,6 +9,7 @@
  */
 
 import { withRetry } from '../../shared/index.js';
+import type { AnthropicUsage } from '../../shared/llm/pricing.js';
 import {
   LlmCancelledError,
   LlmMalformedResponseError,
@@ -16,7 +17,6 @@ import {
   LlmRateLimitError,
   LlmTimeoutError,
 } from './errors.js';
-import type { AnthropicUsage } from './pricing.js';
 import { wrapUntrusted } from './prompt-safety.js';
 import { type LlmSpendSink, NULL_SPEND_SINK } from './spend-sink.js';
 import {

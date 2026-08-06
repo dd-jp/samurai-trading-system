@@ -53,7 +53,9 @@ function resolvedUnexpectedly(): never {
 const MUTATED_ENV_VARS = [
   'ALPACA_API_KEY',
   'ALPACA_API_SECRET',
-  'ANTHROPIC_API_KEY',
+  'NOUS_API_KEY',
+  'NOUS_BASE_URL',
+  'SAMURAI_SENTIMENT',
   'NODE_ENV',
   // #330 (PR #447 review): the store path is keyed off SAMURAI_MODE now, and
   // the test below sets it. Restoring it at file scope for `NODE_ENV`'s reason
@@ -118,7 +120,9 @@ describe('startFromEnvironment — real construction path', () => {
   it('assembles and starts the whole orchestrator from credentials alone', async () => {
     process.env.ALPACA_API_KEY = 'test-key';
     process.env.ALPACA_API_SECRET = 'test-secret';
-    process.env.ANTHROPIC_API_KEY = 'test-anthropic-key';
+    process.env.NOUS_API_KEY = 'test-fake-nous-key';
+    process.env.NOUS_BASE_URL = 'https://nous.test/v1';
+    process.env.SAMURAI_SENTIMENT = 'off';
 
     // No transports, no clients, no account-state or volatility provider —
     // only the tuning configs the operator genuinely owns.
@@ -159,10 +163,11 @@ describe('startFromEnvironment — real construction path', () => {
     // unconfigured host learned about `ALPACA_API_KEY` alone — the broker
     // client is simply the first thing `buildProductionComponents`
     // constructs — and only discovered `ALPACA_API_SECRET`, then
-    // `ANTHROPIC_API_KEY`, on subsequent runs.
+    // `NOUS_API_KEY`, on subsequent runs.
     delete process.env.ALPACA_API_KEY;
     delete process.env.ALPACA_API_SECRET;
-    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.NOUS_API_KEY;
+    delete process.env.NOUS_BASE_URL;
 
     const error = startFromEnvironment({
       ...STAGE_CONFIGS,
@@ -172,7 +177,7 @@ describe('startFromEnvironment — real construction path', () => {
     return error.then((e) => {
       expect(e.message).toContain('ALPACA_API_KEY');
       expect(e.message).toContain('ALPACA_API_SECRET');
-      expect(e.message).toContain('ANTHROPIC_API_KEY');
+      expect(e.message).toContain('NOUS_API_KEY');
     });
   });
 });
@@ -197,7 +202,9 @@ describe('startFromEnvironment — the shipped paper profile', () => {
     // `afterEach` above, along with everything else these tests touch.
     process.env.ALPACA_API_KEY = 'dummy-key-not-a-credential';
     process.env.ALPACA_API_SECRET = 'dummy-secret-not-a-credential';
-    process.env.ANTHROPIC_API_KEY = 'dummy-anthropic-not-a-credential';
+    process.env.NOUS_API_KEY = 'dummy-nous-not-a-credential';
+    process.env.NOUS_BASE_URL = 'https://nous.test/v1';
+    process.env.SAMURAI_SENTIMENT = 'off';
   });
 
   it('boots to a running tick loop and logs `orchestrator started`', async () => {

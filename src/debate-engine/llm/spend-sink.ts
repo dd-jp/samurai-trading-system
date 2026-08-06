@@ -20,9 +20,9 @@
  * trading decision.
  */
 
+import { type AnthropicUsage, priceServerToolCalls, priceUsage } from '../../shared/llm/pricing.js';
 import type { SharedStore } from '../../shared/store/index.js';
 import type { Logger } from '../../shared/types.js';
-import { type AnthropicUsage, priceServerToolCalls, priceUsage } from './pricing.js';
 
 /** One metered API call, as handed to the sink. */
 export interface LlmSpendRecord {
@@ -54,10 +54,12 @@ export interface LlmSpendRecord {
   /**
    * How many SERVER-SIDE tool invocations this call incurred (#476).
    *
-   * Zero or absent for every Anthropic completion — they invoke no server-side
-   * tool, so they incur no such charge. Non-zero for the Grok agent, whose
-   * `x_search` usage xAI bills per invocation on top of tokens: "Tool requests
-   * are priced based on two components: token usage and tool invocations."
+   * Zero or absent on every call this system currently makes: ADR-0009 routes
+   * all of them through Nous's `chat/completions`, which runs no server-side
+   * tool. The field survives the cutover because the charge it prices is real
+   * wherever a provider does run one — "Tool requests are priced based on two
+   * components: token usage and tool invocations" — and a meter that has no
+   * slot for it under-counts silently rather than loudly.
    *
    * Priced independently of `MODEL_RATES`, so it lands in `cost_usd` even when
    * the model itself is unrecognised.

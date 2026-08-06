@@ -6,7 +6,7 @@
  * review) when a second caller appeared — the debate adapter's
  * failed-debate line (#364), which logs an `LlmClient` error whose message
  * can carry the provider's raw response body
- * (`llm/anthropic-http-client.ts`'s `buildApiError`). Two adapters
+ * (`shared/llm/nous-chat.ts`'s `buildApiError`). Two adapters
  * hand-rolling the same pattern list is how one of them silently stops
  * matching a new credential shape.
  *

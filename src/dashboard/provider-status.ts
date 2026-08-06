@@ -67,8 +67,8 @@ export interface AlpacaBalanceWire {
 
 export interface ProviderTile {
   /**
-   * Only the two providers this poller probes. Anthropic is deliberately NOT
-   * a member: it has no probe and no tile here, because there is nothing to
+   * Only the two providers this poller probes. Nous is deliberately NOT a
+   * member: it has no probe and no tile here, because there is nothing to
    * probe — its dashboard figure comes from the `llm_spend` table instead.
    * Listing it would advertise a tile this module never produces.
    */

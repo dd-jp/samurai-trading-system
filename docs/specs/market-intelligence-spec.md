@@ -16,7 +16,7 @@ This spec describes three agents and a Convergence Engine. **One agent is built.
 
 | Module below | Built? | Note |
 | --- | --- | --- |
-| Grok Agent | **Yes** | `src/market-intelligence/grok/` — live X sentiment only. No Reddit. |
+| Grok Agent | **Yes, narrowed** | `src/market-intelligence/grok/` — X/Twitter sentiment only, no Reddit, and **not live retrieval** since ADR-0009. See the retrieval note below. |
 | DeepResearch Agent | No | Not scheduled. |
 | WorldMonitor Agent | Partial | CII snapshot capture exists (migration `0003`); the live SDK/API wiring is parked on cost until after paper trading (#182). |
 | Convergence Engine | **No** | With a single source there is nothing to converge. Not built, deliberately — not an oversight. |
@@ -24,9 +24,13 @@ This spec describes three agents and a Convergence Engine. **One agent is built.
 
 **Consequences for anyone reading the modules below:** `ConvergenceSignal`, `StreamSnapshot`, the signal taxonomy and the confidence formulas are all **design, not code**. Analysts today read `IntelligenceItem[]` from one agent, and an empty read reaches them as `NO_DATA_MARKER` (#463) rather than as a neutral sentiment score.
 
-**Retrieval, and why the endpoint is load-bearing.** "Real-time stream of market-related tweets" (Module: Grok Agent) is served by xAI's server-side `x_search` tool on **`POST /v1/responses`**. It cannot be served by `/v1/chat/completions`, whose `tools` field accepts functions only — a request there retrieves nothing and Grok answers from training data, which would reach the analysts as live sentiment. The first implementation did exactly that; see `xai-client.ts`, which now requires evidence of retrieval (citations, or a tool step in the output) before any item is ingested and discards the response with an `error` log otherwise. xAI retired the older `search_parameters` form of Live Search on 2026-01-12.
+**Retrieval — THIS STAGE DOES NOT RETRIEVE, and that is now a standing property.** "Real-time stream of market-related tweets" (Module: Grok Agent) is **not** what runs. What runs asks a model for X/Twitter sentiment and gets its answer from the training corpus; nothing searches X.
 
-**Known gap in the #430 convention.** No `yarn smoke` assertion covers the Grok agent, because the smoke run is offline and keyless and the composition root gates `GrokAgent` on `XAI_API_KEY`. This mechanism's first real exercise is the soak itself. Treat early soak intelligence rows as the verification step they are.
+The endpoint is why. Live retrieval is served by xAI's server-side `x_search` tool on **`POST /v1/responses`**, and cannot be served by `/v1/chat/completions`, whose `tools` field accepts functions only. ADR-0009 routes every LLM call through Nous, which **proxies `chat/completions` only** — so `/v1/responses` is unreachable and there is no way to search from here. xAI retired the older `search_parameters` form of Live Search on 2026-01-12, so no legacy route exists either.
+
+**Consequence, stated because it removes a guard that briefly existed.** The post-hoc review of #469 (2026-08-06) added a fail-closed retrieval gate to the direct-to-xAI client: no citations and no tool step meant the response was discarded with an `error` log rather than ingested. ADR-0009 deletes that client, and the gate with it, because under `chat/completions` the gate could only ever discard — every response. The trade-off David took instead: keep the stage, and be explicit in the spec and in `nous-sentiment-client.ts` that its items are corpus recall, not observation. The `source: 'twitter'` tag and the `grok` agent id are kept because they are persisted in `market_intelligence` rows and renaming them is a migration, not a rename — **they name the subject, not the method**. Anything downstream that treats this stage as evidence of what is being said on X *right now* is reading it wrong, and restoring live retrieval is a separate piece of work (a real retrieval source), not a model swap.
+
+**Known gap in the #430 convention.** No `yarn smoke` assertion covers the Grok agent, because the smoke run is offline and keyless, so the composition root never constructs one (it needs Nous credentials, and `SAMURAI_SENTIMENT=off` skips it outright). This mechanism's first real exercise is the soak itself. Treat early soak intelligence rows as the verification step they are — and note that the stage has never run in production: `XAI_API_KEY` was always empty, so its first live call comes when `NOUS_API_KEY` is set.
 
 ## Solution
 

@@ -12,6 +12,16 @@
 -- meter that prices only tokens under-counts every single Grok call, and the
 -- ceiling quietly stops being a ceiling.
 --
+-- SUPERSEDED IN PRACTICE, SAME DAY, BY ADR-0009 — read this before concluding
+-- the column is live. The cutover to Nous deleted the direct-to-xAI client
+-- along with its `x_search` usage: Nous proxies `chat/completions`, which runs
+-- no server-side tool. Every row written today therefore carries 0 here, and
+-- will keep doing so until some provider grows a server-side tool we call. The
+-- column stays because it and `priceServerToolCalls` and the sink's INSERT are
+-- one unit — dropping it means another migration and a re-plumbed write path
+-- the next time the charge is real, against zero cost for leaving a
+-- `DEFAULT 0` integer in place.
+--
 -- WHY A COLUMN AND NOT JUST MORE DOLLARS IN `cost_usd`. Both, in fact:
 -- `cost_usd` carries the tool charge so the cap stays honest, and this column
 -- records how many invocations produced it so the number is auditable. Without

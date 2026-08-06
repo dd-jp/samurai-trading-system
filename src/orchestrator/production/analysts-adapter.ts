@@ -113,8 +113,9 @@ export interface AnalystsStepOptions {
    * calling it every pass cheap — it returns immediately unless the bucket has
    * rolled.
    *
-   * Absent when `XAI_API_KEY` is unset, which is the honest default: no key,
-   * no calls, and the analysts keep saying NO DATA.
+   * Absent under `SAMURAI_SENTIMENT=off`, or when Nous is unconfigured —
+   * which is the honest default: no agent, no calls, and the analysts keep
+   * saying NO DATA.
    */
   marketIntelligence?: MarketIntelligenceRefresh;
 }

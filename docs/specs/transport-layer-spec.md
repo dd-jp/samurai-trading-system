@@ -39,7 +39,7 @@ Cutting across all five: a shared error taxonomy, a shared (but per-client-confi
 ### AnthropicLlmClient (production wiring)
 
 7. As the composition root, I want a production `AnthropicMessagesClient` implementation (raw `fetch`, no SDK dependency) promoted from the integration test's inline helper into a real module, so that `production.ts` can construct `AnthropicLlmClient` without depending on test code.
-8. As the debate engine, I want the model pinned via an `ANTHROPIC_MODEL` env var (default `claude-haiku-4-5-20251001`), so that a model swap is a config change, not a code change.
+8. As the debate engine, I want the model pinned via an env var, so that a model swap is a config change, not a code change. *(Superseded by [ADR-0009](../adr/0009-single-provider-nous.md): the variable is now `NOUS_DEBATE_MODEL` → `NOUS_MODEL`, defaulting to `openai/gpt-5.6-luna`. The story's intent — the model is configuration, not code — is unchanged and still met.)*
 9. As the system, I want the existing `withRetry`/timeout/error-classification/prompt-injection wiring left untouched, so that this decision only fills in the wire client, not re-decide anything already shipped.
 
 ### TelegramClient (heartbeat + HITL)
@@ -89,7 +89,7 @@ Cutting across all five: a shared error taxonomy, a shared (but per-client-confi
 **Retry/backoff** — the exact algorithm already in `src/debate-engine/llm/retry.ts` (`baseDelayMs * 2 ** (attempt - 1)`, capped at `maxDelayMs`) is generalized out of `src/debate-engine/llm/` into a new shared, provider-agnostic module (`src/shared/http/retry.ts`), parameterized by a generic `RetryConfig { maxAttempts, baseDelayMs, maxDelayMs }` and an injected `isRetryable(error): boolean` predicate per call site — not a shared error-type check, since each client's error hierarchy is its own. `withRetry(fn, config, isRetryable)` replaces the LLM-specific `withRetry(fn, config)`; `AnthropicLlmClient` moves onto the generalized version with its existing `isRetryable` closed over (unchanged — the LLM client keeps its narrower Timeout|RateLimit-only retryable set, since this 5xx extension is scoped to the four transport clients described here, not a retroactive change to the LLM client's decided behavior). Config *values* are per-client constants sized to that client's own known rate limit — Alpaca's ~200 req/min tolerates a short base delay; Polygon's 5 calls/min free tier needs a much longer one — never shared constants.
 
 **Env var naming** — extends the already-settled `.env.local` convention (existing `POLYGON_API_KEY`) with a consistent `{PROVIDER}_...` shape:
-- `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` (default `claude-haiku-4-5-20251001`)
+- `NOUS_BASE_URL`, `NOUS_API_KEY`, and the optional per-role `NOUS_DEBATE_API_KEY`/`NOUS_DEBATE_MODEL` (ADR-0009; was `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL`)
 - `POLYGON_API_KEY` (already provisioned)
 - `ALPACA_API_KEY`, `ALPACA_API_SECRET`
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_IDS` (comma-separated Telegram user ids — an allowlist of *who may approve*, not a destination; deliberately not a single chat id, since the trade channel is a group/channel and `chat.id` is shared by every member)
@@ -123,11 +123,13 @@ Both land in `src/shared/http/`.
 
 ### Module: AnthropicMessagesClient (production)
 
+> **Retargeted by [ADR-0009](../adr/0009-single-provider-nous.md) (2026-08-06).** The production implementation is now `src/debate-engine/llm/nous-messages-client.ts` over `src/shared/llm/nous-chat.ts`, against Nous's OpenAI-compatible `chat/completions`. Two decisions below survive the move intact and are still binding: **no SDK dependency** and **non-streaming**. The interface itself is unchanged, which is what made the swap a new wire client rather than a redesign — its name is now misleading and a rename is a tracked follow-up.
+
 - **Promote, don't redesign.** The `createMessage` implementation already proven in `disagreement-detector.integration.test.ts` (raw `fetch` to `https://api.anthropic.com/v1/messages`, header `anthropic-version: 2023-06-01`) moves from test helper to a production module, e.g. `src/debate-engine/llm/anthropic-http-client.ts`, implementing the existing narrow `AnthropicMessagesClient` structural interface.
 - **No SDK dependency** — `@anthropic-ai/sdk` is not added; the structural interface exists precisely so a raw-HTTP implementation satisfies it.
 - **Non-streaming** — `AnthropicLlmClient.complete()` awaits the full response; nothing in `debate-engine-spec.md`'s latency budgets (15s crypto / 60s stocks) requires streaming.
-- **Model pin:** `ANTHROPIC_MODEL` env var, defaulting to `claude-haiku-4-5-20251001` (bumped from the now-stale `claude-3-5-haiku-latest` used in the pre-existing integration test, which should be bumped alongside this module). Threaded through `AnthropicLlmClientConfig.model`.
-- **Auth:** credentials sourced from `ANTHROPIC_API_KEY` in `.env.local`. The exact header name is not decided here — #261's resolution confirms `anthropic-version: 2023-06-01` and the raw-`fetch` shape but not the auth header; the pre-existing integration test this module promotes from is the concrete reference to copy at implementation time.
+- **Model pin:** per ADR-0009, `NOUS_DEBATE_MODEL` → `NOUS_MODEL` → `openai/gpt-5.6-luna`. Threaded through `AnthropicLlmClientConfig.model`. A model with no rate in `MODEL_RATES` is refused at startup, because an unpriced call records a null cost and the spend cap sums nulls as zero.
+- **Auth:** per ADR-0009, `Authorization: Bearer` with `NOUS_DEBATE_API_KEY` → `NOUS_API_KEY` from `.env.local`, against a `NOUS_BASE_URL` that has no default in source. *(Historical: this was `ANTHROPIC_API_KEY` with an `x-api-key` header.)* The exact header name is not decided here — #261's resolution confirms `anthropic-version: 2023-06-01` and the raw-`fetch` shape but not the auth header; the pre-existing integration test this module promotes from is the concrete reference to copy at implementation time.
 - **Retry/timeout/error-classification/prompt-safety** (`withRetry`, per-attempt timeout, `LlmTimeoutError`/`LlmRateLimitError`/`LlmProviderError`/`LlmMalformedResponseError`, `wrapUntrusted`) — **all already shipped in `AnthropicLlmClient`; no change.** Only its `retry.ts` internals move onto the generalized shared retry module (see Shared Transport Conventions), which is a refactor with no behavior change.
 - **Composition:** `production.ts` constructs one `AnthropicLlmClient` (real `createMessage` + config) and closes each persona/detector over it — no change to `personas.ts`/`disagreement-detector.ts`.
 
@@ -205,7 +207,7 @@ Closes `direct-bind.ts`'s existing `VolatilityReadingProvider` interface (`getVo
 
 **AlpacaClient (broker + data)** — `src/execution/adapters/` real implementation; `src/market-data-service/sources/alpaca-source.ts`'s injected client.
 
-**AnthropicMessagesClient** — the promoted `src/debate-engine/llm/anthropic-http-client.ts`; `disagreement-detector.integration.test.ts`'s hardcoded model bumped to `claude-haiku-4-5-20251001`.
+**AnthropicMessagesClient** — now `src/debate-engine/llm/nous-messages-client.ts` (ADR-0009); `disagreement-detector.integration.test.ts` resolves its model through `nousCredentials('debate')` rather than hardcoding one, and doubles as the model bake-off seam.
 
 **TelegramClient** — the new implementation under `src/verdict/notifications/` (or a new `src/verdict/notifications/telegram/` module); the allowlist check and correlation-token map in isolation from the long-poll loop itself (which needs an integration/manual test against the real Bot API, not a unit test).
 
@@ -238,7 +240,7 @@ Closes `direct-bind.ts`'s existing `VolatilityReadingProvider` interface (`getVo
 
 - `src/orchestrator/production/direct-bind.ts`'s doc comment ("no in-repo data source today" for `AccountStateProvider`/`VolatilityReadingProvider`) becomes stale once these are implemented.
 - `src/orchestrator/production.ts`'s doc comment (no real implementation of `AlpacaClient`, `AnthropicMessagesClient`, `TelegramClient`, or `CiiScoreProvider` anywhere in `src/`) becomes partially stale — `CiiScoreProvider` stays out of scope (parked), the other three do not.
-- `disagreement-detector.integration.test.ts`'s hardcoded `claude-3-5-haiku-latest` should bump to `claude-haiku-4-5-20251001` alongside the `AnthropicMessagesClient` promotion.
+- `disagreement-detector.integration.test.ts` no longer hardcodes a model at all (ADR-0009) — it reads the debate role's resolved one, so it cannot drift from what production runs.
 
 ### Domain Glossary Alignment
 
