@@ -8,6 +8,12 @@
 
 export type { Clock } from './clock.js';
 export { SimulatedClock, SystemClock } from './clock.js';
+export type {
+  RiskDecisionRecord,
+  RiskLogStore,
+  TraderDecisionRecord,
+  TraderLogStore,
+} from './decision-records.js';
 export { fetchWithTimeout } from './http/fetch-with-timeout.js';
 export { parseRetryAfterMs, truncateForError } from './http/response-errors.js';
 export type { RetryConfig } from './http/retry.js';

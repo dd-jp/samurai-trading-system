@@ -197,6 +197,7 @@ import type {
 } from '../shared/index.js';
 import { resolveVenuePacing, TokenBucket } from '../shared/index.js';
 import type { SharedStore as SqliteHandle } from '../shared/store/index.js';
+import { SqliteRiskLogStore, SqliteTraderLogStore } from '../shared/store/index.js';
 import type { TraderConfig } from '../trader/index.js';
 import { SqliteSetupStore } from '../trader/index.js';
 import type { ApprovalChannel, VerdictConfig } from '../verdict/index.js';
@@ -1534,12 +1535,24 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       spendCap,
       logger,
     ),
-    trader: buildTraderStep({ ...breakerStateDeps, config: config.traderConfig, setupStore }),
+    // #328: `traderLog`/`riskLog` are what make the two stages that decide WHAT
+    // to trade and HOW BIG reconstructible after the fact. Without them the
+    // only record is an `audit_log` digest — enough to prove the stage ran,
+    // never enough to say why a size came out at N or why a tick stopped at
+    // `risk`. Both write on a skip/rejection too, which is the case with no
+    // downstream record at all.
+    trader: buildTraderStep({
+      ...breakerStateDeps,
+      config: config.traderConfig,
+      setupStore,
+      traderLog: new SqliteTraderLogStore(config.db),
+    }),
     risk: buildRiskStep({
       ...breakerStateDeps,
       config: config.riskConfig,
       correlationConfig: config.correlationConfig,
       ciiConsumer,
+      riskLog: new SqliteRiskLogStore(config.db),
       // #433: the live dial. Without this Risk freezes its RiskConfig at
       // construction and `autoTighten`'s response to a kill-line breach
       // changes no decision.

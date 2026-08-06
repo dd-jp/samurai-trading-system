@@ -421,6 +421,16 @@ export interface SmokeObservations {
    * cleanly" while attributing nothing.
    */
   analystWeights: { analyst_id: string }[];
+  /**
+   * From `trader_log` / `risk_log` — the decision records (#328). Empty means
+   * the two stages that decide WHAT to trade and HOW BIG left nothing behind
+   * but an `audit_log` digest, so a soak's surprises are unreconstructable
+   * afterwards. Both write on a skip/rejection too, so a run that traded
+   * nothing must still produce rows: zero is always a wiring failure, never a
+   * quiet market.
+   */
+  traderDecisions: { trace_id: string; instrument: string; intent_type: string | null }[];
+  riskDecisions: { trace_id: string; instrument: string; status: string }[];
 }
 
 /**
@@ -483,6 +493,12 @@ export function readSmokeObservations(db: SqliteHandle): SmokeObservations {
     riskThresholds: db
       .prepare('SELECT threshold_name AS name, value FROM risk_thresholds')
       .all() as SmokeObservations['riskThresholds'],
+    traderDecisions: db
+      .prepare('SELECT trace_id, instrument, intent_type FROM trader_log')
+      .all() as SmokeObservations['traderDecisions'],
+    riskDecisions: db
+      .prepare('SELECT trace_id, instrument, status FROM risk_log')
+      .all() as SmokeObservations['riskDecisions'],
     analystWeights: db
       .prepare('SELECT analyst_id FROM analyst_weights')
       .all() as SmokeObservations['analystWeights'],
@@ -647,6 +663,30 @@ export function evaluateSmokeGate(
         "`autoTighten` has no current value to step from and the Feedback Loop's defensive " +
         'response to a kill-line breach tightens nothing. This is the #433 defect: the write ' +
         'end existed and the read end did not, and nothing failed',
+    );
+  }
+
+  // #328. Anchored on `debates.length > 0` for the same reason the
+  // cosine_setups check is: a run where no debate resolved never reached the
+  // Trader, and demanding a row then would fail for a reason that is not this
+  // one. Once a debate HAS resolved, a row is unconditional — the Trader
+  // writes on a skip and Risk on a rejection, so "nothing traded" is not an
+  // explanation for an empty table.
+  if (debates.length > 0 && observations.traderDecisions.length === 0) {
+    failures.push(
+      'a debate resolved and reached the Trader, but no row in trader_log — the decision ' +
+        'record is not wired, so why a size came out at N (or why nothing traded at all) is ' +
+        'reconstructable only from an `audit_log` digest and ephemeral stdout. Note the ' +
+        'Trader writes on a SKIP too, so this cannot be explained by a quiet tick',
+    );
+  }
+
+  if (observations.traderDecisions.length > 0 && observations.riskDecisions.length === 0) {
+    failures.push(
+      'the Trader produced an intent but no row in risk_log — Risk evaluated it and left no ' +
+        'record of what portfolio state it sized against or which gate bound. A rejected ' +
+        'intent never reaches Verdict, so with this unwired a rejection has no durable ' +
+        'record anywhere in the system',
     );
   }
 

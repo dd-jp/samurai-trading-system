@@ -46,7 +46,13 @@ import {
   countryForInstrument,
   RiskManagerImpl,
 } from '../../risk-manager/index.js';
-import type { Clock, OpenPosition, SetupStore } from '../../shared/index.js';
+import type {
+  Clock,
+  OpenPosition,
+  RiskLogStore,
+  SetupStore,
+  TraderLogStore,
+} from '../../shared/index.js';
 // Aliased: this module already imports a DIFFERENT `SharedStore` above (an
 // unrelated `execution/index.js` interface, `ExecutionStepDeps.store`'s
 // type) — the alias names which one `VerdictStepDeps.store` actually is,
@@ -106,6 +112,12 @@ export interface TraderStepDeps extends BreakerStateDeps {
    * independently-constructed stores.
    */
   setupStore: SetupStore;
+  /**
+   * #328: the decision record. Optional so a test or backtest can stay silent,
+   * supplied on the production path — without it, the two stages that decide
+   * what to trade and how big leave nothing behind but a digest.
+   */
+  traderLog?: TraderLogStore;
 }
 
 export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
@@ -115,7 +127,7 @@ export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
     // computeCurrentPortfolioAndBreakers, so this stays a single source
     // rather than a separately-injected scalar.
     const { portfolio } = await computeCurrentPortfolioAndBreakers(deps, clock);
-    return decide({
+    const intent = await decide({
       trace_id,
       instrument,
       debate,
@@ -126,6 +138,31 @@ export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
       positionState: deps.getOpenPositions,
       setupStore: deps.setupStore,
     });
+
+    // Written for a null intent too (#328). `TickOutcome.final_stage` records
+    // where a tick stopped and never why, and "why did nothing trade for six
+    // hours" is the likeliest question a soak produces. A skip is a decision.
+    deps.traderLog?.write({
+      trace_id,
+      instrument,
+      debate_id: debate.debate_id,
+      intent_type: intent?.intent_type ?? null,
+      // `decide()` returns a bare null rather than a tagged reason, so the
+      // honest record is that it declined — not a reason invented here. The
+      // sizing/precedent columns being null alongside it says how far it got,
+      // which is the part that distinguishes "sized then rejected" from
+      // "never reached sizing".
+      skip_reason: intent === null ? 'decide() returned no intent' : null,
+      sizing: intent?.metadata.sizing ?? null,
+      cosine_precedent: intent?.metadata.cosine_precedent ?? null,
+      atr: null,
+      entry: intent?.entry ?? null,
+      stop: intent?.stop ?? null,
+      size: intent?.size ?? null,
+      created_at: clock.now(),
+    });
+
+    return intent;
   };
 }
 
@@ -184,6 +221,8 @@ export interface RiskStepDeps extends BreakerStateDeps {
    * defensive auto-tightening writes a row nothing honours.
    */
   thresholds?: RiskThresholdSource;
+  /** #328: the decision record. Same optionality rationale as `traderLog`. */
+  riskLog?: RiskLogStore;
 }
 
 export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
@@ -212,7 +251,7 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
     // Red-team critic (#204) is pre-fetched by critic.ts outside evaluate();
     // not wired here — absent defaults to "pass" (mechanical steps remain
     // the safety net), same as any other caller that doesn't run it.
-    return riskManager.evaluate({
+    const decision = riskManager.evaluate({
       trace_id,
       intent,
       clock,
@@ -223,6 +262,42 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
       cii,
       mode: deps.mode,
     });
+
+    // Written on rejection too — the case that has no downstream record at all
+    // today, since a rejected intent never reaches Verdict.
+    const daily = portfolio.daily_pnl;
+    deps.riskLog?.write({
+      trace_id,
+      instrument: intent.instrument,
+      status: decision.status,
+      binding_constraint: decision.binding_constraint,
+      reasons: decision.reasons,
+      original_size: decision.modifications?.original_size ?? null,
+      final_size: decision.modifications?.final_size ?? null,
+      stop_tightened: decision.modifications?.stop_tightened ?? false,
+      breakers: {
+        portfolio_tripped: breakers.portfolio_tripped,
+        crypto_tripped: breakers.asset_class_tripped.crypto,
+        stocks_tripped: breakers.asset_class_tripped.stocks,
+        armed_breakers: breakers.armed_breakers,
+      },
+      portfolio: {
+        equity: portfolio.equity,
+        drawdown_pct: portfolio.drawdown_pct,
+        gross_exposure: portfolio.gross_exposure,
+        consecutive_losses: portfolio.consecutive_losses,
+        // Null pct rather than 0 when unknown (#333). Recording an absent
+        // figure as flat here would reintroduce, in the audit trail, the exact
+        // confusion the breaker's tagged union exists to prevent.
+        daily_pnl_portfolio_pct: daily.portfolio.known ? daily.portfolio.pct : null,
+        daily_pnl_crypto_pct: daily.crypto.known ? daily.crypto.pct : null,
+        daily_pnl_stocks_pct: daily.stocks.known ? daily.stocks.pct : null,
+        daily_pnl_unknown_reason: daily.portfolio.known ? null : daily.portfolio.reason,
+      },
+      created_at: clock.now(),
+    });
+
+    return decision;
   };
 }
 
