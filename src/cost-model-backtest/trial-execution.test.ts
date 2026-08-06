@@ -3,6 +3,7 @@ import { digest } from '../orchestrator/index.js';
 import { SimulatedClock } from '../shared/index.js';
 import { InMemoryConfigTrialLog } from './config-trial-log.js';
 import type { EvalExecutor, EvalOptions, EvalReport } from './eval-types.js';
+import { minbtl } from './overfitting.js';
 import type { ProxyStrategyConfig } from './proxy-strategy.js';
 import { type ReplayBarSource, ReplayDriver, type ReplayInstrument } from './replay-driver.js';
 import {
@@ -11,7 +12,9 @@ import {
   type ReplayRunner,
   runTrialGrid,
   STOCK_PERIODS_PER_YEAR,
+  sizeTrialGridToSample,
   type TrialGridAssetClass,
+  type TrialGridSizing,
 } from './trial-execution.js';
 import type { CostModel, CostModelResult, FillRequest, MarketState } from './types.js';
 import type { DateRange, InstrumentListing, InstrumentRegistry } from './universe.js';
@@ -78,9 +81,19 @@ describe('buildTrialGrid', () => {
   });
 });
 
+/**
+ * Long enough that MinBTL's cap does not cut the grid (#405).
+ *
+ * It was one DAY, which was fine while the grid ran unconditionally. Now that
+ * `runTrialGrid` sizes the grid to the sample BEFORE running it, a one-day
+ * window supports one trial and every "all 12 configs ran" assertion below
+ * would be asserting the sizing rather than the thing it was written for. Six
+ * years puts the cap comfortably above 12, so these tests keep testing
+ * execution; the sizing itself is tested directly in its own describe.
+ */
 const WINDOW: DateRange = {
   start: new Date(Date.UTC(2020, 0, 1)),
-  end: new Date(Date.UTC(2020, 0, 2)),
+  end: new Date(Date.UTC(2026, 0, 1)),
 };
 
 /** A canned `ReplayRunResult`-shaped stand-in — the fake runner never inspects it. */
@@ -202,6 +215,41 @@ describe('runTrialGrid — orchestration wiring (fakes, no real replay/eval)', (
     expect(cryptoEvaluator.calls).toHaveLength(12);
     expect(stockEvaluator.calls.every((call) => call.periodsPerYear === 252)).toBe(true);
     expect(cryptoEvaluator.calls.every((call) => call.periodsPerYear === 365)).toBe(true);
+  });
+
+  it('announces the sizing runTrialGrid actually used, before any trial runs', async () => {
+    // The point of the callback: the operator-facing "grid sized to N=..." line
+    // must be built from the sizing that constrained the search, not from a
+    // second computation that merely agrees with it. Asserting the announced
+    // `selected` is exactly what ran is what makes that non-negotiable.
+    const evaluator = new RecordingEvaluator();
+    const { assetClass } = makeAssetClass('stocks', STOCK_PERIODS_PER_YEAR);
+    const announced: TrialGridSizing[] = [];
+
+    const results = await runTrialGrid({
+      assetClasses: [assetClass],
+      // Deliberately NOT the module `WINDOW`, which is six years and wide
+      // enough that the cap never bites: this test is about the sizing, so it
+      // needs a window where the grid is actually cut.
+      window: { start: new Date(Date.UTC(2020, 0, 1)), end: new Date(Date.UTC(2022, 0, 1)) },
+      averageCapital: 10_000,
+      configTrialLog: new InMemoryConfigTrialLog(),
+      makeEvaluator: () => evaluator,
+      announceSizing: (sizing) => {
+        // Before, not after: a cap reported once the trials are spent is the
+        // ordering #405 exists to correct.
+        expect(evaluator.calls).toHaveLength(0);
+        announced.push(sizing);
+      },
+    });
+
+    expect(announced).toHaveLength(1);
+    const sizing = announced[0] as TrialGridSizing;
+    expect(sizing.requested).toBe(12);
+    expect(results).toHaveLength(sizing.selected.length);
+    expect(results.map((result) => result.config_hash)).toEqual(
+      sizing.selected.map((entry) => entry.config_hash),
+    );
   });
 
   it('runs the fixed 5-fold walk-forward split (barMs=1 day, embargo=50 bars) for every call', async () => {
@@ -543,7 +591,7 @@ function makeAssetClass(
 }
 
 describe('runTrialGrid — real ReplayDriver + EvalExecutorImpl end to end', () => {
-  it('runs all 12 configs across stock and crypto universes and produces 24 scored, 5-split EvalReports', async () => {
+  it('runs the sample-sized grid across both universes and scores every retained config', async () => {
     const referenceBars = buildTrendingBars('AAPL');
     const window: DateRange = {
       start: (referenceBars[0] as Bar).close_time,
@@ -561,8 +609,15 @@ describe('runTrialGrid — real ReplayDriver + EvalExecutorImpl end to end', () 
       configTrialLog,
     });
 
-    expect(results).toHaveLength(24);
-    expect(configTrialLog.distinctTrialCount()).toBe(12);
+    // #405: the grid is now sized to what the sample supports BEFORE anything
+    // runs, so the count is MinBTL's cap rather than the full cross-product.
+    // Asserted against `minbtl` rather than a literal, so this states the rule
+    // instead of pinning whatever number this fixture's bar span happens to
+    // produce.
+    const { limit } = minbtl(window);
+    expect(limit).toBeLessThan(buildTrialGrid().length);
+    expect(results).toHaveLength(limit * 2);
+    expect(configTrialLog.distinctTrialCount()).toBe(limit);
 
     for (const result of results) {
       expect(result.report.window).toBeDefined();
@@ -572,5 +627,111 @@ describe('runTrialGrid — real ReplayDriver + EvalExecutorImpl end to end', () 
     // The evaluator instance used per pair is the default EvalExecutorImpl —
     // not the fakes above.
     expect(results.every((result) => typeof result.report.window.sharpe === 'number')).toBe(true);
+  });
+});
+
+/**
+ * #405 — the binding constraint on the Stage 2 gate.
+ *
+ * The 12-config grid was sized against an assumed 5-year sample (MinBTL cap
+ * ~45). The Polygon plan serves 2 years, which supports 7, so every run
+ * reported `{"limit":7,"distinct_configs":12,"exceeded":true}` — the cap
+ * computed at the END, after all 12 trials had already run. The number exists
+ * to constrain the search, not to grade it afterwards.
+ */
+describe('sizeTrialGridToSample', () => {
+  function windowOfYears(years: number): DateRange {
+    return {
+      start: new Date(Date.UTC(2020, 0, 1)),
+      end: new Date(Date.UTC(2020, 0, 1) + years * 365.25 * 24 * 60 * 60 * 1_000),
+    };
+  }
+
+  it('cuts the grid to the cap the sample supports', () => {
+    const full = buildTrialGrid();
+    const window = windowOfYears(2);
+    const { limit } = minbtl(window);
+
+    const sizing = sizeTrialGridToSample(full, window);
+
+    expect(limit).toBeLessThan(full.length);
+    expect(sizing.selected).toHaveLength(limit);
+    expect(sizing.requested).toBe(full.length);
+    expect(sizing.years).toBeCloseTo(2, 2);
+  });
+
+  it('leaves the grid alone when the sample supports all of it', () => {
+    const full = buildTrialGrid();
+
+    const sizing = sizeTrialGridToSample(full, windowOfYears(20));
+
+    expect(sizing.selected).toEqual(full);
+    expect(sizing.selected.length).toBeLessThanOrEqual(sizing.limit);
+  });
+
+  it('SPREADS the retained configs rather than truncating', () => {
+    // Taking the first N would keep every config from one corner of the
+    // parameter space and call it a smaller search. It is not smaller, it is
+    // narrower — and chosen by array order rather than by design.
+    const full = buildTrialGrid();
+
+    const sizing = sizeTrialGridToSample(full, windowOfYears(2));
+    const kept = sizing.selected.map((entry) => full.indexOf(entry));
+
+    expect(kept[0]).toBe(0);
+    expect(kept[kept.length - 1]).toBe(full.length - 1);
+    // "Spread" has to be asserted as spread, not merely as increasing:
+    // strictly-increasing indices are equally true of a head-truncation
+    // (0,1,2,…), which is the behaviour this test exists to rule out. The
+    // property that actually distinguishes them is EVEN spacing — every gap
+    // within one of the ideal step. (Not "no two adjacent": at this cap the
+    // ideal step is under 2, so some gaps are legitimately 1. A truncation
+    // fails on the `kept[last]` assertion above, and on the ceiling here.)
+    const step = (full.length - 1) / (kept.length - 1);
+    for (let i = 1; i < kept.length; i++) {
+      const gap = (kept[i] as number) - (kept[i - 1] as number);
+      expect(gap).toBeGreaterThanOrEqual(Math.floor(step));
+      expect(gap).toBeLessThanOrEqual(Math.ceil(step));
+    }
+  });
+
+  it('reports a cap that does NOT bind without overstating the grid', () => {
+    // The trap in the announced figure: over a 5-6 year window MinBTL supports
+    // ~45 trials while the cross-product only asks for 12. A message built from
+    // `limit` would announce a 45-config grid and then run 12 — the same
+    // reported-vs-actual divergence the callback exists to remove. `selected`
+    // is the only field that tracks what runs in BOTH regimes.
+    const sizing = sizeTrialGridToSample(buildTrialGrid(), windowOfYears(6));
+
+    expect(sizing.limit).toBeGreaterThan(12);
+    expect(sizing.requested).toBe(12);
+    expect(sizing.selected).toHaveLength(12);
+  });
+
+  it('refuses an empty grid rather than sizing it to nothing', () => {
+    // The `limit < 1` guard's mirror image, and this one is REACHABLE: an
+    // empty array falls straight through the `requested <= limit` branch and
+    // returns an empty selection, which is the vacuous zero-trial verdict the
+    // guard exists to prevent — arrived at from the other direction.
+    expect(() => sizeTrialGridToSample([], windowOfYears(2))).toThrow(/empty grid/);
+  });
+
+  it('keeps only distinct configs — a duplicate would inflate N against the cap', () => {
+    const sizing = sizeTrialGridToSample(buildTrialGrid(), windowOfYears(2));
+    const hashes = sizing.selected.map((entry) => entry.config_hash);
+
+    expect(new Set(hashes).size).toBe(hashes.length);
+  });
+
+  it('is deterministic — the same window always yields the same configs', () => {
+    // A reproducible verdict is the whole point of Stage 2: a gate that cannot
+    // be re-run to check it is not evidence.
+    const window = windowOfYears(2);
+    const first = sizeTrialGridToSample(buildTrialGrid(), window);
+    const second = sizeTrialGridToSample(buildTrialGrid(), window);
+
+    expect(first.selected.map((e) => e.config_hash)).toEqual(
+      second.selected.map((e) => e.config_hash),
+    );
   });
 });

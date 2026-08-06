@@ -371,12 +371,31 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
   const stocks = makeAssetClass(ctx, 'stocks', STOCK_SYMBOLS, STOCK_PERIODS_PER_YEAR);
   const crypto = makeAssetClass(ctx, 'crypto', CRYPTO_SYMBOLS, CRYPTO_PERIODS_PER_YEAR);
 
-  print('Stage 2: running the 12-config trial grid across stocks + crypto...');
+  // #405: state the sizing POSITIVELY, before the run, rather than reporting
+  // `exceeded: true` after 12 trials have already been spent. The cap exists
+  // to constrain the search; a reader should see what it constrained it to.
   const results = await runTrialGrid({
     assetClasses: [stocks, crypto],
     window: effective,
     averageCapital,
     configTrialLog,
+    // Printed from INSIDE the run, off the sizing it actually used, rather
+    // than from a second `sizeTrialGridToSample` call here. The two agreed —
+    // same pure function, same window — but a verdict's audit trail should
+    // report what ran, not something computed alongside it.
+    //
+    // N is `selected.length`, NOT `limit`. They differ whenever the cap does
+    // not bind — a 5-year window supports ~45 trials and the cross-product
+    // only asks for 12, where printing `limit` would announce a 45-config grid
+    // and then run 12. That is the same reported-vs-actual divergence this
+    // change exists to remove, one line further along.
+    announceSizing: (sizing) =>
+      print(
+        `Stage 2: grid sized to N=${sizing.selected.length} from a ` +
+          `${sizing.years.toFixed(1)}-year effective sample (the full cross-product asks ` +
+          `for ${sizing.requested}; MinBTL supports ${sizing.limit}). ` +
+          'Running across stocks + crypto...',
+      ),
     // The gate run is the one caller that needs the CSCV pass: without it PBO
     // has no configs x folds matrix to rank across and the verdict can only
     // refuse (#406). Costs a second evaluate() per pair over the same replay.

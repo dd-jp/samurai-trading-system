@@ -43,6 +43,7 @@ import { digest } from '../orchestrator/index.js';
 import type { ConfigTrialLog } from './config-trial-log.js';
 import { EvalExecutorImpl } from './eval-executor.js';
 import type { EvalExecutor, EvalReport } from './eval-types.js';
+import { minbtl, windowYears } from './overfitting.js';
 import type { ProxyStrategyConfig } from './proxy-strategy.js';
 import type { ReplayRunResult } from './replay-driver.js';
 import type { BacktestReport } from './types.js';
@@ -122,6 +123,118 @@ export function buildTrialGrid(): TrialGridEntry[] {
   return entries;
 }
 
+/** What sizing the grid to the sample decided (#405). */
+export interface TrialGridSizing {
+  /** The configs that will actually be run. */
+  selected: TrialGridEntry[];
+  /** MinBTL's cap for this window — the most trials the sample can support. */
+  limit: number;
+  /** How many the full cross-product asked for. */
+  requested: number;
+  /** Effective sample length, for the positive statement in the report. */
+  years: number;
+}
+
+/**
+ * Cuts the grid to what the sample can actually support (#405).
+ *
+ * ## Why this is the binding constraint
+ *
+ * MinBTL caps the number of independent configurations a sample of a given
+ * length can be searched over before the best in-sample Sharpe is expected to
+ * be spurious. The 12-config grid was sized against an assumed 5-year sample
+ * (cap ~45); the Polygon plan actually serves 2 years, which supports 7. Every
+ * run so far reported `{"limit":7,"distinct_configs":12,"exceeded":true}`.
+ *
+ * The cap was computed at the END and reported as a verdict field, after all
+ * 12 trials had run. That is the wrong order: the number exists to CONSTRAIN
+ * the search, not to grade it afterwards. And it cut the wrong way once cost
+ * calibration took passing configs from 2/24 to 12/24 — with 2 passing,
+ * "pick the best" was not a live risk; with 12 on an over-budget grid, it is.
+ *
+ * ## The subset is spread, not truncated
+ *
+ * Taking the first N of the cross-product would keep every config from one
+ * corner of the parameter space — all the shortest fast/slow windows — and
+ * discard the rest. That is not a smaller search, it is a different and
+ * narrower one, chosen by array order rather than by design.
+ *
+ * So the retained configs are sampled EVENLY across the ordered grid. The
+ * selection is deterministic (no RNG, no seed) because a reproducible verdict
+ * is the whole point of Stage 2: the same window must always yield the same
+ * configs, or the gate cannot be re-run to check it.
+ */
+export function sizeTrialGridToSample(
+  entries: TrialGridEntry[],
+  window: DateRange,
+): TrialGridSizing {
+  const { limit } = minbtl(window);
+  const years = windowYears(window);
+  const requested = entries.length;
+
+  // A window too short to support even ONE configuration must REFUSE, not
+  // return an empty selection. `runTrialGrid` over zero configs completes
+  // without error and yields zero trials, and a Stage 2 verdict rendered over
+  // zero trials has no failing config to report — it reads as a pass. That is
+  // the single worst outcome this whole function exists to prevent: the cap is
+  // here to make the gate harder to pass, and a bug in it that makes the gate
+  // pass vacuously inverts its purpose.
+  //
+  // Stated honestly: this is UNREACHABLE as `minbtl` is written today — it
+  // starts its search at `limit = 1` and only ever increments
+  // (overfitting.ts:195), so it cannot return less. The guard is here because
+  // nothing in the `{ limit: number }` return type says that, the invariant is
+  // one refactor away from being lost, and the failure mode it protects
+  // against is silent rather than loud. `< 1` rather than `=== 0` for the same
+  // reason: MinBTL is a continuous expression underneath.
+  // Same failure, from the other side and reachable: an EMPTY grid falls
+  // through the `requested <= limit` branch below and returns an empty
+  // selection with no complaint. This function is exported, so "no caller
+  // passes an empty array today" is not a guarantee it holds.
+  if (requested < 1) {
+    throw new Error(
+      'sizeTrialGridToSample: an empty grid cannot be sized — there is nothing to run, ' +
+        'and a Stage 2 verdict over zero trials has no failing config to report, so it ' +
+        'reads as a pass.',
+    );
+  }
+
+  if (limit < 1) {
+    throw new Error(
+      `sizeTrialGridToSample: MinBTL supports ${limit} configs over a ` +
+        `${years.toFixed(2)}-year window, so no grid can be run against it. ` +
+        'Widen the window or ingest more history — a verdict over zero trials ' +
+        'is not a pass.',
+    );
+  }
+
+  if (requested <= limit) {
+    return { selected: entries, limit, requested, years };
+  }
+
+  // Evenly spaced indices across the whole grid, endpoints included, so the
+  // retained set spans the parameter space rather than clustering at one end.
+  const selected: TrialGridEntry[] = [];
+  for (let i = 0; i < limit; i++) {
+    const index = limit === 1 ? 0 : Math.round((i * (requested - 1)) / (limit - 1));
+    const entry = entries[index];
+    // Provably in bounds — `i` runs to `limit - 1` and `limit < requested`
+    // here, so `index` never exceeds `requested - 1`. Throwing rather than
+    // skipping because a silent skip would make `selected` shorter than
+    // `limit` with no signal, and `announceSizing` would then report a grid
+    // size that is not the one that ran.
+    if (entry === undefined) {
+      throw new Error(
+        `sizeTrialGridToSample: index ${index} is out of bounds for ${requested} configs ` +
+          `at limit ${limit} — the even-spacing arithmetic is wrong.`,
+      );
+    }
+    selected.push(entry);
+  }
+
+  return { selected, limit, requested, years };
+}
+
 /** The subset of `ReplayDriver`'s public API this module drives. */
 export interface ReplayRunner {
   run(config: ProxyStrategyConfig, window: DateRange): Promise<ReplayRunResult>;
@@ -193,6 +306,18 @@ export interface TrialGridRunDeps {
    * partitioning differs. That is what makes the two passes comparable.
    */
   includeCscvPass?: boolean;
+  /**
+   * Called once with the sizing this run ACTUALLY used, before any trial runs.
+   *
+   * A callback rather than letting the caller size the grid itself and print
+   * from that: `run-stage2.ts` used to call `sizeTrialGridToSample` a second
+   * time purely to build its log line, so the number an operator reads and the
+   * number that constrained the search were two computations that agreed only
+   * by convention. They are pure and take the same window, so they cannot
+   * disagree today — but a verdict's audit trail should not rest on "cannot
+   * disagree today", and the divergence would be silent if it ever did.
+   */
+  announceSizing?: (sizing: TrialGridSizing) => void;
 }
 
 /**
@@ -216,7 +341,10 @@ export async function runTrialGrid(deps: TrialGridRunDeps): Promise<TrialGridRes
     ((run: ReplayRunResult) =>
       new EvalExecutorImpl({ source: run.trades, timeline: run.timeline }));
 
-  const grid = buildTrialGrid();
+  // #405: sized from the sample BEFORE any trial runs, not graded afterwards.
+  const sizing = sizeTrialGridToSample(buildTrialGrid(), deps.window);
+  deps.announceSizing?.(sizing);
+  const grid = sizing.selected;
   const results: TrialGridResult[] = [];
 
   for (const { config, config_hash } of grid) {

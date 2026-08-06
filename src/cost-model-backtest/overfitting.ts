@@ -29,6 +29,19 @@ const PBO_REJECT_THRESHOLD = 0.05;
 const MS_PER_YEAR = 365.25 * 24 * 60 * 60 * 1000;
 
 /**
+ * A window's length in Julian years — the conversion MinBTL's cap is a
+ * function of.
+ *
+ * Exported because `sizeTrialGridToSample` reports the same figure alongside
+ * the cap derived from it, and had its own copy of this arithmetic that agreed
+ * with this one only by a comment saying so. Two constants that must match is
+ * the shape of a bug, not a coincidence worth preserving.
+ */
+export function windowYears(window: DateRange): number {
+  return (window.end.getTime() - window.start.getTime()) / MS_PER_YEAR;
+}
+
+/**
  * The annual Sharpe a trial is assumed to be searching for, in the MinBTL
  * cap. 1.0 is López de Prado's reference case and reproduces the spec's
  * stated calibration exactly: at N = 45 the formula returns ~5 years, which
@@ -186,7 +199,7 @@ export function pbo(performance: readonly (readonly number[])[]): PboVerdict {
  * data supports ~45 trials.
  */
 export function minbtl(window: DateRange): { limit: number } {
-  const years = (window.end.getTime() - window.start.getTime()) / MS_PER_YEAR;
+  const years = windowYears(window);
 
   if (years <= 0) {
     throw new Error('minbtl: window must have end > start.');

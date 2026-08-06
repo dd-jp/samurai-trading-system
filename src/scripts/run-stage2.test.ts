@@ -1,4 +1,5 @@
 import type { PolygonAggregate, PolygonClient } from '../cost-model-backtest/index.js';
+import { minbtl } from '../cost-model-backtest/index.js';
 import {
   CRYPTO_SYMBOLS,
   defaultFiveYearWindow,
@@ -111,14 +112,19 @@ describe('runStage2', () => {
       print: (line) => lines.push(line),
     });
 
-    // MinBTL is always computable (window/N only) — 12 distinct configs.
-    expect(verdict.n_distinct_trials).toBe(12);
-    expect(verdict.min_btl).toBeDefined();
+    // #405: the grid is sized to what the sample supports BEFORE it runs, so
+    // the trial count is MinBTL's cap rather than the full cross-product —
+    // and `exceeded` is false by construction rather than reported after the
+    // fact. Asserted against `minbtl` so this states the rule instead of
+    // pinning this fixture's particular span.
+    const { limit } = minbtl(window);
+    expect(verdict.n_distinct_trials).toBe(limit);
+    expect(verdict.min_btl.exceeded).toBe(false);
 
-    // Kill-line checks: 12 configs x 2 asset classes = 24 entries.
-    expect(verdict.kill_line_checks).toHaveLength(24);
-    expect(verdict.kill_line_checks.filter((c) => c.asset_class === 'stocks')).toHaveLength(12);
-    expect(verdict.kill_line_checks.filter((c) => c.asset_class === 'crypto')).toHaveLength(12);
+    // Kill-line checks: one per (retained config, asset class).
+    expect(verdict.kill_line_checks).toHaveLength(limit * 2);
+    expect(verdict.kill_line_checks.filter((c) => c.asset_class === 'stocks')).toHaveLength(limit);
+    expect(verdict.kill_line_checks.filter((c) => c.asset_class === 'crypto')).toHaveLength(limit);
 
     // PBO is attempted per asset class present (2 outcomes for stocks+crypto).
     expect(verdict.pbo).toHaveLength(2);
