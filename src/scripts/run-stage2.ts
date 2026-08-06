@@ -537,6 +537,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     polygonClient,
     costConfig: costConfigFromEnv(),
     window: STAGE2_PINNED_WINDOW,
+    // Persistent scratch (review 2026-08-06 A4): the window is pinned, so the
+    // requested bars are byte-identical every run and `ingest`'s INSERT OR
+    // IGNORE makes a re-run cost zero API calls once this file is warm. The
+    // previous `:memory:` default re-fetched all six symbols on every single
+    // invocation. Tests keep `:memory:` by passing no dbPath.
+    dbPath: 'data/stage2-bars.sqlite',
     selections: new SqliteStage2SelectionStore(shared),
   }).catch((error: unknown) => {
     console.error('Stage 2 run failed:', error);
