@@ -119,6 +119,43 @@ describe('buildDebateStep', () => {
     expect(result.position.length).toBeGreaterThan(0);
   });
 
+  it('floors a mid-bar tick to its bar in BOTH debate_id and bar_timestamp (#393)', async () => {
+    // Every other test in this file runs `CLOCK` at 14:00:00Z — already a bar
+    // boundary, so flooring is a no-op there and asserting against `NOW`
+    // passes whether or not `buildDebateStep` floors at all. This test uses a
+    // clock deliberately OFF the boundary, so deleting the `floorToBar` call
+    // in the adapter fails here rather than only in `floorToBar`'s own unit
+    // test. That gap is what the reviewers on #448 caught.
+    const midBar = new Date('2026-07-28T14:32:07Z');
+    const bar = new Date('2026-07-28T14:00:00Z');
+
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    const step = buildDebateStep(fakeLlmClient(), store, unlimited(), UNCAPPED_SPEND);
+    const views = [makeView()];
+
+    const result = await step({
+      trace_id: 'trace-mid-bar',
+      instrument: 'AAPL',
+      views,
+      asset_class: ASSET_CLASS,
+      clock: { now: () => midBar },
+    });
+
+    // The id is hashed over the FLOORED bar, not the tick time. This is the
+    // half that makes replay-from-log (ADR-0003 §2) reachable: a replay
+    // stepping bar closes computes 14:00:00 and must land on the row a live
+    // tick at 14:32:07 wrote.
+    expect(result.debate_id).toBe(computeDebateId('AAPL', bar, views));
+
+    const row = store.getByDebateId(result.debate_id);
+    expect(row?.bar_timestamp.toISOString()).toBe(bar.toISOString());
+    // ...and `created_at` still records the tick, which is the distinction
+    // #393 was about: before the fix both columns held 14:32:07.
+    expect(row?.created_at.toISOString()).toBe(midBar.toISOString());
+    expect(row?.trace_id).toBe('trace-mid-bar');
+  });
+
   it('writes exactly one debate_log row for a completed debate (#364)', async () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteDebateLogStore(db);

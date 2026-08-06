@@ -72,20 +72,27 @@ export function buildDebateLog(
  * every historical row would then refer to a grid nothing else shares.
  *
  * Consequence worth stating: at a 15-minute cadence, four consecutive ticks
- * share one bar and therefore one `debate_id`. That is correct and already
- * handled — `debate_id` is a content hash, the log's primary key is
- * write-once, and a repeat within the same bar is the retry case migration
- * 0015 describes rather than a second debate.
+ * share one bar. They do NOT thereby share a `debate_id` — the bar is only one
+ * of three hash inputs, and the third is the analyst views, whose `key_points`
+ * are raw model prose. Two ticks fifteen minutes apart collide only if the
+ * analysts produced byte-identical output over the interval, which is the
+ * retry case the write-once primary key is for, not a second debate. Flooring
+ * therefore makes the log's duplicate guard REACHABLE where an unfloored
+ * instant left it dead code; first-write-wins is the intended resolution.
  */
 export const DEBATE_BAR_TIMEFRAME_MS = 60 * 60 * 1_000;
 
 /**
  * Floors an instant to its bar's opening boundary, in UTC.
  *
- * Epoch-relative, not calendar-relative: `DEBATE_BAR_TIMEFRAME_MS` divides the
- * day evenly, so the two agree — and an epoch floor stays correct for a
- * timeframe that does not, which is the property a calendar floor silently
- * loses.
+ * Epoch-relative, not calendar-relative. The honest statement of the tradeoff:
+ * epoch flooring produces a uniform grid with no local-time concept at all, so
+ * it neither knows nor cares about DST — which is right here, because every
+ * timestamp in this system is UTC (`bar_timestamp` is stored and compared as
+ * an ISO instant) and UTC has no DST transitions to misalign against. A
+ * calendar floor would be the one that needs a timezone argument to be
+ * well-defined. If a local-session timeframe is ever introduced — a US equity
+ * trading day, say — this function is NOT the right tool for it.
  */
 export function floorToBar(at: Date, timeframeMs: number = DEBATE_BAR_TIMEFRAME_MS): Date {
   return new Date(Math.floor(at.getTime() / timeframeMs) * timeframeMs);
