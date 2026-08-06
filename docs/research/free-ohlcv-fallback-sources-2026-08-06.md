@@ -33,6 +33,14 @@ This changes what a fallback must be good at. Depth stops being the discriminato
 
 Append-only caching is sound here because both primaries are unadjusted: Alpaca is pinned `adjustment=raw`, and crypto venues do not restate candles. A fallback that serves *adjusted* prices breaks that property — see Yahoo below.
 
+### ⚠️ The equities recommendation depends on that fix, and the fix does not exist yet
+
+**Polygon free physically cannot serve a cold backfill** — it 403s beyond 2 years, and the Stage 2 window is 5. It is a valid fallback *only* in the increment-only role, which *only* exists once bars persist across runs.
+
+So the ordering is a hard dependency, not a preference: **the caching change (persistent `dbPath` + skip covered windows) must land before any equities failover is implemented.** Implement failover first and the fallback is wrong in practice — the first stall would try a 5-year fetch against a 2-year key and fail.
+
+The crypto leg has no such ordering constraint: Bitstamp's 15 years cover a cold backfill on their own. (Crypto.com's 2020-11 floor would not — a third reason Bitstamp wins.)
+
 ---
 
 ## Crypto leg
@@ -130,7 +138,20 @@ That is exactly the documented free profile: **2-year rolling window, 5 requests
 
 - The 2-year window is irrelevant to the increment-only role. A stall needs the last few days.
 - 5 req/min is ample: the equities increment is 1 request/day for the whole 4-symbol universe.
-- `adjusted=false` gives unadjusted bars, matching Alpaca's `adjustment=raw` convention, so fallback bars and primary bars are the same kind of number. **DOC** for the semantics of `adjusted=false`; not separately PROBED, because none of SPY/QQQ/AAPL/TSLA split inside the 2-year window the free tier will serve, so there is no split to test against. Confirm on the first real split.
+- `adjusted=false` gives unadjusted bars matching Alpaca's `adjustment=raw` convention, so fallback bars and primary bars are the same kind of number. **PROBED directly** — this is the load-bearing claim, so it was measured rather than read off a docs page. Both sources, same 6-month range, all four tickers:
+
+  ```
+  SPY : 128 bars each, 128 shared dates, max |close diff| = 0.0000
+  AAPL: 128 bars each, 128 shared dates, max |close diff| = 0.0000
+  TSLA: 128 bars each, 128 shared dates, max |close diff| = 0.0000
+  QQQ : 128 bars each, 128 shared dates, max |close diff| = 0.0000
+  ```
+
+  Closes agree **exactly**, to the cent, on every shared bar, with no date mismatches. The two conventions are interchangeable for price.
+
+  ⚠️ **Volume does not agree exactly.** Polygon/Alpaca volume ratio ranges 0.918–1.001 — Polygon reports up to ~8% *less* volume on SPY, ~1% less on the single names. That is trade-condition/odd-lot consolidation differing between vendors, not a defect. It is small enough not to threaten a mixed table the way #484's ~600× Alpaca-crypto break would, but it does mean **failover shifts `getADV()`'s denominator by up to ~8%** and therefore the cost model's `√(size/adv)` charge by up to ~4%. Acceptable for a stall; worth recording which source each bar came from so it can be re-derived from the primary later.
+
+  Note this also means no split test was needed: agreement is measured on live data, not inferred. (None of the four split inside the free tier's 2-year window anyway.)
 - It is an official, documented API with terms, and the key is already in hand. Zero provisioning work.
 - There is already a `HttpPolygonClient` in the codebase (`src/cost-model-backtest/http-polygon-client.ts`) — the transport exists.
 
