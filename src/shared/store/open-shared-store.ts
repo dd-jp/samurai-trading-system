@@ -8,7 +8,7 @@
  * path or `:memory:`. Two paths never share state — paper/live cross-
  * contamination is physically impossible.
  */
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
 import { runMigrations } from './migrate.js';
@@ -36,37 +36,126 @@ export type SharedStore = BetterSqlite3.Database;
  * `test` is listed because vitest sets `NODE_ENV=test`; suites that touch a
  * real file pass a temp path or `:memory:` directly and never reach here.
  *
- * Note the list is `NODE_ENV` values, which is what the entrypoints actually
- * key off today. shared-sqlite-store-spec.md § "DB file path convention"
- * (#168) names the files after the *trading mode* instead
- * (`data/samurai-paper.sqlite` / `data/samurai-live.sqlite`) — that gap is
- * documented at `startFromEnvironment` in src/orchestrator/index.ts and is
- * not closed here.
+ * **No longer what the path is keyed on (#330).** These remain the recognised
+ * `NODE_ENV` values, and `legacyStorePath` still builds the old filename so a
+ * pre-#330 database can be detected and named in the refusal below. The live
+ * path is keyed off the TRADING MODE now — see `sharedStorePath`.
  */
 export const STORE_ENVIRONMENTS = ['development', 'test', 'staging', 'production'] as const;
 
 export type StoreEnvironment = (typeof STORE_ENVIRONMENTS)[number];
 
+/** The trading modes that may own a store file (shared-sqlite-store-spec.md #168). */
+export const STORE_MODES = ['paper', 'live', 'backtest'] as const;
+
+export type StoreMode = (typeof STORE_MODES)[number];
+
 /**
- * The one file-per-environment path convention
- * (shared-sqlite-store-spec.md): `data/samurai-{env}.sqlite`.
+ * Resolves the trading mode from `SAMURAI_MODE` — the ONE derivation both
+ * entrypoints use (#330).
  *
- * Shared by both entrypoints on purpose. The orchestrator writes this file
- * and the dashboard reads it, so the two must agree on its name — deriving it
+ * That sharing is the whole point. The orchestrator writes the store and the
+ * dashboard reads it, and #330's open question was how the reader derives a
+ * mode it is never told: the answer is that it reads the same variable the
+ * writer does, from the same function, so the two cannot disagree about which
+ * file they mean.
+ *
+ * Throws rather than defaulting, exactly as `parseMode` does for the same
+ * variable. A default of `paper` would be the #330 hazard inverted — a live
+ * run whose `SAMURAI_MODE` failed to export would quietly open the paper
+ * database and trade real money against paper state.
+ */
+export function resolveStoreMode(raw: string | undefined = process.env.SAMURAI_MODE): StoreMode {
+  const mode = (STORE_MODES as readonly string[]).includes(raw ?? '')
+    ? (raw as StoreMode)
+    : undefined;
+  if (mode === undefined) {
+    throw new Error(
+      `Refusing to resolve a shared-store path: SAMURAI_MODE must be one of ` +
+        `${STORE_MODES.join('|')} and is ${JSON.stringify(raw)}. The store file is named after ` +
+        'the trading mode (#168/#330) precisely so a live run cannot inherit paper positions, ' +
+        'and guessing the mode would defeat that.',
+    );
+  }
+  return mode;
+}
+
+/**
+ * The file-per-MODE path convention (shared-sqlite-store-spec.md § "DB file
+ * path convention", #168): `data/samurai-{mode}.sqlite`.
+ *
+ * ## Why this changed (#330)
+ *
+ * It used to key off `NODE_ENV`. On a single `NODE_ENV=production` host that
+ * flips `SAMURAI_MODE` from `paper` to `live` — which is exactly the
+ * graduation this project plans — both modes wrote
+ * `samurai-production.sqlite`. A live composition root would then inherit
+ * paper lots and fills as real state and compute risk caps and drawdown
+ * against them. The spec's convention exists to make that "physically
+ * impossible", and keying off the environment did the opposite.
+ *
+ * Shared by both entrypoints on purpose. The orchestrator writes this file and
+ * the dashboard reads it, so the two must agree on its name — deriving it
  * twice is how they drift, and a dashboard pointed at a file the orchestrator
  * never writes shows a healthy, empty system.
  */
-export function sharedStorePath(rawEnv: string | undefined = process.env.NODE_ENV): string {
+export function sharedStorePath(mode: StoreMode = resolveStoreMode()): string {
+  const path = `data/samurai-${mode}.sqlite`;
+  assertNoStrandedLegacyStore(mode, path);
+  return path;
+}
+
+/**
+ * The pre-#330 filename, kept only so a stranded database can be NAMED in the
+ * refusal below. Nothing opens it.
+ */
+export function legacyStorePath(rawEnv: string | undefined = process.env.NODE_ENV): string {
   const env = rawEnv ?? 'development';
   if (!(STORE_ENVIRONMENTS as readonly string[]).includes(env)) {
     throw new Error(
-      `Refusing to open a shared store for NODE_ENV=${JSON.stringify(env)}: it must be one of ` +
-        `${STORE_ENVIRONMENTS.join('|')}. An unrecognised environment would silently open a ` +
-        'different database file, starting the process against empty state while real positions ' +
-        'are open at the broker.',
+      `Refusing to derive the legacy store path for NODE_ENV=${JSON.stringify(env)}: it must be ` +
+        `one of ${STORE_ENVIRONMENTS.join('|')}.`,
     );
   }
   return `data/samurai-${env}.sqlite`;
+}
+
+/**
+ * The migration story #330 asks for, and it is deliberately manual.
+ *
+ * If the mode-keyed file does not exist yet but a pre-#330 environment-keyed
+ * one does, this process is one start away from running against an EMPTY
+ * database while real positions sit open at the broker — the same
+ * crash-restart invariant `STORE_ENVIRONMENTS` protects, failing the same
+ * quiet way.
+ *
+ * It refuses instead of renaming. Moving a database that may hold live-money
+ * state is not a decision a process should make on an operator's behalf: only
+ * the operator knows whether `samurai-production.sqlite` is the paper history
+ * they want carried forward or a live one that must not be handed to a paper
+ * run. The error names both paths and the exact command, so the manual step is
+ * one line rather than an investigation.
+ *
+ * One-shot by construction: once `data/samurai-{mode}.sqlite` exists, this
+ * never fires again.
+ */
+function assertNoStrandedLegacyStore(mode: StoreMode, path: string): void {
+  if (existsSync(path)) return;
+
+  const env = process.env.NODE_ENV ?? 'development';
+  if (!(STORE_ENVIRONMENTS as readonly string[]).includes(env)) return;
+  const legacy = `data/samurai-${env}.sqlite`;
+  if (!existsSync(legacy)) return;
+
+  throw new Error(
+    `Refusing to start against an empty store: ${path} does not exist, but ${legacy} does. ` +
+      'Store files are named after the TRADING MODE as of #330 (they used to be named after ' +
+      `NODE_ENV), so this run would open a fresh database and see none of the positions, fills ` +
+      'or tuning history in the old one — while any real positions stay open at the broker.\n' +
+      `Decide which this is, then move it deliberately:  mv ${legacy} ${path}\n` +
+      'If the old file is live-money state, do NOT hand it to a paper run: keep it as ' +
+      'data/samurai-live.sqlite instead.',
+  );
 }
 
 /**

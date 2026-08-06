@@ -24,6 +24,12 @@ const port = Number(process.env.PORT ?? 8787);
 const host = process.env.HOST ?? '127.0.0.1';
 // Same resolver the orchestrator uses: the dashboard reads the file the
 // orchestrator writes, so the two must not derive its name independently.
+//
+// #330's open question was how the READER derives a mode it is never told.
+// The answer is that it does not derive one: `sharedStorePath` reads
+// `SAMURAI_MODE` itself, through `resolveStoreMode`, so both sides resolve the
+// same file from the same variable. A dashboard started without that variable
+// refuses rather than showing a healthy, empty system from the wrong file.
 const db = openSharedStore(sharedStorePath());
 
 /**

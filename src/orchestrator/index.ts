@@ -351,15 +351,13 @@ function assertCredentialsPresent(
  * Whether `dbPath`'s filename identifies the trading mode it belongs to —
  * i.e. whether it is the shape shared-sqlite-store-spec.md § "DB file path
  * convention" (#168) asks for (`data/samurai-paper.sqlite` /
- * `data/samurai-live.sqlite`) rather than the `NODE_ENV`-keyed shape this
- * codebase actually resolves.
+ * `data/samurai-live.sqlite`).
  *
- * False for every filename in use today, which is the point: it is the
- * condition for the startup warning below, written against the *fixed* shape
- * so that [#330](https://github.com/dd-jp/samurai-trading-system/issues/330)
- * re-keying the path silences the warning by making this true. Nobody has to
- * remember to delete it, and nobody can delete it early without the test
- * turning red.
+ * True on every ordinary run since #330 re-keyed the path off the trading
+ * mode. It was written against the FIXED shape while the code still had the
+ * broken one, so the fix made it start answering true rather than needing a
+ * separate edit — and what used to be a warning below is now a refusal, which
+ * is what it can afford to be once the check normally passes.
  *
  * Filename only, never the directories above it: a checkout that happens to
  * live under `~/live/` must not be able to silence this by accident.
@@ -372,50 +370,40 @@ export function storePathEncodesTradingMode(
 }
 
 /**
- * Warns, once at startup, when the file this process is about to write cannot
+ * Refuses to start when the file this process is about to write cannot
  * distinguish paper money from real money —
  * [#330](https://github.com/dd-jp/samurai-trading-system/issues/330).
  *
- * The hazard in full: `sharedStorePath()` keys off `NODE_ENV`, so a single
- * `NODE_ENV=production` host that flips `SAMURAI_MODE` from `paper` to `live`
- * writes both into `samurai-production.sqlite`. A live composition root then
- * reads paper lots and fills as real state and computes its risk caps and
- * drawdown against them — the exact cross-contamination #168's convention
- * exists to make impossible.
+ * This was a `warn` until #330 was fixed, because the path was keyed off
+ * `NODE_ENV` and every filename in use failed the check: refusing would have
+ * refused every start. Now that `sharedStorePath` keys off the trading mode,
+ * the check passes on every ordinary run, and the one case that can still fail
+ * it is the residual hazard #330 named — an INJECTED mode that disagrees with
+ * `SAMURAI_MODE`.
  *
- * A warning rather than a refusal, deliberately: paper trading on one
- * `NODE_ENV` is unaffected in practice, and #323's whole purpose was to let a
- * paper run start. Refusing here would re-break the thing that ticket fixed,
- * to guard a transition (`paper` → `live` on one host) that the shipped
- * entrypoint already refuses on other grounds.
- *
- * **Do not delete this as noise.** #330 records that it is removed only when
- * the real fix lands — and by construction it removes itself then, because
- * `storePathEncodesTradingMode` starts answering true.
+ * That case matters precisely because it is invisible: `sharedStorePath` reads
+ * the environment, so a programmatic caller passing `mode: 'live'` on a host
+ * whose `SAMURAI_MODE` still says `paper` would write live state into the paper
+ * database. There is nothing to warn about there — the run is already wrong —
+ * so it refuses, which is the same posture `SAMURAI_ALERTS` and `parseMode`
+ * take for their own unrecoverable configurations.
  */
-export function warnIfStorePathIgnoresMode(deps: {
+export function assertStorePathMatchesMode(deps: {
   dbPath: string;
   mode: ProductionConfig['mode'];
-  logger: Logger;
 }): void {
   if (storePathEncodesTradingMode(deps.dbPath, deps.mode)) return;
 
-  deps.logger.log({
-    trace_id: 'startup',
-    stage: 'orchestrator',
-    level: 'warn',
-    message:
-      'shared store path is keyed off NODE_ENV, not trading mode — this file cannot separate ' +
-      'paper from live, so a later live run on this host would inherit paper positions as real ' +
-      'state (#330, spec #168). Safe for a paper-only host; must be resolved before live money.',
-    payload: {
-      mode: deps.mode,
+  throw new Error(
+    `Orchestrator cannot start: it is about to run in '${deps.mode}' mode but the shared store ` +
       // Filename, not the absolute path: the path can carry a home directory,
-      // and a startup log line is not the place to disclose one.
-      db_file: basename(deps.dbPath),
-      expected_convention: `samurai-${deps.mode}.sqlite`,
-    },
-  });
+      // and a startup error is not the place to disclose one.
+      `resolves to ${basename(deps.dbPath)}, which is not that mode's file. Store files are ` +
+      `named after the trading mode (#168/#330) so paper and live state cannot mix — writing ` +
+      `'${deps.mode}' state into another mode's database is exactly what that convention ` +
+      'prevents. This happens when an injected mode disagrees with SAMURAI_MODE; set ' +
+      `SAMURAI_MODE=${deps.mode} so the writer and the dashboard resolve the same file.`,
+  );
 }
 
 /**
@@ -426,38 +414,21 @@ export function warnIfStorePathIgnoresMode(deps: {
  * where alerts go (`SAMURAI_ALERTS`, #322 — see `./alert-transport.ts`).
  *
  * DB path convention matches `src/dashboard/index.ts` (both call
- * `sharedStorePath`): `data/samurai-{env}.sqlite`, one file per `NODE_ENV`.
+ * `sharedStorePath`): `data/samurai-{mode}.sqlite`, one file per TRADING MODE
+ * (shared-sqlite-store-spec.md § "DB file path convention", #168) — which is
+ * what makes paper/live PnL cross-contamination physically impossible.
  *
- * **This does not yet deliver paper/live separation, despite the shape.**
- * shared-sqlite-store-spec.md § "DB file path convention" (#168) names the
- * files `data/samurai-paper.sqlite` / `data/samurai-live.sqlite` — that is,
- * keyed off the *trading mode*, which is what makes "paper/live PnL
- * cross-contamination physically impossible". This code keys off `NODE_ENV`
- * instead, so a single `NODE_ENV=production` host that flips `SAMURAI_MODE`
- * from `paper` to `live` writes both into one file.
+ * **Re-keyed in #330**, where it used to key off `NODE_ENV`: a single
+ * `NODE_ENV=production` host that flipped `SAMURAI_MODE` from `paper` to
+ * `live` wrote both into one file, and a live composition root would have read
+ * paper lots and fills as real state.
  *
- * **Reachable as of #323, where it was latent before — tracked as
- * [#330](https://github.com/dd-jp/samurai-trading-system/issues/330).** The
- * earlier note here said the `REQUIRED_INJECTED_CONFIG` guard threw long
- * before this line, which is no longer true: `yarn orchestrator` now boots, so
- * the path is resolved on every start. Two things still stand between this
- * hazard and a live wrong answer — the shipped entrypoint runs on
- * `paperStartingProfile`, which refuses `live` outright, and a `live` process
- * would have to be someone's own composition root — but it is still the wrong
- * key, and #330 gates it on any live-money run.
- *
- * Not re-keyed here, deliberately and not for lack of effort: `mode` resolves
- * from `injected.mode ?? SAMURAI_MODE`, and an injected mode is invisible to
- * the dashboard, which calls `sharedStorePath()` with no argument precisely so
- * writer and reader cannot derive different paths. Switching the key needs a
- * decision about how the *reader* derives mode, plus a migration story for
- * existing files — #330's scope, not a template-string change.
- *
- * What this function does do meanwhile is say so out loud:
- * `warnIfStorePathIgnoresMode` logs a `warn` at startup naming the mode and
- * the file actually being written. Per #330 that warning is removed only when
- * the real fix lands — and it retires itself when it does, since re-keying
- * makes `storePathEncodesTradingMode` true.
+ * #330's open question was how the READER derives a mode it is never told. The
+ * answer is `resolveStoreMode`: both entrypoints read `SAMURAI_MODE` through
+ * the same function, so writer and reader cannot mean different files. The one
+ * case that can still diverge — an INJECTED mode disagreeing with the
+ * environment — is refused by `assertStorePathMatchesMode` rather than written
+ * to the wrong database.
  */
 export async function startFromEnvironment(
   injected: Partial<ProductionConfig> = {},
@@ -515,7 +486,7 @@ export async function startFromEnvironment(
   let db = injected.db;
   if (db === undefined) {
     const dbPath = sharedStorePath();
-    warnIfStorePathIgnoresMode({ dbPath, mode, logger });
+    assertStorePathMatchesMode({ dbPath, mode });
     db = openSharedStore(dbPath);
   }
 
