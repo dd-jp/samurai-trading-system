@@ -101,7 +101,7 @@ export function resolveStoreMode(raw: string | undefined = process.env.SAMURAI_M
  */
 export function sharedStorePath(mode: StoreMode = resolveStoreMode()): string {
   const path = `data/samurai-${mode}.sqlite`;
-  assertNoStrandedLegacyStore(mode, path);
+  assertNoStrandedLegacyStore(path);
   return path;
 }
 
@@ -139,7 +139,7 @@ export function legacyStorePath(rawEnv: string | undefined = process.env.NODE_EN
  * One-shot by construction: once `data/samurai-{mode}.sqlite` exists, this
  * never fires again.
  */
-function assertNoStrandedLegacyStore(mode: StoreMode, path: string): void {
+function assertNoStrandedLegacyStore(path: string): void {
   if (existsSync(path)) return;
 
   // Through `legacyStorePath` rather than rebuilt here (PR #447 review): one

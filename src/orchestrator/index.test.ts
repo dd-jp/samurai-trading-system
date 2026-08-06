@@ -17,7 +17,6 @@ import {
   startFromEnvironment,
   storePathEncodesTradingMode,
 } from './index.js';
-import type { Logger } from './types.js';
 
 /**
  * See the twin in `startup.test.ts`. Resolve arm of the `.then(…, …)` pairs

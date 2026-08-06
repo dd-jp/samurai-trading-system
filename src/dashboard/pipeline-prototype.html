@@ -333,7 +333,7 @@ function advanceSim() {
         { instrument:'BTC-USD', asset_class:'crypto' }, { instrument:'MSFT', asset_class:'equity' },
         { instrument:'ETH-USD', asset_class:'crypto' }, { instrument:'AAPL', asset_class:'equity' },
       ][Math.floor(Math.random()*4)];
-      LIVE = { ...next, trace_id:'t-'+Math.random().toString(16).slice(2,8), stage:'analysts', elapsed:0 };
+      LIVE = { ...next, trace_id:`t-${Math.random().toString(16).slice(2,8)}`, stage:'analysts', elapsed:0 };
       liveStageIdx = 0;
     }
   }
@@ -344,14 +344,14 @@ function advanceSim() {
 /* ------------------------------------------------------------------ *
  * Helpers
  * ------------------------------------------------------------------ */
-function ms(n) { return n >= 1000 ? (n/1000).toFixed(1)+'s' : n+'ms'; }
-function ago(mins) { return mins === 0 ? 'just now' : Math.abs(mins)+'m ago'; }
+function ms(n) { return n >= 1000 ? `${(n/1000).toFixed(1)}s` : `${n}ms`; }
+function ago(mins) { return mins === 0 ? 'just now' : `${Math.abs(mins)}m ago`; }
 function totalMs(trace) { return trace.stages.reduce((a,s)=>a+s.ms,0); }
 function outcomeBadge(t) {
   if (t.outcome === 'go') return '<span class="badge badge-go">go</span>';
   if (t.outcome === 'no_go') return '<span class="badge badge-no_go">no go</span>';
   if (t.outcome === 'skipped') return '<span class="badge badge-skip">quorum skip</span>';
-  return '<span class="badge badge-no_go">stopped · '+t.stopped_at+'</span>';
+  return `<span class="badge badge-no_go">stopped · ${t.stopped_at}</span>`;
 }
 
 /* The Debate expansion — real per-analyst detail exists only for COMPLETED
@@ -367,7 +367,7 @@ function agentCards(live) {
     '<div class="agent"><div class="who">'+a.analyst_id+
       '<span class="badge badge-'+a.final_position+'">'+a.final_position.slice(0,4)+'</span></div>' +
       '<div class="role">'+a.analyst_type+'</div>' +
-      '<div class="stance">'+a.stance.map(s=>'<i class="'+s+'"></i>').join('')+'</div>' +
+      `<div class="stance">${a.stance.map(s=>`<i class="${s}"></i>`).join('')}</div>` +
       '<div class="inf">influence '+a.influence_score.toFixed(2)+'</div></div>';
   return '<h3>Analysts — views into the debate</h3><div class="agents">' + CONTRIBUTIONS.map(card).join('') + '</div>' +
          '<h3 style="margin-top:14px;">Personas — the argument itself</h3><div class="agents">' + PERSONAS.map(card).join('') + '</div>' +
@@ -445,7 +445,7 @@ function VariantB() {
     const dormant = !t && !isLive;
     const cells = STAGES.map(stage => {
       if (isLive && LIVE.stage === stage) {
-        return '<td class="cell"><div class="seg live">'+ms(LIVE.elapsed)+'</div></td>';
+        return `<td class="cell"><div class="seg live">${ms(LIVE.elapsed)}</div></td>`;
       }
       if (isLive && STAGES.indexOf(stage) < STAGES.indexOf(LIVE.stage)) {
         return '<td class="cell"><div class="seg done">✓</div></td>';
@@ -455,7 +455,7 @@ function VariantB() {
       if (!hit) return '<td class="cell"><div class="seg never">·</div></td>';
       const last = t.stages[t.stages.length-1].s === stage;
       const cls = last && (t.outcome === 'stopped' || t.outcome === 'skipped' || t.outcome === 'no_go') ? 'stopped' : 'done';
-      const retry = hit.retry ? '<span class="retry">×'+(hit.retry+1)+'</span>' : '';
+      const retry = hit.retry ? `<span class="retry">×${hit.retry+1}</span>` : '';
       return '<td class="cell" data-inst="'+u.instrument+'" data-stage="'+stage+'"><div class="seg '+cls+'">'+ms(hit.ms)+retry+'</div></td>';
     }).join('');
     const when = isLive ? '<span class="badge badge-live">live</span>'

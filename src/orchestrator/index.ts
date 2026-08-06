@@ -65,7 +65,6 @@ import {
   type ProductionOrchestrator,
   SMOKE_TEST_UNIVERSE,
 } from './production.js';
-import type { Logger } from './types.js';
 
 export {
   ALERT_CHANNEL_FIELDS,
