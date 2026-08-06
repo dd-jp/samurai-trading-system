@@ -42,10 +42,15 @@ function sideFor(direction: 'bullish' | 'bearish'): 'buy' | 'sell' {
  * `DEFAULT_VOLATILITY_INDICATOR`), that fallback would silently make this an
  * ATR(15), the exact off-by-one commit 0281a8c already had to fix once.
  */
-export function atrIndicatorSpec(lookback: number): IndicatorSpec {
+export function atrIndicatorSpec(lookback: number, timeframe: string): IndicatorSpec {
   return {
     indicator: 'atr',
     params: { period: lookback },
+    // Passed in rather than defaulted (#315). This spec describes the bars the
+    // caller fetched with `config.atr_timeframe`, and a default here would let
+    // the two drift — the spec claiming 1h while the ATR was computed on
+    // something else, which reprices every stop without changing a test.
+    timeframe,
     lookback: lookback + 1,
   };
 }
@@ -92,8 +97,8 @@ export function atrIndicatorSpec(lookback: number): IndicatorSpec {
  * check belongs at the one place every indicator computation passes through,
  * not in every consumer of it.
  */
-function atrFor(bars: Bar[], lookback: number): number | null {
-  const spec = atrIndicatorSpec(lookback);
+function atrFor(bars: Bar[], lookback: number, timeframe: string): number | null {
+  const spec = atrIndicatorSpec(lookback, timeframe);
 
   // `lookback + 1` bars yield `lookback` true ranges — the arity lives in
   // `minimumBarsFor`, not in a literal here. Skipping the trade is the only
@@ -169,18 +174,23 @@ async function buildBracket(
     ),
   ]);
 
-  // Bars are fetched here, not read through `marketData.getIndicator`, so
-  // `config.atr_timeframe` is honoured: `getIndicator` hardcodes its own
-  // `DEFAULT_INDICATOR_TIMEFRAME` because `IndicatorSpec` carries no
-  // timeframe, and routing through it would silently pin ATR to 1h whatever
-  // this config says. Same trade-off, same shape, as the cost model's
-  // `replay-driver` / `proxy-strategy` call sites. Cost of that: Trader
-  // misses the Tier-1 indicator cache — cheap at one ATR per instrument per
-  // cycle. Note the bypass buys nothing at DEFAULT_TRADER_CONFIG, whose
-  // `atr_timeframe` is '1h', the same value `getIndicator` hardcodes; it is
-  // what keeps a NON-default `atr_timeframe` honest. Recoverable once
-  // `IndicatorSpec` grows a timeframe — tracked in #315.
-  const atr = atrFor(bars, config.atr_lookback);
+  // Bars are still fetched here rather than read through
+  // `marketData.getIndicator`, and #315 changed WHY.
+  //
+  // The old reason is gone: `IndicatorSpec` now carries a timeframe and
+  // `getIndicator` builds its window from it, so routing through the serving
+  // layer would no longer silently pin ATR to 1h.
+  //
+  // The remaining reason is arity. `atrFor` skips the trade when there are
+  // fewer than `minimumBarsFor(spec)` bars, because a stop cannot be priced
+  // off an ATR that does not exist. `getIndicator` does not enforce that: it
+  // throws only when there are NO bars, and otherwise hands `computeIndicator`
+  // whatever short window it got. Repointing here today would trade a cache
+  // miss — one ATR per instrument per cycle — for silently repricing every
+  // stop off an under-seeded ATR during any warm-up or data gap. That is the
+  // worse defect, so the last step of #315 waits on `getIndicator` enforcing
+  // indicator arity.
+  const atr = atrFor(bars, config.atr_lookback, config.atr_timeframe);
   if (atr === null) return null;
 
   // The same NaN argument `atrFor` documents, applied to the OTHER priced

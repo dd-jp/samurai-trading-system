@@ -1,9 +1,10 @@
 /**
  * Tier-1 input-hash response cache for `getIndicator` (ticket #65).
  * See docs/specs/market-data-service-spec.md (Module: Caching):
- * key = hash(instrument, kind, spec, asOf); lookback is part of the spec
- * and therefore part of the key, so two different-history values for the
- * same indicator+instrument+asOf never collide.
+ * key = hash(instrument, kind, spec, asOf); lookback AND timeframe are part
+ * of the spec and therefore part of the key, so neither two different-history
+ * values nor two different-timeframe values for the same
+ * indicator+instrument+asOf can collide (#315).
  */
 import type { IndicatorSpec, IndicatorValue } from './types.js';
 
@@ -18,7 +19,16 @@ export function buildIndicatorCacheKey(
     .map((key) => `${key}=${spec.params[key]}`)
     .join(',');
 
-  return [instrument, spec.indicator, sortedParams, spec.lookback, asOf.toISOString()].join('|');
+  return [
+    instrument,
+    spec.indicator,
+    sortedParams,
+    spec.lookback,
+    // #315: two specs differing only in timeframe are different values. Before
+    // the spec carried one, every key described a 1h bar by construction.
+    spec.timeframe,
+    asOf.toISOString(),
+  ].join('|');
 }
 
 /**

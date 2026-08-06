@@ -88,7 +88,7 @@ describe('MarketDataServiceImpl.getIndicator', () => {
 
   it('is byte-identical across repeated calls with identical inputs', async () => {
     const { service } = buildService(bars, asOf);
-    const spec = { indicator: 'sma', params: { period: 10 }, lookback: 20 };
+    const spec = { indicator: 'sma', params: { period: 10 }, timeframe: '1h', lookback: 20 };
 
     const first = await service.getIndicator(INSTRUMENT, spec, asOf);
     const second = await service.getIndicator(INSTRUMENT, spec, asOf);
@@ -109,16 +109,77 @@ describe('MarketDataServiceImpl.getIndicator', () => {
     const { service } = buildService(bars, asOf);
     const shortLookback = await service.getIndicator(
       INSTRUMENT,
-      { indicator: 'sma', params: {}, lookback: 5 },
+      { indicator: 'sma', params: {}, timeframe: '1h', lookback: 5 },
       asOf,
     );
     const longLookback = await service.getIndicator(
       INSTRUMENT,
-      { indicator: 'sma', params: {}, lookback: 15 },
+      { indicator: 'sma', params: {}, timeframe: '1h', lookback: 15 },
       asOf,
     );
 
     expect(shortLookback.value).not.toBe(longLookback.value);
+  });
+
+  it("serves a NON-1h spec off that timeframe's bars (#315)", async () => {
+    // `getIndicator` used to build its window from a module constant, so it
+    // could only ever serve 1h. A 4h caller either bypassed the serving layer
+    // or — worse — came through and got a 1h answer with no error.
+    //
+    // The two bar series carry deliberately different prices, so a spec that
+    // was still pinned to 1h would return the 1h value and fail here rather
+    // than merely returning something plausible.
+    const fourHour = bars.map((source, i) => ({
+      ...source,
+      timeframe: '4h',
+      close: source.close + 1_000 + i,
+      open: source.close + 1_000 + i,
+      high: source.close + 1_001 + i,
+      low: source.close + 999 + i,
+    }));
+    const { service } = buildService([...bars, ...fourHour], asOf);
+
+    const hourly = await service.getIndicator(
+      INSTRUMENT,
+      { indicator: 'sma', params: {}, timeframe: '1h', lookback: 5 },
+      asOf,
+    );
+    const fourHourly = await service.getIndicator(
+      INSTRUMENT,
+      { indicator: 'sma', params: {}, timeframe: '4h', lookback: 5 },
+      asOf,
+    );
+
+    // The 4h series sits ~1000 above the 1h one, so this is not a near-miss.
+    expect(fourHourly.value).toBeGreaterThan(hourly.value + 900);
+  });
+
+  it('never collides two specs differing ONLY in timeframe (#315)', async () => {
+    // The cache-key half. Before the timeframe joined the key, these two specs
+    // hashed identically, so whichever ran first would have served BOTH — the
+    // second caller silently receiving the first one's timeframe. That is the
+    // failure this test exists to make impossible, and asserting on the values
+    // rather than on the key means a key built from the wrong fields still
+    // fails it.
+    const fourHour = bars.map((source, i) => ({
+      ...source,
+      timeframe: '4h',
+      close: source.close + 1_000 + i,
+      open: source.close + 1_000 + i,
+      high: source.close + 1_001 + i,
+      low: source.close + 999 + i,
+    }));
+    const { service } = buildService([...bars, ...fourHour], asOf);
+    const spec = { indicator: 'sma', params: {}, lookback: 5 };
+
+    const first = await service.getIndicator(INSTRUMENT, { ...spec, timeframe: '1h' }, asOf);
+    const second = await service.getIndicator(INSTRUMENT, { ...spec, timeframe: '4h' }, asOf);
+    // ...and back again, so a cache that had been poisoned by the second call
+    // would return the 4h value under the 1h spec here.
+    const firstAgain = await service.getIndicator(INSTRUMENT, { ...spec, timeframe: '1h' }, asOf);
+
+    expect(second.value).not.toBe(first.value);
+    expect(firstAgain.value).toBe(first.value);
   });
 
   it('reads the bulk tier once per call, even over a large sequential bar range', async () => {
@@ -128,7 +189,7 @@ describe('MarketDataServiceImpl.getIndicator', () => {
 
     await service.getIndicator(
       INSTRUMENT,
-      { indicator: 'sma', params: { period: 50 }, lookback: 2000 },
+      { indicator: 'sma', params: { period: 50 }, timeframe: '1h', lookback: 2000 },
       bigAsOf,
     );
 
@@ -137,7 +198,7 @@ describe('MarketDataServiceImpl.getIndicator', () => {
 
   it('serves repeat reads within a tick from the Tier-1 cache without re-fetching', async () => {
     const { service, counting } = buildService(bars, asOf);
-    const spec = { indicator: 'ema', params: { period: 10 }, lookback: 20 };
+    const spec = { indicator: 'ema', params: { period: 10 }, timeframe: '1h', lookback: 20 };
 
     await service.getIndicator(INSTRUMENT, spec, asOf);
     await service.getIndicator(INSTRUMENT, spec, asOf);
@@ -149,7 +210,7 @@ describe('MarketDataServiceImpl.getIndicator', () => {
     const { service } = buildService(bars, asOf);
     const result = await service.getIndicator(
       INSTRUMENT,
-      { indicator: 'sma', params: { period: 5 }, lookback: 10 },
+      { indicator: 'sma', params: { period: 5 }, timeframe: '1h', lookback: 10 },
       asOf,
     );
 
@@ -171,7 +232,7 @@ describe('MarketDataServiceImpl.getIndicator', () => {
     await expect(
       service.getIndicator(
         INSTRUMENT,
-        { indicator: 'atr', params: { period: 14 }, lookback: 15 },
+        { indicator: 'atr', params: { period: 14 }, timeframe: '1h', lookback: 15 },
         coldAsOf,
       ),
     ).rejects.toThrow(InsufficientBarsError);
@@ -231,7 +292,7 @@ describe('computeIndicator — a period-N indicator is never computed over fewer
     // The old value is asserted here so the regression is legible: the guard
     // is not rejecting a NaN, it is rejecting a plausible-looking number.
     const threeBars = buildBars(3, start);
-    const spec = { indicator: 'atr', params: { period: 14 }, lookback: 15 };
+    const spec = { indicator: 'atr', params: { period: 14 }, timeframe: '1h', lookback: 15 };
 
     const twoRangeMean = computeIndicator(threeBars, {
       indicator: 'atr',
@@ -244,7 +305,7 @@ describe('computeIndicator — a period-N indicator is never computed over fewer
   });
 
   it('carries the arity in the error, so a caller can degrade without parsing text', () => {
-    const spec = { indicator: 'rsi', params: { period: 14 }, lookback: 15 };
+    const spec = { indicator: 'rsi', params: { period: 14 }, timeframe: '1h', lookback: 15 };
 
     try {
       computeIndicator(buildBars(9, start), spec);
@@ -264,7 +325,7 @@ describe('computeIndicator — a period-N indicator is never computed over fewer
     // A 50-bar lookback carrying `period: 10` needs 10 bars, not 50 — the
     // lookback is the warm-up window, the period is what the value claims to
     // describe. Guarding on the lookback would refuse legitimate reads.
-    const spec = { indicator: 'sma', params: { period: 10 }, lookback: 50 };
+    const spec = { indicator: 'sma', params: { period: 10 }, timeframe: '1h', lookback: 50 };
 
     expect(minimumBarsFor(spec)).toBe(10);
     expect(Number.isFinite(computeIndicator(buildBars(10, start), spec))).toBe(true);
@@ -275,7 +336,7 @@ describe('computeIndicator — a period-N indicator is never computed over fewer
     // `params.period ?? spec.lookback` — the technical analyst's SMA_SPEC
     // shape. The guard has to follow the same fallback or it would measure
     // against a period the computation never used.
-    const spec = { indicator: 'sma', params: {}, lookback: 20 };
+    const spec = { indicator: 'sma', params: {}, timeframe: '1h', lookback: 20 };
 
     expect(minimumBarsFor(spec)).toBe(20);
     expect(() => computeIndicator(buildBars(19, start), spec)).toThrow(InsufficientBarsError);
@@ -288,7 +349,12 @@ describe('computeIndicator — a period-N indicator is never computed over fewer
     const bothWrong = [...buildBars(3, start)].reverse();
 
     expect(() =>
-      computeIndicator(bothWrong, { indicator: 'atr', params: { period: 14 }, lookback: 15 }),
+      computeIndicator(bothWrong, {
+        indicator: 'atr',
+        params: { period: 14 },
+        timeframe: '1h',
+        lookback: 15,
+      }),
     ).toThrow(/ascending by close_time/);
   });
 
@@ -299,10 +365,20 @@ describe('computeIndicator — a period-N indicator is never computed over fewer
     const twenty = buildBars(20, start);
 
     expect(() =>
-      computeIndicator(twenty, { indicator: 'sma', params: { period: 0 }, lookback: 20 }),
+      computeIndicator(twenty, {
+        indicator: 'sma',
+        params: { period: 0 },
+        timeframe: '1h',
+        lookback: 20,
+      }),
     ).toThrow(/positive integer/);
     expect(() =>
-      computeIndicator(twenty, { indicator: 'sma', params: { period: -5 }, lookback: 20 }),
+      computeIndicator(twenty, {
+        indicator: 'sma',
+        params: { period: -5 },
+        timeframe: '1h',
+        lookback: 20,
+      }),
     ).toThrow(/positive integer/);
   });
 });
@@ -325,7 +401,7 @@ describe('computeIndicator — bar ordering is enforced, not assumed', () => {
     const descending = [...ascending].reverse();
 
     expect(() =>
-      computeIndicator(descending, { indicator: 'atr', params: {}, lookback: 14 }),
+      computeIndicator(descending, { indicator: 'atr', params: {}, timeframe: '1h', lookback: 14 }),
     ).toThrow(/ascending by close_time/);
   });
 
@@ -339,7 +415,12 @@ describe('computeIndicator — bar ordering is enforced, not assumed', () => {
     interleaved[11] = straggler;
 
     expect(() =>
-      computeIndicator(interleaved, { indicator: 'sma', params: {}, lookback: 20 }),
+      computeIndicator(interleaved, {
+        indicator: 'sma',
+        params: {},
+        timeframe: '1h',
+        lookback: 20,
+      }),
     ).toThrow(/ascending by close_time/);
   });
 
@@ -348,13 +429,13 @@ describe('computeIndicator — bar ordering is enforced, not assumed', () => {
     duplicated[5] = { ...(duplicated[4] as Bar) };
 
     expect(() =>
-      computeIndicator(duplicated, { indicator: 'atr', params: {}, lookback: 14 }),
+      computeIndicator(duplicated, { indicator: 'atr', params: {}, timeframe: '1h', lookback: 14 }),
     ).not.toThrow();
   });
 
   it('leaves a correctly ordered window untouched', () => {
     expect(
-      computeIndicator(ascending, { indicator: 'atr', params: {}, lookback: 14 }),
+      computeIndicator(ascending, { indicator: 'atr', params: {}, timeframe: '1h', lookback: 14 }),
     ).toBeGreaterThan(0);
   });
 });

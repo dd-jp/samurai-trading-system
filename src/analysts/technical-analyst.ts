@@ -31,7 +31,12 @@ const MI_CONTEXT_WINDOW_MS = 24 * 60 * 60 * 1000;
  * `sma` reads the closes directly, so an SMA(14) is exactly 14 bars: the
  * `params.period ?? lookback` fallback resolves to 14 and needs no `+ 1`.
  */
-const SMA_SPEC: IndicatorSpec = { indicator: 'sma', params: {}, lookback: INDICATOR_LOOKBACK };
+const SMA_SPEC: IndicatorSpec = {
+  indicator: 'sma',
+  params: {},
+  timeframe: INDICATOR_TIMEFRAME,
+  lookback: INDICATOR_LOOKBACK,
+};
 /**
  * `lookback: INDICATOR_LOOKBACK + 1`, and `params.period` pinned rather than
  * left to the `?? lookback` fallback — the same shape `trader/decide.ts`'s
@@ -46,6 +51,7 @@ const SMA_SPEC: IndicatorSpec = { indicator: 'sma', params: {}, lookback: INDICA
 const RSI_SPEC: IndicatorSpec = {
   indicator: 'rsi',
   params: { period: INDICATOR_LOOKBACK },
+  timeframe: INDICATOR_TIMEFRAME,
   lookback: INDICATOR_LOOKBACK + 1,
 };
 

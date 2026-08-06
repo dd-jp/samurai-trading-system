@@ -47,11 +47,21 @@ export function proxySignal(bars: readonly Bar[], config: ProxyStrategyConfig): 
   const fastSma = computeIndicator(bars.slice(-config.fastWindow) as Bar[], {
     indicator: 'sma',
     params: {},
+    // Daily bars — this is the Stage 2 replay grid, ingested as daily
+    // aggregates. Descriptive rather than selecting: `computeIndicator`
+    // runs on a slice the caller already holds, so the field records
+    // WHICH bars these are (#315).
+    timeframe: '1d',
     lookback: config.fastWindow,
   });
   const slowSma = computeIndicator(bars.slice(-config.slowWindow) as Bar[], {
     indicator: 'sma',
     params: {},
+    // Daily bars — this is the Stage 2 replay grid, ingested as daily
+    // aggregates. Descriptive rather than selecting: `computeIndicator`
+    // runs on a slice the caller already holds, so the field records
+    // WHICH bars these are (#315).
+    timeframe: '1d',
     lookback: config.slowWindow,
   });
 
@@ -71,6 +81,11 @@ export function proxySignal(bars: readonly Bar[], config: ProxyStrategyConfig): 
   const atrValue = computeIndicator(bars.slice(-(config.atrWindow + 1)) as Bar[], {
     indicator: 'atr',
     params: {},
+    // Daily bars — this is the Stage 2 replay grid, ingested as daily
+    // aggregates. Descriptive rather than selecting: `computeIndicator`
+    // runs on a slice the caller already holds, so the field records
+    // WHICH bars these are (#315).
+    timeframe: '1d',
     lookback: config.atrWindow,
   });
 

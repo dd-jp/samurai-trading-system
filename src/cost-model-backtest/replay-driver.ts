@@ -490,6 +490,11 @@ export class ReplayDriver {
       volatility: computeIndicator(bars.slice(-(config.atrWindow + 1)) as Bar[], {
         indicator: 'atr',
         params: {},
+        // Daily bars — this is the Stage 2 replay grid, ingested as daily
+        // aggregates. Descriptive rather than selecting: `computeIndicator`
+        // runs on a slice the caller already holds, so the field records
+        // WHICH bars these are (#315).
+        timeframe: '1d',
         lookback: config.atrWindow,
       }),
       asset_class: instrument.asset_class,

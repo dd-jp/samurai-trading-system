@@ -180,12 +180,23 @@ export class MarketDataServiceImpl implements MarketDataService {
       return cached;
     }
 
-    const window: BarWindow = { timeframe: DEFAULT_INDICATOR_TIMEFRAME, lookback: spec.lookback };
+    // From the SPEC, not the module constant (#315). The constant pinned every
+    // caller to 1h, so a non-1h consumer either bypassed this whole serving
+    // layer — losing the Tier-1 cache — or, worse, came through anyway and had
+    // its indicator silently computed on the wrong bars.
+    const window: BarWindow = { timeframe: spec.timeframe, lookback: spec.lookback };
     const bars = await this.getBars(instrument, window, asOf);
 
     const lastBar = bars.at(-1);
     if (!lastBar) {
-      throw new Error(`No bars for ${instrument} at or before ${asOf.toISOString()}`);
+      // Names the TIMEFRAME, not just the instrument (#315). Now that the
+      // window comes from the spec, "no bars" is most often "no bars at THAT
+      // timeframe" — a spec asking for one nothing ingests fails here, and
+      // without the timeframe in the message it reads as missing data.
+      throw new Error(
+        `No ${spec.timeframe} bars for ${instrument} at or before ${asOf.toISOString()} ` +
+          `(indicator '${spec.indicator}', lookback ${spec.lookback})`,
+      );
     }
 
     const value: IndicatorValue = {

@@ -804,6 +804,9 @@ const DEFAULT_FILL_POLL_INTERVAL_MS = 15_000;
 const DEFAULT_VOLATILITY_INDICATOR: IndicatorSpec = {
   indicator: 'atr',
   params: { period: 14 },
+  // 1h, matching every other indicator in the live path. Explicit since #315:
+  // `getIndicator` used to hardcode this and now reads it from the spec.
+  timeframe: '1h',
   lookback: 15,
 };
 /**
