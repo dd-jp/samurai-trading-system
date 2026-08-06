@@ -10,7 +10,7 @@
 import type { DebateResult } from '../debate-engine/index.js';
 import type { MarketDataService } from '../market-data-service/index.js';
 /** Asset classes the risk multiplier is keyed on, matching `Mark.asset_class`. */
-import type { AssetClass, Clock, OpenPosition, OrderIntent } from '../shared/index.js';
+import type { AssetClass, Clock, OpenPosition, OrderIntent, SetupStore } from '../shared/index.js';
 
 export type { AssetClass };
 
@@ -107,12 +107,7 @@ export const DEFAULT_TRADER_CONFIG: TraderConfig = {
   scale_in_conviction_delta: 0.1,
 };
 
-/**
- * Fully deterministic given its inputs + the clock-scoped market data.
- *
- * Narrower than trader-spec.md's `TraderInput`: `setupStore` (#75, cosine
- * precedent) is absent — nothing in this codebase consults it yet.
- */
+/** Fully deterministic given its inputs + the clock-scoped market data. */
 export interface TraderInput {
   /** Cross-cutting correlation ID, threaded from the Orchestrator's tick — not business data. */
   trace_id: string;
@@ -138,6 +133,16 @@ export interface TraderInput {
    * returned lots down to `instrument` itself.
    */
   positionState: () => Promise<OpenPosition[]>;
+  /**
+   * #432: the cosine precedent store, read at decision time for neighbors and
+   * written at decision time with the new setup (trader-spec.md stories 13 and
+   * 16). Owned by the Feedback Loop, which labels the realized R on close.
+   *
+   * Required, not optional. An optional store would let a composition root
+   * forget it and silently fall back to the permanent 0.75x haircut this
+   * ticket exists to remove — exactly the no-caller shape #430 closes.
+   */
+  setupStore: SetupStore;
 }
 
 /** The single test seam. `decide` in ./decide.ts is its implementation. */

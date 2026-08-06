@@ -4,7 +4,7 @@ import type { RiskConfig } from '../../risk-manager/index.js';
 import { CircuitBreakers } from '../../risk-manager/index.js';
 import type { Clock, OpenPosition, OrderIntent } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
-import type { TraderConfig } from '../../trader/index.js';
+import { FixtureSetupStore, type TraderConfig } from '../../trader/index.js';
 import type { ApprovalOutcome, VerdictConfig, VerdictDecision } from '../../verdict/index.js';
 import { OrphanVerdictScanner } from '../orphan-verdict-scan.js';
 import { SqliteAuditLog } from '../sqlite-audit-log.js';
@@ -121,6 +121,7 @@ describe('buildTraderStep', () => {
       getOpenPositions: async () => NO_POSITIONS,
       mode: 'paper',
       config,
+      setupStore: new FixtureSetupStore(),
     });
 
     const intent = await step({
@@ -165,6 +166,7 @@ describe('buildTraderStep', () => {
       getOpenPositions: async () => NO_POSITIONS,
       mode: 'paper',
       config,
+      setupStore: new FixtureSetupStore(),
     });
 
     const intent = await step({

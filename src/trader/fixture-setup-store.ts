@@ -21,7 +21,14 @@ export class FixtureSetupStore implements SetupStore {
     return this.neighbors.filter((neighbor) => neighbor.closed_at.getTime() <= asOf.getTime());
   }
 
+  /**
+   * First-write-wins, mirroring `SqliteSetupStore.writeSetup` since #432: a
+   * re-decided bar (replay, or a crash-restart) must not throw or duplicate.
+   * A fixture that accepted a second write would let a caller pass here and
+   * fail against the real store.
+   */
   writeSetup(debateId: string, vector: SetupVector, decidedAt: Date): void {
+    if (this.written.some((entry) => entry.debateId === debateId)) return;
     this.written.push({ debateId, vector, decidedAt });
     this.pending.set(debateId, { vector, decidedAt });
   }

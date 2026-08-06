@@ -1196,6 +1196,12 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
 
   const logger = config.logger ?? new JsonLogger();
 
+  // One instance, both ends of `cosine_setups` (#432): the Trader's `decide`
+  // WRITES the setup at decision time and `onTradeClose` LABELS it with the
+  // realized R on close. Constructed here rather than inline below so the two
+  // halves cannot drift into separate stores.
+  const setupStore = new SqliteSetupStore(config.db);
+
   /**
    * Hoisted above `spendCap` (below) rather than left beside the Feedback
    * Loop's stores: the LLM spend cap escalates its breach through this same
@@ -1285,7 +1291,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // fires no matter which of them eventually calls `writeClosedTrade`.
   const executionStore = withOnTradeClose(
     new SqliteExecutionStore(config.db),
-    { setup_store: new SqliteSetupStore(config.db) },
+    { setup_store: setupStore },
     logger,
   );
   // `resolveVenuePacing` starts from `DEFAULT_VENUE_PACING` — which carries
@@ -1432,7 +1438,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       spendCap,
       logger,
     ),
-    trader: buildTraderStep({ ...breakerStateDeps, config: config.traderConfig }),
+    trader: buildTraderStep({ ...breakerStateDeps, config: config.traderConfig, setupStore }),
     risk: buildRiskStep({
       ...breakerStateDeps,
       config: config.riskConfig,

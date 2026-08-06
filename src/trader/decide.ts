@@ -8,7 +8,9 @@
  * runs live and in replay; only the injected Clock and the data behind
  * MarketDataService differ.
  *
- * Cosine precedent retrieval is #75 — see NO_PRECEDENT_COSINE_MULTIPLIER.
+ * Cosine precedent retrieval (#75) is wired in here as of #432; before that
+ * this module hardcoded the no-precedent default on every intent, which meant
+ * a permanent 0.75x haircut on every position the system ever took.
  */
 import {
   type Bar,
@@ -17,22 +19,10 @@ import {
   minimumBarsFor,
 } from '../market-data-service/index.js';
 import type { OpenPosition, OrderIntent } from '../shared/index.js';
+import { NO_PRECEDENT_MULTIPLIER, retrieveCosinePrecedent } from './cosine-precedent.js';
 import { computeIdempotencyKey } from './idempotency-key.js';
+import { buildSetupVector } from './setup-vector.js';
 import type { AssetClass, TraderConfig, TraderInput } from './types.js';
-
-/**
- * trader-spec.md's "no close neighbor" default (Module: Cosine Precedent
- * Retrieval). #75 owns retrieval, but `OrderIntentMetadata.cosine_*` is
- * non-optional (cross-spec-contracts.md registry #1) so #73 must populate
- * it. The spec's warm-up decision (Module: Determinism & Replay) says an
- * empty store yields the no-precedent default "naturally — no
- * special-casing", so hardcoding it here is what #75 will compute anyway
- * when it queries an empty store.
- *
- * It is APPLIED, not merely recorded: multiplicative stacking is a spec
- * invariant, so the recorded decomposition must reproduce the actual size.
- */
-const NO_PRECEDENT_COSINE_MULTIPLIER = 0.75;
 
 /** trader-spec.md Module: Side Derivation. `neutral` has no directional edge to act on. */
 function sideFor(direction: 'bullish' | 'bearish'): 'buy' | 'sell' {
@@ -145,7 +135,7 @@ async function buildBracket(
   input: TraderInput,
   intentType: 'entry' | 'scale_in',
 ): Promise<OrderIntent | null> {
-  const { clock, config, debate, equity, instrument, marketData } = input;
+  const { clock, config, debate, equity, instrument, marketData, setupStore } = input;
 
   // Every caller must have already excluded 'neutral' — sideFor has no
   // direction to derive a side from. Checked here, not just assumed, so the
@@ -212,9 +202,15 @@ async function buildBracket(
   const baseRiskFraction = maxRiskFor(mark.asset_class, config) * convictionMult;
   const nonConvergedHaircut = debate.converged ? 1 : config.non_converged_haircut;
 
+  // The setup this decision represents, embedded once and used twice: to find
+  // precedent now, and — if this intent survives the skip guards below — as
+  // the row the Feedback Loop labels with its realized R on close.
+  const setupVector = buildSetupVector(debate, { entry, atr, stopDistance, bars });
+  const precedent = retrieveCosinePrecedent(setupVector, setupStore, asOf);
+
   // Multiplicative stacking — penalties compound honestly (trader-spec.md
   // Module: Non-Convergence & Skip Policy).
-  const riskFraction = baseRiskFraction * nonConvergedHaircut * NO_PRECEDENT_COSINE_MULTIPLIER;
+  const riskFraction = baseRiskFraction * nonConvergedHaircut * precedent.cosine_multiplier;
   const size = (equity * riskFraction) / stopDistance;
 
   // Backstop covering every numeric inlet at once, including `equity`, which
@@ -225,6 +221,23 @@ async function buildBracket(
   if (!Number.isFinite(size)) return null;
 
   if (size * entry < config.min_viable_notional) return null;
+
+  // Written only once every skip guard has passed, so a decision the Trader
+  // itself declined leaves no row.
+  //
+  // What this does NOT promise: that every row written here becomes a labelled
+  // trade. Risk can trim to a reject, Verdict can say no-go, and the broker can
+  // refuse the order — each leaves a setup no `labelSetup` ever arrives for.
+  // Those rows are inert rather than harmful (`findNeighbors` returns only
+  // closed-outcome setups, so an unlabelled row can never influence sizing),
+  // and the alternative is worse: the vector is only computable here, at the
+  // point the decision is made, so deferring the write to the fill would mean
+  // carrying the embedding through three stages that have no use for it.
+  //
+  // The write is first-write-wins in the store, which is what makes a
+  // re-decided bar — replay, or a crash-restart on the same bar — safe rather
+  // than fatal.
+  setupStore.writeSetup(debate.debate_id, setupVector, asOf);
 
   const side = sideFor(debate.direction);
   const direction = side === 'buy' ? 1 : -1;
@@ -258,12 +271,12 @@ async function buildBracket(
         // determinant; recorded as 1.
         vol_floor_factor: atr > 0 ? effectiveVol / atr : 1,
         non_converged_haircut: nonConvergedHaircut,
-        cosine_multiplier: NO_PRECEDENT_COSINE_MULTIPLIER,
+        cosine_multiplier: precedent.cosine_multiplier,
       },
       cosine_precedent: {
-        neighbor_count: 0,
-        weighted_mean_r: null,
-        no_precedent: true,
+        neighbor_count: precedent.neighbor_count,
+        weighted_mean_r: precedent.weighted_mean_r,
+        no_precedent: precedent.no_precedent,
       },
     },
   };
@@ -319,7 +332,12 @@ async function buildExitIntent(
         conviction_multiplier: 0,
         vol_floor_factor: 1,
         non_converged_haircut: 1,
-        cosine_multiplier: NO_PRECEDENT_COSINE_MULTIPLIER,
+        // An exit sizes to the held quantity, not to risk, so no precedent is
+        // retrieved and no setup is written: the flatten is the consequence of
+        // an earlier setup, not a new one to find neighbors for. The field is
+        // non-optional (cross-spec-contracts.md registry #1), so it carries
+        // the no-precedent default — which is also the honest reading.
+        cosine_multiplier: NO_PRECEDENT_MULTIPLIER,
       },
       cosine_precedent: {
         neighbor_count: 0,
