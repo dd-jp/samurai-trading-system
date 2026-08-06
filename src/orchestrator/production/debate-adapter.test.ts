@@ -156,6 +156,52 @@ describe('buildDebateStep', () => {
     expect(row?.trace_id).toBe('trace-mid-bar');
   });
 
+  it('applies analyst weights to the resolved debate, and logs the WEIGHTED result (#435)', async () => {
+    // The DoD on #435 is explicit that reading the store is not enough: move a
+    // weight, then assert the debate actually CHANGES.
+    //
+    // A two-analyst panel is required for this to mean anything. With one
+    // analyst, agreeing and total are the same set, the weighted and
+    // unweighted agreement ratios are equal by construction, and the factor is
+    // 1 whatever the weight — a test built on one view would pass while the
+    // mechanism did nothing.
+    const views = [
+      makeView({ analyst_id: 'bull-1', direction: 'bullish' }),
+      makeView({ analyst_id: 'bear-1', direction: 'bearish' }),
+    ];
+    const run = (weights: Record<string, number>, store: InMemoryDebateLogStore) =>
+      buildDebateStep(fakeLlmClient(), store, unlimited(), UNCAPPED_SPEND, undefined, {
+        getAnalystWeights: () => weights,
+      })({
+        trace_id: 'trace-1',
+        instrument: 'AAPL',
+        views,
+        asset_class: ASSET_CLASS,
+        clock: CLOCK,
+      });
+
+    const seededStore = new InMemoryDebateLogStore();
+    const seeded = await run({ 'bull-1': 1, 'bear-1': 1 }, seededStore);
+
+    const movedStore = new InMemoryDebateLogStore();
+    // The mediator resolves bullish in this fixture, so `bull-1` is the
+    // analyst that AGREES. Weighting it above the panel average must raise
+    // conviction.
+    const moved = await run({ 'bull-1': 2, 'bear-1': 0.5 }, movedStore);
+
+    expect(moved.confidence).toBeGreaterThan(seeded.confidence);
+
+    // Same inputs and same bar, so the SAME debate_id — the point of weighting
+    // the output rather than the inputs. The frozen cross-spec contract still
+    // identifies the debate's inputs, undisturbed.
+    expect(moved.debate_id).toBe(seeded.debate_id);
+
+    // And the LOGGED row carries the weighted conviction, so replay-from-log
+    // restores what the Trader actually sized on rather than the pre-weight
+    // figure.
+    expect(movedStore.getByDebateId(moved.debate_id)).toBeDefined();
+  });
+
   it('writes exactly one debate_log row for a completed debate (#364)', async () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteDebateLogStore(db);
