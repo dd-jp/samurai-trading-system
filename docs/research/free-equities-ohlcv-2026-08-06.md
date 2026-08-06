@@ -22,6 +22,8 @@ The recommended source is not on the candidate list this ticket was asked to ver
 
 **Cost impact: the $29/mo Polygon Stocks Starter line item is unnecessary.** ($49/mo Currencies Starter is #484's call, not this ticket's.)
 
+⚠️ **One thing to confirm before building on this:** the key was shown to *behave* as free Basic (see §1), but no endpoint reports the plan name. Check the Alpaca dashboard shows Basic — a legacy/promotional plan would invalidate the "free" half of this verdict, though not the depth or PIT findings.
+
 ---
 
 ## Evidence classes
@@ -38,20 +40,29 @@ Every claim below is tagged:
 
 Probed with the `ALPACA_API_KEY` already in `.env.local` (paper account, `status: ACTIVE`, $100,000 paper cash).
 
-### Tier confirmed as free — PROBED
+### Tier — behaviour matches the documented Basic profile — PROBED + DOC inference
 
-This is the important control, because the results below look too good for a free plan. Two independent confirmations that this key is *not* on a paid plan:
+This is the important control, because the results below look too good for a free plan. **The whole recommendation rests on this key being free-tier, so be precise about what was and wasn't established.**
+
+What was PROBED:
 
 ```
 GET /v2/stocks/AAPL/quotes/latest?feed=sip
   -> HTTP 403 {"message":"subscription does not permit querying recent SIP data"}
 GET /v2/stocks/AAPL/quotes/latest?feed=iex
   -> HTTP 200 (returns a live quote)
+GET https://api.alpaca.markets/v2/account       (live host)  -> HTTP 401
+GET https://paper-api.alpaca.markets/v2/account (paper host) -> HTTP 200, ACTIVE, $100,000
 ```
 
-That 403 is the free-Basic fingerprint. `https://api.alpaca.markets/v2/account` (live) returns 401; only `paper-api` authenticates. So: free tier, paper account.
+None of those endpoints *names* a subscription plan. The inference is behavioural, and it's a matching argument against the DOC (`docs.alpaca.markets/docs/about-market-data-api`, fetched 2026-08-06):
 
-The free-tier restriction is on **recent SIP**, not on **historical SIP**. That distinction is the whole finding.
+- Basic is documented as **"real time IEX or 15 mins delayed SIP"**, with historical access restricted to the **"latest 15 minutes"**. Observed behaviour matches: live IEX quote served, recent SIP quote refused.
+- Algo Trader Plus is documented as **"no restriction"**. Observed behaviour **contradicts** this — a paid key would not have been refused the recent SIP quote.
+
+So the key behaves exactly as documented for Basic and cannot be on Algo Trader Plus. **Residual risk:** a legacy or promotional plan that isn't in the current pricing table would not be detected this way. Plan-level confirmation can only come from the Alpaca dashboard, which David can read and this research cannot. **Worth one glance before #241 is built on this** — everything below assumes free Basic.
+
+The restriction is on **recent SIP**, not **historical SIP**. That distinction is the whole finding.
 
 ### Depth — PROBED
 
@@ -100,7 +111,7 @@ adjustment=raw           adjustment=all
 
 `raw` returns **890.91** for 2022-08-24 — the actual price printed on the tape that day, pre-split. That is genuine point-in-time data: what a backtest running on 2022-08-24 would have seen. `all` returns the retroactively split-adjusted 296.97.
 
-DOC (`docs.alpaca.markets/reference/stockbars`): `adjustment` accepts `raw`, `split`, `dividend`, `spinoff`, `all` (comma-separable). So each adjustment axis is independently selectable.
+`raw` and `all` are PROBED above — those two values are confirmed working on this key. The wider enum (`raw`, `split`, `dividend`, `spinoff`, `all`, comma-separable) is **DOC-inherited from #155**'s reading of `docs.alpaca.markets/reference/stockbars`; that page was *not* re-fetched this session, and `split`/`dividend`/`spinoff` were not individually probed. The recommendation only depends on `raw`, which is probed.
 
 **This satisfies the hard PIT requirement from #155 directly, with no reconstruction step.** Note that #155 already recorded this (`adjustment` param, "Yes" in its PIT row) — it was correct and got buried under the IEX-only objection.
 
@@ -161,7 +172,7 @@ DOC (`tiingo.com/pricing`), answering the ticket's questions directly:
 | Survivorship-free / PIT? | Not stated. **UNVERIFIED** — and this is the axis that matters. |
 | Depth | **"30+ Years"** at free-tier level. |
 
-🚩 **Licence — the finding that likely settles it.** Tiingo's free tier carries an **"Internal Use Only"** restriction: *"you may only use the data for your own personal use and you may not display or share the data with another person or organization."* Samurai is David's own system, so personal trading use is plausibly within this — but the project has a **web dashboard** as its 12th component ([dashboard-supersedes-cli](https://github.com/dd-jp/samurai-trading-system/issues/482)). If that dashboard ever displays Tiingo-derived prices to anyone else, that clause is breached. Read it before adopting Tiingo, not after.
+🚩 **Licence — the finding that likely settles it.** Tiingo's free tier carries an **"Internal Use Only"** restriction: *"you may only use the data for your own personal use and you may not display or share the data with another person or organization."* Samurai is David's own system, so personal trading use is plausibly within this — but the project has a **web dashboard** as its 12th component. If that dashboard ever displays Tiingo-derived prices to anyone other than David, that clause is breached. Read it before adopting Tiingo, not after.
 
 **No provisioning ticket is being raised for this.** Under the advisor's framing, an unprobeable strongest-candidate would justify a `wayfinder:task` to get a key. That doesn't apply: Alpaca is already probed, free, deeper (10.5y vs Tiingo's need-to-verify), and has no licence restriction — so a Tiingo key would cost David signup effort to evaluate a strictly worse option. **Revisit only if the Alpaca recommendation fails in implementation.**
 
