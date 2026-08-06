@@ -210,9 +210,9 @@ describe('CircuitBreakers', () => {
       },
     });
 
-    expect(
-      breakers.evaluate(makeInput({ portfolio: breached })).asset_class_tripped.crypto,
-    ).toBe(true);
+    expect(breakers.evaluate(makeInput({ portfolio: breached })).asset_class_tripped.crypto).toBe(
+      true,
+    );
 
     // Recovery, same instance: only the hard drawdown breaker is sticky, so a
     // class that comes back inside its threshold trades again with no reArm().
