@@ -32,6 +32,7 @@ import type { MarketDataService, TradingCalendar } from '../../market-data-servi
 import type { CiiConsumer } from '../../market-intelligence/index.js';
 import type {
   BreakerEvalInput,
+  BreakerStatePersistence,
   CircuitBreakers,
   PersistedBreakerState,
   RiskConfig,
@@ -133,10 +134,10 @@ export interface TraderStepDeps extends BreakerStateDeps {
 export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
   return async ({ trace_id, instrument, debate, clock }) => {
     // TraderInput.equity is current portfolio equity (cash + mark-to-market
-    // exposure) — the same figure the risk/verdict steps derive via
-    // computeCurrentPortfolioAndBreakers, so this stays a single source
-    // rather than a separately-injected scalar.
-    const { portfolio } = await computeCurrentPortfolioAndBreakers(deps, clock);
+    // exposure) — the same OBSERVATION Risk gates against this tick, not
+    // merely the same derivation: the snapshot is memoized per trace so the
+    // two stages cannot see two different portfolios (B4).
+    const { portfolio } = await snapshotForTick(deps, clock, trace_id);
     const { intent, skip_reason, atr } = await decideWithReason({
       trace_id,
       instrument,
@@ -186,10 +187,57 @@ export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
 interface BreakerStateDeps {
   marketData: MarketDataService;
   circuitBreakers: CircuitBreakers;
+  /**
+   * Where the sticky breakers' state lands after every evaluation, so a
+   * tripped hard-drawdown breaker or kill switch survives a restart (#203,
+   * review 2026-08-06 B1). Required, not optional: an omitted persistence
+   * seam is exactly the wired-but-skippable shape that left `breaker_state`
+   * unwritten for the life of the project.
+   */
+  breakerState: BreakerStatePersistence;
   accountState: AccountStateProvider;
   volatility: VolatilityReadingProvider;
   getOpenPositions: () => Promise<OpenPosition[]>;
   mode: 'live' | 'paper' | 'backtest';
+  /**
+   * Per-tick memo (review 2026-08-06 B4): the Trader computes the portfolio
+   * snapshot, Risk reuses it, so both stages size and gate against ONE
+   * observation of account state instead of two that can disagree mid-tick.
+   * Verdict never reads this — gate 5's fire-time re-check is specced to see
+   * current breaker state, not the tick's earlier snapshot (verdict-spec.md).
+   * Shared across the trader/risk binds via the composition root's single
+   * `breakerStateDeps` object; keyed by `trace_id`, consumed by Risk.
+   */
+  portfolioSnapshots: Map<string, PortfolioSnapshot>;
+}
+
+/** One tick's portfolio + breaker observation — see `BreakerStateDeps.portfolioSnapshots`. */
+export interface PortfolioSnapshot {
+  portfolio: Awaited<ReturnType<typeof computePortfolioView>>;
+  breakers: ReturnType<CircuitBreakers['evaluate']>;
+}
+
+/**
+ * Bounds the memo against ticks whose Risk stage never ran (a null intent
+ * leaves the Trader's entry unconsumed). 64 is far above any concurrent
+ * instrument count; eviction is oldest-first insertion order.
+ */
+const MAX_SNAPSHOT_ENTRIES = 64;
+
+async function snapshotForTick(
+  deps: BreakerStateDeps,
+  clock: Clock,
+  trace_id: string,
+): Promise<PortfolioSnapshot> {
+  const cached = deps.portfolioSnapshots.get(trace_id);
+  if (cached !== undefined) return cached;
+  const snapshot = await computeCurrentPortfolioAndBreakers(deps, clock);
+  deps.portfolioSnapshots.set(trace_id, snapshot);
+  for (const key of deps.portfolioSnapshots.keys()) {
+    if (deps.portfolioSnapshots.size <= MAX_SNAPSHOT_ENTRIES) break;
+    deps.portfolioSnapshots.delete(key);
+  }
+  return snapshot;
 }
 
 async function computeCurrentPortfolioAndBreakers(deps: BreakerStateDeps, clock: Clock) {
@@ -210,6 +258,10 @@ async function computeCurrentPortfolioAndBreakers(deps: BreakerStateDeps, clock:
   });
   const breakerInput: BreakerEvalInput = { portfolio, volatility, mode: deps.mode, clock };
   const breakers = deps.circuitBreakers.evaluate(breakerInput);
+  // Persist the sticky tiers immediately: `evaluate` is where a trip becomes
+  // real, and a restart between this call and any later persist point would
+  // silently re-arm the one mechanism ADR-0007 left standing.
+  deps.breakerState.save(deps.circuitBreakers.getPersistedState());
   return { portfolio, breakers };
 }
 
@@ -245,7 +297,10 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
   const riskManager = new RiskManagerImpl(deps.config, deps.thresholds);
 
   return async ({ trace_id, intent, clock }) => {
-    const { portfolio, breakers } = await computeCurrentPortfolioAndBreakers(deps, clock);
+    // Reuses the Trader's snapshot for this trace (B4) and consumes it — Risk
+    // is the memo's last reader; Verdict re-derives fresh by spec.
+    const { portfolio, breakers } = await snapshotForTick(deps, clock, trace_id);
+    deps.portfolioSnapshots.delete(trace_id);
     const next_breaker_state: PersistedBreakerState[] = deps.circuitBreakers.getPersistedState();
 
     const otherInstruments = Object.keys(portfolio.exposure_by_instrument).filter(

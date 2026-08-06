@@ -42,21 +42,7 @@ export type {
   UnpricedFillRecord,
 } from './broker-state-store.js';
 export { InMemoryBrokerStateStore } from './broker-state-store.js';
-export type {
-  CcxtBrokerClient,
-  CcxtOrder,
-  CcxtOrderStatus,
-} from './ccxt-adapter.js';
-export { CcxtBrokerAdapter } from './ccxt-adapter.js';
 export { ExecutionImpl } from './execute.js';
-export type {
-  IbkrBracketOrderIds,
-  IbkrBracketRequest,
-  IbkrBrokerClient,
-  IbkrExecution,
-  IbkrOrderStatus,
-} from './ibkr-adapter.js';
-export { IbkrBrokerAdapter } from './ibkr-adapter.js';
 export type { SimulatedBrokerAdapterInput } from './simulated-adapter.js';
 export { SimulatedBrokerAdapter } from './simulated-adapter.js';
 export { SqliteBrokerStateStore } from './sqlite-broker-state-store.js';
@@ -68,6 +54,7 @@ export type {
   ExecutionConfig,
   ExecutionInput,
   ExecutionResult,
+  LotAdvance,
   NativeBracketRequest,
   NormalizedFill,
   NormalizedOrder,

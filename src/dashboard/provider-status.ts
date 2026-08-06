@@ -127,13 +127,14 @@ export const NULL_PROVIDER_STATUS: ProviderStatusReader = {
 };
 
 /**
- * 60s. The underlying quantities move on the order of minutes (a paper cash
- * balance changes only when a fill lands) and both probes cost a real API
- * call against a rate-limited plan — Polygon's free tier is 5 requests/minute,
- * so a poll interval anywhere near the page's 3s refresh would spend the
- * entire market-data budget answering a status light.
+ * 15 minutes (review 2026-08-06 A5; was 60s). Both probes cost a real,
+ * authenticated API call, and a status light does not need to be fresher
+ * than the tick cadence it sits next to (ADR-0008: 15 min). At 60s the
+ * Polygon probe alone was 1,440 calls/day — by itself in breach of the free
+ * tier's 5-requests/minute budget the moment anything ran alongside it, all
+ * to answer a reachability tile whose answer changes approximately never.
  */
-export const DEFAULT_POLL_INTERVAL_MS = 60_000;
+export const DEFAULT_POLL_INTERVAL_MS = 15 * 60_000;
 
 /** Per-probe network timeout. Well under the poll interval so probes cannot overlap. */
 const PROBE_TIMEOUT_MS = 10_000;

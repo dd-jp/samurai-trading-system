@@ -22,7 +22,7 @@
 
 import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../shared/index.js';
 import { type SharedStore as Db, isUniqueConstraintError } from '../shared/store/index.js';
-import type { SharedStore } from './types.js';
+import type { LotAdvance, SharedStore } from './types.js';
 
 /** Terminal `order_state`s — excluded from `getOpenPositions()` (execution-spec.md). */
 const TERMINAL_STATES: readonly OrderState[] = ['closed', 'cancelled', 'rejected', 'expired'];
@@ -183,7 +183,7 @@ export class SqliteExecutionStore implements SharedStore {
    * table's PK, so a duplicate write — which `hasFill` is meant to prevent —
    * surfaces as a constraint violation rather than silently double-counting.
    */
-  async writeFill(fill: Fill): Promise<void> {
+  private insertFill(fill: Fill): void {
     try {
       this.db
         .prepare(
@@ -204,9 +204,9 @@ export class SqliteExecutionStore implements SharedStore {
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {
         throw new Error(
-          `SqliteExecutionStore.writeFill: broker_fill_id '${fill.broker_fill_id}' was already ` +
-            `ingested for '${fill.idempotency_key}' — ingestFills()'s hasFill gate should have ` +
-            'prevented this write.',
+          `SqliteExecutionStore.applyLotAdvance: broker_fill_id '${fill.broker_fill_id}' was ` +
+            `already ingested for '${fill.idempotency_key}' — ingestFills()'s hasFill gate should ` +
+            'have prevented this write.',
           { cause },
         );
       }
@@ -227,11 +227,10 @@ export class SqliteExecutionStore implements SharedStore {
     return rows.map(fromFillRow);
   }
 
-  /** Persist a fill-driven advance of the lot (partial or complete). */
-  async updatePositionFill(
+  private updateLotState(
     idempotency_key: string,
     update: { filled_size: number; avg_entry_price: number; order_state: OrderState },
-  ): Promise<void> {
+  ): void {
     this.db
       .prepare(
         `UPDATE open_positions
@@ -247,7 +246,7 @@ export class SqliteExecutionStore implements SharedStore {
    * `ingestFills()` closed it twice — surfaces as a constraint violation
    * rather than a silent overwrite.
    */
-  async writeClosedTrade(trade: ClosedTrade): Promise<void> {
+  private insertClosedTrade(trade: ClosedTrade): void {
     try {
       this.db
         .prepare(
@@ -275,7 +274,7 @@ export class SqliteExecutionStore implements SharedStore {
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {
         throw new Error(
-          `SqliteExecutionStore.writeClosedTrade: a closed trade already exists for ` +
+          `SqliteExecutionStore.applyLotAdvance: a closed trade already exists for ` +
             `idempotency_key '${trade.idempotency_key}' — a lot closes exactly once, ` +
             'on round-trip-to-flat.',
           { cause },
@@ -283,6 +282,29 @@ export class SqliteExecutionStore implements SharedStore {
       }
       throw cause;
     }
+  }
+
+  /**
+   * One poll's advance of a lot, in a single transaction — the fills, the
+   * recomputed lot state, and (on round-trip-to-flat) the `ClosedTrade`
+   * commit together or not at all. A crash mid-advance rolls back cleanly,
+   * so the next poll's `hasFill` gate sees none of it and re-ingests the
+   * re-offered fills; the un-transacted version of this left a lot whose
+   * persisted fills said one thing and whose `filled_size` said another,
+   * forever (`hasFill` skipped the repair).
+   */
+  async applyLotAdvance(advance: LotAdvance): Promise<void> {
+    this.db.transaction(() => {
+      for (const fill of advance.fills) {
+        this.insertFill(fill);
+      }
+      if (advance.position_update !== undefined) {
+        this.updateLotState(advance.idempotency_key, advance.position_update);
+      }
+      if (advance.closed_trade !== undefined) {
+        this.insertClosedTrade(advance.closed_trade);
+      }
+    })();
   }
 }
 

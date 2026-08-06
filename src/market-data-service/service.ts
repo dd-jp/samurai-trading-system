@@ -34,12 +34,27 @@ export class MarketDataServiceImpl implements MarketDataService {
    * process refetches, which is the conservative direction.
    */
   private readonly lastBarFetch = new Map<string, number>();
+  /**
+   * instrument -> when its mark was last FETCHED (wall-clock of the request,
+   * not the mark's own trade-time `observed_at`, which can lag minutes on an
+   * illiquid symbol while the quote is perfectly fresh). In-process and
+   * restart-clean, like `lastBarFetch` — a fresh process refetches.
+   */
+  private readonly lastMarkFetch = new Map<string, number>();
 
   constructor(
     private readonly dataSource: DataSource,
     private readonly clock: Clock,
     private readonly mode: 'live' | 'backtest',
     private readonly store: MarketDataStore,
+    /**
+     * How long a live mark serves repeat callers from the store before the
+     * next fetch (review 2026-08-06 A7). Within one tick, trader, risk's
+     * portfolio view, and verdict each ask for the same instruments' marks
+     * seconds apart — previously every call was its own venue round trip.
+     * Zero disables the reuse window entirely.
+     */
+    private readonly markTtlMs: number = 5_000,
   ) {}
 
   /**
@@ -142,11 +157,23 @@ export class MarketDataServiceImpl implements MarketDataService {
    * exercise the real store, not just the freshly fetched value.
    */
   async getMark(instrument: string, asOf: Date = this.clock.now()): Promise<Mark> {
+    // Repeat live callers inside the TTL serve from the store (A7): the same
+    // freshness argument as the bar-interval skip above, at mark timescale.
+    // Backtest never takes this path — `latest_mark` must stay untouched there.
+    if (this.mode === 'live') {
+      const fetchedAt = this.lastMarkFetch.get(instrument);
+      if (fetchedAt !== undefined && asOf.getTime() - fetchedAt <= this.markTtlMs) {
+        const cached = this.store.readLatestMark(instrument);
+        if (cached) return cached;
+      }
+    }
+
     const mark = await this.dataSource.fetchMark(instrument, asOf, this.mode);
     if (this.mode === 'backtest') {
       return mark;
     }
 
+    this.lastMarkFetch.set(instrument, asOf.getTime());
     this.store.upsertLatestMark(instrument, mark);
     const stored = this.store.readLatestMark(instrument);
     if (!stored) {

@@ -49,7 +49,7 @@ describe('HttpPolygonClient', () => {
       }),
     );
 
-    const client = new HttpPolygonClient({ apiKey: FAKE_KEY, fetchImpl });
+    const client = new HttpPolygonClient({ apiKey: FAKE_KEY, fetchImpl, minRequestSpacingMs: 0 });
     const aggregates = await client.fetchAggregates('SPY', window);
 
     expect(aggregates).toEqual([{ t: 1, o: 1, h: 2, l: 0.5, c: 1.5, v: 100 }]);
@@ -63,7 +63,7 @@ describe('HttpPolygonClient', () => {
 
   it('maps crypto symbols to X:<BASE>USD in the request URL', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ results: [] }));
-    const client = new HttpPolygonClient({ apiKey: FAKE_KEY, fetchImpl });
+    const client = new HttpPolygonClient({ apiKey: FAKE_KEY, fetchImpl, minRequestSpacingMs: 0 });
 
     await client.fetchAggregates('BTC-USD', window);
 
@@ -73,7 +73,7 @@ describe('HttpPolygonClient', () => {
 
   it('treats a missing results key as an empty page', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({}));
-    const client = new HttpPolygonClient({ apiKey: FAKE_KEY, fetchImpl });
+    const client = new HttpPolygonClient({ apiKey: FAKE_KEY, fetchImpl, minRequestSpacingMs: 0 });
 
     const aggregates = await client.fetchAggregates('SPY', window);
     expect(aggregates).toEqual([]);
@@ -94,7 +94,7 @@ describe('HttpPolygonClient', () => {
         }),
       );
 
-    const client = new HttpPolygonClient({ apiKey: FAKE_KEY, fetchImpl });
+    const client = new HttpPolygonClient({ apiKey: FAKE_KEY, fetchImpl, minRequestSpacingMs: 0 });
     const aggregates = await client.fetchAggregates('SPY', window);
 
     expect(aggregates).toEqual([
@@ -121,14 +121,14 @@ describe('HttpPolygonClient', () => {
       }),
     );
 
-    const client = new HttpPolygonClient({ apiKey: FAKE_KEY, fetchImpl });
+    const client = new HttpPolygonClient({ apiKey: FAKE_KEY, fetchImpl, minRequestSpacingMs: 0 });
 
     await expect(client.fetchAggregates('SPY', window)).rejects.toThrow(/exceeded .* pages/);
   });
 
   it('throws on a non-ok HTTP response without leaking the API key', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({}, 500));
-    const client = new HttpPolygonClient({ apiKey: FAKE_KEY, fetchImpl });
+    const client = new HttpPolygonClient({ apiKey: FAKE_KEY, fetchImpl, minRequestSpacingMs: 0 });
 
     await expect(client.fetchAggregates('SPY', window)).rejects.toThrow(/HTTP 500/);
     await expect(client.fetchAggregates('SPY', window)).rejects.not.toThrow(new RegExp(FAKE_KEY));

@@ -30,7 +30,6 @@ import {
   HttpPolygonClient,
   InMemoryConfigTrialLog,
   type PolygonClient,
-  ReplayDriver,
   renderStage2Verdict,
   runTrialGrid,
   SqliteStage2SelectionStore,
@@ -39,11 +38,10 @@ import {
   type Stage2Selection,
   type Stage2Verdict,
   selectionsFrom,
-  type TrialGridAssetClass,
   type TrialGridResult,
 } from '../cost-model-backtest/index.js';
-import { SimulatedClock } from '../shared/index.js';
 import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
+import { makeAssetClass } from './stage2-support.js';
 
 /** The fixed MVP universe (CLAUDE.md "Broker Plan" / spec "User Stories"). */
 export const STOCK_SYMBOLS = ['SPY', 'QQQ', 'AAPL', 'TSLA'] as const;
@@ -288,33 +286,6 @@ export function effectiveWindow(
 }
 
 /** One asset class's fixed symbol/periodsPerYear pairing this script drives. */
-function makeAssetClass(
-  ctx: ReplayContext,
-  asset_class: 'stocks' | 'crypto',
-  symbols: readonly string[],
-  periodsPerYear: number,
-): TrialGridAssetClass {
-  return {
-    asset_class,
-    periodsPerYear,
-    makeRunner: () =>
-      new ReplayDriver({
-        barSource: ctx.store,
-        // Scoped to this asset class's symbols, not the whole store (#420).
-        // The store's own `barTimestamps` is the union across every ingested
-        // instrument, and stock/crypto daily bars close at different UTC
-        // times — so an unscoped timeline steps a stock replay through every
-        // crypto bar too, padding the return series with zeros and understating
-        // the per-period Sharpe by roughly sqrt(n_real / n_union).
-        timeline: ctx.store.timelineFor(symbols),
-        registry: ctx.store,
-        costModel: ctx.costModel,
-        clock: new SimulatedClock(ctx.window.start),
-        universe: symbols.map((symbol) => ({ symbol, asset_class })),
-        capitalPerTrade: ctx.capitalPerTrade,
-      }),
-  };
-}
 
 /**
  * Ingests the full MVP universe, runs the 12-config grid across stocks and

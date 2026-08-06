@@ -214,6 +214,32 @@ describe('MarketDataServiceImpl.getMark', () => {
     expect(liveMark.price).toBe(999);
     expect(backtestMark.price).toBe(110);
   });
+
+  it('serves repeat live callers inside the TTL from the store, without a second fetch (A7)', async () => {
+    const dataSource = new FixtureDataSource(
+      BARS,
+      { price: 999, observed_at: new Date('2026-07-15T10:59:59Z'), source: 'fixture-live' },
+      'crypto',
+    );
+    const fetchMark = vi.spyOn(dataSource, 'fetchMark');
+    const service = new MarketDataServiceImpl(
+      dataSource,
+      new ManualClock(ASOF),
+      'live',
+      new SqliteMarketDataStore(openSharedStore(':memory:')),
+      5_000,
+    );
+
+    const first = await service.getMark(INSTRUMENT, ASOF);
+    const second = await service.getMark(INSTRUMENT, new Date(ASOF.getTime() + 4_000));
+    const third = await service.getMark(INSTRUMENT, new Date(ASOF.getTime() + 6_000));
+
+    expect(first.price).toBe(999);
+    expect(second.price).toBe(999);
+    expect(third.price).toBe(999);
+    // 1st call fetches, 2nd (inside 5s) serves from the store, 3rd refetches.
+    expect(fetchMark).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('MarketDataServiceImpl.getSpreadEstimate', () => {

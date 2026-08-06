@@ -5,9 +5,13 @@
  *
  * Ingests daily bars from Polygon/Massive for the MVP universe and persists
  * them to a research-only scratch SQLite file — deliberately NOT the shared
- * store's `bars` table (that table, and its migration, don't exist yet; this
- * store's schema is private and unrelated). A fresh `Stage2HistoricalStore`
- * over `:memory:` is also the fixture shape for tests.
+ * store's `bars` table, although that table exists (0001_init.sql) with the
+ * same columns and key: the shared store is runtime state the Feedback Loop
+ * and dashboard read live, and research ingests must not be able to corrupt
+ * it or collide with the orchestrator's writes. (The original justification
+ * here — "that table doesn't exist yet" — was never true; the split stands
+ * on the isolation argument alone. Review 2026-08-06 A3.) A fresh
+ * `Stage2HistoricalStore` over `:memory:` is also the fixture shape for tests.
  *
  * The Polygon HTTP client is injected (`PolygonClient`), matching
  * `AlpacaDataSource`'s precedent in market-data-service/sources —

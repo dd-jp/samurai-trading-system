@@ -67,29 +67,33 @@ async function advanceLot(
   // call's `now`, not a grouping key.
   const lotFills = fills.filter((fill) => fill.timestamp.getTime() <= now.getTime());
 
-  let ingested = 0;
+  const newFills: Fill[] = [];
   let ingestedEntry = false;
   for (const fill of lotFills) {
     if (await store.hasFill(fill.broker_fill_id)) continue;
-    await store.writeFill(toFill(fill, position.idempotency_key));
-    ingested += 1;
+    newFills.push(toFill(fill, position.idempotency_key));
     ingestedEntry ||= fill.leg === 'entry';
   }
 
   // Nothing landed: the lot is exactly as the last poll left it.
-  if (ingested === 0) return;
+  if (newFills.length === 0) return;
 
-  // Recomputed from the persisted rows, never from a running total — the
-  // `Fill` rows are the record, and rebuilding from them is what makes a
-  // re-poll converge on the same numbers instead of drifting.
-  const recorded = await store.getFills(position.idempotency_key);
+  // Recomputed from the full fill record (persisted rows + this poll's new
+  // ones, in the order the atomic write below will persist them), never from
+  // a running total — rebuilding from the record is what makes a re-poll
+  // converge on the same numbers instead of drifting.
+  const recorded = [...(await store.getFills(position.idempotency_key)), ...newFills];
   const entryFills = recorded.filter((fill) => fill.leg === 'entry');
   const exitFills = recorded.filter(isExitFill);
 
   const filledSize = totalQty(entryFills);
   // An exit fill cannot precede the entry fill that created the lot to exit.
-  // If one somehow arrives first, there is no lot to size or close yet.
-  if (filledSize === 0) return;
+  // If one somehow arrives first, there is no lot to size or close yet —
+  // persist the fill rows alone.
+  if (filledSize === 0) {
+    await store.applyLotAdvance({ idempotency_key: position.idempotency_key, fills: newFills });
+    return;
+  }
 
   const avgEntryPrice = weightedAvgPrice(entryFills);
   const flat = coversQty(totalQty(exitFills), filledSize);
@@ -98,21 +102,29 @@ async function advanceLot(
   // Size the protection to what actually filled, before persisting the
   // advance: leaving a lot under-protected is the failure that costs money,
   // and only a fresh entry fill can have changed the quantity to protect.
+  // Resize sets an absolute quantity, so if the persist below never happens
+  // the re-poll's identical resize is a no-op, not a double-trim.
   if (!flat && ingestedEntry) {
     await broker.resizeProtectiveLegs(position.idempotency_key, filledSize);
   }
 
-  await store.updatePositionFill(position.idempotency_key, {
-    filled_size: filledSize,
-    avg_entry_price: avgEntryPrice,
-    order_state: orderState,
+  // One transaction: fills, lot state, and (on flat) the ClosedTrade land
+  // together or not at all — a crash mid-advance is repaired by the next
+  // poll re-offering the same fills, which the dedup gate then accepts.
+  await store.applyLotAdvance({
+    idempotency_key: position.idempotency_key,
+    fills: newFills,
+    position_update: {
+      filled_size: filledSize,
+      avg_entry_price: avgEntryPrice,
+      order_state: orderState,
+    },
+    ...(flat
+      ? {
+          closed_trade: closedTrade(position, { filledSize, avgEntryPrice, entryFills, exitFills }),
+        }
+      : {}),
   });
-
-  if (!flat) return;
-
-  await store.writeClosedTrade(
-    closedTrade(position, { filledSize, avgEntryPrice, entryFills, exitFills }),
-  );
 }
 
 /**

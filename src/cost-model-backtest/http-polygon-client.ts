@@ -64,6 +64,15 @@ function toPolygonDate(date: Date): string {
   return date.toISOString().split('T')[0] as string;
 }
 
+/**
+ * Free-tier pacing (review 2026-08-06 A1): Polygon's free tier allows 5
+ * calls/min and this key is deliberately on it (the paid depth entitlement
+ * was never in effect — see docs/reviews/codebase-review-2026-08-06.md).
+ * 13s spacing sits under the ceiling rather than at it, the same posture
+ * DEFAULT_VENUE_PACING takes for Alpaca.
+ */
+const MIN_REQUEST_SPACING_MS = 13_000;
+
 export interface HttpPolygonClientOptions {
   /** Defaults to `process.env.POLYGON_API_KEY`. Never logged or thrown into an error message. */
   apiKey?: string;
@@ -71,6 +80,8 @@ export interface HttpPolygonClientOptions {
   baseUrl?: string;
   /** Injectable for tests — defaults to the global `fetch`. */
   fetchImpl?: typeof fetch;
+  /** Milliseconds between requests. Defaults to free-tier spacing; tests pass 0. */
+  minRequestSpacingMs?: number;
 }
 
 /** Real HTTP `PolygonClient` against Polygon/Massive's aggregates endpoint. */
@@ -78,6 +89,8 @@ export class HttpPolygonClient implements PolygonClient {
   private readonly apiKey: string;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly minRequestSpacingMs: number;
+  private lastRequestAt = 0;
 
   constructor(options: HttpPolygonClientOptions = {}) {
     const apiKey = options.apiKey ?? process.env.POLYGON_API_KEY;
@@ -90,6 +103,16 @@ export class HttpPolygonClient implements PolygonClient {
     this.apiKey = apiKey;
     this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.minRequestSpacingMs = options.minRequestSpacingMs ?? MIN_REQUEST_SPACING_MS;
+  }
+
+  /** Sleeps out the remainder of the spacing window since the last request. */
+  private async paceRequest(): Promise<void> {
+    const wait = this.lastRequestAt + this.minRequestSpacingMs - Date.now();
+    if (wait > 0) {
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+    this.lastRequestAt = Date.now();
   }
 
   async fetchAggregates(symbol: string, window: DateRange): Promise<PolygonAggregate[]> {
@@ -114,6 +137,7 @@ export class HttpPolygonClient implements PolygonClient {
         );
       }
 
+      await this.paceRequest();
       const response = await this.fetchImpl(url, {
         headers: { Authorization: `Bearer ${this.apiKey}` },
       });

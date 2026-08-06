@@ -60,6 +60,41 @@ describe('Stage2HistoricalStore', () => {
     expect(store.bars('SPY', window)).toHaveLength(3);
   });
 
+  it('skips the fetch entirely when the window is already covered (warm cache, A4)', async () => {
+    const start = Date.UTC(2020, 0, 1);
+    const days = 30;
+    const fetchAggregates = vi.fn(async () => aggregates(days, start, 100));
+    const store = new Stage2HistoricalStore({ fetchAggregates });
+    const window = { start: new Date(start), end: new Date(start + days * DAY_MS) };
+
+    await store.ingest('SPY', window);
+    await store.ingest('SPY', window);
+
+    expect(fetchAggregates).toHaveBeenCalledTimes(1);
+    expect(store.bars('SPY', window)).toHaveLength(days);
+  });
+
+  it('still fetches when existing coverage is partial (a 2-year cache asked for 5)', async () => {
+    const start = Date.UTC(2020, 0, 1);
+    const shortDays = 40;
+    const fullDays = 100;
+    let respondWith = aggregates(shortDays, start + (fullDays - shortDays) * DAY_MS, 100);
+    const fetchAggregates = vi.fn(async () => respondWith);
+    const store = new Stage2HistoricalStore({ fetchAggregates });
+    const fullWindow = { start: new Date(start), end: new Date(start + fullDays * DAY_MS) };
+
+    // First ingest covers only the recent tail; the deeper request must refetch.
+    await store.ingest('SPY', {
+      start: new Date(start + (fullDays - shortDays) * DAY_MS),
+      end: new Date(start + fullDays * DAY_MS),
+    });
+    respondWith = aggregates(fullDays, start, 100);
+    await store.ingest('SPY', fullWindow);
+
+    expect(fetchAggregates).toHaveBeenCalledTimes(2);
+    expect(store.bars('SPY', fullWindow)).toHaveLength(fullDays);
+  });
+
   it('filters bars to the requested window only', async () => {
     const start = Date.UTC(2020, 0, 1);
     const client = fakeClient({ SPY: aggregates(10, start, 100) });

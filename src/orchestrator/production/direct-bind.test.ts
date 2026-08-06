@@ -74,6 +74,9 @@ const FAKE_VOLATILITY = {
 
 const NO_POSITIONS: OpenPosition[] = [];
 
+/** B1 persistence seam — a sink; these tests assert step behavior, not the write. */
+const NOOP_BREAKER_STATE = { save: () => {} };
+
 function makeDebate(overrides: Partial<DebateResult> = {}): DebateResult {
   return {
     synthesis: 'bullish',
@@ -121,6 +124,8 @@ describe('buildTraderStep', () => {
       volatility: FAKE_VOLATILITY,
       getOpenPositions: async () => NO_POSITIONS,
       mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
       config,
       setupStore: new FixtureSetupStore(),
     });
@@ -167,6 +172,8 @@ describe('buildTraderStep', () => {
       volatility: FAKE_VOLATILITY,
       getOpenPositions: async () => NO_POSITIONS,
       mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
       config,
       setupStore: new FixtureSetupStore(),
     });
@@ -240,6 +247,8 @@ describe('buildRiskStep', () => {
       volatility: FAKE_VOLATILITY,
       getOpenPositions: async () => NO_POSITIONS,
       mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
     });
 
     const decision = await step({ trace_id: TRACE_ID, intent: makeIntent(), clock: CLOCK });
@@ -281,6 +290,8 @@ describe('buildRiskStep', () => {
       volatility: FAKE_VOLATILITY,
       getOpenPositions: async () => NO_POSITIONS,
       mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
     });
 
     const decision = await step({ trace_id: TRACE_ID, intent: makeIntent(), clock: CLOCK });
@@ -359,6 +370,8 @@ describe('buildVerdictStep', () => {
       volatility: FAKE_VOLATILITY,
       getOpenPositions: async () => NO_POSITIONS,
       mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
       store: db,
     });
 
@@ -426,6 +439,8 @@ describe('buildVerdictStep', () => {
       volatility: FAKE_VOLATILITY,
       getOpenPositions: async () => NO_POSITIONS,
       mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
       store: db,
     });
 

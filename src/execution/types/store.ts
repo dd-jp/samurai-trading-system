@@ -42,19 +42,35 @@ export interface SharedStore {
    * `filled_size` runs away from the broker's.
    */
   hasFill(broker_fill_id: string): Promise<boolean>;
-  /** One row per (partial) fill — CONTEXT.md invariant #4. */
-  writeFill(fill: Fill): Promise<void>;
   /**
    * Every `Fill` recorded against a lot, in ingestion order. Realized size,
    * avg price and PnL are reconstructed from these rather than a running
    * total, so a re-poll converges instead of drifting.
    */
   getFills(idempotency_key: string): Promise<Fill[]>;
-  /** Persist a fill-driven advance of the lot (partial or complete). */
-  updatePositionFill(
-    idempotency_key: string,
-    update: { filled_size: number; avg_entry_price: number; order_state: OrderState },
-  ): Promise<void>;
-  /** The realized record, written once on round-trip-to-flat. */
-  writeClosedTrade(trade: ClosedTrade): Promise<void>;
+  /**
+   * Persist one poll's advance of a lot — new fills, the recomputed lot
+   * state, and on round-trip-to-flat the `ClosedTrade` — atomically. A crash
+   * can no longer land between the fill rows and the lot state they imply:
+   * that gap was unrepairable, because the next poll's `hasFill` dedup
+   * skipped the already-written fills and never recomputed the lot
+   * (`filled_size`/`avg_entry_price` stale forever, the `ClosedTrade` never
+   * written). All-or-nothing, the re-poll repairs by re-offering.
+   *
+   * `fills` may stand alone (an exit fill arriving before any entry gives
+   * the lot no state to recompute yet); `closed_trade` is written once —
+   * a second close for the same lot fails the whole advance.
+   */
+  applyLotAdvance(advance: LotAdvance): Promise<void>;
+}
+
+/** One poll's atomic advance of a single lot — see `SharedStore.applyLotAdvance`. */
+export interface LotAdvance {
+  idempotency_key: string;
+  /** New fills this poll ingested (already deduped against `hasFill`). One row per fill — CONTEXT.md invariant #4. */
+  fills: readonly Fill[];
+  /** The lot state recomputed from ALL persisted + new fills; absent while no entry fill exists. */
+  position_update?: { filled_size: number; avg_entry_price: number; order_state: OrderState };
+  /** The realized record, on round-trip-to-flat only. */
+  closed_trade?: ClosedTrade;
 }

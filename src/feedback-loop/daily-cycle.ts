@@ -59,10 +59,9 @@ function tradesInWindow(input: DailyCycleInput, now: Date): ClosedTrade[] {
 }
 
 export function runDailyCycle(input: DailyCycleInput): DailyCycleResult {
-  const { clock, config, tuning, adjustments, approvals, mode } = input;
-  assertNoNameCollision(config);
+  assertNoNameCollision(input.config);
 
-  const now = clock.now();
+  const now = input.clock.now();
   const result: DailyCycleResult = {
     weight_updates: {},
     param_updates: {},
@@ -71,11 +70,24 @@ export function runDailyCycle(input: DailyCycleInput): DailyCycleResult {
   };
 
   const record = (entry: Adjustment): void => {
-    adjustments.append(entry);
+    input.adjustments.append(entry);
     result.applied = true;
   };
 
-  // --- Dial 1: analyst weights, from attribution. Never gated. ---
+  tuneAnalystWeights(input, now, result, record);
+  applyTuningProposals(input, now, result, record);
+
+  return result;
+}
+
+/** Dial 1: analyst weights, from attribution. Never gated. */
+function tuneAnalystWeights(
+  input: DailyCycleInput,
+  now: Date,
+  result: DailyCycleResult,
+  record: (entry: Adjustment) => void,
+): void {
+  const { config, tuning } = input;
   const credits = accumulateCredit(tradesInWindow(input, now), input.debate_log);
   const weights = tuning.getAnalystWeights();
 
@@ -113,8 +125,16 @@ export function runDailyCycle(input: DailyCycleInput): DailyCycleResult {
       reason: 'attribution',
     });
   }
+}
 
-  // --- Dials 2 & 3: strategy params (free) and risk thresholds (asymmetric). ---
+/** Dials 2 & 3: strategy params (free) and risk thresholds (asymmetric). */
+function applyTuningProposals(
+  input: DailyCycleInput,
+  now: Date,
+  result: DailyCycleResult,
+  record: (entry: Adjustment) => void,
+): void {
+  const { config, tuning, approvals, mode } = input;
   const params = tuning.getStrategyParams();
   const thresholds = tuning.getRiskThresholds();
 
@@ -176,6 +196,4 @@ export function runDailyCycle(input: DailyCycleInput): DailyCycleResult {
         isThreshold && direction === 'loosen' ? 'proposal:backtest_auto_approved' : 'proposal',
     });
   }
-
-  return result;
 }

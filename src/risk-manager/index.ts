@@ -41,7 +41,6 @@ export { CircuitBreakers } from './breakers.js';
 export { countryForInstrument, trackedCountries } from './cii-mapping.js';
 export type { CorrelationConfig, CorrelationEstimateInput } from './correlation.js';
 export { computeCorrelationEstimate } from './correlation.js';
-export { InMemoryRiskCriticStore } from './critic-store.js';
 export type { PortfolioAccountingInput } from './portfolio-view.js';
 export { computePortfolioView } from './portfolio-view.js';
 export {
@@ -51,6 +50,8 @@ export {
   resolveRiskConfig,
   riskThresholdsFrom,
 } from './risk-thresholds.js';
+export type { BreakerStatePersistence } from './sqlite-breaker-state-store.js';
+export { SqliteBreakerStateStore } from './sqlite-breaker-state-store.js';
 export type {
   BreakerState,
   CorrelationEstimate,
@@ -157,6 +158,12 @@ export class RiskManagerImpl implements RiskManager {
     private readonly thresholds?: RiskThresholdSource,
   ) {}
 
+  /**
+   * The check pipeline: exit pass-through, then the circuit-breaker gate,
+   * then `ENTRY_CAP_GATES` in declared order, then the min-viable re-check
+   * and the critic review. The ordering IS the spec's step numbering — each
+   * gate's own doc says what it caps.
+   */
   evaluate(input: RiskInput): RiskDecision {
     const { intent, portfolio, breakers, correlation, cii, critic, next_breaker_state } = input;
 
@@ -171,6 +178,19 @@ export class RiskManagerImpl implements RiskManager {
       ...ciiWarnings(intent.instrument, cii, config.cii_threshold),
       ...correlationWarmupWarnings(correlation.insufficient_history),
     ];
+    const decisionBase = {
+      warnings,
+      risk_snapshot: snapshot(portfolio, breakers),
+      next_breaker_state,
+    };
+    const rejected = (binding_constraint: string, reasons: string[]): RiskDecision => ({
+      status: 'rejected',
+      order_intent: null,
+      modifications: null,
+      binding_constraint,
+      reasons,
+      ...decisionBase,
+    });
 
     if (intent.intent_type === 'exit') {
       return {
@@ -183,150 +203,58 @@ export class RiskManagerImpl implements RiskManager {
         },
         binding_constraint: null,
         reasons: ['exit: bypasses all entry gates, passes through verbatim'],
-        warnings,
-        risk_snapshot: snapshot(portfolio, breakers),
-        next_breaker_state,
+        ...decisionBase,
       };
     }
 
-    // Step 1: circuit-breaker gate — halts new entries + scale-ins, fail fast.
-    const trippedTier = breakers.portfolio_tripped
-      ? 'portfolio'
-      : breakers.asset_class_tripped[intent.asset_class]
-        ? intent.asset_class
-        : null;
+    const trippedTier = trippedBreakerTier(breakers, intent.asset_class);
     if (trippedTier !== null) {
-      const bindingConstraint = `circuit_breaker:${trippedTier}`;
-      return {
-        status: 'rejected',
-        order_intent: null,
-        modifications: null,
-        binding_constraint: bindingConstraint,
-        reasons: [
-          `${bindingConstraint}: new entries halted (armed: ${
-            breakers.armed_breakers.length > 0 ? breakers.armed_breakers.join(', ') : 'none'
-          })`,
-        ],
-        warnings,
-        risk_snapshot: snapshot(portfolio, breakers),
-        next_breaker_state,
-      };
+      const binding = `circuit_breaker:${trippedTier}`;
+      return rejected(binding, [
+        `${binding}: new entries halted (armed: ${
+          breakers.armed_breakers.length > 0 ? breakers.armed_breakers.join(', ') : 'none'
+        })`,
+      ]);
     }
 
     const reasons: string[] = [];
     let bindingConstraint: string | null = null;
     let notional = intent.size * intent.entry;
 
-    // Step 2: per-trade size cap.
-    {
+    for (const gate of ENTRY_CAP_GATES) {
+      const cap = gate(config, intent, portfolio, correlation);
+      if (cap === null) continue;
       const { notional: trimmed, changed } = trimToAllowed(
         notional,
-        config.max_position_size,
-        'per_trade_size_cap',
+        cap.allowedAdditional,
+        cap.name,
         reasons,
       );
       notional = trimmed;
-      if (changed) bindingConstraint = 'per_trade_size_cap';
-    }
-
-    // Step 3: per-asset exposure cap.
-    {
-      const existing = portfolio.exposure_by_instrument[intent.instrument] ?? 0;
-      const { notional: trimmed, changed } = trimToAllowed(
-        notional,
-        config.per_asset_cap - existing,
-        'per_asset_exposure_cap',
-        reasons,
-      );
-      notional = trimmed;
-      if (changed) bindingConstraint = 'per_asset_exposure_cap';
-    }
-
-    // Step 4: per-asset-class exposure cap.
-    {
-      const existing = portfolio.exposure_by_class[intent.asset_class];
-      const cap = config.per_asset_class_cap[intent.asset_class];
-      const { notional: trimmed, changed } = trimToAllowed(
-        notional,
-        cap - existing,
-        'per_asset_class_exposure_cap',
-        reasons,
-      );
-      notional = trimmed;
-      if (changed) bindingConstraint = 'per_asset_class_exposure_cap';
-    }
-
-    // Step 5: portfolio gross exposure cap.
-    {
-      const { notional: trimmed, changed } = trimToAllowed(
-        notional,
-        config.portfolio_gross_cap - portfolio.gross_exposure,
-        'portfolio_gross_exposure_cap',
-        reasons,
-      );
-      notional = trimmed;
-      if (changed) bindingConstraint = 'portfolio_gross_exposure_cap';
-    }
-
-    // Step 6: concentration check (v2 dynamic correlation matrix, #50).
-    // Instruments absent from `correlation.correlations` are treated as not
-    // correlated — that's the warm-up fallback, not a special case here. #303
-    // deliberately did NOT change that: an under-`min_bars` pair still cannot
-    // bind this cap. It is surfaced as a `correlation_warmup:` warning above
-    // instead, so the inertness is stated rather than inferred from silence.
-    const correlatedInstruments = Object.entries(correlation.correlations)
-      .filter(([, corr]) => Math.abs(corr) >= config.concentration.threshold)
-      .map(([instrument]) => instrument);
-    if (correlatedInstruments.length > 0) {
-      const correlatedSet = [intent.instrument, ...correlatedInstruments];
-      const existingCorrelatedExposure = correlatedSet.reduce(
-        (sum, instrument) => sum + (portfolio.exposure_by_instrument[instrument] ?? 0),
-        0,
-      );
-      const { notional: trimmed, changed } = trimToAllowed(
-        notional,
-        config.concentration.cap - existingCorrelatedExposure,
-        'concentration_correlation_cap',
-        reasons,
-      );
-      notional = trimmed;
-      if (changed) bindingConstraint = 'concentration_correlation_cap';
+      if (changed) bindingConstraint = cap.name;
     }
 
     const finalSize = notional / intent.entry;
 
-    // Step 7: min-viable-size re-check.
     if (notional < config.min_viable_size) {
       reasons.push(
         `min_viable_size: trimmed notional ${notional} below viable minimum ${config.min_viable_size}`,
       );
-      return {
-        status: 'rejected',
-        order_intent: null,
-        modifications: null,
-        binding_constraint: 'min_viable_size',
-        reasons,
-        warnings,
-        risk_snapshot: snapshot(portfolio, breakers),
-        next_breaker_state,
-      };
+      return rejected('min_viable_size', reasons);
     }
 
-    // Step 8: risk-critic review (#204).
-    const criticWarnings = warnings;
+    // Risk-critic review (#204).
+    if (critic === undefined) {
+      // Fails open BY RECORD, not silently (review 2026-08-06 B3): no producer
+      // for the critic exists yet, and until one does, every decision must be
+      // distinguishable from one the critic actually passed. The mechanical
+      // steps above remain the safety net.
+      reasons.push('risk_critic: skipped — no critic verdict was supplied for this evaluation');
+    }
     if (critic) {
       const criticTrim = applyCritic(critic, notional, finalSize, reasons);
       if (criticTrim.rejected) {
-        return {
-          status: 'rejected',
-          order_intent: null,
-          modifications: null,
-          binding_constraint: 'risk_critic:reject',
-          reasons,
-          warnings: criticWarnings,
-          risk_snapshot: snapshot(portfolio, breakers),
-          next_breaker_state,
-        };
+        return rejected('risk_critic:reject', reasons);
       }
       if (criticTrim.changed) {
         notional = criticTrim.notional;
@@ -344,12 +272,90 @@ export class RiskManagerImpl implements RiskManager {
       },
       binding_constraint: bindingConstraint,
       reasons,
-      warnings: criticWarnings,
-      risk_snapshot: snapshot(portfolio, breakers),
-      next_breaker_state,
+      ...decisionBase,
     };
   }
 }
+
+/** The circuit-breaker gate — halts new entries + scale-ins, fail fast. */
+function trippedBreakerTier(
+  breakers: BreakerState,
+  assetClass: RiskInput['intent']['asset_class'],
+): string | null {
+  if (breakers.portfolio_tripped) return 'portfolio';
+  if (breakers.asset_class_tripped[assetClass]) return assetClass;
+  return null;
+}
+
+/**
+ * One entry cap: how much ADDITIONAL notional this gate allows, under its
+ * binding-constraint name — or `null` when the gate does not apply to this
+ * intent. Evaluated in `ENTRY_CAP_GATES` order; monotonic risk-reducing by
+ * construction, since `trimToAllowed` only ever trims.
+ */
+type EntryCapGate = (
+  config: RiskConfig,
+  intent: RiskInput['intent'],
+  portfolio: PortfolioView,
+  correlation: RiskInput['correlation'],
+) => { name: string; allowedAdditional: number } | null;
+
+const perTradeSizeCap: EntryCapGate = (config) => ({
+  name: 'per_trade_size_cap',
+  allowedAdditional: config.max_position_size,
+});
+
+const perAssetExposureCap: EntryCapGate = (config, intent, portfolio) => ({
+  name: 'per_asset_exposure_cap',
+  allowedAdditional:
+    config.per_asset_cap - (portfolio.exposure_by_instrument[intent.instrument] ?? 0),
+});
+
+const perAssetClassExposureCap: EntryCapGate = (config, intent, portfolio) => ({
+  name: 'per_asset_class_exposure_cap',
+  allowedAdditional:
+    config.per_asset_class_cap[intent.asset_class] -
+    portfolio.exposure_by_class[intent.asset_class],
+});
+
+const portfolioGrossExposureCap: EntryCapGate = (config, _intent, portfolio) => ({
+  name: 'portfolio_gross_exposure_cap',
+  allowedAdditional: config.portfolio_gross_cap - portfolio.gross_exposure,
+});
+
+/**
+ * Concentration check (v2 dynamic correlation matrix, #50). Instruments
+ * absent from `correlation.correlations` are treated as not correlated —
+ * that's the warm-up fallback, not a special case here. #303 deliberately
+ * did NOT change that: an under-`min_bars` pair still cannot bind this cap.
+ * It is surfaced as a `correlation_warmup:` warning instead, so the
+ * inertness is stated rather than inferred from silence.
+ */
+const concentrationCorrelationCap: EntryCapGate = (config, intent, portfolio, correlation) => {
+  const correlatedInstruments = Object.entries(correlation.correlations)
+    .filter(([, corr]) => Math.abs(corr) >= config.concentration.threshold)
+    .map(([instrument]) => instrument);
+  if (correlatedInstruments.length === 0) return null;
+
+  const correlatedSet = [intent.instrument, ...correlatedInstruments];
+  const existingCorrelatedExposure = correlatedSet.reduce(
+    (sum, instrument) => sum + (portfolio.exposure_by_instrument[instrument] ?? 0),
+    0,
+  );
+  return {
+    name: 'concentration_correlation_cap',
+    allowedAdditional: config.concentration.cap - existingCorrelatedExposure,
+  };
+};
+
+/** Spec steps 2–6, in binding order. The array IS the pipeline. */
+const ENTRY_CAP_GATES: readonly EntryCapGate[] = [
+  perTradeSizeCap,
+  perAssetExposureCap,
+  perAssetClassExposureCap,
+  portfolioGrossExposureCap,
+  concentrationCorrelationCap,
+];
 
 function applyCritic(
   critic: { verdict: RiskCriticVerdict['verdict']; max_notional: number | null; reasoning: string },
