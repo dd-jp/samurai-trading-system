@@ -221,6 +221,7 @@ describe('toReturnSeries bar attribution — binary search equivalence (#289)', 
   const start = Date.UTC(2026, 0, 1);
   const DAY = 86_400_000;
   const bars = Array.from({ length: 200 }, (_, i) => new Date(start + i * DAY));
+  const WINDOW_200D = { start: new Date(start), end: new Date(start + 200 * DAY) };
 
   it('attributes to the same bar as the linear scan, across every boundary case', () => {
     // Exhaustive rather than sampled: every bar's exact timestamp, one
@@ -253,7 +254,11 @@ describe('toReturnSeries bar attribution — binary search equivalence (#289)', 
 
       if (expected === -1) continue;
 
-      const series = toReturnSeries(trades, bars, { averageCapital: 100, periodsPerYear: 252 });
+      const series = toReturnSeries(trades, bars, {
+        averageCapital: 100,
+        periodsPerYear: 252,
+        window: WINDOW_200D,
+      });
       const attributed = series.returns.findIndex((r) => r !== 0);
 
       expect(attributed).toBe(expected);
@@ -270,6 +275,7 @@ describe('toReturnSeries bar attribution — binary search equivalence (#289)', 
       toReturnSeries([closedTrade({ closed_at, realized_pnl_net: 1 })], bars, {
         averageCapital: 100,
         periodsPerYear: 252,
+        window: WINDOW_200D,
       }),
     ).toThrow(/after the last bar/);
   });
