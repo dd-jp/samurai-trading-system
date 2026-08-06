@@ -9,7 +9,9 @@
  * runs AFTER the guard, so a broken default would surface as a deep stack
  * trace rather than the legible message the guard was written to give.
  */
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { openSharedStore } from '../shared/store/index.js';
 import { paperStartingProfile, startFromEnvironment } from './index.js';
 import type { Logger } from './types.js';
@@ -251,23 +253,48 @@ describe('startFromEnvironment — the shipped paper profile', () => {
     const entries: Parameters<Logger['log']>[0][] = [];
     const logger: Logger = { log: (entry) => entries.push(entry) };
 
-    // Deliberately NOT passing `db` — resolving the path internally is the
-    // whole point of this test.
-    const orchestrator = await startFromEnvironment({
-      ...paperStartingProfile('paper'),
-      logger,
-    });
+    // `sharedStorePath()` returns a path RELATIVE to the process cwd, so this
+    // test used to open — and then `rmSync` — the real `data/samurai-paper.sqlite`
+    // in whatever checkout vitest was invoked from. On 2026-08-06 that unlinked
+    // the store of a live paper run mid-flight: the orchestrator and dashboard
+    // kept writing to the now-nameless inode, so nothing appeared broken until
+    // a restart would have dropped the whole session, and `llm_spend` (the
+    // table ADR-0008's $50 cap is measured over) reset to zero with it. Any
+    // `yarn test` — including the one inside `yarn precommit` — was enough.
+    //
+    // Relocating the cwd rather than the assertion is deliberate: what is under
+    // test is that the path is derived from SAMURAI_MODE and not NODE_ENV, and
+    // that only holds if the production resolution runs untouched. So the test
+    // moves itself somewhere destroying `data/` is harmless instead of moving
+    // the code somewhere it can be observed.
+    const sandbox = realpathSync(mkdtempSync(join(tmpdir(), 'samurai-startup-')));
+    const cwd = process.cwd();
+    process.chdir(sandbox);
+
+    // Every path below is inside the try, so a construction failure restores
+    // the cwd too rather than stranding the rest of the worker in a directory
+    // this test is about to delete.
+    let orchestrator: Awaited<ReturnType<typeof startFromEnvironment>> | undefined;
 
     try {
-      expect(existsSync('data/samurai-paper.sqlite')).toBe(true);
-      expect(existsSync('data/samurai-staging.sqlite')).toBe(false);
+      // Deliberately NOT passing `db` — resolving the path internally is the
+      // whole point of this test.
+      orchestrator = await startFromEnvironment({
+        ...paperStartingProfile('paper'),
+        logger,
+      });
+
+      expect(existsSync(join(sandbox, 'data/samurai-paper.sqlite'))).toBe(true);
+      expect(existsSync(join(sandbox, 'data/samurai-staging.sqlite'))).toBe(false);
       // And the warning this replaces is gone rather than merely quiet.
       expect(entries.find((entry) => entry.message.includes('#330'))).toBeUndefined();
     } finally {
-      await orchestrator.stop();
-      rmSync('data/samurai-paper.sqlite', { force: true });
-      rmSync('data/samurai-paper.sqlite-wal', { force: true });
-      rmSync('data/samurai-paper.sqlite-shm', { force: true });
+      await orchestrator?.stop();
+      // Restore the cwd BEFORE removing the sandbox: every later test in this
+      // worker resolves its own relative paths against it, and a process whose
+      // cwd has been deleted resolves nothing at all.
+      process.chdir(cwd);
+      rmSync(sandbox, { recursive: true, force: true });
     }
   });
 
