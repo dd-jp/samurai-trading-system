@@ -52,8 +52,46 @@ export interface AlpacaBracketOrderRequest {
   stop_loss: { stop_price: string };
 }
 
+/**
+ * A plain market order (#429) — the flatten. No `order_class`, no legs: a
+ * flatten reaches zero and stops, and attaching protective legs to it would
+ * leave a resting stop behind after the position was gone.
+ */
+export interface AlpacaMarketOrderRequest {
+  symbol: string;
+  side: 'buy' | 'sell';
+  qty: string;
+  time_in_force: string;
+  client_order_id: string;
+}
+
+/**
+ * One row of `GET /v2/positions` (#429). Alpaca reports decimal STRINGS, kept
+ * as strings here for `AlpacaOrder.filled_qty`'s reason: parsing belongs to
+ * the consumer, which can decide what an unparseable value means rather than
+ * silently receiving a NaN the wire shape claimed was a number.
+ */
+export interface AlpacaPosition {
+  symbol: string;
+  /** Signed: negative for a short. */
+  qty: string;
+  side: 'long' | 'short';
+  avg_entry_price: string;
+}
+
 export interface AlpacaClient {
   submitOrder(request: AlpacaBracketOrderRequest): Promise<AlpacaOrder>;
+  /** The flatten (#429) — a plain market order, no bracket. */
+  submitMarketOrder(request: AlpacaMarketOrderRequest): Promise<AlpacaOrder>;
+  /**
+   * `DELETE /v2/orders/{id}` (#429). Resolves rather than throwing when the
+   * order is already gone — cancelled, filled, or unknown — because the caller
+   * cannot know the venue's state at the instant it calls, and a cancel that
+   * throws on "too late" is unusable exactly when it is needed.
+   */
+  cancelOrder(alpacaOrderId: string): Promise<void>;
+  /** `GET /v2/positions` (#429) — everything the venue believes it holds. */
+  getPositions(): Promise<AlpacaPosition[]>;
   /** Reconciliation/poll lookup — current broker-side state of a prior order. */
   getOrder(alpacaOrderId: string): Promise<AlpacaOrder>;
   /**

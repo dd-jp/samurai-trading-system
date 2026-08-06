@@ -23,6 +23,7 @@ import type {
   NativeBracketRequest,
   NormalizedFill,
   NormalizedOrder,
+  NormalizedPosition,
   SimulatedAdapterConfig,
 } from './types.js';
 
@@ -48,6 +49,8 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
   private readonly accepted = new Map<string, NativeBracketRequest>();
   /** Quantity each lot's protective legs cover, as `ingestFills()` sizes them. */
   private readonly protectedQty = new Map<string, number>();
+  /** Lots `cancel` has been called for (#429) — the simulation's observable. */
+  private readonly cancelled = new Set<string>();
 
   constructor(private readonly input: SimulatedBrokerAdapterInput) {}
 
@@ -155,6 +158,123 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
   /** The quantity this lot's protective legs currently cover; null if unarmed. */
   getProtectedQty(clientOrderId: string): number | null {
     return this.protectedQty.get(clientOrderId) ?? null;
+  }
+
+  /**
+   * The intervention path (#429), modelled the same way the entry is: priced
+   * by the injected cost model against market state at the injected clock's T,
+   * so a replay reproduces a flatten exactly as it reproduces an entry.
+   *
+   * `order_type: 'market'`, unlike `submitBracket`'s limit entry. A flatten
+   * that rests unfilled is not a flatten, and the cost model prices the
+   * urgency honestly — which is the point of simulating it rather than
+   * assuming a clean exit at the mid.
+   */
+  async submitFlatten(
+    instrument: string,
+    side: 'buy' | 'sell',
+    size: number,
+    clientOrderId: string,
+  ): Promise<BrokerAck> {
+    if (this.accepted.has(clientOrderId)) {
+      return {
+        client_order_id: clientOrderId,
+        broker_order_ids: [`${clientOrderId}:flatten`],
+        order_state: 'submitted',
+      };
+    }
+
+    const now = this.input.clock.now();
+    // A flatten carries no bracket, so the market state is assembled from the
+    // instrument alone — `buildMarketState` needs only `instrument` off the
+    // request, and passing a synthetic one keeps the pricing path single.
+    const marketState = await this.buildMarketState({ instrument } as NativeBracketRequest, now);
+    const result = this.input.costModel.fill(
+      {
+        instrument,
+        side,
+        size,
+        order_type: 'market',
+        idempotency_key: clientOrderId,
+      },
+      marketState,
+    );
+
+    // Recorded in `accepted` so a repeat is deduped and `getOrder` can answer
+    // for it: a flatten is an order the venue holds like any other.
+    this.accepted.set(clientOrderId, {
+      instrument,
+      side,
+      size,
+      client_order_id: clientOrderId,
+    } as NativeBracketRequest);
+    this.fills.push({
+      client_order_id: clientOrderId,
+      broker_fill_id: `${clientOrderId}:flatten`,
+      leg: 'entry',
+      price: result.fill_price,
+      qty: result.filled_size,
+      fee: result.cost_breakdown.commission,
+      timestamp: marketState.timestamp,
+      cost_breakdown: result.cost_breakdown,
+    });
+
+    return {
+      client_order_id: clientOrderId,
+      broker_order_ids: [`${clientOrderId}:flatten`],
+      order_state: 'submitted',
+    };
+  }
+
+  /**
+   * Idempotent by contract: cancelling an unknown, already-cancelled or
+   * already-filled order resolves. This adapter's fills are modelled at submit
+   * time, so nothing here is ever genuinely working — cancelling forgets the
+   * order's protective legs and leaves its fills alone, which is what a venue
+   * does to a bracket whose entry has already filled.
+   */
+  async cancel(clientOrderId: string, _instrument: string): Promise<void> {
+    this.protectedQty.delete(clientOrderId);
+    this.cancelled.add(clientOrderId);
+  }
+
+  /** True if `cancel` has been called for this lot — the simulation's observable. */
+  isCancelled(clientOrderId: string): boolean {
+    return this.cancelled.has(clientOrderId);
+  }
+
+  /**
+   * The venue's own account of what it holds, netted per instrument from the
+   * modelled fills. This adapter IS the venue, so the answer is authoritative:
+   * unlike a real one it can never be stale or partial.
+   *
+   * Netted, not per-lot: a venue reports a position, not the lots that built
+   * it. Two entries and a partial exit on one instrument are one row here,
+   * which is exactly the shape reconciliation has to compare against.
+   */
+  async getOpenPositions(): Promise<NormalizedPosition[]> {
+    const netByInstrument = new Map<string, number>();
+    for (const fill of this.fills) {
+      const order = this.accepted.get(fill.client_order_id);
+      if (order === undefined) continue;
+      const signed = order.side === 'buy' ? fill.qty : -fill.qty;
+      netByInstrument.set(order.instrument, (netByInstrument.get(order.instrument) ?? 0) + signed);
+    }
+
+    return (
+      [...netByInstrument.entries()]
+        // A netted-flat instrument is not a position. Reporting it as qty 0
+        // would make reconciliation see a holding where the venue has none.
+        .filter(([, qty]) => qty !== 0)
+        .map(([instrument, qty]) => ({
+          instrument,
+          qty,
+          side: qty > 0 ? ('buy' as const) : ('sell' as const),
+          // The simulation prices every fill individually and keeps no running
+          // average; null is the honest answer rather than a fabricated one.
+          avg_entry_price: null,
+        }))
+    );
   }
 
   /**

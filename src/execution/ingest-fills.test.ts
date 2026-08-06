@@ -82,6 +82,16 @@ class ScriptedBroker implements BrokerAdapter {
   async getOrder(): Promise<NormalizedOrder | null> {
     return null;
   }
+  /** #429's intervention path — likewise untouched by the fill loop. */
+  async submitFlatten(): Promise<never> {
+    throw new Error('ScriptedBroker.submitFlatten: ingestFills() does not flatten');
+  }
+  async cancel(): Promise<never> {
+    throw new Error('ScriptedBroker.cancel: ingestFills() does not cancel');
+  }
+  async getOpenPositions(): Promise<never> {
+    throw new Error('ScriptedBroker.getOpenPositions: ingestFills() does not reconcile');
+  }
 }
 
 function fill(overrides: Partial<NormalizedFill> = {}): NormalizedFill {

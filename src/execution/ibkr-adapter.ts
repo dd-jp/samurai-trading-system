@@ -35,6 +35,7 @@ import type {
   NativeBracketRequest,
   NormalizedFill,
   NormalizedOrder,
+  NormalizedPosition,
 } from './types.js';
 
 /** A native IBKR bracket: parent entry + two OCA-grouped protective children. */
@@ -118,6 +119,41 @@ export interface IbkrBrokerClient {
    * `reqCompletedOrders` and match on the order ref it set at placement.
    */
   fetchOrderStatus(clientOrderId: string): Promise<IbkrOrderStatus | null>;
+  /**
+   * A plain market order — the flatten (#429). Separate from
+   * `placeBracketOrder` because a flatten has no children and no OCA group:
+   * attaching them would leave a resting stop behind after the position was
+   * gone.
+   */
+  placeMarketOrder(request: IbkrMarketOrderRequest): Promise<string>;
+  /**
+   * Cancels the order and its OCA children (`cancelOrder` on the parent, which
+   * TWS propagates through the group).
+   *
+   * Idempotent by contract: an order TWS no longer holds — filled, cancelled
+   * or never accepted — resolves rather than throwing. Only a genuine
+   * connection failure propagates.
+   */
+  cancelOrder(parentOrderId: string): Promise<void>;
+  /** Everything the account holds, per `reqPositions` (#429). */
+  fetchPositions(): Promise<IbkrPosition[]>;
+}
+
+/** A market order request (#429) — no legs, no OCA group. */
+export interface IbkrMarketOrderRequest {
+  clientOrderId: string;
+  symbol: string;
+  action: 'BUY' | 'SELL';
+  totalQuantity: number;
+  tif: string;
+}
+
+/** One row of TWS's `reqPositions` (#429). Signed quantity, as TWS reports it. */
+export interface IbkrPosition {
+  symbol: string;
+  /** Negative for a short. */
+  position: number;
+  avgCost: number;
 }
 
 /**
@@ -282,6 +318,83 @@ export class IbkrBrokerAdapter implements BrokerAdapter {
    * as "never placed" — and a transport failure throws out of `call()` and is
    * left to propagate, which reconcile records as `undetermined`.
    */
+  /**
+   * The flatten (#429) — a plain market order, no OCA group.
+   *
+   * `tif: 'IOC'`: an emergency exit should fill what the book offers now and
+   * leave nothing resting. IBKR accepts IOC on market orders for both the
+   * equity and the crypto venues this adapter would serve.
+   *
+   * Not tracked in `brackets`/`legs`: those indexes exist so a fill can find
+   * its bracket leg, and a flatten has no legs. Its executions arrive through
+   * `fetchExecutions` like any other and are attributed by order id.
+   */
+  async submitFlatten(
+    instrument: string,
+    side: 'buy' | 'sell',
+    size: number,
+    clientOrderId: string,
+  ): Promise<BrokerAck> {
+    const orderId = await this.call('submitFlatten', () =>
+      this.client.placeMarketOrder({
+        clientOrderId,
+        symbol: instrument,
+        action: side === 'buy' ? 'BUY' : 'SELL',
+        totalQuantity: size,
+        tif: 'IOC',
+      }),
+    );
+
+    return {
+      client_order_id: clientOrderId,
+      broker_order_ids: [orderId],
+      order_state: 'submitted',
+    };
+  }
+
+  /**
+   * Cancels the parent, which TWS propagates through the OCA group — unlike
+   * ccxt, IBKR's children really are attached, so one cancel is enough.
+   *
+   * The parent id is resolved through the venue rather than the local
+   * `brackets` map when the map has nothing: that map is populated by
+   * `placeBracketOrder` in this process, so after a restart it is empty and
+   * answering from it would silently cancel nothing.
+   */
+  async cancel(clientOrderId: string, _instrument: string): Promise<void> {
+    const tracked = this.brackets.get(clientOrderId);
+    const parentOrderId =
+      tracked?.parentOrderId ??
+      (await this.call('cancel', () => this.client.fetchOrderStatus(clientOrderId)))?.parentOrderId;
+    if (parentOrderId === undefined) return;
+
+    await this.call('cancel', () => this.client.cancelOrder(parentOrderId));
+    this.brackets.delete(clientOrderId);
+  }
+
+  /**
+   * Everything TWS says the account holds (#429).
+   *
+   * A non-finite or zero position is dropped rather than reported: this feeds
+   * an exposure comparison, and NaN compares false against everything, so a
+   * poisoned row would read as "no divergence".
+   */
+  async getOpenPositions(): Promise<NormalizedPosition[]> {
+    const positions = await this.call('getOpenPositions', () => this.client.fetchPositions());
+
+    return positions.flatMap((position) => {
+      if (!Number.isFinite(position.position) || position.position === 0) return [];
+      return [
+        {
+          instrument: position.symbol,
+          qty: position.position,
+          side: position.position > 0 ? ('buy' as const) : ('sell' as const),
+          avg_entry_price: Number.isFinite(position.avgCost) ? position.avgCost : null,
+        },
+      ];
+    });
+  }
+
   async getOrder(clientOrderId: string): Promise<NormalizedOrder | null> {
     const status = await this.call('getOrder', () => this.client.fetchOrderStatus(clientOrderId));
     if (status === null) return null;

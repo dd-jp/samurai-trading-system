@@ -48,6 +48,7 @@ import type {
   NativeBracketRequest,
   NormalizedFill,
   NormalizedOrder,
+  NormalizedPosition,
 } from '../types.js';
 import type { UnpricedFillAlertChannel } from '../unpriced-fill-alert.js';
 import type { AlpacaClient, AlpacaOrder, AlpacaOrderLeg } from './alpaca-client.js';
@@ -200,6 +201,97 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     } catch (cause) {
       throw sanitizeBrokerError('alpaca', operation, cause);
     }
+  }
+
+  /**
+   * The flatten (#429) — a plain market order, never a bracket.
+   *
+   * `time_in_force: 'ioc'` is the one value Alpaca accepts for a MARKET order
+   * on both venues: equities take `day`/`ioc`/`fok` and crypto takes
+   * `gtc`/`ioc`, so `ioc` is the intersection and this adapter serves both.
+   * It is also the right semantics for an emergency exit — fill what the book
+   * offers now, leave nothing resting.
+   *
+   * The honest caveat: a thin book can leave the flatten PARTIAL, and a repeat
+   * call under the same `clientOrderId` is a venue-side no-op by design, so
+   * finishing the job needs a fresh key. That is the correct trade — the
+   * alternative is a resting order the operator has to remember to clean up.
+   *
+   * Not written to `this.state`: the bracket index tracks bracket lifecycles,
+   * and a flatten has no legs to arm, resize or reconcile.
+   */
+  async submitFlatten(
+    instrument: string,
+    side: 'buy' | 'sell',
+    size: number,
+    clientOrderId: string,
+  ): Promise<BrokerAck> {
+    const response = await this.call('submitFlatten', () =>
+      this.input.client.submitMarketOrder({
+        symbol: instrument,
+        side,
+        qty: String(size),
+        time_in_force: 'ioc',
+        client_order_id: clientOrderId,
+      }),
+    );
+
+    return {
+      client_order_id: clientOrderId,
+      broker_order_ids: [response.id],
+      order_state: mapOrderState(response.status),
+    };
+  }
+
+  /**
+   * Cancels the order and, on a bracket, its attached legs with it — Alpaca
+   * cancels a parent's children as part of cancelling the parent.
+   *
+   * Resolves rather than throwing when the venue has nothing under this id:
+   * `getOrderByClientOrderId` returning null means it was never placed or is
+   * long gone, and the transport treats `404`/`422` the same way. The caller
+   * cannot know the venue's state at the instant it calls, and a cancel that
+   * throws on "too late" fails precisely in the race it exists to handle.
+   *
+   * Resolves the Alpaca id through the venue rather than the local `brackets`
+   * map, for `getOrder`'s reason: that map is populated only by `submitBracket`
+   * in this process, so after a restart it is empty.
+   */
+  async cancel(clientOrderId: string, _instrument: string): Promise<void> {
+    const order = await this.call('cancel', () =>
+      this.input.client.getOrderByClientOrderId(clientOrderId),
+    );
+    if (order === null) return;
+
+    await this.call('cancel', () => this.input.client.cancelOrder(order.id));
+    this.brackets.delete(clientOrderId);
+  }
+
+  /**
+   * Everything the venue believes it holds (#429) — the direction of
+   * reconciliation `getOrder` cannot serve.
+   *
+   * A row whose `qty` does not parse is dropped rather than reported as NaN:
+   * downstream this feeds an exposure comparison, and NaN compares false
+   * against everything, so a poisoned row would silently read as "no
+   * divergence" — the exact answer it must not give.
+   */
+  async getOpenPositions(): Promise<NormalizedPosition[]> {
+    const positions = await this.call('getOpenPositions', () => this.input.client.getPositions());
+
+    return positions.flatMap((position) => {
+      const qty = Number(position.qty);
+      if (!Number.isFinite(qty) || qty === 0) return [];
+      const avgEntry = Number(position.avg_entry_price);
+      return [
+        {
+          instrument: position.symbol,
+          qty,
+          side: position.side === 'long' ? ('buy' as const) : ('sell' as const),
+          avg_entry_price: Number.isFinite(avgEntry) ? avgEntry : null,
+        },
+      ];
+    });
   }
 
   async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {

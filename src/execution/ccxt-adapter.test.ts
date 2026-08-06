@@ -75,7 +75,18 @@ function makeClient() {
   );
 
   return {
-    client: { createOrder, cancelOrder, fetchOrder, fetchOrderByClientOrderId },
+    client: {
+      createOrder,
+      cancelOrder,
+      fetchOrder,
+      fetchOrderByClientOrderId,
+      // #429. Throws rather than answering `[]`: an empty array is the claim
+      // "the venue holds nothing", and a fake that made it silently would let
+      // a test assert no divergence against a venue it never asked.
+      fetchPositions: vi.fn<CcxtBrokerClient['fetchPositions']>(async () => {
+        throw new Error('makeClient: override fetchPositions to use it');
+      }),
+    },
     orders,
     createOrder,
     cancelOrder,
@@ -364,5 +375,93 @@ describe('CcxtBrokerAdapter', () => {
       expect((error as BrokerError).message).not.toContain(secret);
       expect('cause' in (error as BrokerError)).toBe(false);
     });
+  });
+});
+
+/**
+ * #429 — the intervention path, and the place ccxt differs from a
+ * native-bracket venue in a way that matters. There is no parent order whose
+ * cancellation takes its children with it: the stop and target are independent
+ * orders this adapter placed, so cancelling only the entry would leave a live
+ * stop resting against a position that no longer exists.
+ */
+describe('CcxtBrokerAdapter — intervention path (#429)', () => {
+  it('flattens with a MARKET order and no bracket state', async () => {
+    const fake = makeClient();
+    const adapter = new CcxtBrokerAdapter(fake.client, permissiveLimiter());
+
+    const ack = await adapter.submitFlatten('BTC/USD', 'sell', 2, 'flatten-1');
+
+    expect(fake.createOrder).toHaveBeenCalledWith(
+      'BTC/USD',
+      'market',
+      'sell',
+      2,
+      undefined,
+      // The venue-side dedup key, exactly as the entry's is, so a retried
+      // flatten is a no-op rather than a double exit.
+      { clientOrderId: 'flatten-1' },
+    );
+    expect(ack.client_order_id).toBe('flatten-1');
+  });
+
+  it('cancels the entry AND both emulated legs', async () => {
+    const fake = makeClient();
+    const adapter = new CcxtBrokerAdapter(fake.client, permissiveLimiter());
+    await adapter.submitBracket(REQUEST);
+    // Arm the legs, so there is something to leave behind if cancel misses them.
+    fake.orders.set(ENTRY_ID, filledOrder(ENTRY_ID, 2, 100));
+    await adapter.syncBrackets();
+    fake.cancelOrder.mockClear();
+
+    await adapter.cancel(REQUEST.client_order_id, REQUEST.instrument);
+
+    const cancelled = fake.cancelOrder.mock.calls.map(([id]) => id).sort();
+    expect(cancelled).toEqual([ENTRY_ID, STOP_ID, TARGET_ID].sort());
+  });
+
+  it('does not let one dead leg abandon the others', async () => {
+    const fake = makeClient();
+    const adapter = new CcxtBrokerAdapter(fake.client, permissiveLimiter());
+    await adapter.submitBracket(REQUEST);
+    fake.orders.set(ENTRY_ID, filledOrder(ENTRY_ID, 2, 100));
+    await adapter.syncBrackets();
+    fake.cancelOrder.mockClear();
+    // An already-filled or already-cancelled leg rejects — which is the state
+    // a cancel is trying to reach, not a failure.
+    fake.cancelOrder.mockRejectedValueOnce(new Error('order not found'));
+
+    await expect(
+      adapter.cancel(REQUEST.client_order_id, REQUEST.instrument),
+    ).resolves.toBeUndefined();
+    expect(fake.cancelOrder).toHaveBeenCalledTimes(3);
+  });
+
+  it('asks the venue when it has no journalled bracket for the id', async () => {
+    // A submit whose journal write never landed: the entry may still exist
+    // under our client order id, so assuming there is nothing to cancel would
+    // leave it working.
+    const fake = makeClient();
+    fake.fetchOrderByClientOrderId.mockResolvedValueOnce(makeOrder({ id: 'venue-orphan' }));
+    const adapter = new CcxtBrokerAdapter(fake.client, permissiveLimiter());
+
+    await adapter.cancel('idem-unknown', 'BTC/USD');
+
+    expect(fake.cancelOrder).toHaveBeenCalledWith('venue-orphan', 'BTC/USD');
+  });
+
+  it('normalizes venue positions and drops an unusable size', async () => {
+    const fake = makeClient();
+    fake.client.fetchPositions = vi.fn(async () => [
+      { symbol: 'BTC/USD', contracts: 2, side: 'long' as const, entryPrice: 100 },
+      { symbol: 'ETH/USD', contracts: 3, side: 'short' as const, entryPrice: undefined },
+      { symbol: 'SOL/USD', contracts: Number.NaN, side: 'long' as const, entryPrice: 1 },
+    ]);
+    const adapter = new CcxtBrokerAdapter(fake.client, permissiveLimiter());
+
+    expect(await adapter.getOpenPositions()).toEqual([
+      { instrument: 'BTC/USD', qty: 2, side: 'buy', avg_entry_price: 100 },
+      { instrument: 'ETH/USD', qty: -3, side: 'sell', avg_entry_price: null },
+    ]);
   });
 });
