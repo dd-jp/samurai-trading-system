@@ -1087,3 +1087,175 @@ describe('pruneIngestedObservedFills (#313)', () => {
     expect(store.loadObservedFills('ibkr')).toEqual([]);
   });
 });
+
+describe('ccxt write-ahead bracket journal (#312)', () => {
+  const WRITE_AHEAD_REQUEST: NativeBracketRequest = {
+    client_order_id: 'lot-wa-1',
+    instrument: 'BTC/USD',
+    asset_class: 'crypto',
+    side: 'buy',
+    size: 1,
+    entry: 100,
+    stop: 90,
+    target: 120,
+    time_in_force: 'gtc',
+  };
+
+  it('journals the bracket BEFORE the venue call, so a crash leaves a record', async () => {
+    // The window #287 knowingly left open: `createOrder` succeeds, the process
+    // dies before the journal, and a LIVE venue order exists with no local
+    // bracket to arm protective legs from.
+    //
+    // Simulated by throwing from inside `createOrder` AFTER the venue would
+    // have accepted — which is also the honest shape of a timeout.
+    const { db } = openFileStore();
+    const state = new SqliteBrokerStateStore(db);
+    const adapter = new CcxtBrokerAdapter(
+      {
+        async createOrder() {
+          throw new Error('socket hung up after the exchange accepted');
+        },
+        async cancelOrder() {
+          return {};
+        },
+        async fetchOrder() {
+          throw new Error('unused');
+        },
+        async fetchOrderByClientOrderId() {
+          return null;
+        },
+        async fetchOpenPositions() {
+          return [];
+        },
+      } as unknown as CcxtBrokerClient,
+      permissiveLimiter(),
+      state,
+    );
+
+    // `call()` converts venue errors to a credential-safe wrapper, so match
+    // the wrapper rather than the cause's text.
+    await expect(adapter.submitBracket(WRITE_AHEAD_REQUEST)).rejects.toThrow(
+      /submitBracket failed/,
+    );
+
+    // The row survives the throw, at `submitting`. Before this fix there was
+    // no row at all.
+    const [record] = state.loadBrackets('ccxt');
+    expect(record?.client_order_id).toBe('lot-wa-1');
+    expect(record?.phase).toBe('submitting');
+    expect(record?.entry_order_id).toBeNull();
+  });
+
+  it('adopts the venue order id when the crashed call HAD landed', async () => {
+    // The case the write-ahead exists for: the order is live, so the restarted
+    // process must find it and continue protecting the lot.
+    const { path, db } = openFileStore();
+    new SqliteBrokerStateStore(db).saveBracket({
+      venue: 'ccxt',
+      client_order_id: 'lot-wa-1',
+      phase: 'submitting',
+      entry_order_id: null,
+      stop_order_id: null,
+      target_order_id: null,
+      request: {
+        instrument: 'BTC/USD',
+        asset_class: 'crypto',
+        side: 'buy',
+        size: 1,
+        entry: 100,
+        stop: 90,
+        target: 120,
+        time_in_force: 'gtc',
+      },
+      armed_qty: null,
+      arming_qty: null,
+      arm_attempt: 0,
+    });
+
+    const restarted = new SqliteBrokerStateStore(reopen(path));
+    const adapter = new CcxtBrokerAdapter(
+      {
+        async createOrder() {
+          throw new Error('must not re-submit an order the venue already holds');
+        },
+        async cancelOrder() {
+          return {};
+        },
+        async fetchOrder() {
+          return { id: 'venue-1', status: 'open', filled: 0 };
+        },
+        async fetchOrderByClientOrderId() {
+          return { id: 'venue-1', status: 'open', filled: 0 };
+        },
+        async fetchOpenPositions() {
+          return [];
+        },
+      } as unknown as CcxtBrokerClient,
+      permissiveLimiter(),
+      restarted,
+    );
+
+    await adapter.syncBrackets();
+
+    const [record] = restarted.loadBrackets('ccxt');
+    expect(record?.phase).toBe('pending_entry');
+    expect(record?.entry_order_id).toBe('venue-1');
+  });
+
+  it('resolves the bracket when the venue AUTHORITATIVELY never had the order', async () => {
+    // The other half. `createOrder` never landed, so there is nothing to
+    // protect — and the row must stop being reprocessed every poll rather than
+    // sitting at `submitting` forever.
+    const { path, db } = openFileStore();
+    new SqliteBrokerStateStore(db).saveBracket({
+      venue: 'ccxt',
+      client_order_id: 'lot-wa-1',
+      phase: 'submitting',
+      entry_order_id: null,
+      stop_order_id: null,
+      target_order_id: null,
+      request: {
+        instrument: 'BTC/USD',
+        asset_class: 'crypto',
+        side: 'buy',
+        size: 1,
+        entry: 100,
+        stop: 90,
+        target: 120,
+        time_in_force: 'gtc',
+      },
+      armed_qty: null,
+      arming_qty: null,
+      arm_attempt: 0,
+    });
+
+    const restarted = new SqliteBrokerStateStore(reopen(path));
+    const adapter = new CcxtBrokerAdapter(
+      {
+        async createOrder() {
+          throw new Error('unused');
+        },
+        async cancelOrder() {
+          return {};
+        },
+        async fetchOrder() {
+          throw new Error('unused');
+        },
+        // `null` is the AUTHORITATIVE "no such order" contract — an
+        // implementation that merely cannot determine the answer throws.
+        async fetchOrderByClientOrderId() {
+          return null;
+        },
+        async fetchOpenPositions() {
+          return [];
+        },
+      } as unknown as CcxtBrokerClient,
+      permissiveLimiter(),
+      restarted,
+    );
+
+    await adapter.syncBrackets();
+
+    expect(restarted.loadBrackets('ccxt')[0]?.phase).toBe('resolved');
+  });
+});
