@@ -13,7 +13,7 @@ import type {
   MarketDataService,
 } from '../market-data-service/index.js';
 import type { Clock, OpenPosition } from '../shared/index.js';
-import { decide } from './decide.js';
+import { decide, decideWithReason } from './decide.js';
 import { FixtureSetupStore } from './fixture-setup-store.js';
 import type { AssetClass, TraderConfig, TraderInput } from './types.js';
 import { DEFAULT_TRADER_CONFIG } from './types.js';
@@ -835,5 +835,118 @@ describe('decide — cosine precedent wiring (#432)', () => {
 
     expect(intent?.metadata.cosine_precedent.no_precedent).toBe(true);
     expect(intent?.metadata.sizing.cosine_multiplier).toBe(0.75);
+  });
+});
+
+describe('decideWithReason — named skip reasons (#475)', () => {
+  /**
+   * Every skip path, named. Until #475 `trader_log.skip_reason` recorded the
+   * constant `'decide() returned no intent'` for all of them, so a soak could
+   * not tell "the conviction floor is too high" from "the market data feed is
+   * returning NaN marks". These assertions are what stop a future skip path
+   * from being added without a name of its own.
+   */
+
+  it('flat and neutral', async () => {
+    const outcome = await decideWithReason(
+      traderInput({ debate: debateResult({ direction: 'neutral' }) }),
+    );
+
+    expect(outcome.intent).toBeNull();
+    expect(outcome.skip_reason).toBe('neutral_direction_while_flat');
+  });
+
+  it('below the conviction floor', async () => {
+    const outcome = await decideWithReason(
+      traderInput({ debate: debateResult({ confidence: 0.1 }) }),
+    );
+
+    expect(outcome.skip_reason).toBe('below_conviction_floor');
+    // Null, not the ATR: the skip fired before any ATR was computed. "How far
+    // did it get" is half the value of the row.
+    expect(outcome.atr).toBeNull();
+  });
+
+  it('too few bars to compute an ATR', async () => {
+    // Benign — a warm-up or a data gap, expected early in a soak, and
+    // deliberately distinct from a non-finite ATR, which never is.
+    const outcome = await decideWithReason(
+      traderInput({ marketData: new FixtureMarketData(bars(2, 2)) }),
+    );
+
+    expect(outcome.skip_reason).toBe('atr_insufficient_bars');
+  });
+
+  it('below the minimum viable notional', async () => {
+    const outcome = await decideWithReason(
+      traderInput({ config: configWith({ min_viable_notional: 1_000_000 }) }),
+    );
+
+    expect(outcome.skip_reason).toBe('below_min_notional');
+  });
+
+  it('holding, and the debate went neutral', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({ direction: 'neutral' }),
+        positionState: async () => [openPosition()],
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('holding_neutral_or_non_converged');
+  });
+
+  it('holding, and conviction has not risen enough to scale in', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({ confidence: 0.6 }),
+        positionState: async () => [openPosition({ conviction: 0.6 })],
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('scale_in_conviction_delta_not_met');
+  });
+
+  it('reversing out of a position that has no filled size yet', async () => {
+    // The opposite-side path reaches the exit builder, which has nothing to
+    // flatten because the lot is still pending at the venue.
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({ direction: 'bearish' }),
+        positionState: async () => [
+          openPosition({ side: 'buy', filled_size: 0, order_state: 'submitted' }),
+        ],
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('exit_no_filled_size');
+  });
+
+  it('reports no reason at all when an order was produced', async () => {
+    // The other half of the contract: a successful decision must not carry a
+    // skip reason, or a soak query counting skips would double-count trades.
+    const outcome = await decideWithReason(traderInput());
+
+    expect(outcome.intent).not.toBeNull();
+    expect(outcome.skip_reason).toBeNull();
+  });
+
+  it('carries the ATR the stop was priced from', async () => {
+    // #475's other half: `trader_log.atr` was a hardcoded null while the value
+    // sat inside `buildBracket`. It is what explains a stop distance.
+    const outcome = await decideWithReason(traderInput());
+
+    expect(outcome.atr).toBe(2);
+    expect(outcome.intent?.entry).toBe(ENTRY_PRICE);
+  });
+
+  it('is the same decision `decide` makes, projected', async () => {
+    // `decide` is a wrapper over this, so the two cannot drift. If it ever
+    // stops being a projection, this fails rather than the pair silently
+    // disagreeing.
+    const input = traderInput({ debate: debateResult({ confidence: 0.1 }) });
+
+    expect(await decide(input)).toBeNull();
+    expect((await decideWithReason(input)).intent).toBeNull();
   });
 });
