@@ -49,11 +49,27 @@ export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
    * null lands in the table unpriced — so without a rate here the cap would
    * sum straight past every xAI call and the ceiling would be a fiction.
    *
-   * PUBLISHED rates for grok-4 (x.ai/api, retrieved 2026-08-06). Prefix-keyed
-   * like the rest, so a dated snapshot prices without a code change.
+   * CORRECTED 2026-08-06 (post-hoc review of #469). The previous entries were
+   * `grok-4` and `grok-3` at 3/15, with a comment claiming they were published
+   * rates retrieved from x.ai/api. **Neither model exists in xAI's lineup**,
+   * and the rate matched nothing real. Verified against docs.x.ai/docs/models.
+   *
+   * The prefix matching made that actively harmful rather than merely dead:
+   * `'grok-4.5'.startsWith('grok-4')` is true, so every real model would have
+   * priced against the phantom entry — grok-4.3 at 3/15 instead of 1.25/2.50,
+   * a 2.4x-6x OVER-estimate. Over-pricing trips ADR-0008's cap early, which
+   * looks like an outage: Grok stops refreshing mid-soak and the debate's own
+   * budget is crowded out by spend that never happened.
+   *
+   * Figures below are the <200k-token tier, which is the only one these calls
+   * reach (one instrument's sentiment, capped at 10 themes). The >=200k tier is
+   * exactly double on both sides for every model; if a caller ever sends a long
+   * context, these under-price by 2x and the cap runs late.
    */
-  'grok-4': { input: 3, output: 15 },
-  'grok-3': { input: 3, output: 15 },
+  'grok-4.5': { input: 2, output: 6 },
+  'grok-4.3': { input: 1.25, output: 2.5 },
+  'grok-4.20': { input: 1.25, output: 2.5 },
+  'grok-build-0.1': { input: 1, output: 2 },
 });
 
 /**
@@ -73,6 +89,45 @@ export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
  */
 export const CACHE_READ_MULTIPLIER = 0.1;
 export const CACHE_WRITE_MULTIPLIER = 1.25;
+
+/**
+ * Dollars per server-side tool invocation (#476).
+ *
+ * xAI bills tool-using requests in two parts. Their tools documentation states
+ * it directly: "Tool requests are priced based on two components: token usage
+ * and tool invocations." The Grok agent (#464) depends on the server-side
+ * `x_search` tool, so its calls incur this charge on top of tokens, and a meter
+ * that prices only tokens under-counts every one of them.
+ *
+ * PROVENANCE, STATED HONESTLY: the two-component billing MODEL is confirmed
+ * against xAI's own documentation. The FIGURE — $5.00 per 1,000 calls — comes
+ * from third-party pricing summaries (retrieved 2026-08-06) and could NOT be
+ * confirmed against x.ai's own pricing page, which is not publicly fetchable.
+ * Treat it as an estimate of the right order, not a quoted rate. This session
+ * corrected four separate comments that asserted things the code or the vendor
+ * did not support, including a `grok-4` rate whose comment claimed a
+ * provenance it did not have; this note exists so that this constant does not
+ * become the fifth.
+ *
+ * Independent of `MODEL_RATES` on purpose: the charge is per invocation, not
+ * per token, so it applies whether or not the model itself is in the rate
+ * table. That is what lets an unpriced model still record the tool dollars it
+ * definitely cost.
+ */
+export const SERVER_TOOL_USD_PER_CALL = 0.005;
+
+/**
+ * Cost of `count` server-side tool invocations.
+ *
+ * Never null, unlike `priceUsage`: there is no rate table to miss, so this is
+ * either a known charge or zero. A negative or non-finite count is treated as
+ * zero rather than propagating a bad number into `cost_usd`, which `SpendCap`
+ * would then read as a corrupt row and refuse to compare.
+ */
+export function priceServerToolCalls(count: number): number {
+  if (!Number.isFinite(count) || count <= 0) return 0;
+  return count * SERVER_TOOL_USD_PER_CALL;
+}
 
 const TOKENS_PER_MILLION = 1_000_000;
 

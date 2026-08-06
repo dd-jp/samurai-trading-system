@@ -68,6 +68,13 @@ export interface GrokSentimentClient {
     items: IntelligenceItem[];
     model: string;
     usage: { input_tokens: number; output_tokens: number };
+    /**
+     * Server-side tool invocations this call incurred (#476). xAI bills these
+     * per invocation on top of tokens, so the meter needs the count or the cap
+     * under-charges every Grok call. Optional because a client that uses no
+     * server-side tool has nothing to report.
+     */
+    server_tool_calls?: number | undefined;
     latency_ms: number;
   }>;
 }
@@ -84,6 +91,8 @@ export interface GrokSpendSink {
       cache_creation_input_tokens?: number;
       cache_read_input_tokens?: number;
     };
+    /** Passed through so the tool half of xAI's bill reaches `cost_usd` (#476). */
+    server_tool_calls?: number | undefined;
     latency_ms: number;
     timestamp: Date;
   }): void;
@@ -125,9 +134,17 @@ export class GrokAgent {
   /**
    * Refreshes this instrument's sentiment if its bucket has rolled over.
    *
-   * Returns whether a call was actually issued, which is what the smoke gate
-   * asserts against — "the agent ran" and "the agent called xAI" are different
-   * claims, and only the second one costs money or produces data.
+   * Returns whether a call was actually issued — "the agent ran" and "the
+   * agent called xAI" are different claims, and only the second one costs
+   * money or produces data.
+   *
+   * NOT covered by `yarn smoke`, despite what an earlier version of this
+   * comment claimed. The smoke run is offline and keyless, so the composition
+   * root never builds a `GrokAgent` at all (`production.ts` gates it on
+   * `XAI_API_KEY`) and there is nothing for the gate to observe. That is a real
+   * hole in the #430 convention, not a decision: this mechanism's first live
+   * exercise will be the soak itself. See the note in
+   * `docs/specs/market-intelligence-spec.md`.
    *
    * NEVER THROWS. This is called from the tick path, and market intelligence
    * is an optional input: an xAI outage must degrade the debate to
@@ -167,6 +184,9 @@ export class GrokAgent {
         stage: 'market_intelligence',
         model: result.model,
         usage: result.usage,
+        // xAI bills tool invocations separately from tokens, so a meter that
+        // dropped this would under-count every search the agent paid for.
+        server_tool_calls: result.server_tool_calls,
         latency_ms: result.latency_ms,
         timestamp: asOf,
       });

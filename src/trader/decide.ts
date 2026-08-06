@@ -97,16 +97,27 @@ export function atrIndicatorSpec(lookback: number, timeframe: string): Indicator
  * check belongs at the one place every indicator computation passes through,
  * not in every consumer of it.
  */
-function atrFor(bars: Bar[], lookback: number, timeframe: string): number | null {
+function atrFor(
+  bars: Bar[],
+  lookback: number,
+  timeframe: string,
+): { atr: number; reason: null } | { atr: null; reason: TraderSkipReason } {
   const spec = atrIndicatorSpec(lookback, timeframe);
 
   // `lookback + 1` bars yield `lookback` true ranges — the arity lives in
   // `minimumBarsFor`, not in a literal here. Skipping the trade is the only
   // safe answer: a stop cannot be priced off an ATR that does not exist.
-  if (bars.length < minimumBarsFor(spec)) return null;
+  //
+  // The two failures are reported SEPARATELY (#475) because they mean opposite
+  // things operationally: a short window is a warm-up or a data gap and is
+  // expected early in a soak, while a non-finite ATR on a full window means
+  // corrupt bar data and is never expected. Collapsing them to one null — as
+  // this did — made the benign case and the alarming one indistinguishable in
+  // `trader_log`.
+  if (bars.length < minimumBarsFor(spec)) return { atr: null, reason: 'atr_insufficient_bars' };
 
   const atr = computeIndicator(bars, spec);
-  return Number.isFinite(atr) ? atr : null;
+  return Number.isFinite(atr) ? { atr, reason: null } : { atr: null, reason: 'atr_not_finite' };
 }
 
 /**
@@ -130,16 +141,17 @@ function maxRiskFor(assetClass: AssetClass, config: TraderConfig): number {
 }
 
 /**
- * Builds a full entry or scale_in bracket, or null to skip. Skips when:
- * conviction is below the floor, ATR cannot be computed, or the resulting
- * position is below the minimum viable notional. Shared by both intent
- * types (trader-spec.md Module: Position Awareness — scale_in sizes exactly
- * like an entry; Risk enforces the exposure cap downstream).
+ * Builds a full entry or scale_in bracket, or a NAMED skip (#475). Skips when:
+ * conviction is below the floor, ATR cannot be computed, a priced input is not
+ * finite, or the resulting position is below the minimum viable notional.
+ * Shared by both intent types (trader-spec.md Module: Position Awareness —
+ * scale_in sizes exactly like an entry; Risk enforces the exposure cap
+ * downstream).
  */
 async function buildBracket(
   input: TraderInput,
   intentType: 'entry' | 'scale_in',
-): Promise<OrderIntent | null> {
+): Promise<TraderOutcome> {
   const { clock, config, debate, equity, instrument, marketData, setupStore } = input;
 
   // Every caller must have already excluded 'neutral' — sideFor has no
@@ -148,7 +160,7 @@ async function buildBracket(
   if (debate.direction === 'neutral') {
     throw new Error('buildBracket: debate.direction must not be neutral');
   }
-  if (debate.confidence < config.conviction_floor) return null;
+  if (debate.confidence < config.conviction_floor) return skip('below_conviction_floor');
 
   const asOf = clock.now();
   const [mark, bars] = await Promise.all([
@@ -196,8 +208,9 @@ async function buildBracket(
   // `InsufficientBarsError` at the call site and return null), but it is a
   // behaviour decision about the Trader rather than a mechanical swap, so it
   // is the remaining step of #315 rather than a line in this one.
-  const atr = atrFor(bars, config.atr_lookback, config.atr_timeframe);
-  if (atr === null) return null;
+  const atrResult = atrFor(bars, config.atr_lookback, config.atr_timeframe);
+  if (atrResult.atr === null) return skip(atrResult.reason);
+  const atr = atrResult.atr;
 
   // The same NaN argument `atrFor` documents, applied to the OTHER priced
   // input. `atrFor` guards the bars; nothing guarded the quote. Alpaca's
@@ -207,12 +220,12 @@ async function buildBracket(
   // because every comparison against it is false. Checked at the inlet rather
   // than only at `size` so the skip names the input that was bad.
   const entry = mark.price;
-  if (!Number.isFinite(entry)) return null;
+  if (!Number.isFinite(entry)) return skip('mark_not_finite');
 
   const volFloor = config.vol_floor_fraction * entry;
   const effectiveVol = Math.max(atr, volFloor);
   const stopDistance = config.atr_k * effectiveVol;
-  if (stopDistance <= 0) return null;
+  if (stopDistance <= 0) return skip('stop_distance_not_positive');
 
   const convictionMult = convictionMultiplier(debate.confidence, config.conviction_floor);
   const baseRiskFraction = maxRiskFor(mark.asset_class, config) * convictionMult;
@@ -234,9 +247,9 @@ async function buildBracket(
   // checks above say WHICH input was bad; this one guarantees that no future
   // inlet can reach an emitted intent unchecked. Must precede the min-notional
   // line: `NaN < min_viable_notional` is false, so that check passes NaN.
-  if (!Number.isFinite(size)) return null;
+  if (!Number.isFinite(size)) return skip('size_not_finite');
 
-  if (size * entry < config.min_viable_notional) return null;
+  if (size * entry < config.min_viable_notional) return skip('below_min_notional');
 
   // Written only once every skip guard has passed, so a decision the Trader
   // itself declined leaves no row.
@@ -263,39 +276,42 @@ async function buildBracket(
   // and would break the idempotency guarantee.
   const decisionBar = mark.observed_at;
 
-  return {
-    idempotency_key: computeIdempotencyKey(instrument, decisionBar),
-    instrument,
-    asset_class: mark.asset_class,
-    side,
-    intent_type: intentType,
-    size,
-    entry,
-    stop: entry - direction * stopDistance,
-    target: entry + direction * config.reward_risk_multiple * stopDistance,
-    time_in_force: config.time_in_force[mark.asset_class],
-    decision_timestamp: decisionBar,
-    metadata: {
-      debate_id: debate.debate_id,
-      conviction: debate.confidence,
-      converged: debate.converged,
-      sizing: {
-        base_risk_fraction: baseRiskFraction,
-        conviction_multiplier: convictionMult,
-        // How much the floor widened the stop. A non-positive ATR (perfectly
-        // flat history) leaves the ratio undefined and the floor as sole
-        // determinant; recorded as 1.
-        vol_floor_factor: atr > 0 ? effectiveVol / atr : 1,
-        non_converged_haircut: nonConvergedHaircut,
-        cosine_multiplier: precedent.cosine_multiplier,
-      },
-      cosine_precedent: {
-        neighbor_count: precedent.neighbor_count,
-        weighted_mean_r: precedent.weighted_mean_r,
-        no_precedent: precedent.no_precedent,
+  return emit(
+    {
+      idempotency_key: computeIdempotencyKey(instrument, decisionBar),
+      instrument,
+      asset_class: mark.asset_class,
+      side,
+      intent_type: intentType,
+      size,
+      entry,
+      stop: entry - direction * stopDistance,
+      target: entry + direction * config.reward_risk_multiple * stopDistance,
+      time_in_force: config.time_in_force[mark.asset_class],
+      decision_timestamp: decisionBar,
+      metadata: {
+        debate_id: debate.debate_id,
+        conviction: debate.confidence,
+        converged: debate.converged,
+        sizing: {
+          base_risk_fraction: baseRiskFraction,
+          conviction_multiplier: convictionMult,
+          // How much the floor widened the stop. A non-positive ATR (perfectly
+          // flat history) leaves the ratio undefined and the floor as sole
+          // determinant; recorded as 1.
+          vol_floor_factor: atr > 0 ? effectiveVol / atr : 1,
+          non_converged_haircut: nonConvergedHaircut,
+          cosine_multiplier: precedent.cosine_multiplier,
+        },
+        cosine_precedent: {
+          neighbor_count: precedent.neighbor_count,
+          weighted_mean_r: precedent.weighted_mean_r,
+          no_precedent: precedent.no_precedent,
+        },
       },
     },
-  };
+    atr,
+  );
 }
 
 /**
@@ -309,7 +325,7 @@ async function buildBracket(
 async function buildExitIntent(
   input: TraderInput,
   positions: OpenPosition[],
-): Promise<OrderIntent | null> {
+): Promise<TraderOutcome> {
   const { clock, config, debate, instrument, marketData } = input;
 
   const existingSide = positions[0]?.side;
@@ -321,47 +337,50 @@ async function buildExitIntent(
   // `submitted` has nothing on the books yet, so an all-pending instrument
   // has no fill to close and there is nothing to emit.
   const totalSize = positions.reduce((sum, lot) => sum + lot.filled_size, 0);
-  if (totalSize <= 0) return null;
+  if (totalSize <= 0) return skip('exit_no_filled_size');
 
   const asOf = clock.now();
   const mark = await marketData.getMark(instrument, asOf);
   const decisionBar = mark.observed_at;
 
-  return {
-    idempotency_key: computeIdempotencyKey(instrument, decisionBar),
-    instrument,
-    asset_class: mark.asset_class,
-    side: closingSide,
-    intent_type: 'exit',
-    size: totalSize,
-    entry: mark.price,
-    stop: mark.price,
-    target: mark.price,
-    time_in_force: config.time_in_force[mark.asset_class],
-    decision_timestamp: decisionBar,
-    metadata: {
-      debate_id: debate.debate_id,
-      conviction: debate.confidence,
-      converged: debate.converged,
-      sizing: {
-        base_risk_fraction: 0,
-        conviction_multiplier: 0,
-        vol_floor_factor: 1,
-        non_converged_haircut: 1,
-        // An exit sizes to the held quantity, not to risk, so no precedent is
-        // retrieved and no setup is written: the flatten is the consequence of
-        // an earlier setup, not a new one to find neighbors for. The field is
-        // non-optional (cross-spec-contracts.md registry #1), so it carries
-        // the no-precedent default — which is also the honest reading.
-        cosine_multiplier: NO_PRECEDENT_MULTIPLIER,
-      },
-      cosine_precedent: {
-        neighbor_count: 0,
-        weighted_mean_r: null,
-        no_precedent: true,
+  return emit(
+    {
+      idempotency_key: computeIdempotencyKey(instrument, decisionBar),
+      instrument,
+      asset_class: mark.asset_class,
+      side: closingSide,
+      intent_type: 'exit',
+      size: totalSize,
+      entry: mark.price,
+      stop: mark.price,
+      target: mark.price,
+      time_in_force: config.time_in_force[mark.asset_class],
+      decision_timestamp: decisionBar,
+      metadata: {
+        debate_id: debate.debate_id,
+        conviction: debate.confidence,
+        converged: debate.converged,
+        sizing: {
+          base_risk_fraction: 0,
+          conviction_multiplier: 0,
+          vol_floor_factor: 1,
+          non_converged_haircut: 1,
+          // An exit sizes to the held quantity, not to risk, so no precedent is
+          // retrieved and no setup is written: the flatten is the consequence of
+          // an earlier setup, not a new one to find neighbors for. The field is
+          // non-optional (cross-spec-contracts.md registry #1), so it carries
+          // the no-precedent default — which is also the honest reading.
+          cosine_multiplier: NO_PRECEDENT_MULTIPLIER,
+        },
+        cosine_precedent: {
+          neighbor_count: 0,
+          weighted_mean_r: null,
+          no_precedent: true,
+        },
       },
     },
-  };
+    null,
+  );
 }
 
 /**
@@ -377,13 +396,105 @@ async function buildExitIntent(
  * - Holding, opposite direction → `exit` (flatten). A same-cycle reversal
  *   fires as a fresh `entry` once flat, next cycle.
  */
+/**
+ * Every distinct way the Trader can decline to trade (#475).
+ *
+ * A CLOSED UNION rather than free text, so the set is greppable, countable
+ * across a soak, and impossible to typo into a new category that looks like a
+ * new phenomenon. Adding a skip path means adding a member here, which is the
+ * point: the compiler asks the question the old bare `null` let us skip.
+ *
+ * Ordered roughly by how often they should fire in a healthy run. The last
+ * four are data-quality failures — if any of them appears in soak logs at all,
+ * the market data feed is the thing to look at, not the strategy.
+ */
+export type TraderSkipReason =
+  | 'neutral_direction_while_flat'
+  | 'below_conviction_floor'
+  | 'below_min_notional'
+  | 'holding_neutral_or_non_converged'
+  | 'scale_in_conviction_delta_not_met'
+  | 'exit_no_filled_size'
+  | 'no_position_side'
+  | 'atr_insufficient_bars'
+  | 'atr_not_finite'
+  | 'mark_not_finite'
+  | 'stop_distance_not_positive'
+  | 'size_not_finite';
+
+/**
+ * What `decideWithReason` returns: an intent, or the reason there isn't one.
+ *
+ * Exactly one side is populated. Not modelled as a discriminated union on a
+ * `kind` field because the two consumers both want `intent` directly — the
+ * production caller writes it to `trader_log` alongside the reason, and
+ * `decide` projects it — and a tag would make both read through a narrowing
+ * they do not otherwise need.
+ */
+export interface TraderOutcome {
+  intent: OrderIntent | null;
+  skip_reason: TraderSkipReason | null;
+  /**
+   * The ATR this decision priced its stop from (#475).
+   *
+   * Surfaced because `trader_log.atr` has had a column since migration 0016 and
+   * was written as a hardcoded `null` — the value existed, inside
+   * `buildBracket`, and simply never left it. It is the input that explains a
+   * stop distance, so without it a soak cannot tell a wide stop from a volatile
+   * instrument.
+   *
+   * Null on an exit (no stop is priced, so no ATR is computed) and on any skip
+   * that happened before or at the ATR step. Carried here rather than added to
+   * `OrderIntentMetadata` because it is a diagnostic about the DECISION, not a
+   * term of the order — nothing downstream of the Trader sizes from it.
+   */
+  atr: number | null;
+}
+
+/**
+ * A declined decision. Narrow helper so the twelve skip sites stay one line
+ * each — and so adding a fourteenth cannot forget a field.
+ */
+function skip(reason: TraderSkipReason): TraderOutcome {
+  return { intent: null, skip_reason: reason, atr: null };
+}
+
+/** A decision that produced an order. */
+function emit(intent: OrderIntent, atr: number | null): TraderOutcome {
+  return { intent, skip_reason: null, atr };
+}
+
 export async function decide(input: TraderInput): Promise<OrderIntent | null> {
+  return (await decideWithReason(input)).intent;
+}
+
+/**
+ * `decide`, but saying WHY when it declines (#475).
+ *
+ * The Trader has thirteen distinct ways to produce no order, and until this
+ * existed `trader_log.skip_reason` recorded the same string —
+ * `'decide() returned no intent'` — for every one of them. #328's resolution
+ * called the skip row "the highest-value row of the lot", and the whole point
+ * of it is answering why nothing traded; one constant answers nothing. During
+ * an unattended soak (#238) that is the difference between "the conviction
+ * floor is too high" and "the market data feed is returning NaN marks", which
+ * are the same row today.
+ *
+ * A SEPARATE ENTRY POINT rather than a changed return type, because `decide`'s
+ * `OrderIntent | null` contract is exercised by a large existing test suite and
+ * one production caller. Widening the contract everywhere would have churned
+ * every one of those assertions for a diagnostic gain, and churned tests are
+ * tests nobody re-reads. `decide` is now a one-line wrapper over this, so the
+ * two cannot drift: there is one implementation, and the old signature is a
+ * projection of it.
+ */
+export async function decideWithReason(input: TraderInput): Promise<TraderOutcome> {
   const { config, debate, instrument, positionState } = input;
 
   const positions = (await positionState()).filter((lot) => lot.instrument === instrument);
 
   if (positions.length === 0) {
-    if (debate.direction === 'neutral') return null;
+    if (debate.direction === 'neutral') return skip('neutral_direction_while_flat');
     return buildBracket(input, 'entry');
   }
 
@@ -391,9 +502,11 @@ export async function decide(input: TraderInput): Promise<OrderIntent | null> {
   // per-lot design: scale_in only adds same-direction, exit flattens before
   // a fresh entry) — no defensive mixed-side reconciliation.
   const existingSide = positions[0]?.side;
-  if (existingSide === undefined) return null;
+  if (existingSide === undefined) return skip('no_position_side');
 
-  if (debate.direction === 'neutral' || !debate.converged) return null;
+  if (debate.direction === 'neutral' || !debate.converged) {
+    return skip('holding_neutral_or_non_converged');
+  }
 
   const desiredSide = sideFor(debate.direction);
   if (desiredSide !== existingSide) {
@@ -403,7 +516,9 @@ export async function decide(input: TraderInput): Promise<OrderIntent | null> {
   const mostRecentLot = positions.reduce((latest, lot) =>
     lot.opened_at > latest.opened_at ? lot : latest,
   );
-  if (debate.confidence - mostRecentLot.conviction < config.scale_in_conviction_delta) return null;
+  if (debate.confidence - mostRecentLot.conviction < config.scale_in_conviction_delta) {
+    return skip('scale_in_conviction_delta_not_met');
+  }
 
   return buildBracket(input, 'scale_in');
 }

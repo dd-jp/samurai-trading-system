@@ -580,17 +580,20 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
    * Reconcile reads the throw as `undetermined` and leaves the record
    * untouched for an operator.
    *
-   * One window is left deliberately open, and it is the reason this does NOT
-   * fall back to `fetchOrderByClientOrderId` even though the slice now offers
-   * it: `submitBracket` journals AFTER `createOrder` returns (it has no venue
-   * id to record before then), so a crash inside that call leaves a live entry
-   * at the venue with no journal row. Asking the venue here would let
-   * `reconcile()` settle such a lot as `submitted`/`filled` — and settle is
-   * exactly the wrong outcome, because the emulation still has no bracket for
-   * it and will never arm its legs. A lot reported healthy with no protective
-   * orders is worse than one flagged `undetermined`, which at least stops an
-   * operator. Closing the window properly means write-ahead-with-null-id plus
-   * a recovery path for it, which is its own decision (see the PR for #287).
+   * That window is now CLOSED (#312): `submitBracket` write-aheads the journal
+   * row in phase `submitting` BEFORE calling `createOrder`, so a crash inside
+   * that call no longer leaves a live venue entry with no journal row. The
+   * previous version of this comment described the old ordering — journal
+   * after `createOrder` returns — and stopped being true in the same commit
+   * that introduced `submitting`.
+   *
+   * A `submitting` bracket is therefore a state this method must EXPECT rather
+   * than treat as corruption: `rehydrate` deliberately loads such rows, and
+   * until `resolveSubmitting` has asked the venue, whether an order exists is
+   * genuinely unknown. It is reported as `undetermined` — the same disposition
+   * as an unresolvable id, and for the same reason. Settling it either way
+   * would be a guess: `rejected` could abandon a live unprotected lot, and
+   * `submitted` could invent one that was never accepted.
    */
   async getOrder(clientOrderId: string, instrument: string): Promise<NormalizedOrder | null> {
     const bracket = this.brackets.get(clientOrderId);
@@ -599,6 +602,22 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
         `ccxt adapter cannot resolve client_order_id '${clientOrderId}' (${instrument}) to a venue ` +
           "order id: the bracket is in neither this process's emulation state nor the durable " +
           'bracket journal, so this adapter has no record it ever placed it.',
+      );
+    }
+
+    // `submitting` named explicitly (#312), because `rehydrate` deliberately
+    // loads these rows. Falling through would reach `entryIdOf`, which throws
+    // "this is a phase-machine bug" — the wrong story for a legitimate state,
+    // and the kind of message that sends an operator hunting for a defect that
+    // is not there. The disposition is identical either way (`reconcile` reads
+    // a throw as `undetermined`); only the explanation changes.
+    if (bracket.phase === 'submitting') {
+      throw new Error(
+        `ccxt adapter cannot yet report on client_order_id '${clientOrderId}' (${instrument}): ` +
+          "the bracket is in phase 'submitting', meaning `createOrder` was written ahead but " +
+          'its outcome is not yet known. `resolveSubmitting` asks the venue on the next poll ' +
+          'and moves it to `pending_entry` or `resolved`. Undetermined is the honest answer ' +
+          'until then — settling it would either abandon a live lot or invent one.',
       );
     }
 

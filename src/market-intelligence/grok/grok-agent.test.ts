@@ -65,7 +65,7 @@ function build(options: { spendCap?: SpendCap; fail?: boolean } = {}) {
         if (options.fail === true) throw new Error('xAI responded 503');
         return {
           items: [item(`i-${fetches}`)],
-          model: 'grok-4',
+          model: 'grok-4.5',
           usage: { input_tokens: 100, output_tokens: 50 },
           latency_ms: 42,
         };
