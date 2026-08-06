@@ -58,6 +58,26 @@ Driven by `invalidation_log`, joined on `(instrument, bar_timestamp)`. Showing d
 6. As an operator, I want current per-analyst weights and their rolling attribution, so that I can see which analysts are earning trust and which are being tuned down.
 7. As an operator, I want the Feedback Loop's daily `MetricsSuite` (Sharpe, Sortino, Calmar, max drawdown, profit factor, expectancy, skew/kurtosis, turnover, exposure), so that I see the full metrics picture the research constraints require, not a single vanity number.
 
+### Pipeline (second view, 2026-08-06)
+
+Added by [Wayfinder: dashboard pipeline view](https://github.com/dd-jp/samurai-trading-system/issues/411). A **second tab** alongside everything above, which is unchanged and remains the default landing view. The four tables answer *what the system holds and what it decided*; this view answers *where each ticker is in the pipeline right now, and where the last one stopped*.
+
+**Primitive: ticker lanes** ([#412](https://github.com/dd-jp/samurai-trading-system/issues/412)) — one row per instrument, one column per stage, the cell carrying what happened at that stage. Chosen over a stage rail (reads system load well, a single ticker's journey badly) and a trace waterfall (reads latency well, at-a-glance state badly).
+
+12. As an operator, I want one row per instrument showing its progress across every stage, so that I can see at a glance which tickers are moving and which are stuck.
+13. As an operator, I want a stage that was **skipped** to read differently from one that **stopped** the tick, so that routine traffic is never displayed as a halt. `invalidation` runs only for `entry`/`scale_in` intents and never terminates a tick, so "skipped" is the common case there, not an anomaly.
+14. As an operator, I want a stage reached more than once in a trace to show its attempt count, so that a retry storm is visible rather than collapsed into a single cell.
+15. As an operator, I want a dormant instrument (market closed, no tick) to read as idle rather than vanish, so that absence of activity is distinguishable from absence of the instrument.
+16. As an operator, I want to open one lane and see that trace's stage sequence and, for a completed debate, its per-analyst contributions — with the live case stating plainly that round-by-round state is not persisted (decision #10) rather than showing a spinner that will never resolve.
+
+**Seven stages, not six.** `analysts → debate → trader → invalidation → risk → verdict → execution`. `invalidation` is specced and not yet built, so today its column renders as never-reached for every lane; `audit_log.stage` is unconstrained TEXT, so the column fills in on its own the day the stage ships.
+
+**Attribution — migration 0013.** This view is only possible because `audit_log` now carries `instrument`/`asset_class`. Before that, the sole trace_id → instrument links were `current_tick` (in-flight only, deleted at tick end) and `verdict_log` (only traces reaching Verdict), so **every short-circuited tick was attributable to no instrument at all** — a lane that went quiet because Risk kept rejecting it looked identical to a closed market. The writer already held both values; they were never persisted. `NULL` means "not attributable" (pre-migration rows, and the HITL callback path, which records under an existing trace_id with no `Signal` in scope) and must never be guessed into a lane.
+
+**Bounded by a window, not a count.** A lane shows the most recent trace within a 15-minute lookback, capped at 24 lanes. The window doubles as the staleness guard: a crash deliberately leaves `current_tick` behind (`tick-runner.ts` — a stale row must be visible, not tidied away), and without the window the view would report a dead tick as running indefinitely.
+
+**Constraints carried unchanged from v1:** read-only, poll-only on the existing 3s `/api/snapshot`, zero runtime dependencies, one payload rather than a second endpoint. Motion is confined to a single ring on cells whose state actually changed between two polls — nothing travels across the page, because the view never observed the intermediate moment and animating one would assert a continuity the data does not have. A tick shorter than the poll interval legitimately appears as a completed flash.
+
 ### Operation
 
 8. As an operator, I want to open one URL in a browser and see current state, so that I can check status without a terminal.
@@ -186,6 +206,8 @@ interface DashboardServer {
 - **A true in-flight/live debate-round view** — the Debate Engine's ephemeral operational round state isn't persisted (decision #10); only completed debates plus a coarse tick-status line are observable.
 - **Remote/public access, auth, HTTPS** — LAN-only opt-in via `HOST`, matching the single-MacBook deployment target. A hosted multi-user product is a different problem, not designed here.
 - **Alerting** — the dead-man's-switch heartbeat and trade notifications are the Orchestrator's/Verdict's concern (already specced); the Dashboard is a pull, not a push, mechanism.
+- **Trader/Risk drill-down in the Pipeline view** — those two stages persist no decision content anywhere (no `trader_log`, no `risk_log`; `audit_log` holds only a digest), so their cells report that a stage ran and nothing about what it decided. What gets persisted is owned by [#328](https://github.com/dd-jp/samurai-trading-system/issues/328); where it surfaces is reserved in [#417](https://github.com/dd-jp/samurai-trading-system/issues/417). The view shows an honest empty slot rather than inventing content.
+- **Per-tick history in the Pipeline view** — a lane holds one trace, the most recent inside the window. Chronological history across ticks is what the Verdict History table already provides; a second path to the same facts is maintenance cost, not a feature.
 
 ## Further Notes
 

@@ -10,6 +10,7 @@ import type { MetricsSuite } from '../cost-model-backtest/index.js';
 import type { AnalystContribution } from '../debate-engine/index.js';
 import type { Mark } from '../market-data-service/index.js';
 import type { DebateLog, OpenPosition } from '../shared/index.js';
+import { PIPELINE_LOOKBACK_MS, PIPELINE_MAX_LANES } from './pipeline-query.js';
 import { buildSnapshot } from './snapshot.js';
 import type {
   AttributionSummary,
@@ -122,6 +123,7 @@ function fakeStore(overrides: Partial<DashboardQueryStore> = {}): DashboardQuery
       last_7d: { ...EMPTY_SPEND_WINDOW },
       all_time: { ...EMPTY_SPEND_WINDOW },
     }),
+    getPipelineActivity: () => ({ universe: [], events: [], live: [] }),
     ...overrides,
   };
 }
@@ -242,5 +244,77 @@ describe('buildSnapshot', () => {
       hitl_override: false,
     });
     expect(snap.verdicts[1]?.hitl_override).toBe(true);
+  });
+
+  it('projects the pipeline lanes onto the same snapshot and the same asOf', () => {
+    const store = fakeStore({
+      getPipelineActivity: () => ({
+        universe: [{ instrument: 'AAPL', asset_class: 'stocks' }],
+        events: [
+          {
+            trace_id: 'trace-1',
+            instrument: 'AAPL',
+            asset_class: 'stocks',
+            stage: 'analysts',
+            decision: 'quorum_skip',
+            timestamp: AS_OF,
+          },
+        ],
+        live: [],
+      }),
+    });
+
+    const snap = buildSnapshot(store, AS_OF);
+
+    expect(snap.pipeline.lanes).toHaveLength(1);
+    expect(snap.pipeline.lanes[0]).toMatchObject({
+      instrument: 'AAPL',
+      outcome: 'quorum_skip',
+      started_at: AS_OF.toISOString(),
+    });
+    // The lanes cross the wire with the tables, not on a second poll — a
+    // `Date` surviving here would break the same JSON boundary the rest of
+    // the snapshot maintains.
+    expect(() => JSON.stringify(snap)).not.toThrow();
+  });
+
+  it('asks for a bounded pipeline read rather than the whole audit history', () => {
+    let asked: { maxLanes: number; lookbackMs: number; asOf: Date } | null = null;
+    const store = fakeStore({
+      getPipelineActivity: (maxLanes, lookbackMs, asOf) => {
+        asked = { maxLanes, lookbackMs, asOf };
+        return { universe: [], events: [], live: [] };
+      },
+    });
+
+    buildSnapshot(store, AS_OF);
+
+    // This read rides a 3-second poll; an unbounded one would degrade the
+    // whole dashboard as the audit log grows through a 14-day soak.
+    expect(asked).toEqual({
+      maxLanes: PIPELINE_MAX_LANES,
+      lookbackMs: PIPELINE_LOOKBACK_MS,
+      asOf: AS_OF,
+    });
+  });
+
+  it('renders every lane idle, not an empty view, when nothing has ticked', () => {
+    const store = fakeStore({
+      getPipelineActivity: () => ({
+        universe: [
+          { instrument: 'BTC-USD', asset_class: 'crypto' },
+          { instrument: 'SPY', asset_class: 'stocks' },
+        ],
+        events: [],
+        live: [],
+      }),
+    });
+
+    const snap = buildSnapshot(store, AS_OF);
+
+    // #413's idle frame, end to end: a closed market is the common case, and
+    // the lanes must still be there to say so.
+    expect(snap.pipeline.lanes.map((l) => l.outcome)).toEqual(['idle', 'idle']);
+    expect(snap.pipeline.live_trace_id).toBeNull();
   });
 });

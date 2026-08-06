@@ -12,7 +12,7 @@
  * `SqliteExecutionStore.getFills` orders by `rowid`).
  */
 import type { SharedStore } from '../shared/store/index.js';
-import type { AuditLog } from './types.js';
+import type { AssetClass, AuditLog } from './types.js';
 
 export interface AuditLogEntry {
   trace_id: string;
@@ -21,6 +21,16 @@ export interface AuditLogEntry {
   input_digest: string;
   output_digest: string;
   timestamp: Date;
+  /**
+   * Which instrument this trace belonged to (migration 0013).
+   *
+   * Optional because not every audit row comes from a tick: the HITL callback
+   * path records under an existing `trace_id` with no `Signal` in scope. A
+   * missing value means "not attributable", never "no instrument" — readers
+   * must not treat it as a lane.
+   */
+  instrument?: string;
+  asset_class?: AssetClass;
 }
 
 interface AuditLogRow {
@@ -30,6 +40,9 @@ interface AuditLogRow {
   input_digest: string;
   output_digest: string;
   timestamp: string;
+  /** NULL for rows written before migration 0013, and for non-tick audit rows. */
+  instrument: string | null;
+  asset_class: AssetClass | null;
 }
 
 export class SqliteAuditLog implements AuditLog {
@@ -38,8 +51,9 @@ export class SqliteAuditLog implements AuditLog {
   record(entry: AuditLogEntry): void {
     this.db
       .prepare(
-        `INSERT INTO audit_log (trace_id, stage, decision, input_digest, output_digest, timestamp)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO audit_log
+           (trace_id, stage, decision, input_digest, output_digest, timestamp, instrument, asset_class)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         entry.trace_id,
@@ -48,6 +62,8 @@ export class SqliteAuditLog implements AuditLog {
         entry.input_digest,
         entry.output_digest,
         entry.timestamp.toISOString(),
+        entry.instrument ?? null,
+        entry.asset_class ?? null,
       );
   }
 
@@ -63,6 +79,8 @@ export class SqliteAuditLog implements AuditLog {
       input_digest: row.input_digest,
       output_digest: row.output_digest,
       timestamp: new Date(row.timestamp),
+      ...(row.instrument === null ? {} : { instrument: row.instrument }),
+      ...(row.asset_class === null ? {} : { asset_class: row.asset_class }),
     }));
   }
 }
