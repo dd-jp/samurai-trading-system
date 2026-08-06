@@ -187,6 +187,18 @@ export function sizeTrialGridToSample(
   // one refactor away from being lost, and the failure mode it protects
   // against is silent rather than loud. `< 1` rather than `=== 0` for the same
   // reason: MinBTL is a continuous expression underneath.
+  // Same failure, from the other side and reachable: an EMPTY grid falls
+  // through the `requested <= limit` branch below and returns an empty
+  // selection with no complaint. This function is exported, so "no caller
+  // passes an empty array today" is not a guarantee it holds.
+  if (requested < 1) {
+    throw new Error(
+      'sizeTrialGridToSample: an empty grid cannot be sized — there is nothing to run, ' +
+        'and a Stage 2 verdict over zero trials has no failing config to report, so it ' +
+        'reads as a pass.',
+    );
+  }
+
   if (limit < 1) {
     throw new Error(
       `sizeTrialGridToSample: MinBTL supports ${limit} configs over a ` +

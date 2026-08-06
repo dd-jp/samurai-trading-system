@@ -708,6 +708,14 @@ describe('sizeTrialGridToSample', () => {
     expect(sizing.selected).toHaveLength(12);
   });
 
+  it('refuses an empty grid rather than sizing it to nothing', () => {
+    // The `limit < 1` guard's mirror image, and this one is REACHABLE: an
+    // empty array falls straight through the `requested <= limit` branch and
+    // returns an empty selection, which is the vacuous zero-trial verdict the
+    // guard exists to prevent — arrived at from the other direction.
+    expect(() => sizeTrialGridToSample([], windowOfYears(2))).toThrow(/empty grid/);
+  });
+
   it('keeps only distinct configs — a duplicate would inflate N against the cap', () => {
     const sizing = sizeTrialGridToSample(buildTrialGrid(), windowOfYears(2));
     const hashes = sizing.selected.map((entry) => entry.config_hash);

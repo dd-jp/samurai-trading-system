@@ -23,7 +23,6 @@
  * (or wire an `npm run stage2` script once this has been run for real once).
  */
 import {
-  buildTrialGrid,
   type CostConfig,
   CostModelImpl,
   CRYPTO_PERIODS_PER_YEAR,
