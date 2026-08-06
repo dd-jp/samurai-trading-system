@@ -238,13 +238,29 @@ Majority quorum ensures debates have sufficient input for meaningful consensus. 
 
 **Budget by Asset Class**
 
+Both breakdowns below were corrected in [#346](https://github.com/dd-jp/samurai-trading-system/issues/346). The originals summed the analyst stage **as if analysts ran in series**. They do not: `AnalystOrchestrator` dispatches them through `Promise.all` (`src/analysts/orchestrator.ts`), so three analysts cost roughly one call's latency, not three.
+
 - **Crypto**: 15s hard cap
-  - Breakdown: ~2s per analyst (6-8s) + ~3s per round × 3 rounds (9s) = ~15-17s total
+  - Breakdown: ~2s for the analyst stage (parallel, not 6-8s) + ~3s per round × 3 rounds (9s) = **~11s** total
   - Rationale: crypto markets are 24/7, signals decay fast, need tight latency
   
 - **Stocks**: 60s hard cap
-  - Breakdown: ~5s per analyst (15-20s) + ~15s per round × 3 rounds (45s) = ~60-65s total
+  - Breakdown: ~5s for the analyst stage (parallel, not 15-20s) + ~15s per round × 3 rounds (45s) = **~50s** total
   - Rationale: stocks move slower, have market-hours buffer, can afford longer debate
+
+**Crypto's per-call budget, and the posture on it (#346)**
+
+The debate itself is strictly sequential and cannot be parallelised without changing its semantics: per round `bull.argue` → `bear.argue` → `mediator.assess`, each awaited, each genuinely dependent on the last (bear's `RoundContext` carries bull's argument; the mediator's carries both). With `MAX_ROUNDS = 3`, a debate is 3 LLM calls if it converges in round 1 and 9 if it runs to the cap. Against the 15s crypto budget:
+
+| Path | Calls | Budget per call |
+|---|---|---|
+| Converges round 1 | 3 | 5000ms |
+| Converges round 2 | 6 | 2500ms |
+| Runs to round 3 | 9 | 1667ms |
+
+**Decision: crypto assumes round-1/round-2 convergence, and the budget and round cap stay as they are.** A crypto debate that runs to round 3 is expected to hit the cap, and that is an accepted outcome rather than a fault — the hard-timeout behaviour below terminates early and returns the state it has with `converged: false`, which the Trader already haircuts (story 18: downstream "can apply caution rather than blocking the trade"). Raising the cap would trade signal decay for a debate that had already failed to converge twice; lowering `MAX_ROUNDS` would remove the third round for stocks too, where there is now headroom for it.
+
+Recorded deliberately rather than discovered during a soak. It is also **not** a measurement claim: per-call latency has never been measured, and real numbers would refine the table above rather than change its structure. [#326](https://github.com/dd-jp/samurai-trading-system/issues/326) tracks persisting them once the system runs, at which point a round-3 crypto timeout rate materially above zero is the signal to revisit this.
 
 **Hard Timeout Behavior**
 
@@ -365,7 +381,7 @@ Per CONTEXT.md:
 
 The 15s/60s budgets are initial estimates based on:
 - Crypto: 2s per analyst + 3s per round
-- Stocks: 5s per analyst + 15s per round
+- Stocks: 5s for the parallel analyst stage + 15s per round (corrected breakdown above — #346)
 
 These may need tuning in Stage 1 based on:
 - Number of analysts deployed
