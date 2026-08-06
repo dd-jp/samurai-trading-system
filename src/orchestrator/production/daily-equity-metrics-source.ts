@@ -24,10 +24,19 @@
  * sampler with no threshold and a reader with a strict one.
  */
 
-import type { ReturnSeries, TradeSeries } from '../../cost-model-backtest/index.js';
+import type {
+  ReturnSeries,
+  Stage2Selection,
+  TradeSeries,
+} from '../../cost-model-backtest/index.js';
 import { computeMetrics } from '../../cost-model-backtest/index.js';
-import type { DailyMetricsSample, DailyMetricsSource } from '../../feedback-loop/index.js';
-import type { ClosedTrade } from '../../shared/index.js';
+import type {
+  DailyMetricsSample,
+  DailyMetricsSource,
+  RevalidationSnapshot,
+} from '../../feedback-loop/index.js';
+import type { Clock, ClosedTrade } from '../../shared/index.js';
+import { SystemClock } from '../../shared/index.js';
 import type {
   DailyEquityObservation,
   SqliteDailyEquityStore,
@@ -117,10 +126,44 @@ export interface DailyEquityMetricsSourceInput {
    * a config that could switch it off would defeat the whole ticket.
    */
   minReturnObservations?: number;
+  /**
+   * The frozen Stage 2 selections (#375, #384). Absent means the three
+   * revalidation kill-lines stay inert — which is what they were before this
+   * existed, and still the right answer for a deployment that has never run
+   * Stage 2.
+   */
+  stage2Selections?: { getLatestPerAssetClass(): Stage2Selection[] };
+  /** Needed to age a selection out; defaults to the system clock. */
+  clock?: Clock;
 }
+
+/**
+ * 90 days.
+ *
+ * docs/research/02-staged-deployment-plan.md's Stage 4 requires re-running the
+ * Stage 2 validation checks periodically "as new data accumulates (edges decay;
+ * what passed six months ago may not still hold)". A verdict has to expire for
+ * that to mean anything, and 90 days is the same horizon #182 uses for its
+ * WorldMonitor revisit — one quarter of regime, rather than a number invented
+ * here.
+ *
+ * Erring long rather than short is deliberate: expiring too eagerly silences
+ * kill-lines that were working, which is the failure #384 is about.
+ *
+ * **Not configurable, on purpose** (PR #446 review). Two consumers read the
+ * same frozen selection — this source, for `revalidation`, and the composition
+ * root, for the divergence baseline — and a knob on one of them would let the
+ * two disagree about whether a selection is fresh, so three kill-lines could
+ * go inert while the fourth kept firing off the same row. Nothing configures
+ * it, and a knob that can desynchronise two halves of one verdict is worse
+ * than no knob.
+ */
+export const DEFAULT_STAGE2_MAX_AGE_DAYS = 90;
 
 export class SqliteDailyEquityMetricsSource implements DailyMetricsSource {
   private readonly minReturnObservations: number;
+  private readonly stage2MaxAgeMs = DEFAULT_STAGE2_MAX_AGE_DAYS * MS_PER_DAY;
+  private inertNoted = false;
 
   constructor(private readonly input: DailyEquityMetricsSourceInput) {
     const requested = input.minReturnObservations ?? MIN_RETURN_OBSERVATIONS;
@@ -189,7 +232,9 @@ export class SqliteDailyEquityMetricsSource implements DailyMetricsSource {
     };
 
     try {
-      return { daily: computeMetrics(returnSeries, tradeSeries) };
+      const daily = computeMetrics(returnSeries, tradeSeries);
+      const revalidation = this.revalidation();
+      return revalidation === undefined ? { daily } : { daily, revalidation };
     } catch (error) {
       // `computeMetrics` throws rather than return a degenerate number — a
       // zero-variance series has no Sharpe, and a flat account produces exactly
@@ -204,6 +249,88 @@ export class SqliteDailyEquityMetricsSource implements DailyMetricsSource {
       );
       return undefined;
     }
+  }
+
+  /**
+   * `DailyMetricsSample.revalidation` (#384), read from the frozen Stage 2
+   * selection rather than computed here.
+   *
+   * PBO, out-of-sample Sharpe and the deflated Sharpe are walk-forward / CSCV
+   * statistics over a trial grid — a live paper run cannot compute them about
+   * itself, which is exactly why the three kill-lines they feed had no producer
+   * and could never fire. #384 named this resolution in advance.
+   *
+   * Absent (`undefined`) whenever there is nothing honest to report, which
+   * keeps those lines inert rather than fabricating a snapshot:
+   * - Stage 2 has never been run and persisted anything;
+   * - the selection is older than `stage2MaxAgeMs` (below);
+   * - the run refused to compute PBO or DSR, so a snapshot would have to
+   *   invent one of the two numbers the kill-lines test.
+   *
+   * When BOTH asset classes have a selection, the WORSE one is reported: the
+   * higher PBO. A portfolio holding crypto and stocks is only as validated as
+   * its weaker half, and averaging two verdicts would hide a failed one behind
+   * a passing one.
+   */
+  private revalidation(): RevalidationSnapshot | undefined {
+    const selections = this.input.stage2Selections?.getLatestPerAssetClass() ?? [];
+    if (selections.length === 0) {
+      this.noteInert('Stage 2 has never persisted a selected config');
+      return undefined;
+    }
+
+    const now = (this.input.clock ?? new SystemClock()).now();
+    const fresh = selections.filter(
+      (selection) => now.getTime() - selection.selected_at.getTime() <= this.stage2MaxAgeMs,
+    );
+    if (fresh.length === 0) {
+      this.noteInert(
+        `every persisted Stage 2 selection is older than ${
+          this.stage2MaxAgeMs / MS_PER_DAY
+        } days — a verdict about an old sample says nothing about today's regime`,
+      );
+      return undefined;
+    }
+
+    // Both statistics are required: the snapshot's shape has no room for "PBO
+    // was refused", and a zero would read as a perfect result.
+    const usable = fresh.filter((selection) => selection.pbo !== null && selection.dsr !== null);
+    if (usable.length === 0) {
+      this.noteInert(
+        'the persisted Stage 2 selection refused to compute PBO or DSR, so no honest ' +
+          'revalidation snapshot exists',
+      );
+      return undefined;
+    }
+
+    const worst = usable.reduce((a, b) => ((a.pbo as number) >= (b.pbo as number) ? a : b));
+
+    return {
+      walk_forward_sharpe_distribution: worst.fold_sharpes,
+      deflated_sharpe: worst.dsr as number,
+      pbo: worst.pbo as number,
+    };
+  }
+
+  /**
+   * Says once per process why the three revalidation kill-lines stay inert.
+   *
+   * Once, not once per cycle: this is a standing state of the deployment, not
+   * an event, and #342's lesson is that a line repeated daily for 14 days is a
+   * line nobody reads.
+   */
+  private noteInert(reason: string): void {
+    if (this.inertNoted) return;
+    this.inertNoted = true;
+    this.input.logger.log({
+      trace_id: 'feedback-cycle',
+      stage: 'feedback-loop',
+      level: 'warn',
+      message:
+        `no revalidation snapshot — ${reason}. The pbo_over_max, oos_sharpe_under_min and ` +
+        'dsr_insignificant kill-lines cannot fire until one exists (#384).',
+      payload: { revalidation: 'inert' },
+    });
   }
 
   private skip(reason: string, payload: Record<string, unknown>): void {

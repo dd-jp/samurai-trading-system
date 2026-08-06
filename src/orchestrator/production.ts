@@ -112,7 +112,7 @@
  */
 import { AnalystOrchestrator } from '../analysts/index.js';
 import type { CostConfig } from '../cost-model-backtest/index.js';
-import { CostModelImpl } from '../cost-model-backtest/index.js';
+import { CostModelImpl, SqliteStage2SelectionStore } from '../cost-model-backtest/index.js';
 import type {
   AnthropicLlmClientConfig,
   LlmClient,
@@ -225,6 +225,7 @@ import type {
 } from './orphan-verdict-scan.js';
 import { AlpacaAccountStateProvider } from './production/account-state.js';
 import { type AnalystSkipAlertChannel, buildAnalystsStep } from './production/analysts-adapter.js';
+import { DEFAULT_STAGE2_MAX_AGE_DAYS } from './production/daily-equity-metrics-source.js';
 import { buildDebateStep, WORST_CASE_LLM_CALLS_PER_DEBATE } from './production/debate-adapter.js';
 import {
   type AccountStateProvider,
@@ -648,6 +649,16 @@ export interface DailyMetricsSourceDeps {
   /** The root's own instance — the same reader `runDailyCycle` attributes over. */
   trades: ClosedTradeStore;
   logger: Logger;
+  /**
+   * The frozen Stage 2 selections (#384) — where `DailyMetricsSample
+   * .revalidation` comes from, since PBO/OOS-Sharpe/DSR are walk-forward
+   * statistics a live run cannot compute about itself. The root's own instance,
+   * so the three revalidation kill-lines and the divergence baseline read the
+   * same row.
+   */
+  stage2Selections: SqliteStage2SelectionStore;
+  /** Ages a selection out; the root's clock, so a replay ages deterministically. */
+  clock: Clock;
 }
 
 /** Deferred construction of a `DailyMetricsSource` — see `DailyMetricsSourceDeps`. */
@@ -693,13 +704,49 @@ export interface DailyMetricsConfig {
    * detector that calls `autoTighten`, which WRITES every risk threshold toward
    * its extreme, against a reference nobody measured.
    *
-   * So `live_backtest_divergence_over_max` remains inert by default, loudly
-   * (see the `warn` in `runMetricsCheck` and `MetricsReport.not_evaluated`), and
-   * arming it is #375's job: run Stage 2 against a real strategy, close
-   * `SqliteConfigTrialLog`'s `config_json` gap, persist the selection, and read
-   * this value from that record instead of taking it as config.
+   * **Superseded as the primary source by #375.** A frozen Stage 2 selection
+   * (`stage2_selected_config`, migration 0014) now carries the selected
+   * config's backtest Sharpe, and the composition root prefers it over this
+   * field whenever a fresh one exists. This stays as the fallback for a
+   * deployment that has never run Stage 2 — where it still defaults to inert,
+   * loudly, for the reason above.
    */
   backtest_reference_sharpe: number;
+}
+
+/**
+ * The divergence baseline (#375): the frozen Stage 2 selection when there is a
+ * fresh one, the operator-supplied config otherwise.
+ *
+ * With a selection for both asset classes it takes the HIGHER backtest Sharpe.
+ * A portfolio's "promise" is a blend of the two that nothing here can compute,
+ * and of the two available readings the higher one is the one MORE likely to
+ * register divergence — the same conservative direction `revalidation` takes
+ * when it reports the worse PBO. A kill-line firing is a report to a human,
+ * not an automatic kill, so erring toward reporting is the right error.
+ *
+ * A stale selection is ignored rather than used: a verdict about an old sample
+ * says nothing about today's regime, and this number drives `autoTighten`,
+ * which writes real risk configuration.
+ */
+function resolveBacktestReferenceSharpe(
+  selections: SqliteStage2SelectionStore,
+  configured: number,
+  clock: Clock,
+): number {
+  const maxAgeMs = DEFAULT_STAGE2_MAX_AGE_DAYS * 24 * 60 * 60 * 1_000;
+
+  const now = clock.now().getTime();
+  const fresh = selections
+    .getLatestPerAssetClass()
+    .filter((selection) => now - selection.selected_at.getTime() <= maxAgeMs);
+
+  if (fresh.length === 0) return configured;
+
+  return fresh.reduce(
+    (best, selection) => Math.max(best, selection.backtest_sharpe),
+    Number.NEGATIVE_INFINITY,
+  );
 }
 
 /**
@@ -1697,6 +1744,14 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
    * `SqliteDailyEquityMetricsSource` refuses) must fail the start it belongs to
    * rather than surface a day later inside a caught timer callback.
    */
+  /**
+   * The frozen Stage 2 selections (#375, #384). One instance, read by two
+   * consumers: the metrics source (for `revalidation`) and the divergence
+   * baseline below. Both must see the same row — a selection good enough to
+   * arm three kill-lines and not the fourth would be incoherent.
+   */
+  const selectionStore = new SqliteStage2SelectionStore(config.db);
+
   const metricsSource =
     config.feedback?.metrics === undefined
       ? undefined
@@ -1704,6 +1759,8 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
           db: config.db,
           trades: feedbackStores.trades,
           logger,
+          stage2Selections: selectionStore,
+          clock,
         });
 
   /**
@@ -1742,7 +1799,11 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       clock,
       daily: sample.daily,
       ...(sample.revalidation === undefined ? {} : { revalidation: sample.revalidation }),
-      backtest_reference_sharpe: metrics.backtest_reference_sharpe,
+      backtest_reference_sharpe: resolveBacktestReferenceSharpe(
+        selectionStore,
+        metrics.backtest_reference_sharpe,
+        clock,
+      ),
       tuning: feedbackStores.tuning,
       adjustments: feedbackStores.adjustments,
       // The same `FeedbackConfig` the tuning cycle used — its

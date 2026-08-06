@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Stage2Selection } from '../../cost-model-backtest/index.js';
 import { computeMetrics as libraryComputeMetrics } from '../../cost-model-backtest/index.js';
 import type {
   AdjustmentLog,
@@ -8,11 +9,12 @@ import type {
   FeedbackConfig,
 } from '../../feedback-loop/index.js';
 import { computeMetrics } from '../../feedback-loop/index.js';
-import type { ClosedTrade, TuningStore } from '../../shared/index.js';
+import type { Clock, ClosedTrade, TuningStore } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { SqliteDailyEquityStore } from '../sqlite-daily-equity-store.js';
 import type { LogEntry, Logger } from '../types.js';
 import {
+  DEFAULT_STAGE2_MAX_AGE_DAYS,
   MIN_RETURN_OBSERVATIONS,
   SqliteDailyEquityMetricsSource,
 } from './daily-equity-metrics-source.js';
@@ -412,6 +414,168 @@ describe('the gate protects autoTighten from a short series', () => {
       // A 9-return sample stepped a real risk threshold toward its floor.
       expect(tuning.thresholds.max_position_pct).toBeLessThan(0.5);
       expect(appended).not.toEqual([]);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+/**
+ * #384 — the revalidation snapshot, and the three kill-lines that could not
+ * fire without one.
+ *
+ * PBO, out-of-sample Sharpe and the deflated Sharpe are walk-forward / CSCV
+ * statistics over a trial grid; a live paper run cannot compute them about
+ * itself. So the snapshot is READ from the frozen Stage 2 selection, and stays
+ * absent whenever there is nothing honest to report.
+ */
+describe('SqliteDailyEquityMetricsSource — revalidation from the Stage 2 selection (#384)', () => {
+  const NOW = new Date('2026-08-06T09:00:00Z');
+  const CLOCK: Clock = { now: () => NOW };
+
+  function selection(overrides: Partial<Stage2Selection> = {}): Stage2Selection {
+    return {
+      config_hash: 'cfg-a',
+      asset_class: 'crypto',
+      selected_at: new Date('2026-08-01T00:00:00Z'),
+      window: { start: new Date('2024-01-01T00:00:00Z'), end: new Date('2026-01-01T00:00:00Z') },
+      backtest_sharpe: 1.4,
+      oos_sharpe: 0.9,
+      fold_sharpes: [0.8, 1.0],
+      pbo: 0.2,
+      dsr: 0.42,
+      n_trials: 24,
+      overall_pass: false,
+      ...overrides,
+    };
+  }
+
+  function sourceWith(
+    store: SqliteDailyEquityStore,
+    logger: Logger,
+    selections: Stage2Selection[],
+  ): SqliteDailyEquityMetricsSource {
+    return new SqliteDailyEquityMetricsSource({
+      equity: store,
+      trades: { getClosedTradesBetween: () => [] },
+      logger,
+      stage2Selections: { getLatestPerAssetClass: () => selections },
+      clock: CLOCK,
+    });
+  }
+
+  it('reports the snapshot from a fresh selection', () => {
+    const { store, cleanup } = openStore();
+    try {
+      seed(store, MIN_RETURN_OBSERVATIONS + 1);
+
+      const sample = sourceWith(store, makeLogger(), [selection()]).getDailyMetrics();
+
+      expect(sample?.revalidation).toEqual({
+        walk_forward_sharpe_distribution: [0.8, 1.0],
+        deflated_sharpe: 0.42,
+        pbo: 0.2,
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('reports the WORSE asset class when both have one', () => {
+    // A portfolio holding crypto and stocks is only as validated as its weaker
+    // half; averaging would hide a failed verdict behind a passing one.
+    const { store, cleanup } = openStore();
+    try {
+      seed(store, MIN_RETURN_OBSERVATIONS + 1);
+
+      const sample = sourceWith(store, makeLogger(), [
+        selection({ asset_class: 'crypto', pbo: 0.9, dsr: 0.1, fold_sharpes: [0.1] }),
+        selection({ asset_class: 'stocks', pbo: 0.01, dsr: 0.99, fold_sharpes: [1.5] }),
+      ]).getDailyMetrics();
+
+      expect(sample?.revalidation?.pbo).toBe(0.9);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('stays absent when Stage 2 has never run', () => {
+    const { store, cleanup } = openStore();
+    try {
+      seed(store, MIN_RETURN_OBSERVATIONS + 1);
+      const logger = makeLogger();
+
+      const sample = sourceWith(store, logger, []).getDailyMetrics();
+
+      expect(sample?.daily).toBeDefined();
+      expect(sample?.revalidation).toBeUndefined();
+      expect(logger.entries.some((entry) => entry.message.includes('never persisted'))).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('refuses a selection older than the freshness bound', () => {
+    // A verdict about an old sample says nothing about today's regime, and this
+    // snapshot drives autoTighten, which WRITES real risk configuration.
+    const { store, cleanup } = openStore();
+    try {
+      seed(store, MIN_RETURN_OBSERVATIONS + 1);
+      const stale = new Date(NOW.getTime() - (DEFAULT_STAGE2_MAX_AGE_DAYS + 1) * 86_400_000);
+
+      const sample = sourceWith(store, makeLogger(), [
+        selection({ selected_at: stale }),
+      ]).getDailyMetrics();
+
+      expect(sample?.revalidation).toBeUndefined();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('refuses a selection whose PBO or DSR was never computed', () => {
+    const { store, cleanup } = openStore();
+    try {
+      seed(store, MIN_RETURN_OBSERVATIONS + 1);
+
+      const sample = sourceWith(store, makeLogger(), [selection({ pbo: null })]).getDailyMetrics();
+
+      expect(sample?.revalidation).toBeUndefined();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('reports a FAILED Stage 2 verdict rather than suppressing it', () => {
+    // The point of the ticket: a strategy that failed Stage 2 has kill-lines
+    // that SHOULD fire. Hiding the row would restore the exact silence #384 is
+    // about.
+    const { store, cleanup } = openStore();
+    try {
+      seed(store, MIN_RETURN_OBSERVATIONS + 1);
+
+      const sample = sourceWith(store, makeLogger(), [
+        selection({ overall_pass: false, pbo: 0.8 }),
+      ]).getDailyMetrics();
+
+      expect(sample?.revalidation?.pbo).toBe(0.8);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('says why the lines are inert ONCE per process, not once per cycle', () => {
+    const { store, cleanup } = openStore();
+    try {
+      seed(store, MIN_RETURN_OBSERVATIONS + 1);
+      const logger = makeLogger();
+      const source = sourceWith(store, logger, []);
+
+      source.getDailyMetrics();
+      source.getDailyMetrics();
+
+      const inert = logger.entries.filter((entry) => entry.message.includes('no revalidation'));
+      expect(inert).toHaveLength(1);
     } finally {
       cleanup();
     }

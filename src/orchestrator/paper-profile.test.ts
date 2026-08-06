@@ -8,13 +8,14 @@
  * then rejects or halts everything is indistinguishable, at a glance, from a
  * clean run that decided not to trade (`SMOKE_TEST_UNIVERSE`'s doc comment).
  */
+import { SqliteStage2SelectionStore } from '../cost-model-backtest/index.js';
 import { InMemoryDebateLogStore, LATENCY_BUDGET_MS } from '../debate-engine/index.js';
 import {
   InMemoryClosedTradeStore,
   InMemoryTuningStore,
   runDailyCycle,
 } from '../feedback-loop/index.js';
-import { SimulatedClock } from '../shared/index.js';
+import { SimulatedClock, SystemClock } from '../shared/index.js';
 import { openSharedStore } from '../shared/store/index.js';
 import { DEFAULT_TRADER_CONFIG } from '../trader/index.js';
 import { REQUIRED_INJECTED_CONFIG } from './index.js';
@@ -386,6 +387,10 @@ describe('paperStartingProfile', () => {
           db,
           trades: { getClosedTradesBetween: () => [] },
           logger: { log: () => undefined },
+          // #384: the revalidation source. Empty here, which is the state a
+          // deployment that has never run Stage 2 is in.
+          stage2Selections: new SqliteStage2SelectionStore(db),
+          clock: new SystemClock(),
         });
         expect(source).toBeInstanceOf(SqliteDailyEquityMetricsSource);
         // Empty series: the gate refuses, which is the state every soak-length

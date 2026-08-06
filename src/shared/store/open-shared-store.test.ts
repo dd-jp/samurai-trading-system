@@ -40,6 +40,10 @@ const TABLES = [
   // derives a live `ReturnSeries` from (#345). Samples the same boundary
   // `session_equity` above does; unlike it, never overwrites a row.
   'daily_equity',
+  // `stage2_selected_config` (0014) — the frozen Stage 2 selection (#375,
+  // #384). Where `DailyMetricsSample.revalidation` and the divergence baseline
+  // both come from, and the reason four kill-lines out of four could not fire.
+  'stage2_selected_config',
 ];
 
 /**
@@ -48,7 +52,7 @@ const TABLES = [
  * That prose number silently drifted twice (it read "twenty" and "twenty-one"
  * simultaneously while the schema held 22), so it is pinned here.
  */
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 24;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 25;
 
 const tempDirs: string[] = [];
 
@@ -113,6 +117,7 @@ describe('openSharedStore', () => {
       { version: 11 },
       { version: 12 },
       { version: 13 },
+      { version: 14 },
     ]);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
@@ -129,6 +134,7 @@ describe('openSharedStore', () => {
       { version: 11 },
       { version: 12 },
       { version: 13 },
+      { version: 14 },
     ]);
   });
 
