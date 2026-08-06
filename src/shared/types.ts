@@ -166,6 +166,17 @@ export interface DebateLog {
   direction: Direction;
   rounds: number;
   created_at: Date;
+  /**
+   * The tick that produced this debate (#426) — what lets the dashboard's lane
+   * drawer find the right row instead of guessing from instrument + recency.
+   *
+   * Optional because it genuinely can be absent: rows written before #426 have
+   * none, and `trace_id` is not stable across a retry (a fresh one is minted
+   * per instrument per tick, while `debate_id` is a content hash and is
+   * identical on a retried tick within the same bar). First-write-wins — the
+   * trace that actually ran the debate owns the row.
+   */
+  trace_id?: string;
 }
 
 /**

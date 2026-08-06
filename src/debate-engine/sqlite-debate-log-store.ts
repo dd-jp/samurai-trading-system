@@ -26,6 +26,8 @@ interface DebateLogRow {
   direction: Direction;
   rounds: number;
   created_at: string;
+  /** #426. Null for a row written before the column existed. */
+  trace_id: string | null;
 }
 
 export class SqliteDebateLogStore implements DebateLogStore {
@@ -36,8 +38,9 @@ export class SqliteDebateLogStore implements DebateLogStore {
       this.db
         .prepare(
           `INSERT INTO debate_log (
-             debate_id, instrument, bar_timestamp, contributions_json, direction, rounds, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+             debate_id, instrument, bar_timestamp, contributions_json, direction, rounds,
+             created_at, trace_id
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           entry.debate_id,
@@ -47,6 +50,12 @@ export class SqliteDebateLogStore implements DebateLogStore {
           entry.direction,
           entry.rounds,
           entry.created_at.toISOString(),
+          // #426. Null rather than absent when the caller has no trace: the
+          // column is nullable precisely because pre-#426 rows have none, and
+          // a retried tick's fresh trace must not overwrite the one that
+          // actually ran the debate (the PK conflict below is what enforces
+          // that — first write wins).
+          entry.trace_id ?? null,
         );
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {
@@ -78,6 +87,10 @@ export class SqliteDebateLogStore implements DebateLogStore {
       direction: row.direction,
       rounds: row.rounds,
       created_at: new Date(row.created_at),
+      // Absent rather than null on the domain object (#426): `DebateLog
+      // .trace_id` is optional, and a pre-#426 row genuinely has no trace
+      // rather than a null one.
+      ...(row.trace_id === null || row.trace_id === undefined ? {} : { trace_id: row.trace_id }),
     };
   }
 }

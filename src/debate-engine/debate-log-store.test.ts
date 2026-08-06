@@ -1,4 +1,9 @@
-import { buildDebateLog, InMemoryDebateLogStore } from './debate-log-store.js';
+import {
+  buildDebateLog,
+  DEBATE_BAR_TIMEFRAME_MS,
+  floorToBar,
+  InMemoryDebateLogStore,
+} from './debate-log-store.js';
 import type { AnalystContribution, DebateResult } from './types.js';
 
 function makeContribution(overrides: Partial<AnalystContribution> = {}): AnalystContribution {
@@ -95,5 +100,67 @@ describe('InMemoryDebateLogStore', () => {
 
     expect(store.getByDebateId('debate-1')).toEqual(first);
     expect(store.getByDebateId('debate-2')).toEqual(second);
+  });
+});
+
+/**
+ * #393 — `bar_timestamp` used to hold `clock.now()` unfloored, which is what
+ * `created_at` already means. A replay stepping bars advances the clock TO a
+ * bar close, so it would look up 14:30:00 and miss a live row stamped
+ * 14:32:07 — and replay-from-log is the determinism posture ADR-0003 §2
+ * states for every LLM pass.
+ */
+describe('floorToBar', () => {
+  it('floors a mid-bar instant to the bar it belongs to', () => {
+    expect(floorToBar(new Date('2026-08-06T14:32:07.412Z'))).toEqual(
+      new Date('2026-08-06T14:00:00.000Z'),
+    );
+  });
+
+  it('leaves an instant already on a boundary alone', () => {
+    // The replay case: `BacktestHarness` advances the clock TO the bar close,
+    // so flooring must be the identity there or live and replay would still
+    // disagree.
+    const onBar = new Date('2026-08-06T14:00:00.000Z');
+    expect(floorToBar(onBar)).toEqual(onBar);
+  });
+
+  it('is idempotent', () => {
+    const once = floorToBar(new Date('2026-08-06T14:59:59.999Z'));
+    expect(floorToBar(once)).toEqual(once);
+  });
+
+  it('maps every instant within one bar to the same coordinate', () => {
+    // The property that makes `(instrument, bar_timestamp)` a usable join key
+    // between a live run and a replay.
+    const first = floorToBar(new Date('2026-08-06T14:00:00.000Z'));
+    const middle = floorToBar(new Date('2026-08-06T14:32:07.412Z'));
+    const last = floorToBar(new Date('2026-08-06T14:59:59.999Z'));
+
+    expect(middle).toEqual(first);
+    expect(last).toEqual(first);
+    // ...and the next bar is a different coordinate, not the same one.
+    expect(floorToBar(new Date('2026-08-06T15:00:00.000Z'))).not.toEqual(first);
+  });
+
+  it('floors in UTC, not local time', () => {
+    // A local-time floor would put the boundary at :30 on a half-hour offset
+    // zone, and every stored coordinate would depend on where the process ran.
+    expect(floorToBar(new Date('2026-08-06T00:15:00.000Z'))).toEqual(
+      new Date('2026-08-06T00:00:00.000Z'),
+    );
+  });
+
+  it('takes the timeframe as a parameter, so the choice is not baked in', () => {
+    const fifteenMinutes = 15 * 60 * 1_000;
+    expect(floorToBar(new Date('2026-08-06T14:32:07Z'), fifteenMinutes)).toEqual(
+      new Date('2026-08-06T14:30:00.000Z'),
+    );
+  });
+
+  it('defaults to the hour the rest of the system already decides on', () => {
+    // `DEFAULT_INDICATOR_TIMEFRAME` and `DEFAULT_TRADER_CONFIG.atr_timeframe`
+    // are both 1h; a second bar concept would be the drift this avoids.
+    expect(DEBATE_BAR_TIMEFRAME_MS).toBe(60 * 60 * 1_000);
   });
 });

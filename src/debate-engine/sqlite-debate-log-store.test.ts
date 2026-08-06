@@ -45,8 +45,30 @@ describe('SqliteDebateLogStore.writeLog', () => {
         direction: 'bullish',
         rounds: 2,
         created_at: log.created_at.toISOString(),
+        // #426. NULL when the caller supplied no trace — a pre-#426 row and a
+        // programmatic writer both land here.
+        trace_id: null,
       },
     ]);
+  });
+
+  /** #426 — the column the Pipeline drawer joins on. */
+  it('persists the trace that ran the debate', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+
+    store.writeLog(makeLog({ trace_id: 'trace-77' }));
+
+    expect(db.prepare('SELECT trace_id FROM debate_log').get()).toEqual({ trace_id: 'trace-77' });
+    expect(store.getByDebateId('debate-1')?.trace_id).toBe('trace-77');
+  });
+
+  it('reads back a pre-#426 row as having no trace, rather than a null one', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    store.writeLog(makeLog());
+
+    expect(store.getByDebateId('debate-1')).not.toHaveProperty('trace_id');
   });
 
   it('rejects a duplicate write for the same debate_id (debate_log PK)', () => {

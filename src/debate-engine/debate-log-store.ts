@@ -20,6 +20,7 @@ export function buildDebateLog(
   instrument: string,
   bar_timestamp: Date,
   created_at: Date,
+  trace_id?: string,
 ): DebateLog {
   return {
     debate_id: result.debate_id,
@@ -29,7 +30,65 @@ export function buildDebateLog(
     direction: result.direction,
     rounds: result.rounds_completed,
     created_at,
+    // #426. Omitted rather than `undefined` so the row shape matches the
+    // optional field exactly; a caller with no trace writes NULL.
+    ...(trace_id === undefined ? {} : { trace_id }),
   };
+}
+
+/**
+ * The bar coordinate a live tick belongs to (#393).
+ *
+ * ## The defect
+ *
+ * `debate_log.bar_timestamp` stored `clock.now()`, unfloored. A tick at
+ * 14:32:07 wrote `bar_timestamp = 14:32:07` — which is what `created_at`
+ * already means. The column is named for a bar coordinate and held the tick
+ * time.
+ *
+ * That breaks replay-from-log, the determinism posture ADR-0003 §2 states for
+ * every LLM pass ("replay the logged output instead of re-calling the LLM …
+ * a live LLM call inside a replayed path is disqualified outright"). Under
+ * `BacktestHarness` the clock is advanced TO a bar close, so a replay looks up
+ * 14:30:00 and misses every live row. `debate_id` cannot bridge the two either
+ * — it hashes the same unfloored instant plus the analyst views.
+ *
+ * ## The timeframe had to be introduced, and this is the one chosen
+ *
+ * #393 records the open question honestly: the debate step receives no
+ * timeframe, and timeframe is a per-ANALYST constant today
+ * (`INDICATOR_TIMEFRAME`, `CONTEXT_TIMEFRAME`) rather than a tick property.
+ *
+ * One hour, because it is the coordinate the rest of the system already
+ * decides on: `DEFAULT_INDICATOR_TIMEFRAME` is `1h`, `DEFAULT_TRADER_CONFIG
+ * .atr_timeframe` is `1h`, and the Trader's stop — the number a mis-floored
+ * bar would actually corrupt — is priced off 1h bars. Choosing anything else
+ * would introduce a second bar concept alongside the one every indicator
+ * already uses.
+ *
+ * It is deliberately NOT the tick cadence (15 minutes, ADR-0008). Cadence is
+ * how often the system looks; a bar is what it looks AT. Flooring to cadence
+ * would make the coordinate change the day someone retunes the scheduler, and
+ * every historical row would then refer to a grid nothing else shares.
+ *
+ * Consequence worth stating: at a 15-minute cadence, four consecutive ticks
+ * share one bar and therefore one `debate_id`. That is correct and already
+ * handled — `debate_id` is a content hash, the log's primary key is
+ * write-once, and a repeat within the same bar is the retry case migration
+ * 0015 describes rather than a second debate.
+ */
+export const DEBATE_BAR_TIMEFRAME_MS = 60 * 60 * 1_000;
+
+/**
+ * Floors an instant to its bar's opening boundary, in UTC.
+ *
+ * Epoch-relative, not calendar-relative: `DEBATE_BAR_TIMEFRAME_MS` divides the
+ * day evenly, so the two agree — and an epoch floor stays correct for a
+ * timeframe that does not, which is the property a calendar floor silently
+ * loses.
+ */
+export function floorToBar(at: Date, timeframeMs: number = DEBATE_BAR_TIMEFRAME_MS): Date {
+  return new Date(Math.floor(at.getTime() / timeframeMs) * timeframeMs);
 }
 
 export class InMemoryDebateLogStore implements DebateLogStore {
