@@ -211,3 +211,72 @@ describe('assertCostModelPriced', () => {
     expect(() => assertCostModelPriced(closedTrade(), [])).toThrow(/has no fills/);
   });
 });
+
+describe('toReturnSeries bar attribution — binary search equivalence (#289)', () => {
+  /** The implementation this replaced, kept here as the oracle. */
+  function linearAttribution(bars: readonly Date[], closedAt: Date): number {
+    return bars.findIndex((bar) => bar.getTime() >= closedAt.getTime());
+  }
+
+  const start = Date.UTC(2026, 0, 1);
+  const DAY = 86_400_000;
+  const bars = Array.from({ length: 200 }, (_, i) => new Date(start + i * DAY));
+  const WINDOW_200D = { start: new Date(start), end: new Date(start + 200 * DAY) };
+
+  it('attributes to the same bar as the linear scan, across every boundary case', () => {
+    // Exhaustive rather than sampled: every bar's exact timestamp, one
+    // millisecond either side of it, and both ends of the range. That covers
+    // the tie case the doc comment calls out — a trade closing exactly ON a bar
+    // must attribute to THAT bar, not the next one, or realized PnL moves off
+    // the bar on which it became knowable.
+    const probes: Date[] = [new Date(start - DAY)];
+    for (const bar of bars) {
+      probes.push(
+        new Date(bar.getTime() - 1),
+        new Date(bar.getTime()),
+        new Date(bar.getTime() + 1),
+      );
+    }
+    probes.push(new Date(start + 500 * DAY));
+
+    for (const [index, closedAt] of probes.entries()) {
+      const expected = linearAttribution(bars, closedAt);
+      const trades =
+        expected === -1
+          ? []
+          : [
+              closedTrade({
+                idempotency_key: `k-${index}`,
+                closed_at: closedAt,
+                realized_pnl_net: 7,
+              }),
+            ];
+
+      if (expected === -1) continue;
+
+      const series = toReturnSeries(trades, bars, {
+        averageCapital: 100,
+        periodsPerYear: 252,
+        window: WINDOW_200D,
+      });
+      const attributed = series.returns.findIndex((r) => r !== 0);
+
+      expect(attributed).toBe(expected);
+    }
+  });
+
+  it('still throws for a trade closing after the last bar', () => {
+    // The -1 path, which the binary search reaches by running off the end
+    // rather than by `findIndex` returning -1. Same outcome, different route,
+    // so it is worth pinning separately.
+    const closed_at = new Date(bars[bars.length - 1]!.getTime() + DAY);
+
+    expect(() =>
+      toReturnSeries([closedTrade({ closed_at, realized_pnl_net: 1 })], bars, {
+        averageCapital: 100,
+        periodsPerYear: 252,
+        window: WINDOW_200D,
+      }),
+    ).toThrow(/after the last bar/);
+  });
+});

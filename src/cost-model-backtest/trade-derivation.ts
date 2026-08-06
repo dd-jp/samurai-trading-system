@@ -105,6 +105,41 @@ export function toTradeSeries(trades: readonly ClosedTrade[], options: SeriesOpt
  * lookahead of exactly the kind `LookaheadAuditor` exists to catch, reintroduced
  * downstream of the audit.
  */
+/**
+ * Index of the first bar at or after `closedAtMs`, or `-1` if there is none.
+ *
+ * Binary search rather than `findIndex` (#289 M12). `bars` is a bar TIMELINE —
+ * ascending by construction everywhere it is produced — so the two are exactly
+ * equivalent, and the linear scan made `toReturnSeries` O(trades x bars).
+ *
+ * Worth doing without a profile, unlike the rest of #289, because the cost is
+ * structural rather than suspected: Stage 2 evaluates 7 configs x 2 asset
+ * classes x 5 folds, twice over (the CSCV pass), against ~700 bars. The
+ * quadratic term is multiplied by all of that, and it grows with every year of
+ * history bought — which is the single change the Stage 2 verdict recommends.
+ *
+ * Standard lower-bound: the loop narrows to the leftmost index whose bar is not
+ * before the target, so ties resolve to the FIRST matching bar, exactly as
+ * `findIndex` did. That matters — attributing a trade to a later bar with the
+ * same timestamp would move realized PnL off the bar on which it became
+ * knowable.
+ */
+function firstBarAtOrAfter(bars: readonly Date[], closedAtMs: number): number {
+  let low = 0;
+  let high = bars.length;
+
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if ((bars[mid] as Date).getTime() >= closedAtMs) {
+      high = mid;
+    } else {
+      low = mid + 1;
+    }
+  }
+
+  return low === bars.length ? -1 : low;
+}
+
 export function toReturnSeries(
   trades: readonly ClosedTrade[],
   bars: readonly Date[],
@@ -123,7 +158,7 @@ export function toReturnSeries(
   const pnlPerBar = new Array<number>(bars.length).fill(0);
 
   for (const trade of trades) {
-    const index = bars.findIndex((bar) => bar.getTime() >= trade.closed_at.getTime());
+    const index = firstBarAtOrAfter(bars, trade.closed_at.getTime());
 
     if (index === -1) {
       throw new Error(
