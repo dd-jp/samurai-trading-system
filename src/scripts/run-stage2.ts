@@ -23,6 +23,7 @@
  * (or wire an `npm run stage2` script once this has been run for real once).
  */
 import {
+  buildTrialGrid,
   type CostConfig,
   CostModelImpl,
   CRYPTO_PERIODS_PER_YEAR,
@@ -39,6 +40,7 @@ import {
   type Stage2Selection,
   type Stage2Verdict,
   selectionsFrom,
+  sizeTrialGridToSample,
   type TrialGridAssetClass,
   type TrialGridResult,
 } from '../cost-model-backtest/index.js';
@@ -371,7 +373,15 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
   const stocks = makeAssetClass(ctx, 'stocks', STOCK_SYMBOLS, STOCK_PERIODS_PER_YEAR);
   const crypto = makeAssetClass(ctx, 'crypto', CRYPTO_SYMBOLS, CRYPTO_PERIODS_PER_YEAR);
 
-  print('Stage 2: running the 12-config trial grid across stocks + crypto...');
+  // #405: state the sizing POSITIVELY, before the run, rather than reporting
+  // `exceeded: true` after 12 trials have already been spent. The cap exists
+  // to constrain the search; a reader should see what it constrained it to.
+  const sizing = sizeTrialGridToSample(buildTrialGrid(), effective);
+  print(
+    `Stage 2: grid sized to N=${sizing.limit} from a ${sizing.years.toFixed(1)}-year effective ` +
+      `sample (the full cross-product asks for ${sizing.requested}; MinBTL supports ` +
+      `${sizing.limit}). Running across stocks + crypto...`,
+  );
   const results = await runTrialGrid({
     assetClasses: [stocks, crypto],
     window: effective,

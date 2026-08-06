@@ -43,10 +43,14 @@ import { digest } from '../orchestrator/index.js';
 import type { ConfigTrialLog } from './config-trial-log.js';
 import { EvalExecutorImpl } from './eval-executor.js';
 import type { EvalExecutor, EvalReport } from './eval-types.js';
+import { minbtl } from './overfitting.js';
 import type { ProxyStrategyConfig } from './proxy-strategy.js';
 import type { ReplayRunResult } from './replay-driver.js';
 import type { BacktestReport } from './types.js';
 import type { DateRange } from './universe.js';
+
+/** Julian year in ms — the same conversion `minbtl` uses, so the two agree. */
+const MS_PER_YEAR = 365.25 * 24 * 60 * 60 * 1_000;
 
 /** One bar's duration — the spec's `barMs`=1 day, fixed for the grid run. */
 const DAY_MS = 86_400_000;
@@ -120,6 +124,71 @@ export function buildTrialGrid(): TrialGridEntry[] {
   }
 
   return entries;
+}
+
+/** What sizing the grid to the sample decided (#405). */
+export interface TrialGridSizing {
+  /** The configs that will actually be run. */
+  selected: TrialGridEntry[];
+  /** MinBTL's cap for this window — the most trials the sample can support. */
+  limit: number;
+  /** How many the full cross-product asked for. */
+  requested: number;
+  /** Effective sample length, for the positive statement in the report. */
+  years: number;
+}
+
+/**
+ * Cuts the grid to what the sample can actually support (#405).
+ *
+ * ## Why this is the binding constraint
+ *
+ * MinBTL caps the number of independent configurations a sample of a given
+ * length can be searched over before the best in-sample Sharpe is expected to
+ * be spurious. The 12-config grid was sized against an assumed 5-year sample
+ * (cap ~45); the Polygon plan actually serves 2 years, which supports 7. Every
+ * run so far reported `{"limit":7,"distinct_configs":12,"exceeded":true}`.
+ *
+ * The cap was computed at the END and reported as a verdict field, after all
+ * 12 trials had run. That is the wrong order: the number exists to CONSTRAIN
+ * the search, not to grade it afterwards. And it cut the wrong way once cost
+ * calibration took passing configs from 2/24 to 12/24 — with 2 passing,
+ * "pick the best" was not a live risk; with 12 on an over-budget grid, it is.
+ *
+ * ## The subset is spread, not truncated
+ *
+ * Taking the first N of the cross-product would keep every config from one
+ * corner of the parameter space — all the shortest fast/slow windows — and
+ * discard the rest. That is not a smaller search, it is a different and
+ * narrower one, chosen by array order rather than by design.
+ *
+ * So the retained configs are sampled EVENLY across the ordered grid. The
+ * selection is deterministic (no RNG, no seed) because a reproducible verdict
+ * is the whole point of Stage 2: the same window must always yield the same
+ * configs, or the gate cannot be re-run to check it.
+ */
+export function sizeTrialGridToSample(
+  entries: TrialGridEntry[],
+  window: DateRange,
+): TrialGridSizing {
+  const { limit } = minbtl(window);
+  const years = (window.end.getTime() - window.start.getTime()) / MS_PER_YEAR;
+  const requested = entries.length;
+
+  if (requested <= limit) {
+    return { selected: entries, limit, requested, years };
+  }
+
+  // Evenly spaced indices across the whole grid, endpoints included, so the
+  // retained set spans the parameter space rather than clustering at one end.
+  const selected: TrialGridEntry[] = [];
+  for (let i = 0; i < limit; i++) {
+    const index = limit === 1 ? 0 : Math.round((i * (requested - 1)) / (limit - 1));
+    const entry = entries[index];
+    if (entry !== undefined) selected.push(entry);
+  }
+
+  return { selected, limit, requested, years };
 }
 
 /** The subset of `ReplayDriver`'s public API this module drives. */
@@ -216,7 +285,9 @@ export async function runTrialGrid(deps: TrialGridRunDeps): Promise<TrialGridRes
     ((run: ReplayRunResult) =>
       new EvalExecutorImpl({ source: run.trades, timeline: run.timeline }));
 
-  const grid = buildTrialGrid();
+  // #405: sized from the sample BEFORE any trial runs, not graded afterwards.
+  const sizing = sizeTrialGridToSample(buildTrialGrid(), deps.window);
+  const grid = sizing.selected;
   const results: TrialGridResult[] = [];
 
   for (const { config, config_hash } of grid) {

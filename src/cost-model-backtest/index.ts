@@ -185,6 +185,8 @@ export {
   CRYPTO_PERIODS_PER_YEAR,
   runTrialGrid,
   STOCK_PERIODS_PER_YEAR,
+  sizeTrialGridToSample,
+  type TrialGridSizing,
 } from './trial-execution.js';
 export type {
   AssetClassCostConfig,
