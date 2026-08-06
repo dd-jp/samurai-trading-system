@@ -273,7 +273,7 @@ Adopted per [ADR-0002](../adr/0002-worldmonitor-mi-source.md). Location: `src/ma
 - **Not used:** WorldMonitor's MCP transport — it's designed for agent-driven tool discovery; this is a deterministic pipeline consumer, not an agent.
 
 **Ingestion Cadence**
-- **Decoupled from the trading tick loop**: poll every 5–15 minutes, cache, serve stale-tolerant to analysts between polls (One-Shot Hydration compliance, ADR-0002 §2 / §8). WorldMonitor's own data (geopolitical/macro) doesn't change on a 5s/30s trading clock.
+- **Decoupled from the trading tick loop**: poll every 5–15 minutes, cache, serve stale-tolerant to analysts between polls (One-Shot Hydration compliance, ADR-0002 §2 / §8). WorldMonitor's own data (geopolitical/macro) doesn't change on a trading clock. *(This originally said "a 5s/30s trading clock". No such cadence exists in code — `DEFAULT_TICK_INTERVAL_MS` is 60s and the paper profile runs at 15 minutes per [ADR-0008](../adr/0008-llm-spend-cap.md), which makes this poll roughly tick-rate rather than far slower. The decoupling argument is unaffected: it rests on the data not changing on a trading clock at all, and on the API quota, not on a specific tick rate. The 5s/30s figures are this stage's own **latency budgets** — see story 19 — a different quantity.)*
 - **Tier:** Pro ($39.99/mo) — covers this cadence comfortably (60 req/60s per-key MCP limit is far above a call every 5–15 min).
 
 **Processing**
