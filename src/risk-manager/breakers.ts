@@ -204,12 +204,20 @@ export class CircuitBreakers {
     // whose absence is why #332 left this advisory.
     //
     // NOT mode-gated here, deliberately, even though decision 5 is a mode-gated
-    // decision. The gate lives one layer up in `AccountStateProvider`
-    // (`midSessionBase`): `paper`/`backtest` report against a mid-session base
-    // and warn, so they never present `known: false` at all, and `live` reports
-    // unknown. Re-testing `mode` here would gate the same decision twice and
-    // give a paper run that DOES produce an unknown — meaning the provider
-    // failed — a silent pass through the breaker that catches it.
+    // decision. There are two upstream paths to `known: false` and only one of
+    // them is about mode:
+    //
+    // - `AccountStateProvider.midSessionBase` IS mode-gated — `paper`/`backtest`
+    //   report against a mid-session base and warn; only `live` reports unknown.
+    //   That is decision 5's cold-start gate, and it already lives there.
+    // - `AccountStateProvider.nonPositiveBase` is NOT, in any mode: a percentage
+    //   against a zero or negative session-open equity has no meaning to gate.
+    //
+    // So a `paper` run CAN present an unknown, and this breaker must halt on it
+    // rather than assume the mode already filtered it out. Re-testing `mode`
+    // here would both gate the cold-start decision twice and hand the
+    // non-positive-base case a silent pass in exactly the mode where the
+    // account has none of itself left.
     const dailyUnknown = !dailyPnl.known;
     if (dailyUnknown) {
       armed.push(`daily_pnl_unknown:portfolio (${dailyPnl.reason})`);
