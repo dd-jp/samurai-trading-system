@@ -1231,28 +1231,34 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     });
     spendCap = UNCAPPED_SPEND;
   } else {
-    spendCap = new SqliteSpendCap(config.db, config.llmBudgetUsd, logger, () =>
+    const cap = new SqliteSpendCap(config.db, config.llmBudgetUsd, logger, () =>
       breachAlerts.postBreachAlert({
         breaches: ['llm_spend_cap'],
         reported_at: clock.now(),
       }),
     );
-  }
+    spendCap = cap;
 
-  /**
-   * Announce what this database has ALREADY spent, because the cap's window is
-   * the whole `llm_spend` table and the operator's mental model is "$50 for
-   * this run".
-   *
-   * The whole-table window is the right choice — a per-process baseline would
-   * hand a fresh budget to every restart, and a 14-day soak on a MacBook will
-   * restart. But it means prior runs against the same file count, and that is
-   * not hypothetical: `data/samurai-development.sqlite` held 196 calls / $0.38
-   * before this cap existed. Silence here would let an operator assume zero
-   * and be wrong by however much they had already spent.
-   */
-  if (spendCap instanceof SqliteSpendCap) {
-    const opening = spendCap.startingTotal();
+    /**
+     * Announce what this database has ALREADY spent, because the cap's window
+     * is the whole `llm_spend` table and the operator's mental model is "$50
+     * for this run".
+     *
+     * The whole-table window is the right choice — a per-process baseline
+     * would hand a fresh budget to every restart, and a 14-day soak on a
+     * MacBook will restart. But it means prior runs against the same file
+     * count, and that is not hypothetical: `data/samurai-development.sqlite`
+     * held 196 calls / $0.38 before this cap existed. Silence here would let
+     * an operator assume zero and be wrong by however much they had already
+     * spent.
+     *
+     * It lives inside this branch, on `cap` rather than on `spendCap`, so the
+     * announcement reaches for `startingTotal()` on the concrete class that
+     * offers it — `SpendCap`, the seam the debate step admits against, carries
+     * `check()` alone. There is nothing to announce in the uncapped branch:
+     * it has already warned, in more detail than a starting total would add.
+     */
+    const opening = cap.startingTotal();
     logger.log({
       trace_id: 'startup',
       stage: 'orchestrator',
