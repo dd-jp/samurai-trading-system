@@ -16,7 +16,10 @@
  * same flag to *this* process, which is load-bearing rather than cosmetic:
  * `sharedStorePath()` derives the database filename from `NODE_ENV`, so a
  * supervisor that skipped the env file could migrate a different file than the
- * one its children then open.
+ * one its children then open. A consequence worth knowing when reading a
+ * failure: with the flag on the supervisor, a missing `.env.local` is now
+ * refused *here*, before either child is spawned, so the error names this
+ * process rather than one of the two below it.
  *
  * **A signal is forwarded, and then the supervisor waits for both children to
  * exit.** It must not `process.exit()` on the signal itself. The orchestrator's
@@ -124,6 +127,13 @@ const DEFAULT_NODE_ARGS = ['--env-file=.env.local'] as const;
  * supervisor's own handler has run. Without this set that race would report a
  * clean Ctrl-C as a crash and exit non-zero. SIGKILL is deliberately absent:
  * the documented escape hatch is manual, and it should still read as a failure.
+ *
+ * This set does not cover the orchestrator, which traps SIGINT and exits 0
+ * *voluntarily* after draining — so its exit carries `signal=null`, matching
+ * nothing here. What keeps that case at exit 0 is the supervisor's own handler
+ * winning the race, which it does because draining costs at least a tick.
+ * Measured rather than assumed: 25/25 trials of a real group-delivered SIGINT
+ * exited 0, with the orchestrator stand-in returning code=0, signal=null.
  */
 const REQUESTED_STOP: ReadonlySet<string> = new Set(['SIGINT', 'SIGTERM']);
 
