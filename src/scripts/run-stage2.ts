@@ -30,7 +30,6 @@ import {
   HttpPolygonClient,
   InMemoryConfigTrialLog,
   type PolygonClient,
-  ReplayDriver,
   renderStage2Verdict,
   runTrialGrid,
   SqliteStage2SelectionStore,
@@ -39,10 +38,8 @@ import {
   type Stage2Selection,
   type Stage2Verdict,
   selectionsFrom,
-  type TrialGridAssetClass,
   type TrialGridResult,
 } from '../cost-model-backtest/index.js';
-import { SimulatedClock } from '../shared/index.js';
 import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
 import { makeAssetClass } from './stage2-support.js';
 

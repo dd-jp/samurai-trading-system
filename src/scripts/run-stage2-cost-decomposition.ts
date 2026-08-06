@@ -45,7 +45,6 @@ import {
   InMemoryConfigTrialLog,
   killLineChecks,
   type PolygonClient,
-  ReplayDriver,
   type ReplayRunResult,
   type RunCostAttribution,
   runTrialGrid,
@@ -54,7 +53,6 @@ import {
   type TrialGridAssetClass,
   type TrialGridResult,
 } from '../cost-model-backtest/index.js';
-import { SimulatedClock } from '../shared/index.js';
 import {
   CRYPTO_SYMBOLS,
   costConfigFromEnv,
