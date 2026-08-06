@@ -30,10 +30,6 @@ function makePortfolio(overrides: Partial<PortfolioView> = {}): PortfolioView {
 function makeConfig(overrides: Partial<BreakerConfig> = {}): BreakerConfig {
   return {
     daily_loss_pct: 3,
-    // Higher than the portfolio tier in the fixture, so the two tiers are
-    // separable in tests: a portfolio-tier breach does not incidentally trip
-    // the class tier, and a class-tier breach has to be set up deliberately.
-    daily_loss_pct_by_class: { crypto: 5, stocks: 5 },
     max_drawdown_pct: 20,
     max_consecutive_losses: 4,
     volatility: {
@@ -93,7 +89,7 @@ describe('CircuitBreakers', () => {
     expect(recovered.portfolio_tripped).toBe(false);
   });
 
-  it('HALTS new entries when the daily figure is unknown, and names why (#333)', () => {
+  it('arms daily_pnl_unknown, without halting, when the daily figure is unknown', () => {
     const breakers = new CircuitBreakers(makeConfig({ daily_loss_pct: 3 }));
     const unknown = { known: false, reason: 'no session-open equity observed' } as const;
 
@@ -105,26 +101,15 @@ describe('CircuitBreakers', () => {
       }),
     );
 
-    // #332 left this advisory-only because it had no re-arm story. #333 supplies
-    // one — the tier is non-sticky, so this clears itself at the next boundary
-    // this process is up for — and decision 5 escalates it to a block.
-    expect(state.portfolio_tripped).toBe(true);
-    // Every tier is halted, not just the portfolio one: a class whose own
-    // figure is unknown must not keep trading on the strength of the other's.
-    expect(state.asset_class_tripped).toEqual({ crypto: true, stocks: true });
-
-    // Still visible in the audit trail with its reason — the #293/#320/#324/#342
-    // posture that a degraded state is never reached quietly. The reason is
-    // carried through because a halted session has to be diagnosable without
-    // reading code.
-    expect(state.armed_breakers).toEqual([
-      'daily_pnl_unknown:portfolio (no session-open equity observed)',
-      'daily_pnl_unknown:crypto (no session-open equity observed)',
-      'daily_pnl_unknown:stocks (no session-open equity observed)',
-    ]);
-    // A halt for a REASON, not a threshold breach — the loss breaker itself
-    // never fired, and the operator summary must not suggest it did.
-    expect(state.armed_breakers.some((name) => name.startsWith('daily_loss_soft'))).toBe(false);
+    // Visible in the audit trail and the operator's breaker summary — the
+    // #293/#320/#324/#342 posture that a degraded state is never reached
+    // quietly.
+    expect(state.armed_breakers).toContain('daily_pnl_unknown');
+    // But NOT a halt: escalating unknown to a block on new entries is #333's
+    // two-tier daily-loss work, which owns the re-arm semantics. Arming a name
+    // this breaker cannot itself clear would strand the system halted.
+    expect(state.portfolio_tripped).toBe(false);
+    expect(state.armed_breakers).not.toContain('daily_loss_soft');
   });
 
   it('does not read an unknown daily figure as a flat day', () => {
@@ -140,109 +125,9 @@ describe('CircuitBreakers', () => {
     );
 
     // A `null`/`undefined` here would coerce to 0 in `pct <= -0.05` and be
-    // indistinguishable from a genuinely flat session — which, post-#333, is
-    // the difference between halting and trading on. The union makes the
+    // indistinguishable from a genuinely flat session. The union makes the
     // absence explicit instead.
-    expect(state.armed_breakers.every((name) => name.startsWith('daily_pnl_unknown:'))).toBe(true);
-    expect(state.portfolio_tripped).toBe(true);
-  });
-
-  it('halts ONE class on its own daily-loss breach, leaving the other tradeable (#333)', () => {
-    const breakers = new CircuitBreakers(
-      makeConfig({ daily_loss_pct: 3, daily_loss_pct_by_class: { crypto: 5, stocks: 5 } }),
-    );
-
-    // Crypto down 6% while stocks are up 4%. All three figures share one
-    // denominator (portfolio equity), so the portfolio nets to −2% — inside its
-    // own 3% floor. This is precisely the case surgical halting exists for: the
-    // account-wide tier alone would let crypto keep bleeding.
-    const state = breakers.evaluate(
-      makeInput({
-        portfolio: makePortfolio({
-          daily_pnl: {
-            crypto: { known: true, pct: -6 },
-            stocks: { known: true, pct: 4 },
-            portfolio: { known: true, pct: -2 },
-          },
-        }),
-      }),
-    );
-
-    expect(state.asset_class_tripped).toEqual({ crypto: true, stocks: false });
-    expect(state.portfolio_tripped).toBe(false);
-    expect(state.armed_breakers).toEqual(['daily_loss_soft:crypto']);
-  });
-
-  it('keeps the account-wide floor: a portfolio breach halts everything regardless of class', () => {
-    const breakers = new CircuitBreakers(
-      makeConfig({ daily_loss_pct: 3, daily_loss_pct_by_class: { crypto: 5, stocks: 5 } }),
-    );
-
-    // Both classes inside their own 5% tier, portfolio through its 3% floor.
-    // Surgical halting was ADDED, not swapped in — neither tier can be traded
-    // away for the other.
-    const state = breakers.evaluate(
-      makeInput({
-        portfolio: makePortfolio({
-          daily_pnl: {
-            crypto: { known: true, pct: -4 },
-            stocks: { known: true, pct: -4 },
-            portfolio: { known: true, pct: -4 },
-          },
-        }),
-      }),
-    );
-
-    expect(state.portfolio_tripped).toBe(true);
-    expect(state.asset_class_tripped).toEqual({ crypto: false, stocks: false });
-    expect(state.armed_breakers).toEqual(['daily_loss_soft']);
-  });
-
-  it('recomputes the per-class tier every call — non-sticky, like the rest of the soft tier', () => {
-    const breakers = new CircuitBreakers(
-      makeConfig({ daily_loss_pct: 3, daily_loss_pct_by_class: { crypto: 5, stocks: 5 } }),
-    );
-    const breached = makePortfolio({
-      daily_pnl: {
-        crypto: { known: true, pct: -6 },
-        stocks: { known: true, pct: 0 },
-        portfolio: { known: true, pct: -3 },
-      },
-    });
-
-    expect(
-      breakers.evaluate(makeInput({ portfolio: breached })).asset_class_tripped.crypto,
-    ).toBe(true);
-
-    // Recovery, same instance: only the hard drawdown breaker is sticky, so a
-    // class that comes back inside its threshold trades again with no reArm().
-    expect(breakers.evaluate(makeInput()).asset_class_tripped.crypto).toBe(false);
-  });
-
-  it('joins the volatility halt rather than replacing it — either source halts the class', () => {
-    const breakers = new CircuitBreakers(
-      makeConfig({ daily_loss_pct: 3, daily_loss_pct_by_class: { crypto: 5, stocks: 5 } }),
-    );
-
-    // Crypto through its daily-loss tier; stocks through the volatility tier.
-    // Both land in the same `asset_class_tripped` field from different causes,
-    // and the armed list has to keep them distinguishable for the operator.
-    const state = breakers.evaluate(
-      makeInput({
-        volatility: { crypto: 1, stocks: 5 },
-        portfolio: makePortfolio({
-          daily_pnl: {
-            crypto: { known: true, pct: -6 },
-            stocks: { known: true, pct: 0 },
-            portfolio: { known: true, pct: -2 },
-          },
-        }),
-      }),
-    );
-
-    expect(state.asset_class_tripped).toEqual({ crypto: true, stocks: true });
-    expect(state.portfolio_tripped).toBe(false);
-    expect(state.armed_breakers).toEqual(['daily_loss_soft:crypto', 'volatility_halt:stocks']);
+    expect(state.armed_breakers).toEqual(['daily_pnl_unknown']);
   });
 
   it('leaves daily_pnl_unknown unarmed when the figure is known', () => {
