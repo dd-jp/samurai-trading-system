@@ -31,10 +31,10 @@ jobs:
             # count against max_tokens and are spent before any answer text.
             # At max_tokens=3000 it burned the whole budget on reasoning and
             # returned finish_reason=length with zero content, every time —
-            # confirmed via the debug log in review_lib.py. Needs the full
-            # budget so reasoning + the (now inline-only, so shorter) answer
-            # both fit; the existing retry/backoff in review_lib.py already
-            # absorbs the Cloudflare 524s this occasionally causes.
+            # confirmed via the debug log in review_lib.py. 8192 makes that
+            # rarer but does NOT fix it (#409 logged content_chars=0 and a
+            # truncated 910-char body at this budget); review_lib.py now
+            # retries an unusable response instead of posting the fragment.
             max_tokens: "8192"
             inline_only: "true"
     steps:
