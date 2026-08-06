@@ -14,6 +14,7 @@
 import type { AnalystView, Direction } from '../debate-engine/index.js';
 import type { IntelligenceItem } from '../market-intelligence/index.js';
 import type { Analyst, AnalystInput, AssetClass } from './types.js';
+import { NO_DATA_MARKER } from './types.js';
 
 /** 24h news context window, matching technical-analyst's always-on context frame. */
 const MI_CONTEXT_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -72,7 +73,15 @@ export const fundamentalAnalyst: Analyst = {
       direction,
       confidence,
       key_points: [
-        `${marketContext.news.length} news/filing items in window, net sentiment driving ${direction}`,
+        // #436, and this one matters more than sentiment's: `fundamental` is
+        // MANDATORY for stocks in the spec, so an equity debate runs 1 real
+        // analyst of 3 while this returns a constant. ADR-0007 removed the
+        // human approval gate, so nobody downstream catches it either. The
+        // marker at least makes the debate — and the audit trail — state that
+        // the input was absent rather than unremarkable.
+        marketContext.news.length === 0
+          ? `${NO_DATA_MARKER}: no news or filing items available for this window — the market-intelligence store returned nothing, so this is an ABSENCE OF INPUT, not a neutral read of the fundamentals. Weight it accordingly.`
+          : `${marketContext.news.length} news/filing items in window, net sentiment driving ${direction}`,
         `Price reaction context: mark=${mark.price} observed ${mark.observed_at.toISOString()}`,
       ],
       timestamp: asOf,

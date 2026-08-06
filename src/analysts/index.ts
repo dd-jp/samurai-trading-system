@@ -19,3 +19,4 @@ export type {
   AssetClass,
   Signal,
 } from './types.js';
+export { NO_DATA_MARKER } from './types.js';

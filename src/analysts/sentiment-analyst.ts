@@ -14,6 +14,7 @@ import type { AnalystView, Direction } from '../debate-engine/index.js';
 import type { BarWindow } from '../market-data-service/index.js';
 import type { IntelligenceItem } from '../market-intelligence/index.js';
 import type { Analyst, AnalystInput, AssetClass } from './types.js';
+import { NO_DATA_MARKER } from './types.js';
 
 /** 24h social context window, matching technical-analyst's always-on context frame. */
 const MI_CONTEXT_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -82,7 +83,15 @@ export const sentimentAnalyst: Analyst = {
       direction,
       confidence,
       key_points: [
-        `${marketContext.social.length} social items in window, net sentiment driving ${direction}`,
+        // #436: an empty store must not read as an assessment. With no writer
+        // in production, `social` is empty on EVERY tick, and the old wording
+        // ("0 social items in window, net sentiment driving neutral") is
+        // indistinguishable in a debate transcript — or in a 14-day soak's own
+        // output — from "sentiment looked and saw nothing bullish". It never
+        // looked. Says so, in the text the mediator actually reads.
+        marketContext.social.length === 0
+          ? `${NO_DATA_MARKER}: no social items available for this window — the market-intelligence store returned nothing, so this is an ABSENCE OF INPUT, not a neutral read of the market. Weight it accordingly.`
+          : `${marketContext.social.length} social items in window, net sentiment driving ${direction}`,
         `Context: ${candles.length} candles, avg volume ${avgVolume}`,
       ],
       timestamp: asOf,
