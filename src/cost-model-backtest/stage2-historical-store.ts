@@ -19,6 +19,8 @@
  * delisting data to source. The seam is real — `assertSurvivorshipFree` runs
  * against it — it simply has nothing to report for this universe.
  */
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
 import type { Bar } from '../market-data-service/index.js';
 import { closeTimeOf } from '../market-data-service/index.js';
@@ -60,6 +62,77 @@ interface Stage2ListingRow {
   delisted_at: string | null;
 }
 
+/**
+ * What a symbol has already been ASKED for, and what actually came back.
+ *
+ * The two are tracked separately, and that separation is the point. Coverage
+ * derived from stored bars alone (`MIN`/`MAX(open_time)`) cannot be satisfied
+ * by a window whose end falls after the last bar the vendor has — which is
+ * ALWAYS true in practice: `STAGE2_PINNED_WINDOW` ends at an intraday instant,
+ * daily bars open at midnight, and equities print nothing at a weekend. Such a
+ * store would see a permanent tail gap and re-request it on every run, so
+ * "re-running is a no-op" would be false forever, just cheaper than before.
+ */
+export interface Stage2Coverage {
+  /** The union of every window requested so far — contiguous by construction. */
+  requestedFrom: Date;
+  requestedTo: Date;
+  /** `MIN`/`MAX(open_time)` of what the vendor actually served, if anything. */
+  firstBar?: Date | undefined;
+  lastBar?: Date | undefined;
+}
+
+/**
+ * The parts of `window` not already requested — at most a head range and a
+ * tail range, in that order. Empty means the whole window is already on disk
+ * and no vendor call is needed.
+ *
+ * Split out as a pure function because it is the whole of #495's decision, and
+ * every interesting case (nothing stored, fully covered, earlier start, later
+ * end, both ends, a vendor that served less than was asked) is a boundary
+ * condition worth testing without a database or a network in the way.
+ *
+ * Gaps stay contiguous with existing coverage — the head extends backwards
+ * from `requestedFrom`, the tail forwards to `window.end` — so the union of
+ * requested ranges is always a single interval and never needs a gap list.
+ *
+ * The tail starts at the LAST STORED BAR rather than at `requestedTo` when one
+ * exists: that bar is the only one that could have been provisional, and
+ * re-reading it costs one bar. See `ingest`.
+ */
+export function uncoveredRanges(
+  window: DateRange,
+  coverage: Stage2Coverage | undefined,
+): DateRange[] {
+  if (!coverage) return [window];
+
+  const gaps: DateRange[] = [];
+  if (window.start < coverage.requestedFrom) {
+    gaps.push({ start: window.start, end: coverage.requestedFrom });
+  }
+  if (window.end > coverage.requestedTo) {
+    const lastBar = coverage.lastBar;
+    const start =
+      lastBar !== undefined && lastBar < coverage.requestedTo ? lastBar : coverage.requestedTo;
+    gaps.push({ start, end: window.end });
+  }
+  return gaps;
+}
+
+/**
+ * SQLite creates the database FILE, never the directory holding it, and the
+ * scratch path convention is `data/…` which is gitignored — so it is absent on
+ * every fresh clone and better-sqlite3 throws an error naming neither the path
+ * nor the fix. `openSharedStore` already learnt this (#323); this store opens
+ * its own handle and has to learn it too. `recursive: true` is idempotent.
+ */
+function ensureParentDirectory(dbPath: string): void {
+  if (dbPath === ':memory:') return;
+  const directory = dirname(dbPath);
+  if (directory === '.') return;
+  mkdirSync(directory, { recursive: true });
+}
+
 export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry {
   private readonly db: BetterSqlite3.Database;
 
@@ -67,6 +140,7 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
     private readonly client: PolygonClient,
     dbPath = ':memory:',
   ) {
+    ensureParentDirectory(dbPath);
     this.db = new BetterSqlite3(dbPath);
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS stage2_bars (
@@ -85,20 +159,142 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
         symbol TEXT PRIMARY KEY,
         delisted_at TEXT
       );
+      -- What has been ASKED of the vendor, which is not what came back (#495).
+      -- A store that inferred coverage from bars alone could never call an
+      -- intraday-ending window satisfied, because no daily bar opens at
+      -- 18:17 — so it would re-request the tail on every run. See
+      -- \`Stage2Coverage\`.
+      --
+      -- No migration: this schema is research scratch, private to this module
+      -- and created on open, unlike the shared store's migration-managed one.
+      -- An existing scratch file simply gains the table and, with no recorded
+      -- request range, re-ingests once before becoming a no-op.
+      CREATE TABLE IF NOT EXISTS stage2_coverage (
+        instrument TEXT NOT NULL,
+        timeframe TEXT NOT NULL,
+        requested_from TEXT NOT NULL,
+        requested_to TEXT NOT NULL,
+        PRIMARY KEY (instrument, timeframe)
+      );
     `);
   }
 
   /**
-   * Fetches `symbol`'s daily aggregates over `window` from Polygon and
-   * persists them. Idempotent per `(instrument, timeframe, open_time)` —
-   * matching `SqliteMarketDataStore.appendBars`'s re-ingest-is-a-no-op
-   * convention.
+   * What `symbol` already has on disk, or `undefined` if it has never been
+   * ingested.
+   *
+   * BOTH ends of the requested range are read, not just the latest (#495
+   * review point). A tail-only strategy is wrong the moment a run asks for an
+   * EARLIER start than a previous one did: coverage would look satisfied, no
+   * fetch would happen, and the caller would be served a window quietly
+   * shorter than the one it asked for — the same silent-truncation class of
+   * bug this ticket exists to remove, merely relocated from the vendor to the
+   * cache.
+   */
+  #coverage(symbol: string): Stage2Coverage | undefined {
+    const requested = this.db
+      .prepare(
+        `SELECT requested_from, requested_to FROM stage2_coverage
+          WHERE instrument = ? AND timeframe = ?`,
+      )
+      .get(symbol, TIMEFRAME) as { requested_from: string; requested_to: string } | undefined;
+    if (!requested) return undefined;
+
+    const bars = this.db
+      .prepare(
+        `SELECT MIN(open_time) AS first, MAX(open_time) AS last
+           FROM stage2_bars WHERE instrument = ? AND timeframe = ?`,
+      )
+      .get(symbol, TIMEFRAME) as { first: string | null; last: string | null } | undefined;
+
+    return {
+      requestedFrom: new Date(requested.requested_from),
+      requestedTo: new Date(requested.requested_to),
+      firstBar: bars?.first ? new Date(bars.first) : undefined,
+      lastBar: bars?.last ? new Date(bars.last) : undefined,
+    };
+  }
+
+  /**
+   * Widens the recorded request range to include `window`. Recorded only after
+   * the fetch resolves, so a vendor error leaves the range unchanged and the
+   * next run retries the same gap instead of treating a failed call as cached.
+   */
+  #recordCoverage(symbol: string, window: DateRange, previous: Stage2Coverage | undefined): void {
+    const from =
+      previous && previous.requestedFrom < window.start ? previous.requestedFrom : window.start;
+    const to = previous && previous.requestedTo > window.end ? previous.requestedTo : window.end;
+
+    this.db
+      .prepare(
+        `INSERT INTO stage2_coverage (instrument, timeframe, requested_from, requested_to)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(instrument, timeframe) DO UPDATE SET
+           requested_from = excluded.requested_from,
+           requested_to = excluded.requested_to`,
+      )
+      .run(symbol, TIMEFRAME, from.toISOString(), to.toISOString());
+  }
+
+  /**
+   * Fetches the parts of `window` not already on disk and persists them.
+   * Idempotent per `(instrument, timeframe, open_time)`, matching
+   * `SqliteMarketDataStore.appendBars`'s re-ingest-is-a-no-op convention.
+   *
+   * **Before #495 this fetched the whole window every time.** The database was
+   * consulted only on the WRITE (`INSERT OR IGNORE` dedups after the network
+   * round-trip), so nothing was ever reused and every run re-pulled five
+   * years. That made the free-data decision (#487) rest on a false premise:
+   * a free, no-SLA source is only acceptable because history lives on disk and
+   * a dead vendor costs new bars alone. It is also what makes an equities
+   * fallback possible at all — Polygon's free tier 403s beyond two years
+   * against a five-year window, so it can only ever serve the increment.
+   *
+   * Coverage is read first and only the uncovered head and tail are requested.
+   * A window already requested at both ends issues NO call at all, so a repeat
+   * run is a true no-op and a partial window tops up rather than restarting.
+   *
+   * The tail refetch starts at the LAST STORED BAR rather than at the previous
+   * request boundary, because that bar is the only one that could have been
+   * PROVISIONAL: a run whose window ended mid-session stored a partially
+   * formed daily bar. `INSERT OR REPLACE` then corrects it. This costs one
+   * re-read bar per top-up.
+   *
+   * Residual, stated so it is not rediscovered as a surprise: a repeat run
+   * with an UNCHANGED window fetches nothing, so it does not revisit a bar
+   * that was provisional when first stored. Correcting that would cost a
+   * request per symbol on every re-run and contradict this ticket's own
+   * "re-running must stay a no-op". It does not arise on the path that
+   * matters — `STAGE2_PINNED_WINDOW` ends at a fixed PAST instant, so no run
+   * of it can store a forming bar — and any run that does advance its window
+   * picks up the correction on the next call.
    */
   async ingest(symbol: string, window: DateRange): Promise<void> {
-    const aggregates = await this.client.fetchAggregates(symbol, window);
+    const coverage = this.#coverage(symbol);
+    for (const gap of uncoveredRanges(window, coverage)) {
+      this.#persist(symbol, await this.client.fetchAggregates(symbol, gap));
+    }
+    this.#recordCoverage(symbol, window, coverage);
 
-    const insert = this.db.prepare(
-      `INSERT OR IGNORE INTO stage2_bars
+    this.db
+      .prepare(
+        `INSERT INTO stage2_listing (symbol, delisted_at) VALUES (?, NULL)
+         ON CONFLICT(symbol) DO NOTHING`,
+      )
+      .run(symbol);
+  }
+
+  /**
+   * `INSERT OR REPLACE`, not `OR IGNORE`. What protects this store from
+   * restated history is that both primaries are UNADJUSTED (Alpaca pinned
+   * `adjustment=raw`; crypto venues do not restate candles), so a re-read bar
+   * carries identical values — not the choice of SQL verb, which cannot tell
+   * a restatement from a correction. `IGNORE` would not preserve history; it
+   * would only make the provisional-bar case above permanent.
+   */
+  #persist(symbol: string, aggregates: PolygonAggregate[]): void {
+    const upsert = this.db.prepare(
+      `INSERT OR REPLACE INTO stage2_bars
          (instrument, timeframe, open_time, close_time, open, high, low, close, volume)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
@@ -106,7 +302,7 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
     for (const aggregate of aggregates) {
       const openTime = new Date(aggregate.t);
       const closeTime = closeTimeOf(openTime, TIMEFRAME);
-      insert.run(
+      upsert.run(
         symbol,
         TIMEFRAME,
         openTime.toISOString(),
@@ -118,13 +314,6 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
         aggregate.v,
       );
     }
-
-    this.db
-      .prepare(
-        `INSERT INTO stage2_listing (symbol, delisted_at) VALUES (?, NULL)
-         ON CONFLICT(symbol) DO NOTHING`,
-      )
-      .run(symbol);
   }
 
   /**

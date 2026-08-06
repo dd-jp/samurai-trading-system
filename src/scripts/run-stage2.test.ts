@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import type { PolygonAggregate, PolygonClient } from '../cost-model-backtest/index.js';
 import { minbtl } from '../cost-model-backtest/index.js';
 import {
@@ -5,6 +7,7 @@ import {
   defaultFiveYearWindow,
   effectiveWindow,
   runStage2,
+  STAGE2_SCRATCH_DB_PATH,
   STOCK_SYMBOLS,
 } from './run-stage2.js';
 
@@ -292,5 +295,38 @@ describe('effectiveWindow', () => {
 
     expect(effective.start.toISOString()).toBe('2025-01-01T00:00:00.000Z');
     expect(effective.end.toISOString()).toBe('2026-01-01T00:00:00.000Z');
+  });
+});
+
+describe('a direct run persists its bars instead of starting empty (#495)', () => {
+  /**
+   * The composition root IS the bug this ticket reports, so it is what gets
+   * asserted. `runStage2`'s `dbPath` plumbing was already correct and already
+   * covered; what was wrong is that the one caller which actually spends money
+   * on vendor calls passed nothing and silently got `:memory:` — so every run
+   * began with an empty database and re-pulled the whole five-year window.
+   *
+   * Read from source because the entrypoint sits behind an `import.meta.url`
+   * guard that cannot be imported without launching a real Polygon run. Same
+   * technique as `replay-driver.test.ts`'s import guard.
+   */
+  const source = readFileSync(fileURLToPath(new URL('./run-stage2.ts', import.meta.url)), 'utf8');
+  const entrypoint = source.slice(source.indexOf('if (import.meta.url ==='));
+
+  it('hands the direct-run entrypoint a persistent scratch path', () => {
+    expect(entrypoint).not.toBe('');
+    expect(entrypoint).toContain('dbPath: STAGE2_SCRATCH_DB_PATH');
+  });
+
+  it('keeps that path a research scratch file, separate from the shared store', () => {
+    expect(STAGE2_SCRATCH_DB_PATH).not.toBe(':memory:');
+    // `data/` so the existing `*.sqlite` gitignore rule covers it; not
+    // `samurai-*`, which is the shared store's live run state.
+    expect(STAGE2_SCRATCH_DB_PATH).toMatch(/^data\/[\w-]+\.sqlite$/);
+    expect(STAGE2_SCRATCH_DB_PATH).not.toContain('samurai-');
+  });
+
+  it("leaves runStage2's own default at :memory: so tests stay isolated", () => {
+    expect(source).toContain("deps.dbPath ?? ':memory:'");
   });
 });

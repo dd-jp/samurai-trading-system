@@ -1,5 +1,9 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { PolygonAggregate, PolygonClient } from './stage2-historical-store.js';
-import { Stage2HistoricalStore } from './stage2-historical-store.js';
+import { Stage2HistoricalStore, uncoveredRanges } from './stage2-historical-store.js';
+import type { DateRange } from './universe.js';
 import { assertSurvivorshipFree } from './universe.js';
 
 const DAY_MS = 86_400_000;
@@ -232,5 +236,191 @@ describe('Stage2HistoricalStore', () => {
     for (const bar of bars) {
       expect(bar.close_time.getTime()).toBeLessThanOrEqual(cutoff);
     }
+  });
+});
+
+describe('ingest reuses what is already stored instead of re-fetching (#495)', () => {
+  const START = Date.UTC(2020, 0, 1);
+
+  /** A client that records every window it was asked for. */
+  function recordingClient(bars: PolygonAggregate[]) {
+    const asked: DateRange[] = [];
+    const client: PolygonClient = {
+      async fetchAggregates(_symbol, window) {
+        asked.push(window);
+        // A real vendor serves only what falls inside the requested range.
+        return bars.filter(({ t }) => t >= window.start.getTime() && t <= window.end.getTime());
+      },
+    };
+    return { client, asked };
+  }
+
+  it('issues no vendor call at all on a re-run of the same window', async () => {
+    const window = { start: new Date(START), end: new Date(START + 10 * DAY_MS) };
+    const vendor = recordingClient(aggregates(5, START, 100));
+    const store = new Stage2HistoricalStore(vendor.client);
+
+    await store.ingest('SPY', window);
+    expect(vendor.asked).toHaveLength(1);
+
+    await store.ingest('SPY', window);
+
+    // Pre-#495 this was 2 — the full window re-fetched, deduped only on write.
+    expect(vendor.asked).toHaveLength(1);
+    expect(store.bars('SPY', window)).toHaveLength(5);
+  });
+
+  it("stays a no-op even though no daily bar opens at the window's intraday end", async () => {
+    // The shape `STAGE2_PINNED_WINDOW` actually has: an end at 18:17, while
+    // bars open at midnight. Coverage inferred from stored bars alone would
+    // see a permanent tail gap here and re-request on every run.
+    const window = {
+      start: new Date(START),
+      end: new Date(START + 4 * DAY_MS + 65_827_694),
+    };
+    const vendor = recordingClient(aggregates(5, START, 100));
+    const store = new Stage2HistoricalStore(vendor.client);
+
+    await store.ingest('SPY', window);
+    await store.ingest('SPY', window);
+    await store.ingest('SPY', window);
+
+    expect(vendor.asked).toHaveLength(1);
+  });
+
+  it('tops up only the uncovered tail when a later run extends the window', async () => {
+    const vendor = recordingClient(aggregates(10, START, 100));
+    const store = new Stage2HistoricalStore(vendor.client);
+    const first = { start: new Date(START), end: new Date(START + 4 * DAY_MS) };
+    const extended = { start: new Date(START), end: new Date(START + 9 * DAY_MS) };
+    // `bars()` filters on close_time (open + 1 day), so a read that ends with
+    // the last bar's OPEN would drop it.
+    const readAll = { start: new Date(START), end: new Date(START + 10 * DAY_MS) };
+
+    await store.ingest('SPY', first);
+    await store.ingest('SPY', extended);
+
+    expect(vendor.asked).toHaveLength(2);
+    // Starts at the last stored bar, not at the window start: the whole point
+    // is that the first four days are never asked for twice.
+    expect(vendor.asked[1]?.start.getTime()).toBe(START + 4 * DAY_MS);
+    expect(vendor.asked[1]?.end.getTime()).toBe(extended.end.getTime());
+    expect(store.bars('SPY', readAll)).toHaveLength(10);
+  });
+
+  it('fetches the head when a later run asks for an EARLIER start', async () => {
+    const vendor = recordingClient(aggregates(10, START, 100));
+    const store = new Stage2HistoricalStore(vendor.client);
+    const late = { start: new Date(START + 5 * DAY_MS), end: new Date(START + 9 * DAY_MS) };
+    const earlier = { start: new Date(START), end: new Date(START + 9 * DAY_MS) };
+    const readAll = { start: new Date(START), end: new Date(START + 10 * DAY_MS) };
+
+    await store.ingest('SPY', late);
+    expect(store.bars('SPY', readAll)).toHaveLength(5);
+
+    await store.ingest('SPY', earlier);
+
+    // A tail-only cache would have called this covered and served 5 bars
+    // forever — silent truncation moved from the vendor into the cache.
+    expect(vendor.asked[1]?.start.getTime()).toBe(START);
+    expect(store.bars('SPY', readAll)).toHaveLength(10);
+  });
+
+  it('re-reads the last stored bar so a provisional one is corrected, not frozen', async () => {
+    const asked: DateRange[] = [];
+    let close = 100;
+    const client: PolygonClient = {
+      async fetchAggregates(_symbol, window) {
+        asked.push(window);
+        // The bar at START is provisional on the first read and settles later.
+        return [{ t: START, o: 100, h: 100, l: 100, c: close, v: 1 }].filter(
+          ({ t }) => t >= window.start.getTime() && t <= window.end.getTime(),
+        );
+      },
+    };
+    const store = new Stage2HistoricalStore(client);
+
+    await store.ingest('SPY', { start: new Date(START), end: new Date(START + DAY_MS) });
+    close = 137; // the settled close
+    await store.ingest('SPY', { start: new Date(START), end: new Date(START + 2 * DAY_MS) });
+
+    const bars = store.bars('SPY', { start: new Date(START), end: new Date(START + 2 * DAY_MS) });
+    expect(bars).toHaveLength(1);
+    // INSERT OR IGNORE would have kept 100 here, forever.
+    expect(bars[0]?.close).toBe(137);
+  });
+
+  it('does not record coverage when the vendor call fails, so the next run retries', async () => {
+    let failing = true;
+    const asked: DateRange[] = [];
+    const client: PolygonClient = {
+      async fetchAggregates(_symbol, window) {
+        asked.push(window);
+        if (failing) throw new Error('vendor 503');
+        return aggregates(5, START, 100);
+      },
+    };
+    const store = new Stage2HistoricalStore(client);
+    const window = { start: new Date(START), end: new Date(START + 10 * DAY_MS) };
+
+    await expect(store.ingest('SPY', window)).rejects.toThrow('vendor 503');
+    failing = false;
+    await store.ingest('SPY', window);
+
+    expect(asked).toHaveLength(2);
+    expect(store.bars('SPY', window)).toHaveLength(5);
+  });
+
+  it('survives a restart against the same file, re-reading bars rather than the vendor', async () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), 'stage2-store-')), 'nested', 'bars.sqlite');
+    const window = { start: new Date(START), end: new Date(START + 10 * DAY_MS) };
+    const vendor = recordingClient(aggregates(5, START, 100));
+
+    // `nested/` does not exist: SQLite creates the file, never the directory.
+    await new Stage2HistoricalStore(vendor.client, dbPath).ingest('SPY', window);
+    const reopened = new Stage2HistoricalStore(vendor.client, dbPath);
+    await reopened.ingest('SPY', window);
+
+    expect(vendor.asked).toHaveLength(1);
+    expect(reopened.bars('SPY', window)).toHaveLength(5);
+  });
+});
+
+describe('uncoveredRanges', () => {
+  const d = (ms: number) => new Date(START + ms * DAY_MS);
+  const START = Date.UTC(2020, 0, 1);
+
+  it('asks for the whole window when nothing has been ingested', () => {
+    expect(uncoveredRanges({ start: d(0), end: d(10) }, undefined)).toEqual([
+      { start: d(0), end: d(10) },
+    ]);
+  });
+
+  it('asks for nothing when the window sits inside what was already requested', () => {
+    const coverage = { requestedFrom: d(0), requestedTo: d(10), firstBar: d(0), lastBar: d(9) };
+
+    expect(uncoveredRanges({ start: d(2), end: d(8) }, coverage)).toEqual([]);
+  });
+
+  it('returns head and tail in order when the window overhangs both ends', () => {
+    const coverage = { requestedFrom: d(4), requestedTo: d(6), firstBar: d(4), lastBar: d(6) };
+
+    expect(uncoveredRanges({ start: d(0), end: d(10) }, coverage)).toEqual([
+      { start: d(0), end: d(4) },
+      { start: d(6), end: d(10) },
+    ]);
+  });
+
+  it('starts the tail at the requested boundary when no bar came back at all', () => {
+    const coverage = {
+      requestedFrom: d(0),
+      requestedTo: d(5),
+      firstBar: undefined,
+      lastBar: undefined,
+    };
+
+    expect(uncoveredRanges({ start: d(0), end: d(10) }, coverage)).toEqual([
+      { start: d(5), end: d(10) },
+    ]);
   });
 });
