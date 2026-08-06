@@ -43,14 +43,11 @@ import { digest } from '../orchestrator/index.js';
 import type { ConfigTrialLog } from './config-trial-log.js';
 import { EvalExecutorImpl } from './eval-executor.js';
 import type { EvalExecutor, EvalReport } from './eval-types.js';
-import { minbtl } from './overfitting.js';
+import { minbtl, windowYears } from './overfitting.js';
 import type { ProxyStrategyConfig } from './proxy-strategy.js';
 import type { ReplayRunResult } from './replay-driver.js';
 import type { BacktestReport } from './types.js';
 import type { DateRange } from './universe.js';
-
-/** Julian year in ms — the same conversion `minbtl` uses, so the two agree. */
-const MS_PER_YEAR = 365.25 * 24 * 60 * 60 * 1_000;
 
 /** One bar's duration — the spec's `barMs`=1 day, fixed for the grid run. */
 const DAY_MS = 86_400_000;
@@ -172,7 +169,7 @@ export function sizeTrialGridToSample(
   window: DateRange,
 ): TrialGridSizing {
   const { limit } = minbtl(window);
-  const years = (window.end.getTime() - window.start.getTime()) / MS_PER_YEAR;
+  const years = windowYears(window);
   const requested = entries.length;
 
   // A window too short to support even ONE configuration must REFUSE, not
@@ -209,7 +206,18 @@ export function sizeTrialGridToSample(
   for (let i = 0; i < limit; i++) {
     const index = limit === 1 ? 0 : Math.round((i * (requested - 1)) / (limit - 1));
     const entry = entries[index];
-    if (entry !== undefined) selected.push(entry);
+    // Provably in bounds — `i` runs to `limit - 1` and `limit < requested`
+    // here, so `index` never exceeds `requested - 1`. Throwing rather than
+    // skipping because a silent skip would make `selected` shorter than
+    // `limit` with no signal, and `announceSizing` would then report a grid
+    // size that is not the one that ran.
+    if (entry === undefined) {
+      throw new Error(
+        `sizeTrialGridToSample: index ${index} is out of bounds for ${requested} configs ` +
+          `at limit ${limit} — the even-spacing arithmetic is wrong.`,
+      );
+    }
+    selected.push(entry);
   }
 
   return { selected, limit, requested, years };

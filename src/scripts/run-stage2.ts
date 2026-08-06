@@ -384,11 +384,18 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
     // than from a second `sizeTrialGridToSample` call here. The two agreed —
     // same pure function, same window — but a verdict's audit trail should
     // report what ran, not something computed alongside it.
+    //
+    // N is `selected.length`, NOT `limit`. They differ whenever the cap does
+    // not bind — a 5-year window supports ~45 trials and the cross-product
+    // only asks for 12, where printing `limit` would announce a 45-config grid
+    // and then run 12. That is the same reported-vs-actual divergence this
+    // change exists to remove, one line further along.
     announceSizing: (sizing) =>
       print(
-        `Stage 2: grid sized to N=${sizing.limit} from a ${sizing.years.toFixed(1)}-year ` +
-          `effective sample (the full cross-product asks for ${sizing.requested}; MinBTL ` +
-          `supports ${sizing.limit}). Running across stocks + crypto...`,
+        `Stage 2: grid sized to N=${sizing.selected.length} from a ` +
+          `${sizing.years.toFixed(1)}-year effective sample (the full cross-product asks ` +
+          `for ${sizing.requested}; MinBTL supports ${sizing.limit}). ` +
+          'Running across stocks + crypto...',
       ),
     // The gate run is the one caller that needs the CSCV pass: without it PBO
     // has no configs x folds matrix to rank across and the verdict can only

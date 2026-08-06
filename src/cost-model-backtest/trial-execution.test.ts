@@ -695,6 +695,19 @@ describe('sizeTrialGridToSample', () => {
     }
   });
 
+  it('reports a cap that does NOT bind without overstating the grid', () => {
+    // The trap in the announced figure: over a 5-6 year window MinBTL supports
+    // ~45 trials while the cross-product only asks for 12. A message built from
+    // `limit` would announce a 45-config grid and then run 12 — the same
+    // reported-vs-actual divergence the callback exists to remove. `selected`
+    // is the only field that tracks what runs in BOTH regimes.
+    const sizing = sizeTrialGridToSample(buildTrialGrid(), windowOfYears(6));
+
+    expect(sizing.limit).toBeGreaterThan(12);
+    expect(sizing.requested).toBe(12);
+    expect(sizing.selected).toHaveLength(12);
+  });
+
   it('keeps only distinct configs — a duplicate would inflate N against the cap', () => {
     const sizing = sizeTrialGridToSample(buildTrialGrid(), windowOfYears(2));
     const hashes = sizing.selected.map((entry) => entry.config_hash);
