@@ -23,7 +23,7 @@
  */
 
 import type { SetupNeighbor, SetupStore, SetupVector } from '../shared/index.js';
-import { isUniqueConstraintError, type SharedStore } from '../shared/store/index.js';
+import type { SharedStore } from '../shared/store/index.js';
 
 export type SetupAssetClass = 'crypto' | 'stocks';
 
@@ -88,38 +88,41 @@ export class SqliteSetupStore implements SetupStore {
   }
 
   /**
-   * One row per `debate_id` (PK). A duplicate write for the same debate is a
-   * bug (replayed decision), so the PK violation is surfaced as a named error
-   * rather than an upsert.
+   * One row per `debate_id` (PK), first-write-wins.
+   *
+   * This used to throw on a repeat, on the reasoning that a duplicate write
+   * "is a bug (replayed decision)". #432 made `decide()` its caller, and that
+   * reasoning does not survive the move: `decide` runs the same code path in
+   * live and in replay (ADR-0003 replay-from-log), and a crash-restart that
+   * re-decides the same bar produces the same deterministic `debate_id`. A
+   * throw there kills the tick over a row that already holds exactly the
+   * values the second write would have supplied — `debate_id` is a hash of the
+   * debate's inputs, so an identical debate embeds an identical vector.
+   *
+   * `ON CONFLICT DO NOTHING`, the same choice and the same reason as
+   * `SqliteVerdictLogStore.writeLog` and `SqliteTuningStore.seedAnalystWeight`:
+   * the row that exists is the record, and a later write must not be able to
+   * erase it — including its `created_at`, which is the only evidence of when
+   * the decision was actually made.
    */
   writeSetup(debateId: string, vector: SetupVector, decidedAt: Date): void {
-    try {
-      this.db
-        .prepare(
-          `INSERT INTO cosine_setups (
+    this.db
+      .prepare(
+        `INSERT INTO cosine_setups (
              debate_id, idempotency_key, instrument, asset_class,
              debate_features_json, market_features_json, r_multiple, closed_at, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
-        )
-        .run(
-          debateId,
-          this.idempotencyKeyFor(debateId),
-          this.instrument,
-          this.assetClass,
-          JSON.stringify(vector.debate_features),
-          JSON.stringify(vector.market_features),
-          decidedAt.toISOString(),
-        );
-    } catch (cause) {
-      if (isUniqueConstraintError(cause)) {
-        throw new Error(
-          `SqliteSetupStore.writeSetup: a setup already exists for debate_id '${debateId}' — ` +
-            'one row per debate (cosine_setups PK); a repeat write is a replayed decision.',
-          { cause },
-        );
-      }
-      throw cause;
-    }
+           ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+         ON CONFLICT(debate_id) DO NOTHING`,
+      )
+      .run(
+        debateId,
+        this.idempotencyKeyFor(debateId),
+        this.instrument,
+        this.assetClass,
+        JSON.stringify(vector.debate_features),
+        JSON.stringify(vector.market_features),
+        decidedAt.toISOString(),
+      );
   }
 
   /**

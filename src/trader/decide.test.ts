@@ -732,6 +732,19 @@ describe('decide — cosine precedent wiring (#432)', () => {
     expect(written[0]?.vector.market_features).toHaveLength(3);
   });
 
+  it('survives a re-decided bar — replay and crash-restart hit the same debate_id', async () => {
+    // `decide` runs the same path in live and in replay (ADR-0003), and a
+    // crash-restart re-decides the bar it died on. `debate_id` is a hash of the
+    // debate's inputs, so the second pass writes the same key; a store that
+    // threw there would take the tick down.
+    const setupStore = new FixtureSetupStore();
+
+    await decide(traderInput({ setupStore }));
+    await expect(decide(traderInput({ setupStore }))).resolves.not.toBeNull();
+
+    expect(setupStore.getWritten()).toHaveLength(1);
+  });
+
   it('writes NO setup when the decision is a skip', async () => {
     const setupStore = new FixtureSetupStore();
     // Below the conviction floor: no intent, so nothing for the Feedback Loop

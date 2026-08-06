@@ -222,11 +222,21 @@ async function buildBracket(
 
   if (size * entry < config.min_viable_notional) return null;
 
-  // Written only once every skip guard has passed, so `cosine_setups` holds
-  // setups that became real intents and nothing else. Writing before the
-  // guards would leave rows no `labelSetup` ever arrives for, and they would
-  // sit unlabelled — invisible to `findNeighbors`, which is closed-outcome
-  // only — quietly inflating the table for the life of the deployment.
+  // Written only once every skip guard has passed, so a decision the Trader
+  // itself declined leaves no row.
+  //
+  // What this does NOT promise: that every row written here becomes a labelled
+  // trade. Risk can trim to a reject, Verdict can say no-go, and the broker can
+  // refuse the order — each leaves a setup no `labelSetup` ever arrives for.
+  // Those rows are inert rather than harmful (`findNeighbors` returns only
+  // closed-outcome setups, so an unlabelled row can never influence sizing),
+  // and the alternative is worse: the vector is only computable here, at the
+  // point the decision is made, so deferring the write to the fill would mean
+  // carrying the embedding through three stages that have no use for it.
+  //
+  // The write is first-write-wins in the store, which is what makes a
+  // re-decided bar — replay, or a crash-restart on the same bar — safe rather
+  // than fatal.
   setupStore.writeSetup(debate.debate_id, setupVector, asOf);
 
   const side = sideFor(debate.direction);

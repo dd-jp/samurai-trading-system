@@ -51,14 +51,32 @@ describe('SqliteSetupStore.writeSetup', () => {
     });
   });
 
-  it('rejects a duplicate write for the same debate (cosine_setups PK)', () => {
+  /**
+   * First-write-wins since #432, where `decide()` became the caller. A repeat
+   * write is a re-decided bar — replay, or a crash-restart on the same bar —
+   * and killing the tick over a row that already holds the same values is the
+   * wrong answer. `debate_id` is a hash of the debate's inputs, so the second
+   * write's vector is identical to the first's by construction.
+   */
+  it('ignores a duplicate write for the same debate rather than throwing', () => {
     const { db, store } = makeStore();
     store.writeSetup('debate-1', VECTOR, DECIDED_AT);
 
-    expect(() => store.writeSetup('debate-1', VECTOR, DECIDED_AT)).toThrow(
-      /already exists for debate_id 'debate-1'/,
-    );
+    expect(() => store.writeSetup('debate-1', VECTOR, DECIDED_AT)).not.toThrow();
     expect(db.prepare('SELECT COUNT(*) AS n FROM cosine_setups').get()).toEqual({ n: 1 });
+  });
+
+  it('leaves the first row untouched — created_at is the record of when it was decided', () => {
+    const { db, store } = makeStore();
+    store.writeSetup('debate-1', VECTOR, DECIDED_AT);
+
+    const later = new Date(DECIDED_AT.getTime() + 60 * 60 * 1000);
+    store.writeSetup('debate-1', { debate_features: [9], market_features: [9] }, later);
+
+    expect(db.prepare('SELECT created_at, debate_features_json FROM cosine_setups').get()).toEqual({
+      created_at: DECIDED_AT.toISOString(),
+      debate_features_json: JSON.stringify(VECTOR.debate_features),
+    });
   });
 });
 
