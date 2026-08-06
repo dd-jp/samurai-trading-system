@@ -793,7 +793,11 @@ function stubConfig(db: SharedStore, overrides: Partial<ProductionConfig>): Stub
     } as unknown as ProductionConfig['accountState'],
     traderConfig: {} as ProductionConfig['traderConfig'],
     riskConfig: {} as ProductionConfig['riskConfig'],
-    verdictConfig: {} as ProductionConfig['verdictConfig'],
+    // Carries the automation dial, which `buildProductionComponents` reads to
+    // refuse a HITL-engaging config (#434). `auto` is ADR-0007's setting.
+    verdictConfig: {
+      automation_level: { crypto: 'auto', stocks: 'auto' },
+    } as ProductionConfig['verdictConfig'],
     executionConfig: {} as ProductionConfig['executionConfig'],
     correlationConfig: {} as ProductionConfig['correlationConfig'],
     breakerConfig: {} as ProductionConfig['breakerConfig'],

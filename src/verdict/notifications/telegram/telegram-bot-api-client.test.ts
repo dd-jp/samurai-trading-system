@@ -392,6 +392,45 @@ describe('TelegramBotApiClient inbound callback flow', () => {
     });
   });
 
+  it('an EMPTY allowlist denies every caller, including a real user id (#434)', async () => {
+    // The assertion the whole "absent is safe" argument rests on. Making the
+    // allowlist optional is fail-closed only while the callback check is an
+    // unconditional `has(fromId)`. If it were ever shaped `size > 0 && !has(..)`,
+    // an unset variable would silently admit EVERYONE to live-money approvals.
+    // So this uses a genuinely valid, allowlisted-in-other-tests user id: the
+    // point is that MEMBERSHIP fails, not that the id was malformed.
+    const auditLog = makeAuditLog();
+    const fetchMock = vi.fn(async (url: string) =>
+      okResponse(
+        String(url).includes('/getUpdates')
+          ? [callbackUpdate(1, 'a'.repeat(32), ALLOWED_ID)]
+          : true,
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new TelegramBotApiClient({
+      botToken: FAKE_TOKEN,
+      allowedUserIds: '',
+      auditLog,
+    });
+    const handler = vi.fn();
+    client.onApprovalCallback(handler);
+
+    await client.pollOnce();
+
+    expect(handler).not.toHaveBeenCalled();
+
+    // The assertion that makes this test mean something. `handler` not being
+    // called proves little on its own — an unrecognised correlation token would
+    // also stop it, so the test would pass even if the allowlist had admitted
+    // the caller. The audit decision distinguishes the two: `allowlist_rejected`
+    // is only written on the membership check. Under a `size > 0 && !has(..)`
+    // shape this caller would sail through and be recorded (or dropped) as an
+    // unknown token instead, and this expectation fails.
+    expect(auditLog.entries.map((entry) => entry.decision)).toContain('allowlist_rejected');
+  });
+
   it('always calls answerCallbackQuery, including for an allowlist rejection', async () => {
     const h = makeClient({
       updates: [[callbackUpdate(1, 'a'.repeat(32), 999)]],

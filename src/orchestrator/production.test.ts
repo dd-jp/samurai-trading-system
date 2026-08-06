@@ -164,7 +164,13 @@ function stubConfig(db: SqliteHandle, overrides: Partial<ProductionConfig> = {})
     },
     traderConfig: {} as ProductionConfig['traderConfig'],
     riskConfig: {} as ProductionConfig['riskConfig'],
-    verdictConfig: {} as ProductionConfig['verdictConfig'],
+    // Not `{}` like its neighbours: `buildProductionComponents` reads the
+    // automation dial to refuse a HITL-engaging config (#434), so an empty cast
+    // here is a lie the assertion is the first code to notice. `auto` is what
+    // ADR-0007 mandates and what every other fixture in this file uses.
+    verdictConfig: {
+      automation_level: { crypto: 'auto', stocks: 'auto' },
+    } as ProductionConfig['verdictConfig'],
     executionConfig: {} as ProductionConfig['executionConfig'],
     correlationConfig: {} as ProductionConfig['correlationConfig'],
     breakerConfig: {} as ProductionConfig['breakerConfig'],
