@@ -31,14 +31,23 @@ import { join } from 'node:path';
 
 /** Mirrors `STORE_MODES` — duplicated rather than imported so this guard does
  * not load application code before the suite starts. Drift is caught by the
- * store's own tests, which assert the full set of paths. */
-const GUARDED_STORE_FILES = [
+ * store's own tests, which assert the full set of paths.
+ *
+ * `data/` itself is guarded alongside the files, and it is the entry that
+ * catches the worse event. A store file absent at snapshot time and absent
+ * afterwards reads as unchanged — which is precisely the state of a checkout
+ * whose live store has ALREADY been unlinked out from under a running process,
+ * so the files alone would go blind exactly when the damage is in flight. The
+ * directory's inode changes on any `rm -rf data/` even when every file inside
+ * it was already gone. */
+const GUARDED_STORE_PATHS = [
+  'data',
   'data/samurai-paper.sqlite',
   'data/samurai-live.sqlite',
   'data/samurai-backtest.sqlite',
 ] as const;
 
-/** The file's inode, or `null` when it does not exist. */
+/** The inode of the file or directory, or `null` when it does not exist. */
 function identity(path: string): string | null {
   try {
     return String(statSync(path).ino);
@@ -48,7 +57,7 @@ function identity(path: string): string | null {
 }
 
 function snapshot(root: string): Map<string, string | null> {
-  return new Map(GUARDED_STORE_FILES.map((file) => [file, identity(join(root, file))]));
+  return new Map(GUARDED_STORE_PATHS.map((path) => [path, identity(join(root, path))]));
 }
 
 export default function setup(): () => void {
@@ -57,7 +66,7 @@ export default function setup(): () => void {
 
   return () => {
     const after = snapshot(root);
-    const damaged = GUARDED_STORE_FILES.filter((file) => before.get(file) !== after.get(file));
+    const damaged = GUARDED_STORE_PATHS.filter((path) => before.get(path) !== after.get(path));
 
     if (damaged.length === 0) return;
 
@@ -70,8 +79,8 @@ export default function setup(): () => void {
     process.exitCode = 1;
 
     throw new Error(
-      `A test created, replaced or deleted a real shared store file in this checkout: ` +
-        `${damaged.join(', ')}. Those files belong to live paper/live/backtest runs — ` +
+      `A test created, replaced or deleted a real shared store path in this checkout: ` +
+        `${damaged.join(', ')}. Those belong to live paper/live/backtest runs — ` +
         `unlinking one while a process holds it open silently strands the whole session on ` +
         `an inode with no name, taking the ADR-0008 llm_spend accounting with it. Open ` +
         `':memory:' via openSharedStore, or relocate the test's cwd to a temp directory ` +
