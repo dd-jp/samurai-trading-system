@@ -53,6 +53,11 @@ const MUTATED_ENV_VARS = [
   'ALPACA_API_SECRET',
   'ANTHROPIC_API_KEY',
   'NODE_ENV',
+  // #330 (PR #447 review): the store path is keyed off SAMURAI_MODE now, and
+  // the test below sets it. Restoring it at file scope for `NODE_ENV`'s reason
+  // — vitest reuses a worker across files, and a leaked mode would repoint
+  // every later store open in that worker.
+  'SAMURAI_MODE',
   // #322: every test in this file drives the real construction path, and that
   // path now refuses to start until the operator has said where alerts go.
   // Defaulted to `log-only` per test below; the Telegram three are cleared so

@@ -142,9 +142,18 @@ export function legacyStorePath(rawEnv: string | undefined = process.env.NODE_EN
 function assertNoStrandedLegacyStore(mode: StoreMode, path: string): void {
   if (existsSync(path)) return;
 
-  const env = process.env.NODE_ENV ?? 'development';
-  if (!(STORE_ENVIRONMENTS as readonly string[]).includes(env)) return;
-  const legacy = `data/samurai-${env}.sqlite`;
+  // Through `legacyStorePath` rather than rebuilt here (PR #447 review): one
+  // place owns the old filename, so a future change to it cannot leave this
+  // guard looking for a file that is no longer what a pre-#330 deployment
+  // wrote. It throws on an unrecognised NODE_ENV, which is not a reason to
+  // fail a start whose own path resolved fine — an environment this guard
+  // cannot name simply has no legacy file to strand.
+  let legacy: string;
+  try {
+    legacy = legacyStorePath();
+  } catch {
+    return;
+  }
   if (!existsSync(legacy)) return;
 
   throw new Error(
