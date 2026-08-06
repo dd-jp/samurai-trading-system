@@ -261,6 +261,17 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   .pl-inf { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 6px; }
   .pl-bar-inf { height: 4px; background: var(--border); border-radius: 2px; margin-top: 4px; overflow: hidden; }
   .pl-bar-inf i { display: block; height: 100%; background: var(--blue); }
+  /* #427 — one cell per round, so a talked-around analyst reads differently
+     from one that never moved. Flex rather than a fixed width: the round
+     count varies per debate (1-3), and the strip should fill the card at any
+     of them rather than leaving a ragged tail. */
+  .pl-stance { display: flex; gap: 2px; margin-top: 6px; }
+  .pl-stance i { flex: 1 1 0; height: 6px; border-radius: 2px; background: var(--border); }
+  .pl-stance i.pl-stance-bullish { background: var(--green); }
+  .pl-stance i.pl-stance-bearish { background: var(--red); }
+  /* A neutral round keeps the grey deliberately: it is the absence of a
+     directional call, and colouring it would read as a third stance with its
+     own weight. */
   /* An empty state that states its reason. Never a spinner or a skeleton —
      both promise detail that is not coming (Debate Engine decision #10). */
   .pl-note { border: 1px dashed var(--border); border-radius: 6px; padding: 10px 12px; font-size: 12px; color: var(--text); }

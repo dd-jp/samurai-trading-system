@@ -94,6 +94,15 @@ export interface PipelineDebateContribution {
   analyst_type: string;
   final_position: string;
   influence_score: number;
+  /**
+   * Round-by-round stance (#427) — what the drawer draws its strip from.
+   *
+   * The prototype that set the agreed look drew this and the shipped drawer
+   * had no equivalent, which made an analyst that was talked around render
+   * identically to one that never moved. Optional: a row with no per-round
+   * record renders no strip rather than a fabricated flat one.
+   */
+  stance_during_debate?: string[];
 }
 
 export interface PipelineDebateSummary {
@@ -123,6 +132,34 @@ export interface PipelineRenderOptions {
  * Escaped for the same reason `html.ts` escapes provider detail: a value this
  * system merely stored is not a value it wrote.
  */
+/**
+ * The per-round stance strip (#427) — one cell per round, in round order, so
+ * an analyst that was talked around reads differently from one that never
+ * moved. Both rendered identically before this.
+ *
+ * Renders nothing at all when there is no per-round record, rather than a flat
+ * strip: a debate that logged no stances did not hold a steady position, it
+ * reported nothing, and drawing a confident-looking line for that would be the
+ * dashboard inventing evidence.
+ *
+ * Every stance goes through `escapePipelineText`, into both the class name and
+ * the label, for that function's stated reason: `analyst_type` and stance are
+ * LLM-derived strings the system stored rather than wrote.
+ */
+function renderStanceStrip(stances: readonly string[] | undefined): string {
+  if (stances === undefined || stances.length === 0) return '';
+
+  const cells = stances
+    .map(
+      (stance, round) =>
+        `<i class="pl-stance-${escapePipelineText(stance)}" title="round ${round + 1}: ` +
+        `${escapePipelineText(stance)}"></i>`,
+    )
+    .join('');
+
+  return `<div class="pl-stance" aria-label="stance by round">${cells}</div>`;
+}
+
 export function escapePipelineText(value: string): string {
   return String(value).replace(
     /[&<>"']/g,
@@ -507,7 +544,9 @@ export function renderDebateSection(
         `<span class="badge badge-${escapePipelineText(c.final_position)}">${escapePipelineText(c.final_position.slice(0, 4))}</span></div>` +
         `<div class="pl-role">${escapePipelineText(c.analyst_type)}</div>` +
         `<div class="pl-inf">influence ${c.influence_score.toFixed(2)}</div>` +
-        `<div class="pl-bar-inf"><i style="width:${Math.max(0, Math.min(100, Math.round(c.influence_score * 100)))}%"></i></div></div>`,
+        `<div class="pl-bar-inf"><i style="width:${Math.max(0, Math.min(100, Math.round(c.influence_score * 100)))}%"></i></div>` +
+        renderStanceStrip(c.stance_during_debate) +
+        '</div>',
     )
     .join('');
 
@@ -515,6 +554,7 @@ export function renderDebateSection(
     debate.contributions.length === 0
       ? '<div class="pl-note">No contributions recorded.</div>'
       : '';
+
   return (
     `<h3>Debate <span class="pl-sub">${escapePipelineText(debate.direction)} · ${debate.rounds} round(s)</span></h3>` +
     `<div class="pl-agents">${cards}</div>${empty}` +
@@ -644,6 +684,10 @@ export const PIPELINE_VIEW_CLIENT_SOURCE: string = [
   renderPipelineGutter.toString(),
   renderPipelineRail.toString(),
   selectDebateForLane.toString(),
+  // #427. Declared before `renderDebateSection`, which calls it — the list's
+  // own doc notes hoisting covers function declarations, and the test that
+  // evaluates this string is what catches an omission.
+  renderStanceStrip.toString(),
   renderDebateSection.toString(),
   renderReservedSlot.toString(),
   renderStageStrip.toString(),

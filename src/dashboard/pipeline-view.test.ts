@@ -573,6 +573,92 @@ describe('selectDebateForLane', () => {
   });
 });
 
+/**
+ * #427 — the per-round stance strip.
+ *
+ * `debate_log.contributions_json` always carried `stance_during_debate`; the
+ * wire shape projected only where each analyst ENDED UP, so an analyst that
+ * started bearish and was talked around rendered identically to one that never
+ * moved. That is the interesting part of a debate.
+ */
+describe('renderDebateSection — the stance strip (#427)', () => {
+  function done() {
+    return lane({ cells: cells({ debate: { state: 'done', duration_ms: 9240 } }) });
+  }
+
+  it('draws one cell per round, in round order', () => {
+    const html = renderDebateSection(done(), [
+      debate({
+        contributions: [
+          {
+            analyst_id: 'technical',
+            analyst_type: 'mandatory',
+            final_position: 'bullish',
+            influence_score: 0.41,
+            stance_during_debate: ['bearish', 'neutral', 'bullish'],
+          },
+        ],
+      }),
+    ]);
+
+    expect(html).toContain('pl-stance-bearish');
+    expect(html).toContain('pl-stance-neutral');
+    expect(html).toContain('pl-stance-bullish');
+    // The round each cell belongs to is on the cell, so a strip is readable
+    // without counting positions.
+    expect(html).toContain('round 1: bearish');
+    expect(html).toContain('round 3: bullish');
+  });
+
+  it('renders no strip at all when no per-round stance was recorded', () => {
+    // Not a flat strip: a debate that logged no stances did not hold a steady
+    // position, it reported nothing, and drawing a confident-looking line for
+    // that is the dashboard inventing evidence.
+    const html = renderDebateSection(done(), [debate()]);
+
+    expect(html).toContain('pl-agent');
+    expect(html).not.toContain('pl-stance');
+  });
+
+  it('renders no strip for an empty round array', () => {
+    const html = renderDebateSection(done(), [
+      debate({
+        contributions: [
+          {
+            analyst_id: 'technical',
+            analyst_type: 'mandatory',
+            final_position: 'bullish',
+            influence_score: 0.41,
+            stance_during_debate: [],
+          },
+        ],
+      }),
+    ]);
+
+    expect(html).not.toContain('pl-stance');
+  });
+
+  it('escapes a stance before putting it in a class name or a label', () => {
+    // `final_position` and the stances are LLM-derived strings the system
+    // stored rather than wrote — the same reason `escapePipelineText` exists.
+    const html = renderDebateSection(done(), [
+      debate({
+        contributions: [
+          {
+            analyst_id: 'technical',
+            analyst_type: 'mandatory',
+            final_position: 'bullish',
+            influence_score: 0.41,
+            stance_during_debate: ['<script>alert(1)</script>'],
+          },
+        ],
+      }),
+    ]);
+
+    expect(html).not.toContain('<script>');
+  });
+});
+
 describe('renderDebateSection', () => {
   it('says why a running debate shows nothing, and shows no cards', () => {
     const html = renderDebateSection(lane({ cells: cells({ debate: { state: 'live' } }) }), [
