@@ -216,6 +216,27 @@ describe('startSupervisor', () => {
     });
   });
 
+  describe('a synchronous spawn failure', () => {
+    it('stops the child already launched rather than orphaning it', () => {
+      const { spawn, children } = fakeSpawn();
+
+      expect(() =>
+        startSupervisor({
+          prepare: () => {},
+          spawn: (command, args) => {
+            if (children.length > 0) throw new Error('EINVAL');
+            return spawn(command, args);
+          },
+        }),
+      ).toThrow('EINVAL');
+
+      // The orchestrator was live when the dashboard failed to launch; the
+      // caller gets the error, but not a process nobody is supervising.
+      const [orchestrator] = children;
+      expect(orchestrator?.signals).toEqual(['SIGTERM']);
+    });
+  });
+
   describe("a child's 'error' event", () => {
     it('stops the other child and fails rather than throwing', async () => {
       const messages: string[] = [];

@@ -143,7 +143,9 @@ const REQUESTED_STOP: ReadonlySet<string> = new Set(['SIGINT', 'SIGTERM']);
  *
  * Spawning happens eagerly here — by the time this returns, both processes are
  * launched — so a caller that never awaits `done` still gets both running. A
- * throwing `prepare` propagates with nothing spawned and nothing to clean up.
+ * throwing `prepare` propagates with nothing spawned and nothing to clean up;
+ * a `spawn` that throws propagates too, but only after signalling whichever
+ * child it had already launched.
  */
 export function startSupervisor(effects: SupervisorEffects = {}): Supervisor {
   const spawn: SpawnFn =
@@ -162,7 +164,19 @@ export function startSupervisor(effects: SupervisorEffects = {}): Supervisor {
   const exits: Promise<void>[] = [];
 
   for (const name of ['orchestrator', 'dashboard'] as const) {
-    const child: SupervisedChild = spawn(execPath, [...nodeArgs, scripts[name]]);
+    let child: SupervisedChild;
+    try {
+      child = spawn(execPath, [...nodeArgs, scripts[name]]);
+    } catch (error) {
+      // `spawn` reports most failures asynchronously — ENOENT arrives as an
+      // `'error'` event, handled below — but an argument it rejects outright
+      // throws here instead. On the second child that would return out of
+      // this function with the first one already live and no supervisor left
+      // holding it: exactly the orphan this module exists to prevent. Ask the
+      // survivors to stop, then let the caller see the original failure.
+      shutdown('SIGTERM');
+      throw error;
+    }
     running.set(name, child);
 
     exits.push(
