@@ -181,15 +181,21 @@ async function buildBracket(
   // `getIndicator` builds its window from it, so routing through the serving
   // layer would no longer silently pin ATR to 1h.
   //
-  // The remaining reason is arity. `atrFor` skips the trade when there are
-  // fewer than `minimumBarsFor(spec)` bars, because a stop cannot be priced
-  // off an ATR that does not exist. `getIndicator` does not enforce that: it
-  // throws only when there are NO bars, and otherwise hands `computeIndicator`
-  // whatever short window it got. Repointing here today would trade a cache
-  // miss — one ATR per instrument per cycle — for silently repricing every
-  // stop off an under-seeded ATR during any warm-up or data gap. That is the
-  // worse defect, so the last step of #315 waits on `getIndicator` enforcing
-  // indicator arity.
+  // The remaining reason is what a SHORT window should do, and it is narrower
+  // than it first looks. `computeIndicator` throws `InsufficientBarsError`
+  // below `minimumBarsFor(spec)` and `getIndicator` propagates it, so routing
+  // through the serving layer would NOT silently reprice stops off an
+  // under-seeded ATR — it would fail loudly (PR #461 review corrected an
+  // earlier version of this comment that claimed otherwise).
+  //
+  // What differs is the disposition. `atrFor` catches the shortfall itself and
+  // returns null, which `decide()` turns into "skip this instrument this
+  // tick" — the right answer during a warm-up or a data gap, since a stop
+  // cannot be priced off an ATR that does not exist. Repointing would turn
+  // that routine skip into a thrown tick. Cheap to fix (catch
+  // `InsufficientBarsError` at the call site and return null), but it is a
+  // behaviour decision about the Trader rather than a mechanical swap, so it
+  // is the remaining step of #315 rather than a line in this one.
   const atr = atrFor(bars, config.atr_lookback, config.atr_timeframe);
   if (atr === null) return null;
 

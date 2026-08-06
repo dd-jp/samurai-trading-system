@@ -43,25 +43,26 @@ export interface ProxySignal {
  * `trader/decide.ts` already uses, since `computeIndicator`'s `atr` case
  * seeds from the start of whatever window it is given.
  */
+/**
+ * The timeframe every spec in this module describes (#315).
+ *
+ * Stage 2's whole universe is ingested as daily aggregates. Descriptive rather
+ * than selecting: `computeIndicator` runs on a slice the caller already holds,
+ * so the field records WHICH bars these are instead of choosing them.
+ */
+const REPLAY_TIMEFRAME = '1d';
+
 export function proxySignal(bars: readonly Bar[], config: ProxyStrategyConfig): ProxySignal {
   const fastSma = computeIndicator(bars.slice(-config.fastWindow) as Bar[], {
     indicator: 'sma',
     params: {},
-    // Daily bars — this is the Stage 2 replay grid, ingested as daily
-    // aggregates. Descriptive rather than selecting: `computeIndicator`
-    // runs on a slice the caller already holds, so the field records
-    // WHICH bars these are (#315).
-    timeframe: '1d',
+    timeframe: REPLAY_TIMEFRAME,
     lookback: config.fastWindow,
   });
   const slowSma = computeIndicator(bars.slice(-config.slowWindow) as Bar[], {
     indicator: 'sma',
     params: {},
-    // Daily bars — this is the Stage 2 replay grid, ingested as daily
-    // aggregates. Descriptive rather than selecting: `computeIndicator`
-    // runs on a slice the caller already holds, so the field records
-    // WHICH bars these are (#315).
-    timeframe: '1d',
+    timeframe: REPLAY_TIMEFRAME,
     lookback: config.slowWindow,
   });
 
@@ -81,11 +82,7 @@ export function proxySignal(bars: readonly Bar[], config: ProxyStrategyConfig): 
   const atrValue = computeIndicator(bars.slice(-(config.atrWindow + 1)) as Bar[], {
     indicator: 'atr',
     params: {},
-    // Daily bars — this is the Stage 2 replay grid, ingested as daily
-    // aggregates. Descriptive rather than selecting: `computeIndicator`
-    // runs on a slice the caller already holds, so the field records
-    // WHICH bars these are (#315).
-    timeframe: '1d',
+    timeframe: REPLAY_TIMEFRAME,
     lookback: config.atrWindow,
   });
 
