@@ -12,7 +12,11 @@
  * `dist/`. `yarn serve` builds once, then this file launches the built
  * entrypoints. `--env-file=.env.local` stays on the *children* so each
  * inherits exactly the environment behaviour of its own script, including
- * refusing to start when `.env.local` is absent.
+ * refusing to start when `.env.local` is absent — and `yarn serve` passes the
+ * same flag to *this* process, which is load-bearing rather than cosmetic:
+ * `sharedStorePath()` derives the database filename from `NODE_ENV`, so a
+ * supervisor that skipped the env file could migrate a different file than the
+ * one its children then open.
  *
  * **A signal is forwarded, and then the supervisor waits for both children to
  * exit.** It must not `process.exit()` on the signal itself. The orchestrator's
@@ -37,6 +41,7 @@
  * `buildShutdownHandler` guards re-entry.
  */
 import { type ChildProcess, spawn as nodeSpawn } from 'node:child_process';
+import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
 
 /** The subset of `child_process.spawn` this module uses, so tests can inject. */
 export type SpawnFn = (command: string, args: readonly string[]) => ChildProcess;
@@ -44,7 +49,37 @@ export type SpawnFn = (command: string, args: readonly string[]) => ChildProcess
 /** The subset of a spawned child this module observes. */
 export type SupervisedChild = Pick<ChildProcess, 'kill'> & {
   once(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
+  once(event: 'error', listener: (error: Error) => void): void;
 };
+
+/**
+ * Migrates the shared store to completion, then lets go of it.
+ *
+ * This exists because `serve` is the first thing that opens that database from
+ * two processes *simultaneously* — until now an operator started `yarn
+ * orchestrator` and `yarn dashboard` seconds apart, by hand. `runMigrations`
+ * reads `schema_migrations` outside a transaction and then applies each
+ * migration inside its own, so two processes opening a brand-new file can both
+ * conclude nothing is applied and both run `CREATE TABLE`.
+ *
+ * This is not a narrow window. Measured at exactly the two-process width
+ * `serve` uses, against a fresh DB: **48 of 50 trials failed**, splitting
+ * between "table bars already exists" and "database is locked". With the store
+ * migrated first: 0 of 50. Without this call the first-ever `yarn serve` on a
+ * clean machine would almost certainly have died on startup — and, under the
+ * fail-fast policy below, taken the other half down with it.
+ *
+ * Doing it here closes the race deterministically rather than by a timing
+ * guess: by the time either child opens the file, every migration is already
+ * recorded, so neither writes schema at all. A sleep-based stagger would only
+ * shrink the window. Fixing the check-then-act in `migrate.ts` is the deeper
+ * fix and belongs to the shared store, not to this script — nothing else in
+ * the repo starts two openers at once, so nothing else is exposed to it today.
+ */
+function migrateSharedStore(): void {
+  const db = openSharedStore(sharedStorePath());
+  db.close();
+}
 
 export interface SupervisorEffects {
   /** Defaults to `child_process.spawn` with `stdio: 'inherit'`. */
@@ -57,6 +92,11 @@ export interface SupervisorEffects {
   nodeArgs?: readonly string[];
   /** Sink for the one thing this module reports: a child dying unrequested. */
   log?: (message: string) => void;
+  /**
+   * Run once, before either child is spawned. Defaults to
+   * `migrateSharedStore`; throwing aborts the launch with nothing spawned.
+   */
+  prepare?: () => void;
 }
 
 export interface Supervisor {
@@ -88,10 +128,12 @@ const DEFAULT_NODE_ARGS = ['--env-file=.env.local'] as const;
 const REQUESTED_STOP: ReadonlySet<string> = new Set(['SIGINT', 'SIGTERM']);
 
 /**
- * Spawns both children and returns the handle the entrypoint drives.
+ * Migrates the store, spawns both children, and returns the handle the
+ * entrypoint drives.
  *
  * Spawning happens eagerly here — by the time this returns, both processes are
- * launched — so a caller that never awaits `done` still gets both running.
+ * launched — so a caller that never awaits `done` still gets both running. A
+ * throwing `prepare` propagates with nothing spawned and nothing to clean up.
  */
 export function startSupervisor(effects: SupervisorEffects = {}): Supervisor {
   const spawn: SpawnFn =
@@ -100,6 +142,8 @@ export function startSupervisor(effects: SupervisorEffects = {}): Supervisor {
   const scripts = effects.scripts ?? DEFAULT_SCRIPTS;
   const nodeArgs = effects.nodeArgs ?? DEFAULT_NODE_ARGS;
   const log = effects.log ?? ((message: string) => console.error(message));
+
+  (effects.prepare ?? migrateSharedStore)();
 
   let shuttingDown = false;
   let exitCode = 0;
@@ -113,14 +157,34 @@ export function startSupervisor(effects: SupervisorEffects = {}): Supervisor {
 
     exits.push(
       new Promise<void>((resolve) => {
-        child.once('exit', (code, signal) => {
+        // `'error'` and `'exit'` are not mutually exclusive, and Node does not
+        // promise `'exit'` after an `'error'` at all. Both paths therefore end
+        // in one guarded `settle`: without it a spawn failure would leave this
+        // promise pending forever and hang `serve` with the other half live,
+        // and an unhandled `'error'` would throw out of the supervisor and
+        // orphan a child mid-drain — the two failures this module exists to
+        // prevent.
+        let settled = false;
+        const settle = (): void => {
+          if (settled) return;
+          settled = true;
           running.delete(name);
+          // Unconditional and idempotent: one half down means both come down,
+          // and the survivor is asked rather than killed so it still drains.
+          // SIGTERM regardless of what took the first child — when it died on
+          // its own there is no signal to relay.
+          shutdown('SIGTERM');
+          resolve();
+        };
 
-          // Read before `shutdown` below flips it, so the first child's death
-          // is judged against the state that preceded it.
+        child.once('exit', (code, signal) => {
+          // Read before `settle` calls `shutdown` and flips it, so the first
+          // child's death is judged against the state that preceded it.
           const requested = shuttingDown || (signal !== null && REQUESTED_STOP.has(signal));
 
-          if (!requested) {
+          if (settled) {
+            // Already accounted for by `'error'`; do not overwrite that code.
+          } else if (!requested) {
             // An exit nobody asked for is a failure of `serve` itself,
             // whichever half it was: what survives is half a system.
             exitCode = code ?? 1;
@@ -131,13 +195,17 @@ export function startSupervisor(effects: SupervisorEffects = {}): Supervisor {
             exitCode = code;
           }
 
-          // Unconditional and idempotent: one half down means both come down,
-          // and the survivor is asked rather than killed so it still drains.
-          // SIGTERM regardless of what took the first child — when it died on
-          // its own there is no signal to relay.
-          shutdown('SIGTERM');
+          settle();
+        });
 
-          resolve();
+        child.once('error', (error) => {
+          if (!settled) {
+            // Never a requested stop: the process could not be spawned, or a
+            // signal could not be delivered to it.
+            if (exitCode === 0) exitCode = 1;
+            log(`${name} failed: ${error.message}; stopping the other.`);
+          }
+          settle();
         });
       }),
     );

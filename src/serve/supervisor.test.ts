@@ -42,7 +42,13 @@ function fakeSpawn(): {
 /** Both children, in spawn order: orchestrator first, then dashboard. */
 function start(log: (message: string) => void = () => {}) {
   const { spawn, calls, children } = fakeSpawn();
-  const supervisor = startSupervisor({ spawn, execPath: '/usr/bin/node', log });
+  const supervisor = startSupervisor({
+    spawn,
+    execPath: '/usr/bin/node',
+    log,
+    // The real one opens SQLite; the ordering it guarantees is tested below.
+    prepare: () => {},
+  });
   const [orchestrator, dashboard] = children;
   if (orchestrator === undefined || dashboard === undefined) {
     throw new Error(`expected two children, spawned ${children.length}`);
@@ -159,5 +165,76 @@ describe('startSupervisor', () => {
     dashboard.die(0);
 
     await expect(supervisor.done).resolves.toBe(1);
+  });
+
+  describe('store migration', () => {
+    it('runs to completion before either child is spawned', () => {
+      const order: string[] = [];
+      const { spawn, children } = fakeSpawn();
+
+      startSupervisor({
+        spawn: (command, args) => {
+          order.push('spawn');
+          return spawn(command, args);
+        },
+        prepare: () => order.push('prepare'),
+      });
+
+      // The point of the ordering: both children open an already-migrated
+      // database, so neither races the other through `CREATE TABLE`.
+      expect(order).toEqual(['prepare', 'spawn', 'spawn']);
+      expect(children).toHaveLength(2);
+    });
+
+    it('spawns nothing when the migration fails', () => {
+      const { spawn, children } = fakeSpawn();
+
+      expect(() =>
+        startSupervisor({
+          spawn,
+          prepare: () => {
+            throw new Error('database is locked');
+          },
+        }),
+      ).toThrow('database is locked');
+      expect(children).toEqual([]);
+    });
+  });
+
+  describe("a child's 'error' event", () => {
+    it('stops the other child and fails rather than throwing', async () => {
+      const messages: string[] = [];
+      const { supervisor, orchestrator, dashboard } = start((m) => messages.push(m));
+
+      orchestrator.emit('error', new Error('spawn ENOENT'));
+
+      expect(dashboard.signals).toEqual(['SIGTERM']);
+      dashboard.die(0);
+      await expect(supervisor.done).resolves.toBe(1);
+      expect(messages).toEqual(['orchestrator failed: spawn ENOENT; stopping the other.']);
+    });
+
+    it('settles even when no exit ever follows it', async () => {
+      // Node does not promise an 'exit' after an 'error'. If this promise
+      // stayed pending, `yarn serve` would hang with the other half live.
+      const { supervisor, orchestrator, dashboard } = start();
+
+      orchestrator.emit('error', new Error('spawn EACCES'));
+      dashboard.die(0);
+
+      await expect(supervisor.done).resolves.toBe(1);
+    });
+
+    it('does not double-count when an exit follows it', async () => {
+      const messages: string[] = [];
+      const { supervisor, orchestrator, dashboard } = start((m) => messages.push(m));
+
+      orchestrator.emit('error', new Error('spawn ENOENT'));
+      orchestrator.die(7);
+      dashboard.die(0);
+
+      await expect(supervisor.done).resolves.toBe(1);
+      expect(messages).toHaveLength(1);
+    });
   });
 });
