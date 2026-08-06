@@ -68,6 +68,7 @@ import {
   type DebaterPersona,
   detectDisagreements,
   enforceLatencyBudget,
+  floorToBar,
   JsonDebateLogger,
   MAX_ROUNDS,
   type MediatorAssessment,
@@ -345,7 +346,13 @@ function persistDebateLog(params: {
     return;
   }
 
-  store.writeLog(buildDebateLog(result, instrument, bar, clock.now()));
+  // `trace_id` (#426): the tick that actually ran this debate. First-write-wins
+  // is already this function's rule — the guard above returns before writing —
+  // and that is exactly the semantics the column needs, since a retried tick
+  // within the same bar carries a FRESH trace against the same content-hashed
+  // `debate_id` and must not overwrite the attribution of the debate it did
+  // not run.
+  store.writeLog(buildDebateLog(result, instrument, bar, clock.now(), trace_id));
 }
 
 /**
@@ -462,7 +469,15 @@ export function buildDebateStep(
     // Hoisted out of the `runDebate` call: the SAME `Date` must go into
     // `debate_id`'s hash and into the row's `bar_timestamp`, or the row
     // claims a bar coordinate its own primary key does not encode.
-    const bar = clock.now();
+    //
+    // FLOORED as of #393. It used to be `clock.now()` raw, so a tick at
+    // 14:32:07 wrote `bar_timestamp = 14:32:07` — the tick time, which is what
+    // `created_at` already means. A replay stepping bars advances the clock TO
+    // a bar close and would look up 14:30:00, missing every live row, so
+    // replay-from-log (ADR-0003 §2) could not find the output it is required
+    // to replay instead of re-calling the LLM. See `floorToBar` for why the
+    // timeframe is an hour and not the tick cadence.
+    const bar = floorToBar(clock.now());
     // Computed here, ahead of the debate, rather than read off the eventual
     // `DebateResult` (#326): the personas need it to attribute their spend
     // rows while the debate is still running, and a debate that THROWS partway

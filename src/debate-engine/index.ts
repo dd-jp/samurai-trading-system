@@ -10,7 +10,12 @@ export type { AnalystCollectionResult, ExpectedAnalyst } from './analyst-respons
 export { collectAnalystViews, validateAnalystView } from './analyst-response-collector.js';
 export { computeConvictionScore } from './conviction-score.js';
 export { computeDebateId } from './debate-id.js';
-export { buildDebateLog, InMemoryDebateLogStore } from './debate-log-store.js';
+export {
+  buildDebateLog,
+  DEBATE_BAR_TIMEFRAME_MS,
+  floorToBar,
+  InMemoryDebateLogStore,
+} from './debate-log-store.js';
 export type {
   DebateAnalystFailure,
   DebateLogger,
