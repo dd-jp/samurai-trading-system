@@ -940,6 +940,25 @@ describe('decideWithReason — named skip reasons (#475)', () => {
     expect(outcome.intent?.entry).toBe(ENTRY_PRICE);
   });
 
+  it('reports the scale_in ATR, not a stale one from the entry path', async () => {
+    // `buildBracket` serves entry AND scale_in, and the reported `atr` must be
+    // the one THIS call priced its stop from. Pinned with a different true
+    // range from the default fixture so a stale or defaulted value cannot pass.
+    const outcome = await decideWithReason(
+      traderInput({
+        marketData: new FixtureMarketData(bars(15, 6)),
+        debate: debateResult({ confidence: 0.95 }),
+        positionState: async () => [openPosition({ conviction: 0.5 })],
+      }),
+    );
+
+    expect(outcome.intent?.intent_type).toBe('scale_in');
+    expect(outcome.atr).toBe(6);
+    // And it is genuinely the stop's input: stop distance = atr_k (2) x 6.
+    expect(outcome.intent?.entry).toBeDefined();
+    expect((outcome.intent?.entry ?? 0) - (outcome.intent?.stop ?? 0)).toBeCloseTo(12, 10);
+  });
+
   it('is the same decision `decide` makes, projected', async () => {
     // `decide` is a wrapper over this, so the two cannot drift. If it ever
     // stops being a projection, this fails rather than the pair silently
