@@ -56,3 +56,22 @@ jobs:
       - name: Test
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: yarn test
+
+  # The AI-review harness is Python and invisible to yarn test, so it gets its
+  # own job. Without this the tests in .github/scripts would never run — the
+  # exact no-caller shape #430 exists to close.
+  review-harness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install deps
+        run: pip install openai pytest
+
+      - name: Test review harness
+        run: python -m pytest .github/scripts -q

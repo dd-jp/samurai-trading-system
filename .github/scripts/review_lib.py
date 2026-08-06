@@ -94,7 +94,8 @@ explanation.
         closing=(
             "Only include an inline comment where you can point at a specific line — put "
             "everything else in summary_markdown. Use APPROVE only when you have no "
-            "material concerns across all five dimensions."
+            "material concerns across all five dimensions; conversely, if you raised no "
+            "material concern anywhere, the verdict must be APPROVE."
         ),
     )
 )
@@ -125,7 +126,8 @@ short enough to finish within the upstream proxy's response-time limit.
             "Always set summary_markdown to an empty string. Only include an inline comment "
             "where you can point at a specific line — if a finding doesn't anchor to a "
             "diff line, drop it rather than writing prose elsewhere. Use APPROVE only when "
-            "you have no material concerns across all five dimensions."
+            "you have no material concerns across all five dimensions; conversely, if "
+            "inline_comments is empty, the verdict must be APPROVE."
         ),
     )
 )
@@ -207,6 +209,40 @@ def commentable_lines(diff_text: str) -> dict[str, set[int]]:
     return result
 
 
+def parse_model_output(raw: str | None) -> dict | None:
+    """Normalise a model response into the review dict, or return None when the
+    output is unusable (empty, or truncated past the point of recovery).
+
+    None is the signal to retry: #409 showed both shapes — content_chars=0 and
+    a half-written JSON object — arriving with finish_reason=length, and the
+    old code posted each of them verbatim as a review."""
+    if not raw or not raw.strip():
+        return None
+
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        # Model may have wrapped the JSON in prose or code fences; recover the
+        # largest {...} block before giving up.
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        try:
+            parsed = json.loads(match.group(0)) if match else None
+        except (json.JSONDecodeError, TypeError):
+            parsed = None
+
+    if not isinstance(parsed, dict):
+        return None
+
+    if not isinstance(parsed.get("inline_comments"), list):
+        parsed["inline_comments"] = []
+    if "summary_markdown" not in parsed:
+        parsed["summary_markdown"] = "_Model response missing summary_markdown._"
+    if parsed.get("verdict") not in ("APPROVE", "APPROVE_WITH_COMMENTS", "REQUEST_CHANGES"):
+        parsed["verdict"] = None
+
+    return parsed
+
+
 def call_model(
     diff: str,
     changed_files: list[str],
@@ -215,6 +251,7 @@ def call_model(
     base_url: str,
     max_tokens: int = 8192,
     inline_only: bool = False,
+    client=None,
 ) -> dict:
     blast_radius_context = classify_blast_radius(changed_files)
     user_content = (
@@ -225,15 +262,16 @@ def call_model(
     # max_retries=0: we own the retry/backoff loop below so failures are
     # visible and paced deliberately, instead of the SDK silently retrying
     # with its own (much shorter) backoff first.
-    client = OpenAI(api_key=api_key, base_url=base_url, timeout=170.0, max_retries=0)
+    if client is None:
+        client = OpenAI(api_key=api_key, base_url=base_url, timeout=170.0, max_retries=0)
     system_prompt = SYSTEM_PROMPT_INLINE_ONLY if inline_only else SYSTEM_PROMPT
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content},
     ]
 
-    raw = None
-    last_exc = None
+    parsed = None
+    last_exc: object = None
     for attempt in range(TRANSIENT_MAX_ATTEMPTS):
         chunks: list[str] = []
         finish_reason = None
@@ -275,56 +313,38 @@ def call_model(
                 f"total_time={time.monotonic() - start:.1f}s",
                 file=sys.stderr,
             )
-            break
+            parsed = parse_model_output(raw)
+            if parsed is not None:
+                break
+            # Truncated or empty: the request itself succeeded, so the old code
+            # broke out of the loop here and posted the fragment as a review.
+            # Spend a retry instead — the same call has been observed finishing
+            # cleanly on the next attempt (#409, runs on #404).
+            last_exc = (
+                f"unusable output (finish_reason={finish_reason}, content_chars={len(raw)})"
+            )
         except Exception as exc:  # noqa: BLE001 - upstream 5xx/timeouts are common on this endpoint
             last_exc = exc
-            if attempt < TRANSIENT_MAX_ATTEMPTS - 1:
-                wait = TRANSIENT_BACKOFF_SECONDS[attempt]
-                print(
-                    f"warning: model call failed ({exc}); retrying in {wait}s "
-                    f"(attempt {attempt + 2}/{TRANSIENT_MAX_ATTEMPTS})",
-                    file=sys.stderr,
-                )
-                time.sleep(wait)
 
-    if raw is None:
+        if attempt < TRANSIENT_MAX_ATTEMPTS - 1:
+            wait = TRANSIENT_BACKOFF_SECONDS[attempt]
+            print(
+                f"warning: model call failed ({last_exc}); retrying in {wait}s "
+                f"(attempt {attempt + 2}/{TRANSIENT_MAX_ATTEMPTS})",
+                file=sys.stderr,
+            )
+            time.sleep(wait)
+
+    if parsed is None:
         return {
             "summary_markdown": (
-                f"_This reviewer ({model}) could not be reached after {TRANSIENT_MAX_ATTEMPTS} "
-                f"attempts and was skipped. Last error: {last_exc}_"
+                f"_This reviewer ({model}) produced no usable review in "
+                f"{TRANSIENT_MAX_ATTEMPTS} attempts and was skipped. "
+                f"Last error: {last_exc}_"
             ),
             "inline_comments": [],
             "verdict": None,
         }
-
-    try:
-        parsed = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        # Model may have wrapped the JSON in prose or code fences, or the
-        # response may have been truncated mid-array by a low max_tokens
-        # budget (e.g. the inline-only reviewer's 3000-token cap); try to
-        # recover the largest {...} block before giving up. A truncated,
-        # unclosed array falls through to the raw-text summary below rather
-        # than raising — this path never crashes the job.
-        match = re.search(r"\{.*\}", raw, re.DOTALL)
-        try:
-            parsed = json.loads(match.group(0)) if match else None
-        except (json.JSONDecodeError, TypeError):
-            parsed = None
-
-        if parsed is None:
-            return {
-                "summary_markdown": f"_Review model returned non-JSON output; posting raw text._\n\n{raw}",
-                "inline_comments": [],
-                "verdict": None,
-            }
-
-    if not isinstance(parsed.get("inline_comments"), list):
-        parsed["inline_comments"] = []
-    if "summary_markdown" not in parsed:
-        parsed["summary_markdown"] = "_Model response missing summary_markdown._"
-    if parsed.get("verdict") not in ("APPROVE", "APPROVE_WITH_COMMENTS", "REQUEST_CHANGES"):
-        parsed["verdict"] = None
 
     return parsed
 
@@ -346,7 +366,7 @@ def build_review_payload(diff_text: str, model_result: dict) -> dict:
         else:
             rejected.append(c)
 
-    summary = model_result["summary_markdown"]
+    summary = model_result["summary_markdown"] or ""
     if rejected:
         summary += "\n\n---\n_Additional comments the reviewer made outside the diff's visible lines (could not be anchored inline):_\n"
         for c in rejected:
@@ -354,6 +374,18 @@ def build_review_payload(diff_text: str, model_result: dict) -> dict:
             summary += f"- **{c.get('file', '?')}:{c.get('line', '?')}** ({sev}): {c.get('body', '')}\n"
 
     verdict = model_result["verdict"]
+
+    # The inline-only prompt forces summary_markdown to "", so a review whose
+    # findings all anchor inline — or which found nothing — used to reach
+    # GitHub as a zero-length body (#409: BODYLEN=0 rows on #396 and #404).
+    # A reader can't tell that apart from a broken reviewer.
+    if not summary.strip():
+        anchored = f"{len(accepted)} inline comment{'' if len(accepted) == 1 else 's'}"
+        summary = (
+            f"_No prose summary from this reviewer (inline-only mode). "
+            f"Verdict: **{verdict or 'none parsed'}**; {anchored} posted._"
+        )
+
     if verdict == "APPROVE":
         event = "APPROVE"
     else:
