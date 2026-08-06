@@ -126,6 +126,25 @@ export interface BrokerStateStore {
   /** Idempotent on `(venue, client_order_id, broker_fill_id)`. */
   saveObservedFill(venue: BrokerVenue, fill: NormalizedFill): void;
   /**
+   * Drops observed fills that `ingestFills()` has already consumed, returning
+   * how many rows went (#313). The table is otherwise append-only and grows
+   * for the life of the deployment.
+   *
+   * **The retention rule, and why it is this simple.** #313 expected the rule
+   * to be delicate — "a row is safe to drop once the venue's fill feed can no
+   * longer re-offer that fill" — because dropping one early looked like it
+   * would reintroduce double-counted fills. It cannot. Dedup does not live in
+   * this table: `ingestFills()` gates on `SharedStore.hasFill`, which reads
+   * `fills`, a permanent ledger. `broker_observed_fills` is only the ccxt
+   * adapter's crash-durable QUEUE — its whole job is that a fill observed by a
+   * process which died before ingesting it survives the restart.
+   *
+   * So a row's purpose is discharged the moment its `broker_fill_id` appears
+   * in `fills`, and after that a re-offer is caught by `hasFill` whether or not
+   * the queue row still exists. No `since` window, no lot terminal state.
+   */
+  pruneIngestedObservedFills(venue: BrokerVenue): number;
+  /**
    * Notes that this fill is still unpriced as of `seenAt` (#298).
    *
    * FIRST WRITE WINS on `first_seen_at`: a re-observation refreshes
@@ -209,6 +228,29 @@ export class InMemoryBrokerStateStore implements BrokerStateStore {
     return [...this.fills.values()]
       .filter((fill) => fill.venue === venue)
       .map(({ venue: _venue, ...fill }) => fill);
+  }
+
+  /**
+   * Stands in for the `fills` ledger the SQLite store joins against — this
+   * double has no `SharedStore` behind it. Tests add an id here to say "this
+   * one has been ingested"; `pruneIngestedObservedFills` then drops exactly
+   * those, which is what the SQL subquery does against a real `fills` table.
+   *
+   * A modelled set rather than a no-op prune: a port implementation that
+   * silently keeps everything would let a caller pass its own tests while the
+   * real store behaved differently.
+   */
+  readonly ingestedFillIds = new Set<string>();
+
+  pruneIngestedObservedFills(venue: BrokerVenue): number {
+    let pruned = 0;
+    for (const [key, fill] of this.fills) {
+      if (fill.venue === venue && this.ingestedFillIds.has(fill.broker_fill_id)) {
+        this.fills.delete(key);
+        pruned++;
+      }
+    }
+    return pruned;
   }
 
   saveObservedFill(venue: BrokerVenue, fill: NormalizedFill): void {

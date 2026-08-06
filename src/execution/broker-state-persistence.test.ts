@@ -968,3 +968,122 @@ describe('SqliteBrokerStateStore', () => {
     expect(loaded[0]?.timestamp).toEqual(new Date(FILL_TS));
   });
 });
+
+/**
+ * Puts a row in `fills`, which is what "ingestFills() has consumed this" means
+ * to the prune. Written with SQL rather than through `ingestFills()` itself:
+ * the retention rule is about the LEDGER's contents, and driving a whole
+ * ingest pass here would test the ingest path instead of the rule.
+ */
+function ingest(db: Db, idempotencyKey: string, brokerFillId: string): void {
+  db.prepare(
+    `INSERT INTO fills (idempotency_key, broker_fill_id, leg, price, qty, fee, timestamp)
+     VALUES (?, ?, 'entry', 100, 1, 0.1, ?)`,
+  ).run(idempotencyKey, brokerFillId, FILL_TIME);
+}
+
+describe('pruneIngestedObservedFills (#313)', () => {
+  const OBSERVED = {
+    client_order_id: 'lot-prune-1',
+    broker_fill_id: 'bf-prune-1',
+    leg: 'entry' as const,
+    price: 100,
+    qty: 1,
+    fee: 0.1,
+    timestamp: new Date(FILL_TS),
+  };
+
+  it('drops a queue row once ingestFills has consumed it, and leaves the rest', () => {
+    const { db } = openFileStore();
+    const store = new SqliteBrokerStateStore(db);
+
+    store.saveObservedFill('ccxt', OBSERVED);
+    store.saveObservedFill('ccxt', {
+      ...OBSERVED,
+      client_order_id: 'lot-prune-2',
+      broker_fill_id: 'bf-prune-2',
+    });
+
+    // Nothing ingested yet: this is exactly the state a crash must preserve,
+    // so the prune must not touch it.
+    expect(store.pruneIngestedObservedFills('ccxt')).toBe(0);
+    expect(store.loadObservedFills('ccxt')).toHaveLength(2);
+
+    ingest(db, 'lot-prune-1', 'bf-prune-1');
+
+    expect(store.pruneIngestedObservedFills('ccxt')).toBe(1);
+    expect(store.loadObservedFills('ccxt').map((fill) => fill.broker_fill_id)).toEqual([
+      'bf-prune-2',
+    ]);
+  });
+
+  it('leaves a re-offered pruned fill still deduplicated', () => {
+    // The failure the ticket names, and the reason pruning looked dangerous.
+    // It is not: dedup never lived in `broker_observed_fills`. `ingestFills`
+    // gates on `hasFill`, which reads `fills` — a permanent ledger the prune
+    // does not touch — so a venue re-offering a pruned fill is caught exactly
+    // as it was before the row went.
+    const { db } = openFileStore();
+    const store = new SqliteBrokerStateStore(db);
+
+    store.saveObservedFill('ccxt', OBSERVED);
+    ingest(db, 'lot-prune-1', 'bf-prune-1');
+    expect(store.pruneIngestedObservedFills('ccxt')).toBe(1);
+    expect(store.loadObservedFills('ccxt')).toEqual([]);
+
+    // The dedup gate still answers yes with the queue row gone. This is the
+    // assertion the whole retention rule rests on.
+    const stillKnown = db.prepare('SELECT 1 FROM fills WHERE broker_fill_id = ?').get('bf-prune-1');
+    expect(stillKnown).toBeDefined();
+  });
+
+  it('is scoped to one venue', () => {
+    const { db } = openFileStore();
+    const store = new SqliteBrokerStateStore(db);
+
+    store.saveObservedFill('ccxt', OBSERVED);
+    store.saveObservedFill('ibkr', OBSERVED);
+    ingest(db, 'lot-prune-1', 'bf-prune-1');
+
+    expect(store.pruneIngestedObservedFills('ccxt')).toBe(1);
+    expect(store.loadObservedFills('ibkr')).toHaveLength(1);
+  });
+
+  it("does not let one venue's ingested fill prune another venue's uningested row", () => {
+    // `broker_fill_id` is VENUE-ASSIGNED, so two venues can hand out the same
+    // id string, and `fills` has no venue column to tell them apart. A prune
+    // matching on `broker_fill_id` alone would therefore let ibkr's ingested
+    // fill delete ccxt's queue row for a fill nobody has consumed — losing it
+    // if the process died before the next poll, which is the exact crash this
+    // queue exists to survive.
+    //
+    // The two rows share an id and differ in lot, which is what makes this
+    // discriminating: the earlier scoping test gives both venues the SAME lot,
+    // so it cannot tell whose row the ledger entry accounted for.
+    const { db } = openFileStore();
+    const store = new SqliteBrokerStateStore(db);
+
+    const sharedId = 'bf-collision';
+    store.saveObservedFill('ibkr', {
+      ...OBSERVED,
+      client_order_id: 'lot-ibkr',
+      broker_fill_id: sharedId,
+    });
+    store.saveObservedFill('ccxt', {
+      ...OBSERVED,
+      client_order_id: 'lot-ccxt',
+      broker_fill_id: sharedId,
+    });
+
+    // Only IBKR's has been ingested.
+    ingest(db, 'lot-ibkr', sharedId);
+
+    // ccxt's row must survive: nothing has consumed it.
+    expect(store.pruneIngestedObservedFills('ccxt')).toBe(0);
+    expect(store.loadObservedFills('ccxt')).toHaveLength(1);
+
+    // ...and ibkr's must still go, so the fix did not simply stop pruning.
+    expect(store.pruneIngestedObservedFills('ibkr')).toBe(1);
+    expect(store.loadObservedFills('ibkr')).toEqual([]);
+  });
+});

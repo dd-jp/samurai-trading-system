@@ -575,7 +575,50 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
    * `ingestFills()` drained it is still delivered (#295).
    */
   async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
+    this.dropIngestedFills();
     return this.fills.filter((fill) => fill.timestamp.getTime() >= since.getTime());
+  }
+
+  /**
+   * Drops queue entries `ingestFills()` has already consumed, from the table
+   * and from the in-memory mirror (#313). BOTH grew without bound before this:
+   * `broker_observed_fills` is append-only, and `fetchNewFills` filters
+   * `this.fills` by `since` without ever removing anything, so a long-lived
+   * process re-scanned every fill it had ever seen on every poll and a restart
+   * re-pushed the entire history into the queue.
+   *
+   * Here rather than on a sweep timer because this is the one moment the
+   * queue is read: pruning where it is used needs no scheduling, cannot drift
+   * out of step with the poll, and costs one DELETE per poll on a table whose
+   * rows are all destined to be deleted anyway.
+   *
+   * The mirror is re-derived from the table rather than filtered in place, and
+   * that is safe in this direction only: `recordFill` writes the table BEFORE
+   * pushing to `this.fills`, so the table is always a superset of the mirror.
+   * The reload also restores `rowid` order, which is the order fills were
+   * observed in.
+   */
+  private dropIngestedFills(): void {
+    // Non-fatal by nature (PR #459 review). `fetchNewFills` was pure in-memory
+    // before this and could not fail on I/O; a transient SQLite error must not
+    // now reject the whole poll, because skipping a prune costs some rows for
+    // one cycle while dropping a poll costs the fills in it. Serve the mirror
+    // as it stands and try again next poll.
+    let pruned: number;
+    try {
+      pruned = this.state.pruneIngestedObservedFills('ccxt');
+    } catch {
+      return;
+    }
+    if (pruned === 0) return;
+    // Load BEFORE clearing (PR #459 review). Truncating first and repopulating
+    // after would leave the queue empty if the load threw, and the adapter
+    // would then silently deliver no fills until the next restart — a worse
+    // outcome than the unbounded growth this method exists to fix, and one
+    // nothing above the seam could detect.
+    const remaining = this.state.loadObservedFills('ccxt');
+    this.fills.length = 0;
+    this.fills.push(...remaining);
   }
 
   /** `pending_entry` → `arming` → `armed`, or → `resolved` if the entry died. */
