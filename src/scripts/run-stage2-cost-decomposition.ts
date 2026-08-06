@@ -65,6 +65,7 @@ import {
   STAGE2_PINNED_WINDOW,
   STOCK_SYMBOLS,
 } from './run-stage2.js';
+import { makeAssetClass } from './stage2-support.js';
 
 /**
  * The exact window the committed 2026-08-05 verdict requested, to the
@@ -154,34 +155,6 @@ export function scaleCostConfig(config: CostConfig, factor: number): CostConfig 
   return { crypto: scale(config.crypto), stocks: scale(config.stocks) };
 }
 
-function makeAssetClass(
-  store: Stage2HistoricalStore,
-  costModel: CostModelImpl,
-  window: DateRange,
-  asset_class: 'stocks' | 'crypto',
-  symbols: readonly string[],
-  periodsPerYear: number,
-): TrialGridAssetClass {
-  return {
-    asset_class,
-    periodsPerYear,
-    makeRunner: () =>
-      new ReplayDriver({
-        barSource: store,
-        // Scoped per asset class (#420) — same fix as run-stage2.ts. The
-        // decomposition compares net against gross over the same trades, so an
-        // unscoped timeline distorts both sides equally and the *ratio* would
-        // survive; the per-config Sharpes it prints would not.
-        timeline: store.timelineFor(symbols),
-        registry: store,
-        costModel,
-        clock: new SimulatedClock(window.start),
-        universe: symbols.map((symbol) => ({ symbol, asset_class })),
-        capitalPerTrade: DEFAULT_CAPITAL_PER_TRADE,
-      }),
-  };
-}
-
 export async function runCostDecomposition(
   deps: CostDecompositionDeps,
 ): Promise<CostDecompositionResult> {
@@ -211,8 +184,18 @@ export async function runCostDecomposition(
 
   const costModel = new CostModelImpl(costConfig);
   const build = (): TrialGridAssetClass[] => [
-    makeAssetClass(store, costModel, window, 'stocks', STOCK_SYMBOLS, STOCK_PERIODS_PER_YEAR),
-    makeAssetClass(store, costModel, window, 'crypto', CRYPTO_SYMBOLS, CRYPTO_PERIODS_PER_YEAR),
+    makeAssetClass(
+      { store, costModel, window, capitalPerTrade: DEFAULT_CAPITAL_PER_TRADE },
+      'stocks',
+      STOCK_SYMBOLS,
+      STOCK_PERIODS_PER_YEAR,
+    ),
+    makeAssetClass(
+      { store, costModel, window, capitalPerTrade: DEFAULT_CAPITAL_PER_TRADE },
+      'crypto',
+      CRYPTO_SYMBOLS,
+      CRYPTO_PERIODS_PER_YEAR,
+    ),
   ];
 
   // The net pass also captures each replay, in grid order, so costs can be
@@ -301,11 +284,14 @@ export async function runCostDecomposition(
     const scaledModel = new CostModelImpl(scaled);
     const results = await runTrialGrid({
       assetClasses: [
-        makeAssetClass(store, scaledModel, window, 'stocks', STOCK_SYMBOLS, STOCK_PERIODS_PER_YEAR),
         makeAssetClass(
-          store,
-          scaledModel,
-          window,
+          { store, costModel: scaledModel, window, capitalPerTrade: DEFAULT_CAPITAL_PER_TRADE },
+          'stocks',
+          STOCK_SYMBOLS,
+          STOCK_PERIODS_PER_YEAR,
+        ),
+        makeAssetClass(
+          { store, costModel: scaledModel, window, capitalPerTrade: DEFAULT_CAPITAL_PER_TRADE },
           'crypto',
           CRYPTO_SYMBOLS,
           CRYPTO_PERIODS_PER_YEAR,
