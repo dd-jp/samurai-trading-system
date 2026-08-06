@@ -316,6 +316,13 @@ export class RiskManagerImpl implements RiskManager {
 
     // Step 8: risk-critic review (#204).
     const criticWarnings = warnings;
+    if (critic === undefined) {
+      // Fails open BY RECORD, not silently (review 2026-08-06 B3): no producer
+      // for the critic exists yet, and until one does, every decision must be
+      // distinguishable from one the critic actually passed. The mechanical
+      // steps above remain the safety net.
+      reasons.push('risk_critic: skipped — no critic verdict was supplied for this evaluation');
+    }
     if (critic) {
       const criticTrim = applyCritic(critic, notional, finalSize, reasons);
       if (criticTrim.rejected) {

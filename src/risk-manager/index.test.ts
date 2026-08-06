@@ -819,3 +819,22 @@ describe('RiskManagerImpl.evaluate — live risk thresholds (#433)', () => {
     expect(decision.modifications?.final_size).toBe(50);
   });
 });
+
+describe('RiskManagerImpl.evaluate — risk-critic skip record (review 2026-08-06 B3)', () => {
+  it('records an explicit skip reason when no critic verdict was supplied', () => {
+    const decision = new RiskManagerImpl(makeConfig()).evaluate(makeInput());
+
+    expect(decision.status).toBe('approved');
+    expect(decision.reasons.some((reason) => reason.includes('risk_critic: skipped'))).toBe(true);
+  });
+
+  it('does not record the skip reason when a critic verdict is present', () => {
+    const decision = new RiskManagerImpl(makeConfig()).evaluate(
+      makeInput({
+        critic: { verdict: 'pass', max_notional: null, reasoning: 'fine' },
+      }),
+    );
+
+    expect(decision.reasons.some((reason) => reason.includes('risk_critic: skipped'))).toBe(false);
+  });
+});

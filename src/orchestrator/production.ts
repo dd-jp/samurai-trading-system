@@ -246,6 +246,7 @@ import {
   buildVerdictStep,
   type ExecutionStepDeps,
   type PersistenceInstances,
+  type PortfolioSnapshot,
   type VolatilityReadingProvider,
 } from './production/direct-bind.js';
 import { withOnTradeClose } from './production/on-trade-close-hookup.js';
@@ -1460,6 +1461,8 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     marketData,
     circuitBreakers,
     breakerState: breakerStateStore,
+    // One portfolio observation per tick, shared by the trader/risk binds (B4).
+    portfolioSnapshots: new Map<string, PortfolioSnapshot>(),
     // Defaulted, not required (#276): the three sources this needs — Alpaca's
     // account ledger, the durable `account_state` table, and the existing
     // ClosedTrade store — all exist in-repo now, so an injected seam would be
