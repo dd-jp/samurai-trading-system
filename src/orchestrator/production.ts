@@ -1578,6 +1578,10 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       llmRateLimiter,
       spendCap,
       logger,
+      // #435: the live `analyst_weights` table, read at every debate. Without
+      // this the daily cycle steps a weight nothing reads — the write end
+      // exists and the read end does not, which is the same shape as #433.
+      tuningStore,
     ),
     // #328: `traderLog`/`riskLog` are what make the two stages that decide WHAT
     // to trade and HOW BIG reconstructible after the fact. Without them the

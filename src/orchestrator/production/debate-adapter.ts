@@ -60,6 +60,7 @@ import type {
   SpendCap,
 } from '../../debate-engine/index.js';
 import {
+  applyAnalystWeights,
   buildAnalystContributions,
   buildDebateLog,
   computeConvictionScore,
@@ -90,6 +91,12 @@ import {
   sanitizeLogText,
 } from '../../shared/index.js';
 import type { TickSteps } from '../types.js';
+
+/** The one method the debate step needs from the tuning store (#435). */
+export interface AnalystWeightSource {
+  getAnalystWeights(): Record<string, number>;
+}
+
 import { RateLimitedLlmClient } from './rate-limited-llm-client.js';
 
 /**
@@ -464,6 +471,13 @@ export function buildDebateStep(
    */
   spendCap: SpendCap,
   logger?: Logger,
+  /**
+   * #435: the live `analyst_weights` table. Optional so a test or backtest can
+   * stay unweighted, supplied on the production path — without it the daily
+   * cycle steps a weight nothing reads, which is this repo's dominant defect
+   * class and the exact gap #377 resolved to close.
+   */
+  analystWeights?: AnalystWeightSource,
 ): TickSteps['debate'] {
   return async ({ trace_id, instrument, asset_class, views, clock }) => {
     // Hoisted out of the `runDebate` call: the SAME `Date` must go into
@@ -608,8 +622,34 @@ export function buildDebateStep(
       throw cause;
     }
 
-    persistDebateLog({ store: debateLog, result, instrument, bar, clock, trace_id, logger });
-    return result;
+    // #435 part 2 — the Debate Engine reads `analyst_weights`, David's
+    // resolution on #377.
+    //
+    // AFTER `runDebate`, so `debate_id` keeps meaning what the frozen
+    // cross-spec contract says it means: the identity of the debate's INPUTS.
+    // The spec recorded a collision worry here — same id, different weights,
+    // different result — and it is unreachable: weights move only in
+    // `runDailyCycle`, the bar is an hour, so a weight step cannot happen
+    // inside a bar and two debates sharing an id necessarily ran under
+    // identical weights. See `weighted-conviction.ts` for the full argument.
+    //
+    // The WEIGHTED result is what gets logged, so replay-from-log restores the
+    // conviction the Trader actually sized on rather than the pre-weight one.
+    const weighted =
+      analystWeights === undefined
+        ? result
+        : applyAnalystWeights(result, analystWeights.getAnalystWeights());
+
+    persistDebateLog({
+      store: debateLog,
+      result: weighted,
+      instrument,
+      bar,
+      clock,
+      trace_id,
+      logger,
+    });
+    return weighted;
   };
 }
 
