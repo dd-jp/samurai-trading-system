@@ -406,9 +406,13 @@ non-recommendation, not a preference.**
 
 ## 5. Costs, side by side
 
-All retrieved 2026-08-06. ADR-0007/0008's cap is **$50 per 14 days** — note those ADRs are recorded
-in project memory and referenced in CLAUDE.md but are **not present in `docs/adr/` as of 2026-08-06**
-(only 0001–0006 exist); the figure is cited as remembered, not as read.
+All retrieved 2026-08-06. ADR-0008's cap is **$50 per 14 days**, verified by reading
+`docs/adr/0008-llm-spend-cap.md` on branch `worktree-semi-auto-readiness`
+([PR #428](https://github.com/dd-jp/samurai-trading-system/pull/428)) — David's words, quoted there:
+*"for paper trading lets keep 50$ / 14 day budget."* Both ADR-0007 and ADR-0008 live on that branch
+and are **not yet merged to `main`**, so `docs/adr/` on `main` still ends at 0006. That also means
+**the ADR number proposed in §8 must be re-checked before it is written** — 0009 is only free once
+#428 merges.
 
 | option | recurring cost | fits the $50/14d cap? |
 |---|---|---|
@@ -522,5 +526,7 @@ Stated here rather than asserted anywhere above:
   `animate()` only.
 - **EC2 on-demand pricing for a comparable small instance** — the EC2 pricing page did not render
   usable figures; the Lightsail table is the like-for-like number.
-- **ADR-0007 / ADR-0008** — referenced in CLAUDE.md and project memory, **not present in
-  `docs/adr/`** as of 2026-08-06. The $50/14-day cap is cited as remembered, not as read.
+
+*(Resolved after first draft: ADR-0007/0008 do exist, on the unmerged branch
+`worktree-semi-auto-readiness` / PR #428, and the $50/14-day figure has been read from
+`0008-llm-spend-cap.md` there rather than remembered. See §5.)*
