@@ -210,6 +210,12 @@ describe('SqliteQueryStore', () => {
     expect(() => store.getMarks(['AAPL', 'TSLA'], NOW)).toThrow(/no mark for instrument "TSLA"/);
 
     expect(store.getMarks([], NOW).size).toBe(0);
+
+    // Two open lots on one instrument (a scale-in) means buildSnapshot passes
+    // the same instrument twice. Both rows must still resolve to a price.
+    const duplicated = store.getMarks(['AAPL', 'AAPL'], NOW);
+    expect(duplicated.size).toBe(1);
+    expect(duplicated.get('AAPL')).toMatchObject({ price: 228.41 });
   });
 
   it('computes profit_factor and expectancy from closed trades in the trailing day, leaving unsourced fields at 0', async () => {
