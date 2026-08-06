@@ -9,16 +9,14 @@
  * error hierarchy, since what counts as transient differs per provider.
  */
 
+import { delay } from './delay.js';
+
 export interface RetryConfig {
   /** Total attempts including the first, e.g. 3 = up to 2 retries. */
   maxAttempts: number;
   baseDelayMs: number;
   /** Backoff is capped here so a long-running provider outage doesn't blow the caller's latency budget. */
   maxDelayMs: number;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**

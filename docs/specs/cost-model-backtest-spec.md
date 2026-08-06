@@ -205,6 +205,15 @@ interface BacktestReport {
 
 **Responsibilities** — own the computational primitives FL and offline research both call.
 
+> **SUPERSEDED (2026-08-06) — the executor is TypeScript, in-tree, not pybroker.** The paragraph
+> below is retained as the original design rationale, but it no longer describes the code. There is
+> no pybroker dependency and no Python anywhere in the repo; ADR-0001 resolved the language to
+> TypeScript. The split generation, eval metrics and overfitting tests were built natively —
+> `src/cost-model-backtest/eval-executor.ts`, `splits.ts`, `metrics.ts`, `overfitting.ts` — and have
+> since produced real Stage 2 verdicts (see `stage2-verdict.ts`). What the paragraph gets *right*
+> and what still holds: pybroker could never host the tick loop, and `CostModel.fill` remains the
+> single fill authority. See `docs/reviews/triage-2026-08-06.md` F-10.
+
 **Backtest/eval executor — pybroker (ADR-0001).** The walkforward/CPCV split generation and eval-metric computation are executed via **pybroker** (mine `src/eval.py` eval metrics + `src/strategy.py` walkforward-split patterns), not a fully-custom harness. pybroker is the executor of the **eval/validation layer only** — it runs the splits and computes eval metrics over the trades the orchestrator produces. It does **NOT** host the pipeline tick loop: its synchronous per-bar `exec_fn` cannot host the seconds-to-minutes LLM debate (verified in the base-repo analysis), so the harness + live orchestrator keep the simulated `Clock` and drive the pipeline unchanged (see Backtest Harness above). Crucially, **the transaction-cost / market-impact model stays ours** and is **injected into the pybroker eval path**: pybroker's built-in fill model is not pessimistic enough for the √-law market-impact requirement (Principle 2), so `CostModel.fill` remains the single fill authority (one implementation → live metrics == backtest metrics, cross-spec §5) and pybroker consumes it rather than its own fills. FL owns the live metric *cadence*; this component (via pybroker) owns the computation.
 
 **Key Interface**
@@ -326,7 +335,14 @@ Execution (paper/backtest) → SimulatedBrokerAdapter → CostModel.fill (cost m
 Execution (live) → real Kraken/IBKR adapter (no cost model; real fills calibrate the model)
 ```
 
-### Backtest/Eval Executor — pybroker (ADR-0001)
+### Backtest/Eval Executor — pybroker (ADR-0001) — SUPERSEDED
+
+> **This section is history, not the design.** The executor was built in TypeScript, in-tree
+> (`src/cost-model-backtest/eval-executor.ts`, `splits.ts`, `metrics.ts`, `overfitting.ts`); no
+> pybroker dependency exists. The bullets below survive only where they describe *constraints*
+> (no tick-loop hosting, `CostModel.fill` as sole fill authority, cadence staying with FL) — those
+> held and are implemented. Read "pybroker" as "the eval executor" throughout.
+> See `docs/reviews/triage-2026-08-06.md` F-10.
 
 Per ADR-0001, the backtest/eval **executor is pybroker**, not a fully-custom harness:
 - **Mined, not depended-on.** Fork/adapt pybroker's eval-metrics (`src/eval.py`) and walkforward-split (`src/strategy.py`) patterns; no build-time dependency on the base repo (ADR-0001 reuse posture).

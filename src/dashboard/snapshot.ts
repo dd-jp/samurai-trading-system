@@ -11,6 +11,7 @@
  * what actually filled. Recent-history window is fixed
  * (`RECENT_DEBATES_LIMIT` / `RECENT_VERDICTS_LIMIT`), no config surface yet.
  */
+import type { Mark } from '../market-data-service/index.js';
 import type { OpenPosition } from '../shared/index.js';
 import { buildPipelineView, PIPELINE_LOOKBACK_MS, PIPELINE_MAX_LANES } from './pipeline-query.js';
 import { NULL_PROVIDER_STATUS, type ProviderStatusReader } from './provider-status.js';
@@ -45,8 +46,17 @@ export function buildSnapshot(
   asOf: Date,
   providers: ProviderStatusReader = NULL_PROVIDER_STATUS,
 ): DashboardSnapshot {
-  const positions = store.getOpenPositions(asOf).map<PositionRow>((position) => {
-    const mark = store.getMark(position.instrument, asOf);
+  const openPositions = store.getOpenPositions(asOf);
+  // One query for every position's mark rather than one per position — this
+  // runs per dashboard HTTP request, not per tick. `getMarks` still throws for
+  // an instrument with no mark, so a priceless row can never be rendered.
+  const marks = store.getMarks(
+    openPositions.map((position) => position.instrument),
+    asOf,
+  );
+
+  const positions = openPositions.map<PositionRow>((position) => {
+    const mark = marks.get(position.instrument) as Mark;
     return {
       idempotency_key: position.idempotency_key,
       instrument: position.instrument,

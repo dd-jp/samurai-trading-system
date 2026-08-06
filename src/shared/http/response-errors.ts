@@ -31,3 +31,53 @@ export function truncateForError(text: string): string {
     ? `${text.slice(0, MAX_ERROR_BODY_CHARS)}… (truncated, ${text.length} chars total)`
     : text;
 }
+
+/**
+ * Best-effort detail for a non-2xx response's error message: the truncated
+ * body if there is one, else `statusText`.
+ *
+ * A body that cannot be read at all (already-consumed stream, mid-flight
+ * network drop) degrades to `statusText` rather than throwing — this runs on
+ * the path that is *already* reporting a failure, and a throw here would
+ * replace a useful provider error with a meaningless one.
+ *
+ * Not usable by a client that needs the raw body for something else as well —
+ * Telegram parses `parameters.retry_after` out of it — since a `Response` body
+ * can only be read once.
+ */
+export async function readErrorDetail(response: Response): Promise<string> {
+  let bodyText: string;
+  try {
+    bodyText = await response.text();
+  } catch {
+    bodyText = '';
+  }
+  return bodyText.length > 0 ? truncateForError(bodyText) : response.statusText;
+}
+
+/**
+ * Which kind of failure an HTTP status represents, per transport-layer-spec.md's
+ * "Shared Transport Conventions" module. The classes stay per-vendor — each
+ * client's error hierarchy must not couple to another's — but this mapping is
+ * the same everywhere and is the part that costs something to keep in sync.
+ */
+export type HttpErrorKind = 'rate-limit' | 'timeout' | 'provider';
+
+/** 429 -> rate-limit, 408/504 -> timeout, everything else -> provider. */
+export function classifyStatus(status: number): HttpErrorKind {
+  if (status === 429) return 'rate-limit';
+  if (status === 408 || status === 504) return 'timeout';
+  return 'provider';
+}
+
+/**
+ * Whether a thrown value is `fetchWithTimeout`'s deadline abort.
+ *
+ * That helper aborts with `new DOMException(…, 'TimeoutError')`; a
+ * caller-supplied signal's plain `AbortError` is deliberately NOT a timeout and
+ * must fall through to the non-retryable branch, or a deliberate shutdown would
+ * be retried as if the provider were slow.
+ */
+export function isTimeoutAbort(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'TimeoutError';
+}
