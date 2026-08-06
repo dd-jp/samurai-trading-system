@@ -200,6 +200,7 @@ import type { SharedStore as SqliteHandle } from '../shared/store/index.js';
 import type { TraderConfig } from '../trader/index.js';
 import { SqliteSetupStore } from '../trader/index.js';
 import type { ApprovalChannel, VerdictConfig } from '../verdict/index.js';
+import { assertAutomationLevelSupported } from '../verdict/index.js';
 import {
   LoggingAnalystSkipAlertChannel,
   LoggingBreachAlertChannel,
@@ -1187,6 +1188,15 @@ export interface ProductionComponents {
  */
 export function buildProductionComponents(config: ProductionConfig): ProductionComponents {
   const clock = config.clock;
+
+  // Before anything is built, for the same reason the LLM budget below is:
+  // refuse a bad config while nothing is half-constructed. This one rejects an
+  // `automation_level` that engages the HITL gate — unsound since ADR-0007
+  // because the staleness and drift gates run before the approval await and
+  // are never re-checked (#434). It was documented at the call site; a comment
+  // does not guard a config value someone flips without reading it, and this
+  // runs on every production boot rather than on a branch nothing reaches.
+  assertAutomationLevelSupported(config.verdictConfig);
 
   // FIRST, ahead of every store, socket and wire client below (PR #390
   // review). The LLM budget is constructed here rather than beside the debate

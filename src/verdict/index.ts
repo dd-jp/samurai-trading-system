@@ -37,6 +37,45 @@ function isFlagged(
   );
 }
 
+/**
+ * Refuses a `VerdictConfig` whose dial engages the human-in-the-loop gate
+ * (#434, review on PR #455). Called from the composition root, not from
+ * `VerdictImpl` — the HITL path still has tests, and they construct the
+ * verdict directly.
+ *
+ * The gate is not merely unused, it is UNSOUND. Gates 1 (staleness) and 2
+ * (drift) run before the approval `await` and are never re-evaluated, so an
+ * approval returning after `human_timeout` submits at a price last checked
+ * that long ago: with `max_signal_age.crypto` at 5 minutes and a 15-minute
+ * human timeout, a gate that reads as a freshness guarantee is not one.
+ *
+ * Documented at the call site since ADR-0007, but a comment guards nothing —
+ * the dial is a config value, flipped by someone who has not read it. This
+ * refuses at the moment it is actually turned, and unlike an in-branch
+ * re-check it is not a guard on an unreachable path (#430): it runs on every
+ * production boot.
+ *
+ * Both engaging levels are covered, not just `semi_auto`. `manual` reaches
+ * the same `await` through the same two already-evaluated gates.
+ */
+export function assertAutomationLevelSupported(config: VerdictConfig): void {
+  const engaging = (['crypto', 'stocks'] as const).filter(
+    (assetClass) => config.automation_level[assetClass] !== 'auto',
+  );
+  if (engaging.length === 0) return;
+
+  throw new Error(
+    `VerdictConfig.automation_level engages the human-in-the-loop gate for ` +
+      `${engaging.map((c) => `${c}='${config.automation_level[c]}'`).join(', ')}, ` +
+      'but that gate is unsound: the staleness and drift gates run BEFORE the approval ' +
+      'await and are never re-checked, so an approval returning after human_timeout ' +
+      'submits at a price older than max_signal_age allows. ADR-0007 set this dial to ' +
+      "'auto' and recommends async approval (Verdict returns pending, a poller resumes " +
+      'it) rather than re-running the two gates — which also removes the human from the ' +
+      'instrument pass, the actual reason the gate was dropped. Land that first (#434).',
+  );
+}
+
 /** Whether the HITL gate engages, per the per-asset-class automation dial. */
 function shouldEngageHitl(
   orderIntent: OrderIntent,
@@ -150,6 +189,26 @@ export class VerdictImpl implements Verdict {
       };
     }
 
+    // KNOWN HAZARD IF THE DIAL IS EVER TURNED BACK (#434, ADR-0007).
+    //
+    // Gates 1 (staleness) and 2 (drift) ran ABOVE, and nothing re-evaluates
+    // them after this await returns. So an approved trade submits at a price
+    // last checked `human_timeout` ago: with `max_signal_age.crypto` at 5
+    // minutes and `human_timeout` at 15, a 15-minute-old approval sails past a
+    // 5-minute staleness bound, because the gate that bounds staleness has
+    // already run. Gate 1 reads as a freshness guarantee here and is not one.
+    //
+    // NOT guarded now, deliberately. `automation_level` is `auto`, this branch
+    // is unreachable, and adding a check to an unreachable path is the exact
+    // dead-mechanism pattern #430 exists to stop — it would be a guard nothing
+    // exercises, aging next to the code it claims to protect.
+    //
+    // The right fix is not a re-check anyway: ADR-0007 recommends ASYNC
+    // approval — Verdict returns `pending`, the intent persists, a poller
+    // resumes it — which removes the human from the instrument pass entirely.
+    // That was the actual reason the gate was dropped: `max_concurrent_
+    // instruments: 1` plus an in-pass `await` means one pending tap blocks the
+    // whole universe. Any real `semi_auto` needs that, not two re-run gates.
     const outcome: ApprovalOutcome = await approvals.requestApproval({
       order_intent: orderIntent,
       risk_decision,

@@ -102,7 +102,9 @@ afterEach(() => {
 const STAGE_CONFIGS = {
   traderConfig: {} as never,
   riskConfig: {} as never,
-  verdictConfig: {} as never,
+  // See #434: the composition root reads the automation dial to refuse a
+  // HITL-engaging config, so this one cannot stay an empty cast.
+  verdictConfig: { automation_level: { crypto: 'auto', stocks: 'auto' } } as never,
   executionConfig: {} as never,
   correlationConfig: {} as never,
   breakerConfig: {} as never,

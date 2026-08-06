@@ -131,16 +131,45 @@ describe('TelegramBotApiClient construction (boot-time validation)', () => {
     }
   });
 
-  it('rejects an unset allowlist at construction rather than failing closed at runtime', () => {
+  it('CONSTRUCTS without an allowlist — outbound-only, the ADR-0007 posture (#434)', async () => {
     const previous = process.env.TELEGRAM_ALLOWED_USER_IDS;
     delete process.env.TELEGRAM_ALLOWED_USER_IDS;
     try {
-      expect(
-        () => new TelegramBotApiClient({ botToken: FAKE_TOKEN, auditLog: makeAuditLog() }),
-      ).toThrow(/TELEGRAM_ALLOWED_USER_IDS/);
+      // Constructing used to throw. It no longer does: the allowlist's only
+      // consumer is the inbound approval callback, approvals are off, and the
+      // outbound escalations this client exists for accept nothing from
+      // Telegram. Demanding it made an operator invent a value for a dead seam.
+      const client = new TelegramBotApiClient({ botToken: FAKE_TOKEN, auditLog: makeAuditLog() });
+
+      // But the approval path refuses OUTRIGHT rather than posting buttons
+      // nobody can answer. Letting the empty allowlist reject each tap would
+      // also fail closed — and would present as a timeout-deny, reading as
+      // "the operator did not answer" when the operator could not.
+      await expect(
+        client.sendApprovalButtons('chat-1', 'approve?', {
+          trace_id: 'trace-1',
+          idempotency_key: 'key-1',
+          timeout_ms: 1_000,
+        }),
+      ).rejects.toThrow(/TELEGRAM_ALLOWED_USER_IDS/);
     } finally {
       if (previous !== undefined) process.env.TELEGRAM_ALLOWED_USER_IDS = previous;
     }
+  });
+
+  it('still rejects a PRESENT but invalid allowlist — absent is safe, wrong is not', () => {
+    // The distinction #434 rests on. An absent allowlist is an access control
+    // nobody configured, and the empty set denies everyone. A wildcard is an
+    // access control someone configured to admit everyone, which is the
+    // critical exposure, and is refused exactly as loudly as before.
+    expect(
+      () =>
+        new TelegramBotApiClient({
+          botToken: FAKE_TOKEN,
+          auditLog: makeAuditLog(),
+          allowedUserIds: '*',
+        }),
+    ).toThrow(/wildcard/);
   });
 
   it('rejects a wildcard allowlist', () => {
@@ -361,6 +390,45 @@ describe('TelegramBotApiClient inbound callback flow', () => {
       idempotency_key: 'idem-1',
       outcome: 'approved',
     });
+  });
+
+  it('an EMPTY allowlist denies every caller, including a real user id (#434)', async () => {
+    // The assertion the whole "absent is safe" argument rests on. Making the
+    // allowlist optional is fail-closed only while the callback check is an
+    // unconditional `has(fromId)`. If it were ever shaped `size > 0 && !has(..)`,
+    // an unset variable would silently admit EVERYONE to live-money approvals.
+    // So this uses a genuinely valid, allowlisted-in-other-tests user id: the
+    // point is that MEMBERSHIP fails, not that the id was malformed.
+    const auditLog = makeAuditLog();
+    const fetchMock = vi.fn(async (url: string) =>
+      okResponse(
+        String(url).includes('/getUpdates')
+          ? [callbackUpdate(1, 'a'.repeat(32), ALLOWED_ID)]
+          : true,
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new TelegramBotApiClient({
+      botToken: FAKE_TOKEN,
+      allowedUserIds: '',
+      auditLog,
+    });
+    const handler = vi.fn();
+    client.onApprovalCallback(handler);
+
+    await client.pollOnce();
+
+    expect(handler).not.toHaveBeenCalled();
+
+    // The assertion that makes this test mean something. `handler` not being
+    // called proves little on its own — an unrecognised correlation token would
+    // also stop it, so the test would pass even if the allowlist had admitted
+    // the caller. The audit decision distinguishes the two: `allowlist_rejected`
+    // is only written on the membership check. Under a `size > 0 && !has(..)`
+    // shape this caller would sail through and be recorded (or dropped) as an
+    // unknown token instead, and this expectation fails.
+    expect(auditLog.entries.map((entry) => entry.decision)).toContain('allowlist_rejected');
   });
 
   it('always calls answerCallbackQuery, including for an allowlist rejection', async () => {

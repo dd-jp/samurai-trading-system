@@ -12,9 +12,17 @@
  * matches, every approval times out to `no_go`) — an operational hazard the
  * system must not discover at runtime.
  *
+ * **Two entry points as of #434.** `parseAllowedUserIds` is the strict one and
+ * refuses an unset value; `parseOptionalAllowedUserIds` treats unset as an
+ * empty (deny-everyone) set, which is what the client uses now that ADR-0007
+ * has the approval gate off. The rejection list below applies to a value that
+ * is PRESENT under either entry point — the dangerous case is not "absent" but
+ * "present and wrong", and only the latter can smuggle in an approver.
+ *
  * Hence: this parser throws rather than degrading. Every rejected shape is a
  * config the operator must fix before the gate is armed:
- * - unset / empty / whitespace-only — fails closed, silently
+ * - unset / empty / whitespace-only — fails closed; an error under the strict
+ *   entry point, an empty set under the optional one
  * - wildcards — `*`, `all`, `any`, `everyone`, `.*`, matched case-insensitively
  *   (the full set is `WILDCARDS` below; keep this list in sync with it). This
  *   is the one permissive shape a validator can actually catch; an over-broad
@@ -53,7 +61,35 @@ export function parseAllowedUserIds(raw: string | undefined): ReadonlySet<number
   if (raw === undefined || raw.trim() === '') {
     fail('is not set (or is empty). It is the sole access control on live-money approvals');
   }
+  return parseNonEmptyAllowedUserIds(raw);
+}
 
+/**
+ * Like `parseAllowedUserIds`, but treats an absent value as an EMPTY allowlist
+ * rather than an error (#434).
+ *
+ * ADR-0007 turned the HITL approval gate off (`automation_level: 'auto'`), and
+ * the inbound half of the Telegram round trip — the only consumer of this list
+ * — is unreachable while it stays off. Demanding the variable at boot forces an
+ * operator to invent a value for a dead seam, and an unexplained required
+ * credential is how a startup failure becomes a twenty-minute puzzle.
+ *
+ * Empty is the SAFE default here, not a lenient one: the sole consumer is
+ * `allowedUserIds.has(fromId)`, so an empty set denies every inbound callback.
+ * "Not configured" therefore fails closed, exactly as an unset access control
+ * should. A value that IS present is still validated in full — a typo'd or
+ * wildcard allowlist is refused as loudly as before, because the dangerous case
+ * was never "absent", it was "present and wrong".
+ *
+ * `requestApproval` refuses outright on an empty set rather than sending a
+ * prompt nobody can answer — see `TelegramBotApiClient`.
+ */
+export function parseOptionalAllowedUserIds(raw: string | undefined): ReadonlySet<number> {
+  if (raw === undefined || raw.trim() === '') return new Set();
+  return parseNonEmptyAllowedUserIds(raw);
+}
+
+function parseNonEmptyAllowedUserIds(raw: string): ReadonlySet<number> {
   const ids = new Set<number>();
   for (const segment of raw.split(',')) {
     const entry = segment.trim();
