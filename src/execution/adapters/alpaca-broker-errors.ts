@@ -17,7 +17,12 @@
  * those are shared (`shared/http/response-errors.js`) rather than duplicated.
  */
 
-import { parseRetryAfterMs, truncateForError } from '../../shared/index.js';
+import {
+  classifyStatus,
+  isTimeoutAbort,
+  parseRetryAfterMs,
+  readErrorDetail,
+} from '../../shared/index.js';
 
 export class AlpacaBrokerTimeoutError extends Error {
   constructor(message: string) {
@@ -75,22 +80,16 @@ export async function classifyAlpacaBrokerResponse(
   response: Response,
   context: string,
 ): Promise<AlpacaBrokerError> {
-  let bodyText: string;
-  try {
-    bodyText = await response.text();
-  } catch {
-    bodyText = '';
-  }
-  const detail = bodyText.length > 0 ? truncateForError(bodyText) : response.statusText;
-  const message = `Alpaca API error: ${response.status} ${detail} (${context})`;
+  const message = `Alpaca API error: ${response.status} ${await readErrorDetail(response)} (${context})`;
 
-  if (response.status === 429) {
-    return new AlpacaBrokerRateLimitError(message, parseRetryAfterMs(response));
+  switch (classifyStatus(response.status)) {
+    case 'rate-limit':
+      return new AlpacaBrokerRateLimitError(message, parseRetryAfterMs(response));
+    case 'timeout':
+      return new AlpacaBrokerTimeoutError(message);
+    default:
+      return new AlpacaBrokerProviderError(message, response.status);
   }
-  if (response.status === 408 || response.status === 504) {
-    return new AlpacaBrokerTimeoutError(message);
-  }
-  return new AlpacaBrokerProviderError(message, response.status);
 }
 
 /** Classifies a network-level failure (e.g. a `fetchWithTimeout` abort) into the typed hierarchy. */
@@ -98,13 +97,11 @@ export function classifyAlpacaBrokerNetworkError(
   error: unknown,
   context: string,
 ): AlpacaBrokerError {
-  // `fetchWithTimeout` aborts with `new DOMException(…, 'TimeoutError')` as the
-  // abort reason (see src/shared/http/fetch-with-timeout.ts) — a caller-supplied
-  // signal's plain `AbortError` is deliberately NOT a timeout and falls through
-  // to the non-retryable ProviderError branch.
-  const isTimeout = error instanceof DOMException && error.name === 'TimeoutError';
+  // A caller-supplied signal's plain `AbortError` is deliberately NOT a timeout
+  // and falls through to the non-retryable ProviderError branch — see
+  // `isTimeoutAbort`.
   const message = error instanceof Error ? error.message : String(error);
-  if (isTimeout) {
+  if (isTimeoutAbort(error)) {
     return new AlpacaBrokerTimeoutError(`Alpaca request timed out (${context}): ${message}`);
   }
   return new AlpacaBrokerProviderError(`Alpaca network error (${context}): ${message}`);

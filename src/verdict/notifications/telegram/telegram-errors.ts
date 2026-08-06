@@ -16,7 +16,7 @@
  * classification reads both and prefers the body's value.
  */
 
-import { parseRetryAfterMs, truncateForError } from '../../../shared/index.js';
+import { classifyStatus, parseRetryAfterMs, truncateForError } from '../../../shared/index.js';
 
 export class TelegramTimeoutError extends Error {
   constructor(message: string) {
@@ -112,16 +112,18 @@ export async function classifyTelegramResponse(
 
   const message = `Telegram Bot API error: ${response.status} ${describe(bodyText, response)} (${context})`;
 
-  if (response.status === 429) {
-    return new TelegramRateLimitError(
-      message,
-      retryAfterMsFromBody(bodyText) ?? parseRetryAfterMs(response),
-    );
+  switch (classifyStatus(response.status)) {
+    case 'rate-limit':
+      // Telegram's hint is in the JSON body, not the header — prefer it.
+      return new TelegramRateLimitError(
+        message,
+        retryAfterMsFromBody(bodyText) ?? parseRetryAfterMs(response),
+      );
+    case 'timeout':
+      return new TelegramTimeoutError(message);
+    default:
+      return new TelegramProviderError(message, response.status);
   }
-  if (response.status === 408 || response.status === 504) {
-    return new TelegramTimeoutError(message);
-  }
-  return new TelegramProviderError(message, response.status);
 }
 
 /**
@@ -137,6 +139,11 @@ export function classifyTelegramThrown(error: unknown, context: string): Telegra
   if (error instanceof TelegramProviderError) {
     return error;
   }
+  // Deliberately a duck-typed `name` check rather than `shared`'s
+  // `isTimeoutAbort`, which requires a real `DOMException`: the poll loop's
+  // long-running `getUpdates` can surface a timeout as an undici error object
+  // that is not a DOMException, and treating that as a provider fault would
+  // make a routine long-poll expiry look like Telegram breaking.
   const name = (error as { name?: unknown } | null)?.name;
   const detail = error instanceof Error ? error.message : String(error);
   if (name === 'TimeoutError') {
