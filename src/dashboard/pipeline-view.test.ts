@@ -4,8 +4,11 @@
  * Three things carry most of the weight here:
  *
  *  - **`skipped` never reads as `stopped`.** An `exit` intent legitimately
- *    skips Invalidation; a lane that reported that as a halted pipeline would
- *    have an operator chasing a breaker that never tripped.
+ *    skips Invalidation; reporting that as a halted pipeline would have an
+ *    operator chasing a breaker that never tripped. Under the stage rail a
+ *    chip is one point, so this distinction lives entirely in the drawer's
+ *    stage strip — which is why the strip is tested as a load-bearing surface
+ *    rather than as decoration.
  *  - **A live debate shows its reason, not a placeholder.** Round state is not
  *    persisted (Debate Engine decision #10), so the expansion must say so
  *    rather than imply detail is loading.
@@ -33,11 +36,13 @@ import {
   type PipelineDebateSummary,
   type PipelineRenderOptions,
   pipelineCellKey,
-  pipelineLaneSignature,
+  pipelineLaneChanged,
+  pipelineStationFor,
   renderDebateSection,
+  renderPipelineChip,
   renderPipelineDrawer,
-  renderPipelineLanes,
   renderPipelineOutcome,
+  renderPipelineRail,
   renderReservedSlot,
   renderStageStrip,
   selectDebateForLane,
@@ -71,6 +76,23 @@ function lane(overrides: Partial<PipelineLane> = {}): PipelineLane {
     total_ms: 12225,
     ...overrides,
   };
+}
+
+/**
+ * A lane that actually reached every stage up to and including `upTo`.
+ *
+ * The bare `lane()` fixture has all seven cells `not_reached`, which under the
+ * rail means "no trace in this window" — correct for an idle ticker, useless
+ * for testing placement. Station tests need cells, because cells are the only
+ * evidence `pipelineStationFor` accepts.
+ */
+function reachedThrough(upTo: PipelineStage, overrides: Partial<PipelineLane> = {}): PipelineLane {
+  const limit = PIPELINE_STAGES.indexOf(upTo);
+  const overridesByStage: Partial<Record<PipelineStage, Partial<PipelineCell>>> = {};
+  for (const [index, stage] of PIPELINE_STAGES.entries()) {
+    if (index <= limit) overridesByStage[stage] = { state: 'done', duration_ms: 500 };
+  }
+  return lane({ cells: cells(overridesByStage), final_stage: upTo, ...overrides });
 }
 
 function view(overrides: Partial<PipelineView> = {}): PipelineView {
@@ -149,65 +171,111 @@ describe('lane lookups', () => {
   });
 });
 
-describe('renderPipelineLanes', () => {
-  it('renders all seven stages including the unbuilt invalidation column', () => {
-    const html = renderPipelineLanes(view(), options());
+describe('pipelineStationFor', () => {
+  // The whole placement rule of the rail lives in this function, so it is
+  // tested directly rather than only through the rendered markup.
+  it('parks a chip on the live stage, whatever it reached before', () => {
+    const l = lane({
+      outcome: 'in_flight',
+      cells: cells({ analysts: { state: 'done' }, debate: { state: 'live' } }),
+    });
+    expect(pipelineStationFor(l)).toBe('debate');
+  });
+
+  it('parks a settled chip on the furthest stage it actually reached', () => {
+    const l = lane({
+      cells: cells({
+        analysts: { state: 'done' },
+        debate: { state: 'done' },
+        trader: { state: 'stopped', decision: 'no_trade' },
+      }),
+    });
+    expect(pipelineStationFor(l)).toBe('trader');
+  });
+
+  it('never parks a chip on a stage the tick skipped', () => {
+    // A skipped Invalidation did not run. A chip sitting there would claim work
+    // that never happened, and would also read as the tick having halted there.
+    const l = lane({
+      cells: cells({
+        trader: { state: 'done' },
+        invalidation: { state: 'skipped' },
+        risk: { state: 'done' },
+      }),
+    });
+    expect(pipelineStationFor(l)).toBe('risk');
+  });
+
+  it('returns null for a ticker with no trace in the window', () => {
+    // Null means "idle group", never "drop it" — see the gutter test below.
+    expect(pipelineStationFor(lane({ outcome: 'idle', trace_id: null }))).toBeNull();
+  });
+});
+
+describe('renderPipelineRail', () => {
+  it('renders all seven stations including the unbuilt invalidation one', () => {
+    const html = renderPipelineRail(view(), options());
     expect(html).toContain('Invalid.');
     expect(html).toContain('specced, not built');
-    // Instrument + outcome columns either side of the seven stages.
-    expect(html.match(/<th[ >]/g)).toHaveLength(PIPELINE_STAGES.length + 2);
+    expect(html.match(/class="pl-station"/g)).toHaveLength(PIPELINE_STAGES.length);
   });
 
-  it('distinguishes skipped from stopped', () => {
-    // The whole reason both states exist: an exit intent skips Invalidation and
-    // the tick carries on, which is not a halted pipeline.
-    const html = renderPipelineLanes(
+  it('keeps every station present even when nothing is parked on it', () => {
+    // The frame has to stay still: a rail that collapsed empty stations would
+    // move the remaining chips under the operator between polls. One ticker
+    // parked on Debate leaves the other six stations rendered and empty.
+    const html = renderPipelineRail(view({ lanes: [reachedThrough('debate')] }), options());
+    expect(html.match(/class="pl-none"/g)).toHaveLength(PIPELINE_STAGES.length - 1);
+  });
+
+  it('clusters chips on the station each ticker stopped at', () => {
+    // The diagnostic the rail exists for: three tickers dying at Risk is a
+    // pile-up you can see without reading a single row.
+    const stuck = (instrument: string) =>
+      lane({
+        instrument,
+        outcome: 'stopped',
+        final_stage: 'risk',
+        cells: cells({
+          analysts: { state: 'done' },
+          debate: { state: 'done' },
+          trader: { state: 'done' },
+          risk: { state: 'stopped', decision: 'breaker_daily_loss' },
+        }),
+      });
+    const html = renderPipelineRail(
+      view({ lanes: [stuck('BTC-USD'), stuck('ETH-USD'), stuck('SPY')] }),
+      options(),
+    );
+    const risk = html.slice(
+      html.indexOf('data-stage="risk"'),
+      html.indexOf('data-stage="verdict"'),
+    );
+    expect(risk.match(/class="pl-chip /g)).toHaveLength(3);
+    expect(risk).toContain('<span class="pl-n">3</span>');
+  });
+
+  it('marks the stations that persist no decision record', () => {
+    // #328's territory. A chip parked on Trader otherwise looks like it has
+    // detail waiting behind it.
+    const html = renderPipelineRail(view(), options());
+    expect(html.match(/pl-lock/g)).toHaveLength(3);
+  });
+
+  it('lights only the station that actually holds an in-flight ticker', () => {
+    const html = renderPipelineRail(
       view({
-        lanes: [
-          lane({
-            cells: cells({
-              invalidation: { state: 'skipped' },
-              risk: { state: 'stopped', duration_ms: 210, decision: 'breaker_daily_loss' },
-            }),
-          }),
-        ],
+        lanes: [lane({ outcome: 'in_flight', cells: cells({ debate: { state: 'live' } }) })],
+        live_trace_id: 't-9f3a21',
+        live_entered_at: '2026-08-05T12:00:04.000Z',
       }),
       options(),
     );
-    expect(html).toContain('pl-seg pl-skipped');
-    expect(html).toContain('pl-seg pl-stopped');
-    expect(html).toContain('skip');
-    expect(html).toContain('breaker_daily_loss');
+    expect(html.match(/pl-station pl-hot/g)).toHaveLength(1);
   });
 
-  it('gives reached cells a real button and leaves unreached ones inert', () => {
-    // A keyboard stop that opens nothing is worse than no keyboard stop.
-    const html = renderPipelineLanes(
-      view({ lanes: [lane({ cells: cells({ analysts: { state: 'done', duration_ms: 820 } }) })] }),
-      options(),
-    );
-    expect(html).toContain(
-      '<button type="button" class="pl-hit" data-instrument="BTC-USD" data-stage="analysts"',
-    );
-    expect(html).toContain('<div class="pl-hit pl-inert"');
-    expect(html).not.toContain('data-stage="verdict"');
-  });
-
-  it('badges a stage that was reached more than once', () => {
-    const html = renderPipelineLanes(
-      view({
-        lanes: [
-          lane({ cells: cells({ debate: { state: 'done', duration_ms: 11890, attempts: 2 } }) }),
-        ],
-      }),
-      options(),
-    );
-    expect(html).toContain('×2');
-    expect(html).toContain('reached 2 times');
-  });
-
-  it('computes the live cell elapsed from live_entered_at and the poll clock', () => {
-    const html = renderPipelineLanes(
+  it('computes the live chip elapsed from live_entered_at and the poll clock', () => {
+    const html = renderPipelineRail(
       view({
         lanes: [lane({ outcome: 'in_flight', cells: cells({ debate: { state: 'live' } }) })],
         live_trace_id: 't-9f3a21',
@@ -216,14 +284,13 @@ describe('renderPipelineLanes', () => {
       options(),
     );
     expect(html).toContain('6.0s');
-    expect(html).toContain('badge-live');
   });
 
   it('falls back to a bare live marker when the entered-at timestamp is unusable', () => {
     // A clock skew that made elapsed negative would otherwise print '-3.0s'.
-    const html = renderPipelineLanes(
+    const html = renderPipelineRail(
       view({
-        lanes: [lane({ cells: cells({ debate: { state: 'live' } }) })],
+        lanes: [lane({ outcome: 'in_flight', cells: cells({ debate: { state: 'live' } }) })],
         live_trace_id: 't-9f3a21',
         live_entered_at: '2026-08-05T12:00:13.000Z',
       }),
@@ -232,16 +299,21 @@ describe('renderPipelineLanes', () => {
     expect(html).toContain('>live<');
   });
 
-  it('gives the elapsed reading only to the lane that owns the live trace', () => {
-    // `live_entered_at` is singular. A second lane reporting a live cell must
-    // not print another instrument's stage duration as if it were measured.
-    const html = renderPipelineLanes(
+  it('gives the elapsed reading only to the ticker that owns the live trace', () => {
+    // `live_entered_at` is singular. A second in-flight chip must not print
+    // another instrument's stage duration as if it were measured.
+    const html = renderPipelineRail(
       view({
         lanes: [
-          lane({ trace_id: 't-9f3a21', cells: cells({ debate: { state: 'live' } }) }),
+          lane({
+            trace_id: 't-9f3a21',
+            outcome: 'in_flight',
+            cells: cells({ debate: { state: 'live' } }),
+          }),
           lane({
             instrument: 'ETH-USD',
             trace_id: 't-other',
+            outcome: 'in_flight',
             cells: cells({ analysts: { state: 'live' } }),
           }),
         ],
@@ -254,11 +326,10 @@ describe('renderPipelineLanes', () => {
     expect(html).toContain('>live<');
   });
 
-  it('stops calling Invalidation unbuilt once a lane reaches it', () => {
+  it('stops calling Invalidation unbuilt once a ticker reaches it', () => {
     // The day the stage ships, the caveat must retire itself.
-    const unbuilt = renderPipelineLanes(view(), options());
-    expect(unbuilt).toContain('specced, not built');
-    const shipped = renderPipelineLanes(
+    expect(renderPipelineRail(view(), options())).toContain('specced, not built');
+    const shipped = renderPipelineRail(
       view({
         lanes: [lane({ cells: cells({ invalidation: { state: 'done', duration_ms: 130 } }) })],
       }),
@@ -267,34 +338,126 @@ describe('renderPipelineLanes', () => {
     expect(shipped).not.toContain('specced, not built');
   });
 
-  it('marks only the cells the diff reported as changed', () => {
-    const html = renderPipelineLanes(
+  it('settles only the chips whose ticker the diff reported as changed', () => {
+    // #421 restated for the rail: a chip that moved appears at the new station
+    // already settled. Nothing travels, because the poll never saw the transit.
+    const html = renderPipelineRail(
       view({
         lanes: [
+          lane({ cells: cells({ debate: { state: 'done', duration_ms: 9240 } }) }),
           lane({
-            cells: cells({
-              analysts: { state: 'done', duration_ms: 820 },
-              debate: { state: 'done', duration_ms: 9240 },
-            }),
+            instrument: 'ETH-USD',
+            cells: cells({ analysts: { state: 'done', duration_ms: 700 } }),
           }),
         ],
       }),
       options({ changedCells: ['BTC-USD|debate'] }),
     );
-    expect(html).toContain('pl-seg pl-done pl-settle');
-    expect(html.match(/pl-settle/g)).toHaveLength(1);
+    // Twice: settled tickers appear on their station and again in the gutter.
+    expect(html.match(/pl-settle/g)).toHaveLength(2);
+    expect(html).toContain('pl-chip pl-chip-go pl-settle');
   });
 
-  it('renders an honest empty table when no instrument has ticked', () => {
-    const html = renderPipelineLanes(view({ lanes: [] }), options());
-    expect(html).toContain('No instrument has ticked in this window.');
-    expect(html).toContain(`colspan="${PIPELINE_STAGES.length + 2}"`);
+  it('renders an honest empty rail when no instrument has ticked', () => {
+    expect(renderPipelineRail(view({ lanes: [] }), options())).toContain(
+      'No instrument has ticked in this window.',
+    );
   });
 
-  it('marks the selected lane and reports it on the toggle button', () => {
-    const html = renderPipelineLanes(view(), options({ selectedInstrument: 'BTC-USD' }));
+  it('marks the selected ticker and reports it on the chip', () => {
+    const html = renderPipelineRail(view(), options({ selectedInstrument: 'BTC-USD' }));
     expect(html).toContain('pl-selected');
     expect(html).toContain('aria-expanded="true"');
+  });
+
+  it('gives every chip a typed button and an outcome named in words', () => {
+    // Colour is never the only signal — the dot carries the outcome visually,
+    // the label carries it for a screen reader and for anyone who cannot
+    // separate the greens from the reds.
+    const html = renderPipelineRail(
+      view({ lanes: [lane({ outcome: 'stopped', final_stage: 'risk' })] }),
+      options(),
+    );
+    expect(html).toContain('<button type="button" class="pl-chip pl-chip-stopped');
+    expect(html).toContain('aria-label="BTC-USD · ');
+    expect(html).toContain('stopped');
+  });
+});
+
+describe('renderPipelineGutter — settled and idle', () => {
+  it('keeps an idle ticker visible instead of dropping it off the rail', () => {
+    // #413's decision, transposed: an instrument outside market hours must read
+    // as idle. A ticker that simply vanished would be indistinguishable from
+    // one nobody is watching.
+    const html = renderPipelineRail(
+      view({
+        lanes: [
+          lane({
+            instrument: 'SPY',
+            asset_class: 'stocks',
+            outcome: 'idle',
+            trace_id: null,
+            started_at: null,
+            total_ms: null,
+            final_stage: null,
+          }),
+        ],
+      }),
+      options(),
+    );
+    expect(html).toContain('pl-group-idle');
+    expect(html).toContain('pl-chip-idle');
+    expect(html).toContain('SPY');
+  });
+
+  it('shows a settled ticker on its station and again in the gutter', () => {
+    // Deliberate duplication: the station answers "where are ticks dying", the
+    // gutter answers "what has happened lately". Collapsing them loses one.
+    const html = renderPipelineRail(view({ lanes: [reachedThrough('execution')] }), options());
+    expect(html.match(/data-instrument="BTC-USD"/g)).toHaveLength(2);
+    expect(html).toContain('>settled<');
+  });
+
+  it('leaves an in-flight ticker out of the settled group', () => {
+    const html = renderPipelineRail(
+      view({
+        lanes: [lane({ outcome: 'in_flight', cells: cells({ debate: { state: 'live' } }) })],
+        live_trace_id: 't-9f3a21',
+        live_entered_at: '2026-08-05T12:00:04.000Z',
+      }),
+      options(),
+    );
+    expect(html).not.toContain('>settled<');
+    expect(html.match(/data-instrument="BTC-USD"/g)).toHaveLength(1);
+  });
+
+  it('renders no gutter at all when nothing has settled and nothing is idle', () => {
+    const html = renderPipelineRail(
+      view({
+        lanes: [lane({ outcome: 'in_flight', cells: cells({ debate: { state: 'live' } }) })],
+      }),
+      options(),
+    );
+    expect(html).not.toContain('pl-gutter');
+  });
+});
+
+describe('renderPipelineChip', () => {
+  it('reports the total for a settled ticker and the elapsed for a live one', () => {
+    expect(renderPipelineChip(lane(), options(), null)).toContain('12.2s');
+    expect(
+      renderPipelineChip(
+        lane({ outcome: 'in_flight', cells: cells({ debate: { state: 'live' } }) }),
+        options(),
+        6000,
+      ),
+    ).toContain('6.0s');
+  });
+
+  it('escapes an instrument name rather than trusting what was stored', () => {
+    const html = renderPipelineChip(lane({ instrument: '<img src=x>' }), options(), null);
+    expect(html).not.toContain('<img src=x>');
+    expect(html).toContain('&lt;img');
   });
 });
 
@@ -362,22 +525,25 @@ describe('diffPipelineCells', () => {
   });
 });
 
-describe('pipelineLaneSignature', () => {
-  it('ignores the poll clock so a live lane does not thrash the DOM', () => {
-    const l = lane({ cells: cells({ debate: { state: 'live' } }) });
-    expect(pipelineLaneSignature(l, false)).toBe(pipelineLaneSignature(l, false));
+describe('pipelineLaneChanged', () => {
+  // The diff is cell-keyed because the wire contract is, but a chip is one
+  // point: the rail cannot ring "the Risk cell" of a chip parked on Verdict.
+  it('settles a ticker when any of its cells moved', () => {
+    expect(pipelineLaneChanged('BTC-USD', ['BTC-USD|risk'])).toBe(true);
   });
 
-  it('changes when the trace, a cell or the selection changes', () => {
-    const base = pipelineLaneSignature(lane(), false);
-    expect(pipelineLaneSignature(lane({ trace_id: 't-other' }), false)).not.toBe(base);
-    expect(pipelineLaneSignature(lane(), true)).not.toBe(base);
-    expect(
-      pipelineLaneSignature(lane({ cells: cells({ risk: { state: 'done' } }) }), false),
-    ).not.toBe(base);
-    expect(
-      pipelineLaneSignature(lane({ cells: cells({ risk: { decision: 'sized_0.6R' } }) }), false),
-    ).not.toBe(base);
+  it('does not settle a ticker on another instrument’s change', () => {
+    expect(pipelineLaneChanged('BTC-USD', ['ETH-USD|risk'])).toBe(false);
+  });
+
+  it('does not match an instrument that merely shares a prefix', () => {
+    // 'BTC' must not be settled by 'BTC-USD' moving — the separator is part of
+    // the key for exactly this reason.
+    expect(pipelineLaneChanged('BTC', ['BTC-USD|risk'])).toBe(false);
+  });
+
+  it('stays quiet on an empty diff', () => {
+    expect(pipelineLaneChanged('BTC-USD', [])).toBe(false);
   });
 });
 
@@ -489,6 +655,12 @@ describe('renderReservedSlot', () => {
   });
 });
 
+/**
+ * Under the stage rail this strip is the **sole** per-stage record — a chip is
+ * one point, so a skipped stage and a retried one cannot be shown on the rail
+ * at all. Both #414 decisions therefore land here, and if these tests go so
+ * does the requirement.
+ */
 describe('renderStageStrip', () => {
   it('lists every stage with its decision word, including the unreached ones', () => {
     const html = renderStageStrip(
@@ -501,12 +673,38 @@ describe('renderStageStrip', () => {
     expect(html).toContain('not reached');
     expect(html.match(/<tr>/g)).toHaveLength(PIPELINE_STAGES.length + 1);
   });
+
+  it('distinguishes skipped from stopped from not-reached', () => {
+    // The whole reason all three states exist: an exit intent skips
+    // Invalidation and the tick carries on, which is not a halted pipeline —
+    // and neither is a stage the tick simply never got to.
+    const html = renderStageStrip(
+      lane({
+        cells: cells({
+          invalidation: { state: 'skipped' },
+          risk: { state: 'stopped', duration_ms: 210, decision: 'breaker_daily_loss' },
+        }),
+      }),
+    );
+    expect(html).toContain('pl-state pl-skipped');
+    expect(html).toContain('pl-state pl-stopped');
+    expect(html).toContain('pl-state pl-not_reached');
+    expect(html).toContain('breaker_daily_loss');
+  });
+
+  it('reports a stage that was reached more than once', () => {
+    const html = renderStageStrip(
+      lane({ cells: cells({ debate: { state: 'done', duration_ms: 11890, attempts: 2 } }) }),
+    );
+    expect(html).toContain('×2');
+    expect(html).toContain('reached 2 times');
+  });
 });
 
 describe('renderPipelineDrawer', () => {
   it('prompts for a selection and states the view is read-only', () => {
     const html = renderPipelineDrawer(null, []);
-    expect(html).toContain('Select a lane');
+    expect(html).toContain('Select a ticker');
     expect(html).toContain('nothing here acts on a trade');
   });
 
@@ -552,7 +750,7 @@ describe('PIPELINE_VIEW_CLIENT_SOURCE', () => {
    */
   function evaluateClientSource(): Record<string, (...args: never[]) => string> {
     const factory = new Function(
-      `${PIPELINE_VIEW_CLIENT_SOURCE}\nreturn { renderPipelineLanes, renderPipelineDrawer, renderDebateSection, renderStageStrip, pipelineLaneSignature };`,
+      `${PIPELINE_VIEW_CLIENT_SOURCE}\nreturn { renderPipelineRail, renderPipelineDrawer, renderDebateSection, renderStageStrip };`,
     );
     return factory() as Record<string, (...args: never[]) => string>;
   }
@@ -561,7 +759,7 @@ describe('PIPELINE_VIEW_CLIENT_SOURCE', () => {
     expect(() => evaluateClientSource()).not.toThrow();
   });
 
-  it('renders the same lanes the imported function renders', () => {
+  it('renders the same rail the imported function renders', () => {
     // The seam this whole design rests on: the page is not running a second,
     // untested copy of these rules.
     const v = view({
@@ -587,8 +785,8 @@ describe('PIPELINE_VIEW_CLIENT_SOURCE', () => {
     });
     const client = evaluateClientSource();
     const opts = options({ selectedInstrument: 'BTC-USD', changedCells: ['BTC-USD|debate'] });
-    expect(client.renderPipelineLanes?.(v as never, opts as never)).toBe(
-      renderPipelineLanes(v, opts),
+    expect(client.renderPipelineRail?.(v as never, opts as never)).toBe(
+      renderPipelineRail(v, opts),
     );
   });
 
@@ -612,10 +810,14 @@ describe('PIPELINE_VIEW_CLIENT_SOURCE', () => {
 
   it('carries every renderer the page mounts', () => {
     for (const name of [
-      'renderPipelineLanes',
+      'renderPipelineRail',
       'renderPipelineDrawer',
+      'renderPipelineChip',
+      'renderPipelineStation',
+      'renderPipelineGutter',
       'diffPipelineCells',
-      'pipelineLaneSignature',
+      'pipelineLaneChanged',
+      'pipelineStationFor',
       'findPipelineLane',
     ]) {
       expect(PIPELINE_VIEW_CLIENT_SOURCE).toContain(`function ${name}(`);
@@ -649,7 +851,7 @@ describe('DASHBOARD_HTML', () => {
   });
 
   it('mounts every element the pipeline code addresses', () => {
-    for (const id of ['pl-panel', 'pl-lanes', 'pl-drawer', 'pl-count', 'tabs', 'view-pipeline']) {
+    for (const id of ['pl-panel', 'pl-rail', 'pl-drawer', 'pl-count', 'tabs', 'view-pipeline']) {
       expect(DASHBOARD_HTML).toContain(`id="${id}"`);
     }
   });

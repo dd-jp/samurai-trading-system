@@ -149,56 +149,72 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   }
   .tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--blue); }
   .tab:hover { color: var(--text); }
-  /* One rule covers every control on the page: the lane cells, the lane
-     toggles, the tabs and the drawer's close button are all real buttons. */
+  /* One rule covers every control on the page: the rail's chips, the tabs and
+     the drawer's close button are all real buttons. */
   :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 3px; }
 
-  /* ---------------- pipeline: ticker lanes ---------------- */
-  /* Seven columns is wide; the table scrolls inside the panel rather than the page. */
+  /* ---------------- pipeline: the stage rail (#412) ----------------
+     Seven fixed stations; a ticker is a chip parked on the station it last
+     reached. The stations never collapse or resize as traffic moves — the
+     frame has to stay still for the chips' positions to mean anything. */
   .pl-scroll { overflow-x: auto; }
-  .pl-lanes { width: 100%; border-collapse: collapse; font-size: 13px; }
-  .pl-lanes th {
-    color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
-    padding: 9px 10px; text-align: center; border-bottom: 1px solid var(--border); white-space: nowrap;
+  .pl-rail {
+    display: grid; grid-template-columns: repeat(7, minmax(112px, 1fr));
+    gap: 0; padding: 18px 12px 4px; min-width: 840px;
   }
-  .pl-lanes th.pl-name { text-align: left; }
-  .pl-lanes th.pl-outcome, .pl-lanes td.pl-outcome { text-align: right; padding-right: 14px; white-space: nowrap; }
-  .pl-lanes td { padding: 0; border-bottom: 1px solid var(--border); }
-  .pl-lanes tr:last-child td { border-bottom: none; }
-  .pl-lanes tr.pl-selected { background: var(--panel-2); }
-  /* Dormant, not absent: a stock outside market hours has a row, dimmed. */
-  .pl-lanes tr.pl-dormant td { opacity: 0.5; }
-  .pl-toggle {
-    display: block; width: 100%; text-align: left; padding: 10px 14px; white-space: nowrap;
-    font-family: var(--mono); font-size: 13px; color: var(--text); background: none; border: none; cursor: pointer;
+  .pl-station { padding: 0 7px; }
+  .pl-station-head {
+    display: flex; align-items: center; gap: 6px; margin-bottom: 8px;
+    font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted);
   }
-  .pl-class { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin-left: 7px; }
-  .pl-hit { display: block; width: 100%; padding: 10px 6px; background: none; border: none; cursor: pointer; }
-  .pl-hit.pl-inert { cursor: default; }
-  .pl-seg {
-    position: relative; display: flex; align-items: center; justify-content: center;
-    height: 22px; min-width: 46px; border-radius: 4px; background: var(--panel-2); border: 1px solid var(--border);
-    font-family: var(--mono); font-size: 11px; color: var(--muted);
+  .pl-station.pl-hot .pl-station-head { color: var(--blue); }
+  .pl-station-head .pl-n { font-family: var(--mono); font-size: 11px; color: var(--text); }
+  /* The stages that persist nothing. Marked out here as well as in the drawer:
+     a chip parked on Trader otherwise looks like it has detail behind it. */
+  .pl-lock { font-size: 10px; color: var(--amber); letter-spacing: 0; text-transform: none; margin-left: auto; }
+  .pl-bar { height: 4px; background: var(--border); border-radius: 2px; }
+  .pl-station.pl-hot .pl-bar { background: linear-gradient(90deg, var(--blue), rgba(74,168,255,0.25)); }
+  .pl-chips { min-height: 88px; padding-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+  .pl-none { color: var(--muted); font-size: 11px; padding-top: 12px; font-style: italic; }
+
+  .pl-chip {
+    display: flex; align-items: center; gap: 7px; width: 100%;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 9px; font-family: var(--mono); font-size: 12px; color: var(--text);
+    cursor: pointer; text-align: left;
   }
-  .pl-done { background: rgba(46,204,113,0.13); border-color: rgba(46,204,113,0.4); color: var(--green); }
-  .pl-live { background: rgba(74,168,255,0.16); border-color: var(--blue); color: var(--blue); }
-  .pl-stopped { background: rgba(255,92,108,0.13); border-color: rgba(255,92,108,0.45); color: var(--red); }
-  /* Skipped is dashed-but-legible; not_reached is dashed-and-faint. They must
-     never be confusable — a skipped Invalidation is normal traffic. */
-  .pl-skipped { background: transparent; border-style: dashed; border-color: var(--border); color: var(--muted); }
-  .pl-not_reached { background: transparent; border-style: dashed; border-color: var(--border); color: #3a4157; }
-  .pl-retry {
-    position: absolute; top: -5px; right: -5px; background: var(--amber); color: #1a1200;
-    font-size: 9px; font-weight: 700; border-radius: 7px; padding: 0 4px; line-height: 13px;
-  }
+  .pl-chip:hover { border-color: var(--blue); }
+  .pl-chip.pl-selected { border-color: var(--blue); background: rgba(74,168,255,0.08); }
+  .pl-tick { overflow: hidden; text-overflow: ellipsis; }
+  .pl-el { margin-left: auto; color: var(--muted); font-size: 11px; }
+  .pl-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--muted); }
+  /* The dot carries the outcome. Colour is never the only signal — the chip's
+     title and aria-label both name the outcome in words. */
+  .pl-chip-in_flight { border-color: var(--blue); }
+  .pl-chip-in_flight .pl-dot { background: var(--blue); animation: pulse 2s infinite; }
+  .pl-chip-go .pl-dot { background: var(--green); }
+  .pl-chip-no_go .pl-dot { background: var(--amber); }
+  .pl-chip-stopped .pl-dot { background: var(--red); }
+  .pl-chip-quorum_skip { opacity: 0.6; }
+  .pl-chip-quorum_skip .pl-dot { background: transparent; border: 1px dashed var(--muted); }
+  .pl-chip-idle { opacity: 0.5; border-style: dashed; }
+
+  /* Settled and idle both live under the rail. Idle is kept visible rather
+     than dropped: an instrument outside market hours must read as idle, not
+     as absent (#413). */
+  .pl-gutter { border-top: 1px solid var(--border); padding: 10px 18px; display: flex; flex-direction: column; gap: 8px; }
+  .pl-group { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .pl-group .pl-chip { width: auto; }
+  .pl-lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); min-width: 52px; }
   .pl-idle { color: var(--muted); font-size: 11px; }
   .badge-live { background: rgba(74,168,255,0.16); color: var(--blue); }
   .pl-empty { padding: 18px 14px; color: var(--muted); text-align: center; }
 
   /* ---------------- pipeline: motion (#421) ----------------
      The view has two snapshots, never the moment between them, so nothing
-     travels: a cell that changed state gets one ring that fades, which says
-     "this is new since the last poll" and claims nothing about the path. */
+     travels: a chip that moved station simply appears at the new one with one
+     ring that fades, which says "this is new since the last poll" and claims
+     nothing about the path between them. */
   .pl-settle { animation: pl-settle 900ms ease-out 1; }
   @keyframes pl-settle {
     0% { box-shadow: 0 0 0 2px rgba(74,168,255,0.6); }
@@ -222,7 +238,17 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   .pl-strip { width: 100%; border-collapse: collapse; font-size: 12px; }
   .pl-strip th { color: var(--muted); font-weight: 500; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; padding: 5px 10px; text-align: left; }
   .pl-strip td { padding: 5px 10px; border-top: 1px solid var(--border); text-align: left; }
+  /* Under the rail the strip is the ONLY per-stage record — a chip is one
+     point, so a skipped stage and a retried one are unrenderable out there.
+     Skipped is dashed-but-legible, not_reached is dashed-and-faint: they must
+     never be confusable, because a skipped Invalidation is normal traffic
+     while a not-reached one means the tick ended early (#414). */
   .pl-state { display: inline-block; padding: 0 6px; border-radius: 4px; border: 1px solid transparent; font-size: 11px; }
+  .pl-state.pl-done { background: rgba(46,204,113,0.13); border-color: rgba(46,204,113,0.4); color: var(--green); }
+  .pl-state.pl-live { background: rgba(74,168,255,0.16); border-color: var(--blue); color: var(--blue); }
+  .pl-state.pl-stopped { background: rgba(255,92,108,0.13); border-color: rgba(255,92,108,0.45); color: var(--red); }
+  .pl-state.pl-skipped { background: transparent; border-style: dashed; border-color: var(--border); color: var(--muted); }
+  .pl-state.pl-not_reached { background: transparent; border-style: dashed; border-color: var(--border); color: #3a4157; }
   .pl-decision { color: var(--muted); }
   .pl-retry-flat { color: var(--amber); font-size: 11px; }
   .pl-agents { display: flex; gap: 10px; flex-wrap: wrap; }
@@ -230,8 +256,8 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   .pl-who { font-family: var(--mono); font-size: 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .pl-role { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-top: 3px; }
   .pl-inf { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 6px; }
-  .pl-bar { height: 4px; background: var(--border); border-radius: 2px; margin-top: 4px; overflow: hidden; }
-  .pl-bar i { display: block; height: 100%; background: var(--blue); }
+  .pl-bar-inf { height: 4px; background: var(--border); border-radius: 2px; margin-top: 4px; overflow: hidden; }
+  .pl-bar-inf i { display: block; height: 100%; background: var(--blue); }
   /* An empty state that states its reason. Never a spinner or a skeleton —
      both promise detail that is not coming (Debate Engine decision #10). */
   .pl-note { border: 1px dashed var(--border); border-radius: 6px; padding: 10px 12px; font-size: 12px; color: var(--text); }
@@ -284,8 +310,8 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
 </div>
 <div class="tabpanel" id="view-pipeline" role="tabpanel" aria-labelledby="tab-pipeline" tabindex="0" hidden>
   <section class="panel" id="pl-panel">
-    <h2>Pipeline by ticker <span class="count" id="pl-count">—</span></h2>
-    <div class="pl-scroll" id="pl-lanes"><div class="pl-empty">loading…</div></div>
+    <h2>Pipeline <span class="count" id="pl-count">—</span></h2>
+    <div class="pl-scroll" id="pl-rail"><div class="pl-empty">loading…</div></div>
     <div id="pl-drawer"></div>
   </section>
 </div>
@@ -498,48 +524,43 @@ let plSelected = null;
 let plData = null;
 let plPrev = null;
 let plDebates = [];
-let plLastLanes = '';
+let plLastRail = '';
 let plLastDrawer = '';
 
-// Wholesale innerHTML replacement drops keyboard focus. The lane cells are real
-// buttons, so an operator tabbing the table would lose their place every 3s.
+// Wholesale innerHTML replacement drops keyboard focus, and a chip that merely
+// moved station is still the same ticker to the operator tabbing the rail. The
+// key is the instrument, not the node, so focus survives the move.
 function plFocusKey() {
   const el = document.activeElement;
-  if (!el || !el.closest || !el.closest('#pl-lanes') || !el.dataset || !el.dataset.instrument) return null;
-  return el.dataset.instrument + '|' + (el.dataset.stage || '');
+  if (!el || !el.closest || !el.closest('#pl-rail') || !el.dataset || !el.dataset.instrument) return null;
+  return el.dataset.instrument;
 }
 function plRestoreFocus(key) {
   if (!key) return;
-  const cut = key.lastIndexOf('|');
-  const inst = CSS.escape(key.slice(0, cut));
-  const stage = key.slice(cut + 1);
-  const sel = stage
-    ? '#pl-lanes .pl-hit[data-instrument="' + inst + '"][data-stage="' + stage + '"]'
-    : '#pl-lanes .pl-toggle[data-instrument="' + inst + '"]';
-  const el = document.querySelector(sel);
+  const el = document.querySelector('#pl-rail .pl-chip[data-instrument="' + CSS.escape(key) + '"]');
   if (el) el.focus();
 }
 
 function paintPipeline(changed) {
-  const lanes = document.getElementById('pl-lanes');
+  const rail = document.getElementById('pl-rail');
   const drawer = document.getElementById('pl-drawer');
   if (!plData) {
-    lanes.innerHTML = '<div class="pl-empty">This snapshot carries no pipeline data.</div>';
+    rail.innerHTML = '<div class="pl-empty">This snapshot carries no pipeline data.</div>';
     drawer.innerHTML = '';
     document.getElementById('pl-count').textContent = '—';
-    plLastLanes = '';
+    plLastRail = '';
     plLastDrawer = '';
     return;
   }
-  const html = renderPipelineLanes(plData, {
+  const html = renderPipelineRail(plData, {
     selectedInstrument: plSelected,
     nowMs: Date.now(),
     changedCells: changed,
   });
-  if (html !== plLastLanes) {
+  if (html !== plLastRail) {
     const focus = plFocusKey();
-    lanes.innerHTML = html;
-    plLastLanes = html;
+    rail.innerHTML = html;
+    plLastRail = html;
     plRestoreFocus(focus);
   }
   const drawerHtml = renderPipelineDrawer(findPipelineLane(plData, plSelected), plDebates);
@@ -547,7 +568,7 @@ function paintPipeline(changed) {
     drawer.innerHTML = drawerHtml;
     plLastDrawer = drawerHtml;
   }
-  document.getElementById('pl-count').textContent = plData.lanes.length + ' instruments';
+  document.getElementById('pl-count').textContent = plData.lanes.length + ' instruments · 15 min';
 }
 
 function renderPipeline(view, debates) {
@@ -558,11 +579,13 @@ function renderPipeline(view, debates) {
   paintPipeline(plData ? diffPipelineCells(plPrev, plData) : []);
 }
 
-// One delegated handler: the rows are replaced wholesale, so per-element
-// listeners would leak with every poll.
+// One delegated handler: the rail is replaced wholesale, so per-element
+// listeners would leak with every poll. A settled ticker has a chip on its
+// station AND one in the gutter — both carry the same instrument, so either
+// opens the same drawer, which is the point of keying selection by instrument.
 document.getElementById('pl-panel').addEventListener('click', (e) => {
   if (e.target.closest('[data-close]')) { plSelected = null; paintPipeline([]); return; }
-  const hit = e.target.closest('.pl-hit[data-instrument], .pl-toggle[data-instrument]');
+  const hit = e.target.closest('.pl-chip[data-instrument]');
   if (!hit) return;
   const instrument = hit.dataset.instrument;
   plSelected = plSelected === instrument ? null : instrument;
@@ -617,7 +640,7 @@ async function poll() {
       // informed, but only the console keeps the stack, and a swallowed stack
       // is how a rendering bug survives a whole soak unnoticed.
       console.error('pipeline render failed', pe);
-      document.getElementById('pl-lanes').innerHTML =
+      document.getElementById('pl-rail').innerHTML =
         '<div class="pl-empty">Pipeline view failed to render: ' + esc(pe.message) + '</div>';
     }
   } catch (e) {
