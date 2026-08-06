@@ -69,7 +69,7 @@
 import type { Logger, RetryConfig } from '../../../shared/index.js';
 import { fetchWithTimeout, withRetry } from '../../../shared/index.js';
 import type { ApprovalButtonTarget, ApprovalCallback, TelegramClient } from '../types.js';
-import { parseAllowedUserIds } from './allowlist.js';
+import { parseOptionalAllowedUserIds } from './allowlist.js';
 import { CorrelationTokenStore, tokenLogPrefix } from './correlation-tokens.js';
 import {
   classifyTelegramResponse,
@@ -203,10 +203,14 @@ export class TelegramBotApiClient implements TelegramClient {
           '(.env.local) or pass { botToken } explicitly.',
       );
     }
-    // Boot-time validation, not a runtime discovery: an unset/wildcard/typo'd
-    // allowlist is either a fail-closed gate nobody notices or a critical
-    // exposure. See allowlist.ts.
-    this.#allowedUserIds = parseAllowedUserIds(
+    // Boot-time validation of a PRESENT value, not a runtime discovery: a
+    // wildcard or typo'd allowlist is a critical exposure and is still refused
+    // here. What changed in #434 is that ABSENT is allowed, and yields an empty
+    // set — the outbound-only posture ADR-0007 left the system in. Empty denies
+    // every inbound callback at the check below, so this fails closed; the
+    // approval path refuses outright rather than relying on that. See
+    // allowlist.ts for why absent is safe and present-and-wrong is not.
+    this.#allowedUserIds = parseOptionalAllowedUserIds(
       options.allowedUserIds ?? process.env.TELEGRAM_ALLOWED_USER_IDS,
     );
 
@@ -244,6 +248,23 @@ export class TelegramBotApiClient implements TelegramClient {
     text: string,
     target: ApprovalButtonTarget,
   ): Promise<void> {
+    // #434: refuse HERE rather than letting the empty allowlist do it at the
+    // callback. Both fail closed, but silently: the buttons would post, every
+    // tap would be rejected as un-allowlisted, and the approval would resolve
+    // as a timeout-deny that reads as "the operator did not answer" when in
+    // fact the operator could not. Since ADR-0007 the allowlist is optional
+    // (approvals are off), so reaching this method without one means the dial
+    // was turned back and half the round trip was left unconfigured.
+    if (this.#allowedUserIds.size === 0) {
+      throw new Error(
+        'TelegramBotApiClient: refusing to send approval buttons with no configured ' +
+          'allowlist — every reply would be rejected as un-allowlisted and the approval ' +
+          'would deny on timeout. Set TELEGRAM_ALLOWED_USER_IDS (it is optional only ' +
+          'because ADR-0007 turned the approval gate off; re-enabling it requires the ' +
+          'inbound half too).',
+      );
+    }
+
     const pair = this.#tokens.mintPair(
       { trace_id: target.trace_id, idempotency_key: target.idempotency_key },
       target.timeout_ms,

@@ -150,6 +150,26 @@ export class VerdictImpl implements Verdict {
       };
     }
 
+    // KNOWN HAZARD IF THE DIAL IS EVER TURNED BACK (#434, ADR-0007).
+    //
+    // Gates 1 (staleness) and 2 (drift) ran ABOVE, and nothing re-evaluates
+    // them after this await returns. So an approved trade submits at a price
+    // last checked `human_timeout` ago: with `max_signal_age.crypto` at 5
+    // minutes and `human_timeout` at 15, a 15-minute-old approval sails past a
+    // 5-minute staleness bound, because the gate that bounds staleness has
+    // already run. Gate 1 reads as a freshness guarantee here and is not one.
+    //
+    // NOT guarded now, deliberately. `automation_level` is `auto`, this branch
+    // is unreachable, and adding a check to an unreachable path is the exact
+    // dead-mechanism pattern #430 exists to stop — it would be a guard nothing
+    // exercises, aging next to the code it claims to protect.
+    //
+    // The right fix is not a re-check anyway: ADR-0007 recommends ASYNC
+    // approval — Verdict returns `pending`, the intent persists, a poller
+    // resumes it — which removes the human from the instrument pass entirely.
+    // That was the actual reason the gate was dropped: `max_concurrent_
+    // instruments: 1` plus an in-pass `await` means one pending tap blocks the
+    // whole universe. Any real `semi_auto` needs that, not two re-run gates.
     const outcome: ApprovalOutcome = await approvals.requestApproval({
       order_intent: orderIntent,
       risk_decision,

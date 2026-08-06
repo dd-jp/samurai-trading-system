@@ -131,16 +131,45 @@ describe('TelegramBotApiClient construction (boot-time validation)', () => {
     }
   });
 
-  it('rejects an unset allowlist at construction rather than failing closed at runtime', () => {
+  it('CONSTRUCTS without an allowlist — outbound-only, the ADR-0007 posture (#434)', async () => {
     const previous = process.env.TELEGRAM_ALLOWED_USER_IDS;
     delete process.env.TELEGRAM_ALLOWED_USER_IDS;
     try {
-      expect(
-        () => new TelegramBotApiClient({ botToken: FAKE_TOKEN, auditLog: makeAuditLog() }),
-      ).toThrow(/TELEGRAM_ALLOWED_USER_IDS/);
+      // Constructing used to throw. It no longer does: the allowlist's only
+      // consumer is the inbound approval callback, approvals are off, and the
+      // outbound escalations this client exists for accept nothing from
+      // Telegram. Demanding it made an operator invent a value for a dead seam.
+      const client = new TelegramBotApiClient({ botToken: FAKE_TOKEN, auditLog: makeAuditLog() });
+
+      // But the approval path refuses OUTRIGHT rather than posting buttons
+      // nobody can answer. Letting the empty allowlist reject each tap would
+      // also fail closed — and would present as a timeout-deny, reading as
+      // "the operator did not answer" when the operator could not.
+      await expect(
+        client.sendApprovalButtons('chat-1', 'approve?', {
+          trace_id: 'trace-1',
+          idempotency_key: 'key-1',
+          timeout_ms: 1_000,
+        }),
+      ).rejects.toThrow(/TELEGRAM_ALLOWED_USER_IDS/);
     } finally {
       if (previous !== undefined) process.env.TELEGRAM_ALLOWED_USER_IDS = previous;
     }
+  });
+
+  it('still rejects a PRESENT but invalid allowlist — absent is safe, wrong is not', () => {
+    // The distinction #434 rests on. An absent allowlist is an access control
+    // nobody configured, and the empty set denies everyone. A wildcard is an
+    // access control someone configured to admit everyone, which is the
+    // critical exposure, and is refused exactly as loudly as before.
+    expect(
+      () =>
+        new TelegramBotApiClient({
+          botToken: FAKE_TOKEN,
+          auditLog: makeAuditLog(),
+          allowedUserIds: '*',
+        }),
+    ).toThrow(/wildcard/);
   });
 
   it('rejects a wildcard allowlist', () => {

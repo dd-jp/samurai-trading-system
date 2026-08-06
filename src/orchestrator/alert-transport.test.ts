@@ -197,18 +197,24 @@ describe('resolveAlertsMode', () => {
 });
 
 describe('TELEGRAM_ALERT_ENV_VARS', () => {
-  it('names the bot token, both chat ids and the approval allowlist', () => {
-    // The allowlist is on this list because `TelegramBotApiClient` validates it
-    // at construction, not because this ticket arms the HITL gate — see the
-    // module doc. The heartbeat chat id joined it in #342: a heartbeat sharing
-    // the escalation chat is the alert-fatigue failure, and there is no chat id
+  it('names the bot token and both chat ids — and NOT the approval allowlist (#434)', () => {
+    // The heartbeat chat id joined this list in #342: a heartbeat sharing the
+    // escalation chat is the alert-fatigue failure, and there is no chat id
     // this process could invent as a default.
+    //
+    // `TELEGRAM_ALLOWED_USER_IDS` LEFT it in #434. It was here because
+    // `TelegramBotApiClient` validated it at construction — but its only
+    // consumer is the inbound approval callback, and ADR-0007 turned the HITL
+    // gate off, so this run forced an operator to supply a credential for a
+    // seam nothing reaches. The outbound escalations on this list (orphaned go
+    // verdicts, stuck fills, kill breaches, heartbeat) accept nothing FROM
+    // Telegram and need no allowlist.
     expect([...TELEGRAM_ALERT_ENV_VARS]).toEqual([
       'TELEGRAM_BOT_TOKEN',
       'TELEGRAM_CHAT_ID',
-      'TELEGRAM_ALLOWED_USER_IDS',
       'TELEGRAM_HEARTBEAT_CHAT_ID',
     ]);
+    expect([...TELEGRAM_ALERT_ENV_VARS]).not.toContain('TELEGRAM_ALLOWED_USER_IDS');
     expect(TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR).toBe('TELEGRAM_HEARTBEAT_CHAT_ID');
   });
 });
