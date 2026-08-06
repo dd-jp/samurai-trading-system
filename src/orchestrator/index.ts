@@ -243,6 +243,20 @@ const CREDENTIAL_REQUIREMENTS: readonly {
     injected: Partial<ProductionConfig>;
     alertsMode: AlertsMode | undefined;
   }) => boolean;
+  /**
+   * Names in `vars` that a DIFFERENT variable can satisfy instead, keyed by
+   * the name reported when none of them is set.
+   *
+   * `vars` is otherwise all-required, which is right for a credential pair
+   * like Alpaca's key and secret — both are read, so both must be there. It is
+   * wrong for a fallback chain: `nousCredentials` resolves a role's key as
+   * `NOUS_<ROLE>_API_KEY` then `NOUS_API_KEY`, so an operator who sets a key
+   * per model has configured the run completely, and demanding the shared one
+   * as well would block a boot on a variable nothing would read — the exact
+   * "keys it will never use" complaint the `unusedByThisRun` escape exists to
+   * avoid, one level down.
+   */
+  alternatives?: Readonly<Record<string, readonly string[]>>;
 }[] = [
   {
     vars: ['ALPACA_API_KEY', 'ALPACA_API_SECRET'],
@@ -251,11 +265,15 @@ const CREDENTIAL_REQUIREMENTS: readonly {
       (injected.dataSource !== undefined || injected.alpacaDataClient !== undefined),
   },
   {
-    // ADR-0009: one provider, one base URL. The per-role overrides
-    // (`NOUS_DEBATE_API_KEY`, `NOUS_SENTIMENT_API_KEY`, and the `_MODEL`
-    // pair) are deliberately NOT listed — they are optional overrides on top
-    // of these two, and demanding them would make the common single-key setup
-    // fail a pre-flight it satisfies.
+    // ADR-0009: one provider, one base URL. `NOUS_BASE_URL` is unconditional —
+    // there is no default in source, so nothing can resolve without it.
+    //
+    // The key is a fallback chain, not a single variable: a per-role key
+    // satisfies the requirement on its own, because that is the "a key per
+    // model" setup ADR-0009 was asked for. `NOUS_API_KEY` is the name reported
+    // when none of them is set, since it is the one that configures every role
+    // at once. The `_MODEL` variables are not listed at all — they are
+    // optional overrides with role defaults behind them.
     //
     // Skipped when `llmClient` is injected, same as the Anthropic entry this
     // replaces: a caller supplying its own client is not asked for keys it
@@ -263,6 +281,7 @@ const CREDENTIAL_REQUIREMENTS: readonly {
     // and degrades to no-agent when they are absent, so it does not widen the
     // requirement.
     vars: ['NOUS_API_KEY', 'NOUS_BASE_URL'],
+    alternatives: { NOUS_API_KEY: ['NOUS_DEBATE_API_KEY', 'NOUS_SENTIMENT_API_KEY'] },
     unusedByThisRun: ({ injected }) => injected.llmClient !== undefined,
   },
   {
@@ -308,11 +327,15 @@ export function missingCredentialEnvVars(
   injected: Partial<ProductionConfig>,
   alertsMode: AlertsMode | undefined,
 ): string[] {
+  const isSet = (name: string): boolean => (process.env[name] ?? '').trim().length > 0;
+
   return CREDENTIAL_REQUIREMENTS.filter(
     (requirement) => !requirement.unusedByThisRun({ injected, alertsMode }),
-  )
-    .flatMap((requirement) => requirement.vars)
-    .filter((name) => (process.env[name] ?? '').trim().length === 0);
+  ).flatMap((requirement) =>
+    requirement.vars.filter(
+      (name) => !isSet(name) && !(requirement.alternatives?.[name] ?? []).some(isSet),
+    ),
+  );
 }
 
 /**

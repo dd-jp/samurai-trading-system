@@ -158,6 +158,10 @@ describe('missingCredentialEnvVars', () => {
     'ALPACA_API_SECRET',
     'NOUS_API_KEY',
     'NOUS_BASE_URL',
+    // Not required by the pre-flight, but cleared between cases: they can
+    // SATISFY `NOUS_API_KEY`, so one left behind would mask a missing key.
+    'NOUS_DEBATE_API_KEY',
+    'NOUS_SENTIMENT_API_KEY',
     'TELEGRAM_BOT_TOKEN',
     'TELEGRAM_CHAT_ID',
     'TELEGRAM_ALLOWED_USER_IDS',
@@ -219,6 +223,45 @@ describe('missingCredentialEnvVars', () => {
       'ALPACA_API_KEY',
       'ALPACA_API_SECRET',
     ]);
+  });
+
+  /**
+   * The "a key per model" setup ADR-0009 was asked for, checked on the path
+   * that actually gates a boot.
+   *
+   * `nousCredentials` resolves `NOUS_<ROLE>_API_KEY` before `NOUS_API_KEY`, so
+   * an operator who sets only per-role keys has configured the run completely.
+   * Before `alternatives`, this pre-flight still demanded `NOUS_API_KEY` and
+   * refused to start over a variable nothing would have read — and a test that
+   * builds components directly cannot catch it, because that path never runs
+   * the pre-flight.
+   */
+  it('accepts a per-role Nous key in place of the shared one', () => {
+    process.env.ALPACA_API_KEY = 'set';
+    process.env.ALPACA_API_SECRET = 'set';
+    process.env.NOUS_BASE_URL = 'set';
+    process.env.NOUS_DEBATE_API_KEY = 'set';
+
+    expect(missingCredentialEnvVars({}, 'log-only')).toEqual([]);
+  });
+
+  it('still reports the shared key when no per-role key is set either', () => {
+    // The reported name is `NOUS_API_KEY` rather than all three, because it is
+    // the one that configures every role at once.
+    process.env.ALPACA_API_KEY = 'set';
+    process.env.ALPACA_API_SECRET = 'set';
+    process.env.NOUS_BASE_URL = 'set';
+
+    expect(missingCredentialEnvVars({}, 'log-only')).toEqual(['NOUS_API_KEY']);
+  });
+
+  it('does not let a per-role key substitute for the base URL', () => {
+    // There is no default endpoint in source, so nothing resolves without it.
+    process.env.ALPACA_API_KEY = 'set';
+    process.env.ALPACA_API_SECRET = 'set';
+    process.env.NOUS_SENTIMENT_API_KEY = 'set';
+
+    expect(missingCredentialEnvVars({}, 'log-only')).toEqual(['NOUS_BASE_URL']);
   });
 
   it('does not demand credentials for clients the caller injected', () => {
