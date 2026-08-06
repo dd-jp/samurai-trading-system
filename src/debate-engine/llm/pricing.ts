@@ -49,11 +49,27 @@ export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
    * null lands in the table unpriced — so without a rate here the cap would
    * sum straight past every xAI call and the ceiling would be a fiction.
    *
-   * PUBLISHED rates for grok-4 (x.ai/api, retrieved 2026-08-06). Prefix-keyed
-   * like the rest, so a dated snapshot prices without a code change.
+   * CORRECTED 2026-08-06 (post-hoc review of #469). The previous entries were
+   * `grok-4` and `grok-3` at 3/15, with a comment claiming they were published
+   * rates retrieved from x.ai/api. **Neither model exists in xAI's lineup**,
+   * and the rate matched nothing real. Verified against docs.x.ai/docs/models.
+   *
+   * The prefix matching made that actively harmful rather than merely dead:
+   * `'grok-4.5'.startsWith('grok-4')` is true, so every real model would have
+   * priced against the phantom entry — grok-4.3 at 3/15 instead of 1.25/2.50,
+   * a 2.4x-6x OVER-estimate. Over-pricing trips ADR-0008's cap early, which
+   * looks like an outage: Grok stops refreshing mid-soak and the debate's own
+   * budget is crowded out by spend that never happened.
+   *
+   * Figures below are the <200k-token tier, which is the only one these calls
+   * reach (one instrument's sentiment, capped at 10 themes). The >=200k tier is
+   * exactly double on both sides for every model; if a caller ever sends a long
+   * context, these under-price by 2x and the cap runs late.
    */
-  'grok-4': { input: 3, output: 15 },
-  'grok-3': { input: 3, output: 15 },
+  'grok-4.5': { input: 2, output: 6 },
+  'grok-4.3': { input: 1.25, output: 2.5 },
+  'grok-4.20': { input: 1.25, output: 2.5 },
+  'grok-build-0.1': { input: 1, output: 2 },
 });
 
 /**

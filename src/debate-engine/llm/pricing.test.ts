@@ -77,3 +77,32 @@ describe('priceUsage', () => {
     ).toBeNull();
   });
 });
+
+describe('xAI rates (post-hoc review of #469)', () => {
+  const ONE_MILLION_EACH = { input_tokens: 1_000_000, output_tokens: 1_000_000 };
+
+  it('prices each real Grok model against its own rate, not a shared prefix', () => {
+    // The defect this pins. The table used to carry `grok-4`, which is not a
+    // model xAI offers — and because `rateFor` matches by PREFIX,
+    // `'grok-4.3'.startsWith('grok-4')` meant every real model priced against
+    // the phantom entry at 3/15. For grok-4.3 that is a 2.4x-6x OVER-estimate,
+    // and over-pricing trips ADR-0008's cap EARLY: Grok stops refreshing
+    // mid-soak and the debate's own budget is crowded out by spend that never
+    // happened. A wrong rate is not cosmetic on a metered path.
+    expect(priceUsage('grok-4.5', ONE_MILLION_EACH)).toBeCloseTo(2 + 6, 10);
+    expect(priceUsage('grok-4.3', ONE_MILLION_EACH)).toBeCloseTo(1.25 + 2.5, 10);
+    expect(priceUsage('grok-build-0.1', ONE_MILLION_EACH)).toBeCloseTo(1 + 2, 10);
+  });
+
+  it('still prices a dated snapshot of a known model', () => {
+    // The prefix behaviour is wanted. It is only harmful when the prefix names
+    // something that does not exist.
+    expect(priceUsage('grok-4.20-0309-reasoning', ONE_MILLION_EACH)).toBeCloseTo(1.25 + 2.5, 10);
+  });
+
+  it('returns null for a Grok id outside the table rather than guessing', () => {
+    // Documented in #476: the cap then sums past it. Null is correct here; the
+    // gap is that nothing alerts when a call that cost money goes unpriced.
+    expect(priceUsage('grok-9', ONE_MILLION_EACH)).toBeNull();
+  });
+});

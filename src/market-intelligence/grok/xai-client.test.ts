@@ -27,7 +27,7 @@ function body(overrides: Record<string, unknown> = {}): Record<string, unknown> 
       items: [{ headline: 'crowd is bullish', sentiment: 1, confidence: 0.8, summary: 'up' }],
     }),
     citations: ['https://x.com/someone/status/1'],
-    model: 'grok-4',
+    model: 'grok-4.5',
     usage: { input_tokens: 100, output_tokens: 20 },
     ...overrides,
   };

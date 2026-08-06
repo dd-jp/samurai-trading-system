@@ -59,7 +59,19 @@ import type { IntelligenceItem } from '../types.js';
 import type { GrokSentimentClient } from './grok-agent.js';
 
 const DEFAULT_BASE_URL = 'https://api.x.ai/v1';
-const DEFAULT_MODEL = 'grok-4';
+/**
+ * Corrected 2026-08-06: this was `grok-4`, WHICH IS NOT A MODEL xAI OFFERS.
+ * The lineup is grok-4.5 / grok-4.3 / grok-4.20-* / grok-build-0.1
+ * (docs.x.ai/docs/models), so every call would have been rejected on the id
+ * alone had one ever been made — and none was, because the request went to an
+ * endpoint that could not search either.
+ *
+ * 4.5 rather than the cheaper 4.3 for a first live run: it is the flagship, so
+ * it is the least likely to surprise us on server-side tool support, and the
+ * difference over a 14-day soak is about $2.50 against a $50 cap. Drop to
+ * `grok-4.3` (1.25/2.50 vs 2/6) if that trade stops being worth it.
+ */
+const DEFAULT_MODEL = 'grok-4.5';
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 /** How many items one call may contribute. A prompt that returns 200 posts is spend, not signal. */
