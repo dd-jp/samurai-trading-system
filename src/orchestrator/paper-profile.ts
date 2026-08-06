@@ -100,6 +100,142 @@ import {
 import { DEFAULT_UNIVERSE } from './scheduler.js';
 import { SqliteDailyEquityStore } from './sqlite-daily-equity-store.js';
 
+/** The header's three-value provenance taxonomy, as data. */
+export type ValueProvenance = 'SPEC' | 'DERIVED' | 'UNSOURCED';
+
+/**
+ * The machine-readable index of the taxonomy the per-value comments below
+ * apply (review 2026-08-06 D4) — greppable and assertable; the comments keep
+ * the WHY, this map keeps the CLASSIFICATION.
+ *
+ * Keys are dot-paths of leaf values as they appear in the object
+ * `paperStartingProfile()` returns. Walk semantics, pinned by
+ * `paper-profile-provenance.test.ts`:
+ *
+ * - Arrays (`universe`) and empty objects (`feedback.config.strategy_params`,
+ *   whose emptiness IS the labeled decision) are single leaves.
+ * - Function-valued members (`feedback.metrics.source`, a factory) and `mode`
+ *   (the caller's own argument echoed back, not a tuning value) carry no
+ *   provenance and are not indexed.
+ *
+ * Where a comment uses a variant label, the mapping here is the nearest of
+ * the three: `SPEC`-adjacent / `SPEC`-by-absence -> `SPEC`; "DECIDED (ADR-000x)"
+ * -> `SPEC` (the ADR is the doc that states it); the dual-labeled
+ * "UNSOURCED — DERIVED from ..." daily-loss values -> `UNSOURCED` (their own
+ * comment closes "a starting point to be measured, not a derived constant").
+ * `riskConfig.portfolio_gross_cap` follows its own field comment (`DERIVED`)
+ * over the block-level "UNSOURCED (all five caps)".
+ */
+export const PAPER_PROFILE_PROVENANCE = {
+  llmBudgetUsd: 'SPEC',
+  tickIntervalMs: 'DERIVED',
+  universe: 'SPEC',
+  'traderConfig.conviction_floor': 'SPEC',
+  'traderConfig.max_risk_per_trade': 'SPEC',
+  'traderConfig.asset_class_risk_multiplier.crypto': 'SPEC',
+  'traderConfig.asset_class_risk_multiplier.stocks': 'SPEC',
+  'traderConfig.atr_timeframe': 'SPEC',
+  'traderConfig.atr_lookback': 'SPEC',
+  'traderConfig.atr_k': 'SPEC',
+  'traderConfig.vol_floor_fraction': 'SPEC',
+  'traderConfig.non_converged_haircut': 'SPEC',
+  'traderConfig.reward_risk_multiple': 'SPEC',
+  'traderConfig.min_viable_notional': 'SPEC',
+  'traderConfig.time_in_force.crypto': 'SPEC',
+  'traderConfig.time_in_force.stocks': 'SPEC',
+  'traderConfig.scale_in_conviction_delta': 'SPEC',
+  'riskConfig.max_position_size': 'UNSOURCED',
+  'riskConfig.per_asset_cap': 'UNSOURCED',
+  'riskConfig.per_asset_class_cap.crypto': 'UNSOURCED',
+  'riskConfig.per_asset_class_cap.stocks': 'UNSOURCED',
+  'riskConfig.portfolio_gross_cap': 'DERIVED',
+  'riskConfig.concentration.cap': 'DERIVED',
+  'riskConfig.concentration.threshold': 'UNSOURCED',
+  'riskConfig.min_viable_size': 'DERIVED',
+  'riskConfig.cii_threshold': 'UNSOURCED',
+  'verdictConfig.automation_level.crypto': 'SPEC',
+  'verdictConfig.automation_level.stocks': 'SPEC',
+  'verdictConfig.max_signal_age.crypto': 'UNSOURCED',
+  'verdictConfig.max_signal_age.stocks': 'UNSOURCED',
+  'verdictConfig.drift_tolerance_pct.crypto': 'UNSOURCED',
+  'verdictConfig.drift_tolerance_pct.stocks': 'UNSOURCED',
+  'verdictConfig.human_timeout': 'UNSOURCED',
+  'verdictConfig.allow_extended_hours': 'DERIVED',
+  'verdictConfig.flag_thresholds.size_over': 'DERIVED',
+  'executionConfig.simulated.volatility_indicator.indicator': 'SPEC',
+  'executionConfig.simulated.volatility_indicator.params.period': 'SPEC',
+  'executionConfig.simulated.volatility_indicator.timeframe': 'SPEC',
+  'executionConfig.simulated.volatility_indicator.lookback': 'SPEC',
+  'executionConfig.simulated.adv_window.timeframe': 'UNSOURCED',
+  'executionConfig.simulated.adv_window.lookback': 'UNSOURCED',
+  'correlationConfig.window.timeframe': 'UNSOURCED',
+  'correlationConfig.window.lookback': 'UNSOURCED',
+  'correlationConfig.min_bars': 'UNSOURCED',
+  'breakerConfig.daily_loss_pct': 'UNSOURCED',
+  'breakerConfig.daily_loss_pct_by_class.crypto': 'UNSOURCED',
+  'breakerConfig.daily_loss_pct_by_class.stocks': 'UNSOURCED',
+  'breakerConfig.max_drawdown_pct': 'SPEC',
+  'breakerConfig.max_consecutive_losses': 'UNSOURCED',
+  'breakerConfig.volatility.baseline.crypto': 'UNSOURCED',
+  'breakerConfig.volatility.baseline.stocks': 'UNSOURCED',
+  'breakerConfig.volatility.multiplier': 'UNSOURCED',
+  'breakerConfig.auto_rearm.recovery_drawdown_pct': 'DERIVED',
+  'breakerConfig.auto_rearm.max_days_tripped': 'DERIVED',
+  'costConfig.crypto.spreadVolatilityCoefficient': 'UNSOURCED',
+  'costConfig.crypto.commissionRate': 'SPEC',
+  'costConfig.crypto.slippageCoefficient': 'UNSOURCED',
+  'costConfig.crypto.impactK': 'UNSOURCED',
+  'costConfig.stocks.spreadVolatilityCoefficient': 'UNSOURCED',
+  'costConfig.stocks.commissionRate': 'SPEC',
+  'costConfig.stocks.slippageCoefficient': 'UNSOURCED',
+  'costConfig.stocks.impactK': 'UNSOURCED',
+  'ciiConsumerConfig.pollIntervalMs': 'SPEC',
+  'rateLimiterConfig.default.windowMs': 'DERIVED',
+  'rateLimiterConfig.default.maxDebates': 'DERIVED',
+  'rateLimiterConfig.default.maxLlmCalls': 'DERIVED',
+  'rateLimiterConfig.perAssetClass.crypto.windowMs': 'DERIVED',
+  'rateLimiterConfig.perAssetClass.crypto.maxDebates': 'DERIVED',
+  'rateLimiterConfig.perAssetClass.crypto.maxLlmCalls': 'DERIVED',
+  'rateLimiterConfig.perAssetClass.stocks.windowMs': 'DERIVED',
+  'rateLimiterConfig.perAssetClass.stocks.maxDebates': 'DERIVED',
+  'rateLimiterConfig.perAssetClass.stocks.maxLlmCalls': 'DERIVED',
+  'feedback.config.attribution_window_ms': 'DERIVED',
+  'feedback.config.weights.max_step': 'DERIVED',
+  'feedback.config.weights.floor': 'DERIVED',
+  'feedback.config.weights.ceiling': 'DERIVED',
+  'feedback.config.weights.tighten_is': 'DERIVED',
+  'feedback.config.strategy_params': 'DERIVED',
+  'feedback.config.risk_thresholds.max_position_size.max_step': 'DERIVED',
+  'feedback.config.risk_thresholds.max_position_size.floor': 'DERIVED',
+  'feedback.config.risk_thresholds.max_position_size.ceiling': 'DERIVED',
+  'feedback.config.risk_thresholds.max_position_size.tighten_is': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_cap.max_step': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_cap.floor': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_cap.ceiling': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_cap.tighten_is': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_class_cap_crypto.max_step': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_class_cap_crypto.floor': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_class_cap_crypto.ceiling': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_class_cap_crypto.tighten_is': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_class_cap_stocks.max_step': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_class_cap_stocks.floor': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_class_cap_stocks.ceiling': 'DERIVED',
+  'feedback.config.risk_thresholds.per_asset_class_cap_stocks.tighten_is': 'DERIVED',
+  'feedback.config.risk_thresholds.portfolio_gross_cap.max_step': 'DERIVED',
+  'feedback.config.risk_thresholds.portfolio_gross_cap.floor': 'DERIVED',
+  'feedback.config.risk_thresholds.portfolio_gross_cap.ceiling': 'DERIVED',
+  'feedback.config.risk_thresholds.portfolio_gross_cap.tighten_is': 'DERIVED',
+  'feedback.config.risk_thresholds.concentration_cap.max_step': 'DERIVED',
+  'feedback.config.risk_thresholds.concentration_cap.floor': 'DERIVED',
+  'feedback.config.risk_thresholds.concentration_cap.ceiling': 'DERIVED',
+  'feedback.config.risk_thresholds.concentration_cap.tighten_is': 'DERIVED',
+  'feedback.config.kill_thresholds.max_pbo': 'SPEC',
+  'feedback.config.kill_thresholds.min_oos_sharpe': 'SPEC',
+  'feedback.config.kill_thresholds.min_deflated_sharpe': 'SPEC',
+  'feedback.config.kill_thresholds.max_live_backtest_divergence': 'UNSOURCED',
+  'feedback.metrics.backtest_reference_sharpe': 'SPEC',
+} as const satisfies Record<string, ValueProvenance>;
+
 /**
  * The equity the notional caps below are expressed against.
  *
