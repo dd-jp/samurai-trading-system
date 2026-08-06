@@ -118,6 +118,7 @@ import type {
   LlmClient,
   LlmSpendSink,
   RateLimiterConfig,
+  SpendCap,
 } from '../debate-engine/index.js';
 import {
   AnthropicHttpMessagesClient,
@@ -126,6 +127,8 @@ import {
   RateLimiter,
   SqliteDebateLogStore,
   SqliteLlmSpendStore,
+  SqliteSpendCap,
+  UNCAPPED_SPEND,
 } from '../debate-engine/index.js';
 import type {
   AlpacaClient as AlpacaBrokerClient,
@@ -192,13 +195,13 @@ import type { TraderConfig } from '../trader/index.js';
 import { SqliteSetupStore } from '../trader/index.js';
 import type { ApprovalChannel, VerdictConfig } from '../verdict/index.js';
 import {
-  ConsoleApprovalChannel,
   LoggingBreachAlertChannel,
   LoggingHeartbeatChannel,
   LoggingLoosenApprovalChannel,
   LoggingOrphanAlertChannel,
   LoggingUnpricedFillAlertChannel,
   ParkedCiiScoreProvider,
+  UnwiredApprovalChannel,
 } from './console-channels.js';
 import {
   FILL_SYNC_TRACE_ID,
@@ -476,6 +479,18 @@ export interface ProductionConfig {
    * each number written out beside it.
    */
   rateLimiterConfig?: RateLimiterConfig;
+  /**
+   * Total USD this process may spend on LLM calls before it stops starting new
+   * debates (ADR-0008). Cumulative over the whole `llm_spend` table, and it
+   * does NOT refill — see `SqliteSpendCap`.
+   *
+   * Optional so that the many programmatic callers and tests that issue no
+   * live calls need not care, but absence is warned about loudly at startup
+   * rather than treated as a default: an unattended run with no ceiling is the
+   * failure this exists to prevent. `paperStartingProfile` supplies the soak's
+   * checked-in figure.
+   */
+  llmBudgetUsd?: number;
   /**
    * Overrides the `RateLimiter` this module would otherwise build from
    * `rateLimiterConfig` — same rationale as `broker`/`llmClient`.
@@ -1040,6 +1055,15 @@ export interface ProductionOrchestrator {
 /** Everything composed from in-repo code, built exactly once per process. */
 export interface ProductionComponents {
   steps: TickSteps;
+  /**
+   * The operator escalation channel, exposed because TWO consumers need the
+   * same instance: the Feedback Loop's kill-threshold breach, and the LLM
+   * spend cap's breach (ADR-0008), which is constructed inside this function.
+   * Returning it beats building a second one in `buildProductionOrchestrator`
+   * — two channels would be two places for an injected override to be applied
+   * to only one of them.
+   */
+  breachAlerts: BreachAlertChannel;
   marketData: MarketDataService;
   broker: BrokerAdapter;
   analysts: AnalystOrchestrator;
@@ -1171,6 +1195,90 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   });
 
   const logger = config.logger ?? new JsonLogger();
+
+  /**
+   * Hoisted above `spendCap` (below) rather than left beside the Feedback
+   * Loop's stores: the LLM spend cap escalates its breach through this same
+   * channel, and a breach that only reaches the log stream is invisible on an
+   * unattended run. It depends on nothing but `logger`, so the move is free.
+   */
+  const breachAlerts = config.breachAlerts ?? new LoggingBreachAlertChannel(logger);
+
+  /**
+   * The hard dollar ceiling (ADR-0008). Distinct from `llmRateLimiter`, which
+   * bounds CALLS PER WINDOW and refills with time: this bounds TOTAL DOLLARS
+   * and never refills. A run can be comfortably inside its rate limit and
+   * still spend a fortnight's budget in three days, which is exactly what the
+   * cadence-only plan risked.
+   *
+   * Absent means uncapped, and that is warned about rather than defaulted
+   * silently — the same posture `SAMURAI_ALERTS` takes. An unattended run
+   * (#238) with no ceiling is the case this exists for, so if it is ever
+   * missing there, the log says so in as many words.
+   */
+  let spendCap: SpendCap;
+  if (config.llmBudgetUsd === undefined) {
+    logger.log({
+      trace_id: 'startup',
+      stage: 'orchestrator',
+      level: 'warn',
+      message:
+        'ProductionConfig.llmBudgetUsd is not set — LLM spend is UNCAPPED. Nothing will ' +
+        'stop this process billing without bound; the rate limiter bounds calls per ' +
+        'window, not total dollars, and it refills. Correct for a short attended run; an ' +
+        'unattended soak (#238) must set a budget.',
+      payload: { llm_budget_usd: null },
+    });
+    spendCap = UNCAPPED_SPEND;
+  } else {
+    const cap = new SqliteSpendCap(config.db, config.llmBudgetUsd, logger, () =>
+      breachAlerts.postBreachAlert({
+        breaches: ['llm_spend_cap'],
+        reported_at: clock.now(),
+      }),
+    );
+    spendCap = cap;
+
+    /**
+     * Announce what this database has ALREADY spent, because the cap's window
+     * is the whole `llm_spend` table and the operator's mental model is "$50
+     * for this run".
+     *
+     * The whole-table window is the right choice — a per-process baseline
+     * would hand a fresh budget to every restart, and a 14-day soak on a
+     * MacBook will restart. But it means prior runs against the same file
+     * count, and that is not hypothetical: `data/samurai-development.sqlite`
+     * held 196 calls / $0.38 before this cap existed. Silence here would let
+     * an operator assume zero and be wrong by however much they had already
+     * spent.
+     *
+     * It lives inside this branch, on `cap` rather than on `spendCap`, so the
+     * announcement reaches for `startingTotal()` on the concrete class that
+     * offers it — `SpendCap`, the seam the debate step admits against, carries
+     * `check()` alone. There is nothing to announce in the uncapped branch:
+     * it has already warned, in more detail than a starting total would add.
+     */
+    const opening = cap.startingTotal();
+    logger.log({
+      trace_id: 'startup',
+      stage: 'orchestrator',
+      level: opening.admitted ? 'info' : 'error',
+      message: opening.admitted
+        ? `LLM spend cap armed: $${opening.spent_usd.toFixed(2)} of ` +
+          `$${opening.budget_usd.toFixed(2)} already recorded in this database, ` +
+          `$${(opening.budget_usd - opening.spent_usd).toFixed(2)} remaining. The window is the ` +
+          'whole llm_spend table, so spend from earlier runs against this file counts. Start ' +
+          'from a fresh store if this run is meant to have the full budget.'
+        : `LLM spend cap is ALREADY BREACHED at startup: ${opening.reason}. No debate will be ` +
+          'admitted and the run will take no new trade. Raise llmBudgetUsd or start from a ' +
+          'fresh store.',
+      payload: {
+        spent_usd: opening.spent_usd,
+        budget_usd: opening.budget_usd,
+        admitted: opening.admitted,
+      },
+    });
+  }
   // Hooked once, shared everywhere below (see `ProductionComponents.executionStore`'s
   // doc): `getOpenPositions`, Verdict's `positionStore` and Execution's
   // `store` all read/write through this same instance, so `onTradeClose`
@@ -1321,6 +1429,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       config.llmClient ?? buildDefaultLlmClient(logger, new SqliteLlmSpendStore(config.db, logger)),
       new SqliteDebateLogStore(config.db),
       llmRateLimiter,
+      spendCap,
       logger,
     ),
     trader: buildTraderStep({ ...breakerStateDeps, config: config.traderConfig }),
@@ -1338,9 +1447,14 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // second connection with a divergent view of the same table.
       positionStore: executionStore,
       config: config.verdictConfig,
-      // Log-only stand-in when unwired (#275): it auto-approves, and its
-      // constructor refuses to exist in live mode.
-      approvals: config.approvals ?? new ConsoleApprovalChannel(logger, config.mode),
+      // Unreachable by design since ADR-0007: `automation_level` is `auto` for
+      // both classes, so gate 6 short-circuits and this is never called. It
+      // THROWS rather than auto-approving, so that turning the dial back
+      // without wiring a transport fails loudly instead of fabricating
+      // consent — and, unlike `ConsoleApprovalChannel`, it constructs in
+      // `live`, because refusing there would block a live start over a gate
+      // that never fires.
+      approvals: config.approvals ?? new UnwiredApprovalChannel(),
       // Backs LoggingVerdict's verdict_log write (#302) — the same handle
       // every other Sqlite* store in this function reads/writes through.
       store: config.db,
@@ -1350,6 +1464,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
 
   return {
     steps,
+    breachAlerts,
     marketData,
     broker,
     analysts,
@@ -1507,7 +1622,6 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     tuning: new SqliteTuningStore(config.db, clock),
     adjustments: new SqliteAdjustmentLog(config.db),
   };
-  const breachAlerts = config.breachAlerts ?? new LoggingBreachAlertChannel(logger);
   /**
    * #366. Resolved once, outside the timer callback, for `feedbackStores`'
    * reason — and read in the same precedence order the alert channels use: an
@@ -1588,7 +1702,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       // `kill_thresholds` are the four lines, and its `risk_thresholds` are
       // what a breach auto-tightens.
       config: feedbackConfig,
-      alerts: breachAlerts,
+      alerts: components.breachAlerts,
     });
 
     logger.log({

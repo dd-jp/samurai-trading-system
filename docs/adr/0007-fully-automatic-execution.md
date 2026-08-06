@@ -1,0 +1,130 @@
+# ADR-0007 — Fully automatic execution: no human approval gate, paper or live
+
+- **Status:** Accepted
+- **Date:** 2026-08-06
+- **Decided by:** David
+- **Supersedes:** verdict-spec.md "Notes & Rationale" — the `manual` → `semi_auto` → `auto` staging
+- **Related:** [#275](https://github.com/dd-jp/samurai-trading-system/issues/275) (built the Telegram approval transport), [#384](https://github.com/dd-jp/samurai-trading-system/issues/384), [#375](https://github.com/dd-jp/samurai-trading-system/issues/375), [#333](https://github.com/dd-jp/samurai-trading-system/issues/333) (the breakers that must work now that this gate does not exist)
+
+## Context
+
+verdict-spec.md's Human-in-the-Loop module specifies a per-asset-class
+`automation_level` dial — `manual` / `semi_auto` / `auto` — as the staged
+deployment control, with the spec's own rationale: *"start `manual` (human
+confirms every real-money trade during paper / tiny-live), move to `semi_auto`
+…, then `auto` once live KPIs hold and trust is earned."* The profile shipped
+at `manual`.
+
+That gate has never actually run. The composition root fell back to
+`ConsoleApprovalChannel`, which auto-approves and logs a `warn` saying no human
+reviewed the trade, so `manual` bought an exercised code path and an audit
+trail of machine consent — not consent. Wiring the real transport was #275's
+remaining half; the parts (`SignedApprovalChannel`, `TelegramApprovalGateway`,
+`approval-callback-verifier`, `allowlist`, `correlation-tokens`) are all built
+and unit-tested, and nothing constructs the chain.
+
+The question was therefore live: finish wiring it, or decide against it.
+
+### What made the decision, and it is structural rather than a preference
+
+`VerdictImpl.decide` **awaits** `approvals.requestApproval` inside the
+instrument pass (gate 6, `src/verdict/index.ts`). `runTickPlan` runs
+instruments at `max_concurrent_instruments`, which is **1**
+(`src/orchestrator/tick-loop.ts`; `production.ts` documents why raising it is
+not free). `human_timeout` was 15 minutes.
+
+Composing those three: **one trade awaiting a human tap blocks every other
+instrument in the universe for up to 15 minutes.** With six instruments on a
+single shared clock, one un-answered notification costs the whole universe a
+full cycle — and at the soak's 15-minute cadence (ADR-0008) that is one cycle
+per un-answered tap, on every instrument, not just the one in question.
+
+A human in this loop is a **serialization point**, not a safety net. That is a
+property of where the await sits, not of how attentive the operator is.
+
+A second, smaller finding pointed the same way. Gates 1 (staleness) and 2
+(drift) evaluate *before* gate 6 and are never re-evaluated after it, so an
+approved trade could submit at a price checked up to `human_timeout` earlier —
+`max_signal_age.crypto` is 5 minutes, and a 15-minute-old approval sails past
+it because the gate that bounds staleness already ran. Making `semi_auto` sound
+would have meant re-checking both gates post-approval, i.e. more machinery on
+the path being removed.
+
+## Decision
+
+**`automation_level: { crypto: 'auto', stocks: 'auto' }`, in paper AND live.**
+No trade is ever routed to a human.
+
+Consequences at the code level:
+
+- `shouldEngageHitl` short-circuits to `false` on the dial before `isFlagged`
+  is consulted, so gate 6 is unreachable and `ProductionConfig.approvals` is
+  never called.
+- `flag_thresholds` and `human_timeout` are inert by construction. They are
+  **kept**, along with the flag plumbing and the whole Telegram chain, so that
+  turning the dial back is a config edit rather than a re-implementation.
+- The composition root's default approval channel is now
+  `UnwiredApprovalChannel`, which **throws** if gate 6 is ever reached, in
+  place of `ConsoleApprovalChannel`, which auto-approved. If someone sets
+  `manual` or `semi_auto` without wiring a transport, that must fail loudly
+  rather than fabricate consent — an auto-approving default is a gate that
+  reads as enforced while enforcing nothing, this repo's dominant defect shape.
+- Unlike `ConsoleApprovalChannel`, the new default **constructs in `live`**.
+  Refusing there would block a live start over a gate that never fires.
+
+## Consequences
+
+### The breakers are now the only stop, and three of them do not work
+
+This is the whole cost of the decision, and it is not hypothetical:
+
+| Gap | Effect |
+| --- | --- |
+| [#384](https://github.com/dd-jp/samurai-trading-system/issues/384) | Three of four kill-lines can never fire — nothing produces `DailyMetricsSample.revalidation`. |
+| [#375](https://github.com/dd-jp/samurai-trading-system/issues/375) | The fourth (divergence) has no persisted backtest Sharpe, so it is inert. |
+| [#333](https://github.com/dd-jp/samurai-trading-system/issues/333) | In `live`, a daily PnL figure that cannot be computed — any restart after the session boundary — leaves the daily-loss breaker unenforced for the rest of the session. |
+
+**These three are the live-go gate for a fully automatic system.** None of them
+blocks the paper soak, where the daily figure is seeded from a mid-session base
+and the breaker stays live throughout. `paperStartingProfile` refuses `live`
+outright and now names these three in its refusal message.
+
+Two capabilities that were "live-only niceties" while a human held the gate are
+sharper now, because there is no longer any manual intervention path at all:
+
+- `BrokerAdapter.submitFlatten` / `cancel` / `getOpenPositions` are specced in
+  execution-spec.md and absent from the code — no cancellation, no forced
+  liquidation, no kill switch.
+- Per-decision operator visibility. `NotifyingVerdict` exists with zero
+  callers ([#307](https://github.com/dd-jp/samurai-trading-system/issues/307));
+  it is now the *only* way an operator sees what the bot decided, rather than a
+  cosmetic duplicate of the log. Its ticket is scoped as a refactor and needs
+  re-framing as a control.
+
+### What is enforced, and where
+
+`yarn smoke` injects no `approvals`, so it takes the throwing default. A
+passing smoke run is therefore positive evidence that the `auto` dial
+short-circuits before any approval is requested — on the real composition root
+rather than in a unit test. Verified 2026-08-06: `verdict: go` with
+`approval_path: "automated"`, `would_require_approval: false`.
+
+### Loose end
+
+`TELEGRAM_ALLOWED_USER_IDS` is still validated as a required environment
+variable at boot when `SAMURAI_ALERTS=telegram`, for a gate that can no longer
+fire. Either relax it or document why it stays.
+
+## Alternatives considered
+
+- **Wire Telegram and run `semi_auto`.** Rejected on the serialization
+  argument above. It would also have required a post-approval re-check of
+  gates 1 and 2 to be sound.
+- **Wire Telegram, keep `manual`.** Same problem, worse: every trade blocks the
+  universe, not just flagged ones.
+- **Async approval** — Verdict returns `pending`, the intent persists, and a
+  separate poller resumes it, so no human ever blocks the loop. This is the
+  design that would make human-in-the-loop compatible with a serial tick
+  runner. Not pursued because the decision was to remove the human, not to
+  re-plumb around them; recorded here because it is the only version of
+  `semi_auto` worth building if the dial is ever turned back.

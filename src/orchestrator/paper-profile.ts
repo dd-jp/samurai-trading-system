@@ -563,11 +563,14 @@ function buildProfileConfigs(): Pick<
   | 'ciiConsumerConfig'
   | 'feedback'
 > &
-  // `Required`, not another `Pick` member: `ProductionConfig.rateLimiterConfig`
-  // is optional (it has a documented fallback for a programmatic caller), but
-  // the profile's whole job is to leave nothing to a fallback nobody chose —
-  // so the type says this profile always carries one.
-  Required<Pick<ProductionConfig, 'rateLimiterConfig'>> {
+  // `Required`, not another `Pick` member: each of these is optional on
+  // `ProductionConfig` (they have documented fallbacks for a programmatic
+  // caller), but the profile's whole job is to leave nothing to a fallback
+  // nobody chose — so the type says this profile always carries them.
+  // `llmBudgetUsd` and `tickIntervalMs` joined `rateLimiterConfig` here under
+  // ADR-0008: a soak that inherited the 60s default interval, or no ceiling at
+  // all, would silently cost ~13x its budget.
+  Required<Pick<ProductionConfig, 'rateLimiterConfig' | 'llmBudgetUsd' | 'tickIntervalMs'>> {
   const traderConfig: TraderConfig = {
     // SPEC — `DEFAULT_TRADER_CONFIG` (src/trader/types.ts) is the one set of
     // sizing constants already checked in and already justified against
@@ -661,22 +664,45 @@ function buildProfileConfigs(): Pick<
 
   const verdictConfig: VerdictConfig = {
     /**
-     * SPEC — verdict-spec.md "Notes & Rationale": "start `manual` (human
-     * confirms every real-money trade during paper / tiny-live), move to
-     * `semi_auto` ..., then `auto` once live KPIs hold and trust is earned."
+     * DECIDED (David, 2026-08-06) — `auto` for both classes, in **paper and
+     * live**. See ADR-0007. This deliberately overrides verdict-spec.md's
+     * "Notes & Rationale" staging ("start `manual` ..., then `auto` once live
+     * KPIs hold"); that sentence has been amended rather than left to
+     * contradict this value.
      *
-     * Worth being explicit about what `manual` means *today*, because it is
-     * not what the spec sentence implies: with no real approval transport
-     * wired (#275's remaining half — #322 wired the outbound alert channels,
-     * which are a different seam), the composition root falls back to
-     * `ConsoleApprovalChannel`, which auto-approves and logs a `warn` naming
-     * the trade and stating that no human reviewed it. So `manual` currently
-     * buys an exercised HITL code path and an audit trail of machine consent
-     * — not consent. It is still the right setting: it is what a real channel
-     * will slot into unchanged, and `ConsoleApprovalChannel` refuses to be
-     * constructed in live mode at all.
+     * **The reason is throughput, and it is a measured one, not a preference.**
+     * `runTickPlan` runs instruments at `max_concurrent_instruments`, which is
+     * `1` (tick-loop.ts, and see `maxConcurrentInstruments` in production.ts
+     * for why raising it is not free), and `VerdictImpl.decide` *awaits*
+     * `approvals.requestApproval` inside the instrument pass. So a single
+     * pending approval blocks every other instrument for up to
+     * `human_timeout`. At the soak's cadence one un-answered tap costs the
+     * whole universe a full cycle. A human in this loop is a serialization
+     * point, not a safety net.
+     *
+     * **What this removes, stated plainly.** Gate 6 is now unreachable: the
+     * dial short-circuits `shouldEngageHitl` to `false` before `isFlagged` is
+     * consulted, so no trade is ever routed to a human, and
+     * `ProductionConfig.approvals` is never called. `flag_thresholds` and
+     * `human_timeout` below are inert by construction — kept, with the flag
+     * plumbing, so that turning the dial back is a config edit rather than a
+     * re-implementation.
+     *
+     * **What must therefore hold before LIVE capital, and does not yet.** With
+     * no human gate the circuit breakers are the *only* stop, and three of
+     * them do not currently work:
+     *
+     * - #384 — three of four kill-lines can never fire; nothing produces
+     *   `DailyMetricsSample.revalidation`.
+     * - #375 — the divergence kill-line has no persisted backtest Sharpe.
+     * - #333 — in `live`, a daily PnL figure that cannot be computed (any
+     *   restart after the session boundary) leaves the daily-loss breaker
+     *   unenforced for the rest of the session.
+     *
+     * Those three are the live-go gate for a fully-automatic system. None of
+     * them blocks the paper soak, where the breaker stays live throughout.
      */
-    automation_level: { crypto: 'manual', stocks: 'manual' },
+    automation_level: { crypto: 'auto', stocks: 'auto' },
     /**
      * UNSOURCED (milliseconds; spec puts exact thresholds out of scope).
      *
@@ -999,6 +1025,52 @@ function buildProfileConfigs(): Pick<
 
   return {
     /**
+     * DECIDED (David, 2026-08-06) — the 14-day soak may spend **$50 total** on
+     * LLM calls. See ADR-0008. Enforced by `SqliteSpendCap` over the
+     * cumulative `llm_spend` total; it does not refill.
+     *
+     * This is a hard ceiling *behind* the cadence choice below, not instead of
+     * it. Cadence is sized to land under the budget; the cap is what makes the
+     * figure a guarantee rather than a forecast, because the only spend
+     * estimate this repo has is indicative and the cycle arithmetic
+     * (`pass duration + interval`) makes proportional scaling an upper bound
+     * on the saving, not a promise. It also covers what cadence cannot: a
+     * retry storm, a debate running more rounds than expected, or a price
+     * change at the provider.
+     */
+    llmBudgetUsd: 50,
+    /**
+     * DERIVED from the budget above — 15 minutes, up from the 60s
+     * `DEFAULT_TICK_INTERVAL_MS`.
+     *
+     * The arithmetic, from #400's resolution comment (which counted
+     * instrument-passes/day at 60s as 2 × 1,440 crypto + 4 × 390 stocks =
+     * 4,440, against the ~$45/day estimate in this file):
+     *
+     *   60s   -> 4,440 passes/day -> ~$45/day  -> ~$630 / 14d
+     *   15min ->   296 passes/day -> ~$3.0/day -> ~$42  / 14d
+     *
+     * 15 min rather than the ~12.6 min the budget divides to exactly: the
+     * saving is an upper bound (see `llmBudgetUsd`), so the margin is
+     * deliberate, and a round number is easier to reason about in a soak log.
+     *
+     * **This is NOT #400's decision, and does not overturn it.** David chose
+     * crypto 2 min / stocks 5 min there, for a run whose budget is a live
+     * budget. Those are per-asset-class cadences and the gating that makes
+     * them expressible is #397's Phase 1, which is not built — today there is
+     * one base interval for every instrument. So this single value is what a
+     * $50 paper soak reduces to on the machinery that exists. A live run
+     * supplies its own `tickIntervalMs` (and, once #397 lands, its own
+     * per-class cadences) from a composition root with a live budget.
+     *
+     * No dial needs retuning to go slower: #400 established that
+     * `max_signal_age` and `drift_tolerance_pct` both measure WITHIN-pass
+     * intervals (`decision_timestamp` is the pass's own `mark.observed_at`,
+     * and `getMark` re-fetches unconditionally with no TTL cache), so the tick
+     * interval never enters either gate's arithmetic.
+     */
+    tickIntervalMs: 15 * 60_000,
+    /**
      * `SPEC` — the universe a paper run trades (#381). ADR-0001 names this
      * exact set ("default universe SPY/QQQ/AAPL/TSLA/BTC-USD/ETH-USD",
      * CLAUDE.md's broker plan), orchestrator-spec.md story 3 makes it the
@@ -1024,6 +1096,17 @@ function buildProfileConfigs(): Pick<
      * instrument.
      *
      * ## What six instruments cost per day, and why it is not 6x (DERIVED)
+     *
+     * > **STALE SINCE ADR-0008 (2026-08-06), and kept because ADR-0008 cites
+     * > it as its own source.** Everything below is computed at the 60s
+     * > `DEFAULT_TICK_INTERVAL_MS`. This profile now sets
+     * > `tickIntervalMs: 15 * 60_000`, so the ~$45/day figure is the BEFORE
+     * > number, not what a soak on this profile costs — that is ~$3/day, ~$42
+     * > over 14 days, and it is capped at $50 by `llmBudgetUsd` regardless.
+     * > The *reasoning* below is what survived the change and is why the cap
+     * > exists: the cycle is `pass duration + interval`, so spend does not
+     * > scale linearly with cadence and no arithmetic here can promise a
+     * > dollar figure.
      *
      * The naive reading is that six instruments is six times the debate spend
      * of one. It is closer to **1.6x**, and the reason is worth writing down
@@ -1112,7 +1195,17 @@ function buildProfileConfigs(): Pick<
      * still catching a runaway within minutes rather than hours.
      *
      * **`maxDebates` — DERIVED from #385's measured cadence**, at roughly 3x
-     * headroom over it, per asset class:
+     * headroom over it, per asset class.
+     *
+     * > **The cadence these were derived from is 15x faster than the one this
+     * > profile now runs (ADR-0008: `tickIntervalMs` 60s -> 15 min).** Left
+     * > unchanged deliberately: this budget is a RUNAWAY guard, and an
+     * > oversized ceiling is permissive rather than wrong — it refuses only
+     * > pathological rates, which is exactly its job. Retuning it down to the
+     * > new cadence would make it a second, redundant cost control and put it
+     * > in conflict with `llmBudgetUsd`, which is the actual budget. Read the
+     * > arithmetic below as "the rate at which something has gone wrong", not
+     * > as a description of the soak's cadence.
      *
      * - crypto (BTC-USD, ETH-USD; trades 24/7) peaks OUTSIDE the equity
      *   session, where a pass is 2x15s and a cycle ~90s — 2 debates per 90s =
@@ -1182,10 +1275,11 @@ function buildProfileConfigs(): Pick<
  * The refusal is not belt-and-braces caution; it follows from what these
  * values are. The volatility breaker's baseline is uncalibrated to the point
  * of being inert, every notional cap is a fraction of an *assumed* paper
- * account balance, `drift_tolerance` is sized for one instrument, and the HITL
- * gate resolves through a channel that fabricates consent. Each of those is a
- * fine trade for a supervised paper run and none of them is acceptable against
- * real money.
+ * account balance, `drift_tolerance` is sized for one instrument, and its
+ * cadence and LLM budget are sized for a $50 paper soak rather than for a run
+ * that is trying to make money. Each of those is a fine trade for a paper run
+ * and none of them is acceptable against real money — the more so since
+ * ADR-0007, which removed the human gate that used to sit behind them.
  *
  * This does not make live unreachable — it makes it explicit.
  * `startFromEnvironment(injected)` still accepts any `ProductionConfig` a live
@@ -1211,15 +1305,17 @@ export function paperStartingProfile(
     | 'ciiConsumerConfig'
     | 'feedback'
   > &
-  Required<Pick<ProductionConfig, 'rateLimiterConfig'>> {
+  Required<Pick<ProductionConfig, 'rateLimiterConfig' | 'llmBudgetUsd' | 'tickIntervalMs'>> {
   if (mode === 'live') {
     throw new Error(
       'Orchestrator cannot start: SAMURAI_MODE=live was requested, but the shipped entrypoint ' +
         'runs on the PAPER STARTING PROFILE (src/orchestrator/paper-profile.ts) — a set of ' +
         'deliberately untuned starting values. Its volatility breaker baseline is uncalibrated ' +
-        'and effectively inert, its exposure caps assume a $100,000 paper account, its drift ' +
-        'tolerance is a fraction nobody has yet observed against a real fill, and its HITL gate ' +
-        'resolves through a channel that auto-approves. It also names the six instruments it ' +
+        'and effectively inert, its exposure caps assume a $100,000 paper account, and its ' +
+        'drift tolerance is a fraction nobody has yet observed against a real fill. Since ' +
+        'ADR-0007 it also runs with NO human gate at all (automation_level: auto for both ' +
+        'classes), which makes the circuit breakers the only stop — and #384, #375 and #333 ' +
+        'mean three of them cannot currently fire. It also names the six instruments it ' +
         'trades. None of that may decide a real-money trade. To trade live, call ' +
         'startFromEnvironment() from your own composition root with a config you have tuned ' +
         'against paper results — see ProductionConfig in src/orchestrator/production.ts.',

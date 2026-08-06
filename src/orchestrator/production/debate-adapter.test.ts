@@ -12,6 +12,7 @@ import {
   RateLimiter,
   SqliteDebateLogStore,
   SqliteLlmSpendStore,
+  UNCAPPED_SPEND,
 } from '../../debate-engine/index.js';
 import { accumulateCredit } from '../../feedback-loop/index.js';
 import type { AssetClass, Clock, ClosedTrade, LogEntry, Logger } from '../../shared/index.js';
@@ -92,7 +93,12 @@ function recordingLogger(): { logger: Logger; entries: LogEntry[] } {
 
 describe('buildDebateStep', () => {
   it('presents the one-argument TickSteps.debate shape and returns a converged DebateResult', async () => {
-    const step = buildDebateStep(fakeLlmClient(), new InMemoryDebateLogStore(), unlimited());
+    const step = buildDebateStep(
+      fakeLlmClient(),
+      new InMemoryDebateLogStore(),
+      unlimited(),
+      UNCAPPED_SPEND,
+    );
     const views = [makeView()];
 
     const result = await step({
@@ -116,7 +122,7 @@ describe('buildDebateStep', () => {
   it('writes exactly one debate_log row for a completed debate (#364)', async () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteDebateLogStore(db);
-    const step = buildDebateStep(fakeLlmClient(), store, unlimited());
+    const step = buildDebateStep(fakeLlmClient(), store, unlimited(), UNCAPPED_SPEND);
 
     const result = await step({
       trace_id: 'trace-1',
@@ -145,7 +151,12 @@ describe('buildDebateStep', () => {
 
   it('writes a row for a debate that resolves WITHOUT converging (hard-cap termination)', async () => {
     const store = new InMemoryDebateLogStore();
-    const step = buildDebateStep(fakeLlmClient({ converged: false }), store, unlimited());
+    const step = buildDebateStep(
+      fakeLlmClient({ converged: false }),
+      store,
+      unlimited(),
+      UNCAPPED_SPEND,
+    );
 
     const result = await step({
       trace_id: 'trace-1',
@@ -169,6 +180,7 @@ describe('buildDebateStep', () => {
       fakeLlmClient({ failOnMediator: true }),
       store,
       unlimited(),
+      UNCAPPED_SPEND,
       logger,
     );
     const views = [makeView()];
@@ -197,7 +209,7 @@ describe('buildDebateStep', () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteDebateLogStore(db);
     const { logger, entries } = recordingLogger();
-    const step = buildDebateStep(fakeLlmClient(), store, unlimited(), logger);
+    const step = buildDebateStep(fakeLlmClient(), store, unlimited(), UNCAPPED_SPEND, logger);
     const input = {
       trace_id: 'trace-1',
       instrument: 'AAPL',
@@ -223,7 +235,7 @@ describe('buildDebateStep', () => {
   it("produces rows the Feedback Loop's attribution reader can consume end to end", async () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteDebateLogStore(db);
-    const step = buildDebateStep(fakeLlmClient(), store, unlimited());
+    const step = buildDebateStep(fakeLlmClient(), store, unlimited(), UNCAPPED_SPEND);
 
     const result = await step({
       trace_id: 'trace-1',
@@ -314,7 +326,7 @@ describe('buildDebateStep latency budget (#374)', () => {
 
   it('returns on budget instead of waiting for a debate that never answers', async () => {
     const { client } = stallingLlmClient({ stallAfterCalls: 0 });
-    const step = buildDebateStep(client, new InMemoryDebateLogStore(), unlimited());
+    const step = buildDebateStep(client, new InMemoryDebateLogStore(), unlimited(), UNCAPPED_SPEND);
 
     const pending = step({
       trace_id: 'trace-1',
@@ -344,7 +356,7 @@ describe('buildDebateStep latency budget (#374)', () => {
     // this would come back as the empty fallback above.
     const { client, callCount } = stallingLlmClient({ stallAfterCalls: 3 });
     const store = new InMemoryDebateLogStore();
-    const step = buildDebateStep(client, store, unlimited());
+    const step = buildDebateStep(client, store, unlimited(), UNCAPPED_SPEND);
     const views = [makeView()];
 
     const pending = step({
@@ -382,7 +394,7 @@ describe('buildDebateStep latency budget (#374)', () => {
 
   it('uses the crypto budget for a crypto instrument', async () => {
     const { client } = stallingLlmClient({ stallAfterCalls: 0 });
-    const step = buildDebateStep(client, new InMemoryDebateLogStore(), unlimited());
+    const step = buildDebateStep(client, new InMemoryDebateLogStore(), unlimited(), UNCAPPED_SPEND);
 
     const pending = step({
       trace_id: 'trace-1',
@@ -403,7 +415,13 @@ describe('buildDebateStep latency budget (#374)', () => {
   it('logs the timeout on the debate stage so an operator can see the budget fire', async () => {
     const { client } = stallingLlmClient({ stallAfterCalls: 0 });
     const { logger, entries } = recordingLogger();
-    const step = buildDebateStep(client, new InMemoryDebateLogStore(), unlimited(), logger);
+    const step = buildDebateStep(
+      client,
+      new InMemoryDebateLogStore(),
+      unlimited(),
+      UNCAPPED_SPEND,
+      logger,
+    );
 
     const pending = step({
       trace_id: 'trace-1',
@@ -476,7 +494,7 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
       { model: 'claude-haiku-4-5', max_tokens: 100, timeoutMs: 60_000, retry: NO_RETRY },
       new SqliteLlmSpendStore(db),
     );
-    return buildDebateStep(llm, new SqliteDebateLogStore(db), unlimited());
+    return buildDebateStep(llm, new SqliteDebateLogStore(db), unlimited(), UNCAPPED_SPEND);
   }
 
   function spendRows(db: SharedStore): SpendRow[] {
@@ -584,7 +602,7 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
         },
       },
     );
-    const step = buildDebateStep(llm, new SqliteDebateLogStore(db), unlimited());
+    const step = buildDebateStep(llm, new SqliteDebateLogStore(db), unlimited(), UNCAPPED_SPEND);
 
     const result = await step({
       trace_id: 'trace-1',
@@ -626,7 +644,7 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
       new SqliteLlmSpendStore(db),
     );
     const views = [makeView()];
-    const step = buildDebateStep(llm, new SqliteDebateLogStore(db), unlimited());
+    const step = buildDebateStep(llm, new SqliteDebateLogStore(db), unlimited(), UNCAPPED_SPEND);
 
     await expect(
       step({

@@ -57,6 +57,8 @@ export {
   priceUsage,
   rateFor,
 } from './llm/pricing.js';
+export type { SpendCap, SpendCapVerdict } from './llm/spend-cap.js';
+export { SqliteSpendCap, UNCAPPED_SPEND } from './llm/spend-cap.js';
 export type { LlmSpendRecord, LlmSpendSink } from './llm/spend-sink.js';
 export { NULL_SPEND_SINK, SqliteLlmSpendStore } from './llm/spend-sink.js';
 export type {

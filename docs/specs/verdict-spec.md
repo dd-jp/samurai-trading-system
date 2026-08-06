@@ -122,7 +122,7 @@ Ordered; first failure short-circuits to `no_go`:
 
 ### Module: Human-in-the-Loop
 
-- **Automation dial** per asset class: `manual` (all trades), `semi_auto` (flagged only), `auto` (none). **Flag sources** (each resolves to a concrete field): non-converged = `order.metadata.converged === false`; no-precedent = `order.metadata.cosine_precedent.no_precedent`; size-over = `order.size > flag_thresholds.size_over`; **near-limit = `risk_decision.modifications != null`** (the trade was trimmed to fit a cap).
+- **Automation dial** per asset class: `manual` (all trades), `semi_auto` (flagged only), `auto` (none). **Set to `auto` for both classes since [ADR-0007](../adr/0007-fully-automatic-execution.md), in paper and live — the flag sources below are therefore inert, because `shouldEngageHitl` short-circuits on the dial before they are consulted.** **Flag sources** (each resolves to a concrete field): non-converged = `order.metadata.converged === false`; no-precedent = `order.metadata.cosine_precedent.no_precedent`; size-over = `order.size > flag_thresholds.size_over`; **near-limit = `risk_decision.modifications != null`** (the trade was trimmed to fit a cap).
 - **Channels:** Telegram (inline approve/reject) + Discord, posted to a dedicated **trade channel**; email fallback; dashboard for history. Fills and no-gos also posted there.
 - **Context shown:** instrument, side, size, entry/stop/target, conviction, `converged`, cosine precedent summary, `risk_snapshot`, and which trigger engaged the gate.
 - **Timeout → no-go.** Fail-safe.
@@ -200,7 +200,15 @@ Per CONTEXT.md:
 
 ### Staged-Deployment Alignment
 
-The automation dial operationalizes the research's staged-deployment plan: start `manual` (human confirms every real-money trade during paper / tiny-live), move to `semi_auto` (only risky trades interrupt), then `auto` once live KPIs hold and trust is earned. The "tuition money" first-live trades get a human's eyes by construction.
+> **SUPERSEDED 2026-08-06 by [ADR-0007](../adr/0007-fully-automatic-execution.md).** The staging below is no longer what the system does. `automation_level` is `auto` for both asset classes in **paper and live**, so gate 6 is unreachable and no trade is ever routed to a human.
+>
+> The reason is structural, not a change of appetite: `Verdict.decide` *awaits* `approvals.requestApproval` **inside** the instrument pass, and `runTickPlan` runs instruments at `max_concurrent_instruments: 1`. One trade awaiting a human tap therefore blocks the entire universe for up to `human_timeout`. A human in this loop is a serialization point, not a safety net.
+>
+> The dial, the flag plumbing, `human_timeout` and the whole Telegram approval chain are **retained and inert**, so turning this back is a config edit rather than a re-implementation. If it is ever turned back, note that gates 1 (staleness) and 2 (drift) run *before* gate 6 and are never re-evaluated after it — a `semi_auto` that is actually sound needs a post-approval re-check, which does not exist today. ADR-0007 records async approval (Verdict returns `pending`; a poller resumes it) as the only version worth building.
+>
+> **What replaces the gate:** nothing. The circuit breakers are now the only stop, which makes #384, #375 and #333 the live-go gate — see ADR-0007 "Consequences".
+
+The paragraph this replaces, retained for provenance: *the automation dial operationalizes the research's staged-deployment plan: start `manual` (human confirms every real-money trade during paper / tiny-live), move to `semi_auto` (only risky trades interrupt), then `auto` once live KPIs hold and trust is earned. The "tuition money" first-live trades get a human's eyes by construction.*
 
 ### Future Extensions
 

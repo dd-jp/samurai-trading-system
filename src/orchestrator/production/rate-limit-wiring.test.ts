@@ -14,6 +14,7 @@ import {
   MAX_ROUNDS,
   RateLimiter,
   type RateLimiterConfig,
+  UNCAPPED_SPEND,
 } from '../../debate-engine/index.js';
 import type { AssetClass, Clock, LogEntry, Logger } from '../../shared/index.js';
 import { DEFAULT_VENUE_PACING, SimulatedClock } from '../../shared/index.js';
@@ -297,7 +298,7 @@ describe('what a refused debate does', () => {
     const store = new InMemoryDebateLogStore();
     const { logger, entries } = recordingLogger();
     const rateLimiter = new RateLimiter(CLOCK, budget({ maxDebates: 0 }));
-    const step = buildDebateStep(llmClient, store, rateLimiter, logger);
+    const step = buildDebateStep(llmClient, store, rateLimiter, UNCAPPED_SPEND, logger);
 
     const result = await step({
       trace_id: 'trace-1',
@@ -326,7 +327,12 @@ describe('what a refused debate does', () => {
       CLOCK,
       budget({ maxDebates: 10, maxLlmCalls: WORST_CASE_LLM_CALLS_PER_DEBATE - 1 }),
     );
-    const step = buildDebateStep(llmClient, new InMemoryDebateLogStore(), rateLimiter);
+    const step = buildDebateStep(
+      llmClient,
+      new InMemoryDebateLogStore(),
+      rateLimiter,
+      UNCAPPED_SPEND,
+    );
 
     const result = await step({
       trace_id: 'trace-1',
@@ -352,7 +358,12 @@ describe('the reserved worst case matches what a debate can actually spend', () 
     // the budget it was admitted under.
     const llmClient = countingLlmClient({ converged: false });
     const rateLimiter = new RateLimiter(CLOCK, budget());
-    const step = buildDebateStep(llmClient, new InMemoryDebateLogStore(), rateLimiter);
+    const step = buildDebateStep(
+      llmClient,
+      new InMemoryDebateLogStore(),
+      rateLimiter,
+      UNCAPPED_SPEND,
+    );
 
     const result = await step({
       trace_id: 'trace-1',
@@ -533,6 +544,125 @@ describe('paperStartingProfile supplies the budget (#388)', () => {
   });
 });
 
+/**
+ * The wiring proof for the LLM spend cap (ADR-0008), written in the same shape
+ * and the same file as #388's, because it is the same failure class: a control
+ * that is implemented, unit-tested and constructed nowhere real.
+ *
+ * The mutation each of these kills is stated at the test.
+ */
+describe('the LLM spend cap is in the production path (ADR-0008)', () => {
+  let db: SharedStore;
+
+  beforeEach(() => {
+    db = openSharedStore(':memory:');
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  /** One priced call in the table the cap reads and the sink writes. */
+  function spend(costUsd: number, id: string): void {
+    db.prepare(
+      `INSERT INTO llm_spend (
+         trace_id, stage, debate_id, model,
+         input_tokens, output_tokens,
+         cache_creation_input_tokens, cache_read_input_tokens,
+         cost_usd, latency_ms, timestamp
+       ) VALUES (?, 'debate', ?, 'claude-haiku-4-5-20251001', 100, 100, 0, 0, ?, 10, ?)`,
+    ).run(`trace-${id}`, `debate-${id}`, costUsd, NOW.toISOString());
+  }
+
+  /**
+   * THE MUTATION THIS KILLS: drop `spendCap` from `buildProductionComponents`
+   * and pass `UNCAPPED_SPEND` at the `buildDebateStep` call. Every unit test in
+   * `spend-cap.test.ts` still passes — the cap is correct, and it is not
+   * connected to anything. That is exactly how #327, #364, #366, #371, #374,
+   * #379 and #388 all shipped.
+   */
+  it('refuses a debate through the composition root once the budget is spent', async () => {
+    spend(60, 'over-budget');
+    const llmClient = countingLlmClient();
+    const components = buildProductionComponents(stubConfig(db, { llmClient, llmBudgetUsd: 50 }));
+
+    const result = await components.steps.debate({
+      trace_id: 'trace-1',
+      instrument: 'BTC-USD',
+      asset_class: 'crypto',
+      views: [makeView()],
+      clock: CLOCK,
+    });
+
+    // Not merely "returned a refusal" — NO MONEY WAS SPENT. A cap that
+    // refuses after billing the debate is not a cap.
+    expect(llmClient.calls).toBe(0);
+    expect(result.rate_limited?.reason).toContain('LLM spend cap reached');
+    expect(result.rounds_completed).toBe(0);
+  });
+
+  it('does not book rate-limit budget for a debate the cap refuses', async () => {
+    // Ordering, not decoration: `reserve` MUTATES the limiter's counters, so
+    // checking the budget after booking would burn window allowance on a
+    // debate that was never going to run.
+    spend(60, 'over-budget');
+    const components = buildProductionComponents(
+      stubConfig(db, { llmClient: countingLlmClient(), llmBudgetUsd: 50 }),
+    );
+
+    await components.steps.debate({
+      trace_id: 'trace-1',
+      instrument: 'BTC-USD',
+      asset_class: 'crypto',
+      views: [makeView()],
+      clock: CLOCK,
+    });
+
+    expect(components.llmRateLimiter.snapshot().crypto).toBeUndefined();
+  });
+
+  it('admits normally while under budget, so the cap is not a blanket refusal', async () => {
+    spend(1, 'under-budget');
+    const llmClient = countingLlmClient();
+    const components = buildProductionComponents(stubConfig(db, { llmClient, llmBudgetUsd: 50 }));
+
+    const result = await components.steps.debate({
+      trace_id: 'trace-1',
+      instrument: 'BTC-USD',
+      asset_class: 'crypto',
+      views: [makeView()],
+      clock: CLOCK,
+    });
+
+    expect(llmClient.calls).toBeGreaterThan(0);
+    expect(result.rate_limited).toBeUndefined();
+  });
+
+  it('warns loudly, at startup, when no budget is configured', () => {
+    // `llmBudgetUsd` is optional so the many programmatic callers need not
+    // care — but silence would make an uncapped unattended run
+    // indistinguishable from a capped one in the log. Same posture as
+    // SAMURAI_ALERTS: no safe default, say what was chosen.
+    const { logger, entries } = recordingLogger();
+
+    buildProductionComponents(stubConfig(db, { llmClient: countingLlmClient(), logger }));
+
+    const warning = entries.find((entry) => entry.message.includes('llmBudgetUsd is not set'));
+    expect(warning?.level).toBe('warn');
+    expect(warning?.message).toContain('UNCAPPED');
+  });
+
+  it('is what the checked-in paper profile actually carries', () => {
+    // The value the soak runs on, pinned where the arithmetic behind it lives.
+    // $50 over 14 days is David's figure (2026-08-06); 15 min is what that
+    // budget reduces to on a single base tick interval.
+    const profile = paperStartingProfile('paper');
+
+    expect(profile.llmBudgetUsd).toBe(50);
+    expect(profile.tickIntervalMs).toBe(15 * 60_000);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------------
@@ -568,7 +698,12 @@ function sixInstrumentPlan(): TickPlan {
  */
 function tickRunnerOver(llmClient: LlmClient, rateLimiter: RateLimiter) {
   const results: Awaited<ReturnType<TickSteps['debate']>>[] = [];
-  const debate = buildDebateStep(llmClient, new InMemoryDebateLogStore(), rateLimiter);
+  const debate = buildDebateStep(
+    llmClient,
+    new InMemoryDebateLogStore(),
+    rateLimiter,
+    UNCAPPED_SPEND,
+  );
   const steps: TickSteps = {
     // TWO views, so the converging round also issues its `detectDisagreements`
     // call — one view takes the directional fallback and never reaches the LLM,

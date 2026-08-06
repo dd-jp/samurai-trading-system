@@ -79,17 +79,18 @@ describe('paperStartingProfile', () => {
       expect(100_000 * verdictConfig.drift_tolerance_pct.crypto).toBeCloseTo(500, 10);
     });
 
-    it('keeps size_over inert, because manual short-circuits before flags are read', () => {
+    it('keeps size_over inert, because auto short-circuits before flags are read', () => {
       // `size_over: 0` is unit-incommensurable across fractional BTC and
       // whole-share SPY, and widening the universe made that worse rather
       // than better. It stays harmless only while `automation_level` is
-      // `manual` for BOTH classes — `shouldEngageHitl` returns true on that
-      // check before `isFlagged` is ever called. Pinned so turning either
-      // class to `semi_auto` fails here first.
+      // `auto` for BOTH classes — `shouldEngageHitl` returns false on that
+      // check before `isFlagged` is ever called (it short-circuited on
+      // `manual` before ADR-0007, on the opposite branch of the same check).
+      // Pinned so turning either class to `semi_auto` fails here first.
       const { verdictConfig } = paperStartingProfile('paper');
 
-      expect(verdictConfig.automation_level.crypto).toBe('manual');
-      expect(verdictConfig.automation_level.stocks).toBe('manual');
+      expect(verdictConfig.automation_level.crypto).toBe('auto');
+      expect(verdictConfig.automation_level.stocks).toBe('auto');
       expect(verdictConfig.flag_thresholds.size_over).toBe(0);
     });
 
@@ -195,13 +196,82 @@ describe('paperStartingProfile', () => {
     expect(traderConfig.time_in_force.stocks).toBe('day');
   });
 
-  it('requires a human on every trade, per the staged-deployment dial', () => {
-    // verdict-spec.md "Notes & Rationale": start `manual` (a human confirms
-    // every trade during paper / tiny-live), open up as trust is earned.
+  it('puts no human on any trade, per ADR-0007', () => {
+    // ADR-0007 (David, 2026-08-06) replaces verdict-spec.md's original
+    // manual -> semi_auto -> auto staging with `auto` from the start, in
+    // paper AND live: `VerdictImpl.decide` awaits `requestApproval` inside
+    // the instrument pass and `max_concurrent_instruments` is 1, so a human
+    // in this loop serializes the whole universe behind one tap.
+    //
+    // Pinned for `paper` only because `live` cannot be asked: this profile
+    // refuses to build in live mode at all (see the guard at the bottom of
+    // paper-profile.ts), so a live composition root supplies its own tuned
+    // `VerdictConfig`. ADR-0007's decision applies there too, but this file
+    // is not where it can be enforced.
     const { verdictConfig } = paperStartingProfile('paper');
 
-    expect(verdictConfig.automation_level.crypto).toBe('manual');
-    expect(verdictConfig.automation_level.stocks).toBe('manual');
+    expect(verdictConfig.automation_level.crypto).toBe('auto');
+    expect(verdictConfig.automation_level.stocks).toBe('auto');
+  });
+
+  /**
+   * ADR-0008's two knobs. Neither was pinned when they landed, which a review
+   * pass on #428 caught by (wrongly) reporting the cadence literal as a typo:
+   * the claim was false, but nothing in the suite could have contradicted it.
+   *
+   * A digit slip here is silent and expensive in exactly the way this repo's
+   * defect pattern predicts. `15 * 60_00` still compiles, still boots, still
+   * ticks, still passes every other test in this file — and burns a fortnight's
+   * budget in hours, after which the cap refuses every debate and the run looks
+   * like a market that went quiet on day 1.
+   */
+  describe('the $50 / 14-day soak budget (ADR-0008)', () => {
+    /**
+     * #400's instrument-pass arithmetic at the 60s `DEFAULT_TICK_INTERVAL_MS`
+     * (2 crypto × 1,440 + 4 stocks × 390), against the ~$45/day estimate
+     * `paper-profile.ts` carries. Restated rather than imported because the
+     * point is to check the shipped constants against the reasoning, and a
+     * derivation that imports its own conclusion checks nothing.
+     */
+    const PASSES_PER_DAY_AT_60S = 2 * 1_440 + 4 * 390;
+    const USD_PER_PASS = 45 / PASSES_PER_DAY_AT_60S;
+    const SOAK_DAYS = 14;
+
+    it('carries the budget and the cadence ADR-0008 fixed', () => {
+      const profile = paperStartingProfile('paper');
+
+      expect(profile.llmBudgetUsd).toBe(50);
+      expect(profile.tickIntervalMs).toBe(900_000);
+    });
+
+    it('runs slowly enough that a full 14 days of passes fits inside the budget', () => {
+      // The assertion that carries the meaning: not "the literal is 900,000"
+      // but "whatever the literal is, the soak it implies is affordable". This
+      // fails at ~$420 projected spend on the 90-second cadence a `60_00` slip
+      // would produce.
+      const profile = paperStartingProfile('paper');
+      const passesPerDay = PASSES_PER_DAY_AT_60S * (60_000 / profile.tickIntervalMs);
+
+      expect(passesPerDay * SOAK_DAYS * USD_PER_PASS).toBeLessThan(profile.llmBudgetUsd);
+    });
+
+    it('does not buy that affordability by ticking too slowly to trade', () => {
+      // The opposite slip. A cadence of hours is trivially inside budget and
+      // useless: the soak's deliverable is plumbing evidence, which needs
+      // passes. Bounds the other side so the test above cannot be satisfied by
+      // making the run inert.
+      expect(paperStartingProfile('paper').tickIntervalMs).toBeLessThanOrEqual(60 * 60_000);
+    });
+  });
+
+  it('refuses live mode naming the missing stop, not the retired approval channel', () => {
+    // The refusal message is what an operator reads when they try to go live.
+    // It used to cite "a channel that auto-approves" as a reason; ADR-0007
+    // removed the human gate entirely, so the honest reason is now that the
+    // breakers are the only stop and three of them cannot fire (#384, #375,
+    // #333). Pinned so the message cannot drift back to describing a gate
+    // this system no longer has.
+    expect(() => paperStartingProfile('live')).toThrow('#384, #375 and #333');
   });
 
   it('bounds the hard drawdown breaker at the documented target, as a fraction', () => {

@@ -57,6 +57,7 @@ import type {
   AnalystView,
   DebateResult,
   LlmClient,
+  SpendCap,
 } from '../../debate-engine/index.js';
 import {
   buildAnalystContributions,
@@ -410,6 +411,24 @@ export function rateLimitedDebateResult(debate_id: string, reason: string): Deba
   };
 }
 
+/**
+ * The same short-circuit shape as `rateLimitedDebateResult`, for a refusal on
+ * COST rather than on rate. Kept separate rather than folded into one helper
+ * with a parameterised string: the two refusals mean different things to
+ * whoever reads the soak log — a rate refusal is "too fast, will pass", a
+ * budget refusal is "out of money, will not pass without an operator" — and
+ * `rate_limited` on the result is read downstream. A budget breach is
+ * reported through `rate_limited` too because that is the field the pipeline
+ * already understands as "the debate was not admitted"; the reason string is
+ * what distinguishes them.
+ */
+export function spendCappedDebateResult(debate_id: string, reason: string): DebateResult {
+  return {
+    ...rateLimitedDebateResult(debate_id, reason),
+    position: 'No position — the debate was not admitted under the LLM spend cap.',
+  };
+}
+
 export function buildDebateStep(
   llmClient: LlmClient,
   /**
@@ -429,6 +448,14 @@ export function buildDebateStep(
    * silently unpaced run.
    */
   rateLimiter: RateLimiter,
+  /**
+   * The hard dollar ceiling (ADR-0008). Required and positional for the third
+   * time in this signature, and for the same reason: a budget control the
+   * composition root is free to omit is a budget control that will eventually
+   * be omitted. `UNCAPPED_SPEND` is the explicit way to say "no ceiling", so
+   * that choice is visible at the call site instead of being the default.
+   */
+  spendCap: SpendCap,
   logger?: Logger,
 ): TickSteps['debate'] {
   return async ({ trace_id, instrument, asset_class, views, clock }) => {
@@ -468,6 +495,36 @@ export function buildDebateStep(
     // misconfigured" into "this instrument silently never trades", which for a
     // 14-day unattended soak is indistinguishable from a quiet market. That
     // failure must stay loud.
+    // BUDGET, before the rate-limit window is booked (ADR-0008). Ordered first
+    // deliberately: `reserve` mutates the limiter's counters, and booking a
+    // window for a debate the budget will refuse anyway would consume rate
+    // allowance that a later, admissible debate needs. This check is a pure
+    // read and mutates nothing, so refusing here costs the system nothing.
+    const spend = spendCap.check();
+    if (!spend.admitted) {
+      logger?.log({
+        trace_id,
+        stage: 'debate',
+        level: 'error',
+        message:
+          `debate: ${instrument} not started — ${sanitizeLogText(spend.reason ?? 'spend cap')}. ` +
+          'No LLM call was made and no debate_log row is written; the tick will short-circuit ' +
+          'at Trader with no_trade. THIS DOES NOT RESOLVE ITSELF: unlike a rate-limit refusal, ' +
+          'the budget does not refill with time, so every subsequent tick will refuse ' +
+          'identically until an operator raises the cap or starts a fresh run. Open positions ' +
+          'are unaffected — their bracket legs remain live venue-side, and Execution, ' +
+          'reconcile and fill ingestion all keep running.',
+        payload: {
+          instrument,
+          asset_class,
+          debate_id,
+          spent_usd: spend.spent_usd,
+          budget_usd: spend.budget_usd,
+        },
+      });
+      return spendCappedDebateResult(debate_id, spend.reason ?? 'spend cap reached');
+    }
+
     const reservation = rateLimiter.reserve(asset_class, WORST_CASE_LLM_CALLS_PER_DEBATE);
     if (!reservation.granted) {
       logger?.log({
