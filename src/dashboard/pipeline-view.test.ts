@@ -454,6 +454,20 @@ describe('renderPipelineChip', () => {
     ).toContain('6.0s');
   });
 
+  it('carries the asset class on the chip face, not only in the tooltip', () => {
+    // Crypto ticks around the clock and stocks do not, so an idle chip means
+    // "market closed" for one and "something is wrong" for the other. Without
+    // the marker the two are indistinguishable — the failure #413 exists to
+    // prevent. This had no test under lanes, which is how it nearly went.
+    const html = renderPipelineChip(
+      lane({ instrument: 'SPY', asset_class: 'stocks', outcome: 'idle', trace_id: null }),
+      options(),
+      null,
+    );
+    expect(html).toContain('<span class="pl-class">stocks</span>');
+    expect(html).toContain('aria-label="SPY · stocks · ');
+  });
+
   it('escapes an instrument name rather than trusting what was stored', () => {
     const html = renderPipelineChip(lane({ instrument: '<img src=x>' }), options(), null);
     expect(html).not.toContain('<img src=x>');
