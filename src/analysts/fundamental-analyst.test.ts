@@ -9,6 +9,7 @@ import type { Clock } from '../shared/index.js';
 import { openSharedStore } from '../shared/store/index.js';
 import { fundamentalAnalyst } from './fundamental-analyst.js';
 import type { AnalystInput, Signal } from './types.js';
+import { NO_DATA_MARKER } from './types.js';
 
 class ManualClock implements Clock {
   constructor(private time: Date) {}
@@ -123,5 +124,27 @@ describe('fundamentalAnalyst', () => {
     const repeat = await fundamentalAnalyst.run(buildInput(signal, 'trace-1', 1));
 
     expect(repeat).toEqual(baseline);
+  });
+
+  it('marks an EMPTY intelligence window as absent input, not a neutral read (#436)', async () => {
+    // Sharper here than for sentiment: `fundamental` is MANDATORY for stocks,
+    // so an equity debate runs one real analyst of three while this returns a
+    // constant — and ADR-0007 removed the human gate that might have caught it.
+    const clock = new ManualClock(ASOF);
+    const empty = new MarketIntelligenceStore(clock);
+    const input = { ...buildInput(signal, 'trace-empty'), market_intelligence: empty };
+
+    const view = await fundamentalAnalyst.run(input);
+
+    expect(view.key_points[0]).toContain(NO_DATA_MARKER);
+    expect(view.key_points[0]).toContain('ABSENCE OF INPUT');
+    expect(view.direction).toBe('neutral');
+    expect(view.confidence).toBe(0.05);
+  });
+
+  it('does NOT mark a populated window', async () => {
+    const view = await fundamentalAnalyst.run(buildInput(signal, 'trace-1'));
+
+    expect(view.key_points.join(' ')).not.toContain(NO_DATA_MARKER);
   });
 });

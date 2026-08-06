@@ -456,7 +456,7 @@ function VariantB() {
       const last = t.stages[t.stages.length-1].s === stage;
       const cls = last && (t.outcome === 'stopped' || t.outcome === 'skipped' || t.outcome === 'no_go') ? 'stopped' : 'done';
       const retry = hit.retry ? `<span class="retry">×${hit.retry+1}</span>` : '';
-      return '<td class="cell" data-inst="'+u.instrument+'" data-stage="'+stage+'"><div class="seg '+cls+'">'+ms(hit.ms)+retry+'</div></td>';
+      return `<td class="cell" data-inst="${u.instrument}" data-stage="${stage}"><div class="seg ${cls}">${ms(hit.ms)}${retry}</div></td>`;
     }).join('');
     const when = isLive ? '<span class="badge badge-live">live</span>'
               : t ? outcomeBadge(t)
@@ -468,7 +468,7 @@ function VariantB() {
 
   return '<div class="panel"><h2>Pipeline by ticker <span class="count">'+universe.length+' in universe</span></h2>' +
     '<table class="lanes"><thead><tr><th>Instrument</th>' +
-      STAGES.map(s => '<th>'+STAGE_LABEL[s]+'</th>').join('') + '<th style="text-align:right;">Outcome</th></tr></thead>' +
+      STAGES.map(s => `<th>${STAGE_LABEL[s]}</th>`).join('') + '<th style="text-align:right;">Outcome</th></tr></thead>' +
     '<tbody>'+rows+'</tbody></table>' +
     '<div class="drawer"><h3>ETH-USD · t-51ea08 · debate (expanded row)</h3>' + agentCards(false) +
       '<div style="margin-top:14px;">'+reservedSlot('trader')+'</div></div>' +
@@ -493,7 +493,7 @@ function VariantC() {
       cursor += st.ms;
       const retry = st.retry ? ' retry' : '';
       return '<div class="wf-bar '+st.s+retry+'" style="left:'+left+'%;width:'+width+'%;" title="'+st.s+' · '+st.d+'">' +
-        (width > 7 ? STAGE_LABEL[st.s]+' '+ms(st.ms) : '') + '</div>';
+        (width > 7 ? `${STAGE_LABEL[st.s]} ${ms(st.ms)}` : '') + '</div>';
     }).join('');
   }
 
@@ -582,8 +582,8 @@ function render() {
   const v = VARIANTS[k];
   document.getElementById('view').innerHTML = v.render();
   document.getElementById('strapline').innerHTML = v.line;
-  document.getElementById('who').innerHTML = k + ' — <span>' + v.name + '</span>';
-  document.getElementById('meta').textContent = 'poll 3s · sim t+' + simT + 's · live ' + LIVE.instrument;
+  document.getElementById('who').innerHTML = `${k} — <span>${v.name}</span>`;
+  document.getElementById('meta').textContent = `poll 3s · sim t+${simT}s · live ${LIVE.instrument}`;
 }
 
 document.getElementById('prev').onclick = () => cycle(-1);

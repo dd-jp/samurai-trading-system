@@ -9,6 +9,7 @@ import type { Clock } from '../shared/index.js';
 import { openSharedStore } from '../shared/store/index.js';
 import { sentimentAnalyst } from './sentiment-analyst.js';
 import type { AnalystInput, Signal } from './types.js';
+import { NO_DATA_MARKER } from './types.js';
 
 class ManualClock implements Clock {
   constructor(private time: Date) {}
@@ -127,5 +128,32 @@ describe('sentimentAnalyst', () => {
     const repeat = await sentimentAnalyst.run(buildInput(signal, 'trace-1', 1));
 
     expect(repeat).toEqual(baseline);
+  });
+
+  it('marks an EMPTY intelligence window as absent input, not a neutral read (#436)', async () => {
+    // `MarketIntelligenceStore` has no writer in production, so this is what
+    // every real tick looks like today. The old text ("0 social items in
+    // window, net sentiment driving neutral") is indistinguishable in a debate
+    // transcript from "the analyst looked and saw nothing bullish" — and a
+    // 14-day soak's own output would read that way for two weeks.
+    const clock = new ManualClock(ASOF);
+    const empty = new MarketIntelligenceStore(clock);
+    const input = { ...buildInput(signal, 'trace-empty'), market_intelligence: empty };
+
+    const view = await sentimentAnalyst.run(input);
+
+    expect(view.key_points[0]).toContain(NO_DATA_MARKER);
+    expect(view.key_points[0]).toContain('ABSENCE OF INPUT');
+    // Still neutral and still low-confidence — the marker changes what the
+    // debate is TOLD, not the arithmetic. Pinned so a later change to one is
+    // not mistaken for a change to the other.
+    expect(view.direction).toBe('neutral');
+    expect(view.confidence).toBe(0.05);
+  });
+
+  it('does NOT mark a populated window', async () => {
+    const view = await sentimentAnalyst.run(buildInput(signal, 'trace-1'));
+
+    expect(view.key_points.join(' ')).not.toContain(NO_DATA_MARKER);
   });
 });
