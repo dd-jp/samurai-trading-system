@@ -600,8 +600,14 @@ export class CcxtBrokerAdapter implements BrokerAdapter {
    */
   private dropIngestedFills(): void {
     if (this.state.pruneIngestedObservedFills('ccxt') === 0) return;
+    // Load BEFORE clearing (PR #459 review). Truncating first and repopulating
+    // after would leave the queue empty if the load threw, and the adapter
+    // would then silently deliver no fills until the next restart — a worse
+    // outcome than the unbounded growth this method exists to fix, and one
+    // nothing above the seam could detect.
+    const remaining = this.state.loadObservedFills('ccxt');
     this.fills.length = 0;
-    this.fills.push(...this.state.loadObservedFills('ccxt'));
+    this.fills.push(...remaining);
   }
 
   /** `pending_entry` → `arming` → `armed`, or → `resolved` if the entry died. */
