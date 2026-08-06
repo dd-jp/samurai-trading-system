@@ -182,17 +182,24 @@ export function startSupervisor(effects: SupervisorEffects = {}): Supervisor {
           // child's death is judged against the state that preceded it.
           const requested = shuttingDown || (signal !== null && REQUESTED_STOP.has(signal));
 
-          if (settled) {
-            // Already accounted for by `'error'`; do not overwrite that code.
-          } else if (!requested) {
-            // An exit nobody asked for is a failure of `serve` itself,
-            // whichever half it was: what survives is half a system.
-            exitCode = code ?? 1;
-            log(`${name} exited (${signal ?? `code ${code ?? 'unknown'}`}); stopping the other.`);
-          } else if (code !== null && code !== 0 && exitCode === 0) {
-            // A requested stop that failed to drain cleanly still has to reach
-            // the shell as a non-zero status.
-            exitCode = code;
+          // When already settled the `'error'` path has accounted for this
+          // child; its code must not be overwritten.
+          if (!settled) {
+            if (!requested) {
+              // An exit nobody asked for is a failure of `serve` itself,
+              // whichever half it was: what survives is half a system. Note
+              // the floor at 1 — a child that exits *cleanly* on its own
+              // (`kill -TERM` aimed at the orchestrator alone, which drains
+              // and returns 0) is still a failure of `serve`, and reporting
+              // success while logging "stopping the other" would strand a
+              // `yarn serve || alert` caller with no alert.
+              exitCode = code === null || code === 0 ? 1 : code;
+              log(`${name} exited (${signal ?? `code ${code ?? 'unknown'}`}); stopping the other.`);
+            } else if (code !== null && code !== 0 && exitCode === 0) {
+              // A requested stop that failed to drain cleanly still has to
+              // reach the shell as a non-zero status.
+              exitCode = code;
+            }
           }
 
           settle();

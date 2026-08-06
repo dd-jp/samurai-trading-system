@@ -132,6 +132,21 @@ describe('startSupervisor', () => {
     await expect(supervisor.done).resolves.toBe(2);
   });
 
+  it('fails when a child exits 0 on its own, matching what it logged', async () => {
+    const messages: string[] = [];
+    const { supervisor, orchestrator, dashboard } = start((m) => messages.push(m));
+
+    // `kill -TERM` aimed at the orchestrator alone: it drains and returns 0.
+    // Nobody asked `serve` to stop, so this is still a failure — logging
+    // "stopping the other" and then exiting 0 would contradict itself.
+    orchestrator.die(0);
+
+    expect(dashboard.signals).toEqual(['SIGTERM']);
+    dashboard.die(0);
+    await expect(supervisor.done).resolves.toBe(1);
+    expect(messages).toEqual(['orchestrator exited (code 0); stopping the other.']);
+  });
+
   it('reports a failure exit code even when the first child died cleanly', async () => {
     const { supervisor, orchestrator, dashboard } = start();
 
