@@ -61,6 +61,10 @@ function transactedObservations(): SmokeObservations {
     ],
     fills: [{ idempotency_key: 'idem-1', leg: 'entry', price: 161, qty: 31.25, fee: 13 }],
     closedTrades: [],
+    // #430 — one per wired mechanism. A healthy run has all of them.
+    cosineSetups: [{ debate_id: 'debate-1', instrument: 'BTC-USD' }],
+    riskThresholds: [{ name: 'max_position_size', value: 5_000 }],
+    analystWeights: [{ analyst_id: 'technical' }],
   };
 }
 
@@ -307,6 +311,9 @@ describe('formatSmokeReport', () => {
       positions: [],
       fills: [],
       closedTrades: [],
+      cosineSetups: [],
+      riskThresholds: [],
+      analystWeights: [],
     };
     const report = formatSmokeReport(
       observations,
@@ -549,6 +556,9 @@ describe('runSmoke (end-to-end, real composition root)', () => {
       positions: [],
       fills: [],
       closedTrades: [],
+      cosineSetups: [],
+      riskThresholds: [],
+      analystWeights: [],
     };
 
     const gate = evaluateSmokeGate(observations, {
@@ -557,7 +567,9 @@ describe('runSmoke (end-to-end, real composition root)', () => {
     });
 
     expect(gate.passed).toBe(false);
-    expect(gate.failures).toHaveLength(6);
+    // Eight since #430 added the seeded-mechanism checks: an empty database is
+    // a run where nothing was wired at all, so it fails those too.
+    expect(gate.failures).toHaveLength(8);
     expect(gate.failures.some((failure) => failure.includes('no tick got past Analysts'))).toBe(
       true,
     );
@@ -565,5 +577,62 @@ describe('runSmoke (end-to-end, real composition root)', () => {
     expect(gate.failures.some((failure) => failure.includes('reached Execution'))).toBe(true);
     expect(gate.failures.some((failure) => failure.includes('open_positions'))).toBe(true);
     expect(gate.failures.some((failure) => failure.includes('ingestFills'))).toBe(true);
+  });
+});
+
+/**
+ * #430 — the composition-root assertions, one per wired mechanism.
+ *
+ * The repo's dominant defect class is a complete, tested mechanism with no
+ * production caller. Per-ticket fixes have not stopped it, because each
+ * instance is individually correct code and the gap is always at the
+ * composition root, where unit tests cannot see it.
+ *
+ * These tests are the mutation proof the issue asks for: each one deletes a
+ * mechanism's EFFECT from an otherwise-healthy run and confirms the gate goes
+ * red. A check that cannot fail is the defect it is meant to catch.
+ */
+describe('evaluateSmokeGate — one assertion per wired mechanism (#430)', () => {
+  function gateFor(observations: SmokeObservations) {
+    return evaluateSmokeGate(observations, {
+      minTicks: 2,
+      llmRateLimiterSnapshot: meteredSnapshot(),
+    });
+  }
+
+  it('fails when a debate reached the Trader but no cosine setup was written (#432)', () => {
+    const gate = gateFor({ ...transactedObservations(), cosineSetups: [] });
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('cosine_setups'))).toBe(true);
+  });
+
+  it('does not demand a setup from a run that never debated — that fails as #364 instead', () => {
+    // Naming the real cause rather than a downstream symptom, the same way the
+    // rate-limiter check hangs off `debates.length`.
+    const gate = gateFor({ ...transactedObservations(), debates: [], cosineSetups: [] });
+
+    expect(gate.failures.some((failure) => failure.includes('cosine_setups'))).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('debate_log'))).toBe(true);
+  });
+
+  it('fails when the risk thresholds were never seeded (#433)', () => {
+    const gate = gateFor({ ...transactedObservations(), riskThresholds: [] });
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('risk_thresholds'))).toBe(true);
+  });
+
+  it('fails when the analyst weights were never seeded (#371)', () => {
+    const gate = gateFor({ ...transactedObservations(), analystWeights: [] });
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('analyst_weights'))).toBe(true);
+  });
+
+  it('passes only when every mechanism left its own evidence', () => {
+    // The conjunction is the point: each row is written by exactly one
+    // mechanism, so no single wiring can carry another's check.
+    expect(gateFor(transactedObservations()).passed).toBe(true);
   });
 });

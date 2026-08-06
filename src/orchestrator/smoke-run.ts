@@ -398,6 +398,29 @@ export interface SmokeObservations {
   fills: { idempotency_key: string; leg: string; price: number; qty: number; fee: number }[];
   /** From `closed_trades`. Always empty offline — see `SMOKE_CLOSED_TRADE_NOTE`. */
   closedTrades: { idempotency_key: string; realized_pnl_net: number; close_reason: string }[];
+  /**
+   * From `cosine_setups` — the row `Trader.decide` writes at decision time
+   * (#432). Observed here for `debates`' reason and from the same defect: the
+   * retrieval mechanism (#75) and the store (#198) both existed and `decide()`
+   * called neither, so every position took a permanent 0.75x haircut and the
+   * table stayed empty for the life of the process. Nothing else in this file
+   * can see that — the `audit_log` line reads `trader: intent` either way.
+   */
+  cosineSetups: { debate_id: string; instrument: string }[];
+  /**
+   * From `risk_thresholds` — the dials the composition root seeds at startup
+   * and `RiskManagerImpl.evaluate` reads live (#433). An empty table means
+   * `autoTighten` has nothing to step from, so a kill-line breach tightens
+   * nothing: the defensive response writes a row nobody reads, which is the
+   * defect #433 closed.
+   */
+  riskThresholds: { name: string; value: number }[];
+  /**
+   * From `analyst_weights` — seeded at startup (#371) so the daily cycle has a
+   * row to step per analyst. Zero rows is the shape that let a soak "run
+   * cleanly" while attributing nothing.
+   */
+  analystWeights: { analyst_id: string }[];
 }
 
 /**
@@ -451,6 +474,18 @@ export function readSmokeObservations(db: SqliteHandle): SmokeObservations {
     closedTrades: db
       .prepare('SELECT idempotency_key, realized_pnl_net, close_reason FROM closed_trades')
       .all() as SmokeObservations['closedTrades'],
+    // #430. Each of these is a mechanism that was, at some point, fully built,
+    // fully unit-tested and called by nothing in production. The table row is
+    // the only evidence that a caller exists.
+    cosineSetups: db
+      .prepare('SELECT debate_id, instrument FROM cosine_setups')
+      .all() as SmokeObservations['cosineSetups'],
+    riskThresholds: db
+      .prepare('SELECT threshold_name AS name, value FROM risk_thresholds')
+      .all() as SmokeObservations['riskThresholds'],
+    analystWeights: db
+      .prepare('SELECT analyst_id FROM analyst_weights')
+      .all() as SmokeObservations['analystWeights'],
   };
 }
 
@@ -580,6 +615,47 @@ export function evaluateSmokeGate(
           'called it, and the whole unit suite passed the entire time',
       );
     }
+  }
+
+  // #430 — one assertion per wired mechanism, aimed at ENFORCEMENT.
+  //
+  // The repo's dominant defect class is a complete, tested mechanism with no
+  // production caller: #327, #364, #366, #371, #374, #379, #388, #432, #433 —
+  // at least nine times. Each instance is individually correct code, the gap is
+  // always at the composition root, and unit tests cannot see it by
+  // construction. These checks are the convention that answer: WIRING A NEW
+  // MECHANISM MEANS ADDING ITS ENFORCEMENT ASSERTION HERE.
+  //
+  // "Aimed at enforcement" is the part that matters. Each check asserts the
+  // mechanism's own durable EFFECT — a row only that mechanism writes — not
+  // that an object was constructed and not that a log line was emitted. A
+  // check on construction passes for a component nothing calls, which is the
+  // defect itself.
+  if (debates.length > 0 && observations.cosineSetups.length === 0) {
+    failures.push(
+      'a debate resolved and reached the Trader, but no row in cosine_setups — `decide()` did ' +
+        'not write the setup it embedded, so cosine retrieval has nothing to find and every ' +
+        'position takes the permanent 0.75x no-precedent haircut. This is the #432 defect ' +
+        'exactly: retrieval (#75) and the store (#198) both existed and `decide()` called ' +
+        'neither, while the whole unit suite passed',
+    );
+  }
+
+  if (observations.riskThresholds.length === 0) {
+    failures.push(
+      'no row in risk_thresholds — the composition root did not seed the dials, so ' +
+        "`autoTighten` has no current value to step from and the Feedback Loop's defensive " +
+        'response to a kill-line breach tightens nothing. This is the #433 defect: the write ' +
+        'end existed and the read end did not, and nothing failed',
+    );
+  }
+
+  if (observations.analystWeights.length === 0) {
+    failures.push(
+      'no row in analyst_weights — the startup seeder did not run, so `runDailyCycle` skips ' +
+        'every analyst it cannot find a row for and the loop attributes nothing while reporting ' +
+        'a clean run. This is the #371 defect',
+    );
   }
 
   if (!verdicts.some((verdict) => verdict.status === 'go')) {
