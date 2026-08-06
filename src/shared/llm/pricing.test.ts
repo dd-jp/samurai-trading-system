@@ -15,8 +15,10 @@ import {
   CACHE_WRITE_MULTIPLIER,
   MODEL_RATES,
   pricedModels,
+  priceServerToolCalls,
   priceUsage,
   rateFor,
+  SERVER_TOOL_USD_PER_CALL,
 } from './pricing.js';
 
 describe('rateFor', () => {
@@ -144,5 +146,36 @@ describe('priceUsage', () => {
     expect(
       priceUsage('vendor/unreleased-9', { input_tokens: 500_000, output_tokens: 500_000 }),
     ).toBeNull();
+  });
+});
+
+describe('priceServerToolCalls (#476)', () => {
+  // Inert under ADR-0009 — Nous proxies `chat/completions`, which runs no
+  // server-side tool, so every call reports zero. Tested anyway because the
+  // arithmetic, the `server_tool_calls` column (migration 0018) and the sink's
+  // INSERT are one unit, and an untested half is how the unit comes apart.
+
+  it('prices each invocation, because a tool-running provider bills on top of tokens', () => {
+    // "Tool requests are priced based on two components: token usage and tool
+    // invocations." A meter that priced only tokens under-counted every such
+    // call, and ADR-0008's ceiling quietly stopped being a ceiling.
+    expect(priceServerToolCalls(1)).toBeCloseTo(SERVER_TOOL_USD_PER_CALL, 10);
+    expect(priceServerToolCalls(200)).toBeCloseTo(1, 10);
+  });
+
+  it('never returns null, unlike priceUsage', () => {
+    // There is no rate table to miss: the charge is per invocation, so it is
+    // knowable for ANY model. That is what lets an unpriced model still record
+    // the tool dollars it definitely cost.
+    expect(priceServerToolCalls(0)).toBe(0);
+  });
+
+  it('treats a nonsense count as zero rather than poisoning cost_usd', () => {
+    // A NaN or negative reaching `cost_usd` would make `SpendCap` read the row
+    // as corrupt and refuse to compare — an accounting slip would become a
+    // halted cap.
+    expect(priceServerToolCalls(Number.NaN)).toBe(0);
+    expect(priceServerToolCalls(-3)).toBe(0);
+    expect(priceServerToolCalls(Number.POSITIVE_INFINITY)).toBe(0);
   });
 });

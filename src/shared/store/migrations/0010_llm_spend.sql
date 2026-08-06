@@ -22,7 +22,7 @@
 -- dashboard's `getLlmSpend` sums with a `WHERE timestamp >= ?`.
 --
 -- `cost_usd` IS NULLABLE ON PURPOSE. Pricing is a hardcoded rate table
--- (debate-engine/llm/pricing.ts) that cannot know a model released after this
+-- (shared/llm/pricing.ts) that cannot know a model released after this
 -- code shipped. Storing 0.0 for an unpriced model would silently understate
 -- the total and look identical to a genuinely free call; NULL forces the
 -- reader to show "unpriced" and keeps the token counts — which are always

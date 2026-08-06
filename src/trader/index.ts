@@ -10,7 +10,12 @@ export {
   NO_PRECEDENT_MULTIPLIER,
   retrieveCosinePrecedent,
 } from './cosine-precedent.js';
-export { decide } from './decide.js';
+export {
+  decide,
+  decideWithReason,
+  type TraderOutcome,
+  type TraderSkipReason,
+} from './decide.js';
 export { FixtureSetupStore } from './fixture-setup-store.js';
 export { computeIdempotencyKey } from './idempotency-key.js';
 export { buildSetupVector, type SetupMarketContext } from './setup-vector.js';

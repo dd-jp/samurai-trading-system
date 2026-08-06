@@ -153,6 +153,49 @@ export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
 export const CACHE_READ_MULTIPLIER = 0.1;
 export const CACHE_WRITE_MULTIPLIER = 1.25;
 
+/**
+ * Dollars per server-side tool invocation (#476).
+ *
+ * A provider that runs a tool for you bills the request in two parts. xAI's
+ * tools documentation states it directly: "Tool requests are priced based on
+ * two components: token usage and tool invocations." A meter that prices only
+ * tokens under-counts every such call.
+ *
+ * CURRENTLY INERT, and that is a consequence of ADR-0009 rather than an
+ * oversight. Nous proxies `chat/completions` only, whose `tools` field takes
+ * functions — server-side tools live on xAI's `/v1/responses`, which is no
+ * longer reachable. Every call this system makes therefore reports zero
+ * invocations. Kept because the column, the arithmetic and the sink path are
+ * one unit (migration `0018_llm_spend_server_tool_calls.sql`): half-applying
+ * them is a broken INSERT, and the day a provider grows a server-side tool the
+ * meter should already be honest about it.
+ *
+ * PROVENANCE, STATED HONESTLY: the two-component billing MODEL is confirmed
+ * against xAI's own documentation. The FIGURE — $5.00 per 1,000 calls — comes
+ * from third-party pricing summaries (retrieved 2026-08-06) and could NOT be
+ * confirmed against x.ai's own pricing page, which is not publicly fetchable.
+ * Treat it as an estimate of the right order, not a quoted rate.
+ *
+ * Independent of `MODEL_RATES` on purpose: the charge is per invocation, not
+ * per token, so it applies whether or not the model itself is in the rate
+ * table. That is what lets an unpriced model still record the tool dollars it
+ * definitely cost.
+ */
+export const SERVER_TOOL_USD_PER_CALL = 0.005;
+
+/**
+ * Cost of `count` server-side tool invocations.
+ *
+ * Never null, unlike `priceUsage`: there is no rate table to miss, so this is
+ * either a known charge or zero. A negative or non-finite count is treated as
+ * zero rather than propagating a bad number into `cost_usd`, which `SpendCap`
+ * would then read as a corrupt row and refuse to compare.
+ */
+export function priceServerToolCalls(count: number): number {
+  if (!Number.isFinite(count) || count <= 0) return 0;
+  return count * SERVER_TOOL_USD_PER_CALL;
+}
+
 const TOKENS_PER_MILLION = 1_000_000;
 
 /**

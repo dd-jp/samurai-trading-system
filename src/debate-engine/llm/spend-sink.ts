@@ -20,7 +20,7 @@
  * trading decision.
  */
 
-import { type AnthropicUsage, priceUsage } from '../../shared/llm/pricing.js';
+import { type AnthropicUsage, priceServerToolCalls, priceUsage } from '../../shared/llm/pricing.js';
 import type { SharedStore } from '../../shared/store/index.js';
 import type { Logger } from '../../shared/types.js';
 
@@ -51,6 +51,20 @@ export interface LlmSpendRecord {
   debate_id?: string | undefined;
   model: string;
   usage: AnthropicUsage;
+  /**
+   * How many SERVER-SIDE tool invocations this call incurred (#476).
+   *
+   * Zero or absent on every call this system currently makes: ADR-0009 routes
+   * all of them through Nous's `chat/completions`, which runs no server-side
+   * tool. The field survives the cutover because the charge it prices is real
+   * wherever a provider does run one — "Tool requests are priced based on two
+   * components: token usage and tool invocations" — and a meter that has no
+   * slot for it under-counts silently rather than loudly.
+   *
+   * Priced independently of `MODEL_RATES`, so it lands in `cost_usd` even when
+   * the model itself is unrecognised.
+   */
+  server_tool_calls?: number | undefined;
   /** Wall-clock time for this one API call, as measured by the client. */
   latency_ms: number;
   timestamp: Date;
@@ -81,15 +95,46 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
       // every historical row silently reprice the next time the table in
       // pricing.ts is edited, quietly rewriting spend history that an
       // operator may have already looked at.
-      const cost = priceUsage(entry.model, entry.usage);
+      const tokenCost = priceUsage(entry.model, entry.usage);
+      const toolCalls = entry.server_tool_calls ?? 0;
+      const toolCost = priceServerToolCalls(toolCalls);
+
+      // The two halves are priced independently, and the tool half is recorded
+      // EVEN WHEN THE TOKEN HALF IS NOT (#476). Discarding a charge we know
+      // exactly, because a different charge is missing from a rate table,
+      // would under-count the cap for the same reason the phantom `grok-4`
+      // rate over-counted it — a number we hold and throw away is the worst of
+      // the three options. Such a row stays recognisable: `server_tool_calls`
+      // is non-zero while `cost_usd` is too small to cover the tokens.
+      const cost = tokenCost === null ? (toolCost > 0 ? toolCost : null) : tokenCost + toolCost;
+
+      if (tokenCost === null) {
+        // The gap #476 named: nothing used to say when a call that cost money
+        // went unpriced. A silent null is how a cap stops being a cap.
+        this.logger?.log({
+          trace_id: entry.trace_id,
+          stage: 'orchestrator',
+          level: 'warn',
+          message:
+            `llm spend: model '${entry.model}' is not in MODEL_RATES, so its TOKEN cost is ` +
+            'unpriced and does not count against the budget cap. Add a rate for it in ' +
+            'pricing.ts. ' +
+            (toolCost > 0
+              ? `The ${toolCalls} server-side tool invocation(s) on this call ARE priced and ` +
+                'recorded, so the row is not empty — but it understates the true cost.'
+              : 'This call contributes nothing to the cap total.'),
+          payload: { model: entry.model, server_tool_calls: toolCalls },
+        });
+      }
+
       this.db
         .prepare(
           `INSERT INTO llm_spend (
              trace_id, stage, debate_id, model,
              input_tokens, output_tokens,
              cache_creation_input_tokens, cache_read_input_tokens,
-             cost_usd, latency_ms, timestamp
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             cost_usd, server_tool_calls, latency_ms, timestamp
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           entry.trace_id,
@@ -105,6 +150,7 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
           entry.usage.cache_creation_input_tokens ?? 0,
           entry.usage.cache_read_input_tokens ?? 0,
           cost,
+          toolCalls,
           entry.latency_ms,
           entry.timestamp.toISOString(),
         );
