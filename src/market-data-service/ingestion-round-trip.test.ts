@@ -13,6 +13,7 @@ import { type AlpacaBar, type AlpacaClient, AlpacaDataSource } from './sources/a
 import type { CcxtClient, CcxtOhlcv } from './sources/ccxt-source.js';
 import type { IbkrClient, IbkrHistoricalBar } from './sources/ibkr-source.js';
 import { SqliteMarketDataStore } from './sqlite-market-data-store.js';
+import type { BarWindow } from './types.js';
 
 class ManualClock implements Clock {
   constructor(private readonly time: Date) {}
@@ -58,10 +59,20 @@ function serviceFor(config: DataSourceConfig, mode: 'live' | 'backtest' = 'backt
 }
 
 describe('crypto round-trip: ccxt payload -> ingestion -> getBars', () => {
-  const service = serviceFor({ kind: 'ccxt', client: krakenClient });
+  const service = serviceFor({ kind: 'ccxt', client: krakenClient, source: 'kraken' });
+
+  /**
+   * `KRAKEN_ROWS` is three candles and these assertions are about
+   * NORMALIZATION, not window sufficiency — so the read is deliberately short
+   * and has to say so since #497 gave `CcxtDataSource` its own loud short-read
+   * guard. Without the opt-in these reads now throw `CcxtDataUnderfetchError`,
+   * which is the correct answer for a real venue and the wrong one for a
+   * fixture asserting field shape.
+   */
+  const SHORT: BarWindow = { timeframe: '1h', lookback: 10, partial: 'allow' };
 
   it('serves normalized 24/7 bars, excluding only the forming candle', async () => {
-    const bars = await service.getBars('BTC/USD', { timeframe: '1h', lookback: 10 }, ASOF);
+    const bars = await service.getBars('BTC/USD', SHORT, ASOF);
 
     expect(bars).toEqual([
       {
@@ -92,14 +103,14 @@ describe('crypto round-trip: ccxt payload -> ingestion -> getBars', () => {
   });
 
   it('keeps the 02:00 UTC bar — crypto has no session to fall outside of', async () => {
-    const bars = await service.getBars('BTC/USD', { timeframe: '1h', lookback: 10 }, ASOF);
+    const bars = await service.getBars('BTC/USD', SHORT, ASOF);
 
     expect(bars.some((b) => b.open_time.toISOString() === '2026-07-15T02:00:00.000Z')).toBe(true);
   });
 
   it('derives a backtest mark from the last completed bar', async () => {
     const mark = await serviceFor(
-      { kind: 'ccxt', client: krakenClient, markTimeframe: '1h' },
+      { kind: 'ccxt', client: krakenClient, source: 'kraken', markTimeframe: '1h' },
       'backtest',
     ).getMark('BTC/USD', ASOF);
 
@@ -171,7 +182,7 @@ describe('swapping DataSource is a config change, not a code change', () => {
 
   it('builds every supported source from config alone', async () => {
     const configs: DataSourceConfig[] = [
-      { kind: 'ccxt', client: krakenClient },
+      { kind: 'ccxt', client: krakenClient, source: 'kraken' },
       { kind: 'alpaca', client: alpacaClient, asset_class: 'stocks' },
       { kind: 'ibkr', client: ibkrClient },
     ];
