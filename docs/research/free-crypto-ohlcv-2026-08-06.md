@@ -13,7 +13,7 @@ Every claim below is labelled **PROBED** (I called the endpoint and read the byt
 
 **Coinbase Exchange public candles (`api.exchange.coinbase.com`) is the recommendation for the crypto leg. Free, no key, no account, 11 years deep, gap-free over the 5-year window, and — the deciding property — it is the only free source that carries a *usable volume column*.**
 
-The $49/mo Polygon Currencies Starter tier from decision [#157](https://github.com/dd-jp/samurai-trading-system/issues/157) is not needed. Combined with #483's equities result, **map #482's full cost saving is $78/mo ($29 Stocks + $49 Currencies), and Samurai needs no paid market-data subscription for Stage 2.**
+**Implication, not this ticket's verdict:** a verified free source now exists for *both* legs, so the whole $78/mo of decision [#157](https://github.com/dd-jp/samurai-trading-system/issues/157) ($29 Stocks Starter + $49 Currencies Starter) is technically avoidable. Whether to actually drop the paid tier — free stack with no SLA versus one paid vendor with support — is map [#482](https://github.com/dd-jp/samurai-trading-system/issues/482)'s decide step, deliberately **not** settled here.
 
 The obvious candidate — Alpaca crypto, which would have tape-matched the MVP execution venue and reused a key already in `.env.local` — **is rejected on a defect that only showed up when I compared its volume column against another venue's**. See "The Alpaca crypto trap" below. It survives as a price cross-check, not as the source.
 
@@ -66,9 +66,11 @@ Median daily volume by year, against Coinbase over the identical days:
 | 2025 | 1.68 | 7,140 | **4,242×** | **65×** |
 | 2026 | 1.85 | 8,049 | **4,346×** | **66×** |
 
-ETH/USD shows the same break on the same date, same shape (12× → 3,900×).
+PROBED — ETH/USD breaks on the **same date**, same shape: 2023-06-13 = 2,002 ETH / 10,387 trades → 2023-06-14 = 487 / 2,115 → **2023-06-15 = 20.1 / 125**. Per-year ratios run 12× → 3,900×.
 
-Coinbase's own volume merely drifts down over the same period (16,039 → 8,049, i.e. ×0.5 across five years). Alpaca's drops **~600× overnight**. That is a change in Alpaca's crypto business — reporting only its own book after the June-2023 US crypto retrenchment — **not a change in the market**. Prices are unaffected throughout, which is exactly what makes it dangerous: nothing in the price series signals that the volume column changed meaning.
+Coinbase's own volume merely drifts down over the same period (16,039 → 8,049, i.e. ×0.5 across five years). Alpaca's drops **~600× overnight**. So the discontinuity is in Alpaca's reporting, **not in the market** — that much is evidenced. *Why* Alpaca's printed crypto volume collapsed on that date is **not established here**, and the consequence below does not depend on it. Prices are unaffected throughout, which is exactly what makes it dangerous: nothing in the price series signals that the volume column changed meaning.
+
+⚠️ **The pre-break half is not clean either.** Even in 2021–2022, before the discontinuity, Alpaca's volume runs 6–13× under Coinbase's for the same days — a 2.5–3.6× impact inflation. There is no sub-window of this column that can be used as ADV; the break just makes the later half catastrophic rather than merely wrong.
 
 **Consequences if used unguarded:**
 
@@ -157,6 +159,7 @@ Crypto is 24/7, so "daily" is a convention, and [#420](https://github.com/dd-jp/
 1. **Source crypto daily history from Coinbase Exchange public candles**, paginated in 300-day windows. No key, so no new precondition — combined with #483's equities result, **#241's Polygon API-key precondition is fully removable.**
 2. **The seam already exists and needs no new dependency.** `src/market-data-service/sources/ccxt-source.ts` defines `CcxtClient` as a *structural* interface (`fetchOHLCV` / `fetchTicker`) with the client **injected**, and **`ccxt` is not in `package.json`**. A small Coinbase REST client satisfying `CcxtClient`, constructed with `{ source: 'coinbase' }`, drops straight into `CcxtDataSource`.
 3. **Use Alpaca crypto as a free price cross-check**, not a source: it is one request for the whole history and agrees with Coinbase to 0.02% median. Diffing the two at ingestion is a near-zero-cost data-quality gate. **Never let its volume column reach `getADV()`.**
+4. ⚠️ **Recalibration flag, for #241 not for this ticket:** Coinbase's volume is also *single-venue* — real, continuous, and far larger than Alpaca's, but not consolidated crypto volume. Adopting it changes the liquidity denominator in the cost model's √(size/adv) term relative to whatever the existing calibration (`docs/research/10-cost-model-calibration-2026-08-05.md`) assumed. Worth one look when the crypto backfill lands; not chased here.
 
 ### Two defects this ticket found in code that already exists
 
