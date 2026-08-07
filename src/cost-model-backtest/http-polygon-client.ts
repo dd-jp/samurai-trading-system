@@ -32,46 +32,13 @@
  * 5-year window, well under the 5000-row default page size).
  */
 
-import { resolveVenuePacing, TokenBucket, type TokenBucketConfig } from '../shared/index.js';
+import { resolvePolygonPacing, TokenBucket } from '../shared/index.js';
 import type { PolygonAggregate, PolygonClient } from './stage2-historical-store.js';
 import type { DateRange } from './universe.js';
 
 const DEFAULT_BASE_URL = 'https://api.polygon.io';
 const MAX_PAGES = 25;
 const PAGE_LIMIT = 50_000;
-
-/**
- * `resolveVenuePacing().polygon`, with the failure mode a Stage 2 operator
- * would actually hit named explicitly (review feedback on #520/#510).
- *
- * `resolveVenuePacing()` validates every venue's `SAMURAI_PACING_*` env vars
- * in one pass — deliberately: it is the fail-fast posture the real
- * composition root (`production.ts`) wants, and splitting it into a
- * per-venue resolver would risk two validation paths drifting apart. But
- * that means a malformed `SAMURAI_PACING_ALPACA_*` or `SAMURAI_PACING_IBKR_*`
- * override — a venue this client never touches — now throws while
- * constructing a Polygon-only backfill client (`run-stage2.ts`,
- * `run-stage2-cost-decomposition.ts`, `run-spread-calibration.ts`). The
- * underlying error already names the offending variable (`readPositive`'s
- * message embeds `name`, e.g. `SAMURAI_PACING_ALPACA_REFILL_PER_SEC must be
- * a finite number; got 'fast'.`), so nothing here needs to re-derive which
- * venue is at fault — it's re-thrown with a prefix explaining WHY a
- * Polygon-only script is even seeing an Alpaca/IBKR variable at all, since
- * that's the part a Stage 2 operator has no reason to already know.
- */
-function resolvePolygonPacing(): TokenBucketConfig {
-  try {
-    return resolveVenuePacing().polygon;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      'HttpPolygonClient: could not resolve outbound pacing config. ' +
-        'resolveVenuePacing() validates every venue in one pass, not just polygon, ' +
-        'so this failure may name a DIFFERENT venue’s env var even though only ' +
-        `Polygon pacing is used here. ${message}`,
-    );
-  }
-}
 
 /** Polygon's raw per-bar shape — a superset of `PolygonAggregate` (also carries `vw`, `n`). */
 interface RawPolygonAggregate {
@@ -107,13 +74,11 @@ export interface HttpPolygonClientOptions {
   fetchImpl?: typeof fetch;
   /**
    * Proactive outbound pacing against the free tier's 5 calls/min (ticket
-   * #510). Defaults to `resolvePolygonPacing()` (this module's wrapper
-   * around `resolveVenuePacing().polygon` — see that function's doc for why
-   * the wrapper exists) — see `shared/http/venue-pacing.ts` for the
-   * provenance of the pacing figure itself and how to override it
-   * (`SAMURAI_PACING_POLYGON_*`) if this key is ever upgraded off the free
-   * tier. Tests inject a bucket sized to never wait (see
-   * `http-polygon-client.test.ts`).
+   * #510). Defaults to `resolvePolygonPacing()` — see
+   * `shared/http/venue-pacing.ts` for the provenance of the pacing figure
+   * and how to override it (`SAMURAI_PACING_POLYGON_*`) if this key is ever
+   * upgraded off the free tier. Tests inject a bucket sized to never wait
+   * (see `http-polygon-client.test.ts`).
    *
    * This replaces the bare `MIN_REQUEST_SPACING_MS` constant this client
    * carried before #510 — that value was invisible to `venue-pacing.ts`'s
@@ -128,9 +93,27 @@ export interface HttpPolygonClientOptions {
    * `run-stage2-cost-decomposition.ts`, `run-spread-calibration.ts`), none
    * of which pass a `rateLimiter`; there is no shared composition root that
    * could inject one instead. So this default IS the only pacing path any
-   * of them ever take, which is why it resolves through `resolveVenuePacing()`
-   * directly rather than the bare `DEFAULT_VENUE_PACING` constant
-   * `AlpacaBrokerAdapter`'s own (comparably rare) fallback uses.
+   * of them ever take.
+   *
+   * **`resolvePolygonPacing()`, not `resolveVenuePacing().polygon` (review
+   * feedback on PR #520, reversing an earlier version of this PR).**
+   * Polygon pacing briefly lived inside `VENUE_KEYS`/`resolveVenuePacing()`
+   * alongside the three broker venues, wrapped here with extra error
+   * context because that coupling meant a malformed
+   * `SAMURAI_PACING_ALPACA_*`/`IBKR_*` override — venues this client never
+   * touches — would throw while constructing a Polygon-only backfill
+   * client. That fixed the direction of the coupling this client could see,
+   * but left the more dangerous direction open: `production.ts`, the LIVE
+   * composition root, would ALSO now validate `SAMURAI_PACING_POLYGON_*` and
+   * build a bucket for a venue it never calls — a typo in a backfill-only
+   * env var failing orchestrator boot during the unattended soak (#238),
+   * with nobody watching. `resolvePolygonPacing()` reads and validates only
+   * `SAMURAI_PACING_POLYGON_*` (see its doc in `venue-pacing.ts`), so
+   * neither direction of the coupling exists any more, and the error-context
+   * wrapper this option's doc used to describe was removed as dead weight —
+   * a malformed `SAMURAI_PACING_POLYGON_*` still throws loudly and still
+   * names the variable (`readPositive`'s own message), it just no longer
+   * needs a wrapper to explain an unrelated venue's failure.
    */
   rateLimiter?: TokenBucket;
 }

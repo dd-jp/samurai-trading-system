@@ -416,7 +416,6 @@ describe('the composition root paces the broker from ops config (#299)', () => {
           alpaca: { capacity: 1, refillPerSecond: 0.001 },
           ccxt: { capacity: 1, refillPerSecond: 1 },
           ibkr: { capacity: 5, refillPerSecond: 5 },
-          polygon: { capacity: 1, refillPerSecond: 1 / 13 },
         },
       }),
     );

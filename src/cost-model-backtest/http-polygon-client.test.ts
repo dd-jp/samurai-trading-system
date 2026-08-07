@@ -4,7 +4,7 @@
 // assertions below from whatever `SAMURAI_PACING_POLYGON_*` an operator's
 // shell or `.env.local` happens to have set.
 import { venuePacingEnvVars } from '../shared/http/venue-pacing.js';
-import { resolveVenuePacing, TokenBucket } from '../shared/index.js';
+import { resolvePolygonPacing, TokenBucket } from '../shared/index.js';
 import { HttpPolygonClient, toPolygonTicker } from './http-polygon-client.js';
 import type { DateRange } from './universe.js';
 
@@ -201,6 +201,13 @@ describe('HttpPolygonClient free-tier pacing (#510)', () => {
   // pass/fail depend on the operator's config rather than the checked-in
   // default. Clearing and restoring them scopes the test to what it claims
   // to test.
+  //
+  // Only `SAMURAI_PACING_POLYGON_*` needs clearing here (not
+  // Alpaca/ccxt/IBKR too) — `resolvePolygonPacing()` reads exclusively that
+  // namespace (#510/#520, third review cycle), so an ambient Alpaca/IBKR
+  // override cannot affect anything constructed in this describe block. See
+  // 'is unaffected by a malformed UNRELATED venue override' below, which
+  // asserts that isolation directly rather than assuming it.
   const polygonEnvVars = Object.values(venuePacingEnvVars('polygon'));
   const previousEnv = new Map<string, string | undefined>();
 
@@ -242,15 +249,15 @@ describe('HttpPolygonClient free-tier pacing (#510)', () => {
 
   it('paces a burst of more than 5 calls through the default bucket rather than firing them at once', async () => {
     // No `rateLimiter` override: this is the constructor's OWN default,
-    // `resolveVenuePacing().polygon` — the path every real call site
+    // `resolvePolygonPacing()` — the path every real call site
     // (`run-stage2.ts`, `run-stage2-cost-decomposition.ts`,
     // `run-spread-calibration.ts`) actually takes. Expectations are derived
-    // from `resolveVenuePacing()` itself, rather than the checked-in numbers
+    // from `resolvePolygonPacing()` itself, rather than the checked-in numbers
     // hard-coded again here, so this test proves "the client is paced by
     // whatever ops config says" — the actual acceptance criterion — instead
-    // of merely reproducing today's `DEFAULT_VENUE_PACING.polygon` values
-    // (already covered by `venue-pacing.test.ts`) a second time.
-    const { capacity, refillPerSecond } = resolveVenuePacing().polygon;
+    // of merely reproducing today's `DEFAULT_POLYGON_PACING` values (already
+    // covered by `venue-pacing.test.ts`) a second time.
+    const { capacity, refillPerSecond } = resolvePolygonPacing();
     const stepMs = 1_000 / refillPerSecond;
 
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ results: [] }));
@@ -276,31 +283,38 @@ describe('HttpPolygonClient free-tier pacing (#510)', () => {
   });
 
   /**
-   * Review feedback on #520/#510: `resolveVenuePacing()` validates every
-   * venue's `SAMURAI_PACING_*` in one pass, so a malformed override for a
-   * venue this Polygon-only client never touches (Alpaca, here) would
-   * otherwise throw with no indication that the failure has nothing to do
-   * with Polygon. `resolvePolygonPacing()` (http-polygon-client.ts) wraps
-   * the failure with that context while preserving the original message —
-   * which already names the exact venue and env var — verbatim.
+   * Third review cycle on #520/#510. Earlier versions of this PR folded
+   * Polygon into `VENUE_KEYS`/`resolveVenuePacing()`, wrapped with extra
+   * error context, so a malformed `SAMURAI_PACING_ALPACA_*` override —
+   * a venue this Polygon-only client never touches — threw with a message
+   * explaining why. That fixed the SYMPTOM (an unhelpful error) but not the
+   * DEFECT: `production.ts`, the live composition root, would also have
+   * validated `SAMURAI_PACING_POLYGON_*` and built a bucket it never uses —
+   * a Stage-2-only typo failing orchestrator boot during the unattended
+   * soak (#238), with nobody watching. The fix is isolation, not a better
+   * message: `resolvePolygonPacing()` never reads Alpaca/ccxt/IBKR vars at
+   * all, so this construction does not merely fail with a clearer error —
+   * it does not fail.
    */
-  it('names the offending venue and env var when an UNRELATED venue override is malformed', () => {
+  it('is unaffected by a malformed UNRELATED venue override — no coupling in either direction', () => {
     const previous = process.env.SAMURAI_PACING_ALPACA_REFILL_PER_SEC;
     process.env.SAMURAI_PACING_ALPACA_REFILL_PER_SEC = 'not-a-number';
     try {
-      expect(() => new HttpPolygonClient({ apiKey: FAKE_KEY })).toThrow(
-        /SAMURAI_PACING_ALPACA_REFILL_PER_SEC/,
-      );
-      // Not weakened into a silent fallback — still loud — and the added
-      // context says why a Polygon-only construction even surfaced an
-      // Alpaca variable, which is the actual diagnosability complaint.
-      expect(() => new HttpPolygonClient({ apiKey: FAKE_KEY })).toThrow(/HttpPolygonClient/);
-      expect(() => new HttpPolygonClient({ apiKey: FAKE_KEY })).toThrow(
-        /DIFFERENT venue.s env var/,
-      );
+      expect(() => new HttpPolygonClient({ apiKey: FAKE_KEY })).not.toThrow();
     } finally {
       if (previous === undefined) delete process.env.SAMURAI_PACING_ALPACA_REFILL_PER_SEC;
       else process.env.SAMURAI_PACING_ALPACA_REFILL_PER_SEC = previous;
+    }
+  });
+
+  it('still throws loudly, naming the variable, when SAMURAI_PACING_POLYGON_* itself is malformed', () => {
+    process.env.SAMURAI_PACING_POLYGON_REFILL_PER_SEC = 'not-a-number';
+    try {
+      expect(() => new HttpPolygonClient({ apiKey: FAKE_KEY })).toThrow(
+        /SAMURAI_PACING_POLYGON_REFILL_PER_SEC/,
+      );
+    } finally {
+      delete process.env.SAMURAI_PACING_POLYGON_REFILL_PER_SEC;
     }
   });
 });
