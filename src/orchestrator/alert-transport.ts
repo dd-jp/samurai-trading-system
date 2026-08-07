@@ -257,10 +257,10 @@ export function resolveAlertsMode(injected: Partial<ProductionConfig>): AlertsMo
  * defaults, and a second set built here would be two places to keep in sync
  * for no behavioural difference. The `warn` is the point of the branch.
  *
- * `telegram` builds ONE `TelegramBotApiClient` shared by all four adapters
- * (breach joined the original three in #327) — not one each: they share a bot
- * token, a retry budget and Telegram's ~30 messages/second ceiling, and four
- * clients would each believe they owned the whole allowance.
+ * `telegram` builds ONE `TelegramBotApiClient` shared by every adapter this
+ * branch constructs (eight as of #551) — not one each: they share a bot
+ * token, a retry budget and Telegram's ~30 messages/second ceiling, and
+ * separate clients would each believe they owned the whole allowance.
  */
 export function buildAlertChannels(deps: {
   alertsMode: AlertsMode;
