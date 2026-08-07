@@ -47,6 +47,12 @@ const TABLES = [
   // #384). Where `DailyMetricsSample.revalidation` and the divergence baseline
   // both come from, and the reason four kill-lines out of four could not fire.
   'stage2_selected_config',
+  // `flatten_submissions` (0019) — the durable journal for `execute()`'s
+  // exit path (#508 review, PR #516): an exit writes no `open_positions`
+  // row, so without this table a replayed flatten had nothing to dedupe
+  // against and a lost `submitFlatten` response had no clientOrderId for
+  // reconcile to resolve.
+  'flatten_submissions',
 ];
 
 /**
@@ -55,7 +61,7 @@ const TABLES = [
  * That prose number silently drifted twice (it read "twenty" and "twenty-one"
  * simultaneously while the schema held 22), so it is pinned here.
  */
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 27;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 28;
 
 const tempDirs: string[] = [];
 
@@ -125,6 +131,7 @@ describe('openSharedStore', () => {
       { version: 16 },
       { version: 17 },
       { version: 18 },
+      { version: 19 },
     ]);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
@@ -146,6 +153,7 @@ describe('openSharedStore', () => {
       { version: 16 },
       { version: 17 },
       { version: 18 },
+      { version: 19 },
     ]);
   });
 

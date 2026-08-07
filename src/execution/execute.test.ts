@@ -68,22 +68,40 @@ interface FlattenCall {
   clientOrderId: string;
 }
 
+/** One `cancel` call, recorded verbatim for assertion. */
+interface CancelCall {
+  clientOrderId: string;
+  instrument: string;
+}
+
 /** Accepts everything and records what it was handed. */
 function makeBroker(
   onSubmit?: (order: NativeBracketRequest) => void | Promise<void>,
   onFlatten?: (call: FlattenCall) => void | Promise<void>,
-): BrokerAdapter & { calls: NativeBracketRequest[]; flattenCalls: FlattenCall[] } {
+  onCancel?: (call: CancelCall) => void | Promise<void>,
+): BrokerAdapter & {
+  calls: NativeBracketRequest[];
+  flattenCalls: FlattenCall[];
+  cancelCalls: CancelCall[];
+  /** Every submitBracket/submitFlatten/cancel call, in call order — the PR #516 review's ordering property (cancel-before-flatten) is otherwise unobservable from the three arrays alone. */
+  callSequence: string[];
+} {
   const calls: NativeBracketRequest[] = [];
   // Kept separate from `calls` (NativeBracketRequest[]): several existing
   // tests assert `broker.calls` has length 0 to mean "no bracket submitted",
   // and a flatten is not a bracket — folding it in would make those
   // assertions pass for the wrong reason.
   const flattenCalls: FlattenCall[] = [];
+  const cancelCalls: CancelCall[] = [];
+  const callSequence: string[] = [];
   return {
     calls,
     flattenCalls,
+    cancelCalls,
+    callSequence,
     async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
       calls.push(order);
+      callSequence.push(`submitBracket:${order.client_order_id}`);
       await onSubmit?.(order);
       return {
         client_order_id: order.client_order_id,
@@ -116,6 +134,7 @@ function makeBroker(
     ): Promise<BrokerAck> {
       const call = { instrument, side, size, clientOrderId };
       flattenCalls.push(call);
+      callSequence.push(`submitFlatten:${clientOrderId}`);
       await onFlatten?.(call);
       return {
         client_order_id: clientOrderId,
@@ -123,8 +142,15 @@ function makeBroker(
         order_state: 'submitted',
       };
     },
-    async cancel(): Promise<never> {
-      throw new Error('makeBroker.cancel: execute() does not cancel');
+    // PR #516 review (comment 1): the exit path now genuinely calls this,
+    // to clear a held lot's stop/target legs before flattening — resolves
+    // rather than throwing, mirroring the production adapters' own
+    // idempotent-cancel contract (types/broker.ts).
+    async cancel(clientOrderId: string, instrument: string): Promise<void> {
+      const call = { clientOrderId, instrument };
+      cancelCalls.push(call);
+      callSequence.push(`cancel:${clientOrderId}`);
+      await onCancel?.(call);
     },
     async getOpenPositions(): Promise<never> {
       throw new Error('makeBroker.getOpenPositions: execute() does not reconcile');
@@ -493,7 +519,7 @@ describe('ExecutionImpl.execute', () => {
     expect((await store.getPosition('key-aapl-1355'))?.intent_type).toBe('scale_in');
   });
 
-  describe('exit intent (#508)', () => {
+  describe('exit intent (#508, hardened by PR #516 review)', () => {
     /** A closing sell of the held quantity — `buildExitIntent` (trader/decide.ts) shape. */
     function makeExitGo(overrides: Partial<OrderIntent> = {}): VerdictDecision {
       return makeGo({
@@ -510,12 +536,52 @@ describe('ExecutionImpl.execute', () => {
       });
     }
 
-    it('routes to submitFlatten with the instrument, closing side, held size and idempotency key', async () => {
+    /**
+     * Seeds a filled entry lot the exit above closes — `executeExit`'s store
+     * cross-check (review comment 3) refuses an exit with nothing to
+     * validate against, so every test that expects the flatten to actually
+     * be attempted needs one of these first. Side `'buy'`, `filled_size 40`,
+     * matching `makeExitGo`'s default `side: 'sell'`/`size: 40`.
+     */
+    async function seedHeldLot(
+      store: ReturnType<typeof openTestExecutionStore>['store'],
+      overrides: Partial<OpenPosition> = {},
+    ): Promise<void> {
+      await store.writeAheadPosition({
+        idempotency_key: 'key-aapl-entry-1',
+        debate_id: 'debate-abc123',
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        side: 'buy',
+        intent_type: 'entry',
+        requested_size: 40,
+        filled_size: 40,
+        avg_entry_price: 95,
+        stop: 90,
+        target: 110,
+        order_state: 'filled',
+        broker_order_ids: ['seed:entry', 'seed:stop', 'seed:target'],
+        opened_at: NOW,
+        decision_timestamp: NOW,
+        conviction: 0.7,
+        converged: true,
+        ...overrides,
+      });
+    }
+
+    it('cancels the held lot, then routes to submitFlatten with the instrument, closing side, held size and idempotency key', async () => {
       const { store } = openTestExecutionStore();
       const broker = makeBroker();
+      await seedHeldLot(store);
 
       await new ExecutionImpl(makeInput({ store, broker })).execute(makeExitGo());
 
+      // Review comment 1: the held lot's bracket is cancelled BEFORE the
+      // flatten, so a resting stop/target leg cannot fire into the
+      // now-flat position.
+      expect(broker.cancelCalls).toEqual([
+        { clientOrderId: 'key-aapl-entry-1', instrument: 'AAPL' },
+      ]);
       expect(broker.flattenCalls).toEqual([
         {
           instrument: 'AAPL',
@@ -530,6 +596,10 @@ describe('ExecutionImpl.execute', () => {
           clientOrderId: 'key-aapl-1355',
         },
       ]);
+      expect(broker.callSequence).toEqual([
+        'cancel:key-aapl-entry-1',
+        'submitFlatten:key-aapl-1355',
+      ]);
       // No bracket path touched.
       expect(broker.calls).toHaveLength(0);
     });
@@ -537,6 +607,7 @@ describe('ExecutionImpl.execute', () => {
     it('returns a submission ack, not an error', async () => {
       const { store } = openTestExecutionStore();
       const broker = makeBroker();
+      await seedHeldLot(store);
 
       const result = await new ExecutionImpl(makeInput({ store, broker })).execute(makeExitGo());
 
@@ -550,27 +621,72 @@ describe('ExecutionImpl.execute', () => {
     // AC: "No half-written bracket state for a flatten." An exit closes an
     // existing lot; `OpenPosition.intent_type` deliberately excludes 'exit'
     // (shared/types/records.ts: "exits close a lot; they never create one"),
-    // so execute() must reach the broker without ever calling
-    // `writeAheadPosition`.
-    it('writes no OpenPosition row for the flatten — there is no bracket to journal', async () => {
+    // so execute() must never write a NEW `open_positions` row for the
+    // flatten itself — only the seeded lot (unwritten-to by the exit) may
+    // be there. The flatten gets its OWN durable record instead, in
+    // `flatten_submissions` (review comments 2+4).
+    it('writes no OpenPosition row for the flatten — only the flatten_submissions journal', async () => {
       const { store } = openTestExecutionStore();
       const broker = makeBroker();
+      await seedHeldLot(store);
 
       await new ExecutionImpl(makeInput({ store, broker })).execute(makeExitGo());
 
-      expect(await store.countAllPositions()).toBe(0);
-      expect(store.writeLog).toEqual([]);
+      // Exactly the one seeded lot — the exit added no second position row.
+      expect(await store.countAllPositions()).toBe(1);
+      expect(store.writeLog).not.toContain('write-ahead:key-aapl-1355');
+      expect(await store.countAllFlattenSubmissions()).toBe(1);
+    });
+
+    // Review comments 2+4: the flatten is journalled BEFORE any broker call
+    // (write-ahead, same shape as the bracket path's `writeAheadPosition`),
+    // and resolved to 'submitted' once the venue acks — observed from
+    // INSIDE the `submitFlatten` call itself, the same technique the
+    // bracket path's "persists the pending record BEFORE calling the
+    // broker" test above uses, so this fails if the ordering is ever
+    // silently reversed.
+    it('journals the flatten to flatten_submissions before calling the broker, and resolves it after the ack', async () => {
+      const { store } = openTestExecutionStore();
+      let stateAtFlattenCall: Awaited<ReturnType<typeof store.getFlattenSubmission>> = null;
+      const broker = makeBroker(undefined, async () => {
+        stateAtFlattenCall = await store.getFlattenSubmission('key-aapl-1355');
+      });
+      await seedHeldLot(store);
+
+      await new ExecutionImpl(makeInput({ store, broker })).execute(makeExitGo());
+
+      const captured = stateAtFlattenCall as Awaited<ReturnType<typeof store.getFlattenSubmission>>;
+      expect(captured).not.toBeNull();
+      expect(captured?.status).toBe('submitting');
+      expect(captured?.instrument).toBe('AAPL');
+      expect(captured?.side).toBe('sell');
+      expect(captured?.size).toBe(40);
+
+      const resolved = await store.getFlattenSubmission('key-aapl-1355');
+      expect(resolved?.status).toBe('submitted');
+      expect(resolved?.order_state).toBe('submitted');
+      expect(resolved?.broker_order_ids).toBe(JSON.stringify(['key-aapl-1355:flatten']));
+
+      expect(store.writeLog).toEqual([
+        // The seed itself, from `writeAheadPosition`/`updatePositionState`
+        // (`seedHeldLot` uses only the first).
+        'write-ahead:key-aapl-entry-1',
+        'write-ahead-flatten:key-aapl-1355',
+        'resolve-flatten:key-aapl-1355:submitted',
+      ]);
     });
 
     // Mirrors the bracket path's "leaves the pending record intact when the
-    // broker call throws" — but an exit has no pending record to leave
-    // behind, so the honest report is `order_state: null`, not a fabricated
-    // 'pending'.
-    it('reports an error with no order_state when submitFlatten throws', async () => {
+    // broker call throws" — but the ambiguity here is genuine (the venue
+    // MAY have seen the flatten before the response was lost), so the row
+    // is left at 'submitting' for #86's reconcile, exactly as the bracket
+    // path leaves its `pending` record on a `submitBracket` failure.
+    it('reports an error with no order_state when submitFlatten throws, leaving the journal row at submitting', async () => {
       const { store } = openTestExecutionStore();
       const broker = makeBroker(undefined, () => {
         throw new Error('venue rejected the flatten');
       });
+      await seedHeldLot(store);
 
       const result = await new ExecutionImpl(makeInput({ store, broker })).execute(makeExitGo());
 
@@ -578,38 +694,119 @@ describe('ExecutionImpl.execute', () => {
       expect(result.reason).toBe('venue rejected the flatten');
       expect(result.order_state).toBeNull();
       expect(result.broker_order_ids).toBeNull();
-      expect(await store.countAllPositions()).toBe(0);
+      expect(await store.countAllPositions()).toBe(1); // just the seed
+      const row = await store.getFlattenSubmission('key-aapl-1355');
+      expect(row?.status).toBe('submitting');
+      expect(row?.reason).toBeNull();
     });
 
-    // The `findByKey` gate (dedup layer 1) sits ahead of the intent_type
-    // branch, so an exit is checked by the SAME gate an entry/scale_in is —
-    // this proves the gate is shared and ordered ahead of the branch, NOT
-    // that a real exit replay trips it: production never writes a store row
-    // under an exit's idempotency_key, so nothing populates this gate for a
-    // genuine replay. See the `intent_type === 'exit'` branch in execute.ts
-    // for what backstops a real replay instead (dedup layer 2).
-    it('shares dedup layer 1 with the bracket path: a hit before the broker skips submitFlatten', async () => {
+    // Review comment 1's cancel-failure path — distinct from the case
+    // above: this is NOT ambiguous (the flatten provably never reached the
+    // broker), so the journal resolves to 'error' immediately, and
+    // `submitFlatten` must never be called while it is unknown whether the
+    // held lot's legs are actually gone.
+    it('refuses without ever calling submitFlatten when cancelling the held lot fails, and resolves the journal row to error', async () => {
+      const { store } = openTestExecutionStore();
+      const broker = makeBroker(undefined, undefined, () => {
+        throw new Error('venue timeout on cancel');
+      });
+      await seedHeldLot(store);
+
+      const result = await new ExecutionImpl(makeInput({ store, broker })).execute(makeExitGo());
+
+      expect(result.status).toBe('error');
+      expect(result.reason).toContain('key-aapl-entry-1');
+      expect(result.reason).toContain('venue timeout on cancel');
+      expect(broker.flattenCalls).toHaveLength(0);
+      const row = await store.getFlattenSubmission('key-aapl-1355');
+      expect(row?.status).toBe('error');
+      expect(row?.reason).toContain('venue timeout on cancel');
+    });
+
+    // Review comment 2, exercised for real rather than via a stubbed gate:
+    // the SAME exit decision replayed (crash-restart, retry) now dedupes
+    // exactly like an entry does — `findByKey` sees the `flatten_submissions`
+    // row the first call journalled, so the second call never reaches
+    // `cancel` or `submitFlatten` at all.
+    it('dedupes a replayed exit without touching the broker a second time', async () => {
       const { store } = openTestExecutionStore();
       const broker = makeBroker();
-      const keyPresentStore: typeof store = Object.create(store);
-      keyPresentStore.findByKey = async () => true;
+      await seedHeldLot(store);
+      const execution = new ExecutionImpl(makeInput({ store, broker }));
 
-      const result = await new ExecutionImpl(makeInput({ store: keyPresentStore, broker })).execute(
-        makeExitGo(),
-      );
+      const first = await execution.execute(makeExitGo());
+      const second = await execution.execute(makeExitGo());
 
-      expect(result.status).toBe('deduped');
-      expect(broker.flattenCalls).toHaveLength(0);
+      expect(first.status).toBe('submitted');
+      expect(second.status).toBe('deduped');
+      expect(second.reason).toBe('an order or fill already exists for this idempotency_key');
+      expect(broker.cancelCalls).toHaveLength(1);
+      expect(broker.flattenCalls).toHaveLength(1);
+    });
+
+    describe('store cross-check (review comment 3)', () => {
+      it('refuses when the store holds no open lot for the instrument to close', async () => {
+        const { store } = openTestExecutionStore();
+        const broker = makeBroker();
+        // No seed: the store has nothing open for AAPL.
+
+        const result = await new ExecutionImpl(makeInput({ store, broker })).execute(makeExitGo());
+
+        expect(result.status).toBe('error');
+        expect(result.reason).toContain('AAPL');
+        expect(result.reason).toContain('no open lot');
+        expect(broker.cancelCalls).toHaveLength(0);
+        expect(broker.flattenCalls).toHaveLength(0);
+        expect(await store.countAllFlattenSubmissions()).toBe(0);
+      });
+
+      it('refuses an exit sized differently than the held quantity, without clamping it', async () => {
+        const { store } = openTestExecutionStore();
+        const broker = makeBroker();
+        await seedHeldLot(store); // filled_size 40
+
+        const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
+          makeExitGo({ size: 999 }),
+        );
+
+        expect(result.status).toBe('error');
+        expect(result.reason).toContain('999');
+        expect(result.reason).toContain('40');
+        expect(broker.cancelCalls).toHaveLength(0);
+        expect(broker.flattenCalls).toHaveLength(0);
+        expect(await store.countAllFlattenSubmissions()).toBe(0);
+      });
+
+      it('refuses an exit whose side does not match the closing side implied by the held lot', async () => {
+        const { store } = openTestExecutionStore();
+        const broker = makeBroker();
+        await seedHeldLot(store); // side 'buy' -> closing side should be 'sell'
+
+        const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
+          makeExitGo({ side: 'buy' }), // wrong: should be 'sell'
+        );
+
+        expect(result.status).toBe('error');
+        expect(result.reason).toContain("'buy'");
+        expect(result.reason).toContain("'sell'");
+        expect(broker.cancelCalls).toHaveLength(0);
+        expect(broker.flattenCalls).toHaveLength(0);
+        expect(await store.countAllFlattenSubmissions()).toBe(0);
+      });
     });
 
     // AC: "Exit submissions are covered against the simulated adapter,
-    // including the case where the venue holds no matching position." The
-    // Simulated adapter's `submitFlatten` never inspects a position book —
-    // it prices and fills unconditionally (simulated-adapter.ts) — so an
-    // exit with nothing held still gets a submission ack, exactly like a
-    // live venue's plain market order would.
-    it('submits through the real SimulatedBrokerAdapter with no matching position held', async () => {
+    // including the case where the venue holds no matching position." This
+    // is a VENUE-side condition, distinct from the store-side cross-check
+    // above: the store is seeded realistically (as production always has
+    // one, per the cross-check), but the Simulated adapter instance itself
+    // has never seen a `submitBracket` call for this key, so its own
+    // `accepted` book has no matching entry. `submitFlatten` never inspects
+    // a position book — it prices and fills unconditionally
+    // (simulated-adapter.ts) — so the flatten still acks.
+    it('submits through the real SimulatedBrokerAdapter when the VENUE holds no matching position', async () => {
       const { store } = openTestExecutionStore();
+      await seedHeldLot(store);
       const costModel: CostModel = {
         fill: vi.fn().mockReturnValue({
           fill_price: 99.5,
@@ -651,15 +848,18 @@ describe('ExecutionImpl.execute', () => {
         },
       });
 
-      // Nothing was ever submitted through this broker — no matching
-      // position exists at the venue — yet the flatten still acks.
+      // Nothing was ever submitted through THIS broker instance — no
+      // matching position exists at the venue — yet the flatten still
+      // acks, because `cancel()` on an unknown id resolves quietly
+      // (idempotent by contract, types/broker.ts) and `submitFlatten`
+      // never consults the venue's book either.
       const result = await new ExecutionImpl(
         makeInput({ store, broker, costModel, marketData }),
       ).execute(makeExitGo());
 
       expect(result.status).toBe('submitted');
       expect(result.broker_order_ids).toEqual(['key-aapl-1355:flatten']);
-      expect(await store.countAllPositions()).toBe(0);
+      expect(await store.countAllPositions()).toBe(1); // just the seed
     });
   });
 });

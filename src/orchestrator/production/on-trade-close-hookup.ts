@@ -5,7 +5,10 @@
  * Corrected scope, per the issue's own comment thread: the original AC asked
  * for this hook off a tick's `execution` step / `TickOutcome.execution_result`
  * — that path never carries a closed trade. `ExecutionImpl.execute()` returns
- * a submission ack only, and `intent_type: 'exit'` is unimplemented (#82/#83).
+ * a submission ack only, for every `intent_type` including `'exit'` (#508):
+ * a flatten's own fill does not yet close the lot it flattens (a follow-up
+ * gap in `ingestFills()`'s fill-to-lot attribution, filed separately), and
+ * even once it does, closing is still `ingestFills()`'s job, not `execute()`'s.
  * The only place a `ClosedTrade` is ever produced is `ingestFills()` calling
  * `SharedStore.writeClosedTrade()` (src/execution/ingest-fills.ts), on its own
  * polling path, independent of the per-instrument tick chain. So this module
@@ -25,7 +28,11 @@
  * for the whole composition root to share.
  */
 
-import type { LotAdvance, SharedStore } from '../../execution/index.js';
+import type {
+  FlattenSubmissionWriteAhead,
+  LotAdvance,
+  SharedStore,
+} from '../../execution/index.js';
 import type { OnTradeCloseInput } from '../../feedback-loop/index.js';
 import { onTradeClose } from '../../feedback-loop/index.js';
 import type { Fill, OpenPosition, OrderState } from '../../shared/index.js';
@@ -77,6 +84,21 @@ export function withOnTradeClose(
     hasFill: (broker_fill_id: string): Promise<boolean> => store.hasFill(broker_fill_id),
 
     getFills: (idempotency_key: string): Promise<Fill[]> => store.getFills(idempotency_key),
+
+    writeAheadFlatten: (submission: FlattenSubmissionWriteAhead): Promise<void> =>
+      store.writeAheadFlatten(submission),
+
+    resolveFlattenSubmitted: (
+      idempotency_key: string,
+      update: { order_state: OrderState; broker_order_ids: string[] },
+      resolved_at: Date,
+    ): Promise<void> => store.resolveFlattenSubmitted(idempotency_key, update, resolved_at),
+
+    resolveFlattenError: (
+      idempotency_key: string,
+      reason: string,
+      resolved_at: Date,
+    ): Promise<void> => store.resolveFlattenError(idempotency_key, reason, resolved_at),
 
     applyLotAdvance: async (advance: LotAdvance): Promise<void> => {
       await store.applyLotAdvance(advance);

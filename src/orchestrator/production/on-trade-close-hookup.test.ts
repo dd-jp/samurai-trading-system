@@ -1,4 +1,8 @@
-import type { LotAdvance, SharedStore } from '../../execution/index.js';
+import type {
+  FlattenSubmissionWriteAhead,
+  LotAdvance,
+  SharedStore,
+} from '../../execution/index.js';
 import type { OnTradeCloseInput } from '../../feedback-loop/index.js';
 import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../../shared/index.js';
 import { FixtureSetupStore } from '../../trader/index.js';
@@ -63,6 +67,17 @@ class FakeSharedStore implements SharedStore {
   async getFills(_idempotency_key: string): Promise<Fill[]> {
     return [];
   }
+  async writeAheadFlatten(_submission: FlattenSubmissionWriteAhead): Promise<void> {}
+  async resolveFlattenSubmitted(
+    _idempotency_key: string,
+    _update: { order_state: OrderState; broker_order_ids: string[] },
+    _resolved_at: Date,
+  ): Promise<void> {}
+  async resolveFlattenError(
+    _idempotency_key: string,
+    _reason: string,
+    _resolved_at: Date,
+  ): Promise<void> {}
   async applyLotAdvance(advance: LotAdvance): Promise<void> {
     if (this.shouldThrow) {
       throw new Error('boom');

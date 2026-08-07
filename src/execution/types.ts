@@ -17,18 +17,21 @@
  * calls until the ticket that drives the rest of the lifecycle (#83) arrives.
  *
  * #86 adds `getOrder` (the reconciliation lookup) and `reconcile()`, in the
- * same additive style. `cancel`/`getOpenPositions` still wait for their
- * callers. `submitFlatten` got its caller in #508 — `execute()`'s `exit`
- * branch — which is also where the "no broker order without a store record
- * preceding it" claim below stops being universal: a flatten reaches the
- * broker with no write-ahead behind it, because an exit closes an existing
- * lot rather than opening one (see execute.ts's `intent_type === 'exit'`
- * branch for why). For every OTHER path the claim still holds: Execution is
- * the store's sole writer and the write-ahead precedes the broker call, so
- * the only reachable divergence direction there is store→broker, which
- * `getOrder` alone answers. A broker-side order with no store record and no
- * exit behind it implies an order placed outside this system, which is out
- * of scope.
+ * same additive style. `cancel`/`getOpenPositions` still wait for a caller
+ * of their own. `submitFlatten` got its caller in #508 — `execute()`'s
+ * `exit` branch — and PR #516's review sharpened it further: `cancel` is
+ * now called too (ahead of `submitFlatten`, to clear the held lot's own
+ * bracket legs before the position goes flat — see execute.ts for why an
+ * uncancelled leg is a live-money hazard, not a backstop), and the flatten
+ * itself is write-ahead journalled to `flatten_submissions`
+ * (`SharedStore.writeAheadFlatten`) rather than `open_positions` — an exit
+ * closes an existing lot rather than opening one, so it has no bracket and
+ * no `OpenPosition` to write ahead, but it still needs SOME durable row for
+ * `findByKey`'s dedup gate and #86's reconcile to resolve against. The "no
+ * broker order without a store record preceding it" claim below therefore
+ * still holds for every path, exit included — only WHICH table the record
+ * lives in differs. A broker-side order with no store record in either
+ * table implies an order placed outside this system, which is out of scope.
  *
  * `OpenPosition` / `OrderState` are NOT redefined here — they are cross-spec
  * types owned by src/shared/types.ts (registry §4).
@@ -50,4 +53,4 @@ export type {
   ReconcileReport,
   SimulatedAdapterConfig,
 } from './types/execution.js';
-export type { LotAdvance, SharedStore } from './types/store.js';
+export type { FlattenSubmissionWriteAhead, LotAdvance, SharedStore } from './types/store.js';

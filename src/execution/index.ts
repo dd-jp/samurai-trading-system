@@ -46,7 +46,11 @@ export { ExecutionImpl } from './execute.js';
 export type { SimulatedBrokerAdapterInput } from './simulated-adapter.js';
 export { SimulatedBrokerAdapter } from './simulated-adapter.js';
 export { SqliteBrokerStateStore } from './sqlite-broker-state-store.js';
-export { DuplicatePositionError, SqliteExecutionStore } from './sqlite-shared-store.js';
+export {
+  DuplicateFlattenSubmissionError,
+  DuplicatePositionError,
+  SqliteExecutionStore,
+} from './sqlite-shared-store.js';
 export type {
   BrokerAck,
   BrokerAdapter,
@@ -54,6 +58,7 @@ export type {
   ExecutionConfig,
   ExecutionInput,
   ExecutionResult,
+  FlattenSubmissionWriteAhead,
   LotAdvance,
   NativeBracketRequest,
   NormalizedFill,

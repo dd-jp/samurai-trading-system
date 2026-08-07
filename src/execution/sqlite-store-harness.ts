@@ -31,6 +31,22 @@ import {
   type OpenPositionRow,
   SqliteExecutionStore,
 } from './sqlite-shared-store.js';
+import type { FlattenSubmissionWriteAhead } from './types.js';
+
+/** Row shape for `TestExecutionStore.getFlattenSubmission` — a read the production port never needs. */
+export interface FlattenSubmissionRow {
+  idempotency_key: string;
+  instrument: string;
+  asset_class: 'crypto' | 'stocks';
+  side: 'buy' | 'sell';
+  size: number;
+  status: 'submitting' | 'submitted' | 'error';
+  order_state: OrderState | null;
+  broker_order_ids: string | null;
+  reason: string | null;
+  submitted_at: string;
+  resolved_at: string | null;
+}
 
 export class TestExecutionStore extends SqliteExecutionStore {
   readonly writeLog: string[] = [];
@@ -50,6 +66,29 @@ export class TestExecutionStore extends SqliteExecutionStore {
   ): Promise<void> {
     this.writeLog.push(`update:${idempotency_key}:${update.order_state}`);
     return super.updatePositionState(idempotency_key, update);
+  }
+
+  override async writeAheadFlatten(submission: FlattenSubmissionWriteAhead): Promise<void> {
+    this.writeLog.push(`write-ahead-flatten:${submission.idempotency_key}`);
+    return super.writeAheadFlatten(submission);
+  }
+
+  override async resolveFlattenSubmitted(
+    idempotency_key: string,
+    update: { order_state: OrderState; broker_order_ids: string[] },
+    resolved_at: Date,
+  ): Promise<void> {
+    this.writeLog.push(`resolve-flatten:${idempotency_key}:${update.order_state}`);
+    return super.resolveFlattenSubmitted(idempotency_key, update, resolved_at);
+  }
+
+  override async resolveFlattenError(
+    idempotency_key: string,
+    reason: string,
+    resolved_at: Date,
+  ): Promise<void> {
+    this.writeLog.push(`resolve-flatten-error:${idempotency_key}`);
+    return super.resolveFlattenError(idempotency_key, reason, resolved_at);
   }
 
   /** Every state, including terminal — what `getOpenPositions()` deliberately excludes. */
@@ -72,6 +111,21 @@ export class TestExecutionStore extends SqliteExecutionStore {
       .prepare('SELECT * FROM closed_trades ORDER BY rowid')
       .all() as ClosedTradeRow[];
     return rows.map(fromClosedTradeRow);
+  }
+
+  /** Raw read of the flatten journal (#508 review, PR #516) — production never reads this back. */
+  async getFlattenSubmission(idempotency_key: string): Promise<FlattenSubmissionRow | null> {
+    const row = this.testDb
+      .prepare('SELECT * FROM flatten_submissions WHERE idempotency_key = ?')
+      .get(idempotency_key) as FlattenSubmissionRow | undefined;
+    return row === undefined ? null : row;
+  }
+
+  async countAllFlattenSubmissions(): Promise<number> {
+    const row = this.testDb.prepare('SELECT COUNT(*) AS n FROM flatten_submissions').get() as {
+      n: number;
+    };
+    return row.n;
   }
 }
 
