@@ -52,6 +52,13 @@ function makeFlattenWriteAhead(
     size: 25,
     submitted_at: OPENED_AT,
     lot_idempotency_keys: ['key-lot-1', 'key-lot-2'],
+    // #571: what each named lot HELD at write-ahead, summing to `size` — the
+    // fixture mirrors `executeExit`, which derives both from one
+    // `heldQuantitiesFor` result.
+    lot_held_quantities: [
+      { idempotency_key: 'key-lot-1', held: 10 },
+      { idempotency_key: 'key-lot-2', held: 15 },
+    ],
     ...overrides,
   };
 }
@@ -351,19 +358,82 @@ describe('SqliteExecutionStore', () => {
     });
   });
 
-  describe('writeAheadFlatten / getFlattenLotKeys (#517)', () => {
+  describe('writeAheadFlatten / getFlattenAttribution (#517, #571)', () => {
     it('round-trips the lot identity through the journal, in the order it was written', async () => {
       const { store } = makeStore();
 
       await store.writeAheadFlatten(makeFlattenWriteAhead());
 
-      expect(await store.getFlattenLotKeys('flatten-1')).toEqual(['key-lot-1', 'key-lot-2']);
+      expect((await store.getFlattenAttribution('flatten-1'))?.lot_idempotency_keys).toEqual([
+        'key-lot-1',
+        'key-lot-2',
+      ]);
+    });
+
+    // #571: the split's per-lot share. Returned already paired with its lot,
+    // so `redistributeFlattenFills` never indexes one array by the other's
+    // position.
+    it('round-trips each lot’s held quantity, paired with its own key', async () => {
+      const { store } = makeStore();
+
+      await store.writeAheadFlatten(makeFlattenWriteAhead());
+
+      expect((await store.getFlattenAttribution('flatten-1'))?.lot_held_quantities).toEqual([
+        { idempotency_key: 'key-lot-1', held: 10 },
+        { idempotency_key: 'key-lot-2', held: 15 },
+      ]);
+    });
+
+    // A lot holding nothing (its entry fill has not landed) stays named — the
+    // #571 decision, recorded in migration 0021: `executeExit`'s cancel loop
+    // cancels its protective legs regardless of this journal, so dropping it
+    // here would remove the only signal that re-arms them (#525).
+    it('journals a zero held quantity rather than dropping the lot that holds nothing', async () => {
+      const { store } = makeStore();
+
+      await store.writeAheadFlatten(
+        makeFlattenWriteAhead({
+          size: 10,
+          lot_idempotency_keys: ['key-lot-1', 'key-lot-2'],
+          lot_held_quantities: [
+            { idempotency_key: 'key-lot-1', held: 10 },
+            { idempotency_key: 'key-lot-2', held: 0 },
+          ],
+        }),
+      );
+
+      const attribution = await store.getFlattenAttribution('flatten-1');
+      expect(attribution?.lot_idempotency_keys).toEqual(['key-lot-1', 'key-lot-2']);
+      expect(attribution?.lot_held_quantities).toEqual([
+        { idempotency_key: 'key-lot-1', held: 10 },
+        { idempotency_key: 'key-lot-2', held: 0 },
+      ]);
+    });
+
+    // The journal's pairing is the thing money is split by, so a caller that
+    // hands over two disagreeing lists is refused at the WRITE rather than
+    // silently journalling a quantity against the wrong lot.
+    it('refuses a submission whose held quantities name different lots than the keys', async () => {
+      const { store } = makeStore();
+
+      await expect(
+        store.writeAheadFlatten(
+          makeFlattenWriteAhead({
+            lot_idempotency_keys: ['key-lot-1', 'key-lot-2'],
+            lot_held_quantities: [
+              { idempotency_key: 'key-lot-2', held: 15 },
+              { idempotency_key: 'key-lot-1', held: 10 },
+            ],
+          }),
+        ),
+      ).rejects.toThrow(/refusing to journal flatten 'flatten-1'/);
+      expect(await store.getFlattenAttribution('flatten-1')).toBeNull();
     });
 
     it('returns null for a key that names no flatten submission', async () => {
       const { store } = makeStore();
 
-      expect(await store.getFlattenLotKeys('never-submitted')).toBeNull();
+      expect(await store.getFlattenAttribution('never-submitted')).toBeNull();
     });
 
     // A flatten journalled before migration 0020 added the column has NULL
@@ -376,13 +446,30 @@ describe('SqliteExecutionStore', () => {
         'UPDATE flatten_submissions SET lot_idempotency_keys = NULL WHERE idempotency_key = ?',
       ).run('flatten-legacy');
 
-      expect(await store.getFlattenLotKeys('flatten-legacy')).toBeNull();
+      expect(await store.getFlattenAttribution('flatten-legacy')).toBeNull();
+    });
+
+    // Migration 0021's own backward-compatibility posture, the same one 0020
+    // took: a flatten submitted before this column existed records no held
+    // quantities, and `ingestFills()` must read that as "fall back to the
+    // entry-total split", not fail parsing a column never populated.
+    it('returns the lot keys with a null held-quantity list for a pre-0021 row', async () => {
+      const { db, store } = makeStore();
+      await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-pre-0021' }));
+      db.prepare(
+        'UPDATE flatten_submissions SET lot_held_quantities = NULL WHERE idempotency_key = ?',
+      ).run('flatten-pre-0021');
+
+      expect(await store.getFlattenAttribution('flatten-pre-0021')).toEqual({
+        lot_idempotency_keys: ['key-lot-1', 'key-lot-2'],
+        lot_held_quantities: null,
+      });
     });
   });
 
   // Review feedback on #524 (kimi): the same unvalidated-cast defect class
   // #509 closed repo-wide, freshly reintroduced by #517 if left unguarded.
-  describe('getFlattenLotKeys — corrupted rows (#524 review)', () => {
+  describe('getFlattenAttribution — corrupted rows (#524 review, #571)', () => {
     it('throws, naming the idempotency_key, when the stored value is not valid JSON', async () => {
       const { db, store } = makeStore();
       await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-corrupt' }));
@@ -390,7 +477,7 @@ describe('SqliteExecutionStore', () => {
         'UPDATE flatten_submissions SET lot_idempotency_keys = ? WHERE idempotency_key = ?',
       ).run('{not json', 'flatten-corrupt');
 
-      await expect(store.getFlattenLotKeys('flatten-corrupt')).rejects.toThrow(
+      await expect(store.getFlattenAttribution('flatten-corrupt')).rejects.toThrow(
         /flatten-corrupt' is not valid JSON/,
       );
     });
@@ -404,7 +491,7 @@ describe('SqliteExecutionStore', () => {
         'UPDATE flatten_submissions SET lot_idempotency_keys = ? WHERE idempotency_key = ?',
       ).run(JSON.stringify({ not: 'an array' }), 'flatten-wrong-shape');
 
-      await expect(store.getFlattenLotKeys('flatten-wrong-shape')).rejects.toThrow(
+      await expect(store.getFlattenAttribution('flatten-wrong-shape')).rejects.toThrow(
         /flatten-wrong-shape' is not a JSON array of strings/,
       );
     });
@@ -416,7 +503,7 @@ describe('SqliteExecutionStore', () => {
         'UPDATE flatten_submissions SET lot_idempotency_keys = ? WHERE idempotency_key = ?',
       ).run(JSON.stringify(['key-1', 42]), 'flatten-mixed');
 
-      await expect(store.getFlattenLotKeys('flatten-mixed')).rejects.toThrow('flatten-mixed');
+      await expect(store.getFlattenAttribution('flatten-mixed')).rejects.toThrow('flatten-mixed');
     });
 
     // The error must name the corrupt row so the failure is diagnosable at
@@ -432,8 +519,83 @@ describe('SqliteExecutionStore', () => {
         'UPDATE flatten_submissions SET lot_idempotency_keys = ? WHERE idempotency_key = ?',
       ).run(poison, 'flatten-secret');
 
-      await expect(store.getFlattenLotKeys('flatten-secret')).rejects.not.toThrow(
+      await expect(store.getFlattenAttribution('flatten-secret')).rejects.not.toThrow(
         /leaked-marker-xyz/,
+      );
+    });
+
+    // #571's column is a SECOND place raw stored text reaches an error
+    // message and a second unvalidated-parse risk, so it carries the same
+    // four guarantees rather than inheriting them by proximity.
+    it('throws, naming the idempotency_key, when the held quantities are not valid JSON', async () => {
+      const { db, store } = makeStore();
+      await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-held-bad' }));
+      db.prepare(
+        'UPDATE flatten_submissions SET lot_held_quantities = ? WHERE idempotency_key = ?',
+      ).run('{not json', 'flatten-held-bad');
+
+      await expect(store.getFlattenAttribution('flatten-held-bad')).rejects.toThrow(
+        /lot_held_quantities for 'flatten-held-bad' is not valid JSON/,
+      );
+    });
+
+    it('throws when a held quantity is not a finite non-negative number', async () => {
+      const { db, store } = makeStore();
+      await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-held-nan' }));
+      db.prepare(
+        'UPDATE flatten_submissions SET lot_held_quantities = ? WHERE idempotency_key = ?',
+      ).run(JSON.stringify([10, 'fifteen']), 'flatten-held-nan');
+
+      await expect(store.getFlattenAttribution('flatten-held-nan')).rejects.toThrow(
+        'flatten-held-nan',
+      );
+    });
+
+    // Fail closed, not clamp: `executeExit` refuses an over-exited lot BEFORE
+    // this row is written, so a negative share is a corrupted record. Skipping
+    // it as "nothing to allocate" would strand that lot's quantity silently.
+    it('throws on a negative held quantity rather than treating it as no share', async () => {
+      const { db, store } = makeStore();
+      await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-held-neg' }));
+      db.prepare(
+        'UPDATE flatten_submissions SET lot_held_quantities = ? WHERE idempotency_key = ?',
+      ).run(JSON.stringify([10, -15]), 'flatten-held-neg');
+
+      await expect(store.getFlattenAttribution('flatten-held-neg')).rejects.toThrow(
+        'flatten-held-neg',
+      );
+    });
+
+    // A length disagreement would pair a quantity with the WRONG lot — the
+    // one corruption that produces a plausible-looking split instead of an
+    // obviously broken one.
+    it.each([
+      ['shorter than', [10]],
+      ['longer than', [10, 15, 20]],
+    ])('throws when the held quantities are %s the lot keys', async (_label, quantities) => {
+      const { db, store } = makeStore();
+      await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-held-len' }));
+      db.prepare(
+        'UPDATE flatten_submissions SET lot_held_quantities = ? WHERE idempotency_key = ?',
+      ).run(JSON.stringify(quantities), 'flatten-held-len');
+
+      await expect(store.getFlattenAttribution('flatten-held-len')).rejects.toThrow(
+        'flatten-held-len',
+      );
+    });
+
+    it('never quotes the corrupted raw held quantities in the thrown error', async () => {
+      const { db, store } = makeStore();
+      await store.writeAheadFlatten(
+        makeFlattenWriteAhead({ idempotency_key: 'flatten-held-leak' }),
+      );
+      const poison = '{"leaked-marker-abc": true';
+      db.prepare(
+        'UPDATE flatten_submissions SET lot_held_quantities = ? WHERE idempotency_key = ?',
+      ).run(poison, 'flatten-held-leak');
+
+      await expect(store.getFlattenAttribution('flatten-held-leak')).rejects.not.toThrow(
+        /leaked-marker-abc/,
       );
     });
   });

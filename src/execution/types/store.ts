@@ -7,6 +7,7 @@ import type {
   AssetClass,
   ClosedTrade,
   Fill,
+  LotHeldQuantity,
   OpenPosition,
   OrderState,
 } from '../../shared/index.js';
@@ -67,6 +68,13 @@ export interface SharedStore {
    * with no persisted entry fill is simply absent from the returned `Map`,
    * not present at 0 — mirroring `DashboardQueryStore.getMarks`' own
    * "missing is absent" answer, the shape this follows.
+   *
+   * #571: no longer how a flatten's fill is split. That split now reads the
+   * held quantities journalled on the flatten row itself
+   * (`FlattenAttribution.lot_held_quantities`); this remains the fallback for
+   * a flatten row written before migration 0021, which has none — see
+   * `redistributeFlattenFills` for why an entry total was the wrong number
+   * despite being a stable one.
    */
   getEntryFillSizes(idempotency_keys: readonly string[]): Promise<Map<string, number>>;
   /**
@@ -81,11 +89,13 @@ export interface SharedStore {
    * `shared/held-quantity.ts`.
    *
    * Two neighbours in `ingest-fills.ts` deliberately do NOT read through this:
-   * `redistributeFlattenFills`, whose split must stay pinned to the ENTRY
-   * total for the stability reasons documented there; and
-   * `maybeRearmResidual`, which arrives at the same residual from the fill
-   * rows it is already holding for the lot it is advancing, so a batch read
-   * keyed by lot would buy it nothing.
+   * `redistributeFlattenFills`, whose split reads the held quantities the
+   * flatten JOURNALLED at write-ahead (#571) rather than re-deriving them
+   * here — a live re-derivation would shrink as this very flatten's own fills
+   * persisted, and an unstable split is what `broker_fill_id` dedup cannot
+   * survive; and `maybeRearmResidual`, which arrives at the same residual
+   * from the fill rows it is already holding for the lot it is advancing, so
+   * a batch read keyed by lot would buy it nothing.
    */
   getExitFillSizes(idempotency_keys: readonly string[]): Promise<Map<string, number>>;
   /**
@@ -130,15 +140,44 @@ export interface SharedStore {
    */
   resolveFlattenError(idempotency_key: string, reason: string, resolved_at: Date): Promise<void>;
   /**
-   * The lot(s) a flatten submission was journalled to close (#517), in the
-   * `opened_at` order `executeExit` wrote them — or `null` if `key` names no
-   * flatten submission, or names one written before migration 0020 added
-   * this column. `ingestFills()` is this method's only reader: a flatten's
-   * fill carries the flatten's OWN idempotency key, never a held lot's, so
-   * this is how a fill bucketed under that key gets routed back to the lot(s)
-   * it actually closed instead of being silently dropped.
+   * What a flatten submission journalled about the lot(s) it was closing
+   * (#517, widened by #571) — or `null` if `key` names no flatten submission,
+   * or names one written before migration 0020 added the lot identity.
+   * `ingestFills()` is this method's only reader: a flatten's fill carries
+   * the flatten's OWN idempotency key, never a held lot's, so this is how a
+   * fill bucketed under that key gets routed back to the lot(s) it actually
+   * closed instead of being silently dropped.
    */
-  getFlattenLotKeys(idempotency_key: string): Promise<readonly string[] | null>;
+  getFlattenAttribution(idempotency_key: string): Promise<FlattenAttribution | null>;
+}
+
+/**
+ * The journalled record of which lots a flatten was closing, and how much
+ * each of them HELD when it was submitted — see `getFlattenAttribution`.
+ *
+ * The two arrays are positionally parallel and the store refuses a row where
+ * they are not, so a reader may index one by the other's position without
+ * re-checking.
+ */
+export interface FlattenAttribution {
+  /** In the `opened_at` order `executeExit` read the lots in — the FIFO order the split allocates in. */
+  lot_idempotency_keys: readonly string[];
+  /**
+   * Each lot's held quantity (`filled_size` minus its already-recorded exit
+   * fills) AT WRITE-AHEAD TIME, summing to the flatten's own `size` — the
+   * fixed per-lot share `redistributeFlattenFills` allocates against (#571).
+   *
+   * Returned already PAIRED with its lot's key, in the same order as
+   * `lot_idempotency_keys`, even though the column stores a bare positional
+   * array: the store validates the two agree in length and is therefore the
+   * only place that has to reason about the pairing at all. A reader handed
+   * two parallel arrays would have to index one by the other's position and
+   * decide, on the money path, what a missing entry means.
+   *
+   * `null` for a flatten row written before migration 0021, which recorded no
+   * such quantities; its fill falls back to the pre-#571 entry-total split.
+   */
+  lot_held_quantities: readonly LotHeldQuantity[] | null;
 }
 
 /** One poll's atomic advance of a single lot — see `SharedStore.applyLotAdvance`. */
@@ -172,4 +211,17 @@ export interface FlattenSubmissionWriteAhead {
    * open in between and wrongly receive this flatten's fill).
    */
   lot_idempotency_keys: readonly string[];
+  /**
+   * What each of those lots HELD as this flatten was submitted (#571) —
+   * `heldQuantitiesFor`'s own result, passed through unflattened, in the same
+   * order as `lot_idempotency_keys` and summing to `size`. The store refuses
+   * a submission whose keys here disagree with `lot_idempotency_keys`, so the
+   * journal can never record a quantity against the wrong lot.
+   *
+   * Journalled rather than re-derived when the fill lands, for the reason
+   * migration 0021 spells out: the split must be identical on every poll or
+   * `broker_fill_id` dedup strands quantity, and held quantity re-derived
+   * later shrinks as this very flatten's own fills persist.
+   */
+  lot_held_quantities: readonly LotHeldQuantity[];
 }

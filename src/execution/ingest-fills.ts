@@ -22,7 +22,8 @@
  * `redistributeFlattenFills` below routes it back to the lot(s) the flatten
  * journalled it was closing before the rest of this module ever sees it —
  * without that routing there is no other mechanism that closes a
- * flatten-closed lot at all (see the finding in PR #517's body).
+ * flatten-closed lot at all (see the finding in PR #517's body) — splitting
+ * it by the per-lot HELD quantities the same journal row recorded (#571).
  *
  * #525: `executeExit` cancels every held lot's protective legs BEFORE
  * submitting the flatten (#516 — a resting leg fires into a now-flat
@@ -110,7 +111,7 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
  * adapter tags its own flatten fill `'entry'` (it models the flatten as
  * just another priced fill at submit time, the same as a bracket's entry),
  * and nothing in `BrokerAdapter`'s contract requires every adapter to agree
- * on what a flatten fill's leg should read. `getFlattenLotKeys` keyed on
+ * on what a flatten fill's leg should read. `getFlattenAttribution` keyed on
  * `client_order_id` is adapter-agnostic where a leg tag is not, which is
  * why this function does not consult `fill.leg` to decide whether a bucket
  * is a flatten's — only afterwards, to force it to `'exit'` on the way out
@@ -145,13 +146,13 @@ async function redistributeFlattenFills(
   // that new lot's own entry fill can already be sitting in `byLot` by the
   // time the loop below reaches it. That new lot's key is absent from THIS
   // `positionKeys` snapshot, so its bucket fails the "a lot's own bucket"
-  // check right below and falls through to the `getFlattenLotKeys` lookup
+  // check right below and falls through to the `getFlattenAttribution` lookup
   // instead — see that lookup's own comment for what happens to it from
   // there, and why it is safe.
   for (const clientOrderId of [...byLot.keys()]) {
     if (positionKeys.has(clientOrderId)) continue; // a lot's own bucket — the existing path.
 
-    const lotKeys = await store.getFlattenLotKeys(clientOrderId);
+    const attribution = await store.getFlattenAttribution(clientOrderId);
     // Not a known flatten either (an unrelated/unknown client_order_id, a
     // flatten row written before migration 0020 named no lot, OR — per the
     // snapshot comment above — a lot that opened on this instrument AFTER
@@ -166,7 +167,8 @@ async function redistributeFlattenFills(
     // flatten's targets: `lot_idempotency_keys` is fixed at that flatten's
     // own write-ahead, which necessarily predates a lot that did not exist
     // yet.
-    if (lotKeys === null || lotKeys.length === 0) continue;
+    if (attribution === null || attribution.lot_idempotency_keys.length === 0) continue;
+    const lotKeys = attribution.lot_idempotency_keys;
 
     // #525: recorded before the split below runs, so a lot that ends up
     // with ZERO share of this raw fill (an earlier-opened sibling absorbed
@@ -178,39 +180,54 @@ async function redistributeFlattenFills(
     if (rawFills === undefined) continue; // appeases the type checker; every key here has a bucket.
     byLot.delete(clientOrderId);
 
-    // Each named lot's FIXED total share of THIS flatten — its entry's fully
-    // filled quantity, reconstructed from persisted ENTRY fills the same way
-    // `advanceLot` reconstructs `filledSize` below. Deliberately NOT reduced
-    // by prior EXIT fills already on record for the lot, and NOT filtered to
-    // lots still present in `positions` (open) — either would make the split
-    // drift between polls as fills get persisted and lots go terminal, and a
-    // DIFFERENT split under the SAME `broker_fill_id`-derived id is exactly
-    // what breaks `hasFill`'s dedup below (it matches on id alone, so a
-    // shrunk second attempt does not "correct" the first — it just vanishes
-    // behind it, silently stranding the difference). An entry's filled
-    // quantity, in contrast, is fixed forever once filling stops — which is
-    // always before any exit fill can exist for the same lot (`advanceLot`'s
-    // own "an exit fill cannot precede the entry fill" invariant) — so
-    // recomputing this on every poll, for every named lot regardless of
-    // whether it has since closed, yields the IDENTICAL split every time.
-    // That is what lets a poll dedupe cleanly on `broker_fill_id` instead of
-    // needing to reconstruct "how much of this fill did lot X already get".
+    // Each named lot's FIXED total share of THIS flatten — what the lot HELD
+    // when `executeExit` journalled the flatten, read straight off the
+    // write-ahead row (#571).
     //
-    // Read as ONE batch, not one `getFills` round-trip per lot: `ingestFills`
-    // runs on every tick, and a multi-scale-in exit can name many lots in
-    // `lotKeys`, so a per-lot loop of store calls would scale the sweep's
-    // I/O with the exit's lot count instead of staying flat. Shape follows
-    // `DashboardQueryStore.getMarks`' precedent (dashboard/sqlite-query-store.ts)
-    // — one `WHERE ... IN (...)` query, a `Map` back, a lot with no
-    // persisted entry fill simply absent from it rather than present at 0.
-    // This reads only what a PRIOR poll already persisted; it has nothing to
+    // Two properties are needed at once, and only a journalled number has
+    // both. STABLE: a DIFFERENT split under the SAME
+    // `broker_fill_id`-derived id is exactly what breaks `hasFill`'s dedup
+    // below (it matches on id alone, so a shrunk second attempt does not
+    // "correct" the first — it just vanishes behind it, silently stranding
+    // the difference), so the share must recompute identically on every poll,
+    // for every named lot, regardless of whether it has since closed. And
+    // EXIT-AWARE: the flatten's SIZE is the venue-true held quantity since
+    // #568 (`filled_size` minus recorded exit fills), so a share that ignores
+    // prior exits does not add up to the fill being split.
+    //
+    // The obvious candidates each have only one. Held quantity re-derived
+    // HERE is exit-aware but not stable — it shrinks as this very flatten's
+    // own fills persist. An entry total is stable but not exit-aware, and
+    // that was the #571 defect: an older lot with prior exit fills took its
+    // whole entry quantity, over-attributing its `ClosedTrade`'s exit price
+    // and leaving a later sibling permanently open on quantity the venue no
+    // longer held. Written once, before the broker call, the journalled held
+    // quantity is fixed the instant it exists AND is the number the flatten
+    // was sized against — `Σ lot_held_quantities === flatten.size`, which is
+    // in turn `executeExit`'s exact-equality guard against `order.size`.
+    //
+    // The store hands these back already paired with their lot's key, having
+    // refused any row where the pairing could not be established, so there is
+    // nothing to index or re-check here.
+    //
+    // PRE-0021 ROWS keep the old entry-total split rather than failing: a
+    // flatten submitted before that migration recorded no held quantities,
+    // and this is the only path that can still reach one (its fill has not
+    // been ingested yet). The entry sizes it needs are read as ONE batch, not
+    // one `getFills` round-trip per lot — `ingestFills` runs on every tick
+    // and a multi-scale-in exit can name many lots — following
+    // `DashboardQueryStore.getMarks`' precedent (dashboard/sqlite-query-store.ts):
+    // one `WHERE ... IN (...)` query, a `Map` back, a lot with no persisted
+    // entry fill simply absent from it rather than present at 0. Either way
+    // this reads only what a PRIOR poll already persisted; it has nothing to
     // do with, and does not touch, `advanceLot`'s `fill.timestamp <= now`
     // no-lookahead filter below, which governs THIS poll's fresh fills off
     // the broker feed instead.
-    const entrySizes = await store.getEntryFillSizes(lotKeys);
-    const totalShare = new Map<string, number>(
-      lotKeys.map((lotKey) => [lotKey, entrySizes.get(lotKey) ?? 0]),
-    );
+    const journalledHeld = attribution.lot_held_quantities;
+    const totalShare =
+      journalledHeld === null
+        ? await entryTotalShares(store, lotKeys)
+        : new Map(journalledHeld.map((lot) => [lot.idempotency_key, lot.held]));
 
     // Processed in the feed's own order, decrementing an IN-MEMORY copy of
     // `totalShare` across `rawFills` — a flatten is modelled/observed as one
@@ -255,26 +272,50 @@ async function redistributeFlattenFills(
         remaining.set(lotKey, need - take);
         leftover -= take;
       }
-      // `leftover > 0` here means the flatten filled more than the named
-      // lots' entries ever covered — `execute()`'s exact
-      // `order.size === heldSize` check (execute.ts's `executeExit`) means
-      // this should not happen, and there is no safe lot to hand the excess
-      // to, so it is left unattributed rather than guessed onto one. Silent,
-      // deliberately: a genuine over-fill here would already be showing up
-      // as a resize/exposure divergence elsewhere, and manufacturing a
-      // second signal here would not make that one easier to find.
+      // `leftover > 0` here means the flatten filled more than the named lots
+      // HELD when it was submitted (#571 — before that, more than their
+      // ENTRIES ever covered, which a lot with prior exits could exceed
+      // legitimately). `execute()`'s exact `order.size === heldSize` check
+      // (execute.ts's `executeExit`) sizes the flatten to exactly the sum of
+      // the shares journalled here, so this is now a genuine venue over-fill,
+      // and there is no safe lot to hand the excess to — it is left
+      // unattributed rather than guessed onto one. Silent, deliberately: a
+      // genuine over-fill here would already be showing up as a
+      // resize/exposure divergence elsewhere, and manufacturing a second
+      // signal here would not make that one easier to find.
       //
       // A DIFFERENT case from a new lot opening on this instrument mid-poll
       // (see the `positionKeys` snapshot comment above, and the
-      // `getFlattenLotKeys` one below it): that one is a bucket this
+      // `getFlattenAttribution` one below it): that one is a bucket this
       // function never even reaches this far for — it exits at the
-      // `getFlattenLotKeys` check, deferred safely to the next poll. This
+      // `getFlattenAttribution` check, deferred safely to the next poll. This
       // one is a genuine surplus against the flatten's OWN named lots, with
       // nowhere safe to go, ever.
     }
   }
 
   return flattenTargetedLots;
+}
+
+/**
+ * The pre-#571 split, kept for flatten rows written before migration 0021
+ * recorded held quantities — each lot's persisted ENTRY total, which is stable
+ * across polls (an entry's filled quantity is fixed forever once filling
+ * stops) but blind to exits already recorded against the lot. That blindness
+ * IS #571; see `redistributeFlattenFills` for what it costs. Reachable only
+ * for a flatten submitted before this code shipped whose fill has not been
+ * ingested yet, so it is a wind-down path, not a supported mode.
+ *
+ * A lot with no persisted entry fill is absent from `getEntryFillSizes`' Map
+ * rather than present at 0 (its documented shape), which reads here as a
+ * zero share — the same answer, made explicit.
+ */
+async function entryTotalShares(
+  store: ExecutionInput['store'],
+  lotKeys: readonly string[],
+): Promise<Map<string, number>> {
+  const entrySizes = await store.getEntryFillSizes(lotKeys);
+  return new Map(lotKeys.map((lotKey) => [lotKey, entrySizes.get(lotKey) ?? 0]));
 }
 
 /**

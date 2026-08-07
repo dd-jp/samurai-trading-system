@@ -1302,6 +1302,267 @@ describe('ExecutionImpl.execute', () => {
         expect(await store.getOpenPositions()).toHaveLength(1);
       });
 
+      // #571. The split above allocated against each lot's ENTRY total, which
+      // is stable but blind to exits already recorded — and since #568 the
+      // flatten's SIZE is the venue-true HELD quantity. The two disagree the
+      // moment an older named lot has prior exit fills, which is reachable by
+      // design: `decide.ts`'s `scale_in` opens additional same-side lots on
+      // one instrument, and any partial flatten leaves one of them
+      // part-closed.
+      //
+      // The repro, run end to end below: lot 1 entry 10 with 4 already closed
+      // (holds 6), lot 2 entry 5 with none closed (holds 5). The exit sizes
+      // 11 and fills 11. Against ENTRY totals lot 1 took `min(10, 11)` = 10 —
+      // an exit total of 14 against an entry of 10, so its `ClosedTrade`
+      // reported `filled_size` 10 with an exit price weighted over 14 units
+      // (realized PnL 97.14 instead of 96 here) — while lot 2 took 1 of its 5
+      // and stayed open forever on quantity the venue no longer held, with
+      // `maybeRearmResidual` arming protective legs over the missing 4: a
+      // resting order that fires into nothing and OPENS A REVERSE POSITION,
+      // #516's hazard. Against the HELD quantities the flatten journalled at
+      // write-ahead, lot 1 takes exactly its own 6 and lot 2 its own 5.
+      describe('multi-lot split by journalled held quantity (#571)', () => {
+        /**
+         * Lot 1 (entry 10 @ 90) and lot 2 (entry 5 @ 92, `scale_in`), then a
+         * first flatten of the full 15 that only partially fills — leaving
+         * lot 1 with prior exit fills and lot 2 untouched, the precondition
+         * the split used to get wrong.
+         *
+         * `firstFlattenQty` is deliberately smaller than lot 1's own share, so
+         * every unit of it lands on lot 1 under either split — the divergence
+         * this suite is about begins at the SECOND flatten.
+         */
+        async function seedTwoLotsWithPriorExit(
+          store: TestExecutionStore,
+          firstFlattenQty: number,
+          secondFlattenQty: number,
+        ): Promise<{ execution: ExecutionImpl; broker: SimulatedBrokerAdapter }> {
+          let now = NOW;
+          const steppingClock: Clock = { now: () => now };
+          const costModel: CostModel = {
+            fill: vi
+              .fn()
+              .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
+              .mockReturnValueOnce({ fill_price: 92, filled_size: 5, cost_breakdown: zeroCosts() })
+              .mockReturnValueOnce({
+                fill_price: 99,
+                filled_size: firstFlattenQty,
+                cost_breakdown: zeroCosts(),
+              })
+              .mockReturnValueOnce({
+                fill_price: 100,
+                filled_size: secondFlattenQty,
+                cost_breakdown: zeroCosts(),
+              }),
+          };
+          const marketData = makeMarketData();
+          const broker = new SimulatedBrokerAdapter({
+            clock: steppingClock,
+            costModel,
+            marketData,
+            config: SIMULATED_CONFIG,
+          });
+          const execution = new ExecutionImpl(
+            makeInput({ store, broker, costModel, marketData, clock: steppingClock }),
+          );
+
+          await execution.execute(
+            makeGo({ idempotency_key: 'key-lot-1', size: 10, entry: 90, stop: 85, target: 110 }),
+          );
+          await execution.ingestFills();
+          now = new Date(now.getTime() + 60_000);
+          await execution.execute(
+            makeGo({
+              idempotency_key: 'key-lot-2',
+              intent_type: 'scale_in',
+              size: 5,
+              entry: 92,
+              stop: 85,
+              target: 110,
+            }),
+          );
+          await execution.ingestFills();
+          now = new Date(now.getTime() + 60_000);
+
+          const first = await execution.execute(
+            makeExitGo({ idempotency_key: 'key-exit-1', size: 15 }),
+          );
+          expect(first.status).toBe('submitted');
+          await execution.ingestFills();
+          now = new Date(now.getTime() + 60_000);
+
+          // The precondition, asserted rather than assumed: lot 1 holds 6 of
+          // its 10, lot 2 still holds all 5, and both are open.
+          expect((await store.getExitFillSizes(['key-lot-1', 'key-lot-2'])).get('key-lot-1')).toBe(
+            firstFlattenQty,
+          );
+          expect(await store.getOpenPositions()).toHaveLength(2);
+
+          const second = await execution.execute(
+            makeExitGo({ idempotency_key: 'key-exit-2', size: 11 }),
+          );
+          // The guard passes on 6 + 5 — this is a correctly sized exit, which
+          // is what made the mis-split so quiet.
+          expect(second.status).toBe('submitted');
+
+          return { execution, broker };
+        }
+
+        it('journals what each lot HELD, not what its entry filled', async () => {
+          const { store } = openTestExecutionStore();
+
+          await seedTwoLotsWithPriorExit(store, 4, 11);
+
+          const journal = await store.getFlattenSubmission('key-exit-2');
+          expect(JSON.parse(journal?.lot_idempotency_keys ?? 'null')).toEqual([
+            'key-lot-1',
+            'key-lot-2',
+          ]);
+          // 6, not lot 1's entry total of 10 — and the pair sums to the
+          // flatten's own size, which `executeExit` already checked equals the
+          // exit intent's.
+          expect(JSON.parse(journal?.lot_held_quantities ?? 'null')).toEqual([6, 5]);
+          expect(journal?.size).toBe(11);
+        });
+
+        it('covers each lot with exactly its own held quantity, closing both and leaving no phantom', async () => {
+          const { store } = openTestExecutionStore();
+
+          const { execution, broker } = await seedTwoLotsWithPriorExit(store, 4, 11);
+          await execution.ingestFills();
+          // Re-polled: the split must land identically the second time or the
+          // difference vanishes behind `hasFill`'s `broker_fill_id` dedup.
+          await execution.ingestFills();
+
+          const closedTrades = await store.getClosedTrades();
+          expect(closedTrades).toHaveLength(2);
+          const byKey = new Map(closedTrades.map((trade) => [trade.idempotency_key, trade]));
+
+          // Lot 1's exit price is weighted over its OWN ten units — 4 at 99
+          // from the first flatten plus 6 at 100 from this one, i.e. 99.6.
+          // The entry-total split weighted it over fourteen (4 + 10) and
+          // reported 97.14 here.
+          expect(byKey.get('key-lot-1')).toMatchObject({ filled_size: 10 });
+          expect(byKey.get('key-lot-1')?.realized_pnl_net).toBeCloseTo((99.6 - 90) * 10, 6);
+          expect(byKey.get('key-lot-2')).toMatchObject({ filled_size: 5 });
+          expect(byKey.get('key-lot-2')?.realized_pnl_net).toBeCloseTo((100 - 92) * 5, 6);
+
+          // No phantom: the venue sold all of lot 2, so lot 2 is closed, not
+          // left open holding 4 units that do not exist.
+          expect(await store.getOpenPositions()).toEqual([]);
+          expect((await store.getPosition('key-lot-2'))?.order_state).toBe('closed');
+          // And nothing re-armed protection over that phantom. `executeExit`
+          // cancelled both lots' legs before the flatten (#525); lot 2 is flat
+          // afterwards, so `advanceLot` must leave them cancelled rather than
+          // arm a resting order that would fire into nothing and open a
+          // REVERSE position (#516).
+          expect(broker.getProtectedQty('key-lot-2')).toBeNull();
+          expect(broker.getProtectedQty('key-lot-1')).toBeNull();
+        });
+
+        // The stability property the entry-total split was chosen for, now
+        // proven for a lot that HAS prior exits — the case that made the
+        // entry total the wrong number. A PARTIAL fill is what exercises it:
+        // the shares must not move as this very flatten's own fills persist.
+        it('splits a PARTIAL fill identically across repeated polls when a lot has prior exits', async () => {
+          const { store } = openTestExecutionStore();
+
+          // 8 of the 11 asked for: lot 1's whole 6-share, then 2 of lot 2's 5.
+          const { execution, broker } = await seedTwoLotsWithPriorExit(store, 4, 8);
+          await execution.ingestFills();
+          await execution.ingestFills();
+          await execution.ingestFills();
+
+          // Lot 1 is genuinely flat — 4 + 6 against an entry of 10 — and its
+          // realized record is the same as the full-fill case above, because
+          // its share never depended on how much of lot 2's share filled.
+          const closedTrades = await store.getClosedTrades();
+          expect(closedTrades).toHaveLength(1);
+          expect(closedTrades[0]).toMatchObject({ idempotency_key: 'key-lot-1', filled_size: 10 });
+          expect(closedTrades[0]?.realized_pnl_net).toBeCloseTo((99.6 - 90) * 10, 6);
+
+          // Lot 2 took the remaining 2 — once, not once per poll — and its
+          // genuine residual of 3 carries fresh protection. The entry-total
+          // split gave it ZERO here (lot 1 absorbed all 8 of its 10-share),
+          // leaving it protected at a stale 5.
+          const lot2ExitQty = (await store.getFills('key-lot-2'))
+            .filter((lotFill) => lotFill.leg === 'exit')
+            .reduce((sum, lotFill) => sum + lotFill.qty, 0);
+          expect(lot2ExitQty).toBe(2);
+          expect(await store.getOpenPositions()).toHaveLength(1);
+          expect(broker.getProtectedQty('key-lot-2')).toBe(3);
+        });
+
+        // Migration 0021's backward compatibility, end to end: a flatten
+        // journalled before the column existed has NULL there and must keep
+        // the pre-#571 entry-total split rather than fail. Only reachable for
+        // a flatten submitted before this code shipped whose fill had not been
+        // ingested yet.
+        it('falls back to the entry-total split for a flatten journalled before migration 0021', async () => {
+          const { db, store } = openTestExecutionStore();
+          let now = NOW;
+          const steppingClock: Clock = { now: () => now };
+          const costModel: CostModel = {
+            fill: vi
+              .fn()
+              .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
+              .mockReturnValueOnce({ fill_price: 92, filled_size: 5, cost_breakdown: zeroCosts() })
+              .mockReturnValueOnce({
+                fill_price: 100,
+                filled_size: 15,
+                cost_breakdown: zeroCosts(),
+              }),
+          };
+          const marketData = makeMarketData();
+          const broker = new SimulatedBrokerAdapter({
+            clock: steppingClock,
+            costModel,
+            marketData,
+            config: SIMULATED_CONFIG,
+          });
+          const execution = new ExecutionImpl(
+            makeInput({ store, broker, costModel, marketData, clock: steppingClock }),
+          );
+
+          await execution.execute(
+            makeGo({ idempotency_key: 'key-lot-1', size: 10, entry: 90, stop: 85, target: 110 }),
+          );
+          await execution.ingestFills();
+          now = new Date(now.getTime() + 60_000);
+          await execution.execute(
+            makeGo({
+              idempotency_key: 'key-lot-2',
+              intent_type: 'scale_in',
+              size: 5,
+              entry: 92,
+              stop: 85,
+              target: 110,
+            }),
+          );
+          await execution.ingestFills();
+          now = new Date(now.getTime() + 60_000);
+
+          await execution.execute(makeExitGo({ idempotency_key: 'key-exit-1', size: 15 }));
+          // Ages the journal row back to its pre-0021 shape, BEFORE the fill
+          // is ingested — the only window in which such a row can be read.
+          db.prepare(
+            'UPDATE flatten_submissions SET lot_held_quantities = NULL WHERE idempotency_key = ?',
+          ).run('key-exit-1');
+
+          await execution.ingestFills();
+
+          // Neither lot has prior exits, so the entry totals ARE the held
+          // quantities and the old split is still correct here — the point is
+          // that it runs at all instead of throwing on a NULL column.
+          const closedTrades = await store.getClosedTrades();
+          expect(closedTrades).toHaveLength(2);
+          const byKey = new Map(closedTrades.map((trade) => [trade.idempotency_key, trade]));
+          expect(byKey.get('key-lot-1')).toMatchObject({ filled_size: 10 });
+          expect(byKey.get('key-lot-2')).toMatchObject({ filled_size: 5 });
+          expect(await store.getOpenPositions()).toEqual([]);
+        });
+      });
+
       describe('residual re-arm on a partial flatten (#525)', () => {
         it('re-arms the residual through the real cancel-then-flatten path', async () => {
           const { store } = openTestExecutionStore();

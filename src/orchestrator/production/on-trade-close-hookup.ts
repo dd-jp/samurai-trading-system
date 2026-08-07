@@ -29,6 +29,7 @@
  */
 
 import type {
+  FlattenAttribution,
   FlattenSubmissionWriteAhead,
   LotAdvance,
   SharedStore,
@@ -106,8 +107,8 @@ export function withOnTradeClose(
       resolved_at: Date,
     ): Promise<void> => store.resolveFlattenError(idempotency_key, reason, resolved_at),
 
-    getFlattenLotKeys: (idempotency_key: string): Promise<readonly string[] | null> =>
-      store.getFlattenLotKeys(idempotency_key),
+    getFlattenAttribution: (idempotency_key: string): Promise<FlattenAttribution | null> =>
+      store.getFlattenAttribution(idempotency_key),
 
     applyLotAdvance: async (advance: LotAdvance): Promise<void> => {
       await store.applyLotAdvance(advance);
