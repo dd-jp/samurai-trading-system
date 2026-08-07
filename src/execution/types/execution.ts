@@ -62,8 +62,10 @@ export interface ExecutionResult {
   /**
    * State of the lot after `execute()` returns — usually 'submitted'. Null
    * when this call wrote no record and so has no state to report: a dedup
-   * (the prior call owns the lot), a refused exit, or a non-`go`. Reporting
-   * a state here would be fabricating one.
+   * (the prior call owns the lot), a non-`go`, or an exit whose
+   * `submitFlatten` call errored (an exit writes no record either way, so
+   * there is no 'pending' to fall back on the way the bracket path's error
+   * branch does). Reporting a state here would be fabricating one.
    */
   order_state: OrderState | null;
   /** Rejection / error / dedup detail. */

@@ -58,23 +58,59 @@ export class ExecutionImpl implements Execution {
     const order = verdict.order;
     const idempotencyKey = order.idempotency_key;
 
-    // An exit closes an existing lot via submitFlatten rather than opening a
-    // bracketed one, so it has neither a bracket to expand nor an
-    // OpenPosition to write ahead. Its endpoint is the ClosedTrade that #83
-    // emits on round-trip-to-flat, so the whole path lands there rather than
-    // being half-built here.
-    if (order.intent_type === 'exit') {
-      return result('error', idempotencyKey, now, {
-        reason: "intent_type 'exit' (flatten) is not implemented in #82 — see #83",
-      });
-    }
-
     // Dedup layer 1 (local): a key already in the store means this decision
     // was acted on before — a crash-restart or retry replaying the same bar.
-    // Never reaches the broker. Layer 2 is the client order id below.
+    // Never reaches the broker. Layer 2 is the client order id below. Checked
+    // ahead of the intent_type branch so entry, scale_in AND exit share one
+    // gate, rather than the exit branch running its own copy of this check.
     if (await store.findByKey(idempotencyKey)) {
       return result('deduped', idempotencyKey, now, {
         reason: 'an order or fill already exists for this idempotency_key',
+      });
+    }
+
+    // An exit closes existing lot(s) via submitFlatten (#429) rather than
+    // opening a bracketed one, so it has neither a bracket to expand nor an
+    // OpenPosition to write ahead — `OpenPosition.intent_type` deliberately
+    // excludes 'exit' ("exits close a lot; they never create one",
+    // shared/types/records.ts). `order.size` is already the HELD quantity:
+    // `buildExitIntent` (trader/decide.ts) sums `filled_size` across the
+    // instrument's open lots before this ever runs, so — unlike the bracket
+    // path below — nothing here re-derives a size from a risk fraction.
+    //
+    // The gate above is a partial guard for this branch: nothing is ever
+    // written to `open_positions` under an exit's idempotency_key (by
+    // design, per the paragraph above), so a genuine replay of the SAME exit
+    // decision does not find a row here and reaches the broker again. What
+    // makes that safe rather than merely unguarded is dedup layer 2 —
+    // `submitFlatten`'s contract requires the venue to treat a repeated
+    // `clientOrderId` as a no-op (types/broker.ts), the same layer that
+    // backstops the bracket path's check-then-act race below.
+    //
+    // Known gap, not this ticket's: the flatten's own fill carries THIS
+    // call's idempotency_key as its `client_order_id`, but `ingestFills()`
+    // attributes fills to a lot by matching that lot's OWN idempotency_key
+    // (ingest-fills.ts) — the held lot(s) this flatten closes were opened
+    // under different keys, so its fill does not (yet) close them through
+    // that path. The held lot's own bracket legs (stop/target) still close
+    // it venue-side in the meantime; wiring the flatten's fill back to the
+    // lot(s) it closes is follow-up work, not silently solved here.
+    if (order.intent_type === 'exit') {
+      let ack: Awaited<ReturnType<typeof broker.submitFlatten>>;
+      try {
+        ack = await broker.submitFlatten(order.instrument, order.side, order.size, idempotencyKey);
+      } catch (error) {
+        // Nothing was written above, so — unlike the bracket path's
+        // broker-call failure — there is no `pending` record to leave
+        // behind for #86 to reconcile. `order_state: null` is the honest
+        // report: this call wrote nothing and so has no state of its own.
+        return result('error', idempotencyKey, now, {
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return result('submitted', idempotencyKey, now, {
+        order_state: ack.order_state,
+        broker_order_ids: ack.broker_order_ids,
       });
     }
 

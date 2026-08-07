@@ -17,13 +17,18 @@
  * calls until the ticket that drives the rest of the lifecycle (#83) arrives.
  *
  * #86 adds `getOrder` (the reconciliation lookup) and `reconcile()`, in the
- * same additive style. `submitFlatten`/`cancel`/`getOpenPositions` still
- * wait for their callers: Execution is the store's sole writer and the
- * write-ahead precedes the broker call, so no broker order can exist without
- * a store record preceding it — the only reachable divergence direction is
- * store→broker, which `getOrder` alone answers. A broker-side order with no
- * store record implies an order placed outside this system, which is out of
- * scope.
+ * same additive style. `cancel`/`getOpenPositions` still wait for their
+ * callers. `submitFlatten` got its caller in #508 — `execute()`'s `exit`
+ * branch — which is also where the "no broker order without a store record
+ * preceding it" claim below stops being universal: a flatten reaches the
+ * broker with no write-ahead behind it, because an exit closes an existing
+ * lot rather than opening one (see execute.ts's `intent_type === 'exit'`
+ * branch for why). For every OTHER path the claim still holds: Execution is
+ * the store's sole writer and the write-ahead precedes the broker call, so
+ * the only reachable divergence direction there is store→broker, which
+ * `getOrder` alone answers. A broker-side order with no store record and no
+ * exit behind it implies an order placed outside this system, which is out
+ * of scope.
  *
  * `OpenPosition` / `OrderState` are NOT redefined here — they are cross-spec
  * types owned by src/shared/types.ts (registry §4).

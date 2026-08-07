@@ -3,6 +3,7 @@ import type { MarketDataService } from '../market-data-service/index.js';
 import type { Clock, OpenPosition, OrderIntent } from '../shared/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
 import { ExecutionImpl } from './execute.js';
+import { SimulatedBrokerAdapter } from './simulated-adapter.js';
 import { openTestExecutionStore } from './sqlite-store-harness.js';
 import type {
   BrokerAck,
@@ -59,13 +60,28 @@ function makeGo(orderOverrides: Partial<OrderIntent> = {}): VerdictDecision {
   };
 }
 
+/** One `submitFlatten` call, recorded verbatim for assertion. */
+interface FlattenCall {
+  instrument: string;
+  side: 'buy' | 'sell';
+  size: number;
+  clientOrderId: string;
+}
+
 /** Accepts everything and records what it was handed. */
 function makeBroker(
   onSubmit?: (order: NativeBracketRequest) => void | Promise<void>,
-): BrokerAdapter & { calls: NativeBracketRequest[] } {
+  onFlatten?: (call: FlattenCall) => void | Promise<void>,
+): BrokerAdapter & { calls: NativeBracketRequest[]; flattenCalls: FlattenCall[] } {
   const calls: NativeBracketRequest[] = [];
+  // Kept separate from `calls` (NativeBracketRequest[]): several existing
+  // tests assert `broker.calls` has length 0 to mean "no bracket submitted",
+  // and a flatten is not a bracket — folding it in would make those
+  // assertions pass for the wrong reason.
+  const flattenCalls: FlattenCall[] = [];
   return {
     calls,
+    flattenCalls,
     async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
       calls.push(order);
       await onSubmit?.(order);
@@ -89,11 +105,23 @@ function makeBroker(
     async getOrder(): Promise<never> {
       throw new Error('makeBroker.getOrder: execute() does not reconcile');
     },
-    // #429's intervention path. `execute()` never reaches for it either, and
-    // these throw for `getOrder`'s reason: a double that quietly flattened or
-    // reported no positions would let a test claim an intervention happened.
-    async submitFlatten(): Promise<never> {
-      throw new Error('makeBroker.submitFlatten: execute() does not flatten');
+    // #508's exit path: recorded like `submitBracket`, mirroring its ack shape
+    // (client_order_id + broker_order_ids + order_state) rather than throwing,
+    // since `execute()` now genuinely reaches for this on an `exit` intent.
+    async submitFlatten(
+      instrument: string,
+      side: 'buy' | 'sell',
+      size: number,
+      clientOrderId: string,
+    ): Promise<BrokerAck> {
+      const call = { instrument, side, size, clientOrderId };
+      flattenCalls.push(call);
+      await onFlatten?.(call);
+      return {
+        client_order_id: clientOrderId,
+        broker_order_ids: [`${clientOrderId}:flatten`],
+        order_state: 'submitted',
+      };
     },
     async cancel(): Promise<never> {
       throw new Error('makeBroker.cancel: execute() does not cancel');
@@ -465,20 +493,173 @@ describe('ExecutionImpl.execute', () => {
     expect((await store.getPosition('key-aapl-1355'))?.intent_type).toBe('scale_in');
   });
 
-  // The flatten path (submitFlatten -> ClosedTrade on round-trip-to-flat) is
-  // #83's; #82 refuses it explicitly rather than silently bracketing an exit.
-  it('refuses an exit intent, which has no bracket to expand', async () => {
-    const { store } = openTestExecutionStore();
-    const broker = makeBroker();
+  describe('exit intent (#508)', () => {
+    /** A closing sell of the held quantity — `buildExitIntent` (trader/decide.ts) shape. */
+    function makeExitGo(overrides: Partial<OrderIntent> = {}): VerdictDecision {
+      return makeGo({
+        intent_type: 'exit',
+        side: 'sell',
+        size: 40,
+        // An exit's stop/target are degenerate (equal to entry) — #83's
+        // flatten lifecycle does not consult them (decide.ts comment above
+        // `buildExitIntent`).
+        entry: 100,
+        stop: 100,
+        target: 100,
+        ...overrides,
+      });
+    }
 
-    const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
-      makeGo({ intent_type: 'exit' }),
-    );
+    it('routes to submitFlatten with the instrument, closing side, held size and idempotency key', async () => {
+      const { store } = openTestExecutionStore();
+      const broker = makeBroker();
 
-    expect(result.status).toBe('error');
-    expect(result.reason).toContain('#83');
-    expect(result.order_state).toBeNull();
-    expect(broker.calls).toHaveLength(0);
-    expect(await store.countAllPositions()).toBe(0);
+      await new ExecutionImpl(makeInput({ store, broker })).execute(makeExitGo());
+
+      expect(broker.flattenCalls).toEqual([
+        {
+          instrument: 'AAPL',
+          // The CLOSING side, carried straight through — `side` on the
+          // exit intent is already the closing side (decide.ts's
+          // `buildExitIntent`), so this must not be inverted here.
+          side: 'sell',
+          // The HELD quantity, not a risk-fraction size: `order.size` is
+          // already `buildExitIntent`'s sum of filled_size across the
+          // instrument's open lots, so execute() passes it through as-is.
+          size: 40,
+          clientOrderId: 'key-aapl-1355',
+        },
+      ]);
+      // No bracket path touched.
+      expect(broker.calls).toHaveLength(0);
+    });
+
+    it('returns a submission ack, not an error', async () => {
+      const { store } = openTestExecutionStore();
+      const broker = makeBroker();
+
+      const result = await new ExecutionImpl(makeInput({ store, broker })).execute(makeExitGo());
+
+      expect(result.status).toBe('submitted');
+      expect(result.idempotency_key).toBe('key-aapl-1355');
+      expect(result.broker_order_ids).toEqual(['key-aapl-1355:flatten']);
+      expect(result.order_state).toBe('submitted');
+      expect(result.reason).toBeNull();
+    });
+
+    // AC: "No half-written bracket state for a flatten." An exit closes an
+    // existing lot; `OpenPosition.intent_type` deliberately excludes 'exit'
+    // (shared/types/records.ts: "exits close a lot; they never create one"),
+    // so execute() must reach the broker without ever calling
+    // `writeAheadPosition`.
+    it('writes no OpenPosition row for the flatten — there is no bracket to journal', async () => {
+      const { store } = openTestExecutionStore();
+      const broker = makeBroker();
+
+      await new ExecutionImpl(makeInput({ store, broker })).execute(makeExitGo());
+
+      expect(await store.countAllPositions()).toBe(0);
+      expect(store.writeLog).toEqual([]);
+    });
+
+    // Mirrors the bracket path's "leaves the pending record intact when the
+    // broker call throws" — but an exit has no pending record to leave
+    // behind, so the honest report is `order_state: null`, not a fabricated
+    // 'pending'.
+    it('reports an error with no order_state when submitFlatten throws', async () => {
+      const { store } = openTestExecutionStore();
+      const broker = makeBroker(undefined, () => {
+        throw new Error('venue rejected the flatten');
+      });
+
+      const result = await new ExecutionImpl(makeInput({ store, broker })).execute(makeExitGo());
+
+      expect(result.status).toBe('error');
+      expect(result.reason).toBe('venue rejected the flatten');
+      expect(result.order_state).toBeNull();
+      expect(result.broker_order_ids).toBeNull();
+      expect(await store.countAllPositions()).toBe(0);
+    });
+
+    // The `findByKey` gate (dedup layer 1) sits ahead of the intent_type
+    // branch, so an exit is checked by the SAME gate an entry/scale_in is —
+    // this proves the gate is shared and ordered ahead of the branch, NOT
+    // that a real exit replay trips it: production never writes a store row
+    // under an exit's idempotency_key, so nothing populates this gate for a
+    // genuine replay. See the `intent_type === 'exit'` branch in execute.ts
+    // for what backstops a real replay instead (dedup layer 2).
+    it('shares dedup layer 1 with the bracket path: a hit before the broker skips submitFlatten', async () => {
+      const { store } = openTestExecutionStore();
+      const broker = makeBroker();
+      const keyPresentStore: typeof store = Object.create(store);
+      keyPresentStore.findByKey = async () => true;
+
+      const result = await new ExecutionImpl(makeInput({ store: keyPresentStore, broker })).execute(
+        makeExitGo(),
+      );
+
+      expect(result.status).toBe('deduped');
+      expect(broker.flattenCalls).toHaveLength(0);
+    });
+
+    // AC: "Exit submissions are covered against the simulated adapter,
+    // including the case where the venue holds no matching position." The
+    // Simulated adapter's `submitFlatten` never inspects a position book —
+    // it prices and fills unconditionally (simulated-adapter.ts) — so an
+    // exit with nothing held still gets a submission ack, exactly like a
+    // live venue's plain market order would.
+    it('submits through the real SimulatedBrokerAdapter with no matching position held', async () => {
+      const { store } = openTestExecutionStore();
+      const costModel: CostModel = {
+        fill: vi.fn().mockReturnValue({
+          fill_price: 99.5,
+          filled_size: 40,
+          cost_breakdown: {
+            spread_cost: 0.1,
+            commission: 0.2,
+            slippage: 0.05,
+            market_impact: 0.01,
+          },
+        }),
+      };
+      const marketData: MarketDataService = {
+        getBars: vi.fn(),
+        getMark: vi.fn().mockResolvedValue({
+          price: 99.5,
+          observed_at: NOW,
+          source: 'fixture',
+          asset_class: 'stocks',
+        }),
+        getIndicator: vi
+          .fn()
+          .mockResolvedValue({ indicator: 'atr', value: 2, as_of_bar_close: NOW }),
+        getSpreadEstimate: vi.fn().mockResolvedValue(0.04),
+        getADV: vi.fn().mockResolvedValue(1_000_000),
+      } as unknown as MarketDataService;
+      const broker = new SimulatedBrokerAdapter({
+        clock: fixedClock,
+        costModel,
+        marketData,
+        config: {
+          volatility_indicator: {
+            indicator: 'atr',
+            params: { period: 14 },
+            timeframe: '1h',
+            lookback: 15,
+          },
+          adv_window: { timeframe: '1d', lookback: 20 },
+        },
+      });
+
+      // Nothing was ever submitted through this broker — no matching
+      // position exists at the venue — yet the flatten still acks.
+      const result = await new ExecutionImpl(
+        makeInput({ store, broker, costModel, marketData }),
+      ).execute(makeExitGo());
+
+      expect(result.status).toBe('submitted');
+      expect(result.broker_order_ids).toEqual(['key-aapl-1355:flatten']);
+      expect(await store.countAllPositions()).toBe(0);
+    });
   });
 });
