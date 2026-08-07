@@ -27,6 +27,20 @@ import type { FlattenSubmissionWriteAhead, LotAdvance, SharedStore } from './typ
 /** Terminal `order_state`s — excluded from `getOpenPositions()` (execution-spec.md). */
 const TERMINAL_STATES: readonly OrderState[] = ['closed', 'cancelled', 'rejected', 'expired'];
 
+/**
+ * The only two leg predicates `fillSizesByLeg` will put in its SQL, chosen by
+ * name rather than passed in as text (#568 review). Frozen so the lookup
+ * cannot be mutated into a third value at runtime either.
+ *
+ * `'exit'` is `leg != 'entry'` rather than an enumeration of the closing
+ * legs, so it stays the SQL spelling of `ingest-fills.ts`'s `isExitFill` and
+ * cannot drift from it if a fourth leg is ever added.
+ */
+const LEG_PREDICATES = Object.freeze({
+  entry: "leg = 'entry'",
+  exit: "leg != 'entry'",
+} as const);
+
 /** Exported for `sqlite-store-harness.ts`, which reads the same row shape for its terminal-inclusive lookups. */
 export interface OpenPositionRow {
   idempotency_key: string;
@@ -258,7 +272,7 @@ export class SqliteExecutionStore implements SharedStore {
    * simply absent from the returned `Map`.
    */
   async getEntryFillSizes(idempotency_keys: readonly string[]): Promise<Map<string, number>> {
-    return this.fillSizesByLeg(idempotency_keys, "leg = 'entry'");
+    return this.fillSizesByLeg(idempotency_keys, 'entry');
   }
 
   /**
@@ -270,23 +284,33 @@ export class SqliteExecutionStore implements SharedStore {
    * is ever added.
    */
   async getExitFillSizes(idempotency_keys: readonly string[]): Promise<Map<string, number>> {
-    return this.fillSizesByLeg(idempotency_keys, "leg != 'entry'");
+    return this.fillSizesByLeg(idempotency_keys, 'exit');
   }
 
   /**
-   * The batch read both of the above are. The leg predicate is a closed union
-   * of two literals owned by this file — never a caller-supplied string — so
-   * the only values interpolated into the SQL are ones written here; the
-   * idempotency keys themselves stay bound parameters, with the placeholder
-   * list built from `length` alone.
+   * The batch read both of the above are.
+   *
+   * The caller names a SIDE (`'entry' | 'exit'`), and the SQL fragment is
+   * chosen from a frozen table here (#568 review). It used to take the
+   * fragment itself as a two-literal union, which was safe in practice — the
+   * method is private and both call sites are above — but rested on a type
+   * that does not exist at runtime: one `as` cast, or a plain-JS caller after
+   * a build step, and an arbitrary string reaches the SQL text of a
+   * live-money store. A lookup cannot be talked into a value that is not in
+   * the table, whatever the type says.
+   *
+   * The idempotency keys were never interpolated and still are not — they
+   * stay bound parameters, with the placeholder list built from `length`
+   * alone.
    */
   private async fillSizesByLeg(
     idempotency_keys: readonly string[],
-    legPredicate: "leg = 'entry'" | "leg != 'entry'",
+    side: 'entry' | 'exit',
   ): Promise<Map<string, number>> {
     const sizes = new Map<string, number>();
     if (idempotency_keys.length === 0) return sizes;
 
+    const legPredicate = LEG_PREDICATES[side];
     const placeholders = idempotency_keys.map(() => '?').join(', ');
     const rows = this.db
       .prepare(
