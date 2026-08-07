@@ -63,6 +63,34 @@ describe('toWireSnapshot', () => {
     expect(snapshot?.pipeline).toBeDefined();
   });
 
+  it('keeps the payload when the spend summary is null, and narrows it to null', () => {
+    // #606 item 2: `SpendPanel` renders a named empty state for exactly this
+    // value and the burn meter renders "meter not drawable", so rejecting the
+    // body froze every OTHER panel — positions, verdicts, the whole pipeline —
+    // to spare the one panel built to degrade.
+    const snapshot = toWireSnapshot(raw({ llm_spend: null }));
+
+    expect(snapshot).not.toBeNull();
+    expect(snapshot?.llm_spend).toBeNull();
+    expect(snapshot?.positions.length).toBeGreaterThan(0);
+    expect(snapshot?.pipeline).toBeDefined();
+  });
+
+  it('narrows an ABSENT or non-object spend summary to null', () => {
+    const absent = raw();
+    delete absent.llm_spend;
+    expect(toWireSnapshot(absent)?.llm_spend).toBeNull();
+    // A scalar where an object belongs is the proxy/older-server case, and it
+    // must not reach `SpendPanel` as something it will dereference.
+    expect(toWireSnapshot(raw({ llm_spend: 'unavailable' }))?.llm_spend).toBeNull();
+    expect(toWireSnapshot(raw({ llm_spend: 0 }))?.llm_spend).toBeNull();
+  });
+
+  it('passes a real spend summary through untouched', () => {
+    const body = raw();
+    expect(toWireSnapshot(body)?.llm_spend).toEqual(body.llm_spend);
+  });
+
   it('rejects a body that is not a snapshot at all', () => {
     expect(toWireSnapshot(null)).toBeNull();
     expect(toWireSnapshot('<html>captive portal</html>')).toBeNull();

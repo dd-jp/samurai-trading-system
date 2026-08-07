@@ -177,15 +177,28 @@ export function makeSnapshot(overrides: Partial<WireSnapshot> = {}): WireSnapsho
 }
 
 /**
+ * A poll that never answers: the server accepted the connection and went
+ * quiet. Distinct from `null` (a rejection) because the two fail in opposite
+ * ways — a rejection releases the in-flight slot, a hang does not (#606 item
+ * 3). Deliberately ignores the abort signal, like a socket that is simply
+ * never written to: aborting a controller does not settle a promise nobody is
+ * settling, which is the whole reason the timeout must release the slot itself
+ * rather than trusting `finally`.
+ */
+export const HANGS = Symbol('a request that never settles');
+
+/**
  * A `fetch` stand-in that answers every call from a queue of payloads, holding
  * the last one once the queue drains. A payload of `null` is a failed poll —
- * the request rejects, which is what the staleness watchdog must survive.
+ * the request rejects, which is what the staleness watchdog must survive — and
+ * `HANGS` is a request that never settles at all.
  */
-export function fakeFetch(payloads: readonly (WireSnapshot | null)[]): typeof fetch {
+export function fakeFetch(payloads: readonly (WireSnapshot | null | typeof HANGS)[]): typeof fetch {
   let index = 0;
   const impl = async (): Promise<Response> => {
     const payload = payloads[Math.min(index, payloads.length - 1)];
     index += 1;
+    if (payload === HANGS) return new Promise<Response>(() => {});
     if (payload === null || payload === undefined) throw new Error('network unreachable');
     return {
       ok: true,
