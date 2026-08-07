@@ -23,9 +23,40 @@
  * ambiguity, `ingestFills()` owns fill-driven advance — so a startup runs
  * reconcile first, then `ingestFills()` to pick up whatever filled while the
  * process was down.
+ *
+ * ## The flatten-journal sweep (#519, #526)
+ *
+ * `executeExit` (execute.ts) journals a flatten to `flatten_submissions`
+ * write-ahead, the same way the bracket path write-aheads to `open_positions`
+ * — but nothing swept that journal: a flatten stuck at `'submitting'` (the
+ * venue may have seen it; the ack response was lost) sat there forever, and
+ * even an ACKED flatten (`'submitted'`) was only ever polled for fills by
+ * `AlpacaBrokerAdapter.flattens`, a process-local map a restart empties —
+ * losing the fill, the lot's round-trip to `closed`, and its `ClosedTrade`
+ * with it (#526's own finding).
+ *
+ * `resolveUnresolvedFlattens` below closes both: it reads
+ * `SharedStore.getUnresolvedFlattens()` — bounded so the sweep does not
+ * re-poll the venue for a flatten that finished closing its lot(s) long ago,
+ * see migration 0023 — and asks the venue about each via
+ * `BrokerAdapter.resumeFlatten`, whose side effect (re-populating a live
+ * adapter's `flattens` map) is what makes the NEXT `fetchNewFills` sweep find
+ * the order again after a restart. Symmetric to `reconcileLot` below in
+ * every way that matters: the venue is the tie-break authority, ignorance is
+ * never treated as absence, and every settled row updates the journal exactly
+ * once.
+ *
+ * `ReconcileDivergence`/`ReconcileReport` are WIDENED to also carry a
+ * flatten's outcome rather than gaining a sibling type — see
+ * `ReconcileDivergence`'s own doc (types/execution.ts) for why.
  */
 import type { OpenPosition, OrderState } from '../shared/index.js';
-import type { ExecutionInput, ReconcileDivergence, ReconcileReport } from './types.js';
+import type {
+  ExecutionInput,
+  ReconcileDivergence,
+  ReconcileReport,
+  UnresolvedFlattenSubmission,
+} from './types.js';
 
 /** The states a crash can strand: written ahead, or acked but not advanced. */
 const IN_FLIGHT: readonly OrderState[] = ['pending', 'submitted'];
@@ -51,9 +82,162 @@ export async function reconcile(input: ExecutionInput): Promise<ReconcileReport>
     if (divergence.action !== 'undetermined') corrected += 1;
   }
 
+  // #519/#526 — see the file doc's "flatten-journal sweep" section.
+  const unresolvedFlattens = await store.getUnresolvedFlattens();
+  for (const row of unresolvedFlattens) {
+    const divergence = await reconcileFlatten(input, row, now);
+    divergences.push(divergence);
+    if (divergence.action !== 'undetermined') corrected += 1;
+  }
+
   divergences.push(...(await findUnrecordedVenuePositions(input, positions)));
 
-  return { checked: inFlight.length, corrected, divergences, timestamp: now };
+  return {
+    checked: inFlight.length + unresolvedFlattens.length,
+    corrected,
+    divergences,
+    timestamp: now,
+  };
+}
+
+/**
+ * Settle one `flatten_submissions` row against the venue — the flatten
+ * counterpart of `reconcileLot` below, called for every row
+ * `SharedStore.getUnresolvedFlattens()` names. Always returns a divergence
+ * (unlike `reconcileLot`, which returns `null` on agreement): every row this
+ * function is handed is, by construction, one the store does not yet
+ * consider settled, so there is always something to report — the flatten
+ * equivalent of `reconcileLot` never being called for an already-terminal
+ * lot in the first place.
+ */
+async function reconcileFlatten(
+  input: ExecutionInput,
+  row: UnresolvedFlattenSubmission,
+  now: Date,
+): Promise<ReconcileDivergence> {
+  const { broker, store } = input;
+  // `'submitting'` maps onto `'pending'` — the same "written ahead, not yet
+  // confirmed" meaning that value already carries for a bracket's write-ahead
+  // (see `ReconcileDivergence`'s widen doc, types/execution.ts).
+  const storeState: OrderState = row.status === 'submitting' ? 'pending' : 'submitted';
+
+  let order: Awaited<ReturnType<typeof broker.resumeFlatten>>;
+  try {
+    order = await broker.resumeFlatten(row.idempotency_key, row.instrument);
+  } catch (error) {
+    // Ignorance, not evidence — `reconcileLot`'s own reasoning applies
+    // unchanged: the adapter could not answer, and treating that as "never
+    // placed" would mark a live, possibly-filled flatten as never having
+    // reached the venue. Left exactly as it was, and escalated: unlike a
+    // bracket's `pending` write-ahead, an unresolved flatten is a lot stuck
+    // in genuine ambiguity about whether it is still held, which is
+    // paging-worthy on its own (#519) — see `FlattenReconcileAlertChannel`'s
+    // doc for why this is not treated as a background diagnostic.
+    const reason = error instanceof Error ? error.message : String(error);
+    await postFlattenReconcileAlert(input, row, reason, now);
+    return {
+      idempotency_key: row.idempotency_key,
+      instrument: row.instrument,
+      store_state: storeState,
+      broker_state: null,
+      action: 'undetermined',
+      reason,
+    };
+  }
+
+  if (order === null) {
+    if (row.status === 'submitting') {
+      // The venue authoritatively has no such order: this write-ahead never
+      // landed, the same settlement `reconcileLot` makes for a bracket's
+      // `pending` record. Unlike that path there is no lot to mark
+      // `rejected` — a flatten writes no `OpenPosition` — so the JOURNAL row
+      // itself is what carries the terminal answer.
+      const reason =
+        'reconcile: broker has no order under this client_order_id — the write-ahead never landed';
+      await store.resolveFlattenError(row.idempotency_key, reason, now);
+      return {
+        idempotency_key: row.idempotency_key,
+        instrument: row.instrument,
+        store_state: storeState,
+        broker_state: null,
+        action: 'rejected',
+        reason,
+      };
+    }
+
+    // A row already at `'submitted'` carries `broker_order_ids` the venue
+    // gave it once — the venue definitely acked this flatten. A LATER null
+    // from `resumeFlatten` is not proof the write-ahead never landed (it
+    // provably did); it is the adapter unable to reconfirm an order it
+    // already told us about (aged out of a lookup window, for instance).
+    // Treating this as `'rejected'` would write a false record — "the
+    // write-ahead never landed" — about a flatten that may have filled and
+    // closed a lot. Left untouched and escalated, the same as a genuine
+    // `resumeFlatten` throw just above.
+    const reason =
+      `flatten '${row.idempotency_key}' was previously acked by the broker (a durable ` +
+      "'submitted' journal row exists) but the venue now reports no such order — leaving the " +
+      'journal untouched; check the venue by hand';
+    await postFlattenReconcileAlert(input, row, reason, now);
+    return {
+      idempotency_key: row.idempotency_key,
+      instrument: row.instrument,
+      store_state: storeState,
+      broker_state: null,
+      action: 'undetermined',
+      reason,
+    };
+  }
+
+  // The venue named an order. `resumeFlatten`'s side effect already
+  // re-populated the adapter's own flatten-sweep worklist; what is left is
+  // updating the journal so this row eventually stops being "unresolved".
+  if (row.status === 'submitting') {
+    // The genuine first resolution of this write-ahead's ambiguity —
+    // `resolveFlattenSubmitted` is the right write here (sets `resolved_at`,
+    // the same as it does when `executeExit` itself calls it on a clean ack).
+    await store.resolveFlattenSubmitted(
+      row.idempotency_key,
+      { order_state: order.order_state, broker_order_ids: order.broker_order_ids },
+      now,
+    );
+  } else {
+    // Already resolved once; this is a FRESHER answer to a question already
+    // settled, not a new ambiguity — `recordFlattenOrderStateObserved`
+    // leaves `resolved_at`/`status` alone (see its own doc, types/store.ts).
+    await store.recordFlattenOrderStateObserved(row.idempotency_key, {
+      order_state: order.order_state,
+      broker_order_ids: order.broker_order_ids,
+    });
+  }
+
+  return {
+    idempotency_key: row.idempotency_key,
+    instrument: row.instrument,
+    store_state: storeState,
+    broker_state: order.order_state,
+    action: 'adopted',
+    reason: `flatten journal said '${row.status}'; broker reports '${order.order_state}'`,
+  };
+}
+
+/** Fire-and-forget, fully swallowed — the alert IS the fallback; see `FlattenReconcileAlertChannel`'s doc. */
+async function postFlattenReconcileAlert(
+  input: ExecutionInput,
+  row: UnresolvedFlattenSubmission,
+  reason: string,
+  now: Date,
+): Promise<void> {
+  try {
+    await input.flattenReconcileAlerts.postFlattenReconcileAlert({
+      idempotency_key: row.idempotency_key,
+      instrument: row.instrument,
+      reason,
+      observed_at: now,
+    });
+  } catch {
+    // Nothing left to do — see `ResidualExposureAlert`'s doc for the same posture.
+  }
 }
 
 /**

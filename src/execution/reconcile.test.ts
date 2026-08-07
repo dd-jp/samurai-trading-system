@@ -17,6 +17,8 @@ import type {
   BrokerAdapter,
   ExecutionConfig,
   ExecutionInput,
+  FlattenReconcileAlert,
+  FlattenReconcileAlertChannel,
   NativeBracketRequest,
   NormalizedFill,
   NormalizedOrder,
@@ -104,11 +106,20 @@ function makeBroker(): BrokerAdapter & {
   failLookup: string | null;
   venuePositions: NormalizedPosition[];
   failPositions: string | null;
+  /** #519/#526: what `resumeFlatten` answers, keyed the same way `book` is for `getOrder`. */
+  flattenBook: Map<string, NormalizedOrder>;
+  /** Ignorance, not absence, for `resumeFlatten` — mirrors `failLookup`. */
+  failFlattenLookup: string | null;
+  /** Every `resumeFlatten` call, in order — so a test can assert it ran (or didn't). */
+  resumeFlattenCalls: string[];
 } {
   return {
     book: new Map<string, NormalizedOrder>(),
     submits: [] as NativeBracketRequest[],
     failLookup: null as string | null,
+    flattenBook: new Map<string, NormalizedOrder>(),
+    failFlattenLookup: null as string | null,
+    resumeFlattenCalls: [] as string[],
 
     async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
       this.submits.push(order);
@@ -130,6 +141,17 @@ function makeBroker(): BrokerAdapter & {
       // Ignorance, not absence — the contract says throw rather than null.
       if (this.failLookup !== null) throw new Error(this.failLookup);
       return this.book.get(clientOrderId) ?? null;
+    },
+
+    // #519/#526's flatten-sweep counterpart of `getOrder`, over its OWN book
+    // — a flatten's client_order_id never collides with a bracket's, but
+    // keeping the maps separate mirrors the production adapters' own
+    // `brackets`/`flattens` split (alpaca-adapter.ts) rather than assuming
+    // it away.
+    async resumeFlatten(clientOrderId: string): Promise<NormalizedOrder | null> {
+      this.resumeFlattenCalls.push(clientOrderId);
+      if (this.failFlattenLookup !== null) throw new Error(this.failFlattenLookup);
+      return this.flattenBook.get(clientOrderId) ?? null;
     },
 
     async fetchNewFills(): Promise<NormalizedFill[]> {
@@ -160,7 +182,13 @@ function makeBroker(): BrokerAdapter & {
   };
 }
 
-function makeInput(store: TestExecutionStore, broker: BrokerAdapter): ExecutionInput {
+function makeInput(
+  store: TestExecutionStore,
+  broker: BrokerAdapter,
+  flattenReconcileAlerts: FlattenReconcileAlertChannel = {
+    postFlattenReconcileAlert: async () => {},
+  },
+): ExecutionInput {
   const config: ExecutionConfig = {
     simulated: {
       volatility_indicator: {
@@ -186,6 +214,7 @@ function makeInput(store: TestExecutionStore, broker: BrokerAdapter): ExecutionI
     mode: 'live',
     residualExposureAlerts: { postResidualExposureAlert: async () => {} },
     flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
+    flattenReconcileAlerts,
   };
 }
 
@@ -445,6 +474,224 @@ describe('reconcile — scope and safety', () => {
 
     expect(report).toMatchObject({ checked: 0, corrected: 0, divergences: [] });
     expect(report.timestamp).toEqual(NOW);
+  });
+});
+
+/**
+ * The flatten-journal sweep (#519, #526) — `reconcile()`'s second worklist,
+ * over `flatten_submissions` rather than `open_positions`. Mirrors the
+ * bracket-side describe blocks above in shape (crash between write-ahead and
+ * ack, store-vs-broker divergence, scope/safety) rather than duplicating
+ * their setup verbatim.
+ */
+describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
+  const FLATTEN_KEY = 'flatten-aapl-exit';
+
+  async function writeAheadFlatten(
+    store: TestExecutionStore,
+    overrides: Partial<Parameters<TestExecutionStore['writeAheadFlatten']>[0]> = {},
+  ): Promise<void> {
+    await store.writeAheadFlatten({
+      idempotency_key: FLATTEN_KEY,
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+      side: 'sell',
+      size: 10,
+      submitted_at: NOW,
+      lot_held_quantities: [{ idempotency_key: 'key-aapl-entry', held: 10 }],
+      ...overrides,
+    });
+  }
+
+  it('resolves a flatten stuck at "submitting" when the venue names an order — the lost-ack case', async () => {
+    const { store } = openTestExecutionStore();
+    await writeAheadFlatten(store);
+    const broker = makeBroker();
+    broker.flattenBook.set(FLATTEN_KEY, {
+      client_order_id: FLATTEN_KEY,
+      broker_order_ids: [`${FLATTEN_KEY}:order`],
+      order_state: 'submitted',
+      filled_qty: 0,
+    });
+
+    const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(broker.resumeFlattenCalls).toEqual([FLATTEN_KEY]);
+    expect(report.divergences).toHaveLength(1);
+    expect(report.divergences[0]).toMatchObject({
+      idempotency_key: FLATTEN_KEY,
+      instrument: 'AAPL',
+      store_state: 'pending',
+      broker_state: 'submitted',
+      action: 'adopted',
+    });
+    expect(report.corrected).toBe(1);
+
+    const row = await store.getFlattenSubmission(FLATTEN_KEY);
+    expect(row?.status).toBe('submitted');
+    expect(row?.order_state).toBe('submitted');
+    expect(row?.broker_order_ids).toBe(JSON.stringify([`${FLATTEN_KEY}:order`]));
+    expect(row?.resolved_at).not.toBeNull();
+  });
+
+  it('resolves a "submitting" flatten to error when the venue authoritatively has no such order', async () => {
+    const { store } = openTestExecutionStore();
+    await writeAheadFlatten(store);
+    const broker = makeBroker();
+    // `flattenBook` left empty: `resumeFlatten` answers null, same as `getOrder`.
+
+    const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(report.divergences[0]).toMatchObject({
+      idempotency_key: FLATTEN_KEY,
+      store_state: 'pending',
+      broker_state: null,
+      action: 'rejected',
+    });
+    expect(report.corrected).toBe(1);
+
+    const row = await store.getFlattenSubmission(FLATTEN_KEY);
+    expect(row?.status).toBe('error');
+    expect(row?.reason).toContain('write-ahead never landed');
+  });
+
+  it('leaves an ALREADY-ACKED row untouched and alerts, rather than mis-resolving it to error, when the venue later answers null', async () => {
+    const { store } = openTestExecutionStore();
+    await writeAheadFlatten(store);
+    // Acked once already — mirrors what `executeExit` itself does on a clean
+    // submit, so this row starts at 'submitted' with real broker_order_ids.
+    await store.resolveFlattenSubmitted(
+      FLATTEN_KEY,
+      { order_state: 'submitted', broker_order_ids: [`${FLATTEN_KEY}:order`] },
+      NOW,
+    );
+    const broker = makeBroker();
+    // `flattenBook` left empty: the venue now answers null for an order it
+    // definitely acked before — ignorance, not proof it never landed.
+    const alerts: FlattenReconcileAlert[] = [];
+    const flattenReconcileAlerts: FlattenReconcileAlertChannel = {
+      postFlattenReconcileAlert: async (alert) => {
+        alerts.push(alert);
+      },
+    };
+
+    const report = await new ExecutionImpl(
+      makeInput(store, broker, flattenReconcileAlerts),
+    ).reconcile();
+
+    expect(report.divergences[0]).toMatchObject({
+      idempotency_key: FLATTEN_KEY,
+      store_state: 'submitted',
+      broker_state: null,
+      action: 'undetermined',
+    });
+    // Not a correction — the record was left exactly as it was.
+    expect(report.corrected).toBe(0);
+
+    const row = await store.getFlattenSubmission(FLATTEN_KEY);
+    expect(row?.status).toBe('submitted');
+    expect(row?.order_state).toBe('submitted');
+    expect(row?.broker_order_ids).toBe(JSON.stringify([`${FLATTEN_KEY}:order`]));
+
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]?.idempotency_key).toBe(FLATTEN_KEY);
+    expect(alerts[0]?.reason).toContain('previously acked');
+  });
+
+  it('leaves the record untouched and alerts when the adapter cannot answer at all', async () => {
+    const { store } = openTestExecutionStore();
+    await writeAheadFlatten(store);
+    const broker = makeBroker();
+    broker.failFlattenLookup = 'venue unreachable';
+    const alerts: FlattenReconcileAlert[] = [];
+    const flattenReconcileAlerts: FlattenReconcileAlertChannel = {
+      postFlattenReconcileAlert: async (alert) => {
+        alerts.push(alert);
+      },
+    };
+
+    const report = await new ExecutionImpl(
+      makeInput(store, broker, flattenReconcileAlerts),
+    ).reconcile();
+
+    expect(report.corrected).toBe(0);
+    expect(report.divergences[0]).toMatchObject({
+      idempotency_key: FLATTEN_KEY,
+      action: 'undetermined',
+      broker_state: null,
+      reason: 'venue unreachable',
+    });
+    const row = await store.getFlattenSubmission(FLATTEN_KEY);
+    expect(row?.status).toBe('submitting');
+    expect(alerts).toEqual([
+      expect.objectContaining({ idempotency_key: FLATTEN_KEY, reason: 'venue unreachable' }),
+    ]);
+  });
+
+  it('does not re-poll a row once markFlattenFillsSwept has run — the #519/#526 bound (migration 0023)', async () => {
+    const { store } = openTestExecutionStore();
+    await writeAheadFlatten(store);
+    await store.resolveFlattenSubmitted(
+      FLATTEN_KEY,
+      { order_state: 'submitted', broker_order_ids: [`${FLATTEN_KEY}:order`] },
+      NOW,
+    );
+    await store.markFlattenFillsSwept(FLATTEN_KEY, NOW);
+    const broker = makeBroker();
+
+    const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(broker.resumeFlattenCalls).toEqual([]);
+    expect(report.divergences).toEqual([]);
+    expect(report.checked).toBe(0);
+  });
+
+  it('does not resolve an "error" row — it provably never reached the broker, nothing left to ask', async () => {
+    const { store } = openTestExecutionStore();
+    await writeAheadFlatten(store);
+    await store.resolveFlattenError(FLATTEN_KEY, 'cancel failed', NOW);
+    const broker = makeBroker();
+
+    const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(broker.resumeFlattenCalls).toEqual([]);
+    expect(report.checked).toBe(0);
+  });
+
+  it('keeps re-polling an acked-but-unswept row across repeated passes — bounded by fills_swept, not by a single resolution', async () => {
+    const { store } = openTestExecutionStore();
+    await writeAheadFlatten(store);
+    const broker = makeBroker();
+    broker.flattenBook.set(FLATTEN_KEY, {
+      client_order_id: FLATTEN_KEY,
+      broker_order_ids: [`${FLATTEN_KEY}:order`],
+      order_state: 'filled',
+      filled_qty: 10,
+    });
+
+    const execution = new ExecutionImpl(makeInput(store, broker));
+    const first = await execution.reconcile();
+    const second = await execution.reconcile();
+
+    // Both passes see it: `fills_swept_at` is only set by `ingestFills()`
+    // (ingest-fills.ts), which this test never calls — reconcile() alone
+    // cannot close its own worklist entry, by design (see
+    // `SharedStore.markFlattenFillsSwept`'s doc for why).
+    expect(broker.resumeFlattenCalls).toEqual([FLATTEN_KEY, FLATTEN_KEY]);
+    expect(first.divergences[0]?.action).toBe('adopted');
+    expect(second.divergences[0]?.action).toBe('adopted');
+  });
+
+  it('checked counts flatten rows alongside in-flight lots', async () => {
+    const { store } = openTestExecutionStore();
+    await store.writeAheadPosition(pendingPosition());
+    await writeAheadFlatten(store);
+    const broker = makeBroker();
+
+    const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    // 1 in-flight lot + 1 unresolved flatten.
+    expect(report.checked).toBe(2);
   });
 });
 

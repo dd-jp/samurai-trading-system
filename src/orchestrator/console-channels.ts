@@ -23,6 +23,8 @@
 import type {
   FlattenOverfillAlertChannel,
   FlattenOverfillWarning,
+  FlattenReconcileAlert,
+  FlattenReconcileAlertChannel,
   OcoDoubleFillAlert,
   OcoDoubleFillAlertChannel,
   ResidualExposureAlert,
@@ -148,6 +150,43 @@ export class LoggingResidualExposureAlertChannel implements ResidualExposureAler
       message:
         'a partially-filled flatten left a residual position and re-arming its protective ' +
         'legs failed — the position is unprotected; check the order on the venue by hand',
+      payload: {
+        ...alert,
+        observed_at: alert.observed_at.toISOString(),
+      },
+    });
+  }
+}
+
+/**
+ * A `flatten_submissions` row `reconcile()`'s sweep could not settle (#519),
+ * written to the log at `error`. See `FlattenReconcileAlertChannel`'s doc
+ * (execution/flatten-reconcile-alert.ts) for why this is treated as an
+ * operator escalation rather than a background diagnostic like
+ * `LoggingFlattenOverfillAlertChannel` below: an unresolved flatten is a lot
+ * stuck in genuine ambiguity about whether it is still held.
+ *
+ * Same caveat as `LoggingResidualExposureAlertChannel`'s: a log line nobody
+ * tails during an unattended soak (#238) is not an alert.
+ * `TradeChannelFlattenReconcileAlert` (flatten-reconcile-alert-channel.ts) is
+ * the reachable-from-a-phone implementation, wired through
+ * `SAMURAI_ALERTS=telegram` (#322, #519) — the same move #551 made for
+ * `residualExposureAlerts`.
+ */
+export class LoggingFlattenReconcileAlertChannel implements FlattenReconcileAlertChannel {
+  constructor(private readonly logger: Logger) {}
+
+  async postFlattenReconcileAlert(alert: FlattenReconcileAlert): Promise<void> {
+    this.logger.log({
+      // Not a tick trace, for `LoggingResidualExposureAlertChannel`'s reason:
+      // this is observed by reconcile(), which spans every unresolved
+      // flatten at once rather than belonging to one pipeline pass.
+      trace_id: 'reconcile',
+      stage: 'execution',
+      level: 'error',
+      message:
+        "reconcile() could not settle a flatten_submissions row — the flatten's outcome is " +
+        'genuinely unknown; check the order on the venue by hand',
       payload: {
         ...alert,
         observed_at: alert.observed_at.toISOString(),

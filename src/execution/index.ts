@@ -51,6 +51,10 @@ export type {
   FlattenOverfillAlertChannel,
   FlattenOverfillWarning,
 } from './flatten-overfill-alert.js';
+export type {
+  FlattenReconcileAlert,
+  FlattenReconcileAlertChannel,
+} from './flatten-reconcile-alert.js';
 export type { OcoDoubleFillAlert, OcoDoubleFillAlertChannel } from './oco-double-fill-alert.js';
 export type {
   ResidualExposureAlert,
@@ -81,5 +85,6 @@ export type {
   ReconcileReport,
   SharedStore,
   SimulatedAdapterConfig,
+  UnresolvedFlattenSubmission,
 } from './types.js';
 export type { UnpricedFillAlert, UnpricedFillAlertChannel } from './unpriced-fill-alert.js';

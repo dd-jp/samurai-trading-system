@@ -137,9 +137,12 @@ import type {
   BrokerAdapter,
   ExecutionConfig,
   ExecutionResult,
+  FlattenReconcileAlert,
+  FlattenReconcileAlertChannel,
   NativeBracketRequest,
   NormalizedFill,
   NormalizedOrder,
+  ReconcileReport,
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
 } from '../execution/index.js';
@@ -164,6 +167,7 @@ import type { VerdictDecision } from '../verdict/index.js';
 import {
   LoggingAnalystSkipAlertChannel,
   LoggingBreachAlertChannel,
+  LoggingFlattenReconcileAlertChannel,
   LoggingHeartbeatChannel,
   LoggingLoosenApprovalChannel,
   LoggingOcoDoubleFillAlertChannel,
@@ -451,11 +455,18 @@ export class UnreachableAlpacaClient implements AlpacaClient {
  * 3. `EXIT_PATH_INSTRUMENTS.twoLot` — an older lot with a prior partial exit
  *    (itself produced the same way as scenario 2) plus a fresh second lot,
  *    flattened together, asserting NEITHER is left phantom-open (#571).
+ * 4. `EXIT_PATH_INSTRUMENTS.crashRestart` — a flatten that acks but whose
+ *    fill is not ingested before a "restart" (a second `buildExecutionSurface`
+ *    over the SAME store + SAME broker, `reconcile.test.ts`'s own definition
+ *    of one): asserts `reconcile()`'s flatten sweep finds the unresolved
+ *    journal row, resolves it against the venue, and the lot still reaches
+ *    `closed` afterward (#519, #526).
  */
 const EXIT_PATH_INSTRUMENTS = {
   fullExit: 'ETH-USD',
   partialFlatten: 'SOL-USD',
   twoLot: 'AVAX-USD',
+  crashRestart: 'DOGE-USD',
 } as const;
 
 /**
@@ -496,6 +507,21 @@ export class RecordingResidualExposureAlertChannel implements ResidualExposureAl
   async postResidualExposureAlert(alert: ResidualExposureAlert): Promise<void> {
     this.alerts.push(alert);
     await this.inner?.postResidualExposureAlert(alert);
+  }
+}
+
+/**
+ * Records every flatten-reconcile alert posted (#519) — a healthy scenario 4
+ * (below) resolves cleanly against the deterministic Simulated venue, so this
+ * should stay empty; `evaluateSmokeGate` asserts exactly that, the same
+ * shape `RecordingResidualExposureAlertChannel` above already establishes for
+ * a different escalation.
+ */
+export class RecordingFlattenReconcileAlertChannel implements FlattenReconcileAlertChannel {
+  readonly alerts: FlattenReconcileAlert[] = [];
+
+  async postFlattenReconcileAlert(alert: FlattenReconcileAlert): Promise<void> {
+    this.alerts.push(alert);
   }
 }
 
@@ -560,6 +586,12 @@ export class ExitPathBrokerAdapter implements BrokerAdapter {
 
   async getOrder(clientOrderId: string, instrument: string): Promise<NormalizedOrder | null> {
     return this.delegate.getOrder(clientOrderId, instrument);
+  }
+
+  /** #519/#526's reconcile-driven flatten sweep — recorded like every other call for scenario 4. */
+  async resumeFlatten(clientOrderId: string, instrument: string): Promise<NormalizedOrder | null> {
+    this.record('resumeFlatten', clientOrderId);
+    return this.delegate.resumeFlatten(clientOrderId, instrument);
   }
 
   async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
@@ -712,6 +744,17 @@ export interface ExitPathEvidence {
   };
   /** Scenario 3's two lots (#571): named here so the gate can check neither is phantom-open. */
   twoLotFlatten: { lotKeys: readonly string[] };
+  /**
+   * Scenario 4's crash-restart (#519, #526): the lot the gate checks reached
+   * `closed`, the flatten's OWN idempotency key (`ReconcileDivergence`s key
+   * off the flatten, never the lot — a flatten writes no `OpenPosition`), and
+   * the `ReconcileReport` the RESTARTED `Execution` produced — what proves
+   * `reconcile()`'s flatten sweep, not merely `ingestFills()`, is what
+   * recovered it.
+   */
+  crashRestart: { lotKey: string; flattenKey: string; reconcileReport: ReconcileReport };
+  /** Every flatten-reconcile alert posted anywhere during the run — a healthy scenario 4 posts none. */
+  flattenReconcileAlerts: readonly FlattenReconcileAlert[];
 }
 
 /**
@@ -752,6 +795,7 @@ async function runExitPathScenarios(input: {
   });
   const broker = new ExitPathBrokerAdapter(innerBroker);
   const residualAlerts = new RecordingResidualExposureAlertChannel();
+  const flattenReconcileAlerts = new RecordingFlattenReconcileAlertChannel();
   const execution = buildExecutionSurface(
     {
       clock,
@@ -768,6 +812,7 @@ async function runExitPathScenarios(input: {
       // doc for why this channel has no phone-reaching counterpart yet
       // either).
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
+      flattenReconcileAlerts,
     },
     'smoke-exit-path',
   );
@@ -906,6 +951,62 @@ async function runExitPathScenarios(input: {
   );
   await execution.ingestFills();
 
+  // --- Scenario 4 (#519/#526): a flatten that acks but is never swept for --
+  // fills before a "restart" — reconcile()'s flatten-journal sweep, not
+  // ingestFills() alone, is what recovers it.
+  const lot4 = 'smoke-exit-restart-lot';
+  const lot4ExitKey = 'smoke-exit-restart-exit';
+  await submit(
+    exitPathOrder(
+      EXIT_PATH_INSTRUMENTS.crashRestart,
+      lot4,
+      'buy',
+      'entry',
+      EXIT_PATH_LOT_SIZE,
+      tick(),
+    ),
+    'scenario 4 entry',
+  );
+  await execution.ingestFills();
+  await submit(
+    exitPathOrder(
+      EXIT_PATH_INSTRUMENTS.crashRestart,
+      lot4ExitKey,
+      'sell',
+      'exit',
+      EXIT_PATH_LOT_SIZE,
+      tick(),
+    ),
+    'scenario 4 exit',
+  );
+  // Deliberately NO `execution.ingestFills()` here — the flatten's journal
+  // row is acked ('submitted') but its fill has not been redistributed, so
+  // `fills_swept_at` is still NULL: exactly the row
+  // `SharedStore.getUnresolvedFlattens()` exists to find, and exactly what a
+  // restart would otherwise strand if a live adapter's process-local
+  // `flattens` map (`AlpacaBrokerAdapter`) were the only record of it.
+
+  // --- restart: a SECOND `Execution` over the SAME store + SAME broker,
+  // `buildExecutionSurface` (the real composition-root binding function)
+  // called again — `reconcile.test.ts`'s own definition of "a restart".
+  const restarted = buildExecutionSurface(
+    {
+      clock,
+      broker,
+      store: new SqliteExecutionStore(db),
+      costModel,
+      marketData,
+      config: executionConfig,
+      mode: 'paper',
+      residualExposureAlerts: residualAlerts,
+      flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
+      flattenReconcileAlerts,
+    },
+    'smoke-exit-path-restart',
+  );
+  const restartReconcile = await restarted.reconcile();
+  await restarted.ingestFills();
+
   return {
     brokerCallSequence: broker.callSequence,
     residualAlerts: residualAlerts.alerts,
@@ -916,6 +1017,8 @@ async function runExitPathScenarios(input: {
       protectedQty: broker.getProtectedQty(lot2),
     },
     twoLotFlatten: { lotKeys: [lot3Older, lot3Newer] },
+    crashRestart: { lotKey: lot4, flattenKey: lot4ExitKey, reconcileReport: restartReconcile },
+    flattenReconcileAlerts: flattenReconcileAlerts.alerts,
   };
 }
 
@@ -1744,6 +1847,55 @@ export function evaluateSmokeGate(
     );
   }
 
+  // #519/#526 — the ENFORCEMENT assertions for the flatten-journal sweep
+  // (#430's convention: a durable EFFECT only the new mechanism produces,
+  // not that an object was constructed). A regression that deletes
+  // `reconcile()`'s flatten sweep, or reverts `resumeFlatten` to a no-op,
+  // leaves scenario 4's lot open forever — `ingestFills()` alone never polls
+  // an order the process-local `flattens` map has forgotten, so nothing
+  // short of the sweep itself can close it.
+  const { crashRestart, flattenReconcileAlerts: flattenReconcileAlertsFired } = options.exitPath;
+  const crashRestartDivergence = crashRestart.reconcileReport.divergences.find(
+    (divergence) => divergence.idempotency_key === crashRestart.flattenKey,
+  );
+  if (crashRestartDivergence === undefined) {
+    failures.push(
+      `the restarted Execution's reconcile() report named no divergence for scenario 4's ` +
+        `flatten '${crashRestart.flattenKey}' (lot '${crashRestart.lotKey}') — ` +
+        'SharedStore.getUnresolvedFlattens() found nothing to resolve, so the journal sweep ' +
+        '(#519) either never ran or the row was not recognised as unresolved ' +
+        `(checked=${crashRestart.reconcileReport.checked}, ` +
+        `divergences=${crashRestart.reconcileReport.divergences.length})`,
+    );
+  } else if (crashRestartDivergence.action !== 'adopted') {
+    failures.push(
+      `the restarted Execution's reconcile() settled scenario 4's flatten with action ` +
+        `'${crashRestartDivergence.action}', not 'adopted' (reason: ` +
+        `${crashRestartDivergence.reason}) — the venue genuinely acked this flatten, so anything ` +
+        "other than 'adopted' means reconcile() mis-settled a row it should have resolved cleanly",
+    );
+  }
+  const crashRestartLot = positions.find(
+    (position) => position.idempotency_key === crashRestart.lotKey,
+  );
+  if (crashRestartLot === undefined || crashRestartLot.order_state !== 'closed') {
+    failures.push(
+      `lot '${crashRestart.lotKey}' (scenario 4's crash-restart flatten) never reached ` +
+        `order_state 'closed' after the restarted Execution's reconcile() + ingestFills() ` +
+        `(${crashRestartLot === undefined ? 'no row in open_positions' : `state=${crashRestartLot.order_state}`}) ` +
+        "— reconcile()'s flatten sweep did not re-establish the fill-sweep worklist the way " +
+        '#519/#526 require',
+    );
+  }
+  if (flattenReconcileAlertsFired.length > 0) {
+    failures.push(
+      `${flattenReconcileAlertsFired.length} flatten-reconcile alert(s) fired during the smoke ` +
+        `run (flatten(s): ${flattenReconcileAlertsFired.map((alert) => alert.idempotency_key).join(', ')}) ` +
+        "— scenario 4's flatten resolves cleanly against a deterministic offline broker; an " +
+        'alert here means reconcile() could not settle a row it should have',
+    );
+  }
+
   // #586 — the emulated crypto protective legs, unconditional for #430's
   // reason: `runCryptoEmulationScenario` always runs, the smoke universe is
   // crypto, and no other check in this gate can see the emulation at all
@@ -2063,6 +2215,14 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // this injection already covered it before that landed, so `resolveAlertsMode`'s
       // exemption logic (below) needed no change here — see the next comment.
       residualExposureAlerts: tickLoopResidualAlerts,
+      // #519 — the ninth channel (`ALERT_CHANNEL_FIELDS`, alert-transport.ts).
+      // The six-stage tick loop above never reaches a flatten (no exit intent
+      // is ever driven through it — see `runExitPathScenarios`'s own file doc
+      // for why), so there is nothing here for the gate to read back; a
+      // plain log-only instance is enough to keep this injection list
+      // exhaustive against `ALERT_CHANNEL_FIELDS`, the same posture
+      // `orphanAlerts`/`unpricedFillAlerts`/etc. already take below.
+      flattenReconcileAlerts: new LoggingFlattenReconcileAlertChannel(logger),
       // #465 — the seventh channel; #551 later added an eighth
       // (`residualExposureAlerts`, above). `resolveAlertsMode` exempts a
       // caller that supplies EVERY field in `ALERT_CHANNEL_FIELDS` from

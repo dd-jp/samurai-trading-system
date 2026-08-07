@@ -1887,6 +1887,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       mode: 'paper',
       residualExposureAlerts: { postResidualExposureAlert: async () => {} },
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
+      flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
     };
     const execution = new ExecutionImpl(input);
 
@@ -1936,5 +1937,157 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       ([orderId]) => orderId === 'aapl-flatten-order',
     ).length;
     expect(flattenOrderCallsAfterSecondPoll).toBe(1);
+  });
+
+  /**
+   * #519/#526 — `resumeFlatten`'s own contract, and the crash-restart
+   * property it exists to serve: a FRESH adapter instance's `flattens` map
+   * is empty (the in-memory gap `AlpacaBrokerAdapter.flattens`'s doc
+   * describes), so without this, `fetchNewFills` polls nothing for a
+   * flatten a prior process submitted. `resumeFlatten` re-populates it —
+   * the same "re-populating the map" move `getOrder` already makes for
+   * `brackets` (see that method's own doc), on a SEPARATE map so a flatten
+   * never joins `brackets`' never-pruned worklist (permanent leak) instead
+   * of `flattens`' bounded one.
+   */
+  describe('AlpacaBrokerAdapter.resumeFlatten (#519, #526)', () => {
+    it('returns null, Alpaca-authoritatively, when the venue has no such order', async () => {
+      const client = makeClient({
+        getOrderByClientOrderId: vi.fn().mockResolvedValue(null),
+      });
+      const adapter = new AlpacaBrokerAdapter({
+        client,
+        rateLimiter: permissiveLimiter(),
+        unpricedFillAlerts: recordingAlerts(),
+        ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+        clock: fixedClock,
+      });
+
+      const result = await adapter.resumeFlatten('flatten-1', 'AAPL');
+
+      expect(result).toBeNull();
+    });
+
+    it('throws (never null) when the adapter cannot answer — mirrors getOrder', async () => {
+      const client = makeClient({
+        getOrderByClientOrderId: vi.fn().mockRejectedValue(new Error('connection reset')),
+      });
+      const adapter = new AlpacaBrokerAdapter({
+        client,
+        rateLimiter: permissiveLimiter(),
+        unpricedFillAlerts: recordingAlerts(),
+        ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+        clock: fixedClock,
+      });
+
+      await expect(adapter.resumeFlatten('flatten-1', 'AAPL')).rejects.toThrow();
+    });
+
+    it('does not journal the flatten to the durable bracket index', async () => {
+      const state = new InMemoryBrokerStateStore();
+      const saveBracketSpy = vi.spyOn(state, 'saveBracket');
+      const recordIdsSpy = vi.spyOn(state, 'recordBracketOrderIds');
+      const client = makeClient({
+        getOrderByClientOrderId: vi.fn().mockResolvedValue(
+          acceptedOrder({
+            id: 'aapl-flatten-order',
+            status: 'filled',
+            filled_qty: '10',
+            filled_avg_price: '105',
+            filled_at: NOW.toISOString(),
+            legs: [],
+          }),
+        ),
+      });
+      const adapter = new AlpacaBrokerAdapter({
+        client,
+        rateLimiter: permissiveLimiter(),
+        unpricedFillAlerts: recordingAlerts(),
+        ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+        clock: fixedClock,
+        state,
+      });
+
+      await adapter.resumeFlatten('flatten-1', 'AAPL');
+
+      // `getOrder` (the bracket counterpart) DOES call both — see the
+      // adapter's own "durable index" tests above. A flatten never should:
+      // migration 0019's comment on why half-formed bracket-shaped state for
+      // a flatten is the wrong shape.
+      expect(saveBracketSpy).not.toHaveBeenCalled();
+      expect(recordIdsSpy).not.toHaveBeenCalled();
+    });
+
+    it('re-populates the flatten sweep across a restart: a SECOND adapter instance, never told about the flatten directly, still finds and prices its fill via resumeFlatten', async () => {
+      // The "venue": one client double shared by both adapter instances, so
+      // it is the thing that does NOT forget across the "restart" below —
+      // `broker-state-persistence.test.ts`'s own definition of the scenario,
+      // applied to a flatten instead of a bracket.
+      const venueOrder = acceptedOrder({
+        id: 'aapl-flatten-order',
+        client_order_id: 'flatten-1',
+        status: 'filled',
+        filled_qty: '10',
+        filled_avg_price: '105',
+        filled_at: NOW.toISOString(),
+        legs: [],
+      });
+      const getOrderByClientOrderId = vi.fn().mockResolvedValue(venueOrder);
+      const getOrder = vi.fn().mockResolvedValue(venueOrder);
+      // The ack `first.submitFlatten` below needs — a fresh, unfilled 'accepted'
+      // response, distinct from `venueOrder` (the LATER, filled state
+      // `getOrderByClientOrderId`/`getOrder` report once the venue has
+      // resolved it, which is what `second.resumeFlatten` reads back).
+      const submitMarketOrder = vi.fn().mockResolvedValue(
+        acceptedOrder({
+          id: 'aapl-flatten-order',
+          client_order_id: 'flatten-1',
+          status: 'accepted',
+          filled_qty: '0',
+          filled_avg_price: null,
+          filled_at: null,
+          legs: [],
+        }),
+      );
+      const client = makeClient({ getOrderByClientOrderId, getOrder, submitMarketOrder });
+
+      // First process: submits the flatten, in-memory `flattens` map has it.
+      const first = new AlpacaBrokerAdapter({
+        client,
+        rateLimiter: permissiveLimiter(),
+        unpricedFillAlerts: recordingAlerts(),
+        ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+        clock: fixedClock,
+      });
+      await first.submitFlatten('AAPL', 'sell', 10, 'flatten-1');
+
+      // --- restart: a brand-new adapter instance, same client (the venue),
+      // `flattens` map empty — the exact gap #526 names.
+      const second = new AlpacaBrokerAdapter({
+        client,
+        rateLimiter: permissiveLimiter(),
+        unpricedFillAlerts: recordingAlerts(),
+        ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+        clock: fixedClock,
+      });
+
+      // Without resumeFlatten, this would return no fills at all — nothing
+      // in `second.flattens` names 'aapl-flatten-order' to poll.
+      expect(await second.fetchNewFills(new Date(0))).toEqual([]);
+
+      const resumed = await second.resumeFlatten('flatten-1', 'AAPL');
+      expect(resumed).toMatchObject({ client_order_id: 'flatten-1', order_state: 'filled' });
+
+      const fills = await second.fetchNewFills(new Date(0));
+      expect(fills).toEqual([
+        expect.objectContaining({
+          client_order_id: 'flatten-1',
+          broker_fill_id: 'aapl-flatten-order',
+          leg: 'exit',
+          price: 105,
+          qty: 10,
+        }),
+      ]);
+    });
   });
 });

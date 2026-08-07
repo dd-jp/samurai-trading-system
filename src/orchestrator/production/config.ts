@@ -4,6 +4,7 @@ import type {
   AlpacaClient as AlpacaBrokerClient,
   BrokerAdapter,
   ExecutionConfig,
+  FlattenReconcileAlertChannel,
   OcoDoubleFillAlertChannel,
   ResidualExposureAlertChannel,
   UnpricedFillAlertChannel,
@@ -120,6 +121,19 @@ export interface AlertChannelSlots {
    * what supplies it — the ninth `ALERT_CHANNEL_FIELDS` member.
    */
   ocoDoubleFillAlerts?: OcoDoubleFillAlertChannel;
+  /**
+   * Where a `flatten_submissions` row `reconcile()`'s sweep could not settle
+   * is escalated (#519) — genuine ignorance, or a venue contradiction on an
+   * already-acked row (`resolveUnresolvedFlattens`, execution/reconcile.ts).
+   * Defaults to `LoggingFlattenReconcileAlertChannel`, with the same caveat
+   * as `residualExposureAlerts`: reachable only by an operator reading the
+   * log stream. `TradeChannelFlattenReconcileAlert`
+   * (flatten-reconcile-alert-channel.ts) is what an unattended soak (#238)
+   * needs, and `SAMURAI_ALERTS=telegram` supplies it, the same move #551
+   * made for `residualExposureAlerts` — the tenth `ALERT_CHANNEL_FIELDS`
+   * member.
+   */
+  flattenReconcileAlerts?: FlattenReconcileAlertChannel;
   /**
    * Where a run of consecutive analyst quorum skips is escalated (#431,
    * analysts-spec.md story 25). Defaults to `LoggingAnalystSkipAlertChannel`,

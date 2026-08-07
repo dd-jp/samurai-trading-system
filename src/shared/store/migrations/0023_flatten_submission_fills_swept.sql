@@ -1,0 +1,34 @@
+-- Bounds `reconcile()`'s flatten-journal sweep (#519, #526) to genuinely
+-- in-flight rows, the same way `open_positions.order_state` bounds the
+-- bracket sweep to `pending`/`submitted` lots (reconcile.ts's `IN_FLIGHT`).
+--
+-- THE PROBLEM THIS CLOSES. `flatten_submissions.order_state` is written once,
+-- at ack time (`resolveFlattenSubmitted`), and nothing on the happy path ever
+-- advances it afterward — `ingestFills()` persists fills against the LOT
+-- (`open_positions`/`fills`), never against the flatten row that named it.
+-- So `order_state = 'submitted'` is not "still in flight": it is the
+-- PERMANENT value of every flatten that ever landed, filled or not, days
+-- after it closed its lot. A sweep that reads that column alone would poll
+-- `broker.resumeFlatten` for every flatten this database has ever recorded,
+-- forever, on every future reconcile — the exact unbounded-growth failure
+-- already documented (and accepted, in-memory) for `AlpacaBrokerAdapter`'s
+-- own `flattens` map (adapters/alpaca-adapter.ts).
+--
+-- `fills_swept_at` is the durable "done" signal instead: written by
+-- `ingest-fills.ts`'s `redistributeOneFlatten`, but only once EVERY lot the
+-- flatten named has durably applied whatever share of its fill(s) this poll
+-- redistributed to it (see that file's call site) — not merely once a raw
+-- fill was observed. A flatten whose redistribution succeeded but whose
+-- target lot's `applyLotAdvance` then failed leaves this column NULL, so the
+-- next reconcile pass still finds it and — via `resumeFlatten`'s side effect
+-- of re-adding the order to the adapter's in-process sweep set — gives the
+-- lost fill another chance to be re-offered and re-ingested. Marking it done
+-- too early (e.g. at raw-fill-observed rather than durably-applied) would
+-- make that recovery path permanently unreachable, which is worse than the
+-- unbounded-scan this column exists to prevent.
+--
+-- NULL, not a default 'not yet' sentinel, and deliberately so — 0020/0021's
+-- own precedent: a flatten whose fill has not been (fully) ingested reads
+-- this column as NULL either way, regardless of whether it predates this
+-- migration or was submitted five minutes ago. There is nothing to backfill.
+ALTER TABLE flatten_submissions ADD COLUMN fills_swept_at TEXT NULL;

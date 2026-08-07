@@ -39,9 +39,12 @@
  * the order-submitting path, and this fallback is what keeps a naked
  * residual from going unnoticed through an unattended soak (#238).
  *
- * Both loops below run under a containment boundary — see `ContainedFailure`.
- * A failure inside one flatten bucket or one lot decides that unit only; the
- * whole set is reported once, after every other unit of work has landed.
+ * Every loop below runs under a containment boundary — see `ContainedFailure`.
+ * A failure inside one flatten bucket, one lot, or one flatten's post-advance
+ * sweep-mark decides that unit only; the whole set is reported once, after
+ * every other unit of work has landed — except a `flatten-sweep-mark`
+ * failure on its own, which resolves the poll rather than rejecting it (see
+ * `throwContainedFailures`'s own doc).
  */
 import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../shared/index.js';
 import type { ExecutionInput, NormalizedFill } from './types.js';
@@ -90,7 +93,13 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
   // full original size because an earlier sibling lot absorbed the whole
   // partial fill.
   const failures: ContainedFailure[] = [];
-  const flattenTargetedLots = await redistributeFlattenFills(input, byLot, positions, failures);
+  const flattenNamedLots = await redistributeFlattenFills(input, byLot, positions, failures);
+  // The flat union `advanceLot`'s per-lot re-arm check reads (#525) — a lot
+  // named by ANY flatten this poll, independent of which one.
+  const flattenTargetedLots = new Set<string>();
+  for (const lotKeys of flattenNamedLots.values()) {
+    for (const lotKey of lotKeys) flattenTargetedLots.add(lotKey);
+  }
 
   for (const position of positions) {
     // Every lot is independent work: whether one lot's store write or broker
@@ -109,9 +118,45 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
     }
   }
 
+  // #519/#526: mark each flatten whose EVERY named lot durably advanced this
+  // poll (or had nothing new to advance) as swept — see
+  // `SharedStore.markFlattenFillsSwept`'s doc for why this is gated on the
+  // lot-advance outcome rather than fired unconditionally once redistribution
+  // succeeds, and migration 0023 for what this bounds.
+  const failedLotKeys = new Set(
+    failures.filter((failure) => failure.scope === 'lot-advance').map((failure) => failure.key),
+  );
+  for (const [flattenKey, lotKeys] of flattenNamedLots) {
+    if ([...lotKeys].some((lotKey) => failedLotKeys.has(lotKey))) continue;
+    try {
+      await input.store.markFlattenFillsSwept(flattenKey, now);
+    } catch (error) {
+      // NOT correctness-critical the way a 'flatten-attribution'/'lot-advance'
+      // failure is (#519/#526 review, deepseek): a missed mark only means the
+      // row stays exactly where it already was — unswept, and so still found
+      // by `getUnresolvedFlattens()` — which is `reconcile()`'s own designed
+      // recovery for it, not data this poll lost. `throwContainedFailures`
+      // below is gated accordingly: this scope alone does not reject the
+      // poll's promise. It still travels in `failures`, so it is NAMED in the
+      // AggregateError whenever a genuinely correctness-critical failure ALSO
+      // happened this same poll — nothing here hides it from that report.
+      // Only a mark failure entirely on its own resolves quietly: this module
+      // carries no `Logger` of its own to write a standalone line to, and a
+      // poll that advanced every lot and attempted every flatten it could
+      // must not be reported as failed over a bookkeeping retry that heals
+      // itself on the very next reconcile() pass.
+      failures.push({ scope: 'flatten-sweep-mark', key: flattenKey, error });
+    }
+  }
+
   // Last, once no unit of work is left to lose: reporting must not cost
-  // progress, and progress must not buy silence.
-  throwContainedFailures(failures);
+  // progress, and progress must not buy silence. Scoped to the
+  // correctness-critical failures only (#519/#526 review) — see the
+  // 'flatten-sweep-mark' catch above for why that scope alone must not
+  // reject this poll's promise.
+  if (failures.some((failure) => failure.scope !== 'flatten-sweep-mark')) {
+    throwContainedFailures(failures);
+  }
 }
 
 /**
@@ -137,8 +182,20 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
  * inspection of the caught error, no I/O.
  */
 interface ContainedFailure {
-  /** Which of the two boundaries caught it — a flatten bucket, or one lot's advance. */
-  scope: 'flatten-attribution' | 'lot-advance';
+  /**
+   * Which boundary caught it — a flatten bucket's redistribution, one lot's
+   * advance, or (#519/#526) the best-effort `markFlattenFillsSwept` write
+   * that bounds `reconcile()`'s rescan. The third is NOT correctness-critical
+   * the way the first two are (see its call site): `ingestFills`'s own call
+   * to `throwContainedFailures` is gated to skip it when it is the ONLY
+   * scope present, so a mark failure alone resolves the poll rather than
+   * rejecting it — reviewed and fixed on PR #603 after a mark failure was
+   * found to reject the whole poll exactly like the other two, contradicting
+   * this same "not correctness-critical" claim. It still rides in this list,
+   * and so is still named, whenever a correctness-critical failure ALSO
+   * occurs the same poll.
+   */
+  scope: 'flatten-attribution' | 'lot-advance' | 'flatten-sweep-mark';
   /**
    * The offending record's identifier: `open_positions.idempotency_key` for a
    * lot, the flatten's `client_order_id` for a bucket. An IDENTIFIER, never
@@ -156,6 +213,13 @@ interface ContainedFailure {
 /**
  * Fail-closed AND visible, which is the bar: the poll did not fully succeed
  * and says so, having first done every piece of work it still could.
+ *
+ * The caller (`ingestFills`) only reaches this when `failures` names at
+ * least one correctness-critical scope — a 'flatten-sweep-mark'-only
+ * `failures` array never gets here at all (#519/#526 review): that scope's
+ * own recovery (the row stays unswept and rescannable) does not need a
+ * rejected promise to work, and treating it as fatal here would make a poll
+ * that fully succeeded at every money-relevant thing report itself failed.
  *
  * Not swallowed, because silence is the failure mode being fixed. The one
  * production caller is `startFillSync`'s `runOnce` (orchestrator/fill-sync.ts),
@@ -201,26 +265,33 @@ function throwContainedFailures(failures: readonly ContainedFailure[]): void {
  * (below), so `advanceLot`'s `isExitFill`/`closedTrade` see one true answer
  * regardless of which adapter reported it.
  *
- * Returns every lot key named by a flatten this call actually processed
- * (#525) — independent of the per-fill split, which can legitimately
- * leave a later-opened lot with ZERO share of a partial fill. That lot gets
- * no entry in `byLot` and so is otherwise invisible to `ingestFills`'
- * per-position loop this poll; the caller uses this set to still run
- * `advanceLot`'s re-arm check for it.
+ * Returns, PER FLATTEN, every lot key it named and this call actually
+ * processed (#525) — independent of the per-fill split, which can
+ * legitimately leave a later-opened lot with ZERO share of a partial fill.
+ * That lot gets no entry in `byLot` and so is otherwise invisible to
+ * `ingestFills`' per-position loop this poll; the caller uses the flat union
+ * of every flatten's set to still run `advanceLot`'s re-arm check for it.
+ *
+ * Keyed by the flatten's OWN `client_order_id` rather than flattened into one
+ * set (#519/#526): the caller also uses this to decide, per flatten, whether
+ * `SharedStore.markFlattenFillsSwept` may run — which requires knowing which
+ * lots THAT flatten named, not the union across every flatten this poll.
  *
  * Never throws. One flatten's failure is contained to that flatten and
  * appended to `failures` for `ingestFills` to report once the poll is done —
  * see `ContainedFailure`. A bucket that fails is left un-redistributed and so
- * un-attributed, which is the fail-closed answer; it is not left unreported.
+ * un-attributed, which is the fail-closed answer; it is not left unreported,
+ * and (per the caller) it is absent from the returned map, so it is never a
+ * `markFlattenFillsSwept` candidate either.
  */
 async function redistributeFlattenFills(
   input: ExecutionInput,
   byLot: Map<string, NormalizedFill[]>,
   positions: readonly OpenPosition[],
   failures: ContainedFailure[],
-): Promise<Set<string>> {
+): Promise<Map<string, Set<string>>> {
   const positionKeys = new Set(positions.map((position) => position.idempotency_key));
-  const flattenTargetedLots = new Set<string>();
+  const flattenNamedLots = new Map<string, Set<string>>();
 
   // A snapshot of the keys, not a live iterator: the loop body deletes from
   // `byLot` as it goes (once a flatten bucket is consumed, redistributed) and
@@ -255,22 +326,39 @@ async function redistributeFlattenFills(
     // failure. Every lot, including the ones this flatten named, still
     // advances on its OWN fills.
     //
-    // The named-lot set is merged only on SUCCESS. A lot key reaching
-    // `flattenTargetedLots` from a bucket that then failed would make
+    // The named-lot set is recorded only on SUCCESS. A lot key reaching
+    // `flattenNamedLots` from a bucket that then failed would make
     // `advanceLot` re-arm protective legs sized off a fill record this very
     // containment refused to complete — arming the venue for quantity it may
     // already have sold. Left out, that lot is naked and reported; left in, it
     // could be naked AND covered by a leg that sells what it does not hold.
+    // The same omission is also what keeps a failed flatten out of the
+    // caller's `markFlattenFillsSwept` candidates (#519/#526) — see this
+    // function's own doc.
     const targetedByThisFlatten = new Set<string>();
     try {
       await redistributeOneFlatten(input, byLot, clientOrderId, targetedByThisFlatten);
-      for (const lotKey of targetedByThisFlatten) flattenTargetedLots.add(lotKey);
+      // EMPTY, not merely absent-from-the-map, is `redistributeOneFlatten`'s
+      // ordinary return for a `clientOrderId` that is not a real flatten at
+      // all — `getFlattenAttribution` returning `null` (its own doc: "not a
+      // known flatten either"). That is NOT a rare edge case here: `brackets`
+      // is never pruned (alpaca-adapter.ts), so a CLOSED lot's own bracket
+      // keeps being re-polled every future sweep, and once that lot leaves
+      // `positions` this loop's `positionKeys.has` gate no longer recognises
+      // its (duplicate, already-`hasFill`-deduped) fill as "a lot's own
+      // bucket" — it falls through to this exact lookup instead. Recording
+      // an EMPTY entry for it would hand the caller's `markFlattenFillsSwept`
+      // a `clientOrderId` that names no `flatten_submissions` row at all,
+      // which throws. Only a NON-EMPTY result is a real flatten.
+      if (targetedByThisFlatten.size > 0) {
+        flattenNamedLots.set(clientOrderId, targetedByThisFlatten);
+      }
     } catch (error) {
       failures.push({ scope: 'flatten-attribution', key: clientOrderId, error });
     }
   }
 
-  return flattenTargetedLots;
+  return flattenNamedLots;
 }
 
 /**

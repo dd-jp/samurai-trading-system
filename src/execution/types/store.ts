@@ -149,6 +149,63 @@ export interface SharedStore {
    * closed instead of being silently dropped.
    */
   getFlattenAttribution(idempotency_key: string): Promise<FlattenAttribution | null>;
+  /**
+   * `reconcile()`'s worklist (#519, #526) — every flatten row a crash could
+   * have stranded, bounded so the sweep does not re-poll the venue for a
+   * flatten that finished closing its lot(s) days ago (0022's own doc for
+   * the full reasoning): `status = 'submitting'` (the write-ahead's ack was
+   * lost) OR (`status = 'submitted'` AND `fills_swept_at IS NULL` — acked,
+   * but not yet confirmed durably applied to every lot it named).
+   *
+   * `'error'` rows are excluded outright: that status means the flatten
+   * PROVABLY never reached the broker (`resolveFlattenError`'s own doc), so
+   * there is nothing left for the venue to answer about it.
+   */
+  getUnresolvedFlattens(): Promise<UnresolvedFlattenSubmission[]>;
+  /**
+   * Refreshes a flatten's known venue state on an ALREADY-`'submitted'` row,
+   * without touching `resolved_at` (migration 0019: the moment the ORIGINAL
+   * write-ahead was settled — `resolveFlattenSubmitted`'s job, for a row
+   * still at `'submitting'`) or `status` (already `'submitted'`; this is not
+   * a new ambiguity being resolved, only a fresher answer to one already
+   * settled once). Reusing `resolveFlattenSubmitted` here would silently
+   * overwrite `resolved_at` with whatever time `reconcile()` happened to run
+   * at, which is a different, false claim about when the flatten was acked.
+   */
+  recordFlattenOrderStateObserved(
+    idempotency_key: string,
+    update: { order_state: OrderState; broker_order_ids: string[] },
+  ): Promise<void>;
+  /**
+   * Marks a flatten's fill(s) as durably applied to every lot it named THIS
+   * poll — `ingest-fills.ts`'s call site, right after every one of a
+   * flatten's named lots has either advanced cleanly or had nothing new to
+   * advance. This is what bounds `getUnresolvedFlattens()` above; see
+   * migration 0023 for why the bound cannot be `order_state` alone, and why
+   * this may NOT be called merely because a raw fill was observed — only
+   * once it is durably applied, or a lot-advance failure this poll would
+   * become permanently unrecoverable instead of retried on the next
+   * `reconcile()` pass.
+   */
+  markFlattenFillsSwept(idempotency_key: string, swept_at: Date): Promise<void>;
+}
+
+/**
+ * One `flatten_submissions` row `reconcile()`'s sweep still has work to do
+ * on — see `SharedStore.getUnresolvedFlattens`.
+ */
+export interface UnresolvedFlattenSubmission {
+  idempotency_key: string;
+  instrument: string;
+  /**
+   * `'submitting'`: the write-ahead's ack was lost — `broker.resumeFlatten`
+   * settles whether the venue ever saw it, the same ambiguity `reconcile()`
+   * already settles for a bracket's `pending` write-ahead.
+   * `'submitted'`: the venue acked it once; this row still needs a fresher
+   * answer, or its fills durably applied, before it can be dropped from the
+   * scan (see `SharedStore.markFlattenFillsSwept`).
+   */
+  status: 'submitting' | 'submitted';
 }
 
 /**
