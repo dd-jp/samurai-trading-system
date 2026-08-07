@@ -778,6 +778,106 @@ describe('composed tick chain (integration)', () => {
     expect(outcome.final_stage).toBe('risk');
     expect(outcome.execution_result).toBeUndefined();
   });
+
+  /**
+   * #568 review: the exit-fill reader is bound HERE, in
+   * `buildProductionComponents`, and the regression class this project keeps
+   * producing is a mechanism that exists and is wired to the wrong thing.
+   * `direct-bind.test.ts` builds its own binding, so it proves the seam works,
+   * not that the composition root uses it — a `getExitFillSizes` bound to a
+   * SECOND store would pass every test there while computing held quantity
+   * from a database that does not hold these lots.
+   *
+   * Pinned two ways, because either alone is escapable: the spy proves the
+   * trader step calls THIS instance (a second store leaves it untouched), and
+   * the sized intent proves that instance sees the same fill rows
+   * `getOpenPositions` served the lot from (a second store over a different
+   * db would size the exit at the lot's original 10).
+   */
+  it('binds the trader step exit-fill reader to the same executionStore the open lots come from (#568)', async () => {
+    const clock = new SimulatedClock(START);
+    const hourMs = 60 * 60 * 1_000;
+    const dataSource = new FixtureDataSource(
+      [
+        ...fixtureBars('BTC-USD', '1h', 60, hourMs),
+        ...fixtureBars('BTC-USD', '1m', 60, 60_000),
+        ...fixtureBars('BTC-USD', '1d', 40, 24 * hourMs),
+      ],
+      { price: 160, observed_at: START, source: 'fixture' },
+      'crypto',
+      { bid: 159.5, ask: 160.5, observed_at: START },
+    );
+    const config = stubConfig(db, {
+      ...REAL_CONFIGS,
+      clock,
+      dataSource,
+      llmClient: new MockLlmClient(),
+    });
+
+    const components = buildProductionComponents(config);
+
+    // A lot of 10 with 4 already flattened, written through the very store
+    // the composition root hands `getOpenPositions`.
+    await components.executionStore.writeAheadPosition({
+      idempotency_key: 'lot-partially-flattened',
+      debate_id: 'debate-earlier',
+      instrument: 'BTC-USD',
+      asset_class: 'crypto',
+      side: 'buy',
+      intent_type: 'entry',
+      requested_size: 10,
+      filled_size: 10,
+      avg_entry_price: 150,
+      stop: 140,
+      target: 180,
+      order_state: 'filled',
+      broker_order_ids: [],
+      opened_at: START,
+      decision_timestamp: START,
+      conviction: 0.6,
+      converged: true,
+    });
+    await components.executionStore.applyLotAdvance({
+      idempotency_key: 'lot-partially-flattened',
+      fills: [
+        {
+          idempotency_key: 'lot-partially-flattened',
+          broker_fill_id: 'fill-earlier-partial-flatten',
+          leg: 'exit',
+          price: 158,
+          qty: 4,
+          fee: 0.1,
+          timestamp: START,
+        },
+      ],
+    });
+
+    const readExitFills = vi.spyOn(components.executionStore, 'getExitFillSizes');
+
+    const intent = await components.steps.trader({
+      trace_id: 'trace-568-wiring',
+      instrument: 'BTC-USD',
+      // Opposite the held long, so the Trader flattens.
+      debate: {
+        synthesis: 'bearish',
+        position: 'short',
+        confidence: 0.9,
+        contributions: [],
+        disagreement_summary: '',
+        open_items: [],
+        converged: true,
+        rounds_completed: 1,
+        latency_ms: 10,
+        direction: 'bearish',
+        debate_id: 'debate-568-wiring',
+      },
+      clock,
+    });
+
+    expect(readExitFills).toHaveBeenCalledWith(['lot-partially-flattened']);
+    expect(intent?.intent_type).toBe('exit');
+    expect(intent?.size).toBe(6);
+  });
 });
 
 describe('startTickLoop', () => {

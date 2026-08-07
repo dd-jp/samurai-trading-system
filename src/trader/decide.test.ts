@@ -966,6 +966,38 @@ describe('decideWithReason — named skip reasons (#475)', () => {
     expect(outcome.skip_reason).toBe('exit_no_filled_size');
   });
 
+  // #568 review: an over-exited lot netting a positive sibling to <= 0 is the
+  // SAME failure the held-quantity fix closes — a negative hiding inside a
+  // total that looks benign. Here it would suppress the exit the sibling
+  // genuinely needs, and `executeExit`'s loud refusal never runs because no
+  // order is emitted for it to refuse, so this reason is what makes it
+  // visible at all.
+  it('reports the divergence, not a flat-lot skip, when a lot records more closed than it ever opened', async () => {
+    const overExited = openPosition({
+      idempotency_key: 'lot-over-exited',
+      side: 'buy',
+      filled_size: 10,
+    });
+    const sibling = openPosition({
+      idempotency_key: 'lot-sibling',
+      side: 'buy',
+      filled_size: 4,
+    });
+
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({ direction: 'bearish', confidence: 0.9, converged: true }),
+        positionState: async () => [overExited, sibling],
+        // 14 closed against an entry of 10 → held -4, which nets the
+        // sibling's real +4 to exactly zero.
+        exitFillSizes: async () => new Map([['lot-over-exited', 14]]),
+      }),
+    );
+
+    expect(outcome.intent).toBeNull();
+    expect(outcome.skip_reason).toBe('exit_held_quantity_diverged');
+  });
+
   it('reports no reason at all when an order was produced', async () => {
     // The other half of the contract: a successful decision must not carry a
     // skip reason, or a soak query counting skips would double-count trades.

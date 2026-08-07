@@ -349,7 +349,19 @@ async function buildExitIntent(
   // already closed — the same derivation `executeExit` re-runs before it
   // submits, and it refuses on exact inequality, so a difference between the
   // two stops the exit rather than mis-sizing it.
-  const totalSize = totalHeldQuantity(await heldQuantitiesFor(positions, exitFillSizes));
+  const held = await heldQuantitiesFor(positions, exitFillSizes);
+
+  // Fail closed, per lot, BEFORE summing — the same check `executeExit` makes,
+  // for the same reason. A lot recording more closed than it ever opened is
+  // the store contradicting itself, and netting that negative against a
+  // positive sibling yields a total that reads as an ordinary "nothing to
+  // flatten". Folded into `exit_no_filled_size` it would be invisible twice
+  // over: the sibling's REAL residual would never be exited, and
+  // `executeExit`'s loud refusal would never run, because no order is emitted
+  // for it to refuse. Its own reason, so a soak can tell it from a flat lot.
+  if (held.some((lot) => lot.held < 0)) return skip('exit_held_quantity_diverged');
+
+  const totalSize = totalHeldQuantity(held);
   if (totalSize <= 0) return skip('exit_no_filled_size');
 
   const asOf = clock.now();
@@ -428,6 +440,14 @@ export type TraderSkipReason =
   | 'holding_neutral_or_non_converged'
   | 'scale_in_conviction_delta_not_met'
   | 'exit_no_filled_size'
+  // #568: a lot whose recorded exit fills exceed what it ever opened. NOT a
+  // quiet variant of `exit_no_filled_size` — that one means "nothing to
+  // close", this one means "the store's own record of this instrument
+  // disagrees with itself", and the exit it suppresses may be one a sibling
+  // lot genuinely needs. If this ever appears in a soak log, the fill record
+  // is the thing to look at, and an instrument is stuck un-exitable until it
+  // is.
+  | 'exit_held_quantity_diverged'
   | 'no_position_side'
   | 'atr_insufficient_bars'
   | 'atr_not_finite'
