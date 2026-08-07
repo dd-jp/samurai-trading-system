@@ -274,4 +274,33 @@ describe('HttpPolygonClient free-tier pacing (#510)', () => {
 
     await pending;
   });
+
+  /**
+   * Review feedback on #520/#510: `resolveVenuePacing()` validates every
+   * venue's `SAMURAI_PACING_*` in one pass, so a malformed override for a
+   * venue this Polygon-only client never touches (Alpaca, here) would
+   * otherwise throw with no indication that the failure has nothing to do
+   * with Polygon. `resolvePolygonPacing()` (http-polygon-client.ts) wraps
+   * the failure with that context while preserving the original message —
+   * which already names the exact venue and env var — verbatim.
+   */
+  it('names the offending venue and env var when an UNRELATED venue override is malformed', () => {
+    const previous = process.env.SAMURAI_PACING_ALPACA_REFILL_PER_SEC;
+    process.env.SAMURAI_PACING_ALPACA_REFILL_PER_SEC = 'not-a-number';
+    try {
+      expect(() => new HttpPolygonClient({ apiKey: FAKE_KEY })).toThrow(
+        /SAMURAI_PACING_ALPACA_REFILL_PER_SEC/,
+      );
+      // Not weakened into a silent fallback — still loud — and the added
+      // context says why a Polygon-only construction even surfaced an
+      // Alpaca variable, which is the actual diagnosability complaint.
+      expect(() => new HttpPolygonClient({ apiKey: FAKE_KEY })).toThrow(/HttpPolygonClient/);
+      expect(() => new HttpPolygonClient({ apiKey: FAKE_KEY })).toThrow(
+        /DIFFERENT venue.s env var/,
+      );
+    } finally {
+      if (previous === undefined) delete process.env.SAMURAI_PACING_ALPACA_REFILL_PER_SEC;
+      else process.env.SAMURAI_PACING_ALPACA_REFILL_PER_SEC = previous;
+    }
+  });
 });
