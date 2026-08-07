@@ -70,14 +70,27 @@ Two known gaps that a premium-harvest Stage 2 would have to close first: the uni
 
 ## Provenance of these numbers
 
-The run was executed at commit `211f425`. The follow-up commit `7024072`
-changed **imports and test stubs only** — routing `stage2-source.ts` through
-the `cost-model-backtest` barrel and replacing cast-based test fixtures with
-real `Response` objects — with no change to fetching, validation, windowing or
-scoring. Verified after that commit by the full suite (2792 passing) and by
-re-checking `resolveStage2Source` against the built output for both sources.
-The numbers below are therefore reproducible at `HEAD`, not only at the commit
-that produced them.
+The run was executed at commit `211f425`. Two follow-up commits touched the
+client afterwards, and neither changes the series it returns:
+
+- `7024072` — **imports and test stubs only**: routing `stage2-source.ts`
+  through the `cost-model-backtest` barrel and replacing cast-based test
+  fixtures with real `Response` objects.
+- review fixes for [#598](https://github.com/dd-jp/samurai-trading-system/pull/598)
+  — de-duplicating Alpaca bars by open time and sorting them, matching what
+  the Coinbase leg already did.
+
+The de-duplication is the one that could in principle move a number, so it was
+checked rather than assumed: re-ingesting after it returns **SPY 2662 bars
+(2016-01-04 → 2026-08-05)** and **ETH-USD 3730 (2016-05-18 → 2026-08-05)**,
+strictly ascending — identical to the counts this verdict was computed on.
+Alpaca does not in fact serve overlapping pages; the dedup is a guard, not a
+correction.
+
+Verified additionally by the full suite (2795 passing) and by re-checking
+`resolveStage2Source` against the built output for both sources. The numbers
+below are therefore reproducible at `HEAD`, not only at the commit that
+produced them.
 
 ## Reproducing
 

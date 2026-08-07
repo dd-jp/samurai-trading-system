@@ -1,5 +1,5 @@
 import { TokenBucket } from '../shared/index.js';
-import { FreeStackAggregatesClient } from './free-stack-aggregates-client.js';
+import { FreeStackAggregatesClient, isCryptoSymbol } from './free-stack-aggregates-client.js';
 import type { DateRange } from './universe.js';
 
 const FAKE_KEY = 'test-fake-alpaca-key';
@@ -141,6 +141,32 @@ describe('FreeStackAggregatesClient — equities via Alpaca', () => {
     expect(bars[0]?.t).toBe(Date.parse('2024-01-02T05:00:00Z'));
   });
 
+  it('de-duplicates bars repeated across pages', async () => {
+    // Alpaca documents non-overlapping pages, but the Coinbase leg already
+    // de-duplicates and a silently doubled bar would skew every metric
+    // downstream rather than failing loudly. Review finding on PR #598.
+    const { fetchImpl } = recordingFetch((_url, call) =>
+      call === 1
+        ? jsonResponse({
+            bars: { SPY: [{ t: '2024-01-02T05:00:00Z', o: 1, h: 2, l: 0.5, c: 1.5, v: 10 }] },
+            next_page_token: 'page-2',
+          })
+        : jsonResponse({
+            bars: {
+              SPY: [
+                { t: '2024-01-02T05:00:00Z', o: 1, h: 2, l: 0.5, c: 1.5, v: 10 },
+                { t: '2024-01-03T05:00:00Z', o: 2, h: 3, l: 1.5, c: 2.5, v: 20 },
+              ],
+            },
+            next_page_token: null,
+          }),
+    );
+
+    const bars = await client(fetchImpl).fetchAggregates('SPY', WINDOW);
+
+    expect(bars.map((b) => b.c)).toEqual([1.5, 2.5]);
+  });
+
   it('returns an empty series when the venue serves no bars for the symbol', async () => {
     const { fetchImpl } = recordingFetch(() => jsonResponse({ bars: {} }));
 
@@ -195,6 +221,32 @@ describe('FreeStackAggregatesClient — routing', () => {
 
     expect(new URL(calls[0] as string).host).toContain('coinbase');
     expect(new URL(calls[1] as string).host).toContain('alpaca');
+  });
+
+  it('never issues a zero-length final chunk', async () => {
+    // Reviewer read `while (cursor <= endMs)` as producing one extra
+    // zero-width request per run. It does not — the loop breaks when
+    // `chunkEnd >= endMs`, which the min() makes true on the last chunk. This
+    // pins that, since the failure it would cause (a spurious request whose
+    // response the venue defines) is invisible in the bar count.
+    const { fetchImpl, calls } = recordingFetch(() => jsonResponse([]));
+
+    await client(fetchImpl).fetchAggregates('BTC-USD', {
+      start: new Date('2024-01-01T00:00:00.000Z'),
+      end: new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    for (const url of calls) {
+      const params = new URL(url).searchParams;
+      expect(params.get('start')).not.toBe(params.get('end'));
+    }
+  });
+
+  it('classifies symbols by the -USD suffix', () => {
+    expect(isCryptoSymbol('BTC-USD')).toBe(true);
+    expect(isCryptoSymbol('ETH-USD')).toBe(true);
+    expect(isCryptoSymbol('SPY')).toBe(false);
+    expect(isCryptoSymbol('AAPL')).toBe(false);
   });
 
   it('refuses to construct without Alpaca credentials', () => {

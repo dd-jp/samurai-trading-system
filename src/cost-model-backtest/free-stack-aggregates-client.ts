@@ -246,11 +246,20 @@ export class FreeStackAggregatesClient implements PolygonClient {
       cursor = chunkEnd;
     }
 
+    // NOT redundant despite the forward chunk walk (raised in review on
+    // #598): Coinbase returns each chunk NEWEST-FIRST, so `Map` insertion
+    // order is descending within a chunk. Deleting this sort returns
+    // [300, 200, 100] for the first test's fixture — verified by mutation.
     return [...byTime.values()].sort((a, b) => a.t - b.t);
   }
 
   private async fetchAlpaca(symbol: string, window: DateRange): Promise<PolygonAggregate[]> {
-    const out: PolygonAggregate[] = [];
+    // Keyed by open time for the same reason as the Coinbase leg: Alpaca
+    // documents non-overlapping pages, but a bar silently counted twice would
+    // skew every downstream metric rather than failing loudly, and the store
+    // has no duplicate check of its own (PRIMARY KEY dedups on write, which is
+    // after the series has already been returned). Review finding on PR #598.
+    const byTime = new Map<number, PolygonAggregate>();
     let pageToken: string | undefined;
     let pages = 0;
 
@@ -300,7 +309,8 @@ export class FreeStackAggregatesClient implements PolygonClient {
         );
       }
       for (const raw of bars ?? []) {
-        out.push(validateAlpacaBar(raw, symbol));
+        const bar = validateAlpacaBar(raw, symbol);
+        byTime.set(bar.t, bar);
       }
 
       // A wrong-typed token degrades to "no more pages" rather than throwing,
@@ -310,6 +320,9 @@ export class FreeStackAggregatesClient implements PolygonClient {
       pageToken = typeof body.next_page_token === 'string' ? body.next_page_token : undefined;
     } while (pageToken !== undefined);
 
-    return out;
+    // Sorted for the same reason as the Coinbase leg: `sort=asc` is a request
+    // parameter, not a guarantee this client verifies, and the store's
+    // contract is ascending.
+    return [...byTime.values()].sort((a, b) => a.t - b.t);
   }
 }
