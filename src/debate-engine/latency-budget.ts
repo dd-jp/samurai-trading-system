@@ -10,15 +10,10 @@
  * ahead-of-#34 pattern as `analyst-contribution.ts` (#36) and
  * `debate-log-store.ts`.
  *
- * STATUS as of #347: #34 has landed (`round-orchestrator.ts`) but nothing in
- * production calls this yet — `buildDebateStep`
- * (orchestrator/production/debate-adapter.ts) calls `runDebate` directly, with
- * no budget around it. So the cancellation this module gained in #347 is a
- * contract that is ready rather than a leak being stopped in the live tick;
- * the live half of that ticket is `AnthropicLlmClient.callWithTimeout`, which
- * abandoned its own timed-out requests on every slow call. Wiring the budget
- * into the tick is its own change: it needs an asset-class decision per
- * instrument and a `getCurrentState` the adapter does not expose today.
+ * STATUS: wired into the live tick since #374 — `buildDebateStep`
+ * (orchestrator/production/debate-adapter.ts) runs every debate through
+ * `enforceLatencyBudget`, with `getCurrentState` read off the mediator
+ * closure and the cancellation contract from #347 threaded into `runDebate`.
  *
  * Uses real `setTimeout` (not the injected `Clock`), matching
  * `analyst-response-collector.ts`'s timeout race — `Clock` is stepped
@@ -27,14 +22,46 @@
  */
 import type { DebateLogger } from './debate-logger.js';
 import type { AssetClass } from './rate-limiter.js';
+import { MAX_ROUNDS } from './round-orchestrator.js';
 import type { DebateResult, Direction } from './types.js';
 
 export type { AssetClass };
 
-/** Budget by asset class, in milliseconds (spec's "Budget by Asset Class"). */
+/**
+ * Budget by asset class, in milliseconds (spec's "Budget by Asset Class").
+ *
+ * Crypto was 15s until #581: the first real paper tick measured every crypto
+ * debate timing out at 15s while the FASTEST completed equity debate took ~17s
+ * — the budget was below one round of sequential bull/bear/mediator calls at
+ * real LLM latency, so 100% of crypto decisions were partial syntheses. 30s
+ * covers the measured one-round debate (~17-20s incl. disagreement detection)
+ * with headroom while staying half the stocks budget, because crypto signals
+ * decay faster. The budget and the round cap below are ONE decision: raising
+ * the budget without capping rounds would let a 3-round crypto debate run
+ * ~45-60s of 24/7 spend and blow the ADR-0008 $50 soak cap (priced in #581's
+ * cost-coupling comment).
+ */
 export const LATENCY_BUDGET_MS: Record<AssetClass, number> = {
-  crypto: 15_000,
+  crypto: 30_000,
   stocks: 60_000,
+};
+
+/**
+ * Round cap by asset class (#581, option 2: shrink the crypto debate so it
+ * genuinely fits its budget rather than truncating every tick).
+ *
+ * Crypto gets ONE round — bull, bear, mediator, once — because the debate is
+ * strictly sequential (~5s/call measured, #346) and a second round cannot fit
+ * any budget that respects crypto signal decay. A one-round debate is a
+ * designed debate that completes; the old shape was a three-round debate that
+ * was cut off mid-round on every tick, which is worse on both quality (no
+ * disagreement detection ran — that only runs on the final round) and
+ * attribution (every crypto row read `converged: false, timed_out`).
+ * Stocks keep the spec's 3-round hybrid termination unchanged.
+ */
+export const MAX_ROUNDS_BY_ASSET_CLASS: Record<AssetClass, number> = {
+  crypto: 1,
+  stocks: MAX_ROUNDS,
 };
 
 /**

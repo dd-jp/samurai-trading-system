@@ -143,7 +143,7 @@ describe('debate cancellation (#347)', () => {
   });
 
   it('runs every round to the cap when each call is fast enough', async () => {
-    // 1s per call * (3 rounds * 3 personas + 1 disagreement call) = 10s < 15s budget.
+    // 1s per call * (3 rounds * 3 personas + 1 disagreement call) = 10s < 30s budget.
     const fetches = stubSlowFetch(1_000);
     const logger = makeLogger();
     const personas = buildDebatePersonas(buildLlmClient(), 'trace-1', CLOCK);
@@ -159,9 +159,9 @@ describe('debate cancellation (#347)', () => {
   });
 
   it('issues strictly fewer LLM calls when the budget fires in round 1', async () => {
-    // 8s per call: bull answers at 8s, bear is still in flight when the 15s
+    // 16s per call: bull answers at 16s, bear is still in flight when the 30s
     // budget fires. Two calls issued, versus ten for the run-to-cap case.
-    const fetches = stubSlowFetch(8_000);
+    const fetches = stubSlowFetch(16_000);
     const logger = makeLogger();
     const personas = buildDebatePersonas(buildLlmClient(), 'trace-1', CLOCK);
 
@@ -169,7 +169,7 @@ describe('debate cancellation (#347)', () => {
     await vi.advanceTimersByTimeAsync(LATENCY_BUDGET_MS.crypto);
     const result = await promise;
 
-    expect(result.timed_out).toEqual({ budget_ms: 15_000, elapsed_ms: 15_000 });
+    expect(result.timed_out).toEqual({ budget_ms: 30_000, elapsed_ms: 30_000 });
     expect(fetches.calls()).toBe(2);
 
     // The decisive assertion: no call is issued AFTER the budget fires. Without
@@ -179,7 +179,7 @@ describe('debate cancellation (#347)', () => {
   });
 
   it('aborts the in-flight request at the fetch layer, not merely ignores it', async () => {
-    const fetches = stubSlowFetch(8_000);
+    const fetches = stubSlowFetch(16_000);
     const logger = makeLogger();
     const personas = buildDebatePersonas(buildLlmClient(), 'trace-1', CLOCK);
 

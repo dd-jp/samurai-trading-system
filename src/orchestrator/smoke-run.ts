@@ -121,12 +121,13 @@ import { pathToFileURL } from 'node:url';
 import type { CostConfig } from '../cost-model-backtest/index.js';
 import { CostModelImpl } from '../cost-model-backtest/index.js';
 import type {
+  AssetClass,
   LlmClient,
   LlmRequest,
   LlmResponse,
   RateLimiterSnapshot,
 } from '../debate-engine/index.js';
-import { RateLimiter } from '../debate-engine/index.js';
+import { MAX_ROUNDS_BY_ASSET_CLASS, RateLimiter } from '../debate-engine/index.js';
 import type {
   AlpacaClient,
   BrokerAck,
@@ -164,6 +165,7 @@ import {
 import { startFromEnvironment } from './index.js';
 import { JsonLogger } from './logger.js';
 import { paperStartingProfile } from './paper-profile.js';
+import { worstCaseLlmCallsForAssetClass } from './production/debate-adapter.js';
 import type { AccountStateProvider } from './production/direct-bind.js';
 import { buildExecutionSurface } from './production/direct-bind.js';
 import { SMOKE_TEST_UNIVERSE } from './production.js';
@@ -1194,6 +1196,48 @@ export function evaluateSmokeGate(
           'beside the LLM path rather than in it. This is the #388 defect exactly: the ' +
           'component was implemented, tested and exported while nothing in production ever ' +
           'called it, and the whole unit suite passed the entire time',
+      );
+    }
+  }
+
+  // #581 — the per-asset-class round cap is wired through the composition
+  // root. Each `debate_log` row is checked against ITS instrument's cap
+  // (looked up through `SMOKE_TEST_UNIVERSE`, so widening the smoke universe
+  // to stocks keeps healthy 3-round debates passing); a row above its cap
+  // means `buildDebateStep` stopped threading the cap into `runDebate`.
+  // Paired with a per-class call-accounting bound that is TIGHT under the
+  // stub (a converged crypto debate spends exactly its worst case: 3 persona
+  // calls + 1 disagreement call), so one extra LLM call per debate — an
+  // unwired cap, a second disagreement pass — fails the gate rather than
+  // passing unseen.
+  const smokeAssetClass = new Map<string, AssetClass>(
+    SMOKE_TEST_UNIVERSE.map((entry) => [entry.asset, entry.asset_class]),
+  );
+  const overCap = debates.filter((debate) => {
+    const assetClass = smokeAssetClass.get(debate.instrument) ?? 'crypto';
+    return debate.rounds > MAX_ROUNDS_BY_ASSET_CLASS[assetClass];
+  });
+  if (overCap.length > 0) {
+    failures.push(
+      `${overCap.length} debate_log row(s) ran more rounds than their asset class's cap ` +
+        '(#581) — the per-asset-class round cap is no longer reaching `runDebate` from the ' +
+        'composition root, so live crypto debates are back to blowing their latency budget ' +
+        'on every tick',
+    );
+  }
+  // Iterated over the closed AssetClass set rather than Object.entries, so a
+  // malformed snapshot key can never produce an undefined cap (whose NaN
+  // bound would compare false everywhere and silently pass the gate).
+  for (const assetClass of ['crypto', 'stocks'] as const satisfies readonly AssetClass[]) {
+    const entry = options.llmRateLimiterSnapshot[assetClass];
+    if (entry === undefined) continue;
+    const perDebateBound = worstCaseLlmCallsForAssetClass(assetClass);
+    if (entry.debatesUsed > 0 && entry.llmCallsUsed > entry.debatesUsed * perDebateBound) {
+      failures.push(
+        `the ${assetClass} limiter metered ${entry.llmCallsUsed} LLM call(s) across ` +
+          `${entry.debatesUsed} debate(s), above the per-debate worst case of ` +
+          `${perDebateBound} (#581) — a debate is spending calls its reservation never ` +
+          'booked, so admission control is under-reserving',
       );
     }
   }

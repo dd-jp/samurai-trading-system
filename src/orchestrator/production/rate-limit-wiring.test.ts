@@ -12,6 +12,7 @@ import type { AnalystView, LlmClient, LlmRequest } from '../../debate-engine/ind
 import {
   InMemoryDebateLogStore,
   MAX_ROUNDS,
+  MAX_ROUNDS_BY_ASSET_CLASS,
   RateLimiter,
   type RateLimiterConfig,
   UNCAPPED_SPEND,
@@ -29,6 +30,7 @@ import {
   buildDebateStep,
   LLM_CALLS_PER_ROUND,
   WORST_CASE_LLM_CALLS_PER_DEBATE,
+  worstCaseLlmCallsForAssetClass,
 } from './debate-adapter.js';
 
 const NOW = new Date('2026-08-05T14:00:00Z');
@@ -325,7 +327,10 @@ describe('what a refused debate does', () => {
     const llmClient = countingLlmClient();
     const rateLimiter = new RateLimiter(
       CLOCK,
-      budget({ maxDebates: 10, maxLlmCalls: WORST_CASE_LLM_CALLS_PER_DEBATE - 1 }),
+      // One call short of CRYPTO's worst case (#581): the reservation is
+      // per-asset-class now, so the global constant minus one would admit a
+      // 1-round crypto debate instead of refusing it.
+      budget({ maxDebates: 10, maxLlmCalls: worstCaseLlmCallsForAssetClass('crypto') - 1 }),
     );
     const step = buildDebateStep(
       llmClient,
@@ -355,7 +360,31 @@ describe('the reserved worst case matches what a debate can actually spend', () 
   it('is not exceeded by a debate that runs to the hard round cap', async () => {
     // The assertion that makes the constant more than arithmetic: run the real
     // personas to the cap and count. Under-reserving would let a debate blow
-    // the budget it was admitted under.
+    // the budget it was admitted under. Stocks, since #581 capped crypto at
+    // one round — the crypto counterpart is the test below.
+    const llmClient = countingLlmClient({ converged: false });
+    const rateLimiter = new RateLimiter(CLOCK, budget());
+    const step = buildDebateStep(
+      llmClient,
+      new InMemoryDebateLogStore(),
+      rateLimiter,
+      UNCAPPED_SPEND,
+    );
+
+    const result = await step({
+      trace_id: 'trace-1',
+      instrument: 'SPY',
+      asset_class: 'stocks',
+      views: [makeView(), makeView({ analyst_id: 'sentiment-1', direction: 'bearish' })],
+      clock: CLOCK,
+    });
+
+    expect(result.rounds_completed).toBe(MAX_ROUNDS);
+    expect(llmClient.calls).toBeLessThanOrEqual(WORST_CASE_LLM_CALLS_PER_DEBATE);
+    expect(rateLimiter.snapshot().stocks?.llmCallsUsed).toBe(llmClient.calls);
+  });
+
+  it('caps a crypto debate at one round and still runs disagreement detection (#581)', async () => {
     const llmClient = countingLlmClient({ converged: false });
     const rateLimiter = new RateLimiter(CLOCK, budget());
     const step = buildDebateStep(
@@ -373,9 +402,21 @@ describe('the reserved worst case matches what a debate can actually spend', () 
       clock: CLOCK,
     });
 
-    expect(result.rounds_completed).toBe(MAX_ROUNDS);
-    expect(llmClient.calls).toBeLessThanOrEqual(WORST_CASE_LLM_CALLS_PER_DEBATE);
+    // One round (bull, bear, mediator) + the once-per-debate disagreement
+    // call: round 1 IS the final round under the crypto cap, so the mediator
+    // must gate `detectDisagreements` on the per-class cap, not `MAX_ROUNDS`.
+    expect(result.rounds_completed).toBe(1);
+    expect(result.converged).toBe(false);
+    expect(llmClient.calls).toBe(4);
+    expect(llmClient.calls).toBeLessThanOrEqual(worstCaseLlmCallsForAssetClass('crypto'));
     expect(rateLimiter.snapshot().crypto?.llmCallsUsed).toBe(llmClient.calls);
+  });
+
+  it('reserves the per-asset-class worst case, not the global one (#581)', () => {
+    expect(worstCaseLlmCallsForAssetClass('crypto')).toBe(
+      MAX_ROUNDS_BY_ASSET_CLASS.crypto * LLM_CALLS_PER_ROUND + 1,
+    );
+    expect(worstCaseLlmCallsForAssetClass('stocks')).toBe(WORST_CASE_LLM_CALLS_PER_DEBATE);
   });
 });
 

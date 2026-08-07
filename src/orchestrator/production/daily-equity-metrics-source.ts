@@ -160,6 +160,28 @@ export interface DailyEquityMetricsSourceInput {
  */
 export const DEFAULT_STAGE2_MAX_AGE_DAYS = 90;
 
+/**
+ * The selections a revalidation snapshot may be built from: fresh (within
+ * `DEFAULT_STAGE2_MAX_AGE_DAYS`) AND with both statistics computed — PBO or
+ * DSR null is a typed refusal, and the snapshot's shape has no room for one.
+ *
+ * Exported because the startup line in `production.ts` reports this exact
+ * decision; a re-implemented predicate there is how the pre-#579 warning came
+ * to describe a producer that no longer existed.
+ */
+export function usableRevalidationSelections(
+  selections: readonly Stage2Selection[],
+  now: Date,
+): Stage2Selection[] {
+  const maxAgeMs = DEFAULT_STAGE2_MAX_AGE_DAYS * MS_PER_DAY;
+  return selections.filter(
+    (selection) =>
+      now.getTime() - selection.selected_at.getTime() <= maxAgeMs &&
+      selection.pbo !== null &&
+      selection.dsr !== null,
+  );
+}
+
 export class SqliteDailyEquityMetricsSource implements DailyMetricsSource {
   private readonly minReturnObservations: number;
   private readonly stage2MaxAgeMs = DEFAULT_STAGE2_MAX_AGE_DAYS * MS_PER_DAY;
@@ -280,25 +302,22 @@ export class SqliteDailyEquityMetricsSource implements DailyMetricsSource {
     }
 
     const now = (this.input.clock ?? new SystemClock()).now();
-    const fresh = selections.filter(
-      (selection) => now.getTime() - selection.selected_at.getTime() <= this.stage2MaxAgeMs,
-    );
-    if (fresh.length === 0) {
-      this.noteInert(
-        `every persisted Stage 2 selection is older than ${
-          this.stage2MaxAgeMs / MS_PER_DAY
-        } days — a verdict about an old sample says nothing about today's regime`,
-      );
-      return undefined;
-    }
-
-    // Both statistics are required: the snapshot's shape has no room for "PBO
-    // was refused", and a zero would read as a perfect result.
-    const usable = fresh.filter((selection) => selection.pbo !== null && selection.dsr !== null);
+    // The DECISION is the shared predicate (also behind the startup line in
+    // production.ts); the staged checks below only pick the inert message.
+    const usable = usableRevalidationSelections(selections, now);
     if (usable.length === 0) {
+      const anyFresh = selections.some(
+        (selection) => now.getTime() - selection.selected_at.getTime() <= this.stage2MaxAgeMs,
+      );
       this.noteInert(
-        'the persisted Stage 2 selection refused to compute PBO or DSR, so no honest ' +
-          'revalidation snapshot exists',
+        anyFresh
+          ? // Both statistics are required: the snapshot's shape has no room for
+            // "PBO was refused", and a zero would read as a perfect result.
+            'the persisted Stage 2 selection refused to compute PBO or DSR, so no honest ' +
+              'revalidation snapshot exists'
+          : `every persisted Stage 2 selection is older than ${
+              this.stage2MaxAgeMs / MS_PER_DAY
+            } days — a verdict about an old sample says nothing about today's regime`,
       );
       return undefined;
     }

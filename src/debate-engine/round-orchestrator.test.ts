@@ -149,6 +149,58 @@ describe('runDebate', () => {
     ]);
   });
 
+  describe('maxRounds option (#581)', () => {
+    it('caps a non-converging debate at maxRounds=1 with converged=false and non-empty open_items', async () => {
+      const calls: string[] = [];
+      const result = await runDebate(
+        makeInput(),
+        {
+          bull: stubDebater('bull', calls),
+          bear: stubDebater('bear', calls),
+          mediator: stubMediator([], calls), // never converges
+          clock: new SimulatedClock(new Date('2026-07-14T09:00:00Z')),
+        },
+        { maxRounds: 1 },
+      );
+
+      expect(result.rounds_completed).toBe(1);
+      expect(result.converged).toBe(false);
+      expect(result.open_items.length).toBeGreaterThan(0);
+      expect(calls).toEqual(['bull:1', 'bear:1', 'mediator:1']);
+    });
+
+    it('defaults to MAX_ROUNDS when maxRounds is undefined', async () => {
+      const calls: string[] = [];
+      const result = await runDebate(
+        makeInput(),
+        {
+          bull: stubDebater('bull', calls),
+          bear: stubDebater('bear', calls),
+          mediator: stubMediator([], calls),
+          clock: new SimulatedClock(new Date('2026-07-14T09:00:00Z')),
+        },
+        { maxRounds: undefined },
+      );
+
+      expect(result.rounds_completed).toBe(MAX_ROUNDS);
+    });
+
+    it.each([0, 4, 1.5, Number.NaN])('refuses maxRounds=%s', async (maxRounds) => {
+      await expect(
+        runDebate(
+          makeInput(),
+          {
+            bull: stubDebater('bull', []),
+            bear: stubDebater('bear', []),
+            mediator: stubMediator([], []),
+            clock: new SimulatedClock(new Date('2026-07-14T09:00:00Z')),
+          },
+          { maxRounds },
+        ),
+      ).rejects.toThrow(/maxRounds must be an integer/);
+    });
+  });
+
   it('guards the hard-cap invariant when the mediator returns empty open_items', async () => {
     const calls: string[] = [];
     const result = await runDebate(makeInput(), {

@@ -11,7 +11,7 @@
  * validated" bar is a manual E2E run, not a unit test).
  */
 import type { MetricsSuite } from '../cost-model-backtest/index.js';
-import { CostModelImpl } from '../cost-model-backtest/index.js';
+import { CostModelImpl, SqliteStage2SelectionStore } from '../cost-model-backtest/index.js';
 import { AnthropicLlmClient, MockLlmClient, SqliteDebateLogStore } from '../debate-engine/index.js';
 import { SimulatedBrokerAdapter, SqliteExecutionStore } from '../execution/index.js';
 import type { DailyMetricsSample, FeedbackConfig } from '../feedback-loop/index.js';
@@ -1419,9 +1419,10 @@ describe('buildProductionOrchestrator', () => {
       await vi.advanceTimersByTimeAsync(3 * 25 * 60 * 60 * 1_000);
 
       // The half of the removed "metrics is not set" warn that #375 does not
-      // cover. `SqliteDailyEquityMetricsSource` never supplies a revalidation
-      // snapshot, so pbo/oos-sharpe/dsr are un-run on every cycle — wiring
-      // `metrics` must not turn that from stated into merely true.
+      // cover — CONDITIONAL since #579: with no usable frozen Stage 2
+      // selection in the store, the three snapshot-gated lines are un-run on
+      // every cycle, and wiring `metrics` must not turn that from stated into
+      // merely true.
       const gated = logger.entries.filter((entry) =>
         entry.message.includes('evaluated ONLY from a revalidation snapshot'),
       );
@@ -1434,7 +1435,49 @@ describe('buildProductionOrchestrator', () => {
           'oos_sharpe_under_min',
           'dsr_insignificant',
         ],
+        persisted_selections: 0,
       });
+
+      await orchestrator.stop();
+    });
+
+    it('says at startup that the three kill-lines are ARMED when a fresh Stage 2 selection exists (#579)', async () => {
+      // The startup line claimed "no component in this repo produces" a
+      // revalidation snapshot long after #384 shipped one, and that stale text
+      // is what #579 was filed from. The statement must be read off the same
+      // store the metrics source reads, not asserted unconditionally.
+      new SqliteStage2SelectionStore(db).record({
+        config_hash: 'cfg-1',
+        asset_class: 'crypto',
+        selected_at: new Date('2026-08-06T23:17:16Z'),
+        window: { start: new Date('2026-06-01T00:00:00Z'), end: new Date('2026-08-01T00:00:00Z') },
+        backtest_sharpe: 1.2,
+        oos_sharpe: 0.9,
+        fold_sharpes: [0.8, 1.0],
+        pbo: 0.55,
+        dsr: 0.39,
+        n_trials: 24,
+        overall_pass: false,
+      });
+      const { config, logger } = paperProfileConfig();
+      const orchestrator = buildProductionOrchestrator(config);
+
+      await orchestrator.start();
+
+      const armed = logger.entries.filter((entry) =>
+        entry.message.includes('ARMED by the frozen Stage 2 selection'),
+      );
+      expect(armed).toHaveLength(1);
+      expect(armed[0]?.level).toBe('info');
+      expect(armed[0]?.trace_id).toBe('startup');
+      expect(armed[0]?.payload).toMatchObject({
+        selections: [{ asset_class: 'crypto', pbo: 0.55, dsr: 0.39 }],
+      });
+      expect(
+        logger.entries.filter((entry) =>
+          entry.message.includes('evaluated ONLY from a revalidation snapshot'),
+        ),
+      ).toHaveLength(0);
 
       await orchestrator.stop();
     });
