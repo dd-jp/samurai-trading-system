@@ -122,6 +122,15 @@ export interface DebateInput {
 /** Per-run knobs that are not debate INPUT (nothing here is hashed into `debate_id`). */
 export interface RunDebateOptions {
   /**
+   * Round cap for THIS debate, defaulting to `MAX_ROUNDS` (#581). An integer in
+   * `[1, MAX_ROUNDS]`: the ceiling stays the spec's hard cap — this knob only
+   * shrinks a debate (crypto runs one round so it fits its latency budget), it
+   * cannot grow one past the safety cap. Not hashed into `debate_id`, same as
+   * `signal`: two debates over identical inputs are the same debate regardless
+   * of how many rounds they were allowed.
+   */
+  maxRounds?: number | undefined;
+  /**
    * Cancels the debate (#347). Checked before EVERY persona call and threaded
    * into each `RoundContext`, so an aborted debate issues no further LLM calls
    * — belt (the loop refuses to start the next call) and braces (the client
@@ -152,6 +161,13 @@ export async function runDebate(
   const { bull, bear, mediator, clock } = personas;
   const { signal } = options;
 
+  const maxRounds = options.maxRounds ?? MAX_ROUNDS;
+  if (!Number.isInteger(maxRounds) || maxRounds < 1 || maxRounds > MAX_ROUNDS) {
+    throw new Error(
+      `runDebate: maxRounds must be an integer in [1, ${MAX_ROUNDS}] (got ${maxRounds})`,
+    );
+  }
+
   const startedAt = clock.now().getTime();
   const priorArguments: DebateArgument[] = [];
   const roundStances: AnalystRoundStance[] = [];
@@ -159,7 +175,7 @@ export async function runDebate(
   let roundsCompleted = 0;
   let lastAssessment: MediatorAssessment | undefined;
 
-  for (let round = 1; round <= MAX_ROUNDS; round++) {
+  for (let round = 1; round <= maxRounds; round++) {
     signal?.throwIfAborted();
     const bullContext: RoundContext = { views, round, priorArguments, signal };
     priorArguments.push(await bull.argue(bullContext));

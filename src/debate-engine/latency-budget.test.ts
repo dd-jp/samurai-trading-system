@@ -108,7 +108,7 @@ describe('enforceLatencyBudget', () => {
     await vi.advanceTimersByTimeAsync(1);
     const result = await promise;
     expect(result.converged).toBe(false);
-    expect(result.timed_out?.budget_ms).toBe(15_000);
+    expect(result.timed_out?.budget_ms).toBe(30_000);
   });
 
   it('enforces the 60s hard cap for stocks', async () => {
@@ -195,7 +195,7 @@ describe('enforceLatencyBudget', () => {
     expect(result.rounds_completed).toBe(partial.rounds_completed);
     expect(result.open_items).toEqual(partial.open_items);
     expect(result.converged).toBe(false);
-    expect(result.timed_out).toEqual({ budget_ms: 15_000, elapsed_ms: 15_000 });
+    expect(result.timed_out).toEqual({ budget_ms: 30_000, elapsed_ms: 30_000 });
   });
 
   it('falls back to a default low-confidence result when no partial state exists', async () => {
@@ -218,7 +218,7 @@ describe('enforceLatencyBudget', () => {
     expect(result.direction).toBe('neutral');
     expect(result.rounds_completed).toBe(0);
     expect(result.debate_id).toBe('debate-1');
-    expect(result.timed_out).toEqual({ budget_ms: 15_000, elapsed_ms: 15_000 });
+    expect(result.timed_out).toEqual({ budget_ms: 30_000, elapsed_ms: 30_000 });
   });
 
   it('logs the timeout event via DebateLogger.logTimeout', async () => {

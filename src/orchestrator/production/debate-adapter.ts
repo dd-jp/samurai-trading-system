@@ -55,6 +55,7 @@
 import type {
   AnalystRoundStance,
   AnalystView,
+  AssetClass,
   DebateResult,
   LlmClient,
   SpendCap,
@@ -72,6 +73,7 @@ import {
   floorToBar,
   JsonDebateLogger,
   MAX_ROUNDS,
+  MAX_ROUNDS_BY_ASSET_CLASS,
   type MediatorAssessment,
   type MediatorPersona,
   type PartialDebateState,
@@ -148,6 +150,14 @@ export function buildDebatePersonas(
    * working; those calls simply meter as unattributed.
    */
   debate_id?: string,
+  /**
+   * The round cap THIS debate runs under (#581) — must match the `maxRounds`
+   * the caller passes to `runDebate`, because the mediator's "is this the
+   * final round" check below gates the once-per-debate `detectDisagreements`
+   * call. A crypto debate capped at 1 round that still compared against
+   * `MAX_ROUNDS` would never run disagreement detection at all.
+   */
+  maxRounds: number = MAX_ROUNDS,
 ): DebatePersonasWithState {
   let lastBull: PersonaResponse | undefined;
   let lastBear: PersonaResponse | undefined;
@@ -209,7 +219,7 @@ export function buildDebatePersonas(
         });
       }
 
-      const isFinalRound = response.converged || context.round === MAX_ROUNDS;
+      const isFinalRound = response.converged || context.round === maxRounds;
       const disagreement = isFinalRound
         ? await detectDisagreements(context.views, llmClient, context.signal, {
             trace_id,
@@ -375,6 +385,19 @@ function persistDebateLog(params: {
  */
 export const LLM_CALLS_PER_ROUND = 3;
 export const WORST_CASE_LLM_CALLS_PER_DEBATE = MAX_ROUNDS * LLM_CALLS_PER_ROUND + 1;
+
+/**
+ * The same worst case, but at the ASSET CLASS's round cap (#581). Crypto is
+ * capped at one round (`MAX_ROUNDS_BY_ASSET_CLASS`), so reserving the global
+ * worst case would book 10 calls for a debate that can only ever make 4 —
+ * starving later debates of rate-limit admission for calls that cannot happen.
+ * `WORST_CASE_LLM_CALLS_PER_DEBATE` above stays the SIZING bound (`maxLlmCalls`
+ * multiples in the paper profile): a ceiling sized for the largest debate still
+ * safely covers the smaller one.
+ */
+export function worstCaseLlmCallsForAssetClass(assetClass: AssetClass): number {
+  return MAX_ROUNDS_BY_ASSET_CLASS[assetClass] * LLM_CALLS_PER_ROUND + 1;
+}
 
 /**
  * What a debate the rate limiter refused to admit returns (#388).
@@ -559,7 +582,10 @@ export function buildDebateStep(
       return spendCappedDebateResult(debate_id, spend.reason ?? 'spend cap reached');
     }
 
-    const reservation = rateLimiter.reserve(asset_class, WORST_CASE_LLM_CALLS_PER_DEBATE);
+    const reservation = rateLimiter.reserve(
+      asset_class,
+      worstCaseLlmCallsForAssetClass(asset_class),
+    );
     if (!reservation.granted) {
       logger?.log({
         trace_id,
@@ -579,11 +605,18 @@ export function buildDebateStep(
     // than once at the composition root because the limiter's counters are
     // per-asset-class and `LlmRequest` carries no instrument — this is the
     // innermost layer that still knows which class to bill.
+    // ROUND CAP, per asset class (#581). Crypto runs ONE round so the debate
+    // genuinely fits its latency budget instead of truncating on every tick;
+    // stocks keep the 3-round hybrid termination. Passed BOTH to the personas
+    // (final-round check gates `detectDisagreements`) and to `runDebate` — the
+    // two must agree or crypto would never run disagreement detection.
+    const maxRounds = MAX_ROUNDS_BY_ASSET_CLASS[asset_class];
     const personas = buildDebatePersonas(
       new RateLimitedLlmClient(llmClient, rateLimiter, asset_class),
       trace_id,
       clock,
       debate_id,
+      maxRounds,
     );
 
     // LATENCY BUDGET (#374). `enforceLatencyBudget` was implemented, tested,
@@ -592,11 +625,11 @@ export function buildDebateStep(
     // provider took. Over an unattended 14-day soak (#238) that has no
     // ceiling at all.
     //
-    // The budget is per asset class (`LATENCY_BUDGET_MS`: crypto 15s, stocks
+    // The budget is per asset class (`LATENCY_BUDGET_MS`: crypto 30s, stocks
     // 60s) and `asset_class` is already on the step's input, so the lookup
-    // needs nothing new. NOTE: #346 disputes the crypto figure as
-    // arithmetically impossible at max rounds — this wires the MECHANISM at
-    // the values the spec currently states; #346 still owns the values.
+    // needs nothing new. The crypto value moved 15s -> 30s alongside the
+    // 1-round cap above (#581): 15s was below one measured round, so every
+    // crypto debate truncated; #346's arithmetic predicted exactly this.
     //
     // `signal` is threaded into `runDebate`, which `throwIfAborted`s before
     // every persona call, so a timed-out debate stops spending instead of
@@ -613,7 +646,8 @@ export function buildDebateStep(
         assetClass: asset_class,
         trace_id,
         debate_id,
-        produceResult: (signal) => runDebate({ views, instrument, bar }, personas, { signal }),
+        produceResult: (signal) =>
+          runDebate({ views, instrument, bar }, personas, { signal, maxRounds }),
         getCurrentState: personas.getCurrentState,
         // `JsonDebateLogger` over the step's own sink, so the timeout line
         // lands in the same stream as every other debate line. A step built

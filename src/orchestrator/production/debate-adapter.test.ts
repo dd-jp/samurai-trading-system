@@ -487,12 +487,12 @@ describe('buildDebateStep latency budget (#374)', () => {
       clock: CLOCK,
     });
 
-    // 15s, not 60s — the per-asset-class lookup #374 called out as the
-    // reason this could not be a one-line wire.
-    await vi.advanceTimersByTimeAsync(15_000);
+    // 30s, not 60s — the per-asset-class lookup #374 called out as the
+    // reason this could not be a one-line wire. (15s -> 30s in #581.)
+    await vi.advanceTimersByTimeAsync(30_000);
     const result = await pending;
 
-    expect(result.timed_out).toEqual({ budget_ms: 15_000, elapsed_ms: 15_000 });
+    expect(result.timed_out).toEqual({ budget_ms: 30_000, elapsed_ms: 30_000 });
   });
 
   it('logs the timeout on the debate stage so an operator can see the budget fire', async () => {
