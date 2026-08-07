@@ -219,7 +219,6 @@ async function redistributeFlattenFills(
   positions: readonly OpenPosition[],
   failures: ContainedFailure[],
 ): Promise<Set<string>> {
-  const { store } = input;
   const positionKeys = new Set(positions.map((position) => position.idempotency_key));
   const flattenTargetedLots = new Set<string>();
 
@@ -264,7 +263,7 @@ async function redistributeFlattenFills(
     // could be naked AND covered by a leg that sells what it does not hold.
     const targetedByThisFlatten = new Set<string>();
     try {
-      await redistributeOneFlatten(store, byLot, clientOrderId, targetedByThisFlatten);
+      await redistributeOneFlatten(input, byLot, clientOrderId, targetedByThisFlatten);
       for (const lotKey of targetedByThisFlatten) flattenTargetedLots.add(lotKey);
     } catch (error) {
       failures.push({ scope: 'flatten-attribution', key: clientOrderId, error });
@@ -287,7 +286,7 @@ async function redistributeFlattenFills(
  * `namedLots` is the caller's per-bucket set, discarded on a throw.
  */
 async function redistributeOneFlatten(
-  store: ExecutionInput['store'],
+  input: ExecutionInput,
   byLot: Map<string, NormalizedFill[]>,
   clientOrderId: string,
   /**
@@ -299,6 +298,7 @@ async function redistributeOneFlatten(
    */
   namedLots: Set<string>,
 ): Promise<void> {
+  const { store } = input;
   const attribution = await store.getFlattenAttribution(clientOrderId);
   // Not a known flatten either (an unrelated/unknown client_order_id, a
   // flatten row written before migration 0020 named no lot, OR — per the
@@ -408,8 +408,20 @@ async function redistributeOneFlatten(
         // Forced regardless of what the adapter tagged the raw fill — see
         // `redistributeFlattenFills`'s docstring.
         leg: 'exit',
-        // The lot-scoped id `hasFill`/`fills`' PK need: `hasFill` dedups
-        // GLOBALLY on `broker_fill_id` alone (`ingest-fills.ts` above), so
+        // `fills`' row identity is `(idempotency_key, broker_fill_id)` — the
+        // table's PK — so the SAME venue fill id can legitimately hold ONE
+        // ROW PER LOT it is split across. That is the right scope here: a
+        // multi-lot flatten's raw fill deliberately becomes several
+        // accounting rows, one per named lot, so uniqueness has to be judged
+        // per (lot, id) pair, not by id alone across every lot — a blanket
+        // "this broker_fill_id exists somewhere, so skip it" rule would read
+        // lot B's rightful share as a duplicate of lot A's the moment lot
+        // A's is persisted.
+        //
+        // `hasFill` itself takes no idempotency_key argument, though — like
+        // `totalShare` above, it compares the id VALUE alone — so the only
+        // way to land it in the right per-lot scope is to put the lot INSIDE
+        // the id, which is what the suffix below does. Omit it, and
         // splitting one raw fill across two lots under the SAME id would
         // make the second lot's split silently vanish behind the first
         // lot's dedup the moment either is persisted. Stable across polls
@@ -435,10 +447,16 @@ async function redistributeOneFlatten(
     // (execute.ts's `executeExit`) sizes the flatten to exactly the sum of
     // the shares journalled here, so this is now a genuine venue over-fill,
     // and there is no safe lot to hand the excess to — it is left
-    // unattributed rather than guessed onto one. Silent, deliberately: a
-    // genuine over-fill here would already be showing up as a
-    // resize/exposure divergence elsewhere, and manufacturing a second
-    // signal here would not make that one easier to find.
+    // unattributed rather than guessed onto one, which stays exactly right:
+    // a split invented here would mis-assign quantity on the money path.
+    //
+    // What changed (#527): dropping it used to be SILENT. "Should not
+    // happen" is precisely the condition worth a trace — a venue over-fill,
+    // a store/venue divergence, or a future change to the `heldSize` guard
+    // would otherwise make this quantity vanish from the accounting with
+    // nothing to show for it, unnoticed through a 14-day unattended soak
+    // (#238). The warning below only reports; it does not change what
+    // happens to `leftover` — the excess still drops.
     //
     // A DIFFERENT case from a new lot opening on this instrument mid-poll
     // (see `redistributeFlattenFills`'s `positionKeys` snapshot comment, and
@@ -447,10 +465,34 @@ async function redistributeOneFlatten(
     // `getFlattenAttribution` check, deferred safely to the next poll. This
     // one is a genuine surplus against the flatten's OWN named lots, with
     // nowhere safe to go, ever.
+    if (leftover > 0) {
+      // Swallowed, deliberately — the same posture `alertResidualExposure`
+      // takes below, for the same reason: this function's contract (see its
+      // doc) is that it either completes in full or leaves `byLot` untouched,
+      // and `byLot.delete(clientOrderId)` still has to run right after this
+      // loop either way. A channel that rejects must not turn a SUCCESSFUL
+      // redistribution into a contained failure — that would defer the whole
+      // bucket to next poll over nothing worse than a failed diagnostic, which
+      // is strictly worse than the silent drop this exists to fix. Only an
+      // identifier and a computed quantity cross this boundary — never the
+      // raw fill or the attribution row — so a corrupted `flatten_submissions`
+      // row (#524's own test) cannot leak through it either.
+      try {
+        await input.flattenOverfillAlerts.postFlattenOverfillWarning({
+          idempotency_key: clientOrderId,
+          unattributed_qty: leftover,
+          observed_at: input.clock.now(),
+        });
+      } catch {
+        // Nothing left to do — see the comment above.
+      }
+    }
   }
 
   // Consumed LAST, not before the split. The split loop above cannot throw —
-  // it is arithmetic over two Maps — but the store reads before it can, and a
+  // the split itself is arithmetic over two Maps, and #527's over-fill
+  // warning is the loop's only I/O, deliberately wrapped so it cannot escape
+  // either (see its own comment) — but the store reads before it can, and a
   // bucket deleted ahead of a throw would take this poll's copy of the raw
   // fill with it. Deleting only once the splits are in `byLot` is what makes
   // this function all-or-nothing. No lot key can collide with

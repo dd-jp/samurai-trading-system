@@ -45,6 +45,10 @@ export type {
 export { InMemoryBrokerStateStore } from './broker-state-store.js';
 export { ExecutionImpl } from './execute.js';
 export type {
+  FlattenOverfillAlertChannel,
+  FlattenOverfillWarning,
+} from './flatten-overfill-alert.js';
+export type {
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
 } from './residual-exposure-alert.js';

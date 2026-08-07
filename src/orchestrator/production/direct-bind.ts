@@ -29,6 +29,7 @@ import type { CostModel } from '../../cost-model-backtest/index.js';
 import type {
   BrokerAdapter,
   ExecutionConfig,
+  FlattenOverfillAlertChannel,
   ResidualExposureAlertChannel,
   SharedStore,
 } from '../../execution/index.js';
@@ -511,6 +512,8 @@ export interface ExecutionStepDeps {
   mode: 'live' | 'paper' | 'backtest';
   /** The #525 fallback alert — see `ExecutionInput.residualExposureAlerts`. */
   residualExposureAlerts: ResidualExposureAlertChannel;
+  /** The #527 over-fill warning — see `ExecutionInput.flattenOverfillAlerts`. */
+  flattenOverfillAlerts: FlattenOverfillAlertChannel;
 }
 
 /**
@@ -535,6 +538,7 @@ export function buildExecutionStep(deps: ExecutionStepDeps): TickSteps['executio
       config: deps.config,
       mode: deps.mode,
       residualExposureAlerts: deps.residualExposureAlerts,
+      flattenOverfillAlerts: deps.flattenOverfillAlerts,
     });
     return execution.execute(verdict);
   };
@@ -567,6 +571,7 @@ export function buildExecutionSurface(deps: ExecutionStepDeps, traceId: string):
     config: deps.config,
     mode: deps.mode,
     residualExposureAlerts: deps.residualExposureAlerts,
+    flattenOverfillAlerts: deps.flattenOverfillAlerts,
   });
 }
 
