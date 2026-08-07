@@ -1,10 +1,11 @@
-// Type-checks this app's test files, which the build config (tsconfig.json)
-// deliberately excludes — without this project, `App.test.tsx` would belong
-// to no TypeScript project and `yarn typecheck` would never see it (PR #563
-// review). Only test files are listed as roots; the sources they import
-// (App.tsx, ...) are pulled in and checked transitively by tsc.
+// The typecheck-gate project for this app: everything the build config
+// (tsconfig.json) checks PLUS the test files it deliberately excludes.
+// Without it, App.test.tsx would belong to no TypeScript project — and
+// `main.tsx`/`vite.config.ts` would only be checked by `yarn build:web`,
+// never by `yarn typecheck` (PR #563 review, twice). The build config stays
+// test-free so `build:web`'s tsc pass never needs the test toolchain types.
 {
   "extends": "./tsconfig.json",
-  "include": ["src/**/*.test.ts", "src/**/*.test.tsx"],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"],
   "exclude": ["node_modules", "dist"]
 }

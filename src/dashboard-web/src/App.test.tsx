@@ -28,7 +28,13 @@ describe('App', () => {
   it('draws room 04 (invalidation) lights-off with its reason', () => {
     render(<App />);
 
-    const invalidationRoom = document.querySelector('[data-room="invalidation"]');
+    // Anchored on the room's accessible heading rather than a bare
+    // `document.querySelector` (PR #563 review); `closest` then walks up to
+    // the room container, whose lights-off class is presentational and has
+    // no accessible query of its own.
+    const invalidationRoom = screen
+      .getByRole('heading', { name: 'Invalidation' })
+      .closest('[data-room="invalidation"]');
     expect(invalidationRoom).not.toBeNull();
     expect(invalidationRoom?.classList.contains('room-lights-off')).toBe(true);
     expect(screen.getByText(/specced and not built/i)).toBeTruthy();
