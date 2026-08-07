@@ -589,6 +589,65 @@ def test_one_refused_slice_keeps_the_other_slices_paid_for_reviews():
     assert "1/2" in payload["summary_markdown"]
 
 
+def test_a_refused_slice_still_contributes_exactly_one_result():
+    """`merge_model_results` labels summaries by index against
+    `[s.files for s in plan.slices]`. If a refusal ever skipped appending a
+    result, every heading after it would silently name the wrong files."""
+    diff = "".join(
+        _file_diff(p, lines_per_hunk=40) for p in ("src/a.ts", "src/b.ts", "src/c.ts")
+    )
+    seen = []
+
+    def fake_call(diff, changed_files, **kwargs):
+        seen.append(changed_files[0])
+        if changed_files == ["src/b.ts"]:
+            exc = RuntimeError("refused")
+            exc.status_code = 400
+            raise exc
+        return {
+            "summary_markdown": f"findings for {changed_files[0]}",
+            "inline_comments": [],
+            "verdict": "APPROVE",
+        }
+
+    payload = review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
+    summary = payload["summary_markdown"]
+
+    assert seen == ["src/a.ts", "src/b.ts", "src/c.ts"]
+    # Headings still line up with the slice that produced them.
+    assert "Slice 1 of 3 — `src/a.ts`" in summary
+    assert "findings for src/a.ts" in summary
+    assert "Slice 3 of 3 — `src/c.ts`" in summary
+    assert "findings for src/c.ts" in summary
+
+
+def test_an_explained_and_an_unexplained_failure_are_both_reported():
+    """`failed = total - reviewed - failures_explained`. With one of each kind
+    of failure the generic line must still fire for the unexplained one — an
+    arithmetic slip here would zero it out and drop the disclosure."""
+    diff = "".join(
+        _file_diff(p, lines_per_hunk=40) for p in ("src/a.ts", "src/b.ts", "src/c.ts")
+    )
+
+    def fake_call(diff, changed_files, **kwargs):
+        if changed_files == ["src/b.ts"]:
+            exc = RuntimeError("refused")
+            exc.status_code = 400
+            raise exc
+        if changed_files == ["src/c.ts"]:
+            # The exhausted-retries shape: a result, but no usable verdict.
+            return {"summary_markdown": "_skipped_", "inline_comments": [], "verdict": None}
+        return {"summary_markdown": "", "inline_comments": [], "verdict": "APPROVE"}
+
+    payload = review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
+    summary = payload["summary_markdown"]
+
+    assert "1/3" in summary
+    assert "1 diff slice(s) produced no usable review." in summary  # the unexplained one
+    assert "was refused by the provider" in summary  # the explained one
+    assert payload["verdict"] != "APPROVE"
+
+
 def test_a_refusal_on_every_slice_still_fails_the_job_loudly():
     """A configuration fault — a rejected max_tokens, a dead key — does not
     discriminate between slices. There is no paid work to preserve, so it must
