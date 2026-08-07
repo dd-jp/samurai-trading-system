@@ -96,7 +96,7 @@ export const STALE_AFTER_MISSED_POLLS = 2;
  * poll slot; anything shorter would abandon a merely slow response the page
  * could still have used.
  */
-export function pollTimeoutMs(intervalMs: number): number {
+function pollTimeoutMs(intervalMs: number): number {
   return intervalMs * STALE_AFTER_MISSED_POLLS;
 }
 
@@ -158,6 +158,39 @@ function hasWireShape(value: unknown): boolean {
   return Array.isArray((pipeline as Record<string, unknown>).lanes);
 }
 
+/** A non-null object that is not an array — `typeof [] === 'object'`. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Is this shape one `SpendPanel` and the burn meter can actually render?
+ *
+ * The depth is chosen from what the consumers DEREFERENCE, not from the type
+ * (PR #607 review). Every scalar they read goes through `formatUsd` /
+ * `formatCount` / `formatStageDuration`, which return the module's em dash for
+ * anything non-finite — so a window missing `cost_usd` degrades honestly on its
+ * own. What throws is a missing OBJECT: `spend.all_time.per_debate.debates`
+ * blows up on an absent `all_time` or `per_debate`, and `main.tsx` mounts
+ * `<App/>` with no error boundary, so that is a white screen on a live-money
+ * surface — strictly worse than the rejected-payload behaviour this branch was
+ * added to replace.
+ *
+ * `Array.isArray` is checked at every level for the same reason: `[]` satisfies
+ * `typeof x === 'object'`, so an array cast to `LlmSpendSummary` would render a
+ * panel of em dashes that looks like a real, empty spend summary rather than a
+ * failed read. A wrong shape admitted is worse than a null rejected.
+ */
+function isSpendSummary(value: unknown): boolean {
+  if (!isPlainObject(value)) return false;
+  for (const key of ['last_24h', 'last_7d', 'all_time']) {
+    const window = value[key];
+    if (!isPlainObject(window)) return false;
+    if (!isPlainObject(window.per_debate)) return false;
+  }
+  return true;
+}
+
 /**
  * Validates a parsed body ONCE, at the fetch boundary, and returns it with
  * `mode` narrowed — or `null` if it is not a snapshot at all.
@@ -174,9 +207,12 @@ function hasWireShape(value: unknown): boolean {
  * rather than passed through: rendering a word we have never seen would be
  * the "trust the wire" failure this function exists to end.
  *
- * `llm_spend` degrades the same way and for the same reason (#606 item 2): an
- * absent or non-object summary becomes `null`, which is the value `SpendPanel`
- * and the burn meter are both already written to render honestly.
+ * `llm_spend` degrades the same way and for the same reason (#606 item 2): a
+ * summary that is absent, or not a shape the panel can render, becomes `null` —
+ * the value `SpendPanel` and the burn meter are both already written to handle.
+ * Degrading is NOT the same as trusting: see `isSpendSummary` for why the check
+ * has to reject an array and a summary missing its windows rather than casting
+ * whatever object arrived.
  */
 export function toWireSnapshot(body: unknown): WireSnapshot | null {
   if (!hasWireShape(body)) return null;
@@ -185,7 +221,7 @@ export function toWireSnapshot(body: unknown): WireSnapshot | null {
     ? (candidate.mode as ServerMode)
     : null;
   const spend = candidate.llm_spend;
-  const llm_spend = typeof spend === 'object' && spend !== null ? (spend as LlmSpendSummary) : null;
+  const llm_spend = isSpendSummary(spend) ? (spend as LlmSpendSummary) : null;
   return {
     ...(candidate as unknown as Omit<WireSnapshot, 'mode' | 'llm_spend'>),
     mode,
@@ -254,6 +290,11 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
       controllers.add(controller);
       const doFetch = optionsRef.current.fetchImpl ?? globalThis.fetch;
 
+      // Per POLL INVOCATION, not per effect (PR #607 review round 1, which
+      // read it as effect-scoped): a fresh `timedOut` is created on every call,
+      // so one poll being declared dead cannot discard the NEXT poll's payload.
+      // The flag reaching the guard below is always the one belonging to the
+      // request whose response is being examined.
       let timedOut = false;
       // Releasing the poll slot is idempotent and reachable from BOTH the
       // timeout and the `finally` (#606 item 3). Aborting a controller does

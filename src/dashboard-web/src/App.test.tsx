@@ -343,6 +343,24 @@ describe('mission control', () => {
     expect(strip.getAttribute('data-stale')).toBe('false');
   });
 
+  it('renders the spend empty state, not a white screen, for a malformed spend summary', async () => {
+    // PR #607 review round 1. An array passes `typeof x === 'object'`, so the
+    // first narrowing handed `[]` to `SpendPanel` as a summary and the read of
+    // `spend.all_time.per_debate` threw — and `main.tsx` mounts `<App/>` with
+    // no error boundary, so the whole operator surface goes blank. This is the
+    // end-to-end version of the boundary test: the page must survive it.
+    const snapshot = makeSnapshot({ pipeline: theaterView() });
+    (snapshot as { llm_spend?: unknown }).llm_spend = [];
+    renderApp([snapshot]);
+
+    expect(await screen.findByText('12:00:00Z')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /QQQ, stocks, stopped/ })).toBeTruthy();
+    const spend = screen.getByRole('region', { name: 'LLM spend' });
+    expect(within(spend).getByText(/an absent summary means the read failed/)).toBeTruthy();
+    // Not a grid of em dashes reading as a real, empty spend summary.
+    expect(within(spend).queryByText('24 hours')).toBeNull();
+  });
+
   it('reads live, not idle, when a trace is running but tick_status is absent', async () => {
     // #606 item 4. `tick_status` is null while `pipeline.live_trace_id` is
     // set: the rooms hero glows and the cell's own caveat prints the trace, so

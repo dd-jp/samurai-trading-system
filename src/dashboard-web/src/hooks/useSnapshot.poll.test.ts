@@ -12,7 +12,7 @@
 import { renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { fakeFetch, HANGS, makeSnapshot } from '../test-fixtures.ts';
-import { pollTimeoutMs, STALE_AFTER_MISSED_POLLS, useSnapshot } from './useSnapshot.ts';
+import { useSnapshot } from './useSnapshot.ts';
 
 /** Short enough to keep the suite fast; the ratios are what the code reads. */
 const INTERVAL_MS = 20;
@@ -37,22 +37,37 @@ describe('useSnapshot polling', () => {
     expect(result.current.stale).toBe(false);
   });
 
-  it('names the timeout while every poll hangs, rather than failing silently', async () => {
+  it('applies a poll that lands after earlier polls timed out', async () => {
+    // PR #607 review round 1 read `timedOut` as effect-scoped and expected a
+    // recovered poll to be discarded. It is declared per invocation, and this
+    // is the behaviour that says so: TWO consecutive hangs, then a payload
+    // that must be applied rather than swallowed by a previous poll's verdict.
+    const { result } = renderHook(() =>
+      useSnapshot({
+        fetchImpl: fakeFetch([HANGS, HANGS, makeSnapshot()]),
+        intervalMs: INTERVAL_MS,
+      }),
+    );
+
+    await waitFor(() => expect(result.current.snapshot).not.toBeNull(), { timeout: 3_000 });
+    expect(result.current.error).toBeNull();
+  });
+
+  it('names the timeout, and the budget it gave the request, while every poll hangs', async () => {
     const { result } = renderHook(() =>
       useSnapshot({ fetchImpl: fakeFetch([HANGS]), intervalMs: INTERVAL_MS }),
     );
 
     await waitFor(() => expect(result.current.error).not.toBeNull(), { timeout: 2_000 });
-    expect(result.current.error).toContain('timed out');
+    // The message states the budget the request actually got, and that budget
+    // is the staleness horizon — two missed polls at this cadence — rather than
+    // an independently chosen number. Asserted through the operator-visible
+    // string, because that is where the choice is observable; comparing
+    // `pollTimeoutMs` to its own formula would only fail if someone edited the
+    // implementation on purpose (PR #607 review round 1).
+    expect(result.current.error).toBe(`snapshot request timed out after ${INTERVAL_MS * 2}ms`);
     // The clock-based watchdog is unchanged by any of this: a hang is stale
     // for the same reason a rejection is.
     await waitFor(() => expect(result.current.stale).toBe(true), { timeout: 2_000 });
-  });
-
-  it('gives a request exactly the staleness horizon', () => {
-    // Not an independent number: the slot is released at the moment the page
-    // admits its numbers are stale, so there is no window in which the strip
-    // says stale while a zombie request still owns the poll.
-    expect(pollTimeoutMs(3_000)).toBe(3_000 * STALE_AFTER_MISSED_POLLS);
   });
 });
