@@ -152,6 +152,28 @@ export async function backfillMarketData(deps: BackfillMarketDataDeps): Promise<
           );
         } catch (error) {
           fetchError = error instanceof Error ? error.message : String(error);
+          // Re-read rather than falling back to `existing`. `appendBars` is
+          // `INSERT OR IGNORE` per bar, so a throw partway through leaves the
+          // bars it already wrote durably in the store — reporting the
+          // pre-fetch count would under-report real coverage and send the
+          // operator back to re-fetch bars that are already there.
+          //
+          // Guarded, because this runs inside a catch: if the store read
+          // ALSO fails, keep the pre-fetch rows and say so, rather than
+          // throwing out of the handler and aborting every remaining pair —
+          // which is the abort this catch exists to prevent.
+          try {
+            rows = deps.store.readBars(
+              instrument.asset,
+              window.timeframe,
+              deps.asOf,
+              window.lookback,
+            );
+          } catch (readError) {
+            fetchError += ` (coverage may under-report: re-read failed: ${
+              readError instanceof Error ? readError.message : String(readError)
+            })`;
+          }
         }
       }
 
