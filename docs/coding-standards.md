@@ -18,6 +18,58 @@ Read on every session before writing/editing code. Supplements CLAUDE.md; does n
 
 `globals: true` is set in `vitest.config.ts`, so `describe`, `it`, `expect`, `vi`, `beforeEach`/`afterEach`/`beforeAll`/`afterAll`, and `expectTypeOf` are ambient in every `*.test.ts` file. Don't add `import { describe, it, expect, ... } from 'vitest'` for these — they're already in scope.
 
+## Async test assertions: gate concurrency, don't race wall-clock timers
+
+A test that proves an ordering property by racing real `setTimeout` delays
+against each other (`setTimeout(resolve, 0)` finishing before
+`setTimeout(resolve, 20)`) is asserting that the event loop is not starved —
+true on a quiet machine, false under load. It reads as a concurrency
+assertion but is actually a wall-clock bet, and it gets more likely to fail
+exactly when the suite is run under the contention a CI merge gate or a
+parallel sweep creates (#528, `tick-loop.test.ts`).
+
+Fix by gating, not by widening the delay: have the slow side `await` a
+promise that the fast side resolves once it has done the observable thing
+under test (e.g. pushed to a shared array). That asserts the real
+happens-before relationship with no dependence on timer precision. It also
+changes the failure mode at a cap that should serialize the workers: the
+sleep-based version still fails there (the completion order comes out
+wrong, a legible assertion diff), but the gated version DEADLOCKS instead —
+a stronger guarantee against a future cap change reading as passing. Note
+the deliberate deadlock in a comment so a future reader doesn't "fix" it
+back to a sleep. Raising the delay (20ms → 200ms) is explicitly the wrong
+fix: it makes the race rarer without removing it, converting a flake
+everyone sees into one nobody trusts a diagnosis for.
+
+## Fake-timer advances: walk only what the test needs, don't raise the ceiling
+
+`vi.advanceTimersByTimeAsync(duration)` is CPU-bound in `duration`, not free:
+it has to walk every timer scheduled inside the window, including ones the
+test isn't asserting on. Two independent costs hide in a long advance, and a
+given test may have either or both:
+
+- **The cadence under test is itself long** (e.g. a 24h default). If that
+  cadence can be set explicitly in the test config, shrink it and advance
+  just past the short value instead — the assertion is about the behaviour
+  at that cadence, not about 24h specifically.
+- **An unrelated timer the test doesn't exercise is left at its short
+  production default** (e.g. a 15s poll) inside a config built for a
+  day-plus advance. Every one of those fires gets walked too, even though
+  nothing in the test asserts on it. Park that timer's interval well outside
+  the advanced window instead — it costs nothing to leave un-fired.
+
+Either way, prefer shrinking the work over raising the ceiling. Reach for a
+per-test `testTimeout` bump only when the slow cadence itself is the thing
+under test, and say why in a comment — a raised global timeout hides the
+next slow test instead of fixing this one.
+
+**Watch the 32-bit `setTimeout` ceiling when "parking" a timer far out.** A
+delay above `2^31 - 1` ms (~24.8 days) overflows Node's signed 32-bit timer
+delay and gets clamped to fire on the next tick instead of being deferred —
+"parking" a poll at 365 days turns it into a near-0ms self-rescheduling loop
+that hangs the advance instead of skipping it. Pick a value comfortably
+under that cap (and comfortably past the longest advance the file uses).
+
 ## Verification before removing or adding an export
 
 - Before deleting an `export`/`export type` line, grep the whole codebase for consumers importing that path. If none exist outside the file's own module, it's dead — remove it. If consumers exist, repoint them at the module's barrel rather than leaving a stray re-export in place.

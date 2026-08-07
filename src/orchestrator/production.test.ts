@@ -57,6 +57,33 @@ import type { Logger, Scheduler, TickOutcome, TickPlan, TickRunner } from './typ
 
 const START = new Date('2026-07-29T12:00:00.000Z');
 
+/**
+ * #528 — `startFillSync` self-arms a `setTimeout` on `fillPollIntervalMs`
+ * (default 15s, `DEFAULT_FILL_POLL_INTERVAL_MS`) independent of
+ * `tickIntervalMs`/`heartbeatIntervalMs`. None of the cases that pass this
+ * exercise fill-sync at all, but a day-plus `vi.advanceTimersByTimeAsync`
+ * still has to walk every 15s poll in the window regardless — confirmed by
+ * isolating the four affected cases: parking this constant alone took each
+ * from a 5000ms+ timeout under load to single-digit milliseconds quiet.
+ * See docs/coding-standards.md "Fake-timer advances" for the general
+ * pattern.
+ *
+ * Deliberately under 2^31-1 ms (~24.8 days, Node's `setTimeout` delay cap) —
+ * a delay above that overflows a 32-bit signed int and is clamped to fire on
+ * the NEXT tick instead of being deferred, which turns "parked" into a
+ * near-0ms self-reschedule loop. 20 days clears every advance in this file
+ * (longest is 75h) with headroom under the cap.
+ *
+ * That headroom is a coupling, not a constant: a future case advancing 20
+ * days or more would step past this and silently re-activate fill-sync
+ * mid-advance, reintroducing the slowdown with no signal beyond the case
+ * getting mysteriously slower. If you add an advance anywhere near that,
+ * raise this — but stay under 2^31-1 ms, which leaves under 5 days of room.
+ * If an advance ever needs to exceed ~24 days, this approach is exhausted
+ * and the poll has to be stopped rather than parked.
+ */
+const NO_FILL_POLL_MS = 20 * 24 * 60 * 60 * 1_000;
+
 function recordingLogger(): Logger & { entries: Parameters<Logger['log']>[0][] } {
   const entries: Parameters<Logger['log']>[0][] = [];
   return { entries, log: (entry) => entries.push(entry) };
@@ -1078,6 +1105,7 @@ describe('buildProductionOrchestrator', () => {
       logger,
       tickIntervalMs: 48 * 60 * 60 * 1_000,
       heartbeatIntervalMs: 48 * 60 * 60 * 1_000,
+      fillPollIntervalMs: NO_FILL_POLL_MS,
     });
     const orchestrator = buildProductionOrchestrator(config);
 
@@ -1183,6 +1211,8 @@ describe('buildProductionOrchestrator', () => {
         logger,
         tickIntervalMs: QUIET,
         heartbeatIntervalMs: QUIET,
+        // #528: none of these cases exercise fill-sync — see NO_FILL_POLL_MS.
+        fillPollIntervalMs: NO_FILL_POLL_MS,
         ...overrides,
       });
       return { config, logger };
