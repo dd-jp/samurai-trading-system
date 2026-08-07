@@ -274,26 +274,73 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
   /**
    * Cancels the order and, on a bracket, its attached legs with it — Alpaca
-   * cancels a parent's children as part of cancelling the parent.
+   * cancels a parent's children as part of cancelling the parent. ALSO
+   * cancels a re-armed residual's protective OCO (#525 follow-up), which
+   * the lookup above cannot find on its own: `rearmProtectiveLegs` submits
+   * that order under `${clientOrderId}:rearm`, a DIFFERENT client order id
+   * from the lot's own — so without this second half, a re-armed lot's OCO
+   * would stay live at the venue through every future call to this method,
+   * ready to fire into whatever flatten this cancel is clearing the way
+   * for and open a reverse position, exactly the #516 hazard this method
+   * exists to prevent, reintroduced one level down.
    *
-   * Resolves rather than throwing when the venue has nothing under this id:
+   * Resolves rather than throwing when the venue has nothing under an id:
    * `getOrderByClientOrderId` returning null means it was never placed or is
    * long gone, and the transport treats `404`/`422` the same way. The caller
    * cannot know the venue's state at the instant it calls, and a cancel that
    * throws on "too late" fails precisely in the race it exists to handle.
+   * That posture does NOT extend to a genuine transport/auth failure on
+   * either half: `this.call()` lets that propagate uncaught, so a cancel
+   * that could not confirm either leg is gone throws — `executeExit`
+   * refuses the flatten rather than sending a market order while it is
+   * unknown whether the legs it was meant to clear are actually gone.
    *
-   * Resolves the Alpaca id through the venue rather than the local `brackets`
-   * map, for `getOrder`'s reason: that map is populated only by `submitBracket`
-   * in this process, so after a restart it is empty.
+   * Resolves the ORIGINAL bracket's Alpaca id through the venue rather than
+   * the local `brackets` map, for `getOrder`'s reason: that map is
+   * populated only by `submitBracket` in this process, so after a restart
+   * it is empty. The re-armed OCO takes the CHEAP path first —
+   * `rearmedLegs` when this process is the one that placed it, no network
+   * round trip needed — and falls back to the SAME venue lookup, by the
+   * derived id, when the map has nothing: the only way to find a re-arm
+   * placed before a restart, since `rearmedLegs` is in-memory only. A null
+   * result there is the ordinary case (no re-arm ever happened for this
+   * lot) and is not an error.
    */
   async cancel(clientOrderId: string, _instrument: string): Promise<void> {
     const order = await this.call('cancel', () =>
       this.input.client.getOrderByClientOrderId(clientOrderId),
     );
-    if (order === null) return;
+    if (order !== null) {
+      await this.call('cancel', () => this.input.client.cancelOrder(order.id));
+      this.brackets.delete(clientOrderId);
+    }
 
-    await this.call('cancel', () => this.input.client.cancelOrder(order.id));
-    this.brackets.delete(clientOrderId);
+    const rearmedOrder = await this.resolveRearmedOrder(clientOrderId);
+    if (rearmedOrder !== null) {
+      await this.call('cancel', () => this.input.client.cancelOrder(rearmedOrder));
+      // Deleted only now, after the cancel is confirmed — not before, and
+      // not merely on finding it: a `cancelOrder` throw above must leave
+      // the map (and the venue) exactly as they were, so a retried cancel
+      // finds the same order again rather than believing it already gone.
+      this.rearmedLegs.delete(clientOrderId);
+    }
+  }
+
+  /**
+   * The re-armed OCO's Alpaca order id for `clientOrderId`'s lot, or `null`
+   * if none exists — the two-path resolution `cancel()`'s doc comment
+   * describes. Split out so `cancel()`'s own body reads as "cancel the
+   * bracket, then cancel the re-arm" rather than burying the fallback
+   * chain inline.
+   */
+  private async resolveRearmedOrder(clientOrderId: string): Promise<string | null> {
+    const inProcess = this.rearmedLegs.get(clientOrderId);
+    if (inProcess !== undefined) return inProcess;
+
+    const rearmOrder = await this.call('cancel', () =>
+      this.input.client.getOrderByClientOrderId(`${clientOrderId}:rearm`),
+    );
+    return rearmOrder?.id ?? null;
   }
 
   /**

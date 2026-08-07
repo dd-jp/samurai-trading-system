@@ -1139,6 +1139,109 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     expect(cancelOrder).not.toHaveBeenCalled();
   });
 
+  // #525 follow-up: `cancel()` must also clear a re-armed residual's OCO —
+  // it carries `${clientOrderId}:rearm`, a DIFFERENT id from the lot's own,
+  // so the lookup above alone can never find it. Left uncancelled, it stays
+  // live at the venue and can fire into the flatten below's now-flat
+  // position, reintroducing the #516 hazard `cancel()` exists to prevent.
+  describe('cancel() also clears a re-armed residual (#525 follow-up)', () => {
+    /** A `getOrderByClientOrderId` fake that answers per-id, like the real venue. */
+    function byClientOrderId(
+      orders: Record<string, ReturnType<typeof acceptedOrder> | null>,
+    ): (clientOrderId: string) => Promise<ReturnType<typeof acceptedOrder> | null> {
+      return async (clientOrderId: string) => orders[clientOrderId] ?? null;
+    }
+
+    it('cancels BOTH the original bracket and the re-armed OCO, original first', async () => {
+      const sequence: string[] = [];
+      const getOrderByClientOrderId = vi.fn(
+        byClientOrderId({
+          'key-1': { ...acceptedOrder(), id: 'bracket-venue-id' },
+          'key-1:rearm': { ...acceptedOrder(), id: 'rearm-venue-id' },
+        }),
+      );
+      const cancelOrder = vi.fn(async (id: string) => {
+        sequence.push(id);
+      });
+      const submitOcoOrder = vi.fn().mockResolvedValue({
+        ...acceptedOrder(),
+        id: 'rearm-venue-id',
+        order_class: 'oco',
+        legs: [],
+      });
+      const adapter = adapterWith(
+        makeClient({ getOrderByClientOrderId, cancelOrder, submitOcoOrder }),
+      );
+      // The re-arm happened in THIS process, so `rearmedLegs` already has
+      // it — the fast, no-network-round-trip path.
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      cancelOrder.mockClear(); // the rearm's own submit isn't a cancel call.
+
+      await adapter.cancel('key-1', 'AAPL');
+
+      expect(sequence).toEqual(['bracket-venue-id', 'rearm-venue-id']);
+    });
+
+    it('finds and cancels a re-armed OCO placed before a restart, when rearmedLegs is empty', async () => {
+      // A FRESH adapter — never called `rearmProtectiveLegs` in this
+      // process, so `rearmedLegs` starts empty. Only the venue lookup by
+      // the derived id can find the order a PRIOR process re-armed.
+      const getOrderByClientOrderId = vi.fn(
+        byClientOrderId({
+          'key-1': { ...acceptedOrder(), id: 'bracket-venue-id' },
+          'key-1:rearm': { ...acceptedOrder(), id: 'rearm-venue-id' },
+        }),
+      );
+      const cancelOrder = vi.fn().mockResolvedValue(undefined);
+      const adapter = adapterWith(makeClient({ getOrderByClientOrderId, cancelOrder }));
+
+      await adapter.cancel('key-1', 'AAPL');
+
+      expect(cancelOrder).toHaveBeenCalledWith('bracket-venue-id');
+      expect(cancelOrder).toHaveBeenCalledWith('rearm-venue-id');
+      expect(cancelOrder).toHaveBeenCalledTimes(2);
+    });
+
+    it('makes no extra cancel call on the ordinary path — no re-arm ever happened', async () => {
+      const getOrderByClientOrderId = vi.fn(
+        byClientOrderId({
+          'key-1': { ...acceptedOrder(), id: 'bracket-venue-id' },
+          // No 'key-1:rearm' entry — the venue genuinely has no such order,
+          // the ordinary case for a lot that was never partially flattened.
+        }),
+      );
+      const cancelOrder = vi.fn().mockResolvedValue(undefined);
+      const adapter = adapterWith(makeClient({ getOrderByClientOrderId, cancelOrder }));
+
+      await adapter.cancel('key-1', 'AAPL');
+
+      expect(cancelOrder).toHaveBeenCalledTimes(1);
+      expect(cancelOrder).toHaveBeenCalledWith('bracket-venue-id');
+    });
+
+    it('refuses (throws) when cancelling the re-armed OCO fails, matching the existing cancel-failure posture', async () => {
+      const getOrderByClientOrderId = vi.fn(
+        byClientOrderId({
+          'key-1': { ...acceptedOrder(), id: 'bracket-venue-id' },
+          'key-1:rearm': { ...acceptedOrder(), id: 'rearm-venue-id' },
+        }),
+      );
+      const cancelOrder = vi.fn(async (id: string) => {
+        if (id === 'rearm-venue-id') throw new Error('venue rejected the cancel');
+      });
+      const adapter = adapterWith(makeClient({ getOrderByClientOrderId, cancelOrder }));
+
+      await expect(adapter.cancel('key-1', 'AAPL')).rejects.toThrow();
+
+      // The original bracket's cancel still went out (this method's
+      // existing behaviour is unchanged), but the overall call rejects —
+      // `executeExit` reads this as "cancelling the held lot's legs
+      // failed" and refuses to submit the flatten at all, exactly as it
+      // does when the ORIGINAL cancel fails.
+      expect(cancelOrder).toHaveBeenCalledWith('bracket-venue-id');
+    });
+  });
+
   // #525: re-arming a residual left by a partial flatten. `executeExit`
   // cancels the lot's ENTIRE bracket before flattening, so unlike a resize
   // there is no live leg left to amend — this submits a fresh
