@@ -13,10 +13,17 @@
  * needs: outcomes come back in plan order regardless of the cap, but a cap of
  * 1 also makes the interleaving of stage calls across instruments
  * deterministic.
+ *
+ * Each worker's `runner.runInstrument` call is wrapped in its own try/catch
+ * (#507): one instrument throwing must fail only that instrument, not reject
+ * this worker's `Promise.all` entry and settle the whole tick early while
+ * sibling workers are still mid-pipeline (and still billing LLM debates). See
+ * the `worker()` function below and `TickOutcome.error`.
  */
 import { randomUUID } from 'node:crypto';
 import type { Signal } from '../analysts/index.js';
-import type { Clock } from '../shared/index.js';
+import type { Clock, LogEntry } from '../shared/index.js';
+import { digest } from './digest.js';
 import type {
   AuditLog,
   CurrentTickStore,
@@ -25,6 +32,51 @@ import type {
   TickPlan,
   TickRunner,
 } from './types.js';
+
+/**
+ * Renders a thrown value into a log-safe string (#507 review, kimi).
+ *
+ * `String(error)` alone degrades a plain-object throw to `"[object Object]"`
+ * — technically not swallowed, but not preserved either. Every throw this
+ * repo's own code produces is an `Error` (grepped: zero `throw {…}` literals
+ * in `src/`), so this mainly guards a third-party dependency that rejects
+ * with something else. `JSON.stringify` can itself throw on a circular
+ * structure, which is exactly the kind of value most likely to reach this
+ * fallback — so it degrades one step further to `String(error)` rather than
+ * letting a formatting failure inside error handling replace the original
+ * failure.
+ */
+function describeThrown(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+/**
+ * Calls `logger.log`, swallowing any throw from the logger itself (#507
+ * review, kimi cycle 2).
+ *
+ * This is only ever called from inside the worker's failure path — the one
+ * place in this file whose entire job is to guarantee nothing escapes and
+ * rejects `Promise.all`. `JsonLogger`'s own primary `process.stdout.write` is
+ * deliberately unguarded (see its doc comment), so a real logger CAN throw —
+ * an EPIPE on a broken pipe, or any injected `Logger` this module doesn't
+ * control. There is nowhere further to escalate a logging failure without
+ * risking regress (logging that the log call failed, which can itself fail),
+ * so this mirrors `JsonLogger`'s own posture on a sink it cannot recover:
+ * losing one message is strictly better than throwing into a tick.
+ */
+function safeLog(logger: Logger, entry: LogEntry): void {
+  try {
+    logger.log(entry);
+  } catch {
+    // Nothing left to do — see doc comment above.
+  }
+}
 
 export interface TickLoopConfig {
   /** Simultaneous instrument passes. Values < 1 are clamped to 1. */
@@ -77,13 +129,88 @@ export async function runTickPlan(
         asset: instrument.asset,
         asset_class: instrument.asset_class,
       };
-      outcomes[index] = await runner.runInstrument(signal, {
-        clock,
-        trace_id: newTraceId(),
-        logger: config.logger,
-        auditLog: config.auditLog,
-        currentTickStore: config.currentTickStore,
-      });
+      const trace_id = newTraceId();
+
+      // See the file header (#507) for why this is caught here rather than
+      // left to reject `Promise.all`.
+      try {
+        outcomes[index] = await runner.runInstrument(signal, {
+          clock,
+          trace_id,
+          logger: config.logger,
+          auditLog: config.auditLog,
+          currentTickStore: config.currentTickStore,
+        });
+      } catch (error) {
+        // Not swallowed: still reaches the logger, still gets a durable
+        // `audit_log` row (below — the runner itself never writes one for a
+        // stage that threw mid-call, since `record()` in tick-runner.ts only
+        // fires after a stage's step function RETURNS; a crash means "reached
+        // a stage but never finished it", which is otherwise invisible to
+        // anything reading `audit_log` after the fact), and still lands in
+        // the returned outcome array (so a caller reading `outcomes` sees the
+        // failure rather than a conspicuously-missing entry — every plan
+        // index is always populated).
+        //
+        // Both side effects below are themselves guarded (#507 review, kimi
+        // cycle 2): this whole `catch` exists to guarantee `worker()` cannot
+        // reject, and `auditLog.record` is a database write — a SQLite
+        // failure here (disk full, handle closed) would otherwise propagate
+        // out of THIS catch and reopen the exact orphaned-worker leak #507
+        // closes. `logger.log` gets the same treatment for the same reason
+        // (see `safeLog`'s doc comment).
+        const message = describeThrown(error);
+        safeLog(config.logger, {
+          trace_id,
+          stage: 'tick-loop',
+          level: 'error',
+          message: `instrument failed: ${instrument.asset}`,
+          payload: {
+            instrument: instrument.asset,
+            asset_class: instrument.asset_class,
+            error: message,
+          },
+        });
+        try {
+          // `decision: 'crashed'` has no stage-specific analogue in
+          // tick-runner.ts's `record()` calls (`quorum_skip`, `no_trade`,
+          // `rejected`, …) on purpose — those all describe a stage that
+          // COMPLETED and chose something; this describes a stage that never
+          // got the chance to. `input_digest` covers the `Signal` (the one
+          // thing known for certain going in, since the runner never told
+          // this layer which stage it had reached) rather than nothing, so a
+          // crashed pass digests to something other than every other crash
+          // on this instrument.
+          config.auditLog.record({
+            trace_id,
+            stage: 'tick-loop',
+            decision: 'crashed',
+            input_digest: digest(signal),
+            output_digest: digest({ error: message }),
+            timestamp: clock.now(),
+            instrument: instrument.asset,
+            asset_class: instrument.asset_class,
+          });
+        } catch (auditError) {
+          // An audit-write failure must stay VISIBLE — this is not the
+          // silent-swallow #507 exists to close, it is the same "log it,
+          // don't let it propagate" treatment as the instrument crash itself
+          // just got, one layer in.
+          safeLog(config.logger, {
+            trace_id,
+            stage: 'tick-loop',
+            level: 'error',
+            message: `audit_log record failed for crashed instrument: ${instrument.asset}`,
+            payload: {
+              instrument: instrument.asset,
+              asset_class: instrument.asset_class,
+              original_error: message,
+              audit_error: describeThrown(auditError),
+            },
+          });
+        }
+        outcomes[index] = { trace_id, error: message };
+      }
     }
   }
 

@@ -32,7 +32,7 @@
  * 5-year window, well under the 5000-row default page size).
  */
 
-import { resolvePolygonPacing, TokenBucket } from '../shared/index.js';
+import { resolvePolygonPacing, TokenBucket, truncateForError } from '../shared/index.js';
 import type { PolygonAggregate, PolygonClient } from './stage2-historical-store.js';
 import type { DateRange } from './universe.js';
 
@@ -53,6 +53,40 @@ interface RawPolygonAggregate {
 interface PolygonAggregatesResponse {
   results?: RawPolygonAggregate[];
   next_url?: string;
+}
+
+/** `typeof x === 'number'` narrowed further to exclude `NaN`/`Infinity` — a vendor can send either on the wire. */
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+/**
+ * Validates and narrows one wire aggregate row (issue #509). This file had no
+ * shape check at all before this ticket — `results` was cast straight to
+ * `RawPolygonAggregate[]` and every OHLCV/`t` field rode along unguarded into
+ * `Stage2HistoricalStore`, which persists it into the offline scratch store
+ * Stage 2's backtests read from. A truncated or wrong-typed row now throws
+ * rather than seeding a backtest with a `NaN` bar.
+ */
+function validateRawPolygonAggregate(raw: unknown, symbol: string): RawPolygonAggregate {
+  if (typeof raw === 'object' && raw !== null) {
+    const { t, o, h, l, c, v } = raw as Record<string, unknown>;
+    if (
+      isFiniteNumber(t) &&
+      isFiniteNumber(o) &&
+      isFiniteNumber(h) &&
+      isFiniteNumber(l) &&
+      isFiniteNumber(c) &&
+      isFiniteNumber(v)
+    ) {
+      return { t, o, h, l, c, v };
+    }
+  }
+  throw new Error(
+    `HttpPolygonClient.fetchAggregates: malformed aggregate for ${symbol}: ${truncateForError(
+      JSON.stringify(raw),
+    )}`,
+  );
 }
 
 /** Maps this repo's universe symbols to Polygon ticker strings — crypto gets the `X:` prefix. */
@@ -179,13 +213,29 @@ export class HttpPolygonClient implements PolygonClient {
         );
       }
 
-      const body = (await response.json()) as PolygonAggregatesResponse;
-      const results = body.results ?? [];
-      for (const bar of results) {
-        out.push({ t: bar.t, o: bar.o, h: bar.h, l: bar.l, c: bar.c, v: bar.v });
+      const parsed: unknown = await response.json();
+      if (typeof parsed !== 'object' || parsed === null) {
+        throw new Error(
+          `HttpPolygonClient.fetchAggregates: malformed response body for ${symbol}: expected an ` +
+            `object, got ${truncateForError(JSON.stringify(parsed))}`,
+        );
+      }
+      const body = parsed as PolygonAggregatesResponse;
+      if (body.results !== undefined && !Array.isArray(body.results)) {
+        throw new Error(
+          `HttpPolygonClient.fetchAggregates: malformed 'results' for ${symbol}: expected an array`,
+        );
+      }
+      for (const bar of body.results ?? []) {
+        out.push(validateRawPolygonAggregate(bar, symbol));
       }
 
-      if (body.next_url === undefined) break;
+      // A wrong-typed `next_url` degrades to "no more pages" rather than
+      // throwing — Stage 2 is offline tooling with no retry/underfetch
+      // machinery of its own, so an early stop here just returns a shorter
+      // series than the venue actually holds, which is visible in the row
+      // count rather than silent.
+      if (typeof body.next_url !== 'string') break;
       url = body.next_url;
     }
 

@@ -88,7 +88,7 @@
  */
 
 import type { RetryConfig, TokenBucket } from '../../shared/index.js';
-import { fetchWithTimeout, withRetry } from '../../shared/index.js';
+import { fetchWithTimeout, truncateForError, withRetry } from '../../shared/index.js';
 import { isDailyTimeframe, timeframeToMs } from '../timeframe.js';
 import {
   AlpacaDataProviderError,
@@ -209,6 +209,87 @@ interface CryptoLatestQuoteResponse {
 
 function toAlpacaBar(raw: RawAlpacaBar): AlpacaBar {
   return { t: raw.t, o: raw.o, h: raw.h, l: raw.l, c: raw.c, v: raw.v };
+}
+
+/** `typeof x === 'number'` narrowed further to exclude `NaN`/`Infinity` — a vendor can send either on the wire. */
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+/**
+ * Validates and narrows one wire bar before it ever reaches `toAlpacaBar`
+ * (issue #509). Prices and volume computed from a non-finite OHLCV field
+ * flow silently into an indicator, then a stop distance — there was
+ * previously no `Number.isFinite` anywhere in this file. A response body
+ * that parses as JSON but has the wrong shape (a missing field, a string
+ * where Alpaca's docs promise a number) throws a classified
+ * `AlpacaDataProviderError` here instead of an unguarded `undefined`/string
+ * riding along as if it were a valid `number`.
+ */
+function validateRawAlpacaBar(raw: unknown, symbol: string, context: string): RawAlpacaBar {
+  if (typeof raw === 'object' && raw !== null) {
+    const { t, o, h, l, c, v } = raw as Record<string, unknown>;
+    if (
+      typeof t === 'string' &&
+      isFiniteNumber(o) &&
+      isFiniteNumber(h) &&
+      isFiniteNumber(l) &&
+      isFiniteNumber(c) &&
+      isFiniteNumber(v)
+    ) {
+      return { t, o, h, l, c, v };
+    }
+  }
+  throw new AlpacaDataProviderError(
+    `AlpacaHttpDataClient: malformed bar for ${symbol} (${context}): ${truncateForError(
+      JSON.stringify(raw),
+    )}`,
+  );
+}
+
+/** Same shape guard as `validateRawAlpacaBar`, for the single-quote payload `getLatestQuote` reads. */
+function validateRawAlpacaQuote(raw: unknown, symbol: string, context: string): RawAlpacaQuote {
+  if (typeof raw === 'object' && raw !== null) {
+    const { t, ap, bp } = raw as Record<string, unknown>;
+    if (typeof t === 'string' && isFiniteNumber(ap) && isFiniteNumber(bp)) {
+      return { t, ap, bp };
+    }
+  }
+  throw new AlpacaDataProviderError(
+    `AlpacaHttpDataClient: malformed quote for ${symbol} (${context}): ${truncateForError(
+      JSON.stringify(raw),
+    )}`,
+  );
+}
+
+/**
+ * Guards the top-level envelope before any field is read off it — a `null`
+ * or non-object body would otherwise throw an unclassified `TypeError` the
+ * instant `.bars`/`.quote` is read, rather than the classified
+ * `AlpacaDataProviderError` every other failure on this path produces.
+ */
+function requireResponseObject(body: unknown, context: string): Record<string, unknown> {
+  if (typeof body === 'object' && body !== null) return body as Record<string, unknown>;
+  throw new AlpacaDataProviderError(
+    `AlpacaHttpDataClient: malformed response body (${context}): expected an object, got ${truncateForError(
+      JSON.stringify(body),
+    )}`,
+  );
+}
+
+/**
+ * Validates a raw bars array is actually an array before iterating it —
+ * `undefined`/`null` degrade to "no bars" (the existing contract), but any
+ * other non-array shape (an object, a string) is a vendor error, not a
+ * silently-empty page.
+ */
+function requireBarsArray(value: unknown, symbol: string, context: string): unknown[] {
+  if (value === undefined || value === null) return [];
+  if (Array.isArray(value)) return value;
+  throw new AlpacaDataProviderError(
+    `AlpacaHttpDataClient: malformed bars array for ${symbol} (${context}): expected an array, ` +
+      `got ${truncateForError(JSON.stringify(value))}`,
+  );
 }
 
 /** `'1m'` -> `'1Min'`, `'5m'` -> `'5Min'`, `'1h'` -> `'1Hour'`, `'1d'` -> `'1Day'` (Alpaca's own vocabulary). */
@@ -538,28 +619,46 @@ export class AlpacaHttpDataClient implements AlpacaClient {
 
       if (this.assetClass === 'crypto') {
         params.set('symbols', alpacaSymbol);
-        const body = (await this.requestJson(
-          `${this.baseUrl}/${ALPACA_CRYPTO_API_VERSION}/crypto/us/bars?${params.toString()}`,
+        const body = requireResponseObject(
+          await this.requestJson(
+            `${this.baseUrl}/${ALPACA_CRYPTO_API_VERSION}/crypto/us/bars?${params.toString()}`,
+            'getBars',
+          ),
           'getBars',
-        )) as CryptoBarsResponse;
-        for (const raw of lookupCryptoKey(body.bars, alpacaSymbol, symbol) ?? []) {
-          out.push(toAlpacaBar(raw));
+        ) as CryptoBarsResponse;
+        // `?? undefined` folds an explicit `bars: null` into the same
+        // "no key" branch `lookupCryptoKey` already handles — it only guards
+        // `undefined`, and a malformed body sending `null` would otherwise
+        // throw an unclassified TypeError reading `byKey[alpacaSymbol]`.
+        const rawBars = lookupCryptoKey(body.bars ?? undefined, alpacaSymbol, symbol);
+        for (const raw of requireBarsArray(rawBars, symbol, 'getBars')) {
+          out.push(toAlpacaBar(validateRawAlpacaBar(raw, symbol, 'getBars')));
         }
-        pageToken = body.next_page_token ?? undefined;
+        // A wrong-typed `next_page_token` degrades to "no more pages" rather
+        // than throwing: an early stop here is exactly the short-read case
+        // `getBars`'s widen-and-retry (RETRY_WIDEN_FACTOR) already exists to
+        // recover, so it is caught by the existing sparse-data path instead
+        // of a second bespoke guard.
+        pageToken = typeof body.next_page_token === 'string' ? body.next_page_token : undefined;
       } else {
         // Stocks only — Alpaca's crypto endpoints take no `feed`. Without this
         // every equity bars request 403s, because `end` is always `clock.now()`
         // and a Basic subscription cannot read SIP data under 15 minutes old.
         // See `AlpacaDataFeed` for the live status codes.
         params.set('feed', this.equityFeed);
-        const body = (await this.requestJson(
-          `${this.baseUrl}/${ALPACA_STOCKS_API_VERSION}/stocks/${encodeURIComponent(
-            symbol,
-          )}/bars?${params.toString()}`,
+        const body = requireResponseObject(
+          await this.requestJson(
+            `${this.baseUrl}/${ALPACA_STOCKS_API_VERSION}/stocks/${encodeURIComponent(
+              symbol,
+            )}/bars?${params.toString()}`,
+            'getBars',
+          ),
           'getBars',
-        )) as StocksBarsResponse;
-        for (const raw of body.bars ?? []) out.push(toAlpacaBar(raw));
-        pageToken = body.next_page_token ?? undefined;
+        ) as StocksBarsResponse;
+        for (const raw of requireBarsArray(body.bars, symbol, 'getBars')) {
+          out.push(toAlpacaBar(validateRawAlpacaBar(raw, symbol, 'getBars')));
+        }
+        pageToken = typeof body.next_page_token === 'string' ? body.next_page_token : undefined;
       }
     } while (pageToken !== undefined);
 
@@ -638,17 +737,21 @@ export class AlpacaHttpDataClient implements AlpacaClient {
     if (this.assetClass === 'crypto') {
       const alpacaSymbol = toAlpacaCryptoSymbol(symbol);
       const params = new URLSearchParams({ symbols: alpacaSymbol });
-      const body = (await this.requestJson(
-        `${this.baseUrl}/${ALPACA_CRYPTO_API_VERSION}/crypto/us/latest/quotes?${params.toString()}`,
+      const body = requireResponseObject(
+        await this.requestJson(
+          `${this.baseUrl}/${ALPACA_CRYPTO_API_VERSION}/crypto/us/latest/quotes?${params.toString()}`,
+          'getLatestQuote',
+        ),
         'getLatestQuote',
-      )) as CryptoLatestQuoteResponse;
-      const quote = lookupCryptoKey(body.quotes, alpacaSymbol, symbol);
+      ) as CryptoLatestQuoteResponse;
+      const quote = lookupCryptoKey(body.quotes ?? undefined, alpacaSymbol, symbol);
       if (quote === undefined) {
         throw new AlpacaDataProviderError(
           `AlpacaHttpDataClient.getLatestQuote: no quote for ${symbol} in crypto response`,
         );
       }
-      return { t: quote.t, ap: quote.ap, bp: quote.bp };
+      const validated = validateRawAlpacaQuote(quote, symbol, 'getLatestQuote');
+      return { t: validated.t, ap: validated.ap, bp: validated.bp };
     }
 
     // Passed explicitly even though this endpoint already defaults to IEX for a
@@ -656,17 +759,21 @@ export class AlpacaHttpDataClient implements AlpacaClient {
     // must come from the same tape, or an ATR-derived stop is priced against a
     // venue the mark never saw.
     const quoteParams = new URLSearchParams({ feed: this.equityFeed });
-    const body = (await this.requestJson(
-      `${this.baseUrl}/${ALPACA_STOCKS_API_VERSION}/stocks/${encodeURIComponent(
-        symbol,
-      )}/quotes/latest?${quoteParams.toString()}`,
+    const body = requireResponseObject(
+      await this.requestJson(
+        `${this.baseUrl}/${ALPACA_STOCKS_API_VERSION}/stocks/${encodeURIComponent(
+          symbol,
+        )}/quotes/latest?${quoteParams.toString()}`,
+        'getLatestQuote',
+      ),
       'getLatestQuote',
-    )) as StocksLatestQuoteResponse;
+    ) as StocksLatestQuoteResponse;
     if (body.quote === undefined) {
       throw new AlpacaDataProviderError(
         `AlpacaHttpDataClient.getLatestQuote: no quote for ${symbol} in stocks response`,
       );
     }
-    return { t: body.quote.t, ap: body.quote.ap, bp: body.quote.bp };
+    const validated = validateRawAlpacaQuote(body.quote, symbol, 'getLatestQuote');
+    return { t: validated.t, ap: validated.ap, bp: validated.bp };
   }
 }
