@@ -589,6 +589,148 @@ def test_one_refused_slice_keeps_the_other_slices_paid_for_reviews():
     assert "1/2" in payload["summary_markdown"]
 
 
+def test_a_malformed_comment_does_not_crash_the_merge():
+    """An unhashable value in file/line/body would raise building the dedup
+    key — crashing the run after every slice call has been paid for."""
+    merged = review_lib.merge_model_results(
+        [
+            {
+                "summary_markdown": "",
+                "inline_comments": [
+                    {"file": ["src/a.ts"], "line": {"n": 1}, "body": ["x"]},
+                    {"file": "src/a.ts", "line": 1, "body": "real"},
+                    # Not a dict at all.
+                    "not-a-comment",
+                ],
+                "verdict": "APPROVE_WITH_COMMENTS",
+            }
+        ],
+        [("src/a.ts",)],
+    )
+
+    assert merged["verdict"] == "APPROVE_WITH_COMMENTS"
+    bodies = [c.get("body") for c in merged["inline_comments"]]
+    assert "real" in bodies
+    # And the malformed ones still can't reach GitHub as anchors.
+    payload = review_lib.build_review_payload(DIFF, merged)
+    assert all(isinstance(c["line"], int) for c in payload["comments"])
+
+
+def test_duplicate_detection_survives_the_string_coercion():
+    merged = review_lib.merge_model_results(
+        [
+            {
+                "summary_markdown": "",
+                "inline_comments": [{"file": "a.ts", "line": 1, "body": "x"}],
+                "verdict": "APPROVE",
+            },
+            {
+                "summary_markdown": "",
+                "inline_comments": [{"file": "a.ts", "line": 1, "body": "x"}],
+                "verdict": "APPROVE",
+            },
+        ],
+        [("a.ts",), ("a.ts",)],
+    )
+
+    assert len(merged["inline_comments"]) == 1
+
+
+# --- nothing from an upstream error reaches a public body unscrubbed --------
+
+
+def test_error_text_is_scrubbed_before_it_can_be_published():
+    leaky = (
+        "502 from https://gw.internal/v1/chat?api_key=sk-abcd1234efgh5678ijkl9012mnop3456 "
+        "(Authorization: Bearer sk-live-9f8e7d6c5b4a3210zyxwvutsrqponmlk) upstream refused"
+    )
+    scrubbed = review_lib.safe_error_text(RuntimeError(leaky))
+
+    for secret in ("sk-abcd1234efgh5678ijkl9012mnop3456", "sk-live-9f8e7d6c5b4a3210zyxwvutsrqponmlk"):
+        assert secret not in scrubbed
+    assert "gw.internal" not in scrubbed
+    assert "api_key=" not in scrubbed
+    assert len(scrubbed) <= review_lib.MAX_ERROR_TEXT_CHARS
+    # Still diagnostic: the non-sensitive part survives.
+    assert "502" in scrubbed
+
+
+def test_error_text_is_bounded_and_flattened():
+    long_error = ("boom " * 500) + "\n\ttrailing"
+    scrubbed = review_lib.safe_error_text(RuntimeError(long_error))
+
+    assert len(scrubbed) <= review_lib.MAX_ERROR_TEXT_CHARS
+    assert "\n" not in scrubbed and "\t" not in scrubbed
+    assert scrubbed.endswith("…")
+    assert review_lib.safe_error_text(RuntimeError("")) == "(no error text)"
+
+
+def test_a_leaky_refusal_does_not_publish_the_secret_in_the_review_body():
+    diff = _file_diff("src/a.ts", lines_per_hunk=40) + _file_diff("src/b.ts", lines_per_hunk=40)
+
+    def fake_call(diff, changed_files, **kwargs):
+        if changed_files == ["src/b.ts"]:
+            exc = RuntimeError(
+                "400 https://gw.internal/v1?token=sk-topsecret0123456789abcdefghij rejected"
+            )
+            exc.status_code = 400
+            raise exc
+        return {"summary_markdown": "ok", "inline_comments": [], "verdict": "APPROVE"}
+
+    payload = review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
+
+    assert "sk-topsecret0123456789abcdefghij" not in payload["summary_markdown"]
+    assert "gw.internal" not in payload["summary_markdown"]
+    assert "was refused by the provider" in payload["summary_markdown"]
+
+
+def test_the_exhausted_retries_body_is_scrubbed_too():
+    """The likeliest leak: `Last error:` is posted publicly on every reviewer
+    that runs out of retries."""
+
+    class Leaky(FakeCompletions):
+        def create(self, **_kwargs):
+            self.calls += 1
+            raise RuntimeError("524 from https://gw.internal/v1?key=sk-leak0123456789abcdefghijkl")
+
+    client = FakeClient([])
+    client.completions = Leaky([])
+    client.chat = types.SimpleNamespace(completions=client.completions)
+
+    result = _call(client)
+
+    assert "sk-leak0123456789abcdefghijkl" not in result["summary_markdown"]
+    assert "gw.internal" not in result["summary_markdown"]
+    assert "524" in result["summary_markdown"]
+
+
+# --- only provider refusals are absorbed ------------------------------------
+
+
+def test_a_bug_in_our_own_code_is_not_reported_as_a_provider_refusal():
+    """A NameError surfacing as 'the provider refused this slice' is a lie the
+    banner would then repeat, and the bug would never surface."""
+    diff = _file_diff("src/a.ts", lines_per_hunk=40) + _file_diff("src/b.ts", lines_per_hunk=40)
+
+    def fake_call(diff, changed_files, **kwargs):
+        raise AttributeError("'NoneType' object has no attribute 'choices'")
+
+    with pytest.raises(AttributeError, match="choices"):
+        review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
+
+
+def test_a_non_status_exception_still_propagates_even_when_later_slices_are_fine():
+    diff = _file_diff("src/a.ts", lines_per_hunk=40) + _file_diff("src/b.ts", lines_per_hunk=40)
+
+    def fake_call(diff, changed_files, **kwargs):
+        if changed_files == ["src/a.ts"]:
+            raise KeyError("typo_in_our_dict")
+        return {"summary_markdown": "", "inline_comments": [], "verdict": "APPROVE"}
+
+    with pytest.raises(KeyError):
+        review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
+
+
 def test_a_refused_slice_still_contributes_exactly_one_result():
     """`merge_model_results` labels summaries by index against
     `[s.files for s in plan.slices]`. If a refusal ever skipped appending a

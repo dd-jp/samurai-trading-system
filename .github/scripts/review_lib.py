@@ -504,17 +504,56 @@ def split_diff_into_slices(
     return SlicePlan(slices=slices, skipped=skipped, skipped_files=tuple(skipped_files))
 
 
+# Everything an upstream error says ends up in a PUBLIC GitHub review body
+# (and in the Actions run log, which is public on a public repo). A chatty
+# proxy or gateway can echo the request it was given — URL with query string,
+# Authorization header, key material — into its error text, and interpolating
+# that verbatim publishes it. Nothing derived from an exception reaches a
+# posted body without going through `safe_error_text` first.
+MAX_ERROR_TEXT_CHARS = 200
+
+_ERROR_REDACTIONS = (
+    # URLs first: they can carry credentials in the query string or userinfo.
+    (re.compile(r"https?://\S+", re.IGNORECASE), "<url-redacted>"),
+    # Explicit credential-bearing fields, however they are punctuated.
+    (
+        re.compile(
+            r"(?i)\b(authorization|api[-_ ]?key|access[-_ ]?token|token|secret|password|bearer)\b"
+            r"\s*[:=]?\s*\S+"
+        ),
+        r"<credential-redacted>",
+    ),
+    # Bare high-entropy blobs: sk-…, long hex digests, base64 chunks.
+    (re.compile(r"\b[A-Za-z0-9_\-]{32,}\b"), "<redacted>"),
+)
+
+
+def safe_error_text(error: object, limit: int = MAX_ERROR_TEXT_CHARS) -> str:
+    """Bound and scrub an exception's text before it can be published.
+
+    Redacts URLs, credential-bearing fields and high-entropy blobs, collapses
+    whitespace, and truncates. Redaction is deliberately over-eager: an error
+    string is a diagnostic hint, and no diagnostic is worth publishing a
+    credential over."""
+    text = str(error)
+    for pattern, replacement in _ERROR_REDACTIONS:
+        text = pattern.sub(replacement, text)
+    text = " ".join(text.split())
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    return text or "(no error text)"
+
+
 _VERDICT_SEVERITY = {"APPROVE": 0, "APPROVE_WITH_COMMENTS": 1, "REQUEST_CHANGES": 2}
 
 
 def slice_is_usable(result: dict) -> bool:
     """Whether a slice's model result counts as a review of that slice.
 
-    ONE definition, used by both the merge and the coverage count. They used
-    to disagree — a slice with comments but no parseable verdict counted as
-    reviewed for coverage while the merge treated it as unusable, so no
-    partial-coverage banner posted and the verdict was quietly capped instead.
-    That is the silently-partial shape this whole change exists to kill.
+    ONE definition, shared by the merge and the coverage count — they must
+    never disagree. When they did, a slice with comments but no parseable
+    verdict counted as reviewed while the merge called it unusable, so no
+    partial-coverage banner posted at all.
 
     A recognised verdict is the bar: without one we cannot say the model
     finished its pass over that slice, whatever else it emitted."""
@@ -540,7 +579,17 @@ def merge_model_results(results: list[dict], slice_files: list[tuple[str, ...]])
 
     for index, result in enumerate(results):
         for comment in result.get("inline_comments") or []:
-            key = (comment.get("file"), comment.get("line"), comment.get("body"))
+            if not isinstance(comment, dict):
+                continue  # not a comment shape; build_review_payload would reject it anyway
+            # str(), not the raw values: a malformed result can put a list or
+            # dict in any of these fields, and an unhashable key would raise
+            # here — crashing the run after every slice call has been paid
+            # for. Same class of defect as the verdict lookup below.
+            key = (
+                str(comment.get("file")),
+                str(comment.get("line")),
+                str(comment.get("body")),
+            )
             if key in seen:
                 continue
             seen.add(key)
@@ -654,26 +703,27 @@ def review_diff(
             result = call(
                 diff=diff_slice.text, changed_files=list(diff_slice.files), **model_kwargs
             )
-        except Exception as exc:  # noqa: BLE001 - re-raised below unless it is slice-local
-            # `call_model` raises on an unambiguous refusal (see
-            # _FATAL_STATUS_CODES). Letting that propagate from here would
-            # throw away every OTHER slice's completed, paid-for review and
-            # post nothing — the wrong trade when the refusal is about this
-            # slice's content (a provider content filter tripping on one
-            # file) rather than the configuration. So it is caught per slice
-            # and routed through the unreviewed path, which names it in the
-            # banner and blocks an APPROVE.
-            #
-            # A configuration fault does not discriminate between slices: if
-            # EVERY slice refuses, there is no paid work to preserve and
-            # nothing slice-local to explain, so it is re-raised below and the
-            # job goes red with the provider's own error.
-            print(f"warning: slice {index + 1} refused: {exc}", file=sys.stderr)
+        except Exception as exc:  # noqa: BLE001 - narrowed on the next line
+            # ONLY a provider refusal is absorbed. A NameError or AttributeError
+            # from our own code reported as "the provider refused this slice"
+            # is a lie the disclosure banner would then repeat, and the bug
+            # would never surface. Anything that is not a refusal propagates.
+            if not _is_fatal_request_error(exc):
+                raise
+            # A refusal about this slice's CONTENT (a provider content filter
+            # tripping on one file) must not discard every other slice's
+            # completed, paid-for review, so it is routed through the
+            # unreviewed path: named in the banner, blocking an APPROVE.
+            # A configuration fault does not single out one slice, so if EVERY
+            # slice refuses there is nothing slice-local to explain and no paid
+            # work to preserve — re-raised below instead.
+            detail = safe_error_text(exc)
+            print(f"warning: slice {index + 1} refused: {detail}", file=sys.stderr)
             fatal_errors.append(exc)
             files = ", ".join(f"`{f}`" for f in diff_slice.files[:5])
             skipped.append(
                 f"slice {index + 1} of {len(plan.slices)} ({files}) was refused by the "
-                f"provider and NOT reviewed: {exc}"
+                f"provider and NOT reviewed: {detail}"
             )
             results.append(
                 {"summary_markdown": "", "inline_comments": [], "verdict": None}
@@ -856,7 +906,8 @@ def call_model(
         if attempt < TRANSIENT_MAX_ATTEMPTS - 1:
             wait = TRANSIENT_BACKOFF_SECONDS[attempt]
             print(
-                f"warning: model call failed ({last_exc}); retrying in {wait}s "
+                f"warning: model call failed ({safe_error_text(last_exc)}); "
+                f"retrying in {wait}s "
                 f"(attempt {attempt + 2}/{TRANSIENT_MAX_ATTEMPTS})",
                 file=sys.stderr,
             )
@@ -867,7 +918,9 @@ def call_model(
             "summary_markdown": (
                 f"_This reviewer ({model}) produced no usable review in "
                 f"{TRANSIENT_MAX_ATTEMPTS} attempts and was skipped. "
-                f"Last error: {last_exc}_"
+                # This string is posted publicly: the upstream error text is
+                # the most likely thing here to have echoed request details.
+                f"Last error: {safe_error_text(last_exc)}_"
             ),
             "inline_comments": [],
             "verdict": None,
@@ -904,13 +957,10 @@ def build_review_payload(
 
     verdict = model_result["verdict"]
 
-    # Partial coverage downgrades the verdict BEFORE anything renders it, so
-    # the blank-summary fallback below can't quote a stale "Verdict: APPROVE".
-    # #594: `deepseek-review` posted APPROVED on #591 having read 37% of it,
-    # and nothing in the review said so — a silently-partial APPROVE is worse
-    # than no review, because it manufactures confidence exactly where a large
-    # change most needs scrutiny. This is the single choke point for that rule:
-    # every caller reaches it.
+    # Partial coverage caps the verdict, and does so BEFORE anything renders
+    # it so the blank-summary fallback below can't quote a stale "APPROVE".
+    # Every caller reaches this line — it is the single choke point for the
+    # rule (#594: APPROVED posted on #591 after reading 37% of it).
     partial = coverage is not None and not coverage.is_complete
     if partial and verdict == "APPROVE":
         verdict = "APPROVE_WITH_COMMENTS"
