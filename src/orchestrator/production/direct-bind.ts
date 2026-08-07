@@ -160,15 +160,25 @@ export interface TraderStepDeps extends BreakerStateDeps {
  * larger than the ceiling — quietly disarming the breakers in order to bound
  * position size. The observation stays true; only the sizing inlet is bounded.
  *
- * A non-finite ceiling cannot arrive here (`assertLiveCapitalCeilingUsd`
- * refuses one) and `Math.min` would propagate a `NaN` if one did, so the guard
- * is explicit rather than trusted: an unusable ceiling falls back to unclamped
- * equity, still bounded by the risk caps, rather than to a `NaN` size —
- * `decide`'s own finite-checks would reject that, but only after the whole pass
- * had been spent computing it.
+ * A non-finite ceiling cannot arrive here through the shipped entrypoint
+ * (`assertLiveCapitalCeilingUsd` refuses one at boot, and
+ * `buildProductionComponents` separately refuses `mode: 'live'` with no
+ * ceiling declared at all) — but `Math.min` would propagate a `NaN` silently
+ * if one somehow did, which is a fail-OPEN outcome on the money path: a
+ * `NaN` ceiling reads as "no bound" all the way through `decide`'s sizing
+ * arithmetic. So a DEFINED, non-finite ceiling throws here (#569) rather
+ * than falling back to unclamped equity — `undefined` is unaffected and
+ * still means "no ceiling declared", the correct reading for every paper/
+ * backtest run and every test that leaves this field unset.
  */
 export function sizingEquity(equity: number, capitalCeilingUsd: number | undefined): number {
-  if (capitalCeilingUsd === undefined || !Number.isFinite(capitalCeilingUsd)) return equity;
+  if (capitalCeilingUsd === undefined) return equity;
+  if (!Number.isFinite(capitalCeilingUsd)) {
+    throw new Error(
+      `sizingEquity: capitalCeilingUsd must be a finite number when declared, but it is ` +
+        `${String(capitalCeilingUsd)}. Refusing to size against unclamped equity.`,
+    );
+  }
   return Math.min(equity, capitalCeilingUsd);
 }
 

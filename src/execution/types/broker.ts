@@ -167,13 +167,23 @@ export interface BrokerAdapter {
    * under a resize; only the quantity they protect changes), never
    * re-derived from the original intent's sizing math.
    *
-   * `clientOrderId` is a FRESH id, distinct from the lot's own
-   * `idempotency_key` — that id already named the now-cancelled original
-   * bracket, and resubmitting under it risks colliding with whatever
-   * identity semantics the venue applies to a reused client order id.
-   * `side` is the lot's HELD side (mirrors `resizeProtectiveLegs`' lot-scoped
-   * framing); an adapter closing the position derives the closing side the
-   * same way `executeExit` does.
+   * `clientOrderId` is the lot's OWN `idempotency_key` — corrected (#569):
+   * the only caller (`ingestFills`, ingest-fills.ts) passes it straight
+   * through, unchanged, and both implementations depend on that. A fresh id
+   * is still needed at the venue (that original id already named the
+   * now-cancelled bracket, and resubmitting under it risks colliding with
+   * whatever identity semantics the venue applies to a reused client order
+   * id) — deriving it is the ADAPTER's job, not the caller's:
+   * `AlpacaBrokerAdapter` suffixes it (`${clientOrderId}:rearm`) before
+   * calling the venue, and `SimulatedBrokerAdapter` keys `protectedQty` on
+   * the id AS PASSED, with no suffixing at all. A future adapter that
+   * generated a fresh id itself, per this comment's old wording, would break
+   * `fetchNewFills`'s lot-keyed sweep — that sweep tags fills under THIS
+   * `clientOrderId` so `ingestFills`' ordinary per-position routing can find
+   * them with no knowledge a re-arm was ever involved. `side` is the lot's
+   * HELD side (mirrors `resizeProtectiveLegs`' lot-scoped framing); an
+   * adapter closing the position derives the closing side the same way
+   * `executeExit` does.
    *
    * Throws on failure rather than swallowing it — the caller (`ingestFills`)
    * is what turns a thrown error into the #525 fallback alert. An adapter

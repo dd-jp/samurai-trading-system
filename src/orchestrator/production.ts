@@ -373,6 +373,29 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // runs on every production boot rather than on a branch nothing reaches.
   assertAutomationLevelSupported(config.verdictConfig);
 
+  // `capitalCeilingUsd` is optional on `ProductionConfig` (paper/backtest
+  // boots and the hundreds of tests that never touch live money need not set
+  // it) and it is NOT in `REQUIRED_INJECTED_CONFIG` — so a programmatic
+  // caller reaching THIS function directly, bypassing
+  // `startFromEnvironment`/`liveStartingProfile` (the only in-repo path that
+  // refuses to build a live profile without one), could otherwise reach
+  // `mode: 'live'` with no ceiling declared at all. `sizingEquity`
+  // (production/direct-bind.ts, see its own doc for why an undefined
+  // ceiling must stay unclamped) treats that as "none declared" — the
+  // correct reading for paper/backtest — so it cannot also be the live-mode
+  // gate; the gate belongs here (#569), before anything below is
+  // half-built, the same placement `assertAutomationLevelSupported` above
+  // uses.
+  if (config.mode === 'live' && config.capitalCeilingUsd === undefined) {
+    throw new Error(
+      'Orchestrator cannot start: mode "live" requires ProductionConfig.capitalCeilingUsd, and ' +
+        'it is not set. It is the ceiling every position size in a live run is derived from ' +
+        '(sizingEquity, production/direct-bind.ts) — build the config through ' +
+        'liveStartingProfile() rather than assembling ProductionConfig by hand, or set the field ' +
+        'explicitly. Refusing to size a live run off unclamped equity.',
+    );
+  }
+
   // FIRST, ahead of every store, socket and wire client below (PR #390
   // review). The LLM budget is constructed here rather than beside the debate
   // step it feeds because `RateLimiter`'s constructor VALIDATES its config, and

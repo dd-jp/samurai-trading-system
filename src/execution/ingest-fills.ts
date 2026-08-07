@@ -388,11 +388,12 @@ async function advanceLot(
  * Re-arms a residual left by a partial flatten (#525's recorded decision —
  * option 1), or posts the fallback alert when the re-arm itself fails or
  * cannot be attempted safely. Never throws: every failure this function can
- * observe — the broker call rejecting, the alert channel itself failing —
- * is swallowed here, the same posture `safeLog()` takes in
- * orchestrator/tick-loop.ts, so a flaky re-arm or a flaky alert transport
- * can never escape into `advanceLot` and cost the fill rows the caller is
- * about to persist regardless.
+ * observe — the store read on the `known === undefined` path, the broker
+ * call rejecting, the alert channel itself failing — is swallowed here, the
+ * same posture `safeLog()` takes in orchestrator/tick-loop.ts, so a flaky
+ * store, a flaky re-arm, or a flaky alert transport can never escape into
+ * `advanceLot` and abort `ingestFills`' per-lot loop for every OTHER lot the
+ * same poll has yet to reach.
  *
  * `known` lets the caller in `advanceLot`'s main path hand over
  * `filledSize`/`exitQty` it already computed off the SAME persisted record,
@@ -410,7 +411,18 @@ async function maybeRearmResidual(
   let filledSize: number;
   let exitQty: number;
   if (known === undefined) {
-    const recorded = await store.getFills(position.idempotency_key);
+    let recorded: Fill[];
+    try {
+      recorded = await store.getFills(position.idempotency_key);
+    } catch {
+      // The residual is unknowable without the read that just failed —
+      // alerting with NaN rather than guessing at a figure, the same
+      // fail-closed posture the non-finite-residual branch below already
+      // takes for a different bad state. Never rethrown: see this
+      // function's "Never throws" doc above.
+      await alertResidualExposure(input, position, Number.NaN, now);
+      return;
+    }
     filledSize = totalQty(recorded.filter((fill) => fill.leg === 'entry'));
     exitQty = totalQty(recorded.filter(isExitFill));
   } else {

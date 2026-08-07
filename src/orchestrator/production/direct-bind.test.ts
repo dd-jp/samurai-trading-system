@@ -207,12 +207,15 @@ describe('sizingEquity (#511)', () => {
   it.each([
     Number.NaN,
     Number.POSITIVE_INFINITY,
-  ])('falls back to unclamped equity for an unusable ceiling of %j rather than producing NaN', (ceiling) => {
-    // `Math.min(10_000, NaN)` is NaN, and a NaN size propagates through the
-    // whole sizing arithmetic before anything rejects it. Unreachable in
-    // production (`resolveLiveCapitalCeilingUsd` refuses both), so this pins
-    // the guard rather than the path.
-    expect(sizingEquity(10_000, ceiling)).toBe(10_000);
+  ])('throws for an unusable ceiling of %j instead of sizing off unclamped equity (#569)', (ceiling) => {
+    // `Math.min(10_000, NaN)` is `NaN`, and "unclamped" is exactly the
+    // fail-OPEN outcome #511 exists to prevent: a live run whose declared
+    // ceiling somehow arrives non-finite must refuse to size, not silently
+    // size off the raw account equity. Unreachable via the shipped
+    // entrypoint (`resolveLiveCapitalCeilingUsd`/`assertLiveCapitalCeilingUsd`
+    // refuse both at boot), so this pins the guard itself for any caller
+    // that reaches `sizingEquity` some other way.
+    expect(() => sizingEquity(10_000, ceiling)).toThrow(/finite/);
   });
 });
 
@@ -284,8 +287,14 @@ describe('buildTraderStep capital ceiling (#511)', () => {
     expect(await sizeFor(1_000_000)).toBeCloseTo(await sizeFor(undefined), 10);
   });
 
-  it('leaves the paper path byte-identical when no ceiling is declared', async () => {
-    expect(await sizeFor(undefined)).toBeCloseTo(await sizeFor(Number.NaN), 10);
+  it('rejects instead of silently sizing off unclamped equity when a declared ceiling is non-finite (#569)', async () => {
+    // `sizingEquity`'s own unit tests (above) pin the corrected behaviour
+    // directly; this asserts the same guard is actually reached through the
+    // real `buildTraderStep` composition, not merely the standalone
+    // function. `sizeFor(undefined)` two tests up already establishes "no
+    // ceiling declared" stays unclamped — this is the DEFINED-but-unusable
+    // case, deliberately not the same input.
+    await expect(sizeFor(Number.NaN)).rejects.toThrow(/finite/);
   });
 });
 

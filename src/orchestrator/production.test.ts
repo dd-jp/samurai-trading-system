@@ -397,6 +397,18 @@ describe('buildProductionComponents', () => {
   });
 
   it(
+    'refuses to build with mode "live" and no declared capital ceiling (#569) — ' +
+      '`capitalCeilingUsd` is optional and absent from `REQUIRED_INJECTED_CONFIG`, so a ' +
+      'programmatic caller reaching this function directly (bypassing `liveStartingProfile`, ' +
+      'which always sets it) could otherwise size a live run off unclamped equity',
+    () => {
+      const config = stubConfig(db, { mode: 'live' });
+
+      expect(() => buildProductionComponents(config)).toThrow(/capitalCeilingUsd/);
+    },
+  );
+
+  it(
     "hooks Feedback Loop's onTradeClose off the returned executionStore's " +
       'writeClosedTrade (#237) — not off any TickSteps member',
     async () => {

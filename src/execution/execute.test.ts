@@ -1,10 +1,10 @@
 import type { CostModel } from '../cost-model-backtest/index.js';
 import type { MarketDataService } from '../market-data-service/index.js';
-import type { Clock, OpenPosition, OrderIntent } from '../shared/index.js';
+import type { Clock, Fill, OpenPosition, OrderIntent } from '../shared/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
 import { ExecutionImpl } from './execute.js';
 import { SimulatedBrokerAdapter } from './simulated-adapter.js';
-import { openTestExecutionStore } from './sqlite-store-harness.js';
+import { openTestExecutionStore, TestExecutionStore } from './sqlite-store-harness.js';
 import type {
   BrokerAck,
   BrokerAdapter,
@@ -1351,6 +1351,146 @@ describe('ExecutionImpl.execute', () => {
           // Both re-arms succeeded — no alert.
           expect(residualExposureAlerts.alerts).toEqual([]);
         });
+
+        it(
+          "one lot's re-arm store-read failure alerts for that lot alone and does not abort " +
+            'ingestion for the OTHER lots in the same poll (#569)',
+          async () => {
+            // `maybeRearmResidual`'s doc claims "Never throws" — but on the
+            // zero-new-fill/`known === undefined` path (a flatten-named
+            // sibling that got ZERO share of this poll's fill), the store
+            // read that recomputes `filledSize`/`exitQty` sat OUTSIDE any
+            // `try`. A rejection there propagated out of `advanceLot` and
+            // out of `ingestFills`'s per-position loop, aborting every OTHER
+            // lot the same poll had yet to reach — reproduced here with a
+            // THIRD lot (`key-lot-3`) that has a genuine new entry fill
+            // waiting in the SAME poll, positioned after the flaky one in
+            // `getOpenPositions()`'s `opened_at` order.
+            class FlakyGetFillsStore extends TestExecutionStore {
+              /** Only throws once armed — lot 2's OWN entry-fill poll must still succeed. */
+              armed = false;
+              override async getFills(idempotency_key: string): Promise<Fill[]> {
+                if (this.armed && idempotency_key === 'key-lot-2') {
+                  throw new Error('simulated store outage on getFills');
+                }
+                return super.getFills(idempotency_key);
+              }
+            }
+
+            const { db } = openTestExecutionStore();
+            const store = new FlakyGetFillsStore(db);
+            let now = NOW;
+            const steppingClock: Clock = { now: () => now };
+            const costModel: CostModel = {
+              fill: vi
+                .fn()
+                .mockReturnValueOnce({
+                  fill_price: 90,
+                  filled_size: 10,
+                  cost_breakdown: zeroCosts(),
+                }) // lot 1 entry
+                .mockReturnValueOnce({
+                  fill_price: 92,
+                  filled_size: 15,
+                  cost_breakdown: zeroCosts(),
+                }) // lot 2 entry
+                .mockReturnValueOnce({
+                  fill_price: 94,
+                  filled_size: 8,
+                  cost_breakdown: zeroCosts(),
+                }) // lot 3 entry
+                // Same shape as the ZERO-share-sibling test above: less than
+                // even lot 1's own 10-share, so lot 2 gets nothing.
+                .mockReturnValueOnce({
+                  fill_price: 100,
+                  filled_size: 7,
+                  cost_breakdown: zeroCosts(),
+                }),
+            };
+            const marketData = makeMarketData();
+            const broker = new SimulatedBrokerAdapter({
+              clock: steppingClock,
+              costModel,
+              marketData,
+              config: SIMULATED_CONFIG,
+            });
+            const residualExposureAlerts = makeResidualExposureAlerts();
+            const execution = new ExecutionImpl(
+              makeInput({
+                store,
+                broker,
+                costModel,
+                marketData,
+                clock: steppingClock,
+                residualExposureAlerts,
+              }),
+            );
+
+            await execution.execute(
+              makeGo({ idempotency_key: 'key-lot-1', size: 10, entry: 90, stop: 85, target: 110 }),
+            );
+            await execution.ingestFills();
+            now = new Date(now.getTime() + 60_000);
+            await execution.execute(
+              makeGo({
+                idempotency_key: 'key-lot-2',
+                intent_type: 'scale_in',
+                size: 15,
+                entry: 92,
+                stop: 85,
+                target: 110,
+              }),
+            );
+            await execution.ingestFills();
+            now = new Date(now.getTime() + 60_000);
+            await execution.execute(
+              makeGo({
+                idempotency_key: 'key-lot-3',
+                intent_type: 'scale_in',
+                size: 8,
+                entry: 94,
+                stop: 85,
+                target: 110,
+              }),
+            );
+            // Deliberately NOT ingested yet — lot 3's entry fill stays fresh
+            // for the SAME poll the flatten resolves in, below.
+            now = new Date(now.getTime() + 60_000);
+
+            await execution.execute(makeExitGo({ size: 25 }));
+            store.armed = true;
+
+            await expect(execution.ingestFills()).resolves.toBeUndefined();
+
+            // Lot 1, iterated BEFORE the flaky lot: unaffected either way —
+            // re-armed to its 3 residual exactly as the zero-share-sibling
+            // test above.
+            expect(broker.getProtectedQty('key-lot-1')).toBe(3);
+
+            // Lot 2: the store read failed, so there is no residual figure to
+            // re-arm with — never armed, and the fallback alert fires with an
+            // unknown (NaN) residual rather than guessing at one.
+            expect(broker.getProtectedQty('key-lot-2')).toBeNull();
+            expect(residualExposureAlerts.alerts).toEqual([
+              {
+                idempotency_key: 'key-lot-2',
+                instrument: 'AAPL',
+                side: 'buy',
+                residual_qty: Number.NaN,
+                stop: 85,
+                target: 110,
+                observed_at: now,
+              },
+            ]);
+
+            // Lot 3, iterated AFTER the flaky lot: THIS is the regression the
+            // unguarded read caused — its entry fill must still be ingested
+            // in the SAME poll despite lot 2's read failing first.
+            const lot3 = await store.getPosition('key-lot-3');
+            expect(lot3?.filled_size).toBe(8);
+            expect(lot3?.order_state).toBe('filled');
+          },
+        );
       });
     });
   });
