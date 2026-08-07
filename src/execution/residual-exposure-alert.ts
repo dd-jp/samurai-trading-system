@@ -44,6 +44,18 @@ export interface ResidualExposureAlert {
   side: 'buy' | 'sell';
   /** The quantity left open after the partial flatten, still uncovered by any leg. */
   residual_qty: number;
+  /**
+   * `true` when `residual_qty` is an UPPER BOUND rather than the exact
+   * residual (#569 review): the fill read needed to compute the exact figure
+   * failed, so the lot's whole requested size is reported instead. It can
+   * only over-state what is at risk, never under-state it.
+   *
+   * A flag rather than the caught error's text, deliberately — see the
+   * CREDENTIALS note below: this channel carries only fields chosen here.
+   * Without it an operator cannot tell an exact residual from an estimate,
+   * and a persistent store outage reads as a stream of confident alerts.
+   */
+  residual_qty_is_upper_bound: boolean;
   /** The price levels re-arming was attempted at — the lot's own, unchanged by the resize. */
   stop: number;
   target: number;

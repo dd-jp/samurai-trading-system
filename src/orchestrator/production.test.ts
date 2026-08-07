@@ -408,6 +408,21 @@ describe('buildProductionComponents', () => {
     },
   );
 
+  it.each([
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+  ])(
+    'refuses to build with mode "live" and a %s capital ceiling (#569 review) — the ' +
+      'hand-assembled-config caller this gate exists for can pass a failed parse just as ' +
+      'easily as omit the field, and `sizingEquity` would otherwise only refuse at the first ' +
+      'sizing of the first tick, with every store and wire client already open',
+    (_label, ceiling: number) => {
+      const config = stubConfig(db, { mode: 'live', capitalCeilingUsd: ceiling });
+
+      expect(() => buildProductionComponents(config)).toThrow(/capitalCeilingUsd/);
+    },
+  );
+
   it(
     "hooks Feedback Loop's onTradeClose off the returned executionStore's " +
       'writeClosedTrade (#237) — not off any TickSteps member',

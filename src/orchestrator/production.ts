@@ -386,13 +386,21 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // gate; the gate belongs here (#569), before anything below is
   // half-built, the same placement `assertAutomationLevelSupported` above
   // uses.
-  if (config.mode === 'live' && config.capitalCeilingUsd === undefined) {
+  // Not just `=== undefined` (#569 review): the caller this gate exists for
+  // is one assembling `ProductionConfig` by hand, and such a caller can as
+  // easily pass `NaN` — from a failed parse of an operator-supplied figure —
+  // as omit the field. `sizingEquity` does refuse a non-finite ceiling, so
+  // either way the run fails closed; but it refuses at the FIRST SIZING of
+  // the first tick, after the store, sockets and wire clients below are all
+  // open. Boot is the honest place to say a live config is unusable.
+  if (config.mode === 'live' && !Number.isFinite(config.capitalCeilingUsd)) {
     throw new Error(
-      'Orchestrator cannot start: mode "live" requires ProductionConfig.capitalCeilingUsd, and ' +
-        'it is not set. It is the ceiling every position size in a live run is derived from ' +
-        '(sizingEquity, production/direct-bind.ts) — build the config through ' +
-        'liveStartingProfile() rather than assembling ProductionConfig by hand, or set the field ' +
-        'explicitly. Refusing to size a live run off unclamped equity.',
+      'Orchestrator cannot start: mode "live" requires ProductionConfig.capitalCeilingUsd to be ' +
+        `a finite number, and it is ${String(config.capitalCeilingUsd)}. It is the ceiling ` +
+        'every position size in a live run is derived from (sizingEquity, ' +
+        'production/direct-bind.ts) — build the config through liveStartingProfile() rather ' +
+        'than assembling ProductionConfig by hand, or set the field explicitly. Refusing to ' +
+        'size a live run off unclamped equity.',
     );
   }
 

@@ -442,6 +442,9 @@ describe('ExecutionImpl.ingestFills', () => {
           instrument: 'AAPL',
           side: 'buy',
           residual_qty: 6,
+          // The re-arm failed, not the fill read — so 6 is the measured
+          // residual, not an upper bound.
+          residual_qty_is_upper_bound: false,
           stop: 95,
           target: 110,
           observed_at: NOW,

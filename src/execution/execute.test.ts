@@ -1478,6 +1478,9 @@ describe('ExecutionImpl.execute', () => {
                 instrument: 'AAPL',
                 side: 'buy',
                 residual_qty: 15,
+                // The fill read failed, so this is the lot's whole requested
+                // size, not the exact residual — and the alert says so.
+                residual_qty_is_upper_bound: true,
                 stop: 85,
                 target: 110,
                 observed_at: now,

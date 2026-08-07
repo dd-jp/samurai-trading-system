@@ -426,7 +426,13 @@ async function maybeRearmResidual(
       // turns `NaN` into `null`, and a `null` quantity is less legible
       // than an honest upper bound. Never rethrown: see this function's
       // "Never throws" doc above.
-      await alertResidualExposure(input, position, position.requested_size, now);
+      //
+      // Flagged as an upper bound rather than passed off as the exact
+      // residual (#569 review): without the flag a persistent store outage
+      // reads as a stream of confident alerts, and an operator cannot tell
+      // an estimate from a measurement. The caught error itself is not
+      // forwarded — see `ResidualExposureAlert`'s CREDENTIALS note.
+      await alertResidualExposure(input, position, position.requested_size, now, true);
       return;
     }
     filledSize = totalQty(recorded.filter((fill) => fill.leg === 'entry'));
@@ -488,6 +494,12 @@ async function alertResidualExposure(
   position: OpenPosition,
   residualQty: number,
   now: Date,
+  /**
+   * `true` only on the path where the fill read failed and `residualQty` is
+   * therefore the lot's whole requested size rather than the exact residual
+   * (#569 review). Defaulted so the two exact call sites read unchanged.
+   */
+  residualQtyIsUpperBound = false,
 ): Promise<void> {
   try {
     await input.residualExposureAlerts.postResidualExposureAlert({
@@ -495,6 +507,7 @@ async function alertResidualExposure(
       instrument: position.instrument,
       side: position.side,
       residual_qty: residualQty,
+      residual_qty_is_upper_bound: residualQtyIsUpperBound,
       stop: position.stop,
       target: position.target,
       observed_at: now,
