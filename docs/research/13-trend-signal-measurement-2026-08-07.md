@@ -81,6 +81,26 @@ The measured diversification figures stand on their own and are not affected by 
 | current (6) | 0.47 | 2.58 |
 | wide (12) | 0.28 | 4.60 |
 
+## Result 5 — under an *executable* gross cap, trend dominates the control
+
+The comparisons above ran either at gross cap 1.0 (unlevered headline) or uncapped (levered). Neither is what would actually be deployed. Re-run with a **gross cap of 1.5** — reachable with Reg T on the equity sleeve while Alpaca crypto stays 1x — and 6% financing:
+
+| vol target | Trend 63d | | | Control | | |
+|---|---|---|---|---|---|---|
+| | ret | Sharpe | maxDD | ret | Sharpe | maxDD |
+| 20% | 6.87% | 0.73 | −15.6% | 5.77% | 0.50 | −26.1% |
+| 30% | 7.12% | 0.64 | −20.6% | 5.91% | 0.44 | −32.9% |
+| 50% | 8.07% | 0.62 | −22.7% | 5.99% | 0.42 | −32.9% |
+| **80%** | **10.20%** | **0.71** | **−23.2%** | 6.18% | 0.41 | −34.0% |
+
+Trend wins on **both** return and drawdown at every setting, which it did not do uncapped. The mechanism is visible in the gross figures: trend goes flat in bad regimes and averages 1.22 gross at the 80% target, while the control must hold everything always, pins against the cap at 1.44, and absorbs the full drawdown.
+
+**Best executable configuration found: 10.20%/yr = 0.040%/day, Sharpe 0.71, max drawdown −23.2%, average gross 1.22.**
+
+**Caveat, and it is not small.** The vol-target and gross-cap settings in this section were explored *after* seeing the pre-registered results. They are **not** part of the 16-trial accounting below and are exposed to exactly the selection problem this report warns about elsewhere. They indicate where to look; they are not validated. Re-running them under PBO in `src/cost-model-backtest/` is required before any of these numbers is treated as an expectation.
+
+Note also that the −10.7% unlevered drawdown in Result 3 depends on the gross cap of 1.0 binding during the vol-targeter's over-levering episodes. Uncapped at the same vol target the figure is −24.6%. The cap is doing real risk work and is part of the strategy, not a formality.
+
 ## Trial accounting
 
 - **16 configurations**, pre-registered (4 lookbacks × 2 universes × 2 directions). No search, no tuning.
