@@ -3,6 +3,15 @@ name: AI Code Review (Nous Portal — DeepSeek + Kimi)
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  # Re-review any PR on demand, including a CLOSED or MERGED one — #591 was
+  # merged on a review that had read 37% of it and there was no way to ask for
+  # another look without pushing a commit to a merged branch (#594).
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review (works on merged/closed PRs)'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -11,6 +20,11 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-latest
+    # The diff is now reviewed in slices, so one reviewer can make up to
+    # MAX_SLICES model calls, each with its own 3-attempt retry budget and a
+    # 90s backoff. Without a ceiling a stuck endpoint would hold a runner for
+    # the 6h default.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -35,27 +49,86 @@ jobs:
             # rarer but does NOT fix it (#409 logged content_chars=0 and a
             # truncated 910-char body at this budget); review_lib.py now
             # retries an unusable response instead of posting the fragment.
-            max_tokens: "8192"
+            #
+            # 32768 (#594): on #591 this model spent all 8192 on reasoning and
+            # posted "no usable review in 3 attempts
+            # (finish_reason=length, content_chars=0)" — three rolls of the
+            # same loaded die, because the budget was structurally too small,
+            # not flaky. Two changes make 32768 the right number rather than
+            # just a bigger one: reasoning burn scales with INPUT size and the
+            # diff is now sliced to <=60k chars per call, so each call reasons
+            # over a fraction of what it used to; and 4x headroom leaves room
+            # for the answer text after the chain-of-thought instead of
+            # betting the whole budget on it. If Nous's endpoint refuses this
+            # value it returns 4xx, and review_lib._is_fatal_request_error
+            # re-raises rather than retrying — the job goes red with the
+            # provider's own error instead of degrading to a skipped reviewer.
+            max_tokens: "32768"
             inline_only: "true"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
 
-      - name: Get PR diff
+      - name: Resolve PR number
+        id: pr
+        env:
+          # Via env, never interpolated straight into the script: a dispatch
+          # input is attacker-controlled text as far as the shell is concerned.
+          PR_INPUT: ${{ inputs.pr_number }}
+          PR_EVENT: ${{ github.event.pull_request.number }}
         run: |
-          # NOT `--depth=1`. `checkout` above already fetched full history
-          # (`fetch-depth: 0`), and a shallow re-fetch of the base truncates it
-          # again — after which `...` (which needs a MERGE BASE, not just the
-          # two tips) fails with `fatal: origin/main...HEAD: no merge base` and
-          # the whole review job exits 128 in under ten seconds.
-          #
-          # It only bites on a branch that has been REBASED: before that, the
-          # shallow tip happens to be an ancestor of HEAD and the merge base is
-          # found by luck. Every rebase-onto-main — which is the normal way to
-          # clear a conflict — broke both reviewers until this line changed.
-          git fetch origin ${{ github.base_ref }}
-          git diff origin/${{ github.base_ref }}...HEAD > diff.txt
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            PR="$PR_INPUT"
+          else
+            PR="$PR_EVENT"
+          fi
+          case "$PR" in
+            ''|*[!0-9]*)
+              echo "::error::pr_number must be a positive integer, got '$PR'"
+              exit 1
+              ;;
+          esac
+          echo "number=$PR" >> "$GITHUB_OUTPUT"
+
+      - name: Get PR diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # `github.base_ref` is empty on a manual dispatch, and for a MERGED
+            # PR the base branch has moved past the fork point: diffing against
+            # origin/main would find the merge base AT the PR head and print an
+            # empty diff. Use the base SHA GitHub recorded on the PR itself.
+            BASE_SHA=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .base.sha)
+            git fetch origin "refs/pull/$PR_NUMBER/head:refs/remotes/origin/pr-$PR_NUMBER"
+            # fetch-depth: 0 usually has it already; fetch only if it doesn't,
+            # and let a genuine failure fail the step rather than `|| true`.
+            git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null || git fetch origin "$BASE_SHA"
+            git diff "$BASE_SHA...refs/remotes/origin/pr-$PR_NUMBER" > diff.txt
+          else
+            # NOT `--depth=1`. `checkout` above already fetched full history
+            # (`fetch-depth: 0`), and a shallow re-fetch of the base truncates
+            # it again — after which `...` (which needs a MERGE BASE, not just
+            # the two tips) fails with `fatal: origin/main...HEAD: no merge
+            # base` and the whole review job exits 128 in under ten seconds.
+            #
+            # It only bites on a branch that has been REBASED: before that, the
+            # shallow tip happens to be an ancestor of HEAD and the merge base
+            # is found by luck. Every rebase-onto-main — which is the normal way
+            # to clear a conflict — broke both reviewers until this line changed.
+            git fetch origin ${{ github.base_ref }}
+            git diff origin/${{ github.base_ref }}...HEAD > diff.txt
+          fi
+          echo "diff bytes: $(wc -c < diff.txt)"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ ! -s diff.txt ]; then
+            # A diff-resolution bug on a merged PR would otherwise post
+            # "_No diff detected — nothing to review._" and go green: the same
+            # shape of lie as the silent truncation this ticket fixes.
+            echo "::error::Resolved an empty diff for PR #$PR_NUMBER — refusing to post a review that would read as 'nothing to review'."
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -84,6 +157,11 @@ jobs:
 
       - name: Post review as ${{ matrix.reviewer }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          # A merged PR can't be gated by an approval, and GitHub is stricter
+          # about review events on a closed PR. Dispatch runs post as comments.
+          FORCE_COMMENT_EVENT: ${{ github.event_name == 'workflow_dispatch' }}
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -92,8 +170,9 @@ jobs:
             const base = {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: context.issue.number,
-              event: payload.event,
+              // NOT context.issue.number: it's undefined on workflow_dispatch.
+              pull_number: Number(process.env.PR_NUMBER),
+              event: process.env.FORCE_COMMENT_EVENT === 'true' ? 'COMMENT' : payload.event,
               body: payload.summary_markdown,
             };
 

@@ -3,10 +3,24 @@ import re
 import subprocess
 import sys
 import time
+from typing import Callable, NamedTuple
 
 from openai import OpenAI
 
-MAX_DIFF_CHARS = 60000
+# Per-CALL cap, not a per-PR cap. The diff used to be hard-truncated to this
+# many characters (`f.read()[:MAX_DIFF_CHARS]`) with nothing said about it:
+# #591's diff is 162 123 chars, so both reviewers read ~37% of it and one of
+# them posted APPROVE on the strength of that (#594). The diff is now SLICED
+# to this size and every slice is reviewed; anything that still can't be
+# covered is disclosed and blocks an APPROVE.
+MAX_SLICE_CHARS = 60000
+
+# Ceiling on model calls per reviewer per run: each slice is a separate call
+# with its own retry budget, so an unbounded count is an unbounded bill and an
+# unbounded runtime. Exceeding it is NOT a silent truncation — the leftover
+# files route through the same partial-coverage disclosure as any other
+# unreviewed content, which is what makes the cap safe to have at all.
+MAX_SLICES = 10
 
 # Nous's inference proxy has been observed hard-timing-out (Cloudflare 524,
 # "origin took too long to respond") on slower models like kimi-k3, well
@@ -169,6 +183,31 @@ def get_changed_files(base_ref: str | None) -> list[str]:
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
+_DIFF_GIT_HEADER = re.compile(r"^diff --git a/(.+?) b/(.+)$")
+
+
+def changed_files_from_diff(diff_text: str) -> list[str]:
+    """Changed-file list read straight out of the diff text.
+
+    Used when BASE_REF is absent — a `workflow_dispatch` run has no
+    `github.base_ref`, so `get_changed_files`' `origin/<base>...HEAD` range
+    doesn't exist and blast-radius classification would silently come back
+    empty. Parses `diff --git` headers rather than reusing
+    `commentable_lines`, which drops `/dev/null` targets and would therefore
+    hide deletions from the risk tiers."""
+    files: list[str] = []
+    for raw_line in diff_text.splitlines():
+        match = _DIFF_GIT_HEADER.match(raw_line)
+        if not match:
+            continue
+        # b/ side is the new path; for a deletion it repeats the old path,
+        # which is what we want in the classification either way.
+        path = match.group(2)
+        if path not in files:
+            files.append(path)
+    return files
+
+
 _HUNK_HEADER = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
@@ -209,6 +248,263 @@ def commentable_lines(diff_text: str) -> dict[str, set[int]]:
     return result
 
 
+class DiffSlice(NamedTuple):
+    text: str
+    files: tuple[str, ...]
+
+
+class SlicePlan(NamedTuple):
+    slices: list[DiffSlice]
+    #: Human-readable reasons for diff content that no slice covers. Non-empty
+    #: means the review CANNOT be presented as whole-PR (see ReviewCoverage).
+    skipped: list[str]
+
+
+class ReviewCoverage(NamedTuple):
+    slices_total: int
+    slices_reviewed: int
+    skipped: tuple[str, ...] = ()
+
+    @property
+    def is_complete(self) -> bool:
+        return not self.skipped and self.slices_reviewed >= self.slices_total
+
+    def disclosure(self) -> str:
+        """Markdown banner naming exactly what went unread. Empty when the
+        whole diff was reviewed."""
+        if self.is_complete:
+            return ""
+        lines = [
+            "> [!WARNING]",
+            "> **Partial review — this is NOT a whole-PR verdict.** Part of the diff was "
+            f"never read by this reviewer ({self.slices_reviewed}/{self.slices_total} "
+            "slices reviewed). Treat silence about the rest as absence of evidence, not "
+            "evidence of absence.",
+        ]
+        failed = self.slices_total - self.slices_reviewed
+        if failed > 0:
+            lines.append(f"> - {failed} diff slice(s) produced no usable review.")
+        lines.extend(f"> - {reason}" for reason in self.skipped)
+        lines.append("> - The verdict is capped below APPROVE while any of the diff is unread.")
+        return "\n".join(lines)
+
+
+def _split_file_block(header: str, hunks: list[str], max_chars: int) -> tuple[list[str], list[str]]:
+    """Split one file's diff into per-call chunks on HUNK boundaries.
+
+    Every chunk repeats the file header (`diff --git` / `---` / `+++`) so each
+    one is a valid, self-contained diff — `commentable_lines` and the model
+    both need the `+++ b/<path>` line to know what file they're looking at.
+    Never splits inside a hunk: a half-hunk has no `@@` anchor, so any comment
+    on it would be rejected by the line-anchoring filter downstream anyway.
+
+    Returns (chunks, skipped_reasons)."""
+    chunks: list[str] = []
+    skipped: list[str] = []
+    current = ""
+
+    for hunk in hunks:
+        if len(header) + len(hunk) > max_chars:
+            # A single hunk that doesn't fit even on its own. Sending it would
+            # mean silently cutting mid-hunk; skipping it is disclosed.
+            first_line = hunk.splitlines()[0] if hunk.splitlines() else "@@"
+            skipped.append(
+                f"hunk `{first_line.strip()}` is {len(hunk)} chars on its own "
+                f"(> {max_chars} cap) and could not be split further — NOT reviewed"
+            )
+            continue
+        if current and len(header) + len(current) + len(hunk) > max_chars:
+            chunks.append(header + current)
+            current = ""
+        current += hunk
+
+    if current:
+        chunks.append(header + current)
+    return chunks, skipped
+
+
+def split_diff_into_slices(
+    diff_text: str,
+    max_chars: int = MAX_SLICE_CHARS,
+    max_slices: int = MAX_SLICES,
+) -> SlicePlan:
+    """Slice a unified diff into per-call pieces, on file boundaries first and
+    hunk boundaries only when a single file is larger than the cap."""
+    if not diff_text.strip():
+        return SlicePlan(slices=[], skipped=[])
+
+    # Group the raw text into (path, header, hunks) per file.
+    blocks: list[tuple[str, str, list[str]]] = []
+    path = ""
+    header = ""
+    hunks: list[str] = []
+
+    def flush() -> None:
+        if header or hunks:
+            blocks.append((path or "<unknown>", header, list(hunks)))
+
+    for raw_line in diff_text.splitlines(keepends=True):
+        git_match = _DIFF_GIT_HEADER.match(raw_line.rstrip("\n"))
+        if git_match:
+            flush()
+            path, header, hunks = git_match.group(2), raw_line, []
+            continue
+        if _HUNK_HEADER.match(raw_line):
+            hunks.append(raw_line)
+            continue
+        if hunks:
+            hunks[-1] += raw_line
+        else:
+            header += raw_line
+    flush()
+
+    slices: list[DiffSlice] = []
+    skipped: list[str] = []
+    current_text = ""
+    current_files: list[str] = []
+
+    def close_slice() -> None:
+        nonlocal current_text, current_files
+        if current_text:
+            slices.append(DiffSlice(text=current_text, files=tuple(current_files)))
+        current_text, current_files = "", []
+
+    for file_path, file_header, file_hunks in blocks:
+        block_text = file_header + "".join(file_hunks)
+        if len(block_text) <= max_chars:
+            if current_text and len(current_text) + len(block_text) > max_chars:
+                close_slice()
+            current_text += block_text
+            current_files.append(file_path)
+            continue
+
+        # Oversized file: it gets its own slices, split on hunk boundaries.
+        close_slice()
+        chunks, chunk_skips = _split_file_block(file_header, file_hunks, max_chars)
+        skipped.extend(f"`{file_path}`: {reason}" for reason in chunk_skips)
+        for chunk in chunks:
+            slices.append(DiffSlice(text=chunk, files=(file_path,)))
+
+    close_slice()
+
+    if len(slices) > max_slices:
+        dropped = slices[max_slices:]
+        dropped_files = sorted({f for s in dropped for f in s.files})
+        skipped.append(
+            f"{len(dropped)} slice(s) over the {max_slices}-slice per-run cap were NOT "
+            f"reviewed, covering: {', '.join(f'`{f}`' for f in dropped_files)}"
+        )
+        slices = slices[:max_slices]
+
+    return SlicePlan(slices=slices, skipped=skipped)
+
+
+_VERDICT_SEVERITY = {"APPROVE": 0, "APPROVE_WITH_COMMENTS": 1, "REQUEST_CHANGES": 2}
+
+
+def merge_model_results(results: list[dict], slice_files: list[tuple[str, ...]]) -> dict:
+    """Fold one model result per slice into a single review.
+
+    Comments are concatenated and de-duplicated on (file, line, body) — the
+    same finding can legitimately surface in two slices when a file was split.
+    The verdict is the most severe across slices; a slice that produced no
+    usable verdict yields None, which `build_review_payload` refuses to treat
+    as an APPROVE."""
+    comments: list[dict] = []
+    seen: set[tuple] = set()
+    summaries: list[str] = []
+    severity = -1
+    any_unusable = False
+
+    for index, result in enumerate(results):
+        for comment in result.get("inline_comments") or []:
+            key = (comment.get("file"), comment.get("line"), comment.get("body"))
+            if key in seen:
+                continue
+            seen.add(key)
+            comments.append(comment)
+
+        summary = (result.get("summary_markdown") or "").strip()
+        if summary:
+            if len(results) > 1:
+                files = slice_files[index] if index < len(slice_files) else ()
+                # Named files, capped: a slice can hold a dozen paths and the
+                # heading would otherwise be longer than the review under it.
+                label = ", ".join(f"`{f}`" for f in files[:3]) or "(unknown files)"
+                if len(files) > 3:
+                    label += f" +{len(files) - 3} more"
+                summary = f"#### Slice {index + 1} of {len(results)} — {label}\n\n{summary}"
+            summaries.append(summary)
+
+        verdict = result.get("verdict")
+        if verdict is None:
+            any_unusable = True
+        else:
+            severity = max(severity, _VERDICT_SEVERITY[verdict])
+
+    merged_verdict = None
+    if not any_unusable and severity >= 0:
+        merged_verdict = next(k for k, v in _VERDICT_SEVERITY.items() if v == severity)
+
+    return {
+        "summary_markdown": "\n\n".join(summaries),
+        "inline_comments": comments,
+        "verdict": merged_verdict,
+    }
+
+
+def review_diff(
+    diff_text: str,
+    changed_files: list[str],
+    *,
+    call: Callable[..., dict] | None = None,
+    max_chars: int = MAX_SLICE_CHARS,
+    max_slices: int = MAX_SLICES,
+    **model_kwargs,
+) -> dict:
+    """Review a whole diff, in slices, and return the payload to post.
+
+    This is the entry point `run_review.py` calls; the orchestration lives here
+    rather than in the script so the tests in this directory actually exercise
+    the shipped path."""
+    call = call or call_model
+    plan = split_diff_into_slices(diff_text, max_chars=max_chars, max_slices=max_slices)
+
+    if not plan.slices:
+        return build_review_payload(
+            diff_text,
+            {
+                "summary_markdown": "_No diff detected — nothing to review._",
+                "inline_comments": [],
+                "verdict": None,
+            },
+            coverage=ReviewCoverage(0, 0, tuple(plan.skipped)),
+        )
+
+    results: list[dict] = []
+    reviewed = 0
+    for index, diff_slice in enumerate(plan.slices):
+        print(
+            f"info: reviewing slice {index + 1}/{len(plan.slices)} "
+            f"({len(diff_slice.text)} chars, {len(diff_slice.files)} file(s))",
+            file=sys.stderr,
+        )
+        result = call(diff=diff_slice.text, changed_files=changed_files, **model_kwargs)
+        results.append(result)
+        if result.get("verdict") is not None or result.get("inline_comments"):
+            reviewed += 1
+
+    merged = merge_model_results(results, [s.files for s in plan.slices])
+    coverage = ReviewCoverage(
+        slices_total=len(plan.slices),
+        slices_reviewed=reviewed,
+        skipped=tuple(plan.skipped),
+    )
+    # The FULL diff, not the slice: a comment is anchorable if the line is in
+    # any hunk of the PR, and the merged comments span every slice.
+    return build_review_payload(diff_text, merged, coverage=coverage)
+
+
 def parse_model_output(raw: str | None) -> dict | None:
     """Normalise a model response into the review dict, or return None when the
     output is unusable (empty, or truncated past the point of recovery).
@@ -241,6 +537,16 @@ def parse_model_output(raw: str | None) -> dict | None:
         parsed["verdict"] = None
 
     return parsed
+
+
+def _is_fatal_request_error(exc: BaseException) -> bool:
+    """True for provider responses that will never succeed on retry: any 4xx
+    except 429. Classified on the status code, not on a message match, so a
+    rejected `max_tokens` and a rejected model name are both caught."""
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+    return isinstance(status, int) and 400 <= status < 500 and status != 429
 
 
 def call_model(
@@ -324,6 +630,15 @@ def call_model(
                 f"unusable output (finish_reason={finish_reason}, content_chars={len(raw)})"
             )
         except Exception as exc:  # noqa: BLE001 - upstream 5xx/timeouts are common on this endpoint
+            # A 4xx is the provider REFUSING the request as sent — an over-cap
+            # max_tokens, a bad model name, a dead key. Retrying it three times
+            # and then posting "_this reviewer produced no usable review_"
+            # dresses a configuration fault up as a flaky endpoint, which is
+            # how #594's kimi budget stayed broken. Fail the job with the
+            # provider's own error instead. 429 stays in the retry loop: rate
+            # limiting IS transient.
+            if _is_fatal_request_error(exc):
+                raise
             last_exc = exc
 
         if attempt < TRANSIENT_MAX_ATTEMPTS - 1:
@@ -349,7 +664,9 @@ def call_model(
     return parsed
 
 
-def build_review_payload(diff_text: str, model_result: dict) -> dict:
+def build_review_payload(
+    diff_text: str, model_result: dict, coverage: ReviewCoverage | None = None
+) -> dict:
     valid_lines = commentable_lines(diff_text)
 
     accepted = []
@@ -375,6 +692,17 @@ def build_review_payload(diff_text: str, model_result: dict) -> dict:
 
     verdict = model_result["verdict"]
 
+    # Partial coverage downgrades the verdict BEFORE anything renders it, so
+    # the blank-summary fallback below can't quote a stale "Verdict: APPROVE".
+    # #594: `deepseek-review` posted APPROVED on #591 having read 37% of it,
+    # and nothing in the review said so — a silently-partial APPROVE is worse
+    # than no review, because it manufactures confidence exactly where a large
+    # change most needs scrutiny. This is the single choke point for that rule:
+    # every caller reaches it.
+    partial = coverage is not None and not coverage.is_complete
+    if partial and verdict == "APPROVE":
+        verdict = "APPROVE_WITH_COMMENTS"
+
     # The inline-only prompt forces summary_markdown to "", so a review whose
     # findings all anchor inline — or which found nothing — used to reach
     # GitHub as a zero-length body (#409: BODYLEN=0 rows on #396 and #404).
@@ -385,6 +713,11 @@ def build_review_payload(diff_text: str, model_result: dict) -> dict:
             f"_No prose summary from this reviewer (inline-only mode). "
             f"Verdict: **{verdict or 'none parsed'}**; {anchored} posted._"
         )
+
+    # The disclosure leads the body — buried at the bottom it would be read
+    # after the reader has already formed a view from the findings above it.
+    if partial:
+        summary = f"{coverage.disclosure()}\n\n{summary}".strip()
 
     if verdict == "APPROVE":
         event = "APPROVE"
