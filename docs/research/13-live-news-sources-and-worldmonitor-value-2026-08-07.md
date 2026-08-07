@@ -114,7 +114,7 @@ WorldMonitor's platform is **AGPL-3.0-only** (`LICENSE`: "Copyright (C) 2024-202
 
 | Path | Self-hosted behaviour | Evidence |
 |---|---|---|
-| **REST** (`wm_` API key) | **Works.** With the entitlement backend unconfigured (no Convex), `server/gateway.ts` logs `entitlement backend unconfigured … serving wm_-key request fail-open` and falls through — the request proceeds. | `server/gateway.ts` ~L1356–1400 |
+| **REST** (`wm_` API key) | **Works, both layers checked.** *Key validity:* a self-hosted instance mints its own keys via the `WORLDMONITOR_VALID_KEYS` env var (comma-separated); the docs state self-deployed instances don't need Convex for key validation, only for optional registration-email capture. *Entitlement/tier:* with the backend unconfigured, `server/gateway.ts` logs `entitlement backend unconfigured … serving wm_-key request fail-open` and falls through — the request proceeds. | `server/gateway.ts` ~L1195–1215 (`validateApiKey`) and ~L1356–1400 (entitlement branch); `docs/api-key-deployment.mdx` |
 | **MCP** | **Blocked.** `checkProMcpAccess` returns a `billing_verification` denial when `backendConfigured === false`. Fails closed. | `server/_shared/pro-mcp-gate.ts` ~L95–110 |
 | **CII scoring** | **Runs locally.** The scorer, weights and risk config are all in the open repo and read from local Redis cache keys populated by the seeders. | `server/worldmonitor/intelligence/v1/get-risk-scores.ts`, `shared/cii-weights.ts`, `_risk-config.ts` |
 
@@ -135,9 +135,14 @@ CII inputs, from the published methodology, against self-host key availability:
 | Information | 25% | Classified news headlines geo-attributed to country | WorldMonitor's own RSS fleet + LLM classification via free GROQ/OpenRouter keys ✅ |
 | Boosts | ≤ caps | Climate, cyber, fire, advisories, displacement, earthquakes, sanctions, AIS | Free ✅ |
 
-All eighteen Redis cache keys the scorer reads map to seeder scripts shipped in the repo (`seed-ucdp-events`, `seed-internet-outages`, `seed-military-cii`, `seed-security-advisories`, `seed-sanctions-pressure`, `seed-infra`, `seed-insights`, …), and `run-seeders.sh` runs the whole `seed-*.mjs` fleet.
+The scorer reads ~18 Redis cache keys. **8 were sampled; 7 map to seeder scripts shipped in the repo** (`seed-ucdp-events`, `seed-internet-outages`, `seed-military-cii`, `seed-security-advisories`, `seed-sanctions-pressure`, `seed-infra`, `seed-insights`). `run-seeders.sh` runs the whole `seed-*.mjs` fleet, so shipped-seeder coverage is the norm — but **the remaining 10 keys were not tested**, and this should not be read as full verification.
 
-**One genuine degradation:** Cloudflare Radar (internet-outage data) is the only paid input, feeding part of the 25%-weight Unrest component. A self-hosted CII would be *slightly thinner* than the hosted one — bounded and identifiable, not a different index.
+**Two bounded degradations, one unresolved:**
+
+- *Paid input:* Cloudflare Radar (internet-outage data) is the only paid dependency, feeding part of the 25%-weight Unrest component.
+- *Unlocated writer:* `news:threat:summary:v1` had no seeder found — it appears only in `api/health.js`, `_dimension-freshness.ts`, proto and tests. Its writer was not identified. Note the main input to the 25%-weight Information component (`news:insights:v1`) **does** have a seeder, so this is a secondary signal, not the component itself.
+
+A self-hosted CII would therefore be *slightly thinner* than the hosted one — bounded and identifiable, not a different index. Confirming the untested 10 keys is a prerequisite if we ever adopt this.
 
 **This corrects the record.** The parked-decision memory claims reproducing CII would need "60+ data subscriptions." It would not: the self-host dependency list is ~10 providers, all free-registration except Cloudflare Radar.
 
