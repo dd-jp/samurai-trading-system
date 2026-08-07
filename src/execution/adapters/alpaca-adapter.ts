@@ -370,6 +370,18 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     });
   }
 
+  /**
+   * VERIFIED 2026-08-07 against live Alpaca paper: crypto rejects
+   * `order_class: 'bracket'` outright — `422 {"code":42210000,"message":
+   * "crypto orders not allowed for advanced order_class: otoco"}`. Also
+   * confirmed: `order.instrument` reaches Alpaca unconverted
+   * (`DEFAULT_UNIVERSE`'s `BTC-USD`, not the `BTC/USD` the trading API
+   * wants), which alone fails first with `422 {"message":"asset \"BTC-USD\"
+   * not found"}` — before the order-class rejection is ever reached. No
+   * crypto bracket entry can succeed today; either defect alone is fatal.
+   * Full probe transcript: #550. Symbol-conversion fix: #585. Order-class
+   * fix: #586.
+   */
   async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
     const response = await this.call('submitBracket', () =>
       this.input.client.submitOrder({
@@ -511,16 +523,16 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * bracket"), but this row is not merely inert either — #548 tracks
    * whether that makes it a usable restart-recovery hook.
    *
-   * NOT verified against a live paper account: this mirrors Alpaca's
-   * documented OCO shape without having exercised it against the real API.
-   * Also unverified for crypto specifically — Alpaca's OCO/bracket order
-   * classes are widely reported unsupported for crypto symbols, a
-   * PRE-EXISTING condition `submitBracket` above already has for the same
-   * reason (this repo's MVP universe includes BTC-USD/ETH-USD on Alpaca).
-   * Either way this call throws on rejection, same as any other, and
-   * `ingestFills()`'s catch turns that into the #525 fallback alert — the
-   * decision's own fail-toward-visibility posture holds even where OCO
-   * genuinely cannot be placed.
+   * VERIFIED 2026-08-07 against live Alpaca paper, two stacked defects: (1)
+   * this method's own wire shape (top-level `limit_price` for take-profit)
+   * is rejected for EVERY asset class — `422 {"code":40010001,"message":"oco
+   * orders require take_profit.limit_price"}` on both `BTC/USD` and `SPY`;
+   * (2) with the shape corrected, crypto is separately rejected at the
+   * order-class level — `422 {"code":42210000,"message":"crypto orders not
+   * allowed for advanced order_class: oco"}` — while the equity control
+   * passes that check. A crypto (and, until #1 is fixed, equity) residual
+   * is alert-only today, never re-armed. Full probe transcript: #550.
+   * Wire-shape + order-class fix: #586.
    */
   async rearmProtectiveLegs(
     clientOrderId: string,
