@@ -64,7 +64,7 @@ function build(
     fail?: boolean;
     /** Defaults `true` so existing tests exercise real, trusted retrieval. */
     retrievalEvidence?: boolean;
-    /** Defaults to one item per call; pass `[]` for the empty-answer shape. */
+    /** Defaults to one item per call; pass `() => []` for the empty-answer shape. */
     items?: (fetchIndex: number) => IntelligenceItem[];
     logger?: Logger;
   } = {},
