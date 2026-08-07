@@ -48,6 +48,9 @@ function healthyExitPath(overrides: Partial<ExitPathEvidence> = {}): ExitPathEvi
   return {
     brokerCallSequence: ['cancel:lot-1', 'submitFlatten:lot-1-exit'],
     residualAlerts: [],
+    // Matches `transactedObservations()`'s 'idem-exit-1' position (closed) —
+    // the fixture pairing the scoped #508/#517 check reads.
+    fullExit: { lotKey: 'idem-exit-1' },
     partialFlatten: { idempotencyKey: 'lot-partial', expectedResidual: 0, protectedQty: 0 },
     twoLotFlatten: { lotKeys: [] },
     ...overrides,
@@ -82,6 +85,18 @@ function transactedObservations(): SmokeObservations {
         filled_size: 31.25,
         avg_entry_price: 161,
         order_state: 'filled',
+      },
+      // #576: scenario 1's closed lot — paired with `healthyExitPath()`'s
+      // `fullExit.lotKey` default and the `closedTrades`/`flattenSubmissions`
+      // rows above, all keyed on the same 'idem-exit-1'.
+      {
+        idempotency_key: 'idem-exit-1',
+        instrument: 'ETH-USD',
+        side: 'buy',
+        requested_size: 10,
+        filled_size: 10,
+        avg_entry_price: 160,
+        order_state: 'closed',
       },
     ],
     fills: [{ idempotency_key: 'idem-1', leg: 'entry', price: 161, qty: 31.25, fee: 13 }],
@@ -664,13 +679,14 @@ describe('runSmoke (end-to-end, real composition root)', () => {
     const gate = evaluateSmokeGate(observations, healthyGateOptions({ minTicks: 1 }));
 
     expect(gate.passed).toBe(false);
-    // Eight since #430 added the seeded-mechanism checks, plus two since #576
-    // made `closed_trades`/`flatten_submissions` unconditional requirements:
-    // an empty database is a run where nothing was wired at all, so it fails
-    // those too. `exitPath` itself is healthy here (see `healthyGateOptions`),
-    // so none of the exit-path-SPECIFIC checks (ordering, residual, phantom-
-    // open) add to this count — this test is about the STORE being empty.
-    expect(gate.failures).toHaveLength(10);
+    // Eight since #430 added the seeded-mechanism checks, plus three since
+    // #576 made `closed_trades`/`flatten_submissions` unconditional
+    // requirements AND scoped the #508/#517 check to scenario 1's own lot:
+    // an empty `positions` table means that lookup finds nothing either. Every
+    // other exit-path-SPECIFIC check (ordering, residual, phantom-open) stays
+    // healthy (see `healthyGateOptions`) — this test is about the STORE being
+    // empty, not about the exit path.
+    expect(gate.failures).toHaveLength(11);
     expect(gate.failures.some((failure) => failure.includes('no tick got past Analysts'))).toBe(
       true,
     );
@@ -678,6 +694,7 @@ describe('runSmoke (end-to-end, real composition root)', () => {
     expect(gate.failures.some((failure) => failure.includes('reached Execution'))).toBe(true);
     expect(gate.failures.some((failure) => failure.includes('open_positions'))).toBe(true);
     expect(gate.failures.some((failure) => failure.includes('ingestFills'))).toBe(true);
+    expect(gate.failures.some((failure) => failure.includes('#508/#517'))).toBe(true);
     expect(gate.failures.some((failure) => failure.includes('no row in closed_trades'))).toBe(true);
     expect(gate.failures.some((failure) => failure.includes('no row in flatten_submissions'))).toBe(
       true,
@@ -784,6 +801,34 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
     expect(gate.failures.some((failure) => failure.includes('no row in flatten_submissions'))).toBe(
       true,
     );
+  });
+
+  /**
+   * The gap an aggregate-only `closed_trades.length === 0` check would miss:
+   * scenario 3 alone closes two lots, so a regression confined to scenario
+   * 1 (e.g. a reintroduced #517 fill-misattribution on its instrument)
+   * would leave `closedTrades` nonzero and the aggregate check green. The
+   * `fullExit` evidence is scoped to scenario 1's own lot for exactly this
+   * reason — mirroring the #571 check's per-lot scoping below.
+   */
+  it("fails when scenario 1's own lot never closed, even though other lots did (#508/#517)", () => {
+    const observations = {
+      ...transactedObservations(),
+      // 'idem-exit-1' (scenario 1's lot) regresses to 'partially_filled';
+      // 'idem-1' is untouched and `closedTrades` still carries its one row
+      // from a DIFFERENT scenario — the aggregate signal alone would pass.
+      positions: transactedObservations().positions.map((position) =>
+        position.idempotency_key === 'idem-exit-1'
+          ? { ...position, order_state: 'partially_filled' }
+          : position,
+      ),
+    };
+
+    const gate = evaluateSmokeGate(observations, healthyGateOptions());
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('idem-exit-1'))).toBe(true);
+    expect(gate.failures.some((failure) => failure.includes('#508/#517'))).toBe(true);
   });
 
   it("fails when a flatten_submissions row never resolved to 'submitted'", () => {

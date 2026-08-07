@@ -24,6 +24,20 @@
  * composition-root level rather than the tick-runner level; see
  * `smoke-run.test.ts`.
  *
+ * ## The exit path (#576)
+ *
+ * The six-stage assertion above only ever exercises ENTRY — nothing about a
+ * fixed bullish fixture makes the pipeline reach an `exit` intent honestly.
+ * Six merged fixes (#508/#516/#517/#525/#568/#571) live entirely in
+ * `Execution`'s exit path, downstream of that intent, and this gate could
+ * pass with every one of them regressed. `runExitPathScenarios` closes that
+ * gap by composing `ExecutionImpl` directly (via the same production binding
+ * helper the tick loop itself uses) and driving three scenarios — a full
+ * exit, a partial flatten, and a two-lot flatten — against a deterministic
+ * offline broker. See that function's own doc for why it does not go through
+ * `startFromEnvironment`, and `evaluateSmokeGate`'s "The exit path" section
+ * for what it now requires.
+ *
  * ## What this is for
  *
  * Before #350 there was no way to run the pipeline **as a process** without
@@ -500,6 +514,14 @@ export class ExitPathBrokerAdapter implements BrokerAdapter {
   readonly callSequence: string[] = [];
   private readonly partialFlattenFraction = new Map<string, number>();
 
+  /**
+   * `delegate` is deliberately typed as the concrete `SimulatedBrokerAdapter`,
+   * not the `BrokerAdapter` interface: `getProtectedQty` below is not part of
+   * that interface, and this class's only caller (`runExitPathScenarios`)
+   * needs it to read back scenario 2's residual. Widening this parameter to
+   * `BrokerAdapter` would compile but break `getProtectedQty` silently at the
+   * one call site that matters.
+   */
   constructor(private readonly delegate: SimulatedBrokerAdapter) {}
 
   /** Opts `clientOrderId`'s flatten into a truncated fill — see the class docs. */
@@ -507,8 +529,13 @@ export class ExitPathBrokerAdapter implements BrokerAdapter {
     this.partialFlattenFraction.set(clientOrderId, fraction);
   }
 
+  /** Appends `action:clientOrderId` to `callSequence` — the one thing every recorded call shares. */
+  private record(action: string, clientOrderId: string): void {
+    this.callSequence.push(`${action}:${clientOrderId}`);
+  }
+
   async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
-    this.callSequence.push(`submitBracket:${order.client_order_id}`);
+    this.record('submitBracket', order.client_order_id);
     return this.delegate.submitBracket(order);
   }
 
@@ -534,7 +561,7 @@ export class ExitPathBrokerAdapter implements BrokerAdapter {
   }
 
   async resizeProtectiveLegs(clientOrderId: string, filledQty: number): Promise<void> {
-    this.callSequence.push(`resizeProtectiveLegs:${clientOrderId}`);
+    this.record('resizeProtectiveLegs', clientOrderId);
     return this.delegate.resizeProtectiveLegs(clientOrderId, filledQty);
   }
 
@@ -546,7 +573,7 @@ export class ExitPathBrokerAdapter implements BrokerAdapter {
     stop: number,
     target: number,
   ): Promise<void> {
-    this.callSequence.push(`rearmProtectiveLegs:${clientOrderId}`);
+    this.record('rearmProtectiveLegs', clientOrderId);
     return this.delegate.rearmProtectiveLegs(clientOrderId, instrument, side, qty, stop, target);
   }
 
@@ -556,12 +583,12 @@ export class ExitPathBrokerAdapter implements BrokerAdapter {
     size: number,
     clientOrderId: string,
   ): Promise<BrokerAck> {
-    this.callSequence.push(`submitFlatten:${clientOrderId}`);
+    this.record('submitFlatten', clientOrderId);
     return this.delegate.submitFlatten(instrument, side, size, clientOrderId);
   }
 
   async cancel(clientOrderId: string, instrument: string): Promise<void> {
-    this.callSequence.push(`cancel:${clientOrderId}`);
+    this.record('cancel', clientOrderId);
     return this.delegate.cancel(clientOrderId, instrument);
   }
 
@@ -648,6 +675,16 @@ export interface ExitPathEvidence {
   brokerCallSequence: readonly string[];
   /** Every residual-exposure alert posted anywhere during the run (harness + tick loop). */
   residualAlerts: readonly ResidualExposureAlert[];
+  /**
+   * Scenario 1's lot (#508/#517): named so the gate can check THIS lot
+   * specifically reached `closed`, not merely that the aggregate
+   * `closed_trades` count is nonzero. Scoped for the same reason the #571
+   * check below is scoped to its own two lots — an aggregate-only check
+   * would keep passing if scenario 1 alone regressed (e.g. a reintroduced
+   * #517 misattribution on ETH-USD) as long as scenario 3 still closed its
+   * two lots, since the aggregate count would stay nonzero either way.
+   */
+  fullExit: { lotKey: string };
   /** Scenario 2's residual (#525): what was expected vs. what the broker actually protected. */
   partialFlatten: {
     idempotencyKey: string;
@@ -847,6 +884,7 @@ async function runExitPathScenarios(input: {
   return {
     brokerCallSequence: broker.callSequence,
     residualAlerts: residualAlerts.alerts,
+    fullExit: { lotKey: lot1 },
     partialFlatten: {
       idempotencyKey: lot2,
       expectedResidual: scenario2ExpectedResidual,
@@ -1291,12 +1329,19 @@ export function evaluateSmokeGate(
 
   // #516 — ORDERING, not merely that both calls happened: every `submitFlatten`
   // must have a `cancel` recorded FRESH since the previous `submitFlatten` (or
-  // the start of the run) — not merely "somewhere earlier in the sequence",
-  // which would let one correctly-ordered flatten's cancel paper over a LATER
-  // flatten's own missing one. A resting bracket leg cancelled after the
-  // flatten (or never) can fire into the now-flat position and open a reverse
-  // one — this is `executeExit`'s per-call invariant, so the check is scoped
-  // per call too.
+  // the start of the run), not merely "somewhere earlier in the sequence" —
+  // that weaker form would report the FIRST flatten's own missing cancel and
+  // then stop, because every later flatten's window contains SOME earlier
+  // cancel and (wrongly) reads as satisfied.
+  //
+  // What this window scoping does NOT do: verify the cancel it finds belongs
+  // to the SAME lot the flatten is closing. A resting bracket leg cancelled
+  // after the flatten (or never) can fire into the now-flat position and open
+  // a reverse one, and this check catches that for the FIRST flatten a
+  // regression touches — sufficient in practice because `executeExit` cancels
+  // and flattens through one uniform code path applied to every exit, so a
+  // real regression of #516's ordering shows up on the first flatten, not
+  // selectively on a later one.
   const { brokerCallSequence } = options.exitPath;
   let sincePreviousFlatten = 0;
   const flattensWithoutPriorCancel: string[] = [];
@@ -1331,6 +1376,25 @@ export function evaluateSmokeGate(
       'no row in closed_trades — the exit-path scenarios never round-tripped a lot to flat, so ' +
         "either a flatten's fill was never attributed back to the lot it closed (#517) or " +
         'ingestFills() never reached its round-trip-to-flat branch at all',
+    );
+  }
+
+  // Scoped to scenario 1's OWN lot, not just the aggregate above: scenario 3
+  // alone closes two lots, so an aggregate-only check stays green if
+  // scenario 1 regresses in isolation (e.g. a reintroduced #517
+  // misattribution confined to its instrument) while scenario 3 still
+  // closes normally. Same pattern the #571 check below uses for its own lots.
+  const fullExitLot = positions.find(
+    (position) => position.idempotency_key === options.exitPath.fullExit.lotKey,
+  );
+  if (fullExitLot === undefined || fullExitLot.order_state !== 'closed') {
+    failures.push(
+      `lot '${options.exitPath.fullExit.lotKey}' (scenario 1's full exit) never reached ` +
+        `order_state 'closed' (${
+          fullExitLot === undefined
+            ? 'no row in open_positions'
+            : `state=${fullExitLot.order_state}`
+        }) — the #508/#517 exit path did not round-trip it to flat`,
     );
   }
 
@@ -1629,6 +1693,10 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       loosenApprovals: new LoggingLoosenApprovalChannel(logger),
       analystSkipAlerts: new LoggingAnalystSkipAlertChannel(logger),
       // #576: recorded, not just logged — see `tickLoopResidualAlerts` above.
+      // NOT an `ALERT_CHANNEL_FIELDS` member (alert-transport.ts) — the
+      // "seventh channel" comment immediately below is about `verdictAlerts`
+      // specifically, and this field's presence or absence has no effect on
+      // `resolveAlertsMode`'s exemption logic.
       residualExposureAlerts: tickLoopResidualAlerts,
       // #465 — the seventh channel. `resolveAlertsMode` exempts a caller that
       // supplies EVERY field in `ALERT_CHANNEL_FIELDS` from needing
