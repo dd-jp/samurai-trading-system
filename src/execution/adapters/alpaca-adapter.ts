@@ -132,32 +132,11 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   /** client_order_id -> the bracket parent's Alpaca order id. */
   private readonly brackets = new Map<string, string>();
   /**
-   * client_order_id -> the flatten's own Alpaca order id (#517). A SEPARATE
-   * map from `brackets`, not a reuse of it: a flatten is never a bracket
-   * (`submitFlatten`'s own docstring), and folding it in would make
-   * `fetchNewFills`'s bracket loop below fetch `entry.legs` for an order that
-   * has none.
-   *
-   * In-memory only, unlike `brackets` — which the constructor warms from
-   * `this.state.loadBrackets('alpaca')` because a bracket can legitimately
-   * still be waiting on a stop/target fill days after a restart. A flatten is
-   * a plain IOC market order: by the time this process could poll it again,
-   * the venue has already resolved it one way or another, so the ONLY window
-   * this not surviving a restart costs is the narrow one between
-   * `submitFlatten` returning and the next `fetchNewFills` sweep landing.
-   * That window is real and NOT closed by this ticket — a crash inside it
-   * strands the flatten's fill unattributed exactly as it is today, and
-   * resolving it needs `reconcile()` to learn about `flatten_submissions`
-   * rows, which is filed as a follow-up rather than built here (mirroring
-   * `executeExit`'s own note in execute.ts that a lost `submitFlatten`
-   * response is "left for reconcile to resolve later" even though reconcile
-   * does not yet do that either).
-   *
-   * Never removed once a flatten resolves — deliberately symmetric with
-   * `brackets`, which is likewise never pruned after a bracket goes terminal
-   * (only `cancel()` removes an entry from either map). A closed flatten
-   * costs one extra `getOrder` call per sweep for the rest of the process's
-   * life, the same standing cost a filled-and-closed bracket already has.
+   * client_order_id -> the flatten's own Alpaca order id (#517), tracked
+   * in-memory only (#526 tracks making it durable) — see `fetchNewFills`'s
+   * "flatten sweep" comment for the full rationale: why this is a SEPARATE
+   * map from `brackets`, why in-memory is an accepted gap rather than an
+   * oversight, and why entries are never removed.
    */
   private readonly flattens = new Map<string, string>();
   /**
@@ -252,8 +231,8 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * tracked in the in-memory `flattens` map below (#517) — without that,
    * `fetchNewFills` has no way to learn this order exists at all, since it
    * only ever polls `brackets`/`flattens`, never the venue's full order list.
-   * See `flattens`' own doc comment for why in-memory is the right amount of
-   * durability here.
+   * See `fetchNewFills`'s "flatten sweep" comment for why in-memory is the
+   * right amount of durability here.
    */
   async submitFlatten(
     instrument: string,
@@ -509,11 +488,34 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
     // The flatten sweep (#517) — structurally the bracket loop above with
     // `entry.legs` dropped (a flatten has none) and `leg: 'exit'` fixed
-    // rather than derived per-leg. Kept as its own loop rather than folded
-    // into the one above: the two worklists (`brackets`/`flattens`) are
-    // maintained separately (see `flattens`' doc comment for why), and
-    // merging the loops would mean merging the maps first for no real
-    // simplification.
+    // rather than derived per-leg. Kept as its own loop, over its own
+    // `flattens` map, rather than folded into the one above: a flatten is
+    // never a bracket (`submitFlatten`'s own docstring), and merging the
+    // maps would make the loop above fetch `entry.legs` for an order that
+    // has none.
+    //
+    // `flattens` IS IN-MEMORY ONLY, unlike `brackets` (which the constructor
+    // warms from `this.state.loadBrackets('alpaca')`, because a bracket can
+    // legitimately still be waiting on a stop/target fill days after a
+    // restart). A flatten is a plain IOC market order: by the time this
+    // process could poll it again, the venue has already resolved it one way
+    // or another, so the ONLY window not surviving a restart costs is the
+    // narrow one between `submitFlatten` returning and this sweep next
+    // running. That window is real and NOT closed here: a crash inside it
+    // strands the flatten's fill unattributed exactly as it was before #517,
+    // and this loop never even attempts the order, because it was never
+    // added to `flattens` in the first place. Closing it needs `reconcile()`
+    // to learn about `flatten_submissions` rows — tracked as #526 rather
+    // than built here, mirroring `executeExit`'s own note in execute.ts that
+    // a lost `submitFlatten` response is "left for reconcile to resolve
+    // later" even though reconcile does not yet do that either.
+    //
+    // Entries are never removed once a flatten resolves — deliberately
+    // symmetric with `brackets`, which is likewise never pruned after a
+    // bracket goes terminal (only `cancel()` removes an entry from either
+    // map). A closed flatten costs one extra `getOrder` call per sweep for
+    // the rest of the process's life, the same standing cost a
+    // filled-and-closed bracket already has.
     let flattenFailures = 0;
     for (const [clientOrderId, orderId] of [...this.flattens]) {
       try {

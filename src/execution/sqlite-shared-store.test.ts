@@ -41,6 +41,21 @@ function makeFill(overrides: Partial<Fill> = {}): Fill {
   };
 }
 
+function makeFlattenWriteAhead(
+  overrides: Partial<Parameters<SqliteExecutionStore['writeAheadFlatten']>[0]> = {},
+): Parameters<SqliteExecutionStore['writeAheadFlatten']>[0] {
+  return {
+    idempotency_key: 'flatten-1',
+    instrument: 'AAPL',
+    asset_class: 'stocks',
+    side: 'sell',
+    size: 25,
+    submitted_at: OPENED_AT,
+    lot_idempotency_keys: ['key-lot-1', 'key-lot-2'],
+    ...overrides,
+  };
+}
+
 function makeClosedTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {
   return {
     idempotency_key: 'key-1',
@@ -337,21 +352,6 @@ describe('SqliteExecutionStore', () => {
   });
 
   describe('writeAheadFlatten / getFlattenLotKeys (#517)', () => {
-    function makeFlattenWriteAhead(
-      overrides: Partial<Parameters<SqliteExecutionStore['writeAheadFlatten']>[0]> = {},
-    ): Parameters<SqliteExecutionStore['writeAheadFlatten']>[0] {
-      return {
-        idempotency_key: 'flatten-1',
-        instrument: 'AAPL',
-        asset_class: 'stocks',
-        side: 'sell',
-        size: 25,
-        submitted_at: OPENED_AT,
-        lot_idempotency_keys: ['key-lot-1', 'key-lot-2'],
-        ...overrides,
-      };
-    }
-
     it('round-trips the lot identity through the journal, in the order it was written', async () => {
       const { store } = makeStore();
 
@@ -377,6 +377,119 @@ describe('SqliteExecutionStore', () => {
       ).run('flatten-legacy');
 
       expect(await store.getFlattenLotKeys('flatten-legacy')).toBeNull();
+    });
+  });
+
+  // Review feedback on #524 (kimi): the same unvalidated-cast defect class
+  // #509 closed repo-wide, freshly reintroduced by #517 if left unguarded.
+  describe('getFlattenLotKeys — corrupted rows (#524 review)', () => {
+    it('throws, naming the idempotency_key, when the stored value is not valid JSON', async () => {
+      const { db, store } = makeStore();
+      await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-corrupt' }));
+      db.prepare(
+        'UPDATE flatten_submissions SET lot_idempotency_keys = ? WHERE idempotency_key = ?',
+      ).run('{not json', 'flatten-corrupt');
+
+      await expect(store.getFlattenLotKeys('flatten-corrupt')).rejects.toThrow(
+        /flatten-corrupt' is not valid JSON/,
+      );
+    });
+
+    it('throws, naming the idempotency_key, when the stored JSON is not an array of strings', async () => {
+      const { db, store } = makeStore();
+      await store.writeAheadFlatten(
+        makeFlattenWriteAhead({ idempotency_key: 'flatten-wrong-shape' }),
+      );
+      db.prepare(
+        'UPDATE flatten_submissions SET lot_idempotency_keys = ? WHERE idempotency_key = ?',
+      ).run(JSON.stringify({ not: 'an array' }), 'flatten-wrong-shape');
+
+      await expect(store.getFlattenLotKeys('flatten-wrong-shape')).rejects.toThrow(
+        /flatten-wrong-shape' is not a JSON array of strings/,
+      );
+    });
+
+    it('throws for an array containing a non-string entry', async () => {
+      const { db, store } = makeStore();
+      await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-mixed' }));
+      db.prepare(
+        'UPDATE flatten_submissions SET lot_idempotency_keys = ? WHERE idempotency_key = ?',
+      ).run(JSON.stringify(['key-1', 42]), 'flatten-mixed');
+
+      await expect(store.getFlattenLotKeys('flatten-mixed')).rejects.toThrow('flatten-mixed');
+    });
+
+    // The error must name the corrupt row so the failure is diagnosable at
+    // the source — but never quote the corrupted value itself: since #507 an
+    // uncaught throw here is durably recorded to `audit_log`, and the raw
+    // column content is untrusted in exactly the way that record must not
+    // carry.
+    it('never quotes the corrupted raw value in the thrown error', async () => {
+      const { db, store } = makeStore();
+      await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-secret' }));
+      const poison = '{"leaked-marker-xyz": true';
+      db.prepare(
+        'UPDATE flatten_submissions SET lot_idempotency_keys = ? WHERE idempotency_key = ?',
+      ).run(poison, 'flatten-secret');
+
+      await expect(store.getFlattenLotKeys('flatten-secret')).rejects.not.toThrow(
+        /leaked-marker-xyz/,
+      );
+    });
+  });
+
+  describe('getEntryFillSizes (#524 review — batch read, replacing one getFills call per lot)', () => {
+    it("sums each named lot's entry fills in one call, omitting a lot with none", async () => {
+      const { store } = makeStore();
+      await store.writeAheadPosition(makePosition({ idempotency_key: 'key-lot-1' }));
+      await store.writeAheadPosition(makePosition({ idempotency_key: 'key-lot-2' }));
+      await store.applyLotAdvance({
+        idempotency_key: 'key-lot-1',
+        fills: [
+          makeFill({ idempotency_key: 'key-lot-1', broker_fill_id: 'e1', leg: 'entry', qty: 4 }),
+          makeFill({ idempotency_key: 'key-lot-1', broker_fill_id: 'e2', leg: 'entry', qty: 6 }),
+        ],
+      });
+      await store.applyLotAdvance({
+        idempotency_key: 'key-lot-2',
+        fills: [
+          makeFill({ idempotency_key: 'key-lot-2', broker_fill_id: 'e3', leg: 'entry', qty: 15 }),
+        ],
+      });
+
+      const sizes = await store.getEntryFillSizes([
+        'key-lot-1',
+        'key-lot-2',
+        'key-lot-never-filled',
+      ]);
+
+      expect(sizes.get('key-lot-1')).toBe(10);
+      expect(sizes.get('key-lot-2')).toBe(15);
+      // Absent, not present at 0 — mirrors `DashboardQueryStore.getMarks`'
+      // own "missing is absent" answer, the shape this method follows.
+      expect(sizes.has('key-lot-never-filled')).toBe(false);
+    });
+
+    it('excludes exit-leg fills from the sum', async () => {
+      const { store } = makeStore();
+      await store.writeAheadPosition(makePosition({ idempotency_key: 'key-lot-1' }));
+      await store.applyLotAdvance({
+        idempotency_key: 'key-lot-1',
+        fills: [
+          makeFill({ idempotency_key: 'key-lot-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+          makeFill({ idempotency_key: 'key-lot-1', broker_fill_id: 'x1', leg: 'exit', qty: 4 }),
+        ],
+      });
+
+      const sizes = await store.getEntryFillSizes(['key-lot-1']);
+
+      expect(sizes.get('key-lot-1')).toBe(10);
+    });
+
+    it('returns an empty Map for an empty key list', async () => {
+      const { store } = makeStore();
+
+      expect(await store.getEntryFillSizes([])).toEqual(new Map());
     });
   });
 });

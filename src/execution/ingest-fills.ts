@@ -154,14 +154,22 @@ async function redistributeFlattenFills(
     // whether it has since closed, yields the IDENTICAL split every time.
     // That is what lets a poll dedupe cleanly on `broker_fill_id` instead of
     // needing to reconstruct "how much of this fill did lot X already get".
-    const totalShare = new Map<string, number>();
-    for (const lotKey of lotKeys) {
-      const priorFills = await store.getFills(lotKey);
-      const entryQty = priorFills
-        .filter((fill) => fill.leg === 'entry')
-        .reduce((sum, fill) => sum + fill.qty, 0);
-      totalShare.set(lotKey, entryQty);
-    }
+    //
+    // Read as ONE batch, not one `getFills` round-trip per lot: `ingestFills`
+    // runs on every tick, and a multi-scale-in exit can name many lots in
+    // `lotKeys`, so a per-lot loop of store calls would scale the sweep's
+    // I/O with the exit's lot count instead of staying flat. Shape follows
+    // `DashboardQueryStore.getMarks`' precedent (dashboard/sqlite-query-store.ts)
+    // — one `WHERE ... IN (...)` query, a `Map` back, a lot with no
+    // persisted entry fill simply absent from it rather than present at 0.
+    // This reads only what a PRIOR poll already persisted; it has nothing to
+    // do with, and does not touch, `advanceLot`'s `fill.timestamp <= now`
+    // no-lookahead filter below, which governs THIS poll's fresh fills off
+    // the broker feed instead.
+    const entrySizes = await store.getEntryFillSizes(lotKeys);
+    const totalShare = new Map<string, number>(
+      lotKeys.map((lotKey) => [lotKey, entrySizes.get(lotKey) ?? 0]),
+    );
 
     // Processed in the feed's own order, decrementing an IN-MEMORY copy of
     // `totalShare` across `rawFills` — a flatten is modelled/observed as one

@@ -60,6 +60,16 @@ export interface SharedStore {
    */
   getFills(idempotency_key: string): Promise<Fill[]>;
   /**
+   * Each named lot's persisted ENTRY fill quantity, summed — the batch read
+   * `redistributeFlattenFills` (ingest-fills.ts, #517) uses in place of one
+   * `getFills` round-trip per lot, since `ingestFills()` runs on every tick
+   * and a flatten can name many lots (a multi-scale-in exit) at once. A key
+   * with no persisted entry fill is simply absent from the returned `Map`,
+   * not present at 0 — mirroring `DashboardQueryStore.getMarks`' own
+   * "missing is absent" answer, the shape this follows.
+   */
+  getEntryFillSizes(idempotency_keys: readonly string[]): Promise<Map<string, number>>;
+  /**
    * Persist one poll's advance of a lot — new fills, the recomputed lot
    * state, and on round-trip-to-flat the `ClosedTrade` — atomically. A crash
    * can no longer land between the fill rows and the lot state they imply:
