@@ -27,7 +27,6 @@ import {
   CostModelImpl,
   CRYPTO_PERIODS_PER_YEAR,
   type DateRange,
-  HttpPolygonClient,
   InMemoryConfigTrialLog,
   type PolygonClient,
   renderStage2Verdict,
@@ -41,6 +40,7 @@ import {
   type TrialGridResult,
 } from '../cost-model-backtest/index.js';
 import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
+import { resolveStage2Source } from './stage2-source.js';
 import { makeAssetClass } from './stage2-support.js';
 
 /** The fixed MVP universe (CLAUDE.md "Broker Plan" / spec "User Stories"). */
@@ -155,11 +155,12 @@ export function defaultFiveYearWindow(now: Date = new Date()): DateRange {
  * walk-forward fold boundary — on each new day. A gate verdict that cannot be
  * reproduced tomorrow is not evidence, and the first real Stage 2 run was
  * recorded before that was noticed.
+ *
+ * Now defined in `stage2-source.ts` alongside the free stack's ten-year
+ * window, and re-exported here so `run-stage2-cost-decomposition.ts` and
+ * `ingest-tiingo-history.ts` keep importing it from where they always have.
  */
-export const STAGE2_PINNED_WINDOW: DateRange = {
-  start: new Date('2021-08-06T18:17:07.694Z'),
-  end: new Date('2026-08-05T18:17:07.694Z'),
-};
+export { STAGE2_FREE_STACK_WINDOW, STAGE2_PINNED_WINDOW } from './stage2-source.js';
 
 /**
  * Where a DIRECT run keeps its ingested bars (#495).
@@ -515,7 +516,13 @@ function printReport(
  * exported, testable function and a thin top-level invocation.
  */
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const polygonClient = new HttpPolygonClient();
+  // Polygon (2y) unless `STAGE2_SOURCE=free-stack` asks for the ten-year free
+  // stack — see `stage2-source.ts` for why the old path stays the default.
+  const { client: polygonClient, window: runWindow, label } = resolveStage2Source();
+  console.log(
+    `Stage 2 source: ${label} over ${runWindow.start.toISOString()} .. ` +
+      `${runWindow.end.toISOString()}`,
+  );
   // Stated explicitly at the entrypoint rather than by changing `runStage2`'s
   // own default, so every existing caller and test keeps the cost config it
   // was written against and only a direct run picks up the calibrated one.
@@ -528,7 +535,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   runStage2({
     polygonClient,
     costConfig: costConfigFromEnv(),
-    window: STAGE2_PINNED_WINDOW,
+    window: runWindow,
     // Stated here rather than by changing `runStage2`'s `:memory:` default, so
     // only a direct run persists bars and every existing caller and test keeps
     // the isolated in-memory store it was written against (#495).
