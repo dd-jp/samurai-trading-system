@@ -559,5 +559,147 @@ describe('runTickPlan', () => {
       // `SequentialTickRunner`, not duplicated here.
       expect(auditLog.records.map((record) => record.instrument)).toEqual(['QQQ']);
     });
+
+    // Kimi review (#507 PR #515, cycle 2): the audit write added above is a
+    // database call sitting inside the very catch block whose job is to
+    // guarantee a worker cannot reject. An unguarded SQLite failure there
+    // would reopen the orphaned-worker leak this whole issue exists to close.
+    describe('the failure handler cannot itself reject the worker', () => {
+      it('survives auditLog.record throwing — worker still returns a failed outcome, siblings still run', async () => {
+        const auditLog: AuditLog = {
+          record: vi.fn(() => {
+            throw new Error('SQLITE_BUSY: database is locked');
+          }),
+        };
+        const runner: TickRunner = {
+          async runInstrument(signal, ctx): Promise<TickOutcome> {
+            if (signal.asset === 'QQQ') throw new Error('debate exploded');
+            return { trace_id: ctx.trace_id, final_stage: 'execution' };
+          },
+        };
+
+        // If the audit-write throw escaped the catch, this whole call would
+        // reject (or — post-fix — the sibling SPY worker would still be
+        // resolved by `Promise.all`'s rejection semantics, but `outcomes`
+        // would never be returned to assert against). Asserting the promise
+        // RESOLVES is itself part of the proof.
+        const outcomes = await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+          max_concurrent_instruments: 2,
+          newTraceId: countingTraceIds(),
+          logger: LOGGER,
+          auditLog,
+          currentTickStore: makeCurrentTickStore(),
+        });
+
+        expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: 'debate exploded' });
+        // SPY — the sibling sharing the same tick — still ran to completion.
+        expect(outcomes[0]).toEqual({ trace_id: 'trace-1', final_stage: 'execution' });
+      });
+
+      it('logs the audit-write failure at error level rather than swallowing it', async () => {
+        const logger: Logger & { entries: Parameters<Logger['log']>[0][] } = {
+          entries: [],
+          log(entry) {
+            this.entries.push(entry);
+          },
+        };
+        const auditLog: AuditLog = {
+          record: vi.fn(() => {
+            throw new Error('SQLITE_BUSY: database is locked');
+          }),
+        };
+        const runner: TickRunner = {
+          async runInstrument(signal, ctx): Promise<TickOutcome> {
+            if (signal.asset === 'QQQ') throw new Error('debate exploded');
+            return { trace_id: ctx.trace_id, final_stage: 'execution' };
+          },
+        };
+
+        await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+          max_concurrent_instruments: 2,
+          newTraceId: countingTraceIds(),
+          logger,
+          auditLog,
+          currentTickStore: makeCurrentTickStore(),
+        });
+
+        const auditFailureEntry = logger.entries.find((entry) =>
+          entry.message.startsWith('audit_log record failed'),
+        );
+        expect(auditFailureEntry).toBeDefined();
+        expect(auditFailureEntry?.level).toBe('error');
+        expect(auditFailureEntry?.payload).toEqual({
+          instrument: 'QQQ',
+          asset_class: 'stocks',
+          original_error: 'debate exploded',
+          audit_error: 'SQLITE_BUSY: database is locked',
+        });
+        // The original instrument-crash line is unaffected — both are
+        // reported, neither replaces the other.
+        expect(logger.entries.some((entry) => entry.message === 'instrument failed: QQQ')).toBe(
+          true,
+        );
+      });
+
+      it('survives logger.log throwing on the same path — worker still returns a failed outcome, siblings still run', async () => {
+        // A real `Logger` can throw: `JsonLogger`'s own primary
+        // `process.stdout.write` is deliberately unguarded (EPIPE on a
+        // broken pipe), and a rotating file sink can hit a full disk
+        // (rotating-file-sink.ts). Every `logger.log` call on this path must
+        // be safe against that, not just the audit write.
+        const logger: Logger = {
+          log: vi.fn(() => {
+            throw new Error('EPIPE');
+          }),
+        };
+        const runner: TickRunner = {
+          async runInstrument(signal, ctx): Promise<TickOutcome> {
+            if (signal.asset === 'QQQ') throw new Error('debate exploded');
+            return { trace_id: ctx.trace_id, final_stage: 'execution' };
+          },
+        };
+
+        const outcomes = await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+          max_concurrent_instruments: 2,
+          newTraceId: countingTraceIds(),
+          logger,
+          auditLog: makeAuditLog(),
+          currentTickStore: makeCurrentTickStore(),
+        });
+
+        expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: 'debate exploded' });
+        expect(outcomes[0]).toEqual({ trace_id: 'trace-1', final_stage: 'execution' });
+      });
+
+      it('survives both logger.log and auditLog.record throwing on the same instrument', async () => {
+        const logger: Logger = {
+          log: vi.fn(() => {
+            throw new Error('EPIPE');
+          }),
+        };
+        const auditLog: AuditLog = {
+          record: vi.fn(() => {
+            throw new Error('SQLITE_BUSY: database is locked');
+          }),
+        };
+        const runner: TickRunner = {
+          async runInstrument(signal, ctx): Promise<TickOutcome> {
+            if (signal.asset === 'QQQ') throw new Error('debate exploded');
+            return { trace_id: ctx.trace_id, final_stage: 'execution' };
+          },
+        };
+
+        const outcomes = await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+          max_concurrent_instruments: 2,
+          newTraceId: countingTraceIds(),
+          logger,
+          auditLog,
+          currentTickStore: makeCurrentTickStore(),
+        });
+
+        expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: 'debate exploded' });
+        expect(outcomes[0]).toEqual({ trace_id: 'trace-1', final_stage: 'execution' });
+      });
+    });
   });
 });
