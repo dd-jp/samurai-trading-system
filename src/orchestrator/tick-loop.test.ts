@@ -437,5 +437,127 @@ describe('runTickPlan', () => {
 
       expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: 'a string rejection' });
     });
+
+    // Kimi review (#507 PR #515): a plain-object throw would otherwise
+    // degrade through `String(error)` to the useless "[object Object]".
+    it('preserves detail from a thrown plain object via JSON.stringify', async () => {
+      const runner: TickRunner = {
+        async runInstrument(signal, ctx): Promise<TickOutcome> {
+          if (signal.asset === 'QQQ') throw { code: 'RATE_LIMIT', retryAfterMs: 5000 };
+          return { trace_id: ctx.trace_id, final_stage: 'execution' };
+        },
+      };
+
+      const outcomes = await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+        max_concurrent_instruments: 2,
+        newTraceId: countingTraceIds(),
+        logger: LOGGER,
+        auditLog: makeAuditLog(),
+        currentTickStore: makeCurrentTickStore(),
+      });
+
+      expect(outcomes[1]).toEqual({
+        trace_id: 'trace-2',
+        error: '{"code":"RATE_LIMIT","retryAfterMs":5000}',
+      });
+    });
+
+    // A circular structure is exactly the shape most likely to reach the
+    // JSON.stringify fallback (an object graph with a `cause`/`parent` back
+    // reference), so it gets its own degrade-once-more path rather than
+    // throwing out of error handling itself.
+    it('falls back to String() when a thrown plain object is circular', async () => {
+      const circular: Record<string, unknown> = { code: 'LOOP' };
+      circular.self = circular;
+      const runner: TickRunner = {
+        async runInstrument(signal, ctx): Promise<TickOutcome> {
+          if (signal.asset === 'QQQ') throw circular;
+          return { trace_id: ctx.trace_id, final_stage: 'execution' };
+        },
+      };
+
+      const outcomes = await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+        max_concurrent_instruments: 2,
+        newTraceId: countingTraceIds(),
+        logger: LOGGER,
+        auditLog: makeAuditLog(),
+        currentTickStore: makeCurrentTickStore(),
+      });
+
+      expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: '[object Object]' });
+    });
+
+    // Kimi review (#507 PR #515): `tick-runner.ts`'s own `record()` only
+    // fires after a stage's step function RETURNS, so a crash mid-stage
+    // leaves no `audit_log` row at all unless this layer writes one — the
+    // logger line above is real-time visibility, not a durable, queryable
+    // record an operator can find after the fact.
+    it('writes a durable audit_log record for the crash, not just the log line', async () => {
+      const auditLog: AuditLog & { records: Parameters<AuditLog['record']>[0][] } = {
+        records: [],
+        record(entry) {
+          this.records.push(entry);
+        },
+      };
+      const runner: TickRunner = {
+        async runInstrument(signal, ctx): Promise<TickOutcome> {
+          if (signal.asset === 'QQQ') throw new Error('debate exploded');
+          return { trace_id: ctx.trace_id, final_stage: 'execution' };
+        },
+      };
+
+      await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+        max_concurrent_instruments: 2,
+        newTraceId: countingTraceIds(),
+        logger: LOGGER,
+        auditLog,
+        currentTickStore: makeCurrentTickStore(),
+      });
+
+      expect(auditLog.records).toHaveLength(1);
+      expect(auditLog.records[0]).toMatchObject({
+        trace_id: 'trace-2',
+        stage: 'tick-loop',
+        decision: 'crashed',
+        instrument: 'QQQ',
+        asset_class: 'stocks',
+        timestamp: NOW,
+      });
+      // Digested, not raw — same convention `tick-runner.ts`'s own `record()`
+      // calls follow (`input_digest`/`output_digest`, never the payload
+      // itself in the audit row).
+      expect(typeof auditLog.records[0]?.input_digest).toBe('string');
+      expect(auditLog.records[0]?.input_digest.length).toBeGreaterThan(0);
+      expect(typeof auditLog.records[0]?.output_digest).toBe('string');
+      expect(auditLog.records[0]?.output_digest.length).toBeGreaterThan(0);
+    });
+
+    it('does not write an audit_log record for an instrument that succeeds', async () => {
+      const auditLog: AuditLog & { records: Parameters<AuditLog['record']>[0][] } = {
+        records: [],
+        record(entry) {
+          this.records.push(entry);
+        },
+      };
+      const runner: TickRunner = {
+        async runInstrument(signal, ctx): Promise<TickOutcome> {
+          if (signal.asset === 'QQQ') throw new Error('debate exploded');
+          return { trace_id: ctx.trace_id, final_stage: 'execution' };
+        },
+      };
+
+      await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+        max_concurrent_instruments: 2,
+        newTraceId: countingTraceIds(),
+        logger: LOGGER,
+        auditLog,
+        currentTickStore: makeCurrentTickStore(),
+      });
+
+      // Only QQQ (the throw) gets an audit row from THIS layer — SPY's
+      // successful pass writes its own audit trail from inside
+      // `SequentialTickRunner`, not duplicated here.
+      expect(auditLog.records.map((record) => record.instrument)).toEqual(['QQQ']);
+    });
   });
 });

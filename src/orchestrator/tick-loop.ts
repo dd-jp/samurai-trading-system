@@ -23,6 +23,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Signal } from '../analysts/index.js';
 import type { Clock } from '../shared/index.js';
+import { digest } from './digest.js';
 import type {
   AuditLog,
   CurrentTickStore,
@@ -31,6 +32,29 @@ import type {
   TickPlan,
   TickRunner,
 } from './types.js';
+
+/**
+ * Renders a thrown value into a log-safe string (#507 review, kimi).
+ *
+ * `String(error)` alone degrades a plain-object throw to `"[object Object]"`
+ * — technically not swallowed, but not preserved either. Every throw this
+ * repo's own code produces is an `Error` (grepped: zero `throw {…}` literals
+ * in `src/`), so this mainly guards a third-party dependency that rejects
+ * with something else. `JSON.stringify` can itself throw on a circular
+ * structure, which is exactly the kind of value most likely to reach this
+ * fallback — so it degrades one step further to `String(error)` rather than
+ * letting a formatting failure inside error handling replace the original
+ * failure.
+ */
+function describeThrown(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
 
 export interface TickLoopConfig {
   /** Simultaneous instrument passes. Values < 1 are clamped to 1. */
@@ -85,22 +109,8 @@ export async function runTickPlan(
       };
       const trace_id = newTraceId();
 
-      // #507: this used to be a bare `await` with nothing catching it. One
-      // instrument throwing rejected THIS worker's `Promise.all` entry, which
-      // settles the whole `Promise.all` immediately — the other workers were
-      // still mid-pipeline, still calling out to the LLM, when the tick loop
-      // (production.ts's `runOnce`) logged `tick failed` and cleared
-      // `inFlight`. That flag is exactly what the NEXT tick's overlap guard
-      // tests, so the guard reported the tick as finished while its surviving
-      // workers kept running — and kept billing debates unattributed to any
-      // live tick.
-      //
-      // Catching here instead turns one instrument's throw into a failed
-      // `TickOutcome` for that instrument alone: this worker's `while` loop
-      // keeps claiming indices off the shared `cursor`, so the rest of the
-      // plan still runs, and `Promise.all` below only settles once every
-      // worker's `while` loop has actually returned — no early exit while
-      // siblings are in flight.
+      // See the file header (#507) for why this is caught here rather than
+      // left to reject `Promise.all`.
       try {
         outcomes[index] = await runner.runInstrument(signal, {
           clock,
@@ -110,12 +120,16 @@ export async function runTickPlan(
           currentTickStore: config.currentTickStore,
         });
       } catch (error) {
-        // Not swallowed: still reaches the logger (so a persistent failure
-        // stays visible in the log stream, same as the tick-level catch this
-        // supplements) and still lands in the returned outcome array (so a
-        // caller reading `outcomes` sees the failure rather than a
-        // conspicuously-missing entry — every plan index is always populated).
-        const message = error instanceof Error ? error.message : String(error);
+        // Not swallowed: still reaches the logger, still gets a durable
+        // `audit_log` row (below — the runner itself never writes one for a
+        // stage that threw mid-call, since `record()` in tick-runner.ts only
+        // fires after a stage's step function RETURNS; a crash means "reached
+        // a stage but never finished it", which is otherwise invisible to
+        // anything reading `audit_log` after the fact), and still lands in
+        // the returned outcome array (so a caller reading `outcomes` sees the
+        // failure rather than a conspicuously-missing entry — every plan
+        // index is always populated).
+        const message = describeThrown(error);
         config.logger.log({
           trace_id,
           stage: 'tick-loop',
@@ -126,6 +140,25 @@ export async function runTickPlan(
             asset_class: instrument.asset_class,
             error: message,
           },
+        });
+        // `decision: 'crashed'` has no stage-specific analogue in
+        // tick-runner.ts's `record()` calls (`quorum_skip`, `no_trade`,
+        // `rejected`, …) on purpose — those all describe a stage that
+        // COMPLETED and chose something; this describes a stage that never
+        // got the chance to. `input_digest` covers the `Signal` (the one
+        // thing known for certain going in, since the runner never told this
+        // layer which stage it had reached) rather than nothing, so a crashed
+        // pass digests to something other than every other crash on this
+        // instrument.
+        config.auditLog.record({
+          trace_id,
+          stage: 'tick-loop',
+          decision: 'crashed',
+          input_digest: digest(signal),
+          output_digest: digest({ error: message }),
+          timestamp: clock.now(),
+          instrument: instrument.asset,
+          asset_class: instrument.asset_class,
         });
         outcomes[index] = { trace_id, error: message };
       }
