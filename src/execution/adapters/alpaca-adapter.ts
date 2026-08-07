@@ -371,48 +371,16 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   }
 
   /**
-   * VERIFIED 2026-08-07 (#550) against the live Alpaca PAPER account: crypto
-   * rejects this call outright at the order-CLASS level. `POST /v2/orders`
-   * with `order_class: 'bracket'` for `BTC/USD` (unfillable limit entry, so
-   * nothing could ever fill) came back `422` —
-   * `{"code":42210000,"message":"crypto orders not allowed for advanced
-   * order_class: otoco"}` ("otoco" is Alpaca's internal name for what this
-   * adapter and the docs call "bracket"). Alpaca's own docs
-   * (docs.alpaca.markets/docs/crypto-orders) list only
-   * `market`/`limit`/`stop_limit` as supported crypto order TYPES and name no
-   * order CLASS at all — consistent with the rejection. An equity control
-   * order (`SPY`, same bracket shape) passes this same class-level check and
-   * is rejected only on a downstream business rule instead (see
-   * `rearmProtectiveLegs`'s doc comment below for its own OCO control's exact
-   * error), confirming the crypto rejection here is class-specific, not a
-   * malformed request.
-   *
-   * A SEPARATE, prior-in-practice problem, also observed while probing this:
-   * this adapter sends `order.instrument` to Alpaca unconverted, and nothing
-   * in `src/execution` converts `DEFAULT_UNIVERSE`'s dash form (`BTC-USD`) to
-   * the slash form Alpaca's trading API expects (`BTC/USD`) — unlike the
-   * market-data client, which documents that exact conversion
-   * (`src/market-data-service/sources/alpaca-http-client.ts`). Probing
-   * `order_class: 'bracket'` with `symbol: 'BTC-USD'` got a DIFFERENT `422`
-   * — `{"code":42210000,"message":"asset \"BTC-USD\" not found"}` — before
-   * the order-class question is even reached. Confirmed this is what production
-   * actually sends: `order.instrument` traces back to `DEFAULT_UNIVERSE`'s
-   * dash form (`orchestrator/smoke-run.ts`'s `SMOKE_INSTRUMENT` defaults to
-   * the literal string `'BTC-USD'`), and a repo-wide grep for a dash-to-slash
-   * conversion or a second `AlpacaBrokerAdapter` construction site (outside
-   * `market-data-service`/tests) found neither — `production.ts` constructs
-   * this adapter directly, with no wrapping decorator. So THIS "asset not
-   * found" error is what a live crypto bracket entry hits FIRST, before the
-   * order-class rejection above is ever reached — both are real, independent
-   * defects, and either alone is enough to fail every crypto bracket entry
-   * today.
-   *
-   * Practical effect either way: no crypto bracket entry can succeed against
-   * Alpaca as this adapter is shaped today — this is not a residual/partial-
-   * flatten edge case like `rearmProtectiveLegs`, it is the ordinary entry
-   * path. The throw propagates out of `call()` as a sanitized `BrokerError`,
-   * same as any other Alpaca rejection. No redesign attempted here — see
-   * #550 and its follow-ups for the fix.
+   * VERIFIED 2026-08-07 against live Alpaca paper: crypto rejects
+   * `order_class: 'bracket'` outright — `422 {"code":42210000,"message":
+   * "crypto orders not allowed for advanced order_class: otoco"}`. Also
+   * confirmed: `order.instrument` reaches Alpaca unconverted
+   * (`DEFAULT_UNIVERSE`'s `BTC-USD`, not the `BTC/USD` the trading API
+   * wants), which alone fails first with `422 {"message":"asset \"BTC-USD\"
+   * not found"}` — before the order-class rejection is ever reached. No
+   * crypto bracket entry can succeed today; either defect alone is fatal.
+   * Full probe transcript: #550. Symbol-conversion fix: #585. Order-class
+   * fix: #586.
    */
   async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
     const response = await this.call('submitBracket', () =>
@@ -555,58 +523,16 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * bracket"), but this row is not merely inert either — #548 tracks
    * whether that makes it a usable restart-recovery hook.
    *
-   * VERIFIED 2026-08-07 (#550) against the live Alpaca PAPER account. Two
-   * independent problems were found, and it took correcting for the first to
-   * even observe the second:
-   *
-   * 1. THIS METHOD'S OWN WIRE SHAPE IS REJECTED, for ANY asset class. The
-   *    exact request `submitOcoOrder` builds below — top-level `limit_price`
-   *    standing in for the take-profit leg, `order_class: 'oco'`,
-   *    `stop_loss.stop_price`, plus the wire-only `type: 'limit'`
-   *    `alpaca-http-client.ts` adds — probed against BOTH `BTC/USD` and
-   *    `SPY` came back the SAME `422` on both:
-   *    `{"code":40010001,"message":"oco orders require
-   *    take_profit.limit_price"}`. Alpaca wants the take-profit price nested
-   *    under a `take_profit` object, not at the top level, regardless of
-   *    symbol — so `AlpacaOcoOrderRequest`'s doc comment above (which asserts
-   *    the top-level `limit_price` IS Alpaca's own take-profit shape) is
-   *    wrong, and this method fails on arrival for every instrument it is
-   *    ever called with, crypto or equity. This is a pre-existing defect,
-   *    not introduced by this comment, and is NOT fixed here — #550 records
-   *    it; the fix is a follow-up.
-   * 2. ONLY AFTER building the corrected shape (`take_profit.limit_price`
-   *    nested, matching `submitBracket`'s own take-profit shape) did the
-   *    crypto-specific question become answerable. With that corrected
-   *    shape: `BTC/USD` came back `422` —
-   *    `{"code":42210000,"message":"crypto orders not allowed for advanced
-   *    order_class: oco"}` — while the same shape against `SPY` (control)
-   *    came back a DIFFERENT `422` — `{"code":42210000,"message":"oco orders
-   *    must be exit orders"}` — because the probe account holds no SPY to
-   *    exit. That equity error is Alpaca validating the `oco` class itself
-   *    and only then rejecting on a business rule (no position to close),
-   *    which is what distinguishes "the class is unsupported" (crypto's
-   *    error) from "the class was accepted but this particular order is
-   *    invalid" (equity's error) — the two probes together are the proof,
-   *    not either alone. Alpaca's own docs
-   *    (docs.alpaca.markets/docs/crypto-orders) name only
-   *    `market`/`limit`/`stop_limit` as supported crypto order TYPES and no
-   *    order CLASS at all, consistent with the rejection.
-   *
-   * So the PRE-EXISTING condition `submitBracket` above already documented as
-   * unverified is now confirmed for crypto: Alpaca's OCO order class is
-   * genuinely unsupported for crypto symbols, not merely "widely reported" as
-   * such. But in production THIS METHOD throws on problem 1 first, for EVERY
-   * asset class, before the crypto-specific rejection is ever reached — so
-   * fixing #1 alone would surface #2 for crypto, not fix crypto. This repo's
-   * MVP universe includes BTC-USD/ETH-USD on Alpaca, so a crypto re-arm fails
-   * either way today. It still throws on rejection the same as any other
-   * failure, and `ingestFills()`'s catch turns that into the #525 fallback
-   * alert (`ResidualExposureAlertChannel` / `UnpricedFillAlertChannel`,
-   * depending on path) — the decision's own fail-toward-visibility posture
-   * holds, but a crypto residual is ALERT-ONLY, never actually re-protected,
-   * for the whole crypto leg (and, until problem 1 above is fixed, neither is
-   * an equity one). No redesign attempted here — that belongs to #549/its
-   * follow-ups; this comment only records the verified posture per #550.
+   * VERIFIED 2026-08-07 against live Alpaca paper, two stacked defects: (1)
+   * this method's own wire shape (top-level `limit_price` for take-profit)
+   * is rejected for EVERY asset class — `422 {"code":40010001,"message":"oco
+   * orders require take_profit.limit_price"}` on both `BTC/USD` and `SPY`;
+   * (2) with the shape corrected, crypto is separately rejected at the
+   * order-class level — `422 {"code":42210000,"message":"crypto orders not
+   * allowed for advanced order_class: oco"}` — while the equity control
+   * passes that check. A crypto (and, until #1 is fixed, equity) residual
+   * is alert-only today, never re-armed. Full probe transcript: #550.
+   * Wire-shape + order-class fix: #586.
    */
   async rearmProtectiveLegs(
     clientOrderId: string,

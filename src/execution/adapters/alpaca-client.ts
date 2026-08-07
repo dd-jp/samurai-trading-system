@@ -56,12 +56,20 @@ export interface AlpacaBracketOrderRequest {
  * A protective-legs-only pair with no entry (#525) — Alpaca's `order_class:
  * 'oco'`, submitted against a position this process already holds rather
  * than one it is opening. Distinct from `AlpacaBracketOrderRequest`: a
- * bracket's `limit_price` is the ENTRY; here `limit_price` is the
- * take-profit leg (Alpaca's own OCO shape — `type: 'limit'` + `limit_price`
- * for the profit side, `stop_loss.stop_price` for the loss side, no separate
- * entry order at all) closing a residual left by a partially-filled flatten
+ * bracket's `limit_price` is the ENTRY; here `limit_price` is meant to be the
+ * take-profit leg, closing a residual left by a partially-filled flatten
  * (#525's decision: re-arm on the resize path, never re-derive from the
  * original intent's sizing).
+ *
+ * WRONG SHAPE, VERIFIED 2026-08-07 (#550): this top-level `limit_price` is
+ * NOT Alpaca's real OCO take-profit shape, as this comment previously
+ * claimed. Probed live against both `BTC/USD` and `SPY`: `422
+ * {"code":40010001,"message":"oco orders require take_profit.limit_price"}`
+ * — Alpaca requires the take-profit price NESTED under a `take_profit`
+ * object (`{ limit_price: string }`, the same shape `AlpacaBracketOrderRequest`
+ * already uses below), not this field. Every `submitOcoOrder` call fails on
+ * arrival as a result, for any asset class. NOT fixed here — doc-only
+ * correction; the wire-shape fix is #586.
  *
  * `side` is the CLOSING side — mirrors `AlpacaMarketOrderRequest`'s flatten,
  * not `AlpacaBracketOrderRequest`'s opening one, since this order's whole
@@ -72,7 +80,10 @@ export interface AlpacaOcoOrderRequest {
   /** The CLOSING side, same convention as the flatten. */
   side: 'buy' | 'sell';
   qty: string;
-  /** The take-profit leg's limit price. */
+  /**
+   * INCORRECTLY top-level — see the WRONG SHAPE note above. Alpaca requires
+   * this nested as `take_profit: { limit_price: string }`; #586 fixes it.
+   */
   limit_price: string;
   time_in_force: string;
   client_order_id: string;
