@@ -16,6 +16,7 @@ import { Heartbeat } from './heartbeat.js';
 import { TradeChannelHeartbeat } from './heartbeat-channel.js';
 import { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
 import type { ProductionConfig } from './production.js';
+import { TradeChannelResidualExposureAlert } from './residual-exposure-alert-channel.js';
 import type { Logger } from './types.js';
 import { TradeChannelUnpricedFillAlert } from './unpriced-fill-channel.js';
 
@@ -120,6 +121,16 @@ const UNPRICED_FILL = {
 const BREACH = {
   breaches: ['pbo_over_max'],
   reported_at: new Date('2026-08-04T09:00:00Z'),
+};
+const RESIDUAL_EXPOSURE = {
+  idempotency_key: 'ioc-1',
+  instrument: 'AAPL',
+  side: 'buy' as const,
+  residual_qty: 5,
+  residual_qty_is_upper_bound: false,
+  stop: 180.5,
+  target: 195.25,
+  observed_at: new Date('2026-08-04T09:00:00Z'),
 };
 
 describe('resolveAlertsMode', () => {
@@ -265,6 +276,7 @@ describe('buildAlertChannels — telegram', () => {
     expect(channels.heartbeatChannel).toBeInstanceOf(TradeChannelHeartbeat);
     expect(channels.orphanAlerts).toBeInstanceOf(TradeChannelOrphanAlert);
     expect(channels.unpricedFillAlerts).toBeInstanceOf(TradeChannelUnpricedFillAlert);
+    expect(channels.residualExposureAlerts).toBeInstanceOf(TradeChannelResidualExposureAlert);
     expect(channels.breachAlerts).toBeInstanceOf(TradeChannelBreachAlert);
   });
 
@@ -398,6 +410,7 @@ describe('buildAlertChannels — heartbeat destination is separate from escalati
     await channels.heartbeatChannel?.postHeartbeat(new Date('2026-08-04T10:00:00Z'));
     await channels.orphanAlerts?.postOrphanAlert(ORPHAN);
     await channels.unpricedFillAlerts?.postUnpricedFillAlert(UNPRICED_FILL);
+    await channels.residualExposureAlerts?.postResidualExposureAlert(RESIDUAL_EXPOSURE);
     channels.breachAlerts?.postBreachAlert(BREACH);
     // `postBreachAlert` is fire-and-forget (void, by design) — let its
     // `Promise.allSettled` settle before reading the wire.
@@ -406,6 +419,7 @@ describe('buildAlertChannels — heartbeat destination is separate from escalati
     const byChat = sentMessages(fetchStub).map((m) => m.chat_id);
     expect(byChat).toEqual([
       HEARTBEAT_CHAT_ID,
+      ESCALATION_CHAT_ID,
       ESCALATION_CHAT_ID,
       ESCALATION_CHAT_ID,
       ESCALATION_CHAT_ID,

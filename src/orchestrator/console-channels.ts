@@ -125,9 +125,10 @@ export class LoggingUnpricedFillAlertChannel implements UnpricedFillAlertChannel
  * with no stop and no target.
  *
  * Same caveat as `LoggingUnpricedFillAlertChannel`'s: a log line nobody
- * tails during an unattended soak (#238) is not an alert. Wiring a
- * reachable-from-a-phone implementation through `SAMURAI_ALERTS=telegram`
- * (#322) is left for a follow-up — see the PR body.
+ * tails during an unattended soak (#238) is not an alert.
+ * `TradeChannelResidualExposureAlert` (residual-exposure-alert-channel.ts)
+ * is the reachable-from-a-phone implementation, wired through
+ * `SAMURAI_ALERTS=telegram` (#322, #551).
  */
 export class LoggingResidualExposureAlertChannel implements ResidualExposureAlertChannel {
   constructor(private readonly logger: Logger) {}

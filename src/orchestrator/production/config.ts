@@ -39,32 +39,22 @@ import { DEFAULT_STAGE2_MAX_AGE_DAYS } from './daily-equity-metrics-source.js';
 import type { AccountStateProvider, VolatilityReadingProvider } from './direct-bind.js';
 
 /**
- * Everything the composition root cannot build from in-repo code. See the
- * file doc comment for why the transports are injected rather than
- * constructed.
+ * The eight outbound operator-escalation transports — the fields
+ * `alert-transport.ts`'s `ALERT_CHANNEL_FIELDS` must cover, and the reason
+ * this interface exists as its own type rather than as eight scattered
+ * fields on `ProductionConfig` (#551): one authoritative list of "what is an
+ * alert channel" that both `ProductionConfig` and `ALERT_CHANNEL_FIELDS` are
+ * checked against, so a ninth field added here without a matching entry
+ * there fails `yarn typecheck` instead of waiting to be noticed by a human —
+ * the same hole found and patched by hand eight times running (#431, #465,
+ * #551, …; see `ALERT_CHANNEL_FIELDS`'s own doc comment for the tally).
+ *
+ * `approvals` (below, on `ProductionConfig` directly) is deliberately NOT a
+ * member: it is an inbound round trip (`requestApproval` returns an
+ * *answer*), not an outbound alert, and wiring it is #275's remaining half —
+ * see `alert-transport.ts`'s file doc.
  */
-export interface ProductionConfig {
-  /** The shared SQLite handle (`openSharedStore(...)`) every store here is built over. */
-  db: SqliteHandle;
-  clock: Clock;
-  /** `paper` for the first run; `live` only after graduation (CLAUDE.md). */
-  mode: 'live' | 'paper' | 'backtest';
-
-  // --- Transports with no in-repo implementation (see file doc comment) ---
-  /**
-   * Alpaca trading REST surface, for order submission. Optional since #273/
-   * #286 landed `AlpacaHttpBrokerClient`: when omitted this module builds it
-   * with the endpoint derived from `mode` (see
-   * `buildDefaultAlpacaBrokerClient` — a live host from a non-live mode is
-   * refused, #293).
-   */
-  alpacaBrokerClient?: AlpacaBrokerClient;
-  /**
-   * Alpaca market-data REST surface, for bars and latest quotes. Optional for
-   * the same reason; defaults to `AlpacaHttpDataClient` on
-   * `dataSourceAssetClass`.
-   */
-  alpacaDataClient?: AlpacaDataClient;
+export interface AlertChannelSlots {
   /**
    * Trade channel the dead-man's-switch heartbeat posts over. Optional: when
    * omitted a log-only `LoggingHeartbeatChannel` stands in, which is a diary
@@ -86,15 +76,6 @@ export interface ProductionConfig {
    * caller has chosen the destination itself.
    */
   heartbeatChannel?: HeartbeatChannel;
-  /**
-   * HITL approval round-trip (Verdict gate 6). Same shape as
-   * `heartbeatChannel`: pass `SignedApprovalChannel`
-   * (verdict/notifications/verified-approval-channel.ts) so #207's HMAC
-   * verification is in the path — the composition root cannot construct it
-   * for you, because its `ApprovalRequestSender` leaf is another
-   * unimplemented transport.
-   */
-  approvals?: ApprovalChannel;
   /**
    * Where a restart-time orphaned `go` verdict is reported. Defaults to the
    * log; `TradeChannelOrphanAlert` (orphan-alert-channel.ts) is the
@@ -118,9 +99,11 @@ export interface ProductionConfig {
    * never on a successful one (see `ResidualExposureAlert`'s doc for why).
    * Defaults to `LoggingResidualExposureAlertChannel`, with the same caveat
    * as `unpricedFillAlerts`: reachable only by an operator reading the log
-   * stream. Unlike the other operator escalations this file lists, this one
-   * is NOT yet wired through `SAMURAI_ALERTS=telegram` (#322) — see the PR
-   * body for #525.
+   * stream. `TradeChannelResidualExposureAlert`
+   * (residual-exposure-alert-channel.ts) is what an unattended soak (#238)
+   * needs, and `SAMURAI_ALERTS=telegram` (#322, wired for this channel by
+   * #551) is what supplies it — the same move every other channel on this
+   * interface makes.
    */
   residualExposureAlerts?: ResidualExposureAlertChannel;
   /**
@@ -133,6 +116,80 @@ export interface ProductionConfig {
    * `SAMURAI_ALERTS=telegram` supplies.
    */
   analystSkipAlerts?: AnalystSkipAlertChannel;
+  /**
+   * Where a kill-threshold breach goes (#93, wired #327). Defaults to
+   * `LoggingBreachAlertChannel`; `SAMURAI_ALERTS=telegram` replaces it with
+   * `TradeChannelBreachAlert` at the entrypoint, like the other outbound
+   * alerts (alert-transport.ts).
+   */
+  breachAlerts?: BreachAlertChannel;
+  /**
+   * Where a gated risk-threshold LOOSENING request goes (#91, wired #366).
+   * Defaults to `LoggingLoosenApprovalChannel`; `SAMURAI_ALERTS=telegram`
+   * replaces it with `TradeChannelLoosenApproval`, like the other outbound
+   * escalations (alert-transport.ts).
+   *
+   * Top-level rather than a field of `feedback` for the reason every other
+   * transport is: `paperStartingProfile` supplies tuning *values* and names no
+   * transport, because where an operator's alerts go is a deployment decision
+   * and not something a checked-in file should hard-code. `FeedbackCycleConfig`
+   * keeps its own `approvals` override, which wins over this when both are
+   * given (see `runFeedbackCycle`).
+   *
+   * There is no live-mode refusal here, unlike `ConsoleApprovalChannel`: this
+   * port returns `void` and cannot approve anything, so neither implementation
+   * can fabricate consent. A request nobody reads leaves the threshold exactly
+   * where it was.
+   */
+  loosenApprovals?: LoosenApprovalChannel;
+  /**
+   * #465: where NOTABLE verdicts go. Absent = no verdict alerting, which is
+   * what `log-only` mode and every test get.
+   *
+   * Filtered, not firehosed — `isNotableVerdict` keeps `go` verdicts and the
+   * no-gos the system chose about itself, and drops the routine ones. Story 14
+   * asks for every no-go, and at ADR-0008's cadence that is ~300 messages a
+   * day; see `notable-verdict.ts` for why the line falls where it does.
+   */
+  verdictAlerts?: TradeChannelNotifier;
+}
+
+/**
+ * Everything the composition root cannot build from in-repo code. See the
+ * file doc comment for why the transports are injected rather than
+ * constructed.
+ */
+export interface ProductionConfig extends AlertChannelSlots {
+  /** The shared SQLite handle (`openSharedStore(...)`) every store here is built over. */
+  db: SqliteHandle;
+  clock: Clock;
+  /** `paper` for the first run; `live` only after graduation (CLAUDE.md). */
+  mode: 'live' | 'paper' | 'backtest';
+
+  // --- Transports with no in-repo implementation (see file doc comment) ---
+  /**
+   * Alpaca trading REST surface, for order submission. Optional since #273/
+   * #286 landed `AlpacaHttpBrokerClient`: when omitted this module builds it
+   * with the endpoint derived from `mode` (see
+   * `buildDefaultAlpacaBrokerClient` — a live host from a non-live mode is
+   * refused, #293).
+   */
+  alpacaBrokerClient?: AlpacaBrokerClient;
+  /**
+   * Alpaca market-data REST surface, for bars and latest quotes. Optional for
+   * the same reason; defaults to `AlpacaHttpDataClient` on
+   * `dataSourceAssetClass`.
+   */
+  alpacaDataClient?: AlpacaDataClient;
+  /**
+   * HITL approval round-trip (Verdict gate 6). Same shape as
+   * `heartbeatChannel`: pass `SignedApprovalChannel`
+   * (verdict/notifications/verified-approval-channel.ts) so #207's HMAC
+   * verification is in the path — the composition root cannot construct it
+   * for you, because its `ApprovalRequestSender` leaf is another
+   * unimplemented transport.
+   */
+  approvals?: ApprovalChannel;
   /**
    * How long a fill may stay unpriced before that escalation fires. Defaults to
    * `DEFAULT_UNPRICED_FILL_AGE_OUT_MS` (15 minutes) — see its doc for why that
@@ -360,46 +417,10 @@ export interface ProductionConfig {
    * the other eight sets of starting values live — `paperStartingProfile`
    * (paper-profile.ts) — and `LoosenApprovalChannel` is resolved from
    * `SAMURAI_ALERTS` like every other outbound escalation, defaulting to
-   * `loosenApprovals` below. A paper run started through the shipped
+   * `loosenApprovals` (`AlertChannelSlots`, above). A paper run started through the shipped
    * entrypoint therefore supplies this.
    */
   feedback?: FeedbackCycleConfig;
-  /**
-   * Where a kill-threshold breach goes (#93, wired #327). Defaults to
-   * `LoggingBreachAlertChannel`; `SAMURAI_ALERTS=telegram` replaces it with
-   * `TradeChannelBreachAlert` at the entrypoint, like the other three
-   * outbound alerts (alert-transport.ts).
-   */
-  breachAlerts?: BreachAlertChannel;
-  /**
-   * Where a gated risk-threshold LOOSENING request goes (#91, wired #366).
-   * Defaults to `LoggingLoosenApprovalChannel`; `SAMURAI_ALERTS=telegram`
-   * replaces it with `TradeChannelLoosenApproval`, like the other four
-   * outbound escalations (alert-transport.ts).
-   *
-   * Top-level rather than a field of `feedback` for the reason every other
-   * transport is: `paperStartingProfile` supplies tuning *values* and names no
-   * transport, because where an operator's alerts go is a deployment decision
-   * and not something a checked-in file should hard-code. `FeedbackCycleConfig`
-   * keeps its own `approvals` override, which wins over this when both are
-   * given (see `runFeedbackCycle`).
-   *
-   * There is no live-mode refusal here, unlike `ConsoleApprovalChannel`: this
-   * port returns `void` and cannot approve anything, so neither implementation
-   * can fabricate consent. A request nobody reads leaves the threshold exactly
-   * where it was.
-   */
-  loosenApprovals?: LoosenApprovalChannel;
-  /**
-   * #465: where NOTABLE verdicts go. Absent = no verdict alerting, which is
-   * what `log-only` mode and every test get.
-   *
-   * Filtered, not firehosed — `isNotableVerdict` keeps `go` verdicts and the
-   * no-gos the system chose about itself, and drops the routine ones. Story 14
-   * asks for every no-go, and at ADR-0008's cadence that is ~300 messages a
-   * day; see `notable-verdict.ts` for why the line falls where it does.
-   */
-  verdictAlerts?: TradeChannelNotifier;
   logger?: Logger;
 }
 
