@@ -18,11 +18,11 @@
 import {
   buildSmokeFixtureBars,
   ConstantResponseLlmClient,
+  type ExitPathEvidence,
   evaluateSmokeGate,
   FixedAccountStateProvider,
   formatSmokeReport,
   runSmoke,
-  SMOKE_CLOSED_TRADE_NOTE,
   SMOKE_LLM_RESPONSE,
   SMOKE_RUN_INSTANT,
   type SmokeObservations,
@@ -34,6 +34,28 @@ const BOTH_TIERS = [
   { tier: 'portfolio_drawdown', tripped: 0 },
   { tier: 'kill_switch', tripped: 0 },
 ];
+
+/**
+ * A healthy exit path (#576) — every check `evaluateSmokeGate` runs against
+ * `options.exitPath` passes against this shape unmodified. `twoLotFlatten`
+ * defaults to no lot keys (vacuously satisfied — nothing to check) rather
+ * than fabricating positions that would also have to exist in whatever
+ * `SmokeObservations` the test under it supplies; tests that actually
+ * exercise the phantom-open check pass their own `positions` AND their own
+ * `twoLotFlatten` override together.
+ */
+function healthyExitPath(overrides: Partial<ExitPathEvidence> = {}): ExitPathEvidence {
+  return {
+    brokerCallSequence: ['cancel:lot-1', 'submitFlatten:lot-1-exit'],
+    residualAlerts: [],
+    // Matches `transactedObservations()`'s 'idem-exit-1' position (closed) —
+    // the fixture pairing the scoped #508/#517 check reads.
+    fullExit: { lotKey: 'idem-exit-1' },
+    partialFlatten: { idempotencyKey: 'lot-partial', expectedResidual: 0, protectedQty: 0 },
+    twoLotFlatten: { lotKeys: [] },
+    ...overrides,
+  };
+}
 
 /** A fully transacted run — the shape every failure case below mutates one field of. */
 function transactedObservations(): SmokeObservations {
@@ -64,9 +86,25 @@ function transactedObservations(): SmokeObservations {
         avg_entry_price: 161,
         order_state: 'filled',
       },
+      // #576: scenario 1's closed lot — paired with `healthyExitPath()`'s
+      // `fullExit.lotKey` default and the `closedTrades`/`flattenSubmissions`
+      // rows above, all keyed on the same 'idem-exit-1'.
+      {
+        idempotency_key: 'idem-exit-1',
+        instrument: 'ETH-USD',
+        side: 'buy',
+        requested_size: 10,
+        filled_size: 10,
+        avg_entry_price: 160,
+        order_state: 'closed',
+      },
     ],
     fills: [{ idempotency_key: 'idem-1', leg: 'entry', price: 161, qty: 31.25, fee: 13 }],
-    closedTrades: [],
+    // #576: no longer always empty — see `SmokeObservations.closedTrades`'s doc.
+    closedTrades: [{ idempotency_key: 'idem-exit-1', realized_pnl_net: 42, close_reason: 'exit' }],
+    flattenSubmissions: [
+      { idempotency_key: 'idem-exit-1', instrument: 'BTC-USD', status: 'submitted' },
+    ],
     // #430 — one per wired mechanism. A healthy run has all of them.
     cosineSetups: [{ debate_id: 'debate-1', instrument: 'BTC-USD' }],
     riskThresholds: [{ name: 'max_position_size', value: 5_000 }],
@@ -86,25 +124,37 @@ function meteredSnapshot() {
   return { crypto: { debatesUsed: 1, llmCallsUsed: 4 } };
 }
 
+/** `evaluateSmokeGate`'s options for a fully healthy run — the base every test below mutates. */
+function healthyGateOptions(overrides: { minTicks?: number; exitPath?: ExitPathEvidence } = {}) {
+  return {
+    minTicks: overrides.minTicks ?? 2,
+    llmRateLimiterSnapshot: meteredSnapshot(),
+    exitPath: overrides.exitPath ?? healthyExitPath(),
+  };
+}
+
 describe('evaluateSmokeGate', () => {
   it('passes when the pipeline transacted end to end', () => {
-    const gate = evaluateSmokeGate(transactedObservations(), {
-      minTicks: 2,
-      llmRateLimiterSnapshot: meteredSnapshot(),
-    });
+    const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
 
     expect(gate.failures).toEqual([]);
     expect(gate.passed).toBe(true);
   });
 
-  it('does NOT require a ClosedTrade — unreachable offline (#82/#83)', () => {
-    const observations = transactedObservations();
-    expect(observations.closedTrades).toEqual([]);
+  /**
+   * #576: no longer the #82/#83 exception it used to be — the exit-path
+   * harness (`runExitPathScenarios`) round-trips a lot to flat on every
+   * healthy run, so an empty `closed_trades` is now a real defect, not an
+   * expected offline limitation.
+   */
+  it('fails when no ClosedTrade was ever recorded', () => {
+    const gate = evaluateSmokeGate(
+      { ...transactedObservations(), closedTrades: [] },
+      healthyGateOptions(),
+    );
 
-    expect(
-      evaluateSmokeGate(observations, { minTicks: 2, llmRateLimiterSnapshot: meteredSnapshot() })
-        .passed,
-    ).toBe(true);
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('no row in closed_trades'))).toBe(true);
   });
 
   it('fails when a debate reached the Trader but trader_log is empty (#328)', () => {
@@ -112,10 +162,7 @@ describe('evaluateSmokeGate', () => {
     observations.traderDecisions = [];
     observations.riskDecisions = [];
 
-    const gate = evaluateSmokeGate(observations, {
-      minTicks: 2,
-      llmRateLimiterSnapshot: meteredSnapshot(),
-    });
+    const gate = evaluateSmokeGate(observations, healthyGateOptions());
 
     expect(gate.passed).toBe(false);
     expect(gate.failures.join(' ')).toContain('no row in trader_log');
@@ -128,10 +175,7 @@ describe('evaluateSmokeGate', () => {
     const observations = transactedObservations();
     observations.riskDecisions = [];
 
-    const gate = evaluateSmokeGate(observations, {
-      minTicks: 2,
-      llmRateLimiterSnapshot: meteredSnapshot(),
-    });
+    const gate = evaluateSmokeGate(observations, healthyGateOptions());
 
     expect(gate.passed).toBe(false);
     expect(gate.failures.join(' ')).toContain('no row in risk_log');
@@ -146,19 +190,13 @@ describe('evaluateSmokeGate', () => {
     observations.traderDecisions = [];
     observations.riskDecisions = [];
 
-    const gate = evaluateSmokeGate(observations, {
-      minTicks: 2,
-      llmRateLimiterSnapshot: meteredSnapshot(),
-    });
+    const gate = evaluateSmokeGate(observations, healthyGateOptions());
 
     expect(gate.failures.join(' ')).not.toContain('trader_log');
   });
 
   it('fails when the loop ran fewer ticks than asked for', () => {
-    const gate = evaluateSmokeGate(transactedObservations(), {
-      minTicks: 5,
-      llmRateLimiterSnapshot: meteredSnapshot(),
-    });
+    const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions({ minTicks: 5 }));
 
     expect(gate.passed).toBe(false);
     expect(gate.failures[0]).toContain('completed 2 of 5 expected ticks');
@@ -182,10 +220,7 @@ describe('evaluateSmokeGate', () => {
       fills: [],
     };
 
-    const gate = evaluateSmokeGate(observations, {
-      minTicks: 2,
-      llmRateLimiterSnapshot: meteredSnapshot(),
-    });
+    const gate = evaluateSmokeGate(observations, healthyGateOptions());
 
     expect(gate.passed).toBe(false);
     expect(gate.failures.some((failure) => failure.includes('no tick got past Analysts'))).toBe(
@@ -202,7 +237,7 @@ describe('evaluateSmokeGate', () => {
   it('fails when a debate ran but no debate_log row was written (#364)', () => {
     const gate = evaluateSmokeGate(
       { ...transactedObservations(), debates: [] },
-      { minTicks: 2, llmRateLimiterSnapshot: meteredSnapshot() },
+      healthyGateOptions(),
     );
 
     expect(gate.passed).toBe(false);
@@ -218,7 +253,7 @@ describe('evaluateSmokeGate', () => {
    */
   it('fails when debates resolved but the rate limiter metered no LLM call (#388)', () => {
     const gate = evaluateSmokeGate(transactedObservations(), {
-      minTicks: 2,
+      ...healthyGateOptions(),
       llmRateLimiterSnapshot: { crypto: { debatesUsed: 3, llmCallsUsed: 0 } },
     });
 
@@ -228,7 +263,7 @@ describe('evaluateSmokeGate', () => {
 
   it('fails when the limiter admitted no debate at all, not just no call (#388)', () => {
     const gate = evaluateSmokeGate(transactedObservations(), {
-      minTicks: 2,
+      ...healthyGateOptions(),
       llmRateLimiterSnapshot: {},
     });
 
@@ -241,7 +276,7 @@ describe('evaluateSmokeGate', () => {
     // the debate never happened, not that the limiter saw nothing.
     const gate = evaluateSmokeGate(
       { ...transactedObservations(), debates: [] },
-      { minTicks: 2, llmRateLimiterSnapshot: {} },
+      { ...healthyGateOptions(), llmRateLimiterSnapshot: {} },
     );
 
     expect(gate.failures.some((failure) => failure.includes('no row in debate_log'))).toBe(true);
@@ -261,7 +296,7 @@ describe('evaluateSmokeGate', () => {
           },
         ],
       },
-      { minTicks: 2, llmRateLimiterSnapshot: meteredSnapshot() },
+      healthyGateOptions(),
     );
 
     expect(gate.passed).toBe(false);
@@ -274,10 +309,7 @@ describe('evaluateSmokeGate', () => {
     if (firstTick === undefined) throw new Error('fixture regression: no first tick');
     firstTick.stages = firstTick.stages.filter((entry) => entry.stage !== 'execution');
 
-    const gate = evaluateSmokeGate(observations, {
-      minTicks: 2,
-      llmRateLimiterSnapshot: meteredSnapshot(),
-    });
+    const gate = evaluateSmokeGate(observations, healthyGateOptions());
 
     expect(gate.passed).toBe(false);
     expect(gate.failures.some((failure) => failure.includes('reached Execution'))).toBe(true);
@@ -286,7 +318,7 @@ describe('evaluateSmokeGate', () => {
   it('fails when nothing was written ahead to open_positions', () => {
     const gate = evaluateSmokeGate(
       { ...transactedObservations(), positions: [] },
-      { minTicks: 2, llmRateLimiterSnapshot: meteredSnapshot() },
+      healthyGateOptions(),
     );
 
     expect(gate.passed).toBe(false);
@@ -301,7 +333,7 @@ describe('evaluateSmokeGate', () => {
   it('fails when the order was submitted but no fill was ever ingested', () => {
     const gate = evaluateSmokeGate(
       { ...transactedObservations(), fills: [] },
-      { minTicks: 2, llmRateLimiterSnapshot: meteredSnapshot() },
+      healthyGateOptions(),
     );
 
     expect(gate.passed).toBe(false);
@@ -315,8 +347,7 @@ describe('evaluateSmokeGate', () => {
    */
   it('fails when anything reached the Alpaca wire client, even if everything else transacted', () => {
     const gate = evaluateSmokeGate(transactedObservations(), {
-      minTicks: 2,
-      llmRateLimiterSnapshot: meteredSnapshot(),
+      ...healthyGateOptions(),
       alpacaWireClientReached: true,
     });
 
@@ -331,7 +362,7 @@ describe('evaluateSmokeGate', () => {
         ...transactedObservations(),
         fills: [{ idempotency_key: 'idem-1', leg: 'stop', price: 150, qty: 1, fee: 0 }],
       },
-      { minTicks: 2, llmRateLimiterSnapshot: meteredSnapshot() },
+      healthyGateOptions(),
     );
 
     expect(gate.passed).toBe(false);
@@ -343,7 +374,7 @@ describe('formatSmokeReport', () => {
     const observations = transactedObservations();
     const report = formatSmokeReport(
       observations,
-      evaluateSmokeGate(observations, { minTicks: 2, llmRateLimiterSnapshot: meteredSnapshot() }),
+      evaluateSmokeGate(observations, healthyGateOptions()),
     ).join('\n');
 
     expect(report).toContain(
@@ -354,9 +385,8 @@ describe('formatSmokeReport', () => {
     expect(report).toContain('BTC-USD buy requested=31.25');
     expect(report).toContain('entry qty=31.25');
     expect(report).toContain('GATE: PASS');
-    // The zero-ClosedTrade explanation travels with the output, so nobody has
-    // to rediscover why a passing run shows none.
-    expect(report).toContain(SMOKE_CLOSED_TRADE_NOTE);
+    expect(report).toContain('closed trades: 1');
+    expect(report).toContain('flatten submissions journalled: 1');
   });
 
   it('lists every unmet requirement on a failure', () => {
@@ -367,6 +397,7 @@ describe('formatSmokeReport', () => {
       positions: [],
       fills: [],
       closedTrades: [],
+      flattenSubmissions: [],
       cosineSetups: [],
       riskThresholds: [],
       analystWeights: [],
@@ -376,7 +407,7 @@ describe('formatSmokeReport', () => {
     };
     const report = formatSmokeReport(
       observations,
-      evaluateSmokeGate(observations, { minTicks: 3, llmRateLimiterSnapshot: meteredSnapshot() }),
+      evaluateSmokeGate(observations, healthyGateOptions({ minTicks: 3 })),
     ).join('\n');
 
     expect(report).toContain('GATE: FAIL');
@@ -520,6 +551,8 @@ describe('smoke-mode containment (#293/#320/#324)', () => {
       'FixedAccountStateProvider',
       'UnreachableAlpacaClient',
       'SMOKE_RUN_INSTANT',
+      'ExitPathBrokerAdapter',
+      'RecordingResidualExposureAlertChannel',
     ]) {
       expect(exported).not.toContain(symbol);
     }
@@ -564,12 +597,26 @@ describe('runSmoke (end-to-end, real composition root)', () => {
 
     // The observable effects, not the log lines.
     expect(result.observations.verdicts.map((verdict) => verdict.status)).toContain('go');
-    expect(result.observations.positions).toHaveLength(1);
+    const sixStageLots = result.observations.positions.filter(
+      (position) => position.instrument === 'BTC-USD',
+    );
+    expect(sixStageLots).toHaveLength(1);
     expect(result.observations.fills.some((fill) => fill.leg === 'entry')).toBe(true);
     // Reachable only through the fill-sync poll: the lot advanced past
     // `submitted` because `ingestFills()` ran, not because `execute()` said so.
-    expect(result.observations.positions[0]?.order_state).toBe('filled');
-    expect(result.observations.positions[0]?.filled_size).toBeGreaterThan(0);
+    expect(sixStageLots[0]?.order_state).toBe('filled');
+    expect(sixStageLots[0]?.filled_size).toBeGreaterThan(0);
+
+    // #576 — the exit path, driven by `runExitPathScenarios` against the same
+    // store: scenario 1 closes one lot, scenario 2 leaves its lot open with a
+    // protected residual (not closed — that is the point), scenario 3 closes
+    // both of its lots. 1 + 0 + 2 = 3 `ClosedTrade`s; 4 `flatten_submissions`
+    // rows (one per exit call across the three scenarios), every one resolved.
+    expect(result.observations.closedTrades).toHaveLength(3);
+    expect(result.observations.flattenSubmissions).toHaveLength(4);
+    expect(result.observations.flattenSubmissions.every((row) => row.status === 'submitted')).toBe(
+      true,
+    );
   });
 
   /**
@@ -593,6 +640,11 @@ describe('runSmoke (end-to-end, real composition root)', () => {
     expect(second.observations.verdicts.map((verdict) => verdict.status)).toEqual(
       first.observations.verdicts.map((verdict) => verdict.status),
     );
+    // #576: the exit-path harness's fixed fractions and fixed clock steps
+    // must reproduce identically too — a flaky ClosedTrade count would mean
+    // something in the harness reads real wall-clock time.
+    expect(second.observations.closedTrades).toEqual(first.observations.closedTrades);
+    expect(second.observations.flattenSubmissions).toEqual(first.observations.flattenSubmissions);
   });
 
   /**
@@ -615,6 +667,7 @@ describe('runSmoke (end-to-end, real composition root)', () => {
       positions: [],
       fills: [],
       closedTrades: [],
+      flattenSubmissions: [],
       cosineSetups: [],
       riskThresholds: [],
       analystWeights: [],
@@ -623,15 +676,17 @@ describe('runSmoke (end-to-end, real composition root)', () => {
       riskDecisions: [],
     };
 
-    const gate = evaluateSmokeGate(observations, {
-      minTicks: 1,
-      llmRateLimiterSnapshot: meteredSnapshot(),
-    });
+    const gate = evaluateSmokeGate(observations, healthyGateOptions({ minTicks: 1 }));
 
     expect(gate.passed).toBe(false);
-    // Eight since #430 added the seeded-mechanism checks: an empty database is
-    // a run where nothing was wired at all, so it fails those too.
-    expect(gate.failures).toHaveLength(8);
+    // Eight since #430 added the seeded-mechanism checks, plus three since
+    // #576 made `closed_trades`/`flatten_submissions` unconditional
+    // requirements AND scoped the #508/#517 check to scenario 1's own lot:
+    // an empty `positions` table means that lookup finds nothing either. Every
+    // other exit-path-SPECIFIC check (ordering, residual, phantom-open) stays
+    // healthy (see `healthyGateOptions`) — this test is about the STORE being
+    // empty, not about the exit path.
+    expect(gate.failures).toHaveLength(11);
     expect(gate.failures.some((failure) => failure.includes('no tick got past Analysts'))).toBe(
       true,
     );
@@ -639,6 +694,11 @@ describe('runSmoke (end-to-end, real composition root)', () => {
     expect(gate.failures.some((failure) => failure.includes('reached Execution'))).toBe(true);
     expect(gate.failures.some((failure) => failure.includes('open_positions'))).toBe(true);
     expect(gate.failures.some((failure) => failure.includes('ingestFills'))).toBe(true);
+    expect(gate.failures.some((failure) => failure.includes('#508/#517'))).toBe(true);
+    expect(gate.failures.some((failure) => failure.includes('no row in closed_trades'))).toBe(true);
+    expect(gate.failures.some((failure) => failure.includes('no row in flatten_submissions'))).toBe(
+      true,
+    );
   });
 });
 
@@ -656,10 +716,7 @@ describe('runSmoke (end-to-end, real composition root)', () => {
  */
 describe('evaluateSmokeGate — one assertion per wired mechanism (#430)', () => {
   function gateFor(observations: SmokeObservations) {
-    return evaluateSmokeGate(observations, {
-      minTicks: 2,
-      llmRateLimiterSnapshot: meteredSnapshot(),
-    });
+    return evaluateSmokeGate(observations, healthyGateOptions());
   }
 
   it('fails when a debate reached the Trader but no cosine setup was written (#432)', () => {
@@ -713,5 +770,218 @@ describe('evaluateSmokeGate — one assertion per wired mechanism (#430)', () =>
     // The conjunction is the point: each row is written by exactly one
     // mechanism, so no single wiring can carry another's check.
     expect(gateFor(transactedObservations()).passed).toBe(true);
+  });
+});
+
+/**
+ * #576 — one case per exit-path invariant, the same convention #430 above
+ * uses: each test mutates exactly one piece of evidence off an otherwise
+ * healthy run and confirms the gate names the right one. These are the
+ * checks `runExitPathScenarios`' real end-to-end evidence has to satisfy
+ * (see `runSmoke`'s test above) — here each is pinned in isolation, the same
+ * way every other branch in this file is.
+ */
+describe('evaluateSmokeGate — exit path (#576)', () => {
+  function gateFor(exitPath: Partial<ExitPathEvidence>) {
+    return evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        exitPath: healthyExitPath(exitPath),
+      }),
+    );
+  }
+
+  it('fails when no flatten was ever journalled (#508)', () => {
+    const gate = evaluateSmokeGate(
+      { ...transactedObservations(), flattenSubmissions: [] },
+      healthyGateOptions(),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('no row in flatten_submissions'))).toBe(
+      true,
+    );
+  });
+
+  /**
+   * The gap an aggregate-only `closed_trades.length === 0` check would miss:
+   * scenario 3 alone closes two lots, so a regression confined to scenario
+   * 1 (e.g. a reintroduced #517 fill-misattribution on its instrument)
+   * would leave `closedTrades` nonzero and the aggregate check green. The
+   * `fullExit` evidence is scoped to scenario 1's own lot for exactly this
+   * reason — mirroring the #571 check's per-lot scoping below.
+   */
+  it("fails when scenario 1's own lot never closed, even though other lots did (#508/#517)", () => {
+    const observations = {
+      ...transactedObservations(),
+      // 'idem-exit-1' (scenario 1's lot) regresses to 'partially_filled';
+      // 'idem-1' is untouched and `closedTrades` still carries its one row
+      // from a DIFFERENT scenario — the aggregate signal alone would pass.
+      positions: transactedObservations().positions.map((position) =>
+        position.idempotency_key === 'idem-exit-1'
+          ? { ...position, order_state: 'partially_filled' }
+          : position,
+      ),
+    };
+
+    const gate = evaluateSmokeGate(observations, healthyGateOptions());
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('idem-exit-1'))).toBe(true);
+    expect(gate.failures.some((failure) => failure.includes('#508/#517'))).toBe(true);
+  });
+
+  it("fails when a flatten_submissions row never resolved to 'submitted'", () => {
+    const gate = evaluateSmokeGate(
+      {
+        ...transactedObservations(),
+        flattenSubmissions: [
+          { idempotency_key: 'idem-exit-1', instrument: 'BTC-USD', status: 'error' },
+        ],
+      },
+      healthyGateOptions(),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes("not resolved to 'submitted'"))).toBe(
+      true,
+    );
+  });
+
+  it('fails when a submitFlatten call has no cancel call recorded before it (#516)', () => {
+    // The reverse of the healthy sequence — cancel AFTER, not before.
+    const gate = gateFor({
+      brokerCallSequence: ['submitFlatten:lot-1-exit', 'cancel:lot-1'],
+    });
+
+    expect(gate.passed).toBe(false);
+    expect(
+      gate.failures.some((failure) =>
+        failure.includes("have no 'cancel' call recorded before them"),
+      ),
+    ).toBe(true);
+  });
+
+  it('fails when no submitFlatten call was ever recorded (#508)', () => {
+    const gate = gateFor({ brokerCallSequence: [] });
+
+    expect(gate.passed).toBe(false);
+    expect(
+      gate.failures.some((failure) => failure.includes('recorded no submitFlatten call')),
+    ).toBe(true);
+  });
+
+  it('fails when a partial flatten left no protective legs armed (#525)', () => {
+    const gate = gateFor({
+      partialFlatten: { idempotencyKey: 'lot-2', expectedResidual: 6, protectedQty: null },
+    });
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('no protective legs armed'))).toBe(
+      true,
+    );
+  });
+
+  it('fails when the re-arm protected the wrong quantity (#525)', () => {
+    const gate = gateFor({
+      partialFlatten: { idempotencyKey: 'lot-2', expectedResidual: 6, protectedQty: 4 },
+    });
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('sized the wrong quantity'))).toBe(
+      true,
+    );
+  });
+
+  it('fails when a residual-exposure alert fired — a successful re-arm posts nothing (#525)', () => {
+    const gate = gateFor({
+      residualAlerts: [
+        {
+          idempotency_key: 'lot-2',
+          instrument: 'SOL-USD',
+          side: 'buy',
+          residual_qty: 6,
+          residual_qty_is_upper_bound: false,
+          stop: 90,
+          target: 120,
+          observed_at: SMOKE_RUN_INSTANT,
+        },
+      ],
+    });
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('re-arm failed'))).toBe(true);
+  });
+
+  it('fails when a lot named by a two-lot flatten is left phantom-open (#571)', () => {
+    const observations = {
+      ...transactedObservations(),
+      positions: [
+        {
+          idempotency_key: 'lot-older',
+          instrument: 'AVAX-USD',
+          side: 'buy',
+          requested_size: 10,
+          filled_size: 10,
+          avg_entry_price: 160,
+          order_state: 'closed',
+        },
+        {
+          idempotency_key: 'lot-newer',
+          instrument: 'AVAX-USD',
+          side: 'buy',
+          requested_size: 10,
+          filled_size: 10,
+          avg_entry_price: 160,
+          // Never reached 'closed' — the #571 regression shape.
+          order_state: 'partially_filled',
+        },
+      ],
+    };
+    const gate = evaluateSmokeGate(
+      observations,
+      healthyGateOptions({
+        exitPath: healthyExitPath({ twoLotFlatten: { lotKeys: ['lot-older', 'lot-newer'] } }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('lot-newer'))).toBe(true);
+    expect(gate.failures.some((failure) => failure.includes('lot-older'))).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('#571'))).toBe(true);
+  });
+
+  it('does not phantom-open when both named lots reached closed', () => {
+    const observations = {
+      ...transactedObservations(),
+      positions: [
+        {
+          idempotency_key: 'lot-older',
+          instrument: 'AVAX-USD',
+          side: 'buy',
+          requested_size: 10,
+          filled_size: 10,
+          avg_entry_price: 160,
+          order_state: 'closed',
+        },
+        {
+          idempotency_key: 'lot-newer',
+          instrument: 'AVAX-USD',
+          side: 'buy',
+          requested_size: 10,
+          filled_size: 10,
+          avg_entry_price: 160,
+          order_state: 'closed',
+        },
+      ],
+    };
+    const gate = evaluateSmokeGate(
+      observations,
+      healthyGateOptions({
+        exitPath: healthyExitPath({ twoLotFlatten: { lotKeys: ['lot-older', 'lot-newer'] } }),
+      }),
+    );
+
+    expect(gate.failures.some((failure) => failure.includes('lot-older, lot-newer'))).toBe(false);
   });
 });
