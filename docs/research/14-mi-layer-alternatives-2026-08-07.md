@@ -99,7 +99,12 @@ Confirmed keyless read access; Gamma 4,000 req/10s; `/prices-history` takes `sta
 | Anthropic web_search | citations + `web_search_requests` count | `page_age` | ❌ encrypted | No | No | Claude API; NOT Nous/Bedrock | $8–13 |
 | OpenAI web_search | `url_citation` + sources list | No | No | No | No | Responses API | $8–12 |
 
-- **Search retrieval free tiers cover the planned 36/day cadence (one refresh sweep = 6 calls, one per asset; §1) — for Brave, only per 14-day window:** Brave Search API news endpoint's $5 free credit/mo covers 504 calls/14d ≈ $2.52, but steady state is 36/day × 30d ≈ 1,080 calls ≈ $5.40/mo — marginally over the credit; drop to 5 sweeps/day (5 × 6 × 30 = 900 calls ≈ $4.50/mo) to stay free, mirroring Tavily (1,000 free credits/mo; same 5-sweeps/day ceiling). Exa $10 free/mo covers steady state as-is. **The claim does NOT extend to the 96/day per-bucket worst case §3's quota column is sized for** — there Brave runs ~2,880 calls/mo ≈ $14.40 and Tavily's credits are blown; raising cadence to per-bucket means paid retrieval. Bing News API retired 2025-08-11 — off the table.
+- **Search retrieval free tiers cover the planned 36/day cadence** (one refresh sweep = 6 calls, one per asset; §1):
+  - **Brave** ($5 free credit/mo): covers 504 calls/14d ≈ $2.52 — but only per 14-day window. Steady state is 36/day × 30d ≈ 1,080 calls ≈ $5.40/mo, marginally over the credit; drop to 5 sweeps/day (5 × 6 × 30 = 900 calls ≈ $4.50/mo) to stay free.
+  - **Tavily** (1,000 free credits/mo): same 5-sweeps/day ceiling.
+  - **Exa** ($10 free/mo): covers steady state as-is.
+  - **The claim does NOT extend to the 96/day per-bucket worst case §3's quota column is sized for** — there Brave runs ~2,880 calls/mo ≈ $14.40 and Tavily's credits are blown; raising cadence to per-bucket means paid retrieval.
+  - Bing News API retired 2025-08-11 — off the table.
 - **Scoring over supplied text via the existing Nous grok-4.5 chat/completions call** keeps ADR-0009 intact and meters through the existing `llm_spend` `stage: 'market_intelligence'` seam. The #485 gate passes by construction: retrieval evidence is our own fetch record.
 - xAI note: old "Live Search" `search_parameters` on chat/completions is no longer documented; the surface is now server-side tools on `/v1/responses` only (`web_search`, `x_search` with `from_date`/`to_date`). $5/1k tool calls + $2/$6 per M tokens on grok-4.5.
 
