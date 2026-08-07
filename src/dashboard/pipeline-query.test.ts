@@ -89,6 +89,8 @@ describe('buildPipelineView', () => {
     });
     expect(lane.cells.every((c) => c.state === 'not_reached')).toBe(true);
     expect(lane.cells.every((c) => c.duration_ms === null && c.decision === null)).toBe(true);
+    // #535: an idle lane's cells have no `audit_log` row to timestamp.
+    expect(lane.cells.every((c) => c.recorded_at === null)).toBe(true);
     expect(view.live_trace_id).toBeNull();
     expect(view.live_entered_at).toBeNull();
   });
@@ -126,6 +128,11 @@ describe('buildPipelineView', () => {
     // The terminal row of a completed trace has no successor to measure
     // against, so its duration is null rather than an invented 0.
     expect(cell(view, 'execution')).toMatchObject({ state: 'done', duration_ms: null });
+    // #535: every `done`/`stopped` cell carries its `audit_log` row's own
+    // timestamp, not the trace's `started_at` or the next row's time.
+    expect(cell(view, 'analysts').recorded_at).toBe(at(0).toISOString());
+    expect(cell(view, 'debate').recorded_at).toBe(at(2).toISOString());
+    expect(cell(view, 'execution').recorded_at).toBe(at(9).toISOString());
   });
 
   it('marks the stage a short-circuited trace ended at as stopped, the rest not_reached', () => {
@@ -146,11 +153,16 @@ describe('buildPipelineView', () => {
       state: 'stopped',
       decision: 'no_trade',
       duration_ms: null,
+      recorded_at: at(3).toISOString(),
     });
     expect(cell(view, 'risk').state).toBe('not_reached');
     expect(cell(view, 'verdict').state).toBe('not_reached');
     expect(cell(view, 'execution').state).toBe('not_reached');
     expect(onlyLane(view)).toMatchObject({ outcome: 'stopped', final_stage: 'trader' });
+    // #535: cells the trace never reached have nothing to timestamp.
+    expect(cell(view, 'risk').recorded_at).toBeNull();
+    expect(cell(view, 'verdict').recorded_at).toBeNull();
+    expect(cell(view, 'execution').recorded_at).toBeNull();
   });
 
   it('reports a quorum skip as its own outcome, not as a generic stop', () => {
@@ -209,6 +221,9 @@ describe('buildPipelineView', () => {
       attempts: 2,
       decision: 'bullish',
       duration_ms: 5_000,
+      // #535: last write wins, matching `decision` — the retry's own row
+      // (t=4), not the first attempt's (t=1).
+      recorded_at: at(4).toISOString(),
     });
     expect(cell(view, 'analysts').attempts).toBe(1);
   });
@@ -255,9 +270,16 @@ describe('buildPipelineView', () => {
       state: 'live',
       duration_ms: null,
       decision: null,
+      // #535: a live cell has no `audit_log` row yet — the row is written
+      // after the stage returns — so it has nothing to timestamp.
+      // `live_entered_at` is its clock instead.
+      recorded_at: null,
       attempts: 0,
     });
-    expect(cell(view, 'analysts').state).toBe('done');
+    expect(cell(view, 'analysts')).toMatchObject({
+      state: 'done',
+      recorded_at: at(0).toISOString(),
+    });
     expect(cell(view, 'trader').state).toBe('not_reached');
     expect(view.live_trace_id).toBe('trace-live');
     expect(view.live_entered_at).toBe(at(1).toISOString());
@@ -350,6 +372,7 @@ describe('buildPipelineView', () => {
       attempts: 0,
       decision: null,
       duration_ms: null,
+      recorded_at: null,
     });
   });
 
@@ -373,6 +396,7 @@ describe('buildPipelineView', () => {
       state: 'skipped',
       duration_ms: null,
       attempts: 0,
+      recorded_at: null,
     });
     expect(cell(view, 'trader').state).toBe('stopped');
   });

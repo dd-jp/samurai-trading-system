@@ -59,6 +59,7 @@ function cells(
     state: 'not_reached',
     duration_ms: null,
     decision: null,
+    recorded_at: null,
     attempts: 1,
     ...(overrides[stage] ?? {}),
   }));

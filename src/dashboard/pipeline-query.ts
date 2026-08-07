@@ -233,13 +233,17 @@ function buildLane(
   const durationByStage = new Map<PipelineStage, number>();
   const attemptsByStage = new Map<PipelineStage, number>();
   const decisionByStage = new Map<PipelineStage, string>();
+  const recordedAtByStage = new Map<PipelineStage, Date>();
   let total_ms = 0;
 
   events.forEach((event, index) => {
     attemptsByStage.set(event.stage, (attemptsByStage.get(event.stage) ?? 0) + 1);
     // Last write wins: a retried stage's outcome is what it finally decided,
-    // while `attempts` is what says the road there was bumpy (#414).
+    // while `attempts` is what says the road there was bumpy (#414). The
+    // recorded timestamp follows the same rule (#535) — a retried stage's
+    // `recorded_at` is when it finally recorded, not its first attempt.
     decisionByStage.set(event.stage, event.decision);
+    recordedAtByStage.set(event.stage, event.timestamp);
     const next = events[index + 1];
     if (next === undefined) {
       return;
@@ -266,6 +270,11 @@ function buildLane(
       // to report at all.
       duration_ms: state === 'live' ? null : (durationByStage.get(stage) ?? null),
       decision: decisionByStage.get(stage) ?? null,
+      // A live cell has no `audit_log` row yet — the row is written after the
+      // stage returns, so `live_entered_at` is its clock, not this field
+      // (#535). Every other cell without a row (`skipped`, `not_reached`)
+      // has nothing to report either.
+      recorded_at: state === 'live' ? null : (recordedAtByStage.get(stage)?.toISOString() ?? null),
       attempts,
     };
   });
@@ -286,7 +295,14 @@ function buildLane(
 }
 
 function idleCell(stage: PipelineStage): PipelineCell {
-  return { stage, state: 'not_reached', duration_ms: null, decision: null, attempts: 0 };
+  return {
+    stage,
+    state: 'not_reached',
+    duration_ms: null,
+    decision: null,
+    recorded_at: null,
+    attempts: 0,
+  };
 }
 
 /**

@@ -77,6 +77,12 @@ export interface PipelineCell {
   /** The `audit_log` decision word (`quorum_met`, `quorum_skip`, …), when one was recorded. */
   decision: string | null;
   /**
+   * ISO timestamp of the stage's last `audit_log` row; `null` for
+   * `not_reached`, `skipped`, and `live` cells (a live stage has no row yet
+   * — `live_entered_at` is its clock).
+   */
+  recorded_at: string | null;
+  /**
    * How many times this stage was reached in this trace. Normally 1.
    *
    * `audit_log` has no primary key precisely because "a tick can legitimately
