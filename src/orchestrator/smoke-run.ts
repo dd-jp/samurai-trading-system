@@ -104,6 +104,7 @@
  * instant for both collapses that gap to zero.
  */
 import { pathToFileURL } from 'node:url';
+import type { CostConfig } from '../cost-model-backtest/index.js';
 import { CostModelImpl } from '../cost-model-backtest/index.js';
 import type {
   LlmClient,
@@ -112,8 +113,19 @@ import type {
   RateLimiterSnapshot,
 } from '../debate-engine/index.js';
 import { RateLimiter } from '../debate-engine/index.js';
-import type { AlpacaClient } from '../execution/index.js';
-import { SimulatedBrokerAdapter } from '../execution/index.js';
+import type {
+  AlpacaClient,
+  BrokerAck,
+  BrokerAdapter,
+  ExecutionConfig,
+  ExecutionResult,
+  NativeBracketRequest,
+  NormalizedFill,
+  NormalizedOrder,
+  ResidualExposureAlert,
+  ResidualExposureAlertChannel,
+} from '../execution/index.js';
+import { SimulatedBrokerAdapter, SqliteExecutionStore } from '../execution/index.js';
 import type { Bar } from '../market-data-service/index.js';
 import {
   FixtureDataSource,
@@ -122,20 +134,24 @@ import {
 } from '../market-data-service/index.js';
 import type { SessionBasisByClass } from '../risk-manager/index.js';
 import { delay } from '../shared/http/delay.js';
+import type { OrderIntent } from '../shared/index.js';
 import { SimulatedClock } from '../shared/index.js';
 import { openSharedStore, type SharedStore as SqliteHandle } from '../shared/store/index.js';
+import type { VerdictDecision } from '../verdict/index.js';
 import {
   LoggingAnalystSkipAlertChannel,
   LoggingBreachAlertChannel,
   LoggingHeartbeatChannel,
   LoggingLoosenApprovalChannel,
   LoggingOrphanAlertChannel,
+  LoggingResidualExposureAlertChannel,
   LoggingUnpricedFillAlertChannel,
 } from './console-channels.js';
 import { startFromEnvironment } from './index.js';
 import { JsonLogger } from './logger.js';
 import { paperStartingProfile } from './paper-profile.js';
 import type { AccountStateProvider } from './production/direct-bind.js';
+import { buildExecutionSurface } from './production/direct-bind.js';
 import { SMOKE_TEST_UNIVERSE } from './production.js';
 import type { Logger } from './types.js';
 
@@ -362,6 +378,484 @@ export class UnreachableAlpacaClient implements AlpacaClient {
   }
 }
 
+/**
+ * The exit path (#576) — the pre-soak gate's other half.
+ *
+ * Everything above this point exercises ENTRY: the real six-stage tick loop,
+ * through `startFromEnvironment`, on a fixture engineered to make Analysts
+ * agree bullish. There is no equivalent way to make the same loop reach an
+ * `exit` intent: the Trader only produces one when Debate resolves opposite
+ * the held lot's side (`production.test.ts`'s `#568` wiring test drives this
+ * by hand-feeding the Trader step a bearish `DebateResult` — nobody drives it
+ * through Analysts and a real LLM, because nothing about this fixture's fixed
+ * uptrend would ever make that resolution happen honestly). Six merged fixes
+ * (#508/#516/#517/#525/#568/#571) live entirely downstream of that intent, in
+ * `Execution`, and none of them needed Analysts, Debate, Trader, Risk or
+ * Verdict to be exercised to be regressed or fixed.
+ *
+ * So this harness composes Execution directly, the same way the SIX-STAGE
+ * run composes the whole pipeline: `buildExecutionSurface`
+ * (production/direct-bind.ts) is the identical function
+ * `buildProductionComponents` calls to bind the tick loop's own `execution`
+ * step and the fill-sync loop's `ingestFills`/`reconcile` surfaces — reusing
+ * it here is not a second composition root, it is calling the production
+ * binding helper for the one layer these six fixes actually live in.
+ * `VerdictDecision`s are hand-built (skipping Analysts/Debate/Trader/Risk/
+ * Verdict, all already proven reachable by the entry-path run above) and fed
+ * straight to `ExecutionImpl.execute()`/`.ingestFills()` against the SAME
+ * `:memory:` store `readSmokeObservations` reads back.
+ *
+ * Three instruments, one per invariant, so no scenario's lots ever appear in
+ * another's `heldLots` filter (`executeExit`, execute.ts, filters
+ * `getOpenPositions()` by instrument alone) — sharing one would mean a
+ * still-open residual from an earlier phase silently joining a later phase's
+ * flatten:
+ *
+ * 1. `EXIT_PATH_INSTRUMENTS.fullExit` — open, exit, assert `closed` +
+ *    `ClosedTrade`, assert cancel-before-flatten ORDERING (#508/#516/#517).
+ * 2. `EXIT_PATH_INSTRUMENTS.partialFlatten` — a flatten that fills only
+ *    partially, asserting the residual is re-armed, not left naked (#525).
+ * 3. `EXIT_PATH_INSTRUMENTS.twoLot` — an older lot with a prior partial exit
+ *    (itself produced the same way as scenario 2) plus a fresh second lot,
+ *    flattened together, asserting NEITHER is left phantom-open (#571).
+ */
+const EXIT_PATH_INSTRUMENTS = {
+  fullExit: 'ETH-USD',
+  partialFlatten: 'SOL-USD',
+  twoLot: 'AVAX-USD',
+} as const;
+
+/**
+ * `CostModelImpl.fill()` (cost-model.ts) always returns
+ * `filled_size: request.size` — there is no partial-fill modelling anywhere
+ * in the real cost model or `SimulatedBrokerAdapter`, so a genuinely partial
+ * flatten cannot be produced by the unmodified production adapter (verified
+ * by reading cost-model.ts before building this — it is the reason this
+ * harness exists rather than just calling `runSmoke` with a bigger fixture).
+ * `ExitPathBrokerAdapter` below truncates a NAMED flatten's fill to this
+ * fraction of what was requested, deterministically, entirely on this side
+ * of the `BrokerAdapter` seam — `execution/` is untouched.
+ */
+const PARTIAL_FLATTEN_FRACTION = 0.4;
+/** Scenario 3's setup fraction — see the class docs above for why it reuses this technique. */
+const PRIOR_EXIT_FRACTION = 0.3;
+
+/** Every entry lot this harness opens, before any exit. */
+const EXIT_PATH_LOT_SIZE = 10;
+
+/**
+ * Records every alert `ingestFills()`'s `maybeRearmResidual` posts
+ * (ingest-fills.ts), on any of its three paths — a failed store read, a
+ * non-finite/non-positive residual, or the broker rejecting the re-arm
+ * itself. All three mean the same thing from a smoke run's chair: the #525
+ * re-arm did not happen, because `ResidualExposureAlert` (residual-exposure-
+ * alert.ts) is explicitly documented as "the FALLBACK for when that re-arm
+ * itself fails, never the primary mechanism ... a successful re-arm posts
+ * nothing here". A healthy smoke run, against a deterministic offline
+ * broker, should therefore produce zero of these, ever — see
+ * `evaluateSmokeGate`'s check for the reasoning this feeds.
+ */
+export class RecordingResidualExposureAlertChannel implements ResidualExposureAlertChannel {
+  readonly alerts: ResidualExposureAlert[] = [];
+
+  constructor(private readonly inner?: ResidualExposureAlertChannel) {}
+
+  async postResidualExposureAlert(alert: ResidualExposureAlert): Promise<void> {
+    this.alerts.push(alert);
+    await this.inner?.postResidualExposureAlert(alert);
+  }
+}
+
+/**
+ * Decorates a real `SimulatedBrokerAdapter` for the exit-path harness (#576).
+ * Adds exactly two things neither the real adapter nor a change to
+ * `execution/` (out of this ticket's scope) is needed for:
+ *
+ * 1. **Call-sequence recording.** `executeExit` cancels every held lot
+ *    BEFORE calling `submitFlatten` (#516) — an ordering property no store
+ *    row observes; `flatten_submissions` and `open_positions` both look
+ *    identical whether the cancel happened first or never happened at all.
+ *    `callSequence` is the only way to assert the ORDERING the ticket asks
+ *    for, not merely that both calls occurred.
+ * 2. **A deterministic partial flatten fill.** See `PARTIAL_FLATTEN_FRACTION`
+ *    above for why the real adapter cannot produce one. `truncateFlattenFill`
+ *    opts a specific flatten's `clientOrderId` into a fixed-fraction fill;
+ *    `fetchNewFills` rewrites that one fill's `qty`/`fee` on the way out,
+ *    leaving `broker_fill_id` untouched — `ingestFills()` dedups on that id
+ *    globally (ingest-fills.ts) and `redistributeFlattenFills` derives a
+ *    per-lot id FROM it, so renaming it would silently break that contract
+ *    in a way that would look like a #571 regression rather than what it is.
+ *
+ * `getOpenPositions()` is passed straight through to the delegate and is
+ * DELIBERATELY not reconciled against the truncated feed above: the
+ * delegate's own netting still sees its full-size internal fill, so the two
+ * disagree by construction once a truncation is in effect. Nothing in this
+ * harness (or the gate) reads `getOpenPositions()` — it exists on this class
+ * only because `BrokerAdapter` requires it. This is a fixed-scenario smoke
+ * fixture, not a general-purpose adapter; a caller with a different need
+ * must not assume this method is trustworthy here.
+ */
+export class ExitPathBrokerAdapter implements BrokerAdapter {
+  /** Every `cancel`/`submitBracket`/`submitFlatten`/`rearmProtectiveLegs` call, in call order. */
+  readonly callSequence: string[] = [];
+  private readonly partialFlattenFraction = new Map<string, number>();
+
+  constructor(private readonly delegate: SimulatedBrokerAdapter) {}
+
+  /** Opts `clientOrderId`'s flatten into a truncated fill — see the class docs. */
+  truncateFlattenFill(clientOrderId: string, fraction: number): void {
+    this.partialFlattenFraction.set(clientOrderId, fraction);
+  }
+
+  async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
+    this.callSequence.push(`submitBracket:${order.client_order_id}`);
+    return this.delegate.submitBracket(order);
+  }
+
+  async getOrder(clientOrderId: string, instrument: string): Promise<NormalizedOrder | null> {
+    return this.delegate.getOrder(clientOrderId, instrument);
+  }
+
+  async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
+    const fills = await this.delegate.fetchNewFills(since);
+    if (this.partialFlattenFraction.size === 0) return fills;
+
+    return fills.map((fill) => {
+      // A flatten's fill id is always `${clientOrderId}:flatten` (simulated-adapter.ts).
+      const clientOrderId = fill.broker_fill_id.endsWith(':flatten')
+        ? fill.broker_fill_id.slice(0, -':flatten'.length)
+        : undefined;
+      const fraction =
+        clientOrderId === undefined ? undefined : this.partialFlattenFraction.get(clientOrderId);
+      if (fraction === undefined) return fill;
+      // `broker_fill_id` is left untouched — see the class docs' dedup note.
+      return { ...fill, qty: fill.qty * fraction, fee: fill.fee * fraction };
+    });
+  }
+
+  async resizeProtectiveLegs(clientOrderId: string, filledQty: number): Promise<void> {
+    this.callSequence.push(`resizeProtectiveLegs:${clientOrderId}`);
+    return this.delegate.resizeProtectiveLegs(clientOrderId, filledQty);
+  }
+
+  async rearmProtectiveLegs(
+    clientOrderId: string,
+    instrument: string,
+    side: 'buy' | 'sell',
+    qty: number,
+    stop: number,
+    target: number,
+  ): Promise<void> {
+    this.callSequence.push(`rearmProtectiveLegs:${clientOrderId}`);
+    return this.delegate.rearmProtectiveLegs(clientOrderId, instrument, side, qty, stop, target);
+  }
+
+  async submitFlatten(
+    instrument: string,
+    side: 'buy' | 'sell',
+    size: number,
+    clientOrderId: string,
+  ): Promise<BrokerAck> {
+    this.callSequence.push(`submitFlatten:${clientOrderId}`);
+    return this.delegate.submitFlatten(instrument, side, size, clientOrderId);
+  }
+
+  async cancel(clientOrderId: string, instrument: string): Promise<void> {
+    this.callSequence.push(`cancel:${clientOrderId}`);
+    return this.delegate.cancel(clientOrderId, instrument);
+  }
+
+  /** Passed straight through — see the class docs for why this is deliberately unreconciled. */
+  async getOpenPositions(): ReturnType<BrokerAdapter['getOpenPositions']> {
+    return this.delegate.getOpenPositions();
+  }
+
+  /** The quantity `rearmProtectiveLegs`/`resizeProtectiveLegs` last set for this lot. */
+  getProtectedQty(clientOrderId: string): number | null {
+    return this.delegate.getProtectedQty(clientOrderId);
+  }
+}
+
+/**
+ * A minimal, internally-consistent `OrderIntent` for the exit-path harness.
+ * Every field the Trader would normally compute (sizing rationale, cosine
+ * precedent, conviction) is a fixed placeholder — `execute()`'s exit branch
+ * reads none of them, and the entry branch only reads `entry`/`stop`/
+ * `target` to expand the bracket, so any internally-consistent numbers serve.
+ */
+function exitPathOrder(
+  instrument: string,
+  idempotencyKey: string,
+  side: 'buy' | 'sell',
+  intentType: 'entry' | 'exit',
+  size: number,
+  decisionTime: Date,
+): OrderIntent {
+  return {
+    idempotency_key: idempotencyKey,
+    instrument,
+    asset_class: 'crypto',
+    side,
+    intent_type: intentType,
+    size,
+    entry: SMOKE_MARK_PRICE,
+    stop: SMOKE_MARK_PRICE - 10,
+    target: SMOKE_MARK_PRICE + 20,
+    time_in_force: 'gtc',
+    decision_timestamp: decisionTime,
+    metadata: {
+      debate_id: `debate-${idempotencyKey}`,
+      conviction: 0.7,
+      converged: true,
+      sizing: {
+        base_risk_fraction: 0.01,
+        conviction_multiplier: 1,
+        vol_floor_factor: 1,
+        non_converged_haircut: 1,
+        cosine_multiplier: 1,
+      },
+      cosine_precedent: { neighbor_count: 0, weighted_mean_r: null, no_precedent: true },
+    },
+  };
+}
+
+/** A `go` verdict wrapping `order` — the only status `Execution.execute()` acts on. */
+function exitPathVerdict(order: OrderIntent, timestamp: Date): VerdictDecision {
+  return {
+    status: 'go',
+    order,
+    no_go_reason: null,
+    approval_path: 'automated',
+    would_require_approval: false,
+    idempotency_key: order.idempotency_key,
+    timestamp,
+  };
+}
+
+/** Throws with the harness step named, rather than letting a silent no-op reach the gate. */
+function assertSubmitted(result: ExecutionResult, step: string): void {
+  if (result.status !== 'submitted') {
+    throw new Error(
+      `smoke exit-path harness: '${step}' did not submit (status=${result.status}, ` +
+        `reason=${result.reason ?? 'none'}) — a scenario precondition is wrong, not the gate`,
+    );
+  }
+}
+
+/** What `evaluateSmokeGate` needs from the exit-path harness beyond the store. */
+export interface ExitPathEvidence {
+  /** `ExitPathBrokerAdapter.callSequence` — the #516 ordering evidence. */
+  brokerCallSequence: readonly string[];
+  /** Every residual-exposure alert posted anywhere during the run (harness + tick loop). */
+  residualAlerts: readonly ResidualExposureAlert[];
+  /** Scenario 2's residual (#525): what was expected vs. what the broker actually protected. */
+  partialFlatten: {
+    idempotencyKey: string;
+    expectedResidual: number;
+    protectedQty: number | null;
+  };
+  /** Scenario 3's two lots (#571): named here so the gate can check neither is phantom-open. */
+  twoLotFlatten: { lotKeys: readonly string[] };
+}
+
+/**
+ * Drives the three scenarios documented above against `db`, using `clock`
+ * (advanced deterministically between phases — see `SimulatedClock.advanceTo`)
+ * and the given cost/execution config. Returns everything `evaluateSmokeGate`
+ * needs that is not itself a store row.
+ */
+async function runExitPathScenarios(input: {
+  db: SqliteHandle;
+  clock: SimulatedClock;
+  costConfig: CostConfig;
+  executionConfig: ExecutionConfig;
+}): Promise<ExitPathEvidence> {
+  const { db, clock, costConfig, executionConfig } = input;
+
+  const bars = Object.values(EXIT_PATH_INSTRUMENTS).flatMap((instrument) =>
+    buildSmokeFixtureBars(instrument),
+  );
+  const dataSource = new FixtureDataSource(
+    bars,
+    { price: SMOKE_MARK_PRICE, observed_at: SMOKE_RUN_INSTANT, source: 'smoke-fixture' },
+    'crypto',
+    { bid: SMOKE_MARK_PRICE - 0.5, ask: SMOKE_MARK_PRICE + 0.5, observed_at: SMOKE_RUN_INSTANT },
+  );
+  const marketData = new MarketDataServiceImpl(
+    dataSource,
+    clock,
+    'live',
+    new SqliteMarketDataStore(db),
+  );
+  const costModel = new CostModelImpl(costConfig);
+  const innerBroker = new SimulatedBrokerAdapter({
+    clock,
+    costModel,
+    marketData,
+    config: executionConfig.simulated,
+  });
+  const broker = new ExitPathBrokerAdapter(innerBroker);
+  const residualAlerts = new RecordingResidualExposureAlertChannel();
+  const execution = buildExecutionSurface(
+    {
+      clock,
+      broker,
+      store: new SqliteExecutionStore(db),
+      costModel,
+      marketData,
+      config: executionConfig,
+      mode: 'paper',
+      residualExposureAlerts: residualAlerts,
+    },
+    'smoke-exit-path',
+  );
+
+  const tick = (): Date => {
+    clock.advanceTo(new Date(clock.now().getTime() + 1_000));
+    return clock.now();
+  };
+
+  /** Submits `order` as a `go`, asserting it actually reached the broker. */
+  const submit = async (order: OrderIntent, step: string): Promise<void> => {
+    assertSubmitted(await execution.execute(exitPathVerdict(order, clock.now())), step);
+  };
+
+  // --- Scenario 1 (#508/#516/#517): open, exit in full. ------------------
+  // `evaluateSmokeGate` reads the cancel-before-flatten ORDERING off
+  // `broker.callSequence` and the `ClosedTrade` off `closed_trades` —
+  // nothing scenario-specific has to be returned for this one.
+  const lot1 = 'smoke-exit-full-lot';
+  await submit(
+    exitPathOrder(EXIT_PATH_INSTRUMENTS.fullExit, lot1, 'buy', 'entry', EXIT_PATH_LOT_SIZE, tick()),
+    'scenario 1 entry',
+  );
+  await execution.ingestFills();
+  await submit(
+    exitPathOrder(
+      EXIT_PATH_INSTRUMENTS.fullExit,
+      'smoke-exit-full-exit',
+      'sell',
+      'exit',
+      EXIT_PATH_LOT_SIZE,
+      tick(),
+    ),
+    'scenario 1 exit',
+  );
+  await execution.ingestFills();
+
+  // --- Scenario 2 (#525): a flatten that fills only partially. -----------
+  const lot2 = 'smoke-exit-partial-lot';
+  const lot2ExitKey = 'smoke-exit-partial-exit';
+  await submit(
+    exitPathOrder(
+      EXIT_PATH_INSTRUMENTS.partialFlatten,
+      lot2,
+      'buy',
+      'entry',
+      EXIT_PATH_LOT_SIZE,
+      tick(),
+    ),
+    'scenario 2 entry',
+  );
+  await execution.ingestFills();
+  broker.truncateFlattenFill(lot2ExitKey, PARTIAL_FLATTEN_FRACTION);
+  await submit(
+    exitPathOrder(
+      EXIT_PATH_INSTRUMENTS.partialFlatten,
+      lot2ExitKey,
+      'sell',
+      'exit',
+      EXIT_PATH_LOT_SIZE,
+      tick(),
+    ),
+    'scenario 2 exit',
+  );
+  await execution.ingestFills();
+  // Matches ingest-fills.ts's own `filledSize - exitQty`, not an algebraic
+  // rearrangement of it — the two are not guaranteed to be the same float64
+  // bit pattern (ADR-0005), only the SAME expression is.
+  const scenario2ExitFillQty = EXIT_PATH_LOT_SIZE * PARTIAL_FLATTEN_FRACTION;
+  const scenario2ExpectedResidual = EXIT_PATH_LOT_SIZE - scenario2ExitFillQty;
+
+  // --- Scenario 3 (#571): an older lot with a prior partial exit, plus a --
+  // fresh sibling, flattened TOGETHER. The older lot's "prior exit" is built
+  // with the same partial-fill technique as scenario 2 (a full-size exit
+  // that only partially fills) — that is the only way to leave it holding
+  // less than its entry size, since `executeExit` refuses any exit whose
+  // size does not exactly equal what is currently held (execute.ts).
+  const lot3Older = 'smoke-exit-twolot-older';
+  const lot3PriorExitKey = 'smoke-exit-twolot-older-prior-exit';
+  await submit(
+    exitPathOrder(
+      EXIT_PATH_INSTRUMENTS.twoLot,
+      lot3Older,
+      'buy',
+      'entry',
+      EXIT_PATH_LOT_SIZE,
+      tick(),
+    ),
+    'scenario 3 older-lot entry',
+  );
+  await execution.ingestFills();
+  broker.truncateFlattenFill(lot3PriorExitKey, PRIOR_EXIT_FRACTION);
+  await submit(
+    exitPathOrder(
+      EXIT_PATH_INSTRUMENTS.twoLot,
+      lot3PriorExitKey,
+      'sell',
+      'exit',
+      EXIT_PATH_LOT_SIZE,
+      tick(),
+    ),
+    'scenario 3 older-lot prior exit',
+  );
+  await execution.ingestFills();
+
+  const lot3Newer = 'smoke-exit-twolot-newer';
+  await submit(
+    exitPathOrder(
+      EXIT_PATH_INSTRUMENTS.twoLot,
+      lot3Newer,
+      'buy',
+      'entry',
+      EXIT_PATH_LOT_SIZE,
+      tick(),
+    ),
+    'scenario 3 newer-lot entry',
+  );
+  await execution.ingestFills();
+
+  // Both lots' held quantity, summed: the older one already gave up
+  // `PRIOR_EXIT_FRACTION` of its size (same `filledSize - exitQty` form as
+  // above), the newer one is untouched.
+  const olderPriorExitFillQty = EXIT_PATH_LOT_SIZE * PRIOR_EXIT_FRACTION;
+  const olderHeld = EXIT_PATH_LOT_SIZE - olderPriorExitFillQty;
+  const twoLotFlattenSize = olderHeld + EXIT_PATH_LOT_SIZE;
+  await submit(
+    exitPathOrder(
+      EXIT_PATH_INSTRUMENTS.twoLot,
+      'smoke-exit-twolot-flatten',
+      'sell',
+      'exit',
+      twoLotFlattenSize,
+      tick(),
+    ),
+    'scenario 3 two-lot flatten',
+  );
+  await execution.ingestFills();
+
+  return {
+    brokerCallSequence: broker.callSequence,
+    residualAlerts: residualAlerts.alerts,
+    partialFlatten: {
+      idempotencyKey: lot2,
+      expectedResidual: scenario2ExpectedResidual,
+      protectedQty: broker.getProtectedQty(lot2),
+    },
+    twoLotFlatten: { lotKeys: [lot3Older, lot3Newer] },
+  };
+}
+
 /** One tick's audit trail: the stages it reached and what each decided. */
 export interface SmokeTick {
   trace_id: string;
@@ -401,8 +895,23 @@ export interface SmokeObservations {
   }[];
   /** From `fills` — appended by `ingestFills()` on the fill-sync poll. */
   fills: { idempotency_key: string; leg: string; price: number; qty: number; fee: number }[];
-  /** From `closed_trades`. Always empty offline — see `SMOKE_CLOSED_TRADE_NOTE`. */
+  /**
+   * From `closed_trades` — written by `ingestFills()`'s round-trip-to-flat
+   * branch (#82/#83). Empty until #576's exit-path harness (`runExitPathScenarios`
+   * below) started driving `intent_type: 'exit'` through `execute()`; before
+   * that this table was unreachable offline, because
+   * `SimulatedBrokerAdapter.submitBracket` models only the entry fill and
+   * nothing ever submitted a flatten. See `evaluateSmokeGate`'s check.
+   */
   closedTrades: { idempotency_key: string; realized_pnl_net: number; close_reason: string }[];
+  /**
+   * From `flatten_submissions` (#508/#516 review, migration 0019) — the
+   * write-ahead journal `executeExit` writes BEFORE cancelling a held lot's
+   * bracket and BEFORE calling `submitFlatten`. A row here is the durable
+   * proof an exit reached that path at all; its `status` proves whether the
+   * broker call resolved (`'submitted'`) or was refused/left ambiguous.
+   */
+  flattenSubmissions: { idempotency_key: string; instrument: string; status: string }[];
   /**
    * From `cosine_setups` — the row `Trader.decide` writes at decision time
    * (#432). Observed here for `debates`' reason and from the same defect: the
@@ -447,24 +956,6 @@ export interface SmokeObservations {
   breakerStates: { tier: string; tripped: number }[];
 }
 
-/**
- * Why a passing smoke run still reports zero `ClosedTrade`s, stated in the
- * output rather than left to be rediscovered.
- *
- * `SimulatedBrokerAdapter.submitBracket` models exactly one `entry` fill and
- * parks it; `resizeProtectiveLegs` records a quantity and nothing more. No
- * stop/target/exit fill is ever produced, so `ingestFills()`'s
- * round-trip-to-flat branch is never taken and `writeClosedTrade` is never
- * called. `intent_type: 'exit'` is separately unimplemented (#82/#83). A
- * `ClosedTrade` is therefore not reachable offline today, and the gate does
- * not require one — inventing exit-fill modelling in the simulated adapter to
- * satisfy a smoke run would be the tail wagging the dog.
- */
-export const SMOKE_CLOSED_TRADE_NOTE =
-  'closed trades: 0 — expected offline. SimulatedBrokerAdapter models only the entry fill (no ' +
-  'stop/target/exit legs), so ingestFills() never reaches round-trip-to-flat and no ClosedTrade ' +
-  'can be produced. Not a gate failure; see #82/#83.';
-
 /** Reads everything the gate and the report need, in one pass over the store. */
 export function readSmokeObservations(db: SqliteHandle): SmokeObservations {
   const auditRows = db
@@ -498,6 +989,9 @@ export function readSmokeObservations(db: SqliteHandle): SmokeObservations {
     closedTrades: db
       .prepare('SELECT idempotency_key, realized_pnl_net, close_reason FROM closed_trades')
       .all() as SmokeObservations['closedTrades'],
+    flattenSubmissions: db
+      .prepare('SELECT idempotency_key, instrument, status FROM flatten_submissions ORDER BY rowid')
+      .all() as SmokeObservations['flattenSubmissions'],
     // #430. Each of these is a mechanism that was, at some point, fully built,
     // fully unit-tested and called by nothing in production. The table row is
     // the only evidence that a caller exists.
@@ -556,7 +1050,15 @@ export interface SmokeGateResult {
  * first-write-wins guard (debate-adapter.ts) correctly collapses them to one
  * row rather than duplicating that debate's analysts in attribution.
  *
- * A `ClosedTrade` is NOT required: see `SMOKE_CLOSED_TRADE_NOTE`.
+ * ## The exit path (#576)
+ *
+ * A `ClosedTrade` IS now required — see `options.exitPath` and
+ * `runExitPathScenarios`. Six merged fixes (#508/#516/#517/#525/#568/#571)
+ * live entirely in `Execution`'s exit path and none of them were reachable
+ * from anything above; this gate could pass with every one of them
+ * regressed, which was #576's entire finding. The checks below are a
+ * conjunction for the same reason requirements 1-7 above are: each names a
+ * different one of the six.
  */
 export function evaluateSmokeGate(
   observations: SmokeObservations,
@@ -592,6 +1094,14 @@ export function evaluateSmokeGate(
      * required positional on `buildDebateStep`.
      */
     llmRateLimiterSnapshot: RateLimiterSnapshot;
+    /**
+     * The exit-path harness's evidence (#576) — required for the same
+     * "compile error, not a silent no-op" reason `llmRateLimiterSnapshot`
+     * above is: `runExitPathScenarios` always runs as part of `runSmoke`, so
+     * an omitted argument here would be a caller that stopped wiring it in,
+     * not a run that legitimately has nothing to report.
+     */
+    exitPath: ExitPathEvidence;
   },
 ): SmokeGateResult {
   const failures: string[] = [];
@@ -756,6 +1266,113 @@ export function evaluateSmokeGate(
     );
   }
 
+  // #576 — the exit path, unconditional: `runExitPathScenarios` always runs,
+  // so every one of these is expected on every healthy smoke run, the same
+  // way `positions`/`fills` above are.
+
+  // #508/#516: the write-ahead journal must exist and every row must have
+  // resolved — an unresolved row means an exit was journalled and then the
+  // broker call was refused or left ambiguous.
+  if (observations.flattenSubmissions.length === 0) {
+    failures.push(
+      "no row in flatten_submissions — no exit ever reached executeExit()'s write-ahead journal " +
+        "(#508), so #516's cancel-before-flatten guard was never exercised",
+    );
+  } else {
+    const unresolved = observations.flattenSubmissions.filter((row) => row.status !== 'submitted');
+    if (unresolved.length > 0) {
+      failures.push(
+        `flatten_submissions has ${unresolved.length} row(s) not resolved to 'submitted' ` +
+          `(${unresolved.map((row) => `${row.idempotency_key}:${row.status}`).join(', ')}) — an ` +
+          'exit was journalled but its flatten never reached, or was refused by, the broker',
+      );
+    }
+  }
+
+  // #516 — ORDERING, not merely that both calls happened: every `submitFlatten`
+  // must have a `cancel` recorded FRESH since the previous `submitFlatten` (or
+  // the start of the run) — not merely "somewhere earlier in the sequence",
+  // which would let one correctly-ordered flatten's cancel paper over a LATER
+  // flatten's own missing one. A resting bracket leg cancelled after the
+  // flatten (or never) can fire into the now-flat position and open a reverse
+  // one — this is `executeExit`'s per-call invariant, so the check is scoped
+  // per call too.
+  const { brokerCallSequence } = options.exitPath;
+  let sincePreviousFlatten = 0;
+  const flattensWithoutPriorCancel: string[] = [];
+  for (const [index, call] of brokerCallSequence.entries()) {
+    if (!call.startsWith('submitFlatten:')) continue;
+    const window = brokerCallSequence.slice(sincePreviousFlatten, index);
+    if (!window.some((entry) => entry.startsWith('cancel:'))) {
+      flattensWithoutPriorCancel.push(call);
+    }
+    sincePreviousFlatten = index + 1;
+  }
+  if (flattensWithoutPriorCancel.length > 0) {
+    failures.push(
+      `broker call(s) ${flattensWithoutPriorCancel.join(', ')} have no 'cancel' call recorded ` +
+        `before them (full sequence: ${brokerCallSequence.join(' -> ') || '(empty)'}) — a resting ` +
+        'bracket leg cancelled after the flatten (or never) can fire into the now-flat position ' +
+        'and open a reverse one (#516)',
+    );
+  }
+  if (!brokerCallSequence.some((call) => call.startsWith('submitFlatten:'))) {
+    failures.push(
+      'the exit-path harness recorded no submitFlatten call at all — exits never reached ' +
+        'submitFlatten (#508)',
+    );
+  }
+
+  // #508/#517: every exit must eventually round-trip a lot to `closed` with
+  // a `ClosedTrade` — see `SmokeObservations.closedTrades`'s doc for why this
+  // was NOT required before #576.
+  if (observations.closedTrades.length === 0) {
+    failures.push(
+      'no row in closed_trades — the exit-path scenarios never round-tripped a lot to flat, so ' +
+        "either a flatten's fill was never attributed back to the lot it closed (#517) or " +
+        'ingestFills() never reached its round-trip-to-flat branch at all',
+    );
+  }
+
+  // #525 — the residual left by a partial flatten must be RE-ARMED (not left
+  // naked), and re-arming must not have needed the fallback alert: a
+  // successful re-arm posts nothing (residual-exposure-alert.ts).
+  const { partialFlatten, residualAlerts } = options.exitPath;
+  if (partialFlatten.protectedQty === null) {
+    failures.push(
+      `lot '${partialFlatten.idempotencyKey}' has no protective legs armed after its partial ` +
+        "flatten — the #525 residual re-arm never ran, leaving the lot's residual naked",
+    );
+  } else if (partialFlatten.protectedQty !== partialFlatten.expectedResidual) {
+    failures.push(
+      `lot '${partialFlatten.idempotencyKey}' has ${partialFlatten.protectedQty} protected after ` +
+        `its partial flatten, expected the residual ${partialFlatten.expectedResidual} — the ` +
+        're-arm (#525) sized the wrong quantity',
+    );
+  }
+  if (residualAlerts.length > 0) {
+    failures.push(
+      `${residualAlerts.length} residual-exposure alert(s) fired during the smoke run ` +
+        `(lot(s): ${residualAlerts.map((alert) => alert.idempotency_key).join(', ')}) — a ` +
+        'successful re-arm posts nothing (residual-exposure-alert.ts); an alert here means the ' +
+        '#525 re-arm failed on a deterministic offline broker',
+    );
+  }
+
+  // #571 — neither lot named by a multi-lot flatten may be left phantom-open:
+  // both must have reached `order_state: 'closed'` in `open_positions`.
+  const phantomOpen = options.exitPath.twoLotFlatten.lotKeys.filter((key) => {
+    const row = positions.find((position) => position.idempotency_key === key);
+    return row === undefined || row.order_state !== 'closed';
+  });
+  if (phantomOpen.length > 0) {
+    failures.push(
+      `lot(s) ${phantomOpen.join(', ')} were named by a two-lot flatten but never reached ` +
+        "order_state 'closed' — the #571 fill split left quantity unaccounted for on at least " +
+        'one sibling lot',
+    );
+  }
+
   return { passed: failures.length === 0, failures };
 }
 
@@ -821,16 +1438,16 @@ export function formatSmokeReport(
     );
   }
 
-  lines.push('');
-  lines.push(
-    observations.closedTrades.length === 0
-      ? SMOKE_CLOSED_TRADE_NOTE
-      : `closed trades: ${observations.closedTrades.length}`,
-  );
+  lines.push('', `closed trades: ${observations.closedTrades.length}`);
   for (const trade of observations.closedTrades) {
     lines.push(
       `  ${trade.close_reason} realized_pnl_net=${trade.realized_pnl_net} [${trade.idempotency_key}]`,
     );
+  }
+
+  lines.push('', `flatten submissions journalled: ${observations.flattenSubmissions.length}`);
+  for (const row of observations.flattenSubmissions) {
+    lines.push(`  ${row.instrument} status=${row.status} [${row.idempotency_key}]`);
   }
 
   lines.push('');
@@ -959,6 +1576,13 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     // used — `profile.rateLimiterConfig` — so this override changes who holds
     // the reference, not what the limiter permits.
     const llmRateLimiter = new RateLimiter(clock, profile.rateLimiterConfig);
+    // #576: the tick loop's own residual-exposure channel, recorded rather
+    // than left at the `LoggingResidualExposureAlertChannel` default — the
+    // gate has to see whether the SIX-STAGE run ever posted one too, not
+    // only the exit-path harness below.
+    const tickLoopResidualAlerts = new RecordingResidualExposureAlertChannel(
+      new LoggingResidualExposureAlertChannel(logger),
+    );
 
     const orchestrator = await startFromEnvironment({
       // The same checked-in tuning values `yarn orchestrator` runs on, at the
@@ -1004,6 +1628,8 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       breachAlerts: new LoggingBreachAlertChannel(logger),
       loosenApprovals: new LoggingLoosenApprovalChannel(logger),
       analystSkipAlerts: new LoggingAnalystSkipAlertChannel(logger),
+      // #576: recorded, not just logged — see `tickLoopResidualAlerts` above.
+      residualExposureAlerts: tickLoopResidualAlerts,
       // #465 — the seventh channel. `resolveAlertsMode` exempts a caller that
       // supplies EVERY field in `ALERT_CHANNEL_FIELDS` from needing
       // SAMURAI_ALERTS, so adding a field to that list makes this injection
@@ -1038,11 +1664,28 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       await orchestrator.stop();
     }
 
+    // #576: the exit path. Run AFTER the tick loop has stopped and drained —
+    // it shares `db` and `clock` with the six-stage run above, but drives its
+    // own instruments (`EXIT_PATH_INSTRUMENTS`), so the two cannot contend
+    // for the same lots or the same `heldLots` filter (execute.ts).
+    const exitPathHarnessResult = await runExitPathScenarios({
+      db,
+      clock,
+      costConfig: profile.costConfig,
+      executionConfig: profile.executionConfig,
+    });
+
     const observations = readSmokeObservations(db);
     const gate = evaluateSmokeGate(observations, {
       minTicks: targetTicks,
       alpacaWireClientReached: alpacaBrokerClient.reached,
       llmRateLimiterSnapshot: llmRateLimiter.snapshot(),
+      exitPath: {
+        ...exitPathHarnessResult,
+        // Alerts from BOTH the six-stage tick loop and the exit-path harness —
+        // a residual alert is a defect wherever it fires during a smoke run.
+        residualAlerts: [...tickLoopResidualAlerts.alerts, ...exitPathHarnessResult.residualAlerts],
+      },
     });
     return { observations, gate, report: formatSmokeReport(observations, gate) };
   } finally {
