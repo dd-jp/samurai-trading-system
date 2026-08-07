@@ -475,11 +475,15 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * than another `submitBracket`: this residual is already held, and a
    * bracket's entry leg would try to buy/sell it again.
    *
-   * A FRESH `client_order_id` (`${clientOrderId}:rearm`), never the lot's
-   * own `idempotency_key` — that id already named the now-cancelled original
-   * bracket, and whether the venue permits reusing a client order id whose
-   * prior order is terminal is unverified. Sidestepping the question is
-   * cheaper than betting on either answer.
+   * The id sent to the VENUE is a FRESH one this method derives itself
+   * (`${clientOrderId}:rearm`), never reused verbatim — that original id
+   * already named the now-cancelled bracket, and whether the venue permits
+   * reusing a client order id whose prior order is terminal is unverified.
+   * Sidestepping the question is cheaper than betting on either answer. This
+   * is distinct from the `clientOrderId` PARAMETER this method receives,
+   * which is the lot's own `idempotency_key` unchanged — see
+   * `BrokerAdapter.rearmProtectiveLegs`'s doc (types/broker.ts) for that
+   * contract.
    *
    * Tracked in `rearmedLegs`, keyed by the LOT's own `idempotency_key` (not
    * the wire id) — `fetchNewFills`'s sweep below tags fills under this key
@@ -490,10 +494,22 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * about it — genuinely open, not closed by this ticket.
    *
    * `recordBracketOrderIds` is called best-effort so the durable index at
-   * least carries the OCO's own order ids — but it COALESCEs onto the
-   * EXISTING row (still keyed by `clientOrderId`, still carrying the
-   * ORIGINAL cancelled entry's id), so it buys no restart recovery on its
-   * own; the gap above still stands.
+   * least carries the OCO's own order ids — and it does MORE than merely
+   * "carry" them: `SqliteBrokerStateStore`'s upsert COALESCEs each column
+   * independently (`excluded.x` wins whenever it is non-null), and every id
+   * passed here except `entry_order_id` is non-null, so `stop_order_id` and
+   * `target_order_id` are OVERWRITTEN with the re-arm's own ids on the SAME
+   * row (still keyed by `clientOrderId`). Only `entry_order_id` survives from
+   * before — this call passes `null` for it, so COALESCE keeps the ORIGINAL
+   * cancelled entry's id. `target_order_id` therefore now holds the OCO's
+   * PARENT order id (`response.id` below), not a take-profit LEG id the way a
+   * native bracket's `target_order_id` does — an OCO has no separate
+   * take-profit child; see the comment on `recordBracketOrderIds`'s call
+   * below for why `.legs` is not used for it. The restart gap above still
+   * stands (nothing durable maps `rearmedLegs`'s in-memory
+   * `clientOrderId -> OCO id` back to "this was a re-arm, not the original
+   * bracket"), but this row is not merely inert either — #548 tracks
+   * whether that makes it a usable restart-recovery hook.
    *
    * NOT verified against a live paper account: this mirrors Alpaca's
    * documented OCO shape without having exercised it against the real API.

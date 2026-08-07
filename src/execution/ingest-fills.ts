@@ -388,11 +388,12 @@ async function advanceLot(
  * Re-arms a residual left by a partial flatten (#525's recorded decision —
  * option 1), or posts the fallback alert when the re-arm itself fails or
  * cannot be attempted safely. Never throws: every failure this function can
- * observe — the broker call rejecting, the alert channel itself failing —
- * is swallowed here, the same posture `safeLog()` takes in
- * orchestrator/tick-loop.ts, so a flaky re-arm or a flaky alert transport
- * can never escape into `advanceLot` and cost the fill rows the caller is
- * about to persist regardless.
+ * observe — the store read on the `known === undefined` path, the broker
+ * call rejecting, the alert channel itself failing — is swallowed here, the
+ * same posture `safeLog()` takes in orchestrator/tick-loop.ts, so a flaky
+ * store, a flaky re-arm, or a flaky alert transport can never escape into
+ * `advanceLot` and abort `ingestFills`' per-lot loop for every OTHER lot the
+ * same poll has yet to reach.
  *
  * `known` lets the caller in `advanceLot`'s main path hand over
  * `filledSize`/`exitQty` it already computed off the SAME persisted record,
@@ -410,7 +411,30 @@ async function maybeRearmResidual(
   let filledSize: number;
   let exitQty: number;
   if (known === undefined) {
-    const recorded = await store.getFills(position.idempotency_key);
+    let recorded: Fill[];
+    try {
+      recorded = await store.getFills(position.idempotency_key);
+    } catch {
+      // The exact residual is unknowable without the read that just
+      // failed — alerting with `requested_size` (the lot's own, always
+      // in hand, untouched by this failure) rather than a smaller,
+      // possibly-wrong guess: it can only OVER-state what is genuinely at
+      // risk, never under-state it, which is the conservative direction
+      // for an operator deciding whether to go check the venue by hand.
+      // NOT `Number.NaN` — `LoggingResidualExposureAlertChannel` writes
+      // this alert through `JSON.stringify` (logger.ts), which silently
+      // turns `NaN` into `null`, and a `null` quantity is less legible
+      // than an honest upper bound. Never rethrown: see this function's
+      // "Never throws" doc above.
+      //
+      // Flagged as an upper bound rather than passed off as the exact
+      // residual (#569 review): without the flag a persistent store outage
+      // reads as a stream of confident alerts, and an operator cannot tell
+      // an estimate from a measurement. The caught error itself is not
+      // forwarded — see `ResidualExposureAlert`'s CREDENTIALS note.
+      await alertResidualExposure(input, position, position.requested_size, now, true);
+      return;
+    }
     filledSize = totalQty(recorded.filter((fill) => fill.leg === 'entry'));
     exitQty = totalQty(recorded.filter(isExitFill));
   } else {
@@ -470,6 +494,12 @@ async function alertResidualExposure(
   position: OpenPosition,
   residualQty: number,
   now: Date,
+  /**
+   * `true` only on the path where the fill read failed and `residualQty` is
+   * therefore the lot's whole requested size rather than the exact residual
+   * (#569 review). Defaulted so the two exact call sites read unchanged.
+   */
+  residualQtyIsUpperBound = false,
 ): Promise<void> {
   try {
     await input.residualExposureAlerts.postResidualExposureAlert({
@@ -477,6 +507,7 @@ async function alertResidualExposure(
       instrument: position.instrument,
       side: position.side,
       residual_qty: residualQty,
+      residual_qty_is_upper_bound: residualQtyIsUpperBound,
       stop: position.stop,
       target: position.target,
       observed_at: now,

@@ -397,6 +397,37 @@ describe('buildProductionComponents', () => {
   });
 
   it(
+    'refuses to build with mode "live" and no declared capital ceiling (#569) — ' +
+      '`capitalCeilingUsd` is optional and absent from `REQUIRED_INJECTED_CONFIG`, so a ' +
+      'programmatic caller reaching this function directly (bypassing `liveStartingProfile`, ' +
+      'which always sets it) could otherwise size a live run off unclamped equity',
+    () => {
+      const config = stubConfig(db, { mode: 'live' });
+
+      expect(() => buildProductionComponents(config)).toThrow(/capitalCeilingUsd/);
+    },
+  );
+
+  it.each([
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    // Finite, so a finiteness-only check let these through — and `Math.min`
+    // would clamp every size in the run to zero or below.
+    ['zero', 0],
+    ['negative', -1_000],
+  ])(
+    'refuses to build with mode "live" and a %s capital ceiling (#569 review) — the ' +
+      'hand-assembled-config caller this gate exists for can pass a failed parse just as ' +
+      'easily as omit the field, and `sizingEquity` would otherwise only refuse at the first ' +
+      'sizing of the first tick, with every store and wire client already open',
+    (_label, ceiling: number) => {
+      const config = stubConfig(db, { mode: 'live', capitalCeilingUsd: ceiling });
+
+      expect(() => buildProductionComponents(config)).toThrow(/capitalCeilingUsd/);
+    },
+  );
+
+  it(
     "hooks Feedback Loop's onTradeClose off the returned executionStore's " +
       'writeClosedTrade (#237) — not off any TickSteps member',
     async () => {
