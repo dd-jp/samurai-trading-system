@@ -29,19 +29,22 @@ export type { TokenBucketConfig } from './http/token-bucket.js';
 export { TokenBucket } from './http/token-bucket.js';
 // Only what has a real cross-module consumer: `DEFAULT_VENUE_PACING` for the
 // three broker adapters' constructor defaults, `resolveVenuePacing` +
-// `VenuePacingConfig` for the composition root, and `resolvePolygonPacing`
+// `VenuePacingConfig` for the composition root, `resolvePolygonPacing`
 // for `HttpPolygonClient` (#510/#520 — deliberately NOT folded into
 // `resolveVenuePacing`/`VENUE_KEYS`: see that function's doc for why a
-// Stage-2-only venue must not be validated by the live composition root).
+// Stage-2-only venue must not be validated by the live composition root),
+// and `resolveCoinbasePacing` for the #512 warm-start backfill script (same
+// reasoning, same shape, one more script-only venue).
 // `VenueKey`, `VENUE_KEYS`, `VENUE_DOCUMENTED_CEILING_PER_SECOND`,
-// `POLYGON_DOCUMENTED_CEILING_PER_SECOND`, `DEFAULT_POLYGON_PACING` and
-// `venuePacingEnvVars` are internal to `venue-pacing.ts` and its own test
-// (or, for `venuePacingEnvVars`, imported directly by
-// `http-polygon-client.test.ts` — see that barrel-exclusion note there),
-// so they stay off this barrel.
+// `POLYGON_DOCUMENTED_CEILING_PER_SECOND`, `DEFAULT_POLYGON_PACING`,
+// `DEFAULT_COINBASE_PACING` and `venuePacingEnvVars` are internal to
+// `venue-pacing.ts` and its own test (or, for `venuePacingEnvVars`, imported
+// directly by `http-polygon-client.test.ts` — see that barrel-exclusion note
+// there), so they stay off this barrel.
 export type { VenuePacingConfig } from './http/venue-pacing.js';
 export {
   DEFAULT_VENUE_PACING,
+  resolveCoinbasePacing,
   resolvePolygonPacing,
   resolveVenuePacing,
 } from './http/venue-pacing.js';

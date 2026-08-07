@@ -123,21 +123,80 @@ export class MarketDataServiceImpl implements MarketDataService {
   }
 
   /**
-   * The stored window, if this (instrument, timeframe) was already fetched in
-   * `asOf`'s bar interval AND the store can satisfy this call's `lookback`.
+   * The stored window, if the store can satisfy this call's `lookback` AND
+   * is known fresh for `asOf`'s bar interval — by either of two routes.
+   *
+   * ## Route 1: in-process fetch history (#391, the original test)
+   *
+   * This (instrument, timeframe) was already fetched, by THIS instance,
+   * during `asOf`'s bar interval. Cheap (no store read needed to decide) and
+   * exact, but blind across a process restart: `lastBarFetch` is an in-memory
+   * map with no constructor seam, so it starts empty every time this class is
+   * constructed.
+   *
+   * ## Route 2: store recency (#512, warm-start backfill)
+   *
+   * Without route 2, a warm-started `SqliteMarketDataStore` — filled by a
+   * separate backfill process before the orchestrator even starts — is
+   * invisible to this check: a fresh process's `lastBarFetch` is always
+   * empty, so route 1 alone would force one live HTTP call per
+   * (instrument, timeframe) on literally every process start regardless of
+   * how much history the store already holds — `paper-profile.ts`'s
+   * `correlationConfig.window` comment documents exactly this gap as a
+   * live-Alpaca observation ("MarketDataServiceImpl.getBars calls
+   * DataSource.fetchBars on every request ... so a cold first tick pulls the
+   * whole window straight from Alpaca's archive").
+   *
+   * The test here is stricter than "the store holds >= lookback rows" for
+   * the same reason the doc comment above (this method's original one) gives
+   * for rejecting that as route 1's test: a store holding enough rows for an
+   * OLDER `asOf` would satisfy a count check while missing every bar since.
+   * Route 2 instead asks whether LESS THAN ONE FULL TIMEFRAME WIDTH has
+   * elapsed since the most recently stored bar's `close_time` — i.e. bars
+   * for this (instrument, timeframe) are produced at a fixed cadence, so if
+   * the newest known one closed under one width ago, the next bar in that
+   * same fixed sequence cannot have closed yet either, regardless of what
+   * wall-clock phase the venue's bars are stamped at.
+   *
+   * That phase-agnosticism is deliberate, not incidental: an exact
+   * "close_time equals the UTC interval boundary" test would silently never
+   * match real Alpaca equity bars, which are session-anchored (a `1Day` bar
+   * closes at the next session's open, not UTC midnight; an `1Hour` bar
+   * closes on the half-hour during EDT) rather than UTC-clock-aligned —
+   * `timeframe.ts`'s `isDailyTimeframe` doc ("whose bar covers an entire
+   * session") is the same fact from the other side. Coinbase's UTC-midnight
+   * daily opens would pass an exact-boundary test; Alpaca's would not, which
+   * would make the store-recency route silently inert for every equity in
+   * `DEFAULT_UNIVERSE` while still (incorrectly) claiming to cover crypto.
+   * Elapsed-time avoids depending on either venue's stamp convention.
+   *
+   * Any gap of a FULL WIDTH OR MORE — a session close over a weekend, a
+   * backfill run stale by more than one interval — makes this false and
+   * falls through to a real fetch, which is the conservative direction (the
+   * same bound route 1 already accepts: a repeat call inside the SAME
+   * recorded interval, i.e. under one width old).
    */
   private cachedBars(instrument: string, window: BarWindow, asOf: Date): Bar[] | undefined {
     if (this.mode === 'backtest') {
       return undefined;
     }
 
-    const fetchedAt = this.lastBarFetch.get(this.barCacheKey(instrument, window.timeframe));
-    if (fetchedAt === undefined || fetchedAt !== this.barIndex(window.timeframe, asOf)) {
+    const rows = this.store.readBars(instrument, window.timeframe, asOf, window.lookback);
+    if (rows.length < window.lookback) {
       return undefined;
     }
 
-    const rows = this.store.readBars(instrument, window.timeframe, asOf, window.lookback);
-    return rows.length >= window.lookback ? rows : undefined;
+    const fetchedAt = this.lastBarFetch.get(this.barCacheKey(instrument, window.timeframe));
+    if (fetchedAt === this.barIndex(window.timeframe, asOf)) {
+      return rows;
+    }
+
+    const latestStoredBar = rows.at(-1);
+    const storeIsFreshForInterval =
+      latestStoredBar !== undefined &&
+      asOf.getTime() - latestStoredBar.close_time.getTime() < timeframeToMs(window.timeframe);
+
+    return storeIsFreshForInterval ? rows : undefined;
   }
 
   private recordFetch(instrument: string, window: BarWindow, asOf: Date): void {
