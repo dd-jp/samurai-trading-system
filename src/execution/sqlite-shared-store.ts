@@ -342,8 +342,8 @@ export class SqliteExecutionStore implements SharedStore {
         .prepare(
           `INSERT INTO flatten_submissions (
              idempotency_key, instrument, asset_class, side, size,
-             status, submitted_at
-           ) VALUES (?, ?, ?, ?, ?, 'submitting', ?)`,
+             status, submitted_at, lot_idempotency_keys
+           ) VALUES (?, ?, ?, ?, ?, 'submitting', ?, ?)`,
         )
         .run(
           submission.idempotency_key,
@@ -352,6 +352,7 @@ export class SqliteExecutionStore implements SharedStore {
           submission.side,
           submission.size,
           submission.submitted_at.toISOString(),
+          JSON.stringify(submission.lot_idempotency_keys),
         );
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {
@@ -406,6 +407,20 @@ export class SqliteExecutionStore implements SharedStore {
         `SqliteExecutionStore.resolveFlattenError: no write-ahead record for '${idempotency_key}'`,
       );
     }
+  }
+
+  /**
+   * #517's read: which lot(s), if any, a flatten submission was journalled to
+   * close. `null` covers both "no such flatten" and "a flatten row written
+   * before migration 0020" — `ingestFills()` treats them identically (cannot
+   * attribute), so this does not distinguish them further.
+   */
+  async getFlattenLotKeys(idempotency_key: string): Promise<readonly string[] | null> {
+    const row = this.db
+      .prepare('SELECT lot_idempotency_keys FROM flatten_submissions WHERE idempotency_key = ?')
+      .get(idempotency_key) as { lot_idempotency_keys: string | null } | undefined;
+    if (row === undefined || row.lot_idempotency_keys === null) return null;
+    return JSON.parse(row.lot_idempotency_keys) as string[];
   }
 }
 

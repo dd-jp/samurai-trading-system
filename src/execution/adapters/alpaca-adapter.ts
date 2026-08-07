@@ -132,6 +132,35 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   /** client_order_id -> the bracket parent's Alpaca order id. */
   private readonly brackets = new Map<string, string>();
   /**
+   * client_order_id -> the flatten's own Alpaca order id (#517). A SEPARATE
+   * map from `brackets`, not a reuse of it: a flatten is never a bracket
+   * (`submitFlatten`'s own docstring), and folding it in would make
+   * `fetchNewFills`'s bracket loop below fetch `entry.legs` for an order that
+   * has none.
+   *
+   * In-memory only, unlike `brackets` — which the constructor warms from
+   * `this.state.loadBrackets('alpaca')` because a bracket can legitimately
+   * still be waiting on a stop/target fill days after a restart. A flatten is
+   * a plain IOC market order: by the time this process could poll it again,
+   * the venue has already resolved it one way or another, so the ONLY window
+   * this not surviving a restart costs is the narrow one between
+   * `submitFlatten` returning and the next `fetchNewFills` sweep landing.
+   * That window is real and NOT closed by this ticket — a crash inside it
+   * strands the flatten's fill unattributed exactly as it is today, and
+   * resolving it needs `reconcile()` to learn about `flatten_submissions`
+   * rows, which is filed as a follow-up rather than built here (mirroring
+   * `executeExit`'s own note in execute.ts that a lost `submitFlatten`
+   * response is "left for reconcile to resolve later" even though reconcile
+   * does not yet do that either).
+   *
+   * Never removed once a flatten resolves — deliberately symmetric with
+   * `brackets`, which is likewise never pruned after a bracket goes terminal
+   * (only `cancel()` removes an entry from either map). A closed flatten
+   * costs one extra `getOrder` call per sweep for the rest of the process's
+   * life, the same standing cost a filled-and-closed bracket already has.
+   */
+  private readonly flattens = new Map<string, string>();
+  /**
    * #299 moved the NUMBER out of this file into `DEFAULT_VENUE_PACING.alpaca`
    * (shared/http/venue-pacing.ts), overridable per deployment via
    * `SAMURAI_PACING_ALPACA_*` — a rate limit is a property of the account, not
@@ -217,8 +246,14 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * finishing the job needs a fresh key. That is the correct trade — the
    * alternative is a resting order the operator has to remember to clean up.
    *
-   * Not written to `this.state`: the bracket index tracks bracket lifecycles,
-   * and a flatten has no legs to arm, resize or reconcile.
+   * Not written to `this.state` (the DURABLE bracket index): a flatten has no
+   * legs to arm, resize or reconcile, and half-formed bracket-shaped state
+   * for one is exactly the wrong shape (migration 0019's comment). It IS
+   * tracked in the in-memory `flattens` map below (#517) — without that,
+   * `fetchNewFills` has no way to learn this order exists at all, since it
+   * only ever polls `brackets`/`flattens`, never the venue's full order list.
+   * See `flattens`' own doc comment for why in-memory is the right amount of
+   * durability here.
    */
   async submitFlatten(
     instrument: string,
@@ -235,6 +270,8 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         client_order_id: clientOrderId,
       }),
     );
+
+    this.flattens.set(clientOrderId, response.id);
 
     return {
       client_order_id: clientOrderId,
@@ -393,6 +430,14 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * `SimulatedBrokerAdapter.fetchNewFills` already produces. Point-in-time:
    * never returns a fill dated before `since`.
    *
+   * Sweeps `brackets` AND `flattens` (#517) — before this, a flatten's own
+   * order was never polled here at all: `submitFlatten` reached the venue but
+   * entered neither map, so its fill was invisible to `ingestFills()` no
+   * matter what that function did with it. Each flatten fill is tagged
+   * `leg: 'exit'`, never `'entry'`, so `ingestFills()`'s own attribution can
+   * tell it apart from a bracket's entry fill without needing to know which
+   * adapter produced it.
+   *
    * Each bracket is isolated. `ingestFills()` awaits this as ONE call before
    * advancing ANY lot, and `brackets` iterates in insertion order, so an
    * unhandled throw here does not just lose one order's fills — it aborts the
@@ -462,6 +507,34 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       }
     }
 
+    // The flatten sweep (#517) — structurally the bracket loop above with
+    // `entry.legs` dropped (a flatten has none) and `leg: 'exit'` fixed
+    // rather than derived per-leg. Kept as its own loop rather than folded
+    // into the one above: the two worklists (`brackets`/`flattens`) are
+    // maintained separately (see `flattens`' doc comment for why), and
+    // merging the loops would mean merging the maps first for no real
+    // simplification.
+    let flattenFailures = 0;
+    for (const [clientOrderId, orderId] of [...this.flattens]) {
+      try {
+        const order = await this.call('fetchNewFills', () => this.input.client.getOrder(orderId));
+        collectFill(order, 'exit', clientOrderId, symbolOf(order), since, fills);
+      } catch (error) {
+        // Same isolation and same UnpricedFillError bookkeeping as the
+        // bracket loop above — see its comments for the reasoning, which
+        // applies unchanged here.
+        if (error instanceof UnpricedFillError) {
+          try {
+            this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
+          } catch (stateError) {
+            failures.push(stateError);
+          }
+        }
+        failures.push(error);
+        flattenFailures += 1;
+      }
+    }
+
     // The venue caught up: this fill priced, was collected above, and is about
     // to be booked, so its anomaly row is resolved. Done here rather than in
     // `collectFill` so the normalizer stays a pure function of one order.
@@ -487,7 +560,8 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       throw new AggregateError(
         failures,
         `Alpaca fetchNewFills: ${failures.length} failure(s) during the sweep ` +
-          `(${bracketFailures} bracket(s) failed); no fills could be read`,
+          `(${bracketFailures} bracket(s), ${flattenFailures} flatten(s) failed); ` +
+          'no fills could be read',
       );
     }
 

@@ -78,6 +78,9 @@ class FakeSharedStore implements SharedStore {
     _reason: string,
     _resolved_at: Date,
   ): Promise<void> {}
+  async getFlattenLotKeys(_idempotency_key: string): Promise<readonly string[] | null> {
+    return null;
+  }
   async applyLotAdvance(advance: LotAdvance): Promise<void> {
     if (this.shouldThrow) {
       throw new Error('boom');

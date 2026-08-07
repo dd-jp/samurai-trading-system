@@ -335,4 +335,48 @@ describe('SqliteExecutionStore', () => {
       expect(position?.filled_size).toBe(0);
     });
   });
+
+  describe('writeAheadFlatten / getFlattenLotKeys (#517)', () => {
+    function makeFlattenWriteAhead(
+      overrides: Partial<Parameters<SqliteExecutionStore['writeAheadFlatten']>[0]> = {},
+    ): Parameters<SqliteExecutionStore['writeAheadFlatten']>[0] {
+      return {
+        idempotency_key: 'flatten-1',
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        side: 'sell',
+        size: 25,
+        submitted_at: OPENED_AT,
+        lot_idempotency_keys: ['key-lot-1', 'key-lot-2'],
+        ...overrides,
+      };
+    }
+
+    it('round-trips the lot identity through the journal, in the order it was written', async () => {
+      const { store } = makeStore();
+
+      await store.writeAheadFlatten(makeFlattenWriteAhead());
+
+      expect(await store.getFlattenLotKeys('flatten-1')).toEqual(['key-lot-1', 'key-lot-2']);
+    });
+
+    it('returns null for a key that names no flatten submission', async () => {
+      const { store } = makeStore();
+
+      expect(await store.getFlattenLotKeys('never-submitted')).toBeNull();
+    });
+
+    // A flatten journalled before migration 0020 added the column has NULL
+    // there, not an empty JSON array — `ingestFills()` (#517) must read that
+    // as "cannot attribute", not throw trying to `JSON.parse(null)`.
+    it('returns null, not a parse error, for a pre-migration row with no lot identity recorded', async () => {
+      const { db, store } = makeStore();
+      await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-legacy' }));
+      db.prepare(
+        'UPDATE flatten_submissions SET lot_idempotency_keys = NULL WHERE idempotency_key = ?',
+      ).run('flatten-legacy');
+
+      expect(await store.getFlattenLotKeys('flatten-legacy')).toBeNull();
+    });
+  });
 });

@@ -963,6 +963,60 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     expect(ack.broker_order_ids).toEqual(['flatten-1']);
   });
 
+  // #517: before this, `fetchNewFills` never learned a flatten's order id at
+  // all — `submitFlatten` reached the venue but entered neither `brackets`
+  // nor any other worklist the sweep polls, so the fill was invisible no
+  // matter what `ingestFills()` did with it. This is that gap's own test,
+  // independent of `ingestFills()`'s attribution (covered in
+  // `execute.test.ts` against the Simulated adapter): does the SWEEP even
+  // see the order.
+  it('sweeps a submitted flatten and reports its fill tagged as an exit, not an entry', async () => {
+    const submitMarketOrder = vi.fn().mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1' });
+    const filledAt = '2026-07-15T15:10:00Z';
+    const getOrder = vi.fn().mockResolvedValue(
+      acceptedOrder({
+        id: 'flatten-1',
+        status: 'filled',
+        filled_qty: '12',
+        filled_avg_price: '99.50',
+        filled_at: filledAt,
+        legs: [], // a flatten is a plain market order — no attached legs.
+      }),
+    );
+    const adapter = adapterWith(makeClient({ submitMarketOrder, getOrder }));
+    await adapter.submitFlatten('AAPL', 'sell', 12, 'flatten-key');
+
+    const fills = await adapter.fetchNewFills(new Date(0));
+
+    expect(fills).toEqual([
+      {
+        client_order_id: 'flatten-key',
+        broker_fill_id: 'flatten-1',
+        leg: 'exit',
+        price: 99.5,
+        qty: 12,
+        fee: 0,
+        timestamp: new Date(filledAt),
+      },
+    ]);
+  });
+
+  it('does not poll a flatten twice under the same order — resubmitting under the same client order id is a venue no-op', async () => {
+    const submitMarketOrder = vi.fn().mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1' });
+    const getOrder = vi
+      .fn()
+      .mockResolvedValue(acceptedOrder({ id: 'flatten-1', status: 'accepted' }));
+    const adapter = adapterWith(makeClient({ submitMarketOrder, getOrder }));
+
+    await adapter.submitFlatten('AAPL', 'sell', 12, 'flatten-key');
+    await adapter.submitFlatten('AAPL', 'sell', 12, 'flatten-key');
+    await adapter.fetchNewFills(new Date(0));
+
+    // One tracked flatten, so one `getOrder` call — the second `submitFlatten`
+    // overwrote the same map entry rather than adding a second one.
+    expect(getOrder).toHaveBeenCalledTimes(1);
+  });
+
   it('cancels the order the venue holds under our client order id', async () => {
     const cancelOrder = vi.fn().mockResolvedValue(undefined);
     const adapter = adapterWith(

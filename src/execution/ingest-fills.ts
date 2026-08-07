@@ -15,6 +15,14 @@
  * Idempotent by construction, because polling is the access pattern: fills
  * dedup on `broker_fill_id`, and a lot closes once because closing makes it
  * terminal and terminal lots leave `getOpenPositions()`.
+ *
+ * A flatten's fill is a special case of "a fill for a lot" (#517): it
+ * arrives under the FLATTEN's own idempotency key, never the lot's, because
+ * `execute()`'s exit path (`executeExit`) submits it under a fresh one.
+ * `redistributeFlattenFills` below routes it back to the lot(s) the flatten
+ * journalled it was closing before the rest of this module ever sees it —
+ * without that routing there is no other mechanism that closes a
+ * flatten-closed lot at all (see the finding in PR #517's body).
  */
 import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../shared/index.js';
 import type { ExecutionInput, NormalizedFill } from './types.js';
@@ -47,8 +55,146 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
     else bucket.push(fill);
   }
 
+  // #517: a bucket the loop below would otherwise never read. A flatten
+  // submits under its OWN fresh idempotency key (execute.ts's
+  // `executeExit`), never a held lot's, so its fill lands in `byLot` keyed
+  // on a client_order_id that matches no `position.idempotency_key` — and
+  // until this call, that bucket was simply never looked up again. This
+  // redistributes it into the target lot(s)' own buckets (keyed by their
+  // OWN idempotency_key) before the loop reads them, so the rest of this
+  // function needs no knowledge that a flatten was ever involved.
+  await redistributeFlattenFills(input, byLot, positions);
+
   for (const position of positions) {
     await advanceLot(input, position, byLot.get(position.idempotency_key) ?? [], now);
+  }
+}
+
+/**
+ * Routes a flatten's fill(s) back to the lot(s) `executeExit` journalled it
+ * to close (#517), by rewriting `byLot` in place: buckets keyed on a
+ * flatten's own client_order_id are removed, and their fills reappear —
+ * split and retagged — under the closing lot(s)' own idempotency_key, so
+ * `advanceLot`'s existing per-lot logic (including its `timestamp <= now`
+ * no-lookahead filter, applied AFTER this call, unchanged) needs no
+ * knowledge that any of this happened.
+ *
+ * `fill.leg` is NOT how a flatten's bucket is recognised — the Simulated
+ * adapter tags its own flatten fill `'entry'` (it models the flatten as
+ * just another priced fill at submit time, the same as a bracket's entry),
+ * and nothing in `BrokerAdapter`'s contract requires every adapter to agree
+ * on what a flatten fill's leg should read. `getFlattenLotKeys` keyed on
+ * `client_order_id` is adapter-agnostic where a leg tag is not, which is
+ * why this function does not consult `fill.leg` to decide whether a bucket
+ * is a flatten's — only afterwards, to force it to `'exit'` on the way out
+ * (below), so `advanceLot`'s `isExitFill`/`closedTrade` see one true answer
+ * regardless of which adapter reported it.
+ */
+async function redistributeFlattenFills(
+  input: ExecutionInput,
+  byLot: Map<string, NormalizedFill[]>,
+  positions: readonly OpenPosition[],
+): Promise<void> {
+  const { store } = input;
+  const positionKeys = new Set(positions.map((position) => position.idempotency_key));
+
+  // A snapshot of the keys, not a live iterator: the loop body deletes from
+  // `byLot` as it goes (once a flatten bucket is consumed, redistributed) and
+  // a Map's own key order is otherwise unaffected by that, but iterating a
+  // separate array keeps the deletion from being a subtlety a reader has to
+  // reason through.
+  for (const clientOrderId of [...byLot.keys()]) {
+    if (positionKeys.has(clientOrderId)) continue; // a lot's own bucket — the existing path.
+
+    const lotKeys = await store.getFlattenLotKeys(clientOrderId);
+    // Not a known flatten either (an unrelated/unknown client_order_id, or a
+    // flatten row written before migration 0020 named no lot): left exactly
+    // as before this change — the bucket sits in `byLot` under a key no
+    // position matches, and the per-position loop below never reads it.
+    if (lotKeys === null || lotKeys.length === 0) continue;
+
+    const rawFills = byLot.get(clientOrderId);
+    if (rawFills === undefined) continue; // appeases the type checker; every key here has a bucket.
+    byLot.delete(clientOrderId);
+
+    // Each named lot's FIXED total share of THIS flatten — its entry's fully
+    // filled quantity, reconstructed from persisted ENTRY fills the same way
+    // `advanceLot` reconstructs `filledSize` below. Deliberately NOT reduced
+    // by prior EXIT fills already on record for the lot, and NOT filtered to
+    // lots still present in `positions` (open) — either would make the split
+    // drift between polls as fills get persisted and lots go terminal, and a
+    // DIFFERENT split under the SAME `broker_fill_id`-derived id is exactly
+    // what breaks `hasFill`'s dedup below (it matches on id alone, so a
+    // shrunk second attempt does not "correct" the first — it just vanishes
+    // behind it, silently stranding the difference). An entry's filled
+    // quantity, in contrast, is fixed forever once filling stops — which is
+    // always before any exit fill can exist for the same lot (`advanceLot`'s
+    // own "an exit fill cannot precede the entry fill" invariant) — so
+    // recomputing this on every poll, for every named lot regardless of
+    // whether it has since closed, yields the IDENTICAL split every time.
+    // That is what lets a poll dedupe cleanly on `broker_fill_id` instead of
+    // needing to reconstruct "how much of this fill did lot X already get".
+    const totalShare = new Map<string, number>();
+    for (const lotKey of lotKeys) {
+      const priorFills = await store.getFills(lotKey);
+      const entryQty = priorFills
+        .filter((fill) => fill.leg === 'entry')
+        .reduce((sum, fill) => sum + fill.qty, 0);
+      totalShare.set(lotKey, entryQty);
+    }
+
+    // Processed in the feed's own order, decrementing an IN-MEMORY copy of
+    // `totalShare` across `rawFills` — a flatten is modelled/observed as one
+    // fill in practice (an IOC market order does not rest, so there is
+    // normally exactly one raw fill per flatten to allocate), but this stays
+    // general instead of assuming that: if the feed ever legitimately offers
+    // more than one raw fill for the same flatten in one poll, an EARLIER
+    // one in this SAME pass must still count against a lot's fixed share
+    // before a LATER one is allocated, or the two would double-book it.
+    const remaining = new Map(totalShare);
+    for (const rawFill of rawFills) {
+      let leftover = rawFill.qty;
+      for (const lotKey of lotKeys) {
+        if (leftover <= 0) break;
+        const need = remaining.get(lotKey) ?? 0;
+        if (need <= 0) continue;
+
+        const take = Math.min(need, leftover);
+        const share = take / rawFill.qty;
+        const splitFill: NormalizedFill = {
+          ...rawFill,
+          // Forced regardless of what the adapter tagged the raw fill — see
+          // this function's docstring.
+          leg: 'exit',
+          // The lot-scoped id `hasFill`/`fills`' PK need: `hasFill` dedups
+          // GLOBALLY on `broker_fill_id` alone (`ingest-fills.ts` above), so
+          // splitting one raw fill across two lots under the SAME id would
+          // make the second lot's split silently vanish behind the first
+          // lot's dedup the moment either is persisted. Stable across polls
+          // for the reason `totalShare` above is: the SAME (id, qty) pair
+          // recomputes every time, so a repeat poll dedupes cleanly instead
+          // of colliding with a differently-sized earlier attempt.
+          broker_fill_id: `${rawFill.broker_fill_id}:${lotKey}`,
+          qty: take,
+          fee: rawFill.fee * share,
+        };
+
+        const bucket = byLot.get(lotKey);
+        if (bucket === undefined) byLot.set(lotKey, [splitFill]);
+        else bucket.push(splitFill);
+
+        remaining.set(lotKey, need - take);
+        leftover -= take;
+      }
+      // `leftover > 0` here means the flatten filled more than the named
+      // lots' entries ever covered — `execute()`'s exact
+      // `order.size === heldSize` check (execute.ts's `executeExit`) means
+      // this should not happen, and there is no safe lot to hand the excess
+      // to, so it is left unattributed rather than guessed onto one. Silent,
+      // deliberately: a genuine over-fill here would already be showing up
+      // as a resize/exposure divergence elsewhere, and manufacturing a
+      // second signal here would not make that one easier to find.
+    }
   }
 }
 

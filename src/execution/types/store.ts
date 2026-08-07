@@ -100,6 +100,16 @@ export interface SharedStore {
    * `pending` record on a `submitBracket` failure.
    */
   resolveFlattenError(idempotency_key: string, reason: string, resolved_at: Date): Promise<void>;
+  /**
+   * The lot(s) a flatten submission was journalled to close (#517), in the
+   * `opened_at` order `executeExit` wrote them — or `null` if `key` names no
+   * flatten submission, or names one written before migration 0020 added
+   * this column. `ingestFills()` is this method's only reader: a flatten's
+   * fill carries the flatten's OWN idempotency key, never a held lot's, so
+   * this is how a fill bucketed under that key gets routed back to the lot(s)
+   * it actually closed instead of being silently dropped.
+   */
+  getFlattenLotKeys(idempotency_key: string): Promise<readonly string[] | null>;
 }
 
 /** One poll's atomic advance of a single lot — see `SharedStore.applyLotAdvance`. */
@@ -123,4 +133,14 @@ export interface FlattenSubmissionWriteAhead {
   /** The held quantity being flattened. */
   size: number;
   submitted_at: Date;
+  /**
+   * The lot(s) this flatten is closing (#517) — `executeExit`'s `heldLots`,
+   * by `idempotency_key`, in the `opened_at` order `getOpenPositions()`
+   * already returned them in. Carried on the write-ahead itself, ahead of
+   * the broker call, rather than reconstructed later from whatever is still
+   * open when the fill lands: see migration 0020's comment for why that
+   * later reconstruction is unsafe (a new lot on the same instrument could
+   * open in between and wrongly receive this flatten's fill).
+   */
+  lot_idempotency_keys: readonly string[];
 }
