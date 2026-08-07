@@ -1,0 +1,11 @@
+// The typecheck-gate project for this app: everything the build config
+// (tsconfig.json) checks PLUS the test files it deliberately excludes.
+// Without it, App.test.tsx would belong to no TypeScript project — and
+// `main.tsx`/`vite.config.ts` would only be checked by `yarn build:web`,
+// never by `yarn typecheck` (PR #563 review, twice). The build config stays
+// test-free so `build:web`'s tsc pass never needs the test toolchain types.
+{
+  "extends": "./tsconfig.json",
+  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"],
+  "exclude": ["node_modules", "dist"]
+}

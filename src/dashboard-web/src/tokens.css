@@ -1,0 +1,34 @@
+/*
+ * Design tokens — dashboard-spec.md, "Design system".
+ *
+ * Values are the spec's colour table verbatim. The visual-reference
+ * prototype (docs/prototypes/dashboard-v2-mission-control.html) spells the
+ * loss/error colour `--red` for the same hex; this file uses the spec's
+ * name, `--vermilion`, because the spec is the naming source of truth.
+ *
+ * `--border` and the font-family stacks are not individually named in the
+ * spec's colour table but are implied by it (`--panel`'s "1px #1E2A44
+ * border" clause; the Type section's three named families) and are needed
+ * by any component consuming these tokens, so they are declared here too.
+ *
+ * "Colour is never the sole carrier of a signal" (spec, Design system) is a
+ * component-level rule, not a token-level one — nothing here encodes it by
+ * itself.
+ */
+:root {
+  /* Colour */
+  --bg: #060a14;
+  --panel: rgba(255, 255, 255, 0.04);
+  --border: #1e2a44;
+  --cyan: #38e1ff;
+  --go: #3ddc7d;
+  --amber: #ffb454;
+  --vermilion: #ff4d5e;
+  --text: #e8edf7;
+  --muted: #8a93a8;
+
+  /* Type — self-hosted via @fontsource, imported in main.tsx */
+  --font-display: "Chakra Petch", sans-serif;
+  --font-body: "IBM Plex Sans", sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
+}

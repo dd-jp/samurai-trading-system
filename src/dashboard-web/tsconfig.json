@@ -1,0 +1,34 @@
+// Owns its own TypeScript project — Vite compiles this app, not `tsc`
+// (dashboard-spec.md, "Module: Web client": "the build becomes `tsc &&
+// vite build`"). This config is what that `tsc` pass checks against; `vite
+// build` itself only transpiles (esbuild), it does not type-check.
+//
+// Deliberately NOT part of the root `tsconfig.json` project references and
+// excluded from both `tsconfig.build.json` and `tsconfig.test.json` (see
+// their `exclude` arrays) — this app has its own `jsx`/DOM lib needs that
+// must never leak into the strict backend build project or the Node-only
+// test project. This app's own test files are excluded here too — they are
+// type-checked by the sibling `tsconfig.test.json` project instead.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"],
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.test.tsx"]
+}
