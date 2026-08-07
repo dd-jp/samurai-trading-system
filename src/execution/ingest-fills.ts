@@ -415,12 +415,18 @@ async function maybeRearmResidual(
     try {
       recorded = await store.getFills(position.idempotency_key);
     } catch {
-      // The residual is unknowable without the read that just failed —
-      // alerting with NaN rather than guessing at a figure, the same
-      // fail-closed posture the non-finite-residual branch below already
-      // takes for a different bad state. Never rethrown: see this
-      // function's "Never throws" doc above.
-      await alertResidualExposure(input, position, Number.NaN, now);
+      // The exact residual is unknowable without the read that just
+      // failed — alerting with `requested_size` (the lot's own, always
+      // in hand, untouched by this failure) rather than a smaller,
+      // possibly-wrong guess: it can only OVER-state what is genuinely at
+      // risk, never under-state it, which is the conservative direction
+      // for an operator deciding whether to go check the venue by hand.
+      // NOT `Number.NaN` — `LoggingResidualExposureAlertChannel` writes
+      // this alert through `JSON.stringify` (logger.ts), which silently
+      // turns `NaN` into `null`, and a `null` quantity is less legible
+      // than an honest upper bound. Never rethrown: see this function's
+      // "Never throws" doc above.
+      await alertResidualExposure(input, position, position.requested_size, now);
       return;
     }
     filledSize = totalQty(recorded.filter((fill) => fill.leg === 'entry'));

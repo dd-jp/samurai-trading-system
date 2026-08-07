@@ -1468,15 +1468,16 @@ describe('ExecutionImpl.execute', () => {
             expect(broker.getProtectedQty('key-lot-1')).toBe(3);
 
             // Lot 2: the store read failed, so there is no residual figure to
-            // re-arm with — never armed, and the fallback alert fires with an
-            // unknown (NaN) residual rather than guessing at one.
+            // re-arm with — never armed, and the fallback alert fires with
+            // its full requested size (15) as a conservative upper bound,
+            // not a guess at the true, unknowable residual.
             expect(broker.getProtectedQty('key-lot-2')).toBeNull();
             expect(residualExposureAlerts.alerts).toEqual([
               {
                 idempotency_key: 'key-lot-2',
                 instrument: 'AAPL',
                 side: 'buy',
-                residual_qty: Number.NaN,
+                residual_qty: 15,
                 stop: 85,
                 target: 110,
                 observed_at: now,
