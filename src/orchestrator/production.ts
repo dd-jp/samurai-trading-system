@@ -393,14 +393,27 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // either way the run fails closed; but it refuses at the FIRST SIZING of
   // the first tick, after the store, sockets and wire clients below are all
   // open. Boot is the honest place to say a live config is unusable.
-  if (config.mode === 'live' && !Number.isFinite(config.capitalCeilingUsd)) {
+  // POSITIVE and finite, not merely finite (#569 review, second pass): a
+  // ceiling of `0` is finite, and `sizingEquity`'s `Math.min` would then
+  // clamp every size in the run to zero — a live orchestrator that boots,
+  // debates, bills for LLM calls and can never place a trade. A negative one
+  // is worse: it survives to `decide`'s arithmetic as a negative size. Both
+  // are configuration mistakes with no legitimate reading, and this gate
+  // exists for exactly the hand-assembled config that can make them.
+  //
+  // `assertLiveCapitalCeilingUsd` (live-profile.ts) already refuses these on
+  // the SAMURAI_LIVE_MAX_CAPITAL_USD path; this is the same rule for the
+  // callers that never pass through it.
+  const ceiling = config.capitalCeilingUsd;
+  if (config.mode === 'live' && !(Number.isFinite(ceiling) && (ceiling as number) > 0)) {
     throw new Error(
       'Orchestrator cannot start: mode "live" requires ProductionConfig.capitalCeilingUsd to be ' +
-        `a finite number, and it is ${String(config.capitalCeilingUsd)}. It is the ceiling ` +
+        `a finite number greater than zero, and it is ${String(ceiling)}. It is the ceiling ` +
         'every position size in a live run is derived from (sizingEquity, ' +
         'production/direct-bind.ts) — build the config through liveStartingProfile() rather ' +
         'than assembling ProductionConfig by hand, or set the field explicitly. Refusing to ' +
-        'size a live run off unclamped equity.',
+        'size a live run off unclamped equity, and refusing to start one that could only ever ' +
+        'size to zero.',
     );
   }
 

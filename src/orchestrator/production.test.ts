@@ -411,6 +411,10 @@ describe('buildProductionComponents', () => {
   it.each([
     ['NaN', Number.NaN],
     ['Infinity', Number.POSITIVE_INFINITY],
+    // Finite, so a finiteness-only check let these through — and `Math.min`
+    // would clamp every size in the run to zero or below.
+    ['zero', 0],
+    ['negative', -1_000],
   ])(
     'refuses to build with mode "live" and a %s capital ceiling (#569 review) — the ' +
       'hand-assembled-config caller this gate exists for can pass a failed parse just as ' +
