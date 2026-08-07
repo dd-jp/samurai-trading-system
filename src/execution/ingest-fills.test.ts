@@ -9,12 +9,13 @@ import type { CostModel } from '../cost-model-backtest/index.js';
 import type { MarketDataService } from '../market-data-service/index.js';
 import type { Clock, OpenPosition } from '../shared/index.js';
 import { ExecutionImpl } from './execute.js';
-import { openTestExecutionStore, type TestExecutionStore } from './sqlite-store-harness.js';
+import { openTestExecutionStore, TestExecutionStore } from './sqlite-store-harness.js';
 import type {
   BrokerAck,
   BrokerAdapter,
   ExecutionConfig,
   ExecutionInput,
+  LotAdvance,
   NativeBracketRequest,
   NormalizedFill,
   NormalizedOrder,
@@ -455,6 +456,126 @@ describe('ExecutionImpl.ingestFills', () => {
       // throws, precisely so a broker/alert failure cannot prevent it.
       expect((await store.getPosition('key-1'))?.filled_size).toBe(10);
       expect(await store.getFills('key-1')).toHaveLength(2);
+    });
+  });
+
+  // The other half of #575's containment boundary. #524 (an unpriced fill
+  // aborting the venue sweep, in adapters/alpaca-adapter.ts), #569 (an
+  // unguarded store read) and #575 (an unattributable flatten) were three
+  // instances of ONE shape — a failure confined to one unit of work aborting
+  // every other unit in the same poll — and this loop was the fourth,
+  // latent: `advanceLot` was awaited unguarded per position, so any store or
+  // broker failure on ONE lot dropped every lot after it in
+  // `getOpenPositions()` order. Contained per lot rather than point-fixed at
+  // each throw site, because there is no reason to believe #575 is the last
+  // throw path anyone adds.
+  describe('per-lot containment (#575)', () => {
+    it("advances the other lots when one lot's advance fails, and names the failed lot", async () => {
+      /** Fails the atomic advance for one lot only, leaving the rest healthy. */
+      class FlakyAdvanceStore extends TestExecutionStore {
+        override async applyLotAdvance(advance: LotAdvance): Promise<void> {
+          if (advance.idempotency_key === 'key-flaky') {
+            throw new Error('simulated store outage on applyLotAdvance');
+          }
+          return super.applyLotAdvance(advance);
+        }
+      }
+
+      const { db } = openTestExecutionStore();
+      const store = new FlakyAdvanceStore(db);
+      // `getOpenPositions()` returns these in `opened_at` order, so the flaky
+      // lot is reached BEFORE the healthy one — which is the only ordering
+      // under which the old code could lose the healthy lot's work.
+      await seedPosition(store, { idempotency_key: 'key-flaky', requested_size: 10 });
+      await seedPosition(store, {
+        idempotency_key: 'key-healthy',
+        requested_size: 10,
+        opened_at: new Date(OPENED_AT.getTime() + 60_000),
+        broker_order_ids: ['key-healthy:entry'],
+      });
+      const broker = new ScriptedBroker([
+        fill({ client_order_id: 'key-flaky', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({ client_order_id: 'key-healthy', broker_fill_id: 'e2', leg: 'entry', qty: 10 }),
+      ]);
+
+      // Visible, not swallowed: the poll still reports that it did not fully
+      // succeed, and the message names the lot that failed.
+      await expect(new ExecutionImpl(makeInput(broker, store)).ingestFills()).rejects.toThrow(
+        'key-flaky',
+      );
+
+      // The failed lot really did fail closed — nothing half-written.
+      expect((await store.getPosition('key-flaky'))?.filled_size).toBe(0);
+      // The healthy lot, iterated after it, still advanced.
+      expect((await store.getPosition('key-healthy'))?.filled_size).toBe(10);
+      expect((await store.getPosition('key-healthy'))?.order_state).toBe('filled');
+    });
+
+    // The money-path half of the same boundary. A contained flatten must not
+    // leave its named lots in `flattenTargetedLots`: `advanceLot` would then
+    // re-arm protective legs sized off `getFills` — a record this very
+    // containment refused to complete — arming the venue for quantity it may
+    // already have sold, so a triggered leg sells what the lot does not hold.
+    // Reachable only where the throw comes AFTER the lot keys are read, which
+    // is why the set is per-bucket and merged on success rather than written
+    // through and rolled back.
+    it('does not re-arm a lot named by a flatten whose redistribution failed', async () => {
+      /** A pre-0021 flatten row's fallback read, failing. */
+      class FlakyEntrySizesStore extends TestExecutionStore {
+        override async getEntryFillSizes(): Promise<Map<string, number>> {
+          throw new Error('simulated store outage on getEntryFillSizes');
+        }
+      }
+
+      const { db } = openTestExecutionStore();
+      const store = new FlakyEntrySizesStore(db);
+      await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
+
+      // Poll 1 persists the lot's entry fill, so it has a residual to re-arm.
+      const entryOnly = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+      ]);
+      await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
+
+      await store.writeAheadFlatten({
+        idempotency_key: 'flatten-1',
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        side: 'sell',
+        size: 10,
+        submitted_at: OPENED_AT,
+        lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+      });
+      // NULLed to a pre-migration-0021 row, which is the one shape that still
+      // routes the split through `getEntryFillSizes` — the only `await`
+      // between reading the lot keys and the (pure, unthrowable) split.
+      db.prepare(
+        'UPDATE flatten_submissions SET lot_held_quantities = NULL WHERE idempotency_key = ?',
+      ).run('flatten-1');
+
+      const withFlatten = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'flatten-1',
+          broker_fill_id: 'f1',
+          leg: 'exit',
+          qty: 4,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+      const residualExposureAlerts = makeResidualExposureAlerts();
+
+      await expect(
+        new ExecutionImpl(makeInput(withFlatten, store, residualExposureAlerts)).ingestFills(),
+      ).rejects.toThrow('flatten-1');
+
+      // Not re-armed at ANY size — the only honest answer while the flatten's
+      // 4 is deliberately unattributed. The lot is naked and the poll says so.
+      expect(withFlatten.rearmCalls).toEqual([]);
+      expect(residualExposureAlerts.alerts).toEqual([]);
+      // And the flatten's fill really was not attributed: the lot is still
+      // whole, with only its entry fill on record.
+      expect(await store.getFills('key-1')).toHaveLength(1);
     });
   });
 });

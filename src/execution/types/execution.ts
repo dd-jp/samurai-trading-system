@@ -142,6 +142,13 @@ export interface Execution {
    * persist each new `Fill`, resize the protective legs to cumulative filled
    * quantity, and emit a `ClosedTrade` on round-trip-to-flat. Idempotent —
    * polling it twice ingests each fill once and closes each lot once.
+   *
+   * A failure confined to one unit of work — one flatten's journal row, one
+   * lot's advance — is contained to that unit (#575): every OTHER lot in the
+   * poll is still advanced, and the pass then rejects with an
+   * `AggregateError` naming the records it could not resolve. So a rejection
+   * here means "some of this poll did not land", never "none of it did", and
+   * the caller's job is to log it and poll again rather than to stop.
    */
   ingestFills(): Promise<void>;
   /**
