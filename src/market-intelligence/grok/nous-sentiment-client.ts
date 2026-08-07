@@ -31,13 +31,23 @@
  * `chat/completions` only, so this path CANNOT retrieve, and restoring a real
  * retrieval source is separate work rather than a model swap.
  *
- * THE CONSEQUENCE, which is the part that reaches money: items parsed here are
- * written as `source: 'twitter'` and read by the sentiment and fundamental
- * analysts, which feed the Debate Engine, which sizes trades. The analysts
- * cannot tell a model's recollection from a live crowd read. The prompt below
- * also asks for sentiment "As of" a recent date the model has no data for,
- * which is the shape that invites confident confabulation. Tracked in #485 with
- * three options; until one is chosen, treat every `twitter` row as un-retrieved.
+ * THE CONSEQUENCE, which is the part that reaches money: items parsed here
+ * would be written as `source: 'twitter'` and read by the sentiment and
+ * fundamental analysts, which feed the Debate Engine, which sizes trades. The
+ * analysts cannot tell a model's recollection from a live crowd read. The
+ * prompt below also asks for sentiment "As of" a recent date the model has no
+ * data for, which is the shape that invites confident confabulation.
+ *
+ * RESOLVED in #485 (options 1 and 2 together; option 3 — a direct xAI
+ * `/v1/responses` path — is a separate, ADR-0009-exception decision, not
+ * this). `fetchSentiment` below always returns `retrievalEvidence: false`,
+ * because this transport cannot carry citations or a tool step at all. That
+ * makes `GrokAgent.refresh` (`grok-agent.ts`) discard every item this client
+ * ever parses, unconditionally, rather than ingest it as signal — so a
+ * `twitter` row that reaches the store is never this client's recall. The
+ * items are still parsed and returned rather than short-circuited to `[]`
+ * here, so this file stays a pure wire adapter: what happens to un-retrieved
+ * items is `GrokAgent`'s policy, not this client's.
  *
  * MEASURED 2026-08-06, which NARROWS the confabulation worry above without
  * removing it. Exercised for the first time against live Nous credentials, this
@@ -56,9 +66,13 @@
  * floating alias could begin returning invented sentiment with no test to catch
  * it, since nothing asserts on content. ADR-0009 carries the full table.
  *
- * The `source: 'twitter'` tag and the `grok` agent id are kept as-is because
- * they are persisted in `market_intelligence` rows and renaming them is a
- * migration, not a rename.
+ * The `source: 'twitter'` tag and the `grok` agent id are kept as-is. An
+ * earlier version of this comment claimed that was because they are
+ * persisted in `market_intelligence` rows and renaming them is a migration,
+ * not a rename — that is not true (`MarketIntelligenceStore` is in-memory and
+ * restart-clean, per #481's research), and the real reason is simpler: with
+ * `retrievalEvidence: false` guaranteeing no item from this client is ever
+ * ingested, there is nothing left for the tag to mislabel.
  *
  * ## Structured output, and what happens when it isn't
  *
@@ -156,6 +170,10 @@ export class NousSentimentClient implements GrokSentimentClient {
       items: this.#parseItems(result.text, instrument, asOf),
       model: result.model,
       usage: result.usage,
+      // ALWAYS false: `chat/completions` carries no citations and runs no
+      // server-side tool, so there is structurally nothing this client could
+      // point to as evidence of retrieval. See the module header and #485.
+      retrievalEvidence: false,
       latency_ms: Date.now() - started,
     };
   }

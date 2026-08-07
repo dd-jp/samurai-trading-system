@@ -190,6 +190,20 @@ describe('NousSentimentClient', () => {
     });
   });
 
+  it('never claims retrieval evidence, because chat/completions cannot carry it (#485)', async () => {
+    // GrokAgent's fail-closed guard trusts this flag to decide whether to
+    // ingest. If this client ever answered `true` here, it would be lying
+    // about what `chat/completions` structurally cannot provide — no
+    // citations, no tool step — and un-retrieved recall would reach the
+    // analysts as signal again.
+    stubContent(ONE_ITEM);
+
+    const result = await client().fetchSentiment('BTC-USD', AS_OF);
+
+    expect(result.items).toHaveLength(1); // still parsed — GrokAgent decides what happens next
+    expect(result.retrievalEvidence).toBe(false);
+  });
+
   it('propagates a provider failure rather than reporting a silent zero', async () => {
     // `GrokAgent.refresh` catches this and marks no bucket, so a transient
     // outage does not buy four hours of silence. Swallowing it here would.

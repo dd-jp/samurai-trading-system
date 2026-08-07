@@ -41,6 +41,15 @@
  * back to `NO_DATA_MARKER`. Never a fabricated neutral item: "we could not
  * afford to look" and "we looked and saw nothing" must stay distinguishable,
  * which is the same principle #463 is built on.
+ *
+ * `refresh` below adds a third case (#485): a call that SUCCEEDED and parsed
+ * cleanly is still discarded, not ingested, unless `retrievalEvidence` says
+ * the client actually looked. "We looked and saw nothing" and "we recalled
+ * from training data and never looked" would otherwise be the same shape —
+ * both parse to items — so the guard is what keeps them apart. It fails
+ * closed on the *absence of evidence*, not on provider identity, so a future
+ * client that supplies real evidence (issue #485's option 3) starts passing
+ * without this file changing.
  */
 import type { SpendCap } from '../../debate-engine/index.js';
 import type { AssetClass, Clock, Logger } from '../../shared/index.js';
@@ -77,6 +86,21 @@ export interface GrokSentimentClient {
      * `chat/completions`, which runs no server-side tool.
      */
     server_tool_calls?: number | undefined;
+    /**
+     * Whether THIS call carries evidence it actually retrieved something —
+     * citations, or a tool-invocation step — as opposed to the model
+     * answering from training-data recall alone (#485). REQUIRED, not
+     * optional: a client must say one way or the other rather than letting an
+     * omission default to trusted.
+     *
+     * `NousSentimentClient` always returns `false` here, because Nous proxies
+     * `chat/completions` only and neither citations nor a tool step can ride
+     * on that endpoint — see its header. This is the seam for restoring real
+     * retrieval later (issue #485's option 3, a direct xAI `/v1/responses`
+     * client): a client that produces genuine evidence sets this `true` and
+     * `refresh` below starts trusting its items, with no change needed here.
+     */
+    retrievalEvidence: boolean;
     latency_ms: number;
   }>;
 }
@@ -196,11 +220,47 @@ export class GrokAgent {
         timestamp: asOf,
       });
 
+      // Fail-closed retrieval-evidence guard (#485, restoring the principle
+      // #474 had and ADR-0009's cutover dropped). Items that parsed cleanly
+      // are still un-retrieved model recall unless the client can point to
+      // actual evidence it looked — this is what keeps "we could not look"
+      // distinguishable from "we looked and saw nothing" once a third case
+      // ("we recalled, but never looked") becomes possible. Discarding here,
+      // not upstream in the client, means the guard is transport-agnostic:
+      // it fires the same way for any future client, Nous or otherwise.
+      //
+      // Logged on EVERY call with no evidence, not only when it discards a
+      // non-empty answer: `NousSentimentClient` reports no evidence on every
+      // call it makes (chat/completions cannot carry any), so that is the
+      // routine case, not the exceptional one, and it must still be visible
+      // as "could not look" rather than reading identically to "looked and
+      // saw nothing" in the logs. `info` when there was nothing to discard,
+      // `warn` when real items were dropped — the level itself carries
+      // whether anything was actually lost this call.
+      const items = result.retrievalEvidence ? result.items : [];
+      if (!result.retrievalEvidence) {
+        this.#deps.logger?.log({
+          trace_id,
+          stage: 'market_intelligence',
+          level: result.items.length > 0 ? 'warn' : 'info',
+          message:
+            result.items.length > 0
+              ? `grok: discarding ${result.items.length} item(s) for ${instrument} — the ` +
+                'response parsed cleanly but carried no evidence of retrieval (no citations, no ' +
+                'tool step), so it cannot be told apart from model recall. Reporting NO DATA ' +
+                'instead of risking confabulated sentiment as signal. See #485.'
+              : `grok: no retrieval evidence for ${instrument} this call (no citations, no tool ` +
+                'step) — reporting NO DATA. "Could not look" rather than "looked and saw ' +
+                'nothing". See #485.',
+          payload: { instrument, discarded_items: result.items.length },
+        });
+      }
+
       this.#deps.store.ingest({
         agent_id: 'grok',
         timestamp: asOf,
         asset_class: assetClass,
-        items: result.items,
+        items,
       });
 
       // Marked only after a SUCCESSFUL call. Marking before would turn one
