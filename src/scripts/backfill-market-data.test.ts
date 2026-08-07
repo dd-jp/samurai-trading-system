@@ -277,6 +277,77 @@ describe('backfillMarketData', () => {
       }),
     ]);
   });
+
+  it('keeps going and says coverage may be wrong when the re-read ALSO fails', async () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteMarketDataStore(db);
+
+    // A SQLITE_BUSY that spans the append and the re-read immediately after
+    // it, then clears — the transient contention the guard is written for.
+    // The re-read inside the catch is therefore the second failure in a row,
+    // and it must not throw out of the handler: that would abort QQQ, which
+    // is the whole reason the catch is there.
+    //
+    // Deliberately transient, not permanent. `backfillMarketData` reads the
+    // store once per pair BEFORE the try block, to decide whether a fetch is
+    // needed at all, and that read is unguarded on purpose: a store that
+    // cannot be read is not a partial-coverage problem to be reported, it is
+    // a dead backfill, and it should abort loudly rather than print a table
+    // of zeroes. Modelling a permanent failure here would assert on that
+    // separate (and correct) behaviour instead of on this fallback.
+    let storeIsBusy = false;
+    const failingStore = new Proxy(store, {
+      get(target, property, receiver) {
+        if (property === 'appendBars') {
+          return () => {
+            storeIsBusy = true;
+            throw new Error('SqliteError: database is locked');
+          };
+        }
+        if (property === 'readBars') {
+          return (...args: Parameters<SqliteMarketDataStore['readBars']>) => {
+            if (storeIsBusy) {
+              storeIsBusy = false;
+              throw new Error('SqliteError: database is locked');
+            }
+            return target.readBars(...args);
+          };
+        }
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+
+    const attempted: string[] = [];
+    const coverage = await backfillMarketData({
+      store: failingStore,
+      universe: [
+        { asset: 'SPY', asset_class: 'stocks' },
+        { asset: 'QQQ', asset_class: 'stocks' },
+      ] satisfies UniverseInstrument[],
+      windows: [{ timeframe: '1h', lookback: 20 }],
+      asOf: ASOF,
+      fetchEquityBars: async (symbol, window, at) => {
+        attempted.push(symbol);
+        return generateBars(symbol, window.timeframe, at, window.lookback);
+      },
+      fetchCryptoBars: async () => [],
+      print: () => {},
+    });
+
+    // The run did not abort: QQQ was still attempted after SPY's double
+    // failure.
+    expect(attempted).toEqual(['SPY', 'QQQ']);
+    // And the operator is TOLD the count is untrustworthy rather than being
+    // handed a confident 0.
+    expect(coverage[0]).toEqual(
+      expect.objectContaining({
+        instrument: 'SPY',
+        rows: 0,
+        satisfied: false,
+        error: expect.stringContaining('coverage may under-report') as string,
+      }),
+    );
+  });
 });
 
 /**
