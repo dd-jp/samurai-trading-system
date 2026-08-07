@@ -2,11 +2,12 @@ import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
-  // Only `src/dashboard-web/**` has `.tsx` files today; the plugin is a
-  // no-op for every plain-`.ts` backend test. Needed so the JSX transform in
-  // `src/dashboard-web/src/App.test.tsx` (issue #536's smoke test) is not
-  // left to esbuild defaults.
-  plugins: [react()],
+  // Needed so the JSX transform in `src/dashboard-web/src/App.test.tsx`
+  // (issue #536's smoke test) is not left to esbuild defaults. Scoped to the
+  // web app's `.tsx` files because the plugin's default include
+  // (`/\.[tj]sx?$/`) would put every plain-`.ts` backend test through an
+  // extra Babel parse per run — the backend suite stays on esbuild.
+  plugins: [react({ include: /src\/dashboard-web\/.+\.tsx$/ })],
   test: {
     // `.test.tsx` added for the dashboard-web component smoke test
     // (dashboard-spec.md, "Testing Decisions": "Component tests (RTL)").
