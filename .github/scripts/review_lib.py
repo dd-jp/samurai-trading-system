@@ -515,14 +515,20 @@ MAX_ERROR_TEXT_CHARS = 200
 _ERROR_REDACTIONS = (
     # URLs first: they can carry credentials in the query string or userinfo.
     (re.compile(r"https?://\S+", re.IGNORECASE), "<url-redacted>"),
-    # Explicit credential-bearing fields, however they are punctuated.
+    # Explicit credential-bearing fields. The separator is REQUIRED: with it
+    # optional, `401: token expired` matched and ate the word that says what
+    # went wrong. A bare secret with no separator is still caught by the
+    # high-entropy rule below, so requiring it costs no coverage.
     (
         re.compile(
-            r"(?i)\b(authorization|api[-_ ]?key|access[-_ ]?token|token|secret|password|bearer)\b"
-            r"\s*[:=]?\s*\S+"
+            r"(?i)\b(authorization|api[-_ ]?key|access[-_ ]?token|token|secret|password)\b"
+            r"\s*[:=]\s*\S+"
         ),
-        r"<credential-redacted>",
+        "<credential-redacted>",
     ),
+    # `Bearer` is the exception: what follows it is the credential itself,
+    # separator or not.
+    (re.compile(r"(?i)\bbearer\s+\S+"), "bearer <credential-redacted>"),
     # Bare high-entropy blobs: sk-…, long hex digests, base64 chunks.
     (re.compile(r"\b[A-Za-z0-9_\-]{32,}\b"), "<redacted>"),
 )

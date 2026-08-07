@@ -655,6 +655,30 @@ def test_error_text_is_scrubbed_before_it_can_be_published():
     assert "502" in scrubbed
 
 
+def test_redaction_does_not_eat_the_diagnostic():
+    """Over-redaction is its own failure: with the separator optional,
+    `401: token expired` matched the credential rule and lost the word that
+    says what went wrong, leaving a scrubbed body with no signal in it."""
+    for intact in [
+        "401: token expired",
+        "403: secret not configured",
+        "api key quota exceeded",
+        "Authorization failed for this model",
+        "password rotation required",
+        "Cloudflare 524: origin took too long to respond",
+    ]:
+        assert review_lib.safe_error_text(RuntimeError(intact)) == intact
+
+    # …while a secret in any of those same shapes is still redacted, because
+    # the high-entropy and URL rules catch what the separator rule now skips.
+    for leaky, secret in [
+        ("HTTP 401: invalid api-key aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        ("token: sk-9f8e7d6c5b4a3210zyxwvutsrqponmlk", "sk-9f8e7d6c5b4a3210zyxwvutsrqponmlk"),
+        ("Authorization: Bearer sk-live-9f8e7d6c5b4a3210zyxwvutsrqponml", "sk-live-9f8e7d6c5b4a3210zyxwvutsrqponml"),
+    ]:
+        assert secret not in review_lib.safe_error_text(RuntimeError(leaky))
+
+
 def test_error_text_is_bounded_and_flattened():
     long_error = ("boom " * 500) + "\n\ttrailing"
     scrubbed = review_lib.safe_error_text(RuntimeError(long_error))
