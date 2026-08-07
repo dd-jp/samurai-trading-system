@@ -56,13 +56,18 @@ import type { BrokerBracketRecord, BrokerStateStore } from '../broker-state-stor
 import { toRequestFields } from '../broker-state-store.js';
 import type { OcoDoubleFillAlertChannel } from '../oco-double-fill-alert.js';
 import type { BrokerAck, NativeBracketRequest, NormalizedFill } from '../types.js';
-// Deliberate import cycle with alpaca-adapter.ts (which constructs this
-// class): every binding is used at call time only, never at module-eval time,
-// which ESM resolves fine — and sharing the adapter's own normalization
-// (`collectFill`'s unpriced-fill refusal included) beats a second copy that
-// could drift from it.
-import { collectFill, mapOrderState, toAlpacaSymbol, UnpricedFillError } from './alpaca-adapter.js';
 import type { AlpacaClient, AlpacaOrder } from './alpaca-client.js';
+// The shared normalization layer (alpaca-order-normalization.ts, split out on
+// PR #600 review): sharing the adapter's own fill normalization —
+// `collectFill`'s unpriced-fill refusal included — without importing the
+// adapter back, which would be a runtime cycle (the adapter constructs this
+// class).
+import {
+  collectFill,
+  mapOrderState,
+  toAlpacaSymbol,
+  UnpricedFillError,
+} from './alpaca-order-normalization.js';
 
 /**
  * One emulated bracket — the in-process working set, ccxt's `EmulatedBracket`
