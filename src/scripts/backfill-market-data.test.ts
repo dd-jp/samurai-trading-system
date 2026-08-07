@@ -12,6 +12,7 @@ import { DEFAULT_UNIVERSE, type UniverseInstrument } from '../orchestrator/index
 import type { Clock } from '../shared/index.js';
 import { openSharedStore } from '../shared/store/index.js';
 import { backfillMarketData, WARM_START_WINDOWS } from './backfill-market-data.js';
+import { withOhlcvFailover } from './ohlcv-failover.js';
 
 class ManualClock implements Clock {
   constructor(private time: Date) {}
@@ -347,6 +348,152 @@ describe('backfillMarketData', () => {
         error: expect.stringContaining('coverage may under-report') as string,
       }),
     );
+  });
+
+  it("reports the source of the most recently stored bar per pair (#496) — 'surface which one served'", async () => {
+    const { deps } = buildDeps(); // generateBars stamps source: 'fixture'
+    const coverage = await backfillMarketData(deps);
+
+    const spy1h = coverage.find((row) => row.instrument === 'SPY' && row.timeframe === '1h');
+    expect(spy1h?.source).toBe('fixture');
+  });
+
+  it('reports source: undefined for a pair with no bars at all, rather than fabricating one', async () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteMarketDataStore(db);
+
+    const coverage = await backfillMarketData({
+      store,
+      universe: [{ asset: 'SPY', asset_class: 'stocks' }] satisfies UniverseInstrument[],
+      windows: [{ timeframe: '1h', lookback: 20 }],
+      asOf: ASOF,
+      fetchEquityBars: async () => [],
+      fetchCryptoBars: async () => [],
+      print: () => {},
+    });
+
+    expect(coverage[0]?.source).toBeUndefined();
+  });
+});
+
+/**
+ * #496: the failover mechanism, exercised through the REAL composition
+ * `backfillMarketData` provides — a throwing primary wrapped by
+ * `withOhlcvFailover` (the same wrapper `backfill-market-data.ts`'s
+ * `runFromEnvironment` wires around the real Alpaca/Polygon and
+ * Coinbase/Bitstamp clients) — and read back from a REAL
+ * `SqliteMarketDataStore`, not asserted against the in-memory return value
+ * alone. This is what answers "is provenance populated by real production
+ * code" rather than only a client-level unit test.
+ */
+describe('OHLCV failover provenance, through the real store (#496)', () => {
+  it('persists the FALLBACK source per bar when the primary throws — readable back from SqliteMarketDataStore', async () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteMarketDataStore(db);
+
+    const fetchEquityBars = withOhlcvFailover({
+      leg: 'equities',
+      primary: async () => {
+        throw new Error('Alpaca 403: SIP data window');
+      },
+      primaryName: 'alpaca',
+      fallback: async (symbol, window, at) =>
+        generateBars(symbol, window.timeframe, at, window.lookback).map((bar) => ({
+          ...bar,
+          source: 'polygon',
+        })),
+      fallbackName: 'polygon',
+      alert: () => {},
+    });
+
+    const coverage = await backfillMarketData({
+      store,
+      universe: [{ asset: 'SPY', asset_class: 'stocks' }] satisfies UniverseInstrument[],
+      windows: [{ timeframe: '1h', lookback: 20 }],
+      asOf: ASOF,
+      fetchEquityBars,
+      fetchCryptoBars: async () => [],
+      print: () => {},
+    });
+
+    expect(coverage[0]).toMatchObject({ satisfied: true, source: 'polygon' });
+
+    // Read back from the REAL store, not the in-memory return value — proves
+    // `SqliteMarketDataStore.appendBars` actually persisted the fallback's
+    // `source` column (`bars.source`, `0001_init.sql`) rather than the
+    // provenance only existing in a test double's memory.
+    const stored = store.readBars('SPY', '1h', ASOF, 20);
+    expect(stored).toHaveLength(20);
+    expect(stored.every((bar) => bar.source === 'polygon')).toBe(true);
+  });
+
+  it('persists the CRYPTO fallback source (bitstamp) the same way', async () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteMarketDataStore(db);
+
+    const fetchCryptoBars = withOhlcvFailover({
+      leg: 'crypto',
+      primary: async () => {
+        throw new Error('Coinbase network error');
+      },
+      primaryName: 'coinbase',
+      fallback: async (symbol, window, at) =>
+        generateBars(symbol, window.timeframe, at, window.lookback).map((bar) => ({
+          ...bar,
+          source: 'bitstamp',
+        })),
+      fallbackName: 'bitstamp',
+      alert: () => {},
+    });
+
+    await backfillMarketData({
+      store,
+      universe: [{ asset: 'BTC-USD', asset_class: 'crypto' }] satisfies UniverseInstrument[],
+      windows: [{ timeframe: '1d', lookback: 30 }],
+      asOf: ASOF,
+      fetchEquityBars: async () => [],
+      fetchCryptoBars,
+      print: () => {},
+    });
+
+    const stored = store.readBars('BTC-USD', '1d', ASOF, 30);
+    expect(stored).toHaveLength(30);
+    expect(stored.every((bar) => bar.source === 'bitstamp')).toBe(true);
+  });
+
+  it('leaves provenance at the PRIMARY source when the primary succeeds — failover never fires needlessly', async () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteMarketDataStore(db);
+    const alert = vi.fn();
+
+    const fetchEquityBars = withOhlcvFailover({
+      leg: 'equities',
+      primary: async (symbol, window, at) =>
+        generateBars(symbol, window.timeframe, at, window.lookback).map((bar) => ({
+          ...bar,
+          source: 'alpaca',
+        })),
+      primaryName: 'alpaca',
+      fallback: async () => {
+        throw new Error('fallback must not be called');
+      },
+      fallbackName: 'polygon',
+      alert,
+    });
+
+    await backfillMarketData({
+      store,
+      universe: [{ asset: 'SPY', asset_class: 'stocks' }] satisfies UniverseInstrument[],
+      windows: [{ timeframe: '1h', lookback: 20 }],
+      asOf: ASOF,
+      fetchEquityBars,
+      fetchCryptoBars: async () => [],
+      print: () => {},
+    });
+
+    expect(alert).not.toHaveBeenCalled();
+    const stored = store.readBars('SPY', '1h', ASOF, 20);
+    expect(stored.every((bar) => bar.source === 'alpaca')).toBe(true);
   });
 });
 
