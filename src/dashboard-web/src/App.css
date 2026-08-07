@@ -50,7 +50,10 @@ main {
 
 .rooms-hero {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  /* The minmax floor is what makes the overflow rule below actually engage:
+     bare `1fr` tracks shrink to fit, so the grid would never overflow —
+     rooms would just get crushed on narrow viewports. */
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
   grid-auto-rows: minmax(120px, auto);
   gap: 12px;
   /* Rooms grid scrolls inside its own container on narrow viewports — the

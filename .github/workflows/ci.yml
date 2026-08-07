@@ -53,6 +53,13 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: yarn build
 
+      # Separate from `yarn build` on purpose: a frontend-toolchain failure
+      # must never block building (and therefore hot-fixing) the trading
+      # process, but the bundle still has to prove it builds somewhere.
+      - name: Build web dashboard
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: yarn build:web
+
       - name: Test
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: yarn test

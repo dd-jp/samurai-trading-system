@@ -32,7 +32,10 @@ export default defineConfig({
       // — the built bundle and the JSON endpoint are served by the same
       // `node:http` process.
       '/api': {
-        target: 'http://127.0.0.1:8787',
+        // Same variable and default the dashboard server itself binds on
+        // (src/dashboard/index.ts), so a nonstandard port only has to be set
+        // once for both processes.
+        target: `http://127.0.0.1:${process.env.PORT ?? 8787}`,
         changeOrigin: true,
       },
     },
