@@ -1,6 +1,8 @@
 # Trend signal measured over 10 years of free history — 2026-08-07
 
-**Verdict: the trend signal is not distinguishable from simply holding the same basket.** Over 10.0 years, the best pre-registered trend configuration beats an always-long control by 0.17 Sharpe with a paired t-statistic of **0.15**. That is nothing. The case for trend rests entirely on drawdown reduction, which is real in this sample but is a single-path statistic.
+**Verdict: on unlevered return the trend signal is not distinguishable from simply holding the same basket** — the best pre-registered configuration beats an always-long control by 0.17 Sharpe over 10.0 years, paired t-statistic **0.15**. That is nothing.
+
+**But the target changes the question.** 0.05%/day is unreachable unlevered on this basket, and under leverage the arms separate sharply: trend reaches 12.6%/yr, and always-long **cannot reach it at any leverage** — it plateaus near 8.7% while its drawdown deepens past −79%. Trend's value here is leverage efficiency and left-tail control, not return generation.
 
 This supersedes the trend-following recommendation made in conversation on 2026-08-07, which assumed the literature's diversified-futures result would carry over to a 12-instrument spot basket. It does not carry over cleanly, and the control arm is why we know.
 
@@ -46,22 +48,31 @@ Sharpe by sample half (~5 years each):
 
 Every arm degrades by roughly half or worse. This is not a trend-specific failure — the whole opportunity set was better in 2016–2021 than in 2021–2026. With a Sharpe standard error of ~0.45 over five years the halves are not statistically distinguishable from each other, but the direction is uniform and it should temper any figure quoted from the full sample.
 
-## Result 3 — where trend does earn its place
+## Result 3 — where trend does earn its place: under leverage
 
-| | Trend (wide, 63d) | Control (wide) |
-|---|---|---|
-| Max drawdown, unlevered | **−10.7%** | −19.4% |
-| Max drawdown, levered to 0.05%/day | **−24.8%** | −43.9% |
-| Leverage multiple required | 2.46x | 2.58x |
-| Gross exposure at that leverage | 1.48 | 1.55 |
+Unlevered, trend's benefit is a smaller left tail: **max drawdown −10.7% versus the control's −19.4%**, for the same return.
 
-This is the documented benefit of trend following — it cuts the left tail, it does not add return. At the leverage required to reach the accepted 0.05%/day target, that is the difference between a 25% drawdown and a 44% one. Caveat that matters: max drawdown is **one number from one path**, not a distribution. It cannot be significance-tested the way the return difference can, and it should not be treated as equally established.
+That matters more than it first appears, because 0.05%/day (12.6%/yr) is not reachable on this basket unlevered — both arms return 4–5%. So the target forces leverage, and leverage is where the two arms separate. Paths below are **generated at leverage** (the backtest re-run at each volatility target), not produced by scaling a return stream, and are charged 6% annual financing on gross exposure above 1.0:
 
-**The leverage is a real constraint, not a footnote.** Gross 1.48 exceeds a cash account. Reg T margin covers the equity sleeve; Alpaca crypto is 1x, so the crypto leg cannot be levered at all.
+| wide basket, levered | Return | Vol | Sharpe | Max DD | Gross |
+|---|---|---|---|---|---|
+| Trend 63d @ 176% vol target | **12.6%** | 27.4% | 0.46 | **−45.5%** | 2.44 |
+| Control @ 64% vol target | 7.8% | 21.1% | 0.37 | −50.5% | 2.26 |
+| Control @ 150% vol target | 9.0% | — | 0.28 | −69.8% | 3.45 |
+| Control @ 250% vol target | 8.5% | — | 0.21 | −79.4% | 4.27 |
+
+**The control cannot reach 12.6%/yr at any leverage.** It plateaus around 8.7–9.0% while the drawdown deepens to −79% — financing consumes the added exposure faster than return accrues. Trend reaches the target; always-long does not. That is a real and specific advantage, and it appears exactly at the risk level David's accepted number requires.
+
+Caveats that belong next to those figures:
+- Max drawdown is **one number from one path**, not a distribution. It cannot be significance-tested the way the return difference can.
+- **−45% is the honest price of 0.05%/day on this basket.** Not −25%; that earlier figure came from post-multiplying a return stream, which is the linear approximation and understates a levered path.
+- Gross 2.44 exceeds a cash account and most of Reg T. Alpaca crypto is 1x, so the crypto sleeve cannot be levered at all — the equity sleeve would have to carry more than 2.44 for the portfolio to average it. **On the accounts actually available, this configuration is not executable as specified.**
 
 ## Result 4 — the current universe's flattering number is hindsight
 
-`DEFAULT_UNIVERSE`'s control posts Sharpe 1.34, well above the wide basket's 0.60. Do not bank it. SPY, QQQ, AAPL, TSLA, BTC and ETH are six assets *selected in 2026 knowing they won* — that is textbook survivorship/selection bias, and it is precisely Stage 1's unticked box ("point-in-time, survivorship-free data"). A basket picked for having gone up will backtest as having gone up.
+`DEFAULT_UNIVERSE`'s control posts Sharpe 1.34, well above the wide basket's 0.60, and reaches 12.6%/yr at gross 0.46 with only a −14.4% drawdown. Do not bank it. SPY, QQQ, AAPL, TSLA, BTC and ETH are six assets *chosen in 2026 knowing they won* — **selection bias**, distinct from survivorship bias (which concerns assets that died and were dropped; broad ETFs rarely delist, so that box is comparatively clean here). A basket picked for having gone up will backtest as having gone up.
+
+This is the single largest effect in the measurement: universe choice moves the headline Sharpe by more than a factor of two, dwarfing every signal decision tested.
 
 The measured diversification figures stand on their own and are not affected by this:
 
@@ -86,11 +97,11 @@ The measured diversification figures stand on their own and are not affected by 
 
 ## What this means for Samurai
 
-1. **Trend as implemented does not justify its complexity on return.** Its case is left-tail reduction at leverage, which is a genuine reason to run it but a narrower one than "it is the best-documented strategy."
-2. **The control is the benchmark to beat, not SPY.** Any future claim — trend, LLM debate, anything — has to clear always-long-the-same-basket. Nothing has yet.
+1. **Trend as implemented does not justify itself on unlevered return** — t = 0.15 against the control. Its case is leverage efficiency: it reaches the target return where always-long cannot, with a shallower left tail at every exposure level.
+2. **The control is the benchmark to beat, not SPY.** Any future claim — trend, LLM debate, anything — has to clear always-long-the-same-basket at the same vol target. Nothing has yet.
 3. **The veto-only debate design becomes more valuable, not less.** It is the cheapest way to get a measured answer on whether the LLM layer adds anything, against a control that is now defined and computed.
-4. **0.05%/day needs ~2.5x leverage on this basket** and brings a 25–44% drawdown. The target is reachable but not at the risk level the unlevered numbers imply.
-5. **Stage 1's survivorship box is not cosmetic.** It changes the headline Sharpe by a factor of two in this very measurement.
+4. **0.05%/day costs a ~45% drawdown and gross 2.44 on the wide basket** — and gross 2.44 is not executable on the available accounts, since Alpaca crypto is 1x. The target is reachable in arithmetic, not on these venues, in this configuration.
+5. **Universe selection dominates signal selection.** Choice of basket moved the headline Sharpe by more than 2x; no lookback or direction choice moved it by more than 0.2. If effort is going anywhere, it goes there — and the hindsight problem in the current universe is Stage 1's unticked data box, not a cosmetic concern.
 
 ## Reproducing
 

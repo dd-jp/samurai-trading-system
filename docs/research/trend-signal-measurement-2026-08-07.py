@@ -157,8 +157,16 @@ def build_panel(prices, symbols):
 
 
 def run(dates, panel, symbols, lookback, allow_short, equity_cost_bps,
-        always_long=False):
-    """One arm. `always_long=True` ignores the signal entirely — the control."""
+        always_long=False, vol_target=PORTFOLIO_VOL_TARGET, gross_cap=GROSS_CAP,
+        financing_rate=0.0):
+    """One arm. `always_long=True` ignores the signal entirely — the control.
+
+    `vol_target`/`gross_cap` are raised for the levered runs so the equity path
+    is GENERATED at leverage rather than post-multiplied: compounding is
+    non-linear, so scaling a daily return stream does not reproduce the
+    drawdown a levered account would actually have experienced.
+    `financing_rate` is charged annually on gross exposure above 1.0.
+    """
     n = len(dates)
     rets = {s: [0.0] * n for s in symbols}
     for i in range(1, n):
@@ -200,12 +208,12 @@ def run(dates, panel, symbols, lookback, allow_short, equity_cost_bps,
             if len(strat_hist) >= VOL_WINDOW:
                 realized = stdev(strat_hist[-VOL_WINDOW:]) * math.sqrt(TRADING_DAYS)
                 if realized > 0:
-                    scale = PORTFOLIO_VOL_TARGET / realized
+                    scale = vol_target / realized
             new = {s: w * scale for s, w in new.items()}
 
             gross = sum(abs(w) for w in new.values())
-            if gross > GROSS_CAP:
-                new = {s: w * GROSS_CAP / gross for s, w in new.items()}
+            if gross > gross_cap:
+                new = {s: w * gross_cap / gross for s, w in new.items()}
 
             traded = sum(abs(new[s] - weights[s]) for s in symbols)
             cost = sum(
@@ -218,7 +226,9 @@ def run(dates, panel, symbols, lookback, allow_short, equity_cost_bps,
         else:
             cost = 0.0
 
-        r = sum(weights[s] * rets[s][i] for s in symbols) - cost
+        gross_now = sum(abs(w) for w in weights.values())
+        financing = max(0.0, gross_now - 1.0) * financing_rate / TRADING_DAYS
+        r = sum(weights[s] * rets[s][i] for s in symbols) - cost - financing
         strat.append(r)
         strat_hist.append(r)
         gross_series.append(sum(abs(w) for w in weights.values()))
@@ -338,22 +348,34 @@ def main():
               f'{tr_m["sharpe"] - ct_m["sharpe"]:>9.2f}{se:>7.2f}{t_stat:>9.2f}'
               f'{tr_m["mdd"]*100:>9.1f}%{ct_m["mdd"]*100:>10.1f}%')
 
-    # ---- what it costs to reach 0.05%/day ----
-    print(f'\n=== leverage required for 0.05%/day (12.6%/yr) ===')
-    print(f'{"config":<34}{"mult":>7}{"vol":>8}{"maxDD":>9}{"gross":>8}')
-    for key in [('wide', 'long-only', 63), ('wide', 'always-long', 0),
-                ('current', 'long-only', 21), ('current', 'always-long', 0)]:
-        m, daily = results[(key[0], key[1], key[2], 2.0)]
-        mult = 0.126 / m['ann_ret']
-        syms = WIDE if key[0] == 'wide' else CURRENT
-        dates, panel = build_panel(prices, syms)
-        # Drawdown scales non-linearly; recompute on the levered return stream.
-        lev = [r * mult for r in daily]
-        lm = metrics(lev, dates[len(dates) - len(daily):])
-        gross = 0.60 if key[0] == 'wide' else 0.40
-        label = f'{key[0]}/{key[1]}' + (f'/{key[2]}d' if key[2] else '')
-        print(f'{label:<34}{mult:>7.2f}{lm["ann_vol"]*100:>7.1f}%'
-              f'{lm["mdd"]*100:>8.1f}%{gross*mult:>8.2f}')
+    # ---- what it costs to reach 0.05%/day, PATH GENERATED AT LEVERAGE ----
+    # Solve for the vol target that delivers 12.6%/yr by re-running the whole
+    # backtest at each candidate, so the drawdown reflects actual levered
+    # compounding. Post-multiplying a daily return stream by a constant is the
+    # LINEAR approximation and understates what a levered account lived through.
+    FINANCING = 0.06  # Reg T-ish, charged on gross above 1.0
+    print(f'\n=== 0.05%/day (12.6%/yr): path generated at leverage, '
+          f'{FINANCING*100:.0f}% financing on gross>1 ===')
+    print(f'{"config":<30}{"volTgt":>8}{"ret":>8}{"vol":>7}{"Sharpe":>8}'
+          f'{"maxDD":>9}{"gross":>7}')
+    for uni, arm, lb in [('wide', 'long-only', 63), ('wide', 'always-long', 0),
+                         ('current', 'long-only', 21), ('current', 'always-long', 0)]:
+        syms = WIDE if uni == 'wide' else CURRENT
+        dts, pnl = build_panel(prices, syms)
+        best = None
+        for vt in [x / 100.0 for x in range(8, 251, 2)]:
+            daily, dd, tt, gg = run(dts, pnl, syms, lb or LOOKBACKS[0], False, 2.0,
+                                    always_long=(arm == 'always-long'),
+                                    vol_target=vt, gross_cap=4.0,
+                                    financing_rate=FINANCING)
+            m = metrics(daily, dd)
+            if best is None or abs(m['ann_ret'] - 0.126) < abs(best[1]['ann_ret'] - 0.126):
+                best = (vt, m, mean(gg))
+        vt, m, gross = best
+        label = f'{uni}/{arm}' + (f'/{lb}d' if lb else '')
+        print(f'{label:<30}{vt*100:>7.0f}%{m["ann_ret"]*100:>7.1f}%'
+              f'{m["ann_vol"]*100:>6.1f}%{m["sharpe"]:>8.2f}'
+              f'{m["mdd"]*100:>8.1f}%{gross:>7.2f}')
 
 
 if __name__ == '__main__':
