@@ -35,7 +35,7 @@ Archive raw payloads at ingest, keyed `(source, native_id)`, stamped with our ow
 
 ## 3. Layer A — Ticker/company news
 
-Verified against primary docs (full detail in agent report; key rows):
+Verified against primary docs (full detail in agent report; key rows). Quota column is sized at **96/day** — the worst case of one fetch per 15-min refresh bucket (4/h × 24h), not the planned 36/day cadence (§1) — so a ✅ means headroom even if cadence is later raised to per-bucket:
 
 | Source | Stable ID | Evidence | Replay | Quota @96/day | Cost | Licensing risk |
 |---|---|---|---|---|---|---|
@@ -99,7 +99,7 @@ Confirmed keyless read access; Gamma 4,000 req/10s; `/prices-history` takes `sta
 | Anthropic web_search | citations + `web_search_requests` count | `page_age` | ❌ encrypted | No | No | Claude API; NOT Nous/Bedrock | $8–13 |
 | OpenAI web_search | `url_citation` + sources list | No | No | No | No | Responses API | $8–12 |
 
-- **Search retrieval free tiers cover our cadence:** Brave Search API news endpoint ($5 free credit/mo ≥ 504 calls/14d ≈ $2.52), Tavily (1,000 free credits/mo; drop to 5 refreshes/day to stay inside), Exa ($10 free/mo). Bing News API retired 2025-08-11 — off the table.
+- **Search retrieval free tiers cover our cadence — for Brave, only per 14-day window:** Brave Search API news endpoint's $5 free credit/mo covers 504 calls/14d ≈ $2.52, but steady state is 36/day × 30d ≈ 1,080 calls ≈ $5.40/mo — marginally over the credit; drop to 5 refreshes/day (~$4.50/mo) to stay free, mirroring Tavily (1,000 free credits/mo; same 5-refreshes/day ceiling). Exa $10 free/mo covers steady state as-is. Bing News API retired 2025-08-11 — off the table.
 - **Scoring over supplied text via the existing Nous grok-4.5 chat/completions call** keeps ADR-0009 intact and meters through the existing `llm_spend` `stage: 'market_intelligence'` seam. The #485 gate passes by construction: retrieval evidence is our own fetch record.
 - xAI note: old "Live Search" `search_parameters` on chat/completions is no longer documented; the surface is now server-side tools on `/v1/responses` only (`web_search`, `x_search` with `from_date`/`to_date`). $5/1k tool calls + $2/$6 per M tokens on grok-4.5.
 
