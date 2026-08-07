@@ -1,0 +1,28 @@
+-- Carries the originating lot(s)' identity on a flatten submission (#517),
+-- closing the gap #508/#516 left behind: a flatten submits under its OWN
+-- fresh idempotency key, never a held lot's, so `ingestFills()` cannot
+-- attribute its fill back to the lot it closed by matching
+-- `client_order_id` alone -- that match only ever succeeds for a lot's own
+-- entry/stop/target fills. `flatten_submissions` already carries
+-- `instrument`, which looks like it should be enough to find "the lot this
+-- closed" after the fact -- it is deliberately NOT used that way. A new lot
+-- opening on the same instrument between the flatten's submit and the fill
+-- landing would then wrongly receive quantity meant for an older one; that
+-- is exactly the "inferring it after the fact" #517 rules out. Writing the
+-- identity down AT SUBMIT TIME, before either the broker call or the race
+-- window it would have to resolve after, is what removes the ambiguity
+-- instead of guessing through it.
+--
+-- JSON array of `open_positions.idempotency_key`, in the SAME `opened_at`
+-- order `executeExit` (execute.ts) read them in via `getOpenPositions()`'s
+-- own `ORDER BY opened_at`. `ingestFills()` relies on that order to
+-- allocate a partial flatten fill FIFO -- oldest lot first -- rather than
+-- pro-rata: splitting a partial fill pro-rata across every named lot would
+-- leave all of them partially exited and close none, so no `ClosedTrade`
+-- would ever be emitted for a flatten that did not fill in full.
+--
+-- NULL, not NOT NULL, and deliberately so: a flatten row written before
+-- this migration landed names no lot, and `ingestFills()` must read that as
+-- "this row predates attribution, so it cannot be attributed" rather than
+-- fail parsing a column that was never populated.
+ALTER TABLE flatten_submissions ADD COLUMN lot_idempotency_keys TEXT NULL;

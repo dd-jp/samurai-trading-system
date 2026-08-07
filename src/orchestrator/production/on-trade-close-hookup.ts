@@ -6,10 +6,10 @@
  * for this hook off a tick's `execution` step / `TickOutcome.execution_result`
  * — that path never carries a closed trade. `ExecutionImpl.execute()` returns
  * a submission ack only, for every `intent_type` including `'exit'` (#508):
- * a flatten's own fill does not yet close the lot it flattens (a follow-up
- * gap in `ingestFills()`'s fill-to-lot attribution, filed separately), and
- * even once it does, closing is still `ingestFills()`'s job, not `execute()`'s.
- * The only place a `ClosedTrade` is ever produced is `ingestFills()` calling
+ * `execute()` never itself closes a lot — even now that a flatten's fill
+ * attributes back to the lot(s) it closed (#517), closing is still
+ * `ingestFills()`'s job, not `execute()`'s. The only place a `ClosedTrade` is
+ * ever produced is `ingestFills()` calling
  * `SharedStore.writeClosedTrade()` (src/execution/ingest-fills.ts), on its own
  * polling path, independent of the per-instrument tick chain. So this module
  * decorates `writeClosedTrade` itself rather than reaching into the tick
@@ -85,6 +85,9 @@ export function withOnTradeClose(
 
     getFills: (idempotency_key: string): Promise<Fill[]> => store.getFills(idempotency_key),
 
+    getEntryFillSizes: (idempotency_keys: readonly string[]): Promise<Map<string, number>> =>
+      store.getEntryFillSizes(idempotency_keys),
+
     writeAheadFlatten: (submission: FlattenSubmissionWriteAhead): Promise<void> =>
       store.writeAheadFlatten(submission),
 
@@ -99,6 +102,9 @@ export function withOnTradeClose(
       reason: string,
       resolved_at: Date,
     ): Promise<void> => store.resolveFlattenError(idempotency_key, reason, resolved_at),
+
+    getFlattenLotKeys: (idempotency_key: string): Promise<readonly string[] | null> =>
+      store.getFlattenLotKeys(idempotency_key),
 
     applyLotAdvance: async (advance: LotAdvance): Promise<void> => {
       await store.applyLotAdvance(advance);

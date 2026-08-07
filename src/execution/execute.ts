@@ -262,6 +262,12 @@ async function executeExit(
     side: order.side,
     size: order.size,
     submitted_at: now,
+    // #517: the lot(s) this flatten is closing, carried on the journal row
+    // itself so `ingestFills()` can attribute the fill back to them without
+    // guessing from whatever is still open when it lands. `heldLots` is
+    // already `getOpenPositions()`'s `ORDER BY opened_at`, which `ingestFills`
+    // relies on to allocate a partial fill oldest-lot-first.
+    lot_idempotency_keys: heldLots.map((lot) => lot.idempotency_key),
   });
 
   for (const lot of heldLots) {

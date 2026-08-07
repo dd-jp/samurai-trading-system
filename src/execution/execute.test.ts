@@ -861,5 +861,312 @@ describe('ExecutionImpl.execute', () => {
       expect(result.broker_order_ids).toEqual(['key-aapl-1355:flatten']);
       expect(await store.countAllPositions()).toBe(1); // just the seed
     });
+
+    // #517: does a flatten-closed lot emit a correct `ClosedTrade` at all?
+    // Unlike every test above, this one carries the lot through `ingestFills()`
+    // too — `seedHeldLot` writes an `OpenPosition` row directly with no `Fill`
+    // rows behind it, which is enough for `execute()`'s own cross-check but
+    // NOT enough for `ingestFills()`: `advanceLot` (ingest-fills.ts) requires
+    // an actual entry `Fill` row to size a lot before it can close one ("An
+    // exit fill cannot precede the entry fill that created the lot"). So a
+    // flatten-attribution test needs a lot that was actually FILLED through
+    // this same pipeline, not a seeded position — which is exactly the gap
+    // that let this issue go unnoticed: every prior exit test stopped at
+    // `execute()`'s submission ack and never called `ingestFills()` at all.
+    describe('flatten fill attribution (#517)', () => {
+      function makeMarketData(): MarketDataService {
+        return {
+          getBars: vi.fn(),
+          getMark: vi.fn().mockResolvedValue({
+            price: 100,
+            observed_at: NOW,
+            source: 'fixture',
+            asset_class: 'stocks',
+          }),
+          getIndicator: vi
+            .fn()
+            .mockResolvedValue({ indicator: 'atr', value: 2, as_of_bar_close: NOW }),
+          getSpreadEstimate: vi.fn().mockResolvedValue(0.04),
+          getADV: vi.fn().mockResolvedValue(1_000_000),
+        } as unknown as MarketDataService;
+      }
+
+      const SIMULATED_CONFIG = {
+        volatility_indicator: {
+          indicator: 'atr' as const,
+          params: { period: 14 },
+          timeframe: '1h' as const,
+          lookback: 15,
+        },
+        adv_window: { timeframe: '1d' as const, lookback: 20 },
+      };
+
+      const zeroCosts = () => ({ spread_cost: 0, commission: 0, slippage: 0, market_impact: 0 });
+
+      // AC #1's finding, established by running the FIRST assertion block of
+      // the test below against pre-fix `ingest-fills.ts`/`execute.ts`: a
+      // flatten-closed lot's `ClosedTrade` was `[]` (not wrong — ABSENT), the
+      // lot stayed `filled` (never `closed`), and `getOpenPositions()` kept
+      // reporting it forever. The flatten's fill DID land — the Simulated
+      // adapter modelled it and `broker.fetchNewFills` reported it — but
+      // `ingestFills()` only ever looked a fill up by matching
+      // `client_order_id` against a LOT's own `idempotency_key`, and a
+      // flatten submits under its own fresh key, so the fill was silently
+      // dropped every poll, forever. See the PR body for the verbatim
+      // pre-fix run. The test below now asserts the FIXED behaviour.
+      it('attributes the flatten fill to the lot it closed and emits a correct ClosedTrade', async () => {
+        const { store } = openTestExecutionStore();
+        const costModel: CostModel = {
+          fill: vi
+            .fn()
+            .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
+            .mockReturnValueOnce({
+              fill_price: 99.5,
+              filled_size: 40,
+              cost_breakdown: {
+                spread_cost: 0.1,
+                commission: 0.2,
+                slippage: 0.05,
+                market_impact: 0.01,
+              },
+            }),
+        };
+        const marketData = makeMarketData();
+        const broker = new SimulatedBrokerAdapter({
+          clock: fixedClock,
+          costModel,
+          marketData,
+          config: SIMULATED_CONFIG,
+        });
+        const execution = new ExecutionImpl(
+          makeInput({ store, broker, costModel, marketData, clock: fixedClock }),
+        );
+
+        await execution.execute(
+          makeGo({
+            idempotency_key: 'key-aapl-entry-1',
+            size: 40,
+            entry: 95,
+            stop: 90,
+            target: 110,
+          }),
+        );
+        await execution.ingestFills();
+
+        const exitResult = await execution.execute(makeExitGo({ size: 40 }));
+        expect(exitResult.status).toBe('submitted');
+        await execution.ingestFills();
+
+        const closedTrades = await store.getClosedTrades();
+        expect(closedTrades).toHaveLength(1);
+        expect(closedTrades[0]).toMatchObject({
+          // The LOT's own key, not the flatten's — the attribution this
+          // ticket exists to fix.
+          idempotency_key: 'key-aapl-entry-1',
+          debate_id: 'debate-abc123',
+          instrument: 'AAPL',
+          side: 'buy',
+          filled_size: 40,
+          // The Simulated adapter's own raw fill is tagged `leg: 'entry'`
+          // (it models a flatten as just another priced fill at submit
+          // time) — `close_reason` reading 'exit' here, not 'entry', proves
+          // `ingestFills()` overrode that tag rather than trusting it.
+          close_reason: 'exit',
+        });
+        // gross = (99.5 - 95) * 40 = 180; fees = 0 (entry) + 0.2 (flatten commission).
+        expect(closedTrades[0].realized_pnl_net).toBeCloseTo(180 - 0.2, 6);
+        expect(closedTrades[0].fees_total).toBeCloseTo(0.2, 6);
+
+        expect((await store.getPosition('key-aapl-entry-1'))?.order_state).toBe('closed');
+        expect(await store.getOpenPositions()).toHaveLength(0);
+      });
+
+      it('is idempotent across repeated polls of the same flatten fill', async () => {
+        const { store } = openTestExecutionStore();
+        const costModel: CostModel = {
+          fill: vi
+            .fn()
+            .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
+            .mockReturnValueOnce({
+              fill_price: 99.5,
+              filled_size: 40,
+              cost_breakdown: zeroCosts(),
+            }),
+        };
+        const marketData = makeMarketData();
+        const broker = new SimulatedBrokerAdapter({
+          clock: fixedClock,
+          costModel,
+          marketData,
+          config: SIMULATED_CONFIG,
+        });
+        const execution = new ExecutionImpl(
+          makeInput({ store, broker, costModel, marketData, clock: fixedClock }),
+        );
+
+        await execution.execute(
+          makeGo({
+            idempotency_key: 'key-aapl-entry-1',
+            size: 40,
+            entry: 95,
+            stop: 90,
+            target: 110,
+          }),
+        );
+        await execution.ingestFills();
+        await execution.execute(makeExitGo({ size: 40 }));
+
+        await execution.ingestFills();
+        // A second poll re-offers the SAME flatten fill (the Simulated
+        // adapter's `fetchNewFills` is inclusive of `since`, by contract) —
+        // it must dedupe, not close the same lot twice or double-count PnL.
+        await execution.ingestFills();
+
+        expect(await store.getClosedTrades()).toHaveLength(1);
+        expect(closedTradesRealizedPnl(await store.getClosedTrades())).toBeCloseTo(
+          (99.5 - 95) * 40,
+          6,
+        );
+      });
+
+      it('FIFO-allocates a single flatten fill across two lots on the same instrument, closing the oldest first', async () => {
+        const { store } = openTestExecutionStore();
+        let now = NOW;
+        const steppingClock: Clock = { now: () => now };
+        const costModel: CostModel = {
+          fill: vi
+            .fn()
+            .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }) // lot 1 entry
+            .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() }) // lot 2 entry
+            .mockReturnValueOnce({ fill_price: 100, filled_size: 25, cost_breakdown: zeroCosts() }), // flatten, covers both
+        };
+        const marketData = makeMarketData();
+        const broker = new SimulatedBrokerAdapter({
+          clock: steppingClock,
+          costModel,
+          marketData,
+          config: SIMULATED_CONFIG,
+        });
+        const execution = new ExecutionImpl(
+          makeInput({ store, broker, costModel, marketData, clock: steppingClock }),
+        );
+
+        await execution.execute(
+          makeGo({ idempotency_key: 'key-lot-1', size: 10, entry: 90, stop: 85, target: 110 }),
+        );
+        await execution.ingestFills();
+        now = new Date(now.getTime() + 60_000); // lot 2 opens a minute after lot 1.
+        await execution.execute(
+          makeGo({
+            idempotency_key: 'key-lot-2',
+            intent_type: 'scale_in',
+            size: 15,
+            entry: 92,
+            stop: 85,
+            target: 110,
+          }),
+        );
+        await execution.ingestFills();
+        now = new Date(now.getTime() + 60_000);
+
+        const exitResult = await execution.execute(makeExitGo({ size: 25 }));
+        expect(exitResult.status).toBe('submitted');
+        await execution.ingestFills();
+
+        const closedTrades = await store.getClosedTrades();
+        expect(closedTrades).toHaveLength(2);
+        const byKey = new Map(closedTrades.map((trade) => [trade.idempotency_key, trade]));
+        expect(byKey.get('key-lot-1')).toMatchObject({ filled_size: 10, close_reason: 'exit' });
+        expect(byKey.get('key-lot-2')).toMatchObject({ filled_size: 15, close_reason: 'exit' });
+        // Each lot's PnL against its OWN entry price, not a blended average —
+        // proof the FIFO split, not a pro-rata one, drove the allocation.
+        expect(byKey.get('key-lot-1')?.realized_pnl_net).toBeCloseTo((100 - 90) * 10, 6);
+        expect(byKey.get('key-lot-2')?.realized_pnl_net).toBeCloseTo((100 - 92) * 15, 6);
+        expect(await store.getOpenPositions()).toHaveLength(0);
+      });
+
+      // Guards the fix's own correctness, not just its intent: an EARLIER
+      // version of `redistributeFlattenFills` seeded each lot's share from
+      // its PRIOR EXIT fills and filtered to lots still open in the CURRENT
+      // poll's `positions` — both of which change between polls as fills get
+      // persisted and lots go terminal. That made the split for a
+      // still-partial lot drift poll to poll, and because `hasFill` dedupes
+      // on `broker_fill_id` alone, a SECOND, differently-sized attempt under
+      // the same derived id did not correct the first — it silently vanished
+      // behind it, stranding the lot's true remainder forever. The fix seeds
+      // from persisted ENTRY fills (fixed once filling stops) and never
+      // filters by "still open", so the split is identical every poll and
+      // dedupes cleanly instead.
+      it('gives a partially-filled multi-lot flatten a stable split across repeated polls, closing what it can and leaving the rest genuinely open', async () => {
+        const { store } = openTestExecutionStore();
+        let now = NOW;
+        const steppingClock: Clock = { now: () => now };
+        const costModel: CostModel = {
+          fill: vi
+            .fn()
+            .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }) // lot 1 entry
+            .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() }) // lot 2 entry
+            // The flatten asked for 25 (10 + 15) but the IOC only fills 20 —
+            // a thin book taking part of the order and cancelling the rest.
+            .mockReturnValueOnce({ fill_price: 100, filled_size: 20, cost_breakdown: zeroCosts() }),
+        };
+        const marketData = makeMarketData();
+        const broker = new SimulatedBrokerAdapter({
+          clock: steppingClock,
+          costModel,
+          marketData,
+          config: SIMULATED_CONFIG,
+        });
+        const execution = new ExecutionImpl(
+          makeInput({ store, broker, costModel, marketData, clock: steppingClock }),
+        );
+
+        await execution.execute(
+          makeGo({ idempotency_key: 'key-lot-1', size: 10, entry: 90, stop: 85, target: 110 }),
+        );
+        await execution.ingestFills();
+        now = new Date(now.getTime() + 60_000);
+        await execution.execute(
+          makeGo({
+            idempotency_key: 'key-lot-2',
+            intent_type: 'scale_in',
+            size: 15,
+            entry: 92,
+            stop: 85,
+            target: 110,
+          }),
+        );
+        await execution.ingestFills();
+        now = new Date(now.getTime() + 60_000);
+
+        await execution.execute(makeExitGo({ size: 25 }));
+        // Polled three times: the Simulated adapter's `fetchNewFills` is
+        // unconditional (re-offers the same historical fill every call), so
+        // this exercises exactly the repeat-poll path the fix above targets.
+        await execution.ingestFills();
+        await execution.ingestFills();
+        await execution.ingestFills();
+
+        // Lot 1's full 10-share is covered by the 20 that filled — closes.
+        const closedTrades = await store.getClosedTrades();
+        expect(closedTrades).toHaveLength(1);
+        expect(closedTrades[0]).toMatchObject({ idempotency_key: 'key-lot-1', filled_size: 10 });
+
+        // Lot 2 gets its FIFO remainder of the 20 (10, after lot 1's 10) —
+        // 5 short of its own 15 need, so it stays open, not silently
+        // dropped and not double-counted by the repeat polls above.
+        const lot2 = await store.getPosition('key-lot-2');
+        expect(lot2?.order_state).toBe('filled'); // entry complete; exit is not
+        const lot2ExitQty = (await store.getFills('key-lot-2'))
+          .filter((fill) => fill.leg === 'exit')
+          .reduce((sum, fill) => sum + fill.qty, 0);
+        expect(lot2ExitQty).toBe(10);
+        expect(await store.getOpenPositions()).toHaveLength(1);
+      });
+    });
   });
 });
+
+function closedTradesRealizedPnl(trades: readonly { realized_pnl_net: number }[]): number {
+  return trades.reduce((sum, trade) => sum + trade.realized_pnl_net, 0);
+}

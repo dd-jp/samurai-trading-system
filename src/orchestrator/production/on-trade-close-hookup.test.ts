@@ -67,6 +67,9 @@ class FakeSharedStore implements SharedStore {
   async getFills(_idempotency_key: string): Promise<Fill[]> {
     return [];
   }
+  async getEntryFillSizes(_idempotency_keys: readonly string[]): Promise<Map<string, number>> {
+    return new Map();
+  }
   async writeAheadFlatten(_submission: FlattenSubmissionWriteAhead): Promise<void> {}
   async resolveFlattenSubmitted(
     _idempotency_key: string,
@@ -78,6 +81,9 @@ class FakeSharedStore implements SharedStore {
     _reason: string,
     _resolved_at: Date,
   ): Promise<void> {}
+  async getFlattenLotKeys(_idempotency_key: string): Promise<readonly string[] | null> {
+    return null;
+  }
   async applyLotAdvance(advance: LotAdvance): Promise<void> {
     if (this.shouldThrow) {
       throw new Error('boom');

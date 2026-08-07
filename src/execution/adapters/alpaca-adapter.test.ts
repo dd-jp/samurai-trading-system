@@ -1,7 +1,13 @@
+import type { CostModel } from '../../cost-model-backtest/index.js';
+import type { MarketDataService } from '../../market-data-service/index.js';
+import type { OrderIntent } from '../../shared/index.js';
 import { type Clock, TokenBucket } from '../../shared/index.js';
+import type { VerdictDecision } from '../../verdict/index.js';
 import { BrokerError } from '../broker-error.js';
 import { InMemoryBrokerStateStore } from '../broker-state-store.js';
-import type { NativeBracketRequest } from '../types.js';
+import { ExecutionImpl } from '../execute.js';
+import { openTestExecutionStore } from '../sqlite-store-harness.js';
+import type { ExecutionConfig, ExecutionInput, NativeBracketRequest } from '../types.js';
 import type { UnpricedFillAlert, UnpricedFillAlertChannel } from '../unpriced-fill-alert.js';
 import { AlpacaBrokerAdapter, DEFAULT_UNPRICED_FILL_AGE_OUT_MS } from './alpaca-adapter.js';
 import type { AlpacaClient, AlpacaOrder } from './alpaca-client.js';
@@ -506,10 +512,23 @@ describe('AlpacaBrokerAdapter outbound call discipline', () => {
 });
 
 describe('AlpacaBrokerAdapter.fetchNewFills on inconsistent venue data', () => {
-  it('refuses to book a filled quantity Alpaca reports no average price for', async () => {
-    // The alternative — recording price 0 — is a phantom fill that corrupts
-    // realized PnL, the R-multiple and the feedback loop's weighting. Same
-    // posture as the ccxt adapter's `toFill`.
+  // Corrected by #524's review (deepseek): this test used to assert that
+  // `fetchNewFills` THROWS here (an AggregateError, caught below). That was
+  // pinning a bug, not a feature — refusing to BOOK an unpriced fill as a
+  // real Fill is correct (recording price 0 would be a phantom fill), but
+  // failing the WHOLE sweep over it is not: an unpriced fill is #298's
+  // modelled, expected condition (the age-out clock in the `catch` below
+  // starts either way), not a failure, and the bracket loop's own "skipped,
+  // not swallowed... retried on the next one" comment already said so
+  // before the code below it contradicted it. The old assertion's own
+  // comment reasoned "the only bracket is the bad one, so nothing is lost by
+  // throwing" — true in THIS test's single-bracket setup, but the general
+  // behaviour it pinned threw on ANY all-unpriced sweep, which silently
+  // drops every OTHER bracket's and flatten's fills too when one happens to
+  // land unpriced in the same poll (see `alpaca-adapter.test.ts`'s
+  // `still collects a healthy bracket fill in the same poll as an unpriced
+  // flatten` for that case).
+  it('does not fail the sweep for a filled quantity Alpaca reports no average price for', async () => {
     const client = makeClient({
       getOrder: vi.fn().mockResolvedValue(
         acceptedOrder({
@@ -527,14 +546,10 @@ describe('AlpacaBrokerAdapter.fetchNewFills on inconsistent venue data', () => {
     });
     await adapter.submitBracket(makeBracket());
 
-    // The only bracket is the bad one, so nothing is lost by throwing — and an
-    // empty array here would read as "no new fills", which is a different fact.
-    const error = await adapter.fetchNewFills(new Date(0)).catch((caught: unknown) => caught);
-
-    expect(error).toBeInstanceOf(AggregateError);
-    expect((error as AggregateError).errors[0]).toMatchObject({
-      message: expect.stringMatching(/reports filled_qty 100 but no filled_avg_price/),
-    });
+    // Not booked (an empty array, same as "nothing new"), and not thrown —
+    // retried next poll, exactly like an order the venue has not reported
+    // on at all yet.
+    await expect(adapter.fetchNewFills(new Date(0))).resolves.toEqual([]);
   });
 
   it('refuses an unparseable filled_qty rather than booking NaN', async () => {
@@ -925,6 +940,76 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
     expect(reported).not.toContain(secret);
     expect(reported).toContain('alert delivery failed for order alpaca-entry-1');
   });
+
+  // #524 review (deepseek): before this fix, an UnpricedFillError counted as
+  // a sweep failure in BOTH the bracket loop and the flatten loop (#517
+  // faithfully mirrored the bracket loop's own pre-existing behaviour) —
+  // contradicting the bracket catch's own "skipped, not swallowed" comment.
+  // On a poll where an unpriced fill was the ONLY new activity, that made
+  // the whole `fetchNewFills` call throw, which `ingestFills()` never
+  // catches per-order — nothing from ANY bracket or flatten got persisted
+  // that poll, not just the unpriced one's. This is the fix, proved for the
+  // flatten sweep specifically (the bracket-only version of this failure
+  // mode already existed before #517; the tests above tolerate it via
+  // `.catch(() => undefined)` because their own assertions are about the
+  // age-out mechanism, not the throw).
+  it('does not fail the sweep when the only new activity is an unpriced flatten fill', async () => {
+    const submitMarketOrder = vi.fn().mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1' });
+    const client = makeClient({
+      submitMarketOrder,
+      getOrder: vi.fn().mockResolvedValue(unpricedOrder({ id: 'flatten-1' })),
+    });
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+    });
+    await adapter.submitFlatten('AAPL', 'sell', 12, 'flatten-key');
+
+    await expect(adapter.fetchNewFills(new Date(0))).resolves.toEqual([]);
+  });
+
+  it('still collects a healthy bracket fill in the same poll as an unpriced flatten', async () => {
+    const filledAt = '2026-07-15T14:05:00Z';
+    const getOrder = vi.fn(async (orderId: string) =>
+      orderId === 'alpaca-entry-1'
+        ? acceptedOrder({
+            status: 'filled',
+            filled_qty: '100',
+            filled_avg_price: '100.02',
+            filled_at: filledAt,
+            legs: [],
+          })
+        : unpricedOrder({ id: 'flatten-stuck' }),
+    );
+    const submitMarketOrder = vi
+      .fn()
+      .mockResolvedValue({ ...acceptedOrder(), id: 'flatten-stuck' });
+    const client = makeClient({ getOrder, submitMarketOrder });
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+    });
+    await adapter.submitBracket(makeBracket());
+    await adapter.submitFlatten('TSLA', 'sell', 5, 'flatten-key');
+
+    const fills = await adapter.fetchNewFills(new Date(0));
+
+    // The bracket's entry fill made it through untouched — the unpriced
+    // flatten cost the sweep nothing beyond its own contribution.
+    expect(fills).toEqual([
+      {
+        client_order_id: 'key-aapl-1355',
+        broker_fill_id: 'alpaca-entry-1',
+        leg: 'entry',
+        price: 100.02,
+        qty: 100,
+        fee: 0,
+        timestamp: new Date(filledAt),
+      },
+    ]);
+  });
 });
 
 /**
@@ -961,6 +1046,60 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     });
     expect(ack.client_order_id).toBe('flatten-key');
     expect(ack.broker_order_ids).toEqual(['flatten-1']);
+  });
+
+  // #517: before this, `fetchNewFills` never learned a flatten's order id at
+  // all — `submitFlatten` reached the venue but entered neither `brackets`
+  // nor any other worklist the sweep polls, so the fill was invisible no
+  // matter what `ingestFills()` did with it. This is that gap's own test,
+  // independent of `ingestFills()`'s attribution (covered in
+  // `execute.test.ts` against the Simulated adapter): does the SWEEP even
+  // see the order.
+  it('sweeps a submitted flatten and reports its fill tagged as an exit, not an entry', async () => {
+    const submitMarketOrder = vi.fn().mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1' });
+    const filledAt = '2026-07-15T15:10:00Z';
+    const getOrder = vi.fn().mockResolvedValue(
+      acceptedOrder({
+        id: 'flatten-1',
+        status: 'filled',
+        filled_qty: '12',
+        filled_avg_price: '99.50',
+        filled_at: filledAt,
+        legs: [], // a flatten is a plain market order — no attached legs.
+      }),
+    );
+    const adapter = adapterWith(makeClient({ submitMarketOrder, getOrder }));
+    await adapter.submitFlatten('AAPL', 'sell', 12, 'flatten-key');
+
+    const fills = await adapter.fetchNewFills(new Date(0));
+
+    expect(fills).toEqual([
+      {
+        client_order_id: 'flatten-key',
+        broker_fill_id: 'flatten-1',
+        leg: 'exit',
+        price: 99.5,
+        qty: 12,
+        fee: 0,
+        timestamp: new Date(filledAt),
+      },
+    ]);
+  });
+
+  it('does not poll a flatten twice under the same order — resubmitting under the same client order id is a venue no-op', async () => {
+    const submitMarketOrder = vi.fn().mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1' });
+    const getOrder = vi
+      .fn()
+      .mockResolvedValue(acceptedOrder({ id: 'flatten-1', status: 'accepted' }));
+    const adapter = adapterWith(makeClient({ submitMarketOrder, getOrder }));
+
+    await adapter.submitFlatten('AAPL', 'sell', 12, 'flatten-key');
+    await adapter.submitFlatten('AAPL', 'sell', 12, 'flatten-key');
+    await adapter.fetchNewFills(new Date(0));
+
+    // One tracked flatten, so one `getOrder` call — the second `submitFlatten`
+    // overwrote the same map entry rather than adding a second one.
+    expect(getOrder).toHaveBeenCalledTimes(1);
   });
 
   it('cancels the order the venue holds under our client order id', async () => {
@@ -1027,5 +1166,238 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       // The only survivor, with an honest null where the price would not parse.
       { instrument: 'TSLA', qty: 4, side: 'buy', avg_entry_price: null },
     ]);
+  });
+});
+
+/**
+ * #524 review (kimi): unpruned `flattens` entries poll every terminal
+ * flatten forever, against Alpaca's shared ~200 req/min account budget
+ * (`alpaca-http-client.ts`) — a resource leak that grows for the whole
+ * 14-day soak (#238). Proved end-to-end through `ExecutionImpl`/
+ * `ingestFills()`, not just the adapter in isolation: the requirement is
+ * "prune only once the fill is actually ingested", and "ingested" is a
+ * claim about the STORE, which only the full pipeline can settle.
+ */
+describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
+  const NOW = new Date('2026-07-20T16:00:00Z');
+  const fixedClock: Clock = { now: () => NOW };
+
+  function executionConfig(): ExecutionConfig {
+    return {
+      simulated: {
+        volatility_indicator: {
+          indicator: 'atr',
+          params: { period: 14 },
+          timeframe: '1h',
+          lookback: 15,
+        },
+        adv_window: { timeframe: '1d', lookback: 20 },
+      },
+    };
+  }
+
+  function orderIntent(overrides: Partial<OrderIntent> = {}): OrderIntent {
+    return {
+      idempotency_key: 'key-aapl-entry',
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+      side: 'buy',
+      intent_type: 'entry',
+      size: 10,
+      entry: 100,
+      stop: 95,
+      target: 110,
+      time_in_force: 'day',
+      decision_timestamp: NOW,
+      metadata: {
+        debate_id: 'debate-1',
+        conviction: 0.7,
+        converged: true,
+        sizing: {
+          base_risk_fraction: 0.01,
+          conviction_multiplier: 1,
+          vol_floor_factor: 1,
+          non_converged_haircut: 1,
+          cosine_multiplier: 1,
+        },
+        cosine_precedent: { neighbor_count: 0, weighted_mean_r: null, no_precedent: true },
+      },
+      ...overrides,
+    };
+  }
+
+  function goDecision(order: OrderIntent): VerdictDecision {
+    return {
+      status: 'go',
+      order,
+      no_go_reason: null,
+      approval_path: 'automated',
+      would_require_approval: true,
+      idempotency_key: order.idempotency_key,
+      timestamp: NOW,
+    };
+  }
+
+  it('stops polling a flatten once it reaches a terminal state and its fill has closed the lot', async () => {
+    const { store } = openTestExecutionStore();
+
+    // A SECOND, unrelated lot that stays open throughout. Without it,
+    // `ingestFills()`'s own "no open positions, return early" guard would
+    // make the second poll below call `fetchNewFills` zero times the
+    // moment AAPL's lot closes — proving nothing about pruning either way.
+    const aaplEntry = orderIntent({
+      idempotency_key: 'key-aapl-entry',
+      instrument: 'AAPL',
+      size: 10,
+      entry: 100,
+      stop: 95,
+      target: 110,
+    });
+    const tslaEntry = orderIntent({
+      idempotency_key: 'key-tsla-entry',
+      instrument: 'TSLA',
+      size: 5,
+      entry: 200,
+      stop: 190,
+      target: 220,
+    });
+
+    const getOrder = vi.fn(async (orderId: string) => {
+      switch (orderId) {
+        case 'aapl-entry-order':
+          return acceptedOrder({
+            id: 'aapl-entry-order',
+            client_order_id: 'key-aapl-entry',
+            symbol: 'AAPL',
+            status: 'filled',
+            filled_qty: '10',
+            filled_avg_price: '100',
+            filled_at: NOW.toISOString(),
+            legs: [],
+          });
+        case 'tsla-entry-order':
+          return acceptedOrder({
+            id: 'tsla-entry-order',
+            client_order_id: 'key-tsla-entry',
+            symbol: 'TSLA',
+            status: 'filled',
+            filled_qty: '5',
+            filled_avg_price: '200',
+            filled_at: NOW.toISOString(),
+            legs: [],
+          });
+        case 'aapl-flatten-order':
+          return acceptedOrder({
+            id: 'aapl-flatten-order',
+            symbol: 'AAPL',
+            status: 'filled',
+            filled_qty: '10',
+            filled_avg_price: '105',
+            // `fixedClock` never advances, so `advanceLot`'s no-lookahead
+            // filter (`fill.timestamp <= now`) requires this at or before
+            // `NOW`, not after it.
+            filled_at: NOW.toISOString(),
+            legs: [],
+          });
+        default:
+          throw new Error(`unexpected getOrder(${orderId})`);
+      }
+    });
+    const submitOrder = vi.fn(async (request: { client_order_id: string }) =>
+      acceptedOrder({
+        id: request.client_order_id === 'key-aapl-entry' ? 'aapl-entry-order' : 'tsla-entry-order',
+        client_order_id: request.client_order_id,
+        status: 'accepted',
+        filled_qty: '0',
+        filled_avg_price: null,
+        filled_at: null,
+        legs: [],
+      }),
+    );
+    const submitMarketOrder = vi.fn(async () =>
+      acceptedOrder({
+        id: 'aapl-flatten-order',
+        status: 'accepted',
+        filled_qty: '0',
+        filled_avg_price: null,
+        filled_at: null,
+        legs: [],
+      }),
+    );
+    // The pre-flatten cancel of AAPL's own bracket (#516): nothing to
+    // clear, so `getOrderByClientOrderId` reports no order and `cancel()`
+    // resolves quietly (its own idempotent-by-contract behaviour).
+    const getOrderByClientOrderId = vi.fn().mockResolvedValue(null);
+
+    const client = makeClient({
+      submitOrder,
+      getOrder,
+      submitMarketOrder,
+      getOrderByClientOrderId,
+    });
+    const broker = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      clock: fixedClock,
+    });
+    const input: ExecutionInput = {
+      trace_id: 'trace-1',
+      clock: fixedClock,
+      broker,
+      store,
+      costModel: {} as CostModel,
+      marketData: {} as MarketDataService,
+      config: executionConfig(),
+      mode: 'paper',
+    };
+    const execution = new ExecutionImpl(input);
+
+    await execution.execute(goDecision(aaplEntry));
+    await execution.execute(goDecision(tslaEntry));
+    await execution.ingestFills(); // fills both entries — nothing to prune yet.
+
+    const exitResult = await execution.execute(
+      goDecision(
+        orderIntent({
+          idempotency_key: 'key-aapl-exit',
+          instrument: 'AAPL',
+          side: 'sell',
+          intent_type: 'exit',
+          size: 10,
+          entry: 105,
+          stop: 105,
+          target: 105,
+        }),
+      ),
+    );
+    expect(exitResult.status).toBe('submitted');
+
+    // Poll, then ingest: the flatten sweep observes the order 'filled'
+    // (terminal), its fill closes the lot, and ONLY THEN — inside the same
+    // call, after `collectFill` has already handed the fill to `fills` —
+    // does the adapter prune its own `flattens` entry.
+    await execution.ingestFills();
+
+    expect((await store.getPosition('key-aapl-entry'))?.order_state).toBe('closed');
+    expect(await store.getClosedTrades()).toHaveLength(1);
+    expect(await store.getOpenPositions()).toEqual([
+      expect.objectContaining({ idempotency_key: 'key-tsla-entry' }),
+    ]);
+
+    const flattenOrderCallsAfterClose = getOrder.mock.calls.filter(
+      ([orderId]) => orderId === 'aapl-flatten-order',
+    ).length;
+    expect(flattenOrderCallsAfterClose).toBe(1);
+
+    // A THIRD poll: TSLA is still open, so `fetchNewFills` genuinely runs
+    // again (not short-circuited by "no open positions") — proving the
+    // entry is gone, not merely that nothing asked.
+    await execution.ingestFills();
+
+    const flattenOrderCallsAfterSecondPoll = getOrder.mock.calls.filter(
+      ([orderId]) => orderId === 'aapl-flatten-order',
+    ).length;
+    expect(flattenOrderCallsAfterSecondPoll).toBe(1);
   });
 });

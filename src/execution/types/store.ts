@@ -60,6 +60,16 @@ export interface SharedStore {
    */
   getFills(idempotency_key: string): Promise<Fill[]>;
   /**
+   * Each named lot's persisted ENTRY fill quantity, summed — the batch read
+   * `redistributeFlattenFills` (ingest-fills.ts, #517) uses in place of one
+   * `getFills` round-trip per lot, since `ingestFills()` runs on every tick
+   * and a flatten can name many lots (a multi-scale-in exit) at once. A key
+   * with no persisted entry fill is simply absent from the returned `Map`,
+   * not present at 0 — mirroring `DashboardQueryStore.getMarks`' own
+   * "missing is absent" answer, the shape this follows.
+   */
+  getEntryFillSizes(idempotency_keys: readonly string[]): Promise<Map<string, number>>;
+  /**
    * Persist one poll's advance of a lot — new fills, the recomputed lot
    * state, and on round-trip-to-flat the `ClosedTrade` — atomically. A crash
    * can no longer land between the fill rows and the lot state they imply:
@@ -100,6 +110,16 @@ export interface SharedStore {
    * `pending` record on a `submitBracket` failure.
    */
   resolveFlattenError(idempotency_key: string, reason: string, resolved_at: Date): Promise<void>;
+  /**
+   * The lot(s) a flatten submission was journalled to close (#517), in the
+   * `opened_at` order `executeExit` wrote them — or `null` if `key` names no
+   * flatten submission, or names one written before migration 0020 added
+   * this column. `ingestFills()` is this method's only reader: a flatten's
+   * fill carries the flatten's OWN idempotency key, never a held lot's, so
+   * this is how a fill bucketed under that key gets routed back to the lot(s)
+   * it actually closed instead of being silently dropped.
+   */
+  getFlattenLotKeys(idempotency_key: string): Promise<readonly string[] | null>;
 }
 
 /** One poll's atomic advance of a single lot — see `SharedStore.applyLotAdvance`. */
@@ -123,4 +143,14 @@ export interface FlattenSubmissionWriteAhead {
   /** The held quantity being flattened. */
   size: number;
   submitted_at: Date;
+  /**
+   * The lot(s) this flatten is closing (#517) — `executeExit`'s `heldLots`,
+   * by `idempotency_key`, in the `opened_at` order `getOpenPositions()`
+   * already returned them in. Carried on the write-ahead itself, ahead of
+   * the broker call, rather than reconstructed later from whatever is still
+   * open when the fill lands: see migration 0020's comment for why that
+   * later reconstruction is unsafe (a new lot on the same instrument could
+   * open in between and wrongly receive this flatten's fill).
+   */
+  lot_idempotency_keys: readonly string[];
 }
