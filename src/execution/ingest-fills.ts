@@ -39,9 +39,12 @@
  * the order-submitting path, and this fallback is what keeps a naked
  * residual from going unnoticed through an unattended soak (#238).
  *
- * Both loops below run under a containment boundary — see `ContainedFailure`.
- * A failure inside one flatten bucket or one lot decides that unit only; the
- * whole set is reported once, after every other unit of work has landed.
+ * Every loop below runs under a containment boundary — see `ContainedFailure`.
+ * A failure inside one flatten bucket, one lot, or one flatten's post-advance
+ * sweep-mark decides that unit only; the whole set is reported once, after
+ * every other unit of work has landed — except a `flatten-sweep-mark`
+ * failure on its own, which resolves the poll rather than rejecting it (see
+ * `throwContainedFailures`'s own doc).
  */
 import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../shared/index.js';
 import type { ExecutionInput, NormalizedFill } from './types.js';
@@ -128,18 +131,32 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
     try {
       await input.store.markFlattenFillsSwept(flattenKey, now);
     } catch (error) {
-      // Visible, not silent — but NOT correctness-critical the way a
-      // 'flatten-attribution'/'lot-advance' failure is: a missed mark only
-      // means `reconcile()` rescans this row again later, which self-heals.
-      // Reported anyway ("noisy, never silent" — `escalateAgedUnpricedFills`'s
-      // own posture, alpaca-adapter.ts).
+      // NOT correctness-critical the way a 'flatten-attribution'/'lot-advance'
+      // failure is (#519/#526 review, deepseek): a missed mark only means the
+      // row stays exactly where it already was — unswept, and so still found
+      // by `getUnresolvedFlattens()` — which is `reconcile()`'s own designed
+      // recovery for it, not data this poll lost. `throwContainedFailures`
+      // below is gated accordingly: this scope alone does not reject the
+      // poll's promise. It still travels in `failures`, so it is NAMED in the
+      // AggregateError whenever a genuinely correctness-critical failure ALSO
+      // happened this same poll — nothing here hides it from that report.
+      // Only a mark failure entirely on its own resolves quietly: this module
+      // carries no `Logger` of its own to write a standalone line to, and a
+      // poll that advanced every lot and attempted every flatten it could
+      // must not be reported as failed over a bookkeeping retry that heals
+      // itself on the very next reconcile() pass.
       failures.push({ scope: 'flatten-sweep-mark', key: flattenKey, error });
     }
   }
 
   // Last, once no unit of work is left to lose: reporting must not cost
-  // progress, and progress must not buy silence.
-  throwContainedFailures(failures);
+  // progress, and progress must not buy silence. Scoped to the
+  // correctness-critical failures only (#519/#526 review) — see the
+  // 'flatten-sweep-mark' catch above for why that scope alone must not
+  // reject this poll's promise.
+  if (failures.some((failure) => failure.scope !== 'flatten-sweep-mark')) {
+    throwContainedFailures(failures);
+  }
 }
 
 /**
@@ -169,8 +186,14 @@ interface ContainedFailure {
    * Which boundary caught it — a flatten bucket's redistribution, one lot's
    * advance, or (#519/#526) the best-effort `markFlattenFillsSwept` write
    * that bounds `reconcile()`'s rescan. The third is NOT correctness-critical
-   * the way the first two are (see its call site), but is still reported
-   * rather than swallowed.
+   * the way the first two are (see its call site): `ingestFills`'s own call
+   * to `throwContainedFailures` is gated to skip it when it is the ONLY
+   * scope present, so a mark failure alone resolves the poll rather than
+   * rejecting it — reviewed and fixed on PR #603 after a mark failure was
+   * found to reject the whole poll exactly like the other two, contradicting
+   * this same "not correctness-critical" claim. It still rides in this list,
+   * and so is still named, whenever a correctness-critical failure ALSO
+   * occurs the same poll.
    */
   scope: 'flatten-attribution' | 'lot-advance' | 'flatten-sweep-mark';
   /**
@@ -190,6 +213,13 @@ interface ContainedFailure {
 /**
  * Fail-closed AND visible, which is the bar: the poll did not fully succeed
  * and says so, having first done every piece of work it still could.
+ *
+ * The caller (`ingestFills`) only reaches this when `failures` names at
+ * least one correctness-critical scope — a 'flatten-sweep-mark'-only
+ * `failures` array never gets here at all (#519/#526 review): that scope's
+ * own recovery (the row stays unswept and rescannable) does not need a
+ * rejected promise to work, and treating it as fatal here would make a poll
+ * that fully succeeded at every money-relevant thing report itself failed.
  *
  * Not swallowed, because silence is the failure mode being fixed. The one
  * production caller is `startFillSync`'s `runOnce` (orchestrator/fill-sync.ts),

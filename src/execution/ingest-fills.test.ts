@@ -850,6 +850,68 @@ describe('ExecutionImpl.ingestFills', () => {
       // the fill gets applied.
       expect(await store.getFills('key-1')).toHaveLength(2);
     });
+
+    // PR #603 review (deepseek): `markFlattenFillsSwept` throwing was
+    // reaching `throwContainedFailures` unconditionally — the SAME path a
+    // genuinely correctness-critical 'flatten-attribution'/'lot-advance'
+    // failure takes — contradicting this file's own "NOT correctness-critical"
+    // comment on that catch. Fixed so a 'flatten-sweep-mark' failure ALONE no
+    // longer rejects the poll's promise.
+    it('does not fail the poll when only markFlattenFillsSwept throws — the row stays rescannable for next poll', async () => {
+      class FlakyMarkSweptStore extends TestExecutionStore {
+        override async markFlattenFillsSwept(): Promise<void> {
+          throw new Error('simulated store outage on markFlattenFillsSwept');
+        }
+      }
+
+      const { db } = openTestExecutionStore();
+      const store = new FlakyMarkSweptStore(db);
+      await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
+      await store.writeAheadFlatten({
+        idempotency_key: 'flatten-1',
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        side: 'sell',
+        size: 10,
+        submitted_at: OPENED_AT,
+        lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+      });
+      // Acked, as `executeExit` always resolves it synchronously right after
+      // `submitFlatten` returns, before any poll ever runs.
+      await store.resolveFlattenSubmitted(
+        'flatten-1',
+        { order_state: 'submitted', broker_order_ids: ['flatten-1:order'] },
+        OPENED_AT,
+      );
+      const broker = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'flatten-1',
+          broker_fill_id: 'f1',
+          leg: 'exit',
+          qty: 10,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+
+      // Resolves, not rejects: every lot-relevant piece of work this poll
+      // could do, it did — only the best-effort sweep-mark bookkeeping
+      // failed, and that alone must not read as a failed poll.
+      await expect(
+        new ExecutionImpl(makeInput(broker, store)).ingestFills(),
+      ).resolves.toBeUndefined();
+
+      // The money-relevant work still landed: the lot closed and its
+      // ClosedTrade was still emitted, unaffected by the mark failure.
+      expect((await store.getPosition('key-1'))?.order_state).toBe('closed');
+      expect(await store.getClosedTrades()).toHaveLength(1);
+
+      // The row's own designed recovery: still unswept, so still found by a
+      // future reconcile() pass — "rescanned next poll", not leaked.
+      expect(await store.getUnresolvedFlattens()).toEqual([
+        { idempotency_key: 'flatten-1', instrument: 'AAPL', status: 'submitted' },
+      ]);
+    });
   });
 
   describe('flatten over-fill warning (#527)', () => {

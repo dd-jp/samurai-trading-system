@@ -201,6 +201,12 @@ export interface Execution {
    * `AggregateError` naming the records it could not resolve. So a rejection
    * here means "some of this poll did not land", never "none of it did", and
    * the caller's job is to log it and poll again rather than to stop.
+   *
+   * One exception (#519/#526): a failure to mark a flatten's fills swept
+   * (`SharedStore.markFlattenFillsSwept`, the bound on `reconcile()`'s own
+   * rescan) does NOT reject this promise when it is the only thing that
+   * failed — every lot still advanced correctly, and the row's own
+   * unresolved state is its designed recovery, not data this call lost.
    */
   ingestFills(): Promise<void>;
   /**
