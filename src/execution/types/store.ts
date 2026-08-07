@@ -3,7 +3,13 @@
  * Alone in its own file because it is the one interface both Execution and
  * Verdict depend on, and it changes for different reasons than either.
  */
-import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../../shared/index.js';
+import type {
+  AssetClass,
+  ClosedTrade,
+  Fill,
+  OpenPosition,
+  OrderState,
+} from '../../shared/index.js';
 
 /**
  * Execution's writer seam over the shared store, of which it is the sole
@@ -15,7 +21,12 @@ import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../../shared/i
  * read-only and has no reason to depend on the writer surface.
  */
 export interface SharedStore {
-  /** True if an order or fill already exists under this idempotency key. */
+  /**
+   * True if an order or fill already exists under this idempotency key —
+   * OR a flatten submission does (#508 review, PR #516). An exit writes no
+   * `OpenPosition` (see `writeAheadFlatten` below), so this alone is what
+   * makes a replayed exit dedupe the same way a replayed entry does.
+   */
   findByKey(idempotency_key: string): Promise<boolean>;
   /**
    * Write-ahead: persist the intended lot at `pending` BEFORE the broker
@@ -62,6 +73,33 @@ export interface SharedStore {
    * a second close for the same lot fails the whole advance.
    */
   applyLotAdvance(advance: LotAdvance): Promise<void>;
+  /**
+   * Write-ahead for a flatten (#508 review, PR #516) — persisted at
+   * `'submitting'` BEFORE `broker.submitFlatten` is called, the same
+   * write-ahead-then-resolve shape `writeAheadPosition` gives the bracket
+   * path (and #312 gave the ccxt bracket journal). An exit has no bracket
+   * and no `OpenPosition` to write ahead, so without this row a crash or a
+   * lost response between the broker call and its ack left NO durable trace
+   * of the attempt anywhere — not dedupable, not reconcilable. This is that
+   * trace. Deliberately thin: no stop/target/entry price, because a flatten
+   * is a plain market order and has none of those to journal.
+   */
+  writeAheadFlatten(submission: FlattenSubmissionWriteAhead): Promise<void>;
+  /** Persist the post-ack transition (`'submitting'` → `'submitted'`). */
+  resolveFlattenSubmitted(
+    idempotency_key: string,
+    update: { order_state: OrderState; broker_order_ids: string[] },
+    resolved_at: Date,
+  ): Promise<void>;
+  /**
+   * Persist `'submitting'` → `'error'` for a flatten that PROVABLY never
+   * reached the broker (e.g. the pre-flatten bracket cancel failed) — as
+   * opposed to a `submitFlatten` call that itself threw, which is genuine
+   * ambiguity (the venue may have seen it) and is left at `'submitting'`
+   * for reconcile to resolve later, exactly as the bracket path leaves a
+   * `pending` record on a `submitBracket` failure.
+   */
+  resolveFlattenError(idempotency_key: string, reason: string, resolved_at: Date): Promise<void>;
 }
 
 /** One poll's atomic advance of a single lot — see `SharedStore.applyLotAdvance`. */
@@ -73,4 +111,16 @@ export interface LotAdvance {
   position_update?: { filled_size: number; avg_entry_price: number; order_state: OrderState };
   /** The realized record, on round-trip-to-flat only. */
   closed_trade?: ClosedTrade;
+}
+
+/** The write-ahead record for `SharedStore.writeAheadFlatten` — see there for why it exists. */
+export interface FlattenSubmissionWriteAhead {
+  idempotency_key: string;
+  instrument: string;
+  asset_class: AssetClass;
+  /** The CLOSING side, carried straight through from the exit intent. */
+  side: 'buy' | 'sell';
+  /** The held quantity being flattened. */
+  size: number;
+  submitted_at: Date;
 }

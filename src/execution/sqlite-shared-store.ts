@@ -22,7 +22,7 @@
 
 import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../shared/index.js';
 import { type SharedStore as Db, isUniqueConstraintError } from '../shared/store/index.js';
-import type { LotAdvance, SharedStore } from './types.js';
+import type { FlattenSubmissionWriteAhead, LotAdvance, SharedStore } from './types.js';
 
 /** Terminal `order_state`s — excluded from `getOpenPositions()` (execution-spec.md). */
 const TERMINAL_STATES: readonly OrderState[] = ['closed', 'cancelled', 'rejected', 'expired'];
@@ -80,20 +80,41 @@ export class DuplicatePositionError extends Error {
   }
 }
 
+/** `writeAheadFlatten`'s equivalent of `DuplicatePositionError` — see there for the reasoning. */
+export class DuplicateFlattenSubmissionError extends Error {
+  constructor(readonly idempotency_key: string) {
+    super(
+      `SqliteExecutionStore.writeAheadFlatten: a flatten submission already exists for ` +
+        `idempotency_key '${idempotency_key}' — execute()'s findByKey gate should ` +
+        'have prevented this write.',
+    );
+    this.name = 'DuplicateFlattenSubmissionError';
+  }
+}
+
 export class SqliteExecutionStore implements SharedStore {
   constructor(private readonly db: Db) {}
 
   /**
-   * True if an order already exists under this key. `open_positions` alone
-   * answers this: a `Fill` never exists without the `OpenPosition` row
-   * `execute()` write-aheads first, so an existing fill implies an existing
-   * (still-present, never-deleted) position row.
+   * True if an order already exists under this key. Two tables, because two
+   * write-ahead paths use this one key space: `open_positions` for entry/
+   * scale_in (a `Fill` never exists without the `OpenPosition` row
+   * `execute()` write-aheads first, so an existing fill implies an existing,
+   * still-present position row) and `flatten_submissions` for exit (#508
+   * review, PR #516) — an exit has no bracket and writes no `OpenPosition`,
+   * so without this second check a replayed exit would sail past this gate
+   * every time.
    */
   async findByKey(idempotency_key: string): Promise<boolean> {
-    const row = this.db
+    const positionRow = this.db
       .prepare('SELECT 1 FROM open_positions WHERE idempotency_key = ?')
       .get(idempotency_key);
-    return row !== undefined;
+    if (positionRow !== undefined) return true;
+
+    const flattenRow = this.db
+      .prepare('SELECT 1 FROM flatten_submissions WHERE idempotency_key = ?')
+      .get(idempotency_key);
+    return flattenRow !== undefined;
   }
 
   /**
@@ -305,6 +326,86 @@ export class SqliteExecutionStore implements SharedStore {
         this.insertClosedTrade(advance.closed_trade);
       }
     })();
+  }
+
+  /**
+   * Write-ahead: INSERT at `'submitting'` before `broker.submitFlatten` is
+   * called — `writeAheadPosition`'s reasoning applies unchanged, only the
+   * table differs. A duplicate key surfaces as `DuplicateFlattenSubmissionError`
+   * for the same reason `writeAheadPosition` distinguishes it: `execute()`'s
+   * `findByKey` gate normally prevents this, so a collision here means a
+   * concurrent caller won the same race, not a generic write failure.
+   */
+  async writeAheadFlatten(submission: FlattenSubmissionWriteAhead): Promise<void> {
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO flatten_submissions (
+             idempotency_key, instrument, asset_class, side, size,
+             status, submitted_at
+           ) VALUES (?, ?, ?, ?, ?, 'submitting', ?)`,
+        )
+        .run(
+          submission.idempotency_key,
+          submission.instrument,
+          submission.asset_class,
+          submission.side,
+          submission.size,
+          submission.submitted_at.toISOString(),
+        );
+    } catch (cause) {
+      if (isUniqueConstraintError(cause)) {
+        throw new DuplicateFlattenSubmissionError(submission.idempotency_key);
+      }
+      throw cause;
+    }
+  }
+
+  /** Persist the post-ack transition (`'submitting'` → `'submitted'`). */
+  async resolveFlattenSubmitted(
+    idempotency_key: string,
+    update: { order_state: OrderState; broker_order_ids: string[] },
+    resolved_at: Date,
+  ): Promise<void> {
+    const result = this.db
+      .prepare(
+        `UPDATE flatten_submissions
+            SET status = 'submitted', order_state = ?, broker_order_ids = ?, resolved_at = ?
+          WHERE idempotency_key = ?`,
+      )
+      .run(
+        update.order_state,
+        JSON.stringify(update.broker_order_ids),
+        resolved_at.toISOString(),
+        idempotency_key,
+      );
+
+    if (result.changes === 0) {
+      throw new Error(
+        `SqliteExecutionStore.resolveFlattenSubmitted: no write-ahead record for '${idempotency_key}'`,
+      );
+    }
+  }
+
+  /** Persist `'submitting'` → `'error'` — see `SharedStore.resolveFlattenError` for when this applies. */
+  async resolveFlattenError(
+    idempotency_key: string,
+    reason: string,
+    resolved_at: Date,
+  ): Promise<void> {
+    const result = this.db
+      .prepare(
+        `UPDATE flatten_submissions
+            SET status = 'error', reason = ?, resolved_at = ?
+          WHERE idempotency_key = ?`,
+      )
+      .run(reason, resolved_at.toISOString(), idempotency_key);
+
+    if (result.changes === 0) {
+      throw new Error(
+        `SqliteExecutionStore.resolveFlattenError: no write-ahead record for '${idempotency_key}'`,
+      );
+    }
   }
 }
 
