@@ -11,6 +11,7 @@ import type {
 } from '../../market-data-service/index.js';
 import type { Clock, OrderState } from '../../shared/index.js';
 import type { VerdictDecision } from '../../verdict/index.js';
+import type { ResidualExposureAlertChannel } from '../residual-exposure-alert.js';
 import type { BrokerAdapter } from './broker.js';
 import type { SharedStore } from './store.js';
 
@@ -52,6 +53,15 @@ export interface ExecutionInput {
   marketData: MarketDataService;
   config: ExecutionConfig;
   mode: 'live' | 'paper' | 'backtest';
+  /**
+   * The #525 fallback — posted only when `ingestFills()` fails to re-arm a
+   * partially-flattened lot's protective legs. Required, not optional: an
+   * omitted channel is exactly the silent-degradation-by-omission bug #322
+   * fixed for the other operator escalations, so every caller (production
+   * and test) must say explicitly where this goes rather than have it
+   * default away.
+   */
+  residualExposureAlerts: ResidualExposureAlertChannel;
 }
 
 export interface ExecutionResult {

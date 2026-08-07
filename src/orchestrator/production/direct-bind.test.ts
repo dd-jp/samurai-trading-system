@@ -486,6 +486,7 @@ describe('buildExecutionStep', () => {
       marketData: FAKE_MARKET_DATA,
       config: EXECUTION_CONFIG,
       mode: 'paper',
+      residualExposureAlerts: { postResidualExposureAlert: async () => {} },
     });
 
     const verdict: VerdictDecision = {

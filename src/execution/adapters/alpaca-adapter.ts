@@ -141,6 +141,18 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    */
   private readonly flattens = new Map<string, string>();
   /**
+   * lot's `idempotency_key` -> the re-armed OCO's Alpaca order id (#525).
+   * Keyed by the LOT, not by the OCO's own wire `client_order_id`
+   * (`${lotKey}:rearm`) — `fetchNewFills`'s rearm sweep below tags fills
+   * under THIS key, so they land in `ingestFills()`'s ordinary per-position
+   * bucket with no routing of their own, the same way a bracket's own fills
+   * do. In-memory only, the same accepted gap `flattens` documents: a
+   * restart between a successful re-arm and its eventual fill loses
+   * visibility until reconcile learns about it (`rearmProtectiveLegs`'s doc
+   * comment).
+   */
+  private readonly rearmedLegs = new Map<string, string>();
+  /**
    * #299 moved the NUMBER out of this file into `DEFAULT_VENUE_PACING.alpaca`
    * (shared/http/venue-pacing.ts), overridable per deployment via
    * `SAMURAI_PACING_ALPACA_*` — a rate limit is a property of the account, not
@@ -262,26 +274,73 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
   /**
    * Cancels the order and, on a bracket, its attached legs with it — Alpaca
-   * cancels a parent's children as part of cancelling the parent.
+   * cancels a parent's children as part of cancelling the parent. ALSO
+   * cancels a re-armed residual's protective OCO (#525 follow-up), which
+   * the lookup above cannot find on its own: `rearmProtectiveLegs` submits
+   * that order under `${clientOrderId}:rearm`, a DIFFERENT client order id
+   * from the lot's own — so without this second half, a re-armed lot's OCO
+   * would stay live at the venue through every future call to this method,
+   * ready to fire into whatever flatten this cancel is clearing the way
+   * for and open a reverse position, exactly the #516 hazard this method
+   * exists to prevent, reintroduced one level down.
    *
-   * Resolves rather than throwing when the venue has nothing under this id:
+   * Resolves rather than throwing when the venue has nothing under an id:
    * `getOrderByClientOrderId` returning null means it was never placed or is
    * long gone, and the transport treats `404`/`422` the same way. The caller
    * cannot know the venue's state at the instant it calls, and a cancel that
    * throws on "too late" fails precisely in the race it exists to handle.
+   * That posture does NOT extend to a genuine transport/auth failure on
+   * either half: `this.call()` lets that propagate uncaught, so a cancel
+   * that could not confirm either leg is gone throws — `executeExit`
+   * refuses the flatten rather than sending a market order while it is
+   * unknown whether the legs it was meant to clear are actually gone.
    *
-   * Resolves the Alpaca id through the venue rather than the local `brackets`
-   * map, for `getOrder`'s reason: that map is populated only by `submitBracket`
-   * in this process, so after a restart it is empty.
+   * Resolves the ORIGINAL bracket's Alpaca id through the venue rather than
+   * the local `brackets` map, for `getOrder`'s reason: that map is
+   * populated only by `submitBracket` in this process, so after a restart
+   * it is empty. The re-armed OCO takes the CHEAP path first —
+   * `rearmedLegs` when this process is the one that placed it, no network
+   * round trip needed — and falls back to the SAME venue lookup, by the
+   * derived id, when the map has nothing: the only way to find a re-arm
+   * placed before a restart, since `rearmedLegs` is in-memory only. A null
+   * result there is the ordinary case (no re-arm ever happened for this
+   * lot) and is not an error.
    */
   async cancel(clientOrderId: string, _instrument: string): Promise<void> {
     const order = await this.call('cancel', () =>
       this.input.client.getOrderByClientOrderId(clientOrderId),
     );
-    if (order === null) return;
+    if (order !== null) {
+      await this.call('cancel', () => this.input.client.cancelOrder(order.id));
+      this.brackets.delete(clientOrderId);
+    }
 
-    await this.call('cancel', () => this.input.client.cancelOrder(order.id));
-    this.brackets.delete(clientOrderId);
+    const rearmedOrder = await this.resolveRearmedOrder(clientOrderId);
+    if (rearmedOrder !== null) {
+      await this.call('cancel', () => this.input.client.cancelOrder(rearmedOrder));
+      // Deleted only now, after the cancel is confirmed — not before, and
+      // not merely on finding it: a `cancelOrder` throw above must leave
+      // the map (and the venue) exactly as they were, so a retried cancel
+      // finds the same order again rather than believing it already gone.
+      this.rearmedLegs.delete(clientOrderId);
+    }
+  }
+
+  /**
+   * The re-armed OCO's Alpaca order id for `clientOrderId`'s lot, or `null`
+   * if none exists — the two-path resolution `cancel()`'s doc comment
+   * describes. Split out so `cancel()`'s own body reads as "cancel the
+   * bracket, then cancel the re-arm" rather than burying the fallback
+   * chain inline.
+   */
+  private async resolveRearmedOrder(clientOrderId: string): Promise<string | null> {
+    const inProcess = this.rearmedLegs.get(clientOrderId);
+    if (inProcess !== undefined) return inProcess;
+
+    const rearmOrder = await this.call('cancel', () =>
+      this.input.client.getOrderByClientOrderId(`${clientOrderId}:rearm`),
+    );
+    return rearmOrder?.id ?? null;
   }
 
   /**
@@ -403,6 +462,89 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    */
   async resizeProtectiveLegs(): Promise<void> {
     // Intentionally empty — see above.
+  }
+
+  /**
+   * Re-arms a residual left by a partial flatten (#525) — `executeExit`
+   * cancelled this lot's ENTIRE bracket (entry-side legs included) before
+   * submitting the flatten (#516), so unlike `resizeProtectiveLegs` above
+   * there is no live native bracket left to fight over quantity: the venue
+   * genuinely holds nothing protecting this position any more.
+   *
+   * `order_class: 'oco'` (Alpaca's protective-legs-only shape, #525) rather
+   * than another `submitBracket`: this residual is already held, and a
+   * bracket's entry leg would try to buy/sell it again.
+   *
+   * A FRESH `client_order_id` (`${clientOrderId}:rearm`), never the lot's
+   * own `idempotency_key` — that id already named the now-cancelled original
+   * bracket, and whether the venue permits reusing a client order id whose
+   * prior order is terminal is unverified. Sidestepping the question is
+   * cheaper than betting on either answer.
+   *
+   * Tracked in `rearmedLegs`, keyed by the LOT's own `idempotency_key` (not
+   * the wire id) — `fetchNewFills`'s sweep below tags fills under this key
+   * directly, so `ingestFills()`'s ordinary per-position routing picks them
+   * up with no knowledge a re-arm was ever involved. In-memory only, the
+   * same accepted gap `flattens` documents: a restart between a successful
+   * re-arm and its eventual fill loses visibility until reconcile learns
+   * about it — genuinely open, not closed by this ticket.
+   *
+   * `recordBracketOrderIds` is called best-effort so the durable index at
+   * least carries the OCO's own order ids — but it COALESCEs onto the
+   * EXISTING row (still keyed by `clientOrderId`, still carrying the
+   * ORIGINAL cancelled entry's id), so it buys no restart recovery on its
+   * own; the gap above still stands.
+   *
+   * NOT verified against a live paper account: this mirrors Alpaca's
+   * documented OCO shape without having exercised it against the real API.
+   * Also unverified for crypto specifically — Alpaca's OCO/bracket order
+   * classes are widely reported unsupported for crypto symbols, a
+   * PRE-EXISTING condition `submitBracket` above already has for the same
+   * reason (this repo's MVP universe includes BTC-USD/ETH-USD on Alpaca).
+   * Either way this call throws on rejection, same as any other, and
+   * `ingestFills()`'s catch turns that into the #525 fallback alert — the
+   * decision's own fail-toward-visibility posture holds even where OCO
+   * genuinely cannot be placed.
+   */
+  async rearmProtectiveLegs(
+    clientOrderId: string,
+    instrument: string,
+    side: 'buy' | 'sell',
+    qty: number,
+    stop: number,
+    target: number,
+  ): Promise<void> {
+    const rearmClientOrderId = `${clientOrderId}:rearm`;
+    // The CLOSING side, mirroring `submitFlatten`'s own convention — `side`
+    // here is the lot's HELD side (the `BrokerAdapter.rearmProtectiveLegs`
+    // contract), so the order that reduces it takes the opposite one.
+    const closingSide = side === 'buy' ? 'sell' : 'buy';
+
+    const response = await this.call('rearmProtectiveLegs', () =>
+      this.input.client.submitOcoOrder({
+        symbol: instrument,
+        side: closingSide,
+        qty: String(qty),
+        limit_price: String(target),
+        time_in_force: 'gtc',
+        client_order_id: rearmClientOrderId,
+        order_class: 'oco',
+        stop_loss: { stop_price: String(stop) },
+      }),
+    );
+
+    this.rearmedLegs.set(clientOrderId, response.id);
+    // NOT `...legOrderIds(response.legs)`: that helper finds the target leg
+    // by scanning `.legs` for a `type: 'limit'` entry, which is where a
+    // BRACKET's take-profit child lives. An OCO's take-profit is the TOP
+    // LEVEL order itself (`response.id`) — `.legs` here holds only the ONE
+    // stop-loss child — so `target_order_id` is set directly rather than
+    // reusing that scan and silently recording `null`.
+    this.state.recordBracketOrderIds('alpaca', clientOrderId, {
+      entry_order_id: null,
+      stop_order_id: legOrderIds(response.legs).stop_order_id,
+      target_order_id: response.id,
+    });
   }
 
   /**
@@ -596,6 +738,51 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       }
     }
 
+    // The re-arm sweep (#525) — structurally the flatten loop above, with
+    // two differences: keyed by the LOT's own `idempotency_key` (not the
+    // OCO's wire id, so a fill lands in `ingestFills()`'s ordinary
+    // per-position bucket with no routing of its own — see `rearmedLegs`'
+    // doc), and the top-level order is tagged `'target'` rather than
+    // `'exit'`/`'entry'`: an OCO's parent order IS the take-profit leg
+    // (Alpaca's own shape, `rearmProtectiveLegs`'s doc), not a market order
+    // with nothing attached. Its one child leg (the stop-loss) is tagged via
+    // `legName`, same as a bracket's legs above. Both satisfy
+    // `isExitFill`/`Fill.leg !== 'entry'` in ingest-fills.ts, so a rearmed
+    // leg firing correctly reduces the lot and can close it.
+    //
+    // Pruned once terminal, same asymmetry with `brackets` as `flattens`
+    // documents and for the same reason: an OCO here protects a residual
+    // that is either still open (worth polling again) or done (a single
+    // fire-or-cancel event, never resting again after that).
+    let rearmFailures = 0;
+    for (const [lotKey, orderId] of [...this.rearmedLegs]) {
+      try {
+        const order = await this.call('fetchNewFills', () => this.input.client.getOrder(orderId));
+        const instrument = symbolOf(order);
+        collectFill(order, 'target', lotKey, instrument, since, fills);
+        for (const leg of order.legs ?? []) {
+          collectFill(leg, legName(leg), lotKey, instrument, since, fills);
+        }
+        if (mapOrderState(order.status) !== 'submitted') {
+          this.rearmedLegs.delete(lotKey);
+        }
+      } catch (error) {
+        // Same isolation and UnpricedFillError bookkeeping as the bracket
+        // and flatten loops above.
+        if (error instanceof UnpricedFillError) {
+          try {
+            this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
+          } catch (stateError) {
+            failures.push(stateError);
+            rearmFailures += 1;
+          }
+        } else {
+          failures.push(error);
+          rearmFailures += 1;
+        }
+      }
+    }
+
     // The venue caught up: this fill priced, was collected above, and is about
     // to be booked, so its anomaly row is resolved. Done here rather than in
     // `collectFill` so the normalizer stays a pure function of one order.
@@ -621,8 +808,8 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       throw new AggregateError(
         failures,
         `Alpaca fetchNewFills: ${failures.length} failure(s) during the sweep ` +
-          `(${bracketFailures} bracket(s), ${flattenFailures} flatten(s) failed); ` +
-          'no fills could be read',
+          `(${bracketFailures} bracket(s), ${flattenFailures} flatten(s), ` +
+          `${rearmFailures} rearm(s) failed); no fills could be read`,
       );
     }
 

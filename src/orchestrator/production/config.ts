@@ -4,6 +4,7 @@ import type {
   AlpacaClient as AlpacaBrokerClient,
   BrokerAdapter,
   ExecutionConfig,
+  ResidualExposureAlertChannel,
   UnpricedFillAlertChannel,
 } from '../../execution/index.js';
 import type {
@@ -111,6 +112,17 @@ export interface ProductionConfig {
    * (#322) is what supplies it.
    */
   unpricedFillAlerts?: UnpricedFillAlertChannel;
+  /**
+   * Where a residual position `ingestFills()` failed to re-arm after a
+   * partial flatten is escalated (#525) — posted only on a FAILED re-arm,
+   * never on a successful one (see `ResidualExposureAlert`'s doc for why).
+   * Defaults to `LoggingResidualExposureAlertChannel`, with the same caveat
+   * as `unpricedFillAlerts`: reachable only by an operator reading the log
+   * stream. Unlike the other operator escalations this file lists, this one
+   * is NOT yet wired through `SAMURAI_ALERTS=telegram` (#322) — see the PR
+   * body for #525.
+   */
+  residualExposureAlerts?: ResidualExposureAlertChannel;
   /**
    * Where a run of consecutive analyst quorum skips is escalated (#431,
    * analysts-spec.md story 25). Defaults to `LoggingAnalystSkipAlertChannel`,

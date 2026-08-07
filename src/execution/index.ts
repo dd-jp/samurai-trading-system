@@ -43,6 +43,10 @@ export type {
 } from './broker-state-store.js';
 export { InMemoryBrokerStateStore } from './broker-state-store.js';
 export { ExecutionImpl } from './execute.js';
+export type {
+  ResidualExposureAlert,
+  ResidualExposureAlertChannel,
+} from './residual-exposure-alert.js';
 export type { SimulatedBrokerAdapterInput } from './simulated-adapter.js';
 export { SimulatedBrokerAdapter } from './simulated-adapter.js';
 export { SqliteBrokerStateStore } from './sqlite-broker-state-store.js';
