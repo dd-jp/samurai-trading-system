@@ -204,10 +204,27 @@ describe('mission control', () => {
 
   it('renders "mode unknown" when the wire carries no mode, never "paper"', async () => {
     const snapshot = makeSnapshot();
-    snapshot.mode = undefined;
+    // Deleted rather than assigned, and cast because the wire type says the
+    // field is there: the case under test is a payload from a server that
+    // does not send it (an older build, a proxy that rewrote the body), which
+    // no type can rule out at runtime. This goes through the real fetch
+    // boundary, so it also covers `toWireSnapshot` narrowing it to `null`.
+    delete (snapshot as { mode?: unknown }).mode;
     renderApp([snapshot]);
 
     expect(await screen.findByText('mode unknown')).toBeTruthy();
+    expect(screen.queryByText('PAPER')).toBeNull();
+  });
+
+  it('renders "mode unknown" for a mode word this client does not recognise', async () => {
+    const snapshot = makeSnapshot();
+    (snapshot as { mode?: unknown }).mode = 'staging';
+    renderApp([snapshot]);
+
+    // The unrecognised word is never printed — rendering whatever the server
+    // sent is the "trust the wire" failure the boundary check exists to end.
+    expect(await screen.findByText('mode unknown')).toBeTruthy();
+    expect(screen.queryByText('STAGING')).toBeNull();
     expect(screen.queryByText('PAPER')).toBeNull();
   });
 

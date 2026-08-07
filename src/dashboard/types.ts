@@ -19,6 +19,7 @@ import type { Direction } from '../debate-engine/index.js';
 import type { Mark } from '../market-data-service/index.js';
 import type { AssetClass } from '../orchestrator/index.js';
 import type { DebateLog, OpenPosition } from '../shared/index.js';
+import type { StoreMode } from '../shared/store/index.js';
 import type { PipelineStage, PipelineView } from './pipeline-types.js';
 import type { ProviderStatusPanel, ProviderStatusReader } from './provider-status.js';
 
@@ -282,6 +283,25 @@ export interface PipelineActivity {
 export interface DashboardSnapshot {
   generated_at: string;
   as_of: string;
+  /**
+   * The run the operator is looking at (dashboard-spec.md "Wire Shape",
+   * #539). Resolved by the dashboard entry point from `resolveStoreMode()` —
+   * the same `SAMURAI_MODE` derivation `sharedStorePath()` uses to pick the
+   * database file — and injected, never read from `process.env` here, so
+   * `buildSnapshot` stays pure.
+   *
+   * On the wire because the browser cannot see the server's environment, and
+   * a mode word baked into the bundle would keep saying "paper" during a live
+   * run — the one time being wrong matters.
+   *
+   * `StoreMode`, not the spec's narrower `'paper' | 'live'`: the resolver the
+   * spec names has three legal returns, and narrowing would force either a
+   * lie (report `backtest` as `paper`) or a refusal to boot a mode the store
+   * layer accepts. The client validates against the two literals it renders
+   * and shows "mode unknown" for anything else, so an honest third value
+   * degrades to ignorance rather than to a wrong claim.
+   */
+  mode: StoreMode;
   tick_status: TickStatus | null;
   positions: PositionRow[];
   debates: DebateRow[];
@@ -324,6 +344,7 @@ export interface DashboardSnapshotBuilder {
   buildSnapshot(
     store: DashboardQueryStore,
     asOf: Date,
+    mode: StoreMode,
     providers?: ProviderStatusReader,
   ): DashboardSnapshot;
 }

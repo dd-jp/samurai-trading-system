@@ -23,16 +23,36 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DashboardSnapshot } from '../../../dashboard/types.ts';
 
-/** The client's view of the wire payload. */
-export type WireSnapshot = DashboardSnapshot & {
-  /**
-   * The run the operator is looking at (dashboard-spec.md, "Wire Shape").
-   * Optional here because the server field is [#539](https://github.com/dd-jp/samurai-trading-system/issues/539)'s
-   * to add, and this client must be correct whether or not it has landed: an
-   * absent `mode` renders "mode unknown" and never falls back to "paper".
-   */
-  mode?: 'paper' | 'live';
-};
+/** The modes the server may send (`DashboardSnapshot['mode']`, #539). */
+type ServerMode = DashboardSnapshot['mode'];
+
+/**
+ * The same list at runtime, for the boundary check below. `satisfies` rather
+ * than a bare array so a value that is not a real server mode cannot be added
+ * here by hand.
+ */
+export const RECOGNISED_MODES = [
+  'paper',
+  'live',
+  'backtest',
+] as const satisfies readonly ServerMode[];
+
+/**
+ * The client's view of the wire payload: the server's `DashboardSnapshot`
+ * with `mode` widened to `| null` — and NARROWED at the fetch boundary by
+ * `toWireSnapshot`, so every consumer downstream can trust it.
+ *
+ * Not a plain alias of `DashboardSnapshot` (PR #597 review). That version
+ * asserted `mode` was always one of three literals while its own docblock
+ * admitted an older server or a rewriting proxy may omit it — leaving
+ * `TelemetryStrip`'s literal check as the only thing standing between a
+ * missing field and a mis-render, and the next consumer to read
+ * `snapshot.mode` would have trusted the type and been wrong. A type that
+ * lies is worse than one that is wide: `null` is the honest name for "the
+ * server did not tell us", it is unrepresentable as a mode word, and the
+ * compiler now forces every reader to handle it.
+ */
+export type WireSnapshot = Omit<DashboardSnapshot, 'mode'> & { mode: ServerMode | null };
 
 export const SNAPSHOT_URL = '/api/snapshot';
 export const POLL_INTERVAL_MS = 3_000;
@@ -78,7 +98,7 @@ export interface UseSnapshotOptions {
  * system had gone quiet. Failing the check keeps the last good numbers on
  * screen and lets the watchdog mark them stale, which is the honest outcome.
  */
-function isWireSnapshot(value: unknown): value is WireSnapshot {
+function hasWireShape(value: unknown): boolean {
   if (typeof value !== 'object' || value === null) return false;
   const candidate = value as Record<string, unknown>;
   if (typeof candidate.generated_at !== 'string') return false;
@@ -92,6 +112,31 @@ function isWireSnapshot(value: unknown): value is WireSnapshot {
   const pipeline = candidate.pipeline;
   if (typeof pipeline !== 'object' || pipeline === null) return false;
   return Array.isArray((pipeline as Record<string, unknown>).lanes);
+}
+
+/**
+ * Validates a parsed body ONCE, at the fetch boundary, and returns it with
+ * `mode` narrowed — or `null` if it is not a snapshot at all.
+ *
+ * `mode` is deliberately NOT part of the structural check above: an
+ * unrecognised or absent mode must not throw the whole payload away, because
+ * positions, verdicts and the pipeline are still true and the strip has an
+ * honest rendering for an unknown mode ("mode unknown"). Discarding a good
+ * snapshot over one bad field would blank the screen an operator is watching
+ * live money on — the opposite of what the field is for. So it degrades to
+ * `null` here rather than rejecting, and nothing downstream has to re-check.
+ *
+ * A mode the server sends but this client does not list is treated as unknown
+ * rather than passed through: rendering a word we have never seen would be
+ * the "trust the wire" failure this function exists to end.
+ */
+export function toWireSnapshot(body: unknown): WireSnapshot | null {
+  if (!hasWireShape(body)) return null;
+  const candidate = body as Record<string, unknown>;
+  const mode = (RECOGNISED_MODES as readonly string[]).includes(candidate.mode as string)
+    ? (candidate.mode as ServerMode)
+    : null;
+  return { ...(candidate as unknown as Omit<WireSnapshot, 'mode'>), mode };
 }
 
 interface FeedState {
@@ -160,7 +205,8 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
         if (!response.ok) throw new Error(`snapshot request failed: HTTP ${response.status}`);
         const body: unknown = await response.json();
         if (cancelled) return;
-        if (!isWireSnapshot(body)) throw new Error('snapshot payload did not match the wire shape');
+        const snapshot = toWireSnapshot(body);
+        if (snapshot === null) throw new Error('snapshot payload did not match the wire shape');
         lastSuccessMs = optionsRef.current.now();
         // `document.hidden` is read where the payload is APPLIED, not where the
         // request was issued: what matters is whether this client was in a
@@ -168,7 +214,7 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
         // round trip is exactly the case Motion rule 4 snaps for.
         const hidden = typeof document !== 'undefined' && document.hidden;
         setState((prev) => ({
-          snapshot: body,
+          snapshot,
           previous: prev.snapshot,
           revision: prev.revision + 1,
           snapOnly: hidden,
