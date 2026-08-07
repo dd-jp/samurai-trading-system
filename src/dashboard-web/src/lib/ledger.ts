@@ -88,6 +88,43 @@ function lastRecordedAt(lane: PipelineLane): string | null {
 }
 
 /**
+ * Sort key for a batch entry: the settle moment in epoch ms, or `null` when
+ * there is none to trust — no `recorded_at` at all, or one the store wrote
+ * malformed. Both degrade the same way, because both mean the same thing to
+ * this ordering: no defensible claim to recency.
+ */
+function settleKey(entry: LedgerEntry): number | null {
+  if (entry.settled_at === null) return null;
+  const ms = Date.parse(entry.settled_at);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/**
+ * Newest settle first within a batch; entries with no usable timestamp sink
+ * to the batch's end in wire order rather than claiming recency.
+ *
+ * The timestamps are parsed BEFORE the comparator runs, and the comparator
+ * never sees a NaN (PR #582 review round 3): a comparator that returns NaN
+ * makes `Array.prototype.sort`'s ordering implementation-defined, so one
+ * malformed `recorded_at` could scramble the whole batch rather than
+ * misplace its own row. Ties — including every unparseable entry against
+ * every other — fall back to the wire index, so the result is a total order
+ * that does not depend on the engine's sort being stable either.
+ */
+function orderNewestFirst(entries: readonly LedgerEntry[]): LedgerEntry[] {
+  return entries
+    .map((entry, index) => ({ entry, index, key: settleKey(entry) }))
+    .sort((a, b) => {
+      if (a.key === null || b.key === null) {
+        if (a.key === b.key) return a.index - b.index;
+        return a.key === null ? 1 : -1;
+      }
+      return b.key - a.key || a.index - b.index;
+    })
+    .map((decorated) => decorated.entry);
+}
+
+/**
  * Fold one poll into the ledger. `prev === null` marks first paint: the
  * currently-settled lanes seed the ledger (flagged `seeded`); on any later
  * poll a newly-settled, never-seen trace is appended as a live settle.
@@ -118,18 +155,10 @@ export function updateLedger(
 
   if (additions.length === 0) return state;
 
-  // Newest settle first within the batch; entries with no timestamp sink to
-  // the batch's end rather than claiming recency.
-  additions.sort((a, b) => {
-    if (a.settled_at === null) return b.settled_at === null ? 0 : 1;
-    if (b.settled_at === null) return -1;
-    return Date.parse(b.settled_at) - Date.parse(a.settled_at);
-  });
-
   const seen = new Set(state.seen);
   for (const entry of additions) seen.add(entry.trace_id);
   return {
-    entries: [...additions, ...state.entries].slice(0, LEDGER_CAP),
+    entries: [...orderNewestFirst(additions), ...state.entries].slice(0, LEDGER_CAP),
     seen,
   };
 }

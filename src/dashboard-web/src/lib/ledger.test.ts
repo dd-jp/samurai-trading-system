@@ -131,6 +131,42 @@ describe('updateLedger — cap and ordering', () => {
     expect(state.entries.at(-1)?.trace_id).toBe('t-5');
   });
 
+  it('keeps valid entries newest-first when a malformed recorded_at is mixed in', () => {
+    // PR #582 review: `Date.parse` on a malformed timestamp returns NaN, and
+    // a comparator that returns NaN makes sort ordering implementation-
+    // defined — one bad row could scramble the whole batch. Unparseable
+    // entries must sink to the end in wire order instead.
+    const next = makeView([
+      doneThrough('A', 't-a', 'verdict', { startMs: 10_000, outcome: 'no_go' }),
+      makeLane({
+        instrument: 'BAD-1',
+        trace_id: 't-bad-1',
+        outcome: 'stopped',
+        final_stage: 'risk',
+        cells: { risk: { state: 'stopped', recorded_at: 'not a timestamp' } },
+      }),
+      doneThrough('B', 't-b', 'verdict', { startMs: 30_000, outcome: 'no_go' }),
+      makeLane({
+        instrument: 'BAD-2',
+        trace_id: 't-bad-2',
+        outcome: 'stopped',
+        final_stage: 'risk',
+        cells: { risk: { state: 'stopped', recorded_at: '2026-13-45T99:99:99Z' } },
+      }),
+      doneThrough('C', 't-c', 'verdict', { startMs: 20_000, outcome: 'no_go' }),
+    ]);
+    const state = updateLedger(createLedger(), null, next);
+    // The three parseable entries hold newest-first; the two unparseable ones
+    // sink to the end in the order the wire delivered them.
+    expect(state.entries.map((e) => e.trace_id)).toEqual([
+      't-b',
+      't-c',
+      't-a',
+      't-bad-1',
+      't-bad-2',
+    ]);
+  });
+
   it('orders a same-poll seed batch newest-settled first', () => {
     const next = makeView([
       doneThrough('A', 't-a', 'verdict', { startMs: 30_000, outcome: 'no_go' }),
