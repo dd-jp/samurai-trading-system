@@ -1,5 +1,8 @@
 import {
+  DEFAULT_POLYGON_PACING,
   DEFAULT_VENUE_PACING,
+  POLYGON_DOCUMENTED_CEILING_PER_SECOND,
+  resolvePolygonPacing,
   resolveVenuePacing,
   VENUE_DOCUMENTED_CEILING_PER_SECOND,
   venuePacingEnvVars,
@@ -74,6 +77,23 @@ describe('resolveVenuePacing', () => {
   });
 
   /**
+   * Polygon is deliberately NOT a `VenueKey` (#510/#520 — see the `VenueKey`
+   * doc in `venue-pacing.ts` for the live-boot-risk reasoning), so
+   * `resolveVenuePacing()` itself must never read or validate
+   * `SAMURAI_PACING_POLYGON_*`. This is the direction of isolation that
+   * protects `production.ts`, the LIVE composition root: a malformed
+   * Stage-2-only override must not be able to fail orchestrator boot.
+   */
+  it('never reads or validates SAMURAI_PACING_POLYGON_* — a malformed override does not throw', () => {
+    expect(() =>
+      resolveVenuePacing({ SAMURAI_PACING_POLYGON_REFILL_PER_SEC: 'not-a-number' }),
+    ).not.toThrow();
+    expect(resolveVenuePacing({ SAMURAI_PACING_POLYGON_REFILL_PER_SEC: 'not-a-number' })).toEqual(
+      DEFAULT_VENUE_PACING,
+    );
+  });
+
+  /**
    * ccxt is the one venue with no ceiling to check against, because no crypto
    * venue OR account tier has been chosen yet (CLAUDE.md: "Kraken or Coinbase
    * Advanced"). Inventing a ceiling here would be exactly the fabricated
@@ -142,6 +162,78 @@ describe('resolveVenuePacing', () => {
       expect(() =>
         resolveVenuePacing({ SAMURAI_PACING_ALPACA_CEILING_PER_SEC: 'unlimited' }),
       ).toThrow(/SAMURAI_PACING_ALPACA_CEILING_PER_SEC/);
+    });
+  });
+});
+
+/**
+ * #510/#520: Polygon's pacing is resolved through its own entry point, NOT
+ * folded into `resolveVenuePacing()`/`VENUE_KEYS` — see the `VenueKey` doc
+ * in `venue-pacing.ts`. These tests cover the same parsing/validation
+ * ground `resolveVenuePacing`'s tests do (via the shared `resolveBucketPacing`
+ * extraction), plus the isolation property that is the whole point of the
+ * split: neither resolver's env-var namespace can affect the other.
+ */
+describe('resolvePolygonPacing', () => {
+  it('returns the checked-in default when nothing is configured', () => {
+    expect(resolvePolygonPacing({})).toEqual(DEFAULT_POLYGON_PACING);
+  });
+
+  it('keeps the default at a deliberate margin under the 5 calls/min ceiling', () => {
+    expect(DEFAULT_POLYGON_PACING.refillPerSecond).toBeLessThan(
+      POLYGON_DOCUMENTED_CEILING_PER_SECOND,
+    );
+  });
+
+  it('overrides from SAMURAI_PACING_POLYGON_*', () => {
+    const resolved = resolvePolygonPacing({ SAMURAI_PACING_POLYGON_REFILL_PER_SEC: '0.05' });
+    expect(resolved).toEqual({
+      capacity: DEFAULT_POLYGON_PACING.capacity,
+      refillPerSecond: 0.05,
+      reserveForPriority: DEFAULT_POLYGON_PACING.reserveForPriority,
+    });
+  });
+
+  it("refuses a sustained rate above Polygon's documented 5 calls/min free tier", () => {
+    expect(() => resolvePolygonPacing({ SAMURAI_PACING_POLYGON_REFILL_PER_SEC: '1' })).toThrow(
+      /documented limit/,
+    );
+  });
+
+  it('names SAMURAI_PACING_POLYGON_REFILL_PER_SEC specifically when the malformed value is not a number', () => {
+    expect(() =>
+      resolvePolygonPacing({ SAMURAI_PACING_POLYGON_REFILL_PER_SEC: 'not-a-number' }),
+    ).toThrow(/SAMURAI_PACING_POLYGON_REFILL_PER_SEC/);
+  });
+
+  /**
+   * The other direction of isolation from the `resolveVenuePacing` test
+   * above: Polygon's own resolver must not be tripped by a malformed
+   * override for a venue it never touches, either — the original
+   * diagnosability complaint (#520 review, second cycle) that a Stage 2
+   * operator's construction shouldn't fail on an Alpaca/IBKR typo.
+   */
+  it('never reads or validates an unrelated venue override — a malformed Alpaca/IBKR value does not throw', () => {
+    expect(() =>
+      resolvePolygonPacing({
+        SAMURAI_PACING_ALPACA_REFILL_PER_SEC: 'not-a-number',
+        SAMURAI_PACING_IBKR_CAPACITY: '-1',
+      }),
+    ).not.toThrow();
+    expect(
+      resolvePolygonPacing({
+        SAMURAI_PACING_ALPACA_REFILL_PER_SEC: 'not-a-number',
+        SAMURAI_PACING_IBKR_CAPACITY: '-1',
+      }),
+    ).toEqual(DEFAULT_POLYGON_PACING);
+  });
+
+  it('names its own env vars under the same SAMURAI_PACING_POLYGON_* scheme every other venue uses', () => {
+    expect(venuePacingEnvVars('polygon')).toEqual({
+      capacity: 'SAMURAI_PACING_POLYGON_CAPACITY',
+      refillPerSecond: 'SAMURAI_PACING_POLYGON_REFILL_PER_SEC',
+      ceilingPerSecond: 'SAMURAI_PACING_POLYGON_CEILING_PER_SEC',
+      reserveForPriority: 'SAMURAI_PACING_POLYGON_PRIORITY_RESERVE',
     });
   });
 });

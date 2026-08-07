@@ -34,7 +34,25 @@
  */
 import type { TokenBucketConfig } from './token-bucket.js';
 
-/** The three broker venues `BrokerAdapter` has implementations for. */
+/**
+ * The three broker venues `BrokerAdapter` has implementations for.
+ *
+ * **Polygon is deliberately NOT one of these (#510, reversed after review on
+ * PR #520).** An earlier version of this module added `'polygon'` here so
+ * `HttpPolygonClient`'s free-tier pacing would go through the same
+ * env-override/ceiling machinery every broker venue gets. That worked, but
+ * `resolveVenuePacing()` validates every key in `VENUE_KEYS` in one pass —
+ * which is the right fail-fast posture for `production.ts`, the LIVE
+ * composition root, but means `production.ts` would now also validate
+ * `SAMURAI_PACING_POLYGON_*` and build a bucket for a venue no live path
+ * ever calls. A typo in a Stage-2-only env var would fail orchestrator boot
+ * during the unattended soak (#238) — nobody watching, dead before the
+ * first tick. See `resolvePolygonPacing` below: same underlying
+ * parsing/validation (`resolveBucketPacing`), a separate entry point that
+ * only ever reads `SAMURAI_PACING_POLYGON_*`, so neither direction of the
+ * coupling exists — this module's own `resolveVenuePacing()` never touches
+ * Polygon, and Polygon's resolution never touches Alpaca/ccxt/IBKR.
+ */
 export type VenueKey = 'alpaca' | 'ccxt' | 'ibkr';
 
 export type VenuePacingConfig = Record<VenueKey, TokenBucketConfig>;
@@ -79,6 +97,21 @@ export const VENUE_DOCUMENTED_CEILING_PER_SECOND: Partial<Record<VenueKey, numbe
   ibkr: 50,
   // ccxt: deliberately absent. See DEFAULT_VENUE_PACING.ccxt.
 };
+
+/**
+ * Polygon's documented ceiling — VERIFIED, same evidence as every other
+ * `VERIFIED` figure in this file, but kept OUT of
+ * `VENUE_DOCUMENTED_CEILING_PER_SECOND` (see the `VenueKey` doc above for
+ * why Polygon is not a `VenueKey` at all): "Free tier is both rate-limited
+ * (5 calls/min — meaningfully slow for backfilling 6 symbols) and capped at
+ * 2 years of history" — docs/research/polygon-aggregates-api-2026-07-31.md
+ * ("Rate limits and lookback (Free / Starter tier)"), and the provisioned
+ * key IS on that tier (docs/reviews/codebase-review-2026-08-06.md, "Premise
+ * correction: the Polygon subscription" — David dropped it to free
+ * 2026-08-06). Exceeding it returns HTTP 429 and, per ADR-0001, Polygon is
+ * a fallback source that must not trip its own limit on the first burst.
+ */
+export const POLYGON_DOCUMENTED_CEILING_PER_SECOND = 5 / 60;
 
 /**
  * The checked-in starting values. Overridable per deployment; see
@@ -184,8 +217,59 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
   ibkr: { capacity: 5, refillPerSecond: 5, reserveForPriority: 0 },
 };
 
-/** The environment variables that override one venue's bucket. */
-export function venuePacingEnvVars(venue: VenueKey): {
+/**
+ * Polygon's checked-in default — VERIFIED CEILING (5 calls/min, cited at
+ * `POLYGON_DOCUMENTED_CEILING_PER_SECOND`), OPERATING RATE a deliberate
+ * margin under it — not at it, the same posture `DEFAULT_VENUE_PACING`
+ * takes for every venue. Kept OUT of `DEFAULT_VENUE_PACING` itself for the
+ * same reason Polygon is not a `VenueKey` — see that type's doc.
+ *
+ * **`refillPerSecond: 1 / 13` — MIGRATED, NOT RE-DERIVED.** Ticket #510
+ * replaces `HttpPolygonClient`'s own ungoverned `MIN_REQUEST_SPACING_MS =
+ * 13_000` (added by the 2026-08-06 codebase review, item A1) with this
+ * bucket; the 13s figure carries over unchanged rather than being
+ * re-derived, so this PR does not also silently change the operating
+ * rate that has been running since that review landed. 1/13 ≈ 0.0769/s =
+ * 4.615/min, ~92% of the 5/min ceiling — a THINNER margin than Alpaca's
+ * deliberate 75%, and honestly labelled as such rather than glossed over.
+ * It is accepted rather than tightened here because the workload this
+ * paces is nothing like Alpaca's: a continuous live trading loop cannot
+ * absorb a margin slip, where Polygon is invoked only by hand-run Stage 2
+ * scripts (`run-stage2.ts` and friends) fetching a handful of symbols per
+ * run, so there is no sustained load anywhere near steady-state that
+ * would actually test how thin the margin is. Re-deriving a wider margin
+ * is a legitimate follow-up, not this ticket's scope — #510 is about
+ * making the existing rate governable (env override, ceiling check),
+ * not re-tuning it. Polygon is still a FALLBACK source per ADR-0001 with
+ * no paid tier to fail over to, which is exactly why exceeding the
+ * ceiling — not just running close to it — must stay impossible; that is
+ * what the ceiling check in `readPositive` enforces regardless of this
+ * default.
+ *
+ * **`capacity: 1` — WORKLOAD-DERIVED, deliberately NO BURST.** Unlike
+ * Alpaca, nothing in this client's workload benefits from a burst: Stage 2
+ * ingestion fetches one symbol's whole date range per call (pagination
+ * inside `fetchAggregates` already serializes via this same bucket), and
+ * the MVP universe is ingested by a hand-run script, never a concurrent
+ * sweep. A capacity above 1 would let the first few calls of a cold start
+ * fire back-to-back and eat into the margin the refill rate above is
+ * counting on. Single-consumer, so no `reserveForPriority` (#391 does not
+ * apply here — see DEFAULT_VENUE_PACING.ibkr for the other 0-reserve
+ * venue).
+ */
+export const DEFAULT_POLYGON_PACING: TokenBucketConfig = {
+  capacity: 1,
+  refillPerSecond: 1 / 13,
+  reserveForPriority: 0,
+};
+
+/**
+ * The environment variables that override one bucket. Not scoped to
+ * `VenueKey` — the string it prefixes is a plain label (`'alpaca'`,
+ * `'polygon'`, ...), because `resolvePolygonPacing` below reuses this same
+ * name-building for a label that is deliberately not a `VenueKey`.
+ */
+export function venuePacingEnvVars(venue: string): {
   capacity: string;
   refillPerSecond: string;
   ceilingPerSecond: string;
@@ -218,9 +302,13 @@ export function venuePacingEnvVars(venue: VenueKey): {
  * documented at this figure", rather than something an operator does by
  * accident while tuning throughput.
  */
-function resolveCeiling(env: NodeJS.ProcessEnv, venue: VenueKey, name: string): number | undefined {
+function resolveCeiling(
+  env: NodeJS.ProcessEnv,
+  documented: number | undefined,
+  name: string,
+): number | undefined {
   const raw = (env[name] ?? '').trim();
-  if (raw.length === 0) return VENUE_DOCUMENTED_CEILING_PER_SECOND[venue];
+  if (raw.length === 0) return documented;
 
   const value = Number(raw);
   if (!Number.isFinite(value) || value <= 0) {
@@ -275,38 +363,84 @@ function readPositive(
 }
 
 /**
+ * Resolves ONE bucket's config from env: the checked-in `fallback`, with
+ * that bucket's own `SAMURAI_PACING_*` override applied and validated
+ * against `documentedCeiling` (if any). This is the piece `resolveVenuePacing`
+ * and `resolvePolygonPacing` both call — one implementation of the
+ * parsing/validation rules, two entry points that read disjoint env-var
+ * namespaces (review feedback on PR #520: extracted specifically so Polygon
+ * could get its own resolution without a second, divergence-prone copy of
+ * this logic).
+ */
+function resolveBucketPacing(
+  env: NodeJS.ProcessEnv,
+  names: ReturnType<typeof venuePacingEnvVars>,
+  fallback: TokenBucketConfig,
+  documentedCeiling: number | undefined,
+): TokenBucketConfig {
+  return {
+    // A bucket whose capacity is under one token can never satisfy
+    // `acquire()`'s `tokens >= 1` test, so every call parks forever. That is
+    // a stopped trading system, not a slow one — refused rather than paced.
+    capacity: readPositive(env, names.capacity, fallback.capacity, {
+      min: 1,
+      minLabel: 'at least 1 (a bucket under one token never releases a call)',
+    }),
+    refillPerSecond: readPositive(env, names.refillPerSecond, fallback.refillPerSecond, {
+      min: Number.MIN_VALUE,
+      minLabel: 'greater than 0 (a non-positive rate parks every call forever)',
+      ceiling: resolveCeiling(env, documentedCeiling, names.ceilingPerSecond),
+      ceilingEnvVar: names.ceilingPerSecond,
+    }),
+    reserveForPriority: resolveReserve(env, names, fallback),
+  };
+}
+
+/**
  * The pacing this deployment runs at: the checked-in defaults, with any
  * `SAMURAI_PACING_<VENUE>_*` override applied and validated.
  *
  * `env` is injected rather than read from `process.env` at module scope so the
  * validation is testable without mutating the process, matching
  * `sharedStorePath`/`rotating-file-sink.ts`.
+ *
+ * Reads and validates `VENUE_KEYS` (`alpaca`/`ccxt`/`ibkr`) ONLY — Polygon is
+ * deliberately excluded (see the `VenueKey` doc above) so the live
+ * composition root that calls this never depends on a Stage-2-only env var.
+ * `resolvePolygonPacing` is the parallel entry point for Polygon.
  */
 export function resolveVenuePacing(env: NodeJS.ProcessEnv = process.env): VenuePacingConfig {
   const resolved = {} as VenuePacingConfig;
 
   for (const venue of VENUE_KEYS) {
-    const names = venuePacingEnvVars(venue);
-    const fallback = DEFAULT_VENUE_PACING[venue];
-    resolved[venue] = {
-      // A bucket whose capacity is under one token can never satisfy
-      // `acquire()`'s `tokens >= 1` test, so every call parks forever. That is
-      // a stopped trading system, not a slow one — refused rather than paced.
-      capacity: readPositive(env, names.capacity, fallback.capacity, {
-        min: 1,
-        minLabel: 'at least 1 (a bucket under one token never releases a call)',
-      }),
-      refillPerSecond: readPositive(env, names.refillPerSecond, fallback.refillPerSecond, {
-        min: Number.MIN_VALUE,
-        minLabel: 'greater than 0 (a non-positive rate parks every call forever)',
-        ceiling: resolveCeiling(env, venue, names.ceilingPerSecond),
-        ceilingEnvVar: names.ceilingPerSecond,
-      }),
-      reserveForPriority: resolveReserve(env, names, fallback),
-    };
+    resolved[venue] = resolveBucketPacing(
+      env,
+      venuePacingEnvVars(venue),
+      DEFAULT_VENUE_PACING[venue],
+      VENUE_DOCUMENTED_CEILING_PER_SECOND[venue],
+    );
   }
 
   return resolved;
+}
+
+/**
+ * Polygon's own pacing resolution — reads and validates ONLY
+ * `SAMURAI_PACING_POLYGON_*`, via the same `resolveBucketPacing` every
+ * `VenueKey` uses, so a malformed override for Alpaca/ccxt/IBKR can never
+ * affect a Polygon-only construction, and a malformed
+ * `SAMURAI_PACING_POLYGON_*` can never affect `resolveVenuePacing()` (and
+ * therefore the live orchestrator, which never calls this function at all).
+ * See the `VenueKey` doc above for why this is a separate entry point
+ * rather than one more key in `VENUE_KEYS`.
+ */
+export function resolvePolygonPacing(env: NodeJS.ProcessEnv = process.env): TokenBucketConfig {
+  return resolveBucketPacing(
+    env,
+    venuePacingEnvVars('polygon'),
+    DEFAULT_POLYGON_PACING,
+    POLYGON_DOCUMENTED_CEILING_PER_SECOND,
+  );
 }
 
 /**
