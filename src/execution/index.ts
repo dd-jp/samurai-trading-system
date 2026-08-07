@@ -19,8 +19,11 @@ export type {
   AlpacaAccount,
   AlpacaBracketOrderRequest,
   AlpacaClient,
+  AlpacaLimitOrderRequest,
+  AlpacaOcoOrderRequest,
   AlpacaOrder,
   AlpacaOrderLeg,
+  AlpacaStopLimitOrderRequest,
 } from './adapters/alpaca-client.js';
 export type {
   AlpacaHttpBrokerClientOptions,
@@ -48,6 +51,7 @@ export type {
   FlattenOverfillAlertChannel,
   FlattenOverfillWarning,
 } from './flatten-overfill-alert.js';
+export type { OcoDoubleFillAlert, OcoDoubleFillAlertChannel } from './oco-double-fill-alert.js';
 export type {
   ResidualExposureAlert,
   ResidualExposureAlertChannel,

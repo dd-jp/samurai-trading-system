@@ -2,8 +2,12 @@
  * Alpaca BrokerAdapter (ticket #84) — see docs/specs/execution-spec.md
  * ("Module: Broker Abstraction"): the MVP paper/live-equities path. Alpaca's
  * native bracket order (`order_class: 'bracket'`) gives the atomic
- * entry + one-cancels-other stop/target guarantee natively, so this adapter
- * does no OCO emulation of its own — unlike the ccxt adapter (#85).
+ * entry + one-cancels-other stop/target guarantee natively — FOR EQUITIES.
+ * Crypto rejects every advanced order class (verified live, #550), so the
+ * crypto half of the universe is emulated instead (#586):
+ * `AlpacaCryptoLegEmulation` (alpaca-crypto-emulation.ts) keeps the same
+ * guarantee by hand, journalled in `broker_brackets`, invisible above the
+ * `BrokerAdapter` seam.
  *
  * The Alpaca trading client is injected (`AlpacaClient`), mirroring the
  * injected-client pattern already used for market data
@@ -42,6 +46,7 @@ import {
   type UnpricedFillObservation,
   type UnpricedFillRecord,
 } from '../broker-state-store.js';
+import type { OcoDoubleFillAlertChannel } from '../oco-double-fill-alert.js';
 import type {
   BrokerAck,
   BrokerAdapter,
@@ -52,6 +57,9 @@ import type {
 } from '../types.js';
 import type { UnpricedFillAlertChannel } from '../unpriced-fill-alert.js';
 import type { AlpacaClient, AlpacaOrder, AlpacaOrderLeg } from './alpaca-client.js';
+// Deliberate import cycle — alpaca-crypto-emulation.ts imports this module's
+// normalization helpers back; see its own comment on why that beats a copy.
+import { AlpacaCryptoLegEmulation } from './alpaca-crypto-emulation.js';
 
 /**
  * How long a fill may sit unpriced before it stops being "the venue is briefly
@@ -115,6 +123,15 @@ export interface AlpacaBrokerAdapterInput {
    * root, #275); silence is not.
    */
   unpricedFillAlerts: UnpricedFillAlertChannel;
+  /**
+   * Where an emulated crypto OCO whose protective legs BOTH filled is
+   * escalated (#586) — the double-fill window the owner accepted when
+   * choosing emulation over Alpaca's crypto-rejected native order classes.
+   * REQUIRED for `unpricedFillAlerts`' exact reason: the one seam whose
+   * absence IS the failure mode does not get an optional default. See
+   * oco-double-fill-alert.ts.
+   */
+  ocoDoubleFillAlerts: OcoDoubleFillAlertChannel;
   /**
    * How long a fill may stay unpriced before it is escalated. Defaults to
    * `DEFAULT_UNPRICED_FILL_AGE_OUT_MS`.
@@ -192,6 +209,16 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   private readonly state: BrokerStateStore;
   private readonly clock: Clock;
   private readonly unpricedFillAgeOutMs: number;
+  /**
+   * The crypto path (#586): Alpaca rejects every advanced order class for
+   * crypto (verified live, #550), so crypto brackets are emulated — plain
+   * entry, plain protective legs armed on the entry fill, sibling cancelled
+   * by the sweep — with every transition journalled in the SAME
+   * `BrokerStateStore` this adapter's native index uses. The file-top claim
+   * that "this adapter does no OCO emulation of its own" is therefore now
+   * equities-only.
+   */
+  private readonly emulation: AlpacaCryptoLegEmulation;
 
   constructor(private readonly input: AlpacaBrokerAdapterInput) {
     this.rateLimiter = input.rateLimiter ?? new TokenBucket(DEFAULT_VENUE_PACING.alpaca);
@@ -199,10 +226,22 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     this.clock = input.clock ?? new SystemClock();
     this.unpricedFillAgeOutMs = input.unpricedFillAgeOutMs ?? DEFAULT_UNPRICED_FILL_AGE_OUT_MS;
 
+    this.emulation = new AlpacaCryptoLegEmulation({
+      client: input.client,
+      state: this.state,
+      clock: this.clock,
+      call: (operation, fn) => this.call(operation, fn),
+      doubleFillAlerts: input.ocoDoubleFillAlerts,
+    });
+
     // Synchronous, in the constructor: the first `fetchNewFills` sweep after a
     // restart iterates this map, and an empty one reports "no new fills" —
     // indistinguishable, above the adapter, from a quiet market.
     for (const record of this.state.loadBrackets('alpaca')) {
+      // Emulated crypto rows belong to the emulation, which rehydrated them
+      // in its own constructor above — polling them here too would sweep the
+      // same orders twice and drive no state machine.
+      if (record.request?.asset_class === 'crypto') continue;
       if (record.entry_order_id === null) continue;
       this.brackets.set(record.client_order_id, record.entry_order_id);
     }
@@ -307,6 +346,16 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * lot) and is not an error.
    */
   async cancel(clientOrderId: string, _instrument: string): Promise<void> {
+    // An emulated crypto bracket has no parent whose cancellation takes the
+    // legs with it — the legs are independent plain orders only the
+    // emulation's journal knows the ids of (#586). Delegated wholesale; the
+    // `:rearm` lookup below is the EQUITY OCO's naming scheme and does not
+    // apply (emulated re-arm legs are cancelled by the same journal walk).
+    if (this.emulation.owns(clientOrderId)) {
+      await this.emulation.cancelAll(clientOrderId);
+      return;
+    }
+
     const order = await this.call('cancel', () =>
       this.input.client.getOrderByClientOrderId(clientOrderId),
     );
@@ -371,18 +420,21 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   }
 
   /**
-   * VERIFIED 2026-08-07 against live Alpaca paper: crypto rejects
+   * VERIFIED 2026-08-07 against live Alpaca paper (#550): crypto rejects
    * `order_class: 'bracket'` outright — `422 {"code":42210000,"message":
-   * "crypto orders not allowed for advanced order_class: otoco"}`. Also
-   * confirmed: `order.instrument` reaches Alpaca unconverted
-   * (`DEFAULT_UNIVERSE`'s `BTC-USD`, not the `BTC/USD` the trading API
-   * wants), which alone fails first with `422 {"message":"asset \"BTC-USD\"
-   * not found"}` — before the order-class rejection is ever reached. No
-   * crypto bracket entry can succeed today; either defect alone is fatal.
-   * Full probe transcript: #550. Symbol-conversion fix: #585. Order-class
-   * fix: #586.
+   * "crypto orders not allowed for advanced order_class: otoco"}` — so a
+   * crypto instrument NEVER takes the native path below. It routes to the
+   * emulation (#586, owner's recorded option (a)): a plain limit entry now,
+   * the two protective legs journalled and armed as plain crypto orders once
+   * the fill sweep observes the entry fill, the sibling cancelled by the
+   * sweep when one leg fires. Same `BrokerAck` above the seam either way.
+   * Symbol-conversion fix: #585.
    */
   async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
+    if (order.asset_class === 'crypto') {
+      return this.emulation.submitEntry(order);
+    }
+
     const response = await this.call('submitBracket', () =>
       this.input.client.submitOrder({
         symbol: toAlpacaSymbol(order.instrument, order.asset_class),
@@ -446,6 +498,20 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     );
     if (order === null) return null;
 
+    // An emulated crypto bracket (#586) is already journalled and swept by
+    // the emulation — re-populating the native map here would double-poll it
+    // and stamp native-shaped ids over emulation state. The venue's answer
+    // about the ENTRY still stands; the leg ids come from the journal, since
+    // a plain crypto entry carries no `legs` for `legOrderIds` to read.
+    if (this.emulation.owns(clientOrderId)) {
+      return {
+        client_order_id: clientOrderId,
+        broker_order_ids: this.emulation.brokerOrderIds(clientOrderId),
+        order_state: mapOrderState(order.status),
+        filled_qty: Number.parseFloat(order.filled_qty),
+      };
+    }
+
     // Re-populating the map lets a post-restart `fetchNewFills` find this
     // bracket again — the reconciliation sweep is the only thing that knows
     // these orders still exist. Journalled too, via the partial-upsert path:
@@ -466,11 +532,17 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   }
 
   /**
-   * A no-op: Alpaca's native bracket attaches the protective legs to the
-   * parent entry, so the venue keeps their quantity in step as the parent
-   * fills. Re-sizing from here would fight the venue over leg quantity — the
-   * same reason this adapter does no OCO emulation of its own. The seam is
-   * still honoured; a native bracket meets it by having already met it.
+   * A no-op on BOTH paths, for different reasons. Equities: Alpaca's native
+   * bracket attaches the protective legs to the parent entry, so the venue
+   * keeps their quantity in step as the parent fills, and re-sizing from
+   * here would fight the venue over leg quantity. Emulated crypto (#586):
+   * the emulation arms its legs only once the entry goes TERMINAL, sized to
+   * the entry's final cumulative fill — so by the time legs exist there is
+   * no later entry fill left to resize for, and before they exist there is
+   * nothing to resize. The honest cost of that design is a window where a
+   * PARTIALLY-filled, still-working crypto entry holds quantity with no legs
+   * armed yet; closing it would mean arming early and re-arming per fill
+   * (ccxt's resize path), which is #549-adjacent work, not this seam's.
    */
   async resizeProtectiveLegs(): Promise<void> {
     // Intentionally empty — see above.
@@ -523,16 +595,21 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * bracket"), but this row is not merely inert either — #548 tracks
    * whether that makes it a usable restart-recovery hook.
    *
-   * VERIFIED 2026-08-07 against live Alpaca paper, two stacked defects: (1)
-   * this method's own wire shape (top-level `limit_price` for take-profit)
-   * is rejected for EVERY asset class — `422 {"code":40010001,"message":"oco
-   * orders require take_profit.limit_price"}` on both `BTC/USD` and `SPY`;
-   * (2) with the shape corrected, crypto is separately rejected at the
+   * VERIFIED 2026-08-07 against live Alpaca paper (#550), fixed here (#586):
+   * (1) the previous wire shape put the take-profit price at the TOP LEVEL,
+   * which Alpaca rejects for EVERY asset class — `422 {"code":40010001,
+   * "message":"oco orders require take_profit.limit_price"}` on both
+   * `BTC/USD` and `SPY`; the price is now nested under `take_profit`, the
+   * verified-required shape. (2) crypto is separately rejected at the
    * order-class level — `422 {"code":42210000,"message":"crypto orders not
-   * allowed for advanced order_class: oco"}` — while the equity control
-   * passes that check. A crypto (and, until #1 is fixed, equity) residual
-   * is alert-only today, never re-armed. Full probe transcript: #550.
-   * Wire-shape + order-class fix: #586.
+   * allowed for advanced order_class: oco"}` — so a crypto residual never
+   * reaches `submitOcoOrder` at all: it takes the emulated path (two plain
+   * orders on a fresh journalled arming episode; see
+   * `AlpacaCryptoLegEmulation.rearm`, whose leg ids and sweep the emulation
+   * owns end to end — nothing lands in `rearmedLegs`, which stays the
+   * EQUITY OCO's index). A crypto residual whose bracket the journal does
+   * not know refuses (throws) rather than guessing, and the caller's #525
+   * fallback alert fires — the contract's required posture.
    */
   async rearmProtectiveLegs(
     clientOrderId: string,
@@ -542,6 +619,22 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     stop: number,
     target: number,
   ): Promise<void> {
+    // `owns` is the authoritative test (the journal knows every emulated
+    // bracket, durably); the syntactic `-USD` fallback catches the crypto
+    // residual whose journal row is missing, which must REFUSE loudly
+    // rather than fall through to an order class the venue is verified to
+    // reject — a thrown 422 here would read as a transient venue error.
+    if (this.emulation.owns(clientOrderId)) {
+      return this.emulation.rearm(clientOrderId, instrument, side, qty, stop, target);
+    }
+    if (instrument.endsWith('-USD')) {
+      throw new Error(
+        `Alpaca adapter cannot re-arm crypto residual '${clientOrderId}' (${instrument}): no ` +
+          'journalled emulated bracket exists for this lot, and the native OCO order class is ' +
+          'rejected for crypto (verified, #550). The residual stays alert-only.',
+      );
+    }
+
     const rearmClientOrderId = `${clientOrderId}:rearm`;
     // The CLOSING side, mirroring `submitFlatten`'s own convention — `side`
     // here is the lot's HELD side (the `BrokerAdapter.rearmProtectiveLegs`
@@ -553,10 +646,10 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         symbol: toAlpacaSymbol(instrument),
         side: closingSide,
         qty: String(qty),
-        limit_price: String(target),
         time_in_force: 'gtc',
         client_order_id: rearmClientOrderId,
         order_class: 'oco',
+        take_profit: { limit_price: String(target) },
         stop_loss: { stop_price: String(stop) },
       }),
     );
@@ -811,6 +904,16 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       }
     }
 
+    // The emulated-crypto sweep (#586) — polls each emulated bracket's plain
+    // entry/stop/target orders, offers their fills (tagged 'entry'/'stop'/
+    // 'target' under the lot's own key, so `ingestFills()`'s ordinary
+    // routing books them with no knowledge an emulation exists), and drives
+    // the journalled phase machine: arm the legs on the entry fill, cancel
+    // the sibling when one leg fires, resume any episode a dead process left
+    // mid-transition. Isolation and UnpricedFillError bookkeeping are the
+    // same as the three loops above — see the emulation module.
+    const emulationFailures = await this.emulation.sweep(since, fills, failures);
+
     // The venue caught up: this fill priced, was collected above, and is about
     // to be booked, so its anomaly row is resolved. Done here rather than in
     // `collectFill` so the normalizer stays a pure function of one order.
@@ -837,7 +940,8 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         failures,
         `Alpaca fetchNewFills: ${failures.length} failure(s) during the sweep ` +
           `(${bracketFailures} bracket(s), ${flattenFailures} flatten(s), ` +
-          `${rearmFailures} rearm(s) failed); no fills could be read`,
+          `${rearmFailures} rearm(s), ${emulationFailures} emulated crypto bracket(s) failed); ` +
+          'no fills could be read',
       );
     }
 
@@ -950,7 +1054,7 @@ function symbolOf(order: AlpacaOrder): string {
  * unchanged: a bracket whose entry cannot be priced must not have its exit legs
  * booked either.
  */
-class UnpricedFillError extends Error {
+export class UnpricedFillError extends Error {
   readonly observation: UnpricedFillObservation;
 
   constructor(message: string, observation: UnpricedFillObservation) {
@@ -986,7 +1090,7 @@ function legName(leg: AlpacaOrderLeg): 'target' | 'stop' {
  * carries no `symbol`, and an alert that cannot name the symbol is not
  * actionable. A bracket's legs trade the parent's symbol by construction.
  */
-function collectFill(
+export function collectFill(
   order: AlpacaOrder | AlpacaOrderLeg,
   leg: NormalizedFill['leg'],
   clientOrderId: string,
@@ -1097,7 +1201,7 @@ function collectFill(
  * first), this must become explicit-list or asset-class-driven instead of
  * syntactic.
  */
-function toAlpacaSymbol(instrument: string, assetClass?: 'crypto' | 'stocks'): string {
+export function toAlpacaSymbol(instrument: string, assetClass?: 'crypto' | 'stocks'): string {
   const isCrypto = assetClass === undefined ? instrument.endsWith('-USD') : assetClass === 'crypto';
   if (!isCrypto || !instrument.endsWith('-USD')) return instrument;
   return `${instrument.slice(0, -'-USD'.length)}/USD`;
@@ -1126,7 +1230,7 @@ function fromAlpacaSymbol(symbol: string): string {
   return symbol.endsWith('/USD') ? `${symbol.slice(0, -'/USD'.length)}-USD` : symbol;
 }
 
-function mapOrderState(status: string): OrderState {
+export function mapOrderState(status: string): OrderState {
   switch (status) {
     case 'filled':
       return 'filled';

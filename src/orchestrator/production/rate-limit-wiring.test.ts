@@ -806,6 +806,18 @@ function stubConfig(db: SharedStore, overrides: Partial<ProductionConfig>): Stub
         status: 'accepted',
         legs: [],
       })),
+      // #586: crypto brackets submit as plain limit entries; the pacing
+      // tests below drive BTC-USD through this method, not submitOrder.
+      submitLimitOrder: vi.fn(async () => ({
+        id: 'alpaca-order-1',
+        client_order_id: 'k',
+        status: 'accepted',
+      })),
+      submitStopLimitOrder: vi.fn(async () => ({
+        id: 'alpaca-order-2',
+        client_order_id: 'k:stop',
+        status: 'accepted',
+      })),
       cancelOrder: vi.fn(async () => undefined),
       getOrder: vi.fn(async () => ({
         id: 'alpaca-order-1',
