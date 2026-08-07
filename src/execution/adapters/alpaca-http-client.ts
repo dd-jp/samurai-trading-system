@@ -54,7 +54,7 @@
  */
 
 import type { RetryConfig } from '../../shared/index.js';
-import { fetchWithTimeout, withRetry } from '../../shared/index.js';
+import { fetchWithTimeout, truncateForError, withRetry } from '../../shared/index.js';
 import {
   AlpacaBrokerProviderError,
   classifyAlpacaBrokerNetworkError,
@@ -69,6 +69,239 @@ import type {
   AlpacaOrder,
   AlpacaPosition,
 } from './alpaca-client.js';
+
+/**
+ * Wire-shape validation for the broker client (issue #509). `request<T>`
+ * used to be a bare `(await response.json()) as T` — every field of every
+ * response shape (`AlpacaOrder`, `AlpacaPosition[]`, `AlpacaAccount`) rode
+ * along unvalidated, and this is the ONE client whose fields feed money math
+ * (fill quantity, average price, account equity) directly.
+ *
+ * A per-shape validator per call site, not one generic check inside
+ * `request<T>` — the three response shapes have nothing in common, and a
+ * single shape-checker parameterized by `T` would have to be either a
+ * runtime-schema library (the issue's "no schema library is needed") or a
+ * pile of `T`-conditional branches indistinguishable from three functions.
+ *
+ * Every message is built ONLY from the parsed body (never the request, which
+ * would carry the `APCA-API-*` headers) and is truncated — but this is a
+ * belt no braces are actually needed for: `alpaca-adapter.ts`'s `call()`
+ * wraps every one of these methods and converts whatever they throw through
+ * `sanitizeBrokerError`, which discards the original message entirely before
+ * it can reach a durable `audit_log` row or the dashboard. See
+ * `broker-error.ts`'s doc comment — this file does not duplicate that
+ * boundary, it relies on it being upstream of every caller.
+ */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+/**
+ * Alpaca reports every decimal as a STRING (`alpaca-client.ts`'s doc comment
+ * on `AlpacaOrder`/`AlpacaPosition`/`AlpacaAccount`: "parsing belongs to the
+ * consumer"). This file keeps that contract — a validated numeric-string
+ * field is still returned as a `string` — but rejects a string that could
+ * never be a valid decimal, so a garbage `filled_qty: "N/A"` cannot reach
+ * `Number.parseFloat` downstream and silently become `NaN` in a `Fill`.
+ * `Number('')` is `0`, which passes this check; empty-string is not
+ * special-cased, since Alpaca never sends one for a field that reaches this
+ * validator (missing is `null`, not `''`, per the interface).
+ */
+function isFiniteNumericString(value: unknown): value is string {
+  return typeof value === 'string' && Number.isFinite(Number(value));
+}
+
+/** Throws a classified, message-bounded `AlpacaBrokerProviderError` for a validation failure. */
+function failValidation(context: string, detail: string, body: unknown): never {
+  throw new AlpacaBrokerProviderError(
+    `Alpaca API error: malformed response body (${context}): ${detail} — ${truncateForError(
+      JSON.stringify(body),
+    )}`,
+  );
+}
+
+/**
+ * A bracket leg, validated leniently on purpose. `id`/`type` are the only
+ * fields ANY caller reads off a leg at submit time (`alpaca-adapter.ts`'s
+ * `legOrderIds`/`legIds`), so those are required. `status`/`filled_qty`/
+ * `filled_avg_price`/`filled_at` are declared required by the `AlpacaOrderLeg`
+ * interface but are only read later, by `fetchNewFills`'s `getOrder` polling
+ * path (`collectFill`) — and whether Alpaca populates them on a freshly
+ * submitted, not-yet-filled leg is not verified against a live account here.
+ * Requiring them at submit time on an unverified guess would turn every
+ * bracket submission into a thrown error the moment the guess is wrong — the
+ * exact "unverified guess must fail loudly, never silently" principle this
+ * module doc's `lookupCryptoKey` reasoning warns against applying backwards.
+ * `collectFill` already has its own `Number.isFinite` guard on `filled_qty`
+ * (issue H1's original mitigation) for the case where it IS present but
+ * garbage, so validating it here too — when present — closes the gap without
+ * guessing about a field's presence.
+ *
+ * Validates in place and returns nothing: this client's whole contract is
+ * that a response passes through UNMODIFIED (pinned by
+ * `alpaca-http-client.test.ts`'s "passes through a full bracket response ...
+ * unmodified" — Alpaca's real payload carries fields this repo's `AlpacaOrderLeg`
+ * does not declare, e.g. `limit_price`/`stop_price`, and a validator that
+ * rebuilds the object from only the fields it knows about would silently drop
+ * them). The caller keeps the original parsed value; this only decides
+ * whether to throw.
+ */
+function validateAlpacaOrderLeg(raw: unknown, context: string, body: unknown): void {
+  if (!isRecord(raw)) failValidation(context, 'a bracket leg was not an object', body);
+  const { id, type, status, filled_qty, filled_avg_price, filled_at } = raw;
+  if (typeof id !== 'string') failValidation(context, 'leg.id must be a string', body);
+  if (type !== 'limit' && type !== 'stop') {
+    failValidation(context, "leg.type must be 'limit' or 'stop'", body);
+  }
+  if (status !== undefined && typeof status !== 'string') {
+    failValidation(context, 'leg.status must be a string', body);
+  }
+  if (filled_qty !== undefined && !isFiniteNumericString(filled_qty)) {
+    failValidation(context, 'leg.filled_qty must be a numeric string', body);
+  }
+  if (
+    filled_avg_price !== undefined &&
+    filled_avg_price !== null &&
+    !isFiniteNumericString(filled_avg_price)
+  ) {
+    failValidation(context, 'leg.filled_avg_price must be a numeric string or null', body);
+  }
+  if (filled_at !== undefined && filled_at !== null && typeof filled_at !== 'string') {
+    failValidation(context, 'leg.filled_at must be a string or null', body);
+  }
+}
+
+/**
+ * The parent order. Strict only on the fields `alpaca-adapter.ts` actually
+ * reads off a RESPONSE object: `id` (bracket tracking, `submitBracket:312`),
+ * `status` (`mapOrderState`), `legs`, and the fill triad `filled_qty`/
+ * `filled_avg_price`/`filled_at` (`collectFill`, and `getOrder:376`'s
+ * unguarded `Number.parseFloat(order.filled_qty)`).
+ *
+ * `client_order_id`/`qty`/`side`/`order_class` are declared on the
+ * `AlpacaOrder` interface but nothing reads them back off a response —
+ * `submitBracket` reads those three off its own REQUEST object, and
+ * `getOrder`/`getOrderByClientOrderId` return the caller's own id, not the
+ * field. Requiring them here would be exactly the unverified-shape risk this
+ * ticket's design note warns against for the legs, applied to a field with
+ * no payoff: `submitMarketOrder` is the flatten (#429), and if Alpaca's
+ * response to a plain market order omits `order_class` (no verified live
+ * sample to confirm either way), a strict check here would fail the
+ * emergency exit on a shape guess. `symbol` gets the same treatment for the
+ * same reason `symbolOf` (below) already degrades a missing/malformed one to
+ * `'unknown'` rather than throwing — this validator must not be stricter
+ * than the consumer that was deliberately built to tolerate it.
+ *
+ * Same "validate, don't rebuild" posture as the leg validator: returns the
+ * original parsed `body`, cast, rather than a reconstructed object — Alpaca's
+ * real order payload carries fields (`extended_hours`, `trail_price`, …) this
+ * repo's `AlpacaOrder` does not declare, and a caller that has always received
+ * the raw object must keep receiving it.
+ */
+function validateAlpacaOrder(body: unknown, context: string): AlpacaOrder {
+  if (!isRecord(body)) failValidation(context, 'expected an object', body);
+  const {
+    id,
+    client_order_id,
+    symbol,
+    side,
+    qty,
+    order_class,
+    status,
+    filled_qty,
+    filled_avg_price,
+    filled_at,
+    legs,
+  } = body;
+  if (typeof id !== 'string') failValidation(context, 'id must be a string', body);
+  // Declared but unread-off-a-response (see doc comment): checked only when
+  // present, never required.
+  if (client_order_id !== undefined && typeof client_order_id !== 'string') {
+    failValidation(context, 'client_order_id must be a string', body);
+  }
+  if (symbol !== undefined && typeof symbol !== 'string') {
+    failValidation(context, 'symbol must be a string', body);
+  }
+  if (side !== undefined && side !== 'buy' && side !== 'sell') {
+    failValidation(context, "side must be 'buy' or 'sell'", body);
+  }
+  if (qty !== undefined && !isFiniteNumericString(qty)) {
+    failValidation(context, 'qty must be a numeric string', body);
+  }
+  if (order_class !== undefined && typeof order_class !== 'string') {
+    failValidation(context, 'order_class must be a string', body);
+  }
+  if (typeof status !== 'string') failValidation(context, 'status must be a string', body);
+  if (!isFiniteNumericString(filled_qty)) {
+    failValidation(context, 'filled_qty must be a numeric string', body);
+  }
+  if (filled_avg_price !== null && !isFiniteNumericString(filled_avg_price)) {
+    failValidation(context, 'filled_avg_price must be a numeric string or null', body);
+  }
+  if (filled_at !== null && typeof filled_at !== 'string') {
+    failValidation(context, 'filled_at must be a string or null', body);
+  }
+  if (legs !== undefined) {
+    if (!Array.isArray(legs)) failValidation(context, 'legs must be an array', body);
+    for (const leg of legs) validateAlpacaOrderLeg(leg, context, body);
+  }
+  // Double cast: `isRecord` narrowed `body` to `Record<string, unknown>`, which
+  // TS considers too dissimilar to `AlpacaOrder` for a direct assertion — the
+  // fields above are exactly what were checked, so `unknown` first is safe.
+  return body as unknown as AlpacaOrder;
+}
+
+/**
+ * One position row. `getOpenPositions` (`alpaca-adapter.ts:283-291`) already
+ * guards `qty`/`avg_entry_price` with `Number.isFinite` after parsing — this
+ * validator's job is the type-level half that guard cannot reach: a `qty`
+ * that is a non-numeric STRING still parses to `NaN` and is already caught,
+ * but a `qty` that is not a string at all (a vendor sending a raw number,
+ * say) would otherwise flow through as a structurally-wrong `AlpacaPosition`.
+ * Validates in place, returns nothing — same "don't rebuild" reasoning as
+ * `validateAlpacaOrder`.
+ */
+function validateAlpacaPosition(raw: unknown, context: string): void {
+  if (!isRecord(raw)) failValidation(context, 'a position was not an object', raw);
+  const { symbol, qty, side, avg_entry_price } = raw;
+  if (typeof symbol !== 'string') failValidation(context, 'symbol must be a string', raw);
+  if (!isFiniteNumericString(qty)) failValidation(context, 'qty must be a numeric string', raw);
+  if (side !== 'long' && side !== 'short') {
+    failValidation(context, "side must be 'long' or 'short'", raw);
+  }
+  if (!isFiniteNumericString(avg_entry_price)) {
+    failValidation(context, 'avg_entry_price must be a numeric string', raw);
+  }
+}
+
+function validateAlpacaPositions(body: unknown, context: string): AlpacaPosition[] {
+  if (!Array.isArray(body)) failValidation(context, 'expected an array', body);
+  for (const raw of body) validateAlpacaPosition(raw, context);
+  return body as AlpacaPosition[];
+}
+
+/**
+ * The account ledger. `cash`/`equity` feed `AccountStateProvider` directly
+ * (`account-state.ts`'s `parseMoney`), which is the high-water-mark input —
+ * validated here too so a malformed body fails at the transport boundary
+ * rather than inside that provider. `last_equity` is deliberately never read
+ * (typed `never` on the interface, #332) and is not validated here either:
+ * validating a field nothing may read would be dead code the moment the
+ * interface's `never` already makes it a compile error to use.
+ */
+function validateAlpacaAccount(body: unknown, context: string): AlpacaAccount {
+  if (!isRecord(body)) failValidation(context, 'expected an object', body);
+  const { cash, equity, buying_power } = body;
+  if (!isFiniteNumericString(cash)) failValidation(context, 'cash must be a numeric string', body);
+  if (!isFiniteNumericString(equity)) {
+    failValidation(context, 'equity must be a numeric string', body);
+  }
+  if (buying_power !== undefined && !isFiniteNumericString(buying_power)) {
+    failValidation(context, 'buying_power must be a numeric string', body);
+  }
+  // See `validateAlpacaOrder`'s comment on the double cast.
+  return body as unknown as AlpacaAccount;
+}
 
 /** Which of Alpaca's two trading environments a client is permitted to reach. */
 export type AlpacaTradingEnvironment = 'paper' | 'live';
@@ -223,8 +456,21 @@ export class AlpacaHttpBrokerClient implements AlpacaClient {
     };
   }
 
-  /** Runs one HTTP attempt through `withRetry`, returning the parsed JSON body of a 2xx response. */
-  private async request<T>(path: string, init: RequestInit, context: string): Promise<T> {
+  /**
+   * Runs one HTTP attempt through `withRetry`, returning the parsed AND
+   * VALIDATED JSON body of a 2xx response. `validate` is supplied per call
+   * site (issue #509) rather than this method doing one generic shape check:
+   * `AlpacaOrder`, `AlpacaPosition[]` and `AlpacaAccount` share no structure,
+   * so a single `T`-parameterized validator would need to branch on `T` at
+   * runtime anyway — three named functions are the same amount of code and
+   * traceable to the shape they check.
+   */
+  private async request<T>(
+    path: string,
+    init: RequestInit,
+    context: string,
+    validate: (body: unknown, context: string) => T,
+  ): Promise<T> {
     return withRetry<T>(
       async () => {
         let response: Response;
@@ -242,8 +488,9 @@ export class AlpacaHttpBrokerClient implements AlpacaClient {
           throw await classifyAlpacaBrokerResponse(response, context);
         }
 
+        let parsed: unknown;
         try {
-          return (await response.json()) as T;
+          parsed = await response.json();
         } catch (cause) {
           throw new AlpacaBrokerProviderError(
             `Alpaca API error: response body could not be parsed as JSON (${context}): ${
@@ -251,6 +498,14 @@ export class AlpacaHttpBrokerClient implements AlpacaClient {
             }`,
           );
         }
+
+        // Outside the JSON-parse try/catch: `validate` throws its own
+        // already-classified `AlpacaBrokerProviderError` (`failValidation`
+        // above), and catching it here would just re-wrap it as an identical
+        // instance for no benefit — see #509's reviewer note on guarding
+        // catch blocks that can themselves throw. There is nothing in this
+        // one worth guarding against.
+        return validate(parsed, context);
       },
       this.retry,
       isRetryableAlpacaBrokerError,
@@ -266,6 +521,7 @@ export class AlpacaHttpBrokerClient implements AlpacaClient {
       '/v2/orders',
       { method: 'POST', body: JSON.stringify({ ...request, type: 'limit' }) },
       'submitOrder',
+      validateAlpacaOrder,
     );
   }
 
@@ -280,6 +536,7 @@ export class AlpacaHttpBrokerClient implements AlpacaClient {
       '/v2/orders',
       { method: 'POST', body: JSON.stringify({ ...request, type: 'market' }) },
       'submitMarketOrder',
+      validateAlpacaOrder,
     );
   }
 
@@ -320,11 +577,21 @@ export class AlpacaHttpBrokerClient implements AlpacaClient {
   }
 
   async getPositions(): Promise<AlpacaPosition[]> {
-    return this.request<AlpacaPosition[]>('/v2/positions', { method: 'GET' }, 'getPositions');
+    return this.request<AlpacaPosition[]>(
+      '/v2/positions',
+      { method: 'GET' },
+      'getPositions',
+      validateAlpacaPositions,
+    );
   }
 
   async getAccount(): Promise<AlpacaAccount> {
-    return this.request<AlpacaAccount>('/v2/account', { method: 'GET' }, 'getAccount');
+    return this.request<AlpacaAccount>(
+      '/v2/account',
+      { method: 'GET' },
+      'getAccount',
+      validateAlpacaAccount,
+    );
   }
 
   async getOrder(alpacaOrderId: string): Promise<AlpacaOrder> {
@@ -332,6 +599,7 @@ export class AlpacaHttpBrokerClient implements AlpacaClient {
       `/v2/orders/${encodeURIComponent(alpacaOrderId)}`,
       { method: 'GET' },
       'getOrder',
+      validateAlpacaOrder,
     );
   }
 
@@ -341,8 +609,12 @@ export class AlpacaHttpBrokerClient implements AlpacaClient {
         `/v2/orders:by_client_order_id?client_order_id=${encodeURIComponent(clientOrderId)}`,
         { method: 'GET' },
         'getOrderByClientOrderId',
+        validateAlpacaOrder,
       );
     } catch (error) {
+      // A validation failure has no `status` (`failValidation` never sets
+      // one), so it falls through to the rethrow below rather than being
+      // mistaken for "no such order" — only a genuine 404 maps to null.
       if (error instanceof AlpacaBrokerProviderError && error.status === 404) {
         return null;
       }
