@@ -126,13 +126,19 @@ export class MarketDataServiceImpl implements MarketDataService {
    * The stored window, if the store can satisfy this call's `lookback` AND
    * is known fresh for `asOf`'s bar interval — by either of two routes.
    *
+   * The store read happens FIRST, before either route is consulted, which is
+   * a change from the pre-#512 order (interval check, then read). Route 2
+   * cannot decide freshness without the rows, and both routes need them to
+   * return anything, so the only call this costs an extra read is one where
+   * BOTH routes miss and a live fetch was about to happen anyway — an
+   * indexed range scan against an HTTP round trip.
+   *
    * ## Route 1: in-process fetch history (#391, the original test)
    *
    * This (instrument, timeframe) was already fetched, by THIS instance,
-   * during `asOf`'s bar interval. Cheap (no store read needed to decide) and
-   * exact, but blind across a process restart: `lastBarFetch` is an in-memory
-   * map with no constructor seam, so it starts empty every time this class is
-   * constructed.
+   * during `asOf`'s bar interval. Exact, but blind across a process restart:
+   * `lastBarFetch` is an in-memory map with no constructor seam, so it starts
+   * empty every time this class is constructed.
    *
    * ## Route 2: store recency (#512, warm-start backfill)
    *

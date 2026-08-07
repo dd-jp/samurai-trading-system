@@ -234,6 +234,49 @@ describe('backfillMarketData', () => {
       }),
     ]);
   });
+
+  it('reports the bars a partially-successful append durably wrote, not the pre-fetch count', async () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteMarketDataStore(db);
+
+    // `appendBars` writes per bar (`INSERT OR IGNORE`), so a throw partway
+    // through leaves the earlier bars durably stored. Reporting `existing`
+    // here would say 0 rows while the store actually holds 12, sending the
+    // operator back to re-fetch bars already on disk.
+    const partiallyAppending = new Proxy(store, {
+      get(target, property, receiver) {
+        if (property === 'appendBars') {
+          return (bars: Bar[]) => {
+            target.appendBars(bars.slice(0, 12));
+            throw new Error('SqliteError: database is locked');
+          };
+        }
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+
+    const coverage = await backfillMarketData({
+      store: partiallyAppending,
+      universe: [{ asset: 'SPY', asset_class: 'stocks' }] satisfies UniverseInstrument[],
+      windows: [{ timeframe: '1h', lookback: 20 }],
+      asOf: ASOF,
+      fetchEquityBars: async (symbol, window, at) =>
+        generateBars(symbol, window.timeframe, at, window.lookback),
+      fetchCryptoBars: async () => [],
+      print: () => {},
+    });
+
+    expect(coverage).toEqual([
+      expect.objectContaining({
+        instrument: 'SPY',
+        timeframe: '1h',
+        // The 12 that landed, NOT the 0 the store held before the attempt.
+        rows: 12,
+        satisfied: false,
+        error: expect.stringContaining('database is locked') as string,
+      }),
+    ]);
+  });
 });
 
 /**
