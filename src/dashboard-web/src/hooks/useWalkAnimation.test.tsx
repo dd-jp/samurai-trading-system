@@ -23,7 +23,7 @@ import { App } from '../App.tsx';
 import { RoomsGrid } from '../components/RoomsGrid.tsx';
 import { computeLayout, type RoomId } from '../lib/room-layout.ts';
 import { doneThrough, makeLane, makeView } from '../lib/test-support.ts';
-import { computeWalkPlan } from '../lib/walk-plan.ts';
+import { computeWalkPlan, type WalkPlan } from '../lib/walk-plan.ts';
 import {
   type DomHarness,
   type DomHarnessOptions,
@@ -62,6 +62,14 @@ interface TheaterProps {
   view: PipelineView;
   previous: PipelineView | null;
   firstPaint: boolean;
+  /**
+   * The plan this render derived. Exposed because the DOM cannot answer the
+   * reduced-motion question: a plan that degraded to snaps and a plan that
+   * still contains a `walk` the hook then suppressed leave IDENTICAL markup
+   * — chip placed, no walking class, no duration write. Only the plan itself
+   * distinguishes the two halves of the wiring.
+   */
+  onPlan?: (plan: WalkPlan) => void;
 }
 
 /**
@@ -70,13 +78,14 @@ interface TheaterProps {
  * because the planner's `snapOnly` reads it, and that wiring is part of what
  * these tests cover.
  */
-function Theater({ view, previous, firstPaint }: TheaterProps) {
+function Theater({ view, previous, firstPaint, onPlan }: TheaterProps) {
   const reducedMotion = usePrefersReducedMotion();
   const layout = useMemo(() => computeLayout(view), [view]);
   const plan = useMemo(
     () => computeWalkPlan(previous, view, { firstPaint, snapOnly: reducedMotion }),
     [previous, view, firstPaint, reducedMotion],
   );
+  onPlan?.(plan);
 
   const floorRef = useRef<HTMLDivElement | null>(null);
   const roomRefs = useRef<Map<RoomId, HTMLElement>>(new Map());
@@ -443,13 +452,27 @@ describe('usePrefersReducedMotion → the planner and the hook (#595)', () => {
     classLog.stop();
   });
 
-  it('shows the settle ring the snap replaces the walk with (Motion rule 5)', async () => {
+  it('degrades the PLAN to snaps, not just the hook to silence (rule 5)', async () => {
     useHarness({ reducedMotion: true });
-    const view = render(<Theater view={AT_ANALYSTS} previous={null} firstPaint={true} />);
-    view.rerender(<Theater view={AT_RISK} previous={AT_ANALYSTS} firstPaint={false} />);
+    const plans: WalkPlan[] = [];
+    const onPlan = (plan: WalkPlan) => plans.push(plan);
+    const view = render(
+      <Theater view={AT_ANALYSTS} previous={null} firstPaint={true} onPlan={onPlan} />,
+    );
+    view.rerender(
+      <Theater view={AT_RISK} previous={AT_ANALYSTS} firstPaint={false} onPlan={onPlan} />,
+    );
     await flushMicrotasks();
 
+    // Without reduced motion this poll is a four-hop walk (the tests above run
+    // exactly it). `usePrefersReducedMotion` reached `computeWalkPlan`, so the
+    // planner emitted a snap — the half no DOM assertion can see.
+    const last = plans.at(-1);
+    expect(last?.motions.map((motion) => motion.kind)).toEqual(['snap']);
+    expect(last?.total_ms).toBe(0);
+    // And the hook's own rule-5 half: snap into place, wear the settle ring.
     expect(chip().classList.contains('chip-walking')).toBe(false);
     expect(chip().classList.contains('chip-settled')).toBe(true);
+    expect(transformOf(chip().getAttribute('style') ?? '')).toEqual(harness.pointFor('risk', 0));
   });
 });
