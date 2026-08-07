@@ -396,6 +396,14 @@ async function redistributeOneFlatten(
   const remaining = new Map(totalShare);
   for (const rawFill of rawFills) {
     let leftover = rawFill.qty;
+    // #527 review: every id this rawFill actually attributes THIS pass — the
+    // dedup key for the warning below. `broker_fill_id` is deterministic
+    // per (rawFill, lotKey) (see the comment on `splitFill` below), so if any
+    // of these already exist in `fills`, this exact rawFill's split already
+    // ran to completion in an earlier poll and its leftover was warned about
+    // then — a re-offered fill (this module's own `hasFill` dedup contract)
+    // must not re-fire the same warning forever.
+    const attributedIdsThisRawFill: string[] = [];
     for (const lotKey of lotKeys) {
       if (leftover <= 0) break;
       const need = remaining.get(lotKey) ?? 0;
@@ -437,6 +445,7 @@ async function redistributeOneFlatten(
       if (bucket === undefined) byLot.set(lotKey, [splitFill]);
       else bucket.push(splitFill);
 
+      attributedIdsThisRawFill.push(splitFill.broker_fill_id);
       remaining.set(lotKey, need - take);
       leftover -= take;
     }
@@ -466,33 +475,77 @@ async function redistributeOneFlatten(
     // one is a genuine surplus against the flatten's OWN named lots, with
     // nowhere safe to go, ever.
     if (leftover > 0) {
-      // Swallowed, deliberately — the same posture `alertResidualExposure`
-      // takes below, for the same reason: this function's contract (see its
-      // doc) is that it either completes in full or leaves `byLot` untouched,
-      // and `byLot.delete(clientOrderId)` still has to run right after this
-      // loop either way. A channel that rejects must not turn a SUCCESSFUL
-      // redistribution into a contained failure — that would defer the whole
-      // bucket to next poll over nothing worse than a failed diagnostic, which
-      // is strictly worse than the silent drop this exists to fix. Only an
-      // identifier and a computed quantity cross this boundary — never the
-      // raw fill or the attribution row — so a corrupted `flatten_submissions`
-      // row (#524's own test) cannot leak through it either.
+      // #527 review: only warn the FIRST time this exact rawFill's over-fill
+      // is observed. `leftover` is pure arithmetic recomputed from the raw
+      // fill's own qty against the (stable, deterministic) journalled
+      // shares, so a RE-OFFERED fill — this module's own dedup-on-`hasFill`
+      // contract says re-offering is expected — would otherwise recompute
+      // the SAME `leftover` and re-fire the SAME warning every poll for as
+      // long as the venue keeps returning it. Alpaca's own flatten sweep
+      // happens to prune an order after one poll (adapters/alpaca-adapter.ts),
+      // but this function has no adapter-specific knowledge and must not
+      // assume every `BrokerAdapter` does the same — the Simulated adapter's
+      // `fetchNewFills` re-offers everything past `since` forever, which is
+      // exactly the shape a `mode: 'backtest'` run drives this through.
+      // Un-deduped, that floods the very trace #527 exists to create — the
+      // "line repeated daily is a line nobody reads" failure #342 already
+      // named for a different channel.
+      //
+      // `attributedIdsThisRawFill` are this rawFill's OWN derived ids
+      // (deterministic per (rawFill, lotKey) — see `splitFill` above): if any
+      // is already in `fills`, this exact rawFill's split already ran to
+      // completion — and so was already warned about — in an earlier poll.
+      // Empty only when EVERY named lot was already fully satisfied before
+      // this rawFill was reached (a LATER rawFill in a multi-fill list
+      // contributing pure surplus with nothing to check against) — that
+      // narrow case still warns every poll; named, not solved, here.
+      let alreadyWarned = false;
       try {
-        await input.flattenOverfillAlerts.postFlattenOverfillWarning({
-          idempotency_key: clientOrderId,
-          unattributed_qty: leftover,
-          observed_at: input.clock.now(),
-        });
+        for (const id of attributedIdsThisRawFill) {
+          if (await store.hasFill(id)) {
+            alreadyWarned = true;
+            break;
+          }
+        }
       } catch {
-        // Nothing left to do — see the comment above.
+        // Can't tell — default to warning rather than suppressing. A
+        // duplicate warn costs a grep; a wrongly-suppressed one costs the
+        // trace this ticket exists to create — the same asymmetry
+        // `maybeRearmResidual`'s upper-bound reasoning (#569 review) already
+        // takes elsewhere in this file.
+        alreadyWarned = false;
+      }
+
+      if (!alreadyWarned) {
+        // Swallowed, deliberately — the same posture `alertResidualExposure`
+        // takes below, for the same reason: this function's contract (see its
+        // doc) is that it either completes in full or leaves `byLot` untouched,
+        // and `byLot.delete(clientOrderId)` still has to run right after this
+        // loop either way. A channel that rejects must not turn a SUCCESSFUL
+        // redistribution into a contained failure — that would defer the whole
+        // bucket to next poll over nothing worse than a failed diagnostic, which
+        // is strictly worse than the silent drop this exists to fix. Only an
+        // identifier and a computed quantity cross this boundary — never the
+        // raw fill or the attribution row — so a corrupted `flatten_submissions`
+        // row (#524's own test) cannot leak through it either.
+        try {
+          await input.flattenOverfillAlerts.postFlattenOverfillWarning({
+            idempotency_key: clientOrderId,
+            unattributed_qty: leftover,
+            observed_at: input.clock.now(),
+          });
+        } catch {
+          // Nothing left to do — see the comment above.
+        }
       }
     }
   }
 
   // Consumed LAST, not before the split. The split loop above cannot throw —
   // the split itself is arithmetic over two Maps, and #527's over-fill
-  // warning is the loop's only I/O, deliberately wrapped so it cannot escape
-  // either (see its own comment) — but the store reads before it can, and a
+  // warning (plus its `hasFill` dedup check, #527 review) is the loop's only
+  // I/O, deliberately wrapped so neither can escape (see their own comments)
+  // — but the store reads before it can, and a
   // bucket deleted ahead of a throw would take this poll's copy of the raw
   // fill with it. Deleting only once the splits are in `byLot` is what makes
   // this function all-or-nothing. No lot key can collide with

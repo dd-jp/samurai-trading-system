@@ -1,5 +1,6 @@
 import {
   ConsoleApprovalChannel,
+  LoggingFlattenOverfillAlertChannel,
   LoggingHeartbeatChannel,
   LoggingOrphanAlertChannel,
   LoggingUnpricedFillAlertChannel,
@@ -69,6 +70,30 @@ describe('LoggingUnpricedFillAlertChannel', () => {
       instrument: 'AAPL',
       qty: 100,
       first_seen_at: firstSeen.toISOString(),
+    });
+  });
+});
+
+describe('LoggingFlattenOverfillAlertChannel', () => {
+  it('reports an over-filled flatten at warn level, naming the flatten and the unattributed qty', async () => {
+    const logger = makeLogger();
+    const observedAt = new Date('2026-08-03T12:00:00Z');
+
+    await new LoggingFlattenOverfillAlertChannel(logger).postFlattenOverfillWarning({
+      idempotency_key: 'flatten-1',
+      unattributed_qty: 4,
+      observed_at: observedAt,
+    });
+
+    // `warn`, not `error`: the split still completed and the poll still
+    // succeeded — this is a diagnostic trail for an invariant violation
+    // elsewhere, not itself a failure of `ingestFills()`.
+    expect(logger.entries[0]?.level).toBe('warn');
+    expect(logger.entries[0]?.trace_id).toBe('flatten-overfill');
+    expect(logger.entries[0]?.payload).toMatchObject({
+      idempotency_key: 'flatten-1',
+      unattributed_qty: 4,
+      observed_at: observedAt.toISOString(),
     });
   });
 });

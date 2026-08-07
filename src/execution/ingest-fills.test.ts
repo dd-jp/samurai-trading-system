@@ -652,6 +652,56 @@ describe('ExecutionImpl.ingestFills', () => {
       expect(exitQty).toBe(6);
     });
 
+    it('warns only once across repeated polls for the same re-offered over-filled fill', async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
+
+      const entryOnly = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+      ]);
+      await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
+
+      await store.writeAheadFlatten({
+        idempotency_key: 'flatten-1',
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        side: 'sell',
+        size: 6,
+        submitted_at: OPENED_AT,
+        lot_held_quantities: [{ idempotency_key: 'key-1', held: 6 }],
+      });
+
+      // A single scripted broker, polled TWICE: `fetchNewFills` re-offers the
+      // same fills every call (filtered only by `since`), the same shape the
+      // Simulated adapter takes in production (unlike Alpaca's flatten sweep,
+      // which prunes after one poll) — the exact re-offer this test exists to
+      // pin `ingestFills()` against.
+      const withFlatten = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'flatten-1',
+          broker_fill_id: 'f1',
+          leg: 'exit',
+          qty: 10,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+      const flattenOverfillAlerts = makeFlattenOverfillAlerts();
+      const execution = new ExecutionImpl(
+        makeInput(withFlatten, store, undefined, flattenOverfillAlerts),
+      );
+
+      await execution.ingestFills();
+      await execution.ingestFills();
+
+      // Warned once, on the poll that actually persisted the split — not
+      // again on the re-poll that re-offers the identical already-ingested
+      // fill.
+      expect(flattenOverfillAlerts.warnings).toEqual([
+        { idempotency_key: 'flatten-1', unattributed_qty: 4, observed_at: NOW },
+      ]);
+    });
+
     it("emits no warning when a flatten fills exactly its named lots' held share", async () => {
       const { store } = openTestExecutionStore();
       await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
