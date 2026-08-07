@@ -90,6 +90,7 @@ import type { CiiConsumerConfig } from '../market-intelligence/index.js';
 import type { BreakerConfig, CorrelationConfig, RiskConfig } from '../risk-manager/index.js';
 import { DEFAULT_TRADER_CONFIG, type TraderConfig } from '../trader/index.js';
 import type { VerdictConfig } from '../verdict/index.js';
+import { LIVE_MONEY_GATE_SUMMARY } from './live-money-gates.js';
 import { SqliteDailyEquityMetricsSource } from './production/daily-equity-metrics-source.js';
 import { WORST_CASE_LLM_CALLS_PER_DEBATE } from './production/debate-adapter.js';
 import {
@@ -261,25 +262,50 @@ export const PAPER_RISK_THRESHOLD_FLOOR_FRACTION = 0.25;
 export const PAPER_RISK_THRESHOLD_STEP_FRACTION = 0.1;
 
 /**
- * The notional caps, named once (#433).
+ * The notional caps as FRACTIONS of whatever equity anchor a profile declares
+ * (#433, generalised by #511).
+ *
+ * The fractions are the decision; the dollars are arithmetic. Keeping them in
+ * that order is what lets the live profile (live-profile.ts) express the same
+ * ladder against a declared capital ceiling instead of a $100,000 paper
+ * account, without a second copy of six numbers that would drift the first
+ * time either profile moved.
+ *
+ * Each fraction's justification stays at its `riskConfig` field, not here.
+ */
+export const RISK_CAP_EQUITY_FRACTIONS = {
+  max_position_size: 0.05,
+  per_asset_cap: 0.1,
+  per_asset_class_cap_crypto: 0.2,
+  per_asset_class_cap_stocks: 0.4,
+  portfolio_gross_cap: 0.5,
+  concentration_cap: 0.2,
+} as const;
+
+/** The six caps, in account currency. */
+export type RiskCaps = Record<keyof typeof RISK_CAP_EQUITY_FRACTIONS, number>;
+
+/**
+ * The notional caps for one equity anchor, derived once (#433).
  *
  * They are consumed in two places that must not drift: `riskConfig` below (the
  * values a run starts from, and the seed for the `risk_thresholds` table) and
  * `feedback.config.risk_thresholds` (the guardrail band those values may move
  * within). Written as literals in both, an edit to one would silently leave
  * the other bounding a cap that no longer exists — with the dial's ceiling
- * then sitting above or below the value it is supposed to bound.
- *
- * Each fraction's justification stays at its `riskConfig` field, not here.
+ * then sitting above or below the value it is supposed to bound. So both read
+ * this.
  */
-export const PAPER_RISK_CAPS = {
-  max_position_size: 0.05 * PAPER_ACCOUNT_EQUITY_ANCHOR,
-  per_asset_cap: 0.1 * PAPER_ACCOUNT_EQUITY_ANCHOR,
-  per_asset_class_cap_crypto: 0.2 * PAPER_ACCOUNT_EQUITY_ANCHOR,
-  per_asset_class_cap_stocks: 0.4 * PAPER_ACCOUNT_EQUITY_ANCHOR,
-  portfolio_gross_cap: 0.5 * PAPER_ACCOUNT_EQUITY_ANCHOR,
-  concentration_cap: 0.2 * PAPER_ACCOUNT_EQUITY_ANCHOR,
-} as const;
+export function riskCapsFor(equityAnchorUsd: number): RiskCaps {
+  return Object.fromEntries(
+    Object.entries(RISK_CAP_EQUITY_FRACTIONS).map(([name, fraction]) => [
+      name,
+      fraction * equityAnchorUsd,
+    ]),
+  ) as RiskCaps;
+}
+
+export const PAPER_RISK_CAPS: RiskCaps = riskCapsFor(PAPER_ACCOUNT_EQUITY_ANCHOR);
 
 /**
  * `breakerConfig.volatility.baseline` is an **absolute ATR reading in price
@@ -423,7 +449,7 @@ const PAPER_ANALYST_WEIGHT_TRAVERSE_CYCLES = 20;
  * `computeMetrics` is no longer the exception either — see `buildDailyMetrics`
  * (#379) for what arming it does and does not mean during a soak.
  */
-function buildFeedbackConfig(): FeedbackConfig {
+function buildFeedbackConfig(caps: RiskCaps): FeedbackConfig {
   /**
    * `DERIVED` from `DEFAULT_FEEDBACK_INTERVAL_MS` (24h), which is why it is
    * written as a multiple of it: two cadences, not "48 hours".
@@ -508,7 +534,7 @@ function buildFeedbackConfig(): FeedbackConfig {
     /**
      * `DERIVED` from the band, and written as the derivation rather than as
      * the 0.05 it evaluates to — the same reason `riskConfig`'s caps are
-     * fractions of `PAPER_ACCOUNT_EQUITY_ANCHOR` instead of rounded literals:
+     * fractions of the profile's equity anchor instead of rounded literals:
      * re-scaling the band must not silently change how many cycles a traverse
      * takes.
      *
@@ -536,9 +562,12 @@ function buildFeedbackConfig(): FeedbackConfig {
 
   /**
    * A guardrail band for one notional cap (#433), expressed relative to the
-   * value this profile ships — so the band re-scales with
-   * `PAPER_ACCOUNT_EQUITY_ANCHOR` instead of pinning absolute dollars that
-   * silently mean something different on a differently-funded account.
+   * value this profile ships — so the band re-scales with the profile's equity
+   * anchor instead of pinning absolute dollars that silently mean something
+   * different on a differently-funded account. Since #511 that matters twice
+   * over: the same builder produces a live profile anchored to a declared
+   * capital ceiling, where a band left pinned to $100,000 would bound a $2,000
+   * run's cap at fifty times the cap itself.
    *
    * `ceiling` is the shipped value itself, and that asymmetry is the safety
    * posture, not an oversight: a kill-line breach may tighten a cap far below
@@ -620,10 +649,13 @@ function buildFeedbackConfig(): FeedbackConfig {
      * ends now agree, so the dials are declarable.
      *
      * Bounds come from `capDial`, relative to the shipped cap rather than
-     * absolute, so they re-scale with `PAPER_ACCOUNT_EQUITY_ANCHOR`.
+     * absolute, so they re-scale with the profile's equity anchor — the paper
+     * account's assumed balance here, a declared capital ceiling in the live
+     * profile (#511). `caps` is the same object `riskConfig` above was built
+     * from, so the two cannot describe different numbers.
      */
     risk_thresholds: Object.fromEntries(
-      Object.entries(PAPER_RISK_CAPS).map(([name, shipped]) => [name, capDial(shipped)]),
+      Object.entries(caps).map(([name, shipped]) => [name, capDial(shipped)]),
     ),
     kill_thresholds: {
       /**
@@ -765,12 +797,26 @@ const CRYPTO_MAX_DEBATES_PER_WINDOW = 20;
 const STOCKS_MAX_DEBATES_PER_WINDOW = 15;
 
 /**
- * The eight required config objects, plus the optional ninth seam (#366). Not
- * exported directly — callers go through `paperStartingProfile(mode)` so the
- * live-mode refusal cannot be bypassed by importing the values, and so each
- * call gets its own copy.
+ * The eight required config objects, plus the optional ninth seam (#366),
+ * expressed against a declared equity anchor.
+ *
+ * **Exported for exactly one caller: `liveStartingProfile` (live-profile.ts,
+ * #511).** The live profile is specified as "the same shape, but every figure
+ * the paper profile pins to a $100,000 assumption derived from a declared
+ * capital ceiling instead" — so it must be the SAME builder with a different
+ * anchor, not a copy. A copy is how the two would silently disagree about a
+ * dial the day either one is retuned, and the live one is the copy nobody
+ * exercises.
+ *
+ * That sharing is also the honest statement of what a live run inherits: every
+ * value here that is not anchored to equity is inherited UNCHANGED and
+ * UNTUNED. See live-profile.ts's header for the enumerated list.
+ *
+ * `paperStartingProfile(mode)` remains the paper entry point, so the live-mode
+ * refusal there cannot be bypassed by importing the values, and each call gets
+ * its own copy.
  */
-function buildProfileConfigs(): Pick<
+export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
   ProductionConfig,
   | 'universe'
   | 'traderConfig'
@@ -791,6 +837,8 @@ function buildProfileConfigs(): Pick<
   // ADR-0008: a soak that inherited the 60s default interval, or no ceiling at
   // all, would silently cost ~13x its budget.
   Required<Pick<ProductionConfig, 'rateLimiterConfig' | 'llmBudgetUsd' | 'tickIntervalMs'>> {
+  const caps = riskCapsFor(equityAnchorUsd);
+
   const traderConfig: TraderConfig = {
     // SPEC — `DEFAULT_TRADER_CONFIG` (src/trader/types.ts) is the one set of
     // sizing constants already checked in and already justified against
@@ -820,9 +868,9 @@ function buildProfileConfigs(): Pick<
     // would expect. Every one is well inside what an Alpaca paper account
     // could take, deliberately: the first run is testing wiring, not size.
     /** 5% of equity — the Trader's own 0.5-1% *risk* budget becomes a much larger *notional* once divided by a ~1-2% ATR stop, so this is the cap that actually binds first on BTC-USD. */
-    max_position_size: PAPER_RISK_CAPS.max_position_size,
+    max_position_size: caps.max_position_size,
     /** 10% — one instrument may hold at most two max-size entries' worth. */
-    per_asset_cap: PAPER_RISK_CAPS.per_asset_cap,
+    per_asset_cap: caps.per_asset_cap,
     /**
      * 20% crypto / 40% stocks. Asymmetric for the same reason
      * `asset_class_risk_multiplier` is (docs/research/02-staged-deployment-plan.md:
@@ -830,8 +878,8 @@ function buildProfileConfigs(): Pick<
      * held to half the equity share of the stock bucket.
      */
     per_asset_class_cap: {
-      crypto: PAPER_RISK_CAPS.per_asset_class_cap_crypto,
-      stocks: PAPER_RISK_CAPS.per_asset_class_cap_stocks,
+      crypto: caps.per_asset_class_cap_crypto,
+      stocks: caps.per_asset_class_cap_stocks,
     },
     /**
      * 50% gross. DERIVED, not arbitrary: anything above 100% is leverage,
@@ -839,7 +887,7 @@ function buildProfileConfigs(): Pick<
      * equity leaves the account able to absorb the full 20% drawdown limit
      * below without the caps and the breaker fighting each other.
      */
-    portfolio_gross_cap: PAPER_RISK_CAPS.portfolio_gross_cap,
+    portfolio_gross_cap: caps.portfolio_gross_cap,
     concentration: {
       /**
        * DERIVED — equal to the crypto asset-class cap: a cluster of
@@ -847,7 +895,7 @@ function buildProfileConfigs(): Pick<
        * single asset class may hold, which is the whole point of the check
        * (risk-manager-spec.md step 6).
        */
-      cap: PAPER_RISK_CAPS.concentration_cap,
+      cap: caps.concentration_cap,
       /**
        * UNSOURCED — 0.7 is the conventional |r| boundary for "strongly
        * correlated". **No longer inert (#381):** it was dead only because the
@@ -909,18 +957,19 @@ function buildProfileConfigs(): Pick<
      * re-implementation.
      *
      * **What must therefore hold before LIVE capital, and does not yet.** With
-     * no human gate the circuit breakers are the *only* stop, and three of
-     * them do not currently work:
+     * no human gate the circuit breakers and the notional caps are the *only*
+     * stop.
      *
-     * - #384 — three of four kill-lines can never fire; nothing produces
-     *   `DailyMetricsSample.revalidation`.
-     * - #375 — the divergence kill-line has no persisted backtest Sharpe.
-     * - #333 — in `live`, a daily PnL figure that cannot be computed (any
-     *   restart after the session boundary) leaves the daily-loss breaker
-     *   unenforced for the rest of the session.
+     * **No list of open bug numbers belongs here.** One lived here and went
+     * stale unnoticed; a checkable claim that is wrong is worse than none,
+     * because the next reader trusts it. `live-money-gates.ts` is the single
+     * dated list, rendered by `paperStartingProfile`'s live refusal — the one
+     * place an operator reads before going live.
      *
-     * Those three are the live-go gate for a fully-automatic system. None of
-     * them blocks the paper soak, where the breaker stays live throughout.
+     * The reason that does not go stale, and why this dial is safe on paper and
+     * not on real money: no 14-day soak (#238) has run, so every `UNSOURCED`
+     * value above is still a guess, and a guessed cap with no human gate behind
+     * it is the only thing standing between a bad debate and the account.
      */
     automation_level: { crypto: 'auto', stocks: 'auto' },
     /**
@@ -1516,7 +1565,7 @@ function buildProfileConfigs(): Pick<
      * channel and its 24h default apply.
      */
     feedback: {
-      config: buildFeedbackConfig(),
+      config: buildFeedbackConfig(caps),
       metrics: buildDailyMetrics(),
     },
   };
@@ -1562,19 +1611,22 @@ export function paperStartingProfile(
   Required<Pick<ProductionConfig, 'rateLimiterConfig' | 'llmBudgetUsd' | 'tickIntervalMs'>> {
   if (mode === 'live') {
     throw new Error(
-      'Orchestrator cannot start: SAMURAI_MODE=live was requested, but the shipped entrypoint ' +
-        'runs on the PAPER STARTING PROFILE (src/orchestrator/paper-profile.ts) — a set of ' +
-        'deliberately untuned starting values. Its volatility breaker baseline is uncalibrated ' +
-        'and effectively inert, its exposure caps assume a $100,000 paper account, and its ' +
-        'drift tolerance is a fraction nobody has yet observed against a real fill. Since ' +
-        'ADR-0007 it also runs with NO human gate at all (automation_level: auto for both ' +
-        'classes), which makes the circuit breakers the only stop — and #384, #375 and #333 ' +
-        'mean three of them cannot currently fire. It also names the six instruments it ' +
-        'trades. None of that may decide a real-money trade. To trade live, call ' +
-        'startFromEnvironment() from your own composition root with a config you have tuned ' +
-        'against paper results — see ProductionConfig in src/orchestrator/production.ts.',
+      'Orchestrator cannot start: SAMURAI_MODE=live was requested against the PAPER STARTING ' +
+        'PROFILE (src/orchestrator/paper-profile.ts) — a set of deliberately untuned starting ' +
+        'values. Its volatility breaker baseline is uncalibrated and effectively inert, its ' +
+        'exposure caps assume a $100,000 paper account, its drift tolerance is a fraction ' +
+        'nobody has yet observed against a real fill, and its cadence and LLM budget are sized ' +
+        'for a $50 paper soak rather than for a run trying to make money. Since ADR-0007 it ' +
+        'also runs with NO human gate at all (automation_level: auto for both classes), which ' +
+        'makes the circuit breakers and the notional caps the only stop. None of that may ' +
+        'decide a real-money trade. ' +
+        LIVE_MONEY_GATE_SUMMARY +
+        ' The live path is liveStartingProfile() in src/orchestrator/live-profile.ts, which ' +
+        'derives its caps from SAMURAI_LIVE_MAX_CAPITAL_USD instead of a paper balance; or ' +
+        'call startFromEnvironment() from your own composition root with a config you have ' +
+        'tuned against paper results — see ProductionConfig in src/orchestrator/production.ts.',
     );
   }
 
-  return { ...buildProfileConfigs(), mode };
+  return { ...buildStartingProfileConfigs(PAPER_ACCOUNT_EQUITY_ANCHOR), mode };
 }

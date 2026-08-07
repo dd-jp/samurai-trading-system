@@ -188,7 +188,7 @@ describe('missingCredentialEnvVars', () => {
     // Each client refuses to be built without its own key, but they are
     // constructed in sequence — so without this pre-flight an unconfigured
     // host learns about exactly one variable per attempt.
-    expect(missingCredentialEnvVars({}, 'log-only')).toEqual([
+    expect(missingCredentialEnvVars({}, 'log-only', 'paper')).toEqual([
       'ALPACA_API_KEY',
       'ALPACA_API_SECRET',
       'NOUS_API_KEY',
@@ -205,7 +205,7 @@ describe('missingCredentialEnvVars', () => {
     process.env.NOUS_API_KEY = 'set';
     process.env.NOUS_BASE_URL = 'set';
 
-    expect(missingCredentialEnvVars({}, 'log-only')).toEqual(['ALPACA_API_KEY']);
+    expect(missingCredentialEnvVars({}, 'log-only', 'paper')).toEqual(['ALPACA_API_KEY']);
   });
 
   it('treats a whitespace-only value as missing too', () => {
@@ -219,7 +219,7 @@ describe('missingCredentialEnvVars', () => {
     process.env.NOUS_API_KEY = 'set';
     process.env.NOUS_BASE_URL = 'set';
 
-    expect(missingCredentialEnvVars({}, 'log-only')).toEqual([
+    expect(missingCredentialEnvVars({}, 'log-only', 'paper')).toEqual([
       'ALPACA_API_KEY',
       'ALPACA_API_SECRET',
     ]);
@@ -242,7 +242,7 @@ describe('missingCredentialEnvVars', () => {
     process.env.NOUS_BASE_URL = 'set';
     process.env.NOUS_DEBATE_API_KEY = 'set';
 
-    expect(missingCredentialEnvVars({}, 'log-only')).toEqual([]);
+    expect(missingCredentialEnvVars({}, 'log-only', 'paper')).toEqual([]);
   });
 
   it('still reports the shared key when no per-role key is set either', () => {
@@ -252,7 +252,7 @@ describe('missingCredentialEnvVars', () => {
     process.env.ALPACA_API_SECRET = 'set';
     process.env.NOUS_BASE_URL = 'set';
 
-    expect(missingCredentialEnvVars({}, 'log-only')).toEqual(['NOUS_API_KEY']);
+    expect(missingCredentialEnvVars({}, 'log-only', 'paper')).toEqual(['NOUS_API_KEY']);
   });
 
   it('does not let a per-role key substitute for the base URL', () => {
@@ -261,7 +261,7 @@ describe('missingCredentialEnvVars', () => {
     process.env.ALPACA_API_SECRET = 'set';
     process.env.NOUS_SENTIMENT_API_KEY = 'set';
 
-    expect(missingCredentialEnvVars({}, 'log-only')).toEqual(['NOUS_BASE_URL']);
+    expect(missingCredentialEnvVars({}, 'log-only', 'paper')).toEqual(['NOUS_BASE_URL']);
   });
 
   it('does not demand credentials for clients the caller injected', () => {
@@ -275,6 +275,7 @@ describe('missingCredentialEnvVars', () => {
           llmClient: {} as never,
         },
         'log-only',
+        'paper',
       ),
     ).toEqual([]);
   });
@@ -286,7 +287,11 @@ describe('missingCredentialEnvVars', () => {
     // Skipping the check on `broker` alone would move the failure back to a
     // deep stack trace inside construction.
     expect(
-      missingCredentialEnvVars({ broker: {} as never, llmClient: {} as never }, 'log-only'),
+      missingCredentialEnvVars(
+        { broker: {} as never, llmClient: {} as never },
+        'log-only',
+        'paper',
+      ),
     ).toEqual(['ALPACA_API_KEY', 'ALPACA_API_SECRET']);
   });
 
@@ -294,8 +299,10 @@ describe('missingCredentialEnvVars', () => {
     process.env.ALPACA_API_KEY = 'super-secret-key';
     process.env.TELEGRAM_BOT_TOKEN = 'super-secret-bot-token';
 
-    expect(missingCredentialEnvVars({}, 'telegram').join(' ')).not.toContain('super-secret-key');
-    expect(missingCredentialEnvVars({}, 'telegram').join(' ')).not.toContain(
+    expect(missingCredentialEnvVars({}, 'telegram', 'paper').join(' ')).not.toContain(
+      'super-secret-key',
+    );
+    expect(missingCredentialEnvVars({}, 'telegram', 'paper').join(' ')).not.toContain(
       'super-secret-bot-token',
     );
   });
@@ -304,7 +311,7 @@ describe('missingCredentialEnvVars', () => {
     // The mode is passed in rather than read from `process.env` here on
     // purpose: what this pre-flight reports must not depend on ambient state
     // that a sibling test could leave behind.
-    expect(missingCredentialEnvVars({}, 'telegram')).toEqual([
+    expect(missingCredentialEnvVars({}, 'telegram', 'paper')).toEqual([
       'ALPACA_API_KEY',
       'ALPACA_API_SECRET',
       'NOUS_API_KEY',
@@ -316,11 +323,13 @@ describe('missingCredentialEnvVars', () => {
     // Not `TELEGRAM_ALLOWED_USER_IDS` as of #434 — a boot cannot be blocked on
     // a credential whose only consumer (the inbound approval callback) is
     // unreachable while ADR-0007 keeps the HITL gate off.
-    expect(missingCredentialEnvVars({}, 'telegram')).not.toContain('TELEGRAM_ALLOWED_USER_IDS');
-    expect(missingCredentialEnvVars({}, 'log-only')).not.toContain('TELEGRAM_BOT_TOKEN');
+    expect(missingCredentialEnvVars({}, 'telegram', 'paper')).not.toContain(
+      'TELEGRAM_ALLOWED_USER_IDS',
+    );
+    expect(missingCredentialEnvVars({}, 'log-only', 'paper')).not.toContain('TELEGRAM_BOT_TOKEN');
     // `undefined` — the caller injected every alert channel, so no transport
     // credential is needed either.
-    expect(missingCredentialEnvVars({}, undefined)).not.toContain('TELEGRAM_BOT_TOKEN');
+    expect(missingCredentialEnvVars({}, undefined, 'paper')).not.toContain('TELEGRAM_BOT_TOKEN');
   });
 
   it('drops the heartbeat chat id when the caller injected its own heartbeat channel (#342)', () => {
@@ -329,14 +338,14 @@ describe('missingCredentialEnvVars', () => {
     // already decided where heartbeats go, so demanding the variable would be
     // asking for one this run never reads — the same precision the Alpaca and
     // Anthropic entries above apply.
-    expect(missingCredentialEnvVars({ heartbeatChannel: {} as never }, 'telegram')).not.toContain(
-      'TELEGRAM_HEARTBEAT_CHAT_ID',
-    );
+    expect(
+      missingCredentialEnvVars({ heartbeatChannel: {} as never }, 'telegram', 'paper'),
+    ).not.toContain('TELEGRAM_HEARTBEAT_CHAT_ID');
     // ...and the escalation chat is still required: that is the channel the
     // injected heartbeat does not cover.
-    expect(missingCredentialEnvVars({ heartbeatChannel: {} as never }, 'telegram')).toContain(
-      'TELEGRAM_CHAT_ID',
-    );
+    expect(
+      missingCredentialEnvVars({ heartbeatChannel: {} as never }, 'telegram', 'paper'),
+    ).toContain('TELEGRAM_CHAT_ID');
   });
 });
 

@@ -134,6 +134,42 @@ export interface TraderStepDeps extends BreakerStateDeps {
    * what to trade and how big leave nothing behind but a digest.
    */
   traderLog?: TraderLogStore;
+  /**
+   * The declared capital ceiling (#511, `ProductionConfig.capitalCeilingUsd`).
+   * Undefined on every paper/backtest run and in every test — absent means "no
+   * ceiling declared", never "a ceiling of zero". See `sizingEquity`.
+   */
+  capitalCeilingUsd?: number;
+}
+
+/**
+ * The equity the Trader may SIZE against — `min(declared ceiling, real equity)`
+ * (#511).
+ *
+ * This is the place the ceiling binds, and it is the only place it needs to:
+ * `decide` computes `size = (equity * riskFraction) / stopDistance`
+ * (trader/decide.ts), so `equity` is the single input in the system that scales
+ * a position with the account balance. The `RiskConfig` notional caps are
+ * absolute dollars derived from the same ceiling at profile-build time, so they
+ * cannot widen with a funded account on their own.
+ *
+ * **Applied here and NOT inside `computePortfolioView`**, which is the tempting
+ * shortcut and would be wrong: that same `equity` is the denominator of
+ * `drawdown_pct` and of the per-class daily PnL the loss breakers fire on.
+ * Clamping the OBSERVATION would understate a real drawdown on an account
+ * larger than the ceiling — quietly disarming the breakers in order to bound
+ * position size. The observation stays true; only the sizing inlet is bounded.
+ *
+ * A non-finite ceiling cannot arrive here (`assertLiveCapitalCeilingUsd`
+ * refuses one) and `Math.min` would propagate a `NaN` if one did, so the guard
+ * is explicit rather than trusted: an unusable ceiling falls back to unclamped
+ * equity, still bounded by the risk caps, rather than to a `NaN` size —
+ * `decide`'s own finite-checks would reject that, but only after the whole pass
+ * had been spent computing it.
+ */
+export function sizingEquity(equity: number, capitalCeilingUsd: number | undefined): number {
+  if (capitalCeilingUsd === undefined || !Number.isFinite(capitalCeilingUsd)) return equity;
+  return Math.min(equity, capitalCeilingUsd);
 }
 
 export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
@@ -149,7 +185,9 @@ export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
       debate,
       clock,
       marketData: deps.marketData,
-      equity: portfolio.equity,
+      // #511: bounded by the declared capital ceiling on a live run, verbatim
+      // portfolio equity everywhere else.
+      equity: sizingEquity(portfolio.equity, deps.capitalCeilingUsd),
       config: deps.config,
       positionState: deps.getOpenPositions,
       setupStore: deps.setupStore,

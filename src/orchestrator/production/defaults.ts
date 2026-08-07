@@ -201,6 +201,27 @@ export const DEFAULT_LLM_RATE_LIMIT_CONFIG: RateLimiterConfig = {
  * barrel, not a local string comparison: the original `startsWith` check here
  * was case- and whitespace-sensitive, so `https://API.ALPACA.MARKETS` walked
  * straight past it. One classifier means one set of rules to be right about.
+ *
+ * ## Credentials follow the environment, and this function does not touch them (#511)
+ *
+ * Alpaca issues DIFFERENT key pairs for paper and live accounts. Until #511
+ * this function selected the HOST from `mode` while the client underneath read
+ * one pair from the environment, so flipping to live would have authenticated
+ * against `api.alpaca.markets` with a paper key.
+ *
+ * The fix lives at the option site rather than here: `environment` now selects
+ * the pair (`ALPACA_CREDENTIAL_ENV_VARS`, execution/adapters/alpaca-http-client.ts),
+ * so this build function passes `environment` and reads no credential at all.
+ * That keeps the rule in one place for every construction path — the dashboard
+ * builds the same client off the same variable — and keeps composition code out
+ * of `process.env` (coding-standards.md). The two properties it buys:
+ *
+ * - **Non-live modes never read the live pair.** The lookup is keyed by
+ *   `environment`, so a garbage value in a live-only variable cannot fail a
+ *   paper boot.
+ * - **Live never falls back to the paper pair.** A missing live key is a
+ *   refusal to construct, not a silent downgrade to credentials that would
+ *   authenticate against the wrong account.
  */
 export function buildDefaultAlpacaBrokerClient(
   mode: ProductionConfig['mode'],
@@ -208,8 +229,9 @@ export function buildDefaultAlpacaBrokerClient(
 ): AlpacaBrokerClient {
   const environment: AlpacaTradingEnvironment = mode === 'live' ? 'live' : 'paper';
   const override = process.env.ALPACA_BASE_URL;
+  const overrideHost = override === undefined ? undefined : classifyAlpacaTradingHost(override);
 
-  if (override !== undefined && classifyAlpacaTradingHost(override) === 'live' && mode !== 'live') {
+  if (overrideHost === 'live' && mode !== 'live') {
     throw new Error(
       `ALPACA_BASE_URL points at Alpaca's LIVE trading host ('${override}') but SAMURAI_MODE ` +
         `is '${mode}'. Refusing to start: this combination spends real money from a process ` +
@@ -217,9 +239,28 @@ export function buildDefaultAlpacaBrokerClient(
     );
   }
 
+  // The mirror of the check above (#511). `AlpacaHttpBrokerClient`'s own
+  // `resolveBaseUrl` already refuses this pairing, so the client is the
+  // authority and this does not replace it — it names the ENVIRONMENT VARIABLE
+  // and the mode that disagree, which the client cannot, because by then the
+  // override is just a `baseUrl` argument. Both directions matter for the same
+  // reason: the operator's belief about which account they are trading and the
+  // account the orders land in must not be allowed to differ, and a live run
+  // silently filling into a paper account is a fortnight of fake fills that
+  // look real.
+  if (overrideHost === 'paper' && mode === 'live') {
+    throw new Error(
+      `ALPACA_BASE_URL points at Alpaca's PAPER trading host ('${override}') but SAMURAI_MODE ` +
+        "is 'live'. Refusing to start: a live run filling into a paper account produces " +
+        'trades, fills and PnL that are not real while every log line says live. Unset ' +
+        'ALPACA_BASE_URL to use the live host, or set SAMURAI_MODE=paper.',
+    );
+  }
+
   // Constructed before the log line, not after: the client re-checks the
   // environment/host agreement and can still throw, and a startup log naming a
-  // host the process never reached is worse than no log at all.
+  // host the process never reached is worse than no log at all. `environment`
+  // is also what selects the credential pair (#511) — see the doc comment.
   const client = new AlpacaHttpBrokerClient(
     override === undefined ? { environment } : { environment, baseUrl: override },
   );
