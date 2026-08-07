@@ -23,16 +23,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DashboardSnapshot } from '../../../dashboard/types.ts';
 
-/** The client's view of the wire payload. */
-export type WireSnapshot = DashboardSnapshot & {
-  /**
-   * The run the operator is looking at (dashboard-spec.md, "Wire Shape").
-   * Optional here because the server field is [#539](https://github.com/dd-jp/samurai-trading-system/issues/539)'s
-   * to add, and this client must be correct whether or not it has landed: an
-   * absent `mode` renders "mode unknown" and never falls back to "paper".
-   */
-  mode?: 'paper' | 'live';
-};
+/**
+ * The client's view of the wire payload.
+ *
+ * Exactly the server's `DashboardSnapshot` since
+ * [#539](https://github.com/dd-jp/samurai-trading-system/issues/539) added
+ * `mode` to it — the client-side widening that stood in for the missing wire
+ * field is gone, so the strip reads a real one. The alias stays because the
+ * name says what it is (an untrusted payload off the network) at every use
+ * site, and because the runtime is still allowed to hand us a payload from an
+ * older server: `TelemetryStrip` validates `mode` against the two literals it
+ * renders rather than trusting the type.
+ */
+export type WireSnapshot = DashboardSnapshot;
 
 export const SNAPSHOT_URL = '/api/snapshot';
 export const POLL_INTERVAL_MS = 3_000;

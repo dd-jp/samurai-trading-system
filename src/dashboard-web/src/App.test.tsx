@@ -204,7 +204,11 @@ describe('mission control', () => {
 
   it('renders "mode unknown" when the wire carries no mode, never "paper"', async () => {
     const snapshot = makeSnapshot();
-    snapshot.mode = undefined;
+    // `mode` is a required wire field since #539, so this is deliberately a
+    // cast rather than a typed assignment: the case under test is a payload
+    // from a server that does not send it (an older build, a proxy that
+    // rewrote the body), which the type system cannot rule out at runtime.
+    (snapshot as { mode?: unknown }).mode = undefined;
     renderApp([snapshot]);
 
     expect(await screen.findByText('mode unknown')).toBeTruthy();
