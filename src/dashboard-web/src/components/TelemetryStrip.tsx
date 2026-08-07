@@ -153,8 +153,18 @@ function PolygonCell({ snapshot }: { snapshot: WireSnapshot | null }) {
   );
 }
 
-function ClockCell(props: { snapshot: WireSnapshot | null; stale: boolean; error: string | null }) {
-  const { snapshot, stale, error } = props;
+function ClockCell(props: {
+  snapshot: WireSnapshot | null;
+  stale: boolean;
+  /** `generated_at` of the last successful poll — what the stale label reports. */
+  lastSuccessAt: string | null;
+  error: string | null;
+}) {
+  const { snapshot, stale, lastSuccessAt, error } = props;
+  // The value cell shows the snapshot's `as_of` (what the numbers are about);
+  // the stale label shows `generated_at` of the last successful poll (when the
+  // page last heard anything). They coincide today, and they are different
+  // questions, so each reads its own field rather than sharing one.
   const asOf = snapshot?.as_of ?? null;
   return (
     <div className="telemetry-cell telemetry-clock" data-field="snapshot-clock">
@@ -162,7 +172,8 @@ function ClockCell(props: { snapshot: WireSnapshot | null; stale: boolean; error
       <span className="telemetry-value">{asOf === null ? UNKNOWN : formatClockUtc(asOf)}</span>
       {stale && (
         <span className="telemetry-caveat telemetry-stale-note" role="status">
-          stale — last update {asOf === null ? UNKNOWN : formatClockUtc(asOf)}
+          stale — last update{' '}
+          {lastSuccessAt === null ? 'never — no poll has succeeded' : formatClockUtc(lastSuccessAt)}
           {error === null ? '' : ` · ${error}`}
         </span>
       )}
@@ -187,7 +198,7 @@ export function TelemetryStrip(props: TelemetryStripProps) {
       <AlpacaCell snapshot={snapshot} />
       <PolygonCell snapshot={snapshot} />
       <span className="telemetry-spacer" />
-      <ClockCell snapshot={snapshot} stale={stale} error={error} />
+      <ClockCell snapshot={snapshot} stale={stale} lastSuccessAt={lastSuccessAt} error={error} />
       {snapshot === null && (
         <span className="telemetry-caveat">
           {error === null

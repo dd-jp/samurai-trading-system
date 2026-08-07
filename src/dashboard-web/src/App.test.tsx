@@ -268,6 +268,41 @@ describe('mission control', () => {
     expect(within(panel).getByText(/calls carry no/)).toBeTruthy();
   });
 
+  it('samples equity per probe observation, not per poll', async () => {
+    // The Alpaca tile is refreshed on its own 60-second poller, so the same
+    // balance is re-served across ~20 of these 3-second polls. Counting each
+    // one would draw a "curve" of one repeated number.
+    const polls = [0, 1, 2, 3].map((step) =>
+      makeSnapshot({
+        as_of: `2026-08-07T12:00:0${step}.000Z`,
+        generated_at: `2026-08-07T12:00:0${step}.000Z`,
+      }),
+    );
+    // The fifth poll carries a genuinely new probe observation.
+    const moved = makeSnapshot({
+      as_of: '2026-08-07T12:00:04.000Z',
+      generated_at: '2026-08-07T12:00:04.000Z',
+    });
+    moved.providers.alpaca = {
+      ...moved.providers.alpaca,
+      observed_at: '2026-08-07T12:01:00.000Z',
+      balance: { cash: 99_000, equity: 100_500.5, buying_power: 198_000 },
+    };
+    renderApp([...polls, moved]);
+
+    const metrics = screen.getByRole('region', { name: 'Metrics suite' });
+    // Four snapshots, one unchanged observation between them: still no series.
+    await screen.findByText('12:00:03Z');
+    expect(within(metrics).getByText(/No equity series yet/)).toBeTruthy();
+    expect(within(metrics).getByText(/one distinct observation so far/)).toBeTruthy();
+
+    // The moved observation is a second point, and the line appears — so the
+    // assertion above is about de-duplication, not about never accumulating.
+    await screen.findByText('12:00:04Z');
+    expect(await within(metrics).findByRole('img', { name: /Alpaca equity/ })).toBeTruthy();
+    expect(within(metrics).getByText(/2 probe observations this session/)).toBeTruthy();
+  });
+
   it('shows the whole metrics suite and the honest empty states around it', async () => {
     renderApp([makeSnapshot({ positions: [], analysts: [], debates: [] })]);
 

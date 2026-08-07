@@ -42,9 +42,10 @@ import './App.css';
 const EMPTY_VIEW: PipelineView = { lanes: [], live_trace_id: null, live_entered_at: null };
 
 /**
- * How many equity samples the sparkline keeps. At the 3-second poll that is
- * about six minutes of history — enough to see the line move, bounded so a tab
- * left open for a week does not accumulate a day's worth of points.
+ * How many equity samples the sparkline keeps. Samples arrive at the Alpaca
+ * probe's cadence (60s), not the page's (3s) — see `EquitySample` — so this is
+ * about two hours of history, bounded so a tab left open for a week does not
+ * accumulate a week's worth of points.
  */
 const MAX_EQUITY_SAMPLES = 120;
 
@@ -118,17 +119,28 @@ export function App({ snapshotOptions }: AppProps = {}) {
     setLedger((state) => updateLedger(state, previousView, view));
   }, [snapshot, previousView, view]);
 
-  // One equity sample per poll that carried a live broker balance. `balance`
-  // is null unless the Alpaca probe reported ok, so a failed probe contributes
-  // no point rather than a repeated stale one.
+  // One equity sample per PROBE OBSERVATION, not per poll. The Alpaca tile is
+  // refreshed on its own 60-second poller while this page polls every 3
+  // seconds, so most snapshots re-serve a balance this series has already
+  // recorded; appending those would draw horizontal runs of one number and
+  // call it a curve. A sample is new when the probe observed at a new time or
+  // the figure itself changed. `balance` is null unless the probe reported
+  // `ok`, so a failed probe contributes no point rather than a stale one.
   useEffect(() => {
     if (snapshot === null) return;
-    const balance = snapshot.providers.alpaca.balance;
+    const alpaca = snapshot.providers.alpaca;
+    const balance = alpaca.balance;
     if (balance === null || !Number.isFinite(balance.equity)) return;
     setEquitySamples((samples) => {
       const last = samples[samples.length - 1];
-      if (last !== undefined && last.as_of === snapshot.as_of) return samples;
-      return [...samples, { as_of: snapshot.as_of, equity: balance.equity }].slice(
+      if (
+        last !== undefined &&
+        last.observed_at === alpaca.observed_at &&
+        last.equity === balance.equity
+      ) {
+        return samples;
+      }
+      return [...samples, { observed_at: alpaca.observed_at, equity: balance.equity }].slice(
         -MAX_EQUITY_SAMPLES,
       );
     });

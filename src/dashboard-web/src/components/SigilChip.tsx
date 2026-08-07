@@ -43,7 +43,11 @@ export function SigilChip(props: SigilChipProps) {
       className={className}
       data-instrument={lane.instrument}
       data-outcome={lane.outcome}
-      aria-pressed={selected}
+      // `aria-current`, not `aria-pressed`: the chips are a single-selection
+      // set pointing at one drawer, not eight independent toggles — and
+      // `aria-pressed` would announce "not pressed" on every chip a keyboard
+      // user tabs past.
+      aria-current={selected ? 'true' : undefined}
       aria-label={`${lane.instrument}, ${asset.word}, ${outcome}, in ${roomName}`}
       onClick={() => onSelect(lane.instrument)}
       ref={(element) => registerRef(lane.instrument, element)}

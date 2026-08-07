@@ -24,9 +24,21 @@
 import type { MetricsSuiteWire } from '../../../../dashboard/types.ts';
 import { formatFixed, formatPercent, formatUsd } from '../../lib/format.ts';
 
-/** One observed equity sample: the broker's equity at a snapshot's `as_of`. */
+/**
+ * One observed equity sample, stamped with the **probe's** own clock rather
+ * than the poll's.
+ *
+ * That distinction is the whole correctness of this series: the Alpaca tile is
+ * refreshed by a 60-second poller on the server, while the page polls every 3
+ * seconds, so ~20 consecutive snapshots re-serve the same balance. Keyed on the
+ * snapshot's `as_of` those would all be appended, and the "line" would be
+ * horizontal runs of one repeated number with a step every minute — which is
+ * the same "consecutive points do not measure what the line implies" failure
+ * this panel rejected the unrealized-PnL sum for.
+ */
 export interface EquitySample {
-  as_of: string;
+  /** `providers.alpaca.observed_at` — when the probe actually read this figure. */
+  observed_at: string | null;
   equity: number;
 }
 
@@ -46,9 +58,10 @@ function EquitySparkline({ samples }: { samples: readonly EquitySample[] }) {
   if (values.length < MIN_SPARK_POINTS) {
     return (
       <p className="empty-state">
-        No equity series yet — this line plots the Alpaca balance observed once per poll, and the
-        probe has reported {values.length === 0 ? 'none' : 'one'} so far. The wire carries no
-        historical equity curve; <code>metrics</code> reports the daily suite as scalars.
+        No equity series yet — this line plots the Alpaca balance as its own 60-second probe
+        observes it, and the probe has reported {values.length === 0 ? 'no' : 'one'} distinct
+        observation so far. The wire carries no historical equity curve; <code>metrics</code>{' '}
+        reports the daily suite as scalars.
       </p>
     );
   }
@@ -85,7 +98,7 @@ function EquitySparkline({ samples }: { samples: readonly EquitySample[] }) {
         <path d={path} className="spark-line" />
       </svg>
       <figcaption className="panel-sub">
-        Alpaca equity, {values.length} samples observed this session — not a historical equity
+        Alpaca equity, {values.length} probe observations this session — not a historical equity
         curve.
       </figcaption>
     </figure>
