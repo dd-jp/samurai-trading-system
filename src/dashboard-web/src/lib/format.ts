@@ -22,7 +22,12 @@ const USD = new Intl.NumberFormat('en-US', {
  * unknown duration must never read as zero.
  */
 export function formatStageDuration(ms: number | null): string {
-  if (ms === null) return EM_DASH;
+  // Non-finite input is guarded up front rather than left to the branches
+  // below, because EVERY comparison against NaN is false: `NaN` fell through
+  // all of them into the minutes branch and rendered `NaNm NaNs`, and
+  // `Infinity` rendered `Infinitym NaNs` (PR #582 review round 3). Same
+  // unknown-value contract the signed formatters keep.
+  if (ms === null || !Number.isFinite(ms)) return EM_DASH;
   if (ms < 1_000) return `${Math.round(ms)}ms`;
 
   // Branch on the ROUNDED value, not the raw one, and round exactly once per

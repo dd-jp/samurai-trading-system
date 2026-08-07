@@ -6,6 +6,14 @@ describe('formatStageDuration', () => {
     expect(formatStageDuration(null)).toBe('—');
   });
 
+  it('renders NaN and Infinity as an em dash, never NaNm NaNs', () => {
+    // PR #582 review: NaN compares false against every branch condition, so
+    // it fell through to the minutes branch instead of the unknown-value path.
+    expect(formatStageDuration(Number.NaN)).toBe('—');
+    expect(formatStageDuration(Number.POSITIVE_INFINITY)).toBe('—');
+    expect(formatStageDuration(Number.NEGATIVE_INFINITY)).toBe('—');
+  });
+
   it('renders sub-second durations in milliseconds', () => {
     expect(formatStageDuration(0)).toBe('0ms');
     expect(formatStageDuration(850)).toBe('850ms');
