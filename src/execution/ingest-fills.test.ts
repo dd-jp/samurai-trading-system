@@ -15,6 +15,8 @@ import type {
   BrokerAdapter,
   ExecutionConfig,
   ExecutionInput,
+  FlattenOverfillAlertChannel,
+  FlattenOverfillWarning,
   LotAdvance,
   NativeBracketRequest,
   NormalizedFill,
@@ -144,10 +146,24 @@ function makeResidualExposureAlerts(): ResidualExposureAlertChannel & {
   };
 }
 
+/** Records every warning posted (#527) — never posted for a clean flatten split. */
+function makeFlattenOverfillAlerts(): FlattenOverfillAlertChannel & {
+  warnings: FlattenOverfillWarning[];
+} {
+  const warnings: FlattenOverfillWarning[] = [];
+  return {
+    warnings,
+    async postFlattenOverfillWarning(warning: FlattenOverfillWarning): Promise<void> {
+      warnings.push(warning);
+    },
+  };
+}
+
 function makeInput(
   broker: BrokerAdapter,
   store: TestExecutionStore,
   residualExposureAlerts: ResidualExposureAlertChannel = makeResidualExposureAlerts(),
+  flattenOverfillAlerts: FlattenOverfillAlertChannel = makeFlattenOverfillAlerts(),
 ): ExecutionInput {
   const config: ExecutionConfig = {
     simulated: {
@@ -171,6 +187,7 @@ function makeInput(
     config,
     mode: 'backtest',
     residualExposureAlerts,
+    flattenOverfillAlerts,
   };
 }
 
@@ -576,6 +593,151 @@ describe('ExecutionImpl.ingestFills', () => {
       // And the flatten's fill really was not attributed: the lot is still
       // whole, with only its entry fill on record.
       expect(await store.getFills('key-1')).toHaveLength(1);
+    });
+  });
+
+  describe('flatten over-fill warning (#527)', () => {
+    it('warns naming the flatten and the unattributed qty, and still drops the excess', async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
+
+      // Poll 1 persists the lot's entry fill.
+      const entryOnly = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+      ]);
+      await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
+
+      // Journalled as HELD 6 — but the venue's raw fill below reports 10, a
+      // genuine over-fill past what `executeExit`'s `heldSize` guard should
+      // ever allow through.
+      await store.writeAheadFlatten({
+        idempotency_key: 'flatten-1',
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        side: 'sell',
+        size: 6,
+        submitted_at: OPENED_AT,
+        lot_held_quantities: [{ idempotency_key: 'key-1', held: 6 }],
+      });
+
+      const withFlatten = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'flatten-1',
+          broker_fill_id: 'f1',
+          leg: 'exit',
+          qty: 10,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+      const residualExposureAlerts = makeResidualExposureAlerts();
+      const flattenOverfillAlerts = makeFlattenOverfillAlerts();
+
+      // Does NOT throw: a successful redistribution with an over-fill is not
+      // a contained failure — see `redistributeOneFlatten`'s doc.
+      await new ExecutionImpl(
+        makeInput(withFlatten, store, residualExposureAlerts, flattenOverfillAlerts),
+      ).ingestFills();
+
+      expect(flattenOverfillAlerts.warnings).toEqual([
+        { idempotency_key: 'flatten-1', unattributed_qty: 4, observed_at: NOW },
+      ]);
+
+      // The excess (4) was dropped, not guessed onto the lot: only the
+      // journalled 6 reached `key-1`'s own exit fills.
+      const fills = await store.getFills('key-1');
+      const exitQty = fills
+        .filter((persisted) => persisted.leg !== 'entry')
+        .reduce((sum, persisted) => sum + persisted.qty, 0);
+      expect(exitQty).toBe(6);
+    });
+
+    it('warns only once across repeated polls for the same re-offered over-filled fill', async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
+
+      const entryOnly = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+      ]);
+      await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
+
+      await store.writeAheadFlatten({
+        idempotency_key: 'flatten-1',
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        side: 'sell',
+        size: 6,
+        submitted_at: OPENED_AT,
+        lot_held_quantities: [{ idempotency_key: 'key-1', held: 6 }],
+      });
+
+      // A single scripted broker, polled TWICE: `fetchNewFills` re-offers the
+      // same fills every call (filtered only by `since`), the same shape the
+      // Simulated adapter takes in production (unlike Alpaca's flatten sweep,
+      // which prunes after one poll) — the exact re-offer this test exists to
+      // pin `ingestFills()` against.
+      const withFlatten = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'flatten-1',
+          broker_fill_id: 'f1',
+          leg: 'exit',
+          qty: 10,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+      const flattenOverfillAlerts = makeFlattenOverfillAlerts();
+      const execution = new ExecutionImpl(
+        makeInput(withFlatten, store, undefined, flattenOverfillAlerts),
+      );
+
+      await execution.ingestFills();
+      await execution.ingestFills();
+
+      // Warned once, on the poll that actually persisted the split — not
+      // again on the re-poll that re-offers the identical already-ingested
+      // fill.
+      expect(flattenOverfillAlerts.warnings).toEqual([
+        { idempotency_key: 'flatten-1', unattributed_qty: 4, observed_at: NOW },
+      ]);
+    });
+
+    it("emits no warning when a flatten fills exactly its named lots' held share", async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
+
+      const entryOnly = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+      ]);
+      await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
+
+      await store.writeAheadFlatten({
+        idempotency_key: 'flatten-1',
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        side: 'sell',
+        size: 10,
+        submitted_at: OPENED_AT,
+        lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+      });
+
+      const withFlatten = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'flatten-1',
+          broker_fill_id: 'f1',
+          leg: 'exit',
+          qty: 10,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+      const flattenOverfillAlerts = makeFlattenOverfillAlerts();
+
+      await new ExecutionImpl(
+        makeInput(withFlatten, store, undefined, flattenOverfillAlerts),
+      ).ingestFills();
+
+      expect(flattenOverfillAlerts.warnings).toEqual([]);
     });
   });
 });

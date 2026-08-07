@@ -745,6 +745,12 @@ async function runExitPathScenarios(input: {
       config: executionConfig,
       mode: 'paper',
       residualExposureAlerts: residualAlerts,
+      // #527: not recorded/gated like `residualAlerts` above — no scenario
+      // here is expected to over-fill a flatten, and wiring a gate check for
+      // it is out of this ticket's scope (see `FlattenOverfillAlertChannel`'s
+      // doc for why this channel has no phone-reaching counterpart yet
+      // either).
+      flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
     },
     'smoke-exit-path',
   );

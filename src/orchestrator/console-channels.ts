@@ -21,6 +21,8 @@
  * through Telegram is #275's remaining half, not #322's.
  */
 import type {
+  FlattenOverfillAlertChannel,
+  FlattenOverfillWarning,
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
   UnpricedFillAlert,
@@ -147,6 +149,45 @@ export class LoggingResidualExposureAlertChannel implements ResidualExposureAler
       payload: {
         ...alert,
         observed_at: alert.observed_at.toISOString(),
+      },
+    });
+  }
+}
+
+/**
+ * A flatten fill that filled more than its named lots' journalled share
+ * (#527), written to the log at `warn`. See `FlattenOverfillAlertChannel`'s
+ * doc (execution/flatten-overfill-alert.ts) for why this is a diagnostic
+ * trail rather than an operator escalation: the redistribution that reports
+ * it still completes, and the excess is dropped either way — this only makes
+ * the drop visible instead of silent.
+ *
+ * Unlike the other channels in this file, there is no `TradeChannel...`
+ * phone-reaching counterpart (yet) — the same posture
+ * `ResidualExposureAlertChannel` had before #551 wired it through
+ * `SAMURAI_ALERTS`. This condition is "should never happen" rather than an
+ * unattended-soak emergency, so a log line an operator can grep after the
+ * fact is the right first step; paging on it is a later ticket if it ever
+ * actually fires.
+ */
+export class LoggingFlattenOverfillAlertChannel implements FlattenOverfillAlertChannel {
+  constructor(private readonly logger: Logger) {}
+
+  async postFlattenOverfillWarning(warning: FlattenOverfillWarning): Promise<void> {
+    this.logger.log({
+      // Same synthetic-trace convention as `residual-exposure`/`unpriced-fill`
+      // above: this is observed by the fill poll, not any one tick.
+      trace_id: 'flatten-overfill',
+      stage: 'execution',
+      level: 'warn',
+      message:
+        "a flatten filled more than its named lots' journalled share — the excess was " +
+        'dropped rather than guessed onto a lot; this should not happen under normal operation, ' +
+        "so check the venue and the flatten's journal row by hand",
+      payload: {
+        idempotency_key: warning.idempotency_key,
+        unattributed_qty: warning.unattributed_qty,
+        observed_at: warning.observed_at.toISOString(),
       },
     });
   }

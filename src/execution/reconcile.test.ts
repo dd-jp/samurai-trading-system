@@ -185,6 +185,7 @@ function makeInput(store: TestExecutionStore, broker: BrokerAdapter): ExecutionI
     config,
     mode: 'live',
     residualExposureAlerts: { postResidualExposureAlert: async () => {} },
+    flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
   };
 }
 

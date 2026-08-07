@@ -11,6 +11,7 @@ import type {
 } from '../../market-data-service/index.js';
 import type { Clock, OrderState } from '../../shared/index.js';
 import type { VerdictDecision } from '../../verdict/index.js';
+import type { FlattenOverfillAlertChannel } from '../flatten-overfill-alert.js';
 import type { ResidualExposureAlertChannel } from '../residual-exposure-alert.js';
 import type { BrokerAdapter } from './broker.js';
 import type { SharedStore } from './store.js';
@@ -62,6 +63,15 @@ export interface ExecutionInput {
    * default away.
    */
   residualExposureAlerts: ResidualExposureAlertChannel;
+  /**
+   * #527: a genuine over-fill on a flatten's attribution split — the excess
+   * past its named lots' journalled share, which is always dropped rather
+   * than guessed onto a lot (see `redistributeOneFlatten`, ingest-fills.ts).
+   * Required for the same "no silent default" reason `residualExposureAlerts`
+   * above is: an omitted channel would make that drop invisible again, which
+   * is the exact defect this ticket exists to close.
+   */
+  flattenOverfillAlerts: FlattenOverfillAlertChannel;
 }
 
 export interface ExecutionResult {

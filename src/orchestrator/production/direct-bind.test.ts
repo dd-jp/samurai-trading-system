@@ -694,6 +694,7 @@ describe('buildExecutionStep', () => {
       config: EXECUTION_CONFIG,
       mode: 'paper',
       residualExposureAlerts: { postResidualExposureAlert: async () => {} },
+      flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
     });
 
     const verdict: VerdictDecision = {

@@ -10,6 +10,8 @@ import type {
   BrokerAdapter,
   ExecutionConfig,
   ExecutionInput,
+  FlattenOverfillAlertChannel,
+  FlattenOverfillWarning,
   NativeBracketRequest,
   NormalizedFill,
   ResidualExposureAlert,
@@ -202,6 +204,19 @@ function makeResidualExposureAlerts(): ResidualExposureAlertChannel & {
   };
 }
 
+/** Records every warning posted (#527) — never posted for a clean split. */
+function makeFlattenOverfillAlerts(): FlattenOverfillAlertChannel & {
+  warnings: FlattenOverfillWarning[];
+} {
+  const warnings: FlattenOverfillWarning[] = [];
+  return {
+    warnings,
+    async postFlattenOverfillWarning(warning: FlattenOverfillWarning): Promise<void> {
+      warnings.push(warning);
+    },
+  };
+}
+
 function makeInput(overrides: Partial<ExecutionInput> = {}): ExecutionInput {
   const config: ExecutionConfig = {
     simulated: {
@@ -224,6 +239,7 @@ function makeInput(overrides: Partial<ExecutionInput> = {}): ExecutionInput {
     config,
     mode: 'backtest',
     residualExposureAlerts: makeResidualExposureAlerts(),
+    flattenOverfillAlerts: makeFlattenOverfillAlerts(),
     ...overrides,
   };
 }

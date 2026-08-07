@@ -167,6 +167,7 @@ import { assertAutomationLevelSupported } from '../verdict/index.js';
 import {
   LoggingAnalystSkipAlertChannel,
   LoggingBreachAlertChannel,
+  LoggingFlattenOverfillAlertChannel,
   LoggingHeartbeatChannel,
   LoggingLoosenApprovalChannel,
   LoggingOrphanAlertChannel,
@@ -752,6 +753,10 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // the #322 bug re-created for a fifth escalation.
     residualExposureAlerts:
       config.residualExposureAlerts ?? new LoggingResidualExposureAlertChannel(logger),
+    // #527: diagnostic-only for now (see `LoggingFlattenOverfillAlertChannel`'s
+    // doc) — no `SAMURAI_ALERTS`/config override yet, unlike the escalations
+    // above. A phone-reaching transport is a later ticket if this ever fires.
+    flattenOverfillAlerts: new LoggingFlattenOverfillAlertChannel(logger),
   };
 
   // #464, retargeted at Nous by ADR-0009. The off switch used to be the

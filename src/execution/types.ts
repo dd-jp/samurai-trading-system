@@ -38,6 +38,10 @@
  */
 
 export type {
+  FlattenOverfillAlertChannel,
+  FlattenOverfillWarning,
+} from './flatten-overfill-alert.js';
+export type {
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
 } from './residual-exposure-alert.js';
