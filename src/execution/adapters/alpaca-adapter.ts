@@ -476,14 +476,32 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
           // from the journal here would escape the isolation entirely and abort
           // the account's whole sweep — turning one venue anomaly into the
           // stop-outs-for-everyone starvation this loop exists to prevent.
+          //
+          // NEITHER `failures.push(error)` NOR `bracketFailures += 1` runs for
+          // an UnpricedFillError itself (#524 review, deepseek) — it is a
+          // MODELLED, EXPECTED condition (#298's whole reason for existing:
+          // the age-out clock just above, and the eventual alert through
+          // `escalateAgedUnpricedFills` -> `unpriced-fill-channel.ts`), not a
+          // failure, which is exactly what this catch's OWN first comment
+          // already says ("skipped, not swallowed... retried on the next
+          // one"). Counting it here contradicted that: `failures.length > 0`
+          // below is what decides whether a `fills`-less call THROWS, so one
+          // unpriced fill — on a poll where nothing else happened to produce
+          // a fill — silently caused the exact "stop-outs-for-everyone"
+          // abort this isolation exists to prevent, for EVERY bracket in the
+          // sweep, not just the unpriced one. A journal-write failure
+          // (`stateError`, below) is a genuinely different, new failure and
+          // still counts.
           try {
             this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
           } catch (stateError) {
             failures.push(stateError);
+            bracketFailures += 1;
           }
+        } else {
+          failures.push(error);
+          bracketFailures += 1;
         }
-        failures.push(error);
-        bracketFailures += 1;
       }
     }
 
@@ -552,18 +570,29 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
           this.flattens.delete(clientOrderId);
         }
       } catch (error) {
-        // Same isolation and same UnpricedFillError bookkeeping as the
-        // bracket loop above — see its comments for the reasoning, which
-        // applies unchanged here.
+        // Same isolation, same UnpricedFillError bookkeeping, and (#524
+        // review, deepseek) the SAME non-counting of an UnpricedFillError
+        // itself as a failure, as the bracket loop above — see its comments
+        // for the full reasoning, which applies unchanged here. Getting this
+        // right matters at least as much here as there: an unpriced flatten
+        // fill on a poll where no bracket produced one either would
+        // otherwise abort the WHOLE sweep, brackets included, not just the
+        // flatten. Note what this means for the prune above: a fill this
+        // catch reaches for is, by construction, one `collectFill` never
+        // finished normalizing, so the `mapOrderState`/`delete` line is never
+        // reached for it — an unpriced flatten is retried next poll, same as
+        // an unpriced bracket, never pruned mid-unpriced.
         if (error instanceof UnpricedFillError) {
           try {
             this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
           } catch (stateError) {
             failures.push(stateError);
+            flattenFailures += 1;
           }
+        } else {
+          failures.push(error);
+          flattenFailures += 1;
         }
-        failures.push(error);
-        flattenFailures += 1;
       }
     }
 

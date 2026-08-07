@@ -512,10 +512,23 @@ describe('AlpacaBrokerAdapter outbound call discipline', () => {
 });
 
 describe('AlpacaBrokerAdapter.fetchNewFills on inconsistent venue data', () => {
-  it('refuses to book a filled quantity Alpaca reports no average price for', async () => {
-    // The alternative — recording price 0 — is a phantom fill that corrupts
-    // realized PnL, the R-multiple and the feedback loop's weighting. Same
-    // posture as the ccxt adapter's `toFill`.
+  // Corrected by #524's review (deepseek): this test used to assert that
+  // `fetchNewFills` THROWS here (an AggregateError, caught below). That was
+  // pinning a bug, not a feature — refusing to BOOK an unpriced fill as a
+  // real Fill is correct (recording price 0 would be a phantom fill), but
+  // failing the WHOLE sweep over it is not: an unpriced fill is #298's
+  // modelled, expected condition (the age-out clock in the `catch` below
+  // starts either way), not a failure, and the bracket loop's own "skipped,
+  // not swallowed... retried on the next one" comment already said so
+  // before the code below it contradicted it. The old assertion's own
+  // comment reasoned "the only bracket is the bad one, so nothing is lost by
+  // throwing" — true in THIS test's single-bracket setup, but the general
+  // behaviour it pinned threw on ANY all-unpriced sweep, which silently
+  // drops every OTHER bracket's and flatten's fills too when one happens to
+  // land unpriced in the same poll (see `alpaca-adapter.test.ts`'s
+  // `still collects a healthy bracket fill in the same poll as an unpriced
+  // flatten` for that case).
+  it('does not fail the sweep for a filled quantity Alpaca reports no average price for', async () => {
     const client = makeClient({
       getOrder: vi.fn().mockResolvedValue(
         acceptedOrder({
@@ -533,14 +546,10 @@ describe('AlpacaBrokerAdapter.fetchNewFills on inconsistent venue data', () => {
     });
     await adapter.submitBracket(makeBracket());
 
-    // The only bracket is the bad one, so nothing is lost by throwing — and an
-    // empty array here would read as "no new fills", which is a different fact.
-    const error = await adapter.fetchNewFills(new Date(0)).catch((caught: unknown) => caught);
-
-    expect(error).toBeInstanceOf(AggregateError);
-    expect((error as AggregateError).errors[0]).toMatchObject({
-      message: expect.stringMatching(/reports filled_qty 100 but no filled_avg_price/),
-    });
+    // Not booked (an empty array, same as "nothing new"), and not thrown —
+    // retried next poll, exactly like an order the venue has not reported
+    // on at all yet.
+    await expect(adapter.fetchNewFills(new Date(0))).resolves.toEqual([]);
   });
 
   it('refuses an unparseable filled_qty rather than booking NaN', async () => {
@@ -930,6 +939,76 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
     const reported = error.errors.map((each: Error) => each.message).join('\n');
     expect(reported).not.toContain(secret);
     expect(reported).toContain('alert delivery failed for order alpaca-entry-1');
+  });
+
+  // #524 review (deepseek): before this fix, an UnpricedFillError counted as
+  // a sweep failure in BOTH the bracket loop and the flatten loop (#517
+  // faithfully mirrored the bracket loop's own pre-existing behaviour) —
+  // contradicting the bracket catch's own "skipped, not swallowed" comment.
+  // On a poll where an unpriced fill was the ONLY new activity, that made
+  // the whole `fetchNewFills` call throw, which `ingestFills()` never
+  // catches per-order — nothing from ANY bracket or flatten got persisted
+  // that poll, not just the unpriced one's. This is the fix, proved for the
+  // flatten sweep specifically (the bracket-only version of this failure
+  // mode already existed before #517; the tests above tolerate it via
+  // `.catch(() => undefined)` because their own assertions are about the
+  // age-out mechanism, not the throw).
+  it('does not fail the sweep when the only new activity is an unpriced flatten fill', async () => {
+    const submitMarketOrder = vi.fn().mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1' });
+    const client = makeClient({
+      submitMarketOrder,
+      getOrder: vi.fn().mockResolvedValue(unpricedOrder({ id: 'flatten-1' })),
+    });
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+    });
+    await adapter.submitFlatten('AAPL', 'sell', 12, 'flatten-key');
+
+    await expect(adapter.fetchNewFills(new Date(0))).resolves.toEqual([]);
+  });
+
+  it('still collects a healthy bracket fill in the same poll as an unpriced flatten', async () => {
+    const filledAt = '2026-07-15T14:05:00Z';
+    const getOrder = vi.fn(async (orderId: string) =>
+      orderId === 'alpaca-entry-1'
+        ? acceptedOrder({
+            status: 'filled',
+            filled_qty: '100',
+            filled_avg_price: '100.02',
+            filled_at: filledAt,
+            legs: [],
+          })
+        : unpricedOrder({ id: 'flatten-stuck' }),
+    );
+    const submitMarketOrder = vi
+      .fn()
+      .mockResolvedValue({ ...acceptedOrder(), id: 'flatten-stuck' });
+    const client = makeClient({ getOrder, submitMarketOrder });
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+    });
+    await adapter.submitBracket(makeBracket());
+    await adapter.submitFlatten('TSLA', 'sell', 5, 'flatten-key');
+
+    const fills = await adapter.fetchNewFills(new Date(0));
+
+    // The bracket's entry fill made it through untouched — the unpriced
+    // flatten cost the sweep nothing beyond its own contribution.
+    expect(fills).toEqual([
+      {
+        client_order_id: 'key-aapl-1355',
+        broker_fill_id: 'alpaca-entry-1',
+        leg: 'entry',
+        price: 100.02,
+        qty: 100,
+        fee: 0,
+        timestamp: new Date(filledAt),
+      },
+    ]);
   });
 });
 
