@@ -158,7 +158,7 @@ def build_panel(prices, symbols):
 
 def run(dates, panel, symbols, lookback, allow_short, equity_cost_bps,
         always_long=False, vol_target=PORTFOLIO_VOL_TARGET, gross_cap=GROSS_CAP,
-        financing_rate=0.0):
+        financing_rate=0.0, ladder=None):
     """One arm. `always_long=True` ignores the signal entirely — the control.
 
     `vol_target`/`gross_cap` are raised for the levered runs so the equity path
@@ -166,6 +166,12 @@ def run(dates, panel, symbols, lookback, allow_short, equity_cost_bps,
     non-linear, so scaling a daily return stream does not reproduce the
     drawdown a levered account would actually have experienced.
     `financing_rate` is charged annually on gross exposure above 1.0.
+
+    `ladder` is an optional profit-taking schedule: [(gain, keep), ...] meaning
+    "once the instrument is `gain` above the price at which the position was
+    opened, cut to `keep` of target size".  It persists until the position goes
+    flat, then resets — otherwise the monthly rebalance would silently restore
+    full size and the ladder would do nothing.
     """
     n = len(dates)
     rets = {s: [0.0] * n for s in symbols}
@@ -174,9 +180,12 @@ def run(dates, panel, symbols, lookback, allow_short, equity_cost_bps,
             rets[s][i] = panel[i][s] / panel[i - 1][s] - 1.0
 
     warmup = max(lookback, VOL_WINDOW) + EXECUTION_LAG + 1
-    weights = {s: 0.0 for s in symbols}
+    weights = {s: 0.0 for s in symbols}      # target weight, pre-ladder
     strat, turnover_series, gross_series = [], [], []
     strat_hist = []
+    entry_px = {s: None for s in symbols}    # price when the position opened
+    keep = {s: 1.0 for s in symbols}         # ladder multiplier, 1.0 = full size
+    eff = {s: 0.0 for s in symbols}          # weight actually held, post-ladder
 
     for i in range(warmup, n):
         # Rebalance on the first trading day of each month, acting on data
@@ -215,23 +224,53 @@ def run(dates, panel, symbols, lookback, allow_short, equity_cost_bps,
             if gross > gross_cap:
                 new = {s: w * gross_cap / gross for s, w in new.items()}
 
-            traded = sum(abs(new[s] - weights[s]) for s in symbols)
+            # A position that opens (or flips) starts a fresh ladder; a
+            # position that closes clears it.
+            for s in symbols:
+                opened = new[s] != 0 and (weights[s] == 0 or
+                                          (new[s] > 0) != (weights[s] > 0))
+                if opened:
+                    entry_px[s] = panel[i][s]
+                    keep[s] = 1.0
+                elif new[s] == 0:
+                    entry_px[s] = None
+                    keep[s] = 1.0
+
+            eff_new = {s: new[s] * keep[s] for s in symbols}
+            traded = sum(abs(eff_new[s] - eff[s]) for s in symbols)
             cost = sum(
-                abs(new[s] - weights[s]) *
+                abs(eff_new[s] - eff[s]) *
                 (CRYPTO_COST_BPS if s in CRYPTO else equity_cost_bps) / 10_000.0
                 for s in symbols
             )
-            weights = new
+            weights, eff = new, eff_new
             turnover_series.append(traded)
         else:
             cost = 0.0
 
-        gross_now = sum(abs(w) for w in weights.values())
+        # Profit ladder: check intraperiod, trim on the way up.
+        if ladder:
+            for s in symbols:
+                if entry_px[s] is None or weights[s] <= 0:
+                    continue
+                gain = panel[i][s] / entry_px[s] - 1.0
+                target_keep = keep[s]
+                for trigger, remaining in ladder:
+                    if gain >= trigger:
+                        target_keep = min(target_keep, remaining)
+                if target_keep < keep[s]:
+                    new_eff = weights[s] * target_keep
+                    cost += abs(new_eff - eff[s]) * \
+                        (CRYPTO_COST_BPS if s in CRYPTO else equity_cost_bps) / 10_000.0
+                    eff[s] = new_eff
+                    keep[s] = target_keep
+
+        gross_now = sum(abs(w) for w in eff.values())
         financing = max(0.0, gross_now - 1.0) * financing_rate / TRADING_DAYS
-        r = sum(weights[s] * rets[s][i] for s in symbols) - cost - financing
+        r = sum(eff[s] * rets[s][i] for s in symbols) - cost - financing
         strat.append(r)
         strat_hist.append(r)
-        gross_series.append(sum(abs(w) for w in weights.values()))
+        gross_series.append(gross_now)
 
     return strat, dates[warmup:], turnover_series, gross_series
 

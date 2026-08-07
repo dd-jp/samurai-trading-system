@@ -101,6 +101,39 @@ Trend wins on **both** return and drawdown at every setting, which it did not do
 
 Note also that the −10.7% unlevered drawdown in Result 3 depends on the gross cap of 1.0 binding during the vol-targeter's over-levering episodes. Uncapped at the same vol target the figure is −24.6%. The cap is doing real risk work and is part of the strategy, not a formality.
 
+## Result 6 — profit-taking ladders are risk-neutral, not free money
+
+Tested on the best executable configuration (wide, trend 63d, gross cap 1.5, 80% vol target): trim to 50% of target size once an instrument is X above its entry, to 25% at Y. The ladder persists until the position goes flat, so the monthly rebalance cannot silently restore full size.
+
+| Ladder | Return | Daily | Sharpe | Max DD |
+|---|---|---|---|---|
+| **none** | **10.20%** | 0.040% | **0.71** | −23.2% |
+| +10% / +20% | 5.61% | 0.022% | 0.50 | −18.0% |
+| +20% / +40% | 7.14% | 0.028% | 0.57 | −19.5% |
+| +30% / +60% | 8.34% | 0.033% | 0.64 | −19.7% |
+| +10% only | 7.03% | 0.028% | 0.60 | −19.8% |
+| +25% only | 8.19% | 0.033% | 0.63 | −20.5% |
+
+At matched settings **every ladder cuts return and Sharpe**, and the tighter the ladder the worse: trimming at +10% nearly halves the return. The reason is structural — a trend-following return stream is carried by its right tail, and a profit ladder is a rule that systematically truncates exactly the positions that pay for all the others.
+
+Drawdown does improve, by 3–5 points. So the fair test is at **matched risk**: re-lever the laddered variants until their drawdown matches the −23.2% baseline.
+
+| At matched risk | vol target | Return | Sharpe | Max DD |
+|---|---|---|---|---|
+| none | 80% | 10.20% | 0.71 | −23.2% |
+| +30% / +60% | 300% (search boundary) | 11.78% | 0.78 | −20.8% |
+| +20% / +40% | 300% (search boundary) | 9.90% | 0.69 | −20.4% |
+
+The laddered variants cannot be levered back to the baseline's risk within the gross cap — they saturate. At saturation the differences (0.78 and 0.69 against 0.71) sit well inside the ~0.36 Sharpe standard error for this sample.
+
+**Conclusion: a profit ladder neither creates nor destroys edge.** It moves position along the same risk/return line, giving up return roughly in proportion to the risk it removes. Adopt it for behavioural reasons if it makes the plan easier to stick to — that benefit is real and this measurement says it is close to free. Do not adopt it expecting more money.
+
+**Two practical notes.**
+- **Monthly rebalancing already does a better version of this.** Selling what has grown and buying what has lagged is systematic profit-taking, triggered by *risk contribution* rather than by an arbitrary gain threshold. It is already in the strategy and it does not truncate the tail.
+- **A ladder lands on the buggiest path in the codebase.** Partial exits are the subject of the open exit-path defects — #525 (partial flatten leaves a naked residual), #526 (in-memory sweep map), #519 (nothing sweeps `flatten_submissions`), #527 (over-filled flatten drops quantity silently). A profit ladder multiplies the number of partial exits, so it should not ship before those close.
+
+These ladder settings are exploratory and post-hoc, like Result 5 — outside the trial accounting below.
+
 ## Trial accounting
 
 - **16 configurations**, pre-registered (4 lookbacks × 2 universes × 2 directions). No search, no tuning.
