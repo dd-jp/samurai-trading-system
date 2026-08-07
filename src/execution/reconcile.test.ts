@@ -138,6 +138,9 @@ function makeBroker(): BrokerAdapter & {
 
     async resizeProtectiveLegs(): Promise<void> {},
 
+    // #525. `reconcile()` does not drive the fill lifecycle either.
+    async rearmProtectiveLegs(): Promise<void> {},
+
     // #429. `venuePositions` is what the venue holds; `failPositions` makes the
     // positions endpoint unreachable, the case that must degrade to a report
     // rather than lose the store-side pass that already ran.
@@ -181,6 +184,7 @@ function makeInput(store: TestExecutionStore, broker: BrokerAdapter): ExecutionI
     marketData: {} as MarketDataService,
     config,
     mode: 'live',
+    residualExposureAlerts: { postResidualExposureAlert: async () => {} },
   };
 }
 

@@ -36,6 +36,11 @@
  * `OpenPosition` / `OrderState` are NOT redefined here — they are cross-spec
  * types owned by src/shared/types.ts (registry §4).
  */
+
+export type {
+  ResidualExposureAlert,
+  ResidualExposureAlertChannel,
+} from './residual-exposure-alert.js';
 export type {
   BrokerAck,
   BrokerAdapter,

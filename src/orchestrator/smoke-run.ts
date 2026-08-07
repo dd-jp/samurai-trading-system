@@ -349,6 +349,10 @@ export class UnreachableAlpacaClient implements AlpacaClient {
     return this.refuse('submitMarketOrder');
   }
 
+  async submitOcoOrder(): Promise<never> {
+    return this.refuse('submitOcoOrder');
+  }
+
   async cancelOrder(): Promise<never> {
     return this.refuse('cancelOrder');
   }

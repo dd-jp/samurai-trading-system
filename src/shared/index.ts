@@ -33,17 +33,20 @@ export { TokenBucket } from './http/token-bucket.js';
 // for `HttpPolygonClient` (#510/#520 — deliberately NOT folded into
 // `resolveVenuePacing`/`VENUE_KEYS`: see that function's doc for why a
 // Stage-2-only venue must not be validated by the live composition root),
-// and `resolveCoinbasePacing` for the #512 warm-start backfill script (same
-// reasoning, same shape, one more script-only venue).
+// and `resolveCoinbasePacing`/`resolveBitstampPacing` for the #512/#496
+// warm-start backfill script's primary/fallback crypto clients (same
+// reasoning, same shape, two more script-only venues).
 // `VenueKey`, `VENUE_KEYS`, `VENUE_DOCUMENTED_CEILING_PER_SECOND`,
 // `POLYGON_DOCUMENTED_CEILING_PER_SECOND`, `DEFAULT_POLYGON_PACING`,
-// `DEFAULT_COINBASE_PACING` and `venuePacingEnvVars` are internal to
-// `venue-pacing.ts` and its own test (or, for `venuePacingEnvVars`, imported
-// directly by `http-polygon-client.test.ts` — see that barrel-exclusion note
-// there), so they stay off this barrel.
+// `DEFAULT_COINBASE_PACING`, `DEFAULT_BITSTAMP_PACING` and
+// `venuePacingEnvVars` are internal to `venue-pacing.ts` and its own test
+// (or, for `venuePacingEnvVars`, imported directly by
+// `http-polygon-client.test.ts` — see that barrel-exclusion note there), so
+// they stay off this barrel.
 export type { VenuePacingConfig } from './http/venue-pacing.js';
 export {
   DEFAULT_VENUE_PACING,
+  resolveBitstampPacing,
   resolveCoinbasePacing,
   resolvePolygonPacing,
   resolveVenuePacing,

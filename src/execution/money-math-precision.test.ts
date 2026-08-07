@@ -260,6 +260,8 @@ class ScriptedBroker implements BrokerAdapter {
       .filter((fill) => fill.timestamp.getTime() >= since.getTime());
   }
   async resizeProtectiveLegs(): Promise<void> {}
+  /** #525's re-arm path — this test drives ordinary fills only. */
+  async rearmProtectiveLegs(): Promise<void> {}
   async getOrder(): Promise<NormalizedOrder | null> {
     return null;
   }
@@ -297,6 +299,7 @@ function makeInput(broker: BrokerAdapter, store: TestExecutionStore): ExecutionI
     marketData: {} as MarketDataService,
     config,
     mode: 'backtest',
+    residualExposureAlerts: { postResidualExposureAlert: async () => {} },
   };
 }
 

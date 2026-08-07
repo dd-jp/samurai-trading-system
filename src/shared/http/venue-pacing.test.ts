@@ -1,8 +1,10 @@
 import {
+  DEFAULT_BITSTAMP_PACING,
   DEFAULT_COINBASE_PACING,
   DEFAULT_POLYGON_PACING,
   DEFAULT_VENUE_PACING,
   POLYGON_DOCUMENTED_CEILING_PER_SECOND,
+  resolveBitstampPacing,
   resolveCoinbasePacing,
   resolvePolygonPacing,
   resolveVenuePacing,
@@ -293,6 +295,70 @@ describe('resolveCoinbasePacing', () => {
       refillPerSecond: 'SAMURAI_PACING_COINBASE_REFILL_PER_SEC',
       ceilingPerSecond: 'SAMURAI_PACING_COINBASE_CEILING_PER_SEC',
       reserveForPriority: 'SAMURAI_PACING_COINBASE_PRIORITY_RESERVE',
+    });
+  });
+});
+
+/**
+ * #496: Bitstamp is the warm-start backfill script's CRYPTO FALLBACK,
+ * resolved through its own entry point for the identical reason
+ * `resolvePolygonPacing`/`resolveCoinbasePacing` are — see
+ * `DEFAULT_BITSTAMP_PACING`'s doc in `venue-pacing.ts`.
+ */
+describe('resolveBitstampPacing', () => {
+  it('returns the checked-in default when nothing is configured', () => {
+    expect(resolveBitstampPacing({})).toEqual(DEFAULT_BITSTAMP_PACING);
+  });
+
+  it('overrides from SAMURAI_PACING_BITSTAMP_*', () => {
+    const resolved = resolveBitstampPacing({ SAMURAI_PACING_BITSTAMP_REFILL_PER_SEC: '0.5' });
+    expect(resolved).toEqual({
+      capacity: DEFAULT_BITSTAMP_PACING.capacity,
+      refillPerSecond: 0.5,
+      reserveForPriority: DEFAULT_BITSTAMP_PACING.reserveForPriority,
+    });
+  });
+
+  it('names SAMURAI_PACING_BITSTAMP_REFILL_PER_SEC specifically when the malformed value is not a number', () => {
+    expect(() =>
+      resolveBitstampPacing({ SAMURAI_PACING_BITSTAMP_REFILL_PER_SEC: 'not-a-number' }),
+    ).toThrow(/SAMURAI_PACING_BITSTAMP_REFILL_PER_SEC/);
+  });
+
+  /**
+   * Same isolation direction as `resolvePolygonPacing`/`resolveCoinbasePacing`'s
+   * equivalent tests: `resolveVenuePacing()` — what `production.ts` actually
+   * calls at boot — must never be tripped by a malformed
+   * `SAMURAI_PACING_BITSTAMP_*`, since that variable belongs to a script
+   * `production.ts` never runs.
+   */
+  it('never reads or validates SAMURAI_PACING_BITSTAMP_* from resolveVenuePacing — a malformed override does not throw', () => {
+    expect(() =>
+      resolveVenuePacing({ SAMURAI_PACING_BITSTAMP_REFILL_PER_SEC: 'not-a-number' }),
+    ).not.toThrow();
+  });
+
+  it('never reads or validates an unrelated venue override — a malformed Alpaca/IBKR value does not throw', () => {
+    expect(() =>
+      resolveBitstampPacing({
+        SAMURAI_PACING_ALPACA_REFILL_PER_SEC: 'not-a-number',
+        SAMURAI_PACING_IBKR_CAPACITY: '-1',
+      }),
+    ).not.toThrow();
+    expect(
+      resolveBitstampPacing({
+        SAMURAI_PACING_ALPACA_REFILL_PER_SEC: 'not-a-number',
+        SAMURAI_PACING_IBKR_CAPACITY: '-1',
+      }),
+    ).toEqual(DEFAULT_BITSTAMP_PACING);
+  });
+
+  it('names its own env vars under the same SAMURAI_PACING_BITSTAMP_* scheme every other venue uses', () => {
+    expect(venuePacingEnvVars('bitstamp')).toEqual({
+      capacity: 'SAMURAI_PACING_BITSTAMP_CAPACITY',
+      refillPerSecond: 'SAMURAI_PACING_BITSTAMP_REFILL_PER_SEC',
+      ceilingPerSecond: 'SAMURAI_PACING_BITSTAMP_CEILING_PER_SEC',
+      reserveForPriority: 'SAMURAI_PACING_BITSTAMP_PRIORITY_RESERVE',
     });
   });
 });

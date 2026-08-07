@@ -90,6 +90,13 @@ function makeClient(overrides: Partial<AlpacaClient> = {}): AlpacaClient {
     submitMarketOrder: vi
       .fn()
       .mockRejectedValue(new Error('makeClient: override submitMarketOrder to use it')),
+    // #525's re-arm path — same "reject unless overridden" posture as the
+    // other intervention-path methods above: a test that reaches this
+    // without overriding it is asserting a re-arm happened when nothing was
+    // asked of the venue.
+    submitOcoOrder: vi
+      .fn()
+      .mockRejectedValue(new Error('makeClient: override submitOcoOrder to use it')),
     cancelOrder: vi.fn().mockRejectedValue(new Error('makeClient: override cancelOrder to use it')),
     getPositions: vi
       .fn()
@@ -1132,6 +1139,199 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     expect(cancelOrder).not.toHaveBeenCalled();
   });
 
+  // #525 follow-up: `cancel()` must also clear a re-armed residual's OCO —
+  // it carries `${clientOrderId}:rearm`, a DIFFERENT id from the lot's own,
+  // so the lookup above alone can never find it. Left uncancelled, it stays
+  // live at the venue and can fire into the flatten below's now-flat
+  // position, reintroducing the #516 hazard `cancel()` exists to prevent.
+  describe('cancel() also clears a re-armed residual (#525 follow-up)', () => {
+    /** A `getOrderByClientOrderId` fake that answers per-id, like the real venue. */
+    function byClientOrderId(
+      orders: Record<string, ReturnType<typeof acceptedOrder> | null>,
+    ): (clientOrderId: string) => Promise<ReturnType<typeof acceptedOrder> | null> {
+      return async (clientOrderId: string) => orders[clientOrderId] ?? null;
+    }
+
+    it('cancels BOTH the original bracket and the re-armed OCO, original first', async () => {
+      const sequence: string[] = [];
+      const getOrderByClientOrderId = vi.fn(
+        byClientOrderId({
+          'key-1': { ...acceptedOrder(), id: 'bracket-venue-id' },
+          'key-1:rearm': { ...acceptedOrder(), id: 'rearm-venue-id' },
+        }),
+      );
+      const cancelOrder = vi.fn(async (id: string) => {
+        sequence.push(id);
+      });
+      const submitOcoOrder = vi.fn().mockResolvedValue({
+        ...acceptedOrder(),
+        id: 'rearm-venue-id',
+        order_class: 'oco',
+        legs: [],
+      });
+      const adapter = adapterWith(
+        makeClient({ getOrderByClientOrderId, cancelOrder, submitOcoOrder }),
+      );
+      // The re-arm happened in THIS process, so `rearmedLegs` already has
+      // it — the fast, no-network-round-trip path.
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      cancelOrder.mockClear(); // the rearm's own submit isn't a cancel call.
+
+      await adapter.cancel('key-1', 'AAPL');
+
+      expect(sequence).toEqual(['bracket-venue-id', 'rearm-venue-id']);
+    });
+
+    it('finds and cancels a re-armed OCO placed before a restart, when rearmedLegs is empty', async () => {
+      // A FRESH adapter — never called `rearmProtectiveLegs` in this
+      // process, so `rearmedLegs` starts empty. Only the venue lookup by
+      // the derived id can find the order a PRIOR process re-armed.
+      const getOrderByClientOrderId = vi.fn(
+        byClientOrderId({
+          'key-1': { ...acceptedOrder(), id: 'bracket-venue-id' },
+          'key-1:rearm': { ...acceptedOrder(), id: 'rearm-venue-id' },
+        }),
+      );
+      const cancelOrder = vi.fn().mockResolvedValue(undefined);
+      const adapter = adapterWith(makeClient({ getOrderByClientOrderId, cancelOrder }));
+
+      await adapter.cancel('key-1', 'AAPL');
+
+      expect(cancelOrder).toHaveBeenCalledWith('bracket-venue-id');
+      expect(cancelOrder).toHaveBeenCalledWith('rearm-venue-id');
+      expect(cancelOrder).toHaveBeenCalledTimes(2);
+    });
+
+    it('makes no extra cancel call on the ordinary path — no re-arm ever happened', async () => {
+      const getOrderByClientOrderId = vi.fn(
+        byClientOrderId({
+          'key-1': { ...acceptedOrder(), id: 'bracket-venue-id' },
+          // No 'key-1:rearm' entry — the venue genuinely has no such order,
+          // the ordinary case for a lot that was never partially flattened.
+        }),
+      );
+      const cancelOrder = vi.fn().mockResolvedValue(undefined);
+      const adapter = adapterWith(makeClient({ getOrderByClientOrderId, cancelOrder }));
+
+      await adapter.cancel('key-1', 'AAPL');
+
+      expect(cancelOrder).toHaveBeenCalledTimes(1);
+      expect(cancelOrder).toHaveBeenCalledWith('bracket-venue-id');
+    });
+
+    it('refuses (throws) when cancelling the re-armed OCO fails, matching the existing cancel-failure posture', async () => {
+      const getOrderByClientOrderId = vi.fn(
+        byClientOrderId({
+          'key-1': { ...acceptedOrder(), id: 'bracket-venue-id' },
+          'key-1:rearm': { ...acceptedOrder(), id: 'rearm-venue-id' },
+        }),
+      );
+      const cancelOrder = vi.fn(async (id: string) => {
+        if (id === 'rearm-venue-id') throw new Error('venue rejected the cancel');
+      });
+      const adapter = adapterWith(makeClient({ getOrderByClientOrderId, cancelOrder }));
+
+      await expect(adapter.cancel('key-1', 'AAPL')).rejects.toThrow();
+
+      // The original bracket's cancel still went out (this method's
+      // existing behaviour is unchanged), but the overall call rejects —
+      // `executeExit` reads this as "cancelling the held lot's legs
+      // failed" and refuses to submit the flatten at all, exactly as it
+      // does when the ORIGINAL cancel fails.
+      expect(cancelOrder).toHaveBeenCalledWith('bracket-venue-id');
+    });
+  });
+
+  // #525: re-arming a residual left by a partial flatten. `executeExit`
+  // cancels the lot's ENTIRE bracket before flattening, so unlike a resize
+  // there is no live leg left to amend — this submits a fresh
+  // protective-legs-only OCO order instead.
+  it("re-arms with an entry-less OCO order under a FRESH client order id, never the lot's own", async () => {
+    const submitOcoOrder = vi
+      .fn()
+      .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-1', order_class: 'oco', legs: [] });
+    const adapter = adapterWith(makeClient({ submitOcoOrder }));
+
+    await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+
+    expect(submitOcoOrder).toHaveBeenCalledWith({
+      symbol: 'AAPL',
+      // The CLOSING side — the lot is HELD long ('buy'), so the order that
+      // reduces it sells.
+      side: 'sell',
+      qty: '6',
+      limit_price: '110',
+      time_in_force: 'gtc',
+      // Never `'key-1'` — that id already named the now-cancelled original
+      // bracket (see the method's own doc comment for why reusing it is
+      // refused rather than risked).
+      client_order_id: 'key-1:rearm',
+      order_class: 'oco',
+      stop_loss: { stop_price: '95' },
+    });
+  });
+
+  it("sweeps a re-armed residual and tags its fills under the LOT's own key, target first then stop", async () => {
+    const submitOcoOrder = vi.fn().mockResolvedValue({
+      ...acceptedOrder(),
+      id: 'rearm-1',
+      order_class: 'oco',
+      legs: [
+        {
+          id: 'rearm-stop-1',
+          type: 'stop',
+          status: 'held',
+          filled_qty: '0',
+          filled_avg_price: null,
+          filled_at: null,
+        },
+      ],
+    });
+    const filledAt = '2026-07-15T15:10:00Z';
+    const getOrder = vi.fn().mockResolvedValue(
+      acceptedOrder({
+        id: 'rearm-1',
+        status: 'filled',
+        filled_qty: '6',
+        filled_avg_price: '110',
+        filled_at: filledAt,
+        legs: [
+          {
+            id: 'rearm-stop-1',
+            type: 'stop',
+            status: 'canceled',
+            filled_qty: '0',
+            filled_avg_price: null,
+            filled_at: null,
+          },
+        ],
+      }),
+    );
+    const adapter = adapterWith(makeClient({ submitOcoOrder, getOrder }));
+    await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+
+    const fills = await adapter.fetchNewFills(new Date(0));
+
+    // Tagged under the LOT's OWN idempotency key ('key-1'), not the OCO's
+    // wire id ('key-1:rearm') — this is what lets `ingestFills()`'s
+    // ordinary per-position routing pick it up with no knowledge a re-arm
+    // was ever involved (`rearmedLegs`' doc comment). The take-profit leg IS
+    // the top-level order (an OCO's own shape, no 'entry' fill), tagged
+    // `'target'`; the stop-loss reports zero filled_qty here so it produces
+    // no fill row.
+    expect(fills).toEqual([
+      {
+        client_order_id: 'key-1',
+        broker_fill_id: 'rearm-1',
+        leg: 'target',
+        price: 110,
+        qty: 6,
+        fee: 0,
+        timestamp: new Date(filledAt),
+      },
+    ]);
+  });
+
   it('normalizes venue positions, signing the short side', async () => {
     const adapter = adapterWith(
       makeClient({
@@ -1350,6 +1550,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       marketData: {} as MarketDataService,
       config: executionConfig(),
       mode: 'paper',
+      residualExposureAlerts: { postResidualExposureAlert: async () => {} },
     };
     const execution = new ExecutionImpl(input);
 

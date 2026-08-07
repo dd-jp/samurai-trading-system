@@ -289,6 +289,31 @@ export const DEFAULT_COINBASE_PACING: TokenBucketConfig = {
 };
 
 /**
+ * Bitstamp OHLC pacing (#496, warm-start backfill script's CRYPTO FALLBACK
+ * only — same posture as `DEFAULT_COINBASE_PACING`/`resolveCoinbasePacing`
+ * above and for the identical reason: the live composition root
+ * (`production.ts`) never calls `resolveBitstampPacing`, so a typo'd
+ * `SAMURAI_PACING_BITSTAMP_*` cannot fail orchestrator boot during an
+ * unattended soak. Kept OUT of `VENUE_KEYS`/`resolveVenuePacing` for that
+ * reason, not because Bitstamp is unpaced.
+ *
+ * No documented per-key ceiling exists to enforce — the endpoint is
+ * unauthenticated (no key, no account; ADR-0001 /
+ * `docs/research/free-ohlcv-fallback-sources-2026-08-06.md` names Bitstamp
+ * `/api/v2/ohlc` as the crypto fallback and records no rate-limit headers
+ * observed while probing it). `capacity: 2, refillPerSecond: 1` mirrors
+ * `DEFAULT_COINBASE_PACING` exactly — same UNVERIFIED-but-conservative
+ * posture, same shape of workload (a hand-run backfill script fetching a
+ * handful of symbols, not a sustained loop), so there is no basis to pick a
+ * different number rather than an honest label.
+ */
+export const DEFAULT_BITSTAMP_PACING: TokenBucketConfig = {
+  capacity: 2,
+  refillPerSecond: 1,
+  reserveForPriority: 0,
+};
+
+/**
  * The environment variables that override one bucket. Not scoped to
  * `VenueKey` — the string it prefixes is a plain label (`'alpaca'`,
  * `'polygon'`, ...), because `resolvePolygonPacing` below reuses this same
@@ -483,6 +508,25 @@ export function resolveCoinbasePacing(env: NodeJS.ProcessEnv = process.env): Tok
     env,
     venuePacingEnvVars('coinbase'),
     DEFAULT_COINBASE_PACING,
+    undefined,
+  );
+}
+
+/**
+ * Bitstamp's own pacing resolution — reads and validates ONLY
+ * `SAMURAI_PACING_BITSTAMP_*`, via the same `resolveBucketPacing` every
+ * other venue uses, so a malformed override here can never affect
+ * `resolveVenuePacing()` (which never calls this) and vice versa. See
+ * `DEFAULT_BITSTAMP_PACING` for why this is a separate entry point rather
+ * than one more `VENUE_KEYS` member — same reasoning as
+ * `resolveCoinbasePacing`. `documentedCeiling` is `undefined`: Bitstamp
+ * publishes no per-key ceiling to enforce against (there is no key).
+ */
+export function resolveBitstampPacing(env: NodeJS.ProcessEnv = process.env): TokenBucketConfig {
+  return resolveBucketPacing(
+    env,
+    venuePacingEnvVars('bitstamp'),
+    DEFAULT_BITSTAMP_PACING,
     undefined,
   );
 }

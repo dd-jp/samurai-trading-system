@@ -89,6 +89,8 @@ describe('buildPipelineView', () => {
     });
     expect(lane.cells.every((c) => c.state === 'not_reached')).toBe(true);
     expect(lane.cells.every((c) => c.duration_ms === null && c.decision === null)).toBe(true);
+    // #535: an idle lane's cells have no `audit_log` row to timestamp.
+    expect(lane.cells.every((c) => c.recorded_at === null)).toBe(true);
     expect(view.live_trace_id).toBeNull();
     expect(view.live_entered_at).toBeNull();
   });
@@ -126,6 +128,11 @@ describe('buildPipelineView', () => {
     // The terminal row of a completed trace has no successor to measure
     // against, so its duration is null rather than an invented 0.
     expect(cell(view, 'execution')).toMatchObject({ state: 'done', duration_ms: null });
+    // #535: every `done`/`stopped` cell carries its `audit_log` row's own
+    // timestamp, not the trace's `started_at` or the next row's time.
+    expect(cell(view, 'analysts').recorded_at).toBe(at(0).toISOString());
+    expect(cell(view, 'debate').recorded_at).toBe(at(2).toISOString());
+    expect(cell(view, 'execution').recorded_at).toBe(at(9).toISOString());
   });
 
   it('marks the stage a short-circuited trace ended at as stopped, the rest not_reached', () => {
@@ -146,11 +153,16 @@ describe('buildPipelineView', () => {
       state: 'stopped',
       decision: 'no_trade',
       duration_ms: null,
+      recorded_at: at(3).toISOString(),
     });
     expect(cell(view, 'risk').state).toBe('not_reached');
     expect(cell(view, 'verdict').state).toBe('not_reached');
     expect(cell(view, 'execution').state).toBe('not_reached');
     expect(onlyLane(view)).toMatchObject({ outcome: 'stopped', final_stage: 'trader' });
+    // #535: cells the trace never reached have nothing to timestamp.
+    expect(cell(view, 'risk').recorded_at).toBeNull();
+    expect(cell(view, 'verdict').recorded_at).toBeNull();
+    expect(cell(view, 'execution').recorded_at).toBeNull();
   });
 
   it('reports a quorum skip as its own outcome, not as a generic stop', () => {
@@ -209,6 +221,9 @@ describe('buildPipelineView', () => {
       attempts: 2,
       decision: 'bullish',
       duration_ms: 5_000,
+      // #535: last write wins, matching `decision` — the retry's own row
+      // (t=4), not the first attempt's (t=1).
+      recorded_at: at(4).toISOString(),
     });
     expect(cell(view, 'analysts').attempts).toBe(1);
   });
@@ -255,12 +270,50 @@ describe('buildPipelineView', () => {
       state: 'live',
       duration_ms: null,
       decision: null,
+      // #535: a live cell has no `audit_log` row yet — the row is written
+      // after the stage returns — so it has nothing to timestamp.
+      // `live_entered_at` is its clock instead.
+      recorded_at: null,
       attempts: 0,
     });
-    expect(cell(view, 'analysts').state).toBe('done');
+    expect(cell(view, 'analysts')).toMatchObject({
+      state: 'done',
+      recorded_at: at(0).toISOString(),
+    });
     expect(cell(view, 'trader').state).toBe('not_reached');
     expect(view.live_trace_id).toBe('trace-live');
     expect(view.live_entered_at).toBe(at(1).toISOString());
+  });
+
+  it('keeps the prior attempt decision word on a live cell mid-retry, but not its timestamp', () => {
+    // A stage can legitimately be reached twice in one trace (#414's retry
+    // case) — including a retry that is still in flight: the first attempt
+    // wrote an `audit_log` row, and `current_tick` now points back at the
+    // same stage for the second one. `decision` and `recorded_at` disagree on
+    // purpose here: `decision` is pre-existing per-stage state, unconditional
+    // on `state`, so it keeps reporting the last row's word until a new one
+    // overwrites it — the operator sees why the first attempt is being
+    // retried. `recorded_at` is gated on `state === 'live'` (#535, matching
+    // `duration_ms`'s existing gate): the CURRENT attempt has no row yet, and
+    // reporting the first attempt's timestamp would let the frontend replay
+    // engine mistake a stale prior-attempt time for the live stage's
+    // transition time. `live_entered_at` is the live clock, not this field.
+    const view = buildPipelineView(
+      activity({
+        events: [
+          event('trace-live', 'analysts', 'quorum_met', 0),
+          event('trace-live', 'debate', 'error_retry', 1),
+        ],
+        live: [liveTick({ trace_id: 'trace-live', stage: 'debate', entered_at: at(4) })],
+      }),
+    );
+
+    expect(cell(view, 'debate')).toMatchObject({
+      state: 'live',
+      decision: 'error_retry',
+      recorded_at: null,
+      attempts: 1,
+    });
   });
 
   it('starts an in-flight lane from current_tick when no stage row exists yet', () => {
@@ -350,6 +403,7 @@ describe('buildPipelineView', () => {
       attempts: 0,
       decision: null,
       duration_ms: null,
+      recorded_at: null,
     });
   });
 
@@ -373,6 +427,7 @@ describe('buildPipelineView', () => {
       state: 'skipped',
       duration_ms: null,
       attempts: 0,
+      recorded_at: null,
     });
     expect(cell(view, 'trader').state).toBe('stopped');
   });

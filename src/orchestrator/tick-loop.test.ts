@@ -278,11 +278,39 @@ describe('runTickPlan', () => {
 
   it('does not stall a fast instrument behind a slow one', async () => {
     // Cap 1 would serialize these; cap 2 lets AAPL finish while SPY blocks.
+    //
+    // Gated rather than timed (#528, see docs/coding-standards.md "Async
+    // test assertions"): SPY does not resume until AFTER AAPL has pushed to
+    // `finished`, so the assertion is a happens-before relationship with no
+    // wall-clock dependence.
+    //
+    // Deliberate deadlock at a cap of 1: with one worker, SPY runs first and
+    // never yields its slot, so AAPL never starts, `aaplRan` never resolves,
+    // and the test times out instead of passing by accident. Do not "fix"
+    // this back to a sleep.
+    //
+    // That deadlock assumes SPY is dispatched FIRST, which it is only because
+    // `makePlan` below lists it first and the pool dispatches in plan order.
+    // Reorder the plan so AAPL leads and a cap of 1 would still pass — AAPL
+    // would push, release, and SPY would resume on an already-resolved
+    // promise. The ordering is load-bearing, not cosmetic.
     const finished: string[] = [];
+    let releaseSpy!: () => void;
+    const aaplRan = new Promise<void>((resolve) => {
+      releaseSpy = resolve;
+    });
     const runner: TickRunner = {
       async runInstrument(signal, ctx) {
-        await new Promise((resolve) => setTimeout(resolve, signal.asset === 'SPY' ? 20 : 0));
+        if (signal.asset === 'SPY') {
+          await aaplRan;
+        }
         finished.push(signal.asset);
+        // Release AFTER pushing, never before: SPY's resume is only a
+        // microtask away, so this ordering is what makes "AAPL pushed before
+        // SPY resumed" true rather than merely likely. Do not hoist.
+        if (signal.asset === 'AAPL') {
+          releaseSpy();
+        }
         return { trace_id: ctx.trace_id, final_stage: 'analysts' };
       },
     };

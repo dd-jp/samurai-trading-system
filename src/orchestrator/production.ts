@@ -170,6 +170,7 @@ import {
   LoggingHeartbeatChannel,
   LoggingLoosenApprovalChannel,
   LoggingOrphanAlertChannel,
+  LoggingResidualExposureAlertChannel,
   LoggingUnpricedFillAlertChannel,
   ParkedCiiScoreProvider,
   UnwiredApprovalChannel,
@@ -695,6 +696,13 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     marketData,
     config: config.executionConfig,
     mode: config.mode,
+    // #525: the fallback alert for a residual `ingestFills()` failed to
+    // re-arm after a partial flatten. Required on `ExecutionInput`, for the
+    // same "no silent default" reason `unpricedFillAlerts` above is
+    // required on `AlpacaBrokerAdapterInput` (#298) — an omitted channel is
+    // the #322 bug re-created for a fifth escalation.
+    residualExposureAlerts:
+      config.residualExposureAlerts ?? new LoggingResidualExposureAlertChannel(logger),
   };
 
   // #464, retargeted at Nous by ADR-0009. The off switch used to be the

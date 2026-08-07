@@ -66,6 +66,7 @@ import type {
   AlpacaBracketOrderRequest,
   AlpacaClient,
   AlpacaMarketOrderRequest,
+  AlpacaOcoOrderRequest,
   AlpacaOrder,
   AlpacaPosition,
 } from './alpaca-client.js';
@@ -536,6 +537,26 @@ export class AlpacaHttpBrokerClient implements AlpacaClient {
       '/v2/orders',
       { method: 'POST', body: JSON.stringify({ ...request, type: 'market' }) },
       'submitMarketOrder',
+      validateAlpacaOrder,
+    );
+  }
+
+  /**
+   * Re-arm on a residual (#525) — `order_class: 'oco'`, take-profit +
+   * stop-loss, no entry: this closes quantity the account already holds
+   * rather than opening any. `type: 'limit'` is the wire-only field, added
+   * here for the same reason `submitOrder`/`submitMarketOrder` add theirs —
+   * the interface's `limit_price` already implies it.
+   *
+   * NOT verified against a live paper account: this mirrors Alpaca's
+   * documented OCO shape, but nothing in this repo has exercised it against
+   * the real API.
+   */
+  async submitOcoOrder(request: AlpacaOcoOrderRequest): Promise<AlpacaOrder> {
+    return this.request<AlpacaOrder>(
+      '/v2/orders',
+      { method: 'POST', body: JSON.stringify({ ...request, type: 'limit' }) },
+      'submitOcoOrder',
       validateAlpacaOrder,
     );
   }

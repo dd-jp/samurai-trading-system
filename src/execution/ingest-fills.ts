@@ -23,6 +23,20 @@
  * journalled it was closing before the rest of this module ever sees it —
  * without that routing there is no other mechanism that closes a
  * flatten-closed lot at all (see the finding in PR #517's body).
+ *
+ * #525: `executeExit` cancels every held lot's protective legs BEFORE
+ * submitting the flatten (#516 — a resting leg fires into a now-flat
+ * position and opens a REVERSE one). When the flatten fills completely that
+ * is safe; when it fills PARTIALLY, the cancelled legs are simply gone and
+ * whatever remains open is naked until something re-arms it. `advanceLot`
+ * below re-arms a residual the same poll it learns about it — from the
+ * lot's own new exit fill, or (see `redistributeFlattenFills`'s returned
+ * set) from a flatten that named this lot at all, even one that gave it
+ * ZERO share this poll because an earlier-opened sibling absorbed the whole
+ * partial fill. A failed re-arm posts `ResidualExposureAlertChannel` rather
+ * than retrying — the recorded decision on #525 rejected a retry loop on
+ * the order-submitting path, and this fallback is what keeps a naked
+ * residual from going unnoticed through an unattended soak (#238).
  */
 import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../shared/index.js';
 import type { ExecutionInput, NormalizedFill } from './types.js';
@@ -63,10 +77,23 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
   // redistributes it into the target lot(s)' own buckets (keyed by their
   // OWN idempotency_key) before the loop reads them, so the rest of this
   // function needs no knowledge that a flatten was ever involved.
-  await redistributeFlattenFills(input, byLot, positions);
+  //
+  // Its RETURN (#525) is every lot key named by a flatten resolved this
+  // poll, regardless of whether that lot ended up with a nonzero share of
+  // this specific raw fill — `advanceLot` needs that even for a lot this
+  // poll gives NO new fill, so it can still re-arm a residual left at its
+  // full original size because an earlier sibling lot absorbed the whole
+  // partial fill.
+  const flattenTargetedLots = await redistributeFlattenFills(input, byLot, positions);
 
   for (const position of positions) {
-    await advanceLot(input, position, byLot.get(position.idempotency_key) ?? [], now);
+    await advanceLot(
+      input,
+      position,
+      byLot.get(position.idempotency_key) ?? [],
+      now,
+      flattenTargetedLots.has(position.idempotency_key),
+    );
   }
 }
 
@@ -89,14 +116,22 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
  * is a flatten's — only afterwards, to force it to `'exit'` on the way out
  * (below), so `advanceLot`'s `isExitFill`/`closedTrade` see one true answer
  * regardless of which adapter reported it.
+ *
+ * Returns every lot key named by a flatten this call actually processed
+ * (#525) — independent of the per-fill split below, which can legitimately
+ * leave a later-opened lot with ZERO share of a partial fill. That lot gets
+ * no entry in `byLot` and so is otherwise invisible to `ingestFills`'
+ * per-position loop this poll; the caller uses this set to still run
+ * `advanceLot`'s re-arm check for it.
  */
 async function redistributeFlattenFills(
   input: ExecutionInput,
   byLot: Map<string, NormalizedFill[]>,
   positions: readonly OpenPosition[],
-): Promise<void> {
+): Promise<Set<string>> {
   const { store } = input;
   const positionKeys = new Set(positions.map((position) => position.idempotency_key));
+  const flattenTargetedLots = new Set<string>();
 
   // A snapshot of the keys, not a live iterator: the loop body deletes from
   // `byLot` as it goes (once a flatten bucket is consumed, redistributed) and
@@ -132,6 +167,12 @@ async function redistributeFlattenFills(
     // own write-ahead, which necessarily predates a lot that did not exist
     // yet.
     if (lotKeys === null || lotKeys.length === 0) continue;
+
+    // #525: recorded before the split below runs, so a lot that ends up
+    // with ZERO share of this raw fill (an earlier-opened sibling absorbed
+    // all of it) is still marked as needing the re-arm check — it is just
+    // as naked as one that got a partial share, only more so.
+    for (const lotKey of lotKeys) flattenTargetedLots.add(lotKey);
 
     const rawFills = byLot.get(clientOrderId);
     if (rawFills === undefined) continue; // appeases the type checker; every key here has a bucket.
@@ -232,14 +273,23 @@ async function redistributeFlattenFills(
       // nowhere safe to go, ever.
     }
   }
+
+  return flattenTargetedLots;
 }
 
-/** `fills` is this lot's bucket already — keyed on `client_order_id` by the caller. */
+/**
+ * `fills` is this lot's bucket already — keyed on `client_order_id` by the
+ * caller. `flattenTargetedThisPoll` (#525) is true when a flatten named
+ * this lot and resolved this poll, independent of whether `fills` itself is
+ * non-empty — see `redistributeFlattenFills`'s doc for why a lot can be
+ * named with zero share.
+ */
 async function advanceLot(
   input: ExecutionInput,
   position: OpenPosition,
   fills: readonly NormalizedFill[],
   now: Date,
+  flattenTargetedThisPoll: boolean,
 ): Promise<void> {
   const { broker, store } = input;
 
@@ -251,14 +301,29 @@ async function advanceLot(
 
   const newFills: Fill[] = [];
   let ingestedEntry = false;
+  let ingestedExit = false;
   for (const fill of lotFills) {
     if (await store.hasFill(fill.broker_fill_id)) continue;
     newFills.push(toFill(fill, position.idempotency_key));
     ingestedEntry ||= fill.leg === 'entry';
+    ingestedExit ||= fill.leg === 'exit';
   }
 
-  // Nothing landed: the lot is exactly as the last poll left it.
-  if (newFills.length === 0) return;
+  if (newFills.length === 0) {
+    // #525: normally "the lot is exactly as the last poll left it" — but a
+    // flatten can name this lot and resolve this poll while handing it ZERO
+    // share (an earlier-opened sibling absorbed the whole partial fill), in
+    // which case there is no new fill here at all yet the lot's legs were
+    // still cancelled by the SAME `executeExit` call that cancelled every
+    // held lot's legs before submitting the flatten. Nothing else in this
+    // function runs for a lot with no new fill, so the re-arm check has to
+    // happen here, off the fuller persisted record rather than this poll's
+    // (empty) one.
+    if (flattenTargetedThisPoll) {
+      await maybeRearmResidual(input, position, now);
+    }
+    return;
+  }
 
   // Recomputed from the full fill record (persisted rows + this poll's new
   // ones, in the order the atomic write below will persist them), never from
@@ -290,6 +355,16 @@ async function advanceLot(
     await broker.resizeProtectiveLegs(position.idempotency_key, filledSize);
   }
 
+  // #525: a partial flatten's own exit fill lands here as `ingestedExit`;
+  // `flattenTargetedThisPoll` covers the zero-share sibling case the block
+  // above already documents. `executeExit` cancels every held lot's legs
+  // BEFORE the flatten, so "not flat" after either signal means genuinely
+  // naked, never merely under-sized — that's `resizeProtectiveLegs`'
+  // case, handled above.
+  if (!flat && (ingestedExit || flattenTargetedThisPoll)) {
+    await maybeRearmResidual(input, position, now, { filledSize, exitQty: totalQty(exitFills) });
+  }
+
   // One transaction: fills, lot state, and (on flat) the ClosedTrade land
   // together or not at all — a crash mid-advance is repaired by the next
   // poll re-offering the same fills, which the dedup gate then accepts.
@@ -307,6 +382,108 @@ async function advanceLot(
         }
       : {}),
   });
+}
+
+/**
+ * Re-arms a residual left by a partial flatten (#525's recorded decision —
+ * option 1), or posts the fallback alert when the re-arm itself fails or
+ * cannot be attempted safely. Never throws: every failure this function can
+ * observe — the broker call rejecting, the alert channel itself failing —
+ * is swallowed here, the same posture `safeLog()` takes in
+ * orchestrator/tick-loop.ts, so a flaky re-arm or a flaky alert transport
+ * can never escape into `advanceLot` and cost the fill rows the caller is
+ * about to persist regardless.
+ *
+ * `known` lets the caller in `advanceLot`'s main path hand over
+ * `filledSize`/`exitQty` it already computed off the SAME persisted record,
+ * rather than re-reading the store; the zero-new-fill branch above has no
+ * such record in hand and reads it fresh here instead.
+ */
+async function maybeRearmResidual(
+  input: ExecutionInput,
+  position: OpenPosition,
+  now: Date,
+  known?: { filledSize: number; exitQty: number },
+): Promise<void> {
+  const { broker, store } = input;
+
+  let filledSize: number;
+  let exitQty: number;
+  if (known === undefined) {
+    const recorded = await store.getFills(position.idempotency_key);
+    filledSize = totalQty(recorded.filter((fill) => fill.leg === 'entry'));
+    exitQty = totalQty(recorded.filter(isExitFill));
+  } else {
+    ({ filledSize, exitQty } = known);
+  }
+
+  // No entry fill on record yet: there is nothing open to protect. Cannot
+  // happen on the `known` path (the caller already refused to reach here
+  // with `filledSize === 0`), but the zero-new-fill path above has no such
+  // guarantee — a flatten can, in principle, name a lot whose entry fill is
+  // still outstanding.
+  if (filledSize === 0) return;
+  // Flat by this fuller read even though the per-poll signal said
+  // "not flat": nothing left to protect.
+  if (coversQty(exitQty, filledSize)) return;
+
+  const residual = filledSize - exitQty;
+
+  // Fail-closed (`executeExit`'s precedent, execute.ts): a non-finite or
+  // non-positive residual while `coversQty` above says "not flat" means the
+  // store's own numbers disagree in a way `QTY_EPSILON_RELATIVE` was not
+  // built to absorb. Refusing to hand the broker a garbage quantity and
+  // alerting instead is the same posture `executeExit` takes on a
+  // store/venue size mismatch — surface it, never guess.
+  if (!(residual > 0) || !Number.isFinite(residual)) {
+    await alertResidualExposure(input, position, residual, now);
+    return;
+  }
+
+  try {
+    await broker.rearmProtectiveLegs(
+      position.idempotency_key,
+      position.instrument,
+      position.side,
+      residual,
+      position.stop,
+      position.target,
+    );
+  } catch {
+    // The broker's own error is not forwarded to the alert — see
+    // `ResidualExposureAlert`'s CREDENTIALS note: this channel carries only
+    // fields chosen here, never broker error text. Losing the detail is
+    // fine; an operator reads the alert and checks the venue directly.
+    await alertResidualExposure(input, position, residual, now);
+  }
+}
+
+/**
+ * The #525 fallback, posted when a re-arm failed or could not be safely
+ * attempted. Fire-and-forget and fully swallowed on failure — the alert IS
+ * the fallback, so there is nothing left to fall back to if delivering it
+ * also fails; the caller (`maybeRearmResidual`) must keep running either
+ * way, mirroring `safeLog()`'s reasoning in orchestrator/tick-loop.ts.
+ */
+async function alertResidualExposure(
+  input: ExecutionInput,
+  position: OpenPosition,
+  residualQty: number,
+  now: Date,
+): Promise<void> {
+  try {
+    await input.residualExposureAlerts.postResidualExposureAlert({
+      idempotency_key: position.idempotency_key,
+      instrument: position.instrument,
+      side: position.side,
+      residual_qty: residualQty,
+      stop: position.stop,
+      target: position.target,
+      observed_at: now,
+    });
+  } catch {
+    // Nothing left to do — see this function's doc comment.
+  }
 }
 
 /**
