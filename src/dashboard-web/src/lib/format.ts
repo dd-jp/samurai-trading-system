@@ -54,14 +54,21 @@ export function formatClockUtc(iso: string): string {
   return `${hh}:${mm}:${ss}Z`;
 }
 
-/** Signed, grouped USD: `+$1,234.56` / `−$0.50`. Zero (and −0) is `+$0.00`. */
+/**
+ * Signed, grouped USD: `+$1,234.56` / `−$0.50`. Zero (and −0) is `+$0.00`.
+ * A non-finite figure renders as an em dash, matching the unknown-value
+ * contract the duration and clock formatters already keep — `+$NaN` on a
+ * live-money surface reads as a rendering bug rather than as missing data.
+ */
 export function formatSignedUsd(value: number): string {
+  if (!Number.isFinite(value)) return EM_DASH;
   const sign = value < 0 ? MINUS : '+';
   return `${sign}$${USD.format(Math.abs(value))}`;
 }
 
-/** Signed R multiple: `+1.25R` / `−0.40R`. Zero is `+0.00R`. */
+/** Signed R multiple: `+1.25R` / `−0.40R`. Zero is `+0.00R`; non-finite is an em dash. */
 export function formatSignedR(value: number): string {
+  if (!Number.isFinite(value)) return EM_DASH;
   const sign = value < 0 ? MINUS : '+';
   return `${sign}${Math.abs(value).toFixed(2)}R`;
 }

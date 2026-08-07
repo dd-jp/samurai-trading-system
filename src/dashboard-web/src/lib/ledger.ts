@@ -45,7 +45,20 @@ export interface LedgerEntry {
 export interface LedgerState {
   /** Newest first, at most `LEDGER_CAP` entries. */
   entries: readonly LedgerEntry[];
-  /** Every trace_id ever ledgered this session, including cap-evicted ones. */
+  /**
+   * Every trace_id ever ledgered this session, including cap-evicted ones.
+   *
+   * Deliberately uncapped, and it must stay that way: the spec's dedupe is
+   * "against every entry ever seen this session, so a re-poll of an unchanged
+   * lane never re-stamps it", and a lane sits in the 15-minute window across
+   * ~300 polls. Any bound smaller than the session re-opens exactly the
+   * double-stamp this set exists to prevent (PR #582 review round 2).
+   *
+   * The growth it trades for that is negligible: lanes are capped at 24 and a
+   * trace turns over at the tick cadence (15 minutes, ADR-0008), so a tab left
+   * open for a week accumulates on the order of 10^4 UUID strings — under a
+   * megabyte, against a 190 kB bundle.
+   */
   seen: ReadonlySet<string>;
 }
 

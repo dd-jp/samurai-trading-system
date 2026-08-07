@@ -72,6 +72,18 @@ describe('formatSignedUsd', () => {
   });
 });
 
+describe('signed formatters — non-finite input', () => {
+  it('renders NaN and Infinity as an em dash, never +$NaN', () => {
+    // PR #582 review: the unknown-value contract formatStageDuration and
+    // formatClockUtc keep must hold for money and R too.
+    expect(formatSignedUsd(Number.NaN)).toBe('—');
+    expect(formatSignedUsd(Number.POSITIVE_INFINITY)).toBe('—');
+    expect(formatSignedUsd(Number.NEGATIVE_INFINITY)).toBe('—');
+    expect(formatSignedR(Number.NaN)).toBe('—');
+    expect(formatSignedR(Number.POSITIVE_INFINITY)).toBe('—');
+  });
+});
+
 describe('formatSignedR', () => {
   it('always carries an explicit sign and the R suffix', () => {
     expect(formatSignedR(1.25)).toBe('+1.25R');
