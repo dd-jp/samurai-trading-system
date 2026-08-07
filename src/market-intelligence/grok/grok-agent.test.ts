@@ -4,6 +4,7 @@
  */
 import type { SpendCap } from '../../debate-engine/index.js';
 import { SimulatedClock } from '../../shared/index.js';
+import type { LogEntry, Logger } from '../../shared/types.js';
 import { MarketIntelligenceStore } from '../index.js';
 import type { IntelligenceItem } from '../types.js';
 import {
@@ -52,7 +53,22 @@ function recordingSink(): GrokSpendSink & { calls: number } {
   return sink;
 }
 
-function build(options: { spendCap?: SpendCap; fail?: boolean } = {}) {
+function recordingLogger(): Logger & { entries: LogEntry[] } {
+  const entries: LogEntry[] = [];
+  return { entries, log: (entry: LogEntry) => entries.push(entry) };
+}
+
+function build(
+  options: {
+    spendCap?: SpendCap;
+    fail?: boolean;
+    /** Defaults `true` so existing tests exercise real, trusted retrieval. */
+    retrievalEvidence?: boolean;
+    /** Defaults to one item per call; pass `() => []` for the empty-answer shape. */
+    items?: (fetchIndex: number) => IntelligenceItem[];
+    logger?: Logger;
+  } = {},
+) {
   const clock = new SimulatedClock(START);
   const store = new MarketIntelligenceStore(clock);
   const sink = recordingSink();
@@ -64,9 +80,10 @@ function build(options: { spendCap?: SpendCap; fail?: boolean } = {}) {
         fetches++;
         if (options.fail === true) throw new Error('xAI responded 503');
         return {
-          items: [item(`i-${fetches}`)],
+          items: (options.items ?? ((i: number) => [item(`i-${i}`)]))(fetches),
           model: 'grok-4.5',
           usage: { input_tokens: 100, output_tokens: 50 },
+          retrievalEvidence: options.retrievalEvidence ?? true,
           latency_ms: 42,
         };
       },
@@ -75,6 +92,7 @@ function build(options: { spendCap?: SpendCap; fail?: boolean } = {}) {
     spendCap: options.spendCap ?? ADMITS,
     spendSink: sink,
     clock,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
   });
 
   return { agent, clock, store, sink, fetches: () => fetches };
@@ -175,5 +193,75 @@ describe('GrokAgent', () => {
     const context = store.getContext('crypto', WINDOW_24H, 't1');
     expect(context.social).toHaveLength(1);
     expect(context.social[0]?.entity).toBe('BTC-USD');
+  });
+
+  describe('retrieval-evidence guard (#485)', () => {
+    it('discards items that parsed cleanly but carry no evidence of retrieval', async () => {
+      // A response that isn't tagged as retrieved cannot be told apart from
+      // model recall, so it must not reach the analysts as signal — the same
+      // NO_DATA_MARKER degradation as an outage, not a fabricated neutral read.
+      const { agent, store } = build({ retrievalEvidence: false });
+
+      await agent.refresh('t1', 'BTC-USD', 'crypto');
+
+      expect(store.getContext('crypto', WINDOW_24H, 't1').social).toEqual([]);
+    });
+
+    it('still meters the call and marks the bucket when evidence is absent', async () => {
+      // The call still cost money and still happened — only the ingest is
+      // suppressed. Marking the bucket keeps a permanently-unretrieved client
+      // (like NousSentimentClient) from being hammered every tick, and NOT
+      // metering would let an un-retrieved-but-billed call under-count spend.
+      const { agent, sink, fetches } = build({ retrievalEvidence: false });
+
+      expect(await agent.refresh('t1', 'BTC-USD', 'crypto')).toBe(true);
+      expect(sink.calls).toBe(1);
+
+      await agent.refresh('t2', 'BTC-USD', 'crypto');
+      expect(fetches()).toBe(1); // bucket held, no second call this window
+    });
+
+    it('logs a warning distinguishing "recalled, never looked" from an unreadable response', async () => {
+      const logger = recordingLogger();
+      const { agent } = build({ retrievalEvidence: false, logger });
+
+      await agent.refresh('t1', 'BTC-USD', 'crypto');
+
+      const warning = logger.entries.find((e) => e.level === 'warn');
+      expect(warning?.message).toContain('no evidence of retrieval');
+      expect(warning?.message).toContain('discarding');
+      expect(warning?.payload).toMatchObject({ instrument: 'BTC-USD', discarded_items: 1 });
+    });
+
+    it('logs "could not look" at info, not warn, when there was nothing to discard', async () => {
+      // This is the routine case in production today — NousSentimentClient
+      // reports no evidence on every call, and today it also returns zero
+      // items every call (see that client's header). It must still log,
+      // because silence here would be indistinguishable from "looked and saw
+      // nothing" — but `warn` on every one of ~36 calls/day for a known,
+      // expected state would just train the log to be ignored.
+      const logger = recordingLogger();
+      const { agent } = build({ retrievalEvidence: false, items: () => [], logger });
+
+      await agent.refresh('t1', 'BTC-USD', 'crypto');
+
+      expect(logger.entries).toHaveLength(1);
+      expect(logger.entries[0]?.level).toBe('info');
+      expect(logger.entries[0]?.message).toContain('no retrieval evidence');
+      expect(logger.entries[0]?.payload).toMatchObject({
+        instrument: 'BTC-USD',
+        discarded_items: 0,
+      });
+    });
+
+    it('ingests when the client does supply retrieval evidence', async () => {
+      // The seam option 3 restores: a client that sets retrievalEvidence:
+      // true is trusted with no change to this file.
+      const { agent, store } = build({ retrievalEvidence: true });
+
+      await agent.refresh('t1', 'BTC-USD', 'crypto');
+
+      expect(store.getContext('crypto', WINDOW_24H, 't1').social).toHaveLength(1);
+    });
   });
 });
