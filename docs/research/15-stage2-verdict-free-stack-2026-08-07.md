@@ -42,7 +42,11 @@ Ingested coverage, measured from the scratch store after the run:
 | DSR crypto | 0.395 | **0.805** | significant |
 | OOS Sharpe kill-line | 9 of 14 pass | **3 of 24 pass** | > 0.5 |
 
-**MinBTL stops being a constraint at all.** The cap moves from 7 configurations to **812**, against a grid of 12. For the first time this project's Stage 2 has search headroom it is nowhere near spending — that is the direct payoff of the repoint, and it is table stakes rather than a result.
+**MinBTL stops being a constraint at all.** The cap moves from 7 configurations to **812**.
+
+Read that carefully, because the config counts are easy to misread as a widened search. **The grid is fixed at 12 and always has been.** `sizeTrialGridToSample` (#405) *downsamples* it when the sample cannot support 12 — `if (requested <= limit) return { selected: entries }` returns the grid untouched otherwise. So the prior run's 7 was the 12-config grid thinned to what 1.99 years supported; this run's 12 is that same grid, unthinned. The search did not grow. The constraint stopped binding, and PBO/DSR are now computed over the whole designed grid rather than an evenly-sampled subset of it.
+
+That is table stakes rather than a result — but it is the first time this project's Stage 2 has had headroom it is nowhere near spending.
 
 **PBO improves substantially and still rejects.** Stocks more than halve, 0.85 to 0.35, but the line is 0.05 and 0.35 is seven times it. The selection still does not generalise.
 
@@ -63,6 +67,17 @@ What it still does not gate: the paper soak, and the Stage 0 hypothesis. Stage 2
 The proxy has now been measured to destruction. The productive next step is not another run of it but **replacing it with the strategy actually intended for capital** — the vol-targeted diversified premium harvest of doc 14 — so that a Stage 2 verdict says something about the thing that would trade. The harness is now demonstrably capable of supporting that: 10 years of bars, 812 configurations of MinBTL headroom, PBO/DSR/CSCV all computing.
 
 Two known gaps that a premium-harvest Stage 2 would have to close first: the universe is 6 symbols (2.58 effective bets, measured in doc 13) against the 12 the strategy needs, and the equity legs are hindsight-selected.
+
+## Provenance of these numbers
+
+The run was executed at commit `211f425`. The follow-up commit `7024072`
+changed **imports and test stubs only** — routing `stage2-source.ts` through
+the `cost-model-backtest` barrel and replacing cast-based test fixtures with
+real `Response` objects — with no change to fetching, validation, windowing or
+scoring. Verified after that commit by the full suite (2792 passing) and by
+re-checking `resolveStage2Source` against the built output for both sources.
+The numbers below are therefore reproducible at `HEAD`, not only at the commit
+that produced them.
 
 ## Reproducing
 
