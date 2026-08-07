@@ -57,9 +57,23 @@ Four constraints make the reversal narrow rather than a licence:
    and `mode`). The rewrite is confined to presentation.
 3. **The GET-only posture survives intact.** The server gains a static-file
    handler for `dist/dashboard-web/`, not a write path. Non-`GET` still answers
-   `405`; the bundle is served with a resolved-path prefix check so a request
-   cannot escape the bundle root. Serving files from disk is the one genuinely
-   new attack surface, and its traversal guard is a required test.
+   `405`; the bundle is served only after the resolved path is proved to be
+   **inside** the bundle root, so a request cannot escape it. Serving files from
+   disk is the one genuinely new attack surface v2 introduces, and the guard is
+   the thing that closes it, so it is specified rather than left to the
+   implementer:
+
+   > **A raw `resolved.startsWith(root)` is not the guard.** String-prefix
+   > matching accepts any sibling whose name merely begins with the root's —
+   > a `dist/dashboard-web-evil/` next to `dist/dashboard-web/` passes it and
+   > escapes the bundle without ever using a `..` segment. Require
+   > `!path.relative(root, resolved).startsWith('..')` (equivalently, a prefix
+   > check against `root + path.sep`), which is a check about directory
+   > containment rather than about characters.
+
+   Both escapes are **required test cases**: the `..`/encoded-`..` traversal,
+   and the sibling-directory-sharing-a-prefix case. The second is the one a
+   naive implementation passes the first test while remaining open to.
 4. **Zero external requests.** Fonts are self-hosted through `@fontsource` and
    bundled. Nothing in the built page reaches any host but its own origin — an
    operator watching live money must not have a page that a dead CDN can blank.

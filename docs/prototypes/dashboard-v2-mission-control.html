@@ -1,3 +1,6 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
 <meta charset="utf-8">
 <title>Samurai — Mission Control (Prototype)</title>
 <style>
@@ -277,6 +280,8 @@ body.stale #t-snap .tlabel{color:var(--amber)}
   *{animation-duration:.01ms!important;animation-delay:0ms!important;transition-duration:.01ms!important}
 }
 </style>
+</head>
+<body>
 
 <div class="wrap">
   <div class="telemetry">
@@ -646,3 +651,6 @@ document.getElementById('stale-toggle').onclick=function(){
   if(staleOn){clockEl.textContent=clock.toISOString().slice(11,19);}
 };
 </script>
+
+</body>
+</html>
