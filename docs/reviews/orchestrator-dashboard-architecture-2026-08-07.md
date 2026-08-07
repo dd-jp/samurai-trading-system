@@ -4,7 +4,7 @@
 
 ## TL;DR — Verdict: (b) good bones, needs targeted refactors. No re-architecture.
 
-The shipped topology — one orchestrator process and one read-only dashboard process sharing a single WAL-mode SQLite file, optionally co-supervised by `yarn serve` — is sound, matches every governing spec/ADR, and already supports the dashboard v2 rewrite: ADR-0010 explicitly confines v2 to presentation ("The backend does not move", ADR-0010 §Decision pt 2), and the one hard data precondition, `PipelineCell.recorded_at` (#535/#543), is verified wired (`src/dashboard/pipeline-query.ts:288`). The module boundary between the two consumers is real: the dashboard touches orchestrator state only through `DashboardQueryStore` (plain `SELECT`s, `src/dashboard/sqlite-query-store.ts:7-10`), never through orchestrator internals. What needs fixing is a short list of shared-store hygiene items (dashboard opens the DB write-capable; the migration runner has a measured check-then-act race; no `busy_timeout` anywhere) and one honesty defect (the dashboard serves zeroed metrics that the orchestrator now computes for real). None of them changes the architecture.
+The shipped topology — one orchestrator process and one read-only dashboard process sharing a single WAL-mode SQLite file, optionally co-supervised by `yarn serve` — is sound, matches every governing spec/ADR, and already supports the dashboard v2 rewrite: ADR-0010 explicitly confines v2 to presentation ("The backend does not move", ADR-0010 §Decision pt 2), and the one hard data precondition, `PipelineCell.recorded_at` (#535/#543), is verified wired (`src/dashboard/pipeline-query.ts:288`). The module boundary between the two consumers is real: the dashboard touches orchestrator state only through `DashboardQueryStore` (plain `SELECT`s, `src/dashboard/sqlite-query-store.ts:7-10`), never through orchestrator internals. What needs fixing is a short list of shared-store hygiene items (dashboard opens the DB write-capable; the migration runner has a measured check-then-act race; the busy timeout is only a library default, never pinned) and one honesty defect (the dashboard serves zeroed metrics that the orchestrator now computes for real). None of them changes the architecture.
 
 ## Current state (as built, not as docs claim)
 
@@ -41,9 +41,9 @@ Two related facts:
 
 **Fix, two parts:** (a) open the dashboard's handle with better-sqlite3's `{ readonly: true, fileMustExist: true }` and skip migrations there (refusing to start on a missing/behind-schema file is the correct posture for a reader — same refuse-don't-guess line `resolveStoreMode` already takes, `open-shared-store.ts:72-79`); (b) make `runMigrations` take the schema decision atomically (e.g. `BEGIN IMMEDIATE` around the read-and-apply, or re-check inside each migration's transaction). Part (a) also makes the read-only claim structural, matching the server's own "no write path by construction" standard (`server.ts:11-15`).
 
-### F3 (MEDIUM) — No `busy_timeout` on any connection
+### F3 (LOW, downgraded from MEDIUM on verification) — `busy_timeout` protection is real but implicit
 
-`grep -rn busy_timeout src/` returns nothing; `openSharedStore` sets WAL/`synchronous`/`foreign_keys` only (`open-shared-store.ts:195-198`). better-sqlite3's default busy timeout applies (verified against the pinned v13.0.1: the constructor's `timeout` option defaults to 5000 ms, `node_modules/better-sqlite3/lib/database.js:33`), but two processes now share this file routinely (`yarn serve`), and WAL still serializes writers and can return `SQLITE_BUSY` to a second writer or during checkpoint recovery. Today the dashboard's snapshot handler converts any throw into a 500 (`server.ts:78-83`) and the tick loop logs-and-continues (`production.ts:910-921`), so the failure is survivable — but a one-line `db.pragma('busy_timeout = 5000')` in `openSharedStore` turns spurious contention errors into short waits. Becomes near-moot for the reader once F2(a) lands (a WAL reader never blocks on a writer), but the orchestrator's own writer path still wants it.
+`grep -rn busy_timeout src/` returns nothing; `openSharedStore` sets WAL/`synchronous`/`foreign_keys` only (`open-shared-store.ts:195-198`). Verified against the pinned v13.0.1: the constructor's `timeout` option defaults to 5000 ms (`node_modules/better-sqlite3/lib/database.js:33`), so every connection ALREADY waits up to 5 s on contention before surfacing `SQLITE_BUSY` — the substantive protection this finding originally asked for exists, and adding `db.pragma('busy_timeout = 5000')` would be a no-op. What remains is hygiene, not a gap: the money path's contention behavior rests on an undocumented-in-repo library default that has shifted meaning across better-sqlite3 major versions, and nothing in `openSharedStore` states the chosen value or that one was chosen at all. Pin it explicitly (constructor `timeout` or the pragma, with a comment picking the value deliberately — a longer wait than 5 s is defensible for the orchestrator's writer during checkpoint recovery) so an upgrade or a reader of `open-shared-store.ts` can't silently lose or misread it. Becomes near-moot for the reader once F2(a) lands (a WAL reader never blocks on a writer).
 
 ### F4 (MEDIUM, prior finding — referenced, not re-filed) — Runner and dashboard disagree on the stage count
 
@@ -55,7 +55,7 @@ Required by dashboard-spec.md "Wire Shape" (owned by #539); absent from `snapsho
 
 ### F6 (LOW, accepted by design — recorded for visibility) — Under `yarn serve`, a dashboard crash halts trading
 
-The supervisor deliberately takes both children down when either dies, with a non-zero exit (`supervisor.ts:34-38`, `:204-227`). Its own header states the mitigation: "`yarn orchestrator` remains the money-path entrypoint" (`supervisor.ts:38`) — an unattended soak should run the orchestrator alone (or under `yarn serve || alert`, which the exit-code floor at `supervisor.ts:216-221` exists for). No change recommended; recorded because the coupling is surprising without the header's context.
+The supervisor deliberately takes both children down when either dies, with a non-zero exit (`supervisor.ts:34-38`, `:204-227`). Its own header states the mitigation: "`yarn orchestrator` remains the money-path entrypoint" (`supervisor.ts:38`) — an unattended soak should run the orchestrator alone (or under `yarn serve || alert`, which the exit-code floor at `supervisor.ts:216-221` exists for). The design is accepted, but a header comment is weak mitigation for a live-money path: recommend one startup `warn` when the supervisor links the two lifecycles, so an unattended `yarn serve` run states the coupling in its own log rather than relying on the operator having read `supervisor.ts` (see table row 6).
 
 ## Fitness assessment — why (b) and not (c)
 
@@ -73,10 +73,11 @@ The supervisor deliberately takes both children down when either dies, with a no
 | 1 | F2(a): dashboard opens store `{readonly: true, fileMustExist: true}`, no migrations | S | Schema written by a reader; version-skew migration under a live orchestrator |
 | 2 | F1: `getDailyMetrics` reads `daily_equity` (reuse `SqliteDailyEquityMetricsSource` computation + its observation gate) | M | Operator watches zeros labelled as the metrics suite through the entire soak |
 | 3 | F2(b): make `runMigrations` atomic (`BEGIN IMMEDIATE` around check+apply) | S | 96% failure rate on any future two-process fresh-DB start outside `yarn serve` |
-| 4 | F3: `busy_timeout` pragma in `openSharedStore` | XS | Spurious `SQLITE_BUSY` 500s / logged tick errors under contention |
+| 4 | F3: pin the busy timeout explicitly in `openSharedStore` (value chosen deliberately, with a comment) | XS | Protection is a library default; a better-sqlite3 upgrade or refactor can silently drop it |
 | 5 | F5: land `mode` on the snapshot with #539 (already ticketed) | XS | v2 telemetry strip permanently says "mode unknown" |
+| 6 | F6: one startup `warn` in the supervisor when it links the orchestrator's lifecycle to the dashboard's | XS | Unattended `yarn serve` runs inherit dashboard-crash-halts-trading coupling silently |
 
-Items 1–4 are all confined to `src/shared/store/` and `src/dashboard/index.ts`; none touches a pipeline stage, the tick loop, or the wire shape, and none blocks starting the v2 client work (`src/dashboard-web/`) in parallel.
+Items 1–4 are all confined to `src/shared/store/` and `src/dashboard/index.ts`, item 6 to `src/serve/supervisor.ts`; none touches a pipeline stage, the tick loop, or the wire shape, and none blocks starting the v2 client work (`src/dashboard-web/`) in parallel.
 
 ## Claims not verified
 
