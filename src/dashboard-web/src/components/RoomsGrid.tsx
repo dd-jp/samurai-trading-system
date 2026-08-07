@@ -49,17 +49,6 @@ export function RoomsGrid(props: RoomsGridProps) {
   const lanesByInstrument = new Map(view.lanes.map((lane) => [lane.instrument, lane]));
   const lightsOff = !invalidationHasShipped(view.lanes);
 
-  // Chips the layout placed but for which no lane exists. The layout is
-  // computed FROM `view.lanes`, so this is a broken internal contract rather
-  // than a wire case — which is exactly why it is named instead of dropped
-  // silently (#606 item 6). An instrument vanishing from the hero deserves the
-  // same treatment `StageStrip` gives a missing cell ("no cell for this stage
-  // on the wire"): a chip that is simply absent reads as "this instrument is
-  // not trading", which on a live-money surface is a claim, not a gap.
-  const lanelessChips = layout.rooms.flatMap((room) =>
-    room.visibleChips.filter((instrument) => !lanesByInstrument.has(instrument)),
-  );
-
   const liveLane =
     view.live_trace_id === null
       ? undefined
@@ -134,6 +123,15 @@ export function RoomsGrid(props: RoomsGridProps) {
             {layout.rooms.flatMap((room) =>
               room.visibleChips.map((instrument) => {
                 const lane = lanesByInstrument.get(instrument);
+                // Unreachable, and enforced as such rather than rendered
+                // around (PR #607 review round 2, revisiting #606 item 6):
+                // `computeLayout` builds every `visibleChips` entry FROM
+                // `view.lanes`, and `App` passes the same view to both, so
+                // `visibleChips ⊆ lanes` holds by construction. That invariant
+                // is guarded by a test in `room-layout.test.ts`, which is the
+                // right place for it — operator-facing text for a state that
+                // cannot occur is reassurance, not information, and it would
+                // sit on the hot path of every repaint to say nothing.
                 if (lane === undefined) return null;
                 return (
                   <SigilChip
@@ -154,18 +152,6 @@ export function RoomsGrid(props: RoomsGridProps) {
       {view.lanes.length === 0 && (
         <p className="empty-state">
           No lanes on the wire — the pipeline view reports no instrument in the last 15 minutes.
-        </p>
-      )}
-      {lanelessChips.length > 0 && (
-        // Rendered OUTSIDE `.rooms-floor` deliberately: the floor holds only
-        // absolutely-positioned chips that the walk animation measures, and a
-        // note among them would be a node that layer never expects.
-        <p className="empty-state" data-caveat="laneless-chips">
-          {lanelessChips.length === 1
-            ? 'One instrument is'
-            : `${lanelessChips.length} instruments are`}{' '}
-          placed in the rooms but carry no lane on this snapshot, so no chip is drawn for{' '}
-          {lanelessChips.join(', ')} — the layout and the lanes disagree.
         </p>
       )}
     </section>
