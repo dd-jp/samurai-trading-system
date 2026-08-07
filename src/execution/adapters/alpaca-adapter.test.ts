@@ -1,7 +1,13 @@
+import type { CostModel } from '../../cost-model-backtest/index.js';
+import type { MarketDataService } from '../../market-data-service/index.js';
+import type { OrderIntent } from '../../shared/index.js';
 import { type Clock, TokenBucket } from '../../shared/index.js';
+import type { VerdictDecision } from '../../verdict/index.js';
 import { BrokerError } from '../broker-error.js';
 import { InMemoryBrokerStateStore } from '../broker-state-store.js';
-import type { NativeBracketRequest } from '../types.js';
+import { ExecutionImpl } from '../execute.js';
+import { openTestExecutionStore } from '../sqlite-store-harness.js';
+import type { ExecutionConfig, ExecutionInput, NativeBracketRequest } from '../types.js';
 import type { UnpricedFillAlert, UnpricedFillAlertChannel } from '../unpriced-fill-alert.js';
 import { AlpacaBrokerAdapter, DEFAULT_UNPRICED_FILL_AGE_OUT_MS } from './alpaca-adapter.js';
 import type { AlpacaClient, AlpacaOrder } from './alpaca-client.js';
@@ -1081,5 +1087,238 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       // The only survivor, with an honest null where the price would not parse.
       { instrument: 'TSLA', qty: 4, side: 'buy', avg_entry_price: null },
     ]);
+  });
+});
+
+/**
+ * #524 review (kimi): unpruned `flattens` entries poll every terminal
+ * flatten forever, against Alpaca's shared ~200 req/min account budget
+ * (`alpaca-http-client.ts`) — a resource leak that grows for the whole
+ * 14-day soak (#238). Proved end-to-end through `ExecutionImpl`/
+ * `ingestFills()`, not just the adapter in isolation: the requirement is
+ * "prune only once the fill is actually ingested", and "ingested" is a
+ * claim about the STORE, which only the full pipeline can settle.
+ */
+describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
+  const NOW = new Date('2026-07-20T16:00:00Z');
+  const fixedClock: Clock = { now: () => NOW };
+
+  function executionConfig(): ExecutionConfig {
+    return {
+      simulated: {
+        volatility_indicator: {
+          indicator: 'atr',
+          params: { period: 14 },
+          timeframe: '1h',
+          lookback: 15,
+        },
+        adv_window: { timeframe: '1d', lookback: 20 },
+      },
+    };
+  }
+
+  function orderIntent(overrides: Partial<OrderIntent> = {}): OrderIntent {
+    return {
+      idempotency_key: 'key-aapl-entry',
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+      side: 'buy',
+      intent_type: 'entry',
+      size: 10,
+      entry: 100,
+      stop: 95,
+      target: 110,
+      time_in_force: 'day',
+      decision_timestamp: NOW,
+      metadata: {
+        debate_id: 'debate-1',
+        conviction: 0.7,
+        converged: true,
+        sizing: {
+          base_risk_fraction: 0.01,
+          conviction_multiplier: 1,
+          vol_floor_factor: 1,
+          non_converged_haircut: 1,
+          cosine_multiplier: 1,
+        },
+        cosine_precedent: { neighbor_count: 0, weighted_mean_r: null, no_precedent: true },
+      },
+      ...overrides,
+    };
+  }
+
+  function goDecision(order: OrderIntent): VerdictDecision {
+    return {
+      status: 'go',
+      order,
+      no_go_reason: null,
+      approval_path: 'automated',
+      would_require_approval: true,
+      idempotency_key: order.idempotency_key,
+      timestamp: NOW,
+    };
+  }
+
+  it('stops polling a flatten once it reaches a terminal state and its fill has closed the lot', async () => {
+    const { store } = openTestExecutionStore();
+
+    // A SECOND, unrelated lot that stays open throughout. Without it,
+    // `ingestFills()`'s own "no open positions, return early" guard would
+    // make the second poll below call `fetchNewFills` zero times the
+    // moment AAPL's lot closes — proving nothing about pruning either way.
+    const aaplEntry = orderIntent({
+      idempotency_key: 'key-aapl-entry',
+      instrument: 'AAPL',
+      size: 10,
+      entry: 100,
+      stop: 95,
+      target: 110,
+    });
+    const tslaEntry = orderIntent({
+      idempotency_key: 'key-tsla-entry',
+      instrument: 'TSLA',
+      size: 5,
+      entry: 200,
+      stop: 190,
+      target: 220,
+    });
+
+    const getOrder = vi.fn(async (orderId: string) => {
+      switch (orderId) {
+        case 'aapl-entry-order':
+          return acceptedOrder({
+            id: 'aapl-entry-order',
+            client_order_id: 'key-aapl-entry',
+            symbol: 'AAPL',
+            status: 'filled',
+            filled_qty: '10',
+            filled_avg_price: '100',
+            filled_at: NOW.toISOString(),
+            legs: [],
+          });
+        case 'tsla-entry-order':
+          return acceptedOrder({
+            id: 'tsla-entry-order',
+            client_order_id: 'key-tsla-entry',
+            symbol: 'TSLA',
+            status: 'filled',
+            filled_qty: '5',
+            filled_avg_price: '200',
+            filled_at: NOW.toISOString(),
+            legs: [],
+          });
+        case 'aapl-flatten-order':
+          return acceptedOrder({
+            id: 'aapl-flatten-order',
+            symbol: 'AAPL',
+            status: 'filled',
+            filled_qty: '10',
+            filled_avg_price: '105',
+            // `fixedClock` never advances, so `advanceLot`'s no-lookahead
+            // filter (`fill.timestamp <= now`) requires this at or before
+            // `NOW`, not after it.
+            filled_at: NOW.toISOString(),
+            legs: [],
+          });
+        default:
+          throw new Error(`unexpected getOrder(${orderId})`);
+      }
+    });
+    const submitOrder = vi.fn(async (request: { client_order_id: string }) =>
+      acceptedOrder({
+        id: request.client_order_id === 'key-aapl-entry' ? 'aapl-entry-order' : 'tsla-entry-order',
+        client_order_id: request.client_order_id,
+        status: 'accepted',
+        filled_qty: '0',
+        filled_avg_price: null,
+        filled_at: null,
+        legs: [],
+      }),
+    );
+    const submitMarketOrder = vi.fn(async () =>
+      acceptedOrder({
+        id: 'aapl-flatten-order',
+        status: 'accepted',
+        filled_qty: '0',
+        filled_avg_price: null,
+        filled_at: null,
+        legs: [],
+      }),
+    );
+    // The pre-flatten cancel of AAPL's own bracket (#516): nothing to
+    // clear, so `getOrderByClientOrderId` reports no order and `cancel()`
+    // resolves quietly (its own idempotent-by-contract behaviour).
+    const getOrderByClientOrderId = vi.fn().mockResolvedValue(null);
+
+    const client = makeClient({
+      submitOrder,
+      getOrder,
+      submitMarketOrder,
+      getOrderByClientOrderId,
+    });
+    const broker = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      clock: fixedClock,
+    });
+    const input: ExecutionInput = {
+      trace_id: 'trace-1',
+      clock: fixedClock,
+      broker,
+      store,
+      costModel: {} as CostModel,
+      marketData: {} as MarketDataService,
+      config: executionConfig(),
+      mode: 'paper',
+    };
+    const execution = new ExecutionImpl(input);
+
+    await execution.execute(goDecision(aaplEntry));
+    await execution.execute(goDecision(tslaEntry));
+    await execution.ingestFills(); // fills both entries — nothing to prune yet.
+
+    const exitResult = await execution.execute(
+      goDecision(
+        orderIntent({
+          idempotency_key: 'key-aapl-exit',
+          instrument: 'AAPL',
+          side: 'sell',
+          intent_type: 'exit',
+          size: 10,
+          entry: 105,
+          stop: 105,
+          target: 105,
+        }),
+      ),
+    );
+    expect(exitResult.status).toBe('submitted');
+
+    // Poll, then ingest: the flatten sweep observes the order 'filled'
+    // (terminal), its fill closes the lot, and ONLY THEN — inside the same
+    // call, after `collectFill` has already handed the fill to `fills` —
+    // does the adapter prune its own `flattens` entry.
+    await execution.ingestFills();
+
+    expect((await store.getPosition('key-aapl-entry'))?.order_state).toBe('closed');
+    expect(await store.getClosedTrades()).toHaveLength(1);
+    expect(await store.getOpenPositions()).toEqual([
+      expect.objectContaining({ idempotency_key: 'key-tsla-entry' }),
+    ]);
+
+    const flattenOrderCallsAfterClose = getOrder.mock.calls.filter(
+      ([orderId]) => orderId === 'aapl-flatten-order',
+    ).length;
+    expect(flattenOrderCallsAfterClose).toBe(1);
+
+    // A THIRD poll: TSLA is still open, so `fetchNewFills` genuinely runs
+    // again (not short-circuited by "no open positions") — proving the
+    // entry is gone, not merely that nothing asked.
+    await execution.ingestFills();
+
+    const flattenOrderCallsAfterSecondPoll = getOrder.mock.calls.filter(
+      ([orderId]) => orderId === 'aapl-flatten-order',
+    ).length;
+    expect(flattenOrderCallsAfterSecondPoll).toBe(1);
   });
 });

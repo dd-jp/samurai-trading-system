@@ -136,7 +136,8 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * in-memory only (#526 tracks making it durable) — see `fetchNewFills`'s
    * "flatten sweep" comment for the full rationale: why this is a SEPARATE
    * map from `brackets`, why in-memory is an accepted gap rather than an
-   * oversight, and why entries are never removed.
+   * oversight, and why (UNLIKE `brackets`) an entry here is pruned once its
+   * order goes terminal, rather than kept for the process lifetime.
    */
   private readonly flattens = new Map<string, string>();
   /**
@@ -510,17 +511,46 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // a lost `submitFlatten` response is "left for reconcile to resolve
     // later" even though reconcile does not yet do that either.
     //
-    // Entries are never removed once a flatten resolves — deliberately
-    // symmetric with `brackets`, which is likewise never pruned after a
-    // bracket goes terminal (only `cancel()` removes an entry from either
-    // map). A closed flatten costs one extra `getOrder` call per sweep for
-    // the rest of the process's life, the same standing cost a
-    // filled-and-closed bracket already has.
+    // Entries ARE removed once their order reaches a terminal state (#524
+    // review, deepseek: "the flatten poll set grows monotonically for the
+    // whole [14-day soak] run" against a ~200 req/min account-wide budget
+    // `alpaca-http-client.ts` warns can starve LIVE ORDER PLACEMENT if
+    // exhausted — a resource leak that degrades the soak itself, not a
+    // tidiness item). Deliberately ASYMMETRIC with `brackets`, which is
+    // still never pruned: a bracket can go on mattering after its entry
+    // fills (`resizeProtectiveLegs`, the stop/target legs), so "terminal"
+    // has no single moment for it. A flatten is a one-shot IOC market
+    // order — once it stops being `'submitted'` it will NEVER change again,
+    // including `'partially_filled'`: whatever did not fill immediately was
+    // cancelled by the venue, not left resting, so there is no later fill
+    // this entry could still deliver. Pruning happens below, INSIDE the
+    // `try`, only once `collectFill` has already run for this poll — the
+    // no-lookahead-preserving reason `advanceLot`'s own filter lives where
+    // it does in ingest-fills.ts applies here too: pruning first and
+    // collecting second would silently drop the terminal fill this exact
+    // ticket exists to stop dropping.
+    //
+    // What this does NOT wait for: confirmation that `ingestFills()`
+    // actually PERSISTED the fill this call handed it. This adapter has no
+    // `SharedStore` access to confirm that (`AlpacaBrokerAdapterInput.state`
+    // above documents that boundary as deliberate), so there is a narrow
+    // residual window — if `ingestFills()` goes on to fail, this poll, for a
+    // reason unrelated to this flatten, AFTER this fill was handed off but
+    // BEFORE its target lot's own advance is durably written — where the
+    // fill is not re-offered on the next poll, because this entry is
+    // already gone. That window is strictly narrower than the restart gap
+    // above (it needs an in-process failure on the EXACT poll a flatten
+    // resolves, not any later restart), and closing it needs the same
+    // `reconcile()`-learns-`flatten_submissions` work #526 already tracks
+    // rather than a second mechanism invented here.
     let flattenFailures = 0;
     for (const [clientOrderId, orderId] of [...this.flattens]) {
       try {
         const order = await this.call('fetchNewFills', () => this.input.client.getOrder(orderId));
         collectFill(order, 'exit', clientOrderId, symbolOf(order), since, fills);
+        if (mapOrderState(order.status) !== 'submitted') {
+          this.flattens.delete(clientOrderId);
+        }
       } catch (error) {
         // Same isolation and same UnpricedFillError bookkeeping as the
         // bracket loop above — see its comments for the reasoning, which
