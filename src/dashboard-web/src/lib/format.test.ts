@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { formatClockUtc, formatSignedR, formatSignedUsd, formatStageDuration } from './format.ts';
+import {
+  barWidth,
+  formatClockUtc,
+  formatCount,
+  formatFixed,
+  formatPercent,
+  formatPrice,
+  formatSignedR,
+  formatSignedUsd,
+  formatStageDuration,
+  formatUsd,
+  formatUsdPrecise,
+} from './format.ts';
 
 describe('formatStageDuration', () => {
   it('renders null as an em dash (an unknown duration is not zero)', () => {
@@ -97,5 +109,71 @@ describe('formatSignedR', () => {
     expect(formatSignedR(1.25)).toBe('+1.25R');
     expect(formatSignedR(-0.4)).toBe('−0.40R');
     expect(formatSignedR(0)).toBe('+0.00R');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The display formatters added for the components (issue #538). Every one of
+// them shares the unknown-value contract above: a value it cannot honestly
+// display renders as the em dash, never as `NaN` and never as a blank.
+// ---------------------------------------------------------------------------
+
+describe('unsigned formatters', () => {
+  it('renders USD with grouping and two decimals', () => {
+    expect(formatUsd(1_234.5)).toBe('$1,234.50');
+    expect(formatUsd(0)).toBe('$0.00');
+  });
+
+  it('renders per-debate costs at the precision that keeps them non-zero', () => {
+    // At two decimals a cents-scale figure rounds to `$0.00`, which reads as
+    // free rather than as small.
+    expect(formatUsdPrecise(0.028, 4)).toBe('$0.0280');
+  });
+
+  it('renders fixed-precision figures and counts', () => {
+    expect(formatFixed(0.8412)).toBe('0.84');
+    expect(formatFixed(260, 0)).toBe('260');
+    expect(formatCount(1_900_000)).toBe('1,900,000');
+  });
+
+  it('renders a 0-1 fraction as a percentage', () => {
+    expect(formatPercent(0.42, 0)).toBe('42%');
+    expect(formatPercent(0.018, 2)).toBe('1.80%');
+  });
+
+  it('renders prices with grouping', () => {
+    expect(formatPrice(61_240)).toBe('61,240.00');
+  });
+
+  it('renders every non-finite input as an em dash', () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(formatUsd(bad)).toBe('—');
+      expect(formatUsdPrecise(bad, 4)).toBe('—');
+      expect(formatFixed(bad)).toBe('—');
+      expect(formatCount(bad)).toBe('—');
+      expect(formatPercent(bad)).toBe('—');
+      expect(formatPrice(bad)).toBe('—');
+    }
+  });
+});
+
+describe('barWidth', () => {
+  it('renders a fraction as a CSS percentage', () => {
+    expect(barWidth(0.42)).toBe('42.0%');
+    expect(barWidth(0)).toBe('0.0%');
+  });
+
+  it('clamps above the cap rather than painting over the page', () => {
+    // A 300%-wide meter would overflow its neighbours; the over-cap fact is
+    // carried by a word beside the meter instead.
+    expect(barWidth(3)).toBe('100.0%');
+    expect(barWidth(-1)).toBe('0.0%');
+  });
+
+  it('returns null — not "0%" — for a value it cannot draw', () => {
+    // Zero is a legitimate reading (nothing spent), so unknown must be
+    // distinguishable from it: the caller renders a named state instead.
+    expect(barWidth(Number.NaN)).toBeNull();
+    expect(barWidth(Number.POSITIVE_INFINITY)).toBeNull();
   });
 });
