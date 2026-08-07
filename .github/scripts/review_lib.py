@@ -331,12 +331,21 @@ class SlicePlan(NamedTuple):
     #: Human-readable reasons for diff content that no slice covers. Non-empty
     #: means the review CANNOT be presented as whole-PR (see ReviewCoverage).
     skipped: list[str]
+    #: Paths already named in `skipped`, structured so `review_diff`'s
+    #: cross-check can tell "this file is missing and nobody said so" from
+    #: "this file is missing and the reason is already in the banner" — a
+    #: banner that lists the same file twice teaches readers to skim it.
+    skipped_files: tuple[str, ...] = ()
 
 
 class ReviewCoverage(NamedTuple):
     slices_total: int
     slices_reviewed: int
     skipped: tuple[str, ...] = ()
+    #: Failed slices that `skipped` already explains individually. Subtracted
+    #: from the generic "N slice(s) produced no usable review" line so one
+    #: loss is never counted as two — same rule as `SlicePlan.skipped_files`.
+    failures_explained: int = 0
 
     @property
     def is_complete(self) -> bool:
@@ -354,7 +363,7 @@ class ReviewCoverage(NamedTuple):
             "slices reviewed). Treat silence about the rest as absence of evidence, not "
             "evidence of absence.",
         ]
-        failed = self.slices_total - self.slices_reviewed
+        failed = self.slices_total - self.slices_reviewed - self.failures_explained
         if failed > 0:
             lines.append(f"> - {failed} diff slice(s) produced no usable review.")
         lines.extend(f"> - {reason}" for reason in self.skipped)
@@ -380,7 +389,10 @@ def _split_file_block(header: str, hunks: list[str], max_chars: int) -> tuple[li
         if len(header) + len(hunk) > max_chars:
             # A single hunk that doesn't fit even on its own. Sending it would
             # mean silently cutting mid-hunk; skipping it is disclosed.
-            first_line = hunk.splitlines()[0] if hunk.splitlines() else "@@"
+            # Hoisted: this hunk is 60k+ chars by definition, so splitting it
+            # twice to read one line is 60k of needless copying.
+            hunk_lines = hunk.splitlines()
+            first_line = hunk_lines[0] if hunk_lines else "@@"
             skipped.append(
                 f"hunk `{first_line.strip()}` is {len(hunk)} chars on its own "
                 f"(> {max_chars} cap) and could not be split further — NOT reviewed"
@@ -412,32 +424,44 @@ def split_diff_into_slices(
         return SlicePlan(slices=[], skipped=[])
 
     # Group the raw text into (path, header, hunks) per file.
+    #
+    # Lines accumulate in lists and are joined once. `s += line` on a list
+    # ELEMENT (`hunks[-1] += line`) cannot use CPython's in-place string
+    # concat optimisation — it copies the whole accumulated string every
+    # line, so one 160k-char hunk costs hundreds of MB of memcpy.
     blocks: list[tuple[str, str, list[str]]] = []
     path = ""
-    header = ""
-    hunks: list[str] = []
+    header_parts: list[str] = []
+    hunk_parts: list[list[str]] = []
 
     def flush() -> None:
-        if header or hunks:
-            blocks.append((path or "<unknown>", header, list(hunks)))
+        if header_parts or hunk_parts:
+            blocks.append(
+                (
+                    path or "<unknown>",
+                    "".join(header_parts),
+                    ["".join(parts) for parts in hunk_parts],
+                )
+            )
 
     for raw_line in diff_text.splitlines(keepends=True):
         git_paths = diff_git_paths(raw_line.rstrip("\n"))
         if git_paths is not None:
             flush()
-            path, header, hunks = git_paths[1], raw_line, []
+            path, header_parts, hunk_parts = git_paths[1], [raw_line], []
             continue
         if _HUNK_HEADER.match(raw_line):
-            hunks.append(raw_line)
+            hunk_parts.append([raw_line])
             continue
-        if hunks:
-            hunks[-1] += raw_line
+        if hunk_parts:
+            hunk_parts[-1].append(raw_line)
         else:
-            header += raw_line
+            header_parts.append(raw_line)
     flush()
 
     slices: list[DiffSlice] = []
     skipped: list[str] = []
+    skipped_files: list[str] = []
     current_text = ""
     current_files: list[str] = []
 
@@ -460,6 +484,8 @@ def split_diff_into_slices(
         close_slice()
         chunks, chunk_skips = _split_file_block(file_header, file_hunks, max_chars)
         skipped.extend(f"`{file_path}`: {reason}" for reason in chunk_skips)
+        if chunk_skips:
+            skipped_files.append(file_path)
         for chunk in chunks:
             slices.append(DiffSlice(text=chunk, files=(file_path,)))
 
@@ -472,9 +498,10 @@ def split_diff_into_slices(
             f"{len(dropped)} slice(s) over the {max_slices}-slice per-run cap were NOT "
             f"reviewed, covering: {', '.join(f'`{f}`' for f in dropped_files)}"
         )
+        skipped_files.extend(dropped_files)
         slices = slices[:max_slices]
 
-    return SlicePlan(slices=slices, skipped=skipped)
+    return SlicePlan(slices=slices, skipped=skipped, skipped_files=tuple(skipped_files))
 
 
 _VERDICT_SEVERITY = {"APPROVE": 0, "APPROVE_WITH_COMMENTS": 1, "REQUEST_CHANGES": 2}
@@ -576,8 +603,15 @@ def review_diff(
     # list (git for a PR run). A file the caller sees that no slice covers is
     # unreviewed content — disclosed, never dropped. This is what catches a
     # slicer bug rather than trusting the slicer to have none.
+    # Files the slicer ALREADY named a reason for are excluded: they are in
+    # the banner once, with the specific reason, and listing them again under
+    # the generic "matched no diff slice" line would have the banner
+    # contradict itself about how much went unread.
     sliced_files = {f for s in plan.slices for f in s.files}
-    unsliced = [f for f in changed_files if f not in sliced_files]
+    already_disclosed = set(plan.skipped_files)
+    unsliced = [
+        f for f in changed_files if f not in sliced_files and f not in already_disclosed
+    ]
     skipped = list(plan.skipped)
     if unsliced:
         skipped.append(
@@ -603,6 +637,7 @@ def review_diff(
 
     results: list[dict] = []
     reviewed = 0
+    fatal_errors: list[BaseException] = []
     for index, diff_slice in enumerate(plan.slices):
         print(
             f"info: reviewing slice {index + 1}/{len(plan.slices)} "
@@ -615,18 +650,51 @@ def review_diff(
         # as real comments on unread lines. No fallback to `changed_files`: a
         # slice always names at least one file, and a fallback that "can't
         # fire" is exactly how the whole-PR list would sneak back in.
-        result = call(
-            diff=diff_slice.text, changed_files=list(diff_slice.files), **model_kwargs
-        )
+        try:
+            result = call(
+                diff=diff_slice.text, changed_files=list(diff_slice.files), **model_kwargs
+            )
+        except Exception as exc:  # noqa: BLE001 - re-raised below unless it is slice-local
+            # `call_model` raises on an unambiguous refusal (see
+            # _FATAL_STATUS_CODES). Letting that propagate from here would
+            # throw away every OTHER slice's completed, paid-for review and
+            # post nothing — the wrong trade when the refusal is about this
+            # slice's content (a provider content filter tripping on one
+            # file) rather than the configuration. So it is caught per slice
+            # and routed through the unreviewed path, which names it in the
+            # banner and blocks an APPROVE.
+            #
+            # A configuration fault does not discriminate between slices: if
+            # EVERY slice refuses, there is no paid work to preserve and
+            # nothing slice-local to explain, so it is re-raised below and the
+            # job goes red with the provider's own error.
+            print(f"warning: slice {index + 1} refused: {exc}", file=sys.stderr)
+            fatal_errors.append(exc)
+            files = ", ".join(f"`{f}`" for f in diff_slice.files[:5])
+            skipped.append(
+                f"slice {index + 1} of {len(plan.slices)} ({files}) was refused by the "
+                f"provider and NOT reviewed: {exc}"
+            )
+            results.append(
+                {"summary_markdown": "", "inline_comments": [], "verdict": None}
+            )
+            continue
         results.append(result)
         if slice_is_usable(result):
             reviewed += 1
+
+    if len(fatal_errors) == len(plan.slices):
+        raise fatal_errors[0]
 
     merged = merge_model_results(results, [s.files for s in plan.slices])
     coverage = ReviewCoverage(
         slices_total=len(plan.slices),
         slices_reviewed=reviewed,
         skipped=tuple(skipped),
+        # Each refusal already has its own line in `skipped`; without this it
+        # would also swell the generic failed-slice count and read as two
+        # separate losses.
+        failures_explained=len(fatal_errors),
     )
     # The FULL diff, not the slice: a comment is anchorable if the line is in
     # any hunk of the PR, and the merged comments span every slice.
@@ -667,14 +735,30 @@ def parse_model_output(raw: str | None) -> dict | None:
     return parsed
 
 
+# Unambiguous refusals: the request as sent is wrong and will be wrong on
+# every retry — a bad max_tokens or model name (400), a dead or unauthorised
+# key (401/403), a wrong endpoint (404), a rejected payload (422).
+#
+# Whitelisted rather than "any 4xx except 429", because a proxied endpoint
+# also emits 408 (request timeout) and 409 (conflict), and those ARE
+# transient — treating them as fatal would kill a whole run over exactly the
+# kind of blip the retry loop exists for. Anything not listed here stays in
+# the retry loop, which is the safe default: a wrongly-retried error costs
+# two retries, a wrongly-fatal one costs the entire review.
+_FATAL_STATUS_CODES = frozenset({400, 401, 403, 404, 422})
+
+
 def _is_fatal_request_error(exc: BaseException) -> bool:
-    """True for provider responses that will never succeed on retry: any 4xx
-    except 429. Classified on the status code, not on a message match, so a
-    rejected `max_tokens` and a rejected model name are both caught."""
+    """True for provider responses that will never succeed on retry.
+
+    Classified on the status code, not on a message match, so a rejected
+    `max_tokens` and a rejected model name are both caught."""
     status = getattr(exc, "status_code", None)
     if status is None:
         status = getattr(getattr(exc, "response", None), "status_code", None)
-    return isinstance(status, int) and 400 <= status < 500 and status != 429
+    # isinstance first: `status` comes off an arbitrary exception object and
+    # an unhashable value would make the membership test raise.
+    return isinstance(status, int) and status in _FATAL_STATUS_CODES
 
 
 def call_model(

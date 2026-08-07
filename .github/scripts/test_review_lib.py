@@ -553,6 +553,142 @@ def test_a_changed_file_that_matched_no_slice_is_disclosed():
     assert payload["event"] == "COMMENT"
 
 
+def test_one_refused_slice_keeps_the_other_slices_paid_for_reviews():
+    """A refusal aimed at one slice's CONTENT (a provider content filter, say)
+    must not discard every other slice's completed, paid-for review."""
+    diff = _file_diff("src/a.ts", lines_per_hunk=40) + _file_diff("src/b.ts", lines_per_hunk=40)
+    calls = []
+
+    def fake_call(diff, changed_files, **kwargs):
+        calls.append(changed_files)
+        if changed_files == ["src/b.ts"]:
+            exc = RuntimeError("content filter tripped")
+            exc.status_code = 400
+            raise exc
+        return {
+            "summary_markdown": "slice one findings",
+            "inline_comments": [{"file": "src/a.ts", "line": 1, "body": "keep me"}],
+            "verdict": "REQUEST_CHANGES",
+        }
+
+    payload = review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
+
+    assert len(calls) == 2
+    # The surviving slice's work is still posted.
+    assert "slice one findings" in payload["summary_markdown"]
+    assert [c["body"] for c in payload["comments"]] == ["keep me"]
+    # And the loss is disclosed, not glossed.
+    assert "Partial review" in payload["summary_markdown"]
+    assert "content filter tripped" in payload["summary_markdown"]
+    assert "src/b.ts" in payload["summary_markdown"]
+    assert payload["verdict"] != "APPROVE"
+    assert payload["event"] == "COMMENT"
+    # The refusal has its own line; it must not ALSO swell the generic
+    # failed-slice count and read as two separate losses.
+    assert "produced no usable review" not in payload["summary_markdown"]
+    assert "1/2" in payload["summary_markdown"]
+
+
+def test_a_refusal_on_every_slice_still_fails_the_job_loudly():
+    """A configuration fault — a rejected max_tokens, a dead key — does not
+    discriminate between slices. There is no paid work to preserve, so it must
+    surface as the provider's error rather than a review saying 'partial'."""
+    diff = _file_diff("src/a.ts", lines_per_hunk=40) + _file_diff("src/b.ts", lines_per_hunk=40)
+
+    def fake_call(diff, changed_files, **kwargs):
+        exc = RuntimeError("max_tokens is too large: 32768")
+        exc.status_code = 400
+        raise exc
+
+    with pytest.raises(RuntimeError, match="max_tokens"):
+        review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
+
+
+def test_transient_4xx_codes_stay_in_the_retry_loop():
+    """408 and 409 are transient on a proxied endpoint; treating every non-429
+    4xx as fatal would kill a run over exactly the blip the retries exist for.
+    Unlisted codes default to retrying — the cheaper mistake."""
+    for status, fatal in [
+        (400, True), (401, True), (403, True), (404, True), (422, True),
+        (408, False), (409, False), (425, False), (429, False), (500, False),
+    ]:
+        exc = RuntimeError("boom")
+        exc.status_code = status
+        assert review_lib._is_fatal_request_error(exc) is fatal, status
+
+    # And end to end: a 408 is retried, not raised.
+    class Timing(FakeCompletions):
+        def create(self, **_kwargs):
+            self.calls += 1
+            exc = RuntimeError("request timeout")
+            exc.status_code = 408
+            raise exc
+
+    client = FakeClient([])
+    client.completions = Timing([])
+    client.chat = types.SimpleNamespace(completions=client.completions)
+    result = _call(client)
+
+    assert client.completions.calls == review_lib.TRANSIENT_MAX_ATTEMPTS
+    assert result["verdict"] is None
+
+
+def test_a_file_the_slicer_already_explained_is_not_listed_twice():
+    """The cross-check must not re-report files `plan.skipped` already names
+    with a specific reason — a banner that lists the same file twice reads as
+    two separate losses and teaches readers to skim it."""
+    diff = _file_diff("src/execution/huge.ts", hunks=1, lines_per_hunk=200)
+
+    plan = review_lib.split_diff_into_slices(diff, max_chars=500)
+    assert plan.skipped_files == ("src/execution/huge.ts",)
+
+    def fake_call(diff, changed_files, **kwargs):  # pragma: no cover - nothing reviewable
+        raise AssertionError("no slice should be reviewable here")
+
+    payload = review_lib.review_diff(
+        diff, ["src/execution/huge.ts"], call=fake_call, max_chars=500
+    )
+    summary = payload["summary_markdown"]
+
+    assert summary.count("src/execution/huge.ts") == 1
+    assert "matched no diff slice" not in summary
+    assert "could not be split further" in summary
+
+
+def test_the_slice_cap_also_suppresses_the_duplicate_listing():
+    paths = [f"src/a{i}.ts" for i in range(6)]
+    diff = "".join(_file_diff(p, hunks=1, lines_per_hunk=10) for p in paths)
+
+    plan = review_lib.split_diff_into_slices(diff, max_chars=300, max_slices=2)
+    covered = {f for s in plan.slices for f in s.files}
+    assert set(plan.skipped_files) == set(paths) - covered
+
+    def fake_call(diff, changed_files, **kwargs):
+        return {"summary_markdown": "", "inline_comments": [], "verdict": "APPROVE"}
+
+    payload = review_lib.review_diff(diff, paths, call=fake_call, max_chars=300, max_slices=2)
+    summary = payload["summary_markdown"]
+
+    assert "matched no diff slice" not in summary
+    for path in set(paths) - covered:
+        assert summary.count(path) == 1
+
+
+def test_a_genuinely_unexplained_missing_file_is_still_reported():
+    """Suppressing duplicates must not suppress the case the cross-check
+    exists for: a file missing with no reason given."""
+
+    def fake_call(diff, changed_files, **kwargs):
+        return {"summary_markdown": "", "inline_comments": [], "verdict": "APPROVE"}
+
+    payload = review_lib.review_diff(
+        DIFF, ["src/trader/x.ts", "src/risk-manager/ghost.ts"], call=fake_call
+    )
+
+    assert "matched no diff slice" in payload["summary_markdown"]
+    assert "src/risk-manager/ghost.ts" in payload["summary_markdown"]
+
+
 def test_the_cross_check_does_not_fire_on_renames_or_submodules():
     """The cross-check blocks APPROVE, so a false positive on an ordinary PR
     would teach every reviewer to ignore the banner. These are the two shapes
