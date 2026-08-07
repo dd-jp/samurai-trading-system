@@ -34,12 +34,20 @@
  */
 import type { TokenBucketConfig } from './token-bucket.js';
 
-/** The three broker venues `BrokerAdapter` has implementations for. */
-export type VenueKey = 'alpaca' | 'ccxt' | 'ibkr';
+/**
+ * The three broker venues `BrokerAdapter` has implementations for, plus
+ * `polygon` — the Stage 2 historical-data fallback client (ticket #510).
+ * Polygon is not a `BrokerAdapter`, but the account-not-code argument this
+ * module makes for order venues applies identically to a market-data venue
+ * with its own published rate limit: `HttpPolygonClient`'s free-tier pacing
+ * was a bare constant (`MIN_REQUEST_SPACING_MS`) before #510, invisible to
+ * this module's env-override/ceiling-validation machinery.
+ */
+export type VenueKey = 'alpaca' | 'ccxt' | 'ibkr' | 'polygon';
 
 export type VenuePacingConfig = Record<VenueKey, TokenBucketConfig>;
 
-export const VENUE_KEYS: readonly VenueKey[] = ['alpaca', 'ccxt', 'ibkr'];
+export const VENUE_KEYS: readonly VenueKey[] = ['alpaca', 'ccxt', 'ibkr', 'polygon'];
 
 /**
  * The venue's own published hard limit, in requests per second, where one
@@ -78,6 +86,17 @@ export const VENUE_DOCUMENTED_CEILING_PER_SECOND: Partial<Record<VenueKey, numbe
    */
   ibkr: 50,
   // ccxt: deliberately absent. See DEFAULT_VENUE_PACING.ccxt.
+  /**
+   * VERIFIED. "Free tier is both rate-limited (5 calls/min — meaningfully
+   * slow for backfilling 6 symbols) and capped at 2 years of history" —
+   * docs/research/polygon-aggregates-api-2026-07-31.md ("Rate limits and
+   * lookback (Free / Starter tier)"), and the provisioned key IS on that
+   * tier (docs/reviews/codebase-review-2026-08-06.md, "Premise correction:
+   * the Polygon subscription" — David dropped it to free 2026-08-06).
+   * Exceeding it returns HTTP 429 and, per ADR-0001, Polygon is a fallback
+   * source that must not trip its own limit on the first burst.
+   */
+  polygon: 5 / 60,
 };
 
 /**
@@ -182,6 +201,45 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
    * disconnects happen while the venue holds live bracket legs.
    */
   ibkr: { capacity: 5, refillPerSecond: 5, reserveForPriority: 0 },
+  /**
+   * VERIFIED CEILING (5 calls/min, cited above), OPERATING RATE a deliberate
+   * margin under it — not at it, the same posture `DEFAULT_VENUE_PACING`
+   * takes for every other venue.
+   *
+   * **`refillPerSecond: 1 / 13` — MIGRATED, NOT RE-DERIVED.** Ticket #510
+   * replaces `HttpPolygonClient`'s own ungoverned `MIN_REQUEST_SPACING_MS =
+   * 13_000` (added by the 2026-08-06 codebase review, item A1) with this
+   * bucket; the 13s figure carries over unchanged rather than being
+   * re-derived, so this PR does not also silently change the operating
+   * rate that has been running since that review landed. 1/13 ≈ 0.0769/s =
+   * 4.615/min, ~92% of the 5/min ceiling — a THINNER margin than Alpaca's
+   * deliberate 75%, and honestly labelled as such rather than glossed over.
+   * It is accepted rather than tightened here because the workload this
+   * paces is nothing like Alpaca's: a continuous live trading loop cannot
+   * absorb a margin slip, where Polygon is invoked only by hand-run Stage 2
+   * scripts (`run-stage2.ts` and friends) fetching a handful of symbols per
+   * run, so there is no sustained load anywhere near steady-state that
+   * would actually test how thin the margin is. Re-deriving a wider margin
+   * is a legitimate follow-up, not this ticket's scope — #510 is about
+   * making the existing rate governable (env override, ceiling check),
+   * not re-tuning it. Polygon is still a FALLBACK source per ADR-0001 with
+   * no paid tier to fail over to, which is exactly why exceeding the
+   * ceiling — not just running close to it — must stay impossible; that is
+   * what the ceiling check in `readPositive` enforces regardless of this
+   * default.
+   *
+   * **`capacity: 1` — WORKLOAD-DERIVED, deliberately NO BURST.** Unlike
+   * Alpaca, nothing in this client's workload benefits from a burst: Stage 2
+   * ingestion fetches one symbol's whole date range per call (pagination
+   * inside `fetchAggregates` already serializes via this same bucket), and
+   * the MVP universe is ingested by a hand-run script, never a concurrent
+   * sweep. A capacity above 1 would let the first few calls of a cold start
+   * fire back-to-back and eat into the margin the refill rate above is
+   * counting on. Single-consumer, so no `reserveForPriority` (#391 does not
+   * apply here — see DEFAULT_VENUE_PACING.ibkr for the other 0-reserve
+   * venue).
+   */
+  polygon: { capacity: 1, refillPerSecond: 1 / 13, reserveForPriority: 0 },
 };
 
 /** The environment variables that override one venue's bucket. */

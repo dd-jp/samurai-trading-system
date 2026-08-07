@@ -36,6 +36,7 @@ const DEFAULT_BASE_URL = 'https://api.polygon.io';
 const MAX_PAGES = 25;
 const PAGE_LIMIT = 50_000;
 
+import { resolveVenuePacing, TokenBucket } from '../shared/index.js';
 import type { PolygonAggregate, PolygonClient } from './stage2-historical-store.js';
 import type { DateRange } from './universe.js';
 
@@ -64,15 +65,6 @@ function toPolygonDate(date: Date): string {
   return date.toISOString().split('T')[0] as string;
 }
 
-/**
- * Free-tier pacing (review 2026-08-06 A1): Polygon's free tier allows 5
- * calls/min and this key is deliberately on it (the paid depth entitlement
- * was never in effect — see docs/reviews/codebase-review-2026-08-06.md).
- * 13s spacing sits under the ceiling rather than at it, the same posture
- * DEFAULT_VENUE_PACING takes for Alpaca.
- */
-const MIN_REQUEST_SPACING_MS = 13_000;
-
 export interface HttpPolygonClientOptions {
   /** Defaults to `process.env.POLYGON_API_KEY`. Never logged or thrown into an error message. */
   apiKey?: string;
@@ -80,8 +72,32 @@ export interface HttpPolygonClientOptions {
   baseUrl?: string;
   /** Injectable for tests — defaults to the global `fetch`. */
   fetchImpl?: typeof fetch;
-  /** Milliseconds between requests. Defaults to free-tier spacing; tests pass 0. */
-  minRequestSpacingMs?: number;
+  /**
+   * Proactive outbound pacing against the free tier's 5 calls/min (ticket
+   * #510). Defaults to `resolveVenuePacing().polygon` — see
+   * `shared/http/venue-pacing.ts` for the provenance of that figure and how
+   * to override it (`SAMURAI_PACING_POLYGON_*`) if this key is ever
+   * upgraded off the free tier. Tests inject a bucket sized to never wait
+   * (see `http-polygon-client.test.ts`).
+   *
+   * This replaces the bare `MIN_REQUEST_SPACING_MS` constant this client
+   * carried before #510 — that value was invisible to `venue-pacing.ts`'s
+   * env-override and ceiling-validation machinery every other venue gets,
+   * so a re-tier could only be applied by editing this file. It is not
+   * optional at the call site (`fetchAggregates` always awaits it), and
+   * unlike `AlpacaHttpDataClient`'s injected-only `rateLimiter` — safe to
+   * omit there because `production.ts` is a real composition root that
+   * always constructs and injects one — this constructor's own default is
+   * not a rarely-exercised fallback. `HttpPolygonClient` is constructed
+   * directly by several standalone scripts (`run-stage2.ts`,
+   * `run-stage2-cost-decomposition.ts`, `run-spread-calibration.ts`), none
+   * of which pass a `rateLimiter`; there is no shared composition root that
+   * could inject one instead. So this default IS the only pacing path any
+   * of them ever take, which is why it resolves through `resolveVenuePacing()`
+   * directly rather than the bare `DEFAULT_VENUE_PACING` constant
+   * `AlpacaBrokerAdapter`'s own (comparably rare) fallback uses.
+   */
+  rateLimiter?: TokenBucket;
 }
 
 /** Real HTTP `PolygonClient` against Polygon/Massive's aggregates endpoint. */
@@ -89,8 +105,7 @@ export class HttpPolygonClient implements PolygonClient {
   private readonly apiKey: string;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
-  private readonly minRequestSpacingMs: number;
-  private lastRequestAt = 0;
+  private readonly rateLimiter: TokenBucket;
 
   constructor(options: HttpPolygonClientOptions = {}) {
     const apiKey = options.apiKey ?? process.env.POLYGON_API_KEY;
@@ -103,16 +118,7 @@ export class HttpPolygonClient implements PolygonClient {
     this.apiKey = apiKey;
     this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
     this.fetchImpl = options.fetchImpl ?? fetch;
-    this.minRequestSpacingMs = options.minRequestSpacingMs ?? MIN_REQUEST_SPACING_MS;
-  }
-
-  /** Sleeps out the remainder of the spacing window since the last request. */
-  private async paceRequest(): Promise<void> {
-    const wait = this.lastRequestAt + this.minRequestSpacingMs - Date.now();
-    if (wait > 0) {
-      await new Promise((resolve) => setTimeout(resolve, wait));
-    }
-    this.lastRequestAt = Date.now();
+    this.rateLimiter = options.rateLimiter ?? new TokenBucket(resolveVenuePacing().polygon);
   }
 
   async fetchAggregates(symbol: string, window: DateRange): Promise<PolygonAggregate[]> {
@@ -137,7 +143,13 @@ export class HttpPolygonClient implements PolygonClient {
         );
       }
 
-      await this.paceRequest();
+      // Proactive floor (#510): stop issuing the call that would earn a 429
+      // in the first place, rather than only reacting after the venue
+      // rejects it. A 429 that does slip through (e.g. another process
+      // sharing this key) still surfaces below via the generic `!response.ok`
+      // throw — this bucket is a floor, not a replacement for reacting to
+      // whatever the venue actually says.
+      await this.rateLimiter.acquire();
       const response = await this.fetchImpl(url, {
         headers: { Authorization: `Bearer ${this.apiKey}` },
       });

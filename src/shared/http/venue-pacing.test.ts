@@ -73,6 +73,20 @@ describe('resolveVenuePacing', () => {
     );
   });
 
+  it("refuses a sustained rate above Polygon's documented 5 calls/min free tier (#510)", () => {
+    expect(() => resolveVenuePacing({ SAMURAI_PACING_POLYGON_REFILL_PER_SEC: '1' })).toThrow(
+      /documented limit/,
+    );
+  });
+
+  it('keeps Polygon at a deliberate margin under its 5 calls/min ceiling by default (#510)', () => {
+    const polygon = resolveVenuePacing({}).polygon;
+    expect(polygon).toEqual({ capacity: 1, refillPerSecond: 1 / 13, reserveForPriority: 0 });
+    const ceiling = VENUE_DOCUMENTED_CEILING_PER_SECOND.polygon;
+    expect(ceiling).toBeDefined();
+    expect(polygon.refillPerSecond).toBeLessThan(ceiling as number);
+  });
+
   /**
    * ccxt is the one venue with no ceiling to check against, because no crypto
    * venue OR account tier has been chosen yet (CLAUDE.md: "Kraken or Coinbase
