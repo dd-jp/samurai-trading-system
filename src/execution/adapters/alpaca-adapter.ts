@@ -395,13 +395,17 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * (`src/market-data-service/sources/alpaca-http-client.ts`). Probing
    * `order_class: 'bracket'` with `symbol: 'BTC-USD'` got a DIFFERENT `422`
    * — `{"code":42210000,"message":"asset \"BTC-USD\" not found"}` — before
-   * the order-class question is even reached. Whether `order.instrument`
-   * actually arrives here as `BTC-USD` in production was not traced past
-   * `execute.ts` (out of scope for this ticket), but no conversion exists
-   * anywhere between there and this call, so if it is unconverted, THIS is
-   * the error a live crypto bracket entry hits, not the order-class one
-   * above — both are real, independent defects, and either alone is enough
-   * to fail every crypto bracket entry today.
+   * the order-class question is even reached. Confirmed this is what production
+   * actually sends: `order.instrument` traces back to `DEFAULT_UNIVERSE`'s
+   * dash form (`orchestrator/smoke-run.ts`'s `SMOKE_INSTRUMENT` defaults to
+   * the literal string `'BTC-USD'`), and a repo-wide grep for a dash-to-slash
+   * conversion or a second `AlpacaBrokerAdapter` construction site (outside
+   * `market-data-service`/tests) found neither — `production.ts` constructs
+   * this adapter directly, with no wrapping decorator. So THIS "asset not
+   * found" error is what a live crypto bracket entry hits FIRST, before the
+   * order-class rejection above is ever reached — both are real, independent
+   * defects, and either alone is enough to fail every crypto bracket entry
+   * today.
    *
    * Practical effect either way: no crypto bracket entry can succeed against
    * Alpaca as this adapter is shaped today — this is not a residual/partial-
