@@ -21,10 +21,14 @@ jobs:
   review:
     runs-on: ubuntu-latest
     # The diff is now reviewed in slices, so one reviewer can make up to
-    # MAX_SLICES model calls, each with its own 3-attempt retry budget and a
-    # 90s backoff. Without a ceiling a stuck endpoint would hold a runner for
-    # the 6h default.
-    timeout-minutes: 45
+    # MAX_SLICES (10) model calls. Absolute worst case is every slice
+    # exhausting its retries: 3 x 170s timeout + 20s + 90s backoff ~= 10min per
+    # slice, ~103min for ten. This is a BACKSTOP against a stuck endpoint
+    # holding a runner for the 6h default, not a target — a healthy run of the
+    # 3-slice #591 diff is a few minutes. Sized above the worst case on
+    # purpose: a timeout kills the job with no review posted at all, which is
+    # strictly worse than a slow one.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:

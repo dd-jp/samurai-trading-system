@@ -402,6 +402,54 @@ def test_review_diff_threads_coverage_when_a_slice_call_fails():
     assert "1/2" in payload["summary_markdown"]
 
 
+def test_each_slice_is_classified_on_its_own_files_only():
+    """Handing every call the whole PR's file list invites findings on code
+    that call was never shown — and they'd anchor fine against the full diff."""
+    diff = _file_diff("src/a.ts", lines_per_hunk=40) + _file_diff("src/b.ts", lines_per_hunk=40)
+    seen = []
+
+    def fake_call(diff, changed_files, **kwargs):
+        seen.append(list(changed_files))
+        return {"summary_markdown": "", "inline_comments": [], "verdict": "APPROVE"}
+
+    review_lib.review_diff(diff, ["src/a.ts", "src/b.ts"], call=fake_call, max_chars=1200)
+
+    assert seen == [["src/a.ts"], ["src/b.ts"]]
+
+
+def test_an_oversized_merged_body_is_clamped_visibly():
+    """GitHub 422s over 65536 chars and the workflow's fallback only retries a
+    'could not be resolved' 422 — an oversized body would post NO review."""
+    payload = review_lib.build_review_payload(
+        DIFF,
+        {"summary_markdown": "x" * 100000, "inline_comments": [], "verdict": "APPROVE"},
+    )
+
+    assert len(payload["summary_markdown"]) <= review_lib.MAX_REVIEW_BODY_CHARS < 65536
+    assert "truncated" in payload["summary_markdown"]
+
+
+def test_the_partial_coverage_banner_survives_the_clamp():
+    payload = review_lib.build_review_payload(
+        DIFF,
+        {"summary_markdown": "x" * 100000, "inline_comments": [], "verdict": "APPROVE"},
+        coverage=review_lib.ReviewCoverage(slices_total=3, slices_reviewed=1),
+    )
+
+    assert payload["summary_markdown"].startswith("> [!WARNING]")
+    assert payload["event"] == "COMMENT"
+
+
+def test_an_over_cap_file_with_no_hunks_is_disclosed_not_dropped():
+    header_only = "diff --git a/src/blob.bin b/src/blob.bin\n" + "# padding\n" * 200
+
+    plan = review_lib.split_diff_into_slices(header_only, max_chars=300)
+
+    assert plan.slices == []
+    assert len(plan.skipped) == 1
+    assert "no hunks" in plan.skipped[0]
+
+
 def test_review_diff_approves_when_every_slice_came_back_clean():
     diff = _file_diff("src/a.ts", lines_per_hunk=40) + _file_diff("src/b.ts", lines_per_hunk=40)
 

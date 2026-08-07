@@ -22,6 +22,13 @@ MAX_SLICE_CHARS = 60000
 # unreviewed content, which is what makes the cap safe to have at all.
 MAX_SLICES = 10
 
+# GitHub rejects a review body over 65536 chars with a 422, and the workflow's
+# fallback only retries a 422 whose message matches /could not be resolved/ —
+# an oversized body re-raises and the job goes red with NO review posted.
+# Slicing made that reachable: the prose prompt writes a five-section review
+# PER SLICE. Clamp below the limit, with visible headroom for the note.
+MAX_REVIEW_BODY_CHARS = 63000
+
 # Nous's inference proxy has been observed hard-timing-out (Cloudflare 524,
 # "origin took too long to respond") on slower models like kimi-k3, well
 # within GitHub Actions' step budget. Retry with backoff rather than
@@ -320,6 +327,11 @@ def _split_file_block(header: str, hunks: list[str], max_chars: int) -> tuple[li
 
     if current:
         chunks.append(header + current)
+    if not chunks and not skipped:
+        # An over-cap file block with no hunks at all (e.g. a huge header-only
+        # entry). Dropping it silently is the exact failure this ticket exists
+        # to kill, so it is disclosed like any other unreviewed content.
+        skipped.append(f"file header is {len(header)} chars with no hunks — NOT reviewed")
     return chunks, skipped
 
 
@@ -489,7 +501,12 @@ def review_diff(
             f"({len(diff_slice.text)} chars, {len(diff_slice.files)} file(s))",
             file=sys.stderr,
         )
-        result = call(diff=diff_slice.text, changed_files=changed_files, **model_kwargs)
+        # Classify only the files IN this slice. Handing every call the whole
+        # PR's file list would invite findings on code the call was never
+        # shown — and those anchor fine against the full diff, so they'd post
+        # as real comments on unread lines.
+        slice_files = list(diff_slice.files) or changed_files
+        result = call(diff=diff_slice.text, changed_files=slice_files, **model_kwargs)
         results.append(result)
         if result.get("verdict") is not None or result.get("inline_comments"):
             reviewed += 1
@@ -718,6 +735,17 @@ def build_review_payload(
     # after the reader has already formed a view from the findings above it.
     if partial:
         summary = f"{coverage.disclosure()}\n\n{summary}".strip()
+
+    # Clamp AFTER the disclosure is prepended, so an oversized body can never
+    # cost us the partial-coverage warning. The cut is stated in the body, not
+    # silent — same rule as everything else here.
+    if len(summary) > MAX_REVIEW_BODY_CHARS:
+        note = (
+            f"\n\n_…review body truncated at {MAX_REVIEW_BODY_CHARS} characters "
+            "(GitHub's limit is 65536); the text above is complete, the text below it "
+            "was cut._"
+        )
+        summary = summary[: MAX_REVIEW_BODY_CHARS - len(note)] + note
 
     if verdict == "APPROVE":
         event = "APPROVE"
