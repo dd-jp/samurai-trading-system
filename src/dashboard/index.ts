@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { AlpacaHttpBrokerClient } from '../execution/index.js';
 import { openSharedStore, resolveStoreMode, sharedStorePath } from '../shared/store/index.js';
 import { ProviderStatusPoller } from './provider-status.js';
-import { createDashboardServer } from './server.js';
+import { bundleDiagnostic, createDashboardServer } from './server.js';
 import { SqliteQueryStore } from './sqlite-query-store.js';
 
 const port = Number(process.env.PORT ?? 8787);
@@ -48,6 +48,30 @@ const db = openSharedStore(sharedStorePath(mode));
  * the process from.
  */
 const bundleRoot = fileURLToPath(new URL('../dashboard-web/', import.meta.url));
+
+/**
+ * Loud at boot, but NOT fatal (PR #597 review).
+ *
+ * The check exists because the failure is otherwise invisible until someone
+ * opens a browser: started from source (`tsx src/dashboard/index.ts`) this
+ * resolves to `src/dashboard-web/`, which contains the Vite dev template
+ * rather than a build, so even a "does index.html exist" test passes while
+ * the page it serves loads nothing. `bundleDiagnostic` distinguishes the two
+ * cases and names the fix.
+ *
+ * Not fatal because the dashboard is a READ-ONLY OBSERVABILITY SURFACE and
+ * `/api/snapshot` is its machine-readable half. Refusing to start would take
+ * away the operator's view of an live trading system to punish a missing UI
+ * build — and would take the supervisor's whole process group down with it
+ * (`src/serve/supervisor.ts` stops the orchestrator when the dashboard dies),
+ * so a forgotten `yarn build:web` would halt trading. That is the same
+ * priority ordering the Alpaca tile below already follows: a degraded view
+ * beats no view. The 503 on the page and this log say the same words.
+ */
+const bundleProblem = bundleDiagnostic(bundleRoot);
+if (bundleProblem !== null) {
+  console.error(`\n*** DASHBOARD UI NOT SERVABLE — /api/snapshot still up ***\n${bundleProblem}`);
+}
 
 /**
  * Paper unless `SAMURAI_MODE=live`, matching `buildDefaultBrokerClient`'s rule

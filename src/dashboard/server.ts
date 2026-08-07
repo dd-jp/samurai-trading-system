@@ -21,7 +21,8 @@
  * handler — see its own comment for why a `startsWith` prefix check is not
  * the same question.
  */
-import { readFile, stat } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { createServer, type Server, type ServerResponse } from 'node:http';
 import { extname, isAbsolute, join, relative, resolve as resolvePath, sep } from 'node:path';
 import type { StoreMode } from '../shared/store/index.js';
@@ -146,18 +147,52 @@ export function resolveBundlePath(root: string, urlPath: string): string | null 
 }
 
 /**
- * The diagnostic for a server started without `yarn build:web`. A bare 404
- * here is the single most confusing outcome the changeover can produce — the
- * process boots, `/api/snapshot` works, and the page is blank — so the
- * missing-bundle case names the path and the command instead.
+ * Whether `bundleRoot` holds a usable build, and if not, why — the diagnostic
+ * text, or `null` when the bundle is fine. Synchronous so the entry point can
+ * call it at boot (see `src/dashboard/index.ts`); the request path calls it
+ * too, so a page load and the startup log say the same thing.
+ *
+ * Two distinct failures, because they have different fixes and only one of
+ * them is visible as a missing file:
+ *
+ *  1. **No `index.html`.** Nobody ran `yarn build:web`. A bare 404 is the most
+ *     confusing outcome the v2 changeover can produce — the process boots,
+ *     `/api/snapshot` works, the page is blank — so this names the path and
+ *     the command.
+ *  2. **`index.html` is the Vite SOURCE template, not a build** (PR #597
+ *     review). Running the server from source (`tsx src/dashboard/index.ts`)
+ *     puts `bundleRoot` at `src/dashboard-web/`, which DOES contain an
+ *     `index.html` — the dev template, whose only script tag is
+ *     `/src/main.tsx`. An existence check passes and the server then serves a
+ *     page whose module 404s, which looks like a broken app rather than a
+ *     wrong directory. The built file references `./assets/…` instead, so the
+ *     dev-only reference is the thing to look for.
  */
-function bundleMissingMessage(root: string): string {
-  return (
-    `Dashboard bundle not found: ${join(root, 'index.html')} does not exist.\n` +
-    'The React client is built ahead of time and served from disk (ADR-0010).\n' +
-    'Run `yarn build` (or `yarn build:web`) and reload. `GET /api/snapshot` is\n' +
-    'unaffected and still serving JSON.\n'
-  );
+export function bundleDiagnostic(root: string): string | null {
+  const resolvedRoot = resolvePath(root);
+  const indexPath = join(resolvedRoot, 'index.html');
+  let html: string;
+  try {
+    html = readFileSync(indexPath, 'utf8');
+  } catch {
+    return (
+      `Dashboard bundle not found: ${indexPath} does not exist.\n` +
+      'The React client is built ahead of time and served from disk (ADR-0010).\n' +
+      'Run `yarn build` (or `yarn build:web`) and reload. `GET /api/snapshot` is\n' +
+      'unaffected and still serving JSON.\n'
+    );
+  }
+  if (html.includes('/src/main.tsx')) {
+    return (
+      `Dashboard bundle not built: ${indexPath} is the Vite SOURCE template, not a\n` +
+      'build — its only script tag is `/src/main.tsx`, which this server does not\n' +
+      'compile and will never serve. This is what a server started from source\n' +
+      '(`tsx src/dashboard/index.ts`) points at; the built bundle lives in\n' +
+      '`dist/dashboard-web/` and is what `node dist/dashboard/index.js` resolves.\n' +
+      'Run `yarn build` and start from `dist/`. `GET /api/snapshot` is unaffected.\n'
+    );
+  }
+  return null;
 }
 
 export function createDashboardServer(opts: DashboardServerOptions): DashboardServer {
@@ -192,32 +227,26 @@ export function createDashboardServer(opts: DashboardServerOptions): DashboardSe
     }
   }
 
-  /** 404, unless the whole bundle is missing — then say so. */
+  /**
+   * 404, unless the bundle itself is the problem — then say which problem.
+   *
+   * Re-checked per request rather than resolved once at construction: the
+   * supervisor (`src/serve/supervisor.ts`) must still boot a dashboard whose
+   * bundle is absent — `/api/snapshot` is worth serving on its own — and a
+   * build that lands after startup must start working without a restart.
+   */
   async function respondNotFound(res: ServerResponse) {
-    if (!(await bundleIsBuilt())) {
+    const diagnostic = bundleDiagnostic(bundleRoot);
+    if (diagnostic !== null) {
       res
         .writeHead(503, {
           'Content-Type': 'text/plain; charset=utf-8',
           'Cache-Control': 'no-store',
         })
-        .end(bundleMissingMessage(bundleRoot));
+        .end(diagnostic);
       return;
     }
     res.writeHead(404, JSON_HEADERS).end(JSON.stringify({ error: 'not found' }));
-  }
-
-  /**
-   * Checked per request rather than once at construction: the supervisor
-   * (`src/serve/supervisor.ts`) must still boot a dashboard whose bundle is
-   * absent — `/api/snapshot` is worth serving on its own — and a build that
-   * lands after startup must start working without a restart.
-   */
-  async function bundleIsBuilt(): Promise<boolean> {
-    try {
-      return (await stat(join(bundleRoot, 'index.html'))).isFile();
-    } catch {
-      return false;
-    }
   }
 
   const server: Server = createServer((req, res) => {

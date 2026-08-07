@@ -26,6 +26,7 @@ import { join } from 'node:path';
 import { InMemoryQueryStore } from './fixture-store.js';
 import {
   bundleContentType,
+  bundleDiagnostic,
   createDashboardServer,
   type DashboardServer,
   resolveBundlePath,
@@ -207,6 +208,40 @@ describe('resolveBundlePath', () => {
 
   it('keeps a leading-slash-collapsed path inside the root', () => {
     expect(resolveBundlePath(root, '//etc/passwd')).toBe(`${root}/etc/passwd`);
+  });
+});
+
+describe('bundleDiagnostic', () => {
+  it('is silent when the bundle is a real build', () => {
+    expect(bundleDiagnostic(bundleRoot)).toBeNull();
+  });
+
+  it('names the missing file and the build command when nothing was built', () => {
+    const message = bundleDiagnostic(join(parent, 'never-built'));
+    expect(message).toContain('Dashboard bundle not found');
+    expect(message).toContain(join(parent, 'never-built', 'index.html'));
+    expect(message).toContain('yarn build');
+  });
+
+  it('catches the Vite SOURCE template, which an existence check passes (PR #597)', async () => {
+    // The reviewer's scenario: `tsx src/dashboard/index.ts` resolves
+    // `bundleRoot` to `src/dashboard-web/`, which HAS an index.html — the dev
+    // template, whose only script tag is `/src/main.tsx`. A "does the file
+    // exist" check is green here and the served page still loads nothing.
+    const sourceTree = join(parent, 'dashboard-web-src');
+    await mkdir(sourceTree, { recursive: true });
+    await writeFile(
+      join(sourceTree, 'index.html'),
+      '<!doctype html><html><body><div id="root"></div>' +
+        '<script type="module" src="/src/main.tsx"></script></body></html>',
+    );
+
+    const message = bundleDiagnostic(sourceTree);
+    expect(message).toContain('Vite SOURCE template');
+    expect(message).toContain('/src/main.tsx');
+    expect(message).toContain('dist/dashboard-web/');
+    // Distinguishable from case 1 — the two have different fixes.
+    expect(message).not.toContain('Dashboard bundle not found');
   });
 });
 
