@@ -295,18 +295,16 @@ describe('runTickPlan', () => {
     });
     const runner: TickRunner = {
       async runInstrument(signal, ctx) {
-        if (signal.asset === 'AAPL') {
-          // Push before releasing: SPY's resume is a microtask away, so this
-          // ordering is what actually makes "AAPL pushed before SPY resumed"
-          // true rather than merely likely.
-          finished.push(signal.asset);
-          releaseSpy();
-          return { trace_id: ctx.trace_id, final_stage: 'analysts' };
-        }
         if (signal.asset === 'SPY') {
           await aaplRan;
         }
         finished.push(signal.asset);
+        // Release AFTER pushing, never before: SPY's resume is only a
+        // microtask away, so this ordering is what makes "AAPL pushed before
+        // SPY resumed" true rather than merely likely. Do not hoist.
+        if (signal.asset === 'AAPL') {
+          releaseSpy();
+        }
         return { trace_id: ctx.trace_id, final_stage: 'analysts' };
       },
     };
