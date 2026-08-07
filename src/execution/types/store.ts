@@ -70,6 +70,25 @@ export interface SharedStore {
    */
   getEntryFillSizes(idempotency_keys: readonly string[]): Promise<Map<string, number>>;
   /**
+   * The mirror of `getEntryFillSizes` over the CLOSING legs (`leg != 'entry'`
+   * — `ingest-fills.ts`'s `isExitFill` discriminator, in SQL): each named
+   * lot's already-closed quantity, summed. Same batch shape and same
+   * "a lot with no such fill is absent from the Map, not present at 0".
+   *
+   * #568: this is what makes held quantity — `filled_size` minus this —
+   * derivable wherever an exit is sized, instead of `filled_size` (an
+   * entry-only total that no exit fill ever reduces) standing in for it. See
+   * `shared/held-quantity.ts`.
+   *
+   * Two neighbours in `ingest-fills.ts` deliberately do NOT read through this:
+   * `redistributeFlattenFills`, whose split must stay pinned to the ENTRY
+   * total for the stability reasons documented there; and
+   * `maybeRearmResidual`, which arrives at the same residual from the fill
+   * rows it is already holding for the lot it is advancing, so a batch read
+   * keyed by lot would buy it nothing.
+   */
+  getExitFillSizes(idempotency_keys: readonly string[]): Promise<Map<string, number>>;
+  /**
    * Persist one poll's advance of a lot — new fills, the recomputed lot
    * state, and on round-trip-to-flat the `ClosedTrade` — atomically. A crash
    * can no longer land between the fill rows and the lot state they imply:

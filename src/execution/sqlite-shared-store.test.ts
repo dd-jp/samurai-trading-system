@@ -492,4 +492,44 @@ describe('SqliteExecutionStore', () => {
       expect(await store.getEntryFillSizes([])).toEqual(new Map());
     });
   });
+
+  describe('getExitFillSizes (#568 — the closing-leg mirror, what held quantity subtracts)', () => {
+    it('sums every CLOSING leg per lot and excludes the entry, omitting a lot with none', async () => {
+      const { store } = makeStore();
+      await store.writeAheadPosition(makePosition({ idempotency_key: 'key-lot-1' }));
+      await store.writeAheadPosition(makePosition({ idempotency_key: 'key-lot-2' }));
+      await store.applyLotAdvance({
+        idempotency_key: 'key-lot-1',
+        fills: [
+          makeFill({ idempotency_key: 'key-lot-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+          // All three closing legs count — the predicate is `leg != 'entry'`,
+          // the SQL spelling of `ingest-fills.ts`'s `isExitFill`.
+          makeFill({ idempotency_key: 'key-lot-1', broker_fill_id: 'x1', leg: 'exit', qty: 4 }),
+          makeFill({ idempotency_key: 'key-lot-1', broker_fill_id: 'x2', leg: 'stop', qty: 1 }),
+          makeFill({ idempotency_key: 'key-lot-1', broker_fill_id: 'x3', leg: 'target', qty: 2 }),
+        ],
+      });
+      await store.applyLotAdvance({
+        idempotency_key: 'key-lot-2',
+        fills: [
+          makeFill({ idempotency_key: 'key-lot-2', broker_fill_id: 'e2', leg: 'entry', qty: 15 }),
+        ],
+      });
+
+      const sizes = await store.getExitFillSizes(['key-lot-1', 'key-lot-2', 'key-lot-unknown']);
+
+      expect(sizes.get('key-lot-1')).toBe(7);
+      // Entry-only lot: absent, not 0 — the same "missing is absent" answer
+      // `getEntryFillSizes` gives, which `heldQuantities` reads as "nothing
+      // closed yet".
+      expect(sizes.has('key-lot-2')).toBe(false);
+      expect(sizes.has('key-lot-unknown')).toBe(false);
+    });
+
+    it('returns an empty Map for an empty key list', async () => {
+      const { store } = makeStore();
+
+      expect(await store.getExitFillSizes([])).toEqual(new Map());
+    });
+  });
 });

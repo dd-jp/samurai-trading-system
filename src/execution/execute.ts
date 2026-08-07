@@ -8,7 +8,12 @@
  * block until filled — the lot's lifecycle is advanced separately by
  * `ingestFills()`, which lives in its own module.
  */
-import type { OpenPosition, OrderIntent } from '../shared/index.js';
+import {
+  heldQuantitiesFor,
+  type OpenPosition,
+  type OrderIntent,
+  totalHeldQuantity,
+} from '../shared/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
 import { ingestFills } from './ingest-fills.js';
 import { reconcile } from './reconcile.js';
@@ -211,7 +216,6 @@ async function executeExit(
   const heldLots = (await store.getOpenPositions()).filter(
     (lot) => lot.instrument === order.instrument,
   );
-  const heldSize = heldLots.reduce((sum, lot) => sum + lot.filled_size, 0);
   const heldSide = heldLots[0]?.side;
 
   if (heldLots.length === 0 || heldSide === undefined) {
@@ -219,6 +223,36 @@ async function executeExit(
       reason: `exit intent for '${order.instrument}' but the store holds no open lot to close`,
     });
   }
+
+  // #568: what the VENUE still holds — `filled_size` minus the exit-leg fills
+  // already recorded — not the lot's entry quantity, which no exit fill
+  // reduces and which a partially-flattened (still open) lot therefore keeps
+  // at its original value. The SAME derivation `buildExitIntent` sized this
+  // order with, so the guard below compares two answers to one question.
+  const perLotHeld = await heldQuantitiesFor(heldLots, (keys) => store.getExitFillSizes(keys));
+
+  // Fail closed, per lot, BEFORE summing: more closed than ever opened on one
+  // lot is the store's own record contradicting itself, and a negative there
+  // would net against a positive on a sibling lot into a total that looks
+  // plausible and is not. `execute()` is the last checkpoint before funds
+  // move, so it refuses and names the lot rather than trading on the sum.
+  //
+  // A bare `< 0`, not ADR-0005's `coversQty` tolerance, and that is not an
+  // oversight: a lot whose exit fills merely APPROACH its filled size is
+  // marked `closed` by `ingestFills()` (`coversQty(exitQty, filledSize)`) and
+  // so has already left `getOpenPositions()`. Every lot reaching this line
+  // therefore holds a residual comfortably outside that epsilon, and a
+  // negative here is a real contradiction rather than summation noise.
+  const overExited = perLotHeld.find((lot) => lot.held < 0);
+  if (overExited !== undefined) {
+    return result('error', idempotencyKey, now, {
+      reason:
+        `exit intent for '${order.instrument}' refused: lot '${overExited.idempotency_key}' ` +
+        `records more closed quantity than it ever opened (held ${overExited.held})`,
+    });
+  }
+
+  const heldSize = totalHeldQuantity(perLotHeld);
 
   // The closing side is the OPPOSITE of what is held — same derivation
   // `buildExitIntent` uses, re-run here rather than trusted from the order.
@@ -232,8 +266,9 @@ async function executeExit(
     });
   }
 
-  // Exact equality, not a tolerance: `heldSize` is the SAME reduce over the
-  // SAME `ORDER BY opened_at` query `buildExitIntent` used, so the two sums
+  // Exact equality, not a tolerance: `heldSize` is the SAME `heldQuantities`
+  // derivation over the SAME `ORDER BY opened_at` query and the SAME
+  // exit-fill sums `buildExitIntent` used (#568), so the two totals
   // are bit-identical unless a fill genuinely landed between decide-time and
   // here — which is precisely the drift that must be refused, not smoothed
   // over with an epsilon built for a different problem (ADR-0005's tolerance

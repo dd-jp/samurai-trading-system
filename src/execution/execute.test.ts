@@ -825,6 +825,96 @@ describe('ExecutionImpl.execute', () => {
         expect(await store.countAllFlattenSubmissions()).toBe(0);
       });
 
+      /**
+       * #568: a lot partially closed by an earlier flatten stays OPEN (only
+       * terminal states leave `getOpenPositions()`) and keeps its ORIGINAL
+       * `filled_size` — that field is the entry total, and no exit fill
+       * reduces it. Held quantity is therefore `filled_size` minus the
+       * exit-leg fills on record; these tests seed exactly that state by
+       * persisting the earlier flatten's own exit fill, the same row
+       * `ingestFills()` writes.
+       */
+      async function recordExitFill(
+        store: ReturnType<typeof openTestExecutionStore>['store'],
+        qty: number,
+      ): Promise<void> {
+        await store.applyLotAdvance({
+          idempotency_key: 'key-aapl-entry-1',
+          fills: [
+            {
+              idempotency_key: 'key-aapl-entry-1',
+              broker_fill_id: `fill-partial-flatten-${qty}`,
+              leg: 'exit',
+              price: 99,
+              qty,
+              fee: 0.1,
+              timestamp: NOW,
+            },
+          ],
+        });
+      }
+
+      it('sizes the held quantity to what the venue still holds after a partial flatten, not the lot original size', async () => {
+        const { store } = openTestExecutionStore();
+        const broker = makeBroker();
+        await seedHeldLot(store, { requested_size: 10, filled_size: 10 });
+        await recordExitFill(store, 4); // an earlier flatten closed 4 of the 10
+
+        const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
+          makeExitGo({ size: 6 }),
+        );
+
+        expect(result.status).toBe('submitted');
+        expect(broker.flattenCalls).toEqual([
+          { instrument: 'AAPL', side: 'sell', size: 6, clientOrderId: 'key-aapl-1355' },
+        ]);
+      });
+
+      it('refuses an exit sized to the lot original filled_size once part of it is already closed', async () => {
+        const { store } = openTestExecutionStore();
+        const broker = makeBroker();
+        await seedHeldLot(store, { requested_size: 10, filled_size: 10 });
+        await recordExitFill(store, 4);
+
+        // What a pre-#568 `buildExitIntent` produced: the entry total, 10,
+        // against a venue holding 6. Submitted, that is a market sell of 10
+        // into 6 — 4 SHORT, with the re-armed OCO cancelled first, i.e. a
+        // reverse position with no lot, no bracket and no protective leg.
+        const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
+          makeExitGo({ size: 10 }),
+        );
+
+        expect(result.status).toBe('error');
+        expect(result.reason).toContain('10');
+        expect(result.reason).toContain('6');
+        // Refused BEFORE the cancel loop: a protective leg the flatten never
+        // replaced must not be taken off the venue on the way to a refusal.
+        expect(broker.cancelCalls).toHaveLength(0);
+        expect(broker.flattenCalls).toHaveLength(0);
+        expect(await store.countAllFlattenSubmissions()).toBe(0);
+      });
+
+      it('refuses, naming the lot, when the fill record shows more closed than the lot ever opened', async () => {
+        const { store } = openTestExecutionStore();
+        const broker = makeBroker();
+        await seedHeldLot(store, { requested_size: 10, filled_size: 10 });
+        await recordExitFill(store, 12); // the store contradicting itself
+
+        // Any size at all: the divergence is refused before the size is
+        // compared, because a negative lot would otherwise net against a
+        // sibling into a total that looks plausible and is not.
+        const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
+          makeExitGo({ size: 6 }),
+        );
+
+        expect(result.status).toBe('error');
+        expect(result.reason).toContain('key-aapl-entry-1');
+        expect(result.reason).toContain('more closed quantity');
+        expect(broker.cancelCalls).toHaveLength(0);
+        expect(broker.flattenCalls).toHaveLength(0);
+        expect(await store.countAllFlattenSubmissions()).toBe(0);
+      });
+
       it('refuses an exit whose side does not match the closing side implied by the held lot', async () => {
         const { store } = openTestExecutionStore();
         const broker = makeBroker();
@@ -1275,6 +1365,83 @@ describe('ExecutionImpl.execute', () => {
           // is explicit that the alert is the fallback, not the primary
           // mechanism.
           expect(residualExposureAlerts.alerts).toEqual([]);
+        });
+
+        // #568, the whole scenario through the real cancel-then-flatten
+        // path: the residual #525 re-armed is a steady state the system keeps
+        // trading against, so the NEXT exit verdict has to size to it. Before
+        // this fix the lot reported its original 40 to both halves of the
+        // exit path, they agreed, and the guard passed — a market sell of 40
+        // into a venue holding 15, i.e. 25 SHORT with the re-armed OCO
+        // cancelled first: a reverse position with no lot, no bracket and no
+        // protective leg.
+        it('sizes and accepts a SECOND exit at the residual, and refuses one sized to the original lot', async () => {
+          const { store } = openTestExecutionStore();
+          const costModel: CostModel = {
+            fill: vi
+              .fn()
+              .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
+              // First flatten: asks 40, fills 25 — residual 15.
+              .mockReturnValueOnce({ fill_price: 99, filled_size: 25, cost_breakdown: zeroCosts() })
+              // Second flatten: the residual, in full.
+              .mockReturnValueOnce({
+                fill_price: 98,
+                filled_size: 15,
+                cost_breakdown: zeroCosts(),
+              }),
+          };
+          const marketData = makeMarketData();
+          const broker = new SimulatedBrokerAdapter({
+            clock: fixedClock,
+            costModel,
+            marketData,
+            config: SIMULATED_CONFIG,
+          });
+          const execution = new ExecutionImpl(
+            makeInput({ store, broker, costModel, marketData, clock: fixedClock }),
+          );
+
+          await execution.execute(
+            makeGo({ idempotency_key: 'key-aapl-entry-1', size: 40, entry: 95 }),
+          );
+          await execution.ingestFills();
+          await execution.execute(makeExitGo({ size: 40 }));
+          await execution.ingestFills();
+
+          // Mid-scenario: 25 of 40 closed. The lot is NOT genuinely flat, so
+          // no ClosedTrade may exist for it — a realized record here would be
+          // a round-trip the position never made.
+          expect(await store.getClosedTrades()).toHaveLength(0);
+          const openLot = (await store.getOpenPositions())[0];
+          // Still carrying the ENTRY total, which is why held quantity cannot
+          // be read off it directly.
+          expect(openLot?.filled_size).toBe(40);
+          expect((await store.getExitFillSizes(['key-aapl-entry-1'])).get('key-aapl-entry-1')).toBe(
+            25,
+          );
+
+          // The pre-#568 exit: the lot's original size, refused without
+          // touching the broker — the re-armed protective legs stay on.
+          const oversized = await execution.execute(
+            makeExitGo({ idempotency_key: 'key-aapl-1400', size: 40 }),
+          );
+          expect(oversized.status).toBe('error');
+          expect(oversized.reason).toContain('does not match the held quantity 15');
+          expect(broker.getProtectedQty('key-aapl-entry-1')).toBe(15);
+
+          // The residual, which is what `buildExitIntent` now sizes.
+          const residualExit = await execution.execute(
+            makeExitGo({ idempotency_key: 'key-aapl-1405', size: 15 }),
+          );
+          expect(residualExit.status).toBe('submitted');
+          await execution.ingestFills();
+
+          // Genuinely flat now — one ClosedTrade for the whole 40, and
+          // nothing left open.
+          expect(await store.getOpenPositions()).toEqual([]);
+          const closed = await store.getClosedTrades();
+          expect(closed).toHaveLength(1);
+          expect(closed[0]).toMatchObject({ idempotency_key: 'key-aapl-entry-1', filled_size: 40 });
         });
 
         it('re-arms a sibling lot that got ZERO share of a partial flatten fill', async () => {

@@ -134,6 +134,20 @@ export interface TraderInput {
    */
   positionState: () => Promise<OpenPosition[]>;
   /**
+   * #568: each named lot's already-closed quantity (`SharedStore`'s
+   * `getExitFillSizes`), narrowed to one function for the same reason
+   * `positionState` is. An exit sizes to what the venue still HOLDS, and
+   * `OpenPosition.filled_size` is the entry total that no exit fill reduces —
+   * a partially-flattened lot stays open at its ORIGINAL size, so without
+   * this the flatten oversells into a reverse position (see
+   * `shared/held-quantity.ts`).
+   *
+   * Required, not optional: an optional reader is one a composition root can
+   * forget, and forgetting it restores exactly the entry-only sizing this
+   * closes — silently, on the money path.
+   */
+  exitFillSizes: (idempotency_keys: readonly string[]) => Promise<Map<string, number>>;
+  /**
    * #432: the cosine precedent store, read at decision time for neighbors and
    * written at decision time with the new setup (trader-spec.md stories 13 and
    * 16). Owned by the Feedback Loop, which labels the realized R on close.

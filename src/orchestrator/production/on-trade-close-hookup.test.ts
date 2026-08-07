@@ -70,6 +70,9 @@ class FakeSharedStore implements SharedStore {
   async getEntryFillSizes(_idempotency_keys: readonly string[]): Promise<Map<string, number>> {
     return new Map();
   }
+  async getExitFillSizes(_idempotency_keys: readonly string[]): Promise<Map<string, number>> {
+    return new Map();
+  }
   async writeAheadFlatten(_submission: FlattenSubmissionWriteAhead): Promise<void> {}
   async resolveFlattenSubmitted(
     _idempotency_key: string,

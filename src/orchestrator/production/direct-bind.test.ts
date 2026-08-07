@@ -1,5 +1,5 @@
 import type { DebateResult } from '../../debate-engine/index.js';
-import type { ExecutionConfig } from '../../execution/index.js';
+import { type ExecutionConfig, SqliteExecutionStore } from '../../execution/index.js';
 import type { RiskConfig } from '../../risk-manager/index.js';
 import { CircuitBreakers } from '../../risk-manager/index.js';
 import type { Clock, OpenPosition, OrderIntent } from '../../shared/index.js';
@@ -129,6 +129,8 @@ describe('buildTraderStep', () => {
       portfolioSnapshots: new Map(),
       config,
       setupStore: new FixtureSetupStore(),
+      // #568: no lot open in these cases, so nothing to look an exit fill up for.
+      getExitFillSizes: async () => new Map<string, number>(),
     });
 
     const intent = await step({
@@ -177,6 +179,8 @@ describe('buildTraderStep', () => {
       portfolioSnapshots: new Map(),
       config,
       setupStore: new FixtureSetupStore(),
+      // #568: no lot open in these cases, so nothing to look an exit fill up for.
+      getExitFillSizes: async () => new Map<string, number>(),
     });
 
     const intent = await step({
@@ -187,6 +191,98 @@ describe('buildTraderStep', () => {
     });
 
     expect(intent).toBeNull();
+  });
+
+  // #568, at the call site: the composition root binds `getExitFillSizes` to
+  // the SAME store `getOpenPositions` reads (production.ts), so an exit is
+  // sized off the fill record `executeExit` re-derives its own guard from.
+  // Bound here to a real `SqliteExecutionStore` rather than a fake, because
+  // the failure this closes was precisely a reader that existed and was not
+  // wired to the lots it had to agree with.
+  it('sizes an exit to the residual of a partially flattened lot, reading the same store the lots come from', async () => {
+    const config: TraderConfig = {
+      conviction_floor: 0.5,
+      max_risk_per_trade: 0.01,
+      asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
+      atr_timeframe: '1h',
+      atr_lookback: 14,
+      atr_k: 2,
+      vol_floor_fraction: 0.002,
+      non_converged_haircut: 0.5,
+      reward_risk_multiple: 2,
+      min_viable_notional: 10,
+      scale_in_conviction_delta: 0.1,
+      time_in_force: { crypto: 'gtc', stocks: 'day' },
+    };
+    const store = new SqliteExecutionStore(openSharedStore(':memory:'));
+    await store.writeAheadPosition({
+      idempotency_key: 'key-aapl-entry-1',
+      debate_id: 'debate-0',
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+      side: 'buy',
+      intent_type: 'entry',
+      requested_size: 10,
+      filled_size: 10,
+      avg_entry_price: 100,
+      stop: 95,
+      target: 110,
+      order_state: 'filled',
+      broker_order_ids: [],
+      opened_at: NOW,
+      decision_timestamp: NOW,
+      conviction: 0.6,
+      converged: true,
+    });
+    // The earlier partial flatten's own fill: 4 of the 10 closed, 6 left at
+    // the venue, the lot still open at `filled_size` 10.
+    await store.applyLotAdvance({
+      idempotency_key: 'key-aapl-entry-1',
+      fills: [
+        {
+          idempotency_key: 'key-aapl-entry-1',
+          broker_fill_id: 'fill-partial-flatten',
+          leg: 'exit',
+          price: 99,
+          qty: 4,
+          fee: 0.1,
+          timestamp: NOW,
+        },
+      ],
+    });
+
+    const step = buildTraderStep({
+      marketData: FAKE_MARKET_DATA,
+      circuitBreakers: new CircuitBreakers({
+        daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+        max_drawdown_pct: 0.2,
+        max_consecutive_losses: 5,
+        volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+        auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+      }),
+      accountState: FAKE_ACCOUNT_STATE,
+      volatility: FAKE_VOLATILITY,
+      getOpenPositions: () => store.getOpenPositions(),
+      getExitFillSizes: (idempotency_keys) => store.getExitFillSizes(idempotency_keys),
+      mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
+      config,
+      setupStore: new FixtureSetupStore(),
+    });
+
+    const intent = await step({
+      trace_id: TRACE_ID,
+      instrument: 'AAPL',
+      // Opposite the held long → flatten.
+      debate: makeDebate({ direction: 'bearish', confidence: 0.8, converged: true }),
+      clock: CLOCK,
+    });
+
+    expect(intent?.intent_type).toBe('exit');
+    expect(intent?.side).toBe('sell');
+    expect(intent?.size).toBe(6);
   });
 });
 
@@ -255,6 +351,8 @@ describe('buildTraderStep capital ceiling (#511)', () => {
       portfolioSnapshots: new Map(),
       config: CEILING_CONFIG,
       setupStore: new FixtureSetupStore(),
+      // #568: no lot open in these cases, so nothing to look an exit fill up for.
+      getExitFillSizes: async () => new Map<string, number>(),
       ...(capitalCeilingUsd === undefined ? {} : { capitalCeilingUsd }),
     });
   }

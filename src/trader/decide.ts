@@ -18,7 +18,12 @@ import {
   type IndicatorSpec,
   minimumBarsFor,
 } from '../market-data-service/index.js';
-import type { OpenPosition, OrderIntent } from '../shared/index.js';
+import {
+  heldQuantitiesFor,
+  type OpenPosition,
+  type OrderIntent,
+  totalHeldQuantity,
+} from '../shared/index.js';
 import { NO_PRECEDENT_MULTIPLIER, retrieveCosinePrecedent } from './cosine-precedent.js';
 import { computeIdempotencyKey } from './idempotency-key.js';
 import { buildSetupVector } from './setup-vector.js';
@@ -326,7 +331,7 @@ async function buildExitIntent(
   input: TraderInput,
   positions: OpenPosition[],
 ): Promise<TraderOutcome> {
-  const { clock, config, debate, instrument, marketData } = input;
+  const { clock, config, debate, exitFillSizes, instrument, marketData } = input;
 
   const existingSide = positions[0]?.side;
   if (existingSide === undefined) {
@@ -336,7 +341,27 @@ async function buildExitIntent(
   // Only filled exposure needs flattening — a lot still `pending`/
   // `submitted` has nothing on the books yet, so an all-pending instrument
   // has no fill to close and there is nothing to emit.
-  const totalSize = positions.reduce((sum, lot) => sum + lot.filled_size, 0);
+  //
+  // #568: and only what the VENUE still holds. `filled_size` alone is the
+  // ENTRY quantity, which no exit fill reduces, so a partially-flattened lot
+  // (which stays open) would size this exit to the original quantity while
+  // the venue holds only the residual. `heldQuantitiesFor` subtracts what is
+  // already closed — the same derivation `executeExit` re-runs before it
+  // submits, and it refuses on exact inequality, so a difference between the
+  // two stops the exit rather than mis-sizing it.
+  const held = await heldQuantitiesFor(positions, exitFillSizes);
+
+  // Fail closed, per lot, BEFORE summing — the same check `executeExit` makes,
+  // for the same reason. A lot recording more closed than it ever opened is
+  // the store contradicting itself, and netting that negative against a
+  // positive sibling yields a total that reads as an ordinary "nothing to
+  // flatten". Folded into `exit_no_filled_size` it would be invisible twice
+  // over: the sibling's REAL residual would never be exited, and
+  // `executeExit`'s loud refusal would never run, because no order is emitted
+  // for it to refuse. Its own reason, so a soak can tell it from a flat lot.
+  if (held.some((lot) => lot.held < 0)) return skip('exit_held_quantity_diverged');
+
+  const totalSize = totalHeldQuantity(held);
   if (totalSize <= 0) return skip('exit_no_filled_size');
 
   const asOf = clock.now();
@@ -415,6 +440,14 @@ export type TraderSkipReason =
   | 'holding_neutral_or_non_converged'
   | 'scale_in_conviction_delta_not_met'
   | 'exit_no_filled_size'
+  // #568: a lot whose recorded exit fills exceed what it ever opened. NOT a
+  // quiet variant of `exit_no_filled_size` — that one means "nothing to
+  // close", this one means "the store's own record of this instrument
+  // disagrees with itself", and the exit it suppresses may be one a sibling
+  // lot genuinely needs. If this ever appears in a soak log, the fill record
+  // is the thing to look at, and an instrument is stuck un-exitable until it
+  // is.
+  | 'exit_held_quantity_diverged'
   | 'no_position_side'
   | 'atr_insufficient_bars'
   | 'atr_not_finite'

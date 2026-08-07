@@ -145,6 +145,9 @@ function traderInput(overrides: Partial<TraderInput> = {}): TraderInput {
     equity: EQUITY,
     config: DEFAULT_TRADER_CONFIG,
     positionState: async () => [],
+    // #568: no exit fill on record for any lot — "missing is absent", so held
+    // quantity is `filled_size`, which is what every pre-#568 case here means.
+    exitFillSizes: async () => new Map<string, number>(),
     setupStore: new FixtureSetupStore(),
     ...overrides,
   };
@@ -651,6 +654,47 @@ describe('decide — position-aware branching (#74)', () => {
     expect(intent?.size).toBe(75);
   });
 
+  // #568: the lot stays OPEN after a partial flatten (`getOpenPositions()`
+  // excludes only terminal states) and its `filled_size` is the entry total
+  // that no exit fill ever reduces. Sizing the next exit off it sold the
+  // original quantity into a venue holding only the residual — 4 short of a
+  // 10-lot flattened by 4 is a REVERSE position, with no lot, no bracket and
+  // no protective leg.
+  it('sizes an exit to what the venue still holds after a partial flatten, not the original filled size', async () => {
+    const partiallyFlattened = openPosition({ side: 'buy', filled_size: 10 });
+    const debate = debateResult({ direction: 'bearish', confidence: 0.9, converged: true });
+
+    const intent = await decide(
+      traderInput({
+        debate,
+        positionState: async () => [partiallyFlattened],
+        // 4 of the 10 already closed by an earlier partial flatten.
+        exitFillSizes: async () => new Map([[partiallyFlattened.idempotency_key, 4]]),
+      }),
+    );
+
+    expect(intent?.intent_type).toBe('exit');
+    expect(intent?.size).toBe(6);
+  });
+
+  it('holds (null) rather than exiting a lot whose exit fills already cover it', async () => {
+    // Flat at the venue but not yet marked terminal — the close lands on the
+    // next `ingestFills()` poll. There is nothing left to sell in between, so
+    // emitting an exit here would be the same oversell in miniature.
+    const fullyExited = openPosition({ side: 'buy', filled_size: 10 });
+    const debate = debateResult({ direction: 'bearish', confidence: 0.9, converged: true });
+
+    const intent = await decide(
+      traderInput({
+        debate,
+        positionState: async () => [fullyExited],
+        exitFillSizes: async () => new Map([[fullyExited.idempotency_key, 10]]),
+      }),
+    );
+
+    expect(intent).toBeNull();
+  });
+
   it('holds (null) rather than emitting a zero-size exit when every lot is still unfilled', async () => {
     const pendingLot = openPosition({ order_state: 'pending', filled_size: 0 });
     const debate = debateResult({ direction: 'bearish', confidence: 0.9, converged: true });
@@ -920,6 +964,38 @@ describe('decideWithReason — named skip reasons (#475)', () => {
     );
 
     expect(outcome.skip_reason).toBe('exit_no_filled_size');
+  });
+
+  // #568 review: an over-exited lot netting a positive sibling to <= 0 is the
+  // SAME failure the held-quantity fix closes — a negative hiding inside a
+  // total that looks benign. Here it would suppress the exit the sibling
+  // genuinely needs, and `executeExit`'s loud refusal never runs because no
+  // order is emitted for it to refuse, so this reason is what makes it
+  // visible at all.
+  it('reports the divergence, not a flat-lot skip, when a lot records more closed than it ever opened', async () => {
+    const overExited = openPosition({
+      idempotency_key: 'lot-over-exited',
+      side: 'buy',
+      filled_size: 10,
+    });
+    const sibling = openPosition({
+      idempotency_key: 'lot-sibling',
+      side: 'buy',
+      filled_size: 4,
+    });
+
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({ direction: 'bearish', confidence: 0.9, converged: true }),
+        positionState: async () => [overExited, sibling],
+        // 14 closed against an entry of 10 → held -4, which nets the
+        // sibling's real +4 to exactly zero.
+        exitFillSizes: async () => new Map([['lot-over-exited', 14]]),
+      }),
+    );
+
+    expect(outcome.intent).toBeNull();
+    expect(outcome.skip_reason).toBe('exit_held_quantity_diverged');
   });
 
   it('reports no reason at all when an order was produced', async () => {
