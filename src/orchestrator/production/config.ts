@@ -295,6 +295,32 @@ export interface ProductionConfig {
    */
   llmBudgetUsd?: number;
   /**
+   * The declared capital ceiling a live run is bounded by, in account currency
+   * (#511, `SAMURAI_LIVE_MAX_CAPITAL_USD`).
+   *
+   * **Where it binds.** The Trader sizes as `equity * riskFraction /
+   * stopDistance` (trader/decide.ts), and `equity` is the account's real
+   * mark-to-market equity — so on a well-funded account every position scales
+   * with the balance rather than with what the operator declared. Present, this
+   * caps the equity the Trader sizes against at `min(ceiling, equity)`
+   * (`buildTraderStep`, production/direct-bind.ts). It is a ceiling on the
+   * DERIVATION, never a floor: an account below the ceiling sizes off its own
+   * smaller equity.
+   *
+   * **Optional, and absent everywhere except a live boot.** Paper and backtest
+   * runs and every test leave it undefined, which restores the pre-#511
+   * behaviour exactly — `undefined` is "no ceiling declared", not "a ceiling of
+   * zero". `liveStartingProfile` is the only in-repo caller that sets it, and
+   * it refuses to be built without a positive finite figure, so a live run
+   * cannot reach here with the field missing.
+   *
+   * It does NOT re-anchor the six `riskConfig` notional caps at runtime: those
+   * are derived from the same ceiling at profile-build time. See
+   * live-profile.ts's header for what that costs when equity is below the
+   * ceiling.
+   */
+  capitalCeilingUsd?: number;
+  /**
    * Whether the market-intelligence sentiment agent runs (D2, review
    * 2026-08-06). Defaults from `SAMURAI_SENTIMENT` (`off` disables, anything
    * else runs it) — the same option-with-env-default idiom every other

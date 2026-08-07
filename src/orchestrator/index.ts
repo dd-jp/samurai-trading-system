@@ -57,6 +57,7 @@ import {
   TELEGRAM_ALERT_ENV_VARS,
   TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR,
 } from './alert-transport.js';
+import { type LiveStartingProfile, liveStartingProfile } from './live-profile.js';
 import { buildEntrypointLogger, JsonLogger } from './logger.js';
 import { paperStartingProfile } from './paper-profile.js';
 import {
@@ -65,6 +66,7 @@ import {
   type ProductionOrchestrator,
   SMOKE_TEST_UNIVERSE,
 } from './production.js';
+import type { Logger } from './types.js';
 
 export {
   ALERT_CHANNEL_FIELDS,
@@ -81,6 +83,20 @@ export { TradeChannelBreachAlert } from './breach-alert-channel.js';
 export { digest } from './digest.js';
 export { Heartbeat, type HeartbeatChannel } from './heartbeat.js';
 export { TradeChannelHeartbeat } from './heartbeat-channel.js';
+export {
+  LIVE_MONEY_GATE_SUMMARY,
+  LIVE_MONEY_GATES,
+  LIVE_MONEY_GATES_VERIFIED_ON,
+} from './live-money-gates.js';
+export {
+  ALPACA_LIVE_API_KEY_ENV_VAR,
+  ALPACA_LIVE_API_SECRET_ENV_VAR,
+  LIVE_MAX_CAPITAL_ENV_VAR,
+  type LiveStartingProfile,
+  liveStartingProfile,
+  minLiveCapitalCeilingUsd,
+  resolveLiveCapitalCeilingUsd,
+} from './live-profile.js';
 export { buildEntrypointLogger, formatLogLine, JsonLogger, type LogLineSink } from './logger.js';
 export { TradeChannelLoosenApproval } from './loosen-approval-channel.js';
 export { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
@@ -89,7 +105,12 @@ export {
   type OrphanGoVerdict,
   OrphanVerdictScanner,
 } from './orphan-verdict-scan.js';
-export { PAPER_ACCOUNT_EQUITY_ANCHOR, paperStartingProfile } from './paper-profile.js';
+export {
+  PAPER_ACCOUNT_EQUITY_ANCHOR,
+  paperStartingProfile,
+  RISK_CAP_EQUITY_FRACTIONS,
+  riskCapsFor,
+} from './paper-profile.js';
 export {
   ALERT_AFTER_CONSECUTIVE_SKIPS,
   ALERT_REPEAT_EVERY_SKIPS,
@@ -242,6 +263,8 @@ const CREDENTIAL_REQUIREMENTS: readonly {
   unusedByThisRun: (context: {
     injected: Partial<ProductionConfig>;
     alertsMode: AlertsMode | undefined;
+    /** The resolved trading mode — what makes the live Alpaca pair required, or a variable this run will never read (#511). */
+    mode: ProductionConfig['mode'];
   }) => boolean;
   /**
    * Names in `vars` that a DIFFERENT variable can satisfy instead, keyed by
@@ -263,6 +286,28 @@ const CREDENTIAL_REQUIREMENTS: readonly {
     unusedByThisRun: ({ injected }) =>
       injected.alpacaBrokerClient !== undefined &&
       (injected.dataSource !== undefined || injected.alpacaDataClient !== undefined),
+  },
+  {
+    // #511. Alpaca issues a different key pair per account, so a live run needs
+    // its own — and must never fall back to the paper pair, which would either
+    // fail on the first order or, worse, quietly trade the paper account.
+    //
+    // **Live only, and that asymmetry is the point.** `unusedByThisRun` returns
+    // true for paper and backtest, so a paper boot never looks these variables
+    // up: an operator who has not yet been issued live keys, or who typo'd one,
+    // still gets a clean paper start. `buildDefaultAlpacaBrokerClient` reads
+    // them under the same condition and is the authority; this entry exists so
+    // the operator learns about them alongside every other missing credential
+    // instead of one per attempt.
+    //
+    // The PAPER pair above stays required in live mode too, deliberately:
+    // `buildDefaultAlpacaDataClient` has no mode branch (Alpaca serves market
+    // data from one host for both account types) and still reads
+    // `ALPACA_API_KEY`. A live run therefore needs both pairs — the live one for
+    // orders, the paper one for bars.
+    vars: ['ALPACA_LIVE_API_KEY', 'ALPACA_LIVE_API_SECRET'],
+    unusedByThisRun: ({ injected, mode }) =>
+      mode !== 'live' || injected.alpacaBrokerClient !== undefined,
   },
   {
     // ADR-0009: one provider, one base URL. `NOUS_BASE_URL` is unconditional —
@@ -326,11 +371,18 @@ const CREDENTIAL_REQUIREMENTS: readonly {
 export function missingCredentialEnvVars(
   injected: Partial<ProductionConfig>,
   alertsMode: AlertsMode | undefined,
+  /**
+   * The resolved trading mode (#511). Defaults to `paper` — the mode that
+   * demands the fewest credentials, so a caller that forgets it under-reports
+   * rather than blocking a boot on variables the run would never read.
+   * `startFromEnvironment` always passes the mode it actually resolved.
+   */
+  mode: ProductionConfig['mode'] = 'paper',
 ): string[] {
   const isSet = (name: string): boolean => (process.env[name] ?? '').trim().length > 0;
 
   return CREDENTIAL_REQUIREMENTS.filter(
-    (requirement) => !requirement.unusedByThisRun({ injected, alertsMode }),
+    (requirement) => !requirement.unusedByThisRun({ injected, alertsMode, mode }),
   ).flatMap((requirement) =>
     requirement.vars.filter(
       (name) => !isSet(name) && !(requirement.alternatives?.[name] ?? []).some(isSet),
@@ -347,8 +399,9 @@ export function missingCredentialEnvVars(
 function assertCredentialsPresent(
   injected: Partial<ProductionConfig>,
   alertsMode: AlertsMode | undefined,
+  mode: ProductionConfig['mode'],
 ): void {
-  const missing = missingCredentialEnvVars(injected, alertsMode);
+  const missing = missingCredentialEnvVars(injected, alertsMode, mode);
   if (missing.length === 0) return;
 
   // Named separately because the fix is different in kind: these are missing
@@ -501,7 +554,7 @@ export async function startFromEnvironment(
   // which Alpaca host the credentials would even be used against), and a run
   // that cannot authenticate should not leave a freshly-created SQLite file
   // behind as a side effect of failing.
-  assertCredentialsPresent(injected, alertsMode);
+  assertCredentialsPresent(injected, alertsMode, mode);
 
   // One logger for the whole startup, threaded into the composition root
   // rather than left for it to default: the #330 warning below has to be
@@ -555,6 +608,37 @@ export async function startFromEnvironment(
   });
 
   return orchestrator;
+}
+
+/**
+ * The profile the shipped entrypoint boots on, for the mode the operator asked
+ * for (#511) — the ONE place the paper and live profiles are chosen between.
+ *
+ * **Exported so this hop is testable.** The entrypoint below sits behind an
+ * `import.meta.url` guard that no unit test can reach, so leaving the choice
+ * inline would have made "SAMURAI_MODE=live reaches the live profile" a claim
+ * about three lines nothing exercises — the exact "tested mechanism nothing
+ * calls" shape this repo keeps rediscovering, inverted.
+ *
+ * `live` is reachable only by an operator typing it exactly: `parseMode`
+ * refuses an unrecognised value, resolves an ABSENT one to `paper`, and
+ * deliberately does not trim, so `' live '` throws rather than resolving. The
+ * branch is a literal comparison against that resolved mode — no lookup table,
+ * no default. And the paper branch cannot be reached with `live` regardless,
+ * because `paperStartingProfile` still refuses it.
+ *
+ * `backtest` goes to the paper profile, which accepts it: that mode spends no
+ * money and `breakerConfig.auto_rearm` exists for it.
+ */
+export function startingProfileForMode(
+  mode: ProductionConfig['mode'],
+  logger?: Logger,
+  // A union of the two profiles' own return types, not `Partial<ProductionConfig>`:
+  // both are typed to carry every value `REQUIRED_INJECTED_CONFIG` demands, and
+  // widening to `Partial` here would move that guarantee from the compiler to
+  // the runtime guard for the shipped entrypoint alone.
+): ReturnType<typeof paperStartingProfile> | LiveStartingProfile {
+  return mode === 'live' ? liveStartingProfile(undefined, logger) : paperStartingProfile(mode);
 }
 
 /**
@@ -626,9 +710,10 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
     // composition root opens a file as a side effect of constructing an
     // orchestrator. An unwritable path degrades to stdout with a warn rather
     // than stopping the process; see logger.ts / rotating-file-sink.ts.
+    const entrypointLogger = buildEntrypointLogger();
     const orchestrator = await startFromEnvironment({
-      ...paperStartingProfile(parseMode(process.env.SAMURAI_MODE)),
-      logger: buildEntrypointLogger(),
+      ...startingProfileForMode(parseMode(process.env.SAMURAI_MODE), entrypointLogger),
+      logger: entrypointLogger,
     });
     const shutdown = buildShutdownHandler(orchestrator);
     process.on('SIGINT', shutdown);

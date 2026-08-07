@@ -265,14 +265,39 @@ describe('paperStartingProfile', () => {
     });
   });
 
-  it('refuses live mode naming the missing stop, not the retired approval channel', () => {
-    // The refusal message is what an operator reads when they try to go live.
-    // It used to cite "a channel that auto-approves" as a reason; ADR-0007
-    // removed the human gate entirely, so the honest reason is now that the
-    // breakers are the only stop and three of them cannot fire (#384, #375,
-    // #333). Pinned so the message cannot drift back to describing a gate
-    // this system no longer has.
-    expect(() => paperStartingProfile('live')).toThrow('#384, #375 and #333');
+  it('refuses live mode without citing issues that have since closed', () => {
+    // The refusal message is what an operator reads when they try to go live,
+    // so every checkable claim in it has to still be true. It has now been
+    // wrong twice in the same way: it first blamed "a channel that
+    // auto-approves" after ADR-0007 removed the human gate, then blamed #384,
+    // #375 and #333 as "three breakers that cannot fire" after all three
+    // closed. A refusal whose evidence is checkable and wrong is worse than a
+    // vague one, because the next reader trusts it.
+    //
+    // Pinned two ways: the closed numbers may not reappear, and the standing
+    // reason — the soak that would tune these values has not run — must.
+    const message = (() => {
+      try {
+        paperStartingProfile('live');
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+      return expect.unreachable('paperStartingProfile("live") must throw');
+    })();
+
+    for (const closed of ['#384', '#375', '#333', '#525']) {
+      expect(message).not.toContain(closed);
+    }
+    expect(message).toContain('#238');
+    expect(message).toContain('has not run');
+  });
+
+  it('routes an operator to the live profile rather than to a dead end', () => {
+    // #511: the refusal must not read as "live is unreachable". It is reachable
+    // and deliberately explicit — through a profile whose caps come from a
+    // declared ceiling rather than from an assumed paper balance.
+    expect(() => paperStartingProfile('live')).toThrow('liveStartingProfile');
+    expect(() => paperStartingProfile('live')).toThrow('SAMURAI_LIVE_MAX_CAPITAL_USD');
   });
 
   it('bounds the hard drawdown breaker at the documented target, as a fraction', () => {

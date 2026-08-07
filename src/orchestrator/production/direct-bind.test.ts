@@ -15,6 +15,7 @@ import {
   buildRiskStep,
   buildTraderStep,
   buildVerdictStep,
+  sizingEquity,
 } from './direct-bind.js';
 
 const NOW = new Date('2026-07-28T14:00:00Z');
@@ -186,6 +187,105 @@ describe('buildTraderStep', () => {
     });
 
     expect(intent).toBeNull();
+  });
+});
+
+describe('sizingEquity (#511)', () => {
+  it('takes the ceiling when equity exceeds it — a funded account cannot widen the run', () => {
+    expect(sizingEquity(250_000, 2_000)).toBe(2_000);
+  });
+
+  it('takes real equity when it is below the ceiling — a ceiling is not a floor', () => {
+    expect(sizingEquity(500, 2_000)).toBe(500);
+  });
+
+  it('leaves equity untouched when no ceiling is declared', () => {
+    // Paper, backtest, and every existing caller: the pre-#511 behaviour.
+    expect(sizingEquity(10_000, undefined)).toBe(10_000);
+  });
+
+  it.each([
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+  ])('falls back to unclamped equity for an unusable ceiling of %j rather than producing NaN', (ceiling) => {
+    // `Math.min(10_000, NaN)` is NaN, and a NaN size propagates through the
+    // whole sizing arithmetic before anything rejects it. Unreachable in
+    // production (`resolveLiveCapitalCeilingUsd` refuses both), so this pins
+    // the guard rather than the path.
+    expect(sizingEquity(10_000, ceiling)).toBe(10_000);
+  });
+});
+
+describe('buildTraderStep capital ceiling (#511)', () => {
+  const CEILING_CONFIG: TraderConfig = {
+    conviction_floor: 0.5,
+    max_risk_per_trade: 0.01,
+    asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
+    atr_timeframe: '1h',
+    atr_lookback: 14,
+    atr_k: 2,
+    vol_floor_fraction: 0.002,
+    non_converged_haircut: 0.5,
+    reward_risk_multiple: 2,
+    min_viable_notional: 0.01,
+    scale_in_conviction_delta: 0.1,
+    time_in_force: { crypto: 'gtc', stocks: 'day' },
+  };
+
+  function stepWithCeiling(capitalCeilingUsd?: number) {
+    return buildTraderStep({
+      marketData: FAKE_MARKET_DATA,
+      circuitBreakers: new CircuitBreakers({
+        daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+        max_drawdown_pct: 0.2,
+        max_consecutive_losses: 5,
+        volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+        auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+      }),
+      // `cash: 10_000`, no open positions, so portfolio equity is 10_000.
+      accountState: FAKE_ACCOUNT_STATE,
+      volatility: FAKE_VOLATILITY,
+      getOpenPositions: async () => NO_POSITIONS,
+      mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
+      config: CEILING_CONFIG,
+      setupStore: new FixtureSetupStore(),
+      ...(capitalCeilingUsd === undefined ? {} : { capitalCeilingUsd }),
+    });
+  }
+
+  async function sizeFor(capitalCeilingUsd?: number): Promise<number> {
+    const intent = await stepWithCeiling(capitalCeilingUsd)({
+      trace_id: TRACE_ID,
+      instrument: 'AAPL',
+      debate: makeDebate(),
+      clock: CLOCK,
+    });
+    if (intent === null) throw new Error('expected an intent to size');
+    return intent.size;
+  }
+
+  it('sizes off the ceiling, not off account equity, when equity is larger', async () => {
+    // THE acceptance criterion: equity 10,000 against a declared 1,000 must
+    // size as if the account held 1,000. Asserted as a RATIO against the
+    // unclamped size rather than an absolute, so it pins the clamp rather than
+    // re-deriving `decide`'s arithmetic here.
+    const unclamped = await sizeFor(undefined);
+    const clamped = await sizeFor(1_000);
+
+    expect(clamped).toBeCloseTo(unclamped / 10, 10);
+  });
+
+  it('does not inflate a size when the ceiling is above real equity', async () => {
+    // A ceiling is a bound, never a target: a $1m declaration against a $10k
+    // account must not size as if the money were there.
+    expect(await sizeFor(1_000_000)).toBeCloseTo(await sizeFor(undefined), 10);
+  });
+
+  it('leaves the paper path byte-identical when no ceiling is declared', async () => {
+    expect(await sizeFor(undefined)).toBeCloseTo(await sizeFor(Number.NaN), 10);
   });
 });
 

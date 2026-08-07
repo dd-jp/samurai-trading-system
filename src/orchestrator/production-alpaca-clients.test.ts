@@ -25,10 +25,15 @@ describe('buildDefaultAlpacaBrokerClient', () => {
   const savedBaseUrl = process.env.ALPACA_BASE_URL;
   const savedKey = process.env.ALPACA_API_KEY;
   const savedSecret = process.env.ALPACA_API_SECRET;
+  const savedLiveKey = process.env.ALPACA_LIVE_API_KEY;
+  const savedLiveSecret = process.env.ALPACA_LIVE_API_SECRET;
 
   beforeEach(() => {
     process.env.ALPACA_API_KEY = 'test-key';
     process.env.ALPACA_API_SECRET = 'test-secret';
+    // #511: live mode reads its own pair. Stubs, never real credentials.
+    process.env.ALPACA_LIVE_API_KEY = 'test-live-key';
+    process.env.ALPACA_LIVE_API_SECRET = 'test-live-secret';
     delete process.env.ALPACA_BASE_URL;
   });
 
@@ -36,6 +41,8 @@ describe('buildDefaultAlpacaBrokerClient', () => {
     restore('ALPACA_BASE_URL', savedBaseUrl);
     restore('ALPACA_API_KEY', savedKey);
     restore('ALPACA_API_SECRET', savedSecret);
+    restore('ALPACA_LIVE_API_KEY', savedLiveKey);
+    restore('ALPACA_LIVE_API_SECRET', savedLiveSecret);
   });
 
   function restore(name: string, value: string | undefined): void {
@@ -113,10 +120,90 @@ describe('buildDefaultAlpacaBrokerClient', () => {
 
   // The reverse mismatch: an operator who set live mode but is silently
   // filling paper orders is running on a false picture of their own risk.
+  //
+  // `AlpacaHttpBrokerClient.resolveBaseUrl` has always refused this pairing, so
+  // the DIRECTION is not new in #511. What is new is who says so: the
+  // composition root now names the two things that actually disagree —
+  // `ALPACA_BASE_URL` and `SAMURAI_MODE` — which the client cannot, because by
+  // the time it sees the override it is an argument with no provenance. The
+  // client's guard stays behind it as the backstop.
   it('refuses a paper-host override when mode is live', () => {
     process.env.ALPACA_BASE_URL = PAPER_HOST;
 
-    expect(() => buildDefaultAlpacaBrokerClient('live', makeLogger())).toThrow(/environment/);
+    expect(() => buildDefaultAlpacaBrokerClient('live', makeLogger())).toThrow(
+      /ALPACA_BASE_URL.*PAPER.*SAMURAI_MODE/s,
+    );
+  });
+
+  it.each([
+    'https://PAPER-API.ALPACA.MARKETS',
+    ' https://paper-api.alpaca.markets',
+    'https://paper-api.alpaca.markets:443',
+  ])('refuses the paper host spelled as %s in live mode', (override) => {
+    // Same classifier as the paper-mode direction above, so the same spellings
+    // that bypass a `startsWith` comparison are covered on both sides.
+    process.env.ALPACA_BASE_URL = override;
+
+    expect(() => buildDefaultAlpacaBrokerClient('live', makeLogger())).toThrow(/Refusing to start/);
+  });
+
+  describe('live credentials (#511)', () => {
+    it.each([
+      'ALPACA_LIVE_API_KEY',
+      'ALPACA_LIVE_API_SECRET',
+    ])('refuses to build a live client when %s is absent, rather than using the paper pair', (name) => {
+      delete process.env[name];
+
+      // The paper pair is still set, so a fallback would silently succeed and
+      // authenticate the wrong account — which is the failure this refuses.
+      expect(() => buildDefaultAlpacaBrokerClient('live', makeLogger())).toThrow(name);
+    });
+
+    it.each([
+      '',
+      '   ',
+    ])('treats a live key set to %j as absent, matching the credential pre-flight', (value) => {
+      process.env.ALPACA_LIVE_API_KEY = value;
+
+      expect(() => buildDefaultAlpacaBrokerClient('live', makeLogger())).toThrow(
+        'ALPACA_LIVE_API_KEY',
+      );
+    });
+
+    it('never puts a credential value in the refusal', () => {
+      process.env.ALPACA_LIVE_API_SECRET = '';
+      process.env.ALPACA_API_KEY = 'paper-key-value';
+      process.env.ALPACA_API_SECRET = 'paper-secret-value';
+
+      try {
+        buildDefaultAlpacaBrokerClient('live', makeLogger());
+        expect.unreachable('expected a refusal');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        expect(message).not.toContain('paper-key-value');
+        expect(message).not.toContain('paper-secret-value');
+        expect(message).not.toContain('test-live-key');
+      }
+    });
+
+    it.each([
+      'paper',
+      'backtest',
+    ] as const)('never reads the live pair in %s mode, so a malformed live key cannot break the boot', (mode) => {
+      delete process.env.ALPACA_LIVE_API_KEY;
+      delete process.env.ALPACA_LIVE_API_SECRET;
+
+      expect(() => buildDefaultAlpacaBrokerClient(mode, makeLogger())).not.toThrow();
+    });
+
+    it('does not log a credential when it builds the live client', () => {
+      const logger = makeLogger();
+
+      buildDefaultAlpacaBrokerClient('live', logger);
+
+      expect(JSON.stringify(logger.entries)).not.toContain('test-live-key');
+      expect(JSON.stringify(logger.entries)).not.toContain('test-live-secret');
+    });
   });
 
   it('refuses an empty ALPACA_BASE_URL rather than falling back to a default', () => {

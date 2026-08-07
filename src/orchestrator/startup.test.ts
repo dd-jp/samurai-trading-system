@@ -12,8 +12,14 @@
 import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openSharedStore } from '../shared/store/index.js';
-import { paperStartingProfile, startFromEnvironment } from './index.js';
+import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
+import {
+  assertStorePathMatchesMode,
+  missingCredentialEnvVars,
+  paperStartingProfile,
+  startFromEnvironment,
+  startingProfileForMode,
+} from './index.js';
 import type { Logger } from './types.js';
 
 /**
@@ -73,6 +79,12 @@ const MUTATED_ENV_VARS = [
   'TELEGRAM_ALLOWED_USER_IDS',
   // #342: the heartbeat's own destination, separate from the escalation chat.
   'TELEGRAM_HEARTBEAT_CHAT_ID',
+  // #511: the live profile's three variables. In this list for the same reason
+  // as `SAMURAI_MODE` — a leaked live key or ceiling would change what a later
+  // test in the same worker exercises. Every value set below is a stub.
+  'SAMURAI_LIVE_MAX_CAPITAL_USD',
+  'ALPACA_LIVE_API_KEY',
+  'ALPACA_LIVE_API_SECRET',
 ] as const;
 
 const savedEnv = new Map<string, string | undefined>();
@@ -425,10 +437,145 @@ describe('startFromEnvironment — the shipped paper profile', () => {
     }
   });
 
-  it('refuses to boot the shipped profile into live mode', () => {
+  it('refuses to boot the shipped PAPER profile into live mode', () => {
     // `mode` is refused at the profile, before `startFromEnvironment` is even
     // called — so no store is opened and no client is constructed. Live stays
-    // reachable, but only for a caller passing values somebody tuned.
+    // reachable, but only through `liveStartingProfile` or a caller passing
+    // values somebody tuned.
     expect(() => paperStartingProfile('live')).toThrow(/live/i);
+  });
+
+  it('never reads the live key pair on a paper boot', () => {
+    // #511's paper-side acceptance criterion, and the blast-radius check: a
+    // garbage live-only variable must not be able to fail a paper start.
+    process.env.SAMURAI_MODE = 'paper';
+    process.env.ALPACA_LIVE_API_KEY = '';
+    process.env.ALPACA_LIVE_API_SECRET = 'not-a-key';
+    process.env.SAMURAI_LIVE_MAX_CAPITAL_USD = 'nonsense';
+
+    expect(missingCredentialEnvVars({}, 'log-only', 'paper')).not.toContain('ALPACA_LIVE_API_KEY');
+    expect(() => paperStartingProfile('paper')).not.toThrow();
+    expect(startingProfileForMode('paper')).toMatchObject({ mode: 'paper' });
+  });
+});
+
+/**
+ * #511 — the composition root's live path, end to end, with stub credentials.
+ *
+ * What this proves: `SAMURAI_MODE=live` plus the three declared variables
+ * reaches a running orchestrator whose broker client is pointed at
+ * `api.alpaca.markets`, and whose config carries the declared ceiling.
+ *
+ * What it deliberately does NOT prove, and cannot without real keys: that the
+ * credentials authenticate, or that Alpaca would accept an order. Nothing here
+ * makes a network call — the store is in-memory and empty, so the startup
+ * reconcile has no lots, and `stop()` runs long before the first tick.
+ *
+ * Nothing in this file writes `.env.local` or leaves `SAMURAI_MODE=live` behind;
+ * the file-level `afterEach` restores all three variables.
+ */
+describe('startFromEnvironment — the live profile (#511)', () => {
+  beforeEach(() => {
+    process.env.ALPACA_API_KEY = 'dummy-key-not-a-credential';
+    process.env.ALPACA_API_SECRET = 'dummy-secret-not-a-credential';
+    process.env.ALPACA_LIVE_API_KEY = 'dummy-live-key-not-a-credential';
+    process.env.ALPACA_LIVE_API_SECRET = 'dummy-live-secret-not-a-credential';
+    process.env.NOUS_API_KEY = 'dummy-nous-not-a-credential';
+    process.env.NOUS_BASE_URL = 'https://nous.test/v1';
+    process.env.SAMURAI_SENTIMENT = 'off';
+    process.env.SAMURAI_LIVE_MAX_CAPITAL_USD = '2000';
+  });
+
+  it('boots a live-configured orchestrator pointed at the live Alpaca host', async () => {
+    const entries: Parameters<Logger['log']>[0][] = [];
+    const logger: Logger = { log: (entry) => entries.push(entry) };
+
+    const orchestrator = await startFromEnvironment({
+      ...startingProfileForMode('live', logger),
+      db: openSharedStore(':memory:'),
+      logger,
+    });
+
+    try {
+      const started = entries.find((entry) => entry.message === 'orchestrator started');
+      expect(started?.payload).toMatchObject({ mode: 'live' });
+
+      // The claim that matters: the broker client this root built talks to the
+      // LIVE host. `buildDefaultAlpacaBrokerClient` logs the resolved base URL,
+      // which is the only place an operator can read it.
+      const brokerLine = entries.find((entry) =>
+        entry.message.includes('LIVE Alpaca broker client'),
+      );
+      expect(brokerLine?.level).toBe('warn');
+      expect(brokerLine?.payload).toMatchObject({
+        mode: 'live',
+        environment: 'live',
+        baseUrl: 'https://api.alpaca.markets',
+      });
+
+      // ...and the profile's own warn, naming the gates, reached the same log.
+      const profileWarn = entries.find((entry) => entry.message.includes('LIVE STARTING PROFILE'));
+      expect(profileWarn?.level).toBe('warn');
+      expect(profileWarn?.payload).toMatchObject({ capital_ceiling_usd: 2_000 });
+
+      // No credential reaches the log, ever.
+      expect(JSON.stringify(entries)).not.toContain('dummy-live-key-not-a-credential');
+      expect(JSON.stringify(entries)).not.toContain('dummy-live-secret-not-a-credential');
+    } finally {
+      await orchestrator.stop();
+    }
+  });
+
+  it.each([
+    '',
+    '  ',
+    '0',
+    '-500',
+    'abc',
+  ])('refuses to boot live with a capital ceiling of %j', (ceiling) => {
+    process.env.SAMURAI_LIVE_MAX_CAPITAL_USD = ceiling;
+
+    // Refused at the profile, before any store is opened or client built.
+    expect(() => startingProfileForMode('live')).toThrow('SAMURAI_LIVE_MAX_CAPITAL_USD');
+  });
+
+  it('refuses to boot live with the ceiling unset', () => {
+    delete process.env.SAMURAI_LIVE_MAX_CAPITAL_USD;
+
+    expect(() => startingProfileForMode('live')).toThrow('SAMURAI_LIVE_MAX_CAPITAL_USD');
+  });
+
+  it.each([
+    'ALPACA_LIVE_API_KEY',
+    'ALPACA_LIVE_API_SECRET',
+  ])('refuses to boot live when %s is absent, with no fallback to the paper pair', async (name) => {
+    delete process.env[name];
+
+    const error = await startFromEnvironment({
+      ...startingProfileForMode('live'),
+      db: openSharedStore(':memory:'),
+    }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
+
+    // The paper pair is still set, so a fallback would have started a live
+    // process authenticated against the wrong account.
+    expect(error.message).toContain(name);
+    expect(missingCredentialEnvVars({}, 'log-only', 'live')).toContain(name);
+  });
+
+  it('keeps live state in its own store file, so a live run cannot inherit paper positions', () => {
+    // #168/#330's invariant, re-asserted because #511 is the change that makes
+    // the mode switch reachable at all. `resolveStoreMode` throws on an unset
+    // mode and the path is `data/samurai-{mode}.sqlite`, file per mode.
+    process.env.SAMURAI_MODE = 'live';
+    expect(sharedStorePath()).toContain('samurai-live.sqlite');
+
+    process.env.SAMURAI_MODE = 'paper';
+    expect(sharedStorePath()).toContain('samurai-paper.sqlite');
+
+    // And the composition root refuses a mode that disagrees with the path it
+    // resolved, rather than writing live state into the paper database.
+    expect(() =>
+      assertStorePathMatchesMode({ dbPath: 'data/samurai-paper.sqlite', mode: 'live' }),
+    ).toThrow(/samurai-paper.sqlite/);
   });
 });

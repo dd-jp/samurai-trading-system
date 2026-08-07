@@ -795,6 +795,15 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       config: config.traderConfig,
       setupStore,
       traderLog: new SqliteTraderLogStore(config.db),
+      // #511: the declared capital ceiling, spread through rather than read
+      // from the environment here — this is the ONE hop that carries it from
+      // `liveStartingProfile` to the arithmetic that turns equity into a size.
+      // Omitted (not passed as `undefined`) on every paper/backtest run under
+      // `exactOptionalPropertyTypes`, which is the pre-#511 behaviour and the
+      // same conditional-spread idiom `verdictAlerts` below uses.
+      ...(config.capitalCeilingUsd === undefined
+        ? {}
+        : { capitalCeilingUsd: config.capitalCeilingUsd }),
     }),
     risk: buildRiskStep({
       ...breakerStateDeps,
