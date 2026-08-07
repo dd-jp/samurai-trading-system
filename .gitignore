@@ -14,8 +14,11 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# Root-anchored: the Python-packaging template's bare `lib/` also swallowed
+# every nested `lib/` source directory (found when src/dashboard-web/src/lib/
+# silently failed to stage, #537).
+/lib/
+/lib64/
 parts/
 sdist/
 var/
