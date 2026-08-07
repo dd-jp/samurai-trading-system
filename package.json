@@ -12,7 +12,7 @@
     "build:migrations": "node --eval \"require('node:fs').cpSync('src/shared/store/migrations','dist/shared/store/migrations',{recursive:true})\"",
     "build:web": "tsc -p src/dashboard-web/tsconfig.json && vite build --config src/dashboard-web/vite.config.ts",
     "dev:web": "vite dev --config src/dashboard-web/vite.config.ts",
-    "typecheck": "tsc -p tsconfig.build.json --noEmit && tsc -p tsconfig.test.json",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit && tsc -p tsconfig.test.json && tsc -p src/dashboard-web/tsconfig.test.json",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",

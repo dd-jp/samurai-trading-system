@@ -1,0 +1,10 @@
+// Type-checks this app's test files, which the build config (tsconfig.json)
+// deliberately excludes — without this project, `App.test.tsx` would belong
+// to no TypeScript project and `yarn typecheck` would never see it (PR #563
+// review). Only test files are listed as roots; the sources they import
+// (App.tsx, ...) are pulled in and checked transitively by tsc.
+{
+  "extends": "./tsconfig.json",
+  "include": ["src/**/*.test.ts", "src/**/*.test.tsx"],
+  "exclude": ["node_modules", "dist"]
+}
