@@ -154,6 +154,42 @@ export interface BrokerAdapter {
    */
   resizeProtectiveLegs(clientOrderId: string, filledQty: number): Promise<void>;
   /**
+   * Re-arms protective legs on a residual position whose legs were CANCELLED
+   * outright, not merely under-sized (#525) — the case `resizeProtectiveLegs`
+   * does not cover, because a cancelled bracket has no legs left for that
+   * method to resize. `executeExit` (execute.ts) cancels a held lot's legs
+   * before every flatten (#516's ordering fix); when the flatten fills only
+   * partially, this is what re-establishes protection on what is still held.
+   *
+   * `qty` is the RESIDUAL still open, not the original lot size — the caller
+   * has already subtracted whatever the flatten closed. `stop`/`target` are
+   * the lot's own, unchanged price levels (absolute prices are invariant
+   * under a resize; only the quantity they protect changes), never
+   * re-derived from the original intent's sizing math.
+   *
+   * `clientOrderId` is a FRESH id, distinct from the lot's own
+   * `idempotency_key` — that id already named the now-cancelled original
+   * bracket, and resubmitting under it risks colliding with whatever
+   * identity semantics the venue applies to a reused client order id.
+   * `side` is the lot's HELD side (mirrors `resizeProtectiveLegs`' lot-scoped
+   * framing); an adapter closing the position derives the closing side the
+   * same way `executeExit` does.
+   *
+   * Throws on failure rather than swallowing it — the caller (`ingestFills`)
+   * is what turns a thrown error into the #525 fallback alert. An adapter
+   * that cannot express this (no native OCO/entry-less protective order for
+   * this asset class) throws too; it must never silently no-op, which would
+   * report success for a residual that is still naked.
+   */
+  rearmProtectiveLegs(
+    clientOrderId: string,
+    instrument: string,
+    side: 'buy' | 'sell',
+    qty: number,
+    stop: number,
+    target: number,
+  ): Promise<void>;
+  /**
    * Flattens exposure with a plain market order — the intervention path
    * (#429). `side` is the CLOSING side, so a long is flattened with `sell`.
    *

@@ -20,7 +20,12 @@
  * the one still reached by omission, because wiring an inbound HITL round trip
  * through Telegram is #275's remaining half, not #322's.
  */
-import type { UnpricedFillAlert, UnpricedFillAlertChannel } from '../execution/index.js';
+import type {
+  ResidualExposureAlert,
+  ResidualExposureAlertChannel,
+  UnpricedFillAlert,
+  UnpricedFillAlertChannel,
+} from '../execution/index.js';
 import type {
   BreachAlert,
   BreachAlertChannel,
@@ -106,6 +111,41 @@ export class LoggingUnpricedFillAlertChannel implements UnpricedFillAlertChannel
       payload: {
         ...alert,
         first_seen_at: alert.first_seen_at.toISOString(),
+      },
+    });
+  }
+}
+
+/**
+ * A residual position `ingestFills()` could not re-arm after a partial
+ * flatten (#525), written to the log at `error`. Posted only on a FAILED
+ * re-arm — a successful one is silent by design (see
+ * `ResidualExposureAlert`'s doc), so every line this channel writes is one
+ * an operator needs to act on: an unprotected position sitting at the venue
+ * with no stop and no target.
+ *
+ * Same caveat as `LoggingUnpricedFillAlertChannel`'s: a log line nobody
+ * tails during an unattended soak (#238) is not an alert. Wiring a
+ * reachable-from-a-phone implementation through `SAMURAI_ALERTS=telegram`
+ * (#322) is left for a follow-up — see the PR body.
+ */
+export class LoggingResidualExposureAlertChannel implements ResidualExposureAlertChannel {
+  constructor(private readonly logger: Logger) {}
+
+  async postResidualExposureAlert(alert: ResidualExposureAlert): Promise<void> {
+    this.logger.log({
+      // Not a tick trace, for the same reason `LoggingUnpricedFillAlertChannel`
+      // isn't: this is observed by the fill poll, which spans every open lot
+      // at once rather than belonging to one pipeline pass.
+      trace_id: 'residual-exposure',
+      stage: 'execution',
+      level: 'error',
+      message:
+        'a partially-filled flatten left a residual position and re-arming its protective ' +
+        'legs failed — the position is unprotected; check the order on the venue by hand',
+      payload: {
+        ...alert,
+        observed_at: alert.observed_at.toISOString(),
       },
     });
   }

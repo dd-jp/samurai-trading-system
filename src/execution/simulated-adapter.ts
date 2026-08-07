@@ -155,6 +155,31 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
     this.protectedQty.set(clientOrderId, filledQty);
   }
 
+  /**
+   * Re-arms a residual left by a partial flatten (#525). This adapter models
+   * a leg's protection purely as `protectedQty` — there is no separate
+   * "cancelled vs armed" venue state to distinguish, so re-arming and
+   * resizing are the same write here: `cancel()` deleted the entry above,
+   * and this puts one back, sized to the residual. `_instrument`/`_side` are
+   * declared but unused for `getOrder`'s reason (this adapter keys on client
+   * order id alone) — keeping them in the signature is what keeps the
+   * compiler enforcing `BrokerAdapter.rearmProtectiveLegs`'s full contract
+   * here rather than silently exempting this adapter from a parameter every
+   * other implementation needs. `stop`/`target` are accepted for the same
+   * contract reason; this adapter has nowhere to record a price level for a
+   * leg (see `resizeProtectiveLegs`'s own doc), so they are read by nothing.
+   */
+  async rearmProtectiveLegs(
+    clientOrderId: string,
+    _instrument: string,
+    _side: 'buy' | 'sell',
+    qty: number,
+    _stop: number,
+    _target: number,
+  ): Promise<void> {
+    this.protectedQty.set(clientOrderId, qty);
+  }
+
   /** The quantity this lot's protective legs currently cover; null if unarmed. */
   getProtectedQty(clientOrderId: string): number | null {
     return this.protectedQty.get(clientOrderId) ?? null;

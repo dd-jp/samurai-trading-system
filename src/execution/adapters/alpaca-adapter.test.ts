@@ -90,6 +90,13 @@ function makeClient(overrides: Partial<AlpacaClient> = {}): AlpacaClient {
     submitMarketOrder: vi
       .fn()
       .mockRejectedValue(new Error('makeClient: override submitMarketOrder to use it')),
+    // #525's re-arm path — same "reject unless overridden" posture as the
+    // other intervention-path methods above: a test that reaches this
+    // without overriding it is asserting a re-arm happened when nothing was
+    // asked of the venue.
+    submitOcoOrder: vi
+      .fn()
+      .mockRejectedValue(new Error('makeClient: override submitOcoOrder to use it')),
     cancelOrder: vi.fn().mockRejectedValue(new Error('makeClient: override cancelOrder to use it')),
     getPositions: vi
       .fn()
@@ -1132,6 +1139,96 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     expect(cancelOrder).not.toHaveBeenCalled();
   });
 
+  // #525: re-arming a residual left by a partial flatten. `executeExit`
+  // cancels the lot's ENTIRE bracket before flattening, so unlike a resize
+  // there is no live leg left to amend — this submits a fresh
+  // protective-legs-only OCO order instead.
+  it("re-arms with an entry-less OCO order under a FRESH client order id, never the lot's own", async () => {
+    const submitOcoOrder = vi
+      .fn()
+      .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-1', order_class: 'oco', legs: [] });
+    const adapter = adapterWith(makeClient({ submitOcoOrder }));
+
+    await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+
+    expect(submitOcoOrder).toHaveBeenCalledWith({
+      symbol: 'AAPL',
+      // The CLOSING side — the lot is HELD long ('buy'), so the order that
+      // reduces it sells.
+      side: 'sell',
+      qty: '6',
+      limit_price: '110',
+      time_in_force: 'gtc',
+      // Never `'key-1'` — that id already named the now-cancelled original
+      // bracket (see the method's own doc comment for why reusing it is
+      // refused rather than risked).
+      client_order_id: 'key-1:rearm',
+      order_class: 'oco',
+      stop_loss: { stop_price: '95' },
+    });
+  });
+
+  it("sweeps a re-armed residual and tags its fills under the LOT's own key, target first then stop", async () => {
+    const submitOcoOrder = vi.fn().mockResolvedValue({
+      ...acceptedOrder(),
+      id: 'rearm-1',
+      order_class: 'oco',
+      legs: [
+        {
+          id: 'rearm-stop-1',
+          type: 'stop',
+          status: 'held',
+          filled_qty: '0',
+          filled_avg_price: null,
+          filled_at: null,
+        },
+      ],
+    });
+    const filledAt = '2026-07-15T15:10:00Z';
+    const getOrder = vi.fn().mockResolvedValue(
+      acceptedOrder({
+        id: 'rearm-1',
+        status: 'filled',
+        filled_qty: '6',
+        filled_avg_price: '110',
+        filled_at: filledAt,
+        legs: [
+          {
+            id: 'rearm-stop-1',
+            type: 'stop',
+            status: 'canceled',
+            filled_qty: '0',
+            filled_avg_price: null,
+            filled_at: null,
+          },
+        ],
+      }),
+    );
+    const adapter = adapterWith(makeClient({ submitOcoOrder, getOrder }));
+    await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+
+    const fills = await adapter.fetchNewFills(new Date(0));
+
+    // Tagged under the LOT's OWN idempotency key ('key-1'), not the OCO's
+    // wire id ('key-1:rearm') — this is what lets `ingestFills()`'s
+    // ordinary per-position routing pick it up with no knowledge a re-arm
+    // was ever involved (`rearmedLegs`' doc comment). The take-profit leg IS
+    // the top-level order (an OCO's own shape, no 'entry' fill), tagged
+    // `'target'`; the stop-loss reports zero filled_qty here so it produces
+    // no fill row.
+    expect(fills).toEqual([
+      {
+        client_order_id: 'key-1',
+        broker_fill_id: 'rearm-1',
+        leg: 'target',
+        price: 110,
+        qty: 6,
+        fee: 0,
+        timestamp: new Date(filledAt),
+      },
+    ]);
+  });
+
   it('normalizes venue positions, signing the short side', async () => {
     const adapter = adapterWith(
       makeClient({
@@ -1350,6 +1447,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       marketData: {} as MarketDataService,
       config: executionConfig(),
       mode: 'paper',
+      residualExposureAlerts: { postResidualExposureAlert: async () => {} },
     };
     const execution = new ExecutionImpl(input);
 

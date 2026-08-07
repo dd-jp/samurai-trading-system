@@ -53,6 +53,34 @@ export interface AlpacaBracketOrderRequest {
 }
 
 /**
+ * A protective-legs-only pair with no entry (#525) — Alpaca's `order_class:
+ * 'oco'`, submitted against a position this process already holds rather
+ * than one it is opening. Distinct from `AlpacaBracketOrderRequest`: a
+ * bracket's `limit_price` is the ENTRY; here `limit_price` is the
+ * take-profit leg (Alpaca's own OCO shape — `type: 'limit'` + `limit_price`
+ * for the profit side, `stop_loss.stop_price` for the loss side, no separate
+ * entry order at all) closing a residual left by a partially-filled flatten
+ * (#525's decision: re-arm on the resize path, never re-derive from the
+ * original intent's sizing).
+ *
+ * `side` is the CLOSING side — mirrors `AlpacaMarketOrderRequest`'s flatten,
+ * not `AlpacaBracketOrderRequest`'s opening one, since this order's whole
+ * purpose is to reduce a position already held.
+ */
+export interface AlpacaOcoOrderRequest {
+  symbol: string;
+  /** The CLOSING side, same convention as the flatten. */
+  side: 'buy' | 'sell';
+  qty: string;
+  /** The take-profit leg's limit price. */
+  limit_price: string;
+  time_in_force: string;
+  client_order_id: string;
+  order_class: 'oco';
+  stop_loss: { stop_price: string };
+}
+
+/**
  * A plain market order (#429) — the flatten. No `order_class`, no legs: a
  * flatten reaches zero and stops, and attaching protective legs to it would
  * leave a resting stop behind after the position was gone.
@@ -83,6 +111,8 @@ export interface AlpacaClient {
   submitOrder(request: AlpacaBracketOrderRequest): Promise<AlpacaOrder>;
   /** The flatten (#429) — a plain market order, no bracket. */
   submitMarketOrder(request: AlpacaMarketOrderRequest): Promise<AlpacaOrder>;
+  /** Re-arm on a residual (#525) — protective legs only, no entry. */
+  submitOcoOrder(request: AlpacaOcoOrderRequest): Promise<AlpacaOrder>;
   /**
    * `DELETE /v2/orders/{id}` (#429). Resolves rather than throwing when the
    * order is already gone — cancelled, filled, or unknown — because the caller

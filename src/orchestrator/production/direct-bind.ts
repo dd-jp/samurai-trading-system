@@ -26,7 +26,12 @@
  */
 
 import type { CostModel } from '../../cost-model-backtest/index.js';
-import type { BrokerAdapter, ExecutionConfig, SharedStore } from '../../execution/index.js';
+import type {
+  BrokerAdapter,
+  ExecutionConfig,
+  ResidualExposureAlertChannel,
+  SharedStore,
+} from '../../execution/index.js';
 import { ExecutionImpl } from '../../execution/index.js';
 import type { MarketDataService, TradingCalendar } from '../../market-data-service/index.js';
 import type { CiiConsumer } from '../../market-intelligence/index.js';
@@ -445,6 +450,8 @@ export interface ExecutionStepDeps {
   marketData: MarketDataService;
   config: ExecutionConfig;
   mode: 'live' | 'paper' | 'backtest';
+  /** The #525 fallback alert — see `ExecutionInput.residualExposureAlerts`. */
+  residualExposureAlerts: ResidualExposureAlertChannel;
 }
 
 /**
@@ -468,6 +475,7 @@ export function buildExecutionStep(deps: ExecutionStepDeps): TickSteps['executio
       marketData: deps.marketData,
       config: deps.config,
       mode: deps.mode,
+      residualExposureAlerts: deps.residualExposureAlerts,
     });
     return execution.execute(verdict);
   };
@@ -499,6 +507,7 @@ export function buildExecutionSurface(deps: ExecutionStepDeps, traceId: string):
     marketData: deps.marketData,
     config: deps.config,
     mode: deps.mode,
+    residualExposureAlerts: deps.residualExposureAlerts,
   });
 }
 

@@ -12,6 +12,8 @@ import type {
   ExecutionInput,
   NativeBracketRequest,
   NormalizedFill,
+  ResidualExposureAlert,
+  ResidualExposureAlertChannel,
 } from './types.js';
 
 const NOW = new Date('2026-07-15T14:00:00Z');
@@ -74,15 +76,27 @@ interface CancelCall {
   instrument: string;
 }
 
+/** One `rearmProtectiveLegs` call, recorded verbatim for assertion (#525). */
+interface RearmCall {
+  clientOrderId: string;
+  instrument: string;
+  side: 'buy' | 'sell';
+  qty: number;
+  stop: number;
+  target: number;
+}
+
 /** Accepts everything and records what it was handed. */
 function makeBroker(
   onSubmit?: (order: NativeBracketRequest) => void | Promise<void>,
   onFlatten?: (call: FlattenCall) => void | Promise<void>,
   onCancel?: (call: CancelCall) => void | Promise<void>,
+  onRearm?: (call: RearmCall) => void | Promise<void>,
 ): BrokerAdapter & {
   calls: NativeBracketRequest[];
   flattenCalls: FlattenCall[];
   cancelCalls: CancelCall[];
+  rearmCalls: RearmCall[];
   /** Every submitBracket/submitFlatten/cancel call, in call order — the PR #516 review's ordering property (cancel-before-flatten) is otherwise unobservable from the three arrays alone. */
   callSequence: string[];
 } {
@@ -93,11 +107,13 @@ function makeBroker(
   // assertions pass for the wrong reason.
   const flattenCalls: FlattenCall[] = [];
   const cancelCalls: CancelCall[] = [];
+  const rearmCalls: RearmCall[] = [];
   const callSequence: string[] = [];
   return {
     calls,
     flattenCalls,
     cancelCalls,
+    rearmCalls,
     callSequence,
     async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
       calls.push(order);
@@ -152,8 +168,36 @@ function makeBroker(
       callSequence.push(`cancel:${clientOrderId}`);
       await onCancel?.(call);
     },
+    // #525's re-arm path: recorded like `cancel`, resolving by default
+    // (a successful re-arm) unless `onRearm` throws.
+    async rearmProtectiveLegs(
+      clientOrderId: string,
+      instrument: string,
+      side: 'buy' | 'sell',
+      qty: number,
+      stop: number,
+      target: number,
+    ): Promise<void> {
+      const call = { clientOrderId, instrument, side, qty, stop, target };
+      rearmCalls.push(call);
+      callSequence.push(`rearm:${clientOrderId}`);
+      await onRearm?.(call);
+    },
     async getOpenPositions(): Promise<never> {
       throw new Error('makeBroker.getOpenPositions: execute() does not reconcile');
+    },
+  };
+}
+
+/** Records every alert posted (#525) — never posted for a SUCCESSFUL re-arm. */
+function makeResidualExposureAlerts(): ResidualExposureAlertChannel & {
+  alerts: ResidualExposureAlert[];
+} {
+  const alerts: ResidualExposureAlert[] = [];
+  return {
+    alerts,
+    async postResidualExposureAlert(alert: ResidualExposureAlert): Promise<void> {
+      alerts.push(alert);
     },
   };
 }
@@ -179,6 +223,7 @@ function makeInput(overrides: Partial<ExecutionInput> = {}): ExecutionInput {
     marketData: {} as MarketDataService,
     config,
     mode: 'backtest',
+    residualExposureAlerts: makeResidualExposureAlerts(),
     ...overrides,
   };
 }
@@ -465,6 +510,9 @@ describe('ExecutionImpl.execute', () => {
       submitBracket: vi.fn().mockRejectedValue(new Error('connection reset')),
       fetchNewFills: vi.fn().mockResolvedValue([]),
       resizeProtectiveLegs: vi.fn().mockResolvedValue(undefined),
+      rearmProtectiveLegs: vi
+        .fn()
+        .mockRejectedValue(new Error('rearmProtectiveLegs: not part of execute()')),
       // See `makeBroker`: never null, and never reached on this path.
       getOrder: vi.fn().mockRejectedValue(new Error('getOrder: not part of execute()')),
       submitFlatten: vi.fn().mockRejectedValue(new Error('submitFlatten: not part of execute()')),
@@ -1162,6 +1210,147 @@ describe('ExecutionImpl.execute', () => {
           .reduce((sum, fill) => sum + fill.qty, 0);
         expect(lot2ExitQty).toBe(10);
         expect(await store.getOpenPositions()).toHaveLength(1);
+      });
+
+      describe('residual re-arm on a partial flatten (#525)', () => {
+        it('re-arms the residual through the real cancel-then-flatten path', async () => {
+          const { store } = openTestExecutionStore();
+          const costModel: CostModel = {
+            fill: vi
+              .fn()
+              .mockReturnValueOnce({ fill_price: 95, filled_size: 40, cost_breakdown: zeroCosts() })
+              // The flatten asks for 40 but a thin book only fills 25 — a
+              // naked residual of 15 if nothing re-arms it.
+              .mockReturnValueOnce({
+                fill_price: 99,
+                filled_size: 25,
+                cost_breakdown: zeroCosts(),
+              }),
+          };
+          const marketData = makeMarketData();
+          const broker = new SimulatedBrokerAdapter({
+            clock: fixedClock,
+            costModel,
+            marketData,
+            config: SIMULATED_CONFIG,
+          });
+          const residualExposureAlerts = makeResidualExposureAlerts();
+          const execution = new ExecutionImpl(
+            makeInput({
+              store,
+              broker,
+              costModel,
+              marketData,
+              clock: fixedClock,
+              residualExposureAlerts,
+            }),
+          );
+
+          await execution.execute(
+            makeGo({
+              idempotency_key: 'key-aapl-entry-1',
+              size: 40,
+              entry: 95,
+              stop: 90,
+              target: 110,
+            }),
+          );
+          await execution.ingestFills();
+          // Legs armed at entry-fill time, before any flatten — `cancel()`
+          // (inside `executeExit`, below) is what removes them.
+          expect(broker.getProtectedQty('key-aapl-entry-1')).toBe(40);
+
+          const exitResult = await execution.execute(makeExitGo({ size: 40 }));
+          expect(exitResult.status).toBe('submitted');
+          await execution.ingestFills();
+
+          // The lot is genuinely still open — not closed, not silently
+          // dropped — and its remaining 15 (40 - 25) carries fresh protection
+          // at the SAME stop/target the original bracket used (95's stop is
+          // 90, target 110 — `makeGo`'s own fixture above).
+          expect(await store.getOpenPositions()).toHaveLength(1);
+          expect(await store.getClosedTrades()).toHaveLength(0);
+          expect(broker.getProtectedQty('key-aapl-entry-1')).toBe(15);
+          // No alert on a SUCCESSFUL re-arm — the decision comment on #525
+          // is explicit that the alert is the fallback, not the primary
+          // mechanism.
+          expect(residualExposureAlerts.alerts).toEqual([]);
+        });
+
+        it('re-arms a sibling lot that got ZERO share of a partial flatten fill', async () => {
+          // The flatten names two lots (FIFO order: lot 1 then lot 2), but the
+          // venue fills LESS than lot 1's own share — lot 2 gets no new Fill
+          // row at all this poll, yet its legs were cancelled by the SAME
+          // `executeExit` call that cancelled lot 1's. `redistributeFlattenFills`'
+          // returned lot-key set (#525) is what makes this lot's re-arm run
+          // despite it having no new fill to trigger the ordinary path.
+          const { store } = openTestExecutionStore();
+          let now = NOW;
+          const steppingClock: Clock = { now: () => now };
+          const costModel: CostModel = {
+            fill: vi
+              .fn()
+              .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }) // lot 1 entry
+              .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() }) // lot 2 entry
+              // The flatten asks for 25 (10 + 15) but only 7 fills — less
+              // than even lot 1's own 10-share, so lot 2 gets nothing.
+              .mockReturnValueOnce({
+                fill_price: 100,
+                filled_size: 7,
+                cost_breakdown: zeroCosts(),
+              }),
+          };
+          const marketData = makeMarketData();
+          const broker = new SimulatedBrokerAdapter({
+            clock: steppingClock,
+            costModel,
+            marketData,
+            config: SIMULATED_CONFIG,
+          });
+          const residualExposureAlerts = makeResidualExposureAlerts();
+          const execution = new ExecutionImpl(
+            makeInput({
+              store,
+              broker,
+              costModel,
+              marketData,
+              clock: steppingClock,
+              residualExposureAlerts,
+            }),
+          );
+
+          await execution.execute(
+            makeGo({ idempotency_key: 'key-lot-1', size: 10, entry: 90, stop: 85, target: 110 }),
+          );
+          await execution.ingestFills();
+          now = new Date(now.getTime() + 60_000);
+          await execution.execute(
+            makeGo({
+              idempotency_key: 'key-lot-2',
+              intent_type: 'scale_in',
+              size: 15,
+              entry: 92,
+              stop: 85,
+              target: 110,
+            }),
+          );
+          await execution.ingestFills();
+          now = new Date(now.getTime() + 60_000);
+
+          await execution.execute(makeExitGo({ size: 25 }));
+          await execution.ingestFills();
+
+          // Lot 1: 7 of its 10-share filled, 3 left — re-armed to 3.
+          expect(broker.getProtectedQty('key-lot-1')).toBe(3);
+          // Lot 2: ZERO share this poll — re-armed to its FULL original 15,
+          // not left at `null` (unprotected) the way `cancel()` alone would
+          // leave it.
+          expect(broker.getProtectedQty('key-lot-2')).toBe(15);
+          expect(await store.getOpenPositions()).toHaveLength(2);
+          expect(await store.getClosedTrades()).toHaveLength(0);
+          // Both re-arms succeeded — no alert.
+          expect(residualExposureAlerts.alerts).toEqual([]);
+        });
       });
     });
   });

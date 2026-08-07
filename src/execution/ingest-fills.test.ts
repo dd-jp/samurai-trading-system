@@ -18,6 +18,8 @@ import type {
   NativeBracketRequest,
   NormalizedFill,
   NormalizedOrder,
+  ResidualExposureAlert,
+  ResidualExposureAlertChannel,
 } from './types.js';
 
 const NOW = new Date('2026-07-20T16:00:00Z');
@@ -62,6 +64,16 @@ async function seedPosition(
  */
 class ScriptedBroker implements BrokerAdapter {
   readonly resizeCalls: Array<{ clientOrderId: string; filledQty: number }> = [];
+  readonly rearmCalls: Array<{
+    clientOrderId: string;
+    instrument: string;
+    side: 'buy' | 'sell';
+    qty: number;
+    stop: number;
+    target: number;
+  }> = [];
+  /** When set, `rearmProtectiveLegs` rejects with this — the #525 failure path. */
+  rearmFailure: Error | undefined;
 
   constructor(private readonly scriptedFills: NormalizedFill[]) {}
 
@@ -77,6 +89,17 @@ class ScriptedBroker implements BrokerAdapter {
   }
   async resizeProtectiveLegs(clientOrderId: string, filledQty: number): Promise<void> {
     this.resizeCalls.push({ clientOrderId, filledQty });
+  }
+  async rearmProtectiveLegs(
+    clientOrderId: string,
+    instrument: string,
+    side: 'buy' | 'sell',
+    qty: number,
+    stop: number,
+    target: number,
+  ): Promise<void> {
+    this.rearmCalls.push({ clientOrderId, instrument, side, qty, stop, target });
+    if (this.rearmFailure !== undefined) throw this.rearmFailure;
   }
   /** #86's surface. `ingestFills()` never reconciles, so it is never called. */
   async getOrder(): Promise<NormalizedOrder | null> {
@@ -107,7 +130,24 @@ function fill(overrides: Partial<NormalizedFill> = {}): NormalizedFill {
   };
 }
 
-function makeInput(broker: BrokerAdapter, store: TestExecutionStore): ExecutionInput {
+/** Records every alert posted (#525) — never posted for a SUCCESSFUL re-arm. */
+function makeResidualExposureAlerts(): ResidualExposureAlertChannel & {
+  alerts: ResidualExposureAlert[];
+} {
+  const alerts: ResidualExposureAlert[] = [];
+  return {
+    alerts,
+    async postResidualExposureAlert(alert: ResidualExposureAlert): Promise<void> {
+      alerts.push(alert);
+    },
+  };
+}
+
+function makeInput(
+  broker: BrokerAdapter,
+  store: TestExecutionStore,
+  residualExposureAlerts: ResidualExposureAlertChannel = makeResidualExposureAlerts(),
+): ExecutionInput {
   const config: ExecutionConfig = {
     simulated: {
       volatility_indicator: {
@@ -129,6 +169,7 @@ function makeInput(broker: BrokerAdapter, store: TestExecutionStore): ExecutionI
     marketData: {} as MarketDataService,
     config,
     mode: 'backtest',
+    residualExposureAlerts,
   };
 }
 
@@ -316,5 +357,101 @@ describe('ExecutionImpl.ingestFills', () => {
     // Only the in-the-past tranche landed.
     expect((await store.getPosition('key-1'))?.filled_size).toBe(4);
     expect(await store.getFills('key-1')).toHaveLength(1);
+  });
+
+  describe('residual re-arm on a partial flatten (#525)', () => {
+    it("re-arms protective legs, sized to the residual, at the lot's own stop/target", async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store, { requested_size: 10, stop: 95, target: 110, side: 'buy' });
+      const broker = new ScriptedBroker([
+        fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100 }),
+        // A partial exit fill — 4 of the 10 held closed, 6 left naked. This
+        // file bypasses the flatten-routing layer (`redistributeFlattenFills`)
+        // by scripting the fill directly under the lot's own key; the
+        // routing itself is covered end-to-end in execute.test.ts's
+        // "flatten fill attribution" suite, via the real
+        // `SimulatedBrokerAdapter`.
+        fill({
+          broker_fill_id: 'x1',
+          leg: 'exit',
+          qty: 4,
+          price: 98,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+
+      const residualExposureAlerts = makeResidualExposureAlerts();
+
+      await new ExecutionImpl(makeInput(broker, store, residualExposureAlerts)).ingestFills();
+
+      expect(broker.rearmCalls).toEqual([
+        { clientOrderId: 'key-1', instrument: 'AAPL', side: 'buy', qty: 6, stop: 95, target: 110 },
+      ]);
+      // No alert on a SUCCESSFUL re-arm — the decision comment on #525 is
+      // explicit that the alert is the FALLBACK, not the primary mechanism,
+      // and that noise on every handled partial flatten during a 14-day
+      // soak trains the operator to stop reading it.
+      expect(residualExposureAlerts.alerts).toEqual([]);
+      // Both fills landed regardless of the re-arm (sanity: the new surface
+      // did not disturb the existing fill-persistence path).
+      expect(await store.getFills('key-1')).toHaveLength(2);
+      expect(await store.getClosedTrades()).toHaveLength(0);
+    });
+
+    it('does not re-arm a lot the exit fill took fully flat', async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store, { requested_size: 10, stop: 95, target: 110, side: 'buy' });
+      const broker = new ScriptedBroker([
+        fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100 }),
+        fill({
+          broker_fill_id: 'x1',
+          leg: 'exit',
+          qty: 10,
+          price: 98,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+
+      await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+      expect(broker.rearmCalls).toEqual([]);
+      expect(await store.getClosedTrades()).toHaveLength(1);
+    });
+
+    it('alerts, and still persists the fills, when the re-arm itself fails', async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store, { requested_size: 10, stop: 95, target: 110, side: 'buy' });
+      const broker = new ScriptedBroker([
+        fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100 }),
+        fill({
+          broker_fill_id: 'x1',
+          leg: 'exit',
+          qty: 4,
+          price: 98,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+      broker.rearmFailure = new Error('venue rejected the OCO order');
+      const residualExposureAlerts = makeResidualExposureAlerts();
+
+      await new ExecutionImpl(makeInput(broker, store, residualExposureAlerts)).ingestFills();
+
+      expect(residualExposureAlerts.alerts).toEqual([
+        {
+          idempotency_key: 'key-1',
+          instrument: 'AAPL',
+          side: 'buy',
+          residual_qty: 6,
+          stop: 95,
+          target: 110,
+          observed_at: NOW,
+        },
+      ]);
+      // The re-arm failure must not cost the fill rows or the recomputed lot
+      // state — `maybeRearmResidual` runs before `applyLotAdvance` but never
+      // throws, precisely so a broker/alert failure cannot prevent it.
+      expect((await store.getPosition('key-1'))?.filled_size).toBe(10);
+      expect(await store.getFills('key-1')).toHaveLength(2);
+    });
   });
 });
