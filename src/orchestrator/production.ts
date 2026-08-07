@@ -242,6 +242,7 @@ import type {
   ProductionConfig,
 } from './production/config.js';
 import { resolveBacktestReferenceSharpe, resolveDailyMetricsSource } from './production/config.js';
+import { DEFAULT_STAGE2_MAX_AGE_DAYS } from './production/daily-equity-metrics-source.js';
 
 export {
   buildAlpacaDataSource,
@@ -1402,37 +1403,77 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
            * nothing else does until a suite exists.
            *
            * `pbo_over_max`, `oos_sharpe_under_min` and `dsr_insignificant` are
-           * computed only from `DailyMetricsSample.revalidation` — a
-           * walk-forward/PBO snapshot produced by re-running Stage 2 validation,
-           * on its own cadence. `DailyMetricsSource` makes that field optional
-           * and the only in-repo implementation
-           * (`SqliteDailyEquityMetricsSource`) never sets it: it derives a
-           * DAILY suite from the equity series, which is a different thing.
+           * computed only from `DailyMetricsSample.revalidation`.
+           * `SqliteDailyEquityMetricsSource.revalidation()` DOES produce that
+           * snapshot (#384) — from the frozen Stage 2 selection, when one is
+           * fresh (`DEFAULT_STAGE2_MAX_AGE_DAYS`) with non-null PBO and DSR —
+           * so the honest startup statement is CONDITIONAL on the store, not
+           * the unconditional "no component produces this" this warn carried
+           * until #579: that text predated #384, outlived it, and misled the
+           * soak-readiness review into re-deriving a gap that was closed.
            *
-           * So a paper run evaluates none of the three, and that is the
-           * statement the old "metrics is not set" warn used to carry. It is
-           * unconditional here rather than conditioned on the sample, because
-           * the first sample is ~60 sessions out and a warn that arrives then
-           * is a warn nobody reads at the time it matters.
+           * Read from the same store and constant the metrics source uses, so
+           * this line cannot drift from the decision it reports. Stated at
+           * startup rather than on the first suite because the first suite is
+           * ~60 sessions out (ADR-0006 §5) and a warn that arrives then is a
+           * warn nobody reads at the time it matters.
            */
-          logger.log({
-            trace_id: 'startup',
-            stage: 'feedback-loop',
-            level: 'warn',
-            message:
-              'pbo_over_max, oos_sharpe_under_min and dsr_insignificant are evaluated ONLY from a ' +
-              'revalidation snapshot (DailyMetricsSample.revalidation), which no component in ' +
-              'this repo produces — SqliteDailyEquityMetricsSource derives a daily suite from ' +
-              'the equity series and never sets it. Expect these three in `not_evaluated` on ' +
-              'every cycle: they are un-run, NOT passed.',
-            payload: {
-              kill_lines_gated_on_revalidation: [
-                'pbo_over_max',
-                'oos_sharpe_under_min',
-                'dsr_insignificant',
-              ],
-            },
-          });
+          const revalidationSelections = selectionStore.getLatestPerAssetClass();
+          const revalidationMaxAgeMs = DEFAULT_STAGE2_MAX_AGE_DAYS * 24 * 60 * 60 * 1_000;
+          const usableSelections = revalidationSelections.filter(
+            (selection) =>
+              clock.now().getTime() - selection.selected_at.getTime() <= revalidationMaxAgeMs &&
+              selection.pbo !== null &&
+              selection.dsr !== null,
+          );
+          if (usableSelections.length === 0) {
+            logger.log({
+              trace_id: 'startup',
+              stage: 'feedback-loop',
+              level: 'warn',
+              message:
+                'pbo_over_max, oos_sharpe_under_min and dsr_insignificant are evaluated ONLY ' +
+                'from a revalidation snapshot (DailyMetricsSample.revalidation), and no usable ' +
+                'frozen Stage 2 selection exists — none persisted, all older than ' +
+                `${DEFAULT_STAGE2_MAX_AGE_DAYS} days, or PBO/DSR refused. Expect these three in ` +
+                '`not_evaluated` on every cycle (un-run, NOT passed) until a direct Stage 2 run ' +
+                '(`node dist/scripts/run-stage2.js`) freezes a fresh selection (#384, #579).',
+              payload: {
+                kill_lines_gated_on_revalidation: [
+                  'pbo_over_max',
+                  'oos_sharpe_under_min',
+                  'dsr_insignificant',
+                ],
+                persisted_selections: revalidationSelections.length,
+              },
+            });
+          } else {
+            logger.log({
+              trace_id: 'startup',
+              stage: 'feedback-loop',
+              level: 'info',
+              message:
+                'pbo_over_max, oos_sharpe_under_min and dsr_insignificant are ARMED by the ' +
+                'frozen Stage 2 selection (#384): the metrics source reports the worse-PBO ' +
+                'snapshot once the daily suite clears its observation gate (ADR-0006 §5, ' +
+                '~60 sessions). Until then they read `not_evaluated`; after a selection ages ' +
+                `past ${DEFAULT_STAGE2_MAX_AGE_DAYS} days they go inert again until Stage 2 ` +
+                'is re-run (#579).',
+              payload: {
+                kill_lines_gated_on_revalidation: [
+                  'pbo_over_max',
+                  'oos_sharpe_under_min',
+                  'dsr_insignificant',
+                ],
+                selections: usableSelections.map((selection) => ({
+                  asset_class: selection.asset_class,
+                  selected_at: selection.selected_at.toISOString(),
+                  pbo: selection.pbo,
+                  dsr: selection.dsr,
+                })),
+              },
+            });
+          }
 
           /**
            * #375, kept visible where an operator will actually see it.
