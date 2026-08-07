@@ -77,3 +77,72 @@ export function formatSignedR(value: number): string {
   const sign = value < 0 ? MINUS : '+';
   return `${sign}${Math.abs(value).toFixed(2)}R`;
 }
+
+/*
+ * ---------------------------------------------------------------------------
+ * Display formatters added for the components (issue #538).
+ *
+ * They live here rather than in a sibling module so there is exactly one
+ * `EM_DASH` and exactly one unknown-value contract on this client: every
+ * function below renders the same em dash for a value it cannot honestly
+ * display, and none of them can emit `NaN` into visible text or — worse — into
+ * a CSS length (see `barWidth`).
+ * ---------------------------------------------------------------------------
+ */
+
+/** The string every formatter here renders for a value it cannot display. */
+export const UNKNOWN = EM_DASH;
+
+/** Unsigned, grouped USD: `$1,234.56`. Non-finite renders as an em dash. */
+export function formatUsd(value: number): string {
+  if (!Number.isFinite(value)) return EM_DASH;
+  return `$${USD.format(value)}`;
+}
+
+/**
+ * Unsigned USD at a caller-chosen precision — per-debate costs are cents-scale
+ * and round to `$0.00` under the two-decimal default, which reads as free.
+ */
+export function formatUsdPrecise(value: number, digits: number): string {
+  if (!Number.isFinite(value)) return EM_DASH;
+  return `$${value.toFixed(digits)}`;
+}
+
+/** A fixed-precision figure (Sharpe, profit factor, …). Non-finite is an em dash. */
+export function formatFixed(value: number, digits = 2): string {
+  if (!Number.isFinite(value)) return EM_DASH;
+  return value.toFixed(digits);
+}
+
+/** An integer count with grouping. Non-finite (or fractional garbage) is an em dash. */
+export function formatCount(value: number): string {
+  if (!Number.isFinite(value)) return EM_DASH;
+  return Math.round(value).toLocaleString('en-US');
+}
+
+/** A `0…1` fraction as a percentage: `42.0%`. Non-finite is an em dash. */
+export function formatPercent(fraction: number, digits = 1): string {
+  if (!Number.isFinite(fraction)) return EM_DASH;
+  return `${(fraction * 100).toFixed(digits)}%`;
+}
+
+/** A price, grouped to 2dp. Non-finite is an em dash — never a blank cell. */
+export function formatPrice(value: number): string {
+  if (!Number.isFinite(value)) return EM_DASH;
+  return USD.format(value);
+}
+
+/**
+ * A CSS width for a meter, from a `0…1` fraction — or `null` when the fraction
+ * is not a number this can honestly draw.
+ *
+ * `null` rather than `'0%'` deliberately: a zero-width bar is a legitimate
+ * reading (nothing spent, no weight), so an unknown value must be
+ * distinguishable from it and the caller renders a named degenerate state
+ * instead. Values above 1 clamp to `100%` — a 300%-wide bar would paint over
+ * its neighbours, and the over-cap fact is carried by a word beside the meter.
+ */
+export function barWidth(fraction: number): string | null {
+  if (!Number.isFinite(fraction)) return null;
+  return `${Math.min(100, Math.max(0, fraction * 100)).toFixed(1)}%`;
+}

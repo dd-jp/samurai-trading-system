@@ -1,117 +1,191 @@
+/**
+ * The mission-control screen (issue #538; dashboard-spec.md, "Layout"): one
+ * vertically-scrolling page — telemetry strip, rooms hero, verdict ledger and
+ * detail drawer, then the bento panels — ordered by how urgently an operator
+ * needs each part.
+ *
+ * This component is the composition root and holds no domain logic: every
+ * number it shows is computed server-side, and everything derived on the
+ * client (room placement, the walk plan, the ledger) comes from the pure
+ * modules under `lib/`, which are unit-tested without a DOM.
+ *
+ * Two things it deliberately does own, because nothing else can:
+ *
+ *  - **Selection.** Which instrument the drawer is showing, shared by the
+ *    chips and the ledger rows.
+ *  - **Session-observed state**: the ledger's accumulated entries and the
+ *    equity samples the sparkline plots. Both are things this page watched
+ *    happen; neither is on any single snapshot.
+ */
+
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { PipelineView } from '../../dashboard/pipeline-types.ts';
+import { DetailDrawer } from './components/DetailDrawer.tsx';
+import { AnalystsPanel } from './components/panels/AnalystsPanel.tsx';
+import { DebatesPanel } from './components/panels/DebatesPanel.tsx';
+import type { EquitySample } from './components/panels/MetricsPanel.tsx';
+import { MetricsPanel } from './components/panels/MetricsPanel.tsx';
+import { PositionsPanel } from './components/panels/PositionsPanel.tsx';
+import { SpendPanel } from './components/panels/SpendPanel.tsx';
+import { RoomsGrid } from './components/RoomsGrid.tsx';
+import { TelemetryStrip } from './components/TelemetryStrip.tsx';
+import { VerdictLedger } from './components/VerdictLedger.tsx';
+import { usePrefersReducedMotion } from './hooks/usePrefersReducedMotion.ts';
+import { type UseSnapshotOptions, useSnapshot } from './hooks/useSnapshot.ts';
+import { useWalkAnimation } from './hooks/useWalkAnimation.ts';
+import { createLedger, updateLedger } from './lib/ledger.ts';
+import { computeLayout, type RoomId } from './lib/room-layout.ts';
+import { computeWalkPlan } from './lib/walk-plan.ts';
 import './App.css';
 
-/**
- * Room numbers/names from dashboard-spec.md, "Pipeline theater": seven
- * pipeline stages plus the Lobby (idle lanes), laid out as a 4x2 grid.
- * Room 04 (`invalidation`) is drawn lights-off because the stage is specced
- * and not built yet (spec: "Layout", "Rooms hero").
- */
-const ROOMS = [
-  { id: 'lobby', number: null, name: 'Lobby', lightsOff: false },
-  { id: 'analysts', number: '01', name: 'Analysts', lightsOff: false },
-  { id: 'debate', number: '02', name: 'Debate', lightsOff: false },
-  { id: 'trader', number: '03', name: 'Trader', lightsOff: false },
-  { id: 'invalidation', number: '04', name: 'Invalidation', lightsOff: true },
-  { id: 'risk', number: '05', name: 'Risk', lightsOff: false },
-  { id: 'verdict', number: '06', name: 'Verdict', lightsOff: false },
-  { id: 'execution', number: '07', name: 'Execution', lightsOff: false },
-] as const;
+/** An empty view, so every derived structure exists from first paint. */
+const EMPTY_VIEW: PipelineView = { lanes: [], live_trace_id: null, live_entered_at: null };
 
 /**
- * Bento panel placeholders — dashboard-spec.md, "Layout", section 4. Every
- * datum in this list has a home in the Information Inventory table; none of
- * these render real data yet (that's later tickets under wayfinder map
- * #533). This is the WorldMonitor deferred-shell contract applied to the
- * bottom-of-screen grid: the panel slots exist from first paint so a poll
- * never changes the page's geometry.
+ * How many equity samples the sparkline keeps. At the 3-second poll that is
+ * about six minutes of history — enough to see the line move, bounded so a tab
+ * left open for a week does not accumulate a day's worth of points.
  */
-const BENTO_PANELS = [
-  { id: 'positions', title: 'Positions' },
-  { id: 'metrics', title: 'Metrics suite' },
-  { id: 'analysts', title: 'Analysts' },
-  { id: 'llm-spend', title: 'LLM spend' },
-  { id: 'recent-debates', title: 'Recent debates' },
-] as const;
+const MAX_EQUITY_SAMPLES = 120;
 
-/**
- * Static shell for the v2 mission-control screen (dashboard-spec.md,
- * "Layout"). This ticket (#536) scaffolds structure and tokens only — no
- * data fetching, no `/api/snapshot` polling, no motion. Those land in
- * later tickets under wayfinder map #533; this component's job is proving
- * the Vite+React build and test wiring, and giving every later panel a
- * reserved place to render into.
- */
-export function App() {
+export interface AppProps {
+  /** Injected by tests to drive the poll deterministically. */
+  snapshotOptions?: UseSnapshotOptions;
+}
+
+export function App({ snapshotOptions }: AppProps = {}) {
+  const feed = useSnapshot(snapshotOptions);
+  const reducedMotion = usePrefersReducedMotion();
+  // `feed.revision` is deliberately not destructured: the per-poll identity
+  // every derived value keys on is `snapshot` itself, which only changes when
+  // a fetch succeeds. A counter alongside it would be a second source of truth
+  // for "is this new data".
+  const { snapshot, previous, firstPaint, snapOnly } = feed;
+
+  const [selected, setSelected] = useState<string | null>(null);
+  const [ledger, setLedger] = useState(createLedger);
+  const [equitySamples, setEquitySamples] = useState<readonly EquitySample[]>([]);
+
+  const view = snapshot?.pipeline ?? EMPTY_VIEW;
+  const previousView = previous?.pipeline ?? null;
+
+  const layout = useMemo(() => computeLayout(view), [view]);
+
+  // Planned once per poll: `previous` and `snapshot` only change identity when
+  // a fetch succeeds, so this memo does not re-plan (and re-animate) on an
+  // unrelated re-render such as a selection change.
+  const plan = useMemo(
+    () =>
+      snapshot === null
+        ? null
+        : computeWalkPlan(previousView, view, {
+            firstPaint,
+            // A hidden tab never observed the transitions, and reduced motion
+            // asks not to see them replayed. Both degrade to the same plan.
+            snapOnly: snapOnly || reducedMotion,
+          }),
+    [snapshot, previousView, view, firstPaint, snapOnly, reducedMotion],
+  );
+
+  const floorRef = useRef<HTMLDivElement | null>(null);
+  const roomRefs = useRef<Map<RoomId, HTMLElement>>(new Map());
+  const chipRefs = useRef<Map<string, HTMLElement>>(new Map());
+
+  const registerRoomRef = (room: RoomId, element: HTMLElement | null) => {
+    if (element === null) roomRefs.current.delete(room);
+    else roomRefs.current.set(room, element);
+  };
+  const registerChipRef = (instrument: string, element: HTMLElement | null) => {
+    if (element === null) chipRefs.current.delete(instrument);
+    else chipRefs.current.set(instrument, element);
+  };
+
+  useWalkAnimation({
+    plan,
+    layout,
+    reducedMotion,
+    firstPaint,
+    floorRef,
+    roomRefs,
+    chipRefs,
+  });
+
+  // The ledger folds each poll in. `updateLedger` dedupes against every
+  // trace_id seen this session, which is what makes it safe to call twice for
+  // the same payload — as StrictMode does in development.
+  useEffect(() => {
+    if (snapshot === null) return;
+    setLedger((state) => updateLedger(state, previousView, view));
+  }, [snapshot, previousView, view]);
+
+  // One equity sample per poll that carried a live broker balance. `balance`
+  // is null unless the Alpaca probe reported ok, so a failed probe contributes
+  // no point rather than a repeated stale one.
+  useEffect(() => {
+    if (snapshot === null) return;
+    const balance = snapshot.providers.alpaca.balance;
+    if (balance === null || !Number.isFinite(balance.equity)) return;
+    setEquitySamples((samples) => {
+      const last = samples[samples.length - 1];
+      if (last !== undefined && last.as_of === snapshot.as_of) return samples;
+      return [...samples, { as_of: snapshot.as_of, equity: balance.equity }].slice(
+        -MAX_EQUITY_SAMPLES,
+      );
+    });
+  }, [snapshot]);
+
+  const verdictsByTrace = useMemo(
+    () => new Map((snapshot?.verdicts ?? []).map((verdict) => [verdict.trace_id, verdict])),
+    [snapshot],
+  );
+
+  const selectedLane = view.lanes.find((lane) => lane.instrument === selected);
+  const selectedDebate = snapshot?.debates.find((debate) => debate.instrument === selected);
+  const selectedTrace = selectedLane?.trace_id ?? null;
+  const selectedVerdict = selectedTrace === null ? undefined : verdictsByTrace.get(selectedTrace);
+
   return (
     <div className="app">
-      {/*
-        `<section aria-label>`, matching the other three top-level regions
-        below, rather than `<header>`: Biome's static a11y check assigns
-        `<header>` here a conservative implicit `generic` role (it cannot
-        prove this isn't nested inside sectioning content) and then rejects
-        `aria-label` as unsupported by that role. A labelled `<section>`
-        gets an unambiguous `region` role, which does support `aria-label`.
-      */}
-      <section className="telemetry-strip" aria-label="Telemetry">
-        <div className="telemetry-cell" data-field="mode">
-          <span className="telemetry-label">Mode</span>
-          <span className="telemetry-value">—</span>
-        </div>
-        <div className="telemetry-cell" data-field="live-tick">
-          <span className="telemetry-label">Live tick</span>
-          <span className="telemetry-value">idle</span>
-        </div>
-        <div className="telemetry-cell" data-field="burn-meter">
-          <span className="telemetry-label">LLM burn</span>
-          <span className="telemetry-value">—</span>
-        </div>
-        <div className="telemetry-cell" data-field="alpaca-balance">
-          <span className="telemetry-label">Alpaca</span>
-          <span className="telemetry-value">—</span>
-        </div>
-        <div className="telemetry-cell" data-field="polygon">
-          <span className="telemetry-label">Polygon</span>
-          <span className="telemetry-value">—</span>
-        </div>
-        <div className="telemetry-cell" data-field="snapshot-clock">
-          <span className="telemetry-label">Snapshot</span>
-          <span className="telemetry-value">—</span>
-        </div>
-      </section>
+      <TelemetryStrip
+        snapshot={snapshot}
+        stale={feed.stale}
+        lastSuccessAt={feed.lastSuccessAt}
+        error={feed.error}
+      />
 
       <main>
-        <section className="rooms-hero" aria-label="Pipeline rooms">
-          {ROOMS.map((room) => (
-            <div
-              key={room.id}
-              className={room.lightsOff ? 'room room-lights-off' : 'room'}
-              data-room={room.id}
-            >
-              <div className="room-heading">
-                {room.number !== null && <span className="room-number">{room.number}</span>}
-                <h2 className="room-name">{room.name}</h2>
-              </div>
-              {room.lightsOff && (
-                <p className="room-note">Specced and not built — devils-advocate-spec.md</p>
-              )}
-              <div className="room-occupants" />
-            </div>
-          ))}
-        </section>
+        <RoomsGrid
+          view={view}
+          layout={layout}
+          selectedInstrument={selected}
+          onSelect={setSelected}
+          floorRef={floorRef}
+          registerRoomRef={registerRoomRef}
+          registerChipRef={registerChipRef}
+        />
 
-        <section className="verdict-ledger" aria-label="Verdict ledger">
-          <h2>Verdict ledger</h2>
-          <div className="ledger-body" />
-        </section>
+        <div className="mid-row">
+          <VerdictLedger
+            entries={ledger.entries}
+            verdictsByTrace={verdictsByTrace}
+            selectedInstrument={selected}
+            onSelect={setSelected}
+          />
+          <DetailDrawer
+            instrument={selected}
+            lane={selectedLane}
+            debate={selectedDebate}
+            verdict={selectedVerdict}
+          />
+        </div>
 
-        <section className="bento" aria-label="Panels">
-          {BENTO_PANELS.map((panel) => (
-            <div key={panel.id} className="bento-panel" data-panel={panel.id}>
-              <h2>{panel.title}</h2>
-              <div className="bento-body" />
-            </div>
-          ))}
-        </section>
+        <div className="bento">
+          <PositionsPanel positions={snapshot?.positions ?? []} />
+          <MetricsPanel metrics={snapshot?.metrics ?? null} equitySamples={equitySamples} />
+          <AnalystsPanel analysts={snapshot?.analysts ?? []} />
+          <SpendPanel spend={snapshot?.llm_spend ?? null} />
+          <DebatesPanel debates={snapshot?.debates ?? []} />
+        </div>
       </main>
     </div>
   );
