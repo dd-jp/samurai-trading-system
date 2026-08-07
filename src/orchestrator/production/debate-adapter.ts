@@ -381,12 +381,17 @@ export const WORST_CASE_LLM_CALLS_PER_DEBATE = MAX_ROUNDS * LLM_CALLS_PER_ROUND 
  *
  * ## Why a result rather than a throw
  *
- * `SequentialTickRunner` does not catch a stage throw; it propagates to
- * `runTickPlan`'s `Promise.all`, and `startTickLoop` logs "tick failed" for
- * the WHOLE pass. So throwing here would let one instrument's exhausted budget
- * discard every other instrument's tick — the opposite of what shedding load
- * is for. Returning a resolved, deliberately unactionable result degrades the
- * one instrument and leaves the rest of the pass alone.
+ * `SequentialTickRunner` does not catch a stage throw; it propagates out of
+ * `runInstrument`. Before #507, that reached `runTickPlan`'s `Promise.all`
+ * uncaught and settled the WHOLE tick early — one instrument's exhausted
+ * budget would have discarded every other instrument's pass, the opposite of
+ * what shedding load is for. `runTickPlan`'s worker now catches a throw
+ * per-instrument (#507), so that specific danger is gone — but throwing here
+ * would still log a routine, expected-under-load rate-limit refusal as an
+ * `error`-level instrument failure, the wrong signal for a degrade-not-fail
+ * path. Returning a resolved, deliberately unactionable result keeps this
+ * instrument's outcome looking like what it is — a no-trade decision, not a
+ * fault — and leaves the rest of the pass alone either way.
  *
  * ## Why it is safe to hand downstream
  *

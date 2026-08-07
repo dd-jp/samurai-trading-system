@@ -313,4 +313,129 @@ describe('runTickPlan', () => {
     expect(outcomes).toEqual([]);
     expect(runner.runInstrument).not.toHaveBeenCalled();
   });
+
+  // #507: a failed tick used to declare itself finished (its rejected
+  // `Promise.all` entry) while sibling workers were still mid-pipeline —
+  // still billing LLM debates unattributed to any live tick. These pin the
+  // fix: one instrument's throw becomes a failed `TickOutcome` for that
+  // instrument alone, and `runTickPlan` never resolves early.
+  describe('worker isolation (#507)', () => {
+    it('does not abort other instruments when one throws', async () => {
+      const runner: TickRunner = {
+        async runInstrument(signal, ctx) {
+          if (signal.asset === 'QQQ') throw new Error('debate exploded');
+          return { trace_id: ctx.trace_id, final_stage: 'execution' };
+        },
+      };
+
+      const outcomes = await runTickPlan(makePlan('SPY', 'QQQ', 'AAPL'), runner, CLOCK, {
+        max_concurrent_instruments: 3,
+        newTraceId: countingTraceIds(),
+        logger: LOGGER,
+        auditLog: makeAuditLog(),
+        currentTickStore: makeCurrentTickStore(),
+      });
+
+      // The two healthy instruments ran to completion — the throw cost only
+      // the instrument that threw.
+      expect(outcomes[0]).toEqual({ trace_id: 'trace-1', final_stage: 'execution' });
+      expect(outcomes[2]).toEqual({ trace_id: 'trace-3', final_stage: 'execution' });
+      expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: 'debate exploded' });
+    });
+
+    it('resolves only after every worker has settled — a slow worker outlives a fast worker throwing', async () => {
+      let releaseSlow!: () => void;
+      const runner: TickRunner = {
+        async runInstrument(signal, ctx) {
+          if (signal.asset === 'FAST') throw new Error('fast worker exploded');
+          // The slow worker blocks until explicitly released, so the test
+          // can prove `runTickPlan` has NOT settled while it is still
+          // in-flight — not just that it eventually returns.
+          await new Promise<void>((resolve) => {
+            releaseSlow = resolve;
+          });
+          return { trace_id: ctx.trace_id, final_stage: 'execution' };
+        },
+      };
+
+      let settled = false;
+      const pending = runTickPlan(makePlan('FAST', 'SLOW'), runner, CLOCK, {
+        max_concurrent_instruments: 2,
+        newTraceId: countingTraceIds(),
+        logger: LOGGER,
+        auditLog: makeAuditLog(),
+        currentTickStore: makeCurrentTickStore(),
+      });
+      pending.then(() => {
+        settled = true;
+      });
+
+      // The fast worker has already thrown and been caught; the slow worker
+      // is still blocked on its gate. Before the old bug's fix, the throw
+      // alone would have settled `Promise.all` here.
+      await settle();
+      expect(settled).toBe(false);
+
+      releaseSlow();
+      const outcomes = await pending;
+
+      expect(settled).toBe(true);
+      expect(outcomes).toEqual([
+        { trace_id: 'trace-1', error: 'fast worker exploded' },
+        { trace_id: 'trace-2', final_stage: 'execution' },
+      ]);
+    });
+
+    it('logs the failure and records it on the outcome — no silent swallow', async () => {
+      const logger: Logger & { entries: Parameters<Logger['log']>[0][] } = {
+        entries: [],
+        log(entry) {
+          this.entries.push(entry);
+        },
+      };
+      const runner: TickRunner = {
+        async runInstrument(signal, ctx): Promise<TickOutcome> {
+          if (signal.asset === 'QQQ') throw new Error('debate exploded');
+          return { trace_id: ctx.trace_id, final_stage: 'execution' };
+        },
+      };
+
+      const outcomes = await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+        max_concurrent_instruments: 2,
+        newTraceId: countingTraceIds(),
+        logger,
+        auditLog: makeAuditLog(),
+        currentTickStore: makeCurrentTickStore(),
+      });
+
+      expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: 'debate exploded' });
+      const failureEntry = logger.entries.find((entry) => entry.level === 'error');
+      expect(failureEntry).toBeDefined();
+      expect(failureEntry?.message).toBe('instrument failed: QQQ');
+      expect(failureEntry?.payload).toEqual({
+        instrument: 'QQQ',
+        asset_class: 'stocks',
+        error: 'debate exploded',
+      });
+    });
+
+    it('wraps a thrown non-Error value into a string message', async () => {
+      const runner: TickRunner = {
+        async runInstrument(signal, ctx): Promise<TickOutcome> {
+          if (signal.asset === 'QQQ') throw 'a string rejection';
+          return { trace_id: ctx.trace_id, final_stage: 'execution' };
+        },
+      };
+
+      const outcomes = await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+        max_concurrent_instruments: 2,
+        newTraceId: countingTraceIds(),
+        logger: LOGGER,
+        auditLog: makeAuditLog(),
+        currentTickStore: makeCurrentTickStore(),
+      });
+
+      expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: 'a string rejection' });
+    });
+  });
 });

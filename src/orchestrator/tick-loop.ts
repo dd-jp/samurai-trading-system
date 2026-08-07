@@ -13,6 +13,12 @@
  * needs: outcomes come back in plan order regardless of the cap, but a cap of
  * 1 also makes the interleaving of stage calls across instruments
  * deterministic.
+ *
+ * Each worker's `runner.runInstrument` call is wrapped in its own try/catch
+ * (#507): one instrument throwing must fail only that instrument, not reject
+ * this worker's `Promise.all` entry and settle the whole tick early while
+ * sibling workers are still mid-pipeline (and still billing LLM debates). See
+ * the `worker()` function below and `TickOutcome.error`.
  */
 import { randomUUID } from 'node:crypto';
 import type { Signal } from '../analysts/index.js';
@@ -77,13 +83,52 @@ export async function runTickPlan(
         asset: instrument.asset,
         asset_class: instrument.asset_class,
       };
-      outcomes[index] = await runner.runInstrument(signal, {
-        clock,
-        trace_id: newTraceId(),
-        logger: config.logger,
-        auditLog: config.auditLog,
-        currentTickStore: config.currentTickStore,
-      });
+      const trace_id = newTraceId();
+
+      // #507: this used to be a bare `await` with nothing catching it. One
+      // instrument throwing rejected THIS worker's `Promise.all` entry, which
+      // settles the whole `Promise.all` immediately — the other workers were
+      // still mid-pipeline, still calling out to the LLM, when the tick loop
+      // (production.ts's `runOnce`) logged `tick failed` and cleared
+      // `inFlight`. That flag is exactly what the NEXT tick's overlap guard
+      // tests, so the guard reported the tick as finished while its surviving
+      // workers kept running — and kept billing debates unattributed to any
+      // live tick.
+      //
+      // Catching here instead turns one instrument's throw into a failed
+      // `TickOutcome` for that instrument alone: this worker's `while` loop
+      // keeps claiming indices off the shared `cursor`, so the rest of the
+      // plan still runs, and `Promise.all` below only settles once every
+      // worker's `while` loop has actually returned — no early exit while
+      // siblings are in flight.
+      try {
+        outcomes[index] = await runner.runInstrument(signal, {
+          clock,
+          trace_id,
+          logger: config.logger,
+          auditLog: config.auditLog,
+          currentTickStore: config.currentTickStore,
+        });
+      } catch (error) {
+        // Not swallowed: still reaches the logger (so a persistent failure
+        // stays visible in the log stream, same as the tick-level catch this
+        // supplements) and still lands in the returned outcome array (so a
+        // caller reading `outcomes` sees the failure rather than a
+        // conspicuously-missing entry — every plan index is always populated).
+        const message = error instanceof Error ? error.message : String(error);
+        config.logger.log({
+          trace_id,
+          stage: 'tick-loop',
+          level: 'error',
+          message: `instrument failed: ${instrument.asset}`,
+          payload: {
+            instrument: instrument.asset,
+            asset_class: instrument.asset_class,
+            error: message,
+          },
+        });
+        outcomes[index] = { trace_id, error: message };
+      }
     }
   }
 
