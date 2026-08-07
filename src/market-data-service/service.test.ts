@@ -183,6 +183,157 @@ describe('MarketDataServiceImpl.getBars — per-bar-interval caching (#391)', ()
 
     expect(source.fetches).toBe(2);
   });
+
+  /**
+   * #512 (warm-start backfill). `lastBarFetch` (the in-process map the tests
+   * above exercise) is empty on every fresh `MarketDataServiceImpl` instance
+   * — it has no constructor seam and nothing persists it. A backfill script
+   * that fills the SQLite store in a SEPARATE process therefore cannot make
+   * the FIRST call from a freshly started orchestrator skip the network
+   * unless the freshness test also trusts the store's own recency, not only
+   * this process's fetch history. Modelled here as two service instances
+   * sharing one store handle — the same relationship a backfill process and
+   * the orchestrator process have via `sharedStorePath()`/`openSharedStore()`.
+   */
+  it('a second, freshly constructed instance serves from an already-warm store without fetching (#512)', async () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteMarketDataStore(db);
+    const window = { timeframe: TIMEFRAME, lookback: 2 };
+
+    // Simulates the backfill script (or a prior process' tick): a first
+    // service instance fetches and persists into the shared store.
+    const warmingSource = new CountingDataSource(
+      new FixtureDataSource(
+        BARS,
+        { price: 999, observed_at: new Date('2026-07-15T10:59:59Z'), source: 'fixture-live' },
+        'crypto',
+      ),
+    );
+    const warmingService = new MarketDataServiceImpl(
+      warmingSource,
+      new ManualClock(ASOF),
+      'live',
+      store,
+    );
+    await warmingService.getBars(INSTRUMENT, window, ASOF);
+    expect(warmingSource.fetches).toBe(1);
+
+    // A brand-new instance — empty `lastBarFetch`, exactly what a freshly
+    // started orchestrator process constructs — reading the SAME store a few
+    // minutes later, still inside the same bar interval.
+    const coldSource = new CountingDataSource(
+      new FixtureDataSource(
+        BARS,
+        { price: 999, observed_at: new Date('2026-07-15T10:59:59Z'), source: 'fixture-live' },
+        'crypto',
+      ),
+    );
+    const coldService = new MarketDataServiceImpl(
+      coldSource,
+      new ManualClock(new Date(ASOF.getTime() + 20 * 60_000)),
+      'live',
+      store,
+    );
+
+    const bars = await coldService.getBars(
+      INSTRUMENT,
+      window,
+      new Date(ASOF.getTime() + 20 * 60_000),
+    );
+
+    expect(coldSource.fetches).toBe(0);
+    expect(bars.map((b) => b.close_time.toISOString())).toEqual([
+      '2026-07-15T09:00:00.000Z',
+      '2026-07-15T10:00:00.000Z',
+    ]);
+  });
+
+  it('a freshly constructed instance still fetches once the store is stale relative to asOf (#512)', async () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteMarketDataStore(db);
+    const window = { timeframe: TIMEFRAME, lookback: 2 };
+
+    const warmingService = new MarketDataServiceImpl(
+      new CountingDataSource(
+        new FixtureDataSource(
+          BARS,
+          { price: 999, observed_at: new Date('2026-07-15T10:59:59Z'), source: 'fixture-live' },
+          'crypto',
+        ),
+      ),
+      new ManualClock(ASOF),
+      'live',
+      store,
+    );
+    await warmingService.getBars(INSTRUMENT, window, ASOF);
+
+    // A new hour has rolled over since the store was warmed — a bar may have
+    // closed that the store does not have, so this must still fetch.
+    const coldSource = new CountingDataSource(
+      new FixtureDataSource(
+        BARS,
+        { price: 999, observed_at: new Date('2026-07-15T10:59:59Z'), source: 'fixture-live' },
+        'crypto',
+      ),
+    );
+    const coldService = new MarketDataServiceImpl(
+      coldSource,
+      new ManualClock(new Date(ASOF.getTime() + 60 * 60_000)),
+      'live',
+      store,
+    );
+
+    await coldService.getBars(INSTRUMENT, window, new Date(ASOF.getTime() + 60 * 60_000));
+
+    expect(coldSource.fetches).toBe(1);
+  });
+
+  /**
+   * #512 fix: the store-recency test is elapsed-time, not "close_time equals
+   * the UTC interval boundary" — a real Alpaca equity bar is
+   * SESSION-anchored (a `1Hour` bar closes on the half-hour during EDT, a
+   * `1Day` bar closes at the next session's open, neither a clock-hour or
+   * UTC-midnight multiple), so a boundary-equality test would have been
+   * silently inert for every equity in `DEFAULT_UNIVERSE` while only
+   * happening to work for Coinbase's UTC-midnight-aligned crypto daily bars.
+   * This fixture is deliberately NOT boundary-aligned (bars close on the
+   * half-hour, not the hour) to prove the predicate doesn't depend on it.
+   */
+  it('treats a phase-offset (session-anchored) store as fresh when less than one width has elapsed (#512)', async () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteMarketDataStore(db);
+    const window = { timeframe: TIMEFRAME, lookback: 2 };
+
+    // Bars close on the half-hour — never a multiple of `timeframeToMs('1h')`
+    // from the UTC epoch, so `close_time === barIndex * timeframeToMs` (the
+    // old, rejected boundary-equality test) would never be true here.
+    store.appendBars([bar('2026-07-15T09:30:00Z', 100), bar('2026-07-15T10:30:00Z', 110)]);
+
+    const coldSource = new CountingDataSource(
+      new FixtureDataSource(
+        BARS,
+        { price: 999, observed_at: new Date('2026-07-15T10:59:59Z'), source: 'fixture-live' },
+        'crypto',
+      ),
+    );
+    // 20 minutes after the latest stored bar's close — well under one 1h
+    // width, so nothing could have closed since.
+    const tickAsOf = new Date('2026-07-15T10:50:00Z');
+    const coldService = new MarketDataServiceImpl(
+      coldSource,
+      new ManualClock(tickAsOf),
+      'live',
+      store,
+    );
+
+    const bars = await coldService.getBars(INSTRUMENT, window, tickAsOf);
+
+    expect(coldSource.fetches).toBe(0);
+    expect(bars.map((b) => b.close_time.toISOString())).toEqual([
+      '2026-07-15T09:30:00.000Z',
+      '2026-07-15T10:30:00.000Z',
+    ]);
+  });
 });
 
 describe('MarketDataServiceImpl.getMark', () => {

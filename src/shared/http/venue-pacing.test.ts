@@ -1,7 +1,9 @@
 import {
+  DEFAULT_COINBASE_PACING,
   DEFAULT_POLYGON_PACING,
   DEFAULT_VENUE_PACING,
   POLYGON_DOCUMENTED_CEILING_PER_SECOND,
+  resolveCoinbasePacing,
   resolvePolygonPacing,
   resolveVenuePacing,
   VENUE_DOCUMENTED_CEILING_PER_SECOND,
@@ -234,6 +236,63 @@ describe('resolvePolygonPacing', () => {
       refillPerSecond: 'SAMURAI_PACING_POLYGON_REFILL_PER_SEC',
       ceilingPerSecond: 'SAMURAI_PACING_POLYGON_CEILING_PER_SEC',
       reserveForPriority: 'SAMURAI_PACING_POLYGON_PRIORITY_RESERVE',
+    });
+  });
+});
+
+describe('resolveCoinbasePacing', () => {
+  it('returns the checked-in default when nothing is configured', () => {
+    expect(resolveCoinbasePacing({})).toEqual(DEFAULT_COINBASE_PACING);
+  });
+
+  it('overrides from SAMURAI_PACING_COINBASE_*', () => {
+    const resolved = resolveCoinbasePacing({ SAMURAI_PACING_COINBASE_REFILL_PER_SEC: '0.5' });
+    expect(resolved).toEqual({
+      capacity: DEFAULT_COINBASE_PACING.capacity,
+      refillPerSecond: 0.5,
+      reserveForPriority: DEFAULT_COINBASE_PACING.reserveForPriority,
+    });
+  });
+
+  it('names SAMURAI_PACING_COINBASE_REFILL_PER_SEC specifically when the malformed value is not a number', () => {
+    expect(() =>
+      resolveCoinbasePacing({ SAMURAI_PACING_COINBASE_REFILL_PER_SEC: 'not-a-number' }),
+    ).toThrow(/SAMURAI_PACING_COINBASE_REFILL_PER_SEC/);
+  });
+
+  /**
+   * Same isolation direction as `resolvePolygonPacing`'s equivalent test:
+   * `resolveVenuePacing()` — what `production.ts` actually calls at boot —
+   * must never be tripped by a malformed `SAMURAI_PACING_COINBASE_*`, since
+   * that variable belongs to a script `production.ts` never runs.
+   */
+  it('never reads or validates SAMURAI_PACING_COINBASE_* from resolveVenuePacing — a malformed override does not throw', () => {
+    expect(() =>
+      resolveVenuePacing({ SAMURAI_PACING_COINBASE_REFILL_PER_SEC: 'not-a-number' }),
+    ).not.toThrow();
+  });
+
+  it('never reads or validates an unrelated venue override — a malformed Alpaca/IBKR value does not throw', () => {
+    expect(() =>
+      resolveCoinbasePacing({
+        SAMURAI_PACING_ALPACA_REFILL_PER_SEC: 'not-a-number',
+        SAMURAI_PACING_IBKR_CAPACITY: '-1',
+      }),
+    ).not.toThrow();
+    expect(
+      resolveCoinbasePacing({
+        SAMURAI_PACING_ALPACA_REFILL_PER_SEC: 'not-a-number',
+        SAMURAI_PACING_IBKR_CAPACITY: '-1',
+      }),
+    ).toEqual(DEFAULT_COINBASE_PACING);
+  });
+
+  it('names its own env vars under the same SAMURAI_PACING_COINBASE_* scheme every other venue uses', () => {
+    expect(venuePacingEnvVars('coinbase')).toEqual({
+      capacity: 'SAMURAI_PACING_COINBASE_CAPACITY',
+      refillPerSecond: 'SAMURAI_PACING_COINBASE_REFILL_PER_SEC',
+      ceilingPerSecond: 'SAMURAI_PACING_COINBASE_CEILING_PER_SEC',
+      reserveForPriority: 'SAMURAI_PACING_COINBASE_PRIORITY_RESERVE',
     });
   });
 });

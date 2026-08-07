@@ -264,6 +264,31 @@ export const DEFAULT_POLYGON_PACING: TokenBucketConfig = {
 };
 
 /**
+ * Coinbase Exchange public candles pacing (#512, warm-start backfill script
+ * only — same posture as `DEFAULT_POLYGON_PACING`/`resolvePolygonPacing`
+ * above and for the identical reason: the live composition root
+ * (`production.ts`) never calls `resolveCoinbasePacing`, so a typo'd
+ * `SAMURAI_PACING_COINBASE_*` cannot fail orchestrator boot during an
+ * unattended soak. Kept OUT of `VENUE_KEYS`/`resolveVenuePacing` for that
+ * reason, not because Coinbase is unpaced.
+ *
+ * No documented per-key ceiling exists to enforce — the endpoint is
+ * unauthenticated (no key, no account; ADR-0001 "Appendix: Broker/Data —
+ * historical OHLCV sourcing" names Coinbase Exchange public candles as the
+ * crypto primary; `docs/research/free-crypto-ohlcv-2026-08-06.md` "no
+ * `RateLimit-*` headers are returned, so pace conservatively rather than
+ * reading back a budget").
+ * `capacity: 2, refillPerSecond: 1` (a burst of 2, then 1 req/s sustained)
+ * is comfortably under the ~10 req/s the research measured as tolerated,
+ * with headroom for the backfill script's own retries.
+ */
+export const DEFAULT_COINBASE_PACING: TokenBucketConfig = {
+  capacity: 2,
+  refillPerSecond: 1,
+  reserveForPriority: 0,
+};
+
+/**
  * The environment variables that override one bucket. Not scoped to
  * `VenueKey` — the string it prefixes is a plain label (`'alpaca'`,
  * `'polygon'`, ...), because `resolvePolygonPacing` below reuses this same
@@ -440,6 +465,25 @@ export function resolvePolygonPacing(env: NodeJS.ProcessEnv = process.env): Toke
     venuePacingEnvVars('polygon'),
     DEFAULT_POLYGON_PACING,
     POLYGON_DOCUMENTED_CEILING_PER_SECOND,
+  );
+}
+
+/**
+ * Coinbase's own pacing resolution — reads and validates ONLY
+ * `SAMURAI_PACING_COINBASE_*`, via the same `resolveBucketPacing` every
+ * other venue uses, so a malformed override here can never affect
+ * `resolveVenuePacing()` (which never calls this) and vice versa. See
+ * `DEFAULT_COINBASE_PACING` for why this is a separate entry point rather
+ * than one more `VENUE_KEYS` member — same reasoning as `resolvePolygonPacing`.
+ * `documentedCeiling` is `undefined`: Coinbase publishes no per-key ceiling
+ * to enforce against (there is no key).
+ */
+export function resolveCoinbasePacing(env: NodeJS.ProcessEnv = process.env): TokenBucketConfig {
+  return resolveBucketPacing(
+    env,
+    venuePacingEnvVars('coinbase'),
+    DEFAULT_COINBASE_PACING,
+    undefined,
   );
 }
 
