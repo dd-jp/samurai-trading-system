@@ -170,6 +170,7 @@ import {
   LoggingFlattenOverfillAlertChannel,
   LoggingHeartbeatChannel,
   LoggingLoosenApprovalChannel,
+  LoggingOcoDoubleFillAlertChannel,
   LoggingOrphanAlertChannel,
   LoggingResidualExposureAlertChannel,
   LoggingUnpricedFillAlertChannel,
@@ -632,6 +633,11 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // will not price, which is why it must be the durable one here — a
       // restart that reset the clock would age nothing out across a soak.
       unpricedFillAlerts: config.unpricedFillAlerts ?? new LoggingUnpricedFillAlertChannel(logger),
+      // #586: the emulated crypto OCO's accepted-risk escalation — required
+      // on `AlpacaBrokerAdapterInput` for the same "no silent default"
+      // reason `unpricedFillAlerts` is.
+      ocoDoubleFillAlerts:
+        config.ocoDoubleFillAlerts ?? new LoggingOcoDoubleFillAlertChannel(logger),
       ...(config.unpricedFillAgeOutMs === undefined
         ? {}
         : { unpricedFillAgeOutMs: config.unpricedFillAgeOutMs }),

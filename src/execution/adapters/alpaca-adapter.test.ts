@@ -6,6 +6,7 @@ import type { VerdictDecision } from '../../verdict/index.js';
 import { BrokerError } from '../broker-error.js';
 import { InMemoryBrokerStateStore } from '../broker-state-store.js';
 import { ExecutionImpl } from '../execute.js';
+import type { OcoDoubleFillAlert, OcoDoubleFillAlertChannel } from '../oco-double-fill-alert.js';
 import { openTestExecutionStore } from '../sqlite-store-harness.js';
 import type { ExecutionConfig, ExecutionInput, NativeBracketRequest } from '../types.js';
 import type { UnpricedFillAlert, UnpricedFillAlertChannel } from '../unpriced-fill-alert.js';
@@ -97,6 +98,14 @@ function makeClient(overrides: Partial<AlpacaClient> = {}): AlpacaClient {
     submitOcoOrder: vi
       .fn()
       .mockRejectedValue(new Error('makeClient: override submitOcoOrder to use it')),
+    // #586's two plain crypto order types — same posture again: the emulated
+    // path submitting an order no test asked for must fail that test.
+    submitLimitOrder: vi
+      .fn()
+      .mockRejectedValue(new Error('makeClient: override submitLimitOrder to use it')),
+    submitStopLimitOrder: vi
+      .fn()
+      .mockRejectedValue(new Error('makeClient: override submitStopLimitOrder to use it')),
     cancelOrder: vi.fn().mockRejectedValue(new Error('makeClient: override cancelOrder to use it')),
     getPositions: vi
       .fn()
@@ -115,6 +124,22 @@ function recordingAlerts(): UnpricedFillAlertChannel & { readonly posted: Unpric
   return {
     posted,
     postUnpricedFillAlert: async (alert) => {
+      posted.push(alert);
+    },
+  };
+}
+
+/**
+ * #586's required seam, same reasoning as `recordingAlerts` above: a
+ * construction that forgets the double-fill escalation cannot exist.
+ */
+function recordingDoubleFillAlerts(): OcoDoubleFillAlertChannel & {
+  readonly posted: OcoDoubleFillAlert[];
+} {
+  const posted: OcoDoubleFillAlert[] = [];
+  return {
+    posted,
+    postOcoDoubleFillAlert: async (alert) => {
       posted.push(alert);
     },
   };
@@ -155,6 +180,7 @@ describe('AlpacaBrokerAdapter.submitBracket', () => {
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
     });
 
     await adapter.submitBracket(makeBracket());
@@ -172,24 +198,53 @@ describe('AlpacaBrokerAdapter.submitBracket', () => {
     });
   });
 
-  // #585: Alpaca's trading API rejects dash-form crypto symbols outright
-  // (422 "asset not found") — it only accepts slash form. The repo's own
-  // universe (DEFAULT_UNIVERSE, orchestrator/scheduler.ts) spells crypto as
-  // 'BTC-USD'/'ETH-USD' throughout (ADR-0001's BrokerAdapter abstraction), so
-  // this adapter is the one seam that must translate before the wire call.
-  it('converts a dash-form crypto instrument to Alpaca slash form on submit', async () => {
-    const client = makeClient();
+  // #586: a crypto bracket must NEVER reach `submitOrder`'s native
+  // `order_class: 'bracket'` — the live venue rejects every advanced order
+  // class for crypto (422 code 42210000, verified #550). The emulated path
+  // sends a PLAIN limit entry instead, in slash form (#585) and with no
+  // order class at all; the protective prices go to the journal, not the
+  // wire, until the entry fills.
+  it('submits a crypto bracket as a PLAIN limit entry, never order_class bracket', async () => {
+    const submitLimitOrder = vi.fn().mockResolvedValue(acceptedOrder({ id: 'entry-1', legs: [] }));
+    const client = makeClient({ submitLimitOrder });
     const adapter = new AlpacaBrokerAdapter({
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
     });
 
-    await adapter.submitBracket(
-      makeBracket({ client_order_id: 'key-btc-1', instrument: 'BTC-USD', asset_class: 'crypto' }),
+    const ack = await adapter.submitBracket(
+      makeBracket({
+        client_order_id: 'key-btc-1',
+        instrument: 'BTC-USD',
+        asset_class: 'crypto',
+        size: 0.5,
+        entry: 60_000,
+        stop: 57_000,
+        target: 66_000,
+        time_in_force: 'gtc',
+      }),
     );
 
-    expect(client.submitOrder).toHaveBeenCalledWith(expect.objectContaining({ symbol: 'BTC/USD' }));
+    // The exact wire body, pinned: no `order_class`, no `take_profit`, no
+    // `stop_loss` — any of those is the guaranteed 422.
+    expect(submitLimitOrder).toHaveBeenCalledWith({
+      symbol: 'BTC/USD',
+      side: 'buy',
+      qty: '0.5',
+      limit_price: '60000',
+      time_in_force: 'gtc',
+      client_order_id: 'key-btc-1',
+    });
+    expect(client.submitOrder).not.toHaveBeenCalled();
+    // Only the entry exists at ack time — the leg ids appear when the sweep
+    // arms them; inventing two the venue never heard of would be a lie.
+    expect(ack).toEqual({
+      client_order_id: 'key-btc-1',
+      broker_order_ids: ['entry-1'],
+      order_state: 'submitted',
+    });
   });
 
   // #585: a symbol already in Alpaca's own slash form must pass through
@@ -199,18 +254,20 @@ describe('AlpacaBrokerAdapter.submitBracket', () => {
   // string transform with no memory of what called it, so this pins that it
   // stays a no-op on input it has no work to do on.
   it('does not double-convert a symbol already in Alpaca slash form', async () => {
-    const client = makeClient();
+    const submitLimitOrder = vi.fn().mockResolvedValue(acceptedOrder({ id: 'entry-1', legs: [] }));
+    const client = makeClient({ submitLimitOrder });
     const adapter = new AlpacaBrokerAdapter({
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
     });
 
     await adapter.submitBracket(
       makeBracket({ client_order_id: 'key-btc-2', instrument: 'BTC/USD', asset_class: 'crypto' }),
     );
 
-    expect(client.submitOrder).toHaveBeenCalledWith(expect.objectContaining({ symbol: 'BTC/USD' }));
+    expect(submitLimitOrder).toHaveBeenCalledWith(expect.objectContaining({ symbol: 'BTC/USD' }));
   });
 
   it('acks with the parent + attached OCO leg ids and a submitted state', async () => {
@@ -218,6 +275,7 @@ describe('AlpacaBrokerAdapter.submitBracket', () => {
       client: makeClient(),
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
     });
 
     const ack = await adapter.submitBracket(makeBracket());
@@ -245,6 +303,7 @@ describe('AlpacaBrokerAdapter.submitBracket', () => {
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
     });
 
     const ack = await adapter.submitBracket(makeBracket());
@@ -264,6 +323,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
     });
     await adapter.submitBracket(makeBracket());
 
@@ -295,6 +355,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
     });
     await adapter.submitBracket(makeBracket());
 
@@ -347,6 +408,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
     });
     await adapter.submitBracket(makeBracket());
 
@@ -366,6 +428,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
       client: makeClient(),
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
     });
     await adapter.submitBracket(makeBracket());
 
@@ -388,6 +451,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
     });
     await adapter.submitBracket(makeBracket());
 
@@ -401,6 +465,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
     });
 
     expect(await adapter.fetchNewFills(new Date(0))).toEqual([]);
@@ -424,6 +489,7 @@ describe('AlpacaBrokerAdapter integration: entry fill then stop-out', () => {
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
     });
     await adapter.submitBracket(makeBracket());
 
@@ -520,6 +586,7 @@ describe('AlpacaBrokerAdapter outbound call discipline', () => {
       client,
       rateLimiter,
       unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
     });
 
     await adapter.submitBracket(makeBracket());
@@ -546,6 +613,7 @@ describe('AlpacaBrokerAdapter outbound call discipline', () => {
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
     });
 
     const error = await adapter.submitBracket(makeBracket()).catch((thrown: unknown) => thrown);
@@ -591,6 +659,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills on inconsistent venue data', () => {
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
     });
     await adapter.submitBracket(makeBracket());
 
@@ -618,6 +687,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills on inconsistent venue data', () => {
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
     });
     await adapter.submitBracket(makeBracket());
 
@@ -662,6 +732,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills on inconsistent venue data', () => {
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
     });
     await adapter.submitBracket(makeBracket({ client_order_id: 'poisoned-lot' }));
     await adapter.submitBracket(makeBracket({ client_order_id: 'healthy-lot' }));
@@ -696,6 +767,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       client: options.client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: options.alerts,
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
       clock: options.clock,
       ...(options.state === undefined ? {} : { state: options.state }),
       ...(options.ageOutMs === undefined ? {} : { unpricedFillAgeOutMs: options.ageOutMs }),
@@ -844,6 +916,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       }),
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: alerts,
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
       clock,
     });
     await adapter.submitFlatten('BTC-USD', 'sell', 0.5, 'flatten-key');
@@ -855,32 +928,66 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
     expect(alerts.posted[0]).toMatchObject({ instrument: 'BTC-USD', leg: 'exit' });
   });
 
-  // #585: same read-back conversion, through the RE-ARM sweep — the third
-  // and last `symbolOf` call site in `fetchNewFills`.
-  it('converts a crypto re-arm symbol back to dash form for an unpriced-fill alert', async () => {
+  // #586: the EMULATED crypto sweep's unpriced-fill posture — a stop leg the
+  // venue reports filled but will not price is recorded and escalated under
+  // the lot's own dash-form instrument, exactly as the native sweeps do.
+  // (Crypto no longer reaches the equity re-arm sweep this test used to
+  // exercise; the emulation names the instrument from its own journalled
+  // request, so no read-back conversion is even needed.)
+  it('escalates an unpriced emulated stop-leg fill under the dash-form instrument (#586)', async () => {
     const clock = new FixedClock(T0);
     const alerts = recordingAlerts();
-    const submitOcoOrder = vi
-      .fn()
-      .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-1', order_class: 'oco', legs: [] });
-    const adapter = new AlpacaBrokerAdapter({
-      client: makeClient({
-        submitOcoOrder,
-        getOrder: vi
-          .fn()
-          .mockResolvedValue(unpricedOrder({ id: 'rearm-1', symbol: 'BTC/USD', legs: [] })),
+    const submitLimitOrder = vi.fn(async (request: { client_order_id: string }) =>
+      acceptedOrder({
+        id: request.client_order_id === 'key-1' ? 'entry-1' : 'target-1',
+        legs: [],
       }),
+    );
+    const submitStopLimitOrder = vi
+      .fn()
+      .mockResolvedValue(acceptedOrder({ id: 'stop-1', legs: [] }));
+    const getOrder = vi.fn(async (id: string) => {
+      if (id === 'entry-1') {
+        return acceptedOrder({
+          id: 'entry-1',
+          symbol: 'BTC/USD',
+          status: 'filled',
+          filled_qty: '0.5',
+          filled_avg_price: '60000',
+          filled_at: '2026-07-15T14:05:00Z',
+          legs: [],
+        });
+      }
+      if (id === 'stop-1') {
+        return unpricedOrder({ id: 'stop-1', symbol: 'BTC/USD', filled_qty: '0.5', legs: [] });
+      }
+      return acceptedOrder({ id, symbol: 'BTC/USD', legs: [] });
+    });
+    const adapter = new AlpacaBrokerAdapter({
+      client: makeClient({ submitLimitOrder, submitStopLimitOrder, getOrder }),
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: alerts,
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
       clock,
     });
-    await adapter.rearmProtectiveLegs('key-1', 'BTC-USD', 'buy', 0.5, 95, 110);
+    await adapter.submitBracket(
+      makeBracket({
+        client_order_id: 'key-1',
+        instrument: 'BTC-USD',
+        asset_class: 'crypto',
+        size: 0.5,
+        time_in_force: 'gtc',
+      }),
+    );
 
+    // Sweep 1: the entry fill is observed and the two plain legs are armed.
+    await adapter.fetchNewFills(new Date(0));
+    // Sweep 2: the stop leg reports filled-but-unpriced — recorded, not booked.
     await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
     clock.advance(DEFAULT_UNPRICED_FILL_AGE_OUT_MS);
     await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
 
-    expect(alerts.posted[0]).toMatchObject({ instrument: 'BTC-USD', leg: 'target' });
+    expect(alerts.posted[0]).toMatchObject({ instrument: 'BTC-USD', leg: 'stop' });
   });
 
   it('escalates even on a sweep that other brackets are filling normally', async () => {
@@ -907,6 +1014,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: alerts,
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
       clock,
     });
     await adapter.submitBracket(makeBracket({ client_order_id: 'stuck-lot' }));
@@ -993,6 +1101,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       client: makeClient({ getOrder: vi.fn().mockResolvedValue(unpricedOrder()) }),
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: alerts,
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
       state,
       clock,
     });
@@ -1031,6 +1140,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
       state,
       clock,
     });
@@ -1090,6 +1200,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
     });
     await adapter.submitFlatten('AAPL', 'sell', 12, 'flatten-key');
 
@@ -1117,6 +1228,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
     });
     await adapter.submitBracket(makeBracket());
     await adapter.submitFlatten('TSLA', 'sell', 5, 'flatten-key');
@@ -1151,6 +1263,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
     });
   }
 
@@ -1397,28 +1510,36 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       // reduces it sells.
       side: 'sell',
       qty: '6',
-      limit_price: '110',
       time_in_force: 'gtc',
       // Never `'key-1'` — that id already named the now-cancelled original
       // bracket (see the method's own doc comment for why reusing it is
       // refused rather than risked).
       client_order_id: 'key-1:rearm',
       order_class: 'oco',
+      // #586, VERIFIED wire shape (#550): the take-profit price NESTED under
+      // `take_profit`, never top-level — Alpaca rejects the top-level form
+      // for every asset class (422 code 40010001, "oco orders require
+      // take_profit.limit_price").
+      take_profit: { limit_price: '110' },
       stop_loss: { stop_price: '95' },
     });
   });
 
-  // #585: same fallback as `submitFlatten` above — `rearmProtectiveLegs`
-  // also takes only a bare `instrument`, no `asset_class`.
-  it('converts a dash-form crypto instrument to Alpaca slash form when re-arming protective legs', async () => {
-    const submitOcoOrder = vi
-      .fn()
-      .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-1', order_class: 'oco', legs: [] });
+  // #586: a crypto residual never reaches `submitOcoOrder` — the order class
+  // itself is rejected for crypto (verified, #550) — and one whose lot the
+  // emulation's journal does not know cannot be re-armed on the emulated
+  // path either (there is no durable home to write the episode ahead). The
+  // contract's required posture is a THROW, which `ingestFills` turns into
+  // the #525 fallback alert; a silent no-op would report success for a
+  // residual that is still naked.
+  it('refuses to re-arm a crypto residual with no journalled emulated bracket (#586)', async () => {
+    const submitOcoOrder = vi.fn();
     const adapter = adapterWith(makeClient({ submitOcoOrder }));
 
-    await adapter.rearmProtectiveLegs('key-1', 'BTC-USD', 'buy', 0.5, 95, 110);
-
-    expect(submitOcoOrder).toHaveBeenCalledWith(expect.objectContaining({ symbol: 'BTC/USD' }));
+    await expect(
+      adapter.rearmProtectiveLegs('key-1', 'BTC-USD', 'buy', 0.5, 95, 110),
+    ).rejects.toThrow(/no journalled emulated bracket/);
+    expect(submitOcoOrder).not.toHaveBeenCalled();
   });
 
   it("sweeps a re-armed residual and tags its fills under the LOT's own key, target first then stop", async () => {
@@ -1752,6 +1873,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
       clock: fixedClock,
     });
     const input: ExecutionInput = {

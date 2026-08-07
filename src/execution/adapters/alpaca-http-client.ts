@@ -65,10 +65,12 @@ import type {
   AlpacaAccount,
   AlpacaBracketOrderRequest,
   AlpacaClient,
+  AlpacaLimitOrderRequest,
   AlpacaMarketOrderRequest,
   AlpacaOcoOrderRequest,
   AlpacaOrder,
   AlpacaPosition,
+  AlpacaStopLimitOrderRequest,
 } from './alpaca-client.js';
 
 /**
@@ -590,21 +592,53 @@ export class AlpacaHttpBrokerClient implements AlpacaClient {
   }
 
   /**
-   * Re-arm on a residual (#525) — `order_class: 'oco'`, take-profit +
+   * Re-arm on an EQUITY residual (#525) — `order_class: 'oco'`, take-profit +
    * stop-loss, no entry: this closes quantity the account already holds
    * rather than opening any. `type: 'limit'` is the wire-only field, added
    * here for the same reason `submitOrder`/`submitMarketOrder` add theirs —
-   * the interface's `limit_price` already implies it.
+   * Alpaca requires it on an OCO body, and the take-profit price rides in
+   * the request's own nested `take_profit.limit_price` (#550's verified
+   * shape, fixed by #586 — see `AlpacaOcoOrderRequest`).
    *
-   * NOT verified against a live paper account: this mirrors Alpaca's
-   * documented OCO shape, but nothing in this repo has exercised it against
-   * the real API.
+   * Crypto never reaches this method: #550 verified the order class itself
+   * is rejected there (`422` code `42210000`), so the adapter routes crypto
+   * residuals through the emulated path instead.
    */
   async submitOcoOrder(request: AlpacaOcoOrderRequest): Promise<AlpacaOrder> {
     return this.request<AlpacaOrder>(
       '/v2/orders',
       { method: 'POST', body: JSON.stringify({ ...request, type: 'limit' }) },
       'submitOcoOrder',
+      validateAlpacaOrder,
+    );
+  }
+
+  /**
+   * A plain limit order (#586) — the crypto emulation's entry and emulated
+   * take-profit leg. `type: 'limit'` is the wire-only field, exactly as on
+   * `submitOrder`; no `order_class` is sent, which is the entire point —
+   * crypto rejects every advanced order class (#550).
+   */
+  async submitLimitOrder(request: AlpacaLimitOrderRequest): Promise<AlpacaOrder> {
+    return this.request<AlpacaOrder>(
+      '/v2/orders',
+      { method: 'POST', body: JSON.stringify({ ...request, type: 'limit' }) },
+      'submitLimitOrder',
+      validateAlpacaOrder,
+    );
+  }
+
+  /**
+   * A plain stop-limit order (#586) — the crypto emulation's stop leg.
+   * `type: 'stop_limit'` is the wire-only field; the request carries both the
+   * trigger (`stop_price`) and the post-trigger limit (`limit_price`), which
+   * Alpaca requires together for this type.
+   */
+  async submitStopLimitOrder(request: AlpacaStopLimitOrderRequest): Promise<AlpacaOrder> {
+    return this.request<AlpacaOrder>(
+      '/v2/orders',
+      { method: 'POST', body: JSON.stringify({ ...request, type: 'stop_limit' }) },
+      'submitStopLimitOrder',
       validateAlpacaOrder,
     );
   }

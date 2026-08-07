@@ -108,6 +108,7 @@ import { TradeChannelAnalystSkipAlert } from './analyst-skip-alert-channel.js';
 import { TradeChannelBreachAlert } from './breach-alert-channel.js';
 import { TradeChannelHeartbeat } from './heartbeat-channel.js';
 import { TradeChannelLoosenApproval } from './loosen-approval-channel.js';
+import { TradeChannelOcoDoubleFillAlert } from './oco-double-fill-channel.js';
 import { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
 import type { AlertChannelSlots, ProductionConfig } from './production.js';
 import { TradeChannelResidualExposureAlert } from './residual-exposure-alert-channel.js';
@@ -160,6 +161,12 @@ export const ALERT_CHANNEL_FIELDS = [
   // for it, so an unprotected residual position after a failed re-arm reached
   // only the log stream during an unattended soak.
   'residualExposureAlerts',
+  // #586 — the ninth, and the first added AFTER `ALL_ALERT_CHANNEL_FIELDS_COVERED`
+  // below started enforcing this list: an emulated crypto OCO's double fill
+  // (both protective legs filled inside one poll window — the accepted-risk
+  // window of #586's emulation) leaves the lot over-closed and a reverse
+  // position possibly open at the venue.
+  'ocoDoubleFillAlerts',
   'breachAlerts',
   'loosenApprovals',
   // #431 — the sixth. Same hole as the original three: a real channel type
@@ -358,6 +365,11 @@ export function buildAlertChannels(deps: {
     // event an operator must act on, not a beat (#342's split).
     ...(deps.injected.residualExposureAlerts === undefined
       ? { residualExposureAlerts: new TradeChannelResidualExposureAlert(telegram, chatId) }
+      : {}),
+    // #586. The escalation chat: a lot over-closed into a possible reverse
+    // position is a decision waiting on the operator, not a beat (#342).
+    ...(deps.injected.ocoDoubleFillAlerts === undefined
+      ? { ocoDoubleFillAlerts: new TradeChannelOcoDoubleFillAlert(telegram, chatId) }
       : {}),
     ...(deps.injected.breachAlerts === undefined
       ? { breachAlerts: new TradeChannelBreachAlert(telegram, chatId, deps.logger) }
