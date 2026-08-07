@@ -109,7 +109,8 @@ import { TradeChannelBreachAlert } from './breach-alert-channel.js';
 import { TradeChannelHeartbeat } from './heartbeat-channel.js';
 import { TradeChannelLoosenApproval } from './loosen-approval-channel.js';
 import { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
-import type { ProductionConfig } from './production.js';
+import type { AlertChannelSlots, ProductionConfig } from './production.js';
+import { TradeChannelResidualExposureAlert } from './residual-exposure-alert-channel.js';
 import { SqliteAuditLog } from './sqlite-audit-log.js';
 import type { Logger } from './types.js';
 import { TradeChannelUnpricedFillAlert } from './unpriced-fill-channel.js';
@@ -121,10 +122,11 @@ export const ALERTS_MODES = ['telegram', 'log-only'] as const;
 export type AlertsMode = (typeof ALERTS_MODES)[number];
 
 /**
- * The `ProductionConfig` fields this module owns — the outbound operator
- * escalations, and nothing else. Verdict's `approvals` is deliberately absent:
- * it is an inbound round trip (`requestApproval` returns an *answer*), not an
- * alert, and wiring it is #275's remaining half.
+ * The `AlertChannelSlots` fields this module owns — the outbound operator
+ * escalations, and nothing else. Verdict's `approvals` is deliberately absent
+ * from `AlertChannelSlots` itself: it is an inbound round trip
+ * (`requestApproval` returns an *answer*), not an alert, and wiring it is
+ * #275's remaining half.
  *
  * `breachAlerts` joined the list in #327: a kill-threshold breach is the
  * fourth outbound escalation, and it had the same shape of hole as the
@@ -136,11 +138,28 @@ export type AlertsMode = (typeof ALERTS_MODES)[number];
  * refused to relax a risk threshold on its own — no answer is collected, no
  * poll is started, and nothing this process does depends on a reply. That makes
  * it the fifth outbound escalation, not a second HITL round trip.
+ *
+ * **This list used to be hand-maintained against `ProductionConfig` directly,
+ * and the same hole — a real channel type with no transport selected for it —
+ * was found and patched by hand eight times running: the original three, then
+ * #431 (sixth), #465 (seventh), and #551 (eighth, `residualExposureAlerts`,
+ * below).** `satisfies readonly (keyof AlertChannelSlots)[]` only ever caught
+ * a field that does NOT belong here; it could not catch one that was missing.
+ * `ALL_ALERT_CHANNEL_FIELDS_COVERED` below is what closes that direction: a
+ * ninth channel added to `AlertChannelSlots` (production/config.ts) without a
+ * matching entry here now fails `yarn typecheck` instead of waiting for a
+ * ninth human to notice.
  */
 export const ALERT_CHANNEL_FIELDS = [
   'heartbeatChannel',
   'orphanAlerts',
   'unpricedFillAlerts',
+  // #551 — the eighth. `ResidualExposureAlertChannel` existed since #525 with
+  // only `LoggingResidualExposureAlertChannel` behind it — the same hole as
+  // every entry on this list: a real channel type with no transport selected
+  // for it, so an unprotected residual position after a failed re-arm reached
+  // only the log stream during an unattended soak.
+  'residualExposureAlerts',
   'breachAlerts',
   'loosenApprovals',
   // #431 — the sixth. Same hole as the original three: a real channel type
@@ -153,7 +172,27 @@ export const ALERT_CHANNEL_FIELDS = [
   // downstream happened to alert. Filtered at the decorator so wiring it does
   // not buy ~300 messages a day.
   'verdictAlerts',
-] as const satisfies readonly (keyof ProductionConfig)[];
+] as const satisfies readonly (keyof AlertChannelSlots)[];
+
+/**
+ * The other half of the exhaustiveness check (#551) — the direction
+ * `satisfies (keyof AlertChannelSlots)[]` above cannot cover. Fully covered,
+ * `Exclude<keyof AlertChannelSlots, (typeof ALERT_CHANNEL_FIELDS)[number]>`
+ * is `never`, the mapped type below has no keys, and `{}` satisfies it. Miss
+ * one — say a ninth channel lands on `AlertChannelSlots` with nothing added
+ * here — and the mapped type gains a required key for the missing field, so
+ * `{}` no longer satisfies it and `yarn typecheck` fails naming that key.
+ *
+ * Exported, not a throwaway local: the entire point of this binding lives in
+ * its TYPE, not in anything read from it at runtime, and an unused local
+ * would be exactly the kind of thing a linter flags and a future edit
+ * "cleans up" — taking the guard with it. Proven in the #551 PR description
+ * by temporarily adding a dummy field to `AlertChannelSlots` and confirming
+ * `yarn typecheck` fails on this line, naming the field.
+ */
+export const ALL_ALERT_CHANNEL_FIELDS_COVERED: {
+  [K in Exclude<keyof AlertChannelSlots, (typeof ALERT_CHANNEL_FIELDS)[number]>]: never;
+} = {};
 
 /**
  * The heartbeat's own chat (#342) — named separately because it is the one
@@ -236,9 +275,9 @@ export function buildAlertChannels(deps: {
       level: 'warn',
       message:
         `${ENV_VAR}=log-only — every operator alert (heartbeat, orphaned go verdict, stuck ` +
-        'unpriced fill, kill-threshold breach, proposed risk-threshold loosening) is a log ' +
-        'line, and nothing will reach a phone. Correct for an ATTENDED run only; an unattended ' +
-        `soak (#238) needs ${ENV_VAR}=telegram.`,
+        'unpriced fill, unprotected residual position, kill-threshold breach, proposed ' +
+        'risk-threshold loosening) is a log line, and nothing will reach a phone. Correct for ' +
+        `an ATTENDED run only; an unattended soak (#238) needs ${ENV_VAR}=telegram.`,
       payload: { alerts: 'log-only' },
     });
     return {};
@@ -288,9 +327,9 @@ export function buildAlertChannels(deps: {
     stage: 'orchestrator',
     level: 'info',
     message:
-      `${ENV_VAR}=telegram — orphaned go verdicts, stuck unpriced fills, kill-threshold ` +
-      'breaches and proposed risk-threshold loosenings will be pushed to the escalation chat ' +
-      `(TELEGRAM_CHAT_ID). ${heartbeatClause} ` +
+      `${ENV_VAR}=telegram — orphaned go verdicts, stuck unpriced fills, unprotected residual ` +
+      'positions, kill-threshold breaches and proposed risk-threshold loosenings will be ' +
+      `pushed to the escalation chat (TELEGRAM_CHAT_ID). ${heartbeatClause} ` +
       'Keep the escalation chat unmuted. No approval poll is started here: HITL approvals ' +
       'still resolve through ProductionConfig.approvals (#275), and a loosening request is ' +
       'outbound-only — replying to it approves nothing, and the threshold stays put (#366).',
@@ -313,6 +352,12 @@ export function buildAlertChannels(deps: {
       : {}),
     ...(deps.injected.unpricedFillAlerts === undefined
       ? { unpricedFillAlerts: new TradeChannelUnpricedFillAlert(telegram, chatId) }
+      : {}),
+    // #551. The escalation chat, not the heartbeat chat: an unprotected
+    // residual position sitting at the venue with no stop or target is an
+    // event an operator must act on, not a beat (#342's split).
+    ...(deps.injected.residualExposureAlerts === undefined
+      ? { residualExposureAlerts: new TradeChannelResidualExposureAlert(telegram, chatId) }
       : {}),
     ...(deps.injected.breachAlerts === undefined
       ? { breachAlerts: new TradeChannelBreachAlert(telegram, chatId, deps.logger) }

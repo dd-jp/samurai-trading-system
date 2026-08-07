@@ -229,6 +229,7 @@ export const SMOKE_TEST_UNIVERSE: readonly UniverseInstrument[] = [
 // builders in ./production/defaults.ts. Re-exported here so this file remains
 // the one import surface ADR-0004 names.
 export type {
+  AlertChannelSlots,
   DailyMetricsConfig,
   DailyMetricsSourceDeps,
   FeedbackCycleConfig,
