@@ -255,7 +255,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   ): Promise<BrokerAck> {
     const response = await this.call('submitFlatten', () =>
       this.input.client.submitMarketOrder({
-        symbol: instrument,
+        symbol: toAlpacaSymbol(instrument),
         side,
         qty: String(size),
         time_in_force: 'ioc',
@@ -361,7 +361,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       const avgEntry = Number(position.avg_entry_price);
       return [
         {
-          instrument: position.symbol,
+          instrument: fromAlpacaSymbol(position.symbol),
           qty,
           side: position.side === 'long' ? ('buy' as const) : ('sell' as const),
           avg_entry_price: Number.isFinite(avgEntry) ? avgEntry : null,
@@ -385,7 +385,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
     const response = await this.call('submitBracket', () =>
       this.input.client.submitOrder({
-        symbol: order.instrument,
+        symbol: toAlpacaSymbol(order.instrument, order.asset_class),
         side: order.side,
         qty: String(order.size),
         limit_price: String(order.entry),
@@ -550,7 +550,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
     const response = await this.call('rearmProtectiveLegs', () =>
       this.input.client.submitOcoOrder({
-        symbol: instrument,
+        symbol: toAlpacaSymbol(instrument),
         side: closingSide,
         qty: String(qty),
         limit_price: String(target),
@@ -627,7 +627,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
           this.input.client.getOrder(entryOrderId),
         );
 
-        const instrument = symbolOf(entry);
+        const instrument = fromAlpacaSymbol(symbolOf(entry));
         collectFill(entry, 'entry', clientOrderId, instrument, since, fills);
         for (const leg of entry.legs ?? []) {
           collectFill(leg, legName(leg), clientOrderId, instrument, since, fills);
@@ -735,7 +735,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     for (const [clientOrderId, orderId] of [...this.flattens]) {
       try {
         const order = await this.call('fetchNewFills', () => this.input.client.getOrder(orderId));
-        collectFill(order, 'exit', clientOrderId, symbolOf(order), since, fills);
+        collectFill(order, 'exit', clientOrderId, fromAlpacaSymbol(symbolOf(order)), since, fills);
         if (mapOrderState(order.status) !== 'submitted') {
           this.flattens.delete(clientOrderId);
         }
@@ -786,7 +786,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     for (const [lotKey, orderId] of [...this.rearmedLegs]) {
       try {
         const order = await this.call('fetchNewFills', () => this.input.client.getOrder(orderId));
-        const instrument = symbolOf(order);
+        const instrument = fromAlpacaSymbol(symbolOf(order));
         collectFill(order, 'target', lotKey, instrument, since, fills);
         for (const leg of order.legs ?? []) {
           collectFill(leg, legName(leg), lotKey, instrument, since, fills);
@@ -1054,6 +1054,76 @@ function collectFill(
     fee: 0,
     timestamp: filledAt,
   });
+}
+
+/**
+ * Alpaca's crypto trading endpoints reject dash-form symbols outright — an
+ * order for `'BTC-USD'` gets a `422 asset "BTC-USD" not found` (#550, PR
+ * #584, empirically verified) — and only accept slash form (`'BTC/USD'`).
+ * Equities are unaffected either way (`'AAPL'` has no separator to convert).
+ *
+ * This is the ONE seam that must translate: the rest of the system speaks
+ * dash-form crypto exclusively (ADR-0001's `BrokerAdapter` abstraction;
+ * `DEFAULT_UNIVERSE`/`SMOKE_TEST_UNIVERSE` in orchestrator/scheduler.ts and
+ * orchestrator/production.ts both spell it `'BTC-USD'`/`'ETH-USD'`), and no
+ * conversion existed anywhere in the trading path before this ticket. Mirrors
+ * the already-verified conversion the market-data path independently arrived
+ * at for the same reason (`toAlpacaCryptoSymbol`,
+ * market-data-service/sources/alpaca-http-client.ts, #358) — same `-USD`
+ * suffix rule, same believed-correct-because-verified posture. That path is
+ * untouched by this change and does its own conversion on its own requests;
+ * this function does not call it, to keep the two modules' seams independent.
+ *
+ * `submitBracket` carries an explicit `asset_class` on `NativeBracketRequest`
+ * and is asked directly rather than guessing from the symbol's shape.
+ * `submitFlatten`/`rearmProtectiveLegs` receive only a bare `instrument`
+ * string on the `BrokerAdapter` interface — no `asset_class` alongside it —
+ * so `assetClass` is `undefined` at those two call sites and this falls back
+ * to the syntactic `-USD`-suffix rule.
+ *
+ * That fallback is safe for every instrument this adapter is configured to
+ * ever see: `DEFAULT_UNIVERSE`/`SMOKE_TEST_UNIVERSE` list crypto ONLY as
+ * `'BTC-USD'`/`'ETH-USD'` (both `-USD`-suffixed) and equities ONLY as bare
+ * tickers with no separator at all (`'SPY'`, `'QQQ'`, `'AAPL'`, `'TSLA'`) — so
+ * a `-USD` suffix unambiguously means crypto today. It would NOT misfire on a
+ * dotted-class equity ticker such as `'BRK.B'` (no `-USD` suffix, so it
+ * passes through unchanged) — the narrower "`-USD` suffix" test is
+ * deliberately chosen over a broader "contains a dash" one for exactly this
+ * reason, even though neither rule can currently be exercised by a dashed
+ * equity ticker, since the configured universes have none. If a future
+ * instrument violates either assumption (a `-USD`-suffixed equity, or a
+ * crypto pair this adapter must submit through `submitFlatten`/
+ * `rearmProtectiveLegs` without ever having gone through `submitBracket`
+ * first), this must become explicit-list or asset-class-driven instead of
+ * syntactic.
+ */
+function toAlpacaSymbol(instrument: string, assetClass?: 'crypto' | 'stocks'): string {
+  const isCrypto = assetClass === undefined ? instrument.endsWith('-USD') : assetClass === 'crypto';
+  if (!isCrypto || !instrument.endsWith('-USD')) return instrument;
+  return `${instrument.slice(0, -'-USD'.length)}/USD`;
+}
+
+/**
+ * The read-back inverse of `toAlpacaSymbol`: `'BTC/USD'` -> `'BTC-USD'`.
+ * Applied to every symbol the venue hands back before it reaches anything
+ * that compares it against, or stores it under, the repo's own instrument
+ * identity — `getOpenPositions` (Risk's exposure caps, `reconcile()`'s
+ * store-vs-venue diff) and `fetchNewFills`'s three `symbolOf` call sites
+ * (bracket, flatten, re-arm sweeps), which feed the age-out alert an operator
+ * reads. Nothing above this adapter's boundary may ever see Alpaca's slash
+ * form — the same ADR-0001 abstraction `toAlpacaSymbol` documents above.
+ *
+ * Narrowed to a `/USD`-suffix test, mirroring `toAlpacaSymbol`'s own
+ * `-USD`-suffix rule on the way out, rather than "contains a slash" — no
+ * equity symbol Alpaca returns contains a `/` today, so a broader rule would
+ * currently behave identically, but the narrower one is what keeps this
+ * function from silently mangling a future non-crypto venue symbol that
+ * happens to contain a `/` for some other reason (Alpaca has no such symbol
+ * today; a hypothetical options contract or foreign-listing spelling might).
+ * Review comment on PR #588.
+ */
+function fromAlpacaSymbol(symbol: string): string {
+  return symbol.endsWith('/USD') ? `${symbol.slice(0, -'/USD'.length)}-USD` : symbol;
 }
 
 function mapOrderState(status: string): OrderState {

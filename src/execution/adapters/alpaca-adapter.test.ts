@@ -172,6 +172,47 @@ describe('AlpacaBrokerAdapter.submitBracket', () => {
     });
   });
 
+  // #585: Alpaca's trading API rejects dash-form crypto symbols outright
+  // (422 "asset not found") — it only accepts slash form. The repo's own
+  // universe (DEFAULT_UNIVERSE, orchestrator/scheduler.ts) spells crypto as
+  // 'BTC-USD'/'ETH-USD' throughout (ADR-0001's BrokerAdapter abstraction), so
+  // this adapter is the one seam that must translate before the wire call.
+  it('converts a dash-form crypto instrument to Alpaca slash form on submit', async () => {
+    const client = makeClient();
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+    });
+
+    await adapter.submitBracket(
+      makeBracket({ client_order_id: 'key-btc-1', instrument: 'BTC-USD', asset_class: 'crypto' }),
+    );
+
+    expect(client.submitOrder).toHaveBeenCalledWith(expect.objectContaining({ symbol: 'BTC/USD' }));
+  });
+
+  // #585: a symbol already in Alpaca's own slash form must pass through
+  // unmangled — not re-converted into something like 'BTC//USD'. Nothing in
+  // this repo submits an already-slash-form instrument today (the universe
+  // only ever produces dash form), but the conversion function is a plain
+  // string transform with no memory of what called it, so this pins that it
+  // stays a no-op on input it has no work to do on.
+  it('does not double-convert a symbol already in Alpaca slash form', async () => {
+    const client = makeClient();
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+    });
+
+    await adapter.submitBracket(
+      makeBracket({ client_order_id: 'key-btc-2', instrument: 'BTC/USD', asset_class: 'crypto' }),
+    );
+
+    expect(client.submitOrder).toHaveBeenCalledWith(expect.objectContaining({ symbol: 'BTC/USD' }));
+  });
+
   it('acks with the parent + attached OCO leg ids and a submitted state', async () => {
     const adapter = new AlpacaBrokerAdapter({
       client: makeClient(),
@@ -763,6 +804,85 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
     });
   });
 
+  // #585: the venue reports a crypto bracket's own symbol back in slash
+  // form. This is the one place that symbol becomes externally observable
+  // (a `NormalizedFill` carries no `instrument` field at all) — so this is
+  // where the read-back conversion is pinned: the operator-facing alert must
+  // read 'BTC-USD', never Alpaca's wire 'BTC/USD', matching what the rest of
+  // the system (and the operator) calls this instrument everywhere else.
+  it('converts a crypto bracket symbol back to dash form for an unpriced-fill alert', async () => {
+    const clock = new FixedClock(T0);
+    const alerts = recordingAlerts();
+    const adapter = await submitAndSweep({
+      clock,
+      alerts,
+      client: makeClient({
+        getOrder: vi.fn().mockResolvedValue(unpricedOrder({ symbol: 'BTC/USD' })),
+      }),
+    });
+
+    await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
+    clock.advance(DEFAULT_UNPRICED_FILL_AGE_OUT_MS);
+    await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
+
+    expect(alerts.posted[0]).toMatchObject({ instrument: 'BTC-USD' });
+  });
+
+  // #585: same read-back conversion, through the FLATTEN sweep rather than
+  // the bracket one — a separate code path in `fetchNewFills` with its own
+  // `symbolOf` call.
+  it('converts a crypto flatten symbol back to dash form for an unpriced-fill alert', async () => {
+    const clock = new FixedClock(T0);
+    const alerts = recordingAlerts();
+    const submitMarketOrder = vi.fn().mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1' });
+    const adapter = new AlpacaBrokerAdapter({
+      client: makeClient({
+        submitMarketOrder,
+        getOrder: vi
+          .fn()
+          .mockResolvedValue(unpricedOrder({ id: 'flatten-1', symbol: 'BTC/USD', legs: [] })),
+      }),
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: alerts,
+      clock,
+    });
+    await adapter.submitFlatten('BTC-USD', 'sell', 0.5, 'flatten-key');
+
+    await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
+    clock.advance(DEFAULT_UNPRICED_FILL_AGE_OUT_MS);
+    await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
+
+    expect(alerts.posted[0]).toMatchObject({ instrument: 'BTC-USD', leg: 'exit' });
+  });
+
+  // #585: same read-back conversion, through the RE-ARM sweep — the third
+  // and last `symbolOf` call site in `fetchNewFills`.
+  it('converts a crypto re-arm symbol back to dash form for an unpriced-fill alert', async () => {
+    const clock = new FixedClock(T0);
+    const alerts = recordingAlerts();
+    const submitOcoOrder = vi
+      .fn()
+      .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-1', order_class: 'oco', legs: [] });
+    const adapter = new AlpacaBrokerAdapter({
+      client: makeClient({
+        submitOcoOrder,
+        getOrder: vi
+          .fn()
+          .mockResolvedValue(unpricedOrder({ id: 'rearm-1', symbol: 'BTC/USD', legs: [] })),
+      }),
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: alerts,
+      clock,
+    });
+    await adapter.rearmProtectiveLegs('key-1', 'BTC-USD', 'buy', 0.5, 95, 110);
+
+    await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
+    clock.advance(DEFAULT_UNPRICED_FILL_AGE_OUT_MS);
+    await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
+
+    expect(alerts.posted[0]).toMatchObject({ instrument: 'BTC-USD', leg: 'target' });
+  });
+
   it('escalates even on a sweep that other brackets are filling normally', async () => {
     // The path that would otherwise hide it: with any healthy fill in the sweep
     // the aggregate throw is skipped and the failure list is discarded, so the
@@ -1055,6 +1175,23 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     expect(ack.broker_order_ids).toEqual(['flatten-1']);
   });
 
+  // #585: `submitFlatten` receives only a bare `instrument` string — no
+  // `asset_class` alongside it on the `BrokerAdapter` interface — so this
+  // site cannot ask, unlike `submitBracket`. It falls back to a syntactic
+  // rule instead: DEFAULT_UNIVERSE/SMOKE_TEST_UNIVERSE (orchestrator/
+  // scheduler.ts, orchestrator/production.ts) spell every crypto instrument
+  // as '<BASE>-USD' and every equity as a bare ticker with no separator at
+  // all, so a '-USD' suffix unambiguously means crypto for every instrument
+  // this adapter is configured to ever see.
+  it('converts a dash-form crypto instrument to Alpaca slash form when flattening', async () => {
+    const submitMarketOrder = vi.fn().mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1' });
+    const adapter = adapterWith(makeClient({ submitMarketOrder }));
+
+    await adapter.submitFlatten('BTC-USD', 'sell', 0.5, 'flatten-key');
+
+    expect(submitMarketOrder).toHaveBeenCalledWith(expect.objectContaining({ symbol: 'BTC/USD' }));
+  });
+
   // #517: before this, `fetchNewFills` never learned a flatten's order id at
   // all — `submitFlatten` reached the venue but entered neither `brackets`
   // nor any other worklist the sweep polls, so the fill was invisible no
@@ -1271,6 +1408,19 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     });
   });
 
+  // #585: same fallback as `submitFlatten` above — `rearmProtectiveLegs`
+  // also takes only a bare `instrument`, no `asset_class`.
+  it('converts a dash-form crypto instrument to Alpaca slash form when re-arming protective legs', async () => {
+    const submitOcoOrder = vi
+      .fn()
+      .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-1', order_class: 'oco', legs: [] });
+    const adapter = adapterWith(makeClient({ submitOcoOrder }));
+
+    await adapter.rearmProtectiveLegs('key-1', 'BTC-USD', 'buy', 0.5, 95, 110);
+
+    expect(submitOcoOrder).toHaveBeenCalledWith(expect.objectContaining({ symbol: 'BTC/USD' }));
+  });
+
   it("sweeps a re-armed residual and tags its fills under the LOT's own key, target first then stop", async () => {
     const submitOcoOrder = vi.fn().mockResolvedValue({
       ...acceptedOrder(),
@@ -1345,6 +1495,69 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     expect(await adapter.getOpenPositions()).toEqual([
       { instrument: 'AAPL', qty: 10, side: 'buy', avg_entry_price: 190.5 },
       { instrument: 'TSLA', qty: -4, side: 'sell', avg_entry_price: 220 },
+    ]);
+  });
+
+  // #585: the venue reports crypto positions under its own slash form —
+  // this read-back must convert to dash form before anything above the
+  // adapter boundary (Risk's exposure caps, the reconcile diff against
+  // `SharedStore`) compares it against the repo's own 'BTC-USD' identity.
+  // Nothing above `BrokerAdapter` may ever see Alpaca's wire form.
+  it('converts a slash-form crypto position back to dash form', async () => {
+    const adapter = adapterWith(
+      makeClient({
+        getPositions: vi
+          .fn()
+          .mockResolvedValue([
+            { symbol: 'BTC/USD', qty: '0.5', side: 'long', avg_entry_price: '61000' },
+          ]),
+      }),
+    );
+
+    expect(await adapter.getOpenPositions()).toEqual([
+      { instrument: 'BTC-USD', qty: 0.5, side: 'buy', avg_entry_price: 61000 },
+    ]);
+  });
+
+  // #585: a row already reporting dash form (should the venue ever do so)
+  // must not be mangled — the read-back conversion is a no-op on input with
+  // no slash to convert, not a blind dash re-insertion.
+  it('does not double-convert a position already in dash form', async () => {
+    const adapter = adapterWith(
+      makeClient({
+        getPositions: vi
+          .fn()
+          .mockResolvedValue([
+            { symbol: 'BTC-USD', qty: '0.5', side: 'long', avg_entry_price: '61000' },
+          ]),
+      }),
+    );
+
+    expect(await adapter.getOpenPositions()).toEqual([
+      { instrument: 'BTC-USD', qty: 0.5, side: 'buy', avg_entry_price: 61000 },
+    ]);
+  });
+
+  // #585 review (PR #588, Kimi): `fromAlpacaSymbol` is narrowed to a
+  // `/USD`-suffix test, mirroring `toAlpacaSymbol`'s own `-USD`-suffix rule
+  // on the way out, rather than a broader "contains a slash" one — no
+  // equity symbol Alpaca returns contains a `/` today, so this pins that a
+  // slash-bearing symbol NOT ending in `/USD` is left alone rather than
+  // silently mangled (e.g. `'BTC/GBP'` -> `'BTC/GBP'`, not `'BTC-GBP'` or
+  // some other guess this adapter has no basis for).
+  it('leaves a slash-bearing symbol that is not /USD-suffixed untouched on read-back', async () => {
+    const adapter = adapterWith(
+      makeClient({
+        getPositions: vi
+          .fn()
+          .mockResolvedValue([
+            { symbol: 'BTC/GBP', qty: '0.5', side: 'long', avg_entry_price: '48000' },
+          ]),
+      }),
+    );
+
+    expect(await adapter.getOpenPositions()).toEqual([
+      { instrument: 'BTC/GBP', qty: 0.5, side: 'buy', avg_entry_price: 48000 },
     ]);
   });
 
