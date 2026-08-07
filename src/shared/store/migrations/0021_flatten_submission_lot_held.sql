@@ -1,59 +1,38 @@
 -- Each named lot's HELD quantity at write-ahead time (#571), so
--- `ingestFills()` can split a flatten's fill by what each lot actually held
+-- `ingestFills()` splits a flatten's fill by what each lot actually held
 -- rather than by what its entry once filled.
 --
--- WHAT 0020 GOT WRONG. 0020's own comment says `ingestFills()` allocates a
--- partial flatten fill FIFO across `lot_idempotency_keys`, and
--- `redistributeFlattenFills` did that against each lot's persisted ENTRY
--- total. Since #568 the flatten's SIZE is the venue-true held quantity
--- (`filled_size - SUM(exit fills)`), so the two disagree the moment an older
--- named lot has prior exit fills. Two lots on one instrument -- lot A entry
--- 10 with 4 already closed (holds 6), lot B entry 5 with none closed (holds
--- 5) -- flatten 11, fills 11, and the entry-total split hands A ten of them:
--- A's exit total becomes 14 against an entry of 10, so its `ClosedTrade`
--- reports `filled_size` 10 with an exit price weighted over 14 units (wrong
--- realized PnL, wrong R, wrong Feedback Loop label), while B takes 1 of 5 and
--- stays permanently open on quantity the venue no longer holds -- a phantom
--- lot consuming Risk's exposure caps whose re-armed protective legs would
--- fire into nothing and OPEN A REVERSE POSITION (#516's hazard). Multi-lot is
--- not exotic: `decide.ts`'s `scale_in` opens additional same-side lots on one
--- instrument by design.
---
--- WHY THIS COLUMN RATHER THAN RECOMPUTING. The split must be IDENTICAL on
--- every poll: `ingestFills()` dedupes on `broker_fill_id` alone, so a second,
--- differently-sized attempt under the same derived id does not correct the
--- first -- it vanishes behind it and strands the difference forever. Held
--- quantity recomputed at split time is not stable, because this very
--- flatten's own fills reduce it as they persist. An entry total IS stable,
--- which is why 0020's reading of it was chosen, and is simply the wrong
--- number. Journalling held quantity at write-ahead -- once, before the broker
--- call, where `executeExit` already computes it via `heldQuantitiesFor`
--- (shared/held-quantity.ts) -- is both: fixed forever the instant it is
--- written, and the number the flatten was actually sized against.
---
 -- JSON array of REALs, POSITIONALLY PARALLEL to `lot_idempotency_keys` and
--- written in the same statement from the same `heldQuantitiesFor` result, so
--- the pairing cannot drift. `SqliteExecutionStore.getFlattenAttribution`
--- validates the parse (array of finite, non-negative numbers) and refuses a
--- length that does not match the keys, naming the offending row's
--- `idempotency_key` -- an unvalidated cast here would surface as a garbage
--- quantity deep inside the allocation loop, on the money path.
+-- written from the same array in the same statement, so the pairing cannot
+-- drift. `SqliteExecutionStore.getFlattenAttribution` refuses a length that
+-- does not match the keys, and any entry that is not a finite non-negative
+-- number, naming the offending row's `idempotency_key` -- an unvalidated cast
+-- here would surface as a garbage quantity deep inside the allocation loop,
+-- on the money path.
+--
+-- WRITE-AHEAD IS THE POINT, and the reason this is a column rather than a
+-- computation. The split must be IDENTICAL on every poll: `ingestFills()`
+-- dedupes on `broker_fill_id` alone, so a second, differently-sized attempt
+-- under the same derived id does not correct the first -- it vanishes behind
+-- it and strands the difference forever. Held quantity recomputed when the
+-- fill lands is not stable, because this very flatten's own fills reduce it
+-- as they persist. An entry total is stable and is the wrong number: since
+-- #568 the flatten's SIZE is the venue-true held quantity, so the two
+-- disagree whenever a named lot has prior exit fills, and the older lot then
+-- absorbs quantity belonging to its siblings. Journalled once, before the
+-- broker call, this is both fixed and correct.
 --
 -- NULL, not NOT NULL, and deliberately so -- 0020's precedent exactly: a
 -- flatten row written before this migration records no held quantities, and
--- `ingestFills()` must fall back to the pre-#571 entry-total split for it
--- rather than fail parsing a column that was never populated. Such a row can
--- only exist for a flatten submitted before this deploy whose fill has not
--- been ingested yet; it keeps the old behaviour, defect included, and no new
--- one is created after this point.
+-- `ingestFills()` must fall back to the entry-total split for it rather than
+-- fail parsing a column that was never populated. Only a flatten submitted
+-- before this migration whose fill has not been ingested yet can be such a
+-- row.
 --
--- ZERO-HELD LOTS STAY NAMED (the #571 decision). `executeExit` keeps listing
--- a lot holding nothing -- one whose entry fill has not landed yet -- in
--- `lot_idempotency_keys`. Its cancel loop (execute.ts) iterates the held lots
--- INDEPENDENTLY of this journal, so such a lot's protective legs are
--- cancelled either way; dropping it from the journal would remove the only
+-- ZERO-HELD LOTS STAY NAMED. `executeExit` keeps journalling a lot holding
+-- nothing -- one whose entry fill has not landed yet. Its cancel loop
+-- iterates the held lots INDEPENDENTLY of this journal, so such a lot's
+-- protective legs are cancelled either way; dropping it would remove the only
 -- signal that re-arms them (`redistributeFlattenFills`' returned lot-key set,
--- #525) and leave it naked. With this column its share is exactly zero BY
--- CONSTRUCTION rather than incidentally, which is strictly safer than the
--- entry-total split it replaces.
+-- #525) and leave it naked. Its share is then exactly zero.
 ALTER TABLE flatten_submissions ADD COLUMN lot_held_quantities TEXT NULL;

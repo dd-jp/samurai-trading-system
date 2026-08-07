@@ -1223,18 +1223,17 @@ describe('ExecutionImpl.execute', () => {
         expect(await store.getOpenPositions()).toHaveLength(0);
       });
 
-      // Guards the fix's own correctness, not just its intent: an EARLIER
-      // version of `redistributeFlattenFills` seeded each lot's share from
-      // its PRIOR EXIT fills and filtered to lots still open in the CURRENT
-      // poll's `positions` — both of which change between polls as fills get
-      // persisted and lots go terminal. That made the split for a
-      // still-partial lot drift poll to poll, and because `hasFill` dedupes
-      // on `broker_fill_id` alone, a SECOND, differently-sized attempt under
-      // the same derived id did not correct the first — it silently vanished
-      // behind it, stranding the lot's true remainder forever. The fix seeds
-      // from persisted ENTRY fills (fixed once filling stops) and never
-      // filters by "still open", so the split is identical every poll and
-      // dedupes cleanly instead.
+      // The split must be identical on every poll: `hasFill` dedupes on
+      // `broker_fill_id` alone, so a SECOND, differently-sized attempt under
+      // the same derived id does not correct the first — it silently vanishes
+      // behind it, stranding the lot's true remainder forever. A share seeded
+      // from anything that moves as fills persist (each lot's prior EXIT
+      // fills, or a filter to lots still open in the CURRENT poll's
+      // `positions`) drifts exactly that way. The journalled held quantity
+      // the split reads is fixed at the flatten's write-ahead, so it does not.
+      //
+      // Neither lot here has prior exits, so this pins the property for the
+      // simple case; the #571 suite below pins it for a lot that does.
       it('gives a partially-filled multi-lot flatten a stable split across repeated polls, closing what it can and leaving the rest genuinely open', async () => {
         const { store } = openTestExecutionStore();
         let now = NOW;

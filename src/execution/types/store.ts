@@ -202,26 +202,22 @@ export interface FlattenSubmissionWriteAhead {
   size: number;
   submitted_at: Date;
   /**
-   * The lot(s) this flatten is closing (#517) — `executeExit`'s `heldLots`,
-   * by `idempotency_key`, in the `opened_at` order `getOpenPositions()`
-   * already returned them in. Carried on the write-ahead itself, ahead of
-   * the broker call, rather than reconstructed later from whatever is still
-   * open when the fill lands: see migration 0020's comment for why that
-   * later reconstruction is unsafe (a new lot on the same instrument could
-   * open in between and wrongly receive this flatten's fill).
-   */
-  lot_idempotency_keys: readonly string[];
-  /**
-   * What each of those lots HELD as this flatten was submitted (#571) —
-   * `heldQuantitiesFor`'s own result, passed through unflattened, in the same
-   * order as `lot_idempotency_keys` and summing to `size`. The store refuses
-   * a submission whose keys here disagree with `lot_idempotency_keys`, so the
-   * journal can never record a quantity against the wrong lot.
+   * The lot(s) this flatten is closing and what each of them HELD as it was
+   * submitted — `heldQuantitiesFor`'s own result, passed through whole, in
+   * the `opened_at` order `getOpenPositions()` returned the lots in and
+   * summing to `size`.
    *
-   * Journalled rather than re-derived when the fill lands, for the reason
-   * migration 0021 spells out: the split must be identical on every poll or
-   * `broker_fill_id` dedup strands quantity, and held quantity re-derived
-   * later shrinks as this very flatten's own fills persist.
+   * ONE field, not a key list beside a quantity list: the store splits it
+   * across the two columns migrations 0020 and 0021 added, so a caller cannot
+   * hand over a quantity paired with the wrong lot.
+   *
+   * Carried on the write-ahead itself, ahead of the broker call, rather than
+   * reconstructed when the fill lands. The IDENTITY must be (migration 0020:
+   * a new lot could open on the same instrument in between and wrongly
+   * receive this flatten's fill); so must the QUANTITY (migration 0021: the
+   * split must be identical on every poll or `broker_fill_id` dedup strands
+   * the difference, and held quantity re-derived later shrinks as this very
+   * flatten's own fills persist).
    */
   lot_held_quantities: readonly LotHeldQuantity[];
 }

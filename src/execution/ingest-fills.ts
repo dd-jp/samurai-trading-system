@@ -184,27 +184,24 @@ async function redistributeFlattenFills(
     // when `executeExit` journalled the flatten, read straight off the
     // write-ahead row (#571).
     //
-    // Two properties are needed at once, and only a journalled number has
-    // both. STABLE: a DIFFERENT split under the SAME
-    // `broker_fill_id`-derived id is exactly what breaks `hasFill`'s dedup
-    // below (it matches on id alone, so a shrunk second attempt does not
+    // Two properties are needed at once. STABLE: a DIFFERENT split under the
+    // SAME `broker_fill_id`-derived id is exactly what breaks `hasFill`'s
+    // dedup below (it matches on id alone, so a shrunk second attempt does not
     // "correct" the first — it just vanishes behind it, silently stranding
     // the difference), so the share must recompute identically on every poll,
     // for every named lot, regardless of whether it has since closed. And
-    // EXIT-AWARE: the flatten's SIZE is the venue-true held quantity since
-    // #568 (`filled_size` minus recorded exit fills), so a share that ignores
-    // prior exits does not add up to the fill being split.
+    // EXIT-AWARE: the flatten's SIZE is the venue-true held quantity
+    // (`filled_size` minus recorded exit fills), so a share that ignores prior
+    // exits does not add up to the fill being split.
     //
-    // The obvious candidates each have only one. Held quantity re-derived
-    // HERE is exit-aware but not stable — it shrinks as this very flatten's
-    // own fills persist. An entry total is stable but not exit-aware, and
-    // that was the #571 defect: an older lot with prior exit fills took its
-    // whole entry quantity, over-attributing its `ClosedTrade`'s exit price
-    // and leaving a later sibling permanently open on quantity the venue no
-    // longer held. Written once, before the broker call, the journalled held
-    // quantity is fixed the instant it exists AND is the number the flatten
-    // was sized against — `Σ lot_held_quantities === flatten.size`, which is
-    // in turn `executeExit`'s exact-equality guard against `order.size`.
+    // Only a journalled number has both. Held quantity re-derived HERE is
+    // exit-aware but not stable — it shrinks as this very flatten's own fills
+    // persist. An entry total is stable but not exit-aware, so an older lot
+    // with prior exits absorbs quantity belonging to its siblings. Written
+    // once, before the broker call, the journalled held quantity is fixed the
+    // instant it exists AND is the number the flatten was sized against —
+    // `Σ lot_held_quantities === flatten.size`, which is in turn
+    // `executeExit`'s exact-equality guard against `order.size`.
     //
     // The store hands these back already paired with their lot's key, having
     // refused any row where the pairing could not be established, so there is

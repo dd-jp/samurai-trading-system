@@ -427,27 +427,6 @@ export class SqliteExecutionStore implements SharedStore {
    * concurrent caller won the same race, not a generic write failure.
    */
   async writeAheadFlatten(submission: FlattenSubmissionWriteAhead): Promise<void> {
-    // #571: the two lot arrays are stored as parallel JSON columns, so the
-    // journal is only trustworthy if they name the same lots in the same
-    // order. Checked here rather than trusted from the caller: this row is
-    // what `ingestFills()` splits real money against, and a quantity recorded
-    // against the wrong lot would over-close one and strand another with no
-    // symptom until the `ClosedTrade` PnL is already wrong. Refuses rather
-    // than reordering — `executeExit` derives both from ONE
-    // `heldQuantitiesFor` result, so a mismatch is a caller defect, not
-    // something to repair.
-    const heldKeys = submission.lot_held_quantities.map((lot) => lot.idempotency_key);
-    if (
-      heldKeys.length !== submission.lot_idempotency_keys.length ||
-      heldKeys.some((key, index) => key !== submission.lot_idempotency_keys[index])
-    ) {
-      throw new Error(
-        `SqliteExecutionStore.writeAheadFlatten: refusing to journal flatten ` +
-          `'${submission.idempotency_key}' — its held quantities name different lots, or name ` +
-          `them in a different order, than lot_idempotency_keys`,
-      );
-    }
-
     try {
       this.db
         .prepare(
@@ -463,11 +442,10 @@ export class SqliteExecutionStore implements SharedStore {
           submission.side,
           submission.size,
           submission.submitted_at.toISOString(),
-          JSON.stringify(submission.lot_idempotency_keys),
-          // #571: written in the SAME statement as the keys, having just been
-          // checked to name the same lots in the same order. Stored as bare
-          // quantities rather than repeating the keys — the pairing is
-          // positional, and `getFlattenAttribution` re-establishes it.
+          // Both columns projected from the SAME array in the same statement,
+          // so the pairing they encode positionally cannot be wrong here.
+          // `getFlattenAttribution` re-establishes it on the way out.
+          JSON.stringify(submission.lot_held_quantities.map((lot) => lot.idempotency_key)),
           JSON.stringify(submission.lot_held_quantities.map((lot) => lot.held)),
         );
     } catch (cause) {
@@ -574,47 +552,35 @@ export class SqliteExecutionStore implements SharedStore {
     }
 
     const held = parseJsonColumn(idempotency_key, 'lot_held_quantities', row.lot_held_quantities);
-    if (!Array.isArray(held)) {
+    // The two columns encode their pairing positionally, so a length
+    // disagreement would attribute a lot's quantity to a DIFFERENT lot —
+    // silently, and on the money path. Checked before anything is paired, so
+    // what this returns needs no re-checking by its caller.
+    if (!Array.isArray(held) || held.length !== keys.length) {
       throw new Error(
         `SqliteExecutionStore.getFlattenAttribution: flatten_submissions.lot_held_quantities for ` +
-          `'${idempotency_key}' is not a JSON array of finite non-negative numbers, one per lot`,
+          `'${idempotency_key}' is not a JSON array of one quantity per journalled lot ` +
+          `(${keys.length})`,
       );
     }
 
-    // Paired with the keys as it is validated, so the returned shape cannot be
-    // mis-indexed downstream. The two columns are positionally parallel by
-    // construction (`writeAheadFlatten` writes both in one statement, having
-    // checked they name the same lots in the same order); anything else means
-    // the row was written or edited outside that path, and pairing them
-    // regardless would attribute a lot's quantity to a DIFFERENT lot —
-    // silently, and on the money path.
-    //
     // Non-negative as well as finite, because this is a quantity the split
     // hands to the money path: `executeExit` refuses an over-exited lot BEFORE
     // writing this row, so a negative here is a corrupted record, not a state
     // the system can reach. Refusing it (fail closed) is the same posture
     // `executeExit` takes rather than clamping it to something
     // plausible-looking — a share silently skipped as "nothing to allocate"
-    // would strand that lot's quantity with no signal at all. A SHORT array
-    // trips this same check (the missing index reads `undefined`); a LONG one
-    // trips the length check below.
+    // would strand that lot's quantity with no signal at all.
     const paired: LotHeldQuantity[] = [];
     for (const [index, key] of keys.entries()) {
       const quantity: unknown = held[index];
       if (typeof quantity !== 'number' || !Number.isFinite(quantity) || quantity < 0) {
         throw new Error(
           `SqliteExecutionStore.getFlattenAttribution: flatten_submissions.lot_held_quantities ` +
-            `for '${idempotency_key}' is not a JSON array of finite non-negative numbers, one ` +
-            `per lot`,
+            `for '${idempotency_key}' holds an entry that is not a finite non-negative number`,
         );
       }
       paired.push({ idempotency_key: key, held: quantity });
-    }
-    if (held.length !== keys.length) {
-      throw new Error(
-        `SqliteExecutionStore.getFlattenAttribution: flatten_submissions for ` +
-          `'${idempotency_key}' records ${held.length} held quantities for ${keys.length} lot(s)`,
-      );
     }
 
     return { lot_idempotency_keys: keys, lot_held_quantities: paired };

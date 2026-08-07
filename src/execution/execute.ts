@@ -297,27 +297,17 @@ async function executeExit(
     side: order.side,
     size: order.size,
     submitted_at: now,
-    // #517: the lot(s) this flatten is closing, carried on the journal row
-    // itself so `ingestFills()` can attribute the fill back to them without
-    // guessing from whatever is still open when it lands. `perLotHeld` is
-    // `heldLots` mapped one-to-one, so this preserves
-    // `getOpenPositions()`'s `ORDER BY opened_at`, which `ingestFills` relies
-    // on to allocate a partial fill oldest-lot-first.
+    // Which lots this flatten closes AND what each of them holds, so
+    // `ingestFills()` can attribute and SPLIT the fill without re-deriving
+    // either from whatever is still open when it lands (migrations 0020 and
+    // 0021 carry both arguments). `perLotHeld` is `heldLots` mapped
+    // one-to-one, preserving `getOpenPositions()`'s `ORDER BY opened_at`,
+    // which the split relies on to allocate a partial fill oldest-lot-first.
     //
-    // #571: and WHAT EACH LOT HELD, from the same `perLotHeld` — both arrays
-    // read off one derivation in one place so their positions cannot drift
-    // apart. This is the per-lot share `ingestFills()` splits the flatten's
-    // fill by; it must be journalled here, not re-derived when the fill
-    // lands, because by then this flatten's own exit fills have reduced it
-    // and a split that changes between polls strands quantity behind
-    // `hasFill`'s `broker_fill_id` dedup (migration 0021).
-    //
-    // Zero-held lots stay named (#571's recorded decision): the cancel loop
-    // below iterates `heldLots` regardless of this journal, so a lot whose
-    // entry fill has not landed yet has its protective legs cancelled either
-    // way — dropping it here would remove the only thing that re-arms them
-    // (#525). Its share is now exactly zero by construction.
-    lot_idempotency_keys: perLotHeld.map((lot) => lot.idempotency_key),
+    // A lot holding NOTHING — its entry fill has not landed — is still named.
+    // The cancel loop below iterates `heldLots` regardless of this journal, so
+    // its protective legs go either way; dropping it here would remove the
+    // only thing that re-arms them (#525). Its share is then exactly zero.
     lot_held_quantities: perLotHeld,
   });
 
