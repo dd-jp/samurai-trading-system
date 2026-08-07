@@ -133,11 +133,18 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   private readonly brackets = new Map<string, string>();
   /**
    * client_order_id -> the flatten's own Alpaca order id (#517), tracked
-   * in-memory only (#526 tracks making it durable) — see `fetchNewFills`'s
-   * "flatten sweep" comment for the full rationale: why this is a SEPARATE
-   * map from `brackets`, why in-memory is an accepted gap rather than an
-   * oversight, and why (UNLIKE `brackets`) an entry here is pruned once its
-   * order goes terminal, rather than kept for the process lifetime.
+   * in-memory only — see `fetchNewFills`'s "flatten sweep" comment for the
+   * full rationale: why this is a SEPARATE map from `brackets`, and why
+   * (UNLIKE `brackets`) an entry here is pruned once its order goes
+   * terminal, rather than kept for the process lifetime.
+   *
+   * A restart still empties this map, same as before #519/#526 — what
+   * changed is that it is no longer the ONLY way an entry gets in: this
+   * process's OWN `submitFlatten` calls still populate it directly, and
+   * `resumeFlatten` (below) re-populates it for an entry a PRIOR process
+   * submitted, driven by `reconcile()`'s `flatten_submissions` sweep. The map
+   * itself stays in-memory-only by design (`resumeFlatten`'s doc) — durability
+   * lives in the journal, not in a second copy of this cache.
    */
   private readonly flattens = new Map<string, string>();
   /**
@@ -457,12 +464,37 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       ...legOrderIds(order.legs),
     });
 
-    return {
-      client_order_id: clientOrderId,
-      broker_order_ids: [order.id, ...(order.legs ?? []).map((leg) => leg.id)],
-      order_state: mapOrderState(order.status),
-      filled_qty: Number.parseFloat(order.filled_qty),
-    };
+    return normalizeOrder(clientOrderId, order);
+  }
+
+  /**
+   * The flatten-sweep counterpart of `getOrder` (#519, #526) — see
+   * `BrokerAdapter.resumeFlatten`'s doc (types/broker.ts) for the null/throw
+   * contract and why this is a separate method rather than a second call
+   * into `getOrder`.
+   *
+   * Re-populates `flattens`, NOT `brackets` — the whole reason this exists
+   * as its own method. The very next `fetchNewFills` sweep then polls this
+   * order through the ordinary flatten loop, which prices whatever fill it
+   * finds (or none) and prunes the entry itself once the order goes
+   * terminal, exactly as it already does for a flatten this SAME process
+   * submitted — this method only has to get the order id back into that map,
+   * not duplicate any of what happens to it afterward.
+   *
+   * NOT written to `this.state` (the durable bracket index), for
+   * `submitFlatten`'s own reason: a flatten has no legs to arm or resize,
+   * and half-formed bracket-shaped state for one is the wrong shape
+   * (migration 0019's comment).
+   */
+  async resumeFlatten(clientOrderId: string, _instrument: string): Promise<NormalizedOrder | null> {
+    const order = await this.call('resumeFlatten', () =>
+      this.input.client.getOrderByClientOrderId(clientOrderId),
+    );
+    if (order === null) return null;
+
+    this.flattens.set(clientOrderId, order.id);
+
+    return normalizeOrder(clientOrderId, order);
   }
 
   /**
@@ -690,14 +722,16 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // process could poll it again, the venue has already resolved it one way
     // or another, so the ONLY window not surviving a restart costs is the
     // narrow one between `submitFlatten` returning and this sweep next
-    // running. That window is real and NOT closed here: a crash inside it
-    // strands the flatten's fill unattributed exactly as it was before #517,
-    // and this loop never even attempts the order, because it was never
-    // added to `flattens` in the first place. Closing it needs `reconcile()`
-    // to learn about `flatten_submissions` rows — tracked as #526 rather
-    // than built here, mirroring `executeExit`'s own note in execute.ts that
-    // a lost `submitFlatten` response is "left for reconcile to resolve
-    // later" even though reconcile does not yet do that either.
+    // running.
+    //
+    // THAT WINDOW IS NOW CLOSED, not by this map becoming durable, but by
+    // `reconcile()` learning about `flatten_submissions` rows (#519/#526):
+    // on startup (and whenever `reconcile()` next runs), it reads every
+    // unresolved journal row and calls `resumeFlatten` for each, which
+    // re-populates THIS map from the venue's own record of the order —
+    // see `resumeFlatten`'s doc above. A crash inside the window still
+    // empties this map exactly as before; what changed is that the map is no
+    // longer the only place that memory lived.
     //
     // Entries ARE removed once their order reaches a terminal state (#524
     // review, deepseek: "the flatten poll set grows monotonically for the
@@ -726,11 +760,20 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // reason unrelated to this flatten, AFTER this fill was handed off but
     // BEFORE its target lot's own advance is durably written — where the
     // fill is not re-offered on the next poll, because this entry is
-    // already gone. That window is strictly narrower than the restart gap
-    // above (it needs an in-process failure on the EXACT poll a flatten
-    // resolves, not any later restart), and closing it needs the same
-    // `reconcile()`-learns-`flatten_submissions` work #526 already tracks
-    // rather than a second mechanism invented here.
+    // already gone.
+    //
+    // #519/#526 close this ACROSS A RESTART: `flatten_submissions`'s
+    // `fills_swept_at` (migration 0022) is deliberately NOT set by
+    // `ingestFills()` merely because a raw fill was observed — only once
+    // every lot the flatten named has durably applied its share — so THIS
+    // exact failure leaves the journal row unresolved, and the next
+    // `reconcile()` pass's `resumeFlatten` call re-adds the order here for
+    // another attempt. What stays open is the WITHIN-PROCESS gap: this
+    // codebase has no recurring `reconcile()` cadence today (it runs at
+    // startup only — see orchestrator/fill-sync.ts's file doc), so a fill
+    // lost this way is not re-offered until the next restart, not the next
+    // poll. Adding a cadence is a scheduling decision out of scope for
+    // either ticket; the mechanism here is ready for one whenever it exists.
     let flattenFailures = 0;
     for (const [clientOrderId, orderId] of [...this.flattens]) {
       try {
@@ -973,6 +1016,21 @@ function legOrderIds(legs: AlpacaOrderLeg[] | undefined): {
   return {
     stop_order_id: all.find((leg) => legName(leg) === 'stop')?.id ?? null,
     target_order_id: all.find((leg) => legName(leg) === 'target')?.id ?? null,
+  };
+}
+
+/**
+ * The shared normalization `getOrder`/`resumeFlatten` both apply to a raw
+ * Alpaca order — factored out because the two methods diverge only in WHICH
+ * in-process map they warm on the way out (`brackets` vs `flattens`), never
+ * in the shape returned to the caller.
+ */
+function normalizeOrder(clientOrderId: string, order: AlpacaOrder): NormalizedOrder {
+  return {
+    client_order_id: clientOrderId,
+    broker_order_ids: [order.id, ...(order.legs ?? []).map((leg) => leg.id)],
+    order_state: mapOrderState(order.status),
+    filled_qty: Number.parseFloat(order.filled_qty),
   };
 }
 

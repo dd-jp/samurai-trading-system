@@ -168,6 +168,7 @@ import {
   LoggingAnalystSkipAlertChannel,
   LoggingBreachAlertChannel,
   LoggingFlattenOverfillAlertChannel,
+  LoggingFlattenReconcileAlertChannel,
   LoggingHeartbeatChannel,
   LoggingLoosenApprovalChannel,
   LoggingOrphanAlertChannel,
@@ -757,6 +758,12 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // doc) — no `SAMURAI_ALERTS`/config override yet, unlike the escalations
     // above. A phone-reaching transport is a later ticket if this ever fires.
     flattenOverfillAlerts: new LoggingFlattenOverfillAlertChannel(logger),
+    // #519: where `reconcile()`'s flatten sweep escalates a row it could not
+    // settle. Required on `ExecutionInput` for the same "no silent default"
+    // reason `residualExposureAlerts` above is — an omitted channel would
+    // make an unresolved flatten's ambiguity invisible again.
+    flattenReconcileAlerts:
+      config.flattenReconcileAlerts ?? new LoggingFlattenReconcileAlertChannel(logger),
   };
 
   // #464, retargeted at Nous by ADR-0009. The off switch used to be the

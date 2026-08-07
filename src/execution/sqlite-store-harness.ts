@@ -50,6 +50,8 @@ export interface FlattenSubmissionRow {
   lot_idempotency_keys: string | null;
   /** JSON `number[]`, positionally parallel to the keys — NULL before migration 0021 (#571). */
   lot_held_quantities: string | null;
+  /** NULL until `markFlattenFillsSwept` runs — migration 0022 (#519/#526). */
+  fills_swept_at: string | null;
 }
 
 export class TestExecutionStore extends SqliteExecutionStore {
@@ -93,6 +95,19 @@ export class TestExecutionStore extends SqliteExecutionStore {
   ): Promise<void> {
     this.writeLog.push(`resolve-flatten-error:${idempotency_key}`);
     return super.resolveFlattenError(idempotency_key, reason, resolved_at);
+  }
+
+  override async recordFlattenOrderStateObserved(
+    idempotency_key: string,
+    update: { order_state: OrderState; broker_order_ids: string[] },
+  ): Promise<void> {
+    this.writeLog.push(`record-flatten-order-state:${idempotency_key}:${update.order_state}`);
+    return super.recordFlattenOrderStateObserved(idempotency_key, update);
+  }
+
+  override async markFlattenFillsSwept(idempotency_key: string, swept_at: Date): Promise<void> {
+    this.writeLog.push(`mark-flatten-fills-swept:${idempotency_key}`);
+    return super.markFlattenFillsSwept(idempotency_key, swept_at);
   }
 
   /** Every state, including terminal — what `getOpenPositions()` deliberately excludes. */

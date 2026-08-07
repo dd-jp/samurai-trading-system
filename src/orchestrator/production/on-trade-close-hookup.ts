@@ -33,6 +33,7 @@ import type {
   FlattenSubmissionWriteAhead,
   LotAdvance,
   SharedStore,
+  UnresolvedFlattenSubmission,
 } from '../../execution/index.js';
 import type { OnTradeCloseInput } from '../../feedback-loop/index.js';
 import { onTradeClose } from '../../feedback-loop/index.js';
@@ -109,6 +110,17 @@ export function withOnTradeClose(
 
     getFlattenAttribution: (idempotency_key: string): Promise<FlattenAttribution | null> =>
       store.getFlattenAttribution(idempotency_key),
+
+    getUnresolvedFlattens: (): Promise<UnresolvedFlattenSubmission[]> =>
+      store.getUnresolvedFlattens(),
+
+    recordFlattenOrderStateObserved: (
+      idempotency_key: string,
+      update: { order_state: OrderState; broker_order_ids: string[] },
+    ): Promise<void> => store.recordFlattenOrderStateObserved(idempotency_key, update),
+
+    markFlattenFillsSwept: (idempotency_key: string, swept_at: Date): Promise<void> =>
+      store.markFlattenFillsSwept(idempotency_key, swept_at),
 
     applyLotAdvance: async (advance: LotAdvance): Promise<void> => {
       await store.applyLotAdvance(advance);

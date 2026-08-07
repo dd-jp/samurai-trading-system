@@ -106,6 +106,7 @@ import type { SharedStore as SqliteHandle } from '../shared/store/index.js';
 import { TelegramBotApiClient, TelegramChannel } from '../verdict/index.js';
 import { TradeChannelAnalystSkipAlert } from './analyst-skip-alert-channel.js';
 import { TradeChannelBreachAlert } from './breach-alert-channel.js';
+import { TradeChannelFlattenReconcileAlert } from './flatten-reconcile-alert-channel.js';
 import { TradeChannelHeartbeat } from './heartbeat-channel.js';
 import { TradeChannelLoosenApproval } from './loosen-approval-channel.js';
 import { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
@@ -141,14 +142,15 @@ export type AlertsMode = (typeof ALERTS_MODES)[number];
  *
  * **This list used to be hand-maintained against `ProductionConfig` directly,
  * and the same hole — a real channel type with no transport selected for it —
- * was found and patched by hand eight times running: the original three, then
- * #431 (sixth), #465 (seventh), and #551 (eighth, `residualExposureAlerts`,
- * below).** `satisfies readonly (keyof AlertChannelSlots)[]` only ever caught
- * a field that does NOT belong here; it could not catch one that was missing.
+ * was found and patched by hand NINE times running: the original three, then
+ * #431 (sixth), #465 (seventh), #551 (eighth, `residualExposureAlerts`), and
+ * #519 (ninth, `flattenReconcileAlerts`, below).**
+ * `satisfies readonly (keyof AlertChannelSlots)[]` only ever caught a field
+ * that does NOT belong here; it could not catch one that was missing.
  * `ALL_ALERT_CHANNEL_FIELDS_COVERED` below is what closes that direction: a
- * ninth channel added to `AlertChannelSlots` (production/config.ts) without a
+ * tenth channel added to `AlertChannelSlots` (production/config.ts) without a
  * matching entry here now fails `yarn typecheck` instead of waiting for a
- * ninth human to notice.
+ * tenth human to notice.
  */
 export const ALERT_CHANNEL_FIELDS = [
   'heartbeatChannel',
@@ -160,6 +162,12 @@ export const ALERT_CHANNEL_FIELDS = [
   // for it, so an unprotected residual position after a failed re-arm reached
   // only the log stream during an unattended soak.
   'residualExposureAlerts',
+  // #519 — the ninth. Same hole as `residualExposureAlerts`: a real channel
+  // type existed (`FlattenReconcileAlertChannel`) with only a log-only
+  // implementation behind it, so an unresolved flatten — a lot stuck in
+  // genuine ambiguity about whether it is still held — reached only the log
+  // stream during an unattended soak.
+  'flattenReconcileAlerts',
   'breachAlerts',
   'loosenApprovals',
   // #431 — the sixth. Same hole as the original three: a real channel type
@@ -328,8 +336,9 @@ export function buildAlertChannels(deps: {
     level: 'info',
     message:
       `${ENV_VAR}=telegram — orphaned go verdicts, stuck unpriced fills, unprotected residual ` +
-      'positions, kill-threshold breaches and proposed risk-threshold loosenings will be ' +
-      `pushed to the escalation chat (TELEGRAM_CHAT_ID). ${heartbeatClause} ` +
+      'positions, unresolved flatten reconciliations, kill-threshold breaches and proposed ' +
+      `risk-threshold loosenings will be pushed to the escalation chat (TELEGRAM_CHAT_ID). ` +
+      `${heartbeatClause} ` +
       'Keep the escalation chat unmuted. No approval poll is started here: HITL approvals ' +
       'still resolve through ProductionConfig.approvals (#275), and a loosening request is ' +
       'outbound-only — replying to it approves nothing, and the threshold stays put (#366).',
@@ -358,6 +367,12 @@ export function buildAlertChannels(deps: {
     // event an operator must act on, not a beat (#342's split).
     ...(deps.injected.residualExposureAlerts === undefined
       ? { residualExposureAlerts: new TradeChannelResidualExposureAlert(telegram, chatId) }
+      : {}),
+    // #519. The escalation chat, not the heartbeat chat: a flatten reconcile
+    // could not settle is a lot stuck in genuine ambiguity about whether it
+    // is still held — a decision waiting on the operator, not a beat.
+    ...(deps.injected.flattenReconcileAlerts === undefined
+      ? { flattenReconcileAlerts: new TradeChannelFlattenReconcileAlert(telegram, chatId) }
       : {}),
     ...(deps.injected.breachAlerts === undefined
       ? { breachAlerts: new TradeChannelBreachAlert(telegram, chatId, deps.logger) }

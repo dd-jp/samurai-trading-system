@@ -3,6 +3,7 @@ import type {
   FlattenSubmissionWriteAhead,
   LotAdvance,
   SharedStore,
+  UnresolvedFlattenSubmission,
 } from '../../execution/index.js';
 import type { OnTradeCloseInput } from '../../feedback-loop/index.js';
 import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../../shared/index.js';
@@ -88,6 +89,14 @@ class FakeSharedStore implements SharedStore {
   async getFlattenAttribution(_idempotency_key: string): Promise<FlattenAttribution | null> {
     return null;
   }
+  async getUnresolvedFlattens(): Promise<UnresolvedFlattenSubmission[]> {
+    return [];
+  }
+  async recordFlattenOrderStateObserved(
+    _idempotency_key: string,
+    _update: { order_state: OrderState; broker_order_ids: string[] },
+  ): Promise<void> {}
+  async markFlattenFillsSwept(_idempotency_key: string, _swept_at: Date): Promise<void> {}
   async applyLotAdvance(advance: LotAdvance): Promise<void> {
     if (this.shouldThrow) {
       throw new Error('boom');

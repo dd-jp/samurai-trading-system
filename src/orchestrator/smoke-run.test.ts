@@ -53,6 +53,32 @@ function healthyExitPath(overrides: Partial<ExitPathEvidence> = {}): ExitPathEvi
     fullExit: { lotKey: 'idem-exit-1' },
     partialFlatten: { idempotencyKey: 'lot-partial', expectedResidual: 0, protectedQty: 0 },
     twoLotFlatten: { lotKeys: [] },
+    // #519/#526: matches `transactedObservations()`'s 'idem-crash-restart-1'
+    // position (closed) — the fixture pairing the scoped check reads, same
+    // convention as `fullExit` above. `reconcileReport` names the flatten's
+    // OWN key (never the lot's — a flatten writes no `OpenPosition`) with
+    // `action: 'adopted'`, the clean-settle outcome a deterministic offline
+    // broker always produces.
+    crashRestart: {
+      lotKey: 'idem-crash-restart-1',
+      flattenKey: 'idem-crash-restart-1-exit',
+      reconcileReport: {
+        checked: 1,
+        corrected: 1,
+        divergences: [
+          {
+            idempotency_key: 'idem-crash-restart-1-exit',
+            instrument: 'DOGE-USD',
+            store_state: 'submitted',
+            broker_state: 'submitted',
+            action: 'adopted',
+            reason: "flatten journal said 'submitted'; broker reports 'submitted'",
+          },
+        ],
+        timestamp: SMOKE_RUN_INSTANT,
+      },
+    },
+    flattenReconcileAlerts: [],
     ...overrides,
   };
 }
@@ -92,6 +118,18 @@ function transactedObservations(): SmokeObservations {
       {
         idempotency_key: 'idem-exit-1',
         instrument: 'ETH-USD',
+        side: 'buy',
+        requested_size: 10,
+        filled_size: 10,
+        avg_entry_price: 160,
+        order_state: 'closed',
+      },
+      // #519/#526: scenario 4's crash-restart lot — paired with
+      // `healthyExitPath()`'s `crashRestart.lotKey` default, same convention
+      // as `idem-exit-1` above.
+      {
+        idempotency_key: 'idem-crash-restart-1',
+        instrument: 'DOGE-USD',
         side: 'buy',
         requested_size: 10,
         filled_size: 10,
@@ -635,10 +673,12 @@ describe('runSmoke (end-to-end, real composition root)', () => {
     // #576 — the exit path, driven by `runExitPathScenarios` against the same
     // store: scenario 1 closes one lot, scenario 2 leaves its lot open with a
     // protected residual (not closed — that is the point), scenario 3 closes
-    // both of its lots. 1 + 0 + 2 = 3 `ClosedTrade`s; 4 `flatten_submissions`
-    // rows (one per exit call across the three scenarios), every one resolved.
-    expect(result.observations.closedTrades).toHaveLength(3);
-    expect(result.observations.flattenSubmissions).toHaveLength(4);
+    // both of its lots, and (#519/#526) scenario 4 closes its own lot too —
+    // via the RESTARTED Execution's reconcile() + ingestFills(), not the
+    // original one. 1 + 0 + 2 + 1 = 4 `ClosedTrade`s; 5 `flatten_submissions`
+    // rows (one per exit call across the four scenarios), every one resolved.
+    expect(result.observations.closedTrades).toHaveLength(4);
+    expect(result.observations.flattenSubmissions).toHaveLength(5);
     expect(result.observations.flattenSubmissions.every((row) => row.status === 'submitted')).toBe(
       true,
     );
@@ -707,11 +747,14 @@ describe('runSmoke (end-to-end, real composition root)', () => {
     // Eight since #430 added the seeded-mechanism checks, plus three since
     // #576 made `closed_trades`/`flatten_submissions` unconditional
     // requirements AND scoped the #508/#517 check to scenario 1's own lot:
-    // an empty `positions` table means that lookup finds nothing either. Every
-    // other exit-path-SPECIFIC check (ordering, residual, phantom-open) stays
-    // healthy (see `healthyGateOptions`) — this test is about the STORE being
-    // empty, not about the exit path.
-    expect(gate.failures).toHaveLength(11);
+    // an empty `positions` table means that lookup finds nothing either,
+    // plus one since #519/#526 scoped its own crash-restart check to
+    // scenario 4's lot the same way — an empty `positions` table means THAT
+    // lookup finds nothing either. Every other exit-path-SPECIFIC check
+    // (ordering, residual, phantom-open, the reconcile-divergence half of
+    // the #519/#526 check) stays healthy (see `healthyGateOptions`) — this
+    // test is about the STORE being empty, not about the exit path.
+    expect(gate.failures).toHaveLength(12);
     expect(gate.failures.some((failure) => failure.includes('no tick got past Analysts'))).toBe(
       true,
     );
@@ -724,6 +767,9 @@ describe('runSmoke (end-to-end, real composition root)', () => {
     expect(gate.failures.some((failure) => failure.includes('no row in flatten_submissions'))).toBe(
       true,
     );
+    expect(
+      gate.failures.some((failure) => failure.includes("scenario 4's crash-restart flatten")),
+    ).toBe(true);
   });
 });
 

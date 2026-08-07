@@ -81,6 +81,32 @@ function overwriteJournalColumn(
   db.prepare(sql).run(raw, idempotency_key);
 }
 
+/** Raw journal columns `SqliteExecutionStore`'s own port never reads back — test-only, like `overwriteJournalColumn` above. */
+function readFlattenRow(
+  db: Db,
+  idempotency_key: string,
+):
+  | {
+      status: string;
+      order_state: string | null;
+      broker_order_ids: string | null;
+      resolved_at: string | null;
+    }
+  | undefined {
+  return db
+    .prepare(
+      'SELECT status, order_state, broker_order_ids, resolved_at FROM flatten_submissions WHERE idempotency_key = ?',
+    )
+    .get(idempotency_key) as
+    | {
+        status: string;
+        order_state: string | null;
+        broker_order_ids: string | null;
+        resolved_at: string | null;
+      }
+    | undefined;
+}
+
 function makeClosedTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {
   return {
     idempotency_key: 'key-1',
@@ -597,6 +623,99 @@ describe('SqliteExecutionStore', () => {
       await expect(store.getFlattenAttribution('flatten-held-leak')).rejects.not.toThrow(
         /leaked-marker-abc/,
       );
+    });
+  });
+
+  describe('getUnresolvedFlattens / recordFlattenOrderStateObserved / markFlattenFillsSwept (#519, #526)', () => {
+    it('finds a row still at "submitting"', async () => {
+      const { store } = makeStore();
+      await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-stuck' }));
+
+      const unresolved = await store.getUnresolvedFlattens();
+
+      expect(unresolved).toEqual([
+        { idempotency_key: 'flatten-stuck', instrument: 'AAPL', status: 'submitting' },
+      ]);
+    });
+
+    it('finds an acked row whose fills have not been swept yet', async () => {
+      const { store } = makeStore();
+      await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-acked' }));
+      await store.resolveFlattenSubmitted(
+        'flatten-acked',
+        { order_state: 'submitted', broker_order_ids: ['order-1'] },
+        OPENED_AT,
+      );
+
+      const unresolved = await store.getUnresolvedFlattens();
+
+      expect(unresolved).toEqual([
+        { idempotency_key: 'flatten-acked', instrument: 'AAPL', status: 'submitted' },
+      ]);
+    });
+
+    it('excludes a row once markFlattenFillsSwept has run — the bound migration 0022 exists for', async () => {
+      const { store } = makeStore();
+      await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-swept' }));
+      await store.resolveFlattenSubmitted(
+        'flatten-swept',
+        { order_state: 'submitted', broker_order_ids: ['order-1'] },
+        OPENED_AT,
+      );
+      await store.markFlattenFillsSwept('flatten-swept', OPENED_AT);
+
+      expect(await store.getUnresolvedFlattens()).toEqual([]);
+    });
+
+    it('excludes a row resolved to "error" — it provably never reached the broker', async () => {
+      const { store } = makeStore();
+      await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-error' }));
+      await store.resolveFlattenError('flatten-error', 'cancel failed', OPENED_AT);
+
+      expect(await store.getUnresolvedFlattens()).toEqual([]);
+    });
+
+    it('recordFlattenOrderStateObserved updates order_state/broker_order_ids without touching resolved_at or status', async () => {
+      const { db, store } = makeStore();
+      await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-refresh' }));
+      await store.resolveFlattenSubmitted(
+        'flatten-refresh',
+        { order_state: 'submitted', broker_order_ids: ['order-1'] },
+        OPENED_AT,
+      );
+      const beforeRow = readFlattenRow(db, 'flatten-refresh');
+
+      await store.recordFlattenOrderStateObserved('flatten-refresh', {
+        order_state: 'filled',
+        broker_order_ids: ['order-1', 'order-1-fill'],
+      });
+
+      const afterRow = readFlattenRow(db, 'flatten-refresh');
+      expect(afterRow?.order_state).toBe('filled');
+      expect(afterRow?.broker_order_ids).toBe(JSON.stringify(['order-1', 'order-1-fill']));
+      // Unchanged — reconcile() is refreshing a KNOWN-acked row's answer, not
+      // resolving a new ambiguity (types/store.ts's doc on this method).
+      expect(afterRow?.status).toBe(beforeRow?.status);
+      expect(afterRow?.resolved_at).toBe(beforeRow?.resolved_at);
+    });
+
+    it('markFlattenFillsSwept throws naming the key when no such row exists', async () => {
+      const { store } = makeStore();
+
+      await expect(store.markFlattenFillsSwept('never-submitted', OPENED_AT)).rejects.toThrow(
+        'never-submitted',
+      );
+    });
+
+    it('recordFlattenOrderStateObserved throws naming the key when no such row exists', async () => {
+      const { store } = makeStore();
+
+      await expect(
+        store.recordFlattenOrderStateObserved('never-submitted', {
+          order_state: 'filled',
+          broker_order_ids: [],
+        }),
+      ).rejects.toThrow('never-submitted');
     });
   });
 

@@ -33,6 +33,7 @@ import type {
   FlattenSubmissionWriteAhead,
   LotAdvance,
   SharedStore,
+  UnresolvedFlattenSubmission,
 } from './types.js';
 
 /** Terminal `order_state`s — excluded from `getOpenPositions()` (execution-spec.md). */
@@ -584,6 +585,74 @@ export class SqliteExecutionStore implements SharedStore {
     }
 
     return { lot_idempotency_keys: keys, lot_held_quantities: paired };
+  }
+
+  /**
+   * `reconcile()`'s worklist (#519, #526) — see `SharedStore.getUnresolvedFlattens`
+   * for the bound this query implements: `'submitting'` outright, or
+   * `'submitted'` rows not yet confirmed swept (`fills_swept_at IS NULL`).
+   * `'error'` rows are excluded by the `status IN (...)` clause itself —
+   * that status means the flatten provably never reached the broker, so
+   * there is nothing left to ask the venue.
+   */
+  async getUnresolvedFlattens(): Promise<UnresolvedFlattenSubmission[]> {
+    const rows = this.db
+      .prepare(
+        `SELECT idempotency_key, instrument, status
+           FROM flatten_submissions
+          WHERE status = 'submitting'
+             OR (status = 'submitted' AND fills_swept_at IS NULL)`,
+      )
+      .all() as Array<{
+      idempotency_key: string;
+      instrument: string;
+      status: 'submitting' | 'submitted';
+    }>;
+
+    return rows.map((row) => ({
+      idempotency_key: row.idempotency_key,
+      instrument: row.instrument,
+      status: row.status,
+    }));
+  }
+
+  /**
+   * A fresher venue answer on an ALREADY-`'submitted'` row — see the doc on
+   * `SharedStore.recordFlattenOrderStateObserved` for why this must not
+   * touch `resolved_at`/`status` the way `resolveFlattenSubmitted` does.
+   */
+  async recordFlattenOrderStateObserved(
+    idempotency_key: string,
+    update: { order_state: OrderState; broker_order_ids: string[] },
+  ): Promise<void> {
+    const result = this.db
+      .prepare(
+        `UPDATE flatten_submissions
+            SET order_state = ?, broker_order_ids = ?
+          WHERE idempotency_key = ?`,
+      )
+      .run(update.order_state, JSON.stringify(update.broker_order_ids), idempotency_key);
+
+    if (result.changes === 0) {
+      throw new Error(
+        `SqliteExecutionStore.recordFlattenOrderStateObserved: no flatten_submissions row for ` +
+          `'${idempotency_key}'`,
+      );
+    }
+  }
+
+  /** Bounds `getUnresolvedFlattens()` above — see `SharedStore.markFlattenFillsSwept`'s doc for when this may be called. */
+  async markFlattenFillsSwept(idempotency_key: string, swept_at: Date): Promise<void> {
+    const result = this.db
+      .prepare('UPDATE flatten_submissions SET fills_swept_at = ? WHERE idempotency_key = ?')
+      .run(swept_at.toISOString(), idempotency_key);
+
+    if (result.changes === 0) {
+      throw new Error(
+        `SqliteExecutionStore.markFlattenFillsSwept: no flatten_submissions row for ` +
+          `'${idempotency_key}'`,
+      );
+    }
   }
 }
 

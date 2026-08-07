@@ -30,6 +30,7 @@ import type {
   BrokerAdapter,
   ExecutionConfig,
   FlattenOverfillAlertChannel,
+  FlattenReconcileAlertChannel,
   ResidualExposureAlertChannel,
   SharedStore,
 } from '../../execution/index.js';
@@ -514,6 +515,8 @@ export interface ExecutionStepDeps {
   residualExposureAlerts: ResidualExposureAlertChannel;
   /** The #527 over-fill warning — see `ExecutionInput.flattenOverfillAlerts`. */
   flattenOverfillAlerts: FlattenOverfillAlertChannel;
+  /** The #519 unresolved-flatten escalation — see `ExecutionInput.flattenReconcileAlerts`. */
+  flattenReconcileAlerts: FlattenReconcileAlertChannel;
 }
 
 /**
@@ -539,6 +542,7 @@ export function buildExecutionStep(deps: ExecutionStepDeps): TickSteps['executio
       mode: deps.mode,
       residualExposureAlerts: deps.residualExposureAlerts,
       flattenOverfillAlerts: deps.flattenOverfillAlerts,
+      flattenReconcileAlerts: deps.flattenReconcileAlerts,
     });
     return execution.execute(verdict);
   };
@@ -572,6 +576,7 @@ export function buildExecutionSurface(deps: ExecutionStepDeps, traceId: string):
     mode: deps.mode,
     residualExposureAlerts: deps.residualExposureAlerts,
     flattenOverfillAlerts: deps.flattenOverfillAlerts,
+    flattenReconcileAlerts: deps.flattenReconcileAlerts,
   });
 }
 

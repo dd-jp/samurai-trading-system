@@ -108,6 +108,10 @@ class ScriptedBroker implements BrokerAdapter {
   async getOrder(): Promise<NormalizedOrder | null> {
     return null;
   }
+  /** #519/#526's reconcile-only surface — likewise untouched by the fill loop. */
+  async resumeFlatten(): Promise<never> {
+    throw new Error('ScriptedBroker.resumeFlatten: ingestFills() does not reconcile');
+  }
   /** #429's intervention path — likewise untouched by the fill loop. */
   async submitFlatten(): Promise<never> {
     throw new Error('ScriptedBroker.submitFlatten: ingestFills() does not flatten');
@@ -188,6 +192,8 @@ function makeInput(
     mode: 'backtest',
     residualExposureAlerts,
     flattenOverfillAlerts,
+    // #519: `ingestFills()` never reconciles, so this is never posted to.
+    flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
   };
 }
 
@@ -593,6 +599,154 @@ describe('ExecutionImpl.ingestFills', () => {
       // And the flatten's fill really was not attributed: the lot is still
       // whole, with only its entry fill on record.
       expect(await store.getFills('key-1')).toHaveLength(1);
+    });
+  });
+
+  // #519/#526: bounds `reconcile()`'s flatten-journal rescan (migration 0022) —
+  // see `SharedStore.markFlattenFillsSwept`'s doc for why the mark may only
+  // fire once every named lot has durably advanced, never merely once a raw
+  // fill was observed.
+  describe('markFlattenFillsSwept gating (#519, #526)', () => {
+    it('marks a flatten swept once its named lot durably advances', async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
+      const entryOnly = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+      ]);
+      await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
+
+      await store.writeAheadFlatten({
+        idempotency_key: 'flatten-1',
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        side: 'sell',
+        size: 10,
+        submitted_at: OPENED_AT,
+        lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+      });
+      const withFlatten = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'flatten-1',
+          broker_fill_id: 'f1',
+          leg: 'exit',
+          qty: 10,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+      store.writeLog.length = 0;
+
+      await new ExecutionImpl(makeInput(withFlatten, store)).ingestFills();
+
+      expect(store.writeLog).toContain('mark-flatten-fills-swept:flatten-1');
+      expect(await store.getClosedTrades()).toHaveLength(1);
+    });
+
+    it('does NOT mark a flatten swept when a lot it named fails to advance this poll', async () => {
+      class FlakyAdvanceStore extends TestExecutionStore {
+        override async applyLotAdvance(advance: LotAdvance): Promise<void> {
+          if (advance.idempotency_key === 'key-1') {
+            throw new Error('simulated store outage on applyLotAdvance');
+          }
+          return super.applyLotAdvance(advance);
+        }
+      }
+
+      const { db } = openTestExecutionStore();
+      const store = new FlakyAdvanceStore(db);
+      await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
+      const entryOnly = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+      ]);
+      // `FlakyAdvanceStore.applyLotAdvance` throws for EVERY advance to
+      // 'key-1', including the entry fill's own — so the entry has to be
+      // seeded through a separate, healthy `TestExecutionStore` over the
+      // SAME underlying db first, then the flaky one takes over for the
+      // flatten poll below.
+      const seedStore = new TestExecutionStore(db);
+      await new ExecutionImpl(makeInput(entryOnly, seedStore)).ingestFills();
+
+      await store.writeAheadFlatten({
+        idempotency_key: 'flatten-1',
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        side: 'sell',
+        size: 10,
+        submitted_at: OPENED_AT,
+        lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+      });
+      const withFlatten = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'flatten-1',
+          broker_fill_id: 'f1',
+          leg: 'exit',
+          qty: 10,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+      store.writeLog.length = 0;
+
+      await expect(new ExecutionImpl(makeInput(withFlatten, store)).ingestFills()).rejects.toThrow(
+        'key-1',
+      );
+
+      // Not marked swept — the lot's own advance failed, so the next
+      // reconcile() pass must still be able to find this row and re-attempt
+      // the sweep (self-healing, see the store method's own doc).
+      expect(store.writeLog).not.toContain('mark-flatten-fills-swept:flatten-1');
+      expect(await store.getFlattenSubmission('flatten-1')).toMatchObject({
+        idempotency_key: 'flatten-1',
+      });
+    });
+
+    it('does NOT mark a flatten swept when its own redistribution fails (attribution corrupt)', async () => {
+      class FlakyEntrySizesStore extends TestExecutionStore {
+        override async getEntryFillSizes(): Promise<Map<string, number>> {
+          throw new Error('simulated store outage on getEntryFillSizes');
+        }
+      }
+
+      const { db } = openTestExecutionStore();
+      const store = new FlakyEntrySizesStore(db);
+      await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
+      const entryOnly = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+      ]);
+      await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
+
+      await store.writeAheadFlatten({
+        idempotency_key: 'flatten-1',
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        side: 'sell',
+        size: 10,
+        submitted_at: OPENED_AT,
+        lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+      });
+      // NULLed to a pre-migration-0021 row, routing the split through the
+      // now-flaky `getEntryFillSizes` fallback — same technique the existing
+      // #575 containment test above uses.
+      db.prepare(
+        'UPDATE flatten_submissions SET lot_held_quantities = NULL WHERE idempotency_key = ?',
+      ).run('flatten-1');
+      const withFlatten = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'flatten-1',
+          broker_fill_id: 'f1',
+          leg: 'exit',
+          qty: 10,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+      store.writeLog.length = 0;
+
+      await expect(new ExecutionImpl(makeInput(withFlatten, store)).ingestFills()).rejects.toThrow(
+        'flatten-1',
+      );
+
+      expect(store.writeLog).not.toContain('mark-flatten-fills-swept:flatten-1');
     });
   });
 
