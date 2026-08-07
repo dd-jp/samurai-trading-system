@@ -21,7 +21,11 @@
  *     discards the outstanding plan when the next one arrives.
  */
 
-import type { PipelineLane, PipelineStage, PipelineView } from '../../../dashboard/pipeline-types.ts';
+import type {
+  PipelineLane,
+  PipelineStage,
+  PipelineView,
+} from '../../../dashboard/pipeline-types.ts';
 import { type RoomId, roomFor, roomIndex, stageAt } from './room-layout.ts';
 
 /** Per-hop duration floor — a hop shorter than this reads as a teleport. */
@@ -112,13 +116,17 @@ export function computeWalkPlan(
         motions.push({ kind: 'snap', instrument: lane.instrument, room });
         continue;
       }
-      motions.push(buildWalk(lane, next, prevRoom, fromIdx, toIdx, anchorTime(lane, prevRoom)));
+      motions.push(
+        walkOrSnap(lane, next, prevRoom, fromIdx, toIdx, anchorTime(lane, prevRoom), room),
+      );
       continue;
     }
 
     // Trace rotated (or a fresh trace left the Lobby): back to Analysts, then
     // forward through the NEW trace's recorded stages (rule 7).
-    motions.push(buildWalk(lane, next, prevRoom, -1, roomIndex(room), parseTime(lane.started_at)));
+    motions.push(
+      walkOrSnap(lane, next, prevRoom, -1, roomIndex(room), parseTime(lane.started_at), room),
+    );
   }
 
   for (const prevLane of prev.lanes) {
@@ -132,6 +140,30 @@ export function computeWalkPlan(
     if (motion.kind === 'walk' && motion.total_ms > total) total = motion.total_ms;
   }
   return { motions, total_ms: total };
+}
+
+/**
+ * `buildWalk`, degrading to a snap when there is nothing to walk (PR #582
+ * review). A rotated lane whose new trace has a `trace_id` but no reached
+ * cells yet stands in the Lobby, so `toIdx` is -1 and the hop range is empty
+ * — and a zero-hop `walk` is not a walk, it is a placement that the renderer
+ * would animate for 0ms. Any other empty-step case degrades the same way.
+ */
+function walkOrSnap(
+  lane: PipelineLane,
+  view: PipelineView,
+  from: RoomId,
+  fromIdx: number,
+  toIdx: number,
+  anchor: number | null,
+  destination: RoomId,
+): ChipMotion {
+  if (toIdx < 0) return { kind: 'snap', instrument: lane.instrument, room: destination };
+  const walk = buildWalk(lane, view, from, fromIdx, toIdx, anchor);
+  if (walk.hops.length === 0) {
+    return { kind: 'snap', instrument: lane.instrument, room: destination };
+  }
+  return walk;
 }
 
 /**

@@ -24,9 +24,19 @@ const USD = new Intl.NumberFormat('en-US', {
 export function formatStageDuration(ms: number | null): string {
   if (ms === null) return EM_DASH;
   if (ms < 1_000) return `${Math.round(ms)}ms`;
-  if (ms < 60_000) return `${(ms / 1_000).toFixed(1)}s`;
-  const minutes = Math.floor(ms / 60_000);
-  const seconds = Math.round((ms % 60_000) / 1_000);
+
+  // Branch on the ROUNDED value, not the raw one, and round exactly once per
+  // branch. Rounding after choosing the branch is what produced two carry
+  // bugs (PR #582 review): `59_950ms` rendered `60.0s` because `toFixed(1)`
+  // rounded up inside the seconds branch, and `3_599_500ms` rendered
+  // `59m 60s` because the minutes were floored off the raw value while the
+  // seconds were rounded up independently of them.
+  const tenths = Math.round(ms / 100);
+  if (tenths < 600) return `${(tenths / 10).toFixed(1)}s`;
+
+  const totalSeconds = Math.round(ms / 1_000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
   return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
 }
 

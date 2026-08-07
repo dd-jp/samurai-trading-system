@@ -6,7 +6,8 @@ const NO_OPTS = { firstPaint: false, snapOnly: false };
 
 function walkFor(plan: ReturnType<typeof computeWalkPlan>, instrument: string) {
   const motion = plan.motions.find((m) => m.instrument === instrument);
-  if (motion?.kind !== 'walk') throw new Error(`expected walk for ${instrument}, got ${motion?.kind}`);
+  if (motion?.kind !== 'walk')
+    throw new Error(`expected walk for ${instrument}, got ${motion?.kind}`);
   return motion;
 }
 
@@ -136,6 +137,19 @@ describe('computeWalkPlan — trace rotation', () => {
     expect(walk.hops.map((h) => h.room)).toEqual(['analysts', 'debate', 'trader']);
   });
 
+  it('snaps when the rotated-to trace has no reached cells yet', () => {
+    // PR #582 review: a lane with a trace_id but no reached cells stands in
+    // the Lobby, so the hop range was empty and this emitted a 0-hop `walk`
+    // — a placement the renderer would "animate" for 0ms — instead of a snap.
+    const prev = makeView([doneThrough('BTC-USD', 'old', 'verdict', { outcome: 'no_go' })]);
+    const next = makeView([
+      makeLane({ instrument: 'BTC-USD', trace_id: 'new', outcome: 'in_flight', started_at: at(0) }),
+    ]);
+    expect(computeWalkPlan(prev, next, NO_OPTS).motions).toEqual([
+      { kind: 'snap', instrument: 'BTC-USD', room: 'lobby' },
+    ]);
+  });
+
   it('walks a chip leaving the Lobby to Analysts and forward when a trace starts', () => {
     const prev = makeView([makeLane({ instrument: 'SPY', outcome: 'idle' })]);
     const next = makeView([doneThrough('SPY', 'fresh', 'debate')]);
@@ -198,7 +212,11 @@ describe('computeWalkPlan — durations', () => {
     // unclamped that is 7 x 450 = 3150ms, which must scale down to <= 1200.
     const prev = makeView([doneThrough('BTC-USD', 'old', 'execution', { outcome: 'go' })]);
     const next = makeView([
-      doneThrough('BTC-USD', 'new', 'execution', { startMs: 600_000, stepMs: 60_000, outcome: 'go' }),
+      doneThrough('BTC-USD', 'new', 'execution', {
+        startMs: 600_000,
+        stepMs: 60_000,
+        outcome: 'go',
+      }),
     ]);
     const walk = walkFor(computeWalkPlan(prev, next, NO_OPTS), 'BTC-USD');
     expect(walk.hops).toHaveLength(7);

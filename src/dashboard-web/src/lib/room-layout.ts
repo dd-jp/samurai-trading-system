@@ -13,7 +13,11 @@
  *  - otherwise the Lobby — an idle lane reads as idle, it never vanishes.
  */
 
-import type { PipelineLane, PipelineStage, PipelineView } from '../../../dashboard/pipeline-types.ts';
+import type {
+  PipelineLane,
+  PipelineStage,
+  PipelineView,
+} from '../../../dashboard/pipeline-types.ts';
 
 /** A room in the theater: one of the seven stages, or the Lobby for idle lanes. */
 export type RoomId = PipelineStage | 'lobby';

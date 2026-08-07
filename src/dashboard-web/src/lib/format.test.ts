@@ -23,6 +23,21 @@ describe('formatStageDuration', () => {
     expect(formatStageDuration(65_000)).toBe('1m 05s');
     expect(formatStageDuration(754_000)).toBe('12m 34s');
   });
+
+  it('carries rounded seconds into the minute rather than rendering 60s', () => {
+    // PR #582 review: the seconds were rounded independently of the floored
+    // minutes, so these rendered '59m 60s' / '12m 60s'.
+    expect(formatStageDuration(3_599_500)).toBe('60m 00s');
+    expect(formatStageDuration(779_500)).toBe('13m 00s');
+  });
+
+  it('promotes a sub-minute duration that rounds up to 60s into the minute branch', () => {
+    // PR #582 review: `toFixed(1)` rounded these up inside the seconds
+    // branch, rendering '60.0s' just below the 60_000ms boundary.
+    expect(formatStageDuration(59_950)).toBe('1m 00s');
+    expect(formatStageDuration(59_999)).toBe('1m 00s');
+    expect(formatStageDuration(59_949)).toBe('59.9s');
+  });
 });
 
 describe('formatClockUtc', () => {
