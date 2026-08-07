@@ -13,6 +13,7 @@
     "typecheck": "tsc -p tsconfig.build.json --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:local": "vitest run --changed origin/main",
     "test:watch": "vitest",
     "format": "biome format .",
     "lint": "biome check .",
