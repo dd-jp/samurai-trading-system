@@ -488,7 +488,7 @@ describe('buildDebateStep latency budget (#374)', () => {
     });
 
     // 30s, not 60s — the per-asset-class lookup #374 called out as the
-    // reason this could not be a one-line wire. (15s -> 30s in #581.)
+    // reason this could not be a one-line wire.
     await vi.advanceTimersByTimeAsync(30_000);
     const result = await pending;
 

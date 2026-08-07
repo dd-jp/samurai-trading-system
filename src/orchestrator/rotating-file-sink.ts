@@ -59,7 +59,7 @@
  * | 20 log lines in a tick | 0.056 ms |
  * | 1000 log lines in a tick | 2.8 ms |
  *
- * Against `DEFAULT_TICK_INTERVAL_MS` (60 s), `LATENCY_BUDGET_MS.crypto` (15 s)
+ * Against `DEFAULT_TICK_INTERVAL_MS` (60 s), `LATENCY_BUDGET_MS.crypto` (30 s)
  * and the Alpaca broker client's own 10 s request timeout, a realistic tick
  * spends **0.0004%** of the debate budget in this sink. The expensive case —
  * the close + 10-rename shift + reopen — costs ~5 ms and fires once per 16 MiB,

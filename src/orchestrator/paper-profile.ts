@@ -1415,20 +1415,21 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
      * nothing is skipped, and the "tick skipped: previous tick still running"
      * warn stays unreachable.
      *
-     * Arithmetic, at `LATENCY_BUDGET_MS` (crypto 15s, stocks 60s) and
+     * Arithmetic, at `LATENCY_BUDGET_MS` (crypto 30s, stocks 60s — #581) and
      * `DEFAULT_TICK_INTERVAL_MS` (60s):
      *
-     * - Session hours (6.5h): a pass is 4x60s + 2x15s = 270s, so a cycle is
-     *   ~330s -> ~71 cycles -> ~426 debates.
-     * - Outside the session (17.5h): a pass is 2x15s = 30s, cycle ~90s ->
-     *   ~700 cycles -> ~1,400 debates.
-     * - Weekday total ~1,800 debates; a weekend day is crypto-only, ~1,900.
+     * - Session hours (6.5h): a pass is 4x60s + 2x30s = 300s, so a cycle is
+     *   ~360s -> ~65 cycles -> ~390 debates.
+     * - Outside the session (17.5h): a pass is 2x30s = 60s, cycle ~120s ->
+     *   ~525 cycles -> ~1,050 debates.
+     * - Weekday total ~1,400 debates; a weekend day is crypto-only, ~1,450.
      *
      * At the debate role's default model (`anthropic/claude-haiku-4.5`,
      * $0.80/M in and $4.00/M out through Nous — ADR-0009) and 3 LLM calls per
-     * round over 1-3 rounds (`MAX_ROUNDS`, early exit on convergence), a debate
-     * is roughly $0.010-$0.036. So **~$36/day, with a defensible range of
-     * $20-$72, and ~$500 over the 14-day soak** — which is why the cap and the
+     * round — crypto capped at 1 round, stocks 1-3 rounds
+     * (`MAX_ROUNDS_BY_ASSET_CLASS`, early exit on convergence) — a debate
+     * is roughly $0.008-$0.036. So **~$30/day, with a defensible range of
+     * $20-$72, and ~$400 over the 14-day soak** — which is why the cap and the
      * cadence below both bind.
      *
      * That is the arithmetic BEFORE ADR-0008's 15-minute cadence, which is

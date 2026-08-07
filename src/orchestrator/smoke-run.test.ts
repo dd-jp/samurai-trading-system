@@ -271,6 +271,31 @@ describe('evaluateSmokeGate', () => {
     expect(gate.failures.some((failure) => failure.includes('#388 defect'))).toBe(true);
   });
 
+  it('fails when a crypto debate ran more rounds than the crypto cap (#581)', () => {
+    const observations = transactedObservations();
+    const gate = evaluateSmokeGate(
+      {
+        ...observations,
+        debates: observations.debates.map((debate) => ({ ...debate, rounds: 2 })),
+      },
+      healthyGateOptions(),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('crypto cap'))).toBe(true);
+  });
+
+  it('fails when a class meters more LLM calls than its per-debate worst case (#581)', () => {
+    const gate = evaluateSmokeGate(transactedObservations(), {
+      ...healthyGateOptions(),
+      // 5 calls for one crypto debate: one above the 1-round worst case of 4.
+      llmRateLimiterSnapshot: { crypto: { debatesUsed: 1, llmCallsUsed: 5 } },
+    });
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('under-reserving'))).toBe(true);
+  });
+
   it('does not demand metering from a run that never debated — that fails as #364 instead', () => {
     // Ordering matters for the operator: a run with no debates must be told
     // the debate never happened, not that the limiter saw nothing.
