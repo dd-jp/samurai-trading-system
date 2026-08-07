@@ -991,3 +991,178 @@ describe('AlpacaHttpDataClient — outbound pacing (#391)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
+
+/**
+ * Wire validation (issue #509). Before this ticket `toAlpacaBar` was a bare
+ * passthrough and there was no `Number.isFinite` anywhere in this file — a
+ * vendor response that parsed as JSON but had the wrong shape (a truncated
+ * body missing fields, or a field of the wrong type) would flow straight
+ * into an indicator/stop calculation as `NaN` or `undefined`. Every case here
+ * asserts the classified `AlpacaDataProviderError`, never a raw `TypeError`
+ * or a structurally-wrong object.
+ */
+describe('AlpacaHttpDataClient — wire validation (#509)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('getBars (equities) rejects a truncated bar missing required fields', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ bars: [{ t: '2026-07-01T00:00:00Z', o: 1, h: 2 }] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpDataClient({
+      assetClass: 'stocks',
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+    });
+
+    await expect(
+      client.getBars('AAPL', '1d', new Date('2026-07-02T00:00:00Z'), 1, 'allow'),
+    ).rejects.toBeInstanceOf(AlpacaDataProviderError);
+  });
+
+  it('getBars (equities) rejects a bar whose OHLCV field is the wrong type (out-of-type body)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        bars: [{ t: '2026-07-01T00:00:00Z', o: '1', h: 2, l: 0.5, c: 1.5, v: 100 }],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpDataClient({
+      assetClass: 'stocks',
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+    });
+
+    await expect(
+      client.getBars('AAPL', '1d', new Date('2026-07-02T00:00:00Z'), 1, 'allow'),
+    ).rejects.toBeInstanceOf(AlpacaDataProviderError);
+  });
+
+  it('getBars (equities) rejects a bar carrying a non-finite OHLCV field', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        bars: [{ t: '2026-07-01T00:00:00Z', o: Number.NaN, h: 2, l: 0.5, c: 1.5, v: 100 }],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpDataClient({
+      assetClass: 'stocks',
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+    });
+
+    await expect(
+      client.getBars('AAPL', '1d', new Date('2026-07-02T00:00:00Z'), 1, 'allow'),
+    ).rejects.toBeInstanceOf(AlpacaDataProviderError);
+  });
+
+  it('getBars (equities) rejects a response body that is not an object at all', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(null));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpDataClient({
+      assetClass: 'stocks',
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+    });
+
+    await expect(
+      client.getBars('AAPL', '1d', new Date('2026-07-02T00:00:00Z'), 1, 'allow'),
+    ).rejects.toBeInstanceOf(AlpacaDataProviderError);
+  });
+
+  it('getBars (crypto) rejects a truncated bar in the keyed response', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ bars: { 'BTC/USD': [{ t: '2026-07-01T00:00:00Z' }] } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpDataClient({
+      assetClass: 'crypto',
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+    });
+
+    await expect(
+      client.getBars('BTC-USD', '1m', new Date('2026-07-02T00:00:00Z'), 1, 'allow'),
+    ).rejects.toBeInstanceOf(AlpacaDataProviderError);
+  });
+
+  it('getBars (crypto) rejects a keyed bars value that is not an array', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ bars: { 'BTC/USD': { not: 'an array' } } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpDataClient({
+      assetClass: 'crypto',
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+    });
+
+    await expect(
+      client.getBars('BTC-USD', '1m', new Date('2026-07-02T00:00:00Z'), 1, 'allow'),
+    ).rejects.toBeInstanceOf(AlpacaDataProviderError);
+  });
+
+  it('getLatestQuote (equities) rejects a quote missing required fields (truncated body)', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ quote: { t: '2026-07-01T00:00:00Z' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpDataClient({
+      assetClass: 'stocks',
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+    });
+
+    await expect(client.getLatestQuote('AAPL')).rejects.toBeInstanceOf(AlpacaDataProviderError);
+  });
+
+  it('getLatestQuote (equities) rejects a quote whose ap/bp are the wrong type (out-of-type body)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        quote: { t: '2026-07-01T00:00:00Z', ap: '101', bp: 100 },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpDataClient({
+      assetClass: 'stocks',
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+    });
+
+    await expect(client.getLatestQuote('AAPL')).rejects.toBeInstanceOf(AlpacaDataProviderError);
+  });
+
+  it('getLatestQuote (crypto) rejects a malformed quote for the requested symbol', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        quotes: {
+          'BTC/USD': { t: '2026-07-01T00:00:00Z', ap: Number.POSITIVE_INFINITY, bp: 30000 },
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpDataClient({
+      assetClass: 'crypto',
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+    });
+
+    await expect(client.getLatestQuote('BTC-USD')).rejects.toBeInstanceOf(AlpacaDataProviderError);
+  });
+});

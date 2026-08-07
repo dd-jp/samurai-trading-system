@@ -1,5 +1,5 @@
 import { AlpacaBrokerProviderError, AlpacaBrokerRateLimitError } from './alpaca-broker-errors.js';
-import type { AlpacaBracketOrderRequest } from './alpaca-client.js';
+import type { AlpacaBracketOrderRequest, AlpacaMarketOrderRequest } from './alpaca-client.js';
 import { AlpacaHttpBrokerClient } from './alpaca-http-client.js';
 
 const FAKE_KEY = 'test-fake-alpaca-key';
@@ -39,6 +39,15 @@ const ORDER_RESPONSE = {
   filled_qty: '0',
   filled_avg_price: null,
   filled_at: null,
+};
+
+/** The flatten (#429) — a plain market order, never a bracket. */
+const MARKET_ORDER_REQUEST: AlpacaMarketOrderRequest = {
+  symbol: 'AAPL',
+  side: 'sell',
+  qty: '1',
+  time_in_force: 'ioc',
+  client_order_id: 'flatten-123',
 };
 
 describe('AlpacaHttpBrokerClient', () => {
@@ -120,6 +129,31 @@ describe('AlpacaHttpBrokerClient', () => {
     const result = await client.submitOrder(ORDER_REQUEST);
 
     expect(result).toEqual(bracketResponse);
+  });
+
+  it('submitMarketOrder (the flatten, #429) POSTs to /v2/orders and returns the parsed order', async () => {
+    const marketResponse = {
+      id: 'alpaca-order-2',
+      client_order_id: 'flatten-123',
+      symbol: 'AAPL',
+      side: 'sell',
+      qty: '1',
+      order_class: 'simple',
+      status: 'new',
+      filled_qty: '0',
+      filled_avg_price: null,
+      filled_at: null,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(marketResponse));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+    const result = await client.submitMarketOrder(MARKET_ORDER_REQUEST);
+
+    expect(result).toEqual(marketResponse);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://paper-api.alpaca.markets/v2/orders');
+    expect(JSON.parse(init.body as string)).toEqual({ ...MARKET_ORDER_REQUEST, type: 'market' });
   });
 
   it('omits content-type on bodyless (GET) requests', async () => {
@@ -497,5 +531,285 @@ describe('AlpacaHttpBrokerClient — paper/live environment guard (#293)', () =>
       expect(message).not.toContain(FAKE_KEY);
       expect(message).not.toContain(FAKE_SECRET);
     }
+  });
+});
+
+/**
+ * Wire validation (issue #509). Before this ticket `request<T>` was a bare
+ * `(await response.json()) as T` — every field of every response shape rode
+ * along unvalidated through the ONE client whose fields feed money math
+ * directly. Every case here asserts the classified `AlpacaBrokerProviderError`,
+ * never a structurally-wrong object reaching `alpaca-adapter.ts`.
+ */
+describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('submitOrder rejects a truncated order missing required fields', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 'alpaca-order-1' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.submitOrder(ORDER_REQUEST)).rejects.toBeInstanceOf(
+      AlpacaBrokerProviderError,
+    );
+  });
+
+  it('submitOrder rejects an order whose filled_qty is the wrong type (out-of-type body)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ...ORDER_RESPONSE, filled_qty: 0 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.submitOrder(ORDER_REQUEST)).rejects.toBeInstanceOf(
+      AlpacaBrokerProviderError,
+    );
+  });
+
+  it('submitOrder rejects an order whose filled_qty does not parse to a finite number', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ ...ORDER_RESPONSE, filled_qty: 'N/A' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.submitOrder(ORDER_REQUEST)).rejects.toBeInstanceOf(
+      AlpacaBrokerProviderError,
+    );
+  });
+
+  it('submitOrder rejects a response body that is not an object at all', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(null));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.submitOrder(ORDER_REQUEST)).rejects.toBeInstanceOf(
+      AlpacaBrokerProviderError,
+    );
+  });
+
+  it('submitOrder accepts an order missing client_order_id/qty/side/order_class (unread-off-a-response fields)', async () => {
+    // `submitBracket` reads these four off its own REQUEST object, never off
+    // the response (grepped: no `response.client_order_id`/`.qty`/`.side`/
+    // `.order_class` in alpaca-adapter.ts) — and `submitMarketOrder` (the
+    // flatten, #429) has no verified live sample confirming Alpaca always
+    // echoes `order_class` on a plain market order. Requiring them here would
+    // be an unverified-shape guess on the live-order path with no consumer to
+    // justify it, so the validator must accept their absence.
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        id: 'alpaca-order-1',
+        status: 'new',
+        filled_qty: '0',
+        filled_avg_price: null,
+        filled_at: null,
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.submitOrder(ORDER_REQUEST)).resolves.toEqual({
+      id: 'alpaca-order-1',
+      status: 'new',
+      filled_qty: '0',
+      filled_avg_price: null,
+      filled_at: null,
+    });
+  });
+
+  it('submitOrder still rejects client_order_id/qty/side/order_class when present but the wrong type', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ...ORDER_RESPONSE, side: 'up' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.submitOrder(ORDER_REQUEST)).rejects.toBeInstanceOf(
+      AlpacaBrokerProviderError,
+    );
+  });
+
+  it('submitOrder rejects a bracket leg missing its required id/type', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ...ORDER_RESPONSE,
+        legs: [{ status: 'held' }],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.submitOrder(ORDER_REQUEST)).rejects.toBeInstanceOf(
+      AlpacaBrokerProviderError,
+    );
+  });
+
+  it('submitOrder still accepts a bracket leg that omits fill fields entirely (unverified-shape leniency)', async () => {
+    // Deliberately the SAME fixture shape as the passthrough test above
+    // (`limit_price`/`stop_price`, no `filled_qty`/`filled_avg_price`/
+    // `filled_at`) — proves the leniency documented on `validateAlpacaOrderLeg`
+    // doesn't regress into rejecting a legitimate not-yet-filled leg.
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ...ORDER_RESPONSE,
+        legs: [{ id: 'leg-take-profit', type: 'limit', limit_price: '110.00', status: 'held' }],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.submitOrder(ORDER_REQUEST)).resolves.toMatchObject({
+      legs: [{ id: 'leg-take-profit', type: 'limit' }],
+    });
+  });
+
+  it('submitOrder rejects a bracket leg whose present filled_qty does not parse (garbage while present)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ...ORDER_RESPONSE,
+        legs: [
+          {
+            id: 'leg-stop',
+            type: 'stop',
+            status: 'new',
+            filled_qty: 'garbage',
+            filled_avg_price: null,
+            filled_at: null,
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.submitOrder(ORDER_REQUEST)).rejects.toBeInstanceOf(
+      AlpacaBrokerProviderError,
+    );
+  });
+
+  it('getOrder rejects a truncated order (getOrder shares the same validator as submitOrder)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 'alpaca-order-1' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.getOrder('alpaca-order-1')).rejects.toBeInstanceOf(
+      AlpacaBrokerProviderError,
+    );
+  });
+
+  it('getOrderByClientOrderId rethrows a validation failure rather than mapping it to null', async () => {
+    // A malformed 200 body must not be mistaken for the 404 "no such order"
+    // case — `failValidation` never sets `.status`, so the 404-only null
+    // mapping must not fire here.
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 'alpaca-order-1' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.getOrderByClientOrderId('client-123')).rejects.toBeInstanceOf(
+      AlpacaBrokerProviderError,
+    );
+  });
+
+  it('getPositions rejects a truncated position missing required fields', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse([{ symbol: 'AAPL' }]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.getPositions()).rejects.toBeInstanceOf(AlpacaBrokerProviderError);
+  });
+
+  it('getPositions rejects a position whose qty is the wrong type (out-of-type body)', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse([{ symbol: 'AAPL', qty: 1, side: 'long', avg_entry_price: '150.00' }]),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.getPositions()).rejects.toBeInstanceOf(AlpacaBrokerProviderError);
+  });
+
+  it('getPositions rejects a response body that is not an array at all', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ not: 'an array' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.getPositions()).rejects.toBeInstanceOf(AlpacaBrokerProviderError);
+  });
+
+  it('getAccount rejects a truncated account missing required fields', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ cash: '1000' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.getAccount()).rejects.toBeInstanceOf(AlpacaBrokerProviderError);
+  });
+
+  it('getAccount rejects an account whose equity is the wrong type (out-of-type body)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ cash: '1000', equity: 5000 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.getAccount()).rejects.toBeInstanceOf(AlpacaBrokerProviderError);
+  });
+
+  it('getAccount rejects a present but unparseable buying_power', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ cash: '1000', equity: '1000', buying_power: 'unlimited' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.getAccount()).rejects.toBeInstanceOf(AlpacaBrokerProviderError);
+  });
+
+  it('getAccount accepts a body with no buying_power at all (optional field)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ cash: '1000', equity: '2000' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.getAccount()).resolves.toEqual({ cash: '1000', equity: '2000' });
+  });
+
+  it('a malformed body is retried like any other attempt failure, not treated as a special case', async () => {
+    // Parse failures have no HTTP status, so `isRetryableAlpacaBrokerError`
+    // classifies them non-retryable — this pins that a validation failure on
+    // attempt 1 does NOT get retried, matching the documented intent for a
+    // shape failure (issue #509's design note).
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 'alpaca-order-1' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+      retry: { maxAttempts: 3, baseDelayMs: 10, maxDelayMs: 100 },
+    });
+
+    await expect(client.getOrder('alpaca-order-1')).rejects.toBeInstanceOf(
+      AlpacaBrokerProviderError,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

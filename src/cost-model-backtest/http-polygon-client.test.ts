@@ -133,4 +133,70 @@ describe('HttpPolygonClient', () => {
     await expect(client.fetchAggregates('SPY', window)).rejects.toThrow(/HTTP 500/);
     await expect(client.fetchAggregates('SPY', window)).rejects.not.toThrow(new RegExp(FAKE_KEY));
   });
+
+  // Wire validation (issue #509). Before this ticket `results` was cast
+  // straight to `RawPolygonAggregate[]` with no shape check at all — a
+  // truncated or wrong-typed row would seed Stage 2's offline scratch store
+  // with a `NaN`/`undefined` bar. Every case here asserts a throw, never a
+  // structurally-wrong object making it into `out`.
+  describe('wire validation (#509)', () => {
+    it('rejects a truncated aggregate missing required fields', async () => {
+      const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ results: [{ t: 1, o: 1 }] }));
+      const client = new HttpPolygonClient({ apiKey: FAKE_KEY, fetchImpl, minRequestSpacingMs: 0 });
+
+      await expect(client.fetchAggregates('SPY', window)).rejects.toThrow(/malformed aggregate/);
+    });
+
+    it('rejects an aggregate whose OHLCV field is the wrong type (out-of-type body)', async () => {
+      const fetchImpl = vi.fn().mockResolvedValue(
+        jsonResponse({
+          results: [{ t: 1, o: '1', h: 2, l: 0.5, c: 1.5, v: 100 }],
+        }),
+      );
+      const client = new HttpPolygonClient({ apiKey: FAKE_KEY, fetchImpl, minRequestSpacingMs: 0 });
+
+      await expect(client.fetchAggregates('SPY', window)).rejects.toThrow(/malformed aggregate/);
+    });
+
+    it('rejects an aggregate carrying a non-finite OHLCV field', async () => {
+      const fetchImpl = vi.fn().mockResolvedValue(
+        jsonResponse({
+          results: [{ t: 1, o: Number.NaN, h: 2, l: 0.5, c: 1.5, v: 100 }],
+        }),
+      );
+      const client = new HttpPolygonClient({ apiKey: FAKE_KEY, fetchImpl, minRequestSpacingMs: 0 });
+
+      await expect(client.fetchAggregates('SPY', window)).rejects.toThrow(/malformed aggregate/);
+    });
+
+    it('rejects a response body that is not an object at all', async () => {
+      const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(null));
+      const client = new HttpPolygonClient({ apiKey: FAKE_KEY, fetchImpl, minRequestSpacingMs: 0 });
+
+      await expect(client.fetchAggregates('SPY', window)).rejects.toThrow(
+        /malformed response body/,
+      );
+    });
+
+    it("rejects a 'results' field that is not an array", async () => {
+      const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ results: { not: 'an array' } }));
+      const client = new HttpPolygonClient({ apiKey: FAKE_KEY, fetchImpl, minRequestSpacingMs: 0 });
+
+      await expect(client.fetchAggregates('SPY', window)).rejects.toThrow(/malformed 'results'/);
+    });
+
+    it('stops pagination rather than throwing when next_url is present but the wrong type', async () => {
+      const fetchImpl = vi.fn().mockResolvedValue(
+        jsonResponse({
+          results: [{ t: 1, o: 1, h: 1, l: 1, c: 1, v: 1 }],
+          next_url: 12345,
+        }),
+      );
+      const client = new HttpPolygonClient({ apiKey: FAKE_KEY, fetchImpl, minRequestSpacingMs: 0 });
+
+      const aggregates = await client.fetchAggregates('SPY', window);
+      expect(aggregates).toEqual([{ t: 1, o: 1, h: 1, l: 1, c: 1, v: 1 }]);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+  });
 });
