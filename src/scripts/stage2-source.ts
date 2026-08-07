@@ -19,10 +19,12 @@
  * far back the sample reaches — the variable under test.
  */
 
-import { FreeStackAggregatesClient } from '../cost-model-backtest/free-stack-aggregates-client.js';
-import { HttpPolygonClient } from '../cost-model-backtest/http-polygon-client.js';
-import type { PolygonClient } from '../cost-model-backtest/stage2-historical-store.js';
-import type { DateRange } from '../cost-model-backtest/universe.js';
+import {
+  type DateRange,
+  FreeStackAggregatesClient,
+  HttpPolygonClient,
+  type PolygonClient,
+} from '../cost-model-backtest/index.js';
 
 /**
  * The exact window the 2026-08-05 verdict requested, to the millisecond.

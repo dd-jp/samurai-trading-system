@@ -1,5 +1,4 @@
-import { FreeStackAggregatesClient } from '../cost-model-backtest/free-stack-aggregates-client.js';
-import { HttpPolygonClient } from '../cost-model-backtest/http-polygon-client.js';
+import { FreeStackAggregatesClient, HttpPolygonClient } from '../cost-model-backtest/index.js';
 import {
   resolveStage2Source,
   STAGE2_FREE_STACK_WINDOW,

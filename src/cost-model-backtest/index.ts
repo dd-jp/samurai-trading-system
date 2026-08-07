@@ -139,6 +139,8 @@ export type {
   ReplayTradeSource,
   SplitEval,
 } from './eval-types.js';
+export type { FreeStackAggregatesClientOptions } from './free-stack-aggregates-client.js';
+export { FreeStackAggregatesClient, isCryptoSymbol } from './free-stack-aggregates-client.js';
 export type { HttpPolygonClientOptions } from './http-polygon-client.js';
 export { HttpPolygonClient, toPolygonTicker } from './http-polygon-client.js';
 export type { HttpTiingoClientOptions } from './http-tiingo-client.js';
