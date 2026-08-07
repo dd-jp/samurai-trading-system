@@ -324,7 +324,20 @@ async function redistributeOneFlatten(
   for (const lotKey of lotKeys) namedLots.add(lotKey);
 
   const rawFills = byLot.get(clientOrderId);
-  if (rawFills === undefined) return; // appeases the type checker; every key here has a bucket.
+  // Appeases the type checker; every key here has a bucket. Note the
+  // ordering above is deliberate and NOT a hazard, though it reads like one
+  // (#575 review): `namedLots` is already populated when this returns, and
+  // the caller merges it. That is the wanted outcome even here — the flatten
+  // named those lots, so they still need `advanceLot`'s re-arm check.
+  //
+  // It is safe only because this return, unlike a throw, leaves `byLot`
+  // exactly as it found it and completes the unit of work. The rule the
+  // caller's containment depends on is "a bucket half-consumed must not
+  // publish its names", and nothing is half-consumed on this path — the
+  // split below has not started. A future edit that moves work above this
+  // line breaks that, and would have to move the `namedLots` population
+  // below it in the same change.
+  if (rawFills === undefined) return;
 
   // Each named lot's FIXED total share of THIS flatten — what the lot HELD
   // when `executeExit` journalled the flatten, read straight off the
