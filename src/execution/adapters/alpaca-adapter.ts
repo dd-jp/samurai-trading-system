@@ -1101,12 +1101,17 @@ function toAlpacaSymbol(instrument: string, assetClass?: 'crypto' | 'stocks'): s
  * reads. Nothing above this adapter's boundary may ever see Alpaca's slash
  * form — the same ADR-0001 abstraction `toAlpacaSymbol` documents above.
  *
- * Unconditional, unlike the submit-side conversion: no equity symbol Alpaca
- * returns contains a `/`, so this is a safe no-op for every non-crypto
- * symbol without needing an asset-class check on the way back.
+ * Narrowed to a `/USD`-suffix test, mirroring `toAlpacaSymbol`'s own
+ * `-USD`-suffix rule on the way out, rather than "contains a slash" — no
+ * equity symbol Alpaca returns contains a `/` today, so a broader rule would
+ * currently behave identically, but the narrower one is what keeps this
+ * function from silently mangling a future non-crypto venue symbol that
+ * happens to contain a `/` for some other reason (Alpaca has no such symbol
+ * today; a hypothetical options contract or foreign-listing spelling might).
+ * Review comment on PR #588.
  */
 function fromAlpacaSymbol(symbol: string): string {
-  return symbol.includes('/') ? symbol.replace('/', '-') : symbol;
+  return symbol.endsWith('/USD') ? `${symbol.slice(0, -'/USD'.length)}-USD` : symbol;
 }
 
 function mapOrderState(status: string): OrderState {

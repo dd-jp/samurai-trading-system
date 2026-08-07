@@ -1538,6 +1538,29 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     ]);
   });
 
+  // #585 review (PR #588, Kimi): `fromAlpacaSymbol` is narrowed to a
+  // `/USD`-suffix test, mirroring `toAlpacaSymbol`'s own `-USD`-suffix rule
+  // on the way out, rather than a broader "contains a slash" one — no
+  // equity symbol Alpaca returns contains a `/` today, so this pins that a
+  // slash-bearing symbol NOT ending in `/USD` is left alone rather than
+  // silently mangled (e.g. `'BTC/GBP'` -> `'BTC/GBP'`, not `'BTC-GBP'` or
+  // some other guess this adapter has no basis for).
+  it('leaves a slash-bearing symbol that is not /USD-suffixed untouched on read-back', async () => {
+    const adapter = adapterWith(
+      makeClient({
+        getPositions: vi
+          .fn()
+          .mockResolvedValue([
+            { symbol: 'BTC/GBP', qty: '0.5', side: 'long', avg_entry_price: '48000' },
+          ]),
+      }),
+    );
+
+    expect(await adapter.getOpenPositions()).toEqual([
+      { instrument: 'BTC/GBP', qty: 0.5, side: 'buy', avg_entry_price: 48000 },
+    ]);
+  });
+
   it('drops an unparseable row rather than reporting NaN', async () => {
     // This feeds an exposure comparison, and NaN compares false against
     // everything — a poisoned row would read as "no divergence", the one
