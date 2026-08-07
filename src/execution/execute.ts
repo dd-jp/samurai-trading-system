@@ -297,12 +297,18 @@ async function executeExit(
     side: order.side,
     size: order.size,
     submitted_at: now,
-    // #517: the lot(s) this flatten is closing, carried on the journal row
-    // itself so `ingestFills()` can attribute the fill back to them without
-    // guessing from whatever is still open when it lands. `heldLots` is
-    // already `getOpenPositions()`'s `ORDER BY opened_at`, which `ingestFills`
-    // relies on to allocate a partial fill oldest-lot-first.
-    lot_idempotency_keys: heldLots.map((lot) => lot.idempotency_key),
+    // Which lots this flatten closes AND what each of them holds, so
+    // `ingestFills()` can attribute and SPLIT the fill without re-deriving
+    // either from whatever is still open when it lands (migrations 0020 and
+    // 0021 carry both arguments). `perLotHeld` is `heldLots` mapped
+    // one-to-one, preserving `getOpenPositions()`'s `ORDER BY opened_at`,
+    // which the split relies on to allocate a partial fill oldest-lot-first.
+    //
+    // A lot holding NOTHING — its entry fill has not landed — is still named.
+    // The cancel loop below iterates `heldLots` regardless of this journal, so
+    // its protective legs go either way; dropping it here would remove the
+    // only thing that re-arms them (#525). Its share is then exactly zero.
+    lot_held_quantities: perLotHeld,
   });
 
   for (const lot of heldLots) {

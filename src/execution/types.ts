@@ -58,4 +58,9 @@ export type {
   ReconcileReport,
   SimulatedAdapterConfig,
 } from './types/execution.js';
-export type { FlattenSubmissionWriteAhead, LotAdvance, SharedStore } from './types/store.js';
+export type {
+  FlattenAttribution,
+  FlattenSubmissionWriteAhead,
+  LotAdvance,
+  SharedStore,
+} from './types/store.js';

@@ -1,0 +1,38 @@
+-- Each named lot's HELD quantity at write-ahead time (#571), so
+-- `ingestFills()` splits a flatten's fill by what each lot actually held
+-- rather than by what its entry once filled.
+--
+-- JSON array of REALs, POSITIONALLY PARALLEL to `lot_idempotency_keys` and
+-- written from the same array in the same statement, so the pairing cannot
+-- drift. `SqliteExecutionStore.getFlattenAttribution` refuses a length that
+-- does not match the keys, and any entry that is not a finite non-negative
+-- number, naming the offending row's `idempotency_key` -- an unvalidated cast
+-- here would surface as a garbage quantity deep inside the allocation loop,
+-- on the money path.
+--
+-- WRITE-AHEAD IS THE POINT, and the reason this is a column rather than a
+-- computation. The split must be IDENTICAL on every poll: `ingestFills()`
+-- dedupes on `broker_fill_id` alone, so a second, differently-sized attempt
+-- under the same derived id does not correct the first -- it vanishes behind
+-- it and strands the difference forever. Held quantity recomputed when the
+-- fill lands is not stable, because this very flatten's own fills reduce it
+-- as they persist. An entry total is stable and is the wrong number: since
+-- #568 the flatten's SIZE is the venue-true held quantity, so the two
+-- disagree whenever a named lot has prior exit fills, and the older lot then
+-- absorbs quantity belonging to its siblings. Journalled once, before the
+-- broker call, this is both fixed and correct.
+--
+-- NULL, not NOT NULL, and deliberately so -- 0020's precedent exactly: a
+-- flatten row written before this migration records no held quantities, and
+-- `ingestFills()` must fall back to the entry-total split for it rather than
+-- fail parsing a column that was never populated. Only a flatten submitted
+-- before this migration whose fill has not been ingested yet can be such a
+-- row.
+--
+-- ZERO-HELD LOTS STAY NAMED. `executeExit` keeps journalling a lot holding
+-- nothing -- one whose entry fill has not landed yet. Its cancel loop
+-- iterates the held lots INDEPENDENTLY of this journal, so such a lot's
+-- protective legs are cancelled either way; dropping it would remove the only
+-- signal that re-arms them (`redistributeFlattenFills`' returned lot-key set,
+-- #525) and leave it naked. Its share is then exactly zero.
+ALTER TABLE flatten_submissions ADD COLUMN lot_held_quantities TEXT NULL;

@@ -46,6 +46,10 @@ export interface FlattenSubmissionRow {
   reason: string | null;
   submitted_at: string;
   resolved_at: string | null;
+  /** JSON `string[]` — NULL for a row written before migration 0020 (#517). */
+  lot_idempotency_keys: string | null;
+  /** JSON `number[]`, positionally parallel to the keys — NULL before migration 0021 (#571). */
+  lot_held_quantities: string | null;
 }
 
 export class TestExecutionStore extends SqliteExecutionStore {

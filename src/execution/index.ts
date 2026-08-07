@@ -63,6 +63,7 @@ export type {
   ExecutionConfig,
   ExecutionInput,
   ExecutionResult,
+  FlattenAttribution,
   FlattenSubmissionWriteAhead,
   LotAdvance,
   NativeBracketRequest,

@@ -1,4 +1,5 @@
 import type {
+  FlattenAttribution,
   FlattenSubmissionWriteAhead,
   LotAdvance,
   SharedStore,
@@ -84,7 +85,7 @@ class FakeSharedStore implements SharedStore {
     _reason: string,
     _resolved_at: Date,
   ): Promise<void> {}
-  async getFlattenLotKeys(_idempotency_key: string): Promise<readonly string[] | null> {
+  async getFlattenAttribution(_idempotency_key: string): Promise<FlattenAttribution | null> {
     return null;
   }
   async applyLotAdvance(advance: LotAdvance): Promise<void> {
