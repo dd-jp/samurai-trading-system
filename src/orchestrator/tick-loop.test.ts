@@ -288,6 +288,12 @@ describe('runTickPlan', () => {
     // never yields its slot, so AAPL never starts, `aaplRan` never resolves,
     // and the test times out instead of passing by accident. Do not "fix"
     // this back to a sleep.
+    //
+    // That deadlock assumes SPY is dispatched FIRST, which it is only because
+    // `makePlan` below lists it first and the pool dispatches in plan order.
+    // Reorder the plan so AAPL leads and a cap of 1 would still pass — AAPL
+    // would push, release, and SPY would resume on an already-resolved
+    // promise. The ordering is load-bearing, not cosmetic.
     const finished: string[] = [];
     let releaseSpy!: () => void;
     const aaplRan = new Promise<void>((resolve) => {

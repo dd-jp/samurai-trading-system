@@ -73,6 +73,14 @@ const START = new Date('2026-07-29T12:00:00.000Z');
  * the NEXT tick instead of being deferred, which turns "parked" into a
  * near-0ms self-reschedule loop. 20 days clears every advance in this file
  * (longest is 75h) with headroom under the cap.
+ *
+ * That headroom is a coupling, not a constant: a future case advancing 20
+ * days or more would step past this and silently re-activate fill-sync
+ * mid-advance, reintroducing the slowdown with no signal beyond the case
+ * getting mysteriously slower. If you add an advance anywhere near that,
+ * raise this — but stay under 2^31-1 ms, which leaves under 5 days of room.
+ * If an advance ever needs to exceed ~24 days, this approach is exhausted
+ * and the poll has to be stopped rather than parked.
  */
 const NO_FILL_POLL_MS = 20 * 24 * 60 * 60 * 1_000;
 
