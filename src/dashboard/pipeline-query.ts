@@ -233,13 +233,17 @@ function buildLane(
   const durationByStage = new Map<PipelineStage, number>();
   const attemptsByStage = new Map<PipelineStage, number>();
   const decisionByStage = new Map<PipelineStage, string>();
+  const recordedAtByStage = new Map<PipelineStage, Date>();
   let total_ms = 0;
 
   events.forEach((event, index) => {
     attemptsByStage.set(event.stage, (attemptsByStage.get(event.stage) ?? 0) + 1);
     // Last write wins: a retried stage's outcome is what it finally decided,
-    // while `attempts` is what says the road there was bumpy (#414).
+    // while `attempts` is what says the road there was bumpy (#414). The
+    // recorded timestamp follows the same rule (#535) — a retried stage's
+    // `recorded_at` is when it finally recorded, not its first attempt.
     decisionByStage.set(event.stage, event.decision);
+    recordedAtByStage.set(event.stage, event.timestamp);
     const next = events[index + 1];
     if (next === undefined) {
       return;
@@ -265,7 +269,23 @@ function buildLane(
       // (`live_entered_at`); a skipped or never-reached cell has no wall time
       // to report at all.
       duration_ms: state === 'live' ? null : (durationByStage.get(stage) ?? null),
+      // Not gated on `state`, unlike `duration_ms`/`recorded_at` below: a
+      // live cell mid-retry (attempts > 0, `current_tick` back on a stage
+      // that already wrote a row) still reports that prior row's decision
+      // word, which is why the retry is happening. It reads stale — the
+      // current attempt hasn't decided anything yet — but it is the most
+      // recent decided fact about this stage, same as before #535.
       decision: decisionByStage.get(stage) ?? null,
+      // A live cell has no `audit_log` row yet FOR ITS CURRENT ATTEMPT — the
+      // row is written after the stage returns — so `live_entered_at` is its
+      // clock, not this field (#535). This is gated on `state`, unlike
+      // `decision` above: a live cell mid-retry has a prior attempt's row in
+      // `recordedAtByStage`, but surfacing that stale timestamp here would
+      // let a client (the frontend replay engine this field exists for) read
+      // it as the live stage's own recorded transition time. Every other
+      // cell without a row (`skipped`, `not_reached`) has nothing to report
+      // either.
+      recorded_at: state === 'live' ? null : (recordedAtByStage.get(stage)?.toISOString() ?? null),
       attempts,
     };
   });
@@ -286,7 +306,14 @@ function buildLane(
 }
 
 function idleCell(stage: PipelineStage): PipelineCell {
-  return { stage, state: 'not_reached', duration_ms: null, decision: null, attempts: 0 };
+  return {
+    stage,
+    state: 'not_reached',
+    duration_ms: null,
+    decision: null,
+    recorded_at: null,
+    attempts: 0,
+  };
 }
 
 /**
