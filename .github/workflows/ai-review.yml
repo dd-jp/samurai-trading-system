@@ -99,7 +99,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
+          # Via env, like PR_INPUT above: a git ref name may contain shell
+          # metacharacters, and interpolating one straight into the script
+          # would run them.
+          BASE_REF: ${{ github.base_ref }}
         run: |
+          # core.quotePath=false: git C-quotes paths with non-ASCII bytes by
+          # default, and a quoted `diff --git` header is a different shape for
+          # the slicer to parse. review_lib handles both, but emitting the
+          # plain form keeps the common path simple.
+          git config core.quotePath false
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             # `github.base_ref` is empty on a manual dispatch, and for a MERGED
             # PR the base branch has moved past the fork point: diffing against
@@ -122,8 +131,8 @@ jobs:
             # shallow tip happens to be an ancestor of HEAD and the merge base
             # is found by luck. Every rebase-onto-main — which is the normal way
             # to clear a conflict — broke both reviewers until this line changed.
-            git fetch origin ${{ github.base_ref }}
-            git diff origin/${{ github.base_ref }}...HEAD > diff.txt
+            git fetch origin "$BASE_REF"
+            git diff "origin/$BASE_REF...HEAD" > diff.txt
           fi
           echo "diff bytes: $(wc -c < diff.txt)"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ ! -s diff.txt ]; then

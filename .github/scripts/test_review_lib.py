@@ -450,6 +450,149 @@ def test_an_over_cap_file_with_no_hunks_is_disclosed_not_dropped():
     assert "no hunks" in plan.skipped[0]
 
 
+def test_a_slice_with_comments_but_no_verdict_is_not_counted_as_reviewed():
+    """Round-1 review finding: the coverage count said 'reviewed' while the
+    merge said 'unusable', so no banner posted and the verdict was quietly
+    capped — a silent partial. One definition now governs both."""
+    diff = _file_diff("src/a.ts", lines_per_hunk=40) + _file_diff("src/b.ts", lines_per_hunk=40)
+    results = [
+        {"summary_markdown": "", "inline_comments": [], "verdict": "APPROVE"},
+        # Parsed JSON, real comments, but the verdict field was garbage —
+        # parse_model_output nulls it.
+        {
+            "summary_markdown": "",
+            "inline_comments": [{"file": "src/b.ts", "line": 1, "body": "x"}],
+            "verdict": None,
+        },
+    ]
+    calls = []
+
+    def fake_call(diff, changed_files, **kwargs):
+        calls.append(diff)
+        return results[len(calls) - 1]
+
+    payload = review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
+
+    assert "Partial review" in payload["summary_markdown"]
+    assert "1/2" in payload["summary_markdown"]
+    assert payload["verdict"] != "APPROVE"
+    # The same rule both places.
+    assert review_lib.slice_is_usable(results[0]) is True
+    assert review_lib.slice_is_usable(results[1]) is False
+
+
+def test_an_unrecognised_verdict_string_does_not_crash_the_run():
+    """`_VERDICT_SEVERITY[verdict]` used to KeyError on anything outside the
+    three strings — after every slice call had already been paid for."""
+    merged = review_lib.merge_model_results(
+        [
+            {"summary_markdown": "", "inline_comments": [], "verdict": "LGTM"},
+            {"summary_markdown": "", "inline_comments": [], "verdict": "approve"},
+        ],
+        [("a",), ("b",)],
+    )
+
+    assert merged["verdict"] is None
+    assert review_lib.slice_is_usable({"verdict": "LGTM"}) is False
+    # An unhashable verdict would raise on `in dict` / `dict.get` alike.
+    assert review_lib.slice_is_usable({"verdict": ["APPROVE"]}) is False
+    assert (
+        review_lib.merge_model_results(
+            [{"summary_markdown": "", "inline_comments": [], "verdict": {"a": 1}}], [("a",)]
+        )["verdict"]
+        is None
+    )
+
+
+def test_parse_model_output_already_whitelists_verdicts():
+    """The `.get` above is defence in depth: the normal path can't produce an
+    unrecognised verdict, but review_diff takes an injectable `call`."""
+    parsed = review_lib.parse_model_output(
+        json.dumps({"summary_markdown": "", "inline_comments": [], "verdict": "LGTM"})
+    )
+
+    assert parsed["verdict"] is None
+
+
+def test_an_all_skipped_diff_does_not_claim_there_was_nothing_to_review():
+    """plan.slices empty because every hunk was oversized is not the same as
+    an empty diff, and must not print the empty-diff line."""
+    diff = _file_diff("src/execution/huge.ts", hunks=1, lines_per_hunk=200)
+
+    def fake_call(diff, changed_files, **kwargs):  # pragma: no cover - must not run
+        raise AssertionError("no slice should be reviewable here")
+
+    payload = review_lib.review_diff(diff, [], call=fake_call, max_chars=500)
+
+    assert "No diff detected" not in payload["summary_markdown"]
+    assert "Partial review" in payload["summary_markdown"]
+    assert "src/execution/huge.ts" in payload["summary_markdown"]
+    assert payload["event"] == "COMMENT"
+
+
+def test_a_genuinely_empty_diff_still_says_nothing_to_review():
+    payload = review_lib.review_diff("", [], call=lambda **_k: None)
+
+    assert "No diff detected" in payload["summary_markdown"]
+    assert "Partial review" not in payload["summary_markdown"]
+
+
+def test_a_changed_file_that_matched_no_slice_is_disclosed():
+    """The caller's file list is an independent check on the slicer: a file it
+    knows about that no slice covers is unreviewed content."""
+
+    def fake_call(diff, changed_files, **kwargs):
+        return {"summary_markdown": "", "inline_comments": [], "verdict": "APPROVE"}
+
+    payload = review_lib.review_diff(
+        DIFF, ["src/trader/x.ts", "src/risk-manager/ghost.ts"], call=fake_call
+    )
+
+    assert "Partial review" in payload["summary_markdown"]
+    assert "src/risk-manager/ghost.ts" in payload["summary_markdown"]
+    assert payload["event"] == "COMMENT"
+
+
+# --- git C-quoted paths -----------------------------------------------------
+
+QUOTED_DIFF = (
+    'diff --git "a/src/trader/caf\\303\\251.ts" "b/src/trader/caf\\303\\251.ts"\n'
+    '--- "a/src/trader/caf\\303\\251.ts"\n'
+    '+++ "b/src/trader/caf\\303\\251.ts"\n'
+    "@@ -1,1 +1,2 @@\n const a = 1;\n+const b = 2;\n"
+)
+
+
+def test_c_quoted_paths_are_decoded_not_dropped():
+    assert review_lib.changed_files_from_diff(QUOTED_DIFF) == ["src/trader/café.ts"]
+    assert review_lib.commentable_lines(QUOTED_DIFF) == {"src/trader/café.ts": {1, 2}}
+
+
+def test_a_c_quoted_file_does_not_merge_into_the_previous_files_slice():
+    """The regex used to miss the quoted header, so this file's body was
+    appended to the PREVIOUS file's block — one file's content reviewed under
+    another file's name, with nothing saying so."""
+    plan = review_lib.split_diff_into_slices(DIFF + QUOTED_DIFF)
+
+    assert len(plan.slices) == 1
+    assert plan.slices[0].files == ("src/trader/x.ts", "src/trader/café.ts")
+    assert plan.skipped == []
+
+
+def test_quoted_path_escapes_are_decoded_faithfully():
+    assert review_lib._unquote_git_path('"a/a\\tb.ts"', "a/") == "a\tb.ts"
+    assert review_lib._unquote_git_path('"a/say \\"hi\\".ts"', "a/") == 'say "hi".ts'
+    assert review_lib._unquote_git_path('"a/back\\\\slash.ts"', "a/") == "back\\slash.ts"
+    # Unquoted paths, including ones containing a space, are untouched.
+    assert review_lib._unquote_git_path("a/plain path.ts", "a/") == "plain path.ts"
+
+
+def test_unquoted_paths_containing_spaces_still_split_correctly():
+    line = "diff --git a/src/my file.ts b/src/my file.ts"
+
+    assert review_lib.diff_git_paths(line) == ("src/my file.ts", "src/my file.ts")
+
+
 def test_review_diff_approves_when_every_slice_came_back_clean():
     diff = _file_diff("src/a.ts", lines_per_hunk=40) + _file_diff("src/b.ts", lines_per_hunk=40)
 

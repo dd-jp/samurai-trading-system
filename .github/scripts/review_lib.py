@@ -178,7 +178,11 @@ def get_changed_files(base_ref: str | None) -> list[str]:
         return []
 
     result = subprocess.run(
-        ["git", "diff", "--name-only", f"origin/{base_ref}...HEAD"],
+        # core.quotePath=false so a non-ASCII path comes back in the same
+        # (unquoted) form the diff parser produces — otherwise review_diff's
+        # coverage cross-check would report it as unsliced and post a false
+        # partial-coverage banner.
+        ["git", "-c", "core.quotePath=false", "diff", "--name-only", f"origin/{base_ref}...HEAD"],
         capture_output=True,
         text=True,
         check=False,
@@ -190,7 +194,64 @@ def get_changed_files(base_ref: str | None) -> list[str]:
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
-_DIFF_GIT_HEADER = re.compile(r"^diff --git a/(.+?) b/(.+)$")
+# git C-quotes any path with non-ASCII bytes, quotes, or control characters
+# (`core.quotePath`, on by default): `diff --git "a/caf\303\251.ts" "b/..."`.
+# A regex that only knows the bare `a/... b/...` form silently fails to match
+# those, and in `split_diff_into_slices` the file's whole body then merges
+# into the PREVIOUS file's block — one file's content reviewed under another
+# file's name, with nothing saying so. Both forms are matched here; the
+# workflow additionally sets `core.quotePath=false` so the quoted form should
+# not arise in the first place.
+_QUOTED_PATH = r'"(?:[^"\\]|\\.)*"'
+_DIFF_GIT_HEADER = re.compile(rf"^diff --git ({_QUOTED_PATH}|a/.+?) ({_QUOTED_PATH}|b/.+)$")
+
+_C_ESCAPES = {
+    "a": "\a", "b": "\b", "f": "\f", "n": "\n",
+    "r": "\r", "t": "\t", "v": "\v", "\\": "\\", '"': '"',
+}
+
+
+def _unquote_git_path(token: str, prefix: str) -> str:
+    """Undo git's C-style path quoting and strip the `a/` or `b/` prefix."""
+    if not (len(token) >= 2 and token.startswith('"') and token.endswith('"')):
+        return token[len(prefix):] if token.startswith(prefix) else token
+
+    body = token[1:-1]
+    out = bytearray()
+    i = 0
+    while i < len(body):
+        char = body[i]
+        if char != "\\":
+            out.extend(char.encode("utf-8"))
+            i += 1
+            continue
+        nxt = body[i + 1] if i + 1 < len(body) else ""
+        if nxt in _C_ESCAPES:
+            out.extend(_C_ESCAPES[nxt].encode("utf-8"))
+            i += 2
+            continue
+        try:
+            out.append(int(body[i + 1 : i + 4], 8))
+        except ValueError:
+            # Not a valid \NNN octal escape: keep the backslash verbatim
+            # rather than dropping bytes out of a path.
+            out.extend(char.encode("utf-8"))
+            i += 1
+        else:
+            i += 4
+    path = out.decode("utf-8", errors="replace")
+    return path[len(prefix):] if path.startswith(prefix) else path
+
+
+def diff_git_paths(raw_line: str) -> tuple[str, str] | None:
+    """(old_path, new_path) from a `diff --git` line, quoted form included."""
+    match = _DIFF_GIT_HEADER.match(raw_line)
+    if not match:
+        return None
+    return (
+        _unquote_git_path(match.group(1), "a/"),
+        _unquote_git_path(match.group(2), "b/"),
+    )
 
 
 def changed_files_from_diff(diff_text: str) -> list[str]:
@@ -203,14 +264,16 @@ def changed_files_from_diff(diff_text: str) -> list[str]:
     `commentable_lines`, which drops `/dev/null` targets and would therefore
     hide deletions from the risk tiers."""
     files: list[str] = []
+    seen: set[str] = set()  # membership set: `in files` is O(n) per header
     for raw_line in diff_text.splitlines():
-        match = _DIFF_GIT_HEADER.match(raw_line)
-        if not match:
+        paths = diff_git_paths(raw_line)
+        if paths is None:
             continue
         # b/ side is the new path; for a deletion it repeats the old path,
         # which is what we want in the classification either way.
-        path = match.group(2)
-        if path not in files:
+        path = paths[1]
+        if path not in seen:
+            seen.add(path)
             files.append(path)
     return files
 
@@ -232,7 +295,10 @@ def commentable_lines(diff_text: str) -> dict[str, set[int]]:
             if path == "/dev/null":
                 current_file = None
             else:
-                current_file = path[2:] if path.startswith("b/") else path
+                # Same C-quoting as the `diff --git` line: an anchor keyed on
+                # the raw `"b/caf\303\251.ts"` text matches no path GitHub
+                # knows, so every comment on that file would be rejected.
+                current_file = _unquote_git_path(path, "b/")
                 result.setdefault(current_file, set())
             new_line = None
             continue
@@ -356,10 +422,10 @@ def split_diff_into_slices(
             blocks.append((path or "<unknown>", header, list(hunks)))
 
     for raw_line in diff_text.splitlines(keepends=True):
-        git_match = _DIFF_GIT_HEADER.match(raw_line.rstrip("\n"))
-        if git_match:
+        git_paths = diff_git_paths(raw_line.rstrip("\n"))
+        if git_paths is not None:
             flush()
-            path, header, hunks = git_match.group(2), raw_line, []
+            path, header, hunks = git_paths[1], raw_line, []
             continue
         if _HUNK_HEADER.match(raw_line):
             hunks.append(raw_line)
@@ -414,6 +480,23 @@ def split_diff_into_slices(
 _VERDICT_SEVERITY = {"APPROVE": 0, "APPROVE_WITH_COMMENTS": 1, "REQUEST_CHANGES": 2}
 
 
+def slice_is_usable(result: dict) -> bool:
+    """Whether a slice's model result counts as a review of that slice.
+
+    ONE definition, used by both the merge and the coverage count. They used
+    to disagree — a slice with comments but no parseable verdict counted as
+    reviewed for coverage while the merge treated it as unusable, so no
+    partial-coverage banner posted and the verdict was quietly capped instead.
+    That is the silently-partial shape this whole change exists to kill.
+
+    A recognised verdict is the bar: without one we cannot say the model
+    finished its pass over that slice, whatever else it emitted."""
+    verdict = result.get("verdict")
+    # isinstance first: a malformed response can put a list or dict here, and
+    # both `x in dict` and `dict.get(x)` raise TypeError on an unhashable key.
+    return isinstance(verdict, str) and verdict in _VERDICT_SEVERITY
+
+
 def merge_model_results(results: list[dict], slice_files: list[tuple[str, ...]]) -> dict:
     """Fold one model result per slice into a single review.
 
@@ -448,11 +531,18 @@ def merge_model_results(results: list[dict], slice_files: list[tuple[str, ...]])
                 summary = f"#### Slice {index + 1} of {len(results)} — {label}\n\n{summary}"
             summaries.append(summary)
 
-        verdict = result.get("verdict")
-        if verdict is None:
-            any_unusable = True
+        # Guarded by `slice_is_usable`, not a bare `_VERDICT_SEVERITY[...]`:
+        # `parse_model_output` does whitelist the three verdicts, but
+        # `review_diff` takes an injectable `call` and this function is
+        # public, so an unrecognised value ("LGTM", or a list) would otherwise
+        # raise — crashing the run AFTER every slice call has already been
+        # paid for. Unknowns route through the unusable path, which discloses
+        # rather than guesses. Sharing the predicate with the coverage count
+        # is also what stops the two definitions drifting apart again.
+        if slice_is_usable(result):
+            severity = max(severity, _VERDICT_SEVERITY[result["verdict"]])
         else:
-            severity = max(severity, _VERDICT_SEVERITY[verdict])
+            any_unusable = True
 
     merged_verdict = None
     if not any_unusable and severity >= 0:
@@ -482,15 +572,33 @@ def review_diff(
     call = call or call_model
     plan = split_diff_into_slices(diff_text, max_chars=max_chars, max_slices=max_slices)
 
+    # Cross-check the slicer against the caller's independently derived file
+    # list (git for a PR run). A file the caller sees that no slice covers is
+    # unreviewed content — disclosed, never dropped. This is what catches a
+    # slicer bug rather than trusting the slicer to have none.
+    sliced_files = {f for s in plan.slices for f in s.files}
+    unsliced = [f for f in changed_files if f not in sliced_files]
+    skipped = list(plan.skipped)
+    if unsliced:
+        skipped.append(
+            f"{len(unsliced)} changed file(s) matched no diff slice and were NOT "
+            f"reviewed: {', '.join(f'`{f}`' for f in unsliced[:10])}"
+            + (" …" if len(unsliced) > 10 else "")
+        )
+
     if not plan.slices:
+        # "Nothing to review" is only true when there was nothing there. If
+        # content was skipped, saying so would be the same lie this change
+        # exists to kill, just told about a smaller diff.
+        empty_summary = (
+            "_The whole diff was skipped — none of it was reviewed. See above._"
+            if skipped
+            else "_No diff detected — nothing to review._"
+        )
         return build_review_payload(
             diff_text,
-            {
-                "summary_markdown": "_No diff detected — nothing to review._",
-                "inline_comments": [],
-                "verdict": None,
-            },
-            coverage=ReviewCoverage(0, 0, tuple(plan.skipped)),
+            {"summary_markdown": empty_summary, "inline_comments": [], "verdict": None},
+            coverage=ReviewCoverage(0, 0, tuple(skipped)),
         )
 
     results: list[dict] = []
@@ -504,18 +612,21 @@ def review_diff(
         # Classify only the files IN this slice. Handing every call the whole
         # PR's file list would invite findings on code the call was never
         # shown — and those anchor fine against the full diff, so they'd post
-        # as real comments on unread lines.
-        slice_files = list(diff_slice.files) or changed_files
-        result = call(diff=diff_slice.text, changed_files=slice_files, **model_kwargs)
+        # as real comments on unread lines. No fallback to `changed_files`: a
+        # slice always names at least one file, and a fallback that "can't
+        # fire" is exactly how the whole-PR list would sneak back in.
+        result = call(
+            diff=diff_slice.text, changed_files=list(diff_slice.files), **model_kwargs
+        )
         results.append(result)
-        if result.get("verdict") is not None or result.get("inline_comments"):
+        if slice_is_usable(result):
             reviewed += 1
 
     merged = merge_model_results(results, [s.files for s in plan.slices])
     coverage = ReviewCoverage(
         slices_total=len(plan.slices),
         slices_reviewed=reviewed,
-        skipped=tuple(plan.skipped),
+        skipped=tuple(skipped),
     )
     # The FULL diff, not the slice: a comment is anchorable if the line is in
     # any hunk of the PR, and the merged comments span every slice.
