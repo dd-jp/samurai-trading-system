@@ -10,6 +10,9 @@
  *  - **The stamp animates only for entries that were observed settling**
  *    (`seeded === false`). A seeded entry existed before the page opened and
  *    must not claim to have just happened.
+ *  - **A row opens the trace stamped on it**, not its instrument's latest one
+ *    (#606 item 5). The subheading promises "click a row for its trace", and
+ *    an instrument settles many times in a session.
  *  - **The gate/reason wording and the HITL badge come from `verdicts[]`**,
  *    joined on `trace_id`. Lanes that ended at `stopped` or `quorum_skip`
  *    never reach `verdict_log`, so they have no verdict row and carry their
@@ -25,8 +28,20 @@ export interface VerdictLedgerProps {
   entries: readonly LedgerEntry[];
   /** `verdicts[]` keyed by `trace_id` — the gate wording and the HITL flag. */
   verdictsByTrace: ReadonlyMap<string, VerdictRow>;
-  selectedInstrument: string | null;
-  onSelect: (instrument: string) => void;
+  /**
+   * The trace the drawer is showing, NOT the selected instrument (#606 item
+   * 5). An instrument can own several settled rows in one session, and only
+   * one of them is the trace on screen — highlighting by instrument would
+   * light up rows the drawer is not describing.
+   */
+  selectedTraceId: string | null;
+  /**
+   * Selects THIS ROW'S trace, not merely its instrument. The subheading
+   * promises "click a row for its trace", and a handler that passed the
+   * instrument alone made an older row open that instrument's CURRENT trace —
+   * a different decision than the one stamped on the row the operator clicked.
+   */
+  onSelect: (instrument: string, traceId: string) => void;
 }
 
 function reasonFor(entry: LedgerEntry, verdict: VerdictRow | undefined): string {
@@ -37,7 +52,7 @@ function reasonFor(entry: LedgerEntry, verdict: VerdictRow | undefined): string 
 }
 
 export function VerdictLedger(props: VerdictLedgerProps) {
-  const { entries, verdictsByTrace, selectedInstrument, onSelect } = props;
+  const { entries, verdictsByTrace, selectedTraceId, onSelect } = props;
 
   return (
     <section className="ledger-panel" aria-label="Verdict ledger">
@@ -63,7 +78,7 @@ export function VerdictLedger(props: VerdictLedgerProps) {
             const rowClass = [
               'ledger-row',
               entry.seeded ? '' : 'ledger-row-stamped',
-              selectedInstrument === entry.instrument ? 'ledger-row-selected' : '',
+              selectedTraceId === entry.trace_id ? 'ledger-row-selected' : '',
             ]
               .filter((part) => part !== '')
               .join(' ');
@@ -76,7 +91,7 @@ export function VerdictLedger(props: VerdictLedgerProps) {
                   className={rowClass}
                   data-trace-id={entry.trace_id}
                   data-outcome={entry.outcome}
-                  onClick={() => onSelect(entry.instrument)}
+                  onClick={() => onSelect(entry.instrument, entry.trace_id)}
                   aria-label={`${entry.instrument}, ${word}${hitl ? ', human override' : ''}, at ${clock}, ${reason}`}
                 >
                   <span className={`seal seal-${entry.outcome}`} aria-hidden="true">

@@ -18,10 +18,17 @@
  *  3. **A stale poll keeps the last numbers.** They are marked stale by the
  *     strip, never blanked — a blank field reads as zero (spec, telemetry
  *     strip).
+ *  4. **Every poll is bounded in time.** A hung request (the server accepts
+ *     the connection and never answers) is abandoned at the staleness horizon
+ *     and its slot released, so the next tick retries. Without that, one hang
+ *     wedges the in-flight guard forever: the watchdog still marks the page
+ *     stale, but no retry is ever issued and only a manual reload recovers —
+ *     the worst failure mode for an always-on surface, because the page looks
+ *     like it is trying (#606 item 3).
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { DashboardSnapshot } from '../../../dashboard/types.ts';
+import type { DashboardSnapshot, LlmSpendSummary } from '../../../dashboard/types.ts';
 
 /** The modes the server may send (`DashboardSnapshot['mode']`, #539). */
 type ServerMode = DashboardSnapshot['mode'];
@@ -52,12 +59,46 @@ export const RECOGNISED_MODES = [
  * server did not tell us", it is unrepresentable as a mode word, and the
  * compiler now forces every reader to handle it.
  */
-export type WireSnapshot = Omit<DashboardSnapshot, 'mode'> & { mode: ServerMode | null };
+export type WireSnapshot = Omit<DashboardSnapshot, 'mode' | 'llm_spend'> & {
+  mode: ServerMode | null;
+  /**
+   * Widened to `| null` for the same reason `mode` is, and settled the same
+   * way (#606 item 2). `SpendPanel` takes `LlmSpendSummary | null` and renders
+   * a deliberate empty state naming the reason, and `TelemetryStrip`'s burn
+   * meter renders "meter not drawable" — so both consumers of this field
+   * already degrade honestly, and the boundary rejecting the payload was the
+   * only thing standing between a missing spend read and those renderings.
+   *
+   * The server cannot send `null` today: `DashboardSnapshot.llm_spend` is
+   * non-nullable and a failed `getLlmSpend` throws out of `buildSnapshot`,
+   * which the server answers as a 500 (`server.ts`) — a case the `!response.ok`
+   * path below already survives. This is therefore a boundary POLICY fix, not
+   * a live bug: an older server or a rewriting proxy is outside that guarantee,
+   * and discarding positions, verdicts and the pipeline over one absent
+   * summary would blank a live-money screen exactly as the `mode` docblock
+   * below forbids.
+   */
+  llm_spend: LlmSpendSummary | null;
+};
 
 export const SNAPSHOT_URL = '/api/snapshot';
 export const POLL_INTERVAL_MS = 3_000;
 /** Two consecutive missed polls put the page into its stale state (spec). */
 export const STALE_AFTER_MISSED_POLLS = 2;
+/**
+ * How long a single poll may hang before it is abandoned (#606 item 3).
+ *
+ * Tied to the staleness horizon rather than picked independently: a request is
+ * given exactly as long as the page is willing to keep calling its numbers
+ * current, so the slot is released at the same instant the watchdog admits the
+ * page is stale, and the NEXT interval tick retries. Anything longer leaves a
+ * window where the strip says stale while a zombie request still holds the
+ * poll slot; anything shorter would abandon a merely slow response the page
+ * could still have used.
+ */
+function pollTimeoutMs(intervalMs: number): number {
+  return intervalMs * STALE_AFTER_MISSED_POLLS;
+}
 
 export interface SnapshotFeed {
   /** The most recent successfully-fetched payload, or `null` before the first. */
@@ -105,13 +146,49 @@ function hasWireShape(value: unknown): boolean {
   for (const key of ['positions', 'debates', 'verdicts', 'analysts']) {
     if (!Array.isArray(candidate[key])) return false;
   }
-  for (const key of ['metrics', 'providers', 'llm_spend']) {
+  // `llm_spend` is deliberately NOT required here — see `WireSnapshot`. It is
+  // narrowed to `null` by `toWireSnapshot` instead, so an absent summary costs
+  // one panel its numbers rather than costing the operator the whole page.
+  for (const key of ['metrics', 'providers']) {
     const field = candidate[key];
     if (typeof field !== 'object' || field === null) return false;
   }
   const pipeline = candidate.pipeline;
   if (typeof pipeline !== 'object' || pipeline === null) return false;
   return Array.isArray((pipeline as Record<string, unknown>).lanes);
+}
+
+/** A non-null object that is not an array — `typeof [] === 'object'`. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Is this shape one `SpendPanel` and the burn meter can actually render?
+ *
+ * The depth is chosen from what the consumers DEREFERENCE, not from the type
+ * (PR #607 review). Every scalar they read goes through `formatUsd` /
+ * `formatCount` / `formatStageDuration`, which return the module's em dash for
+ * anything non-finite — so a window missing `cost_usd` degrades honestly on its
+ * own. What throws is a missing OBJECT: `spend.all_time.per_debate.debates`
+ * blows up on an absent `all_time` or `per_debate`, and `main.tsx` mounts
+ * `<App/>` with no error boundary, so that is a white screen on a live-money
+ * surface — strictly worse than the rejected-payload behaviour this branch was
+ * added to replace.
+ *
+ * `Array.isArray` is checked at every level for the same reason: `[]` satisfies
+ * `typeof x === 'object'`, so an array cast to `LlmSpendSummary` would render a
+ * panel of em dashes that looks like a real, empty spend summary rather than a
+ * failed read. A wrong shape admitted is worse than a null rejected.
+ */
+function isSpendSummary(value: unknown): boolean {
+  if (!isPlainObject(value)) return false;
+  for (const key of ['last_24h', 'last_7d', 'all_time']) {
+    const window = value[key];
+    if (!isPlainObject(window)) return false;
+    if (!isPlainObject(window.per_debate)) return false;
+  }
+  return true;
 }
 
 /**
@@ -129,6 +206,13 @@ function hasWireShape(value: unknown): boolean {
  * A mode the server sends but this client does not list is treated as unknown
  * rather than passed through: rendering a word we have never seen would be
  * the "trust the wire" failure this function exists to end.
+ *
+ * `llm_spend` degrades the same way and for the same reason (#606 item 2): a
+ * summary that is absent, or not a shape the panel can render, becomes `null` —
+ * the value `SpendPanel` and the burn meter are both already written to handle.
+ * Degrading is NOT the same as trusting: see `isSpendSummary` for why the check
+ * has to reject an array and a summary missing its windows rather than casting
+ * whatever object arrived.
  */
 export function toWireSnapshot(body: unknown): WireSnapshot | null {
   if (!hasWireShape(body)) return null;
@@ -136,7 +220,13 @@ export function toWireSnapshot(body: unknown): WireSnapshot | null {
   const mode = (RECOGNISED_MODES as readonly string[]).includes(candidate.mode as string)
     ? (candidate.mode as ServerMode)
     : null;
-  return { ...(candidate as unknown as Omit<WireSnapshot, 'mode'>), mode };
+  const spend = candidate.llm_spend;
+  const llm_spend = isSpendSummary(spend) ? (spend as LlmSpendSummary) : null;
+  return {
+    ...(candidate as unknown as Omit<WireSnapshot, 'mode' | 'llm_spend'>),
+    mode,
+    llm_spend,
+  };
 }
 
 interface FeedState {
@@ -188,6 +278,8 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
       setState((prev) => (prev.stale === stale ? prev : { ...prev, stale }));
     };
 
+    const timeoutMs = pollTimeoutMs(intervalMs);
+
     const poll = async () => {
       // A poll already in flight is not replaced: overlapping requests would
       // let an older response land after a newer one and walk the chips
@@ -197,6 +289,35 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
       const controller = new AbortController();
       controllers.add(controller);
       const doFetch = optionsRef.current.fetchImpl ?? globalThis.fetch;
+
+      // Per POLL INVOCATION, not per effect (PR #607 review round 1, which
+      // read it as effect-scoped): a fresh `timedOut` is created on every call,
+      // so one poll being declared dead cannot discard the NEXT poll's payload.
+      // The flag reaching the guard below is always the one belonging to the
+      // request whose response is being examined.
+      let timedOut = false;
+      // Releasing the poll slot is idempotent and reachable from BOTH the
+      // timeout and the `finally` (#606 item 3). Aborting a controller does
+      // not settle a request that ignores its signal, so a `finally`-only
+      // release leaves `inFlight` true forever after a hang — every later
+      // `poll()` returns at the guard above, no retry is ever issued, and the
+      // page merely looks stale while having silently stopped polling.
+      let released = false;
+      const release = () => {
+        if (released) return;
+        released = true;
+        controllers.delete(controller);
+        inFlight = false;
+      };
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+        release();
+        if (cancelled) return;
+        const message = `snapshot request timed out after ${timeoutMs}ms`;
+        setState((prev) => (prev.error === message ? prev : { ...prev, error: message }));
+      }, timeoutMs);
+
       try {
         const response = await doFetch(optionsRef.current.url, {
           cache: 'no-store',
@@ -204,7 +325,11 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
         });
         if (!response.ok) throw new Error(`snapshot request failed: HTTP ${response.status}`);
         const body: unknown = await response.json();
-        if (cancelled) return;
+        // `timedOut` is checked after BOTH awaits, so a response whose headers
+        // arrived in time but whose body hung is discarded too: a payload this
+        // poll has already been declared dead over must not land later and
+        // walk the chips from a snapshot the page never showed.
+        if (cancelled || timedOut) return;
         const snapshot = toWireSnapshot(body);
         if (snapshot === null) throw new Error('snapshot payload did not match the wire shape');
         lastSuccessMs = optionsRef.current.now();
@@ -222,14 +347,16 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
           error: null,
         }));
       } catch (cause) {
+        // An abort is either this effect tearing down or the timeout above,
+        // and the timeout has already named itself in `error`.
         if (cancelled || controller.signal.aborted) return;
         // Deliberately leaves `snapshot`/`previous`/`revision` untouched: the
         // numbers stay on screen and the watchdog decides when they are stale.
         const message = describeError(cause);
         setState((prev) => (prev.error === message ? prev : { ...prev, error: message }));
       } finally {
-        controllers.delete(controller);
-        inFlight = false;
+        clearTimeout(timeout);
+        release();
       }
     };
 

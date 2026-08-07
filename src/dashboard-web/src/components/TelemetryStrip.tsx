@@ -18,7 +18,24 @@ import type { WireSnapshot } from '../hooks/useSnapshot.ts';
 import { barWidth, formatClockUtc, formatPercent, formatUsd, UNKNOWN } from '../lib/format.ts';
 import { providerStateWord } from '../lib/vocabulary.ts';
 
-/** ADR-0008's spend cap, in USD. The burn meter's denominator. */
+/**
+ * ADR-0008's spend cap, in USD. The burn meter's denominator.
+ *
+ * **This is a COPY, and there is nowhere to copy it from** (#606 item 6, and
+ * the reason that item was declined rather than fixed). The enforced ceiling
+ * is `ProductionConfig.llmBudgetUsd`, set in `src/orchestrator/paper-profile.ts`
+ * and read by `SqliteSpendCap` — inside the ORCHESTRATOR process. The dashboard
+ * is a second process (`src/dashboard/index.ts`) that shares only the SQLite
+ * file, no environment variable carries the budget, and nothing persists it, so
+ * this figure cannot be put on the wire without the dashboard first inventing
+ * its own copy — which is the same duplication one indirection further from the
+ * meter.
+ *
+ * The consequence to know: change `llmBudgetUsd` server-side without changing
+ * this line and the meter silently reports the wrong fraction of the wrong cap.
+ * Both numbers are checked-in constants, so they move together in one commit or
+ * not at all.
+ */
 export const LLM_SPEND_CAP_USD = 50;
 
 export interface TelemetryStripProps {
@@ -57,15 +74,31 @@ function LiveTickCell({ snapshot }: { snapshot: WireSnapshot | null }) {
   return (
     <div className="telemetry-cell" data-field="live-tick">
       <span className="telemetry-label">Live tick</span>
-      {tick === null ? (
-        <span className="telemetry-value telemetry-muted">idle — no tick in progress</span>
-      ) : (
+      {tick !== null ? (
         <span className="telemetry-value">
           {tick.instrument} · {tick.asset_class} · {tick.stage}
           {enteredAt !== null && (
             <span className="telemetry-since"> since {formatClockUtc(enteredAt)}</span>
           )}
         </span>
+      ) : traceId !== null ? (
+        // The conflicting-fields case, named rather than resolved toward the
+        // quieter answer (#606 item 4). `tick_status` is absent but the
+        // pipeline reports a live trace, and the caveat below is about to
+        // print that trace id while the rooms hero glows for it — so "idle"
+        // here would leave the strip contradicting the rest of the page,
+        // which is the disagreement the `traceId` fallback above exists to
+        // prevent. Live is also the safer of the two readings: a page that
+        // says idle during a live tick is how an operator concludes the system
+        // has gone quiet and starts intervening.
+        <span className="telemetry-value">
+          live — a trace is running, but this snapshot carries no tick detail
+          {enteredAt !== null && (
+            <span className="telemetry-since"> since {formatClockUtc(enteredAt)}</span>
+          )}
+        </span>
+      ) : (
+        <span className="telemetry-value telemetry-muted">idle — no tick in progress</span>
       )}
       <span className="telemetry-caveat">
         {traceId === null ? 'no live trace' : `trace ${traceId}`}
@@ -75,7 +108,10 @@ function LiveTickCell({ snapshot }: { snapshot: WireSnapshot | null }) {
 }
 
 function BurnMeterCell({ snapshot }: { snapshot: WireSnapshot | null }) {
-  const allTime = snapshot?.llm_spend.all_time;
+  // `llm_spend` is nullable on the wire type (#606 item 2) — an absent summary
+  // reaches the same "meter not drawable" rendering an absent snapshot does,
+  // rather than a zero-width bar that would read as "nothing spent".
+  const allTime = snapshot?.llm_spend?.all_time;
   const spent = allTime?.cost_usd;
   const fraction = spent === undefined ? Number.NaN : spent / LLM_SPEND_CAP_USD;
   const width = barWidth(fraction);

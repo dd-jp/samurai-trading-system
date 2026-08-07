@@ -25,7 +25,12 @@ export interface StanceStripProps {
   finalPosition: Direction;
 }
 
-function directionClass(direction: string): string {
+/**
+ * `Direction`, not `string` (#606 item 6): the only callers pass a wire
+ * direction, and the wider type invited a `stance-<garbage>` class that no
+ * stylesheet rule matches — a mark rendered with no colour and no meaning.
+ */
+function directionClass(direction: Direction): string {
   return `stance-mark stance-${direction}`;
 }
 

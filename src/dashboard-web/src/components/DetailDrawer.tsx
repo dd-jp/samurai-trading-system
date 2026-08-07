@@ -39,6 +39,14 @@ const STAGES: readonly PipelineStage[] = ROOM_ORDER.filter(
 
 export interface DetailDrawerProps {
   instrument: string | null;
+  /**
+   * The trace being shown, which OUTLIVES its lane (#606 item 5). A ledger row
+   * keeps its entry for the session while the pipeline view only reaches back
+   * 15 minutes, so a row can name a trace that has no lane left — and the
+   * drawer must report that trace rather than fall silent or, worse, describe
+   * the instrument's newer one.
+   */
+  traceId: string | null;
   lane: PipelineLane | undefined;
   debate: DebateRow | undefined;
   verdict: VerdictRow | undefined;
@@ -155,7 +163,10 @@ function DebateSection(props: { debate: DebateRow | undefined; lane: PipelineLan
 }
 
 export function DetailDrawer(props: DetailDrawerProps) {
-  const { instrument, lane, debate, verdict } = props;
+  const { instrument, traceId, lane, debate, verdict } = props;
+  // The pinned trace wins over the lane's, and they only ever differ when the
+  // lane is absent — `App` resolves the lane BY that trace when one is pinned.
+  const shownTrace = traceId ?? lane?.trace_id ?? null;
 
   return (
     <section className="drawer-panel" aria-label="Instrument detail">
@@ -165,7 +176,9 @@ export function DetailDrawer(props: DetailDrawerProps) {
           {instrument === null
             ? 'no instrument selected — choose a sigil chip or a ledger row'
             : lane === undefined
-              ? 'no lane on this snapshot for this instrument'
+              ? shownTrace === null
+                ? 'no lane on this snapshot for this instrument'
+                : 'this trace has aged out of the 15-minute pipeline window'
               : `${lane.asset_class} · ${OUTCOME_WORD[lane.outcome]}${
                   lane.final_stage === null
                     ? ''
@@ -173,16 +186,31 @@ export function DetailDrawer(props: DetailDrawerProps) {
                 }${lane.total_ms === null ? '' : ` · ${formatStageDuration(lane.total_ms)} total`}`}
         </span>
         <span className="drawer-trace">
-          {lane === undefined || lane.trace_id === null ? 'no trace' : `trace ${lane.trace_id}`}
+          {shownTrace === null ? 'no trace' : `trace ${shownTrace}`}
         </span>
       </div>
 
       {lane === undefined ? (
-        <p className="empty-state">
-          {instrument === null
-            ? 'Select an instrument to see its stage strip, debate stances and invalidation section.'
-            : 'This instrument has no lane in the current snapshot.'}
-        </p>
+        <>
+          <p className="empty-state">
+            {instrument === null
+              ? 'Select an instrument to see its stage strip, debate stances and invalidation section.'
+              : shownTrace === null
+                ? 'This instrument has no lane in the current snapshot.'
+                : // The ledger keeps a settled row for the whole session; the
+                  // pipeline view reaches back 15 minutes. Past that the
+                  // stage-by-stage record is genuinely gone, and the verdict
+                  // line below is all that survives — which is still the row
+                  // the operator clicked, not a newer one.
+                  'The stage strip is drawn from the 15-minute pipeline window, and this trace is older than that. The ledger row and its verdict are what remain.'}
+          </p>
+          {verdict !== undefined && (
+            <p className="drawer-started">
+              verdict {verdict.status} · {verdict.reason} · {formatClockUtc(verdict.timestamp)}
+              {verdict.hitl_override ? ' · human override' : ''}
+            </p>
+          )}
+        </>
       ) : lane.trace_id === null ? (
         <p className="empty-state">
           No trace in the last 15 minutes — this instrument is idle and stands in the Lobby.

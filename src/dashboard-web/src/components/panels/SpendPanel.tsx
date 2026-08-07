@@ -11,6 +11,9 @@
  *    non-zero — not one of them, and not in a tooltip. `unpriced_calls` means
  *    `cost_usd` is a floor rather than a total; `unattributed_calls` means
  *    spend that is in the window total but in none of the per-debate figures.
+ *    Each count is `all_time`'s and names that window, because the three
+ *    windows are NESTED (24h ⊂ 7d ⊂ all time) and adding them counts the same
+ *    call up to three times (#606).
  *  - **p50/p95, never a mean** — LLM latency is long-tailed and a mean over
  *    that tail reports a duration no debate actually experienced.
  *  - **The word "Anthropic" does not appear.** All LLM traffic moved to Nous
@@ -64,12 +67,17 @@ export function SpendPanel({ spend }: SpendPanelProps) {
   }
 
   const perDebate = spend.all_time.per_debate;
-  const unpriced =
-    spend.last_24h.unpriced_calls + spend.last_7d.unpriced_calls + spend.all_time.unpriced_calls;
-  const unattributed =
-    spend.last_24h.per_debate.unattributed_calls +
-    spend.last_7d.per_debate.unattributed_calls +
-    spend.all_time.per_debate.unattributed_calls;
+  // Both counts come from `all_time` ALONE (#606 item 1). The three windows are
+  // nested — `SqliteQueryStore.getLlmSpend` bounds `last_24h`/`last_7d` by
+  // timestamp and leaves `all_time` open-ended — so summing them counted the
+  // same unpriced call two or three times. A caveat exists so a spend figure
+  // cannot read as more complete than it is; one that inflates its own count
+  // is the honesty convention lying. `all_time` is the superset, so it is the
+  // truthful total, and the wording names the window it belongs to. It is also
+  // the window the burn meter's caveat already reports, so the strip and this
+  // panel now quote the same number.
+  const unpriced = spend.all_time.unpriced_calls;
+  const unattributed = spend.all_time.per_debate.unattributed_calls;
 
   return (
     <section className="panel panel-spend" aria-label="LLM spend">
@@ -106,17 +114,26 @@ export function SpendPanel({ spend }: SpendPanelProps) {
         Latency is time spent inside LLM calls, not a debate's wall-clock elapsed time — the two
         differ whenever calls overlap or one is retried.
       </p>
+      {/*
+        "Every cost figure above" is deliberately WIDER than the count beside
+        it: if all of the unpriced calls are older than seven days, `last_24h`
+        is exact and only `all_time` is a floor. Over-scoping the caveat is the
+        safe direction under the honesty convention — the reader is told a
+        figure may be incomplete when it happens to be exact, never the reverse
+        — and the alternative, a per-window caveat, would print three of these
+        and still say nothing the operator can act on differently.
+      */}
       {unpriced > 0 && (
         <p className="caveat" data-caveat="unpriced">
-          {formatCount(unpriced)} unpriced calls — their model is absent from the rate table, so
-          they contribute tokens but no dollars. Every cost figure above is a{' '}
+          {formatCount(unpriced)} unpriced calls (all time) — their model is absent from the rate
+          table, so they contribute tokens but no dollars. Every cost figure above is a{' '}
           <b>floor, not a total</b>, and so is the burn meter.
         </p>
       )}
       {unattributed > 0 && (
         <p className="caveat" data-caveat="unattributed">
-          {formatCount(unattributed)} calls carry no <code>debate_id</code> — their spend is in the
-          window totals above but in <b>none</b> of the per-debate figures.
+          {formatCount(unattributed)} calls (all time) carry no <code>debate_id</code> — their spend
+          is in the window totals above but in <b>none</b> of the per-debate figures.
         </p>
       )}
     </section>

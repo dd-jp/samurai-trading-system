@@ -16,16 +16,42 @@
  * itself.
  */
 :root {
-  /* Colour */
+  /*
+   * Colour. Every colour that App.css also needs as a translucent wash is
+   * declared ONCE, as space-separated channels, and the opaque token is
+   * derived from it (#606 item 6). App.css writes `rgb(var(--cyan-rgb) / 0.06)`
+   * instead of `rgba(56, 225, 255, 0.06)`, so a palette change is one edit
+   * here rather than a hand-sweep of ~20 literals — which is what the App.css
+   * header already claimed was true.
+   *
+   * The channel token is the SOURCE and the hex-equivalent is the derivation,
+   * not the other way round: two independent declarations of the same colour
+   * is the duplication this exists to remove. The values are still the spec's
+   * colour table (`--cyan` = #38e1ff = 56 225 255, and so on).
+   */
   --bg: #060a14;
   --panel: rgba(255, 255, 255, 0.04);
-  --border: #1e2a44;
-  --cyan: #38e1ff;
-  --go: #3ddc7d;
-  --amber: #ffb454;
-  --vermilion: #ff4d5e;
+  --border-rgb: 30 42 68;
+  --border: rgb(var(--border-rgb));
+  --cyan-rgb: 56 225 255;
+  --cyan: rgb(var(--cyan-rgb));
+  --go-rgb: 61 220 125;
+  --go: rgb(var(--go-rgb));
+  --amber-rgb: 255 180 84;
+  --amber: rgb(var(--amber-rgb));
+  --vermilion-rgb: 255 77 94;
+  --vermilion: rgb(var(--vermilion-rgb));
   --text: #e8edf7;
-  --muted: #8a93a8;
+  --muted-rgb: 138 147 168;
+  --muted: rgb(var(--muted-rgb));
+  /*
+   * The dark the panels and chips sit ON, distinct from `--bg` (6 10 20) and
+   * deliberately not folded into it: the washes at 0.4–0.72 alpha are read
+   * against the page's radial gradient, and collapsing them onto the page
+   * colour would flatten that separation. No opaque counterpart is derived
+   * because nothing uses it at full alpha.
+   */
+  --ink-rgb: 11 16 32;
 
   /* Type — self-hosted via @fontsource, imported in main.tsx */
   --font-display: "Chakra Petch", sans-serif;

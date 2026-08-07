@@ -1,9 +1,15 @@
 /*
  * Mission-control screen styling (issue #538; dashboard-spec.md "Layout" and
  * "Design system"). All colours come from tokens.css custom properties;
- * nothing here hard-codes a hex, per the Design system's rule. The only
- * literal colours are rgba() glows and washes derived from the tokens, which
- * CSS cannot express as an alpha over a var() without colour-mix.
+ * nothing here hard-codes a palette colour, per the Design system's rule.
+ *
+ * Glows and washes are written `rgb(var(--cyan-rgb) / 0.06)` rather than
+ * `rgba(56, 225, 255, 0.06)` (#606 item 6): the previous form repeated each
+ * palette triple across ~20 literals, so a token change meant hand-editing all
+ * of them and the claim above was only true of the opaque colours. The two
+ * remaining literals are `rgba(0, 0, 0, …)` drop shadows, which are shadow
+ * depth rather than palette, and one opaque chip background that has no token
+ * counterpart.
  *
  * Motion here is CSS keyframes and transitions only — no JS animation loop and
  * no requestAnimationFrame anywhere in the app (Motion rule 10).
@@ -18,7 +24,7 @@
   background: var(--bg);
   background-image: radial-gradient(
     1200px 600px at 50% -200px,
-    rgba(56, 225, 255, 0.06),
+    rgb(var(--cyan-rgb) / 0.06),
     transparent 60%
   );
   color: var(--text);
@@ -243,6 +249,19 @@ main {
   padding: 0 20px 60px;
 }
 
+/*
+ * No `backdrop-filter` on the panels (#606 item 6). Backdrop blur makes the
+ * compositor re-snapshot and blur everything behind the element on every
+ * repaint, and this page repaints every 3 seconds, forever, on a machine that
+ * is also running the trading process. What it was blurring is the page's
+ * static radial gradient — the panels are opaque enough that the blur bought
+ * close to nothing visible, and it was paid for once per panel per repaint.
+ * The translucent tint (`--panel`) that carries the glass look is unchanged.
+ *
+ * The telemetry strip keeps its blur: one element rather than eight (five bento
+ * panels, the rooms hero, the ledger and the drawer), and it is the one thing
+ * the rooms hero actually scrolls behind.
+ */
 .panel,
 .rooms-panel,
 .ledger-panel,
@@ -250,7 +269,6 @@ main {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--panel);
-  backdrop-filter: blur(12px);
   padding: 16px 18px;
 }
 
@@ -329,7 +347,7 @@ main {
   position: relative;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: rgba(11, 16, 32, 0.72);
+  background: rgb(var(--ink-rgb) / 0.72);
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
@@ -366,7 +384,7 @@ main {
 
 .room-lobby {
   border-style: dashed;
-  background: rgba(11, 16, 32, 0.4);
+  background: rgb(var(--ink-rgb) / 0.4);
 }
 
 /* Room 04 while the invalidation stage is unbuilt: lights off, and it says so
@@ -377,10 +395,10 @@ main {
 }
 
 .room-live {
-  border-color: rgba(56, 225, 255, 0.55);
+  border-color: rgb(var(--cyan-rgb) / 0.55);
   box-shadow:
-    0 0 18px rgba(56, 225, 255, 0.12),
-    inset 0 0 24px rgba(56, 225, 255, 0.04);
+    0 0 18px rgb(var(--cyan-rgb) / 0.12),
+    inset 0 0 24px rgb(var(--cyan-rgb) / 0.04);
 }
 
 .room-live::before {
@@ -390,7 +408,7 @@ main {
 .room-selected {
   box-shadow:
     0 0 0 1px var(--cyan),
-    0 0 18px rgba(56, 225, 255, 0.15);
+    0 0 18px rgb(var(--cyan-rgb) / 0.15);
 }
 
 .room-corner {
@@ -484,7 +502,7 @@ main {
   bottom: 2px;
   font-size: 48px;
   line-height: 1;
-  color: rgba(138, 147, 168, 0.1);
+  color: rgb(var(--muted-rgb) / 0.1);
   pointer-events: none;
   user-select: none;
 }
@@ -542,13 +560,13 @@ main {
 .chip-selected {
   border-color: var(--cyan);
   box-shadow:
-    0 0 0 1px rgba(56, 225, 255, 0.6),
-    0 2px 12px rgba(56, 225, 255, 0.2);
+    0 0 0 1px rgb(var(--cyan-rgb) / 0.6),
+    0 2px 12px rgb(var(--cyan-rgb) / 0.2);
 }
 
 .chip-walking {
   border-color: var(--cyan);
-  box-shadow: 0 4px 16px rgba(56, 225, 255, 0.25);
+  box-shadow: 0 4px 16px rgb(var(--cyan-rgb) / 0.25);
 }
 
 /* The settle ring: what moved, when it did not walk (Motion rule 5/8). A
@@ -573,7 +591,7 @@ main {
 }
 
 .chip-in_flight {
-  border-color: rgba(56, 225, 255, 0.5);
+  border-color: rgb(var(--cyan-rgb) / 0.5);
 }
 
 .chip-in_flight .chip-ring {
@@ -582,7 +600,7 @@ main {
 
 .chip-go .chip-ring {
   border-color: var(--go);
-  background: rgba(61, 220, 125, 0.25);
+  background: rgb(var(--go-rgb) / 0.25);
 }
 
 .chip-no_go .chip-ring {
@@ -591,7 +609,7 @@ main {
 
 .chip-stopped .chip-ring {
   border-color: var(--vermilion);
-  background: rgba(255, 77, 94, 0.25);
+  background: rgb(var(--vermilion-rgb) / 0.25);
 }
 
 .chip-quorum_skip .chip-ring {
@@ -637,7 +655,7 @@ main {
   top: 0;
   bottom: 0;
   width: 36%;
-  background: linear-gradient(105deg, transparent, rgba(56, 225, 255, 0.14), transparent);
+  background: linear-gradient(105deg, transparent, rgb(var(--cyan-rgb) / 0.14), transparent);
   animation: chip-scan 2.4s infinite;
 }
 
@@ -668,7 +686,7 @@ main {
   text-align: left;
   padding: 7px 4px;
   border: 0;
-  border-bottom: 1px solid rgba(30, 42, 68, 0.6);
+  border-bottom: 1px solid rgb(var(--border-rgb) / 0.6);
   background: transparent;
   color: inherit;
   font-family: var(--font-mono);
@@ -678,11 +696,11 @@ main {
 }
 
 .ledger-row:hover {
-  background: rgba(56, 225, 255, 0.05);
+  background: rgb(var(--cyan-rgb) / 0.05);
 }
 
 .ledger-row-selected {
-  background: rgba(56, 225, 255, 0.08);
+  background: rgb(var(--cyan-rgb) / 0.08);
 }
 
 .ledger-time,
@@ -714,19 +732,19 @@ main {
 .seal-go {
   color: var(--cyan);
   border-color: var(--cyan);
-  background: rgba(56, 225, 255, 0.08);
+  background: rgb(var(--cyan-rgb) / 0.08);
 }
 
 .seal-no_go {
   color: var(--amber);
   border-color: var(--amber);
-  background: rgba(255, 180, 84, 0.08);
+  background: rgb(var(--amber-rgb) / 0.08);
 }
 
 .seal-stopped {
   color: var(--vermilion);
   border-color: var(--vermilion);
-  background: rgba(255, 77, 94, 0.1);
+  background: rgb(var(--vermilion-rgb) / 0.1);
 }
 
 .seal-quorum_skip {
@@ -833,7 +851,7 @@ main {
 
 .stage-strip td {
   padding: 5px 8px;
-  border-bottom: 1px solid rgba(30, 42, 68, 0.5);
+  border-bottom: 1px solid rgb(var(--border-rgb) / 0.5);
   font-family: var(--font-mono);
 }
 
@@ -955,7 +973,7 @@ main {
   border-radius: 9px;
   padding: 12px 14px;
   margin-bottom: 10px;
-  background: rgba(11, 16, 32, 0.5);
+  background: rgb(var(--ink-rgb) / 0.5);
 }
 
 .position-top {
@@ -985,12 +1003,12 @@ main {
 
 .side-buy {
   color: var(--go);
-  border-color: rgba(61, 220, 125, 0.5);
+  border-color: rgb(var(--go-rgb) / 0.5);
 }
 
 .side-sell {
   color: var(--vermilion);
-  border-color: rgba(255, 77, 94, 0.5);
+  border-color: rgb(var(--vermilion-rgb) / 0.5);
 }
 
 .position-size {
@@ -1086,7 +1104,7 @@ main {
   border: 1px solid var(--border);
   border-radius: 9px;
   padding: 10px 12px;
-  background: rgba(11, 16, 32, 0.5);
+  background: rgb(var(--ink-rgb) / 0.5);
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -1126,7 +1144,7 @@ main {
 }
 
 .spark-fill {
-  fill: rgba(56, 225, 255, 0.1);
+  fill: rgb(var(--cyan-rgb) / 0.1);
   stroke: none;
 }
 
@@ -1138,7 +1156,7 @@ main {
   gap: 10px;
   align-items: center;
   padding: 6px 0;
-  border-bottom: 1px solid rgba(30, 42, 68, 0.5);
+  border-bottom: 1px solid rgb(var(--border-rgb) / 0.5);
   font-size: 12px;
 }
 
@@ -1217,7 +1235,7 @@ main {
 
 .debate-row {
   padding: 8px 0;
-  border-bottom: 1px solid rgba(30, 42, 68, 0.5);
+  border-bottom: 1px solid rgb(var(--border-rgb) / 0.5);
 }
 
 .debate-row:last-child {
@@ -1254,12 +1272,12 @@ main {
 
 .direction-bullish {
   color: var(--go);
-  border-color: rgba(61, 220, 125, 0.5);
+  border-color: rgb(var(--go-rgb) / 0.5);
 }
 
 .direction-bearish {
   color: var(--vermilion);
-  border-color: rgba(255, 77, 94, 0.5);
+  border-color: rgb(var(--vermilion-rgb) / 0.5);
 }
 
 .direction-neutral {

@@ -141,4 +141,61 @@ describe('computeLayout', () => {
     expect(debate?.overflowChips).toEqual([]);
     expect(debate?.overflowCount).toBe(0);
   });
+
+  /**
+   * The invariant `RoomsGrid` relies on instead of rendering a caveat for a
+   * state that cannot happen (PR #607 review round 2, revisiting #606 item 6).
+   *
+   * `RoomsGrid` looks every `visibleChips` entry up in a map built from
+   * `view.lanes`; a miss would silently drop a chip, and an instrument missing
+   * from the hero reads as "not trading" rather than as a gap. Rather than
+   * carry operator-facing text for an unreachable case on the repaint path,
+   * the contract is pinned here — where a change to `computeLayout` that
+   * invented a chip, or renamed one, fails immediately.
+   */
+  describe('every placed chip belongs to a lane', () => {
+    const views = {
+      empty: makeView([]),
+      'one lane': makeView([doneThrough('BTC-USD', 'a', 'debate')]),
+      'idle lane in the lobby': makeView([makeLane({ instrument: 'SPY', outcome: 'idle' })]),
+      'a room past the collapse threshold': makeView([
+        doneThrough('BTC-USD', 'a', 'risk'),
+        doneThrough('ETH-USD', 'b', 'risk'),
+        doneThrough('SPY', 'c', 'risk'),
+        doneThrough('QQQ', 'd', 'risk'),
+        doneThrough('AAPL', 'e', 'risk'),
+      ]),
+      'lanes spread across every room': makeView([
+        doneThrough('A', 'a', 'analysts'),
+        doneThrough('B', 'b', 'debate'),
+        doneThrough('C', 'c', 'trader'),
+        doneThrough('D', 'd', 'invalidation'),
+        doneThrough('E', 'e', 'risk'),
+        doneThrough('F', 'f', 'verdict'),
+        doneThrough('G', 'g', 'execution'),
+        makeLane({ instrument: 'H', outcome: 'idle' }),
+      ]),
+    };
+
+    for (const [name, view] of Object.entries(views)) {
+      it(name, () => {
+        const layout = computeLayout(view);
+        const instruments = new Set(view.lanes.map((lane) => lane.instrument));
+
+        for (const room of layout.rooms) {
+          for (const chip of [...room.visibleChips, ...room.overflowChips, ...room.chips]) {
+            expect(instruments.has(chip)).toBe(true);
+          }
+        }
+        // The placement lookup `RoomsGrid` reads for the live and selected
+        // rooms carries the same guarantee.
+        for (const instrument of Object.keys(layout.chips)) {
+          expect(instruments.has(instrument)).toBe(true);
+        }
+        // And nothing is lost on the way in: every lane got a chip, so the
+        // subset relation is an equality rather than a licence to drop lanes.
+        expect(new Set(layout.rooms.flatMap((room) => room.chips))).toEqual(instruments);
+      });
+    }
+  });
 });

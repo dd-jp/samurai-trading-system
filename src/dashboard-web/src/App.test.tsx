@@ -26,15 +26,21 @@ function renderApp(payloads: Parameters<typeof fakeFetch>[0]) {
 
 /** BTC live in debate, QQQ stopped at risk, SPY idle in the Lobby. */
 function theaterView() {
-  const btc = doneThrough('BTC-USD', 'trace-btc', 'analysts', { outcome: 'in_flight' });
-  btc.cells[1] = {
-    stage: 'debate',
-    state: 'live',
-    duration_ms: null,
-    decision: null,
-    recorded_at: null,
-    attempts: 1,
-  };
+  // Built with `makeLane` rather than `doneThrough` plus a `cells[1]` write:
+  // the index was an unstated bet on `doneThrough`'s stage ordering, and
+  // `doneThrough` only emits `done` cells, so a live stage was never something
+  // it could express (#606 item 6).
+  const btc = makeLane({
+    instrument: 'BTC-USD',
+    trace_id: 'trace-btc',
+    outcome: 'in_flight',
+    final_stage: 'debate',
+    started_at: '2026-08-07T11:59:49.000Z',
+    cells: {
+      analysts: { state: 'done', recorded_at: '2026-08-07T11:59:50.000Z', duration_ms: 1_000 },
+      debate: { state: 'live' },
+    },
+  });
   const qqq = makeLane({
     instrument: 'QQQ',
     trace_id: 'trace-qqq',
@@ -271,18 +277,164 @@ describe('mission control', () => {
   });
 
   it('carries both spend caveats whenever their counts are non-zero', async () => {
+    // Both counts sit on `all_time` — the window the caveats report — because
+    // the windows are nested and a call inside 24h is inside all time too.
     const spend = makeSpend();
-    spend.all_time = { ...spend.all_time, unpriced_calls: 3 };
-    spend.last_24h = {
-      ...spend.last_24h,
-      per_debate: { ...spend.last_24h.per_debate, unattributed_calls: 7 },
+    spend.all_time = {
+      ...spend.all_time,
+      unpriced_calls: 3,
+      per_debate: { ...spend.all_time.per_debate, unattributed_calls: 7 },
     };
     renderApp([makeSnapshot({ llm_spend: spend })]);
 
     const panel = screen.getByRole('region', { name: 'LLM spend' });
     expect(await within(panel).findByText(/unpriced calls/)).toBeTruthy();
     expect(within(panel).getByText(/floor, not a total/)).toBeTruthy();
-    expect(within(panel).getByText(/calls carry no/)).toBeTruthy();
+    expect(within(panel).getByText(/carry no/)).toBeTruthy();
+  });
+
+  it('counts each unpriced call ONCE across the nested spend windows', async () => {
+    // #606 item 1. The same 3 unpriced and 7 unattributed calls appear in all
+    // three windows, because 24h ⊂ 7d ⊂ all time (`getLlmSpend` leaves
+    // `all_time` open-ended and bounds the other two by timestamp). Summing
+    // the windows reported 9 and 21 — a caveat that exists to stop a spend
+    // figure reading as more complete than it is, inflating its own count.
+    const spend = makeSpend();
+    for (const key of ['last_24h', 'last_7d', 'all_time'] as const) {
+      spend[key] = {
+        ...spend[key],
+        unpriced_calls: 3,
+        per_debate: { ...spend[key].per_debate, unattributed_calls: 7 },
+      };
+    }
+    renderApp([makeSnapshot({ llm_spend: spend })]);
+
+    const panel = screen.getByRole('region', { name: 'LLM spend' });
+    const unpriced = await within(panel).findByText(/unpriced calls/);
+    expect(unpriced.textContent).toContain('3 unpriced calls (all time)');
+    expect(unpriced.textContent).not.toContain('9 unpriced');
+    const unattributed = within(panel).getByText(/carry no/);
+    expect(unattributed.textContent).toContain('7 calls (all time)');
+    expect(unattributed.textContent).not.toContain('21 calls');
+    // The strip's burn caveat already quoted `all_time`; the two agree now.
+    const strip = screen.getByRole('region', { name: 'Telemetry' });
+    expect(within(strip).getByText(/3 unpriced calls/)).toBeTruthy();
+  });
+
+  it('degrades to the spend panel’s empty state when the spend read is missing', async () => {
+    // #606 item 2. The panel and the burn meter both have an honest rendering
+    // for an absent summary; the boundary used to throw the whole payload away
+    // instead, freezing every OTHER panel into stale to spare the one built to
+    // degrade. Deleted rather than assigned, because the case is a server or
+    // proxy that does not send the field.
+    const snapshot = makeSnapshot({ pipeline: theaterView() });
+    delete (snapshot as { llm_spend?: unknown }).llm_spend;
+    renderApp([snapshot]);
+
+    // The rest of the page is alive: positions, the theater and the clock all
+    // landed from the very payload the boundary used to reject.
+    expect(await screen.findByText('12:00:00Z')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /QQQ, stocks, stopped/ })).toBeTruthy();
+    const spend = screen.getByRole('region', { name: 'LLM spend' });
+    expect(within(spend).getByText(/an absent summary means the read failed/)).toBeTruthy();
+    const strip = screen.getByRole('region', { name: 'Telemetry' });
+    // Not a zero-width bar reading as "nothing spent".
+    expect(within(strip).getByText(/meter not drawable/)).toBeTruthy();
+    expect(strip.getAttribute('data-stale')).toBe('false');
+  });
+
+  it('renders the spend empty state, not a white screen, for a malformed spend summary', async () => {
+    // PR #607 review round 1. An array passes `typeof x === 'object'`, so the
+    // first narrowing handed `[]` to `SpendPanel` as a summary and the read of
+    // `spend.all_time.per_debate` threw — and `main.tsx` mounts `<App/>` with
+    // no error boundary, so the whole operator surface goes blank. This is the
+    // end-to-end version of the boundary test: the page must survive it.
+    const snapshot = makeSnapshot({ pipeline: theaterView() });
+    (snapshot as { llm_spend?: unknown }).llm_spend = [];
+    renderApp([snapshot]);
+
+    expect(await screen.findByText('12:00:00Z')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /QQQ, stocks, stopped/ })).toBeTruthy();
+    const spend = screen.getByRole('region', { name: 'LLM spend' });
+    expect(within(spend).getByText(/an absent summary means the read failed/)).toBeTruthy();
+    // Not a grid of em dashes reading as a real, empty spend summary.
+    expect(within(spend).queryByText('24 hours')).toBeNull();
+  });
+
+  it('reads live, not idle, when a trace is running but tick_status is absent', async () => {
+    // #606 item 4. `tick_status` is null while `pipeline.live_trace_id` is
+    // set: the rooms hero glows and the cell's own caveat prints the trace, so
+    // "idle — no tick in progress" left the strip contradicting the rest of
+    // the page — and "the system has gone quiet" is the reading that makes an
+    // operator intervene.
+    renderApp([makeSnapshot({ pipeline: theaterView(), tick_status: null })]);
+
+    const strip = screen.getByRole('region', { name: 'Telemetry' });
+    expect(await within(strip).findByText('trace trace-btc')).toBeTruthy();
+    expect(within(strip).queryByText(/idle — no tick in progress/)).toBeNull();
+    expect(within(strip).getByText(/live — a trace is running/)).toBeTruthy();
+    // The room it disagreed with, still glowing.
+    const debateRoom = screen.getByRole('heading', { name: 'Debate' }).closest('.room');
+    expect(debateRoom?.classList.contains('room-live')).toBe(true);
+  });
+
+  it('still reads idle when there is no tick AND no live trace', async () => {
+    // The other half of item 4: the muted idle wording is not gone, it is
+    // reserved for the case where both fields agree there is nothing running.
+    renderApp([makeSnapshot({ tick_status: null })]);
+
+    const strip = screen.getByRole('region', { name: 'Telemetry' });
+    expect(await within(strip).findByText(/idle — no tick in progress/)).toBeTruthy();
+    expect(within(strip).getByText('no live trace')).toBeTruthy();
+  });
+
+  it('opens the trace stamped on a ledger row, not the instrument’s current one', async () => {
+    // #606 item 5. ETH-USD settles twice this session. The drawer used to be
+    // keyed by instrument, so clicking the OLDER row showed the trace ETH-USD
+    // is on now — a different decision than the one the row is stamped with,
+    // under a subheading promising "click a row for its trace".
+    const old = doneThrough('ETH-USD', 'trace-old', 'verdict', { outcome: 'no_go' });
+    const current = doneThrough('ETH-USD', 'trace-new', 'execution', { outcome: 'go' });
+    const first = makeSnapshot({
+      pipeline: makeView([old]),
+      verdicts: [makeVerdict({ trace_id: 'trace-old', status: 'no_go', reason: 'drawdown gate' })],
+    });
+    const second = makeSnapshot({
+      pipeline: makeView([current]),
+      as_of: '2026-08-07T12:00:03.000Z',
+      generated_at: '2026-08-07T12:00:03.000Z',
+      // Both, as the wire carries them: `verdicts[]` is the last ten settled
+      // decisions, not just the current tick's.
+      verdicts: [
+        makeVerdict({ trace_id: 'trace-new', status: 'go', reason: 'approved' }),
+        makeVerdict({ trace_id: 'trace-old', status: 'no_go', reason: 'drawdown gate' }),
+      ],
+    });
+    renderApp([first, second]);
+
+    // Wait for the second poll, so the ledger holds both rows and the only
+    // lane on the wire is the newer trace.
+    await screen.findByText('12:00:03Z');
+    const ledger = await screen.findByRole('region', { name: 'Verdict ledger' });
+    const older = await within(ledger).findByRole('button', { name: /ETH-USD, no-go/ });
+    fireEvent.click(older);
+
+    const drawer = screen.getByRole('region', { name: 'Instrument detail' });
+    expect(within(drawer).getByText('trace trace-old')).toBeTruthy();
+    expect(within(drawer).queryByText('trace trace-new')).toBeNull();
+    // Its own verdict travels with it, even though the lane has aged out.
+    expect(within(drawer).getByText(/drawdown gate/)).toBeTruthy();
+    expect(within(drawer).getByText(/aged out of the 15-minute pipeline window/)).toBeTruthy();
+    // Only the row being described is highlighted.
+    expect(older.classList.contains('ledger-row-selected')).toBe(true);
+    const newer = within(ledger).getByRole('button', { name: /ETH-USD, go/ });
+    expect(newer.classList.contains('ledger-row-selected')).toBe(false);
+
+    // And the current row still resolves to the live lane's stage strip.
+    fireEvent.click(newer);
+    expect(within(drawer).getByText('trace trace-new')).toBeTruthy();
+    // A trace still inside the window keeps its full stage strip.
+    expect(within(drawer).getByRole('columnheader', { name: 'Stage' })).toBeTruthy();
   });
 
   it('samples equity per probe observation, not per poll', async () => {
