@@ -282,7 +282,7 @@ describe('evaluateSmokeGate', () => {
     );
 
     expect(gate.passed).toBe(false);
-    expect(gate.failures.some((failure) => failure.includes('crypto cap'))).toBe(true);
+    expect(gate.failures.some((failure) => failure.includes("asset class's cap"))).toBe(true);
   });
 
   it('fails when a class meters more LLM calls than its per-debate worst case (#581)', () => {

@@ -125,6 +125,15 @@ export interface DebatePersonasWithState extends DebatePersonas {
    * its start.
    */
   getCurrentState: () => PartialDebateState | undefined;
+  /**
+   * The round cap these personas were built for, echoed back so the caller
+   * passes THE SAME value to `runDebate` (#581, PR #583 review). The
+   * mediator's final-round check gates the once-per-debate
+   * `detectDisagreements` call on this cap; reading it off the personas
+   * object instead of a second independent argument is what makes the two
+   * caps structurally unable to drift.
+   */
+  maxRounds: number;
 }
 
 /**
@@ -151,11 +160,12 @@ export function buildDebatePersonas(
    */
   debate_id?: string,
   /**
-   * The round cap THIS debate runs under (#581) — must match the `maxRounds`
-   * the caller passes to `runDebate`, because the mediator's "is this the
+   * The round cap THIS debate runs under (#581). The mediator's "is this the
    * final round" check below gates the once-per-debate `detectDisagreements`
-   * call. A crypto debate capped at 1 round that still compared against
-   * `MAX_ROUNDS` would never run disagreement detection at all.
+   * call on it, and it is echoed back on the returned personas
+   * (`DebatePersonasWithState.maxRounds`) for the caller to hand to
+   * `runDebate` — read it from there rather than repeating the value, or a
+   * drift between the two would silently skip disagreement detection.
    */
   maxRounds: number = MAX_ROUNDS,
 ): DebatePersonasWithState {
@@ -277,7 +287,7 @@ export function buildDebatePersonas(
     },
   };
 
-  return { bull, bear, mediator, clock, getCurrentState: () => currentState };
+  return { bull, bear, mediator, clock, getCurrentState: () => currentState, maxRounds };
 }
 
 /**
@@ -607,16 +617,15 @@ export function buildDebateStep(
     // innermost layer that still knows which class to bill.
     // ROUND CAP, per asset class (#581). Crypto runs ONE round so the debate
     // genuinely fits its latency budget instead of truncating on every tick;
-    // stocks keep the 3-round hybrid termination. Passed BOTH to the personas
-    // (final-round check gates `detectDisagreements`) and to `runDebate` — the
-    // two must agree or crypto would never run disagreement detection.
-    const maxRounds = MAX_ROUNDS_BY_ASSET_CLASS[asset_class];
+    // stocks keep the 3-round hybrid termination. Given to the personas once
+    // and read back off them for `runDebate`, so the final-round check that
+    // gates `detectDisagreements` cannot disagree with the loop bound.
     const personas = buildDebatePersonas(
       new RateLimitedLlmClient(llmClient, rateLimiter, asset_class),
       trace_id,
       clock,
       debate_id,
-      maxRounds,
+      MAX_ROUNDS_BY_ASSET_CLASS[asset_class],
     );
 
     // LATENCY BUDGET (#374). `enforceLatencyBudget` was implemented, tested,
@@ -647,7 +656,10 @@ export function buildDebateStep(
         trace_id,
         debate_id,
         produceResult: (signal) =>
-          runDebate({ views, instrument, bar }, personas, { signal, maxRounds }),
+          runDebate({ views, instrument, bar }, personas, {
+            signal,
+            maxRounds: personas.maxRounds,
+          }),
         getCurrentState: personas.getCurrentState,
         // `JsonDebateLogger` over the step's own sink, so the timeout line
         // lands in the same stream as every other debate line. A step built

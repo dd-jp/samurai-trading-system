@@ -1201,25 +1201,37 @@ export function evaluateSmokeGate(
   }
 
   // #581 — the per-asset-class round cap is wired through the composition
-  // root. The smoke universe is crypto-only, so every `debate_log` row here
-  // ran under `MAX_ROUNDS_BY_ASSET_CLASS.crypto`; a row above it means
-  // `buildDebateStep` stopped threading the cap into `runDebate`. Paired with
-  // a per-class call-accounting bound that is TIGHT under the stub (a
-  // converged crypto debate spends exactly its worst case: 3 persona calls +
-  // 1 disagreement call), so one extra LLM call per debate — an unwired cap,
-  // a second disagreement pass — fails the gate rather than passing unseen.
-  const cryptoRoundCap = MAX_ROUNDS_BY_ASSET_CLASS.crypto;
-  const overCap = debates.filter((debate) => debate.rounds > cryptoRoundCap);
+  // root. Each `debate_log` row is checked against ITS instrument's cap
+  // (looked up through `SMOKE_TEST_UNIVERSE`, so widening the smoke universe
+  // to stocks keeps healthy 3-round debates passing); a row above its cap
+  // means `buildDebateStep` stopped threading the cap into `runDebate`.
+  // Paired with a per-class call-accounting bound that is TIGHT under the
+  // stub (a converged crypto debate spends exactly its worst case: 3 persona
+  // calls + 1 disagreement call), so one extra LLM call per debate — an
+  // unwired cap, a second disagreement pass — fails the gate rather than
+  // passing unseen.
+  const smokeAssetClass = new Map<string, AssetClass>(
+    SMOKE_TEST_UNIVERSE.map((entry) => [entry.asset, entry.asset_class]),
+  );
+  const overCap = debates.filter((debate) => {
+    const assetClass = smokeAssetClass.get(debate.instrument) ?? 'crypto';
+    return debate.rounds > MAX_ROUNDS_BY_ASSET_CLASS[assetClass];
+  });
   if (overCap.length > 0) {
     failures.push(
-      `${overCap.length} debate_log row(s) ran more rounds than the crypto cap of ` +
-        `${cryptoRoundCap} (#581) — the per-asset-class round cap is no longer reaching ` +
-        '`runDebate` from the composition root, so live crypto debates are back to blowing ' +
-        'their latency budget on every tick',
+      `${overCap.length} debate_log row(s) ran more rounds than their asset class's cap ` +
+        '(#581) — the per-asset-class round cap is no longer reaching `runDebate` from the ' +
+        'composition root, so live crypto debates are back to blowing their latency budget ' +
+        'on every tick',
     );
   }
-  for (const [assetClass, entry] of Object.entries(options.llmRateLimiterSnapshot)) {
-    const perDebateBound = worstCaseLlmCallsForAssetClass(assetClass as AssetClass);
+  // Iterated over the closed AssetClass set rather than Object.entries, so a
+  // malformed snapshot key can never produce an undefined cap (whose NaN
+  // bound would compare false everywhere and silently pass the gate).
+  for (const assetClass of ['crypto', 'stocks'] as const satisfies readonly AssetClass[]) {
+    const entry = options.llmRateLimiterSnapshot[assetClass];
+    if (entry === undefined) continue;
+    const perDebateBound = worstCaseLlmCallsForAssetClass(assetClass);
     if (entry.debatesUsed > 0 && entry.llmCallsUsed > entry.debatesUsed * perDebateBound) {
       failures.push(
         `the ${assetClass} limiter metered ${entry.llmCallsUsed} LLM call(s) across ` +
