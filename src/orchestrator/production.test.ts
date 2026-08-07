@@ -808,7 +808,7 @@ describe('startTickLoop', () => {
     await loop.stop();
   });
 
-  it('logs and survives a tick that throws', async () => {
+  it('logs and survives an instrument that throws inside a tick (#507)', async () => {
     const logger = recordingLogger();
     const runInstrument = vi
       .fn<TickRunner['runInstrument']>()
@@ -826,11 +826,79 @@ describe('startTickLoop', () => {
     });
 
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(logger.entries.some((entry) => entry.message === 'tick failed')).toBe(true);
+    // Caught inside tick-loop.ts's per-worker try/catch (#507), not this
+    // module's `runOnce` catch: the instrument-level failure line fires...
+    expect(logger.entries.some((entry) => entry.message === 'instrument failed: BTC-USD')).toBe(
+      true,
+    );
+    // ...and 'tick failed' — which used to be the ONLY record of a throw
+    // anywhere in this path — does not, because `runTickPlan` no longer
+    // rejects the whole tick over one instrument's failure.
+    expect(logger.entries.some((entry) => entry.message === 'tick failed')).toBe(false);
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(runInstrument).toHaveBeenCalledTimes(2);
 
+    await loop.stop();
+  });
+
+  it('holds the overlap guard for a surviving worker from a tick where a sibling already threw (#507)', async () => {
+    // Reproduces the defect directly: before the fix, FAST's throw alone
+    // rejected `runTickPlan`'s `Promise.all`, which resolved `runOnce` and
+    // cleared `inFlight` — the exact flag this suite's overlap guard tests —
+    // while SLOW was still mid-pipeline. The next scheduled tick would then
+    // have started alongside it. Proven here as a call-count assertion
+    // rather than the 'tick skipped' warn line: this loop self-schedules
+    // (`setTimeout` chained off the PREVIOUS tick's completion, not
+    // `setInterval`), so the warn path is for an externally-supplied eager
+    // timer seam, not this normal chain — see `schedule()`'s doc comment.
+    // Under self-scheduling, an `inFlight` cleared too early shows up
+    // instead as a second `scheduler.nextTick()` call while SLOW is still
+    // running, which is exactly what this test watches for.
+    let releaseSlow!: () => void;
+    const twoInstrumentPlan: TickPlan = {
+      instruments: [
+        { asset: 'FAST', asset_class: 'crypto' },
+        { asset: 'SLOW', asset_class: 'crypto' },
+      ],
+      tick_time: START,
+    };
+    const nextTick = vi.fn((): TickPlan => twoInstrumentPlan);
+    const runInstrument = vi.fn(async (signal): Promise<TickOutcome> => {
+      if (signal.asset === 'FAST') throw new Error('fast instrument exploded');
+      await new Promise<void>((resolve) => {
+        releaseSlow = resolve;
+      });
+      return { trace_id: 't', final_stage: 'execution' };
+    });
+
+    const loop = startTickLoop({
+      scheduler: { nextTick },
+      runner: { runInstrument } as TickRunner,
+      clock: new SimulatedClock(START),
+      logger: recordingLogger(),
+      persistence: persistence() as never,
+      tickIntervalMs: 1_000,
+      maxConcurrentInstruments: 2,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(nextTick).toHaveBeenCalledTimes(1);
+    // FAST already threw and was caught; SLOW is still blocked on its gate.
+    expect(runInstrument).toHaveBeenCalledTimes(2);
+
+    // Several interval periods elapse with SLOW still in flight. Because
+    // scheduling is chained off `runOnce`'s own completion, a second
+    // `nextTick()` here can only mean `inFlight` was cleared prematurely.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(nextTick).toHaveBeenCalledTimes(1);
+
+    releaseSlow();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(nextTick).toHaveBeenCalledTimes(2);
+
+    // The second tick's own SLOW pass, so `stop()` doesn't wait forever.
+    releaseSlow();
     await loop.stop();
   });
 

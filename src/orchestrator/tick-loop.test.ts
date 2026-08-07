@@ -313,4 +313,393 @@ describe('runTickPlan', () => {
     expect(outcomes).toEqual([]);
     expect(runner.runInstrument).not.toHaveBeenCalled();
   });
+
+  // #507: a failed tick used to declare itself finished (its rejected
+  // `Promise.all` entry) while sibling workers were still mid-pipeline —
+  // still billing LLM debates unattributed to any live tick. These pin the
+  // fix: one instrument's throw becomes a failed `TickOutcome` for that
+  // instrument alone, and `runTickPlan` never resolves early.
+  describe('worker isolation (#507)', () => {
+    it('does not abort other instruments when one throws', async () => {
+      const runner: TickRunner = {
+        async runInstrument(signal, ctx) {
+          if (signal.asset === 'QQQ') throw new Error('debate exploded');
+          return { trace_id: ctx.trace_id, final_stage: 'execution' };
+        },
+      };
+
+      const outcomes = await runTickPlan(makePlan('SPY', 'QQQ', 'AAPL'), runner, CLOCK, {
+        max_concurrent_instruments: 3,
+        newTraceId: countingTraceIds(),
+        logger: LOGGER,
+        auditLog: makeAuditLog(),
+        currentTickStore: makeCurrentTickStore(),
+      });
+
+      // The two healthy instruments ran to completion — the throw cost only
+      // the instrument that threw.
+      expect(outcomes[0]).toEqual({ trace_id: 'trace-1', final_stage: 'execution' });
+      expect(outcomes[2]).toEqual({ trace_id: 'trace-3', final_stage: 'execution' });
+      expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: 'debate exploded' });
+    });
+
+    it('resolves only after every worker has settled — a slow worker outlives a fast worker throwing', async () => {
+      let releaseSlow!: () => void;
+      const runner: TickRunner = {
+        async runInstrument(signal, ctx) {
+          if (signal.asset === 'FAST') throw new Error('fast worker exploded');
+          // The slow worker blocks until explicitly released, so the test
+          // can prove `runTickPlan` has NOT settled while it is still
+          // in-flight — not just that it eventually returns.
+          await new Promise<void>((resolve) => {
+            releaseSlow = resolve;
+          });
+          return { trace_id: ctx.trace_id, final_stage: 'execution' };
+        },
+      };
+
+      let settled = false;
+      const pending = runTickPlan(makePlan('FAST', 'SLOW'), runner, CLOCK, {
+        max_concurrent_instruments: 2,
+        newTraceId: countingTraceIds(),
+        logger: LOGGER,
+        auditLog: makeAuditLog(),
+        currentTickStore: makeCurrentTickStore(),
+      });
+      pending.then(() => {
+        settled = true;
+      });
+
+      // The fast worker has already thrown and been caught; the slow worker
+      // is still blocked on its gate. Before the old bug's fix, the throw
+      // alone would have settled `Promise.all` here.
+      await settle();
+      expect(settled).toBe(false);
+
+      releaseSlow();
+      const outcomes = await pending;
+
+      expect(settled).toBe(true);
+      expect(outcomes).toEqual([
+        { trace_id: 'trace-1', error: 'fast worker exploded' },
+        { trace_id: 'trace-2', final_stage: 'execution' },
+      ]);
+    });
+
+    it('logs the failure and records it on the outcome — no silent swallow', async () => {
+      const logger: Logger & { entries: Parameters<Logger['log']>[0][] } = {
+        entries: [],
+        log(entry) {
+          this.entries.push(entry);
+        },
+      };
+      const runner: TickRunner = {
+        async runInstrument(signal, ctx): Promise<TickOutcome> {
+          if (signal.asset === 'QQQ') throw new Error('debate exploded');
+          return { trace_id: ctx.trace_id, final_stage: 'execution' };
+        },
+      };
+
+      const outcomes = await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+        max_concurrent_instruments: 2,
+        newTraceId: countingTraceIds(),
+        logger,
+        auditLog: makeAuditLog(),
+        currentTickStore: makeCurrentTickStore(),
+      });
+
+      expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: 'debate exploded' });
+      const failureEntry = logger.entries.find((entry) => entry.level === 'error');
+      expect(failureEntry).toBeDefined();
+      expect(failureEntry?.message).toBe('instrument failed: QQQ');
+      expect(failureEntry?.payload).toEqual({
+        instrument: 'QQQ',
+        asset_class: 'stocks',
+        error: 'debate exploded',
+      });
+    });
+
+    it('wraps a thrown non-Error value into a string message', async () => {
+      const runner: TickRunner = {
+        async runInstrument(signal, ctx): Promise<TickOutcome> {
+          if (signal.asset === 'QQQ') throw 'a string rejection';
+          return { trace_id: ctx.trace_id, final_stage: 'execution' };
+        },
+      };
+
+      const outcomes = await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+        max_concurrent_instruments: 2,
+        newTraceId: countingTraceIds(),
+        logger: LOGGER,
+        auditLog: makeAuditLog(),
+        currentTickStore: makeCurrentTickStore(),
+      });
+
+      expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: 'a string rejection' });
+    });
+
+    // Kimi review (#507 PR #515): a plain-object throw would otherwise
+    // degrade through `String(error)` to the useless "[object Object]".
+    it('preserves detail from a thrown plain object via JSON.stringify', async () => {
+      const runner: TickRunner = {
+        async runInstrument(signal, ctx): Promise<TickOutcome> {
+          if (signal.asset === 'QQQ') throw { code: 'RATE_LIMIT', retryAfterMs: 5000 };
+          return { trace_id: ctx.trace_id, final_stage: 'execution' };
+        },
+      };
+
+      const outcomes = await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+        max_concurrent_instruments: 2,
+        newTraceId: countingTraceIds(),
+        logger: LOGGER,
+        auditLog: makeAuditLog(),
+        currentTickStore: makeCurrentTickStore(),
+      });
+
+      expect(outcomes[1]).toEqual({
+        trace_id: 'trace-2',
+        error: '{"code":"RATE_LIMIT","retryAfterMs":5000}',
+      });
+    });
+
+    // A circular structure is exactly the shape most likely to reach the
+    // JSON.stringify fallback (an object graph with a `cause`/`parent` back
+    // reference), so it gets its own degrade-once-more path rather than
+    // throwing out of error handling itself.
+    it('falls back to String() when a thrown plain object is circular', async () => {
+      const circular: Record<string, unknown> = { code: 'LOOP' };
+      circular.self = circular;
+      const runner: TickRunner = {
+        async runInstrument(signal, ctx): Promise<TickOutcome> {
+          if (signal.asset === 'QQQ') throw circular;
+          return { trace_id: ctx.trace_id, final_stage: 'execution' };
+        },
+      };
+
+      const outcomes = await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+        max_concurrent_instruments: 2,
+        newTraceId: countingTraceIds(),
+        logger: LOGGER,
+        auditLog: makeAuditLog(),
+        currentTickStore: makeCurrentTickStore(),
+      });
+
+      expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: '[object Object]' });
+    });
+
+    // Kimi review (#507 PR #515): `tick-runner.ts`'s own `record()` only
+    // fires after a stage's step function RETURNS, so a crash mid-stage
+    // leaves no `audit_log` row at all unless this layer writes one — the
+    // logger line above is real-time visibility, not a durable, queryable
+    // record an operator can find after the fact.
+    it('writes a durable audit_log record for the crash, not just the log line', async () => {
+      const auditLog: AuditLog & { records: Parameters<AuditLog['record']>[0][] } = {
+        records: [],
+        record(entry) {
+          this.records.push(entry);
+        },
+      };
+      const runner: TickRunner = {
+        async runInstrument(signal, ctx): Promise<TickOutcome> {
+          if (signal.asset === 'QQQ') throw new Error('debate exploded');
+          return { trace_id: ctx.trace_id, final_stage: 'execution' };
+        },
+      };
+
+      await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+        max_concurrent_instruments: 2,
+        newTraceId: countingTraceIds(),
+        logger: LOGGER,
+        auditLog,
+        currentTickStore: makeCurrentTickStore(),
+      });
+
+      expect(auditLog.records).toHaveLength(1);
+      expect(auditLog.records[0]).toMatchObject({
+        trace_id: 'trace-2',
+        stage: 'tick-loop',
+        decision: 'crashed',
+        instrument: 'QQQ',
+        asset_class: 'stocks',
+        timestamp: NOW,
+      });
+      // Digested, not raw — same convention `tick-runner.ts`'s own `record()`
+      // calls follow (`input_digest`/`output_digest`, never the payload
+      // itself in the audit row).
+      expect(typeof auditLog.records[0]?.input_digest).toBe('string');
+      expect(auditLog.records[0]?.input_digest.length).toBeGreaterThan(0);
+      expect(typeof auditLog.records[0]?.output_digest).toBe('string');
+      expect(auditLog.records[0]?.output_digest.length).toBeGreaterThan(0);
+    });
+
+    it('does not write an audit_log record for an instrument that succeeds', async () => {
+      const auditLog: AuditLog & { records: Parameters<AuditLog['record']>[0][] } = {
+        records: [],
+        record(entry) {
+          this.records.push(entry);
+        },
+      };
+      const runner: TickRunner = {
+        async runInstrument(signal, ctx): Promise<TickOutcome> {
+          if (signal.asset === 'QQQ') throw new Error('debate exploded');
+          return { trace_id: ctx.trace_id, final_stage: 'execution' };
+        },
+      };
+
+      await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+        max_concurrent_instruments: 2,
+        newTraceId: countingTraceIds(),
+        logger: LOGGER,
+        auditLog,
+        currentTickStore: makeCurrentTickStore(),
+      });
+
+      // Only QQQ (the throw) gets an audit row from THIS layer — SPY's
+      // successful pass writes its own audit trail from inside
+      // `SequentialTickRunner`, not duplicated here.
+      expect(auditLog.records.map((record) => record.instrument)).toEqual(['QQQ']);
+    });
+
+    // Kimi review (#507 PR #515, cycle 2): the audit write added above is a
+    // database call sitting inside the very catch block whose job is to
+    // guarantee a worker cannot reject. An unguarded SQLite failure there
+    // would reopen the orphaned-worker leak this whole issue exists to close.
+    describe('the failure handler cannot itself reject the worker', () => {
+      it('survives auditLog.record throwing — worker still returns a failed outcome, siblings still run', async () => {
+        const auditLog: AuditLog = {
+          record: vi.fn(() => {
+            throw new Error('SQLITE_BUSY: database is locked');
+          }),
+        };
+        const runner: TickRunner = {
+          async runInstrument(signal, ctx): Promise<TickOutcome> {
+            if (signal.asset === 'QQQ') throw new Error('debate exploded');
+            return { trace_id: ctx.trace_id, final_stage: 'execution' };
+          },
+        };
+
+        // If the audit-write throw escaped the catch, this whole call would
+        // reject (or — post-fix — the sibling SPY worker would still be
+        // resolved by `Promise.all`'s rejection semantics, but `outcomes`
+        // would never be returned to assert against). Asserting the promise
+        // RESOLVES is itself part of the proof.
+        const outcomes = await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+          max_concurrent_instruments: 2,
+          newTraceId: countingTraceIds(),
+          logger: LOGGER,
+          auditLog,
+          currentTickStore: makeCurrentTickStore(),
+        });
+
+        expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: 'debate exploded' });
+        // SPY — the sibling sharing the same tick — still ran to completion.
+        expect(outcomes[0]).toEqual({ trace_id: 'trace-1', final_stage: 'execution' });
+      });
+
+      it('logs the audit-write failure at error level rather than swallowing it', async () => {
+        const logger: Logger & { entries: Parameters<Logger['log']>[0][] } = {
+          entries: [],
+          log(entry) {
+            this.entries.push(entry);
+          },
+        };
+        const auditLog: AuditLog = {
+          record: vi.fn(() => {
+            throw new Error('SQLITE_BUSY: database is locked');
+          }),
+        };
+        const runner: TickRunner = {
+          async runInstrument(signal, ctx): Promise<TickOutcome> {
+            if (signal.asset === 'QQQ') throw new Error('debate exploded');
+            return { trace_id: ctx.trace_id, final_stage: 'execution' };
+          },
+        };
+
+        await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+          max_concurrent_instruments: 2,
+          newTraceId: countingTraceIds(),
+          logger,
+          auditLog,
+          currentTickStore: makeCurrentTickStore(),
+        });
+
+        const auditFailureEntry = logger.entries.find((entry) =>
+          entry.message.startsWith('audit_log record failed'),
+        );
+        expect(auditFailureEntry).toBeDefined();
+        expect(auditFailureEntry?.level).toBe('error');
+        expect(auditFailureEntry?.payload).toEqual({
+          instrument: 'QQQ',
+          asset_class: 'stocks',
+          original_error: 'debate exploded',
+          audit_error: 'SQLITE_BUSY: database is locked',
+        });
+        // The original instrument-crash line is unaffected — both are
+        // reported, neither replaces the other.
+        expect(logger.entries.some((entry) => entry.message === 'instrument failed: QQQ')).toBe(
+          true,
+        );
+      });
+
+      it('survives logger.log throwing on the same path — worker still returns a failed outcome, siblings still run', async () => {
+        // A real `Logger` can throw: `JsonLogger`'s own primary
+        // `process.stdout.write` is deliberately unguarded (EPIPE on a
+        // broken pipe), and a rotating file sink can hit a full disk
+        // (rotating-file-sink.ts). Every `logger.log` call on this path must
+        // be safe against that, not just the audit write.
+        const logger: Logger = {
+          log: vi.fn(() => {
+            throw new Error('EPIPE');
+          }),
+        };
+        const runner: TickRunner = {
+          async runInstrument(signal, ctx): Promise<TickOutcome> {
+            if (signal.asset === 'QQQ') throw new Error('debate exploded');
+            return { trace_id: ctx.trace_id, final_stage: 'execution' };
+          },
+        };
+
+        const outcomes = await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+          max_concurrent_instruments: 2,
+          newTraceId: countingTraceIds(),
+          logger,
+          auditLog: makeAuditLog(),
+          currentTickStore: makeCurrentTickStore(),
+        });
+
+        expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: 'debate exploded' });
+        expect(outcomes[0]).toEqual({ trace_id: 'trace-1', final_stage: 'execution' });
+      });
+
+      it('survives both logger.log and auditLog.record throwing on the same instrument', async () => {
+        const logger: Logger = {
+          log: vi.fn(() => {
+            throw new Error('EPIPE');
+          }),
+        };
+        const auditLog: AuditLog = {
+          record: vi.fn(() => {
+            throw new Error('SQLITE_BUSY: database is locked');
+          }),
+        };
+        const runner: TickRunner = {
+          async runInstrument(signal, ctx): Promise<TickOutcome> {
+            if (signal.asset === 'QQQ') throw new Error('debate exploded');
+            return { trace_id: ctx.trace_id, final_stage: 'execution' };
+          },
+        };
+
+        const outcomes = await runTickPlan(makePlan('SPY', 'QQQ'), runner, CLOCK, {
+          max_concurrent_instruments: 2,
+          newTraceId: countingTraceIds(),
+          logger,
+          auditLog,
+          currentTickStore: makeCurrentTickStore(),
+        });
+
+        expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: 'debate exploded' });
+        expect(outcomes[0]).toEqual({ trace_id: 'trace-1', final_stage: 'execution' });
+      });
+    });
+  });
 });

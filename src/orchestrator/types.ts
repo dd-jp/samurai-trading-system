@@ -117,10 +117,31 @@ export interface TickContext {
 
 export interface TickOutcome {
   trace_id: string;
-  final_stage: TickStage;
+  /**
+   * Absent only when `error` is set (#507). `SequentialTickRunner.runInstrument`
+   * always resolves to one of the six stage names below — but a pass that
+   * THREW never reached a `return`, so tick-loop.ts's per-worker catch has no
+   * stage to report. Fabricating one (e.g. defaulting to the first stage)
+   * would misrepresent where the pipeline actually died; an absent field is
+   * the honest record, not a fabricated one — same posture production.ts's
+   * doc comment takes on injected seams ("an honest injected seam beats a
+   * fabricated implementation").
+   */
+  final_stage?: TickStage;
   verdict_status?: 'go' | 'no_go';
   /** Only present on a Verdict `go` — Execution is not called otherwise. */
   execution_result?: ExecutionResult;
+  /**
+   * Set only when the instrument's pipeline pass threw instead of returning
+   * normally (#507: a failed tick declaring itself finished while sibling
+   * workers kept running). Caught in tick-loop.ts's worker — never here in
+   * `runInstrument` itself, which deliberately has no try/catch (see
+   * tick-runner.ts's doc comment: a crash must leave the `current_tick` row
+   * stale for the next tick to safely clobber, not be swallowed and cleaned
+   * up). Presence of this field IS the failure signal; `final_stage`,
+   * `verdict_status` and `execution_result` are all absent alongside it.
+   */
+  error?: string;
 }
 
 /**
