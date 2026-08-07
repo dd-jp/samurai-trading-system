@@ -553,6 +553,43 @@ def test_a_changed_file_that_matched_no_slice_is_disclosed():
     assert payload["event"] == "COMMENT"
 
 
+def test_the_cross_check_does_not_fire_on_renames_or_submodules():
+    """The cross-check blocks APPROVE, so a false positive on an ordinary PR
+    would teach every reviewer to ignore the banner. These are the two shapes
+    where `git diff --name-only` and the diff headers could disagree: a rename
+    (name-only prints the NEW path; the header is `a/old b/new`) and a
+    submodule bump (a hunk of `Subproject commit` lines). Both diffs below are
+    real `git diff` output, reduced."""
+    rename = (
+        "diff --git a/old.ts b/new.ts\nsimilarity index 83%\nrename from old.ts\n"
+        "rename to new.ts\nindex 6f195b4..cbe236c 100644\n--- a/old.ts\n+++ b/new.ts\n"
+        "@@ -3,3 +3,4 @@ bbb\n ccc\n ddd\n eee\n+fff\n"
+    )
+    pure_rename = (
+        "diff --git a/new.ts b/final.ts\nsimilarity index 100%\n"
+        "rename from new.ts\nrename to final.ts\n"
+    )
+    submodule = (
+        "diff --git a/sub b/sub\nindex c85df84..f781a9a 160000\n--- a/sub\n+++ b/sub\n"
+        "@@ -1 +1 @@\n-Subproject commit c85df847eef57bc08a3552f65380d3f20adaded6\n"
+        "+Subproject commit f781a9afb8a6d8d5efa2d953363b57def1e881c0\n"
+    )
+
+    def fake_call(diff, changed_files, **kwargs):
+        return {"summary_markdown": "", "inline_comments": [], "verdict": "APPROVE"}
+
+    for diff, name_only in [
+        (rename, ["new.ts"]),
+        (pure_rename, ["final.ts"]),
+        (submodule, ["sub"]),
+    ]:
+        # What `git diff --name-only` reports must match what the slicer covers.
+        assert review_lib.changed_files_from_diff(diff) == name_only
+        payload = review_lib.review_diff(diff, name_only, call=fake_call)
+        assert "Partial review" not in payload["summary_markdown"], name_only
+        assert payload["event"] == "APPROVE", name_only
+
+
 # --- git C-quoted paths -----------------------------------------------------
 
 QUOTED_DIFF = (

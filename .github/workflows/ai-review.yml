@@ -104,11 +104,11 @@ jobs:
           # would run them.
           BASE_REF: ${{ github.base_ref }}
         run: |
-          # core.quotePath=false: git C-quotes paths with non-ASCII bytes by
-          # default, and a quoted `diff --git` header is a different shape for
-          # the slicer to parse. review_lib handles both, but emitting the
-          # plain form keeps the common path simple.
-          git config core.quotePath false
+          # core.quotePath=false on the diff commands below: git C-quotes
+          # paths with non-ASCII bytes by default, and a quoted `diff --git`
+          # header is a different shape for the slicer to parse. review_lib
+          # handles both, but emitting the plain form keeps the common path
+          # simple. Inline `-c`, not `git config` — no repo state mutated.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             # `github.base_ref` is empty on a manual dispatch, and for a MERGED
             # PR the base branch has moved past the fork point: diffing against
@@ -119,7 +119,7 @@ jobs:
             # fetch-depth: 0 usually has it already; fetch only if it doesn't,
             # and let a genuine failure fail the step rather than `|| true`.
             git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null || git fetch origin "$BASE_SHA"
-            git diff "$BASE_SHA...refs/remotes/origin/pr-$PR_NUMBER" > diff.txt
+            git -c core.quotePath=false diff "$BASE_SHA...refs/remotes/origin/pr-$PR_NUMBER" > diff.txt
           else
             # NOT `--depth=1`. `checkout` above already fetched full history
             # (`fetch-depth: 0`), and a shallow re-fetch of the base truncates
@@ -132,7 +132,7 @@ jobs:
             # is found by luck. Every rebase-onto-main — which is the normal way
             # to clear a conflict — broke both reviewers until this line changed.
             git fetch origin "$BASE_REF"
-            git diff "origin/$BASE_REF...HEAD" > diff.txt
+            git -c core.quotePath=false diff "origin/$BASE_REF...HEAD" > diff.txt
           fi
           echo "diff bytes: $(wc -c < diff.txt)"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ ! -s diff.txt ]; then
