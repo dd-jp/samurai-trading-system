@@ -71,15 +71,6 @@ import type { ProductionConfig } from './production.js';
 export const LIVE_MAX_CAPITAL_ENV_VAR = 'SAMURAI_LIVE_MAX_CAPITAL_USD';
 
 /**
- * Alpaca issues DIFFERENT key pairs for paper and live. Reading the paper pair
- * against `api.alpaca.markets` authenticates nothing — so live mode has its own
- * variables, and never falls back to the paper pair (see
- * `buildDefaultAlpacaBrokerClient`).
- */
-export const ALPACA_LIVE_API_KEY_ENV_VAR = 'ALPACA_LIVE_API_KEY';
-export const ALPACA_LIVE_API_SECRET_ENV_VAR = 'ALPACA_LIVE_API_SECRET';
-
-/**
  * The smallest ceiling that produces a run capable of trading at all.
  *
  * `max_position_size` is 5% of the ceiling and `min_viable_size` is the
@@ -135,23 +126,39 @@ export function resolveLiveCapitalCeilingUsd(
 
   // `Number` rather than `parseFloat`: `parseFloat('2000abc')` is 2000, which
   // would turn a typo into a silently accepted ceiling. `Number` rejects it.
-  const value = Number(trimmed);
+  return assertLiveCapitalCeilingUsd(Number(trimmed), `${LIVE_MAX_CAPITAL_ENV_VAR}='${trimmed}'`);
+}
+
+/**
+ * The same bounds as `resolveLiveCapitalCeilingUsd`, applied to a number that
+ * did not come from the environment.
+ *
+ * Split from the parse (#511 review) for one reason: `liveStartingProfile`
+ * accepts an injected ceiling, and re-validating it by round-tripping through
+ * the env parser produced a message blaming `SAMURAI_LIVE_MAX_CAPITAL_USD` for
+ * a value that variable never held. `source` is what the caller is asked to
+ * fix, so the message names the real culprit either way. It is a variable name
+ * or an argument name — never a credential, and the ceiling itself is not
+ * secret, so quoting it back is what makes a typo visible.
+ */
+export function assertLiveCapitalCeilingUsd(value: number, source: string): number {
   if (!Number.isFinite(value) || value <= 0) {
     throw new Error(
-      `Orchestrator cannot start: ${LIVE_MAX_CAPITAL_ENV_VAR} must be a positive, finite number ` +
-        `of US dollars, but it is '${trimmed}'. Refusing to fall back to a default ceiling — ` +
-        'this is the one figure a live run may not guess at.',
+      `Orchestrator cannot start: ${source} must be a positive, finite number of US dollars, ` +
+        `but it is ${String(value)}. Refusing to fall back to a default ceiling — this is the ` +
+        'one figure a live run may not guess at.',
     );
   }
+
   const floor = minLiveCapitalCeilingUsd();
   if (value < floor) {
     throw new Error(
-      `Orchestrator cannot start: ${LIVE_MAX_CAPITAL_ENV_VAR}='${trimmed}' is below ` +
-        `${floor}, the smallest ceiling that can place a trade. At that ` +
-        `ceiling the per-trade cap (${RISK_CAP_EQUITY_FRACTIONS.max_position_size * 100}% of it) ` +
-        `falls under the ${DEFAULT_TRADER_CONFIG.min_viable_notional} dust floor, so every ` +
-        'intent would be trimmed to fit the cap and then rejected as too small — a run that ' +
-        'connects, spends LLM budget and never trades. Raise the ceiling or stay on paper.',
+      `Orchestrator cannot start: ${source} is below ${floor}, the smallest ceiling that can ` +
+        `place a trade. At that ceiling the per-trade cap ` +
+        `(${RISK_CAP_EQUITY_FRACTIONS.max_position_size * 100}% of it) falls under the ` +
+        `${DEFAULT_TRADER_CONFIG.min_viable_notional} dust floor, so every intent would be ` +
+        'trimmed to fit the cap and then rejected as too small — a run that connects, spends ' +
+        'LLM budget and never trades. Raise the ceiling or stay on paper.',
     );
   }
 
@@ -178,8 +185,10 @@ export function liveStartingProfile(
   logger?: Logger,
 ): LiveStartingProfile {
   // Re-validated even when passed explicitly: a programmatic caller computing a
-  // ceiling from somewhere else must not be able to hand this a NaN.
-  const ceiling = resolveLiveCapitalCeilingUsd(String(ceilingUsd));
+  // ceiling from somewhere else must not be able to hand this a NaN. Named as
+  // the ARGUMENT, so the message does not blame an environment variable that
+  // may be perfectly well set.
+  const ceiling = assertLiveCapitalCeilingUsd(ceilingUsd, 'liveStartingProfile(ceilingUsd)');
 
   // A warn, not a refusal — #511's scope is to make the switch work. The
   // operator asked for live; they are told what they are getting, once, on the
@@ -191,7 +200,9 @@ export function liveStartingProfile(
     message:
       'building the LIVE STARTING PROFILE — real money, no human gate (ADR-0007). Its dials ' +
       "are the paper soak's untuned starting values; only the notional caps are re-anchored " +
-      `to ${LIVE_MAX_CAPITAL_ENV_VAR}. ${LIVE_MONEY_GATE_SUMMARY}`,
+      `to ${LIVE_MAX_CAPITAL_ENV_VAR}. Declare a ceiling at or below what the account actually ` +
+      'holds: the caps are fractions of the ceiling, so a ceiling above real equity leaves ' +
+      `them looser than the account can support. ${LIVE_MONEY_GATE_SUMMARY}`,
     payload: { capital_ceiling_usd: ceiling },
   });
 

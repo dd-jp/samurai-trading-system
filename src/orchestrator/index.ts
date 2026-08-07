@@ -48,6 +48,7 @@
  */
 import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { ALPACA_CREDENTIAL_ENV_VARS } from '../execution/index.js';
 import { SystemClock } from '../shared/index.js';
 import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
 import {
@@ -89,8 +90,6 @@ export {
   LIVE_MONEY_GATES_VERIFIED_ON,
 } from './live-money-gates.js';
 export {
-  ALPACA_LIVE_API_KEY_ENV_VAR,
-  ALPACA_LIVE_API_SECRET_ENV_VAR,
   LIVE_MAX_CAPITAL_ENV_VAR,
   type LiveStartingProfile,
   liveStartingProfile,
@@ -288,24 +287,28 @@ const CREDENTIAL_REQUIREMENTS: readonly {
       (injected.dataSource !== undefined || injected.alpacaDataClient !== undefined),
   },
   {
-    // #511. Alpaca issues a different key pair per account, so a live run needs
-    // its own — and must never fall back to the paper pair, which would either
-    // fail on the first order or, worse, quietly trade the paper account.
+    // #511. The live account's own pair — see `ALPACA_CREDENTIAL_ENV_VARS`
+    // (execution/adapters/alpaca-http-client.ts) for why the pair is keyed by
+    // environment and never falls back.
     //
     // **Live only, and that asymmetry is the point.** `unusedByThisRun` returns
     // true for paper and backtest, so a paper boot never looks these variables
     // up: an operator who has not yet been issued live keys, or who typo'd one,
-    // still gets a clean paper start. `buildDefaultAlpacaBrokerClient` reads
-    // them under the same condition and is the authority; this entry exists so
-    // the operator learns about them alongside every other missing credential
-    // instead of one per attempt.
+    // still gets a clean paper start. The client's constructor refuses on the
+    // same condition and is the authority; this entry exists so the operator
+    // learns about them alongside every other missing credential instead of one
+    // per attempt.
     //
     // The PAPER pair above stays required in live mode too, deliberately:
     // `buildDefaultAlpacaDataClient` has no mode branch (Alpaca serves market
     // data from one host for both account types) and still reads
     // `ALPACA_API_KEY`. A live run therefore needs both pairs — the live one for
     // orders, the paper one for bars.
-    vars: ['ALPACA_LIVE_API_KEY', 'ALPACA_LIVE_API_SECRET'],
+    //
+    // Names taken from the client's own table rather than restated: this
+    // pre-flight exists to report what the constructor would refuse on, so two
+    // lists of strings that could drift apart would defeat it.
+    vars: [ALPACA_CREDENTIAL_ENV_VARS.live.key, ALPACA_CREDENTIAL_ENV_VARS.live.secret],
     unusedByThisRun: ({ injected, mode }) =>
       mode !== 'live' || injected.alpacaBrokerClient !== undefined,
   },
@@ -372,12 +375,15 @@ export function missingCredentialEnvVars(
   injected: Partial<ProductionConfig>,
   alertsMode: AlertsMode | undefined,
   /**
-   * The resolved trading mode (#511). Defaults to `paper` — the mode that
-   * demands the fewest credentials, so a caller that forgets it under-reports
-   * rather than blocking a boot on variables the run would never read.
-   * `startFromEnvironment` always passes the mode it actually resolved.
+   * The resolved trading mode (#511).
+   *
+   * **Required, deliberately.** A default of `paper` would be exactly the value
+   * that makes the live-credential requirement vacuous, and PR #390 is the
+   * standing precedent: an optional argument dropped at one call site left a
+   * gate assertion vacuously true with the whole suite green
+   * (docs/coding-standards.md, "Prefer a required argument to an optional one").
    */
-  mode: ProductionConfig['mode'] = 'paper',
+  mode: ProductionConfig['mode'],
 ): string[] {
   const isSet = (name: string): boolean => (process.env[name] ?? '').trim().length > 0;
 

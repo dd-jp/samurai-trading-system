@@ -176,40 +176,6 @@ export const DEFAULT_LLM_RATE_LIMIT_CONFIG: RateLimiterConfig = {
 };
 
 /**
- * The LIVE Alpaca key pair, or a refusal (#511).
- *
- * Read only from the `mode === 'live'` branch of
- * `buildDefaultAlpacaBrokerClient` — a paper boot never calls this, so a typo
- * in a live-only variable cannot break one.
- *
- * **Names variables, never values.** The messages below say which variable is
- * absent and nothing about what any variable contains, not even a length or a
- * prefix: a startup error is written to a log an operator may paste anywhere.
- * Empty and whitespace-only count as absent, matching `missingCredentialEnvVars`
- * — `--env-file` turns a placeholder `ALPACA_LIVE_API_KEY=` into `''`, which is
- * "not configured", and `AlpacaHttpBrokerClient` would otherwise report the
- * PAPER variable's name for a live run's missing key.
- */
-export function resolveLiveAlpacaCredentials(): { apiKey: string; apiSecret: string } {
-  const read = (name: string): string => {
-    const value = (process.env[name] ?? '').trim();
-    if (value.length === 0) {
-      throw new Error(
-        `Orchestrator cannot start: SAMURAI_MODE=live requires ${name}, and it is not set. ` +
-          'Alpaca issues a DIFFERENT key pair for live and paper accounts, so the paper pair ' +
-          '(ALPACA_API_KEY / ALPACA_API_SECRET) cannot authenticate against the live host — ' +
-          'refusing to fall back to it rather than silently trading the wrong account or ' +
-          'failing on the first order. Provide it via the environment (.env.local, which is ' +
-          'gitignored).',
-      );
-    }
-    return value;
-  };
-
-  return { apiKey: read('ALPACA_LIVE_API_KEY'), apiSecret: read('ALPACA_LIVE_API_SECRET') };
-}
-
-/**
  * The default broker wire client, with the Alpaca environment DERIVED FROM
  * `mode` rather than left to `AlpacaHttpBrokerClient`'s own default (#293).
  *
@@ -236,26 +202,26 @@ export function resolveLiveAlpacaCredentials(): { apiKey: string; apiSecret: str
  * was case- and whitespace-sensitive, so `https://API.ALPACA.MARKETS` walked
  * straight past it. One classifier means one set of rules to be right about.
  *
- * ## Credentials are mode-keyed too (#511)
+ * ## Credentials follow the environment, and this function does not touch them (#511)
  *
  * Alpaca issues DIFFERENT key pairs for paper and live accounts. Until #511
  * this function selected the HOST from `mode` while the client underneath read
- * one pair — `ALPACA_API_KEY`/`ALPACA_API_SECRET` — from the environment, so
- * flipping to live would have authenticated against `api.alpaca.markets` with a
- * paper key and failed on the first request, after the process had already
- * started.
+ * one pair from the environment, so flipping to live would have authenticated
+ * against `api.alpaca.markets` with a paper key.
  *
- * Live mode now reads `ALPACA_LIVE_API_KEY`/`ALPACA_LIVE_API_SECRET`, passes
- * them explicitly, and refuses to construct without them. Two properties matter
- * more than the lookup:
+ * The fix lives at the option site rather than here: `environment` now selects
+ * the pair (`ALPACA_CREDENTIAL_ENV_VARS`, execution/adapters/alpaca-http-client.ts),
+ * so this build function passes `environment` and reads no credential at all.
+ * That keeps the rule in one place for every construction path — the dashboard
+ * builds the same client off the same variable — and keeps composition code out
+ * of `process.env` (coding-standards.md). The two properties it buys:
  *
- * - **Non-live modes never read the live pair.** `resolveLiveAlpacaCredentials`
- *   is called only inside the `mode === 'live'` branch, so a garbage value in a
- *   live-only variable cannot fail a paper boot.
+ * - **Non-live modes never read the live pair.** The lookup is keyed by
+ *   `environment`, so a garbage value in a live-only variable cannot fail a
+ *   paper boot.
  * - **Live never falls back to the paper pair.** A missing live key is a
- *   refusal, not a silent downgrade to credentials that would authenticate
- *   against the wrong account — or, worse, succeed against a paper account
- *   while the operator believed they were live.
+ *   refusal to construct, not a silent downgrade to credentials that would
+ *   authenticate against the wrong account.
  */
 export function buildDefaultAlpacaBrokerClient(
   mode: ProductionConfig['mode'],
@@ -291,16 +257,13 @@ export function buildDefaultAlpacaBrokerClient(
     );
   }
 
-  const credentials = mode === 'live' ? resolveLiveAlpacaCredentials() : {};
-
   // Constructed before the log line, not after: the client re-checks the
   // environment/host agreement and can still throw, and a startup log naming a
-  // host the process never reached is worse than no log at all.
-  const client = new AlpacaHttpBrokerClient({
-    ...credentials,
-    environment,
-    ...(override === undefined ? {} : { baseUrl: override }),
-  });
+  // host the process never reached is worse than no log at all. `environment`
+  // is also what selects the credential pair (#511) — see the doc comment.
+  const client = new AlpacaHttpBrokerClient(
+    override === undefined ? { environment } : { environment, baseUrl: override },
+  );
 
   logger.log({
     trace_id: 'startup',

@@ -283,7 +283,14 @@ export class ProviderStatusPoller implements ProviderStatusReader {
       return {
         provider: 'alpaca',
         state: 'not_configured',
-        detail: 'no Alpaca client wired (ALPACA_API_KEY / ALPACA_API_SECRET unset?)',
+        // Both pairs named, because which one is missing depends on
+        // `SAMURAI_MODE` (#511): the dashboard builds its client for the same
+        // environment the orchestrator trades in, and Alpaca issues a separate
+        // key pair per account. Naming only the paper pair sent a live operator
+        // to check a variable that was already set.
+        detail:
+          'no Alpaca client wired (ALPACA_API_KEY / ALPACA_API_SECRET unset — or, under ' +
+          'SAMURAI_MODE=live, ALPACA_LIVE_API_KEY / ALPACA_LIVE_API_SECRET?)',
         observed_at,
         balance: null,
       };

@@ -392,10 +392,41 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 /** ~200 req/min (issue #260 research) tolerates a short base delay; capped well under the reconciliation loop's own budget. */
 const DEFAULT_RETRY_CONFIG: RetryConfig = { maxAttempts: 3, baseDelayMs: 250, maxDelayMs: 4_000 };
 
+/**
+ * Which environment variables carry which account's credentials (#511).
+ *
+ * **Alpaca issues a DIFFERENT key pair for paper and live.** A paper key
+ * against `api.alpaca.markets` authenticates nothing, so the pair is keyed off
+ * `environment` here — at the option site, where `environment` is already the
+ * one control (coding-standards.md: "an option with an env default, never a
+ * mid-wiring read"). Putting the rule anywhere else means every construction
+ * path has to remember it, and the orchestrator, the dashboard and any future
+ * caller would each have to remember it identically.
+ *
+ * Exported so a composition root's credential pre-flight names the same
+ * variables this constructor will actually read, rather than a second list of
+ * strings that can drift out of agreement with it.
+ */
+export const ALPACA_CREDENTIAL_ENV_VARS: Readonly<
+  Record<AlpacaTradingEnvironment, { readonly key: string; readonly secret: string }>
+> = {
+  paper: { key: 'ALPACA_API_KEY', secret: 'ALPACA_API_SECRET' },
+  live: { key: 'ALPACA_LIVE_API_KEY', secret: 'ALPACA_LIVE_API_SECRET' },
+};
+
 export interface AlpacaHttpBrokerClientOptions {
-  /** Defaults to `process.env.ALPACA_API_KEY`. Never logged or thrown into an error message. */
+  /**
+   * Defaults to the variable `ALPACA_CREDENTIAL_ENV_VARS[environment].key`
+   * names — `ALPACA_API_KEY` for paper, `ALPACA_LIVE_API_KEY` for live. Never
+   * logged or thrown into an error message.
+   *
+   * There is deliberately NO fallback from the live pair to the paper pair: a
+   * live client built on a paper key either fails on its first request or, if
+   * the base URL were also wrong, quietly trades the wrong account. Both are
+   * worse than refusing to construct.
+   */
   apiKey?: string;
-  /** Defaults to `process.env.ALPACA_API_SECRET`. Never logged or thrown into an error message. */
+  /** Defaults to `ALPACA_CREDENTIAL_ENV_VARS[environment].secret`. Never logged or thrown into an error message. */
   apiSecret?: string;
   /**
    * Which Alpaca trading environment this client may reach. Defaults to
@@ -428,23 +459,40 @@ export class AlpacaHttpBrokerClient implements AlpacaClient {
   private readonly retry: RetryConfig;
 
   constructor(options: AlpacaHttpBrokerClientOptions = {}) {
-    const apiKey = options.apiKey ?? process.env.ALPACA_API_KEY;
-    const apiSecret = options.apiSecret ?? process.env.ALPACA_API_SECRET;
+    // Resolved first: it is what decides WHICH pair of variables the defaults
+    // below read (#511), as well as which host `resolveBaseUrl` returns.
+    const environment = options.environment ?? 'paper';
+    const names = ALPACA_CREDENTIAL_ENV_VARS[environment];
+    // Whitespace-only counts as absent for an env-sourced value, matching
+    // `missingCredentialEnvVars` (orchestrator/index.ts): `--env-file` turns a
+    // placeholder `ALPACA_LIVE_API_KEY=` into `''`, which is "not configured".
+    // Only the env default is trimmed — a value the caller passed explicitly is
+    // theirs, and silently rewriting a credential is worse than using it.
+    const fromEnv = (name: string): string | undefined => {
+      const value = process.env[name]?.trim();
+      return value === undefined || value.length === 0 ? undefined : value;
+    };
+    const apiKey = options.apiKey ?? fromEnv(names.key);
+    const apiSecret = options.apiSecret ?? fromEnv(names.secret);
     if (apiKey === undefined || apiKey.length === 0) {
       throw new Error(
-        'AlpacaHttpBrokerClient: ALPACA_API_KEY is not set. Provide it via the environment ' +
-          '(.env.local) or pass { apiKey } explicitly.',
+        `AlpacaHttpBrokerClient: ${names.key} is not set. Provide it via the environment ` +
+          `(.env.local) or pass { apiKey } explicitly. This is the ${environment} account's ` +
+          'key; Alpaca issues a different pair per account and neither substitutes for the ' +
+          'other.',
       );
     }
     if (apiSecret === undefined || apiSecret.length === 0) {
       throw new Error(
-        'AlpacaHttpBrokerClient: ALPACA_API_SECRET is not set. Provide it via the environment ' +
-          '(.env.local) or pass { apiSecret } explicitly.',
+        `AlpacaHttpBrokerClient: ${names.secret} is not set. Provide it via the environment ` +
+          `(.env.local) or pass { apiSecret } explicitly. This is the ${environment} account's ` +
+          'secret; Alpaca issues a different pair per account and neither substitutes for the ' +
+          'other.',
       );
     }
     this.apiKey = apiKey;
     this.apiSecret = apiSecret;
-    this.baseUrl = resolveBaseUrl(options.environment ?? 'paper', options.baseUrl);
+    this.baseUrl = resolveBaseUrl(environment, options.baseUrl);
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.retry = options.retry ?? DEFAULT_RETRY_CONFIG;
   }

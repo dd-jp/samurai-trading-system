@@ -27,6 +27,7 @@ export type {
   AlpacaTradingEnvironment,
 } from './adapters/alpaca-http-client.js';
 export {
+  ALPACA_CREDENTIAL_ENV_VARS,
   AlpacaHttpBrokerClient,
   classifyAlpacaTradingHost,
 } from './adapters/alpaca-http-client.js';

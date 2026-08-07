@@ -90,6 +90,96 @@ describe('AlpacaHttpBrokerClient', () => {
     }
   });
 
+  describe('environment-keyed credentials (#511)', () => {
+    // Alpaca issues a different key pair per account, so `environment` selects
+    // which variables the defaults read. Every value here is a stub.
+    const NAMES = [
+      'ALPACA_API_KEY',
+      'ALPACA_API_SECRET',
+      'ALPACA_LIVE_API_KEY',
+      'ALPACA_LIVE_API_SECRET',
+    ];
+    const saved = new Map<string, string | undefined>();
+
+    beforeEach(() => {
+      for (const name of NAMES) {
+        saved.set(name, process.env[name]);
+        delete process.env[name];
+      }
+    });
+
+    afterEach(() => {
+      for (const name of NAMES) {
+        const value = saved.get(name);
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    });
+
+    it('reads the LIVE pair for a live client, never the paper pair', () => {
+      process.env.ALPACA_API_KEY = FAKE_KEY;
+      process.env.ALPACA_API_SECRET = FAKE_SECRET;
+
+      // The paper pair is fully set, so a fallback would construct silently and
+      // authenticate the wrong account.
+      expect(() => new AlpacaHttpBrokerClient({ environment: 'live' })).toThrow(
+        /ALPACA_LIVE_API_KEY/,
+      );
+    });
+
+    it('names the live SECRET when only that half is missing', () => {
+      process.env.ALPACA_LIVE_API_KEY = FAKE_KEY;
+
+      expect(() => new AlpacaHttpBrokerClient({ environment: 'live' })).toThrow(
+        /ALPACA_LIVE_API_SECRET/,
+      );
+    });
+
+    it('reads the PAPER pair for a paper client, and never looks at the live pair', () => {
+      process.env.ALPACA_API_KEY = FAKE_KEY;
+      process.env.ALPACA_API_SECRET = FAKE_SECRET;
+      process.env.ALPACA_LIVE_API_KEY = '';
+
+      // A blank live-only variable must not be able to fail a paper boot.
+      expect(() => new AlpacaHttpBrokerClient({ environment: 'paper' })).not.toThrow();
+      expect(() => new AlpacaHttpBrokerClient()).not.toThrow();
+    });
+
+    it.each(['', '   '])('treats an env value of %j as absent', (value) => {
+      process.env.ALPACA_LIVE_API_KEY = value;
+      process.env.ALPACA_LIVE_API_SECRET = FAKE_SECRET;
+
+      // `--env-file` turns a placeholder `ALPACA_LIVE_API_KEY=` into `''`, which
+      // is "not configured" — not a credential of length zero.
+      expect(() => new AlpacaHttpBrokerClient({ environment: 'live' })).toThrow(
+        /ALPACA_LIVE_API_KEY/,
+      );
+    });
+
+    it('constructs a live client on the live pair alone, with no paper pair set', () => {
+      process.env.ALPACA_LIVE_API_KEY = FAKE_KEY;
+      process.env.ALPACA_LIVE_API_SECRET = FAKE_SECRET;
+
+      const client = new AlpacaHttpBrokerClient({ environment: 'live' });
+
+      expect(client.baseUrl).toBe('https://api.alpaca.markets');
+    });
+
+    it('never puts a credential value in the refusal', () => {
+      process.env.ALPACA_API_KEY = 'paper-key-value';
+      process.env.ALPACA_API_SECRET = 'paper-secret-value';
+
+      try {
+        new AlpacaHttpBrokerClient({ environment: 'live' });
+        expect.unreachable('expected a refusal');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        expect(message).not.toContain('paper-key-value');
+        expect(message).not.toContain('paper-secret-value');
+      }
+    });
+  });
+
   it('submitOrder POSTs to /v2/orders with the APCA auth headers and returns the parsed order', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(ORDER_RESPONSE));
     vi.stubGlobal('fetch', fetchMock);

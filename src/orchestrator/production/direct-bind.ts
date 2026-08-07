@@ -136,8 +136,8 @@ export interface TraderStepDeps extends BreakerStateDeps {
   traderLog?: TraderLogStore;
   /**
    * The declared capital ceiling (#511, `ProductionConfig.capitalCeilingUsd`).
-   * Undefined on every paper/backtest run and in every test, which is exactly
-   * the pre-#511 behaviour. See `sizingEquity`.
+   * Undefined on every paper/backtest run and in every test — absent means "no
+   * ceiling declared", never "a ceiling of zero". See `sizingEquity`.
    */
   capitalCeilingUsd?: number;
 }
@@ -160,12 +160,12 @@ export interface TraderStepDeps extends BreakerStateDeps {
  * larger than the ceiling — quietly disarming the breakers in order to bound
  * position size. The observation stays true; only the sizing inlet is bounded.
  *
- * A non-finite ceiling cannot arrive here (`resolveLiveCapitalCeilingUsd`
+ * A non-finite ceiling cannot arrive here (`assertLiveCapitalCeilingUsd`
  * refuses one) and `Math.min` would propagate a `NaN` if one did, so the guard
- * is explicit rather than trusted: an unusable ceiling falls back to the
- * unclamped equity, which is the pre-#511 behaviour and is bounded by the risk
- * caps regardless — never to a `NaN` size, which `decide`'s own finite-checks
- * would reject but only after the whole pass had been spent computing it.
+ * is explicit rather than trusted: an unusable ceiling falls back to unclamped
+ * equity, still bounded by the risk caps, rather than to a `NaN` size —
+ * `decide`'s own finite-checks would reject that, but only after the whole pass
+ * had been spent computing it.
  */
 export function sizingEquity(equity: number, capitalCeilingUsd: number | undefined): number {
   if (capitalCeilingUsd === undefined || !Number.isFinite(capitalCeilingUsd)) return equity;

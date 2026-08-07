@@ -5,14 +5,9 @@
  *
  * Two callers state it: `paperStartingProfile`'s live refusal (paper-profile.ts)
  * and `liveStartingProfile`'s startup warning (live-profile.ts). Written twice,
- * one of them becomes wrong the first time a gate closes — and this repo has
- * the receipts. The refusal these replace cited
- * [#384](https://github.com/dd-jp/samurai-trading-system/issues/384),
- * [#375](https://github.com/dd-jp/samurai-trading-system/issues/375) and
- * [#333](https://github.com/dd-jp/samurai-trading-system/issues/333) as "three
- * breakers that cannot fire". All three were closed by the time anyone read it
- * again, so the refusal was justifying itself on grounds that no longer held,
- * in a checkable way, which is the worst kind: the next reader trusts it.
+ * one of them becomes wrong the first time a gate closes — and a checkable
+ * claim that is wrong is the worst kind, because the next reader trusts it.
+ * One list, so both callers go stale together or not at all.
  *
  * ## The rule for editing this list
  *

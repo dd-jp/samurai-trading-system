@@ -960,16 +960,13 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
      * no human gate the circuit breakers and the notional caps are the *only*
      * stop.
      *
-     * This note used to name #384, #375 and #333 as three breakers that could
-     * not fire. **All three are now closed** (verified 2026-08-07, #511), and
-     * the list is deliberately not replaced with another one here: an
-     * enumeration of open bug numbers inside a config file goes stale the day
-     * they close, and a stale one is worse than none because the next reader
-     * trusts it. `paperStartingProfile`'s live refusal below carries the
-     * current list, dated, in the one place an operator actually reads before
-     * going live.
+     * **No list of open bug numbers belongs here.** One lived here and went
+     * stale unnoticed; a checkable claim that is wrong is worse than none,
+     * because the next reader trusts it. `live-money-gates.ts` is the single
+     * dated list, rendered by `paperStartingProfile`'s live refusal — the one
+     * place an operator reads before going live.
      *
-     * What does NOT go stale, and is the reason this dial is safe on paper and
+     * The reason that does not go stale, and why this dial is safe on paper and
      * not on real money: no 14-day soak (#238) has run, so every `UNSOURCED`
      * value above is still a guess, and a guessed cap with no human gate behind
      * it is the only thing standing between a bad debate and the account.
