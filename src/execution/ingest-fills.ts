@@ -103,14 +103,34 @@ async function redistributeFlattenFills(
   // a Map's own key order is otherwise unaffected by that, but iterating a
   // separate array keeps the deletion from being a subtlety a reader has to
   // reason through.
+  //
+  // The snapshot can go stale mid-loop: a concurrent `execute()` can write a
+  // NEW lot on the same instrument while this function is still awaiting a
+  // store round-trip for an EARLIER bucket, and on an unlucky interleaving
+  // that new lot's own entry fill can already be sitting in `byLot` by the
+  // time the loop below reaches it. That new lot's key is absent from THIS
+  // `positionKeys` snapshot, so its bucket fails the "a lot's own bucket"
+  // check right below and falls through to the `getFlattenLotKeys` lookup
+  // instead — see that lookup's own comment for what happens to it from
+  // there, and why it is safe.
   for (const clientOrderId of [...byLot.keys()]) {
     if (positionKeys.has(clientOrderId)) continue; // a lot's own bucket — the existing path.
 
     const lotKeys = await store.getFlattenLotKeys(clientOrderId);
-    // Not a known flatten either (an unrelated/unknown client_order_id, or a
-    // flatten row written before migration 0020 named no lot): left exactly
-    // as before this change — the bucket sits in `byLot` under a key no
-    // position matches, and the per-position loop below never reads it.
+    // Not a known flatten either (an unrelated/unknown client_order_id, a
+    // flatten row written before migration 0020 named no lot, OR — per the
+    // snapshot comment above — a lot that opened on this instrument AFTER
+    // `positions` was captured): left exactly as before this change. The
+    // bucket sits untouched in `byLot`; `ingestFills()`'s per-position loop
+    // reads only the SAME stale `positions`, so it never looks this key up
+    // either. Nothing is lost — the broker's fill feed re-offers the same
+    // fill next poll (this module's own dedup-on-`broker_fill_id` contract),
+    // and by then a fresh `getOpenPositions()` snapshot names the lot, so it
+    // is picked up by the ORDINARY per-position path, one poll later than it
+    // theoretically could have been. And it can never collide with a REAL
+    // flatten's targets: `lot_idempotency_keys` is fixed at that flatten's
+    // own write-ahead, which necessarily predates a lot that did not exist
+    // yet.
     if (lotKeys === null || lotKeys.length === 0) continue;
 
     const rawFills = byLot.get(clientOrderId);
@@ -194,6 +214,14 @@ async function redistributeFlattenFills(
       // deliberately: a genuine over-fill here would already be showing up
       // as a resize/exposure divergence elsewhere, and manufacturing a
       // second signal here would not make that one easier to find.
+      //
+      // A DIFFERENT case from a new lot opening on this instrument mid-poll
+      // (see the `positionKeys` snapshot comment above, and the
+      // `getFlattenLotKeys` one below it): that one is a bucket this
+      // function never even reaches this far for — it exits at the
+      // `getFlattenLotKeys` check, deferred safely to the next poll. This
+      // one is a genuine surplus against the flatten's OWN named lots, with
+      // nowhere safe to go, ever.
     }
   }
 }
