@@ -42,5 +42,11 @@
   // Verified by injecting `const x: number = 'nope'` into a `.test.ts` and
   // confirming it fails here; without the `exclude` override it did not.
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  // `extends` does NOT inherit `exclude` merges from the base beyond a
+  // straight override — this file re-declares its own `exclude` array (see
+  // the header comment above), so `src/dashboard-web` has to be listed here
+  // too, not just in `tsconfig.build.json`. Without this, `yarn typecheck`'s
+  // `tsc -p tsconfig.test.json` pass pulls in `src/dashboard-web/**/*.ts`
+  // (e.g. `vite.config.ts`) under Node-only `types` and no `jsx` option.
+  "exclude": ["node_modules", "dist", "src/dashboard-web"]
 }

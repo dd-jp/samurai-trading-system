@@ -19,5 +19,10 @@
     "isolatedModules": true
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+  // `src/dashboard-web` owns its own tsconfig.json and is built by Vite, not
+  // `tsc` (issue #536) — its `.tsx` files are already invisible to this
+  // `include` glob (`src/**/*.ts` does not match `.tsx`), but its `.ts`
+  // files (e.g. `vite.config.ts`) are not, so the directory is excluded
+  // here explicitly.
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "src/dashboard-web"]
 }
