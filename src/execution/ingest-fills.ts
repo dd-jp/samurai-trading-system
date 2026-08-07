@@ -301,7 +301,9 @@ async function redistributeFlattenFills(
  * stops) but blind to exits already recorded against the lot. That blindness
  * IS #571; see `redistributeFlattenFills` for what it costs. Reachable only
  * for a flatten submitted before this code shipped whose fill has not been
- * ingested yet, so it is a wind-down path, not a supported mode.
+ * ingested yet, so it is a wind-down path, not a supported mode — delete it,
+ * and the branch that selects it, once no `flatten_submissions` row has a
+ * NULL `lot_held_quantities`.
  *
  * A lot with no persisted entry fill is absent from `getEntryFillSizes`' Map
  * rather than present at 0 (its documented shape), which reads here as a
