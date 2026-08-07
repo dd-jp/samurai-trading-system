@@ -130,6 +130,9 @@ import type {
 import { MAX_ROUNDS_BY_ASSET_CLASS, RateLimiter } from '../debate-engine/index.js';
 import type {
   AlpacaClient,
+  AlpacaLimitOrderRequest,
+  AlpacaOrder,
+  AlpacaStopLimitOrderRequest,
   BrokerAck,
   BrokerAdapter,
   ExecutionConfig,
@@ -143,7 +146,12 @@ import type {
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
 } from '../execution/index.js';
-import { SimulatedBrokerAdapter, SqliteExecutionStore } from '../execution/index.js';
+import {
+  AlpacaBrokerAdapter,
+  SimulatedBrokerAdapter,
+  SqliteBrokerStateStore,
+  SqliteExecutionStore,
+} from '../execution/index.js';
 import type { Bar } from '../market-data-service/index.js';
 import {
   FixtureDataSource,
@@ -153,7 +161,7 @@ import {
 import type { SessionBasisByClass } from '../risk-manager/index.js';
 import { delay } from '../shared/http/delay.js';
 import type { OrderIntent } from '../shared/index.js';
-import { SimulatedClock } from '../shared/index.js';
+import { SimulatedClock, TokenBucket } from '../shared/index.js';
 import { openSharedStore, type SharedStore as SqliteHandle } from '../shared/store/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
 import {
@@ -162,6 +170,7 @@ import {
   LoggingFlattenReconcileAlertChannel,
   LoggingHeartbeatChannel,
   LoggingLoosenApprovalChannel,
+  LoggingOcoDoubleFillAlertChannel,
   LoggingOrphanAlertChannel,
   LoggingResidualExposureAlertChannel,
   LoggingUnpricedFillAlertChannel,
@@ -387,6 +396,14 @@ export class UnreachableAlpacaClient implements AlpacaClient {
 
   async submitOcoOrder(): Promise<never> {
     return this.refuse('submitOcoOrder');
+  }
+
+  async submitLimitOrder(): Promise<never> {
+    return this.refuse('submitLimitOrder');
+  }
+
+  async submitStopLimitOrder(): Promise<never> {
+    return this.refuse('submitStopLimitOrder');
   }
 
   async cancelOrder(): Promise<never> {
@@ -1005,6 +1022,238 @@ async function runExitPathScenarios(input: {
   };
 }
 
+/**
+ * The crypto-emulation scenario (#586) — the pre-soak gate's third leg,
+ * beside the six-stage entry run and the exit-path harness.
+ *
+ * Alpaca rejects every advanced order class for crypto (verified live, #550:
+ * `422` code `42210000`), so `AlpacaBrokerAdapter` emulates the protective
+ * pair for crypto: plain entry, plain stop_limit/limit legs armed by the
+ * fill sweep, sibling cancelled by hand, every transition journalled in
+ * `broker_brackets`. None of that is reachable by the six-stage run (it
+ * overrides the broker with `SimulatedBrokerAdapter`) or by the exit-path
+ * harness (same), and the smoke universe is crypto — so a soak's entire
+ * bracket path runs on this mechanism while nothing else in this gate can
+ * see it. Wiring a new mechanism means adding its enforcement assertion
+ * here (#430), so this scenario composes the REAL `AlpacaBrokerAdapter`
+ * over a REAL `SqliteBrokerStateStore` on the shared `:memory:` store, with
+ * only the wire client scripted — and the script mirrors the verified venue
+ * posture: any advanced order class for crypto is refused, exactly as the
+ * live API does, so a regression back to `order_class: 'bracket'` fails
+ * this run the same way it would fail the soak.
+ */
+class CryptoEmulationScenarioClient implements AlpacaClient {
+  private readonly orders = new Map<string, AlpacaOrder>();
+  private readonly idsByClientOrderId = new Map<string, string>();
+  /** Every venue order id a cancel reached — the sibling-cancel evidence. */
+  readonly cancelledOrderIds: string[] = [];
+  private nextId = 1;
+
+  private accept(request: {
+    symbol: string;
+    side: 'buy' | 'sell';
+    qty: string;
+    client_order_id: string;
+  }): AlpacaOrder {
+    // #585/#588: the adapter boundary must have converted to slash form
+    // before the wire — the live venue 422s dash form as "asset not found".
+    if (!request.symbol.endsWith('/USD')) {
+      throw new Error(
+        `smoke crypto-emulation scenario: order for '${request.symbol}' reached the wire in ` +
+          'dash form — the adapter boundary stopped converting (#585); the live venue rejects ' +
+          'this with 422 "asset not found"',
+      );
+    }
+    const order: AlpacaOrder = {
+      id: `scenario-alpaca-${this.nextId++}`,
+      client_order_id: request.client_order_id,
+      symbol: request.symbol,
+      side: request.side,
+      qty: request.qty,
+      order_class: '',
+      status: 'accepted',
+      filled_qty: '0',
+      filled_avg_price: null,
+      filled_at: null,
+    };
+    this.orders.set(order.id, order);
+    this.idsByClientOrderId.set(request.client_order_id, order.id);
+    return { ...order };
+  }
+
+  /** The #550-verified posture, scripted: crypto + advanced order class = 422. */
+  private rejectAdvancedOrderClass(method: string): never {
+    throw new Error(
+      `smoke crypto-emulation scenario: ${method} sent an advanced order_class for crypto — ` +
+        'the live venue rejects this with 422 {"code":42210000,"message":"crypto orders not ' +
+        'allowed for advanced order_class"} (verified #550). The adapter must take the ' +
+        'emulated path (#586), never this one.',
+    );
+  }
+
+  async submitOrder(): Promise<never> {
+    this.rejectAdvancedOrderClass('submitOrder (order_class: bracket)');
+  }
+
+  async submitOcoOrder(): Promise<never> {
+    this.rejectAdvancedOrderClass('submitOcoOrder (order_class: oco)');
+  }
+
+  async submitLimitOrder(request: AlpacaLimitOrderRequest): Promise<AlpacaOrder> {
+    return this.accept(request);
+  }
+
+  async submitStopLimitOrder(request: AlpacaStopLimitOrderRequest): Promise<AlpacaOrder> {
+    return this.accept(request);
+  }
+
+  async submitMarketOrder(): Promise<never> {
+    throw new Error('smoke crypto-emulation scenario: no flatten is scripted here');
+  }
+
+  async cancelOrder(alpacaOrderId: string): Promise<void> {
+    this.cancelledOrderIds.push(alpacaOrderId);
+    const order = this.orders.get(alpacaOrderId);
+    if (order !== undefined && order.status !== 'filled') order.status = 'canceled';
+  }
+
+  async getOrder(alpacaOrderId: string): Promise<AlpacaOrder> {
+    const order = this.orders.get(alpacaOrderId);
+    if (order === undefined) {
+      throw new Error(`smoke crypto-emulation scenario: unknown order id '${alpacaOrderId}'`);
+    }
+    return { ...order };
+  }
+
+  async getOrderByClientOrderId(clientOrderId: string): Promise<AlpacaOrder | null> {
+    const id = this.idsByClientOrderId.get(clientOrderId);
+    return id === undefined ? null : this.getOrder(id);
+  }
+
+  async getPositions(): Promise<never> {
+    throw new Error('smoke crypto-emulation scenario: getPositions is not scripted here');
+  }
+
+  async getAccount(): Promise<never> {
+    throw new Error('smoke crypto-emulation scenario: getAccount is not scripted here');
+  }
+
+  /** The scripted market: marks an order fully filled at `price`. */
+  fillByClientOrderId(clientOrderId: string, price: number, filledAt: string): void {
+    const id = this.idsByClientOrderId.get(clientOrderId);
+    const order = id === undefined ? undefined : this.orders.get(id);
+    if (order === undefined) {
+      throw new Error(
+        `smoke crypto-emulation scenario: cannot fill unknown client order id '${clientOrderId}'`,
+      );
+    }
+    order.status = 'filled';
+    order.filled_qty = order.qty;
+    order.filled_avg_price = String(price);
+    order.filled_at = filledAt;
+  }
+
+  venueOrderId(clientOrderId: string): string | undefined {
+    return this.idsByClientOrderId.get(clientOrderId);
+  }
+}
+
+/** What `evaluateSmokeGate` needs from the crypto-emulation scenario (#586). */
+export interface CryptoEmulationEvidence {
+  /** The lot's `broker_brackets` row after the full drive, or undefined if none was journalled. */
+  journalRow:
+    | {
+        phase: string;
+        asset_class: string | null;
+        stop_order_id: string | null;
+        target_order_id: string | null;
+      }
+    | undefined;
+  /** The entry fill came back through the emulation's sweep. */
+  entryFillSeen: boolean;
+  /** The stop leg's fill came back through the sweep after it fired. */
+  stopFillSeen: boolean;
+  /** The surviving take-profit leg's cancel reached the venue after the stop filled. */
+  siblingCancelled: boolean;
+}
+
+const CRYPTO_EMULATION_LOT_KEY = 'smoke-crypto-emulated-lot';
+
+/**
+ * Drives one emulated crypto bracket end to end against the scripted venue:
+ * submit (must NOT be an advanced order class — the script 422s that), fill
+ * the entry, sweep (arms the legs), fill the stop, sweep (cancels the
+ * sibling), then read the journal back off the SAME db the gate reads.
+ */
+async function runCryptoEmulationScenario(db: SqliteHandle): Promise<CryptoEmulationEvidence> {
+  const client = new CryptoEmulationScenarioClient();
+  const adapter = new AlpacaBrokerAdapter({
+    client,
+    rateLimiter: new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 }),
+    state: new SqliteBrokerStateStore(db),
+    unpricedFillAlerts: {
+      postUnpricedFillAlert: async () => {},
+    },
+    // A double fill is impossible in this script (the target is cancelled
+    // before it could ever fill), so an alert here is itself a defect —
+    // thrown rather than swallowed, failing the run loudly.
+    ocoDoubleFillAlerts: {
+      postOcoDoubleFillAlert: async (alert) => {
+        throw new Error(
+          `smoke crypto-emulation scenario: unexpected double-fill alert for ` +
+            `'${alert.client_order_id}'`,
+        );
+      },
+    },
+  });
+
+  const ack = await adapter.submitBracket({
+    client_order_id: CRYPTO_EMULATION_LOT_KEY,
+    instrument: 'BTC-USD',
+    asset_class: 'crypto',
+    side: 'buy',
+    size: 0.5,
+    entry: 60_000,
+    stop: 57_000,
+    target: 66_000,
+    time_in_force: 'gtc',
+  });
+  if (ack.order_state !== 'submitted') {
+    throw new Error(
+      `smoke crypto-emulation scenario: entry ack was '${ack.order_state}', not 'submitted' — ` +
+        'a scenario precondition is wrong, not the gate',
+    );
+  }
+
+  client.fillByClientOrderId(CRYPTO_EMULATION_LOT_KEY, 60_000, '2026-01-02T00:00:00Z');
+  const armSweep = await adapter.fetchNewFills(new Date(0));
+
+  // The emulation's deterministic first-episode leg id (#586) — the stop
+  // firing is the OCO edge under test.
+  client.fillByClientOrderId(`${CRYPTO_EMULATION_LOT_KEY}:stop`, 57_000, '2026-01-02T00:01:00Z');
+  const exitSweep = await adapter.fetchNewFills(new Date(0));
+
+  const journalRow = db
+    .prepare(
+      'SELECT phase, asset_class, stop_order_id, target_order_id FROM broker_brackets ' +
+        "WHERE venue = 'alpaca' AND client_order_id = ?",
+    )
+    .get(CRYPTO_EMULATION_LOT_KEY) as CryptoEmulationEvidence['journalRow'];
+
+  const targetVenueId = client.venueOrderId(`${CRYPTO_EMULATION_LOT_KEY}:target`);
+  return {
+    journalRow,
+    entryFillSeen: armSweep.some(
+      (fill) => fill.leg === 'entry' && fill.client_order_id === CRYPTO_EMULATION_LOT_KEY,
+    ),
+    stopFillSeen: exitSweep.some(
+      (fill) => fill.leg === 'stop' && fill.client_order_id === CRYPTO_EMULATION_LOT_KEY,
+    ),
+    siblingCancelled:
+      targetVenueId !== undefined && client.cancelledOrderIds.includes(targetVenueId),
+  };
+}
+
 /** One tick's audit trail: the stages it reached and what each decided. */
 export interface SmokeTick {
   trace_id: string;
@@ -1251,6 +1500,14 @@ export function evaluateSmokeGate(
      * not a run that legitimately has nothing to report.
      */
     exitPath: ExitPathEvidence;
+    /**
+     * The crypto-emulation scenario's evidence (#586) — required for the
+     * same "compile error, not a silent no-op" reason the two above are:
+     * `runCryptoEmulationScenario` always runs as part of `runSmoke`, and
+     * the smoke universe is crypto, so the soak's entire bracket path runs
+     * on the mechanism this gates.
+     */
+    cryptoEmulation: CryptoEmulationEvidence;
   },
 ): SmokeGateResult {
   const failures: string[] = [];
@@ -1639,6 +1896,61 @@ export function evaluateSmokeGate(
     );
   }
 
+  // #586 — the emulated crypto protective legs, unconditional for #430's
+  // reason: `runCryptoEmulationScenario` always runs, the smoke universe is
+  // crypto, and no other check in this gate can see the emulation at all
+  // (the six-stage run and the exit-path harness both override the broker
+  // with `SimulatedBrokerAdapter`). Each check names a different way the
+  // mechanism can silently stop being wired.
+  const emulation = options.cryptoEmulation;
+  if (emulation.journalRow === undefined || emulation.journalRow.asset_class !== 'crypto') {
+    failures.push(
+      "the emulated-leg journal (broker_brackets, venue 'alpaca') has no crypto row for the " +
+        "crypto-emulation scenario's lot — submitBracket stopped journalling the emulated " +
+        'bracket (#586), so a crash between the entry and its protective legs leaves a live ' +
+        'crypto position nothing knows to protect',
+    );
+  } else {
+    if (
+      emulation.journalRow.stop_order_id === null ||
+      emulation.journalRow.target_order_id === null
+    ) {
+      failures.push(
+        "the crypto-emulation scenario's journal row is missing protective-leg order ids after " +
+          'the entry filled — the legs were never submitted as plain crypto orders (#586), so ' +
+          'the filled lot sat naked',
+      );
+    }
+    if (emulation.journalRow.phase !== 'resolved') {
+      failures.push(
+        `the crypto-emulation scenario's journal row ended in phase ` +
+          `'${emulation.journalRow.phase}', expected 'resolved' — the emulated OCO edge ` +
+          '(leg fill -> sibling cancel) did not complete (#586)',
+      );
+    }
+  }
+  if (!emulation.entryFillSeen) {
+    failures.push(
+      "the crypto-emulation scenario's entry fill never came back through fetchNewFills — the " +
+        'emulation sweep is not polling its plain entry order (#586), so ingestFills would ' +
+        'never learn a crypto entry filled',
+    );
+  }
+  if (!emulation.stopFillSeen) {
+    failures.push(
+      "the crypto-emulation scenario's stop-leg fill never came back through fetchNewFills — " +
+        'the emulation sweep is not polling its resting legs (#586), so a stop-out would go ' +
+        'unbooked',
+    );
+  }
+  if (!emulation.siblingCancelled) {
+    failures.push(
+      'the surviving take-profit leg was never cancelled after the stop leg filled — the ' +
+        'emulated one-cancels-other edge is not firing (#586), leaving a resting order that ' +
+        'can fire into a flat position and open a reverse one',
+    );
+  }
+
   return { passed: failures.length === 0, failures };
 }
 
@@ -1891,6 +2203,10 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       heartbeatChannel: new LoggingHeartbeatChannel(logger),
       orphanAlerts: new LoggingOrphanAlertChannel(logger),
       unpricedFillAlerts: new LoggingUnpricedFillAlertChannel(logger),
+      // #586 — the ninth `ALERT_CHANNEL_FIELDS` member; injected so this
+      // run stays exempt from SAMURAI_ALERTS (see the derived-list comment
+      // below).
+      ocoDoubleFillAlerts: new LoggingOcoDoubleFillAlertChannel(logger),
       breachAlerts: new LoggingBreachAlertChannel(logger),
       loosenApprovals: new LoggingLoosenApprovalChannel(logger),
       analystSkipAlerts: new LoggingAnalystSkipAlertChannel(logger),
@@ -1953,11 +2269,17 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       executionConfig: profile.executionConfig,
     });
 
+    // #586: the emulated crypto protective legs, on the REAL AlpacaBrokerAdapter
+    // over the same db — its own lot key and its own scripted client, so it
+    // contends with nothing above.
+    const cryptoEmulation = await runCryptoEmulationScenario(db);
+
     const observations = readSmokeObservations(db);
     const gate = evaluateSmokeGate(observations, {
       minTicks: targetTicks,
       alpacaWireClientReached: alpacaBrokerClient.reached,
       llmRateLimiterSnapshot: llmRateLimiter.snapshot(),
+      cryptoEmulation,
       exitPath: {
         ...exitPathHarnessResult,
         // Alerts from BOTH the six-stage tick loop and the exit-path harness —

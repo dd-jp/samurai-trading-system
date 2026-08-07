@@ -654,7 +654,7 @@ describe('SqliteExecutionStore', () => {
       ]);
     });
 
-    it('excludes a row once markFlattenFillsSwept has run — the bound migration 0022 exists for', async () => {
+    it('excludes a row once markFlattenFillsSwept has run — the bound migration 0023 exists for', async () => {
       const { store } = makeStore();
       await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-swept' }));
       await store.resolveFlattenSubmitted(

@@ -5,6 +5,7 @@ import type {
   BrokerAdapter,
   ExecutionConfig,
   FlattenReconcileAlertChannel,
+  OcoDoubleFillAlertChannel,
   ResidualExposureAlertChannel,
   UnpricedFillAlertChannel,
 } from '../../execution/index.js';
@@ -40,7 +41,7 @@ import { DEFAULT_STAGE2_MAX_AGE_DAYS } from './daily-equity-metrics-source.js';
 import type { AccountStateProvider, VolatilityReadingProvider } from './direct-bind.js';
 
 /**
- * The eight outbound operator-escalation transports — the fields
+ * The nine outbound operator-escalation transports — the fields
  * `alert-transport.ts`'s `ALERT_CHANNEL_FIELDS` must cover, and the reason
  * this interface exists as its own type rather than as eight scattered
  * fields on `ProductionConfig` (#551): one authoritative list of "what is an
@@ -108,6 +109,19 @@ export interface AlertChannelSlots {
    */
   residualExposureAlerts?: ResidualExposureAlertChannel;
   /**
+   * Where an emulated crypto OCO's DOUBLE FILL is escalated (#586): both
+   * protective legs filled inside one poll window, so the lot over-closed
+   * and a reverse position may be open at the venue — the risk the owner
+   * accepted when choosing local emulation over Alpaca's crypto-rejected
+   * native order classes, surfaced rather than hidden. Defaults to
+   * `LoggingOcoDoubleFillAlertChannel`, with the same caveat as
+   * `unpricedFillAlerts`: reachable only by an operator reading the log
+   * stream. `TradeChannelOcoDoubleFillAlert` (oco-double-fill-channel.ts) is
+   * what an unattended soak (#238) needs, and `SAMURAI_ALERTS=telegram` is
+   * what supplies it — the ninth `ALERT_CHANNEL_FIELDS` member.
+   */
+  ocoDoubleFillAlerts?: OcoDoubleFillAlertChannel;
+  /**
    * Where a `flatten_submissions` row `reconcile()`'s sweep could not settle
    * is escalated (#519) — genuine ignorance, or a venue contradiction on an
    * already-acked row (`resolveUnresolvedFlattens`, execution/reconcile.ts).
@@ -116,7 +130,8 @@ export interface AlertChannelSlots {
    * log stream. `TradeChannelFlattenReconcileAlert`
    * (flatten-reconcile-alert-channel.ts) is what an unattended soak (#238)
    * needs, and `SAMURAI_ALERTS=telegram` supplies it, the same move #551
-   * made for `residualExposureAlerts`.
+   * made for `residualExposureAlerts` — the tenth `ALERT_CHANNEL_FIELDS`
+   * member.
    */
   flattenReconcileAlerts?: FlattenReconcileAlertChannel;
   /**

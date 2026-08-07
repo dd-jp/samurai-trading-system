@@ -18,6 +18,7 @@
 import {
   buildSmokeFixtureBars,
   ConstantResponseLlmClient,
+  type CryptoEmulationEvidence,
   type ExitPathEvidence,
   evaluateSmokeGate,
   FixedAccountStateProvider,
@@ -162,12 +163,42 @@ function meteredSnapshot() {
   return { crypto: { debatesUsed: 1, llmCallsUsed: 4 } };
 }
 
+/**
+ * A healthy crypto-emulation drive (#586) — every check `evaluateSmokeGate`
+ * runs against `options.cryptoEmulation` passes against this shape
+ * unmodified: the lot was journalled as crypto, both legs got venue ids, the
+ * OCO edge completed, and both fills came back through the sweep.
+ */
+function healthyCryptoEmulation(
+  overrides: Partial<CryptoEmulationEvidence> = {},
+): CryptoEmulationEvidence {
+  return {
+    journalRow: {
+      phase: 'resolved',
+      asset_class: 'crypto',
+      stop_order_id: 'scenario-alpaca-2',
+      target_order_id: 'scenario-alpaca-3',
+    },
+    entryFillSeen: true,
+    stopFillSeen: true,
+    siblingCancelled: true,
+    ...overrides,
+  };
+}
+
 /** `evaluateSmokeGate`'s options for a fully healthy run — the base every test below mutates. */
-function healthyGateOptions(overrides: { minTicks?: number; exitPath?: ExitPathEvidence } = {}) {
+function healthyGateOptions(
+  overrides: {
+    minTicks?: number;
+    exitPath?: ExitPathEvidence;
+    cryptoEmulation?: CryptoEmulationEvidence;
+  } = {},
+) {
   return {
     minTicks: overrides.minTicks ?? 2,
     llmRateLimiterSnapshot: meteredSnapshot(),
     exitPath: overrides.exitPath ?? healthyExitPath(),
+    cryptoEmulation: overrides.cryptoEmulation ?? healthyCryptoEmulation(),
   };
 }
 
@@ -1054,5 +1085,67 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
     );
 
     expect(gate.failures.some((failure) => failure.includes('lot-older, lot-newer'))).toBe(false);
+  });
+
+  // #586 — the crypto-emulation checks. Each mutates one field of a healthy
+  // evidence shape, naming a distinct way the emulation can stop being wired
+  // while every other observation stays green.
+  it('fails when no emulated-leg journal row exists for the crypto lot (#586)', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({ cryptoEmulation: healthyCryptoEmulation({ journalRow: undefined }) }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('no crypto row'))).toBe(true);
+  });
+
+  it('fails when the journal row never got protective-leg order ids (#586)', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        cryptoEmulation: healthyCryptoEmulation({
+          journalRow: {
+            phase: 'pending_entry',
+            asset_class: 'crypto',
+            stop_order_id: null,
+            target_order_id: null,
+          },
+        }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('never submitted as plain'))).toBe(
+      true,
+    );
+    expect(gate.failures.some((failure) => failure.includes("expected 'resolved'"))).toBe(true);
+  });
+
+  it('fails when the sibling was never cancelled after the stop filled (#586)', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({ cryptoEmulation: healthyCryptoEmulation({ siblingCancelled: false }) }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('one-cancels-other'))).toBe(true);
+  });
+
+  it('fails when the emulated fills never came back through the sweep (#586)', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        cryptoEmulation: healthyCryptoEmulation({ entryFillSeen: false, stopFillSeen: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('entry fill never came back'))).toBe(
+      true,
+    );
+    expect(gate.failures.some((failure) => failure.includes('stop-leg fill never came back'))).toBe(
+      true,
+    );
   });
 });

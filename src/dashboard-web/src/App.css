@@ -1,31 +1,142 @@
 /*
- * Static-shell layout only — dashboard-spec.md, "Layout". No motion, no
- * data-driven states (those are later tickets under wayfinder map #533).
- * All colours/fonts come from tokens.css custom properties; nothing here
- * hard-codes a hex, per the Design system section's rule.
+ * Mission-control screen styling (issue #538; dashboard-spec.md "Layout" and
+ * "Design system"). All colours come from tokens.css custom properties;
+ * nothing here hard-codes a hex, per the Design system's rule. The only
+ * literal colours are rgba() glows and washes derived from the tokens, which
+ * CSS cannot express as an alpha over a var() without colour-mix.
+ *
+ * Motion here is CSS keyframes and transitions only — no JS animation loop and
+ * no requestAnimationFrame anywhere in the app (Motion rule 10).
  */
+
+* {
+  box-sizing: border-box;
+}
 
 .app {
   min-height: 100vh;
   background: var(--bg);
+  background-image: radial-gradient(
+    1200px 600px at 50% -200px,
+    rgba(56, 225, 255, 0.06),
+    transparent 60%
+  );
   color: var(--text);
   font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.5;
 }
+
+.numeric,
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.gain {
+  color: var(--go);
+}
+
+.loss {
+  color: var(--vermilion);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+/* Available to assistive technology, invisible on screen — never used to hide
+   a signal, only to say in words what a glyph shows visually. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Empty states name their reason; they are content, not absence, so they are
+   styled as readable prose rather than as a greyed-out placeholder. */
+.empty-state {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 8px 0;
+  max-width: 62ch;
+}
+
+.caveat {
+  color: var(--amber);
+  font-size: 11px;
+  line-height: 1.6;
+  margin: 8px 0 0;
+  max-width: 62ch;
+}
+
+button {
+  font: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------- telemetry */
 
 .telemetry-strip {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
-  gap: 16px;
-  padding: 12px 18px;
-  border-bottom: 1px solid var(--border);
+  gap: 22px;
+  padding: 12px 20px;
+  margin: 14px 20px 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
   background: var(--panel);
   backdrop-filter: blur(12px);
+  transition: border-color 0.3s;
+}
+
+/* Staleness is a label plus a border, never a disappearance. The colour
+   override of the labels themselves lives below, after their base rules, so
+   the stylesheet never descends in specificity. */
+.telemetry-strip-stale {
+  border-color: var(--amber);
+}
+
+.brand {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.14em;
+}
+
+.brand i {
+  font-style: normal;
+  color: var(--cyan);
+}
+
+.brand small {
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  margin-left: 8px;
+  font-weight: 600;
 }
 
 .telemetry-cell {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.telemetry-spacer {
+  flex: 1;
 }
 
 .telemetry-label {
@@ -41,38 +152,275 @@
   font-size: 13px;
 }
 
+.telemetry-muted {
+  color: var(--muted);
+}
+
+.telemetry-strip-stale .telemetry-label,
+.telemetry-strip-stale .telemetry-value {
+  color: var(--amber);
+}
+
+.telemetry-since,
+.telemetry-caveat {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.telemetry-stale-note {
+  color: var(--amber);
+}
+
+.telemetry-mode {
+  border: 1px solid var(--amber);
+  color: var(--amber);
+  border-radius: 5px;
+  padding: 2px 9px;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  align-self: flex-start;
+}
+
+.telemetry-mode-live {
+  border-color: var(--vermilion);
+  color: var(--vermilion);
+}
+
+.telemetry-mode-unknown {
+  color: var(--amber);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+/* Provider state words. The colour is redundant with the word — never the only
+   carrier of the meaning. */
+.provider-ok {
+  color: var(--go);
+}
+
+.provider-rate_limited,
+.provider-forbidden,
+.provider-not_configured {
+  color: var(--amber);
+}
+
+.provider-unauthorized,
+.provider-error {
+  color: var(--vermilion);
+}
+
+.burn-meter {
+  width: 120px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  margin-top: 3px;
+  position: relative;
+  overflow: hidden;
+}
+
+.burn-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--cyan);
+  border-radius: 2px;
+}
+
+.burn-fill-over {
+  background: var(--vermilion);
+}
+
+/* ------------------------------------------------------------------- layout */
+
 main {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  padding: 20px;
+  gap: 18px;
+  padding: 0 20px 60px;
 }
 
-.rooms-hero {
-  display: grid;
-  /* The minmax floor is what makes the overflow rule below actually engage:
-     bare `1fr` tracks shrink to fit, so the grid would never overflow —
-     rooms would just get crushed on narrow viewports. */
-  grid-template-columns: repeat(4, minmax(180px, 1fr));
-  grid-auto-rows: minmax(120px, auto);
-  gap: 12px;
-  /* Rooms grid scrolls inside its own container on narrow viewports — the
-     page body must never scroll sideways (spec, Accessibility floor). */
-  overflow-x: auto;
-}
-
-.room {
+.panel,
+.rooms-panel,
+.ledger-panel,
+.drawer-panel {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--panel);
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  backdrop-filter: blur(12px);
+  padding: 16px 18px;
 }
 
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.panel-head h2 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  margin: 0;
+}
+
+.panel-sub {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.mid-row {
+  display: grid;
+  grid-template-columns: minmax(340px, 1fr) minmax(400px, 1.4fr);
+  gap: 18px;
+}
+
+.bento {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 18px;
+}
+
+.panel-positions,
+.panel-metrics {
+  grid-column: span 2;
+}
+
+@media (max-width: 1100px) {
+  .mid-row {
+    grid-template-columns: 1fr;
+  }
+
+  .panel-positions,
+  .panel-metrics {
+    grid-column: auto;
+  }
+}
+
+/* -------------------------------------------------------------- rooms hero */
+
+/* The grid scrolls inside its own container on narrow viewports; the page body
+   never scrolls sideways (spec, Accessibility floor). */
+.rooms-scroll {
+  overflow-x: auto;
+  padding-bottom: 6px;
+}
+
+.rooms-hero {
+  position: relative;
+  display: grid;
+  /* The minmax floor is what makes the overflow rule engage: bare `1fr`
+     tracks shrink to fit, so the grid would never overflow — rooms would just
+     get crushed on narrow viewports. */
+  grid-template-columns: repeat(4, minmax(200px, 1fr));
+  grid-auto-rows: minmax(150px, auto);
+  gap: 12px;
+  min-width: 880px;
+}
+
+.room {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(11, 16, 32, 0.72);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition:
+    border-color 0.3s,
+    box-shadow 0.3s;
+  animation: room-power-on 0.5s both;
+  animation-delay: calc(var(--room-index, 0) * 70ms);
+}
+
+@keyframes room-power-on {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.room::before {
+  content: "";
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  top: 0;
+  height: 3px;
+  border-radius: 0 0 3px 3px;
+  background: var(--border);
+}
+
+.room-lobby {
+  border-style: dashed;
+  background: rgba(11, 16, 32, 0.4);
+}
+
+/* Room 04 while the invalidation stage is unbuilt: lights off, and it says so
+   in the blurb rather than only by opacity. */
 .room-lights-off {
-  opacity: 0.5;
+  border-style: dashed;
+  opacity: 0.55;
+}
+
+.room-live {
+  border-color: rgba(56, 225, 255, 0.55);
+  box-shadow:
+    0 0 18px rgba(56, 225, 255, 0.12),
+    inset 0 0 24px rgba(56, 225, 255, 0.04);
+}
+
+.room-live::before {
+  background: var(--cyan);
+}
+
+.room-selected {
+  box-shadow:
+    0 0 0 1px var(--cyan),
+    0 0 18px rgba(56, 225, 255, 0.15);
+}
+
+.room-corner {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--cyan);
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+}
+
+.room-selected .room-corner {
+  opacity: 1;
+}
+
+.room-corner-tl {
+  top: -2px;
+  left: -2px;
+  border-right: 0;
+  border-bottom: 0;
+  border-radius: 3px 0 0 0;
+}
+
+.room-corner-br {
+  bottom: -2px;
+  right: -2px;
+  border-left: 0;
+  border-top: 0;
+  border-radius: 0 0 3px 0;
 }
 
 .room-heading {
@@ -83,49 +431,862 @@ main {
 
 .room-number {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 9px;
   color: var(--muted);
+  letter-spacing: 0.1em;
 }
 
 .room-name {
   font-family: var(--font-display);
   font-weight: 600;
-  font-size: 12px;
-  letter-spacing: 0.12em;
+  font-size: 11px;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
   margin: 0;
+  color: var(--muted);
 }
 
-.room-note {
+/* Declared after `.room-name` so specificity ascends down the file. */
+.room-live .room-name {
+  color: var(--cyan);
+}
+
+.room-live-word {
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--cyan);
+}
+
+.room-blurb {
+  font-size: 10px;
+  color: var(--muted);
+  margin: 0;
+  max-width: 22ch;
+}
+
+.room-overflow {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--cyan);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0 6px;
+}
+
+.room-kanji {
+  position: absolute;
+  right: 8px;
+  bottom: 2px;
+  font-size: 48px;
+  line-height: 1;
+  color: rgba(138, 147, 168, 0.1);
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ------------------------------------------------------------ sigil chips */
+
+.rooms-floor {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.chip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: rgba(13, 20, 38, 1);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 4px 10px 4px 6px;
+  cursor: pointer;
+  /* The transform transition IS the walk. Its duration is set per hop by
+     useWalkAnimation; this is the resting default. */
+  transition:
+    transform 0.38s cubic-bezier(0.45, 0.08, 0.3, 1),
+    opacity 0.4s,
+    box-shadow 0.3s;
+  will-change: transform;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+  animation: chip-appear 0.4s both;
+}
+
+@keyframes chip-appear {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.chip:hover {
+  border-color: var(--cyan);
+}
+
+.chip-selected {
+  border-color: var(--cyan);
+  box-shadow:
+    0 0 0 1px rgba(56, 225, 255, 0.6),
+    0 2px 12px rgba(56, 225, 255, 0.2);
+}
+
+.chip-walking {
+  border-color: var(--cyan);
+  box-shadow: 0 4px 16px rgba(56, 225, 255, 0.25);
+}
+
+/* The settle ring: what moved, when it did not walk (Motion rule 5/8). A
+   static ring rather than a keyframe, precisely so reduced motion keeps it. */
+.chip-settled {
+  box-shadow:
+    0 0 0 2px var(--cyan),
+    0 2px 10px rgba(0, 0, 0, 0.5);
+}
+
+.chip-ring {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2.5px solid var(--muted);
+  flex: none;
+}
+
+.chip-glyph {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.chip-in_flight {
+  border-color: rgba(56, 225, 255, 0.5);
+}
+
+.chip-in_flight .chip-ring {
+  border-color: var(--cyan);
+}
+
+.chip-go .chip-ring {
+  border-color: var(--go);
+  background: rgba(61, 220, 125, 0.25);
+}
+
+.chip-no_go .chip-ring {
+  border-color: var(--amber);
+}
+
+.chip-stopped .chip-ring {
+  border-color: var(--vermilion);
+  background: rgba(255, 77, 94, 0.25);
+}
+
+.chip-quorum_skip .chip-ring {
+  border-style: dashed;
+  border-color: var(--amber);
+}
+
+.chip-idle {
+  opacity: 0.7;
+}
+
+.chip-idle .chip-ring {
+  border-style: dashed;
+}
+
+.chip-bob {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  animation: chip-bob 3.4s ease-in-out infinite;
+}
+
+@keyframes chip-bob {
+  50% {
+    transform: translateY(-2px);
+  }
+}
+
+/* Scanline shimmer while live. Not a pulsing status dot — it is a sweep across
+   the chip, and the word "live" carries the same fact in the room heading and
+   in the chip's accessible name. */
+.chip-shimmer {
+  position: absolute;
+  inset: 0;
+  border-radius: 16px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.chip-shimmer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 36%;
+  background: linear-gradient(105deg, transparent, rgba(56, 225, 255, 0.14), transparent);
+  animation: chip-scan 2.4s infinite;
+}
+
+@keyframes chip-scan {
+  from {
+    left: -40%;
+  }
+
+  to {
+    left: 110%;
+  }
+}
+
+/* ---------------------------------------------------------------- ledger */
+
+.ledger-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ledger-row {
+  display: grid;
+  grid-template-columns: 30px 82px 92px 1fr 92px;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  padding: 7px 4px;
+  border: 0;
+  border-bottom: 1px solid rgba(30, 42, 68, 0.6);
+  background: transparent;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.ledger-row:hover {
+  background: rgba(56, 225, 255, 0.05);
+}
+
+.ledger-row-selected {
+  background: rgba(56, 225, 255, 0.08);
+}
+
+.ledger-time,
+.ledger-trace {
   color: var(--muted);
   font-size: 11px;
+}
+
+.ledger-reason {
+  color: var(--muted);
+  font-size: 11px;
+  font-family: var(--font-body);
+}
+
+.seal {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1.5px solid;
+  transform: rotate(-6deg);
+  flex: none;
+}
+
+.seal-go {
+  color: var(--cyan);
+  border-color: var(--cyan);
+  background: rgba(56, 225, 255, 0.08);
+}
+
+.seal-no_go {
+  color: var(--amber);
+  border-color: var(--amber);
+  background: rgba(255, 180, 84, 0.08);
+}
+
+.seal-stopped {
+  color: var(--vermilion);
+  border-color: var(--vermilion);
+  background: rgba(255, 77, 94, 0.1);
+}
+
+.seal-quorum_skip {
+  color: var(--muted);
+  border-color: var(--muted);
+}
+
+/* Stamped on entries observed settling; a seeded entry never animates,
+   because it did not just happen. */
+.ledger-row-stamped .seal {
+  animation: hanko-stamp 0.38s cubic-bezier(0.2, 1.6, 0.4, 1);
+}
+
+@keyframes hanko-stamp {
+  0% {
+    transform: rotate(-6deg) scale(2.6);
+    opacity: 0;
+  }
+
+  60% {
+    transform: rotate(-6deg) scale(0.92);
+    opacity: 1;
+  }
+
+  100% {
+    transform: rotate(-6deg) scale(1);
+  }
+}
+
+.outcome-word {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.outcome-go {
+  color: var(--cyan);
+}
+
+.outcome-no_go,
+.outcome-quorum_skip {
+  color: var(--amber);
+}
+
+.outcome-stopped {
+  color: var(--vermilion);
+}
+
+.hitl-badge {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  font-weight: 600;
+  color: var(--bg);
+  background: var(--amber);
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-left: 6px;
+}
+
+/* ---------------------------------------------------------------- drawer */
+
+.drawer-trace {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.drawer-section {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  margin: 16px 0 8px;
+}
+
+.drawer-started,
+.drawer-caveat {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 8px 0 0;
+}
+
+.stage-strip {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.stage-strip th {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.stage-strip td {
+  padding: 5px 8px;
+  border-bottom: 1px solid rgba(30, 42, 68, 0.5);
+  font-family: var(--font-mono);
+}
+
+.stage-strip .numeric {
+  text-align: right;
+}
+
+.state-word {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.state-done {
+  color: var(--go);
+}
+
+.state-live {
+  color: var(--cyan);
+}
+
+.state-stopped {
+  color: var(--vermilion);
+}
+
+.state-skipped,
+.state-not_reached {
+  color: var(--muted);
+}
+
+/* ----------------------------------------------------------- stance strips */
+
+.stance-list,
+.debate-list,
+.debate-contributions,
+.analyst-list,
+.position-list,
+.stat-grid,
+.spend-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.stance-row,
+.debate-contribution {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.stance-name {
+  min-width: 90px;
+}
+
+.stance-strip {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+}
+
+.stance-mark {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  display: inline-block;
+  background: var(--muted);
+}
+
+.stance-bullish {
+  background: var(--go);
+}
+
+.stance-bearish {
+  background: var(--vermilion);
+}
+
+.stance-neutral {
+  background: var(--muted);
+}
+
+.stance-empty,
+.stance-final,
+.stance-influence {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.stance-influence {
+  margin-left: auto;
+}
+
+.legend {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 10px;
+}
+
+.legend i {
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+
+.legend-note {
+  margin-left: auto;
+}
+
+/* ------------------------------------------------------------- positions */
+
+.position-card {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  background: rgba(11, 16, 32, 0.5);
+}
+
+.position-top {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.position-symbol {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0.06em;
+}
+
+.side {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 4px;
+  border: 1px solid;
+  text-transform: uppercase;
+}
+
+.side-buy {
+  color: var(--go);
+  border-color: rgba(61, 220, 125, 0.5);
+}
+
+.side-sell {
+  color: var(--vermilion);
+  border-color: rgba(255, 77, 94, 0.5);
+}
+
+.position-size {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.position-pnl {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.rail-wrap {
+  position: relative;
+  height: 34px;
+  margin: 18px 0 6px;
+}
+
+.rail {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 11px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+}
+
+.rail-tick {
+  position: absolute;
+  top: 4px;
+  width: 2px;
+  height: 17px;
+  border-radius: 1px;
+}
+
+.rail-label {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.rail-stop {
+  background: var(--vermilion);
+}
+
+.rail-entry {
+  background: var(--muted);
+}
+
+.rail-target {
+  background: var(--go);
+}
+
+.rail-mark {
+  background: var(--cyan);
+  height: 22px;
+  top: 2px;
+}
+
+.rail-mark .rail-label {
+  top: -14px;
+  color: var(--cyan);
+}
+
+.position-meta {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+/* --------------------------------------------------------------- metrics */
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.stat,
+.spend-cell {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 10px 12px;
+  background: rgba(11, 16, 32, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stat-label {
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.stat-value {
+  font-size: 19px;
+  font-weight: 600;
+}
+
+.stat-note {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.spark-figure {
+  margin: 14px 0 0;
+}
+
+.spark {
+  max-width: 100%;
+}
+
+.spark-line {
+  fill: none;
+  stroke: var(--cyan);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.spark-fill {
+  fill: rgba(56, 225, 255, 0.1);
+  stroke: none;
+}
+
+/* -------------------------------------------------------------- analysts */
+
+.analyst-row {
+  display: grid;
+  grid-template-columns: 96px 1fr 48px 66px 88px;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(30, 42, 68, 0.5);
+  font-size: 12px;
+}
+
+.analyst-row:last-child {
+  border-bottom: 0;
+}
+
+.analyst-name {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.analyst-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  position: relative;
+  overflow: hidden;
+  display: block;
+}
+
+.analyst-bar i {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--cyan);
+  border-radius: 3px;
+}
+
+.analyst-bar-missing,
+.analyst-window {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.analyst-weight,
+.analyst-r {
+  text-align: right;
+  font-size: 11px;
+}
+
+/* ----------------------------------------------------------------- spend */
+
+.spend-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.kv-list {
   margin: 0;
 }
 
-.room-occupants {
-  flex: 1;
-}
-
-.verdict-ledger,
-.bento-panel {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--panel);
-  padding: 16px 18px;
-}
-
-.verdict-ledger h2,
-.bento-panel h2 {
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 12px;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  margin: 0 0 8px;
-}
-
-.bento {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+.kv {
+  display: flex;
+  justify-content: space-between;
   gap: 12px;
+  font-size: 11px;
+  padding: 3px 0;
+  font-family: var(--font-mono);
+  color: var(--muted);
+}
+
+.kv dt {
+  margin: 0;
+}
+
+.kv dd {
+  margin: 0;
+  color: var(--text);
+}
+
+/* --------------------------------------------------------------- debates */
+
+.debate-row {
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(30, 42, 68, 0.5);
+}
+
+.debate-row:last-child {
+  border-bottom: 0;
+}
+
+.debate-head {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.debate-rounds,
+.debate-time {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.debate-time {
+  margin-left: auto;
+}
+
+.direction {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid;
+  text-transform: uppercase;
+}
+
+.direction-bullish {
+  color: var(--go);
+  border-color: rgba(61, 220, 125, 0.5);
+}
+
+.direction-bearish {
+  color: var(--vermilion);
+  border-color: rgba(255, 77, 94, 0.5);
+}
+
+.direction-neutral {
+  color: var(--muted);
+  border-color: var(--border);
+}
+
+/* --------------------------------------------------- prefers-reduced-motion
+ *
+ * Motion rule 5: snap, with a settle ring. Suppression is scoped to bob,
+ * shimmer, power-on and the hanko stamp — NOT a blanket
+ * `*{animation-duration:.01ms}`, which would kill `.chip-settled` (the ring is
+ * a static box-shadow, but a blanket rule also collapses the chip's transform
+ * transition to zero, and with it the only signal that reduced motion is meant
+ * to preserve). The walk itself is already suppressed upstream: the planner
+ * emits snaps, so no chip crosses the screen regardless of what CSS allows.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .chip-bob,
+  .chip-shimmer::after,
+  .room,
+  .ledger-row-stamped .seal,
+  .chip {
+    animation: none;
+  }
+
+  .chip {
+    transition: box-shadow 0.3s;
+  }
 }

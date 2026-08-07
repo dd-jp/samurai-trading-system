@@ -181,7 +181,7 @@ export interface SharedStore {
    * poll — `ingest-fills.ts`'s call site, right after every one of a
    * flatten's named lots has either advanced cleanly or had nothing new to
    * advance. This is what bounds `getUnresolvedFlattens()` above; see
-   * migration 0022 for why the bound cannot be `order_state` alone, and why
+   * migration 0023 for why the bound cannot be `order_state` alone, and why
    * this may NOT be called merely because a raw fill was observed — only
    * once it is durably applied, or a lot-advance failure this poll would
    * become permanently unrecoverable instead of retried on the next

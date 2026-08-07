@@ -27,8 +27,10 @@ import type { NativeBracketRequest, NormalizedFill } from './types.js';
  */
 export type BrokerVenue = 'ccxt' | 'ibkr' | 'alpaca';
 
-/** ccxt's emulated lifecycle; always `'armed'` on a native-bracket venue. */
 /**
+ * The emulated lifecycle (originally ccxt's; now Alpaca's crypto emulation,
+ * #586); always `'armed'` on a native-bracket path.
+ *
  * `submitting` is the write-ahead phase (#312): journalled BEFORE the venue
  * call, so a crash between `createOrder` and the journal leaves a row naming
  * the order that may exist rather than a live venue order nothing knows about.
@@ -37,8 +39,21 @@ export type BrokerVenue = 'ccxt' | 'ibkr' | 'alpaca';
  * is indistinguishable from an ordinary bracket whose id has not been recorded
  * yet, since `recordBracketOrderIds` COALESCEs and a null there already means
  * "no news".
+ *
+ * `cancelling_sibling` (#586, migration 0022) is the same write-ahead rule
+ * applied to the OCO edge: one protective leg has been observed filled and the
+ * surviving sibling's cancel is owed to the venue. Journalled BEFORE the
+ * cancel call, so a crash in that window leaves a row that says a live resting
+ * order still needs killing, rather than an `armed` that hides the fill or a
+ * `resolved` that hides the sibling.
  */
-export type BrokerBracketPhase = 'submitting' | 'pending_entry' | 'arming' | 'armed' | 'resolved';
+export type BrokerBracketPhase =
+  | 'submitting'
+  | 'pending_entry'
+  | 'arming'
+  | 'armed'
+  | 'cancelling_sibling'
+  | 'resolved';
 
 /**
  * One persisted bracket. See the migration for per-venue column applicability

@@ -628,7 +628,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     ]);
   });
 
-  it('does not re-poll a row once markFlattenFillsSwept has run — the #519/#526 bound (migration 0022)', async () => {
+  it('does not re-poll a row once markFlattenFillsSwept has run — the #519/#526 bound (migration 0023)', async () => {
     const { store } = openTestExecutionStore();
     await writeAheadFlatten(store);
     await store.resolveFlattenSubmitted(

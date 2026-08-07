@@ -119,7 +119,7 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
   // poll (or had nothing new to advance) as swept — see
   // `SharedStore.markFlattenFillsSwept`'s doc for why this is gated on the
   // lot-advance outcome rather than fired unconditionally once redistribution
-  // succeeds, and migration 0022 for what this bounds.
+  // succeeds, and migration 0023 for what this bounds.
   const failedLotKeys = new Set(
     failures.filter((failure) => failure.scope === 'lot-advance').map((failure) => failure.key),
   );

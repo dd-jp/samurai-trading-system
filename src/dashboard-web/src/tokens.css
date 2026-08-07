@@ -32,3 +32,8 @@
   --font-body: "IBM Plex Sans", sans-serif;
   --font-mono: "IBM Plex Mono", monospace;
 }
+
+body {
+  margin: 0;
+  box-sizing: border-box;
+}

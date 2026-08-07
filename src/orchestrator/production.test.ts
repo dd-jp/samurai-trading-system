@@ -127,6 +127,18 @@ function stubConfig(db: SqliteHandle, overrides: Partial<ProductionConfig> = {})
     mode: 'paper',
     alpacaBrokerClient: {
       submitOrder,
+      // #586: a crypto bracket goes to the venue as a PLAIN limit entry —
+      // `submitOrder`'s native bracket is the verified 422 for crypto.
+      submitLimitOrder: vi.fn(async () => ({
+        id: 'alpaca-order-1',
+        client_order_id: 'k',
+        status: 'accepted',
+      })),
+      submitStopLimitOrder: vi.fn(async () => ({
+        id: 'alpaca-order-2',
+        client_order_id: 'k:stop',
+        status: 'accepted',
+      })),
       cancelOrder: vi.fn(async () => undefined),
       getOrder: vi.fn(async () => ({
         id: 'alpaca-order-1',
@@ -375,7 +387,12 @@ describe('buildProductionComponents', () => {
 
     await steps.execution(goVerdict());
 
-    expect(config.alpacaBrokerClient.submitOrder).toHaveBeenCalled();
+    // #586: the verdict's instrument is crypto (BTC-USD), so the adapter's
+    // emulated path submits a PLAIN limit entry — `submitOrder`'s native
+    // bracket order class is the verified 422 for crypto (#550) and must
+    // never be reached.
+    expect(config.alpacaBrokerClient.submitLimitOrder).toHaveBeenCalled();
+    expect(config.alpacaBrokerClient.submitOrder).not.toHaveBeenCalled();
   });
 
   it('exposes the same broker instance the execution step submits through', async () => {

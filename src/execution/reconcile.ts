@@ -38,7 +38,7 @@
  * `resolveUnresolvedFlattens` below closes both: it reads
  * `SharedStore.getUnresolvedFlattens()` — bounded so the sweep does not
  * re-poll the venue for a flatten that finished closing its lot(s) long ago,
- * see migration 0022 — and asks the venue about each via
+ * see migration 0023 — and asks the venue about each via
  * `BrokerAdapter.resumeFlatten`, whose side effect (re-populating a live
  * adapter's `flattens` map) is what makes the NEXT `fetchNewFills` sweep find
  * the order again after a restart. Symmetric to `reconcileLot` below in

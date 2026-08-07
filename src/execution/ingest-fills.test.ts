@@ -602,7 +602,7 @@ describe('ExecutionImpl.ingestFills', () => {
     });
   });
 
-  // #519/#526: bounds `reconcile()`'s flatten-journal rescan (migration 0022) —
+  // #519/#526: bounds `reconcile()`'s flatten-journal rescan (migration 0023) —
   // see `SharedStore.markFlattenFillsSwept`'s doc for why the mark may only
   // fire once every named lot has durably advanced, never merely once a raw
   // fill was observed.
@@ -747,6 +747,108 @@ describe('ExecutionImpl.ingestFills', () => {
       );
 
       expect(store.writeLog).not.toContain('mark-flatten-fills-swept:flatten-1');
+    });
+
+    // PR #603 review (deepseek): does `redistributeOneFlatten`'s unconditional
+    // `namedLots.add(lotKey)` (for every key the JOURNAL names, regardless of
+    // whether that lot is STILL OPEN) leave `targetedByThisFlatten` empty when
+    // every named lot already closed by the time this poll's `positions`
+    // snapshot was taken — and if not empty, what actually happens to the
+    // fill? Traced by construction below rather than by reading alone: the
+    // set is NOT empty (the existing #525 line populates it straight from the
+    // journal's `lot_idempotency_keys`, unconditionally), so the flatten DOES
+    // reach `flattenNamedLots` and IS marked swept — but `advanceLot` is never
+    // called for the closed lot (it is absent from `positions`, the loop's
+    // only source of work), so the fill sitting in `byLot` for it is silently
+    // discarded rather than durably applied.
+    it('marks a flatten swept (and silently drops its fill) when its named lot is ALREADY closed at redistribution time', async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
+      // A SECOND, unrelated lot that stays open throughout — without it,
+      // `ingestFills()`'s own "no open positions, return early" guard would
+      // short-circuit the whole poll the moment key-1 closes, proving
+      // nothing about redistribution either way (the same reason
+      // alpaca-adapter.test.ts's pruning test keeps a second lot alive).
+      await seedPosition(store, {
+        idempotency_key: 'key-other',
+        instrument: 'TSLA',
+        requested_size: 5,
+        stop: 190,
+      });
+      // Close key-1 through the ORDINARY (non-flatten) path first, so it is
+      // genuinely terminal — excluded from `getOpenPositions()` — before the
+      // contrived flatten row below ever exists.
+      const closeDirectly = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'key-1',
+          broker_fill_id: 'x1',
+          leg: 'exit',
+          qty: 10,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+      await new ExecutionImpl(makeInput(closeDirectly, store)).ingestFills();
+      expect((await store.getPosition('key-1'))?.order_state).toBe('closed');
+
+      // A flatten journalled AFTER the lot it names is already closed — not a
+      // reachable state through `executeExit`'s own guards (a flatten's
+      // `heldSize` check refuses to journal against a lot with nothing left
+      // to hold), constructed directly here to exercise the redistribution
+      // code path on its own terms, independent of whether real callers can
+      // reach it.
+      await store.writeAheadFlatten({
+        idempotency_key: 'flatten-orphan',
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        side: 'sell',
+        size: 10,
+        submitted_at: OPENED_AT,
+        lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+      });
+      // Acked, as `executeExit` always resolves it synchronously right after
+      // `submitFlatten` returns, before any poll ever runs — a row still at
+      // 'submitting' when its fill lands is a DIFFERENT anomaly (reconcile.ts's
+      // own sweep), not the one under test here.
+      await store.resolveFlattenSubmitted(
+        'flatten-orphan',
+        { order_state: 'submitted', broker_order_ids: ['flatten-orphan:order'] },
+        OPENED_AT,
+      );
+      const withOrphanFlatten = new ScriptedBroker([
+        fill({
+          client_order_id: 'flatten-orphan',
+          broker_fill_id: 'fo1',
+          leg: 'exit',
+          qty: 10,
+          timestamp: new Date('2026-07-20T16:00:00Z'),
+        }),
+      ]);
+      store.writeLog.length = 0;
+
+      // Does not throw: no lot-advance was ever attempted for key-1 (it is
+      // not in `positions`), so there is no failure to report either.
+      await new ExecutionImpl(makeInput(withOrphanFlatten, store)).ingestFills();
+
+      // Marked swept — `flattenNamedLots` is non-empty (namedLots is
+      // populated unconditionally from the journal), and no 'lot-advance'
+      // failure was ever recorded for key-1 to gate the mark on.
+      expect(store.writeLog).toContain('mark-flatten-fills-swept:flatten-orphan');
+      // Bounded, not leaked: a later reconcile() sweep will not find this row
+      // again (`fills_swept_at` is set), so it does not haunt every future
+      // pass — the "noisy but safe rescan forever" the review comment
+      // hypothesized does not happen either.
+      expect(await store.getUnresolvedFlattens()).toEqual([]);
+      // The fill itself was never applied anywhere: key-1's own fill record
+      // is unchanged (still just its original two fills), and no OTHER lot
+      // exists to have received it. This is the actual behaviour — silently
+      // dropped, not silently leaked — and is not a NEW defect: the fill
+      // would have been dropped exactly the same way before this PR, since
+      // `advanceLot` was never reachable for a closed lot either way. This
+      // PR's `markFlattenFillsSwept` only recognises that nothing more will
+      // ever happen to it and stops rescanning — it does not change whether
+      // the fill gets applied.
+      expect(await store.getFills('key-1')).toHaveLength(2);
     });
   });
 

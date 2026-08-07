@@ -148,7 +148,7 @@ describe('buildSnapshot', () => {
       getMark: () => makeMark(110),
     });
 
-    const snap = buildSnapshot(store, AS_OF);
+    const snap = buildSnapshot(store, AS_OF, 'paper');
 
     expect(snap.positions).toHaveLength(1);
     expect(snap.positions[0]?.unrealized_pnl).toBe(100);
@@ -163,7 +163,7 @@ describe('buildSnapshot', () => {
       getMark: () => makeMark(90),
     });
 
-    const snap = buildSnapshot(store, AS_OF);
+    const snap = buildSnapshot(store, AS_OF, 'paper');
 
     expect(snap.positions[0]?.unrealized_pnl).toBe(50);
   });
@@ -174,7 +174,7 @@ describe('buildSnapshot', () => {
       getRecentDebates: () => [makeDebate()],
     });
 
-    const snap = buildSnapshot(store, AS_OF);
+    const snap = buildSnapshot(store, AS_OF, 'paper');
 
     expect(snap.as_of).toBe(AS_OF.toISOString());
     expect(typeof snap.generated_at).toBe('string');
@@ -193,7 +193,7 @@ describe('buildSnapshot', () => {
       getAttribution: () => attribution,
     });
 
-    const snap = buildSnapshot(store, AS_OF);
+    const snap = buildSnapshot(store, AS_OF, 'paper');
 
     const tech = snap.analysts.find((a) => a.analyst_id === 'technical-analyst');
     const sent = snap.analysts.find((a) => a.analyst_id === 'sentiment-analyst');
@@ -210,11 +210,20 @@ describe('buildSnapshot', () => {
     };
     const store = fakeStore({ getTickStatus: () => tick });
 
-    expect(buildSnapshot(store, AS_OF).tick_status).toEqual(tick);
+    expect(buildSnapshot(store, AS_OF, 'paper').tick_status).toEqual(tick);
+  });
+
+  it('projects the injected run mode verbatim, never a default (#539)', () => {
+    // Both directions, because the failure that matters is asymmetric: a
+    // page that says "paper" during a live run is how an operator watches
+    // real money believing it is simulated.
+    expect(buildSnapshot(fakeStore(), AS_OF, 'live').mode).toBe('live');
+    expect(buildSnapshot(fakeStore(), AS_OF, 'paper').mode).toBe('paper');
+    expect(buildSnapshot(fakeStore(), AS_OF, 'backtest').mode).toBe('backtest');
   });
 
   it('renders an empty state (zero rows, not a throw) when the store has no data', () => {
-    const snap = buildSnapshot(fakeStore(), AS_OF);
+    const snap = buildSnapshot(fakeStore(), AS_OF, 'paper');
 
     expect(snap.positions).toEqual([]);
     expect(snap.debates).toEqual([]);
@@ -245,7 +254,7 @@ describe('buildSnapshot', () => {
     ];
     const store = fakeStore({ getVerdictHistory: () => verdicts });
 
-    const snap = buildSnapshot(store, AS_OF);
+    const snap = buildSnapshot(store, AS_OF, 'paper');
 
     expect(snap.verdicts).toHaveLength(2);
     expect(snap.verdicts[0]).toMatchObject({
@@ -275,7 +284,7 @@ describe('buildSnapshot', () => {
       }),
     });
 
-    const snap = buildSnapshot(store, AS_OF);
+    const snap = buildSnapshot(store, AS_OF, 'paper');
 
     expect(snap.pipeline.lanes).toHaveLength(1);
     expect(snap.pipeline.lanes[0]).toMatchObject({
@@ -298,7 +307,7 @@ describe('buildSnapshot', () => {
       },
     });
 
-    buildSnapshot(store, AS_OF);
+    buildSnapshot(store, AS_OF, 'paper');
 
     // This read rides a 3-second poll; an unbounded one would degrade the
     // whole dashboard as the audit log grows through a 14-day soak.
@@ -321,7 +330,7 @@ describe('buildSnapshot', () => {
       }),
     });
 
-    const snap = buildSnapshot(store, AS_OF);
+    const snap = buildSnapshot(store, AS_OF, 'paper');
 
     // #413's idle frame, end to end: a closed market is the common case, and
     // the lanes must still be there to say so.

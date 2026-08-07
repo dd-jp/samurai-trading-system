@@ -50,7 +50,7 @@ export interface FlattenSubmissionRow {
   lot_idempotency_keys: string | null;
   /** JSON `number[]`, positionally parallel to the keys — NULL before migration 0021 (#571). */
   lot_held_quantities: string | null;
-  /** NULL until `markFlattenFillsSwept` runs — migration 0022 (#519/#526). */
+  /** NULL until `markFlattenFillsSwept` runs — migration 0023 (#519/#526). */
   fills_swept_at: string | null;
 }
 
