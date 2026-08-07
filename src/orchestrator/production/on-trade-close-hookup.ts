@@ -88,6 +88,9 @@ export function withOnTradeClose(
     getEntryFillSizes: (idempotency_keys: readonly string[]): Promise<Map<string, number>> =>
       store.getEntryFillSizes(idempotency_keys),
 
+    getExitFillSizes: (idempotency_keys: readonly string[]): Promise<Map<string, number>> =>
+      store.getExitFillSizes(idempotency_keys),
+
     writeAheadFlatten: (submission: FlattenSubmissionWriteAhead): Promise<void> =>
       store.writeAheadFlatten(submission),
 

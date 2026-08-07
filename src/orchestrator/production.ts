@@ -837,6 +837,12 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     trader: buildTraderStep({
       ...breakerStateDeps,
       config: config.traderConfig,
+      // #568: literally the `executionStore` above — the same instance
+      // `getOpenPositions` reads and `ingestFills()` writes fills through — so
+      // the Trader sizes an exit off the same fill record `executeExit`
+      // re-derives it from. Two stores here would mean two answers to "what
+      // does this lot still hold", which is the divergence #568 was.
+      getExitFillSizes: (idempotency_keys) => executionStore.getExitFillSizes(idempotency_keys),
       setupStore,
       traderLog: new SqliteTraderLogStore(config.db),
       // #511: the declared capital ceiling, spread through rather than read

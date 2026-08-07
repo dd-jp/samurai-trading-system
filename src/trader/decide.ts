@@ -18,7 +18,12 @@ import {
   type IndicatorSpec,
   minimumBarsFor,
 } from '../market-data-service/index.js';
-import type { OpenPosition, OrderIntent } from '../shared/index.js';
+import {
+  heldQuantitiesFor,
+  type OpenPosition,
+  type OrderIntent,
+  totalHeldQuantity,
+} from '../shared/index.js';
 import { NO_PRECEDENT_MULTIPLIER, retrieveCosinePrecedent } from './cosine-precedent.js';
 import { computeIdempotencyKey } from './idempotency-key.js';
 import { buildSetupVector } from './setup-vector.js';
@@ -326,7 +331,7 @@ async function buildExitIntent(
   input: TraderInput,
   positions: OpenPosition[],
 ): Promise<TraderOutcome> {
-  const { clock, config, debate, instrument, marketData } = input;
+  const { clock, config, debate, exitFillSizes, instrument, marketData } = input;
 
   const existingSide = positions[0]?.side;
   if (existingSide === undefined) {
@@ -336,7 +341,15 @@ async function buildExitIntent(
   // Only filled exposure needs flattening — a lot still `pending`/
   // `submitted` has nothing on the books yet, so an all-pending instrument
   // has no fill to close and there is nothing to emit.
-  const totalSize = positions.reduce((sum, lot) => sum + lot.filled_size, 0);
+  //
+  // #568: and only what the VENUE still holds. `filled_size` alone is the
+  // ENTRY quantity, which no exit fill reduces, so a partially-flattened lot
+  // (which stays open) would size this exit to the original quantity while
+  // the venue holds only the residual. `heldQuantitiesFor` subtracts what is
+  // already closed — the same derivation `executeExit` re-runs before it
+  // submits, and it refuses on exact inequality, so a difference between the
+  // two stops the exit rather than mis-sizing it.
+  const totalSize = totalHeldQuantity(await heldQuantitiesFor(positions, exitFillSizes));
   if (totalSize <= 0) return skip('exit_no_filled_size');
 
   const asOf = clock.now();

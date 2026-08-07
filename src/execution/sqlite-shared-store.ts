@@ -258,6 +258,32 @@ export class SqliteExecutionStore implements SharedStore {
    * simply absent from the returned `Map`.
    */
   async getEntryFillSizes(idempotency_keys: readonly string[]): Promise<Map<string, number>> {
+    return this.fillSizesByLeg(idempotency_keys, "leg = 'entry'");
+  }
+
+  /**
+   * #568's mirror of the above over the CLOSING legs — the quantity to
+   * subtract from `filled_size` to get what a lot still holds (see
+   * `shared/held-quantity.ts`). `leg != 'entry'` rather than an enumeration of
+   * the three closing legs, so it stays the SQL spelling of
+   * `ingest-fills.ts`'s `isExitFill` and cannot drift from it if a fourth leg
+   * is ever added.
+   */
+  async getExitFillSizes(idempotency_keys: readonly string[]): Promise<Map<string, number>> {
+    return this.fillSizesByLeg(idempotency_keys, "leg != 'entry'");
+  }
+
+  /**
+   * The batch read both of the above are. The leg predicate is a closed union
+   * of two literals owned by this file — never a caller-supplied string — so
+   * the only values interpolated into the SQL are ones written here; the
+   * idempotency keys themselves stay bound parameters, with the placeholder
+   * list built from `length` alone.
+   */
+  private async fillSizesByLeg(
+    idempotency_keys: readonly string[],
+    legPredicate: "leg = 'entry'" | "leg != 'entry'",
+  ): Promise<Map<string, number>> {
     const sizes = new Map<string, number>();
     if (idempotency_keys.length === 0) return sizes;
 
@@ -266,7 +292,7 @@ export class SqliteExecutionStore implements SharedStore {
       .prepare(
         `SELECT idempotency_key, SUM(qty) AS qty
            FROM fills
-          WHERE idempotency_key IN (${placeholders}) AND leg = 'entry'
+          WHERE idempotency_key IN (${placeholders}) AND ${legPredicate}
           GROUP BY idempotency_key`,
       )
       .all(...idempotency_keys) as { idempotency_key: string; qty: number }[];

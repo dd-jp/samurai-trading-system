@@ -122,6 +122,14 @@ export interface VolatilityReadingProvider {
 export interface TraderStepDeps extends BreakerStateDeps {
   config: TraderConfig;
   /**
+   * #568: `SharedStore.getExitFillSizes`, bound to the SAME store
+   * `getOpenPositions` reads. Held quantity is `filled_size` minus this, and
+   * `executeExit` refuses any exit whose size does not match its own copy of
+   * that derivation — so an unbound (or differently-bound) reader here does
+   * not mis-trade quietly, it stops every exit at the guard.
+   */
+  getExitFillSizes: (idempotency_keys: readonly string[]) => Promise<Map<string, number>>;
+  /**
    * #432: the same `SetupStore` instance `withOnTradeClose` labels through.
    * `decide` writes the setup at decision time and the close hook labels it
    * with the realized R — two halves of one table, so they must not be two
@@ -200,6 +208,9 @@ export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
       equity: sizingEquity(portfolio.equity, deps.capitalCeilingUsd),
       config: deps.config,
       positionState: deps.getOpenPositions,
+      // #568: the same store the lots came from, so the exit the Trader sizes
+      // and the exit `executeExit` validates are computed off ONE fill record.
+      exitFillSizes: deps.getExitFillSizes,
       setupStore: deps.setupStore,
     });
 
