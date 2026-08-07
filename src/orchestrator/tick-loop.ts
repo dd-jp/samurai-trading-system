@@ -22,7 +22,13 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { Signal } from '../analysts/index.js';
-import type { Clock, LogEntry } from '../shared/index.js';
+import type { Clock } from '../shared/index.js';
+// #573: `describeThrown`/`safeLog` moved to shared/safe-log.ts once
+// execution/ingest-fills.ts and execution/reconcile.ts needed the identical
+// "a log call inside a catch must not itself throw" guarantee this file
+// worked out first (#507) — see that file's doc for the full reasoning,
+// unchanged by the move.
+import { describeThrown, safeLog } from '../shared/index.js';
 import { digest } from './digest.js';
 import type {
   AuditLog,
@@ -32,51 +38,6 @@ import type {
   TickPlan,
   TickRunner,
 } from './types.js';
-
-/**
- * Renders a thrown value into a log-safe string (#507 review, kimi).
- *
- * `String(error)` alone degrades a plain-object throw to `"[object Object]"`
- * — technically not swallowed, but not preserved either. Every throw this
- * repo's own code produces is an `Error` (grepped: zero `throw {…}` literals
- * in `src/`), so this mainly guards a third-party dependency that rejects
- * with something else. `JSON.stringify` can itself throw on a circular
- * structure, which is exactly the kind of value most likely to reach this
- * fallback — so it degrades one step further to `String(error)` rather than
- * letting a formatting failure inside error handling replace the original
- * failure.
- */
-function describeThrown(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === 'string') return error;
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
-}
-
-/**
- * Calls `logger.log`, swallowing any throw from the logger itself (#507
- * review, kimi cycle 2).
- *
- * This is only ever called from inside the worker's failure path — the one
- * place in this file whose entire job is to guarantee nothing escapes and
- * rejects `Promise.all`. `JsonLogger`'s own primary `process.stdout.write` is
- * deliberately unguarded (see its doc comment), so a real logger CAN throw —
- * an EPIPE on a broken pipe, or any injected `Logger` this module doesn't
- * control. There is nowhere further to escalate a logging failure without
- * risking regress (logging that the log call failed, which can itself fail),
- * so this mirrors `JsonLogger`'s own posture on a sink it cannot recover:
- * losing one message is strictly better than throwing into a tick.
- */
-function safeLog(logger: Logger, entry: LogEntry): void {
-  try {
-    logger.log(entry);
-  } catch {
-    // Nothing left to do — see doc comment above.
-  }
-}
 
 export interface TickLoopConfig {
   /** Simultaneous instrument passes. Values < 1 are clamped to 1. */

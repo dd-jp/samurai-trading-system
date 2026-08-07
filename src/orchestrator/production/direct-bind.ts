@@ -56,6 +56,7 @@ import {
 } from '../../risk-manager/index.js';
 import type {
   Clock,
+  Logger,
   OpenPosition,
   RiskLogStore,
   SetupStore,
@@ -517,6 +518,8 @@ export interface ExecutionStepDeps {
   flattenOverfillAlerts: FlattenOverfillAlertChannel;
   /** The #519 unresolved-flatten escalation — see `ExecutionInput.flattenReconcileAlerts`. */
   flattenReconcileAlerts: FlattenReconcileAlertChannel;
+  /** #573's local diagnostic trace — see `ExecutionInput.logger`'s decision doc. */
+  logger: Logger;
 }
 
 /**
@@ -543,6 +546,7 @@ export function buildExecutionStep(deps: ExecutionStepDeps): TickSteps['executio
       residualExposureAlerts: deps.residualExposureAlerts,
       flattenOverfillAlerts: deps.flattenOverfillAlerts,
       flattenReconcileAlerts: deps.flattenReconcileAlerts,
+      logger: deps.logger,
     });
     return execution.execute(verdict);
   };
@@ -577,6 +581,7 @@ export function buildExecutionSurface(deps: ExecutionStepDeps, traceId: string):
     residualExposureAlerts: deps.residualExposureAlerts,
     flattenOverfillAlerts: deps.flattenOverfillAlerts,
     flattenReconcileAlerts: deps.flattenReconcileAlerts,
+    logger: deps.logger,
   });
 }
 

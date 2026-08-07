@@ -253,6 +253,9 @@ function makeInput(overrides: Partial<ExecutionInput> = {}): ExecutionInput {
     residualExposureAlerts: makeResidualExposureAlerts(),
     flattenOverfillAlerts: makeFlattenOverfillAlerts(),
     flattenReconcileAlerts: makeFlattenReconcileAlerts(),
+    // #573: `execute()` never logs — every failure it observes flows into
+    // the `ExecutionResult` it returns instead. A no-op is enough here.
+    logger: { log: () => {} },
     ...overrides,
   };
 }

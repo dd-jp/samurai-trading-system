@@ -768,8 +768,9 @@ async function runExitPathScenarios(input: {
   clock: SimulatedClock;
   costConfig: CostConfig;
   executionConfig: ExecutionConfig;
+  logger: Logger;
 }): Promise<ExitPathEvidence> {
-  const { db, clock, costConfig, executionConfig } = input;
+  const { db, clock, costConfig, executionConfig, logger } = input;
 
   const bars = Object.values(EXIT_PATH_INSTRUMENTS).flatMap((instrument) =>
     buildSmokeFixtureBars(instrument),
@@ -813,6 +814,7 @@ async function runExitPathScenarios(input: {
       // either).
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts,
+      logger,
     },
     'smoke-exit-path',
   );
@@ -1001,6 +1003,7 @@ async function runExitPathScenarios(input: {
       residualExposureAlerts: residualAlerts,
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts,
+      logger,
     },
     'smoke-exit-path-restart',
   );
@@ -2267,6 +2270,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       clock,
       costConfig: profile.costConfig,
       executionConfig: profile.executionConfig,
+      logger,
     });
 
     // #586: the emulated crypto protective legs, on the REAL AlpacaBrokerAdapter

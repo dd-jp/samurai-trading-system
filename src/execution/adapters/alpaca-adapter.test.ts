@@ -1888,6 +1888,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       residualExposureAlerts: { postResidualExposureAlert: async () => {} },
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
+      logger: { log: () => {} },
     };
     const execution = new ExecutionImpl(input);
 

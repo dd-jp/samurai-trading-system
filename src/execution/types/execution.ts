@@ -9,7 +9,7 @@ import type {
   IndicatorSpec,
   MarketDataService,
 } from '../../market-data-service/index.js';
-import type { Clock, OrderState } from '../../shared/index.js';
+import type { Clock, Logger, OrderState } from '../../shared/index.js';
 import type { VerdictDecision } from '../../verdict/index.js';
 import type { FlattenOverfillAlertChannel } from '../flatten-overfill-alert.js';
 import type { FlattenReconcileAlertChannel } from '../flatten-reconcile-alert.js';
@@ -83,6 +83,47 @@ export interface ExecutionInput {
    * is still held, and an omitted channel would make that invisible again.
    */
   flattenReconcileAlerts: FlattenReconcileAlertChannel;
+  /**
+   * #573's recorded decision: the execution port DOES carry a `Logger`, for
+   * a LOCAL diagnostic trace — "what actually failed" — that is distinct
+   * from every alert channel above.
+   *
+   * The three `*AlertChannel` fields are OUTBOUND capabilities the domain
+   * already reasons about (broker, store, alerts) and each carries a
+   * CREDENTIALS boundary that forbids a caught error's own text in its
+   * payload (`ResidualExposureAlert`'s doc). A `Logger` is a different kind
+   * of dependency — it has no domain meaning and no such boundary — but the
+   * alternative the ticket raised, a typed field on the alert (or a
+   * dedicated diagnostic channel per failure kind), was rejected: that adds
+   * a channel per NEW failure kind forever, where a `Logger` this module can
+   * already reach handles every kind uniformly, including ones with no alert
+   * of their own at all (`markFlattenFillsSwept`'s catch, ingest-fills.ts,
+   * is exactly this — a best-effort store write with no channel to escalate
+   * through, which is why it "resolved quietly" before this ticket).
+   *
+   * Required, not optional: an omitted dependency dropped at a composition
+   * root is this repo's dominant defect class (#322 fixed the same hole for
+   * `residualExposureAlerts` et al. above), and making this field required
+   * turns a dropped wiring into a `tsc` error at every composition root
+   * rather than a silent gap discovered during an unattended soak.
+   *
+   * `LogEntry.trace_id` needs no new plumbing: `ExecutionInput.trace_id`
+   * above is already the per-surface synthetic id
+   * (`buildExecutionSurface`'s `FILL_SYNC_TRACE_ID`/`RECONCILE_TRACE_ID`,
+   * production/direct-bind.ts) or the per-order `idempotency_key` on the
+   * `execute()` path — every call site already has the right trace_id in
+   * hand.
+   *
+   * SAFE INSIDE A CATCH is the hard requirement, not a nicety:
+   * `JsonLogger.log`'s primary `process.stdout.write` is deliberately
+   * unguarded (orchestrator/logger.ts — an EPIPE on a broken pipe is
+   * `JsonLogger`'s problem elsewhere, not here), so every call site on this
+   * field goes through `shared/safe-log.ts`'s `safeLog`/`logCaughtFailure`
+   * (the same helper orchestrator/tick-loop.ts's `safeLog` was extracted
+   * from, #573) — never `logger.log` directly — so a throwing logger can
+   * never turn a handled failure into an unhandled one.
+   */
+  logger: Logger;
 }
 
 export interface ExecutionResult {

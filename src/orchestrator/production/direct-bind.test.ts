@@ -696,6 +696,7 @@ describe('buildExecutionStep', () => {
       residualExposureAlerts: { postResidualExposureAlert: async () => {} },
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
+      logger: { log: vi.fn() },
     });
 
     const verdict: VerdictDecision = {

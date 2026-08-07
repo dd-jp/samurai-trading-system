@@ -979,6 +979,21 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // bracket would re-create the account-wide stall this isolation removes.
     // A wholly-failed sweep is the one case where throwing costs nothing — and
     // it must not be reported as the "no new fills" that an empty array means.
+    //
+    // #573 sweep: on any OTHER poll — `fills.length > 0` — `failures` falls
+    // out of scope here UNREPORTED: a `recordUnpricedFill`/`clearUnpricedFill`
+    // journal-write failure, a non-`UnpricedFillError` broker error on one
+    // bracket/flatten/rearm, and `escalateAgedUnpricedFills`'s own named
+    // alert-delivery replacement are all silently dropped the moment ANY
+    // other bracket in the same sweep produced a fill — which, on a live
+    // multi-instrument universe, is close to always. Left silent rather than
+    // fixed here: `AlpacaBrokerAdapterInput` above carries no `Logger` — it is
+    // a DIFFERENT port than `ExecutionInput` (`ingestFills()` calls THIS
+    // adapter, it is not called BY it), so wiring one in is a second,
+    // unrecorded decision outside this ticket's scope, not a one-line reuse
+    // of the mechanism #573 added there. `production.ts` already has
+    // `logger` in scope at this adapter's construction site, so the fix is
+    // cheap whenever someone takes the ticket.
     if (fills.length === 0 && failures.length > 0) {
       throw new AggregateError(
         failures,
