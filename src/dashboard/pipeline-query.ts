@@ -269,11 +269,22 @@ function buildLane(
       // (`live_entered_at`); a skipped or never-reached cell has no wall time
       // to report at all.
       duration_ms: state === 'live' ? null : (durationByStage.get(stage) ?? null),
+      // Not gated on `state`, unlike `duration_ms`/`recorded_at` below: a
+      // live cell mid-retry (attempts > 0, `current_tick` back on a stage
+      // that already wrote a row) still reports that prior row's decision
+      // word, which is why the retry is happening. It reads stale — the
+      // current attempt hasn't decided anything yet — but it is the most
+      // recent decided fact about this stage, same as before #535.
       decision: decisionByStage.get(stage) ?? null,
-      // A live cell has no `audit_log` row yet — the row is written after the
-      // stage returns, so `live_entered_at` is its clock, not this field
-      // (#535). Every other cell without a row (`skipped`, `not_reached`)
-      // has nothing to report either.
+      // A live cell has no `audit_log` row yet FOR ITS CURRENT ATTEMPT — the
+      // row is written after the stage returns — so `live_entered_at` is its
+      // clock, not this field (#535). This is gated on `state`, unlike
+      // `decision` above: a live cell mid-retry has a prior attempt's row in
+      // `recordedAtByStage`, but surfacing that stale timestamp here would
+      // let a client (the frontend replay engine this field exists for) read
+      // it as the live stage's own recorded transition time. Every other
+      // cell without a row (`skipped`, `not_reached`) has nothing to report
+      // either.
       recorded_at: state === 'live' ? null : (recordedAtByStage.get(stage)?.toISOString() ?? null),
       attempts,
     };

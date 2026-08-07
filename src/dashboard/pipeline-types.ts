@@ -79,7 +79,11 @@ export interface PipelineCell {
   /**
    * ISO timestamp of the stage's last `audit_log` row; `null` for
    * `not_reached`, `skipped`, and `live` cells (a live stage has no row yet
-   * — `live_entered_at` is its clock).
+   * for its CURRENT attempt — `live_entered_at` is its clock). A live cell
+   * mid-retry may still have an older row from a prior attempt — that is
+   * where `decision` comes from — but this field stays `null` regardless, so
+   * a client never mistakes a stale prior-attempt timestamp for the live
+   * stage's own recorded transition time.
    */
   recorded_at: string | null;
   /**

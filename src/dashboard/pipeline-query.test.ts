@@ -285,6 +285,37 @@ describe('buildPipelineView', () => {
     expect(view.live_entered_at).toBe(at(1).toISOString());
   });
 
+  it('keeps the prior attempt decision word on a live cell mid-retry, but not its timestamp', () => {
+    // A stage can legitimately be reached twice in one trace (#414's retry
+    // case) — including a retry that is still in flight: the first attempt
+    // wrote an `audit_log` row, and `current_tick` now points back at the
+    // same stage for the second one. `decision` and `recorded_at` disagree on
+    // purpose here: `decision` is pre-existing per-stage state, unconditional
+    // on `state`, so it keeps reporting the last row's word until a new one
+    // overwrites it — the operator sees why the first attempt is being
+    // retried. `recorded_at` is gated on `state === 'live'` (#535, matching
+    // `duration_ms`'s existing gate): the CURRENT attempt has no row yet, and
+    // reporting the first attempt's timestamp would let the frontend replay
+    // engine mistake a stale prior-attempt time for the live stage's
+    // transition time. `live_entered_at` is the live clock, not this field.
+    const view = buildPipelineView(
+      activity({
+        events: [
+          event('trace-live', 'analysts', 'quorum_met', 0),
+          event('trace-live', 'debate', 'error_retry', 1),
+        ],
+        live: [liveTick({ trace_id: 'trace-live', stage: 'debate', entered_at: at(4) })],
+      }),
+    );
+
+    expect(cell(view, 'debate')).toMatchObject({
+      state: 'live',
+      decision: 'error_retry',
+      recorded_at: null,
+      attempts: 1,
+    });
+  });
+
   it('starts an in-flight lane from current_tick when no stage row exists yet', () => {
     const view = buildPipelineView(
       activity({
