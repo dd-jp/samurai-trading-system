@@ -32,13 +32,13 @@
  * 5-year window, well under the 5000-row default page size).
  */
 
-const DEFAULT_BASE_URL = 'https://api.polygon.io';
-const MAX_PAGES = 25;
-const PAGE_LIMIT = 50_000;
-
 import { resolveVenuePacing, TokenBucket } from '../shared/index.js';
 import type { PolygonAggregate, PolygonClient } from './stage2-historical-store.js';
 import type { DateRange } from './universe.js';
+
+const DEFAULT_BASE_URL = 'https://api.polygon.io';
+const MAX_PAGES = 25;
+const PAGE_LIMIT = 50_000;
 
 /** Polygon's raw per-bar shape — a superset of `PolygonAggregate` (also carries `vw`, `n`). */
 interface RawPolygonAggregate {
