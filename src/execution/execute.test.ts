@@ -1922,6 +1922,146 @@ describe('ExecutionImpl.execute', () => {
             expect(lot3?.order_state).toBe('filled');
           },
         );
+
+        it(
+          'contains an UNATTRIBUTABLE flatten to itself: the unrelated lot still advances, the ' +
+            'flatten-named lots take none of its fill, and the poll names the offending row (#575)',
+          async () => {
+            // The third instance of the blast-radius shape #524 and #569 each
+            // fixed once: `redistributeFlattenFills` was awaited UNGUARDED
+            // above `ingestFills`' per-lot loop, so a corrupt
+            // `flatten_submissions` row aborted the whole poll before a single
+            // lot advanced — and, being a DURABLE row, aborted every
+            // subsequent poll identically. During a 14-day unattended soak
+            // (#238) that is a permanent halt to fill persistence, not a
+            // transient error.
+            //
+            // Driven through the REAL sqlite store with a genuinely
+            // unparseable `lot_held_quantities` — the column PR #574 added,
+            // which is what widened this call site from two throw paths to
+            // five — rather than a fake store that rejects, so the actual
+            // `JSON.parse` path is the thing being contained.
+            const { db, store } = openTestExecutionStore();
+            let now = NOW;
+            const steppingClock: Clock = { now: () => now };
+            const costModel: CostModel = {
+              fill: vi
+                .fn()
+                .mockReturnValueOnce({
+                  fill_price: 90,
+                  filled_size: 10,
+                  cost_breakdown: zeroCosts(),
+                }) // lot 1 entry
+                .mockReturnValueOnce({
+                  fill_price: 92,
+                  filled_size: 15,
+                  cost_breakdown: zeroCosts(),
+                }) // lot 2 entry
+                .mockReturnValueOnce({
+                  fill_price: 94,
+                  filled_size: 8,
+                  cost_breakdown: zeroCosts(),
+                }) // lot 3 entry
+                .mockReturnValueOnce({
+                  fill_price: 100,
+                  filled_size: 25,
+                  cost_breakdown: zeroCosts(),
+                }), // the flatten, in full
+            };
+            const marketData = makeMarketData();
+            const broker = new SimulatedBrokerAdapter({
+              clock: steppingClock,
+              costModel,
+              marketData,
+              config: SIMULATED_CONFIG,
+            });
+            const residualExposureAlerts = makeResidualExposureAlerts();
+            const execution = new ExecutionImpl(
+              makeInput({
+                store,
+                broker,
+                costModel,
+                marketData,
+                clock: steppingClock,
+                residualExposureAlerts,
+              }),
+            );
+
+            await execution.execute(
+              makeGo({ idempotency_key: 'key-lot-1', size: 10, entry: 90, stop: 85, target: 110 }),
+            );
+            await execution.ingestFills();
+            now = new Date(now.getTime() + 60_000);
+            await execution.execute(
+              makeGo({
+                idempotency_key: 'key-lot-2',
+                intent_type: 'scale_in',
+                size: 15,
+                entry: 92,
+                stop: 85,
+                target: 110,
+              }),
+            );
+            await execution.ingestFills();
+            now = new Date(now.getTime() + 60_000);
+            await execution.execute(
+              makeGo({
+                idempotency_key: 'key-lot-3',
+                intent_type: 'scale_in',
+                size: 8,
+                entry: 94,
+                stop: 85,
+                target: 110,
+              }),
+            );
+            // Deliberately NOT ingested yet — lot 3's entry fill is the
+            // UNRELATED work that must still land in the SAME poll the corrupt
+            // flatten row is read in. It is also why the exit below is sized
+            // to 25 and not 33: lot 3 holds nothing yet.
+            now = new Date(now.getTime() + 60_000);
+
+            // Writes the journal row (naming lots 1 and 2) and submits the
+            // flatten under its own fresh key.
+            await execution.execute(makeExitGo({ size: 25 }));
+            // Corrupted AFTER the write-ahead, before the fill is read back —
+            // the only window in which this row is ever consulted.
+            db.prepare(
+              'UPDATE flatten_submissions SET lot_held_quantities = ? WHERE idempotency_key = ?',
+            ).run('{not json', 'key-aapl-1355');
+
+            // Fail-CLOSED and VISIBLE, not silent: the poll still reports the
+            // failure, and the message names the offending row's own
+            // idempotency key (never the raw column content — the
+            // `getFlattenAttribution` rule, since an uncaught throw here is
+            // durably recorded to `audit_log` by #507).
+            await expect(execution.ingestFills()).rejects.toThrow('key-aapl-1355');
+
+            // THE FIX: lot 3 is untouched by the corrupt flatten and advances
+            // in the very same poll. Before #575 this assertion failed —
+            // `ingestFills` threw before its per-lot loop began.
+            const lot3 = await store.getPosition('key-lot-3');
+            expect(lot3?.filled_size).toBe(8);
+            expect(lot3?.order_state).toBe('filled');
+
+            // The flatten's own named lots: NOTHING of its fill is attributed
+            // to them. Guessing a split off a corrupt row would mis-assign
+            // quantity on the money path, which is worse than not advancing.
+            const exitSizes = await store.getExitFillSizes(['key-lot-1', 'key-lot-2']);
+            expect(exitSizes.get('key-lot-1')).toBeUndefined();
+            expect(exitSizes.get('key-lot-2')).toBeUndefined();
+            expect((await store.getPosition('key-lot-1'))?.order_state).toBe('filled');
+            expect((await store.getPosition('key-lot-2'))?.order_state).toBe('filled');
+            expect(await store.getClosedTrades()).toEqual([]);
+
+            // And they are not re-armed either: the throw happens inside
+            // `getFlattenAttribution`, so which lots this flatten named is
+            // itself unknown. Pinned so the naked residual this leaves is a
+            // recorded consequence of the containment, not a surprise.
+            expect(broker.getProtectedQty('key-lot-1')).toBeNull();
+            expect(broker.getProtectedQty('key-lot-2')).toBeNull();
+            expect(residualExposureAlerts.alerts).toEqual([]);
+          },
+        );
       });
     });
   });

@@ -38,6 +38,10 @@
  * than retrying — the recorded decision on #525 rejected a retry loop on
  * the order-submitting path, and this fallback is what keeps a naked
  * residual from going unnoticed through an unattended soak (#238).
+ *
+ * Both loops below run under a containment boundary — see `ContainedFailure`.
+ * A failure inside one flatten bucket or one lot decides that unit only; the
+ * whole set is reported once, after every other unit of work has landed.
  */
 import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../shared/index.js';
 import type { ExecutionInput, NormalizedFill } from './types.js';
@@ -85,17 +89,96 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
   // poll gives NO new fill, so it can still re-arm a residual left at its
   // full original size because an earlier sibling lot absorbed the whole
   // partial fill.
-  const flattenTargetedLots = await redistributeFlattenFills(input, byLot, positions);
+  const failures: ContainedFailure[] = [];
+  const flattenTargetedLots = await redistributeFlattenFills(input, byLot, positions, failures);
 
   for (const position of positions) {
-    await advanceLot(
-      input,
-      position,
-      byLot.get(position.idempotency_key) ?? [],
-      now,
-      flattenTargetedLots.has(position.idempotency_key),
-    );
+    // Every lot is independent work: whether one lot's store write or broker
+    // call succeeds says nothing about the next lot's, so it must not decide
+    // it. See `ContainedFailure`.
+    try {
+      await advanceLot(
+        input,
+        position,
+        byLot.get(position.idempotency_key) ?? [],
+        now,
+        flattenTargetedLots.has(position.idempotency_key),
+      );
+    } catch (error) {
+      failures.push({ scope: 'lot-advance', key: position.idempotency_key, error });
+    }
   }
+
+  // Last, once no unit of work is left to lose: reporting must not cost
+  // progress, and progress must not buy silence.
+  throwContainedFailures(failures);
+}
+
+/**
+ * One unit of work a poll could not complete, held until the rest of the poll
+ * has run.
+ *
+ * The boundary is per unit of work rather than per throw site because the same
+ * blast-radius shape had already been point-fixed twice before #575 — #569
+ * (`maybeRearmResidual`'s unguarded store read, below) and #524
+ * (`AlpacaBrokerAdapter.fetchNewFills`, adapters/alpaca-adapter.ts) — and a
+ * per-throw-site guard only ever closes the throw paths that exist today.
+ * `ingestFills` is two loops over independent work: each flatten bucket to
+ * redistribute, then each open lot to advance. A failure inside one says
+ * nothing about any other, so it may not abort them. Where the cause is a
+ * DURABLE row (a corrupt `flatten_submissions` entry) an aborting poll never
+ * self-recovers: the next poll reads the same row and aborts identically,
+ * indefinitely, looking in the logs exactly like a quiet market.
+ *
+ * Nothing that constructs one of these may throw. A containment guard that can
+ * re-throw reopens exactly the hole it closes — the property `safeLog()`
+ * (orchestrator/tick-loop.ts) and `alertResidualExposure` below are built
+ * around. So the `catch` blocks push and do nothing else: no formatting, no
+ * inspection of the caught error, no I/O.
+ */
+interface ContainedFailure {
+  /** Which of the two boundaries caught it — a flatten bucket, or one lot's advance. */
+  scope: 'flatten-attribution' | 'lot-advance';
+  /**
+   * The offending record's identifier: `open_positions.idempotency_key` for a
+   * lot, the flatten's `client_order_id` for a bucket. An IDENTIFIER, never
+   * the failure's message and never any column content — `throwContainedFailures`
+   * puts it in a message #507 durably records to `audit_log`, and that record
+   * must not carry untrusted payload. Same rule, same reason, as
+   * `SqliteExecutionStore.getFlattenAttribution`'s own messages, which name
+   * this key and withhold the row.
+   */
+  key: string;
+  /** The original throw, preserved whole rather than stringified here. */
+  error: unknown;
+}
+
+/**
+ * Fail-closed AND visible, which is the bar: the poll did not fully succeed
+ * and says so, having first done every piece of work it still could.
+ *
+ * Not swallowed, because silence is the failure mode being fixed. The one
+ * production caller is `startFillSync`'s `runOnce` (orchestrator/fill-sync.ts),
+ * which logs a rejection at `error` and keeps polling — so a throw here costs
+ * no future poll, and is the only channel that reaches an operator at all
+ * while #551's alert transport is unbuilt. That sink logs `error.message`
+ * ONLY, so every identifier has to be in the message itself; the underlying
+ * errors ride in `AggregateError.errors`, and the first also as `cause`, for a
+ * debugger holding the object.
+ *
+ * `AggregateError` rather than a bare `Error` for the reason
+ * `AlpacaBrokerAdapter.fetchNewFills` uses one: a pass over independent units
+ * can fail in several at once, and picking one to report discards the rest.
+ */
+function throwContainedFailures(failures: readonly ContainedFailure[]): void {
+  if (failures.length === 0) return;
+  const named = failures.map((failure) => `${failure.scope} '${failure.key}'`).join(', ');
+  throw new AggregateError(
+    failures.map((failure) => failure.error),
+    `ingestFills: ${failures.length} contained failure(s) — every other lot in this poll was ` +
+      `advanced; unresolved: ${named}`,
+    { cause: failures[0]?.error },
+  );
 }
 
 /**
@@ -119,16 +202,22 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
  * regardless of which adapter reported it.
  *
  * Returns every lot key named by a flatten this call actually processed
- * (#525) — independent of the per-fill split below, which can legitimately
+ * (#525) — independent of the per-fill split, which can legitimately
  * leave a later-opened lot with ZERO share of a partial fill. That lot gets
  * no entry in `byLot` and so is otherwise invisible to `ingestFills`'
  * per-position loop this poll; the caller uses this set to still run
  * `advanceLot`'s re-arm check for it.
+ *
+ * Never throws. One flatten's failure is contained to that flatten and
+ * appended to `failures` for `ingestFills` to report once the poll is done —
+ * see `ContainedFailure`. A bucket that fails is left un-redistributed and so
+ * un-attributed, which is the fail-closed answer; it is not left unreported.
  */
 async function redistributeFlattenFills(
   input: ExecutionInput,
   byLot: Map<string, NormalizedFill[]>,
   positions: readonly OpenPosition[],
+  failures: ContainedFailure[],
 ): Promise<Set<string>> {
   const { store } = input;
   const positionKeys = new Set(positions.map((position) => position.idempotency_key));
@@ -152,146 +241,222 @@ async function redistributeFlattenFills(
   for (const clientOrderId of [...byLot.keys()]) {
     if (positionKeys.has(clientOrderId)) continue; // a lot's own bucket — the existing path.
 
-    const attribution = await store.getFlattenAttribution(clientOrderId);
-    // Not a known flatten either (an unrelated/unknown client_order_id, a
-    // flatten row written before migration 0020 named no lot, OR — per the
-    // snapshot comment above — a lot that opened on this instrument AFTER
-    // `positions` was captured): left exactly as before this change. The
-    // bucket sits untouched in `byLot`; `ingestFills()`'s per-position loop
-    // reads only the SAME stale `positions`, so it never looks this key up
-    // either. Nothing is lost — the broker's fill feed re-offers the same
-    // fill next poll (this module's own dedup-on-`broker_fill_id` contract),
-    // and by then a fresh `getOpenPositions()` snapshot names the lot, so it
-    // is picked up by the ORDINARY per-position path, one poll later than it
-    // theoretically could have been. And it can never collide with a REAL
-    // flatten's targets: `lot_idempotency_keys` is fixed at that flatten's
-    // own write-ahead, which necessarily predates a lot that did not exist
-    // yet.
-    if (attribution === null || attribution.lot_idempotency_keys.length === 0) continue;
-    const lotKeys = attribution.lot_idempotency_keys;
-
-    // #525: recorded before the split below runs, so a lot that ends up
-    // with ZERO share of this raw fill (an earlier-opened sibling absorbed
-    // all of it) is still marked as needing the re-arm check — it is just
-    // as naked as one that got a partial share, only more so.
-    for (const lotKey of lotKeys) flattenTargetedLots.add(lotKey);
-
-    const rawFills = byLot.get(clientOrderId);
-    if (rawFills === undefined) continue; // appeases the type checker; every key here has a bucket.
-    byLot.delete(clientOrderId);
-
-    // Each named lot's FIXED total share of THIS flatten — what the lot HELD
-    // when `executeExit` journalled the flatten, read straight off the
-    // write-ahead row (#571).
+    // #575's containment boundary for one flatten. `getFlattenAttribution`
+    // alone throws five ways, and every one of them is a statement about THIS
+    // journal row — not about any other bucket, and not about any lot.
     //
-    // Two properties are needed at once. STABLE: a DIFFERENT split under the
-    // SAME `broker_fill_id`-derived id is exactly what breaks `hasFill`'s
-    // dedup below (it matches on id alone, so a shrunk second attempt does not
-    // "correct" the first — it just vanishes behind it, silently stranding
-    // the difference), so the share must recompute identically on every poll,
-    // for every named lot, regardless of whether it has since closed. And
-    // EXIT-AWARE: the flatten's SIZE is the venue-true held quantity
-    // (`filled_size` minus recorded exit fills), so a share that ignores prior
-    // exits does not add up to the fill being split.
+    // The contained outcome is deliberately NOT "skip the lots this flatten
+    // named": on the two paths where the key parse itself fails, which lots it
+    // named is exactly what is unknown. What is skipped is the
+    // REDISTRIBUTION. The flatten's raw bucket stays keyed on its own
+    // client_order_id, which matches no `position.idempotency_key`, so the
+    // per-position loop never reads it and not one share of its fill is
+    // attributed to anyone — fail-closed, because a split guessed off a
+    // corrupt row mis-assigns quantity on the money path, which is the worse
+    // failure. Every lot, including the ones this flatten named, still
+    // advances on its OWN fills.
     //
-    // Only a journalled number has both. Held quantity re-derived HERE is
-    // exit-aware but not stable — it shrinks as this very flatten's own fills
-    // persist. An entry total is stable but not exit-aware, so an older lot
-    // with prior exits absorbs quantity belonging to its siblings. Written
-    // once, before the broker call, the journalled held quantity is fixed the
-    // instant it exists AND is the number the flatten was sized against —
-    // `Σ lot_held_quantities === flatten.size`, which is in turn
-    // `executeExit`'s exact-equality guard against `order.size`.
-    //
-    // The store hands these back already paired with their lot's key, having
-    // refused any row where the pairing could not be established, so there is
-    // nothing to index or re-check here.
-    //
-    // PRE-0021 ROWS keep the old entry-total split rather than failing: a
-    // flatten submitted before that migration recorded no held quantities,
-    // and this is the only path that can still reach one (its fill has not
-    // been ingested yet). The entry sizes it needs are read as ONE batch, not
-    // one `getFills` round-trip per lot — `ingestFills` runs on every tick
-    // and a multi-scale-in exit can name many lots — following
-    // `DashboardQueryStore.getMarks`' precedent (dashboard/sqlite-query-store.ts):
-    // one `WHERE ... IN (...)` query, a `Map` back, a lot with no persisted
-    // entry fill simply absent from it rather than present at 0. Either way
-    // this reads only what a PRIOR poll already persisted; it has nothing to
-    // do with, and does not touch, `advanceLot`'s `fill.timestamp <= now`
-    // no-lookahead filter below, which governs THIS poll's fresh fills off
-    // the broker feed instead.
-    const journalledHeld = attribution.lot_held_quantities;
-    const totalShare =
-      journalledHeld === null
-        ? await entryTotalShares(store, lotKeys)
-        : new Map(journalledHeld.map((lot) => [lot.idempotency_key, lot.held]));
-
-    // Processed in the feed's own order, decrementing an IN-MEMORY copy of
-    // `totalShare` across `rawFills` — a flatten is modelled/observed as one
-    // fill in practice (an IOC market order does not rest, so there is
-    // normally exactly one raw fill per flatten to allocate), but this stays
-    // general instead of assuming that: if the feed ever legitimately offers
-    // more than one raw fill for the same flatten in one poll, an EARLIER
-    // one in this SAME pass must still count against a lot's fixed share
-    // before a LATER one is allocated, or the two would double-book it.
-    const remaining = new Map(totalShare);
-    for (const rawFill of rawFills) {
-      let leftover = rawFill.qty;
-      for (const lotKey of lotKeys) {
-        if (leftover <= 0) break;
-        const need = remaining.get(lotKey) ?? 0;
-        if (need <= 0) continue;
-
-        const take = Math.min(need, leftover);
-        const share = take / rawFill.qty;
-        const splitFill: NormalizedFill = {
-          ...rawFill,
-          // Forced regardless of what the adapter tagged the raw fill — see
-          // this function's docstring.
-          leg: 'exit',
-          // The lot-scoped id `hasFill`/`fills`' PK need: `hasFill` dedups
-          // GLOBALLY on `broker_fill_id` alone (`ingest-fills.ts` above), so
-          // splitting one raw fill across two lots under the SAME id would
-          // make the second lot's split silently vanish behind the first
-          // lot's dedup the moment either is persisted. Stable across polls
-          // for the reason `totalShare` above is: the SAME (id, qty) pair
-          // recomputes every time, so a repeat poll dedupes cleanly instead
-          // of colliding with a differently-sized earlier attempt.
-          broker_fill_id: `${rawFill.broker_fill_id}:${lotKey}`,
-          qty: take,
-          fee: rawFill.fee * share,
-        };
-
-        const bucket = byLot.get(lotKey);
-        if (bucket === undefined) byLot.set(lotKey, [splitFill]);
-        else bucket.push(splitFill);
-
-        remaining.set(lotKey, need - take);
-        leftover -= take;
-      }
-      // `leftover > 0` here means the flatten filled more than the named lots
-      // HELD when it was submitted (#571 — before that, more than their
-      // ENTRIES ever covered, which a lot with prior exits could exceed
-      // legitimately). `execute()`'s exact `order.size === heldSize` check
-      // (execute.ts's `executeExit`) sizes the flatten to exactly the sum of
-      // the shares journalled here, so this is now a genuine venue over-fill,
-      // and there is no safe lot to hand the excess to — it is left
-      // unattributed rather than guessed onto one. Silent, deliberately: a
-      // genuine over-fill here would already be showing up as a
-      // resize/exposure divergence elsewhere, and manufacturing a second
-      // signal here would not make that one easier to find.
-      //
-      // A DIFFERENT case from a new lot opening on this instrument mid-poll
-      // (see the `positionKeys` snapshot comment above, and the
-      // `getFlattenAttribution` one below it): that one is a bucket this
-      // function never even reaches this far for — it exits at the
-      // `getFlattenAttribution` check, deferred safely to the next poll. This
-      // one is a genuine surplus against the flatten's OWN named lots, with
-      // nowhere safe to go, ever.
+    // The named-lot set is merged only on SUCCESS. A lot key reaching
+    // `flattenTargetedLots` from a bucket that then failed would make
+    // `advanceLot` re-arm protective legs sized off a fill record this very
+    // containment refused to complete — arming the venue for quantity it may
+    // already have sold. Left out, that lot is naked and reported; left in, it
+    // could be naked AND covered by a leg that sells what it does not hold.
+    const targetedByThisFlatten = new Set<string>();
+    try {
+      await redistributeOneFlatten(store, byLot, clientOrderId, targetedByThisFlatten);
+      for (const lotKey of targetedByThisFlatten) flattenTargetedLots.add(lotKey);
+    } catch (error) {
+      failures.push({ scope: 'flatten-attribution', key: clientOrderId, error });
     }
   }
 
   return flattenTargetedLots;
+}
+
+/**
+ * One flatten bucket's redistribution, whole: read the journal row, record the
+ * lot(s) it named into `namedLots`, split its raw fill(s) across
+ * them in `byLot`, and consume the bucket. Extracted so the caller's loop is
+ * one unit of work under one `try` rather than a hundred lines punctuated by
+ * section headers.
+ *
+ * All-or-nothing within the poll: it either completes or leaves `byLot`
+ * exactly as it found it (see the `byLot.delete` at the end), which is what
+ * makes the caller's containment a clean skip rather than a partial write.
+ * `namedLots` is the caller's per-bucket set, discarded on a throw.
+ */
+async function redistributeOneFlatten(
+  store: ExecutionInput['store'],
+  byLot: Map<string, NormalizedFill[]>,
+  clientOrderId: string,
+  /**
+   * THIS bucket's named lots, not the caller's accumulator — deliberately a
+   * separate set, which the caller merges only once this function returns. A
+   * key written straight through to the shared set and then abandoned mid-way
+   * makes `advanceLot` re-arm against a fill record this poll never completed;
+   * see the caller's comment.
+   */
+  namedLots: Set<string>,
+): Promise<void> {
+  const attribution = await store.getFlattenAttribution(clientOrderId);
+  // Not a known flatten either (an unrelated/unknown client_order_id, a
+  // flatten row written before migration 0020 named no lot, OR — per the
+  // snapshot comment in `redistributeFlattenFills` — a lot that opened AFTER
+  // `positions` was captured): left exactly as before this change. The
+  // bucket sits untouched in `byLot`; `ingestFills()`'s per-position loop
+  // reads only the SAME stale `positions`, so it never looks this key up
+  // either. Nothing is lost — the broker's fill feed re-offers the same
+  // fill next poll (this module's own dedup-on-`broker_fill_id` contract),
+  // and by then a fresh `getOpenPositions()` snapshot names the lot, so it
+  // is picked up by the ORDINARY per-position path, one poll later than it
+  // theoretically could have been. And it can never collide with a REAL
+  // flatten's targets: `lot_idempotency_keys` is fixed at that flatten's
+  // own write-ahead, which necessarily predates a lot that did not exist
+  // yet.
+  if (attribution === null || attribution.lot_idempotency_keys.length === 0) return;
+  const lotKeys = attribution.lot_idempotency_keys;
+
+  // #525: recorded before the split below runs, so a lot that ends up
+  // with ZERO share of this raw fill (an earlier-opened sibling absorbed
+  // all of it) is still marked as needing the re-arm check — it is just
+  // as naked as one that got a partial share, only more so.
+  for (const lotKey of lotKeys) namedLots.add(lotKey);
+
+  const rawFills = byLot.get(clientOrderId);
+  // Appeases the type checker; every key here has a bucket. Note the
+  // ordering above is deliberate and NOT a hazard, though it reads like one
+  // (#575 review): `namedLots` is already populated when this returns, and
+  // the caller merges it. That is the wanted outcome even here — the flatten
+  // named those lots, so they still need `advanceLot`'s re-arm check.
+  //
+  // It is safe only because this return, unlike a throw, leaves `byLot`
+  // exactly as it found it and completes the unit of work. The rule the
+  // caller's containment depends on is "a bucket half-consumed must not
+  // publish its names", and nothing is half-consumed on this path — the
+  // split below has not started. A future edit that moves work above this
+  // line breaks that, and would have to move the `namedLots` population
+  // below it in the same change.
+  if (rawFills === undefined) return;
+
+  // Each named lot's FIXED total share of THIS flatten — what the lot HELD
+  // when `executeExit` journalled the flatten, read straight off the
+  // write-ahead row (#571).
+  //
+  // Two properties are needed at once. STABLE: a DIFFERENT split under the
+  // SAME `broker_fill_id`-derived id is exactly what breaks `hasFill`'s
+  // dedup below (it matches on id alone, so a shrunk second attempt does not
+  // "correct" the first — it just vanishes behind it, silently stranding
+  // the difference), so the share must recompute identically on every poll,
+  // for every named lot, regardless of whether it has since closed. And
+  // EXIT-AWARE: the flatten's SIZE is the venue-true held quantity
+  // (`filled_size` minus recorded exit fills), so a share that ignores prior
+  // exits does not add up to the fill being split.
+  //
+  // Only a journalled number has both. Held quantity re-derived HERE is
+  // exit-aware but not stable — it shrinks as this very flatten's own fills
+  // persist. An entry total is stable but not exit-aware, so an older lot
+  // with prior exits absorbs quantity belonging to its siblings. Written
+  // once, before the broker call, the journalled held quantity is fixed the
+  // instant it exists AND is the number the flatten was sized against —
+  // `Σ lot_held_quantities === flatten.size`, which is in turn
+  // `executeExit`'s exact-equality guard against `order.size`.
+  //
+  // The store hands these back already paired with their lot's key, having
+  // refused any row where the pairing could not be established, so there is
+  // nothing to index or re-check here.
+  //
+  // PRE-0021 ROWS keep the old entry-total split rather than failing: a
+  // flatten submitted before that migration recorded no held quantities,
+  // and this is the only path that can still reach one (its fill has not
+  // been ingested yet). The entry sizes it needs are read as ONE batch, not
+  // one `getFills` round-trip per lot — `ingestFills` runs on every tick
+  // and a multi-scale-in exit can name many lots — following
+  // `DashboardQueryStore.getMarks`' precedent (dashboard/sqlite-query-store.ts):
+  // one `WHERE ... IN (...)` query, a `Map` back, a lot with no persisted
+  // entry fill simply absent from it rather than present at 0. Either way
+  // this reads only what a PRIOR poll already persisted; it has nothing to
+  // do with, and does not touch, `advanceLot`'s `fill.timestamp <= now`
+  // no-lookahead filter below, which governs THIS poll's fresh fills off
+  // the broker feed instead.
+  const journalledHeld = attribution.lot_held_quantities;
+  const totalShare =
+    journalledHeld === null
+      ? await entryTotalShares(store, lotKeys)
+      : new Map(journalledHeld.map((lot) => [lot.idempotency_key, lot.held]));
+
+  // Processed in the feed's own order, decrementing an IN-MEMORY copy of
+  // `totalShare` across `rawFills` — a flatten is modelled/observed as one
+  // fill in practice (an IOC market order does not rest, so there is
+  // normally exactly one raw fill per flatten to allocate), but this stays
+  // general instead of assuming that: if the feed ever legitimately offers
+  // more than one raw fill for the same flatten in one poll, an EARLIER
+  // one in this SAME pass must still count against a lot's fixed share
+  // before a LATER one is allocated, or the two would double-book it.
+  const remaining = new Map(totalShare);
+  for (const rawFill of rawFills) {
+    let leftover = rawFill.qty;
+    for (const lotKey of lotKeys) {
+      if (leftover <= 0) break;
+      const need = remaining.get(lotKey) ?? 0;
+      if (need <= 0) continue;
+
+      const take = Math.min(need, leftover);
+      const share = take / rawFill.qty;
+      const splitFill: NormalizedFill = {
+        ...rawFill,
+        // Forced regardless of what the adapter tagged the raw fill — see
+        // `redistributeFlattenFills`'s docstring.
+        leg: 'exit',
+        // The lot-scoped id `hasFill`/`fills`' PK need: `hasFill` dedups
+        // GLOBALLY on `broker_fill_id` alone (`ingest-fills.ts` above), so
+        // splitting one raw fill across two lots under the SAME id would
+        // make the second lot's split silently vanish behind the first
+        // lot's dedup the moment either is persisted. Stable across polls
+        // for the reason `totalShare` above is: the SAME (id, qty) pair
+        // recomputes every time, so a repeat poll dedupes cleanly instead
+        // of colliding with a differently-sized earlier attempt.
+        broker_fill_id: `${rawFill.broker_fill_id}:${lotKey}`,
+        qty: take,
+        fee: rawFill.fee * share,
+      };
+
+      const bucket = byLot.get(lotKey);
+      if (bucket === undefined) byLot.set(lotKey, [splitFill]);
+      else bucket.push(splitFill);
+
+      remaining.set(lotKey, need - take);
+      leftover -= take;
+    }
+    // `leftover > 0` here means the flatten filled more than the named lots
+    // HELD when it was submitted (#571 — before that, more than their
+    // ENTRIES ever covered, which a lot with prior exits could exceed
+    // legitimately). `execute()`'s exact `order.size === heldSize` check
+    // (execute.ts's `executeExit`) sizes the flatten to exactly the sum of
+    // the shares journalled here, so this is now a genuine venue over-fill,
+    // and there is no safe lot to hand the excess to — it is left
+    // unattributed rather than guessed onto one. Silent, deliberately: a
+    // genuine over-fill here would already be showing up as a
+    // resize/exposure divergence elsewhere, and manufacturing a second
+    // signal here would not make that one easier to find.
+    //
+    // A DIFFERENT case from a new lot opening on this instrument mid-poll
+    // (see `redistributeFlattenFills`'s `positionKeys` snapshot comment, and
+    // the `getFlattenAttribution` one above): that one is a bucket this
+    // function never even reaches this far for — it exits at the
+    // `getFlattenAttribution` check, deferred safely to the next poll. This
+    // one is a genuine surplus against the flatten's OWN named lots, with
+    // nowhere safe to go, ever.
+  }
+
+  // Consumed LAST, not before the split. The split loop above cannot throw —
+  // it is arithmetic over two Maps — but the store reads before it can, and a
+  // bucket deleted ahead of a throw would take this poll's copy of the raw
+  // fill with it. Deleting only once the splits are in `byLot` is what makes
+  // this function all-or-nothing. No lot key can collide with
+  // `clientOrderId`: a flatten's key is fresh per `executeExit`, so it is
+  // never one of the lots it names.
+  byLot.delete(clientOrderId);
 }
 
 /**
