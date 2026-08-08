@@ -119,7 +119,7 @@ test('drawer: a chip opens its stage strip and stances; an idle lane names its r
   const drawer = page.getByRole('region', { name: 'Instrument detail' });
   await expect(drawer).toContainText('no instrument selected');
 
-  await page.getByRole('button', { name: 'BTC-USD, crypto, go, in Execution' }).click();
+  await page.getByRole('button', { name: BTC_CHIP }).click();
   await expect(drawer.getByRole('heading', { level: 2 })).toHaveText('BTC-USD');
   // All seven stages, including the one that never ran.
   await expect(drawer.getByRole('row')).toHaveCount(8);

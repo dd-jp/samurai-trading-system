@@ -114,6 +114,23 @@ const providers: ProviderStatusReader = {
   readProviderStatus: () => FIXTURE_PROVIDERS,
 };
 
+/**
+ * Resolved the way the production entry resolves it — and then PINNED.
+ *
+ * `resolveStoreMode()` reads whatever `SAMURAI_MODE` the shell holds, so a
+ * developer with `live` exported who runs this file directly would get a page
+ * labelled LIVE over fabricated positions, verdicts and a fabricated broker
+ * balance. That is the one mislabelling this codebase treats as unacceptable
+ * (see the `mode` field's docblock in `types.ts`), and it costs nothing to
+ * refuse: the harness sets the variable explicitly in `playwright.config.ts`.
+ */
+const mode = resolveStoreMode();
+if (mode !== 'paper') {
+  throw new Error(
+    `fixture server refuses SAMURAI_MODE=${mode}: it serves fabricated data and must never be labelled anything but paper`,
+  );
+}
+
 const server = createDashboardServer({
   port: Number(process.env.PORT ?? DEFAULT_PORT),
   host: process.env.HOST ?? '127.0.0.1',
@@ -122,7 +139,7 @@ const server = createDashboardServer({
   // `dist/dashboard/fixture-server.js` in the only form Playwright runs it,
   // so its sibling is the built bundle.
   bundleRoot: fileURLToPath(new URL('../dashboard-web/', import.meta.url)),
-  mode: resolveStoreMode(),
+  mode,
   providers,
 });
 
