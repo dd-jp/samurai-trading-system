@@ -21,7 +21,7 @@
  */
 import { fileURLToPath } from 'node:url';
 import { resolveStoreMode } from '../shared/store/index.js';
-import { InMemoryQueryStore } from './fixture-store.js';
+import { FIXTURE_NOW, InMemoryQueryStore } from './fixture-store.js';
 import type { ProviderStatusPanel, ProviderStatusReader } from './provider-status.js';
 import { createDashboardServer } from './server.js';
 import type { VerdictAuditEntry } from './types.js';
@@ -40,7 +40,19 @@ const DEFAULT_PORT = 8788;
  *
  * ETH carries `hitl_override` so the badge is rendered from the first paint,
  * without the suite having to drive a settle first.
+ *
+ * Timestamps are offsets from `FIXTURE_NOW` — the same fixed clock every other
+ * fixture in `fixture-store.ts` is written against — so a verdict cannot drift
+ * away from the pipeline row it describes. The whole fixture set is pinned to
+ * one instant rather than to the wall clock, and nothing on this page renders
+ * an AGE: the ledger, the drawer and the strip all print an absolute UTC time,
+ * and the 15-minute pipeline window is applied by the SQLite store, not by
+ * this one.
  */
+function fixtureVerdictTime(secondsAgo: number): Date {
+  return new Date(FIXTURE_NOW.getTime() - secondsAgo * 1_000);
+}
+
 const E2E_VERDICTS: VerdictAuditEntry[] = [
   {
     trace_id: 'trace-p-btc',
@@ -48,7 +60,8 @@ const E2E_VERDICTS: VerdictAuditEntry[] = [
     status: 'go',
     reason: 'approved',
     hitl_override: false,
-    timestamp: new Date('2026-07-19T14:27:08Z'),
+    // The BTC lane's Execution row is 170s old; its verdict is the row before it.
+    timestamp: fixtureVerdictTime(172),
   },
   {
     trace_id: 'trace-p-eth',
@@ -56,7 +69,8 @@ const E2E_VERDICTS: VerdictAuditEntry[] = [
     status: 'no_go',
     reason: 'risk_correlation',
     hitl_override: true,
-    timestamp: new Date('2026-07-19T14:28:08Z'),
+    // The ETH lane's Verdict row, to the second.
+    timestamp: fixtureVerdictTime(112),
   },
 ];
 
