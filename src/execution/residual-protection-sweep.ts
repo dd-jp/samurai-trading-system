@@ -1,0 +1,311 @@
+/**
+ * The #549 residual-protection sweep — the durable, cadence-driven retry for
+ * a partial-flatten residual whose protective legs were never CONFIRMED
+ * re-armed.
+ *
+ * ## Why this exists
+ *
+ * `ingestFills()`'s #525 re-arm fires only on the poll that OBSERVES the
+ * residual — both of its triggers (`ingestedExit`, `flattenTargetedThisPoll`)
+ * are poll-scoped, and the venue's fill feed does not re-offer forever
+ * (`AlpacaBrokerAdapter` prunes a flatten's order after the poll that offers
+ * its fill). A crash between the exit fill persisting and the re-arm
+ * confirming — or a re-arm failure the process survives — therefore left the
+ * residual naked indefinitely, with no retry and (in the crash case) no
+ * alert, because the fallback alert lives inside the attempt that never runs
+ * again. The recorded #525 decision rejected a retry LOOP on the
+ * order-submitting poll path; this sweep is the accepted alternative — a
+ * durable marker (migration 0024, written by `ingest-fills.ts` the moment
+ * the residual is first known) checked idempotently on an ongoing basis.
+ *
+ * ## When it runs
+ *
+ * Twice-wired, mirroring #603's flatten-journal sweep:
+ *
+ * - `reconcile()` calls it (reconcile.ts) — startup and any future reconcile
+ *   cadence, which is what covers a crash: the restarted process's first
+ *   reconcile finds the marker and retries.
+ * - `startFillSync`'s poll loop calls it (orchestrator/fill-sync.ts) via
+ *   `Execution.sweepResidualProtection` — the WITHIN-PROCESS cadence, which
+ *   is what covers a re-arm failure the process survived: this codebase has
+ *   no recurring `reconcile()` schedule today (fill-sync.ts's file doc), so
+ *   without this leg the retry would wait for the next restart.
+ *
+ * Cheap when healthy: `getUnprotectedResidualLots()` returns nothing, and
+ * the sweep makes no broker call at all.
+ *
+ * ## Idempotency
+ *
+ * A retry must tolerate a re-arm that actually SUCCEEDED venue-side before a
+ * crash lost its confirmation. Every `rearmProtectiveLegs` path does:
+ * equities adopt-or-place on the deterministic `:rearm` wire id
+ * (`AlpacaBrokerAdapter`, the #600/#603 posture); the crypto emulation
+ * retires its previous episode's legs before arming a fresh journalled
+ * episode (`AlpacaCryptoLegEmulation.rearm`); the Simulated adapter re-sets
+ * the same protected quantity. So the sweep retries through the SAME broker
+ * seam the observing poll uses, and "confirmed" means exactly what it means
+ * there: the call resolved.
+ *
+ * ## Escalation
+ *
+ * A marker whose sweep retry FAILS pages `ResidualExposureAlertChannel` —
+ * from the sweep, not only the observing poll — once per unprotected
+ * EPISODE, not once per pass (#342's repeated-line lesson): the dedup is the
+ * durable `alerted_at` on the marker itself, set by whichever surface alerts
+ * first and cleared only with the marker. N = 1 retry before paging,
+ * deliberately: a naked residual is live venue exposure, waiting more sweeps
+ * buys nothing, and a retry that would have succeeded on pass 2 clears the
+ * marker then anyway — the operator just also knows it happened. Every
+ * attempt, alerted or not, still leaves a trace: failures via
+ * `logCaughtFailure` (#608), outcomes via the `ReconcileDivergence`s this
+ * returns, which both callers log per entry.
+ */
+
+import { logCaughtFailure } from '../shared/index.js';
+import { alertResidualExposure, coversQty, recordedExposure } from './ingest-fills.js';
+import type {
+  ExecutionInput,
+  ReconcileDivergence,
+  ResidualProtectionSweepResult,
+  UnprotectedResidualLot,
+} from './types.js';
+
+/**
+ * One sweep pass over every marked lot. Never rejects for a single lot's
+ * failure — each lot is independent work under its own containment
+ * (`ingestFills`' own `ContainedFailure` reasoning), reported as an
+ * `undetermined` divergence rather than a thrown error, because a durable
+ * cause (a corrupt row, a venue outage) would otherwise abort every LATER
+ * marked lot on every pass, indefinitely. Only the worklist read itself may
+ * reject — with no worklist there is no pass, the same way `reconcile()`
+ * treats `getUnresolvedFlattens()`.
+ */
+export async function sweepResidualProtection(
+  input: ExecutionInput,
+): Promise<ResidualProtectionSweepResult> {
+  const marked = await input.store.getUnprotectedResidualLots();
+  const divergences: ReconcileDivergence[] = [];
+
+  for (const row of marked) {
+    try {
+      const divergence = await sweepOne(input, row);
+      if (divergence !== null) divergences.push(divergence);
+    } catch (error) {
+      // `sweepOne` handles its own known failure modes; this catch is the
+      // outer boundary for the writes it makes on its success paths (the
+      // confirm/alert-dedup store writes). The marker's own durability is
+      // the recovery: whatever failed, the row is still marked and the next
+      // pass retries it.
+      logCaughtFailure(
+        input.logger,
+        {
+          trace_id: input.trace_id,
+          stage: 'execution',
+          level: 'error',
+          message:
+            'sweepResidualProtection: one marked lot could not be settled this pass — the ' +
+            'marker stays and the next pass retries',
+        },
+        error,
+        { idempotency_key: row.position.idempotency_key },
+      );
+      divergences.push({
+        idempotency_key: row.position.idempotency_key,
+        instrument: row.position.instrument,
+        store_state: row.position.order_state,
+        broker_state: null,
+        action: 'undetermined',
+        // An IDENTIFIER-only message plus the error's own text — safe here
+        // for `reconcileLot`'s reason: #297's H1 sanitizes every broker
+        // error before it is visible, and store errors are this codebase's
+        // own curated messages.
+        reason: `residual-protection sweep failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      });
+    }
+  }
+
+  return { checked: marked.length, divergences };
+}
+
+/**
+ * Settle one marked lot. Recomputes the residual off the persisted fill
+ * record fresh — never off the marker's age or any cached figure — with the
+ * SAME expressions the observing poll uses (`recordedExposure`/`coversQty`,
+ * ingest-fills.ts), so the two surfaces cannot disagree about flatness.
+ */
+async function sweepOne(
+  input: ExecutionInput,
+  row: UnprotectedResidualLot,
+): Promise<ReconcileDivergence | null> {
+  const { broker, store, clock } = input;
+  const { position } = row;
+  const key = position.idempotency_key;
+  const now = clock.now();
+
+  let filledSize: number;
+  let exitQty: number;
+  try {
+    ({ filledSize, exitQty } = recordedExposure(await store.getFills(key)));
+  } catch (error) {
+    // The exact residual is unknowable without this read — the same
+    // upper-bound escalation `maybeRearmResidual`'s own store-read catch
+    // takes (#569's flag), because the conservative direction for an
+    // operator is over-stating what is at risk. Marker stays.
+    logCaughtFailure(
+      input.logger,
+      {
+        trace_id: input.trace_id,
+        stage: 'execution',
+        level: 'error',
+        message:
+          'sweepResidualProtection: store read failed while recomputing a marked residual — ' +
+          'alerting with the upper-bound requested_size instead',
+      },
+      error,
+      { idempotency_key: key },
+    );
+    await alertResidualExposureOnce(input, row, position.requested_size, now, true);
+    return {
+      idempotency_key: key,
+      instrument: position.instrument,
+      store_state: position.order_state,
+      broker_state: null,
+      action: 'undetermined',
+      reason: `marked residual could not be recomputed (fill read failed): ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    };
+  }
+
+  // Entry fill still outstanding: nothing open to protect yet, nothing to
+  // report — the marker stays for the pass after the entry lands.
+  if (filledSize === 0) return null;
+
+  // Flat by the persisted record: the residual is gone (a later fill closed
+  // it), so "not yet confirmed protected" is settled — there is nothing left
+  // to protect. Clearing here is what makes crash window (d) a no-op sweep.
+  if (coversQty(exitQty, filledSize)) {
+    await store.confirmResidualProtected(key);
+    return {
+      idempotency_key: key,
+      instrument: position.instrument,
+      store_state: position.order_state,
+      broker_state: null,
+      action: 'adopted',
+      reason:
+        'marked lot reads flat on the persisted fill record — nothing left unprotected; ' +
+        'residual-protection marker cleared',
+    };
+  }
+
+  const residual = filledSize - exitQty;
+
+  // Fail-closed, `maybeRearmResidual`'s own guard verbatim: a garbage
+  // residual while `coversQty` says "not flat" is a store divergence to
+  // surface, never a quantity to hand the broker.
+  if (!(residual > 0) || !Number.isFinite(residual)) {
+    await alertResidualExposureOnce(input, row, residual, now, false);
+    return {
+      idempotency_key: key,
+      instrument: position.instrument,
+      store_state: position.order_state,
+      broker_state: null,
+      action: 'undetermined',
+      reason:
+        'marked residual recomputes non-finite or non-positive while the fill record reads ' +
+        'not-flat — refusing to re-arm a garbage quantity; check the store by hand',
+    };
+  }
+
+  try {
+    await broker.rearmProtectiveLegs(
+      key,
+      position.instrument,
+      position.side,
+      residual,
+      position.stop,
+      position.target,
+    );
+  } catch (error) {
+    // Every attempt leaves a trace (#608); the PAGE is once per episode —
+    // see the file doc's escalation section.
+    logCaughtFailure(
+      input.logger,
+      {
+        trace_id: input.trace_id,
+        stage: 'execution',
+        level: 'error',
+        message:
+          'sweepResidualProtection: broker.rearmProtectiveLegs retry failed — the marker stays ' +
+          'and the next pass retries',
+      },
+      error,
+      { idempotency_key: key, residual_qty: residual },
+    );
+    await alertResidualExposureOnce(input, row, residual, now, false);
+    return {
+      idempotency_key: key,
+      instrument: position.instrument,
+      store_state: position.order_state,
+      broker_state: null,
+      action: 'undetermined',
+      reason: `re-arm retry failed for residual ${residual}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    };
+  }
+
+  // CONFIRMED — the broker call resolved (venue-acked or adopted), which is
+  // the only thing that may clear the marker. Runs OUTSIDE the try above so
+  // a confirm-write failure is the outer containment's `undetermined` (and
+  // the next pass's idempotent re-verify), never mistaken for a re-arm
+  // failure.
+  await store.confirmResidualProtected(key);
+  return {
+    idempotency_key: key,
+    instrument: position.instrument,
+    store_state: position.order_state,
+    broker_state: null,
+    action: 'adopted',
+    reason:
+      `protective legs re-armed for residual ${residual} by the #549 sweep — ` +
+      'residual-protection marker cleared',
+  };
+}
+
+/**
+ * The once-per-episode escalation — posts `ResidualExposureAlertChannel`
+ * (through `alertResidualExposure`'s swallow/CREDENTIALS posture, unchanged)
+ * only when this episode has never alerted, then records the dedup durably.
+ * A suppressed duplicate is not silent: every suppressing pass still emits
+ * its `undetermined` divergence, which both callers log per entry.
+ */
+async function alertResidualExposureOnce(
+  input: ExecutionInput,
+  row: UnprotectedResidualLot,
+  residualQty: number,
+  now: Date,
+  residualQtyIsUpperBound: boolean,
+): Promise<void> {
+  if (row.alerted_at !== null) return;
+  await alertResidualExposure(input, row.position, residualQty, now, residualQtyIsUpperBound);
+  try {
+    await input.store.markResidualAlerted(row.position.idempotency_key, now);
+  } catch (error) {
+    logCaughtFailure(
+      input.logger,
+      {
+        trace_id: input.trace_id,
+        stage: 'execution',
+        level: 'warn',
+        message:
+          'markResidualAlerted failed — the next sweep pass may page a second time for an ' +
+          'episode that was already alerted (noisy, not unsafe)',
+      },
+      error,
+      { idempotency_key: row.position.idempotency_key },
+    );
+  }
+}

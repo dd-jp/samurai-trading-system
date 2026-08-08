@@ -136,6 +136,7 @@ describe('openSharedStore', () => {
       { version: 21 },
       { version: 22 },
       { version: 23 },
+      { version: 24 },
     ]);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
@@ -162,6 +163,7 @@ describe('openSharedStore', () => {
       { version: 21 },
       { version: 22 },
       { version: 23 },
+      { version: 24 },
     ]);
   });
 

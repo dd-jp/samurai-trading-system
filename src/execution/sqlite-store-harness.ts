@@ -110,6 +110,40 @@ export class TestExecutionStore extends SqliteExecutionStore {
     return super.markFlattenFillsSwept(idempotency_key, swept_at);
   }
 
+  override async markResidualUnprotected(
+    idempotency_key: string,
+    observed_at: Date,
+  ): Promise<void> {
+    this.writeLog.push(`mark-residual-unprotected:${idempotency_key}`);
+    return super.markResidualUnprotected(idempotency_key, observed_at);
+  }
+
+  override async confirmResidualProtected(idempotency_key: string): Promise<void> {
+    this.writeLog.push(`confirm-residual-protected:${idempotency_key}`);
+    return super.confirmResidualProtected(idempotency_key);
+  }
+
+  override async markResidualAlerted(idempotency_key: string, alerted_at: Date): Promise<void> {
+    this.writeLog.push(`mark-residual-alerted:${idempotency_key}`);
+    return super.markResidualAlerted(idempotency_key, alerted_at);
+  }
+
+  /** Raw read of the #549 marker columns (migration 0024) — production reads them only via `getUnprotectedResidualLots`. */
+  async getResidualProtectionMarker(
+    idempotency_key: string,
+  ): Promise<{ unprotected_since: string | null; alerted_at: string | null } | null> {
+    const row = this.testDb
+      .prepare(
+        `SELECT residual_unprotected_since AS unprotected_since,
+                residual_rearm_alerted_at AS alerted_at
+           FROM open_positions WHERE idempotency_key = ?`,
+      )
+      .get(idempotency_key) as
+      | { unprotected_since: string | null; alerted_at: string | null }
+      | undefined;
+    return row === undefined ? null : row;
+  }
+
   /** Every state, including terminal — what `getOpenPositions()` deliberately excludes. */
   async getPosition(idempotency_key: string): Promise<OpenPosition | null> {
     const row = this.testDb

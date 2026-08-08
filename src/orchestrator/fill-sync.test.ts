@@ -21,6 +21,7 @@ function makeExecution(overrides: Partial<FillSyncSurface> = {}): FillSyncSurfac
   return {
     reconcile: vi.fn().mockResolvedValue(makeReport()),
     ingestFills: vi.fn().mockResolvedValue(undefined),
+    sweepResidualProtection: vi.fn().mockResolvedValue({ checked: 0, divergences: [] }),
     ...overrides,
   };
 }

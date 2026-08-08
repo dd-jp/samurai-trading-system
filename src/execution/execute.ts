@@ -17,6 +17,7 @@ import {
 import type { VerdictDecision } from '../verdict/index.js';
 import { ingestFills } from './ingest-fills.js';
 import { reconcile } from './reconcile.js';
+import { sweepResidualProtection } from './residual-protection-sweep.js';
 import { DuplicatePositionError } from './sqlite-shared-store.js';
 import type {
   Execution,
@@ -24,6 +25,7 @@ import type {
   ExecutionResult,
   NativeBracketRequest,
   ReconcileReport,
+  ResidualProtectionSweepResult,
 } from './types.js';
 
 export class ExecutionImpl implements Execution {
@@ -47,6 +49,16 @@ export class ExecutionImpl implements Execution {
    */
   async reconcile(): Promise<ReconcileReport> {
     return reconcile(this.input);
+  }
+
+  /**
+   * Delegated whole, same as its siblings. The #549 sweep's standalone
+   * surface — `reconcile()` above already includes a pass; this is what the
+   * fill-sync loop calls on cadence (see `Execution.sweepResidualProtection`'s
+   * doc for why both wirings exist).
+   */
+  async sweepResidualProtection(): Promise<ResidualProtectionSweepResult> {
+    return sweepResidualProtection(this.input);
   }
 
   async execute(verdict: VerdictDecision): Promise<ExecutionResult> {

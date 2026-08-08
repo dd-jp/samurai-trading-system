@@ -188,6 +188,60 @@ export interface SharedStore {
    * `reconcile()` pass.
    */
   markFlattenFillsSwept(idempotency_key: string, swept_at: Date): Promise<void>;
+  /**
+   * #549: durably marks a lot's partial-flatten residual as observed but not
+   * yet confirmed protected — written by `maybeRearmResidual`
+   * (ingest-fills.ts) the moment the residual is first known, BEFORE the
+   * re-arm attempt, so a crash anywhere between the exit fill persisting and
+   * the re-arm confirming leaves a row `getUnprotectedResidualLots()` finds.
+   *
+   * Keeps the FIRST observation: a lot already marked stays marked at its
+   * original `residual_unprotected_since` (COALESCE), and its alert-dedup
+   * state (`residual_rearm_alerted_at`) is untouched — a re-poll of the same
+   * unprotected episode is the same episode, not a fresh one. See migration
+   * 0024.
+   */
+  markResidualUnprotected(idempotency_key: string, observed_at: Date): Promise<void>;
+  /**
+   * The only way the #549 marker clears: protection was CONFIRMED — the
+   * broker's re-arm call resolved (venue-acked, or adopted as already live
+   * on the venue), or a fuller read showed the lot flat with nothing left to
+   * protect. Clears the alert-dedup timestamp with it, so a LATER residual
+   * episode on the same lot alerts afresh. Idempotent: clearing an unmarked
+   * (or unknown) lot is a no-op, which is what lets the sweep and the
+   * observing poll race without either failing.
+   */
+  confirmResidualProtected(idempotency_key: string): Promise<void>;
+  /**
+   * Once-per-episode alert dedup for the #549 sweep (#342's repeated-line
+   * lesson): recorded when `ResidualExposureAlertChannel` is posted for an
+   * unprotected episode, checked by the sweep so a marker that stays
+   * unprotected across many passes pages the operator once, not once per
+   * pass. Cleared together with the marker by `confirmResidualProtected`.
+   */
+  markResidualAlerted(idempotency_key: string, alerted_at: Date): Promise<void>;
+  /**
+   * The #549 sweep's worklist: every NON-TERMINAL lot still marked
+   * unprotected. Bounded the same way `getOpenPositions()` is — a terminal
+   * lot's residual is settled by definition (`closed` means round-tripped to
+   * flat; `rejected`/`cancelled`/`expired` mean no venue exposure under this
+   * lot) — so the sweep never grows with history. Each row carries the full
+   * `OpenPosition` (everything a retry needs: instrument, side, stop,
+   * target, requested_size) plus the marker's own two timestamps.
+   */
+  getUnprotectedResidualLots(): Promise<UnprotectedResidualLot[]>;
+}
+
+/**
+ * One lot the #549 residual-protection sweep still has work to do on — see
+ * `SharedStore.getUnprotectedResidualLots`.
+ */
+export interface UnprotectedResidualLot {
+  position: OpenPosition;
+  /** When the unprotected residual was FIRST observed (migration 0024). */
+  unprotected_since: Date;
+  /** When this episode's operator alert was posted; null if it never was. */
+  alerted_at: Date | null;
 }
 
 /**

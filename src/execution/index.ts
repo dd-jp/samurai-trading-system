@@ -60,6 +60,7 @@ export type {
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
 } from './residual-exposure-alert.js';
+export { sweepResidualProtection } from './residual-protection-sweep.js';
 export type { SimulatedBrokerAdapterInput } from './simulated-adapter.js';
 export { SimulatedBrokerAdapter } from './simulated-adapter.js';
 export { SqliteBrokerStateStore } from './sqlite-broker-state-store.js';
@@ -83,8 +84,10 @@ export type {
   NormalizedOrder,
   ReconcileDivergence,
   ReconcileReport,
+  ResidualProtectionSweepResult,
   SharedStore,
   SimulatedAdapterConfig,
+  UnprotectedResidualLot,
   UnresolvedFlattenSubmission,
 } from './types.js';
 export type { UnpricedFillAlert, UnpricedFillAlertChannel } from './unpriced-fill-alert.js';

@@ -48,7 +48,21 @@ const BOTH_TIERS = [
 function healthyExitPath(overrides: Partial<ExitPathEvidence> = {}): ExitPathEvidence {
   return {
     brokerCallSequence: ['cancel:lot-1', 'submitFlatten:lot-1-exit'],
-    residualAlerts: [],
+    // #549: scenario 5 scripts ONE re-arm failure, so a healthy run carries
+    // exactly its one inline alert — the gate now scopes the "no alerts"
+    // check to every OTHER lot and requires exactly one for this one.
+    residualAlerts: [
+      {
+        idempotency_key: 'lot-sweep',
+        instrument: 'LINK-USD',
+        side: 'buy',
+        residual_qty: 6,
+        residual_qty_is_upper_bound: false,
+        stop: 90,
+        target: 120,
+        observed_at: SMOKE_RUN_INSTANT,
+      },
+    ],
     // Matches `transactedObservations()`'s 'idem-exit-1' position (closed) —
     // the fixture pairing the scoped #508/#517 check reads.
     fullExit: { lotKey: 'idem-exit-1' },
@@ -80,6 +94,15 @@ function healthyExitPath(overrides: Partial<ExitPathEvidence> = {}): ExitPathEvi
       },
     },
     flattenReconcileAlerts: [],
+    // #549: scenario 5's healthy outcome — the restarted sweep re-armed the
+    // residual, cleared the marker, and reported it.
+    residualSweep: {
+      lotKey: 'lot-sweep',
+      expectedResidual: 6,
+      protectedQty: 6,
+      markerCleared: true,
+      sweepDivergenceAction: 'adopted',
+    },
     ...overrides,
   };
 }
@@ -704,12 +727,14 @@ describe('runSmoke (end-to-end, real composition root)', () => {
     // #576 — the exit path, driven by `runExitPathScenarios` against the same
     // store: scenario 1 closes one lot, scenario 2 leaves its lot open with a
     // protected residual (not closed — that is the point), scenario 3 closes
-    // both of its lots, and (#519/#526) scenario 4 closes its own lot too —
-    // via the RESTARTED Execution's reconcile() + ingestFills(), not the
-    // original one. 1 + 0 + 2 + 1 = 4 `ClosedTrade`s; 5 `flatten_submissions`
-    // rows (one per exit call across the four scenarios), every one resolved.
+    // both of its lots, (#519/#526) scenario 4 closes its own lot too — via
+    // the RESTARTED Execution's reconcile() + ingestFills(), not the original
+    // one — and (#549) scenario 5 leaves its lot open like scenario 2's, its
+    // residual re-armed by the restarted sweep. 1 + 0 + 2 + 1 + 0 = 4
+    // `ClosedTrade`s; 6 `flatten_submissions` rows (one per exit call across
+    // the five scenarios), every one resolved.
     expect(result.observations.closedTrades).toHaveLength(4);
-    expect(result.observations.flattenSubmissions).toHaveLength(5);
+    expect(result.observations.flattenSubmissions).toHaveLength(6);
     expect(result.observations.flattenSubmissions.every((row) => row.status === 'submitted')).toBe(
       true,
     );
@@ -1013,6 +1038,100 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
 
     expect(gate.passed).toBe(false);
     expect(gate.failures.some((failure) => failure.includes('re-arm failed'))).toBe(true);
+  });
+
+  // #549 — the residual-protection sweep's own enforcement branches, each
+  // pinned in isolation the same way every other exit-path check above is.
+  describe('the residual-protection sweep (#549)', () => {
+    it("fails when the restarted reconcile() named no divergence for scenario 5's lot — the marker or the sweep is unwired", () => {
+      const gate = gateFor({
+        residualSweep: {
+          lotKey: 'lot-sweep',
+          expectedResidual: 6,
+          protectedQty: 6,
+          markerCleared: true,
+          sweepDivergenceAction: undefined,
+        },
+      });
+
+      expect(gate.passed).toBe(false);
+      expect(
+        gate.failures.some((failure) => failure.includes('never written by the observing poll')),
+      ).toBe(true);
+    });
+
+    it('fails when the sweep retry could not settle the marker (undetermined)', () => {
+      const gate = gateFor({
+        residualSweep: {
+          lotKey: 'lot-sweep',
+          expectedResidual: 6,
+          protectedQty: null,
+          markerCleared: false,
+          sweepDivergenceAction: 'undetermined',
+        },
+      });
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.some((failure) => failure.includes("not 'adopted'"))).toBe(true);
+    });
+
+    it('fails when the marker survived the restarted sweep — protection was never confirmed', () => {
+      const gate = gateFor({
+        residualSweep: {
+          lotKey: 'lot-sweep',
+          expectedResidual: 6,
+          protectedQty: 6,
+          markerCleared: false,
+          sweepDivergenceAction: 'adopted',
+        },
+      });
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.some((failure) => failure.includes('is still set'))).toBe(true);
+    });
+
+    it("fails when the sweep's retry left the lot naked or mis-sized", () => {
+      const gate = gateFor({
+        residualSweep: {
+          lotKey: 'lot-sweep',
+          expectedResidual: 6,
+          protectedQty: null,
+          markerCleared: true,
+          sweepDivergenceAction: 'adopted',
+        },
+      });
+
+      expect(gate.passed).toBe(false);
+      expect(
+        gate.failures.some((failure) =>
+          failure.includes('either never re-armed (the lot is naked) or sized the wrong quantity'),
+        ),
+      ).toBe(true);
+    });
+
+    it('fails when the episode paged more than once — the once-per-episode dedup regressed (#342)', () => {
+      const [healthyAlert] = healthyExitPath().residualAlerts;
+      if (healthyAlert === undefined) throw new Error('fixture invariant: one healthy alert');
+      const gate = gateFor({
+        residualAlerts: [healthyAlert, { ...healthyAlert, observed_at: SMOKE_RUN_INSTANT }],
+      });
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.some((failure) => failure.includes('once-per-episode dedup'))).toBe(
+        true,
+      );
+    });
+
+    it('fails when the deliberately-failed re-arm no longer pages at all', () => {
+      const gate = gateFor({ residualAlerts: [] });
+
+      expect(gate.passed).toBe(false);
+      expect(
+        gate.failures.some((failure) =>
+          failure.includes('0 means the failed re-arm no longer pages'),
+        ),
+      ).toBe(true);
+    });
   });
 
   it('fails when a lot named by a two-lot flatten is left phantom-open (#571)', () => {

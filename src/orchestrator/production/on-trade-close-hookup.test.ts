@@ -3,6 +3,7 @@ import type {
   FlattenSubmissionWriteAhead,
   LotAdvance,
   SharedStore,
+  UnprotectedResidualLot,
   UnresolvedFlattenSubmission,
 } from '../../execution/index.js';
 import type { OnTradeCloseInput } from '../../feedback-loop/index.js';
@@ -97,6 +98,12 @@ class FakeSharedStore implements SharedStore {
     _update: { order_state: OrderState; broker_order_ids: string[] },
   ): Promise<void> {}
   async markFlattenFillsSwept(_idempotency_key: string, _swept_at: Date): Promise<void> {}
+  async markResidualUnprotected(_idempotency_key: string, _observed_at: Date): Promise<void> {}
+  async confirmResidualProtected(_idempotency_key: string): Promise<void> {}
+  async markResidualAlerted(_idempotency_key: string, _alerted_at: Date): Promise<void> {}
+  async getUnprotectedResidualLots(): Promise<UnprotectedResidualLot[]> {
+    return [];
+  }
   async applyLotAdvance(advance: LotAdvance): Promise<void> {
     if (this.shouldThrow) {
       throw new Error('boom');

@@ -1500,7 +1500,10 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     const submitOcoOrder = vi
       .fn()
       .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-1', order_class: 'oco', legs: [] });
-    const adapter = adapterWith(makeClient({ submitOcoOrder }));
+    // #549 adopt-or-place: null = the venue authoritatively has no prior
+    // re-arm under the deterministic wire id, so this places afresh.
+    const getOrderByClientOrderId = vi.fn().mockResolvedValue(null);
+    const adapter = adapterWith(makeClient({ submitOcoOrder, getOrderByClientOrderId }));
 
     await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
 
@@ -1522,6 +1525,58 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       // take_profit.limit_price").
       take_profit: { limit_price: '110' },
       stop_loss: { stop_price: '95' },
+    });
+  });
+
+  // #549 adopt-or-place: the wire id is deterministic (`${key}:rearm`), so a
+  // re-arm that succeeded venue-side before a crash lost its confirmation is
+  // ADOPTED by the retry rather than double-submitted (or misread as a fresh
+  // failure when the venue rejects the duplicate client order id).
+  describe('re-arm adopt-or-place (#549)', () => {
+    it('adopts a live prior OCO under the deterministic wire id instead of submitting again', async () => {
+      const submitOcoOrder = vi.fn();
+      const getOrderByClientOrderId = vi.fn().mockResolvedValue({
+        ...acceptedOrder(),
+        id: 'prior-rearm-oco',
+        client_order_id: 'key-1:rearm',
+        order_class: 'oco',
+        legs: [
+          {
+            id: 'prior-rearm-stop',
+            type: 'stop' as const,
+            status: 'held',
+            filled_qty: '0',
+            filled_avg_price: null,
+            filled_at: null,
+          },
+        ],
+      });
+      const adapter = adapterWith(makeClient({ submitOcoOrder, getOrderByClientOrderId }));
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+
+      expect(getOrderByClientOrderId).toHaveBeenCalledWith('key-1:rearm');
+      expect(submitOcoOrder).not.toHaveBeenCalled();
+    });
+
+    it('places afresh when the prior attempt under the wire id is dead (cancelled)', async () => {
+      const submitOcoOrder = vi
+        .fn()
+        .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-2', order_class: 'oco', legs: [] });
+      const getOrderByClientOrderId = vi.fn().mockResolvedValue({
+        ...acceptedOrder(),
+        id: 'prior-rearm-oco',
+        client_order_id: 'key-1:rearm',
+        order_class: 'oco',
+        status: 'canceled',
+        legs: [],
+      });
+      const adapter = adapterWith(makeClient({ submitOcoOrder, getOrderByClientOrderId }));
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+
+      // A cancelled prior protects nothing — the retry submits.
+      expect(submitOcoOrder).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -1578,7 +1633,13 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         ],
       }),
     );
-    const adapter = adapterWith(makeClient({ submitOcoOrder, getOrder }));
+    const adapter = adapterWith(
+      makeClient({
+        submitOcoOrder,
+        getOrder,
+        getOrderByClientOrderId: vi.fn().mockResolvedValue(null),
+      }),
+    );
     await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
 
     const fills = await adapter.fetchNewFills(new Date(0));

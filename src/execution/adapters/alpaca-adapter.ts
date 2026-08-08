@@ -669,6 +669,40 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     }
 
     const rearmClientOrderId = `${clientOrderId}:rearm`;
+
+    // ADOPT-OR-PLACE (#549, the #600/#603 posture): the wire id above is
+    // deterministic, so before submitting, ask the venue whether a prior
+    // attempt's OCO already lives under it — a re-arm that succeeded
+    // venue-side and then crashed (or lost its journaling) before the caller
+    // could confirm it would otherwise be DOUBLE-submitted by the
+    // residual-protection sweep's retry, or (Alpaca rejecting the duplicate
+    // client_order_id) read as a fresh failure and page the operator about a
+    // residual that is in fact protected. Any non-dead state is adopted:
+    // `submitted`/`partially_filled` mean the protection is resting now, and
+    // `filled` means it already did its job (the leg closed the residual —
+    // whose fills the re-arm sweep in `fetchNewFills` below offers/offered).
+    // A `cancelled`/`rejected`/`expired` prior attempt protects nothing, so
+    // the code falls through and places afresh — if the venue then refuses
+    // the reused client_order_id, that throw is the honest answer and takes
+    // the caller's existing alert path.
+    const prior = await this.call('rearmProtectiveLegs', () =>
+      this.input.client.getOrderByClientOrderId(rearmClientOrderId),
+    );
+    if (
+      prior !== null &&
+      !['cancelled', 'rejected', 'expired'].includes(mapOrderState(prior.status))
+    ) {
+      this.rearmedLegs.set(clientOrderId, prior.id);
+      // Same column semantics as the fresh-place path below — the OCO's
+      // parent id IS the take-profit (see that path's `.legs` note).
+      this.state.recordBracketOrderIds('alpaca', clientOrderId, {
+        entry_order_id: null,
+        stop_order_id: legOrderIds(prior.legs).stop_order_id,
+        target_order_id: prior.id,
+      });
+      return;
+    }
+
     // The CLOSING side, mirroring `submitFlatten`'s own convention — `side`
     // here is the lot's HELD side (the `BrokerAdapter.rearmProtectiveLegs`
     // contract), so the order that reduces it takes the opposite one.
