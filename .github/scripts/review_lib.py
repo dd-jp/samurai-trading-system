@@ -189,10 +189,18 @@ def classify_blast_radius(changed_files: list[str]) -> str:
     return "\n".join(lines) if lines else "No changed files detected."
 
 
-def get_changed_files(base_ref: str | None) -> list[str]:
+def get_changed_files(base_ref: str | None) -> list[str] | None:
+    """The PR's changed files per git, or None when git could not tell us.
+
+    None, NOT [] — the distinction is load-bearing. This list is `review_diff`'s
+    independent cross-check on the slicer, so an empty list reads as "the
+    slicer missed nothing" and makes that check silently vacuous for the whole
+    run. A safety net that quietly stops catching things is worse than no net,
+    because the rest of the design trusts it. None says "unknown" and gets
+    disclosed in the banner."""
     if not base_ref:
-        print("warning: BASE_REF not set, skipping blast-radius classification", file=sys.stderr)
-        return []
+        print("warning: BASE_REF not set, cannot cross-check slice coverage", file=sys.stderr)
+        return None
 
     result = subprocess.run(
         # core.quotePath=false so a non-ASCII path comes back in the same
@@ -205,23 +213,36 @@ def get_changed_files(base_ref: str | None) -> list[str]:
         check=False,
     )
     if result.returncode != 0:
-        print(f"warning: git diff failed, skipping blast-radius classification: {result.stderr}", file=sys.stderr)
-        return []
+        print(
+            f"warning: git diff failed, slice coverage cannot be cross-checked: "
+            f"{safe_error_text(result.stderr)}",
+            file=sys.stderr,
+        )
+        return None
 
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
 # git C-quotes any path with non-ASCII bytes, quotes, or control characters
 # (`core.quotePath`, on by default): `diff --git "a/caf\303\251.ts" "b/..."`.
-# A regex that only knows the bare `a/... b/...` form silently fails to match
-# those, and in `split_diff_into_slices` the file's whole body then merges
-# into the PREVIOUS file's block — one file's content reviewed under another
-# file's name, with nothing saying so. Both forms are matched here; the
-# workflow additionally sets `core.quotePath=false` so the quoted form should
-# not arise in the first place.
+# A pattern that only knows the bare `a/... b/...` form silently fails to
+# match those, and in `split_diff_into_slices` the file's whole body then
+# merges into the PREVIOUS file's block — one file's content reviewed under
+# another file's name, with nothing saying so. The workflow additionally sets
+# `core.quotePath=false` so the quoted forms should not arise in the first
+# place.
 _QUOTED_PATH = r'"(?:[^"\\]|\\.)*"'
-_DIFF_GIT_QUOTED = re.compile(rf"^diff --git ({_QUOTED_PATH}) ({_QUOTED_PATH})$")
 _DIFF_GIT_PREFIX = "diff --git "
+
+# git quotes each side INDEPENDENTLY, so a rename can quote one and not the
+# other: `diff --git a/plain.ts "b/caf\303\251.ts"`. All four combinations are
+# matched, in most-specific-first order; the both-bare case falls through to
+# the ` b/` split below.
+_DIFF_GIT_FORMS = (
+    re.compile(rf"^({_QUOTED_PATH}) ({_QUOTED_PATH})$"),  # both quoted
+    re.compile(rf"^({_QUOTED_PATH}) (b/.+)$"),  # old quoted, new bare
+    re.compile(rf"^(a/.+?) ({_QUOTED_PATH})$"),  # old bare, new quoted
+)
 
 _C_ESCAPES = {
     "a": "\a", "b": "\b", "f": "\f", "n": "\n",
@@ -270,26 +291,30 @@ def _unquote_git_path(token: str, prefix: str) -> str:
 
 
 def diff_git_paths(raw_line: str) -> tuple[str, str] | None:
-    """(old_path, new_path) from a `diff --git` line, quoted form included.
+    """(old_path, new_path) from a `diff --git` line.
 
-    The unquoted form `diff --git a/X b/Y` is genuinely ambiguous when a path
-    contains the literal `" b/"` — git emits it anyway. Splitting at the first
-    occurrence gets it wrong (both paths come out wrong, and the file is then
-    tracked under a mangled name); so the equal-paths split is preferred
-    first, which resolves every case except a rename where the path also
-    contains `" b/"`. That residue is unresolvable from this line alone, and
-    it fails safe: the coverage cross-check reports the file as unsliced."""
+    Handles all four quoting combinations, because git quotes each side
+    independently — a rename can quote only the new path.
+
+    The both-bare form `diff --git a/X b/Y` is genuinely ambiguous when a path
+    contains the literal `" b/"`; git emits it anyway. Splitting at the first
+    occurrence gets it wrong (BOTH paths come out wrong, and the file is then
+    tracked under a mangled name), so the equal-paths split is preferred
+    first. That resolves everything except a rename where the path also
+    contains `" b/"` — unresolvable from this line alone, and it fails safe:
+    the coverage cross-check reports the file as unsliced."""
     if not raw_line.startswith(_DIFF_GIT_PREFIX):
         return None
 
-    quoted = _DIFF_GIT_QUOTED.match(raw_line)
-    if quoted:
-        return (
-            _unquote_git_path(quoted.group(1), "a/"),
-            _unquote_git_path(quoted.group(2), "b/"),
-        )
-
     rest = raw_line[len(_DIFF_GIT_PREFIX) :]
+    for form in _DIFF_GIT_FORMS:
+        match = form.match(rest)
+        if match:
+            return (
+                _unquote_git_path(match.group(1), "a/"),
+                _unquote_git_path(match.group(2), "b/"),
+            )
+
     if not rest.startswith("a/"):
         return None
     splits = [m.start() for m in re.finditer(r" b/", rest)]
@@ -475,23 +500,49 @@ class ReviewCoverage(NamedTuple):
     #: of dropping it, but the banner must then say the page contains
     #: findings from a slice it also calls unreviewed.
     partial_comments: int = 0
+    #: The independent cross-check on the slicer could not run. Distinct from
+    #: `skipped`, which is content KNOWN to be unread — here everything may
+    #: well have been reviewed, we just cannot demonstrate it. Kept separate so
+    #: the banner states whichever is actually true instead of claiming lost
+    #: content that may not exist.
+    coverage_unverified: bool = False
+
+    @property
+    def content_was_lost(self) -> bool:
+        return bool(self.skipped) or self.slices_reviewed < self.slices_total
 
     @property
     def is_complete(self) -> bool:
-        return not self.skipped and self.slices_reviewed >= self.slices_total
+        return not self.content_was_lost and not self.coverage_unverified
 
     def disclosure(self) -> str:
         """Markdown banner naming exactly what went unread. Empty when the
-        whole diff was reviewed."""
+        whole diff was reviewed and that could be verified."""
         if self.is_complete:
             return ""
-        lines = [
-            "> [!WARNING]",
-            "> **Partial review — this is NOT a whole-PR verdict.** Part of the diff was "
-            f"never read by this reviewer ({self.slices_reviewed}/{self.slices_total} "
-            "slices reviewed). Treat silence about the rest as absence of evidence, not "
-            "evidence of absence.",
-        ]
+        if self.content_was_lost:
+            headline = (
+                "> **Partial review — this is NOT a whole-PR verdict.** Part of the diff was "
+                f"never read by this reviewer ({self.slices_reviewed}/{self.slices_total} "
+                "slices reviewed). Treat silence about the rest as absence of evidence, not "
+                "evidence of absence."
+            )
+        else:
+            # Every slice came back, so claiming lost content here would be its
+            # own false statement — the defect this banner exists to prevent.
+            headline = (
+                "> **Unverified coverage — this is NOT a whole-PR verdict.** Every slice was "
+                f"reviewed ({self.slices_reviewed}/{self.slices_total}), but the independent "
+                "check that no file was missed could not run, so full coverage cannot be "
+                "demonstrated."
+            )
+        lines = ["> [!WARNING]", headline]
+        if self.coverage_unverified:
+            lines.append(
+                "> - The changed-file list could not be determined, so slice coverage was "
+                "NOT independently cross-checked — a file the slicer missed would not have "
+                "been detected on this run."
+            )
         failed = self.slices_total - self.slices_reviewed - self.failures_explained
         if failed > 0:
             lines.append(f"> - {failed} diff slice(s) produced no usable review.")
@@ -504,7 +555,11 @@ class ReviewCoverage(NamedTuple):
                 f"an anchored finding is still worth reading — not evidence that the rest of "
                 f"that slice is clean."
             )
-        lines.append("> - The verdict is capped below APPROVE while any of the diff is unread.")
+        lines.append(
+            "> - The verdict is capped below APPROVE while any of the diff is unread."
+            if self.content_was_lost
+            else "> - The verdict is capped below APPROVE while coverage is unverified."
+        )
         return "\n".join(lines)
 
 
@@ -791,7 +846,7 @@ def merge_model_results(results: list[dict], slice_files: list[tuple[str, ...]])
 
 def review_diff(
     diff_text: str,
-    changed_files: list[str],
+    changed_files: list[str] | None,
     *,
     call: Callable[..., dict] | None = None,
     max_chars: int = MAX_SLICE_CHARS,
@@ -818,12 +873,23 @@ def review_diff(
     sliced_files = {f for s in plan.slices for f in s.files}
     already_disclosed = set(plan.skipped_files)
     unsliced = [
-        f for f in changed_files if f not in sliced_files and f not in already_disclosed
+        f
+        for f in (changed_files or ())
+        if f not in sliced_files and f not in already_disclosed
     ]
     # `extra_skipped` carries losses that happened before slicing — the
     # read-time ceiling in `read_capped_diff`. They belong in the same banner
     # as everything else that went unread.
     skipped = list(extra_skipped) + list(plan.skipped)
+    # None means the caller could not determine the file list (git failed).
+    # Silently treating that as "nothing missing" would make the cross-check
+    # vacuous for the entire run while the banner still implied full coverage
+    # — a safety net that has quietly stopped catching anything is worse than
+    # no net, because everything downstream trusts it.
+    # Kept OUT of `skipped`: that list is content known to be unread, and this
+    # is not — everything may have been reviewed, we just cannot show it. The
+    # banner renders it as its own line with its own headline.
+    coverage_unverified = changed_files is None and bool(plan.slices)
     if unsliced:
         skipped.append(
             f"{len(unsliced)} changed file(s) matched no diff slice and were NOT "
@@ -924,6 +990,7 @@ def review_diff(
         # separate losses.
         failures_explained=len(fatal_errors),
         partial_comments=merged.get("partial_comments", 0),
+        coverage_unverified=coverage_unverified,
     )
     # The FULL diff, not the slice: a comment is anchorable if the line is in
     # any hunk of the PR, and the merged comments span every slice.

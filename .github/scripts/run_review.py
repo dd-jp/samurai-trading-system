@@ -21,6 +21,11 @@ def main() -> None:
     base_ref = os.environ.get("BASE_REF")
     # workflow_dispatch has no github.base_ref, so the `origin/<base>...HEAD`
     # range doesn't resolve; read the file list out of the diff instead.
+    #
+    # `get_changed_files` can return None when git fails. That None is passed
+    # STRAIGHT THROUGH — never defaulted to [] — because review_diff needs to
+    # tell "no files missing" from "we could not check", and only the second
+    # of those belongs in the disclosure banner.
     changed_files = get_changed_files(base_ref) if base_ref else changed_files_from_diff(diff)
 
     payload = review_diff(

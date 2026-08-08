@@ -1140,6 +1140,88 @@ def test_the_slice_cap_also_suppresses_the_duplicate_listing():
         assert summary.count(path) == 1
 
 
+def test_git_failure_makes_the_file_list_unknown_not_empty():
+    """[] would read as 'the slicer missed nothing' and make the cross-check
+    silently vacuous for the whole run."""
+
+    class Failed:
+        returncode = 1
+        stdout = ""
+        stderr = "fatal: bad revision 'origin/main...HEAD'"
+
+    original = review_lib.subprocess.run
+    try:
+        review_lib.subprocess.run = lambda *a, **k: Failed()
+        assert review_lib.get_changed_files("main") is None
+    finally:
+        review_lib.subprocess.run = original
+
+    # And the no-base-ref case is 'unknown' for the same reason.
+    assert review_lib.get_changed_files("") is None
+
+
+def test_an_unknown_file_list_is_disclosed_rather_than_trusted():
+    """The cross-check is the net the rest of the design leans on. A net that
+    has quietly stopped catching things is worse than no net."""
+
+    def fake_call(diff, changed_files, **kwargs):
+        return {"summary_markdown": "", "inline_comments": [], "verdict": "APPROVE"}
+
+    payload = review_lib.review_diff(DIFF, None, call=fake_call)
+    summary = payload["summary_markdown"]
+
+    assert "NOT independently cross-checked" in summary
+    assert payload["verdict"] != "APPROVE"
+    assert payload["event"] == "COMMENT"
+    # The headline must state THIS failure, not invent a different one: every
+    # slice was in fact reviewed, so "part of the diff was never read" would
+    # be its own false claim — the exact defect this banner exists to prevent.
+    assert "Unverified coverage" in summary
+    assert "Partial review" not in summary
+    assert "1/1" in summary
+
+
+def test_real_content_loss_still_gets_the_partial_headline():
+    """The two headlines must not blur: when content really was unread, the
+    banner has to say so rather than downgrade to 'unverified'."""
+    diff = _file_diff("src/a.ts", lines_per_hunk=40) + _file_diff("src/b.ts", lines_per_hunk=40)
+    calls = []
+
+    def fake_call(diff, changed_files, **kwargs):
+        calls.append(1)
+        if len(calls) == 2:
+            return {"summary_markdown": "", "inline_comments": [], "verdict": None}
+        return {"summary_markdown": "", "inline_comments": [], "verdict": "APPROVE"}
+
+    payload = review_lib.review_diff(diff, None, call=fake_call, max_chars=1200)
+    summary = payload["summary_markdown"]
+
+    assert "Partial review" in summary
+    assert "Unverified coverage" not in summary
+    # …and the unverified cross-check is still listed as its own line.
+    assert "NOT independently cross-checked" in summary
+
+
+def test_a_known_empty_file_list_is_not_treated_as_a_git_failure():
+    """[] from a caller that genuinely has no list to offer is not the same
+    signal, and must not raise a false alarm on every dispatch run."""
+
+    def fake_call(diff, changed_files, **kwargs):
+        return {"summary_markdown": "", "inline_comments": [], "verdict": "APPROVE"}
+
+    payload = review_lib.review_diff(DIFF, [], call=fake_call)
+
+    assert "cross-checked" not in payload["summary_markdown"]
+    assert payload["event"] == "APPROVE"
+
+
+def test_an_unknown_file_list_on_an_empty_diff_says_nothing_extra():
+    payload = review_lib.review_diff("", None, call=lambda **_k: None)
+
+    assert "cross-checked" not in payload["summary_markdown"]
+    assert "No diff detected" in payload["summary_markdown"]
+
+
 def test_a_genuinely_unexplained_missing_file_is_still_reported():
     """Suppressing duplicates must not suppress the case the cross-check
     exists for: a file missing with no reason given."""
@@ -1215,6 +1297,48 @@ def test_a_c_quoted_file_does_not_merge_into_the_previous_files_slice():
 
     assert len(plan.slices) == 1
     assert plan.slices[0].files == ("src/trader/x.ts", "src/trader/café.ts")
+    assert plan.skipped == []
+
+
+def test_all_four_quoting_combinations_parse():
+    """git quotes each side INDEPENDENTLY, so a rename can quote only one of
+    them. Every line below is real `git diff` output, reduced."""
+    cases = [
+        # both bare
+        ("diff --git a/src/x.ts b/src/x.ts", ("src/x.ts", "src/x.ts")),
+        ("diff --git a/old.ts b/new.ts", ("old.ts", "new.ts")),
+        # both quoted
+        (
+            'diff --git "a/caf\\303\\251.ts" "b/caf\\303\\251.ts"',
+            ("café.ts", "café.ts"),
+        ),
+        # bare -> quoted rename (git mv plain.ts café.ts)
+        ('diff --git a/plain.ts "b/caf\\303\\251.ts"', ("plain.ts", "café.ts")),
+        # quoted -> bare rename (git mv café.ts plain2.ts)
+        ('diff --git "a/caf\\303\\251.ts" b/plain2.ts', ("café.ts", "plain2.ts")),
+    ]
+    for line, expected in cases:
+        assert review_lib.diff_git_paths(line) == expected, line
+
+
+def test_a_mixed_quoted_rename_does_not_merge_into_the_previous_file():
+    """The failure the both-quoted-only pattern left open: the header matched
+    nothing, so this file's whole body was appended to the PREVIOUS file's
+    block and reviewed under that file's name."""
+    mixed = (
+        'diff --git a/plain.ts "b/caf\\303\\251.ts"\n'
+        "--- a/plain.ts\n"
+        '+++ "b/caf\\303\\251.ts"\n'
+        "@@ -1,1 +1,2 @@\n const a = 1;\n+const b = 2;\n"
+    )
+
+    plan = review_lib.split_diff_into_slices(DIFF + mixed)
+
+    assert plan.slices[0].files == ("src/trader/x.ts", "café.ts")
+    assert review_lib.changed_files_from_diff(DIFF + mixed) == [
+        "src/trader/x.ts",
+        "café.ts",
+    ]
     assert plan.skipped == []
 
 
