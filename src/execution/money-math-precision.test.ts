@@ -306,6 +306,7 @@ function makeInput(broker: BrokerAdapter, store: TestExecutionStore): ExecutionI
     residualExposureAlerts: { postResidualExposureAlert: async () => {} },
     flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
     flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
+    logger: { log: () => {} },
   };
 }
 

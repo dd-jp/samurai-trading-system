@@ -50,7 +50,9 @@
  * flatten's outcome rather than gaining a sibling type — see
  * `ReconcileDivergence`'s own doc (types/execution.ts) for why.
  */
+
 import type { OpenPosition, OrderState } from '../shared/index.js';
+import { safeLog } from '../shared/index.js';
 import type {
   ExecutionInput,
   ReconcileDivergence,
@@ -236,7 +238,24 @@ async function postFlattenReconcileAlert(
       observed_at: now,
     });
   } catch {
-    // Nothing left to do — see `ResidualExposureAlert`'s doc for the same posture.
+    // The reconcile pass this alert reports on already completed — nothing
+    // to undo here, see `ResidualExposureAlert`'s doc for the same posture.
+    // #573: traced locally now — this IS the fallback failing, so without
+    // this an unresolved flatten's genuine ambiguity is invisible even to
+    // someone reading the log. Fixed, self-authored message, never the
+    // channel's own error — the same CREDENTIALS posture
+    // `alertResidualExposure`'s own channel-failure catch takes
+    // (ingest-fills.ts): a Telegram/Discord transport failure quotes the
+    // request it failed on, which can carry a bot token.
+    safeLog(input.logger, {
+      trace_id: input.trace_id,
+      stage: 'execution',
+      level: 'error',
+      message:
+        'postFlattenReconcileAlert delivery failed — an unresolved flatten stays genuinely ' +
+        'ambiguous and the operator was not paged; check the venue by hand',
+      payload: { idempotency_key: row.idempotency_key, instrument: row.instrument },
+    });
   }
 }
 

@@ -8,7 +8,8 @@
  */
 import type { CostModel } from '../cost-model-backtest/index.js';
 import type { MarketDataService } from '../market-data-service/index.js';
-import type { Clock, OpenPosition, OrderIntent } from '../shared/index.js';
+import type { Clock, Logger, OpenPosition, OrderIntent } from '../shared/index.js';
+import { recordingLogger } from '../shared/recording-logger.js';
 import type { VerdictDecision } from '../verdict/index.js';
 import { ExecutionImpl } from './execute.js';
 import { openTestExecutionStore, type TestExecutionStore } from './sqlite-store-harness.js';
@@ -188,6 +189,7 @@ function makeInput(
   flattenReconcileAlerts: FlattenReconcileAlertChannel = {
     postFlattenReconcileAlert: async () => {},
   },
+  logger: Logger = recordingLogger(),
 ): ExecutionInput {
   const config: ExecutionConfig = {
     simulated: {
@@ -215,6 +217,7 @@ function makeInput(
     residualExposureAlerts: { postResidualExposureAlert: async () => {} },
     flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
     flattenReconcileAlerts,
+    logger,
   };
 }
 
@@ -626,6 +629,69 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     expect(alerts).toEqual([
       expect.objectContaining({ idempotency_key: FLATTEN_KEY, reason: 'venue unreachable' }),
     ]);
+  });
+
+  // #573: before this ticket, a failure of the fallback alert ITSELF (as
+  // opposed to the flatten it reports on) vanished with no trace at all —
+  // the store row is correctly left untouched either way, but nothing said
+  // the alert never reached anyone.
+  it('logs a fixed, self-authored message (never the channel error) when the fallback alert itself fails to deliver', async () => {
+    const { store } = openTestExecutionStore();
+    await writeAheadFlatten(store);
+    const broker = makeBroker();
+    broker.failFlattenLookup = 'venue unreachable';
+    // A Telegram/Discord transport failure quotes the request it failed on,
+    // which can carry a bot token — this text must never reach the log.
+    const failingFlattenReconcileAlerts: FlattenReconcileAlertChannel = {
+      postFlattenReconcileAlert: async () => {
+        throw new Error('Bearer super-secret-transport-token rejected the request');
+      },
+    };
+    const logger = recordingLogger();
+
+    const report = await new ExecutionImpl(
+      makeInput(store, broker, failingFlattenReconcileAlerts, logger),
+    ).reconcile();
+
+    // The row-level outcome is unaffected by the alert's own delivery
+    // failure — same as the adapter-unreachable case above.
+    expect(report.divergences[0]).toMatchObject({
+      idempotency_key: FLATTEN_KEY,
+      action: 'undetermined',
+    });
+    const entry = logger.entries.find((e) =>
+      e.message.includes('postFlattenReconcileAlert delivery failed'),
+    );
+    expect(entry).toMatchObject({
+      level: 'error',
+      payload: { idempotency_key: FLATTEN_KEY, instrument: 'AAPL' },
+    });
+    expect(JSON.stringify(entry)).not.toContain('super-secret-transport-token');
+  });
+
+  it('survives a throwing logger on the fallback-alert-failure path — reconcile still resolves', async () => {
+    const { store } = openTestExecutionStore();
+    await writeAheadFlatten(store);
+    const broker = makeBroker();
+    broker.failFlattenLookup = 'venue unreachable';
+    const failingFlattenReconcileAlerts: FlattenReconcileAlertChannel = {
+      postFlattenReconcileAlert: async () => {
+        throw new Error('transport down');
+      },
+    };
+    const throwingLogger: Logger = {
+      log: () => {
+        throw new Error('EPIPE');
+      },
+    };
+
+    await expect(
+      new ExecutionImpl(
+        makeInput(store, broker, failingFlattenReconcileAlerts, throwingLogger),
+      ).reconcile(),
+    ).resolves.toMatchObject({
+      divergences: [expect.objectContaining({ action: 'undetermined' })],
+    });
   });
 
   it('does not re-poll a row once markFlattenFillsSwept has run — the #519/#526 bound (migration 0023)', async () => {

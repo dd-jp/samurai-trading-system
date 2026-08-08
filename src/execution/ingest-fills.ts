@@ -46,7 +46,9 @@
  * failure on its own, which resolves the poll rather than rejecting it (see
  * `throwContainedFailures`'s own doc).
  */
+
 import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../shared/index.js';
+import { logCaughtFailure, safeLog } from '../shared/index.js';
 import type { ExecutionInput, NormalizedFill } from './types.js';
 
 /** A fill on a protective/closing leg — anything that isn't opening the lot. */
@@ -140,11 +142,27 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
       // poll's promise. It still travels in `failures`, so it is NAMED in the
       // AggregateError whenever a genuinely correctness-critical failure ALSO
       // happened this same poll — nothing here hides it from that report.
-      // Only a mark failure entirely on its own resolves quietly: this module
-      // carries no `Logger` of its own to write a standalone line to, and a
-      // poll that advanced every lot and attempted every flatten it could
-      // must not be reported as failed over a bookkeeping retry that heals
-      // itself on the very next reconcile() pass.
+      // Only a mark failure entirely on its own resolves without REJECTING the
+      // poll's promise (#519/#526's gate below) — but it no longer resolves
+      // SILENTLY (#573): this module now carries a `Logger`
+      // (`ExecutionInput.logger`), so the row staying unswept gets a local
+      // trace even when nothing else this poll failed to name it in an
+      // AggregateError. `warn`, not `error`: the self-healing next-reconcile()
+      // recovery this comment already describes is exactly why this is not
+      // an operator escalation.
+      logCaughtFailure(
+        input.logger,
+        {
+          trace_id: input.trace_id,
+          stage: 'execution',
+          level: 'warn',
+          message:
+            'markFlattenFillsSwept failed — the row stays unswept and will be found again by ' +
+            "the next reconcile() pass (SharedStore.getUnresolvedFlattens()'s own designed recovery)",
+        },
+        error,
+        { flatten_key: flattenKey },
+      );
       failures.push({ scope: 'flatten-sweep-mark', key: flattenKey, error });
     }
   }
@@ -176,10 +194,10 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
  * indefinitely, looking in the logs exactly like a quiet market.
  *
  * Nothing that constructs one of these may throw. A containment guard that can
- * re-throw reopens exactly the hole it closes — the property `safeLog()`
- * (orchestrator/tick-loop.ts) and `alertResidualExposure` below are built
- * around. So the `catch` blocks push and do nothing else: no formatting, no
- * inspection of the caught error, no I/O.
+ * re-throw reopens exactly the hole it closes — the property `shared/safe-log.ts`'s
+ * `safeLog()` and `alertResidualExposure` below are built around. So the
+ * `catch` blocks push and do nothing else: no formatting, no inspection of
+ * the caught error, no I/O.
  */
 interface ContainedFailure {
   /**
@@ -600,7 +618,11 @@ async function redistributeOneFlatten(
         // duplicate warn costs a grep; a wrongly-suppressed one costs the
         // trace this ticket exists to create — the same asymmetry
         // `maybeRearmResidual`'s upper-bound reasoning (#569 review) already
-        // takes elsewhere in this file.
+        // takes elsewhere in this file. And deliberately UNLOGGED (#573): the
+        // `postFlattenOverfillWarning` call this `hasFill` check gates is
+        // itself the trace — defaulting to warning guarantees it still fires,
+        // so a `logCaughtFailure` call here would only ever be a duplicate of
+        // that one, on a path that already runs once per raw fill.
         alreadyWarned = false;
       }
 
@@ -623,7 +645,23 @@ async function redistributeOneFlatten(
             observed_at: input.clock.now(),
           });
         } catch {
-          // Nothing left to do — see the comment above.
+          // The redistribution itself is unaffected — see the comment above
+          // for why this stays swallowed rather than contained. #573: now
+          // traced locally with a FIXED, self-authored message rather than
+          // the channel's own error — `alpaca-adapter.ts`'s
+          // `escalateAgedUnpricedFills` sets the precedent this follows: a
+          // Telegram/Discord transport failure quotes the request it failed
+          // on, and that URL can carry a bot token, so the channel's error is
+          // read and discarded, never logged.
+          safeLog(input.logger, {
+            trace_id: input.trace_id,
+            stage: 'execution',
+            level: 'warn',
+            message:
+              'flatten-overfill alert delivery failed — the overfill itself was still dropped ' +
+              'as designed; this only lost the diagnostic line about it',
+            payload: { flatten_client_order_id: clientOrderId, unattributed_qty: leftover },
+          });
         }
       }
     }
@@ -778,7 +816,8 @@ async function advanceLot(
  * cannot be attempted safely. Never throws: every failure this function can
  * observe — the store read on the `known === undefined` path, the broker
  * call rejecting, the alert channel itself failing — is swallowed here, the
- * same posture `safeLog()` takes in orchestrator/tick-loop.ts, so a flaky
+ * same posture `shared/safe-log.ts`'s `safeLog()`/`logCaughtFailure()` take
+ * on the logging calls this function ALSO makes now (#573) — so a flaky
  * store, a flaky re-arm, or a flaky alert transport can never escape into
  * `advanceLot` and abort `ingestFills`' per-lot loop for every OTHER lot the
  * same poll has yet to reach.
@@ -802,7 +841,32 @@ async function maybeRearmResidual(
     let recorded: Fill[];
     try {
       recorded = await store.getFills(position.idempotency_key);
-    } catch {
+    } catch (error) {
+      // #573: this is THE local diagnostic trace `ResidualExposureAlert`
+      // cannot carry — its CREDENTIALS note (below) forbids a caught error's
+      // text in the alert payload, so without this the operator saw a
+      // flagged upper-bound estimate with no way to tell WHY the exact
+      // figure was unavailable. `logCaughtFailure`, not `safeLog`: the
+      // store's own error text IS the deliverable here, unlike the alert/
+      // channel failures elsewhere in this file (`ResidualExposureAlert`'s
+      // CREDENTIALS note is about what a downstream ALERT TRANSPORT can leak
+      // — Telegram/Discord quoting the failed request — not about a local
+      // store-driver error, which carries no such transport detail; #297's
+      // H1 precedent `reconcileLot` (reconcile.ts) already cites applies the
+      // same way here).
+      logCaughtFailure(
+        input.logger,
+        {
+          trace_id: input.trace_id,
+          stage: 'execution',
+          level: 'error',
+          message:
+            'maybeRearmResidual: store read failed while computing the exact residual after a ' +
+            'partial flatten — alerting with the upper-bound requested_size instead',
+        },
+        error,
+        { idempotency_key: position.idempotency_key },
+      );
       // The exact residual is unknowable without the read that just
       // failed — alerting with `requested_size` (the lot's own, always
       // in hand, untouched by this failure) rather than a smaller,
@@ -819,7 +883,8 @@ async function maybeRearmResidual(
       // residual (#569 review): without the flag a persistent store outage
       // reads as a stream of confident alerts, and an operator cannot tell
       // an estimate from a measurement. The caught error itself is not
-      // forwarded — see `ResidualExposureAlert`'s CREDENTIALS note.
+      // forwarded to the ALERT — see `ResidualExposureAlert`'s CREDENTIALS
+      // note — but it IS now in the local log line just above.
       await alertResidualExposure(input, position, position.requested_size, now, true);
       return;
     }
@@ -861,11 +926,28 @@ async function maybeRearmResidual(
       position.stop,
       position.target,
     );
-  } catch {
-    // The broker's own error is not forwarded to the alert — see
+  } catch (error) {
+    // The broker's own error is not forwarded to the ALERT — see
     // `ResidualExposureAlert`'s CREDENTIALS note: this channel carries only
-    // fields chosen here, never broker error text. Losing the detail is
-    // fine; an operator reads the alert and checks the venue directly.
+    // fields chosen here, never broker error text. Losing the detail there
+    // is fine; an operator reads the alert and checks the venue directly.
+    //
+    // #573: safe to put in the LOCAL log, though, same as the store-read
+    // catch above — #297's H1 (cited by `reconcileLot`, reconcile.ts) makes
+    // every broker adapter convert what its client threw into a curated,
+    // credential-free error before it is visible here, so the credentialed
+    // original never reaches this catch either.
+    logCaughtFailure(
+      input.logger,
+      {
+        trace_id: input.trace_id,
+        stage: 'execution',
+        level: 'error',
+        message: 'maybeRearmResidual: broker.rearmProtectiveLegs failed — alerting instead',
+      },
+      error,
+      { idempotency_key: position.idempotency_key, residual_qty: residual },
+    );
     await alertResidualExposure(input, position, residual, now);
   }
 }
@@ -875,7 +957,7 @@ async function maybeRearmResidual(
  * attempted. Fire-and-forget and fully swallowed on failure — the alert IS
  * the fallback, so there is nothing left to fall back to if delivering it
  * also fails; the caller (`maybeRearmResidual`) must keep running either
- * way, mirroring `safeLog()`'s reasoning in orchestrator/tick-loop.ts.
+ * way, the same reasoning `shared/safe-log.ts`'s `safeLog()` is built around.
  */
 async function alertResidualExposure(
   input: ExecutionInput,
@@ -901,7 +983,28 @@ async function alertResidualExposure(
       observed_at: now,
     });
   } catch {
-    // Nothing left to do — see this function's doc comment.
+    // The redistribution/advance this alert reports on already completed —
+    // see this function's doc comment for why that must not be undone here.
+    // #573: this IS the fallback failing, the most severe blind spot this
+    // whole file has — a residual is unprotected AND nobody was told, not
+    // even locally. Traced with a FIXED, self-authored message rather than
+    // the channel's own error (same CREDENTIALS posture as the
+    // flatten-overfill channel catch above, `escalateAgedUnpricedFills`'s
+    // precedent in alpaca-adapter.ts): a Telegram/Discord transport failure
+    // quotes the request it failed on, which can carry a bot token.
+    safeLog(input.logger, {
+      trace_id: input.trace_id,
+      stage: 'execution',
+      level: 'error',
+      message:
+        'postResidualExposureAlert delivery failed — a residual position is unprotected and ' +
+        'the operator was not paged; check the venue by hand',
+      payload: {
+        idempotency_key: position.idempotency_key,
+        residual_qty: residualQty,
+        residual_qty_is_upper_bound: residualQtyIsUpperBound,
+      },
+    });
   }
 }
 

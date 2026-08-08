@@ -7,7 +7,8 @@
  */
 import type { CostModel } from '../cost-model-backtest/index.js';
 import type { MarketDataService } from '../market-data-service/index.js';
-import type { Clock, OpenPosition } from '../shared/index.js';
+import type { Clock, Logger, OpenPosition } from '../shared/index.js';
+import { recordingLogger } from '../shared/recording-logger.js';
 import { ExecutionImpl } from './execute.js';
 import { openTestExecutionStore, TestExecutionStore } from './sqlite-store-harness.js';
 import type {
@@ -168,6 +169,7 @@ function makeInput(
   store: TestExecutionStore,
   residualExposureAlerts: ResidualExposureAlertChannel = makeResidualExposureAlerts(),
   flattenOverfillAlerts: FlattenOverfillAlertChannel = makeFlattenOverfillAlerts(),
+  logger: Logger = recordingLogger(),
 ): ExecutionInput {
   const config: ExecutionConfig = {
     simulated: {
@@ -194,6 +196,7 @@ function makeInput(
     flattenOverfillAlerts,
     // #519: `ingestFills()` never reconciles, so this is never posted to.
     flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
+    logger,
   };
 }
 
@@ -457,8 +460,11 @@ describe('ExecutionImpl.ingestFills', () => {
       ]);
       broker.rearmFailure = new Error('venue rejected the OCO order');
       const residualExposureAlerts = makeResidualExposureAlerts();
+      const logger = recordingLogger();
 
-      await new ExecutionImpl(makeInput(broker, store, residualExposureAlerts)).ingestFills();
+      await new ExecutionImpl(
+        makeInput(broker, store, residualExposureAlerts, undefined, logger),
+      ).ingestFills();
 
       expect(residualExposureAlerts.alerts).toEqual([
         {
@@ -479,6 +485,239 @@ describe('ExecutionImpl.ingestFills', () => {
       // throws, precisely so a broker/alert failure cannot prevent it.
       expect((await store.getPosition('key-1'))?.filled_size).toBe(10);
       expect(await store.getFills('key-1')).toHaveLength(2);
+      // #573: the broker's own error text — safe to surface locally (#297's
+      // H1) — is now a diagnosable local trace, distinct from the alert
+      // above, which never carries it (CREDENTIALS).
+      expect(logger.entries).toContainEqual(
+        expect.objectContaining({
+          level: 'error',
+          message: expect.stringContaining('broker.rearmProtectiveLegs failed'),
+          payload: expect.objectContaining({
+            idempotency_key: 'key-1',
+            residual_qty: 6,
+            error: 'venue rejected the OCO order',
+          }),
+        }),
+      );
+    });
+
+    it('survives a throwing logger on the re-arm-failure path — the alert is still posted and the fills still persist', async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store, { requested_size: 10, stop: 95, target: 110, side: 'buy' });
+      const broker = new ScriptedBroker([
+        fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100 }),
+        fill({
+          broker_fill_id: 'x1',
+          leg: 'exit',
+          qty: 4,
+          price: 98,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+      broker.rearmFailure = new Error('venue rejected the OCO order');
+      const residualExposureAlerts = makeResidualExposureAlerts();
+      // A real `Logger` can throw — `JsonLogger`'s own primary
+      // `process.stdout.write` is deliberately unguarded (EPIPE on a broken
+      // pipe, orchestrator/logger.ts). `maybeRearmResidual`'s whole contract
+      // is "never throws"; a logging call inside it must not be the thing
+      // that breaks that.
+      const throwingLogger: Logger = {
+        log: () => {
+          throw new Error('EPIPE');
+        },
+      };
+
+      await expect(
+        new ExecutionImpl(
+          makeInput(broker, store, residualExposureAlerts, undefined, throwingLogger),
+        ).ingestFills(),
+      ).resolves.toBeUndefined();
+
+      expect(residualExposureAlerts.alerts).toHaveLength(1);
+      expect(await store.getFills('key-1')).toHaveLength(2);
+    });
+  });
+
+  // #573: `maybeRearmResidual`'s store-read catch, exercised through the
+  // `known === undefined` path — a lot a flatten named but handed ZERO share
+  // of this poll's raw fill, so `advanceLot` reaches `maybeRearmResidual`
+  // with no fresher record in hand and has to read the store itself. Before
+  // this ticket the read's own failure was discarded with no message and no
+  // stack; this pins that it now leaves a local trace alongside the existing
+  // upper-bound alert (#569).
+  describe('store-read failure in the zero-new-fill re-arm path (#573)', () => {
+    it('logs the sanitized store error and the lot key when the store read fails, alongside the upper-bound alert', async () => {
+      const { db } = openTestExecutionStore();
+      // Throws ONLY for 'key-2', and only once ARMED — the first poll below
+      // has to persist key-2's own entry fill through this SAME `getFills`
+      // method (`advanceLot`'s main path, `newFills.length > 0`) before the
+      // scenario under test even exists, so the flakiness is armed only
+      // after that poll completes. 'key-1' (the sibling that absorbs the
+      // whole partial fill below) and every other store call stay
+      // unaffected throughout, so the failure is isolated to the exact read
+      // under test — key-2's `maybeRearmResidual` call on the SECOND poll.
+      class FlakyGetFillsForKey2 extends TestExecutionStore {
+        armed = false;
+        override async getFills(idempotencyKey: string) {
+          if (this.armed && idempotencyKey === 'key-2') {
+            throw new Error('SQLITE_BUSY: database is locked');
+          }
+          return super.getFills(idempotencyKey);
+        }
+      }
+      const store = new FlakyGetFillsForKey2(db);
+
+      // key-1 opens first (held 6), key-2 opens second (held 4) — the SAME
+      // "earlier-opened sibling absorbs the whole partial fill" shape
+      // `redistributeOneFlatten`'s own doc describes.
+      await seedPosition(store, {
+        idempotency_key: 'key-1',
+        requested_size: 6,
+        opened_at: OPENED_AT,
+      });
+      await seedPosition(store, {
+        idempotency_key: 'key-2',
+        requested_size: 4,
+        opened_at: new Date(OPENED_AT.getTime() + 1_000),
+      });
+      const entryOnly = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 6 }),
+        fill({ client_order_id: 'key-2', broker_fill_id: 'e2', leg: 'entry', qty: 4 }),
+      ]);
+      await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
+      store.armed = true;
+
+      // Journalled in opened_at order — the split loop allocates a raw fill
+      // to `lotKeys` in this order, oldest lot first.
+      await store.writeAheadFlatten({
+        idempotency_key: 'flatten-1',
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        side: 'sell',
+        size: 6,
+        submitted_at: OPENED_AT,
+        lot_held_quantities: [
+          { idempotency_key: 'key-1', held: 6 },
+          { idempotency_key: 'key-2', held: 4 },
+        ],
+      });
+      // The raw fill (qty 6) exactly covers key-1's own share, leaving
+      // key-2 with ZERO — named by the flatten, but with no new fill of its
+      // own this poll, which is what routes it through
+      // `maybeRearmResidual`'s `known === undefined` branch.
+      const withFlatten = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 6 }),
+        fill({ client_order_id: 'key-2', broker_fill_id: 'e2', leg: 'entry', qty: 4 }),
+        fill({
+          client_order_id: 'flatten-1',
+          broker_fill_id: 'f1',
+          leg: 'exit',
+          qty: 6,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+      const residualExposureAlerts = makeResidualExposureAlerts();
+      const logger = recordingLogger();
+
+      await new ExecutionImpl(
+        makeInput(withFlatten, store, residualExposureAlerts, undefined, logger),
+      ).ingestFills();
+
+      // The existing #569 behaviour is unchanged: an upper-bound alert for
+      // key-2, sized off its own `requested_size` since the exact residual
+      // was unreadable.
+      expect(residualExposureAlerts.alerts).toContainEqual(
+        expect.objectContaining({
+          idempotency_key: 'key-2',
+          residual_qty: 4,
+          residual_qty_is_upper_bound: true,
+        }),
+      );
+      // NEW (#573): a local trace naming WHY — absent before this ticket.
+      expect(logger.entries).toContainEqual(
+        expect.objectContaining({
+          level: 'error',
+          message: expect.stringContaining('store read failed'),
+          payload: expect.objectContaining({
+            idempotency_key: 'key-2',
+            error: 'SQLITE_BUSY: database is locked',
+          }),
+        }),
+      );
+      // key-1's own advance is unaffected by key-2's store failure — the
+      // per-lot containment this file's #575 section pins holds here too.
+      expect((await store.getPosition('key-1'))?.order_state).toBe('closed');
+    });
+
+    it('survives a throwing logger on the store-read-failure path — the upper-bound alert is still posted', async () => {
+      const { db } = openTestExecutionStore();
+      class FlakyGetFillsForKey2 extends TestExecutionStore {
+        armed = false;
+        override async getFills(idempotencyKey: string) {
+          if (this.armed && idempotencyKey === 'key-2') {
+            throw new Error('SQLITE_BUSY: database is locked');
+          }
+          return super.getFills(idempotencyKey);
+        }
+      }
+      const store = new FlakyGetFillsForKey2(db);
+
+      await seedPosition(store, {
+        idempotency_key: 'key-1',
+        requested_size: 6,
+        opened_at: OPENED_AT,
+      });
+      await seedPosition(store, {
+        idempotency_key: 'key-2',
+        requested_size: 4,
+        opened_at: new Date(OPENED_AT.getTime() + 1_000),
+      });
+      const entryOnly = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 6 }),
+        fill({ client_order_id: 'key-2', broker_fill_id: 'e2', leg: 'entry', qty: 4 }),
+      ]);
+      await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
+      store.armed = true;
+
+      await store.writeAheadFlatten({
+        idempotency_key: 'flatten-1',
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        side: 'sell',
+        size: 6,
+        submitted_at: OPENED_AT,
+        lot_held_quantities: [
+          { idempotency_key: 'key-1', held: 6 },
+          { idempotency_key: 'key-2', held: 4 },
+        ],
+      });
+      const withFlatten = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 6 }),
+        fill({ client_order_id: 'key-2', broker_fill_id: 'e2', leg: 'entry', qty: 4 }),
+        fill({
+          client_order_id: 'flatten-1',
+          broker_fill_id: 'f1',
+          leg: 'exit',
+          qty: 6,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+      const residualExposureAlerts = makeResidualExposureAlerts();
+      const throwingLogger: Logger = {
+        log: () => {
+          throw new Error('EPIPE');
+        },
+      };
+
+      await expect(
+        new ExecutionImpl(
+          makeInput(withFlatten, store, residualExposureAlerts, undefined, throwingLogger),
+        ).ingestFills(),
+      ).resolves.toBeUndefined();
+
+      expect(residualExposureAlerts.alerts).toContainEqual(
+        expect.objectContaining({ idempotency_key: 'key-2', residual_qty_is_upper_bound: true }),
+      );
     });
   });
 
@@ -894,11 +1133,13 @@ describe('ExecutionImpl.ingestFills', () => {
         }),
       ]);
 
+      const logger = recordingLogger();
+
       // Resolves, not rejects: every lot-relevant piece of work this poll
       // could do, it did — only the best-effort sweep-mark bookkeeping
       // failed, and that alone must not read as a failed poll.
       await expect(
-        new ExecutionImpl(makeInput(broker, store)).ingestFills(),
+        new ExecutionImpl(makeInput(broker, store, undefined, undefined, logger)).ingestFills(),
       ).resolves.toBeUndefined();
 
       // The money-relevant work still landed: the lot closed and its
@@ -911,6 +1152,20 @@ describe('ExecutionImpl.ingestFills', () => {
       expect(await store.getUnresolvedFlattens()).toEqual([
         { idempotency_key: 'flatten-1', instrument: 'AAPL', status: 'submitted' },
       ]);
+      // #573: before this ticket this failure "resolved quietly" — no local
+      // trace at all when it was the ONLY failure this poll (the comment on
+      // this catch, ingest-fills.ts, used to say so explicitly: "this module
+      // carries no Logger of its own"). Now it does.
+      expect(logger.entries).toContainEqual(
+        expect.objectContaining({
+          level: 'warn',
+          message: expect.stringContaining('markFlattenFillsSwept failed'),
+          payload: expect.objectContaining({
+            flatten_key: 'flatten-1',
+            error: 'simulated store outage on markFlattenFillsSwept',
+          }),
+        }),
+      );
     });
   });
 
@@ -1056,6 +1311,111 @@ describe('ExecutionImpl.ingestFills', () => {
       ).ingestFills();
 
       expect(flattenOverfillAlerts.warnings).toEqual([]);
+    });
+
+    it('logs a fixed, self-authored message (never the channel error) when overfill alert delivery itself fails', async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
+
+      const entryOnly = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+      ]);
+      await new ExecutionImpl(makeInput(entryOnly, store)).ingestFills();
+
+      await store.writeAheadFlatten({
+        idempotency_key: 'flatten-1',
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        side: 'sell',
+        size: 6,
+        submitted_at: OPENED_AT,
+        lot_held_quantities: [{ idempotency_key: 'key-1', held: 6 }],
+      });
+      const withFlatten = new ScriptedBroker([
+        fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
+        fill({
+          client_order_id: 'flatten-1',
+          broker_fill_id: 'f1',
+          leg: 'exit',
+          qty: 10,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+      // A Telegram/Discord transport failure quotes the request it failed
+      // on, which can carry a bot token (`escalateAgedUnpricedFills`'s
+      // precedent, alpaca-adapter.ts) — this error's text must never reach
+      // the log.
+      const failingFlattenOverfillAlerts: FlattenOverfillAlertChannel = {
+        postFlattenOverfillWarning: async () => {
+          throw new Error('Bearer super-secret-transport-token rejected the request');
+        },
+      };
+      const logger = recordingLogger();
+
+      // Does not throw: the redistribution itself still completes — see
+      // `redistributeOneFlatten`'s doc.
+      await expect(
+        new ExecutionImpl(
+          makeInput(withFlatten, store, undefined, failingFlattenOverfillAlerts, logger),
+        ).ingestFills(),
+      ).resolves.toBeUndefined();
+
+      const entry = logger.entries.find((e) => e.message.includes('overfill alert delivery'));
+      expect(entry).toMatchObject({
+        level: 'warn',
+        payload: { flatten_client_order_id: 'flatten-1', unattributed_qty: 4 },
+      });
+      // The channel's own error text — which could carry a credential — must
+      // never appear anywhere in the logged entry.
+      expect(JSON.stringify(entry)).not.toContain('super-secret-transport-token');
+    });
+  });
+
+  // #573: the LAST channel in the residual-exposure fallback chain failing —
+  // the most severe blind spot in this file before this ticket, since a
+  // residual is both unprotected AND nobody, not even a local log reader,
+  // was told.
+  describe('residual-exposure alert delivery itself failing (#573)', () => {
+    it('logs a fixed, self-authored message (never the channel error) when the fallback alert cannot be delivered', async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store, { requested_size: 10, stop: 95, target: 110, side: 'buy' });
+      const broker = new ScriptedBroker([
+        fill({ broker_fill_id: 'e1', leg: 'entry', qty: 10, price: 100 }),
+        fill({
+          broker_fill_id: 'x1',
+          leg: 'exit',
+          qty: 4,
+          price: 98,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+      broker.rearmFailure = new Error('venue rejected the OCO order');
+      const failingResidualExposureAlerts: ResidualExposureAlertChannel = {
+        postResidualExposureAlert: async () => {
+          throw new Error('Bearer super-secret-transport-token rejected the request');
+        },
+      };
+      const logger = recordingLogger();
+
+      // Does not throw: `maybeRearmResidual`'s whole contract is "never
+      // throws" — a failed fallback must not cost the fills or lot state
+      // either.
+      await expect(
+        new ExecutionImpl(
+          makeInput(broker, store, failingResidualExposureAlerts, undefined, logger),
+        ).ingestFills(),
+      ).resolves.toBeUndefined();
+
+      expect((await store.getPosition('key-1'))?.filled_size).toBe(10);
+
+      const entry = logger.entries.find((e) =>
+        e.message.includes('postResidualExposureAlert delivery failed'),
+      );
+      expect(entry).toMatchObject({
+        level: 'error',
+        payload: { idempotency_key: 'key-1', residual_qty: 6, residual_qty_is_upper_bound: false },
+      });
+      expect(JSON.stringify(entry)).not.toContain('super-secret-transport-token');
     });
   });
 });

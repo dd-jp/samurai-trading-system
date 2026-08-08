@@ -770,6 +770,10 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // make an unresolved flatten's ambiguity invisible again.
     flattenReconcileAlerts:
       config.flattenReconcileAlerts ?? new LoggingFlattenReconcileAlertChannel(logger),
+    // #573: the execution port's own local diagnostic trace — see
+    // `ExecutionInput.logger`'s decision doc. Required, so a composition
+    // root that forgets it is a `tsc` error rather than a silent gap.
+    logger,
   };
 
   // #464, retargeted at Nous by ADR-0009. The off switch used to be the
