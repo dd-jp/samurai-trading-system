@@ -34,13 +34,21 @@ const DEFAULT_PORT = 8788;
  * unparseable value fails inside the socket layer with a message that names
  * neither the variable nor this process, and the Playwright output would show
  * only "webServer was not able to start".
+ *
+ * `0` is rejected for the same reason it is legal elsewhere. It asks the OS for
+ * an ephemeral port, which is exactly right for a test that reads the bound
+ * port back — and useless here, because Playwright probes a URL fixed in
+ * `playwright.config.ts`. The server would come up healthy on a port nothing
+ * looks at and the run would die on an opaque readiness timeout.
  */
 function resolvePort(): number {
   const raw = process.env.PORT;
   if (raw === undefined || raw === '') return DEFAULT_PORT;
   const port = Number(raw);
-  if (!Number.isInteger(port) || port < 0 || port > 65_535) {
-    throw new Error(`PORT is not a usable port number: "${raw}"`);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error(
+      `fixture server refuses PORT="${raw}": it must be an integer in 1-65535 (0 would bind an ephemeral port the harness URL could never reach)`,
+    );
   }
   return port;
 }
