@@ -16,7 +16,7 @@
  */
 
 import type { MetricsSuite } from '../cost-model-backtest/index.js';
-import type { AnalystContribution, Direction } from '../debate-engine/index.js';
+import type { AnalystContribution } from '../debate-engine/index.js';
 import type { Mark } from '../market-data-service/index.js';
 import type { DebateLog, OpenPosition } from '../shared/index.js';
 import type { PipelineStage } from './pipeline-types.js';
@@ -175,10 +175,45 @@ const RECENT_DEBATES: DebateLog[] = [
 ];
 
 /**
- * A recorded round history: at least one round, oldest first, and as many
- * entries as the owning debate's `rounds` (#618).
+ * A recorded stance history has one entry per debate round — otherwise the
+ * fixtures depict a 3-round debate with a 1-square strip (#618). An EMPTY
+ * history is the recorded-none case and is legal at any round count; it is
+ * "nothing was recorded", not a history that ran short.
+ *
+ * Checked at module load so editing a debate's `rounds` without its stance
+ * arrays (or the reverse) fails at import in every test run, rather than
+ * rendering a wrong strip nobody questions.
  */
-type RecordedStances = readonly [Direction, ...Direction[]];
+function assertStanceLengthsMatchRounds(debates: readonly DebateLog[]): void {
+  for (const debate of debates) {
+    for (const entry of debate.contributions) {
+      const recorded = entry.stance_during_debate.length;
+      if (recorded !== 0 && recorded !== debate.rounds) {
+        throw new Error(
+          `fixture ${debate.debate_id}: ${entry.analyst_id} records ${recorded} round stance(s) for a ${debate.rounds}-round debate — expected ${debate.rounds} or 0 (none recorded)`,
+        );
+      }
+    }
+  }
+}
+
+assertStanceLengthsMatchRounds(RECENT_DEBATES);
+
+/**
+ * Indexed off the contract these helpers build rather than off `Direction`
+ * directly, so a widening of `AnalystContribution` (a nullable final position
+ * for an unresolved debate, say) reaches the fixtures as a compile error
+ * instead of a signature that silently no longer matches what it constructs.
+ */
+type Stance = AnalystContribution['stance_during_debate'][number];
+type FinalPosition = AnalystContribution['final_position'];
+
+/**
+ * A recorded round history: at least one round, oldest first, and as many
+ * entries as the owning debate's `rounds` (#618). Enforced at load by
+ * `assertStanceLengthsMatchRounds`.
+ */
+type RecordedStances = readonly [Stance, ...Stance[]];
 
 /**
  * One analyst's contribution, built from its RECORDED round history.
@@ -214,7 +249,7 @@ function contribution(
  */
 function unrecordedContribution(
   type: string,
-  final: Direction,
+  final: FinalPosition,
   influence: number,
 ): AnalystContribution {
   return {
