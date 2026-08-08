@@ -512,6 +512,12 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * what makes `stopped` cells reachable in production and not only in
    * fixtures.
    *
+   * BOTH 0013 columns are required, matching `getPipelineActivity`'s universe
+   * arm word for word. The two must agree on what "attributed" means: a row
+   * naming an instrument with no asset class is not renderable, and letting it
+   * win `chosenTrace` would blank a lane whose real trace sits in the same
+   * window — the identical symptom, one path over.
+   *
    * The `stage IN (…)` filter is not defensive tidiness: `audit_log.stage` is
    * unconstrained TEXT and the HITL Telegram callback writes
    * `verdict.hitl.telegram_callback` rows under the pipeline's own `trace_id`
@@ -538,6 +544,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
         `SELECT trace_id, instrument, asset_class, stage, decision, timestamp FROM audit_log
           WHERE timestamp > ? AND timestamp <= ?
             AND instrument IS NOT NULL
+            AND asset_class IS NOT NULL
             AND stage IN (${stagePlaceholders})
           ORDER BY timestamp, rowid`,
       )

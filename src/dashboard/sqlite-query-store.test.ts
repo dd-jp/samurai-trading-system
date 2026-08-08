@@ -994,4 +994,38 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
     expect(activity.universe).toEqual([{ instrument: 'AAPL', asset_class: 'stocks' }]);
     expect(activity.events).toEqual([]);
   });
+
+  it("never lets a half-attributed row displace a lane's real trace", () => {
+    const db = makeDb();
+    seedMark(db, 'AAPL', 'stocks');
+    seedAudit(db, {
+      trace_id: 'real',
+      stage: 'analysts',
+      decision: 'quorum_met',
+      at: minutesBefore(5),
+    });
+    seedAudit(db, {
+      trace_id: 'real',
+      stage: 'trader',
+      decision: 'no_trade',
+      at: minutesBefore(5),
+    });
+    // Newer, names AAPL, but carries no asset class — so it is not a trace this
+    // view can render. "Attributed" must mean the same thing to the trace
+    // choice as it does to the universe, or the newest unrenderable row wins
+    // the lane and blanks a real trace sitting in the same window.
+    seedAudit(db, {
+      trace_id: 'half',
+      stage: 'verdict',
+      decision: 'go',
+      at: minutesBefore(1),
+      instrument: 'AAPL',
+      asset_class: null,
+    });
+
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+
+    expect(activity.events.map((e) => e.trace_id)).toEqual(['real', 'real']);
+    expect(activity.events.map((e) => e.stage)).toEqual(['analysts', 'trader']);
+  });
 });
