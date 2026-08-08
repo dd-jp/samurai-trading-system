@@ -137,6 +137,21 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
   }
 
   /**
+   * The flatten-sweep counterpart of `getOrder` (#519, #526) — see
+   * `BrokerAdapter.resumeFlatten`'s doc (types/broker.ts) for the contract.
+   * This adapter has no separate process-local sweep set to re-populate: its
+   * `fills` array (`fetchNewFills`'s only source) already carries everything
+   * `accepted` ever recorded, restart or not, so this is simply `getOrder`
+   * again under the name reconcile calls. Kept as its own method rather than
+   * an alias so the `BrokerAdapter` contract is satisfied explicitly, the
+   * same posture this class already takes on `_instrument`/`_side` params it
+   * does not use elsewhere.
+   */
+  async resumeFlatten(clientOrderId: string, instrument: string): Promise<NormalizedOrder | null> {
+    return this.getOrder(clientOrderId, instrument);
+  }
+
+  /**
    * The fill feed `ingestFills()` drains. Deterministic and point-in-time:
    * never returns a fill dated before `since`, so a backtest cannot see a
    * fill ahead of simulated T.

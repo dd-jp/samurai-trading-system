@@ -149,6 +149,126 @@ export interface SharedStore {
    * closed instead of being silently dropped.
    */
   getFlattenAttribution(idempotency_key: string): Promise<FlattenAttribution | null>;
+  /**
+   * `reconcile()`'s worklist (#519, #526) — every flatten row a crash could
+   * have stranded, bounded so the sweep does not re-poll the venue for a
+   * flatten that finished closing its lot(s) days ago (0022's own doc for
+   * the full reasoning): `status = 'submitting'` (the write-ahead's ack was
+   * lost) OR (`status = 'submitted'` AND `fills_swept_at IS NULL` — acked,
+   * but not yet confirmed durably applied to every lot it named).
+   *
+   * `'error'` rows are excluded outright: that status means the flatten
+   * PROVABLY never reached the broker (`resolveFlattenError`'s own doc), so
+   * there is nothing left for the venue to answer about it.
+   */
+  getUnresolvedFlattens(): Promise<UnresolvedFlattenSubmission[]>;
+  /**
+   * Refreshes a flatten's known venue state on an ALREADY-`'submitted'` row,
+   * without touching `resolved_at` (migration 0019: the moment the ORIGINAL
+   * write-ahead was settled — `resolveFlattenSubmitted`'s job, for a row
+   * still at `'submitting'`) or `status` (already `'submitted'`; this is not
+   * a new ambiguity being resolved, only a fresher answer to one already
+   * settled once). Reusing `resolveFlattenSubmitted` here would silently
+   * overwrite `resolved_at` with whatever time `reconcile()` happened to run
+   * at, which is a different, false claim about when the flatten was acked.
+   */
+  recordFlattenOrderStateObserved(
+    idempotency_key: string,
+    update: { order_state: OrderState; broker_order_ids: string[] },
+  ): Promise<void>;
+  /**
+   * Marks a flatten's fill(s) as durably applied to every lot it named THIS
+   * poll — `ingest-fills.ts`'s call site, right after every one of a
+   * flatten's named lots has either advanced cleanly or had nothing new to
+   * advance. This is what bounds `getUnresolvedFlattens()` above; see
+   * migration 0023 for why the bound cannot be `order_state` alone, and why
+   * this may NOT be called merely because a raw fill was observed — only
+   * once it is durably applied, or a lot-advance failure this poll would
+   * become permanently unrecoverable instead of retried on the next
+   * `reconcile()` pass.
+   */
+  markFlattenFillsSwept(idempotency_key: string, swept_at: Date): Promise<void>;
+  /**
+   * #549: durably marks a lot's partial-flatten residual as observed but not
+   * yet confirmed protected — written by `maybeRearmResidual`
+   * (ingest-fills.ts) the moment the residual is first known, BEFORE the
+   * re-arm attempt, so a crash anywhere between the exit fill persisting and
+   * the re-arm confirming leaves a row `getUnprotectedResidualLots()` finds.
+   *
+   * Keeps the FIRST observation: a lot already marked stays marked at its
+   * original `residual_unprotected_since` (COALESCE), and its alert-dedup
+   * state (`residual_rearm_alerted_at`) is untouched — a re-poll of the same
+   * unprotected episode is the same episode, not a fresh one. See migration
+   * 0024.
+   */
+  markResidualUnprotected(idempotency_key: string, observed_at: Date): Promise<void>;
+  /**
+   * The only way the #549 marker clears: protection was CONFIRMED — the
+   * broker's re-arm call resolved (venue-acked, or adopted as already live
+   * on the venue), or a fuller read showed the lot flat with nothing left to
+   * protect. Clears the alert-dedup timestamp with it, so a LATER residual
+   * episode on the same lot alerts afresh. Idempotent: clearing an unmarked
+   * (or unknown) lot is a no-op, which is what lets the sweep and the
+   * observing poll race without either failing.
+   */
+  confirmResidualProtected(idempotency_key: string): Promise<void>;
+  /**
+   * Once-per-episode alert dedup for the #549 sweep (#342's repeated-line
+   * lesson): recorded when `ResidualExposureAlertChannel` accepted a
+   * delivery for an unprotected episode, checked by the sweep so a marker
+   * that stays unprotected across many passes pages the operator once, not
+   * once per pass. Cleared together with the marker by
+   * `confirmResidualProtected`.
+   *
+   * CONDITIONAL (#549 review): records only when the episode has no
+   * alerted-at yet (`... AND residual_rearm_alerted_at IS NULL`) and
+   * returns whether THIS call won that write — first-writer-wins durably,
+   * so the dedup holds regardless of which alert surface (the observing
+   * poll's inline path, the sweep) got there first or in what order.
+   * `false` means another surface already recorded the episode's page (or
+   * the key names no lot) — never an error.
+   */
+  markResidualAlerted(idempotency_key: string, alerted_at: Date): Promise<boolean>;
+  /**
+   * The #549 sweep's worklist: every NON-TERMINAL lot still marked
+   * unprotected. Bounded the same way `getOpenPositions()` is — a terminal
+   * lot's residual is settled by definition (`closed` means round-tripped to
+   * flat; `rejected`/`cancelled`/`expired` mean no venue exposure under this
+   * lot) — so the sweep never grows with history. Each row carries the full
+   * `OpenPosition` (everything a retry needs: instrument, side, stop,
+   * target, requested_size) plus the marker's own two timestamps.
+   */
+  getUnprotectedResidualLots(): Promise<UnprotectedResidualLot[]>;
+}
+
+/**
+ * One lot the #549 residual-protection sweep still has work to do on — see
+ * `SharedStore.getUnprotectedResidualLots`.
+ */
+export interface UnprotectedResidualLot {
+  position: OpenPosition;
+  /** When the unprotected residual was FIRST observed (migration 0024). */
+  unprotected_since: Date;
+  /** When this episode's operator alert was posted; null if it never was. */
+  alerted_at: Date | null;
+}
+
+/**
+ * One `flatten_submissions` row `reconcile()`'s sweep still has work to do
+ * on — see `SharedStore.getUnresolvedFlattens`.
+ */
+export interface UnresolvedFlattenSubmission {
+  idempotency_key: string;
+  instrument: string;
+  /**
+   * `'submitting'`: the write-ahead's ack was lost — `broker.resumeFlatten`
+   * settles whether the venue ever saw it, the same ambiguity `reconcile()`
+   * already settles for a bracket's `pending` write-ahead.
+   * `'submitted'`: the venue acked it once; this row still needs a fresher
+   * answer, or its fills durably applied, before it can be dropped from the
+   * scan (see `SharedStore.markFlattenFillsSwept`).
+   */
+  status: 'submitting' | 'submitted';
 }
 
 /**

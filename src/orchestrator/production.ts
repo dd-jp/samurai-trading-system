@@ -168,8 +168,10 @@ import {
   LoggingAnalystSkipAlertChannel,
   LoggingBreachAlertChannel,
   LoggingFlattenOverfillAlertChannel,
+  LoggingFlattenReconcileAlertChannel,
   LoggingHeartbeatChannel,
   LoggingLoosenApprovalChannel,
+  LoggingOcoDoubleFillAlertChannel,
   LoggingOrphanAlertChannel,
   LoggingResidualExposureAlertChannel,
   LoggingUnpricedFillAlertChannel,
@@ -632,6 +634,11 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // will not price, which is why it must be the durable one here — a
       // restart that reset the clock would age nothing out across a soak.
       unpricedFillAlerts: config.unpricedFillAlerts ?? new LoggingUnpricedFillAlertChannel(logger),
+      // #586: the emulated crypto OCO's accepted-risk escalation — required
+      // on `AlpacaBrokerAdapterInput` for the same "no silent default"
+      // reason `unpricedFillAlerts` is.
+      ocoDoubleFillAlerts:
+        config.ocoDoubleFillAlerts ?? new LoggingOcoDoubleFillAlertChannel(logger),
       ...(config.unpricedFillAgeOutMs === undefined
         ? {}
         : { unpricedFillAgeOutMs: config.unpricedFillAgeOutMs }),
@@ -757,6 +764,16 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // doc) — no `SAMURAI_ALERTS`/config override yet, unlike the escalations
     // above. A phone-reaching transport is a later ticket if this ever fires.
     flattenOverfillAlerts: new LoggingFlattenOverfillAlertChannel(logger),
+    // #519: where `reconcile()`'s flatten sweep escalates a row it could not
+    // settle. Required on `ExecutionInput` for the same "no silent default"
+    // reason `residualExposureAlerts` above is — an omitted channel would
+    // make an unresolved flatten's ambiguity invisible again.
+    flattenReconcileAlerts:
+      config.flattenReconcileAlerts ?? new LoggingFlattenReconcileAlertChannel(logger),
+    // #573: the execution port's own local diagnostic trace — see
+    // `ExecutionInput.logger`'s decision doc. Required, so a composition
+    // root that forgets it is a `tsc` error rather than a silent gap.
+    logger,
   };
 
   // #464, retargeted at Nous by ADR-0009. The off switch used to be the

@@ -13,6 +13,7 @@
  */
 import type { Mark } from '../market-data-service/index.js';
 import type { OpenPosition } from '../shared/index.js';
+import type { StoreMode } from '../shared/store/index.js';
 import { buildPipelineView, PIPELINE_LOOKBACK_MS, PIPELINE_MAX_LANES } from './pipeline-query.js';
 import { NULL_PROVIDER_STATUS, type ProviderStatusReader } from './provider-status.js';
 import type { DashboardQueryStore, DashboardSnapshot, PositionRow } from './types.js';
@@ -40,10 +41,18 @@ function unrealizedPnl(position: OpenPosition, markPrice: number): number {
  * arguments — keeps working. The reader is injected rather than called
  * directly because it is the one input here that is live, timer-refreshed
  * state; taking it as a parameter is what preserves this function's purity.
+ *
+ * `mode` is required and has NO default, deliberately (#539). It is the run
+ * the operator is looking at, and the one wrong answer that matters is
+ * "paper" during a live run — so the caller that resolved `SAMURAI_MODE`
+ * states it, and a caller that never resolved one does not compile. It sits
+ * before `providers` for the same reason: a defaulted trailing parameter is
+ * exactly the shape that lets a new call site forget it.
  */
 export function buildSnapshot(
   store: DashboardQueryStore,
   asOf: Date,
+  mode: StoreMode,
   providers: ProviderStatusReader = NULL_PROVIDER_STATUS,
 ): DashboardSnapshot {
   const openPositions = store.getOpenPositions(asOf);
@@ -111,6 +120,7 @@ export function buildSnapshot(
   return {
     generated_at: new Date().toISOString(),
     as_of: asOf.toISOString(),
+    mode,
     tick_status: tickStatus,
     positions,
     debates,

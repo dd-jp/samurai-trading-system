@@ -42,6 +42,10 @@ export type {
   FlattenOverfillWarning,
 } from './flatten-overfill-alert.js';
 export type {
+  FlattenReconcileAlert,
+  FlattenReconcileAlertChannel,
+} from './flatten-reconcile-alert.js';
+export type {
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
 } from './residual-exposure-alert.js';
@@ -60,6 +64,7 @@ export type {
   ExecutionResult,
   ReconcileDivergence,
   ReconcileReport,
+  ResidualProtectionSweepResult,
   SimulatedAdapterConfig,
 } from './types/execution.js';
 export type {
@@ -67,4 +72,6 @@ export type {
   FlattenSubmissionWriteAhead,
   LotAdvance,
   SharedStore,
+  UnprotectedResidualLot,
+  UnresolvedFlattenSubmission,
 } from './types/store.js';

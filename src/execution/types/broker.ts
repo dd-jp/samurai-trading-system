@@ -136,6 +136,32 @@ export interface BrokerAdapter {
    */
   getOrder(clientOrderId: string, instrument: string): Promise<NormalizedOrder | null>;
   /**
+   * The flatten-sweep counterpart of `getOrder` (#519, #526) —
+   * `reconcile()`'s ONLY caller, for every `flatten_submissions` row its
+   * `getUnresolvedFlattens()` worklist names. Same null/throw contract as
+   * `getOrder` verbatim: null is the venue AUTHORITATIVELY reporting no such
+   * order (what lets `reconcile()` settle a write-ahead whose broker call
+   * never landed), and an adapter that merely cannot answer MUST throw —
+   * `getOrder`'s own doc explains why returning null on ignorance would bury
+   * a live position, and the same reasoning applies here to a flatten that
+   * genuinely filled and closed a lot.
+   *
+   * The re-populating SIDE EFFECT is the point, exactly as `getOrder`'s own
+   * doc says of `brackets`: a live adapter's flatten-sweep worklist
+   * (`AlpacaBrokerAdapter.flattens`) is process-local and empty after a
+   * restart, so without this call `fetchNewFills` polls nothing for a
+   * flatten a crash stranded between `submitFlatten` returning and the next
+   * sweep — the exact gap #526 names. Deliberately a SEPARATE method from
+   * `getOrder` rather than a second call into it: `getOrder`'s own
+   * implementation re-populates `brackets`, which is never pruned once an
+   * entry lands there (a bracket can go on mattering after its entry fills),
+   * so routing a flatten through it would leak that flatten into the bracket
+   * sweep for the rest of the process's life — worse than the bounded gap
+   * this method exists to close. See `AlpacaBrokerAdapter.resumeFlatten` for
+   * the concrete side effect.
+   */
+  resumeFlatten(clientOrderId: string, instrument: string): Promise<NormalizedOrder | null>;
+  /**
    * The venue's fill feed. Inclusive of `since` and never dated before it,
    * so a backtest cannot see a fill ahead of simulated T. Re-offering an
    * already-returned fill is expected — `ingestFills()` dedups on

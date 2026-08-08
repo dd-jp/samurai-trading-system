@@ -18,6 +18,7 @@
 import {
   buildSmokeFixtureBars,
   ConstantResponseLlmClient,
+  type CryptoEmulationEvidence,
   type ExitPathEvidence,
   evaluateSmokeGate,
   FixedAccountStateProvider,
@@ -47,12 +48,61 @@ const BOTH_TIERS = [
 function healthyExitPath(overrides: Partial<ExitPathEvidence> = {}): ExitPathEvidence {
   return {
     brokerCallSequence: ['cancel:lot-1', 'submitFlatten:lot-1-exit'],
-    residualAlerts: [],
+    // #549: scenario 5 scripts ONE re-arm failure, so a healthy run carries
+    // exactly its one inline alert — the gate now scopes the "no alerts"
+    // check to every OTHER lot and requires exactly one for this one.
+    residualAlerts: [
+      {
+        idempotency_key: 'lot-sweep',
+        instrument: 'LINK-USD',
+        side: 'buy',
+        residual_qty: 6,
+        residual_qty_is_upper_bound: false,
+        stop: 90,
+        target: 120,
+        observed_at: SMOKE_RUN_INSTANT,
+      },
+    ],
     // Matches `transactedObservations()`'s 'idem-exit-1' position (closed) —
     // the fixture pairing the scoped #508/#517 check reads.
     fullExit: { lotKey: 'idem-exit-1' },
     partialFlatten: { idempotencyKey: 'lot-partial', expectedResidual: 0, protectedQty: 0 },
     twoLotFlatten: { lotKeys: [] },
+    // #519/#526: matches `transactedObservations()`'s 'idem-crash-restart-1'
+    // position (closed) — the fixture pairing the scoped check reads, same
+    // convention as `fullExit` above. `reconcileReport` names the flatten's
+    // OWN key (never the lot's — a flatten writes no `OpenPosition`) with
+    // `action: 'adopted'`, the clean-settle outcome a deterministic offline
+    // broker always produces.
+    crashRestart: {
+      lotKey: 'idem-crash-restart-1',
+      flattenKey: 'idem-crash-restart-1-exit',
+      reconcileReport: {
+        checked: 1,
+        corrected: 1,
+        divergences: [
+          {
+            idempotency_key: 'idem-crash-restart-1-exit',
+            instrument: 'DOGE-USD',
+            store_state: 'submitted',
+            broker_state: 'submitted',
+            action: 'adopted',
+            reason: "flatten journal said 'submitted'; broker reports 'submitted'",
+          },
+        ],
+        timestamp: SMOKE_RUN_INSTANT,
+      },
+    },
+    flattenReconcileAlerts: [],
+    // #549: scenario 5's healthy outcome — the restarted sweep re-armed the
+    // residual, cleared the marker, and reported it.
+    residualSweep: {
+      lotKey: 'lot-sweep',
+      expectedResidual: 6,
+      protectedQty: 6,
+      markerCleared: true,
+      sweepDivergenceAction: 'adopted',
+    },
     ...overrides,
   };
 }
@@ -98,6 +148,18 @@ function transactedObservations(): SmokeObservations {
         avg_entry_price: 160,
         order_state: 'closed',
       },
+      // #519/#526: scenario 4's crash-restart lot — paired with
+      // `healthyExitPath()`'s `crashRestart.lotKey` default, same convention
+      // as `idem-exit-1` above.
+      {
+        idempotency_key: 'idem-crash-restart-1',
+        instrument: 'DOGE-USD',
+        side: 'buy',
+        requested_size: 10,
+        filled_size: 10,
+        avg_entry_price: 160,
+        order_state: 'closed',
+      },
     ],
     fills: [{ idempotency_key: 'idem-1', leg: 'entry', price: 161, qty: 31.25, fee: 13 }],
     // #576: no longer always empty — see `SmokeObservations.closedTrades`'s doc.
@@ -124,12 +186,42 @@ function meteredSnapshot() {
   return { crypto: { debatesUsed: 1, llmCallsUsed: 4 } };
 }
 
+/**
+ * A healthy crypto-emulation drive (#586) — every check `evaluateSmokeGate`
+ * runs against `options.cryptoEmulation` passes against this shape
+ * unmodified: the lot was journalled as crypto, both legs got venue ids, the
+ * OCO edge completed, and both fills came back through the sweep.
+ */
+function healthyCryptoEmulation(
+  overrides: Partial<CryptoEmulationEvidence> = {},
+): CryptoEmulationEvidence {
+  return {
+    journalRow: {
+      phase: 'resolved',
+      asset_class: 'crypto',
+      stop_order_id: 'scenario-alpaca-2',
+      target_order_id: 'scenario-alpaca-3',
+    },
+    entryFillSeen: true,
+    stopFillSeen: true,
+    siblingCancelled: true,
+    ...overrides,
+  };
+}
+
 /** `evaluateSmokeGate`'s options for a fully healthy run — the base every test below mutates. */
-function healthyGateOptions(overrides: { minTicks?: number; exitPath?: ExitPathEvidence } = {}) {
+function healthyGateOptions(
+  overrides: {
+    minTicks?: number;
+    exitPath?: ExitPathEvidence;
+    cryptoEmulation?: CryptoEmulationEvidence;
+  } = {},
+) {
   return {
     minTicks: overrides.minTicks ?? 2,
     llmRateLimiterSnapshot: meteredSnapshot(),
     exitPath: overrides.exitPath ?? healthyExitPath(),
+    cryptoEmulation: overrides.cryptoEmulation ?? healthyCryptoEmulation(),
   };
 }
 
@@ -635,10 +727,14 @@ describe('runSmoke (end-to-end, real composition root)', () => {
     // #576 — the exit path, driven by `runExitPathScenarios` against the same
     // store: scenario 1 closes one lot, scenario 2 leaves its lot open with a
     // protected residual (not closed — that is the point), scenario 3 closes
-    // both of its lots. 1 + 0 + 2 = 3 `ClosedTrade`s; 4 `flatten_submissions`
-    // rows (one per exit call across the three scenarios), every one resolved.
-    expect(result.observations.closedTrades).toHaveLength(3);
-    expect(result.observations.flattenSubmissions).toHaveLength(4);
+    // both of its lots, (#519/#526) scenario 4 closes its own lot too — via
+    // the RESTARTED Execution's reconcile() + ingestFills(), not the original
+    // one — and (#549) scenario 5 leaves its lot open like scenario 2's, its
+    // residual re-armed by the restarted sweep. 1 + 0 + 2 + 1 + 0 = 4
+    // `ClosedTrade`s; 6 `flatten_submissions` rows (one per exit call across
+    // the five scenarios), every one resolved.
+    expect(result.observations.closedTrades).toHaveLength(4);
+    expect(result.observations.flattenSubmissions).toHaveLength(6);
     expect(result.observations.flattenSubmissions.every((row) => row.status === 'submitted')).toBe(
       true,
     );
@@ -707,11 +803,14 @@ describe('runSmoke (end-to-end, real composition root)', () => {
     // Eight since #430 added the seeded-mechanism checks, plus three since
     // #576 made `closed_trades`/`flatten_submissions` unconditional
     // requirements AND scoped the #508/#517 check to scenario 1's own lot:
-    // an empty `positions` table means that lookup finds nothing either. Every
-    // other exit-path-SPECIFIC check (ordering, residual, phantom-open) stays
-    // healthy (see `healthyGateOptions`) — this test is about the STORE being
-    // empty, not about the exit path.
-    expect(gate.failures).toHaveLength(11);
+    // an empty `positions` table means that lookup finds nothing either,
+    // plus one since #519/#526 scoped its own crash-restart check to
+    // scenario 4's lot the same way — an empty `positions` table means THAT
+    // lookup finds nothing either. Every other exit-path-SPECIFIC check
+    // (ordering, residual, phantom-open, the reconcile-divergence half of
+    // the #519/#526 check) stays healthy (see `healthyGateOptions`) — this
+    // test is about the STORE being empty, not about the exit path.
+    expect(gate.failures).toHaveLength(12);
     expect(gate.failures.some((failure) => failure.includes('no tick got past Analysts'))).toBe(
       true,
     );
@@ -724,6 +823,9 @@ describe('runSmoke (end-to-end, real composition root)', () => {
     expect(gate.failures.some((failure) => failure.includes('no row in flatten_submissions'))).toBe(
       true,
     );
+    expect(
+      gate.failures.some((failure) => failure.includes("scenario 4's crash-restart flatten")),
+    ).toBe(true);
   });
 });
 
@@ -938,6 +1040,100 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
     expect(gate.failures.some((failure) => failure.includes('re-arm failed'))).toBe(true);
   });
 
+  // #549 — the residual-protection sweep's own enforcement branches, each
+  // pinned in isolation the same way every other exit-path check above is.
+  describe('the residual-protection sweep (#549)', () => {
+    it("fails when the restarted reconcile() named no divergence for scenario 5's lot — the marker or the sweep is unwired", () => {
+      const gate = gateFor({
+        residualSweep: {
+          lotKey: 'lot-sweep',
+          expectedResidual: 6,
+          protectedQty: 6,
+          markerCleared: true,
+          sweepDivergenceAction: undefined,
+        },
+      });
+
+      expect(gate.passed).toBe(false);
+      expect(
+        gate.failures.some((failure) => failure.includes('never written by the observing poll')),
+      ).toBe(true);
+    });
+
+    it('fails when the sweep retry could not settle the marker (undetermined)', () => {
+      const gate = gateFor({
+        residualSweep: {
+          lotKey: 'lot-sweep',
+          expectedResidual: 6,
+          protectedQty: null,
+          markerCleared: false,
+          sweepDivergenceAction: 'undetermined',
+        },
+      });
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.some((failure) => failure.includes("not 'adopted'"))).toBe(true);
+    });
+
+    it('fails when the marker survived the restarted sweep — protection was never confirmed', () => {
+      const gate = gateFor({
+        residualSweep: {
+          lotKey: 'lot-sweep',
+          expectedResidual: 6,
+          protectedQty: 6,
+          markerCleared: false,
+          sweepDivergenceAction: 'adopted',
+        },
+      });
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.some((failure) => failure.includes('is still set'))).toBe(true);
+    });
+
+    it("fails when the sweep's retry left the lot naked or mis-sized", () => {
+      const gate = gateFor({
+        residualSweep: {
+          lotKey: 'lot-sweep',
+          expectedResidual: 6,
+          protectedQty: null,
+          markerCleared: true,
+          sweepDivergenceAction: 'adopted',
+        },
+      });
+
+      expect(gate.passed).toBe(false);
+      expect(
+        gate.failures.some((failure) =>
+          failure.includes('either never re-armed (the lot is naked) or sized the wrong quantity'),
+        ),
+      ).toBe(true);
+    });
+
+    it('fails when the episode paged more than once — the once-per-episode dedup regressed (#342)', () => {
+      const [healthyAlert] = healthyExitPath().residualAlerts;
+      if (healthyAlert === undefined) throw new Error('fixture invariant: one healthy alert');
+      const gate = gateFor({
+        residualAlerts: [healthyAlert, { ...healthyAlert, observed_at: SMOKE_RUN_INSTANT }],
+      });
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.some((failure) => failure.includes('once-per-episode dedup'))).toBe(
+        true,
+      );
+    });
+
+    it('fails when the deliberately-failed re-arm no longer pages at all', () => {
+      const gate = gateFor({ residualAlerts: [] });
+
+      expect(gate.passed).toBe(false);
+      expect(
+        gate.failures.some((failure) =>
+          failure.includes('0 means the failed re-arm no longer pages'),
+        ),
+      ).toBe(true);
+    });
+  });
+
   it('fails when a lot named by a two-lot flatten is left phantom-open (#571)', () => {
     const observations = {
       ...transactedObservations(),
@@ -1008,5 +1204,67 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
     );
 
     expect(gate.failures.some((failure) => failure.includes('lot-older, lot-newer'))).toBe(false);
+  });
+
+  // #586 — the crypto-emulation checks. Each mutates one field of a healthy
+  // evidence shape, naming a distinct way the emulation can stop being wired
+  // while every other observation stays green.
+  it('fails when no emulated-leg journal row exists for the crypto lot (#586)', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({ cryptoEmulation: healthyCryptoEmulation({ journalRow: undefined }) }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('no crypto row'))).toBe(true);
+  });
+
+  it('fails when the journal row never got protective-leg order ids (#586)', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        cryptoEmulation: healthyCryptoEmulation({
+          journalRow: {
+            phase: 'pending_entry',
+            asset_class: 'crypto',
+            stop_order_id: null,
+            target_order_id: null,
+          },
+        }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('never submitted as plain'))).toBe(
+      true,
+    );
+    expect(gate.failures.some((failure) => failure.includes("expected 'resolved'"))).toBe(true);
+  });
+
+  it('fails when the sibling was never cancelled after the stop filled (#586)', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({ cryptoEmulation: healthyCryptoEmulation({ siblingCancelled: false }) }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('one-cancels-other'))).toBe(true);
+  });
+
+  it('fails when the emulated fills never came back through the sweep (#586)', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        cryptoEmulation: healthyCryptoEmulation({ entryFillSeen: false, stopFillSeen: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('entry fill never came back'))).toBe(
+      true,
+    );
+    expect(gate.failures.some((failure) => failure.includes('stop-leg fill never came back'))).toBe(
+      true,
+    );
   });
 });

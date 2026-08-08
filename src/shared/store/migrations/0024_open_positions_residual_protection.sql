@@ -1,0 +1,39 @@
+-- #549: the durable "this lot's partial-flatten residual has not been
+-- confirmed protected" marker.
+--
+-- THE CRASH WINDOW THIS CLOSES. `ingestFills()`'s re-arm of a residual left
+-- by a partial flatten (#525) fires only on the poll that OBSERVES the
+-- residual — both of its triggers (`ingestedExit`, `flattenTargetedThisPoll`)
+-- are poll-scoped. A crash after `applyLotAdvance` persisted the exit fill
+-- but before the re-arm attempt leaves the next poll with nothing to see:
+-- `hasFill` dedups the re-offered fill away, `newFills` is empty, no flatten
+-- resolves that poll, and `advanceLot` returns early forever. The residual
+-- stays naked indefinitely with NO alert, because the #525 fallback alert
+-- only fires inside the re-arm attempt that never runs again.
+--
+-- `residual_unprotected_since` is written the moment the residual is first
+-- known — BEFORE the re-arm attempt, in `maybeRearmResidual`
+-- (ingest-fills.ts) — and cleared only when protection is CONFIRMED (the
+-- broker's re-arm call resolved, or a later read shows the lot flat). It
+-- lives on `open_positions` rather than a new table because the marker IS
+-- lot state: the residual belongs to exactly one lot, every field the sweep
+-- needs to retry (instrument, side, stop, target, requested_size) is already
+-- on the row, and a terminal lot leaving `getOpenPositions()` scopes the
+-- sweep to live lots with no extra bookkeeping. `flatten_submissions` was
+-- rejected as the home because one flatten names many lots and the marker is
+-- per-lot; `broker_brackets` because it is a venue-adapter journal that
+-- equities' native-OCO re-arm path never writes.
+--
+-- `residual_rearm_alerted_at` is the once-per-episode alert dedup (#342's
+-- "a line repeated daily is a line nobody reads"): the sweep
+-- (`sweepResidualProtection`, execution/residual-protection-sweep.ts) retries
+-- the re-arm on reconcile/fill-sync cadence and must page the operator when a
+-- retry fails — but once per unprotected episode, not once per sweep pass.
+-- Both columns clear together when protection is confirmed, so a LATER
+-- residual episode on the same lot alerts afresh.
+--
+-- NULL, not a sentinel default, per 0020/0021/0023's precedent: a lot with no
+-- unconfirmed residual reads NULL whether it predates this migration or was
+-- opened five minutes ago. There is nothing to backfill.
+ALTER TABLE open_positions ADD COLUMN residual_unprotected_since TEXT NULL;
+ALTER TABLE open_positions ADD COLUMN residual_rearm_alerted_at TEXT NULL;

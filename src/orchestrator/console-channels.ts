@@ -23,6 +23,10 @@
 import type {
   FlattenOverfillAlertChannel,
   FlattenOverfillWarning,
+  FlattenReconcileAlert,
+  FlattenReconcileAlertChannel,
+  OcoDoubleFillAlert,
+  OcoDoubleFillAlertChannel,
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
   UnpricedFillAlert,
@@ -155,6 +159,43 @@ export class LoggingResidualExposureAlertChannel implements ResidualExposureAler
 }
 
 /**
+ * A `flatten_submissions` row `reconcile()`'s sweep could not settle (#519),
+ * written to the log at `error`. See `FlattenReconcileAlertChannel`'s doc
+ * (execution/flatten-reconcile-alert.ts) for why this is treated as an
+ * operator escalation rather than a background diagnostic like
+ * `LoggingFlattenOverfillAlertChannel` below: an unresolved flatten is a lot
+ * stuck in genuine ambiguity about whether it is still held.
+ *
+ * Same caveat as `LoggingResidualExposureAlertChannel`'s: a log line nobody
+ * tails during an unattended soak (#238) is not an alert.
+ * `TradeChannelFlattenReconcileAlert` (flatten-reconcile-alert-channel.ts) is
+ * the reachable-from-a-phone implementation, wired through
+ * `SAMURAI_ALERTS=telegram` (#322, #519) — the same move #551 made for
+ * `residualExposureAlerts`.
+ */
+export class LoggingFlattenReconcileAlertChannel implements FlattenReconcileAlertChannel {
+  constructor(private readonly logger: Logger) {}
+
+  async postFlattenReconcileAlert(alert: FlattenReconcileAlert): Promise<void> {
+    this.logger.log({
+      // Not a tick trace, for `LoggingResidualExposureAlertChannel`'s reason:
+      // this is observed by reconcile(), which spans every unresolved
+      // flatten at once rather than belonging to one pipeline pass.
+      trace_id: 'reconcile',
+      stage: 'execution',
+      level: 'error',
+      message:
+        "reconcile() could not settle a flatten_submissions row — the flatten's outcome is " +
+        'genuinely unknown; check the order on the venue by hand',
+      payload: {
+        ...alert,
+        observed_at: alert.observed_at.toISOString(),
+      },
+    });
+  }
+}
+
+/**
  * A flatten fill that filled more than its named lots' journalled share
  * (#527), written to the log at `warn`. See `FlattenOverfillAlertChannel`'s
  * doc (execution/flatten-overfill-alert.ts) for why this is a diagnostic
@@ -188,6 +229,43 @@ export class LoggingFlattenOverfillAlertChannel implements FlattenOverfillAlertC
         idempotency_key: warning.idempotency_key,
         unattributed_qty: warning.unattributed_qty,
         observed_at: warning.observed_at.toISOString(),
+      },
+    });
+  }
+}
+
+/**
+ * An emulated crypto OCO's DOUBLE FILL (#586), written to the log at `error`:
+ * both protective legs filled inside one poll window, so the second leg
+ * over-closed the lot and opened a reverse position the system never decided
+ * to hold. Both fills are booked truthfully; nothing is unwound
+ * automatically — this is the accepted-risk escalation, and it needs a human
+ * (see oco-double-fill-alert.ts).
+ *
+ * Same caveat as every stand-in here: a log line nobody tails during an
+ * unattended soak (#238) is not an alert. `TradeChannelOcoDoubleFillAlert`
+ * (oco-double-fill-channel.ts) is the reachable-from-a-phone implementation,
+ * wired through `SAMURAI_ALERTS=telegram`.
+ */
+export class LoggingOcoDoubleFillAlertChannel implements OcoDoubleFillAlertChannel {
+  constructor(private readonly logger: Logger) {}
+
+  async postOcoDoubleFillAlert(alert: OcoDoubleFillAlert): Promise<void> {
+    this.logger.log({
+      // Same synthetic-trace convention as `residual-exposure` above: this is
+      // observed by the fill poll, not any one tick.
+      trace_id: 'oco-double-fill',
+      stage: 'execution',
+      level: 'error',
+      message:
+        'both protective legs of an emulated crypto OCO filled — the lot is over-closed and a ' +
+        'reverse position may be open at the venue; check and unwind it by hand',
+      payload: {
+        client_order_id: alert.client_order_id,
+        instrument: alert.instrument,
+        stop_order_id: alert.stop_order_id,
+        target_order_id: alert.target_order_id,
+        observed_at: alert.observed_at.toISOString(),
       },
     });
   }

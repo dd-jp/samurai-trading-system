@@ -59,14 +59,22 @@
  * state does, which is #295/#287. Do not read this module as making the
  * adapters restart-safe.
  */
-import type { ReconcileReport } from '../execution/index.js';
+import type { ReconcileReport, ResidualProtectionSweepResult } from '../execution/index.js';
 import type { Clock } from '../shared/index.js';
 import type { Logger } from './types.js';
 
-/** Execution's two polled surfaces — the subset of `Execution` this loop drives. */
+/** Execution's polled surfaces — the subset of `Execution` this loop drives. */
 export interface FillSyncSurface {
   reconcile(): Promise<ReconcileReport>;
   ingestFills(): Promise<void>;
+  /**
+   * The #549 residual-protection sweep's within-process cadence — run after
+   * every fill poll (see `runOnce`), because `reconcile()` has no recurring
+   * schedule here and a re-arm failure the process survives must not wait
+   * for the next restart to be retried. Cheap when healthy: an empty marker
+   * worklist makes no broker call.
+   */
+  sweepResidualProtection(): Promise<ResidualProtectionSweepResult>;
 }
 
 export interface FillSyncDeps {
@@ -129,6 +137,66 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
   /** The current pass, so `stop()` awaits it rather than cutting it off. */
   let inFlight: Promise<void> | undefined;
   let handle: NodeJS.Timeout | undefined;
+  /**
+   * Per-lot dedup for the sweep-divergence log line (#549 review, #342's
+   * repeated-line lesson): a lot stuck `undetermined` is returned by EVERY
+   * pass, and a warn re-fired on every poll cadence indefinitely is a line
+   * nobody reads. Logged on first observation and on state TRANSITIONS
+   * (`undetermined` -> `adopted` and vice versa) only; a lot that leaves the
+   * sweep's report is forgotten here, so a LATER episode on the same lot
+   * logs afresh — the same episode scoping the durable alert dedup uses.
+   * In-memory deliberately: this dedups a log line, not the page, and a
+   * restart re-logging current state once is a feature.
+   */
+  const lastSweepAction = new Map<string, string>();
+
+  /**
+   * One pass: the fill poll, then the #549 residual-protection sweep. The
+   * sweep runs in a `finally` — even when the poll itself failed, and
+   * ESPECIALLY then: a residual whose re-arm the failed poll never confirmed
+   * is exactly the durable marker it retries. Its own failure is contained
+   * to a log line so it can neither mask the poll's error nor add a second
+   * failure mode to a loop whose posture is log-and-poll-again.
+   */
+  const runPoll = async (): Promise<void> => {
+    try {
+      await deps.execution.ingestFills();
+    } finally {
+      try {
+        const sweep = await deps.execution.sweepResidualProtection();
+        const reportedThisPass = new Set<string>();
+        for (const divergence of sweep.divergences) {
+          reportedThisPass.add(divergence.idempotency_key);
+          // Repeat pass, same state: already logged — see `lastSweepAction`.
+          if (lastSweepAction.get(divergence.idempotency_key) === divergence.action) continue;
+          lastSweepAction.set(divergence.idempotency_key, divergence.action);
+          deps.logger.log({
+            trace_id: FILL_SYNC_TRACE_ID,
+            stage: 'execution',
+            // Mirrors `runStartupReconcile`'s split: `undetermined` means the
+            // marker stays and a human may need to look; `adopted` means
+            // protection was confirmed and the marker cleared.
+            level: divergence.action === 'undetermined' ? 'warn' : 'info',
+            message: 'residual-protection sweep divergence',
+            payload: { ...divergence },
+          });
+        }
+        for (const key of [...lastSweepAction.keys()]) {
+          if (!reportedThisPass.has(key)) lastSweepAction.delete(key);
+        }
+      } catch (sweepError) {
+        deps.logger.log({
+          trace_id: FILL_SYNC_TRACE_ID,
+          stage: 'execution',
+          level: 'error',
+          message: 'residual-protection sweep failed',
+          payload: {
+            error: sweepError instanceof Error ? sweepError.message : String(sweepError),
+          },
+        });
+      }
+    }
+  };
 
   const runOnce = async (): Promise<void> => {
     // Belt-and-braces against re-entry: `schedule()` already re-arms only
@@ -144,7 +212,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
       return;
     }
     try {
-      inFlight = deps.execution.ingestFills();
+      inFlight = runPoll();
       await inFlight;
     } catch (error) {
       // One bad poll must not end the run — the venue being briefly

@@ -30,6 +30,7 @@ import type {
   BrokerAdapter,
   ExecutionConfig,
   FlattenOverfillAlertChannel,
+  FlattenReconcileAlertChannel,
   ResidualExposureAlertChannel,
   SharedStore,
 } from '../../execution/index.js';
@@ -55,6 +56,7 @@ import {
 } from '../../risk-manager/index.js';
 import type {
   Clock,
+  Logger,
   OpenPosition,
   RiskLogStore,
   SetupStore,
@@ -514,6 +516,10 @@ export interface ExecutionStepDeps {
   residualExposureAlerts: ResidualExposureAlertChannel;
   /** The #527 over-fill warning — see `ExecutionInput.flattenOverfillAlerts`. */
   flattenOverfillAlerts: FlattenOverfillAlertChannel;
+  /** The #519 unresolved-flatten escalation — see `ExecutionInput.flattenReconcileAlerts`. */
+  flattenReconcileAlerts: FlattenReconcileAlertChannel;
+  /** #573's local diagnostic trace — see `ExecutionInput.logger`'s decision doc. */
+  logger: Logger;
 }
 
 /**
@@ -539,6 +545,8 @@ export function buildExecutionStep(deps: ExecutionStepDeps): TickSteps['executio
       mode: deps.mode,
       residualExposureAlerts: deps.residualExposureAlerts,
       flattenOverfillAlerts: deps.flattenOverfillAlerts,
+      flattenReconcileAlerts: deps.flattenReconcileAlerts,
+      logger: deps.logger,
     });
     return execution.execute(verdict);
   };
@@ -572,6 +580,8 @@ export function buildExecutionSurface(deps: ExecutionStepDeps, traceId: string):
     mode: deps.mode,
     residualExposureAlerts: deps.residualExposureAlerts,
     flattenOverfillAlerts: deps.flattenOverfillAlerts,
+    flattenReconcileAlerts: deps.flattenReconcileAlerts,
+    logger: deps.logger,
   });
 }
 

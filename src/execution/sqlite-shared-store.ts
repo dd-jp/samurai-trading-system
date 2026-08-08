@@ -33,6 +33,8 @@ import type {
   FlattenSubmissionWriteAhead,
   LotAdvance,
   SharedStore,
+  UnprotectedResidualLot,
+  UnresolvedFlattenSubmission,
 } from './types.js';
 
 /** Terminal `order_state`s — excluded from `getOpenPositions()` (execution-spec.md). */
@@ -71,6 +73,10 @@ export interface OpenPositionRow {
   decision_timestamp: string;
   conviction: number;
   converged: 0 | 1;
+  /** NULL unless a #549 unprotected-residual episode is open — migration 0024. */
+  residual_unprotected_since: string | null;
+  /** NULL until that episode's operator alert was posted — migration 0024. */
+  residual_rearm_alerted_at: string | null;
 }
 
 interface FillRow {
@@ -584,6 +590,170 @@ export class SqliteExecutionStore implements SharedStore {
     }
 
     return { lot_idempotency_keys: keys, lot_held_quantities: paired };
+  }
+
+  /**
+   * `reconcile()`'s worklist (#519, #526) — see `SharedStore.getUnresolvedFlattens`
+   * for the bound this query implements: `'submitting'` outright, or
+   * `'submitted'` rows not yet confirmed swept (`fills_swept_at IS NULL`).
+   * `'error'` rows are excluded by the `status IN (...)` clause itself —
+   * that status means the flatten provably never reached the broker, so
+   * there is nothing left to ask the venue.
+   */
+  async getUnresolvedFlattens(): Promise<UnresolvedFlattenSubmission[]> {
+    const rows = this.db
+      .prepare(
+        `SELECT idempotency_key, instrument, status
+           FROM flatten_submissions
+          WHERE status = 'submitting'
+             OR (status = 'submitted' AND fills_swept_at IS NULL)`,
+      )
+      .all() as Array<{
+      idempotency_key: string;
+      instrument: string;
+      status: 'submitting' | 'submitted';
+    }>;
+
+    return rows.map((row) => ({
+      idempotency_key: row.idempotency_key,
+      instrument: row.instrument,
+      status: row.status,
+    }));
+  }
+
+  /**
+   * A fresher venue answer on an ALREADY-`'submitted'` row — see the doc on
+   * `SharedStore.recordFlattenOrderStateObserved` for why this must not
+   * touch `resolved_at`/`status` the way `resolveFlattenSubmitted` does.
+   */
+  async recordFlattenOrderStateObserved(
+    idempotency_key: string,
+    update: { order_state: OrderState; broker_order_ids: string[] },
+  ): Promise<void> {
+    const result = this.db
+      .prepare(
+        `UPDATE flatten_submissions
+            SET order_state = ?, broker_order_ids = ?
+          WHERE idempotency_key = ?`,
+      )
+      .run(update.order_state, JSON.stringify(update.broker_order_ids), idempotency_key);
+
+    if (result.changes === 0) {
+      throw new Error(
+        `SqliteExecutionStore.recordFlattenOrderStateObserved: no flatten_submissions row for ` +
+          `'${idempotency_key}'`,
+      );
+    }
+  }
+
+  /** Bounds `getUnresolvedFlattens()` above — see `SharedStore.markFlattenFillsSwept`'s doc for when this may be called. */
+  async markFlattenFillsSwept(idempotency_key: string, swept_at: Date): Promise<void> {
+    const result = this.db
+      .prepare('UPDATE flatten_submissions SET fills_swept_at = ? WHERE idempotency_key = ?')
+      .run(swept_at.toISOString(), idempotency_key);
+
+    if (result.changes === 0) {
+      throw new Error(
+        `SqliteExecutionStore.markFlattenFillsSwept: no flatten_submissions row for ` +
+          `'${idempotency_key}'`,
+      );
+    }
+  }
+
+  /**
+   * #549's durable marker — see `SharedStore.markResidualUnprotected`.
+   * COALESCE keeps the FIRST observation time, so a re-mark of an already
+   * open episode changes nothing (and never resets the alert dedup either).
+   * Throws when no such lot exists: a marker written against a key
+   * `open_positions` does not hold protects nothing, and silently succeeding
+   * would let the caller believe it is covered by the sweep.
+   */
+  async markResidualUnprotected(idempotency_key: string, observed_at: Date): Promise<void> {
+    const result = this.db
+      .prepare(
+        `UPDATE open_positions
+            SET residual_unprotected_since = COALESCE(residual_unprotected_since, ?)
+          WHERE idempotency_key = ?`,
+      )
+      .run(observed_at.toISOString(), idempotency_key);
+
+    if (result.changes === 0) {
+      throw new Error(
+        `SqliteExecutionStore.markResidualUnprotected: no open_positions row for ` +
+          `'${idempotency_key}'`,
+      );
+    }
+  }
+
+  /**
+   * Clears the #549 marker AND its alert-dedup timestamp together — see
+   * `SharedStore.confirmResidualProtected` for why this is the only clear
+   * path and why it is a no-op on an unmarked/unknown lot (unlike
+   * `markResidualUnprotected` above, which must not silently succeed).
+   */
+  async confirmResidualProtected(idempotency_key: string): Promise<void> {
+    this.db
+      .prepare(
+        `UPDATE open_positions
+            SET residual_unprotected_since = NULL, residual_rearm_alerted_at = NULL
+          WHERE idempotency_key = ?`,
+      )
+      .run(idempotency_key);
+  }
+
+  /**
+   * The #549 once-per-episode alert dedup — see `SharedStore.markResidualAlerted`
+   * for the first-writer-wins contract this WHERE clause implements: the
+   * write lands only while the episode is still un-alerted, and `changes`
+   * reports whether THIS call was the one that landed it.
+   */
+  async markResidualAlerted(idempotency_key: string, alerted_at: Date): Promise<boolean> {
+    const result = this.db
+      .prepare(
+        `UPDATE open_positions
+            SET residual_rearm_alerted_at = ?
+          WHERE idempotency_key = ? AND residual_rearm_alerted_at IS NULL`,
+      )
+      .run(alerted_at.toISOString(), idempotency_key);
+
+    return result.changes > 0;
+  }
+
+  /**
+   * The #549 sweep's worklist — non-terminal lots still marked unprotected,
+   * in `opened_at` order for the same determinism `getOpenPositions()` gives
+   * its own iterating callers.
+   */
+  async getUnprotectedResidualLots(): Promise<UnprotectedResidualLot[]> {
+    const placeholders = TERMINAL_STATES.map(() => '?').join(', ');
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM open_positions
+          WHERE residual_unprotected_since IS NOT NULL
+            AND order_state NOT IN (${placeholders})
+          ORDER BY opened_at`,
+      )
+      .all(...TERMINAL_STATES) as OpenPositionRow[];
+
+    return rows.map((row) => {
+      // Non-null by the WHERE clause — a null here means the row (or the
+      // query) is corrupted, and mapping it to some default would hand the
+      // sweep a fabricated observation time. Fail loudly instead (#549
+      // review); the sweep's caller treats an unreadable worklist as "no
+      // pass", which is the honest answer.
+      if (row.residual_unprotected_since === null) {
+        throw new Error(
+          `SqliteExecutionStore.getUnprotectedResidualLots: row '${row.idempotency_key}' ` +
+            'matched the marker query but residual_unprotected_since reads NULL',
+        );
+      }
+      return {
+        position: fromPositionRow(row),
+        unprotected_since: new Date(row.residual_unprotected_since),
+        alerted_at:
+          row.residual_rearm_alerted_at === null ? null : new Date(row.residual_rearm_alerted_at),
+      };
+    });
   }
 }
 

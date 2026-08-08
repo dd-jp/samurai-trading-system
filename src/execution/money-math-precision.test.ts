@@ -265,6 +265,10 @@ class ScriptedBroker implements BrokerAdapter {
   async getOrder(): Promise<NormalizedOrder | null> {
     return null;
   }
+  /** #519/#526's reconcile-only surface — this test drives fills only. */
+  async resumeFlatten(): Promise<never> {
+    throw new Error('ScriptedBroker.resumeFlatten: not part of the fill path');
+  }
   /** #429's intervention path — this test drives fills only. */
   async submitFlatten(): Promise<never> {
     throw new Error('ScriptedBroker.submitFlatten: not part of the fill path');
@@ -301,6 +305,8 @@ function makeInput(broker: BrokerAdapter, store: TestExecutionStore): ExecutionI
     mode: 'backtest',
     residualExposureAlerts: { postResidualExposureAlert: async () => {} },
     flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
+    flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
+    logger: { log: () => {} },
   };
 }
 

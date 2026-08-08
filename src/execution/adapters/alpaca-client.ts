@@ -21,6 +21,15 @@ export interface AlpacaOrderLeg {
   filled_qty: string;
   filled_avg_price: string | null;
   filled_at: string | null;
+  /**
+   * The stop trigger, present on a `type: 'stop'` leg. Optional here because
+   * the wire client passes payloads through UNMODIFIED and older doubles do
+   * not set it — declared (#549) so `rearmOrderMatches`
+   * (alpaca-adapter.ts) can verify a prior re-arm's levels without a cast.
+   */
+  stop_price?: string | null;
+  /** The leg's limit price, present on a `type: 'limit'` leg — same optionality reasoning as `stop_price`. */
+  limit_price?: string | null;
 }
 
 /** Alpaca's order payload, as returned by both submit and get-order. */
@@ -37,6 +46,14 @@ export interface AlpacaOrder {
   filled_at: string | null;
   /** Present on the bracket parent: [take_profit_leg, stop_loss_leg]. */
   legs?: AlpacaOrderLeg[];
+  /**
+   * The order's own limit price — for an OCO this IS the take-profit level
+   * (the take-profit is the top-level order; only the stop is a child leg).
+   * Optional for `AlpacaOrderLeg.stop_price`'s reason: the wire client
+   * passes payloads through unmodified, and this field was undeclared until
+   * `rearmOrderMatches` (#549) needed to read it.
+   */
+  limit_price?: string | null;
 }
 
 export interface AlpacaBracketOrderRequest {
@@ -61,15 +78,18 @@ export interface AlpacaBracketOrderRequest {
  * (#525's decision: re-arm on the resize path, never re-derive from the
  * original intent's sizing).
  *
- * WRONG SHAPE, VERIFIED 2026-08-07 (#550): this top-level `limit_price` is
- * NOT Alpaca's real OCO take-profit shape, as this comment previously
- * claimed. Probed live against both `BTC/USD` and `SPY`: `422
- * {"code":40010001,"message":"oco orders require take_profit.limit_price"}`
- * — Alpaca requires the take-profit price NESTED under a `take_profit`
- * object (`{ limit_price: string }`, the same shape `AlpacaBracketOrderRequest`
- * already uses below), not this field. Every `submitOcoOrder` call fails on
- * arrival as a result, for any asset class. NOT fixed here — doc-only
- * correction; the wire-shape fix is #586.
+ * SHAPE VERIFIED 2026-08-07 (#550, fixed #586): the take-profit price is
+ * NESTED under a `take_profit` object (`{ limit_price: string }`, the same
+ * shape `AlpacaBracketOrderRequest` uses), never top-level. The previous
+ * top-level `limit_price` field was probed live against both `BTC/USD` and
+ * `SPY` and rejected for every asset class: `422 {"code":40010001,"message":
+ * "oco orders require take_profit.limit_price"}`.
+ *
+ * Also verified in the same probe: crypto is separately rejected at the
+ * order-class level (`422 code 42210000 "crypto orders not allowed for
+ * advanced order_class: oco"`), so this request shape is EQUITIES-ONLY —
+ * a crypto residual takes the emulated path
+ * (adapters/alpaca-crypto-emulation.ts) and never reaches `submitOcoOrder`.
  *
  * `side` is the CLOSING side — mirrors `AlpacaMarketOrderRequest`'s flatten,
  * not `AlpacaBracketOrderRequest`'s opening one, since this order's whole
@@ -80,15 +100,45 @@ export interface AlpacaOcoOrderRequest {
   /** The CLOSING side, same convention as the flatten. */
   side: 'buy' | 'sell';
   qty: string;
-  /**
-   * INCORRECTLY top-level — see the WRONG SHAPE note above. Alpaca requires
-   * this nested as `take_profit: { limit_price: string }`; #586 fixes it.
-   */
-  limit_price: string;
   time_in_force: string;
   client_order_id: string;
   order_class: 'oco';
+  take_profit: { limit_price: string };
   stop_loss: { stop_price: string };
+}
+
+/**
+ * A plain limit order with no `order_class` and no legs (#586) — the only
+ * shape besides `market`/`stop_limit` Alpaca accepts for crypto (#550's
+ * probe: every advanced order class is rejected with `422` code `42210000`).
+ * The crypto emulation (adapters/alpaca-crypto-emulation.ts) uses it for
+ * both the ENTRY and the emulated take-profit leg; which one it is, is the
+ * caller's business — the wire shape is identical.
+ */
+export interface AlpacaLimitOrderRequest {
+  symbol: string;
+  side: 'buy' | 'sell';
+  qty: string;
+  limit_price: string;
+  time_in_force: string;
+  client_order_id: string;
+}
+
+/**
+ * A plain stop-limit order (#586) — the emulated STOP leg. Crypto accepts no
+ * plain `stop` (market-on-trigger) type at all, only `stop_limit`, so the
+ * trigger and the post-trigger limit are both required on the wire.
+ */
+export interface AlpacaStopLimitOrderRequest {
+  symbol: string;
+  side: 'buy' | 'sell';
+  qty: string;
+  /** The trigger. */
+  stop_price: string;
+  /** The limit the order rests at once triggered. */
+  limit_price: string;
+  time_in_force: string;
+  client_order_id: string;
 }
 
 /**
@@ -122,8 +172,15 @@ export interface AlpacaClient {
   submitOrder(request: AlpacaBracketOrderRequest): Promise<AlpacaOrder>;
   /** The flatten (#429) — a plain market order, no bracket. */
   submitMarketOrder(request: AlpacaMarketOrderRequest): Promise<AlpacaOrder>;
-  /** Re-arm on a residual (#525) — protective legs only, no entry. */
+  /** Re-arm on an EQUITY residual (#525) — protective legs only, no entry. */
   submitOcoOrder(request: AlpacaOcoOrderRequest): Promise<AlpacaOrder>;
+  /**
+   * A plain limit order (#586) — the crypto emulation's entry and its
+   * emulated take-profit leg. No `order_class`, no legs.
+   */
+  submitLimitOrder(request: AlpacaLimitOrderRequest): Promise<AlpacaOrder>;
+  /** A plain stop-limit order (#586) — the crypto emulation's stop leg. */
+  submitStopLimitOrder(request: AlpacaStopLimitOrderRequest): Promise<AlpacaOrder>;
   /**
    * `DELETE /v2/orders/{id}` (#429). Resolves rather than throwing when the
    * order is already gone — cancelled, filled, or unknown — because the caller

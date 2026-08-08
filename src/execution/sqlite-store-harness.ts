@@ -50,6 +50,8 @@ export interface FlattenSubmissionRow {
   lot_idempotency_keys: string | null;
   /** JSON `number[]`, positionally parallel to the keys — NULL before migration 0021 (#571). */
   lot_held_quantities: string | null;
+  /** NULL until `markFlattenFillsSwept` runs — migration 0023 (#519/#526). */
+  fills_swept_at: string | null;
 }
 
 export class TestExecutionStore extends SqliteExecutionStore {
@@ -93,6 +95,53 @@ export class TestExecutionStore extends SqliteExecutionStore {
   ): Promise<void> {
     this.writeLog.push(`resolve-flatten-error:${idempotency_key}`);
     return super.resolveFlattenError(idempotency_key, reason, resolved_at);
+  }
+
+  override async recordFlattenOrderStateObserved(
+    idempotency_key: string,
+    update: { order_state: OrderState; broker_order_ids: string[] },
+  ): Promise<void> {
+    this.writeLog.push(`record-flatten-order-state:${idempotency_key}:${update.order_state}`);
+    return super.recordFlattenOrderStateObserved(idempotency_key, update);
+  }
+
+  override async markFlattenFillsSwept(idempotency_key: string, swept_at: Date): Promise<void> {
+    this.writeLog.push(`mark-flatten-fills-swept:${idempotency_key}`);
+    return super.markFlattenFillsSwept(idempotency_key, swept_at);
+  }
+
+  override async markResidualUnprotected(
+    idempotency_key: string,
+    observed_at: Date,
+  ): Promise<void> {
+    this.writeLog.push(`mark-residual-unprotected:${idempotency_key}`);
+    return super.markResidualUnprotected(idempotency_key, observed_at);
+  }
+
+  override async confirmResidualProtected(idempotency_key: string): Promise<void> {
+    this.writeLog.push(`confirm-residual-protected:${idempotency_key}`);
+    return super.confirmResidualProtected(idempotency_key);
+  }
+
+  override async markResidualAlerted(idempotency_key: string, alerted_at: Date): Promise<boolean> {
+    this.writeLog.push(`mark-residual-alerted:${idempotency_key}`);
+    return super.markResidualAlerted(idempotency_key, alerted_at);
+  }
+
+  /** Raw read of the #549 marker columns (migration 0024) — production reads them only via `getUnprotectedResidualLots`. */
+  async getResidualProtectionMarker(
+    idempotency_key: string,
+  ): Promise<{ unprotected_since: string | null; alerted_at: string | null } | null> {
+    const row = this.testDb
+      .prepare(
+        `SELECT residual_unprotected_since AS unprotected_since,
+                residual_rearm_alerted_at AS alerted_at
+           FROM open_positions WHERE idempotency_key = ?`,
+      )
+      .get(idempotency_key) as
+      | { unprotected_since: string | null; alerted_at: string | null }
+      | undefined;
+    return row === undefined ? null : row;
   }
 
   /** Every state, including terminal — what `getOpenPositions()` deliberately excludes. */

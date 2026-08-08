@@ -33,6 +33,8 @@ import type {
   FlattenSubmissionWriteAhead,
   LotAdvance,
   SharedStore,
+  UnprotectedResidualLot,
+  UnresolvedFlattenSubmission,
 } from '../../execution/index.js';
 import type { OnTradeCloseInput } from '../../feedback-loop/index.js';
 import { onTradeClose } from '../../feedback-loop/index.js';
@@ -109,6 +111,29 @@ export function withOnTradeClose(
 
     getFlattenAttribution: (idempotency_key: string): Promise<FlattenAttribution | null> =>
       store.getFlattenAttribution(idempotency_key),
+
+    getUnresolvedFlattens: (): Promise<UnresolvedFlattenSubmission[]> =>
+      store.getUnresolvedFlattens(),
+
+    recordFlattenOrderStateObserved: (
+      idempotency_key: string,
+      update: { order_state: OrderState; broker_order_ids: string[] },
+    ): Promise<void> => store.recordFlattenOrderStateObserved(idempotency_key, update),
+
+    markFlattenFillsSwept: (idempotency_key: string, swept_at: Date): Promise<void> =>
+      store.markFlattenFillsSwept(idempotency_key, swept_at),
+
+    markResidualUnprotected: (idempotency_key: string, observed_at: Date): Promise<void> =>
+      store.markResidualUnprotected(idempotency_key, observed_at),
+
+    confirmResidualProtected: (idempotency_key: string): Promise<void> =>
+      store.confirmResidualProtected(idempotency_key),
+
+    markResidualAlerted: (idempotency_key: string, alerted_at: Date): Promise<boolean> =>
+      store.markResidualAlerted(idempotency_key, alerted_at),
+
+    getUnprotectedResidualLots: (): Promise<UnprotectedResidualLot[]> =>
+      store.getUnprotectedResidualLots(),
 
     applyLotAdvance: async (advance: LotAdvance): Promise<void> => {
       await store.applyLotAdvance(advance);

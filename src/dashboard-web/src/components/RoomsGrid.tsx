@@ -123,6 +123,15 @@ export function RoomsGrid(props: RoomsGridProps) {
             {layout.rooms.flatMap((room) =>
               room.visibleChips.map((instrument) => {
                 const lane = lanesByInstrument.get(instrument);
+                // Unreachable, and enforced as such rather than rendered
+                // around (PR #607 review round 2, revisiting #606 item 6):
+                // `computeLayout` builds every `visibleChips` entry FROM
+                // `view.lanes`, and `App` passes the same view to both, so
+                // `visibleChips ⊆ lanes` holds by construction. That invariant
+                // is guarded by a test in `room-layout.test.ts`, which is the
+                // right place for it — operator-facing text for a state that
+                // cannot occur is reassurance, not information, and it would
+                // sit on the hot path of every repaint to say nothing.
                 if (lane === undefined) return null;
                 return (
                   <SigilChip

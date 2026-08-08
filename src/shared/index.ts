@@ -57,6 +57,14 @@ export {
   resolvePolygonPacing,
   resolveVenuePacing,
 } from './http/venue-pacing.js';
+// #573: three consumers (orchestrator/tick-loop.ts, execution/ingest-fills.ts,
+// execution/reconcile.ts) need the identical "a log call inside a catch must
+// not itself throw" guarantee — see safe-log.ts's file doc.
+export {
+  describeThrown,
+  logCaughtFailure,
+  safeLog,
+} from './safe-log.js';
 export { sanitizeLogText } from './sanitize-log-text.js';
 export type {
   AssetClass,

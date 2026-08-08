@@ -12,6 +12,7 @@ import type {
   ExecutionInput,
   FlattenOverfillAlertChannel,
   FlattenOverfillWarning,
+  FlattenReconcileAlertChannel,
   NativeBracketRequest,
   NormalizedFill,
   ResidualExposureAlert,
@@ -188,6 +189,10 @@ function makeBroker(
     async getOpenPositions(): Promise<never> {
       throw new Error('makeBroker.getOpenPositions: execute() does not reconcile');
     },
+    // #519/#526's reconcile-only surface — execute() never calls it.
+    async resumeFlatten(): Promise<never> {
+      throw new Error('makeBroker.resumeFlatten: execute() does not reconcile');
+    },
   };
 }
 
@@ -217,6 +222,13 @@ function makeFlattenOverfillAlerts(): FlattenOverfillAlertChannel & {
   };
 }
 
+/** Records every alert posted (#519) — never posted for a clean settle. */
+function makeFlattenReconcileAlerts(): FlattenReconcileAlertChannel {
+  return {
+    async postFlattenReconcileAlert(): Promise<void> {},
+  };
+}
+
 function makeInput(overrides: Partial<ExecutionInput> = {}): ExecutionInput {
   const config: ExecutionConfig = {
     simulated: {
@@ -240,6 +252,10 @@ function makeInput(overrides: Partial<ExecutionInput> = {}): ExecutionInput {
     mode: 'backtest',
     residualExposureAlerts: makeResidualExposureAlerts(),
     flattenOverfillAlerts: makeFlattenOverfillAlerts(),
+    flattenReconcileAlerts: makeFlattenReconcileAlerts(),
+    // #573: `execute()` never logs — every failure it observes flows into
+    // the `ExecutionResult` it returns instead. A no-op is enough here.
+    logger: { log: () => {} },
     ...overrides,
   };
 }
@@ -536,6 +552,7 @@ describe('ExecutionImpl.execute', () => {
       getOpenPositions: vi
         .fn()
         .mockRejectedValue(new Error('getOpenPositions: not part of execute()')),
+      resumeFlatten: vi.fn().mockRejectedValue(new Error('resumeFlatten: not part of execute()')),
     };
 
     const result = await new ExecutionImpl(makeInput({ store, broker })).execute(makeGo());

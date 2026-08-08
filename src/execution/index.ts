@@ -19,8 +19,11 @@ export type {
   AlpacaAccount,
   AlpacaBracketOrderRequest,
   AlpacaClient,
+  AlpacaLimitOrderRequest,
+  AlpacaOcoOrderRequest,
   AlpacaOrder,
   AlpacaOrderLeg,
+  AlpacaStopLimitOrderRequest,
 } from './adapters/alpaca-client.js';
 export type {
   AlpacaHttpBrokerClientOptions,
@@ -49,9 +52,15 @@ export type {
   FlattenOverfillWarning,
 } from './flatten-overfill-alert.js';
 export type {
+  FlattenReconcileAlert,
+  FlattenReconcileAlertChannel,
+} from './flatten-reconcile-alert.js';
+export type { OcoDoubleFillAlert, OcoDoubleFillAlertChannel } from './oco-double-fill-alert.js';
+export type {
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
 } from './residual-exposure-alert.js';
+export { sweepResidualProtection } from './residual-protection-sweep.js';
 export type { SimulatedBrokerAdapterInput } from './simulated-adapter.js';
 export { SimulatedBrokerAdapter } from './simulated-adapter.js';
 export { SqliteBrokerStateStore } from './sqlite-broker-state-store.js';
@@ -75,7 +84,10 @@ export type {
   NormalizedOrder,
   ReconcileDivergence,
   ReconcileReport,
+  ResidualProtectionSweepResult,
   SharedStore,
   SimulatedAdapterConfig,
+  UnprotectedResidualLot,
+  UnresolvedFlattenSubmission,
 } from './types.js';
 export type { UnpricedFillAlert, UnpricedFillAlertChannel } from './unpriced-fill-alert.js';

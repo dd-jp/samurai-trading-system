@@ -130,17 +130,29 @@ import type {
 import { MAX_ROUNDS_BY_ASSET_CLASS, RateLimiter } from '../debate-engine/index.js';
 import type {
   AlpacaClient,
+  AlpacaLimitOrderRequest,
+  AlpacaOrder,
+  AlpacaStopLimitOrderRequest,
   BrokerAck,
   BrokerAdapter,
   ExecutionConfig,
   ExecutionResult,
+  FlattenReconcileAlert,
+  FlattenReconcileAlertChannel,
   NativeBracketRequest,
   NormalizedFill,
   NormalizedOrder,
+  ReconcileDivergence,
+  ReconcileReport,
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
 } from '../execution/index.js';
-import { SimulatedBrokerAdapter, SqliteExecutionStore } from '../execution/index.js';
+import {
+  AlpacaBrokerAdapter,
+  SimulatedBrokerAdapter,
+  SqliteBrokerStateStore,
+  SqliteExecutionStore,
+} from '../execution/index.js';
 import type { Bar } from '../market-data-service/index.js';
 import {
   FixtureDataSource,
@@ -150,14 +162,16 @@ import {
 import type { SessionBasisByClass } from '../risk-manager/index.js';
 import { delay } from '../shared/http/delay.js';
 import type { OrderIntent } from '../shared/index.js';
-import { SimulatedClock } from '../shared/index.js';
+import { SimulatedClock, TokenBucket } from '../shared/index.js';
 import { openSharedStore, type SharedStore as SqliteHandle } from '../shared/store/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
 import {
   LoggingAnalystSkipAlertChannel,
   LoggingBreachAlertChannel,
+  LoggingFlattenReconcileAlertChannel,
   LoggingHeartbeatChannel,
   LoggingLoosenApprovalChannel,
+  LoggingOcoDoubleFillAlertChannel,
   LoggingOrphanAlertChannel,
   LoggingResidualExposureAlertChannel,
   LoggingUnpricedFillAlertChannel,
@@ -385,6 +399,14 @@ export class UnreachableAlpacaClient implements AlpacaClient {
     return this.refuse('submitOcoOrder');
   }
 
+  async submitLimitOrder(): Promise<never> {
+    return this.refuse('submitLimitOrder');
+  }
+
+  async submitStopLimitOrder(): Promise<never> {
+    return this.refuse('submitStopLimitOrder');
+  }
+
   async cancelOrder(): Promise<never> {
     return this.refuse('cancelOrder');
   }
@@ -434,11 +456,25 @@ export class UnreachableAlpacaClient implements AlpacaClient {
  * 3. `EXIT_PATH_INSTRUMENTS.twoLot` — an older lot with a prior partial exit
  *    (itself produced the same way as scenario 2) plus a fresh second lot,
  *    flattened together, asserting NEITHER is left phantom-open (#571).
+ * 4. `EXIT_PATH_INSTRUMENTS.crashRestart` — a flatten that acks but whose
+ *    fill is not ingested before a "restart" (a second `buildExecutionSurface`
+ *    over the SAME store + SAME broker, `reconcile.test.ts`'s own definition
+ *    of one): asserts `reconcile()`'s flatten sweep finds the unresolved
+ *    journal row, resolves it against the venue, and the lot still reaches
+ *    `closed` afterward (#519, #526).
+ * 5. `EXIT_PATH_INSTRUMENTS.residualSweep` — a partial flatten (scenario 2's
+ *    technique) whose observing-poll re-arm is scripted to FAIL once, then a
+ *    restart: asserts the durable residual-protection marker (migration
+ *    0024) plus `reconcile()`'s #549 sweep re-arm the residual, clear the
+ *    marker, and page exactly once for the episode.
  */
 const EXIT_PATH_INSTRUMENTS = {
   fullExit: 'ETH-USD',
   partialFlatten: 'SOL-USD',
   twoLot: 'AVAX-USD',
+  crashRestart: 'DOGE-USD',
+  /** Scenario 5 (#549): the residual-protection sweep across a restart. */
+  residualSweep: 'LINK-USD',
 } as const;
 
 /**
@@ -483,6 +519,21 @@ export class RecordingResidualExposureAlertChannel implements ResidualExposureAl
 }
 
 /**
+ * Records every flatten-reconcile alert posted (#519) — a healthy scenario 4
+ * (below) resolves cleanly against the deterministic Simulated venue, so this
+ * should stay empty; `evaluateSmokeGate` asserts exactly that, the same
+ * shape `RecordingResidualExposureAlertChannel` above already establishes for
+ * a different escalation.
+ */
+export class RecordingFlattenReconcileAlertChannel implements FlattenReconcileAlertChannel {
+  readonly alerts: FlattenReconcileAlert[] = [];
+
+  async postFlattenReconcileAlert(alert: FlattenReconcileAlert): Promise<void> {
+    this.alerts.push(alert);
+  }
+}
+
+/**
  * Decorates a real `SimulatedBrokerAdapter` for the exit-path harness (#576).
  * Adds exactly two things neither the real adapter nor a change to
  * `execution/` (out of this ticket's scope) is needed for:
@@ -515,6 +566,8 @@ export class ExitPathBrokerAdapter implements BrokerAdapter {
   /** Every `cancel`/`submitBracket`/`submitFlatten`/`rearmProtectiveLegs` call, in call order. */
   readonly callSequence: string[] = [];
   private readonly partialFlattenFraction = new Map<string, number>();
+  /** Lots whose NEXT `rearmProtectiveLegs` call throws — scenario 5's one-shot failure (#549). */
+  private readonly rearmFailuresOnce = new Set<string>();
 
   /**
    * `delegate` is deliberately typed as the concrete `SimulatedBrokerAdapter`,
@@ -531,6 +584,17 @@ export class ExitPathBrokerAdapter implements BrokerAdapter {
     this.partialFlattenFraction.set(clientOrderId, fraction);
   }
 
+  /**
+   * Makes this lot's NEXT `rearmProtectiveLegs` call throw, once (#549,
+   * scenario 5) — the deterministic stand-in for "the observing poll's
+   * re-arm did not confirm", which is what forces the durable marker to be
+   * the ONLY path back to protection. One-shot so the restarted process's
+   * sweep retry succeeds against the same adapter.
+   */
+  failRearmOnce(clientOrderId: string): void {
+    this.rearmFailuresOnce.add(clientOrderId);
+  }
+
   /** Appends `action:clientOrderId` to `callSequence` — the one thing every recorded call shares. */
   private record(action: string, clientOrderId: string): void {
     this.callSequence.push(`${action}:${clientOrderId}`);
@@ -543,6 +607,12 @@ export class ExitPathBrokerAdapter implements BrokerAdapter {
 
   async getOrder(clientOrderId: string, instrument: string): Promise<NormalizedOrder | null> {
     return this.delegate.getOrder(clientOrderId, instrument);
+  }
+
+  /** #519/#526's reconcile-driven flatten sweep — recorded like every other call for scenario 4. */
+  async resumeFlatten(clientOrderId: string, instrument: string): Promise<NormalizedOrder | null> {
+    this.record('resumeFlatten', clientOrderId);
+    return this.delegate.resumeFlatten(clientOrderId, instrument);
   }
 
   async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
@@ -576,6 +646,11 @@ export class ExitPathBrokerAdapter implements BrokerAdapter {
     target: number,
   ): Promise<void> {
     this.record('rearmProtectiveLegs', clientOrderId);
+    if (this.rearmFailuresOnce.delete(clientOrderId)) {
+      throw new Error(
+        `smoke exit-path harness: scripted one-shot re-arm failure for '${clientOrderId}' (#549 scenario 5)`,
+      );
+    }
     return this.delegate.rearmProtectiveLegs(clientOrderId, instrument, side, qty, stop, target);
   }
 
@@ -695,6 +770,36 @@ export interface ExitPathEvidence {
   };
   /** Scenario 3's two lots (#571): named here so the gate can check neither is phantom-open. */
   twoLotFlatten: { lotKeys: readonly string[] };
+  /**
+   * Scenario 4's crash-restart (#519, #526): the lot the gate checks reached
+   * `closed`, the flatten's OWN idempotency key (`ReconcileDivergence`s key
+   * off the flatten, never the lot — a flatten writes no `OpenPosition`), and
+   * the `ReconcileReport` the RESTARTED `Execution` produced — what proves
+   * `reconcile()`'s flatten sweep, not merely `ingestFills()`, is what
+   * recovered it.
+   */
+  crashRestart: { lotKey: string; flattenKey: string; reconcileReport: ReconcileReport };
+  /** Every flatten-reconcile alert posted anywhere during the run — a healthy scenario 4 posts none. */
+  flattenReconcileAlerts: readonly FlattenReconcileAlert[];
+  /**
+   * Scenario 5 (#549): a partial flatten whose OBSERVING-POLL re-arm failed
+   * (scripted, one-shot), so the durable marker (migration 0024) + the
+   * restarted `reconcile()`'s residual-protection sweep are the ONLY path
+   * back to protection. The gate checks the sweep re-armed the residual
+   * (`protectedQty`), settled the marker (`markerCleared`), reported it
+   * (`sweepDivergenceAction: 'adopted'`), and paged exactly once for the
+   * whole episode — the observing poll's inline alert, never a second from
+   * the sweep (#342).
+   */
+  residualSweep: {
+    lotKey: string;
+    expectedResidual: number;
+    protectedQty: number | null;
+    /** `open_positions.residual_unprotected_since IS NULL` after the restarted sweep. */
+    markerCleared: boolean;
+    /** The restarted reconcile()'s divergence for the LOT's own key, if any. */
+    sweepDivergenceAction: ReconcileDivergence['action'] | undefined;
+  };
 }
 
 /**
@@ -708,8 +813,9 @@ async function runExitPathScenarios(input: {
   clock: SimulatedClock;
   costConfig: CostConfig;
   executionConfig: ExecutionConfig;
+  logger: Logger;
 }): Promise<ExitPathEvidence> {
-  const { db, clock, costConfig, executionConfig } = input;
+  const { db, clock, costConfig, executionConfig, logger } = input;
 
   const bars = Object.values(EXIT_PATH_INSTRUMENTS).flatMap((instrument) =>
     buildSmokeFixtureBars(instrument),
@@ -735,6 +841,7 @@ async function runExitPathScenarios(input: {
   });
   const broker = new ExitPathBrokerAdapter(innerBroker);
   const residualAlerts = new RecordingResidualExposureAlertChannel();
+  const flattenReconcileAlerts = new RecordingFlattenReconcileAlertChannel();
   const execution = buildExecutionSurface(
     {
       clock,
@@ -751,6 +858,8 @@ async function runExitPathScenarios(input: {
       // doc for why this channel has no phone-reaching counterpart yet
       // either).
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
+      flattenReconcileAlerts,
+      logger,
     },
     'smoke-exit-path',
   );
@@ -889,6 +998,123 @@ async function runExitPathScenarios(input: {
   );
   await execution.ingestFills();
 
+  // --- Scenario 4's ENTRY, hoisted ahead of scenario 5 -------------------
+  // (#549): scenario 5's failed re-arm must be the LAST thing any
+  // `ingestFills()` does before the restart — the Simulated feed re-offers a
+  // flatten's fill every poll, so any later poll would retry (and heal) the
+  // re-arm IN-PROCESS and the restart would find nothing to sweep. Scenario
+  // 4's own constraint is only that no ingest runs between its EXIT and the
+  // restart, so its entry fill is ingested here and its exit submitted after
+  // scenario 5's observing poll, below.
+  const lot4 = 'smoke-exit-restart-lot';
+  const lot4ExitKey = 'smoke-exit-restart-exit';
+  await submit(
+    exitPathOrder(
+      EXIT_PATH_INSTRUMENTS.crashRestart,
+      lot4,
+      'buy',
+      'entry',
+      EXIT_PATH_LOT_SIZE,
+      tick(),
+    ),
+    'scenario 4 entry',
+  );
+  await execution.ingestFills();
+
+  // --- Scenario 5 (#549): a partial flatten whose observing-poll re-arm ----
+  // FAILS (scripted, one-shot). The inline #525 alert fires once and the
+  // durable marker (migration 0024) is written; nothing in the poll path
+  // ever retries. The restarted `reconcile()`'s residual-protection sweep is
+  // what re-arms the residual and clears the marker — evidence read after
+  // the restart below.
+  const lot5 = 'smoke-exit-sweep-lot';
+  const lot5ExitKey = 'smoke-exit-sweep-exit';
+  await submit(
+    exitPathOrder(
+      EXIT_PATH_INSTRUMENTS.residualSweep,
+      lot5,
+      'buy',
+      'entry',
+      EXIT_PATH_LOT_SIZE,
+      tick(),
+    ),
+    'scenario 5 entry',
+  );
+  await execution.ingestFills();
+  broker.truncateFlattenFill(lot5ExitKey, PARTIAL_FLATTEN_FRACTION);
+  broker.failRearmOnce(lot5);
+  await submit(
+    exitPathOrder(
+      EXIT_PATH_INSTRUMENTS.residualSweep,
+      lot5ExitKey,
+      'sell',
+      'exit',
+      EXIT_PATH_LOT_SIZE,
+      tick(),
+    ),
+    'scenario 5 exit',
+  );
+  // The observing poll: the partial fill lands, the re-arm throws once, the
+  // lot's residual is left naked with only the marker pointing at it.
+  await execution.ingestFills();
+  const scenario5ExitFillQty = EXIT_PATH_LOT_SIZE * PARTIAL_FLATTEN_FRACTION;
+  // Same `filledSize - exitQty` expression as ingest-fills.ts — scenario 2's
+  // own float-identity reasoning, unchanged.
+  const scenario5ExpectedResidual = EXIT_PATH_LOT_SIZE - scenario5ExitFillQty;
+
+  // --- Scenario 4 (#519/#526): a flatten that acks but is never swept for --
+  // fills before a "restart" — reconcile()'s flatten-journal sweep, not
+  // ingestFills() alone, is what recovers it. Its entry was opened and
+  // ingested ABOVE, before scenario 5 (see the hoist comment there).
+  await submit(
+    exitPathOrder(
+      EXIT_PATH_INSTRUMENTS.crashRestart,
+      lot4ExitKey,
+      'sell',
+      'exit',
+      EXIT_PATH_LOT_SIZE,
+      tick(),
+    ),
+    'scenario 4 exit',
+  );
+  // Deliberately NO `execution.ingestFills()` here — the flatten's journal
+  // row is acked ('submitted') but its fill has not been redistributed, so
+  // `fills_swept_at` is still NULL: exactly the row
+  // `SharedStore.getUnresolvedFlattens()` exists to find, and exactly what a
+  // restart would otherwise strand if a live adapter's process-local
+  // `flattens` map (`AlpacaBrokerAdapter`) were the only record of it.
+
+  // --- restart: a SECOND `Execution` over the SAME store + SAME broker,
+  // `buildExecutionSurface` (the real composition-root binding function)
+  // called again — `reconcile.test.ts`'s own definition of "a restart".
+  const restarted = buildExecutionSurface(
+    {
+      clock,
+      broker,
+      store: new SqliteExecutionStore(db),
+      costModel,
+      marketData,
+      config: executionConfig,
+      mode: 'paper',
+      residualExposureAlerts: residualAlerts,
+      flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
+      flattenReconcileAlerts,
+      logger,
+    },
+    'smoke-exit-path-restart',
+  );
+  const restartReconcile = await restarted.reconcile();
+  await restarted.ingestFills();
+
+  // Scenario 5's evidence, read AFTER the restarted reconcile+ingest: the
+  // sweep's own divergence keys on the LOT (a flatten's divergence keys on
+  // the flatten's own id, so the lookup cannot collide), the venue-side
+  // protection off the delegate adapter, and the marker column raw off the
+  // store — the durable effect the gate exists to enforce (#430).
+  const lot5MarkerRow = db
+    .prepare('SELECT residual_unprotected_since FROM open_positions WHERE idempotency_key = ?')
+    .get(lot5) as { residual_unprotected_since: string | null } | undefined;
+
   return {
     brokerCallSequence: broker.callSequence,
     residualAlerts: residualAlerts.alerts,
@@ -899,6 +1125,250 @@ async function runExitPathScenarios(input: {
       protectedQty: broker.getProtectedQty(lot2),
     },
     twoLotFlatten: { lotKeys: [lot3Older, lot3Newer] },
+    crashRestart: { lotKey: lot4, flattenKey: lot4ExitKey, reconcileReport: restartReconcile },
+    flattenReconcileAlerts: flattenReconcileAlerts.alerts,
+    residualSweep: {
+      lotKey: lot5,
+      expectedResidual: scenario5ExpectedResidual,
+      protectedQty: broker.getProtectedQty(lot5),
+      markerCleared:
+        lot5MarkerRow !== undefined && lot5MarkerRow.residual_unprotected_since === null,
+      sweepDivergenceAction: restartReconcile.divergences.find(
+        (divergence) => divergence.idempotency_key === lot5,
+      )?.action,
+    },
+  };
+}
+
+/**
+ * The crypto-emulation scenario (#586) — the pre-soak gate's third leg,
+ * beside the six-stage entry run and the exit-path harness.
+ *
+ * Alpaca rejects every advanced order class for crypto (verified live, #550:
+ * `422` code `42210000`), so `AlpacaBrokerAdapter` emulates the protective
+ * pair for crypto: plain entry, plain stop_limit/limit legs armed by the
+ * fill sweep, sibling cancelled by hand, every transition journalled in
+ * `broker_brackets`. None of that is reachable by the six-stage run (it
+ * overrides the broker with `SimulatedBrokerAdapter`) or by the exit-path
+ * harness (same), and the smoke universe is crypto — so a soak's entire
+ * bracket path runs on this mechanism while nothing else in this gate can
+ * see it. Wiring a new mechanism means adding its enforcement assertion
+ * here (#430), so this scenario composes the REAL `AlpacaBrokerAdapter`
+ * over a REAL `SqliteBrokerStateStore` on the shared `:memory:` store, with
+ * only the wire client scripted — and the script mirrors the verified venue
+ * posture: any advanced order class for crypto is refused, exactly as the
+ * live API does, so a regression back to `order_class: 'bracket'` fails
+ * this run the same way it would fail the soak.
+ */
+class CryptoEmulationScenarioClient implements AlpacaClient {
+  private readonly orders = new Map<string, AlpacaOrder>();
+  private readonly idsByClientOrderId = new Map<string, string>();
+  /** Every venue order id a cancel reached — the sibling-cancel evidence. */
+  readonly cancelledOrderIds: string[] = [];
+  private nextId = 1;
+
+  private accept(request: {
+    symbol: string;
+    side: 'buy' | 'sell';
+    qty: string;
+    client_order_id: string;
+  }): AlpacaOrder {
+    // #585/#588: the adapter boundary must have converted to slash form
+    // before the wire — the live venue 422s dash form as "asset not found".
+    if (!request.symbol.endsWith('/USD')) {
+      throw new Error(
+        `smoke crypto-emulation scenario: order for '${request.symbol}' reached the wire in ` +
+          'dash form — the adapter boundary stopped converting (#585); the live venue rejects ' +
+          'this with 422 "asset not found"',
+      );
+    }
+    const order: AlpacaOrder = {
+      id: `scenario-alpaca-${this.nextId++}`,
+      client_order_id: request.client_order_id,
+      symbol: request.symbol,
+      side: request.side,
+      qty: request.qty,
+      order_class: '',
+      status: 'accepted',
+      filled_qty: '0',
+      filled_avg_price: null,
+      filled_at: null,
+    };
+    this.orders.set(order.id, order);
+    this.idsByClientOrderId.set(request.client_order_id, order.id);
+    return { ...order };
+  }
+
+  /** The #550-verified posture, scripted: crypto + advanced order class = 422. */
+  private rejectAdvancedOrderClass(method: string): never {
+    throw new Error(
+      `smoke crypto-emulation scenario: ${method} sent an advanced order_class for crypto — ` +
+        'the live venue rejects this with 422 {"code":42210000,"message":"crypto orders not ' +
+        'allowed for advanced order_class"} (verified #550). The adapter must take the ' +
+        'emulated path (#586), never this one.',
+    );
+  }
+
+  async submitOrder(): Promise<never> {
+    this.rejectAdvancedOrderClass('submitOrder (order_class: bracket)');
+  }
+
+  async submitOcoOrder(): Promise<never> {
+    this.rejectAdvancedOrderClass('submitOcoOrder (order_class: oco)');
+  }
+
+  async submitLimitOrder(request: AlpacaLimitOrderRequest): Promise<AlpacaOrder> {
+    return this.accept(request);
+  }
+
+  async submitStopLimitOrder(request: AlpacaStopLimitOrderRequest): Promise<AlpacaOrder> {
+    return this.accept(request);
+  }
+
+  async submitMarketOrder(): Promise<never> {
+    throw new Error('smoke crypto-emulation scenario: no flatten is scripted here');
+  }
+
+  async cancelOrder(alpacaOrderId: string): Promise<void> {
+    this.cancelledOrderIds.push(alpacaOrderId);
+    const order = this.orders.get(alpacaOrderId);
+    if (order !== undefined && order.status !== 'filled') order.status = 'canceled';
+  }
+
+  async getOrder(alpacaOrderId: string): Promise<AlpacaOrder> {
+    const order = this.orders.get(alpacaOrderId);
+    if (order === undefined) {
+      throw new Error(`smoke crypto-emulation scenario: unknown order id '${alpacaOrderId}'`);
+    }
+    return { ...order };
+  }
+
+  async getOrderByClientOrderId(clientOrderId: string): Promise<AlpacaOrder | null> {
+    const id = this.idsByClientOrderId.get(clientOrderId);
+    return id === undefined ? null : this.getOrder(id);
+  }
+
+  async getPositions(): Promise<never> {
+    throw new Error('smoke crypto-emulation scenario: getPositions is not scripted here');
+  }
+
+  async getAccount(): Promise<never> {
+    throw new Error('smoke crypto-emulation scenario: getAccount is not scripted here');
+  }
+
+  /** The scripted market: marks an order fully filled at `price`. */
+  fillByClientOrderId(clientOrderId: string, price: number, filledAt: string): void {
+    const id = this.idsByClientOrderId.get(clientOrderId);
+    const order = id === undefined ? undefined : this.orders.get(id);
+    if (order === undefined) {
+      throw new Error(
+        `smoke crypto-emulation scenario: cannot fill unknown client order id '${clientOrderId}'`,
+      );
+    }
+    order.status = 'filled';
+    order.filled_qty = order.qty;
+    order.filled_avg_price = String(price);
+    order.filled_at = filledAt;
+  }
+
+  venueOrderId(clientOrderId: string): string | undefined {
+    return this.idsByClientOrderId.get(clientOrderId);
+  }
+}
+
+/** What `evaluateSmokeGate` needs from the crypto-emulation scenario (#586). */
+export interface CryptoEmulationEvidence {
+  /** The lot's `broker_brackets` row after the full drive, or undefined if none was journalled. */
+  journalRow:
+    | {
+        phase: string;
+        asset_class: string | null;
+        stop_order_id: string | null;
+        target_order_id: string | null;
+      }
+    | undefined;
+  /** The entry fill came back through the emulation's sweep. */
+  entryFillSeen: boolean;
+  /** The stop leg's fill came back through the sweep after it fired. */
+  stopFillSeen: boolean;
+  /** The surviving take-profit leg's cancel reached the venue after the stop filled. */
+  siblingCancelled: boolean;
+}
+
+const CRYPTO_EMULATION_LOT_KEY = 'smoke-crypto-emulated-lot';
+
+/**
+ * Drives one emulated crypto bracket end to end against the scripted venue:
+ * submit (must NOT be an advanced order class — the script 422s that), fill
+ * the entry, sweep (arms the legs), fill the stop, sweep (cancels the
+ * sibling), then read the journal back off the SAME db the gate reads.
+ */
+async function runCryptoEmulationScenario(db: SqliteHandle): Promise<CryptoEmulationEvidence> {
+  const client = new CryptoEmulationScenarioClient();
+  const adapter = new AlpacaBrokerAdapter({
+    client,
+    rateLimiter: new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 }),
+    state: new SqliteBrokerStateStore(db),
+    unpricedFillAlerts: {
+      postUnpricedFillAlert: async () => {},
+    },
+    // A double fill is impossible in this script (the target is cancelled
+    // before it could ever fill), so an alert here is itself a defect —
+    // thrown rather than swallowed, failing the run loudly.
+    ocoDoubleFillAlerts: {
+      postOcoDoubleFillAlert: async (alert) => {
+        throw new Error(
+          `smoke crypto-emulation scenario: unexpected double-fill alert for ` +
+            `'${alert.client_order_id}'`,
+        );
+      },
+    },
+  });
+
+  const ack = await adapter.submitBracket({
+    client_order_id: CRYPTO_EMULATION_LOT_KEY,
+    instrument: 'BTC-USD',
+    asset_class: 'crypto',
+    side: 'buy',
+    size: 0.5,
+    entry: 60_000,
+    stop: 57_000,
+    target: 66_000,
+    time_in_force: 'gtc',
+  });
+  if (ack.order_state !== 'submitted') {
+    throw new Error(
+      `smoke crypto-emulation scenario: entry ack was '${ack.order_state}', not 'submitted' — ` +
+        'a scenario precondition is wrong, not the gate',
+    );
+  }
+
+  client.fillByClientOrderId(CRYPTO_EMULATION_LOT_KEY, 60_000, '2026-01-02T00:00:00Z');
+  const armSweep = await adapter.fetchNewFills(new Date(0));
+
+  // The emulation's deterministic first-episode leg id (#586) — the stop
+  // firing is the OCO edge under test.
+  client.fillByClientOrderId(`${CRYPTO_EMULATION_LOT_KEY}:stop`, 57_000, '2026-01-02T00:01:00Z');
+  const exitSweep = await adapter.fetchNewFills(new Date(0));
+
+  const journalRow = db
+    .prepare(
+      'SELECT phase, asset_class, stop_order_id, target_order_id FROM broker_brackets ' +
+        "WHERE venue = 'alpaca' AND client_order_id = ?",
+    )
+    .get(CRYPTO_EMULATION_LOT_KEY) as CryptoEmulationEvidence['journalRow'];
+
+  const targetVenueId = client.venueOrderId(`${CRYPTO_EMULATION_LOT_KEY}:target`);
+  return {
+    journalRow,
+    entryFillSeen: armSweep.some(
+      (fill) => fill.leg === 'entry' && fill.client_order_id === CRYPTO_EMULATION_LOT_KEY,
+    ),
+    stopFillSeen: exitSweep.some(
+      (fill) => fill.leg === 'stop' && fill.client_order_id === CRYPTO_EMULATION_LOT_KEY,
+    ),
+    siblingCancelled:
+      targetVenueId !== undefined && client.cancelledOrderIds.includes(targetVenueId),
   };
 }
 
@@ -1148,6 +1618,14 @@ export function evaluateSmokeGate(
      * not a run that legitimately has nothing to report.
      */
     exitPath: ExitPathEvidence;
+    /**
+     * The crypto-emulation scenario's evidence (#586) — required for the
+     * same "compile error, not a silent no-op" reason the two above are:
+     * `runCryptoEmulationScenario` always runs as part of `runSmoke`, and
+     * the smoke universe is crypto, so the soak's entire bracket path runs
+     * on the mechanism this gates.
+     */
+    cryptoEmulation: CryptoEmulationEvidence;
   },
 ): SmokeGateResult {
   const failures: string[] = [];
@@ -1464,12 +1942,65 @@ export function evaluateSmokeGate(
         're-arm (#525) sized the wrong quantity',
     );
   }
-  if (residualAlerts.length > 0) {
+  // Scoped since #549: scenario 5 DELIBERATELY fails one re-arm, so exactly
+  // its one inline alert is expected — any OTHER lot alerting still means a
+  // re-arm failed on a deterministic offline broker.
+  const { residualSweep } = options.exitPath;
+  const strayResidualAlerts = residualAlerts.filter(
+    (alert) => alert.idempotency_key !== residualSweep.lotKey,
+  );
+  if (strayResidualAlerts.length > 0) {
     failures.push(
-      `${residualAlerts.length} residual-exposure alert(s) fired during the smoke run ` +
-        `(lot(s): ${residualAlerts.map((alert) => alert.idempotency_key).join(', ')}) — a ` +
+      `${strayResidualAlerts.length} residual-exposure alert(s) fired during the smoke run ` +
+        `(lot(s): ${strayResidualAlerts.map((alert) => alert.idempotency_key).join(', ')}) — a ` +
         'successful re-arm posts nothing (residual-exposure-alert.ts); an alert here means the ' +
         '#525 re-arm failed on a deterministic offline broker',
+    );
+  }
+
+  // #549 — the residual-protection sweep's ENFORCEMENT assertions (#430's
+  // convention, mirroring #519/#526's above): scenario 5's observing-poll
+  // re-arm was scripted to fail, so ONLY the durable marker + the restarted
+  // reconcile()'s sweep can have re-established protection. Each check names
+  // a different way the mechanism can silently stop being wired.
+  const scenario5Alerts = residualAlerts.filter(
+    (alert) => alert.idempotency_key === residualSweep.lotKey,
+  );
+  if (scenario5Alerts.length !== 1) {
+    failures.push(
+      `scenario 5's residual episode alerted ${scenario5Alerts.length} time(s), expected exactly 1 ` +
+        "(the observing poll's inline #525 alert) — 0 means the failed re-arm no longer pages at " +
+        'all; more than 1 means the once-per-episode dedup (#549/#342, ' +
+        'open_positions.residual_rearm_alerted_at) regressed and the sweep re-pages every pass',
+    );
+  }
+  if (residualSweep.sweepDivergenceAction === undefined) {
+    failures.push(
+      `the restarted Execution's reconcile() report named no divergence for scenario 5's lot ` +
+        `'${residualSweep.lotKey}' — the durable residual-protection marker (migration 0024) was ` +
+        'never written by the observing poll, or SharedStore.getUnprotectedResidualLots() found ' +
+        'nothing, so the #549 sweep either never ran or had nothing to find',
+    );
+  } else if (residualSweep.sweepDivergenceAction !== 'adopted') {
+    failures.push(
+      `the restarted Execution's residual-protection sweep settled scenario 5's lot with action ` +
+        `'${residualSweep.sweepDivergenceAction}', not 'adopted' — the retry against a healthy ` +
+        'deterministic broker should have re-armed and confirmed; anything else means the sweep ' +
+        'could not settle a marker it should have (#549)',
+    );
+  }
+  if (!residualSweep.markerCleared) {
+    failures.push(
+      `scenario 5's residual-protection marker (open_positions.residual_unprotected_since, lot ` +
+        `'${residualSweep.lotKey}') is still set after the restarted reconcile() — protection was ` +
+        'never CONFIRMED, so the lot would be re-swept forever (#549)',
+    );
+  }
+  if (residualSweep.protectedQty !== residualSweep.expectedResidual) {
+    failures.push(
+      `lot '${residualSweep.lotKey}' has ${residualSweep.protectedQty ?? 'no'} protected after ` +
+        `the #549 sweep's retry, expected the residual ${residualSweep.expectedResidual} — the ` +
+        'sweep either never re-armed (the lot is naked) or sized the wrong quantity',
     );
   }
 
@@ -1484,6 +2015,110 @@ export function evaluateSmokeGate(
       `lot(s) ${phantomOpen.join(', ')} were named by a two-lot flatten but never reached ` +
         "order_state 'closed' — the #571 fill split left quantity unaccounted for on at least " +
         'one sibling lot',
+    );
+  }
+
+  // #519/#526 — the ENFORCEMENT assertions for the flatten-journal sweep
+  // (#430's convention: a durable EFFECT only the new mechanism produces,
+  // not that an object was constructed). A regression that deletes
+  // `reconcile()`'s flatten sweep, or reverts `resumeFlatten` to a no-op,
+  // leaves scenario 4's lot open forever — `ingestFills()` alone never polls
+  // an order the process-local `flattens` map has forgotten, so nothing
+  // short of the sweep itself can close it.
+  const { crashRestart, flattenReconcileAlerts: flattenReconcileAlertsFired } = options.exitPath;
+  const crashRestartDivergence = crashRestart.reconcileReport.divergences.find(
+    (divergence) => divergence.idempotency_key === crashRestart.flattenKey,
+  );
+  if (crashRestartDivergence === undefined) {
+    failures.push(
+      `the restarted Execution's reconcile() report named no divergence for scenario 4's ` +
+        `flatten '${crashRestart.flattenKey}' (lot '${crashRestart.lotKey}') — ` +
+        'SharedStore.getUnresolvedFlattens() found nothing to resolve, so the journal sweep ' +
+        '(#519) either never ran or the row was not recognised as unresolved ' +
+        `(checked=${crashRestart.reconcileReport.checked}, ` +
+        `divergences=${crashRestart.reconcileReport.divergences.length})`,
+    );
+  } else if (crashRestartDivergence.action !== 'adopted') {
+    failures.push(
+      `the restarted Execution's reconcile() settled scenario 4's flatten with action ` +
+        `'${crashRestartDivergence.action}', not 'adopted' (reason: ` +
+        `${crashRestartDivergence.reason}) — the venue genuinely acked this flatten, so anything ` +
+        "other than 'adopted' means reconcile() mis-settled a row it should have resolved cleanly",
+    );
+  }
+  const crashRestartLot = positions.find(
+    (position) => position.idempotency_key === crashRestart.lotKey,
+  );
+  if (crashRestartLot === undefined || crashRestartLot.order_state !== 'closed') {
+    failures.push(
+      `lot '${crashRestart.lotKey}' (scenario 4's crash-restart flatten) never reached ` +
+        `order_state 'closed' after the restarted Execution's reconcile() + ingestFills() ` +
+        `(${crashRestartLot === undefined ? 'no row in open_positions' : `state=${crashRestartLot.order_state}`}) ` +
+        "— reconcile()'s flatten sweep did not re-establish the fill-sweep worklist the way " +
+        '#519/#526 require',
+    );
+  }
+  if (flattenReconcileAlertsFired.length > 0) {
+    failures.push(
+      `${flattenReconcileAlertsFired.length} flatten-reconcile alert(s) fired during the smoke ` +
+        `run (flatten(s): ${flattenReconcileAlertsFired.map((alert) => alert.idempotency_key).join(', ')}) ` +
+        "— scenario 4's flatten resolves cleanly against a deterministic offline broker; an " +
+        'alert here means reconcile() could not settle a row it should have',
+    );
+  }
+
+  // #586 — the emulated crypto protective legs, unconditional for #430's
+  // reason: `runCryptoEmulationScenario` always runs, the smoke universe is
+  // crypto, and no other check in this gate can see the emulation at all
+  // (the six-stage run and the exit-path harness both override the broker
+  // with `SimulatedBrokerAdapter`). Each check names a different way the
+  // mechanism can silently stop being wired.
+  const emulation = options.cryptoEmulation;
+  if (emulation.journalRow === undefined || emulation.journalRow.asset_class !== 'crypto') {
+    failures.push(
+      "the emulated-leg journal (broker_brackets, venue 'alpaca') has no crypto row for the " +
+        "crypto-emulation scenario's lot — submitBracket stopped journalling the emulated " +
+        'bracket (#586), so a crash between the entry and its protective legs leaves a live ' +
+        'crypto position nothing knows to protect',
+    );
+  } else {
+    if (
+      emulation.journalRow.stop_order_id === null ||
+      emulation.journalRow.target_order_id === null
+    ) {
+      failures.push(
+        "the crypto-emulation scenario's journal row is missing protective-leg order ids after " +
+          'the entry filled — the legs were never submitted as plain crypto orders (#586), so ' +
+          'the filled lot sat naked',
+      );
+    }
+    if (emulation.journalRow.phase !== 'resolved') {
+      failures.push(
+        `the crypto-emulation scenario's journal row ended in phase ` +
+          `'${emulation.journalRow.phase}', expected 'resolved' — the emulated OCO edge ` +
+          '(leg fill -> sibling cancel) did not complete (#586)',
+      );
+    }
+  }
+  if (!emulation.entryFillSeen) {
+    failures.push(
+      "the crypto-emulation scenario's entry fill never came back through fetchNewFills — the " +
+        'emulation sweep is not polling its plain entry order (#586), so ingestFills would ' +
+        'never learn a crypto entry filled',
+    );
+  }
+  if (!emulation.stopFillSeen) {
+    failures.push(
+      "the crypto-emulation scenario's stop-leg fill never came back through fetchNewFills — " +
+        'the emulation sweep is not polling its resting legs (#586), so a stop-out would go ' +
+        'unbooked',
+    );
+  }
+  if (!emulation.siblingCancelled) {
+    failures.push(
+      'the surviving take-profit leg was never cancelled after the stop leg filled — the ' +
+        'emulated one-cancels-other edge is not firing (#586), leaving a resting order that ' +
+        'can fire into a flat position and open a reverse one',
     );
   }
 
@@ -1739,6 +2374,10 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       heartbeatChannel: new LoggingHeartbeatChannel(logger),
       orphanAlerts: new LoggingOrphanAlertChannel(logger),
       unpricedFillAlerts: new LoggingUnpricedFillAlertChannel(logger),
+      // #586 — the ninth `ALERT_CHANNEL_FIELDS` member; injected so this
+      // run stays exempt from SAMURAI_ALERTS (see the derived-list comment
+      // below).
+      ocoDoubleFillAlerts: new LoggingOcoDoubleFillAlertChannel(logger),
       breachAlerts: new LoggingBreachAlertChannel(logger),
       loosenApprovals: new LoggingLoosenApprovalChannel(logger),
       analystSkipAlerts: new LoggingAnalystSkipAlertChannel(logger),
@@ -1747,6 +2386,14 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // this injection already covered it before that landed, so `resolveAlertsMode`'s
       // exemption logic (below) needed no change here — see the next comment.
       residualExposureAlerts: tickLoopResidualAlerts,
+      // #519 — the ninth channel (`ALERT_CHANNEL_FIELDS`, alert-transport.ts).
+      // The six-stage tick loop above never reaches a flatten (no exit intent
+      // is ever driven through it — see `runExitPathScenarios`'s own file doc
+      // for why), so there is nothing here for the gate to read back; a
+      // plain log-only instance is enough to keep this injection list
+      // exhaustive against `ALERT_CHANNEL_FIELDS`, the same posture
+      // `orphanAlerts`/`unpricedFillAlerts`/etc. already take below.
+      flattenReconcileAlerts: new LoggingFlattenReconcileAlertChannel(logger),
       // #465 — the seventh channel; #551 later added an eighth
       // (`residualExposureAlerts`, above). `resolveAlertsMode` exempts a
       // caller that supplies EVERY field in `ALERT_CHANNEL_FIELDS` from
@@ -1791,13 +2438,20 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       clock,
       costConfig: profile.costConfig,
       executionConfig: profile.executionConfig,
+      logger,
     });
+
+    // #586: the emulated crypto protective legs, on the REAL AlpacaBrokerAdapter
+    // over the same db — its own lot key and its own scripted client, so it
+    // contends with nothing above.
+    const cryptoEmulation = await runCryptoEmulationScenario(db);
 
     const observations = readSmokeObservations(db);
     const gate = evaluateSmokeGate(observations, {
       minTicks: targetTicks,
       alpacaWireClientReached: alpacaBrokerClient.reached,
       llmRateLimiterSnapshot: llmRateLimiter.snapshot(),
+      cryptoEmulation,
       exitPath: {
         ...exitPathHarnessResult,
         // Alerts from BOTH the six-stage tick loop and the exit-path harness —

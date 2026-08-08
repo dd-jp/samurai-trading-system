@@ -18,8 +18,9 @@
  *    happen; neither is on any single snapshot.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PipelineView } from '../../dashboard/pipeline-types.ts';
+import type { AnalystPerformanceRow, DebateRow, PositionRow } from '../../dashboard/types.ts';
 import { DetailDrawer } from './components/DetailDrawer.tsx';
 import { AnalystsPanel } from './components/panels/AnalystsPanel.tsx';
 import { DebatesPanel } from './components/panels/DebatesPanel.tsx';
@@ -40,6 +41,35 @@ import './App.css';
 
 /** An empty view, so every derived structure exists from first paint. */
 const EMPTY_VIEW: PipelineView = { lanes: [], live_trace_id: null, live_entered_at: null };
+
+/**
+ * The panels' empty fallbacks, hoisted for the same reason `EMPTY_VIEW` is
+ * (#606 item 6): `?? []` inside the render minted a fresh array identity every
+ * pass, so a panel wrapped in `React.memo` would re-render on every 3-second
+ * poll — and on every selection change — even when the page has no data for it
+ * at all. No panel is memoised today; this is the identity discipline that
+ * makes memoising one work when it happens, and it matches `EMPTY_VIEW`, whose
+ * stable identity the walk planner's memo already depends on.
+ */
+const EMPTY_POSITIONS: readonly PositionRow[] = [];
+const EMPTY_ANALYSTS: readonly AnalystPerformanceRow[] = [];
+const EMPTY_DEBATES: readonly DebateRow[] = [];
+
+/**
+ * What the drawer is showing: an instrument AND the trace within it (#606 item
+ * 5).
+ *
+ * The trace is part of the selection rather than derived from the instrument
+ * because an instrument settles repeatedly in a session and the ledger keeps
+ * every settled row. A ledger row names its own `trace_id`; a sigil chip
+ * stands for whatever trace its lane carries right now, so it selects
+ * `traceId: null` and the lane resolves it.
+ */
+interface Selection {
+  instrument: string;
+  /** `null` means "whatever trace this instrument's lane carries now". */
+  traceId: string | null;
+}
 
 /**
  * How many equity samples the sparkline keeps. Samples arrive at the Alpaca
@@ -63,9 +93,24 @@ export function App({ snapshotOptions }: AppProps = {}) {
   // for "is this new data".
   const { snapshot, previous, firstPaint, snapOnly } = feed;
 
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selection, setSelection] = useState<Selection | null>(null);
   const [ledger, setLedger] = useState(createLedger);
   const [equitySamples, setEquitySamples] = useState<readonly EquitySample[]>([]);
+
+  const selected = selection?.instrument ?? null;
+  // A chip stands for its lane's CURRENT trace, so it pins none; a ledger row
+  // is a settled decision and pins the trace stamped on it (#606 item 5).
+  // `useCallback` for the same identity reason as the empty fallbacks above:
+  // these replaced a bare `setSelection`, which React guarantees is stable, and
+  // a handler rebuilt every render would hand that guarantee back.
+  const selectChip = useCallback(
+    (instrument: string) => setSelection({ instrument, traceId: null }),
+    [],
+  );
+  const selectLedgerRow = useCallback(
+    (instrument: string, traceId: string) => setSelection({ instrument, traceId }),
+    [],
+  );
 
   const view = snapshot?.pipeline ?? EMPTY_VIEW;
   const previousView = previous?.pipeline ?? null;
@@ -151,9 +196,19 @@ export function App({ snapshotOptions }: AppProps = {}) {
     [snapshot],
   );
 
-  const selectedLane = view.lanes.find((lane) => lane.instrument === selected);
+  // A ledger row pins its own trace, so the lane is looked up BY TRACE when
+  // one is pinned: an older settled row must not resolve to the lane that
+  // instrument is running now (#606 item 5). A pinned trace that has aged out
+  // of the 15-minute pipeline window finds no lane, and the drawer says so
+  // rather than substituting a newer decision.
+  const selectedLane =
+    selection === null
+      ? undefined
+      : selection.traceId === null
+        ? view.lanes.find((lane) => lane.instrument === selection.instrument)
+        : view.lanes.find((lane) => lane.trace_id === selection.traceId);
   const selectedDebate = snapshot?.debates.find((debate) => debate.instrument === selected);
-  const selectedTrace = selectedLane?.trace_id ?? null;
+  const selectedTrace = selection?.traceId ?? selectedLane?.trace_id ?? null;
   const selectedVerdict = selectedTrace === null ? undefined : verdictsByTrace.get(selectedTrace);
 
   return (
@@ -170,7 +225,7 @@ export function App({ snapshotOptions }: AppProps = {}) {
           view={view}
           layout={layout}
           selectedInstrument={selected}
-          onSelect={setSelected}
+          onSelect={selectChip}
           floorRef={floorRef}
           registerRoomRef={registerRoomRef}
           registerChipRef={registerChipRef}
@@ -180,11 +235,16 @@ export function App({ snapshotOptions }: AppProps = {}) {
           <VerdictLedger
             entries={ledger.entries}
             verdictsByTrace={verdictsByTrace}
-            selectedInstrument={selected}
-            onSelect={setSelected}
+            // The RESOLVED trace, so a chip click also highlights the ledger
+            // row describing the trace that chip is standing on. The chip and
+            // its room stay highlighted by instrument, which is still true of
+            // both — only the drawer and this list are per-trace.
+            selectedTraceId={selectedTrace}
+            onSelect={selectLedgerRow}
           />
           <DetailDrawer
             instrument={selected}
+            traceId={selectedTrace}
             lane={selectedLane}
             debate={selectedDebate}
             verdict={selectedVerdict}
@@ -192,11 +252,11 @@ export function App({ snapshotOptions }: AppProps = {}) {
         </div>
 
         <div className="bento">
-          <PositionsPanel positions={snapshot?.positions ?? []} />
+          <PositionsPanel positions={snapshot?.positions ?? EMPTY_POSITIONS} />
           <MetricsPanel metrics={snapshot?.metrics ?? null} equitySamples={equitySamples} />
-          <AnalystsPanel analysts={snapshot?.analysts ?? []} />
+          <AnalystsPanel analysts={snapshot?.analysts ?? EMPTY_ANALYSTS} />
           <SpendPanel spend={snapshot?.llm_spend ?? null} />
-          <DebatesPanel debates={snapshot?.debates ?? []} />
+          <DebatesPanel debates={snapshot?.debates ?? EMPTY_DEBATES} />
         </div>
       </main>
     </div>

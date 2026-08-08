@@ -39,11 +39,26 @@
  * the order-submitting path, and this fallback is what keeps a naked
  * residual from going unnoticed through an unattended soak (#238).
  *
- * Both loops below run under a containment boundary — see `ContainedFailure`.
- * A failure inside one flatten bucket or one lot decides that unit only; the
- * whole set is reported once, after every other unit of work has landed.
+ * #549: both re-arm triggers above are POLL-SCOPED, so this module now also
+ * journals a durable marker (`open_positions.residual_unprotected_since`,
+ * migration 0024) the moment a residual is first known — at flatten
+ * redistribution and again ahead of the re-arm attempt — cleared only when
+ * protection is CONFIRMED. `sweepResidualProtection`
+ * (residual-protection-sweep.ts) reads it back on reconcile/fill-sync
+ * cadence, which is what retries a re-arm a crash (or a survived failure)
+ * left unconfirmed; the #525 no-retry-loop decision stands unchanged on the
+ * poll path itself.
+ *
+ * Every loop below runs under a containment boundary — see `ContainedFailure`.
+ * A failure inside one flatten bucket, one lot, or one flatten's post-advance
+ * sweep-mark decides that unit only; the whole set is reported once, after
+ * every other unit of work has landed — except a `flatten-sweep-mark`
+ * failure on its own, which resolves the poll rather than rejecting it (see
+ * `throwContainedFailures`'s own doc).
  */
+
 import type { ClosedTrade, Fill, OpenPosition, OrderState } from '../shared/index.js';
+import { logCaughtFailure, safeLog } from '../shared/index.js';
 import type { ExecutionInput, NormalizedFill } from './types.js';
 
 /** A fill on a protective/closing leg — anything that isn't opening the lot. */
@@ -90,7 +105,13 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
   // full original size because an earlier sibling lot absorbed the whole
   // partial fill.
   const failures: ContainedFailure[] = [];
-  const flattenTargetedLots = await redistributeFlattenFills(input, byLot, positions, failures);
+  const flattenNamedLots = await redistributeFlattenFills(input, byLot, positions, failures);
+  // The flat union `advanceLot`'s per-lot re-arm check reads (#525) — a lot
+  // named by ANY flatten this poll, independent of which one.
+  const flattenTargetedLots = new Set<string>();
+  for (const lotKeys of flattenNamedLots.values()) {
+    for (const lotKey of lotKeys) flattenTargetedLots.add(lotKey);
+  }
 
   for (const position of positions) {
     // Every lot is independent work: whether one lot's store write or broker
@@ -109,9 +130,61 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
     }
   }
 
+  // #519/#526: mark each flatten whose EVERY named lot durably advanced this
+  // poll (or had nothing new to advance) as swept — see
+  // `SharedStore.markFlattenFillsSwept`'s doc for why this is gated on the
+  // lot-advance outcome rather than fired unconditionally once redistribution
+  // succeeds, and migration 0023 for what this bounds.
+  const failedLotKeys = new Set(
+    failures.filter((failure) => failure.scope === 'lot-advance').map((failure) => failure.key),
+  );
+  for (const [flattenKey, lotKeys] of flattenNamedLots) {
+    if ([...lotKeys].some((lotKey) => failedLotKeys.has(lotKey))) continue;
+    try {
+      await input.store.markFlattenFillsSwept(flattenKey, now);
+    } catch (error) {
+      // NOT correctness-critical the way a 'flatten-attribution'/'lot-advance'
+      // failure is (#519/#526 review, deepseek): a missed mark only means the
+      // row stays exactly where it already was — unswept, and so still found
+      // by `getUnresolvedFlattens()` — which is `reconcile()`'s own designed
+      // recovery for it, not data this poll lost. `throwContainedFailures`
+      // below is gated accordingly: this scope alone does not reject the
+      // poll's promise. It still travels in `failures`, so it is NAMED in the
+      // AggregateError whenever a genuinely correctness-critical failure ALSO
+      // happened this same poll — nothing here hides it from that report.
+      // Only a mark failure entirely on its own resolves without REJECTING the
+      // poll's promise (#519/#526's gate below) — but it no longer resolves
+      // SILENTLY (#573): this module now carries a `Logger`
+      // (`ExecutionInput.logger`), so the row staying unswept gets a local
+      // trace even when nothing else this poll failed to name it in an
+      // AggregateError. `warn`, not `error`: the self-healing next-reconcile()
+      // recovery this comment already describes is exactly why this is not
+      // an operator escalation.
+      logCaughtFailure(
+        input.logger,
+        {
+          trace_id: input.trace_id,
+          stage: 'execution',
+          level: 'warn',
+          message:
+            'markFlattenFillsSwept failed — the row stays unswept and will be found again by ' +
+            "the next reconcile() pass (SharedStore.getUnresolvedFlattens()'s own designed recovery)",
+        },
+        error,
+        { flatten_key: flattenKey },
+      );
+      failures.push({ scope: 'flatten-sweep-mark', key: flattenKey, error });
+    }
+  }
+
   // Last, once no unit of work is left to lose: reporting must not cost
-  // progress, and progress must not buy silence.
-  throwContainedFailures(failures);
+  // progress, and progress must not buy silence. Scoped to the
+  // correctness-critical failures only (#519/#526 review) — see the
+  // 'flatten-sweep-mark' catch above for why that scope alone must not
+  // reject this poll's promise.
+  if (failures.some((failure) => failure.scope !== 'flatten-sweep-mark')) {
+    throwContainedFailures(failures);
+  }
 }
 
 /**
@@ -131,14 +204,26 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
  * indefinitely, looking in the logs exactly like a quiet market.
  *
  * Nothing that constructs one of these may throw. A containment guard that can
- * re-throw reopens exactly the hole it closes — the property `safeLog()`
- * (orchestrator/tick-loop.ts) and `alertResidualExposure` below are built
- * around. So the `catch` blocks push and do nothing else: no formatting, no
- * inspection of the caught error, no I/O.
+ * re-throw reopens exactly the hole it closes — the property `shared/safe-log.ts`'s
+ * `safeLog()` and `alertResidualExposure` below are built around. So the
+ * `catch` blocks push and do nothing else: no formatting, no inspection of
+ * the caught error, no I/O.
  */
 interface ContainedFailure {
-  /** Which of the two boundaries caught it — a flatten bucket, or one lot's advance. */
-  scope: 'flatten-attribution' | 'lot-advance';
+  /**
+   * Which boundary caught it — a flatten bucket's redistribution, one lot's
+   * advance, or (#519/#526) the best-effort `markFlattenFillsSwept` write
+   * that bounds `reconcile()`'s rescan. The third is NOT correctness-critical
+   * the way the first two are (see its call site): `ingestFills`'s own call
+   * to `throwContainedFailures` is gated to skip it when it is the ONLY
+   * scope present, so a mark failure alone resolves the poll rather than
+   * rejecting it — reviewed and fixed on PR #603 after a mark failure was
+   * found to reject the whole poll exactly like the other two, contradicting
+   * this same "not correctness-critical" claim. It still rides in this list,
+   * and so is still named, whenever a correctness-critical failure ALSO
+   * occurs the same poll.
+   */
+  scope: 'flatten-attribution' | 'lot-advance' | 'flatten-sweep-mark';
   /**
    * The offending record's identifier: `open_positions.idempotency_key` for a
    * lot, the flatten's `client_order_id` for a bucket. An IDENTIFIER, never
@@ -156,6 +241,13 @@ interface ContainedFailure {
 /**
  * Fail-closed AND visible, which is the bar: the poll did not fully succeed
  * and says so, having first done every piece of work it still could.
+ *
+ * The caller (`ingestFills`) only reaches this when `failures` names at
+ * least one correctness-critical scope — a 'flatten-sweep-mark'-only
+ * `failures` array never gets here at all (#519/#526 review): that scope's
+ * own recovery (the row stays unswept and rescannable) does not need a
+ * rejected promise to work, and treating it as fatal here would make a poll
+ * that fully succeeded at every money-relevant thing report itself failed.
  *
  * Not swallowed, because silence is the failure mode being fixed. The one
  * production caller is `startFillSync`'s `runOnce` (orchestrator/fill-sync.ts),
@@ -201,26 +293,33 @@ function throwContainedFailures(failures: readonly ContainedFailure[]): void {
  * (below), so `advanceLot`'s `isExitFill`/`closedTrade` see one true answer
  * regardless of which adapter reported it.
  *
- * Returns every lot key named by a flatten this call actually processed
- * (#525) — independent of the per-fill split, which can legitimately
- * leave a later-opened lot with ZERO share of a partial fill. That lot gets
- * no entry in `byLot` and so is otherwise invisible to `ingestFills`'
- * per-position loop this poll; the caller uses this set to still run
- * `advanceLot`'s re-arm check for it.
+ * Returns, PER FLATTEN, every lot key it named and this call actually
+ * processed (#525) — independent of the per-fill split, which can
+ * legitimately leave a later-opened lot with ZERO share of a partial fill.
+ * That lot gets no entry in `byLot` and so is otherwise invisible to
+ * `ingestFills`' per-position loop this poll; the caller uses the flat union
+ * of every flatten's set to still run `advanceLot`'s re-arm check for it.
+ *
+ * Keyed by the flatten's OWN `client_order_id` rather than flattened into one
+ * set (#519/#526): the caller also uses this to decide, per flatten, whether
+ * `SharedStore.markFlattenFillsSwept` may run — which requires knowing which
+ * lots THAT flatten named, not the union across every flatten this poll.
  *
  * Never throws. One flatten's failure is contained to that flatten and
  * appended to `failures` for `ingestFills` to report once the poll is done —
  * see `ContainedFailure`. A bucket that fails is left un-redistributed and so
- * un-attributed, which is the fail-closed answer; it is not left unreported.
+ * un-attributed, which is the fail-closed answer; it is not left unreported,
+ * and (per the caller) it is absent from the returned map, so it is never a
+ * `markFlattenFillsSwept` candidate either.
  */
 async function redistributeFlattenFills(
   input: ExecutionInput,
   byLot: Map<string, NormalizedFill[]>,
   positions: readonly OpenPosition[],
   failures: ContainedFailure[],
-): Promise<Set<string>> {
+): Promise<Map<string, Set<string>>> {
   const positionKeys = new Set(positions.map((position) => position.idempotency_key));
-  const flattenTargetedLots = new Set<string>();
+  const flattenNamedLots = new Map<string, Set<string>>();
 
   // A snapshot of the keys, not a live iterator: the loop body deletes from
   // `byLot` as it goes (once a flatten bucket is consumed, redistributed) and
@@ -255,22 +354,39 @@ async function redistributeFlattenFills(
     // failure. Every lot, including the ones this flatten named, still
     // advances on its OWN fills.
     //
-    // The named-lot set is merged only on SUCCESS. A lot key reaching
-    // `flattenTargetedLots` from a bucket that then failed would make
+    // The named-lot set is recorded only on SUCCESS. A lot key reaching
+    // `flattenNamedLots` from a bucket that then failed would make
     // `advanceLot` re-arm protective legs sized off a fill record this very
     // containment refused to complete — arming the venue for quantity it may
     // already have sold. Left out, that lot is naked and reported; left in, it
     // could be naked AND covered by a leg that sells what it does not hold.
+    // The same omission is also what keeps a failed flatten out of the
+    // caller's `markFlattenFillsSwept` candidates (#519/#526) — see this
+    // function's own doc.
     const targetedByThisFlatten = new Set<string>();
     try {
       await redistributeOneFlatten(input, byLot, clientOrderId, targetedByThisFlatten);
-      for (const lotKey of targetedByThisFlatten) flattenTargetedLots.add(lotKey);
+      // EMPTY, not merely absent-from-the-map, is `redistributeOneFlatten`'s
+      // ordinary return for a `clientOrderId` that is not a real flatten at
+      // all — `getFlattenAttribution` returning `null` (its own doc: "not a
+      // known flatten either"). That is NOT a rare edge case here: `brackets`
+      // is never pruned (alpaca-adapter.ts), so a CLOSED lot's own bracket
+      // keeps being re-polled every future sweep, and once that lot leaves
+      // `positions` this loop's `positionKeys.has` gate no longer recognises
+      // its (duplicate, already-`hasFill`-deduped) fill as "a lot's own
+      // bucket" — it falls through to this exact lookup instead. Recording
+      // an EMPTY entry for it would hand the caller's `markFlattenFillsSwept`
+      // a `clientOrderId` that names no `flatten_submissions` row at all,
+      // which throws. Only a NON-EMPTY result is a real flatten.
+      if (targetedByThisFlatten.size > 0) {
+        flattenNamedLots.set(clientOrderId, targetedByThisFlatten);
+      }
     } catch (error) {
       failures.push({ scope: 'flatten-attribution', key: clientOrderId, error });
     }
   }
 
-  return flattenTargetedLots;
+  return flattenNamedLots;
 }
 
 /**
@@ -512,7 +628,11 @@ async function redistributeOneFlatten(
         // duplicate warn costs a grep; a wrongly-suppressed one costs the
         // trace this ticket exists to create — the same asymmetry
         // `maybeRearmResidual`'s upper-bound reasoning (#569 review) already
-        // takes elsewhere in this file.
+        // takes elsewhere in this file. And deliberately UNLOGGED (#573): the
+        // `postFlattenOverfillWarning` call this `hasFill` check gates is
+        // itself the trace — defaulting to warning guarantees it still fires,
+        // so a `logCaughtFailure` call here would only ever be a duplicate of
+        // that one, on a path that already runs once per raw fill.
         alreadyWarned = false;
       }
 
@@ -535,9 +655,67 @@ async function redistributeOneFlatten(
             observed_at: input.clock.now(),
           });
         } catch {
-          // Nothing left to do — see the comment above.
+          // The redistribution itself is unaffected — see the comment above
+          // for why this stays swallowed rather than contained. #573: now
+          // traced locally with a FIXED, self-authored message rather than
+          // the channel's own error — `alpaca-adapter.ts`'s
+          // `escalateAgedUnpricedFills` sets the precedent this follows: a
+          // Telegram/Discord transport failure quotes the request it failed
+          // on, and that URL can carry a bot token, so the channel's error is
+          // read and discarded, never logged.
+          safeLog(input.logger, {
+            trace_id: input.trace_id,
+            stage: 'execution',
+            level: 'warn',
+            message:
+              'flatten-overfill alert delivery failed — the overfill itself was still dropped ' +
+              'as designed; this only lost the diagnostic line about it',
+            payload: { flatten_client_order_id: clientOrderId, unattributed_qty: leftover },
+          });
         }
       }
+    }
+  }
+
+  // #549: the durable "residual observed, protection not confirmed" marker,
+  // written the moment the residual is FIRST knowable — this split's own
+  // arithmetic: any named lot whose journalled share was not fully consumed
+  // by this flatten's fill(s) still holds quantity whose protective legs
+  // `executeExit` already cancelled. Written HERE, before any
+  // `applyLotAdvance` this poll runs, because this is the last durable
+  // foothold ahead of the exact crash window #549 names: a crash after a
+  // SIBLING lot's advance persists (which dedups the re-offered fill away)
+  // but before THIS lot's re-arm attempt would leave `flattenTargetedThisPoll`
+  // false on every future poll, and nothing else would ever look at this lot
+  // again. `advanceLot`'s `maybeRearmResidual` clears it the same poll on a
+  // confirmed re-arm (or a flat read); a lot that instead round-trips to
+  // `closed` leaves the column set on a TERMINAL row, which
+  // `getUnprotectedResidualLots()` excludes by state — settled, not swept.
+  //
+  // Best-effort, never throwing, for the same reason as the over-fill warning
+  // above: this function's contract is complete-in-full-or-leave-`byLot`-
+  // untouched, and the splits are already pushed — a store flake here must
+  // not turn a successful redistribution into a contained failure. A failed
+  // write only narrows #549's crash coverage back to the old poll-scoped
+  // window, and says so in the log.
+  for (const [lotKey, unclosed] of remaining) {
+    if (!(unclosed > 0)) continue;
+    try {
+      await store.markResidualUnprotected(lotKey, input.clock.now());
+    } catch (error) {
+      logCaughtFailure(
+        input.logger,
+        {
+          trace_id: input.trace_id,
+          stage: 'execution',
+          level: 'warn',
+          message:
+            'markResidualUnprotected failed during flatten redistribution — a crash before the ' +
+            "re-arm confirms would leave this lot's residual invisible to the #549 sweep",
+        },
+        error,
+        { idempotency_key: lotKey, flatten_client_order_id: clientOrderId },
+      );
     }
   }
 
@@ -690,7 +868,8 @@ async function advanceLot(
  * cannot be attempted safely. Never throws: every failure this function can
  * observe — the store read on the `known === undefined` path, the broker
  * call rejecting, the alert channel itself failing — is swallowed here, the
- * same posture `safeLog()` takes in orchestrator/tick-loop.ts, so a flaky
+ * same posture `shared/safe-log.ts`'s `safeLog()`/`logCaughtFailure()` take
+ * on the logging calls this function ALSO makes now (#573) — so a flaky
  * store, a flaky re-arm, or a flaky alert transport can never escape into
  * `advanceLot` and abort `ingestFills`' per-lot loop for every OTHER lot the
  * same poll has yet to reach.
@@ -714,7 +893,32 @@ async function maybeRearmResidual(
     let recorded: Fill[];
     try {
       recorded = await store.getFills(position.idempotency_key);
-    } catch {
+    } catch (error) {
+      // #573: this is THE local diagnostic trace `ResidualExposureAlert`
+      // cannot carry — its CREDENTIALS note (below) forbids a caught error's
+      // text in the alert payload, so without this the operator saw a
+      // flagged upper-bound estimate with no way to tell WHY the exact
+      // figure was unavailable. `logCaughtFailure`, not `safeLog`: the
+      // store's own error text IS the deliverable here, unlike the alert/
+      // channel failures elsewhere in this file (`ResidualExposureAlert`'s
+      // CREDENTIALS note is about what a downstream ALERT TRANSPORT can leak
+      // — Telegram/Discord quoting the failed request — not about a local
+      // store-driver error, which carries no such transport detail; #297's
+      // H1 precedent `reconcileLot` (reconcile.ts) already cites applies the
+      // same way here).
+      logCaughtFailure(
+        input.logger,
+        {
+          trace_id: input.trace_id,
+          stage: 'execution',
+          level: 'error',
+          message:
+            'maybeRearmResidual: store read failed while computing the exact residual after a ' +
+            'partial flatten — alerting with the upper-bound requested_size instead',
+        },
+        error,
+        { idempotency_key: position.idempotency_key },
+      );
       // The exact residual is unknowable without the read that just
       // failed — alerting with `requested_size` (the lot's own, always
       // in hand, untouched by this failure) rather than a smaller,
@@ -731,12 +935,22 @@ async function maybeRearmResidual(
       // residual (#569 review): without the flag a persistent store outage
       // reads as a stream of confident alerts, and an operator cannot tell
       // an estimate from a measurement. The caught error itself is not
-      // forwarded — see `ResidualExposureAlert`'s CREDENTIALS note.
-      await alertResidualExposure(input, position, position.requested_size, now, true);
+      // forwarded to the ALERT — see `ResidualExposureAlert`'s CREDENTIALS
+      // note — but it IS now in the local log line just above.
+      //
+      // #549: marked BEFORE the alert — the residual cannot be recomputed
+      // right now, which is exactly a "protection not confirmed" state the
+      // sweep must keep retrying with a fresh read.
+      await bestEffortMarkerWrite(input, position, now, 'mark-unprotected');
+      // #549 review: the alert-dedup marker records only a delivery the
+      // channel ACCEPTED — a swallowed transport failure must leave the
+      // episode un-alerted so the sweep pages again on its next pass.
+      if (await alertResidualExposure(input, position, position.requested_size, now, true)) {
+        await bestEffortMarkerWrite(input, position, now, 'mark-alerted');
+      }
       return;
     }
-    filledSize = totalQty(recorded.filter((fill) => fill.leg === 'entry'));
-    exitQty = totalQty(recorded.filter(isExitFill));
+    ({ filledSize, exitQty } = recordedExposure(recorded));
   } else {
     ({ filledSize, exitQty } = known);
   }
@@ -748,10 +962,29 @@ async function maybeRearmResidual(
   // still outstanding.
   if (filledSize === 0) return;
   // Flat by this fuller read even though the per-poll signal said
-  // "not flat": nothing left to protect.
-  if (coversQty(exitQty, filledSize)) return;
+  // "not flat": nothing left to protect. #549: a marker
+  // `redistributeOneFlatten` set for this lot (off this poll's split
+  // arithmetic) is cleared here off the fuller persisted record — flat IS
+  // "nothing left unprotected", confirmed.
+  if (coversQty(exitQty, filledSize)) {
+    await bestEffortMarkerWrite(input, position, now, 'confirm-protected');
+    return;
+  }
 
   const residual = filledSize - exitQty;
+
+  // #549: the durable marker, written BEFORE the re-arm attempt below. Both
+  // of this function's triggers (`ingestedExit`, `flattenTargetedThisPoll`)
+  // are poll-scoped, so without this row a crash — or a re-arm failure the
+  // process survives — between here and a confirmed re-arm left the residual
+  // naked FOREVER: the next poll's `hasFill` dedup empties `newFills`, no
+  // flatten resolves, and `advanceLot` returns early indefinitely.
+  // `sweepResidualProtection` (residual-protection-sweep.ts) is what reads
+  // it back, on reconcile/fill-sync cadence, and only a CONFIRMED re-arm (or
+  // a flat read) clears it. Best-effort, never throwing (this function's own
+  // contract): a failed marker write is logged and must not stop the actual
+  // re-arm attempt, which matters more than its bookkeeping.
+  await bestEffortMarkerWrite(input, position, now, 'mark-unprotected');
 
   // Fail-closed (`executeExit`'s precedent, execute.ts): a non-finite or
   // non-positive residual while `coversQty` above says "not flat" means the
@@ -760,7 +993,9 @@ async function maybeRearmResidual(
   // alerting instead is the same posture `executeExit` takes on a
   // store/venue size mismatch — surface it, never guess.
   if (!(residual > 0) || !Number.isFinite(residual)) {
-    await alertResidualExposure(input, position, residual, now);
+    if (await alertResidualExposure(input, position, residual, now)) {
+      await bestEffortMarkerWrite(input, position, now, 'mark-alerted');
+    }
     return;
   }
 
@@ -773,12 +1008,101 @@ async function maybeRearmResidual(
       position.stop,
       position.target,
     );
-  } catch {
-    // The broker's own error is not forwarded to the alert — see
+    // #549: protection is now CONFIRMED — the venue acked the re-arm (or the
+    // adapter adopted legs it verified already live) — so the marker clears.
+    // Best-effort: if this write fails the sweep retries a re-arm that is
+    // already in place, which every adapter path tolerates (equities
+    // adopt-or-place on the deterministic `:rearm` wire id; crypto emulation
+    // retires stale legs before arming; Simulated re-sets the same qty).
+    await bestEffortMarkerWrite(input, position, now, 'confirm-protected');
+  } catch (error) {
+    // The broker's own error is not forwarded to the ALERT — see
     // `ResidualExposureAlert`'s CREDENTIALS note: this channel carries only
-    // fields chosen here, never broker error text. Losing the detail is
-    // fine; an operator reads the alert and checks the venue directly.
-    await alertResidualExposure(input, position, residual, now);
+    // fields chosen here, never broker error text. Losing the detail there
+    // is fine; an operator reads the alert and checks the venue directly.
+    //
+    // #573: safe to put in the LOCAL log, though, same as the store-read
+    // catch above — #297's H1 (cited by `reconcileLot`, reconcile.ts) makes
+    // every broker adapter convert what its client threw into a curated,
+    // credential-free error before it is visible here, so the credentialed
+    // original never reaches this catch either.
+    logCaughtFailure(
+      input.logger,
+      {
+        trace_id: input.trace_id,
+        stage: 'execution',
+        level: 'error',
+        message: 'maybeRearmResidual: broker.rearmProtectiveLegs failed — alerting instead',
+      },
+      error,
+      { idempotency_key: position.idempotency_key, residual_qty: residual },
+    );
+    // #549: the marker stays set (protection is NOT confirmed). The episode
+    // is recorded as already-alerted ONLY when the channel accepted the
+    // delivery (#549 review) — so the sweep retries the re-arm on cadence
+    // without paging again for a page that actually landed (#342), and DOES
+    // page again for one a transport outage swallowed.
+    if (await alertResidualExposure(input, position, residual, now)) {
+      await bestEffortMarkerWrite(input, position, now, 'mark-alerted');
+    }
+  }
+}
+
+/**
+ * The best-effort #549 marker writes, one parameterized helper (#549
+ * review). Each op swallows its own store failure — `maybeRearmResidual`'s
+ * "never throws" contract, and the same reasoning as this file's other
+ * contained writes: the marker is recovery BOOKKEEPING, and losing a
+ * bookkeeping write must never abort the actual re-arm (or the poll) it
+ * books. Logged at `warn` via `logCaughtFailure` (#608) with an op-specific
+ * message: what a failed write COSTS differs per op, and that is exactly
+ * what an operator grepping after an incident needs to see.
+ */
+const MARKER_WRITES = {
+  'mark-unprotected': {
+    write: (input: ExecutionInput, key: string, now: Date) =>
+      input.store.markResidualUnprotected(key, now),
+    failureMessage:
+      'markResidualUnprotected failed — if this process dies before the re-arm is confirmed, ' +
+      'the #549 sweep will not know to retry this lot',
+  },
+  'confirm-protected': {
+    write: (input: ExecutionInput, key: string, _now: Date) =>
+      input.store.confirmResidualProtected(key),
+    failureMessage:
+      'confirmResidualProtected failed — the lot stays marked and the #549 sweep will ' +
+      're-verify a protection that is already in place (idempotent on every adapter path)',
+  },
+  'mark-alerted': {
+    write: (input: ExecutionInput, key: string, now: Date) =>
+      input.store.markResidualAlerted(key, now),
+    failureMessage:
+      'markResidualAlerted failed — the #549 sweep may page a second time for an episode ' +
+      'that was already alerted (noisy, not unsafe)',
+  },
+} as const;
+
+async function bestEffortMarkerWrite(
+  input: ExecutionInput,
+  position: OpenPosition,
+  now: Date,
+  op: keyof typeof MARKER_WRITES,
+): Promise<void> {
+  const { write, failureMessage } = MARKER_WRITES[op];
+  try {
+    await write(input, position.idempotency_key, now);
+  } catch (error) {
+    logCaughtFailure(
+      input.logger,
+      {
+        trace_id: input.trace_id,
+        stage: 'execution',
+        level: 'warn',
+        message: failureMessage,
+      },
+      error,
+      { idempotency_key: position.idempotency_key },
+    );
   }
 }
 
@@ -787,9 +1111,21 @@ async function maybeRearmResidual(
  * attempted. Fire-and-forget and fully swallowed on failure — the alert IS
  * the fallback, so there is nothing left to fall back to if delivering it
  * also fails; the caller (`maybeRearmResidual`) must keep running either
- * way, mirroring `safeLog()`'s reasoning in orchestrator/tick-loop.ts.
+ * way, the same reasoning `shared/safe-log.ts`'s `safeLog()` is built around.
+ *
+ * Exported (#549) for `sweepResidualProtection` (residual-protection-sweep.ts),
+ * whose escalation is the SAME alert with the same CREDENTIALS boundary —
+ * a second hand-rolled copy of this channel's swallow/trace posture is
+ * exactly the drift `shared/safe-log.ts` was extracted to prevent.
+ *
+ * Returns whether the channel RESOLVED (#549 review): the once-per-episode
+ * dedup (`markResidualAlerted`) may only be recorded against a delivery the
+ * channel accepted — marking it after a swallowed failure would let a
+ * transient transport outage permanently suppress the only page for a
+ * still-naked residual. The swallow itself is unchanged; only the caller's
+ * bookkeeping branches on the answer.
  */
-async function alertResidualExposure(
+export async function alertResidualExposure(
   input: ExecutionInput,
   position: OpenPosition,
   residualQty: number,
@@ -800,7 +1136,7 @@ async function alertResidualExposure(
    * (#569 review). Defaulted so the two exact call sites read unchanged.
    */
   residualQtyIsUpperBound = false,
-): Promise<void> {
+): Promise<boolean> {
   try {
     await input.residualExposureAlerts.postResidualExposureAlert({
       idempotency_key: position.idempotency_key,
@@ -812,8 +1148,31 @@ async function alertResidualExposure(
       target: position.target,
       observed_at: now,
     });
+    return true;
   } catch {
-    // Nothing left to do — see this function's doc comment.
+    // The redistribution/advance this alert reports on already completed —
+    // see this function's doc comment for why that must not be undone here.
+    // #573: this IS the fallback failing, the most severe blind spot this
+    // whole file has — a residual is unprotected AND nobody was told, not
+    // even locally. Traced with a FIXED, self-authored message rather than
+    // the channel's own error (same CREDENTIALS posture as the
+    // flatten-overfill channel catch above, `escalateAgedUnpricedFills`'s
+    // precedent in alpaca-adapter.ts): a Telegram/Discord transport failure
+    // quotes the request it failed on, which can carry a bot token.
+    safeLog(input.logger, {
+      trace_id: input.trace_id,
+      stage: 'execution',
+      level: 'error',
+      message:
+        'postResidualExposureAlert delivery failed — a residual position is unprotected and ' +
+        'the operator was not paged; check the venue by hand',
+      payload: {
+        idempotency_key: position.idempotency_key,
+        residual_qty: residualQty,
+        residual_qty_is_upper_bound: residualQtyIsUpperBound,
+      },
+    });
+    return false;
   }
 }
 
@@ -853,9 +1212,28 @@ function nextState(position: OpenPosition, filledSize: number, flat: boolean): O
  */
 const QTY_EPSILON_RELATIVE = 1e-12;
 
-/** `actual >= target`, tolerant of float64 summation noise on either side. */
-function coversQty(actual: number, target: number): boolean {
+/**
+ * `actual >= target`, tolerant of float64 summation noise on either side.
+ * Exported (#549) so `sweepResidualProtection` (residual-protection-sweep.ts)
+ * judges "flat" with the SAME expression this module does, not an algebraic
+ * rearrangement that is not guaranteed the same float64 answer (ADR-0005).
+ */
+export function coversQty(actual: number, target: number): boolean {
   return actual >= target - Math.abs(target) * QTY_EPSILON_RELATIVE;
+}
+
+/**
+ * The two totals every residual decision is made from, computed off a lot's
+ * full persisted fill record — exported (#549) for the same single-expression
+ * reason as `coversQty` above: the sweep's recomputation must be
+ * bit-identical to the observing poll's, or a lot could read not-flat on one
+ * surface and flat on the other.
+ */
+export function recordedExposure(fills: readonly Fill[]): { filledSize: number; exitQty: number } {
+  return {
+    filledSize: totalQty(fills.filter((fill) => fill.leg === 'entry')),
+    exitQty: totalQty(fills.filter(isExitFill)),
+  };
 }
 
 function closedTrade(
