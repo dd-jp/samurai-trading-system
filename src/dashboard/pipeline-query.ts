@@ -6,31 +6,24 @@
  *
  * Pure by design, the same seam `buildSnapshot` uses: every cell-state rule
  * below is exercised from an event list in `pipeline-query.test.ts` without a
- * database, which matters more here than elsewhere because two of the rules
- * (`skipped`, and a `stopped` before Verdict) describe traffic the current
- * schema cannot yet deliver. See "What a lane can and cannot see".
+ * database. See "What a lane can and cannot see".
  *
  * ## What a lane can and cannot see  (read this before trusting a lane)
  *
- * `audit_log` carries no `instrument` column and `trace_id` is a bare
- * `randomUUID()`, so a stage row can only be attributed to an instrument by
- * joining a table that holds both. Today that is `current_tick` (in-flight
- * only) and `verdict_log` (only traces that actually reached Verdict). A tick
- * that short-circuits at Analysts, Trader or Risk writes its `audit_log` rows
- * and is then unattributable — invisible to this view.
+ * Stage rows are attributed by `audit_log.instrument` / `.asset_class`
+ * (migration 0013), which tick-runner.ts writes on every stage row — so a tick
+ * that short-circuits at Analysts, Trader or Risk is visible here, and the
+ * lane universe is derived from those same rows (#619). What stays invisible
+ * is only what is genuinely unattributable: rows predating migration 0013, and
+ * audit rows written outside a tick (the HITL Telegram callback).
  *
- * The consequence is deliberate and bounded rather than hidden:
+ * Two bounds remain, and they are deliberate rather than hidden:
  *
  *  - A lane shows the most recent trace it can SEE, never a claim about the
  *    most recent trace that RAN.
  *  - `PIPELINE_LOOKBACK_MS` is what keeps that honest. Past the window a lane
  *    goes `idle` — "nothing visible here recently" — instead of presenting an
  *    old trace as the current state of the instrument.
- *
- * The fix is one additive migration (`instrument`, `asset_class` on
- * `audit_log`; `tick-runner.ts`'s `record` closure already holds both) plus a
- * single-query change in `SqliteQueryStore.getPipelineActivity`. Nothing in
- * this file changes when it lands.
  */
 
 import type { TickStage } from '../orchestrator/index.js';
@@ -62,7 +55,9 @@ export const PIPELINE_LOOKBACK_MS = 15 * 60 * 1_000;
 /**
  * Hard bound on lanes. The default universe is six instruments
  * (ADR-0001: SPY/QQQ/AAPL/TSLA/BTC-USD/ETH-USD); this leaves room to grow
- * without letting a 3-second poll's payload grow with `latest_mark`.
+ * without letting a 3-second poll's payload grow with the union the store
+ * derives the universe from. An instrument the pipeline actually RAN in the
+ * window outranks a merely priced one at this cap (#619).
  */
 export const PIPELINE_MAX_LANES = 24;
 

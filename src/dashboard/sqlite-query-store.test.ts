@@ -541,9 +541,11 @@ describe('percentile', () => {
 
 /**
  * The Pipeline view's read (#411). These tests pin the ATTRIBUTION rules as
- * much as the data: `audit_log` has no instrument column, so which stage rows
- * a lane can see is a property of the joins this method performs, and the last
- * test here is the standing record of what those joins still cannot reach.
+ * much as the data: since migration 0013 a stage row names its own instrument,
+ * so both which lanes exist and which rows land in them are read off
+ * `audit_log.instrument` (#619). The NULL cases at the end are the standing
+ * record of what stays unattributable — pre-0013 rows and the HITL callback
+ * path — and of the rule that unattributable is never a lane.
  */
 describe('SqliteQueryStore.getPipelineActivity', () => {
   const LOOKBACK_MS = 15 * 60 * 1_000;
@@ -617,7 +619,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
     );
   }
 
-  it('builds the lane universe from marked instruments and in-flight ticks, in lane order', () => {
+  it('unions marked instruments and in-flight ticks into the universe, in lane order', () => {
     const db = makeDb();
     seedMark(db, 'TSLA', 'stocks');
     seedMark(db, 'BTC-USD', 'crypto');
@@ -649,6 +651,86 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
     const activity = new SqliteQueryStore(db).getPipelineActivity(2, LOOKBACK_MS, NOW);
 
     expect(activity.universe.map((u) => u.instrument)).toEqual(['AAPL', 'MSFT']);
+  });
+
+  /**
+   * #619's defect, in the shape the running soak produced it: `latest_mark` is
+   * written only by `MarketDataServiceImpl.getMark`, on demand rather than per
+   * tick, so the instruments doing all the work had no row in it at all. A
+   * universe read off `latest_mark` alone showed four idle stocks and hid both
+   * crypto instruments, while their traces sat in the same database.
+   */
+  it('gives a lane to an instrument with audit activity and no latest_mark row (#619)', () => {
+    const db = makeDb();
+    seedMark(db, 'SPY', 'stocks');
+    seedAudit(db, {
+      trace_id: 'trace-btc',
+      stage: 'analysts',
+      decision: 'quorum_met',
+      at: minutesBefore(2),
+      instrument: 'BTC-USD',
+      asset_class: 'crypto',
+    });
+    seedAudit(db, {
+      trace_id: 'trace-btc',
+      stage: 'trader',
+      decision: 'no_trade',
+      at: minutesBefore(2),
+      instrument: 'BTC-USD',
+      asset_class: 'crypto',
+    });
+
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+
+    expect(activity.universe).toEqual([
+      { instrument: 'BTC-USD', asset_class: 'crypto' },
+      { instrument: 'SPY', asset_class: 'stocks' },
+    ]);
+    // The lane is not merely present — it carries the trace, which is what
+    // makes the union worth having rather than a wider list of empty chips.
+    expect(activity.events.map((e) => e.stage)).toEqual(['analysts', 'trader']);
+  });
+
+  it('keeps a priced instrument with no recent activity as an idle lane', () => {
+    const db = makeDb();
+    // Marked before the previous close and silent since — the stale-stock case.
+    // Dropping it would read as "removed from the universe"; the Lobby exists
+    // to say "priced, nothing running".
+    seedMark(db, 'TSLA', 'stocks');
+    seedAudit(db, {
+      trace_id: 'trace-old',
+      stage: 'verdict',
+      decision: 'go',
+      at: minutesBefore(90),
+      instrument: 'TSLA',
+      asset_class: 'stocks',
+    });
+
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+
+    expect(activity.universe).toEqual([{ instrument: 'TSLA', asset_class: 'stocks' }]);
+    expect(activity.events).toEqual([]);
+  });
+
+  it('lets an active instrument outrank a merely priced one at the maxLanes cap', () => {
+    const db = makeDb();
+    // Alphabetically ahead of ZETA on both keys, so only the activity ranking
+    // can save ZETA from the cap — and evicting the one instrument that is
+    // running is exactly this ticket's failure mode arriving by another door.
+    seedMark(db, 'AAPL', 'stocks');
+    seedMark(db, 'MSFT', 'stocks');
+    seedAudit(db, {
+      trace_id: 'trace-zeta',
+      stage: 'analysts',
+      decision: 'quorum_met',
+      at: minutesBefore(1),
+      instrument: 'ZETA',
+      asset_class: 'stocks',
+    });
+
+    const activity = new SqliteQueryStore(db).getPipelineActivity(1, LOOKBACK_MS, NOW);
+
+    expect(activity.universe).toEqual([{ instrument: 'ZETA', asset_class: 'stocks' }]);
   });
 
   it('attributes a settled trace to its instrument through verdict_log', () => {
@@ -683,8 +765,8 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       stage: 'analysts',
       decision: 'quorum_met',
     });
-    // `asset_class` is not on `verdict_log` — it comes from the universe row,
-    // which is why an instrument with neither a mark nor a tick has no lane.
+    // `asset_class` is not on `verdict_log` — every event carries the one its
+    // own `audit_log` row names.
     expect(activity.events[1]?.stage).toBe('verdict');
   });
 
@@ -889,5 +971,27 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
 
     expect(activity.events).toEqual([]);
     expect(activity.universe).toEqual([{ instrument: 'AAPL', asset_class: 'stocks' }]);
+  });
+
+  it('ignores an audit row naming an instrument with no asset_class', () => {
+    const db = makeDb();
+    seedMark(db, 'AAPL', 'stocks');
+    // Half-attributed: `audit_log`'s two 0013 columns are independently
+    // nullable, and a lane needs both — its asset class is what orders it and
+    // what the view renders it as. Guessing one would put a lane on the wire
+    // claiming an asset class no writer ever recorded.
+    seedAudit(db, {
+      trace_id: 'half',
+      stage: 'verdict',
+      decision: 'go',
+      at: minutesBefore(2),
+      instrument: 'GHOST',
+      asset_class: null,
+    });
+
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+
+    expect(activity.universe).toEqual([{ instrument: 'AAPL', asset_class: 'stocks' }]);
+    expect(activity.events).toEqual([]);
   });
 });
