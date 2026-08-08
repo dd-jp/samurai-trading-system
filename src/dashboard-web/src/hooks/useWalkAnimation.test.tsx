@@ -301,6 +301,25 @@ describe('useWalkAnimation — re-placement must not cancel the walk (#595)', ()
     log.stop();
   });
 
+  it('does not re-place on a window resize that moved nothing', async () => {
+    render(<Theater view={AT_ANALYSTS} previous={null} firstPaint={true} />);
+    await flushMicrotasks();
+    const log = recordStyle(chip());
+
+    // A mobile URL-bar collapse fires `resize` with no geometry change at all.
+    // The floor observer is the only re-placement trigger and it stays silent;
+    // a `window` listener beside it could not share the observer's guard
+    // (`placedAgainst` is content-box, `clientWidth` is not) and would
+    // force-reflow every non-walking chip for nothing. A resize that DOES move
+    // the rooms still re-places — the jitter test above and the re-aim test
+    // below assert that half.
+    window.dispatchEvent(new Event('resize'));
+
+    // `states()` always reports the current value, so one entry means no write.
+    expect(log.states()).toHaveLength(1);
+    log.stop();
+  });
+
   it('re-aims a walking chip at a genuine resize instead of snapping it', async () => {
     const walk = plannedWalk(AT_ANALYSTS, AT_RISK);
     const view = render(<Theater view={AT_ANALYSTS} previous={null} firstPaint={true} />);
@@ -513,6 +532,32 @@ describe('usePrefersReducedMotion → the planner and the hook (#595)', () => {
     expect(chip().classList.contains('chip-walking')).toBe(false);
     expect(chip().classList.contains('chip-settled')).toBe(true);
     expect(transformOf(chip().getAttribute('style') ?? '')).toEqual(harness.pointFor('risk', 0));
+  });
+
+  it('snaps an in-flight walk when reduced motion turns on mid-session', async () => {
+    // The flip test below sequences the flip BEFORE the walk starts, so the
+    // hook's `walking` map is empty and no in-flight teardown runs. Here the
+    // chip is mid-hop when the OS setting changes, which is the case rule 5
+    // has to survive: the walk is torn down, not left running.
+    useHarness();
+    const view = render(<Theater view={AT_ANALYSTS} previous={null} firstPaint={true} />);
+    const log = recordStyle(chip());
+    view.rerender(<Theater view={AT_RISK} previous={AT_ANALYSTS} firstPaint={false} />);
+    await flushMicrotasks();
+
+    walkStartsAt(log.states());
+    expect(chip().classList.contains('chip-walking')).toBe(true);
+
+    await act(async () => {
+      harness.setReducedMotion(true);
+    });
+
+    // `finish()` ran from the effect's teardown: the walking class is off and
+    // the pending hop's fallback timer is cleared, so the chip stands where
+    // the layout says instead of travelling the rest of the way there.
+    expect(chip().classList.contains('chip-walking')).toBe(false);
+    expect(transformOf(chip().getAttribute('style') ?? '')).toEqual(harness.pointFor('risk', 0));
+    log.stop();
   });
 
   it('degrades a session that starts with motion allowed and flips mid-run', async () => {

@@ -98,10 +98,20 @@ interface Point {
   y: number;
 }
 
+/**
+ * The only place a chip's transform is serialized. Snap, hop and re-aim all
+ * write through here, so the format cannot drift between them — and
+ * `transformOf` in `test-dom.ts`, which parses it back, has one grammar to
+ * match rather than three.
+ */
+function writeTransform(element: HTMLElement, point: Point): void {
+  element.style.transform = `translate(${point.x}px, ${point.y}px)`;
+}
+
 function applyTransform(element: HTMLElement, point: Point, animate: boolean, durationMs?: number) {
   if (!animate) {
     element.style.transition = 'none';
-    element.style.transform = `translate(${point.x}px, ${point.y}px)`;
+    writeTransform(element, point);
     // Read layout back to commit the transform under `transition: none`
     // before the transition property is restored — otherwise the browser
     // coalesces both writes into one style recalculation and animates the
@@ -112,7 +122,7 @@ function applyTransform(element: HTMLElement, point: Point, animate: boolean, du
     return;
   }
   if (durationMs !== undefined) element.style.transitionDuration = `${durationMs}ms`;
-  element.style.transform = `translate(${point.x}px, ${point.y}px)`;
+  writeTransform(element, point);
 }
 
 export function useWalkAnimation(input: WalkAnimationInput): void {
@@ -260,7 +270,7 @@ export function useWalkAnimation(input: WalkAnimationInput): void {
         const reaim = () => {
           const point = pointFor(currentRoom, placement.slot);
           if (point === null) return;
-          element.style.transform = `translate(${point.x}px, ${point.y}px)`;
+          writeTransform(element, point);
         };
         walking.set(element, reaim);
 
@@ -347,11 +357,14 @@ export function useWalkAnimation(input: WalkAnimationInput): void {
       typeof ResizeObserver === 'undefined'
         ? null
         : new ResizeObserver((entries) => {
+            // Content-box only. A delivery with no entry is not spec-reachable
+            // (`observe()` never calls back with an empty list), and the
+            // padding-box fallback a `clientWidth` read would give is not
+            // comparable to `placedAgainst` — the padding difference alone
+            // would cross the epsilon and re-place for nothing.
             const box = entries[entries.length - 1]?.contentRect;
-            const size =
-              box === undefined
-                ? { width: floor.clientWidth, height: floor.clientHeight }
-                : { width: box.width, height: box.height };
+            if (box === undefined) return;
+            const size = { width: box.width, height: box.height };
             if (placedAgainst === null) {
               placedAgainst = size;
               return;
