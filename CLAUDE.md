@@ -7,8 +7,9 @@ Read this on every session start.
 - **Codename:** Samurai
 - **Goal:** Live-money multi-agent trading system covering crypto AND stocks
 - **Owner:** David (Deepak)
-- **Architecture:** 7-stage pipeline — Analysts → Debate → Trader → Invalidation → Risk → Verdict → Feedback Loop (`invalidation` added 2026-08-05, see `docs/specs/devils-advocate-spec.md`)
-- **Status:** Design phase complete (12 components charted, specced, cross-verified; 49 GitHub tickets published). Project scaffolded — TypeScript, npm, vitest, Biome. Implementation not yet started (see `src/` for the skeleton, `docs/specs/` for what fills it in).
+- **Architecture:** Analysts → Debate → Trader → [Invalidation] → Risk → Verdict → **Execution**, with a Feedback Loop adjusting analyst weights and risk thresholds post-trade. `invalidation` is specced and NOT built (added 2026-08-05, see `docs/specs/devils-advocate-spec.md`), so the runtime chain is six stages and goes Trader → Risk today. This line previously omitted Execution and listed Feedback Loop as the seventh stage; `RUNTIME_STAGES` and the README are the authority.
+- **Repo layout:** `client/` (Vite+React UI) + `server/` (Node: `apps/`, `pipeline/`, `providers/`, `shared/`, `tools/`) + `contracts/` (the wire model both import and neither owns). There is no root `src/`. Neither runtime imports the other; both import `contracts/`.
+- **Status:** Implemented and under test — all twelve charted components built, ~2900 tests, end-to-end offline run green (`yarn smoke`). Paper soak has run. Not yet cleared: one real Alpaca paper tick (ADR-0004 §5).
 - **Language:** TypeScript (Node 22+). Resolved in [ADR-0001](docs/adr/0001-technical-foundation-hybrid.md) — no hard dependency on the Python repos mined for patterns.
 
 ## Docs Convention

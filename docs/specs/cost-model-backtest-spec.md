@@ -209,7 +209,7 @@ interface BacktestReport {
 > below is retained as the original design rationale, but it no longer describes the code. There is
 > no pybroker dependency and no Python anywhere in the repo; ADR-0001 resolved the language to
 > TypeScript. The split generation, eval metrics and overfitting tests were built natively —
-> `src/cost-model-backtest/eval-executor.ts`, `splits.ts`, `metrics.ts`, `overfitting.ts` — and have
+> `server/tools/backtest/eval-executor.ts`, `splits.ts`, `metrics.ts`, `overfitting.ts` — and have
 > since produced real Stage 2 verdicts (see `stage2-verdict.ts`). What the paragraph gets *right*
 > and what still holds: pybroker could never host the tick loop, and `CostModel.fill` remains the
 > single fill authority. See `docs/reviews/triage-2026-08-06.md` F-10.
@@ -338,7 +338,7 @@ Execution (live) → real Kraken/IBKR adapter (no cost model; real fills calibra
 ### Backtest/Eval Executor — pybroker (ADR-0001) — SUPERSEDED
 
 > **This section is history, not the design.** The executor was built in TypeScript, in-tree
-> (`src/cost-model-backtest/eval-executor.ts`, `splits.ts`, `metrics.ts`, `overfitting.ts`); no
+> (`server/tools/backtest/eval-executor.ts`, `splits.ts`, `metrics.ts`, `overfitting.ts`); no
 > pybroker dependency exists. The bullets below survive only where they describe *constraints*
 > (no tick-loop hosting, `CostModel.fill` as sole fill authority, cadence staying with FL) — those
 > held and are implemented. Read "pybroker" as "the eval executor" throughout.

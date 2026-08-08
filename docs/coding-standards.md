@@ -81,7 +81,7 @@ This repo's dominant defect class is **a complete, tested mechanism with no prod
 
 So the rule is structural rather than a reminder to be careful:
 
-- **When you wire a new mechanism into `buildProductionComponents`, add an assertion for it to `evaluateSmokeGate`** (`src/orchestrator/smoke-run.ts`). `yarn smoke` drives the real composition root, and it is the only automated check that has ever caught this class.
+- **When you wire a new mechanism into `buildProductionComponents`, add an assertion for it to `evaluateSmokeGate`** (`server/apps/orchestrator/smoke-run.ts`). `yarn smoke` drives the real composition root, and it is the only automated check that has ever caught this class.
 - **Aim the assertion at the ENFORCEMENT, not the construction.** Assert the mechanism's own durable effect — a row only it writes, a counter only it increments. A check on "was it constructed" passes for a component nothing calls, which is the defect itself.
 - **Prove the assertion can fail.** Delete the effect from an otherwise-healthy observation set and confirm the gate goes red. PR #390 shipped three checks in one branch that all read as correct and enforced nothing (a config never read, a gate assertion made vacuous by a dropped argument, and `windowMs: 0` at which the limiter enforced nothing) — none was caught by review, all three by mutation.
 - **Prefer a required argument to an optional one.** `evaluateSmokeGate`'s `llmRateLimiterSnapshot` is required precisely because, while optional, deleting the one line that passed it left the check vacuously true and the whole suite green.
