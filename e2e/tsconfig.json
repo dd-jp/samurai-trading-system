@@ -1,0 +1,29 @@
+// Type-checks the Playwright suite, which no other project sees: the build
+// config is `src/**/*.ts` and the test config is the vitest suite, so without
+// this `yarn typecheck` would be green while an e2e file referenced a wire
+// field that no longer exists — the drift those two configs exist to prevent,
+// reintroduced one directory over. Run by `yarn typecheck`.
+//
+// Standalone rather than extending `tsconfig.build.json`: this code runs in
+// Playwright's runner and in a browser, not in the Node service, so it needs
+// the DOM lib and `allowImportingTsExtensions` (specs import `./support/*.ts`
+// by the path Playwright itself resolves) — and it must emit nothing.
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2023", "DOM"],
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "exactOptionalPropertyTypes": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "include": ["**/*.ts"]
+}

@@ -243,6 +243,13 @@ coverage/
 # match. Log payloads are diagnostic detail from a real run — never committed.
 logs/
 
+# Playwright e2e output (#544). Traces and reports are per-run artifacts —
+# CI uploads them from a failed job, they are never committed.
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
 # macOS
 .DS_Store
 .orchestrator-state/

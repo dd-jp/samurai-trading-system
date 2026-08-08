@@ -64,6 +64,57 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: yarn test
 
+  # The dashboard's browser suite (#544). Its own job because it needs a
+  # browser download and several minutes of wall clock, and because a UI
+  # regression must not be able to hide behind — or delay — the checks that
+  # gate the trading process.
+  #
+  # Requires NO repository secret: the suite serves the real bundle from
+  # `dist/dashboard/fixture-server.js` over an in-memory fixture store, and
+  # fails itself if the page makes a single off-origin request.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+
+      # Same Corepack-before-yarn ordering as `checks` above.
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      # Chromium only: the operator runs one browser on one MacBook, and a
+      # matrix here would triple the job for coverage nobody consumes.
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      # These steps carry no `if:`, unlike `checks` above — there each check is
+      # independent and worth running past a failure, here each step is the
+      # previous one's prerequisite and running past a failure would only
+      # produce a second, derived error.
+      #
+      # No separate build step either: the suite's `webServer` runs `yarn build`
+      # itself, so the bytes under test are always the ones this job produced.
+      - name: E2E
+        run: yarn e2e
+
+      - name: Upload Playwright traces
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-traces
+          path: |
+            e2e/test-results/
+            e2e/playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
+
   # The AI-review harness is Python and invisible to yarn test, so it gets its
   # own job. Without this the tests in .github/scripts would never run — the
   # exact no-caller shape #430 exists to close.
