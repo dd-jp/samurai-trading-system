@@ -2,7 +2,7 @@
  * Gross-vs-net cost decomposition for a replay run.
  *
  * Diagnostic for the Stage 2 kill verdict of 2026-08-05
- * (docs/research/08-stage2-verdict-first-real-run-2026-08-05.md): 22 of 24
+ * (docs/research/archive/2026-08-05-stage2-verdict-first-real-run.md): 22 of 24
  * (config, asset class) pairs posted a negative out-of-sample Sharpe under
  * `PESSIMISTIC_COST_CONFIG`, at a turnover of 115–556 and an exposure of ~0.9,
  * with no config's profit factor above 1.14. Two very different diagnoses fit

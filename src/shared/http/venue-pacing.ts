@@ -104,7 +104,7 @@ export const VENUE_DOCUMENTED_CEILING_PER_SECOND: Partial<Record<VenueKey, numbe
  * `VENUE_DOCUMENTED_CEILING_PER_SECOND` (see the `VenueKey` doc above for
  * why Polygon is not a `VenueKey` at all): "Free tier is both rate-limited
  * (5 calls/min — meaningfully slow for backfilling 6 symbols) and capped at
- * 2 years of history" — docs/research/polygon-aggregates-api-2026-07-31.md
+ * 2 years of history" — docs/research/32-vendor-api-reference.md
  * ("Rate limits and lookback (Free / Starter tier)"), and the provisioned
  * key IS on that tier (docs/reviews/codebase-review-2026-08-06.md, "Premise
  * correction: the Polygon subscription" — David dropped it to free
@@ -275,7 +275,7 @@ export const DEFAULT_POLYGON_PACING: TokenBucketConfig = {
  * No documented per-key ceiling exists to enforce — the endpoint is
  * unauthenticated (no key, no account; ADR-0001 "Appendix: Broker/Data —
  * historical OHLCV sourcing" names Coinbase Exchange public candles as the
- * crypto primary; `docs/research/free-crypto-ohlcv-2026-08-06.md` "no
+ * crypto primary; `docs/research/31-free-ohlcv-evidence.md` "no
  * `RateLimit-*` headers are returned, so pace conservatively rather than
  * reading back a budget").
  * `capacity: 2, refillPerSecond: 1` (a burst of 2, then 1 req/s sustained)
@@ -299,7 +299,7 @@ export const DEFAULT_COINBASE_PACING: TokenBucketConfig = {
  *
  * No documented per-key ceiling exists to enforce — the endpoint is
  * unauthenticated (no key, no account; ADR-0001 /
- * `docs/research/free-ohlcv-fallback-sources-2026-08-06.md` names Bitstamp
+ * `docs/research/31-free-ohlcv-evidence.md` names Bitstamp
  * `/api/v2/ohlc` as the crypto fallback and records no rate-limit headers
  * observed while probing it). `capacity: 2, refillPerSecond: 1` mirrors
  * `DEFAULT_COINBASE_PACING` exactly — same UNVERIFIED-but-conservative

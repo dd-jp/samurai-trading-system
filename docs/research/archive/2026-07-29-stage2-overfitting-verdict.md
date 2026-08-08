@@ -1,15 +1,17 @@
 # Stage 2 Overfitting Verdict — DSR / PBO / MinBTL over the 12-Config Trial Grid
 
+> **ARCHIVED — superseded by [`13-stage2-proxy-verdict.md`](../13-stage2-proxy-verdict.md).** Note beyond the in-body banner: this doc's MinBTL `exceeded: false` was wrong on real data (12 configs against a limit of 7).
+
 **Status:** Recorded 2026-07-29. **Issue [#245](../../issues/245)** ("Stage 2: overfitting
 verdict + write-up"), Verdict module of
-[stage2-validation-execution-spec.md](../specs/stage2-validation-execution-spec.md), wayfinder
+[stage2-validation-execution-spec.md](../../specs/stage2-validation-execution-spec.md), wayfinder
 map [#154](../../issues/154).
 
 > **Superseded on the two structural gaps (2026-08-05, [#406](../../issues/406)).** This document
 > reports DSR and PBO as blocked by design mismatches — `MetricsSuite` exposing only the annualized
 > Sharpe, and walk-forward folds not being a CSCV partition. Both seams have since been built, and
 > both statistics now compute against real data. See
-> [12-stage2-pbo-dsr-first-computation-2026-08-05.md](12-stage2-pbo-dsr-first-computation-2026-08-05.md).
+> [12-stage2-pbo-dsr-first-computation-2026-08-05.md](2026-08-05-stage2-pbo-dsr-first-computation.md).
 > The reasoning below for *why* they were blocked is still accurate and worth reading; the
 > conclusion that they cannot be computed is not.
 

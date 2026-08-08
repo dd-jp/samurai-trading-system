@@ -2,7 +2,7 @@
  * Real broker `AlpacaClient` (ticket #273) — see
  * docs/specs/transport-layer-spec.md ("Module: AlpacaClient (broker)"),
  * Wayfinder map "Live Transport Layer" #259 (closed), decision #260, and
- * docs/research/alpaca-rest-api-surface-2026-07-29.md.
+ * docs/research/32-vendor-api-reference.md.
  *
  * Implements `alpaca-client.ts`'s `AlpacaClient` (`submitOrder`/`getOrder`/
  * `getOrderByClientOrderId`) against Alpaca's Trading API v2
@@ -19,7 +19,7 @@
  * that survives).
  *
  * **Auth.** `APCA-API-KEY-ID`/`APCA-API-SECRET-KEY` headers, per Alpaca's
- * public docs (docs/research/alpaca-rest-api-surface-2026-07-29.md flags
+ * public docs (docs/research/32-vendor-api-reference.md flags
  * this as unconfirmed against a live account — re-verify before trusting in
  * production; see this ticket's PR description). Credentials default to
  * `ALPACA_API_KEY`/`ALPACA_API_SECRET`, the same pair the market-data client
@@ -36,7 +36,7 @@
  * the other throws at construction, before any order can be placed — the
  * money-safety decision is made once, loudly, rather than inferred from a
  * constant nobody passed. Alpaca exposes no cheap "is this key paper or live"
- * probe (docs/research/alpaca-rest-api-surface-2026-07-29.md), so this is a
+ * probe (docs/research/32-vendor-api-reference.md), so this is a
  * consistency check between two operator-supplied facts, not a verification
  * that the credentials themselves belong to the named environment. Non-Alpaca
  * hosts (a local mock, a staging proxy) are allowed in either environment:

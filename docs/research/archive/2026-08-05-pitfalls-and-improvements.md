@@ -1,8 +1,10 @@
 # Pitfalls and Improvements — What the Runs So Far Actually Taught (2026-08-05)
 
+> **ARCHIVED — lessons carried forward to [`14-backtest-pitfalls.md`](../14-backtest-pitfalls.md).** The PBO/DSR figures quoted here are pre-#420 (crypto PBO 0.35 and DSR 0.254 should read 0.30 and 0.255); doc 14 carries the corrected numbers.
+
 **Status:** Recorded 2026-08-05, commissioned by David: *"caliberate cost and based on runs so far
 identify pitfalls and improvements"*. The calibration half is
-[10-cost-model-calibration-2026-08-05.md](10-cost-model-calibration-2026-08-05.md).
+[10-cost-model-calibration-2026-08-05.md](2026-08-05-cost-model-calibration.md).
 
 Every item below is tied to a **specific observed symptom** from a real run, not to general
 engineering advice. Where a symptom has already been fixed, it says so — the pattern still matters
@@ -199,7 +201,7 @@ regardless of any strategy decision.
 `observations`, and `generateSplits` gained a purged 6-fold `cscv` scheme. Both statistics
 computed on real data for the first time, and both reject: PBO 0.65 (stocks) / 0.35 (crypto)
 against a 0.05 line, DSR 0.254 / 0.519 against 0.95. See
-[12-stage2-pbo-dsr-first-computation-2026-08-05.md](12-stage2-pbo-dsr-first-computation-2026-08-05.md)
+[12-stage2-pbo-dsr-first-computation-2026-08-05.md](2026-08-05-stage2-pbo-dsr-first-computation.md)
 — the finding is that the 12-of-24 pass rate does not survive selection accounting, which makes
 I1 necessary rather than sufficient.
 

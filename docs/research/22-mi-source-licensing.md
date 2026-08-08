@@ -20,7 +20,7 @@ the exact failure doc 14 named.
 Two facts about Samurai change which clause bites, and both were verified in-repo rather than
 assumed:
 
-1. **The dashboard is a single-operator console on localhost.** `docs/research/13-dashboard-framework-and-hosting-2026-08-06.md`
+1. **The dashboard is a single-operator console on localhost.** `docs/research/40-dashboard-framework-and-hosting.md`
    §2.5: *"a single-operator console on localhost: no SEO, no public traffic, no multi-tenant auth,
    no user-generated content"*. ADR-0010 §4 adds that the built page reaches no host but its own
    origin. Exposure, if any, is planned behind Cloudflare Zero Trust or Tailscale — still no public

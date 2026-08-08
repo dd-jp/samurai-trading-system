@@ -6,7 +6,7 @@ HTML-based solution would not be enough — I'm planning more animation and pers
 different stages and agents. Also once things start working we have to deploy this in cloud, so
 should we consider Vercel or AWS to deploy this?"*
 
-This resolves the open decision in [techstack.md](techstack.md): *"Framework/library, if any, if the
+This resolves the open decision in [techstack.md](../techstack.md): *"Framework/library, if any, if the
 dashboard ever grows past one static page"*. Per Standing Pipeline Rule 1 it locks nothing — it is
 the evidence to grill against.
 
@@ -410,7 +410,7 @@ All retrieved 2026-08-06. ADR-0008's cap is **$50 per 14 days**, verified by rea
 `docs/adr/0008-llm-spend-cap.md` on branch `worktree-semi-auto-readiness`
 ([PR #428](https://github.com/dd-jp/samurai-trading-system/pull/428)) — David's words, quoted there:
 *"for paper trading lets keep 50$ / 14 day budget."* Both ADR-0007 and ADR-0008 live on that branch
-and are **not yet merged to `main`**, so `docs/adr/` on `main` still ends at 0006. That also means
+and are **not yet merged to `main`**, so `docs/adr/` on `main` still ended at 0006 when this was written (it now ends at 0011). That also means
 **the ADR number proposed in §8 must be re-checked before it is written** — 0009 is only free once
 #428 merges.
 
@@ -507,9 +507,15 @@ dependencies."*
   filesystem and process-lifetime constraint, not a preference; (3) a real trade-off — remote
   reachability versus keeping one process and one local file.
 
-Suggested title if David agrees: **ADR-0009: Dashboard stays co-located with the orchestrator; remote
+Suggested title if David agrees: **Dashboard stays co-located with the orchestrator; remote
 access by tunnel, not by splitting the store.** Its first consequence would be that authentication
 (§4.3) becomes a hard precondition on exposure, tracked as its own issue.
+
+> **Landed as [ADR-0010](../adr/0010-dashboard-vite-react-rewrite.md), not ADR-0009.** This section
+> proposed the number 0009, which was taken by `0009-single-provider-nous.md` — the risk this doc
+> flagged for itself in §5. **The authentication precondition remains open:** `GET /api/snapshot`
+> still serves positions, P&L and LLM spend with zero auth, and nothing else here should be actioned
+> ahead of it.
 
 ---
 

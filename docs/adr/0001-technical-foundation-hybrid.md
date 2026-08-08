@@ -9,7 +9,7 @@
 Two source-of-truth documents existed and disagreed:
 
 1. **The original vision** — `~/Documents/Obsidian/Ideas/Samurai — Multi-Agent Trading System.md` and `~/trading-system/SAMURAI-HANDOFF.md` (both 2026-07-09). Stocks-first, **paper on Alpaca → live on Freetrade/Trading212**, built by **reusing three existing Python repos** at `~/trading-system/` (`swarm-trader`, `sentient-trader`, `pybroker`), LangGraph + Supabase JSONB + Redis, **pybroker for backtest evaluation only**.
-2. **The greenfield brief** the specs were built from — `CLAUDE.md` + `docs/trading-agent-handover.md`. Crypto-first, **Kraken/Coinbase (ccxt) + IBKR**, TypeScript, custom everything, shared SQLite.
+2. **The greenfield brief** the specs were built from — `CLAUDE.md` + `docs/research/archive/2026-07-14-trading-agent-handover.md`. Crypto-first, **Kraken/Coinbase (ccxt) + IBKR**, TypeScript, custom everything, shared SQLite.
 
 The **stage architecture matched** across both (6 stages, adversarial debate, independent risk gate, per-analyst feedback attribution, full audit trail). Only the **technical foundation** (broker, language, rebuild-vs-reuse, backtest engine, state/audit store) had drifted — and the drift was never recorded as a decision. All 6 pipeline stages plus Market Intelligence, Market Data Service, Execution, and the cost-model/backtest harness had already been specced against the greenfield assumptions.
 
@@ -47,7 +47,7 @@ This ADR is the canonical technical-foundation decision. It supersedes the confl
 
 - `~/Documents/Obsidian/Ideas/Samurai — Multi-Agent Trading System.md` (architecture still valid; infra now per this ADR)
 - `~/trading-system/SAMURAI-HANDOFF.md` (same)
-- `docs/trading-agent-handover.md` (greenfield-only infra now superseded by the hybrid)
+- `docs/research/archive/2026-07-14-trading-agent-handover.md` (greenfield-only infra now superseded by the hybrid)
 
 ## Appendix: Broker/Data — historical OHLCV sourcing (2026-08-06)
 
@@ -55,10 +55,10 @@ This ADR is the canonical technical-foundation decision. It supersedes the confl
 
 | Leg | Role | Source | Key facts |
 | --- | --- | --- | --- |
-| Equities | Primary | **Alpaca free Basic**, `feed=sip&adjustment=raw` | 10.5y of true unadjusted daily bars (2016-01-04→), all 4 tickers in 2 requests, 200 req/min. Key already provisioned. **Pin `feed=sip`** — `feed=iex` silently returns a shallow archive. ([#483](../../issues/483), `docs/research/free-equities-ohlcv-2026-08-06.md`) |
-| Equities | Fallback | **Polygon free tier**, `adjusted=false` | Key already provisioned (free — nobody is billed). 2-year window, 5 req/min. `adjusted=false` closes match Alpaca `raw` exactly (max diff 0.0000 over 128 bars × 4 tickers). Increment-only role — never the backfill source. ([#487](../../issues/487), `docs/research/free-ohlcv-fallback-sources-2026-08-06.md`) |
-| Crypto | Primary | **Coinbase Exchange public candles** | No key, no account. BTC-USD to 2015-07-20, ETH-USD to 2016-05-18, zero gaps over the 5y window; 7 paginated ≤300-day requests per symbol. ([#484](../../issues/484), `docs/research/free-crypto-ohlcv-2026-08-06.md`) |
-| Crypto | Fallback | **Bitstamp** `/api/v2/ohlc` | No key. BTC 2011→, ETH 2017→, zero gaps over the window. ([#487](../../issues/487), `docs/research/free-ohlcv-fallback-sources-2026-08-06.md`) |
+| Equities | Primary | **Alpaca free Basic**, `feed=sip&adjustment=raw` | 10.5y of true unadjusted daily bars (2016-01-04→), all 4 tickers in 2 requests, 200 req/min. Key already provisioned. **Pin `feed=sip`** — `feed=iex` silently returns a shallow archive. ([#483](../../issues/483), `docs/research/31-free-ohlcv-evidence.md`) |
+| Equities | Fallback | **Polygon free tier**, `adjusted=false` | Key already provisioned (free — nobody is billed). 2-year window, 5 req/min. `adjusted=false` closes match Alpaca `raw` exactly (max diff 0.0000 over 128 bars × 4 tickers). Increment-only role — never the backfill source. ([#487](../../issues/487), `docs/research/31-free-ohlcv-evidence.md`) |
+| Crypto | Primary | **Coinbase Exchange public candles** | No key, no account. BTC-USD to 2015-07-20, ETH-USD to 2016-05-18, zero gaps over the 5y window; 7 paginated ≤300-day requests per symbol. ([#484](../../issues/484), `docs/research/31-free-ohlcv-evidence.md`) |
+| Crypto | Fallback | **Bitstamp** `/api/v2/ohlc` | No key. BTC 2011→, ETH 2017→, zero gaps over the window. ([#487](../../issues/487), `docs/research/31-free-ohlcv-evidence.md`) |
 
 **Why a stall is acceptable:** bars are cacheable, so a dead vendor costs *new* bars only, not history already stored — failover to the fallback covers the gap. This is the code fact that collapsed the paid-tier SLA argument (#487).
 
@@ -68,6 +68,6 @@ This ADR is the canonical technical-foundation decision. It supersedes the confl
 
 Decision ticket [#157](../../issues/157) chose **Polygon paid** for both asset classes — Stocks Starter $29/mo (5y) + Currencies Starter $49/mo (10y), $78/mo total. **Both legs are overturned:** equities by [#483](../../issues/483), crypto by [#484](../../issues/484), the reliability case by [#487](../../issues/487). Any document citing #157's paid tiers, the $78/mo figure, or "Polygon Stocks Starter / Currencies Starter" as the plan is describing the superseded state.
 
-#157 rested on a false premise: that Alpaca's free tier is **IEX-only**. That applies to Alpaca's *real-time* feed only — **historical SIP data is served on the free tier** (only the most recent 15 minutes is withheld). The premise appears in research #155 (`docs/research/03-historical-data-vendor-options.md`, corrected in-body 2026-08-06) and caused the wrong equities-leg decision.
+#157 rested on a false premise: that Alpaca's free tier is **IEX-only**. That applies to Alpaca's *real-time* feed only — **historical SIP data is served on the free tier** (only the most recent 15 minutes is withheld). The premise appears in research #155 (`docs/research/archive/2026-07-21-historical-data-vendor-options.md`, corrected in-body 2026-08-06) and caused the wrong equities-leg decision.
 
 **Open, deliberately not charged against this decision:** whether Polygon Currencies volume is exchange-aggregated (the free key cannot reach crypto aggregates to test). Polygon and Alpaca equities volume already differ by up to ~8% despite identical prices, so source-switching shifts `getADV()` under either stack. Implementation follow-ups: [#495](../../issues/495) (stop re-fetching the full window every run), [#496](../../issues/496) (failover wiring), [#497](../../issues/497) (`CcxtDataSource` pagination + default source).

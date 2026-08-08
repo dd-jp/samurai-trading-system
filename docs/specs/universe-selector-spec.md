@@ -86,7 +86,7 @@ The crypto pair is out of the screener's reach entirely: BTC-USD and ETH-USD are
 
 ### Naming — the Universe Selector is not "Stage 0"
 
-The map inherits the label "Stage 0" from `docs/research/07-stock-selection-manipulation-guardrails.md`, and it collides. `CONTEXT.md` already uses Stage 0 for the **data layer** — Market Intelligence is "the news/sentiment half of the Stage 0 data layer" and the Market Data Service is "a dedicated Stage 0-level data layer, parallel to Market Intelligence". `src/market-data-service/types.ts` says the same in code.
+The map inherits the label "Stage 0" from `docs/research/17-universe-manipulation-guardrails.md`, and it collides. `CONTEXT.md` already uses Stage 0 for the **data layer** — Market Intelligence is "the news/sentiment half of the Stage 0 data layer" and the Market Data Service is "a dedicated Stage 0-level data layer, parallel to Market Intelligence". `src/market-data-service/types.ts` says the same in code.
 
 Resolved: **the Universe Selector is not a pipeline stage at all.** It runs *between* sessions, not inside a tick, and produces configuration for the next session rather than a decision within one. It is the **pre-session selector**; the pipeline it feeds still starts at Stage 0's data layer. `CONTEXT.md` gains the term with this disambiguation.
 
@@ -202,7 +202,7 @@ The batched Alpaca read is tested at the existing HTTP-client seam (fake fetch, 
 
 ## Out of Scope
 
-- **The PERIL gate** — manipulation-vulnerability rejection from `docs/research/07-stock-selection-manipulation-guardrails.md`. It needs a fundamentals vendor the repo does not integrate, and the map assigns it **its own wayfinder map**. The pipeline above leaves the slot where it goes.
+- **The PERIL gate** — manipulation-vulnerability rejection from `docs/research/17-universe-manipulation-guardrails.md`. It needs a fundamentals vendor the repo does not integrate, and the map assigns it **its own wayfinder map**. The pipeline above leaves the slot where it goes.
 - **Crypto screening.** BTC-USD and ETH-USD are fixed and always active. Ranking crypto against equities, or selecting among crypto pairs, is not this effort.
 - **The S&P 500 widening.** v1 is the S&P 100; 500 is a config dial whose cost implications (and the shortlist-vs-limiter question below) are not evaluated here.
 - **Cadence gating implementation.** Kept as a later refinement with its shape settled, not built here — see above.

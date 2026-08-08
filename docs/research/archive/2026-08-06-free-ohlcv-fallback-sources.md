@@ -1,5 +1,7 @@
 # Fallback Historical OHLCV Sources — Both Legs
 
+> **ARCHIVED — merged into [`31-free-ohlcv-evidence.md`](../31-free-ohlcv-evidence.md).** Full probe log kept here.
+
 Research supporting the resolution of GitHub issue [#487](https://github.com/dd-jp/samurai-trading-system/issues/487) ("grilling — free two-source stack vs Polygon paid"), child of wayfinder map [#482](https://github.com/dd-jp/samurai-trading-system/issues/482).
 
 Primaries were settled by [#483](https://github.com/dd-jp/samurai-trading-system/issues/483) (equities: Alpaca free Basic, `feed=sip&adjustment=raw`) and [#484](https://github.com/dd-jp/samurai-trading-system/issues/484) (crypto: Coinbase Exchange public candles). This document answers the question those two left open: **when a free primary breaks, what takes over?**
@@ -201,7 +203,7 @@ Tiingo (free tier "Internal Use Only" licence, a live problem given the dashboar
 ## Corrections this research forces on map #482
 
 1. **"Polygon/Massive API key is still an unprovisioned precondition" is wrong.** The key is provisioned and works. It is free tier — 2y window, 5 req/min, PROBED. It is a usable fallback today.
-2. The #483 and #484 writeups (`docs/research/free-equities-ohlcv-2026-08-06.md`, `free-crypto-ohlcv-2026-08-06.md`) are **not on `main`** — they live on the unmerged branches `origin/worktree-wayfinder-483-free-equities-ohlcv` and `origin/worktree-wayfinder-484-free-crypto-ohlcv`. Anyone reading `docs/research/` on `main` will not find the evidence the map's decisions cite.
+2. The #483 and #484 writeups (`docs/research/archive/2026-08-06-free-equities-ohlcv.md`, `free-crypto-ohlcv-2026-08-06.md`) are **not on `main`** — they live on the unmerged branches `origin/worktree-wayfinder-483-free-equities-ohlcv` and `origin/worktree-wayfinder-484-free-crypto-ohlcv`. Anyone reading `docs/research/` on `main` will not find the evidence the map's decisions cite.
 
 ---
 

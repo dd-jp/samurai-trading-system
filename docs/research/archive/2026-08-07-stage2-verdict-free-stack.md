@@ -1,10 +1,12 @@
 # Stage 2 verdict on ten years of free history — 2026-08-07
 
+> **ARCHIVED — folded into [`13-stage2-proxy-verdict.md`](../13-stage2-proxy-verdict.md).** This is the terminal run: the numbers here are the ones doc 13 reports as final.
+
 **Verdict: KILL/INCOMPLETE, and the sample-length explanation is now closed.**
 
-[11-stage2-verdict-post-405-2026-08-06.md](11-stage2-verdict-post-405-2026-08-06.md) named sample length as "the one lever that would change this" and concluded that "buying deeper history is the single change that would make a re-run informative rather than a repeat". The history turned out to be free rather than purchasable, the run has now been done over **10.2 years instead of 1.99**, and **the verdict did not change**. The proxy strategy's failure was not an artifact of a short sample.
+[11-stage2-verdict-post-405-2026-08-06.md](2026-08-06-stage2-verdict-post-405.md) named sample length as "the one lever that would change this" and concluded that "buying deeper history is the single change that would make a re-run informative rather than a repeat". The history turned out to be free rather than purchasable, the run has now been done over **10.2 years instead of 1.99**, and **the verdict did not change**. The proxy strategy's failure was not an artifact of a short sample.
 
-Written before the numbers were read, and stated here so a favourable result could not be reinterpreted after the fact: a KILL would mean the earlier verdict was not a sample-length artifact; a PASS would mean only that the moving-average-cross **proxy** survives selection accounting on a longer sample, and would say nothing about the Stage 0 hypothesis recorded in [14-stage0-edge-hypothesis-2026-08-07.md](14-stage0-edge-hypothesis-2026-08-07.md), which is a premium harvest and not this strategy.
+Written before the numbers were read, and stated here so a favourable result could not be reinterpreted after the fact: a KILL would mean the earlier verdict was not a sample-length artifact; a PASS would mean only that the moving-average-cross **proxy** survives selection accounting on a longer sample, and would say nothing about the Stage 0 hypothesis recorded in [14-stage0-edge-hypothesis-2026-08-07.md](../10-edge-hypothesis.md), which is a premium harvest and not this strategy.
 
 ## What changed mechanically
 

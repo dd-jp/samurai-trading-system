@@ -6,7 +6,7 @@
 
 ## Context
 
-[docs/research/05-tradingagents-risk-debate-finding.md](../research/05-tradingagents-risk-debate-finding.md) flagged that TradingAgents (TauricResearch) implements its Risk Management stage as a second LLM debate — three personas (aggressive/neutral/conservative) deliberate before a Portfolio Manager makes the final call. Samurai's Risk Manager (Stage 4) is currently fully mechanical and deterministic: an ordered check pipeline (circuit breakers → per-trade cap → per-asset/asset-class caps → portfolio gross exposure → concentration → min-viable-size) that only trims or hard-rejects, never increases risk (`risk-manager-spec.md`'s monotonic risk-reducing invariant).
+[docs/research/16-risk-debate-finding.md](../research/16-risk-debate-finding.md) flagged that TradingAgents (TauricResearch) implements its Risk Management stage as a second LLM debate — three personas (aggressive/neutral/conservative) deliberate before a Portfolio Manager makes the final call. Samurai's Risk Manager (Stage 4) is currently fully mechanical and deterministic: an ordered check pipeline (circuit breakers → per-trade cap → per-asset/asset-class caps → portfolio gross exposure → concentration → min-viable-size) that only trims or hard-rejects, never increases risk (`risk-manager-spec.md`'s monotonic risk-reducing invariant).
 
 This ADR synthesizes the resolved wayfinder ticket [Risk Manager: 3-persona risk debate (advisory) vs mechanical-only — #186](https://github.com/dd-jp/samurai-trading-system/issues/186), grilled against the research finding's five open questions.
 
@@ -45,4 +45,4 @@ The critic runs on every `OrderIntent` reaching Stage 4, not only ones the mecha
 
 ## Superseded / informs
 
-Updates [docs/specs/risk-manager-spec.md](../specs/risk-manager-spec.md) with the resolved answer to the debate-layer question the spec previously left open (via [docs/research/05-tradingagents-risk-debate-finding.md](../research/05-tradingagents-risk-debate-finding.md)).
+Updates [docs/specs/risk-manager-spec.md](../specs/risk-manager-spec.md) with the resolved answer to the debate-layer question the spec previously left open (via [docs/research/16-risk-debate-finding.md](../research/16-risk-debate-finding.md)).

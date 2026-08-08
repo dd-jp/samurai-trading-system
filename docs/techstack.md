@@ -71,7 +71,7 @@ Locked-in choices, versions, and rationale. Update as stack crystallizes.
 
 | Component | Choice | Why |
 |-----------|--------|-----|
-| Rendering | Single static HTML page, no framework/bundler | Lower build cost; zero new runtime dependencies (Node 22's built-in `http`), matches ADR-0001's dependency-light TS core. |
+| Rendering | **Vite + React**, self-hosted alongside the orchestrator | Resolved by [ADR-0010](adr/0010-dashboard-vite-react-rewrite.md) and [`research/40-dashboard-framework-and-hosting.md`](research/40-dashboard-framework-and-hosting.md). The static-page approach broke down on three counts: `server.ts` has no route that can serve a file, the client was composed by `Function.prototype.toString()` over 16 hand-listed functions, and 339 lines of browser JS sat outside tsc and Biome. Vercel is out — read-only FS, archived-when-idle, and a Hobby-tier commercial-use ban. |
 | Transport | One `http` server, two `GET` routes (`/`, `/api/snapshot`) | One process, one command (`npm run dashboard`) starts everything — no separate frontend build/serve step. |
 | Refresh | Client-side polling | No real-time push needed at single-operator scale; matches the original CLI decision's "a few seconds of staleness is fine" reasoning. |
 | Read path | Direct SQLite queries via `QueryStore` | No new message bus; Dashboard is a pure read-only consumer of the shared store (dashboard-spec.md), reusing the CLI's original `QueryStore` port unchanged. |
@@ -89,4 +89,4 @@ Locked-in choices, versions, and rationale. Update as stack crystallizes.
 - [ ] Analyst persona registry (static config vs dynamic LLM-generated)
 - [ ] Monitoring / observability stack beyond structured logs + Telegram (Grafana/Prometheus, or logs+Telegram is sufficient for v1?)
 - [ ] Multi-strategy support: shared broker abstraction per-strategy, or unified? (post-MVP question)
-- [ ] Framework/library, if any, if the dashboard ever grows past one static page (see Dashboard row above)
+- [x] ~~Framework/library, if any, if the dashboard ever grows past one static page~~ — **resolved 2026-08-06: Vite + React, self-hosted** (ADR-0010; see Dashboard row above)

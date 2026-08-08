@@ -76,7 +76,7 @@ export const PESSIMISTIC_COST_CONFIG: CostConfig = {
 /**
  * Cost config calibrated against measured market data and published fee
  * schedules (2026-08-05). See
- * `docs/research/10-cost-model-calibration-2026-08-05.md`.
+ * `docs/research/archive/2026-08-05-cost-model-calibration.md`.
  *
  * Every number below has a stated basis. That is the whole point: the fixture
  * above did not, and the gross-vs-net decomposition (#403) showed it was

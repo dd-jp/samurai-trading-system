@@ -7,7 +7,7 @@
  * ADR-0001 ("Appendix: Broker/Data — historical OHLCV sourcing" table,
  * `docs/adr/0001-technical-foundation-hybrid.md:60`) names Coinbase Exchange
  * public candles as the crypto PRIMARY, sourced from
- * `docs/research/free-crypto-ohlcv-2026-08-06.md`. No key, no account:
+ * `docs/research/31-free-ohlcv-evidence.md`. No key, no account:
  *
  *   GET https://api.exchange.coinbase.com/products/{product_id}/candles
  *       ?granularity=<seconds>&start=<ISO8601>&end=<ISO8601>

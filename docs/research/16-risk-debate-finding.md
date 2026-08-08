@@ -56,7 +56,7 @@ These are captured in the Obsidian report and should be considered when charting
 - **Analysts stage:** 4-analyst decomposition (Fundamentals / Sentiment / News / Technical) — TradingAgents' Sentiment Analyst aggregates news + StockTwits + Reddit into a structured `SentimentReport` (band, score 0–10, confidence). Port the 4 Pydantic schemas to Zod. → `docs/specs/analysts-spec.md`
 - **Debate Engine stage:** `max_debate_rounds` config knob; 5-tier `PortfolioRating` output (Buy/Overweight/Hold/Underweight/Sell) vs Samurai's structured `DebateResult`. → `docs/specs/debate-engine-spec.md`
 - **Feedback Loop stage:** append-only markdown decision log (`~/.tradingagents/memory/trading_memory.md`) + per-market alpha-vs-benchmark resolution (SPY for US, regional benchmarks for HK/JP/LON/IN/CN/AU). Port the regional benchmark map for R-multiple labels. → `docs/specs/feedback-loop-spec.md`
-- **Cross-cutting:** two-tier LLM split (`deep_think_llm` / `quick_think_llm`) + 12+ provider config shape. → `docs/research/techstack.md`
+- **Cross-cutting:** two-tier LLM split (`deep_think_llm` / `quick_think_llm`) + 12+ provider config shape. → `docs/techstack.md`
 
 ---
 

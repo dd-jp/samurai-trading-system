@@ -1,5 +1,7 @@
 # Paper-soak readiness — 2026-08-06
 
+> **ARCHIVED — point-in-time gate record (PASS, 2026-08-06).** No successor doc; the standing caveats are carried in [`README.md`](../README.md) under Infra.
+
 Written at the end of the autonomy sweep, against merged `main` at `ac87c6a`.
 
 **Verdict: the system boots, transacts end to end, and is configured to ADR-0008's budget. Three things are true that you should know before starting #238, and none of them is a build defect.**

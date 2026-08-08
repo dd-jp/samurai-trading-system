@@ -8,7 +8,7 @@
 
 [WorldMonitor](https://worldmonitor.app) is a geopolitical/macro intelligence platform (news convergence detection, prediction-market tracking, a per-country instability index) that overlaps and extends Samurai's Market Intelligence layer, which today runs two agents — DeepResearch (professional news) and Grok (social sentiment) — reconciled by a static 2-agent priority-rule Conflict Resolution Engine (`docs/specs/market-intelligence-spec.md`).
 
-The research handoff at [docs/research/04-worldmonitor-as-mi-source.md](../research/04-worldmonitor-as-mi-source.md) identified two things worth taking from WorldMonitor:
+The research handoff at [docs/research/archive/2026-07-22-worldmonitor-as-mi-source.md](../research/archive/2026-07-22-worldmonitor-as-mi-source.md) identified two things worth taking from WorldMonitor:
 
 1. **A third intelligence source** — geopolitical/regional signals Samurai's two existing agents don't cover — plus a **Country Instability Index (CII)** the Risk Manager could consume as macro context.
 2. **A more sophisticated conflict-resolution algorithm** (`src/services/analysis-core.ts`, read for design purposes only) — n-source convergence, triangulation, and absence signals (market/prediction moving without news) — strictly more capable than Samurai's current 2-agent priority rules.

@@ -1,8 +1,10 @@
 # Live News Sources, WorldMonitor Pricing, and Self-Hosting — Evaluation
 
+> **ARCHIVED — conclusions carried into [`20-mi-decisions.md`](../20-mi-decisions.md).** This doc's WorldMonitor pricing and self-hosting findings are the authoritative ones over the 2026-07-22 handoff.
+
 **Date:** 2026-08-07
 **Question (David):** What other live-news sources can we use instead of the WorldMonitor dashboard? Is WorldMonitor worth $49/mo? If it beats the alternatives, should we self-host — and what does self-hosting require?
-**Status:** Research finding. Falsifies premises in [ADR-0002](../adr/0002-worldmonitor-mi-source.md) §1/§2/§4 and in `docs/research/04-worldmonitor-as-mi-source.md`. Adopting anything here needs a new ADR — this document does not change a decision.
+**Status:** Research finding. Falsifies premises in [ADR-0002](../../adr/0002-worldmonitor-mi-source.md) §1/§2/§4 and in `docs/research/archive/2026-07-22-worldmonitor-as-mi-source.md`. Adopting anything here needs a new ADR — this document does not change a decision.
 **Method:** WorldMonitor pricing/docs pages, plus direct reads of the AGPL platform source at `koala73/worldmonitor` (read for evaluation only, nothing copied).
 
 ---

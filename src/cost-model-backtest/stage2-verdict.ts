@@ -2,9 +2,9 @@
  * Stage 2 overfitting verdict (ticket #245) — see
  * docs/specs/stage2-validation-execution-spec.md ("Module: Verdict") and
  * wayfinder map #154. Computes DSR/PBO/MinBTL over the trial grid's logged
- * configs and checks the result against `docs/research/02-staged-deployment-
- * plan.md`'s Stage 2 kill line (OOS Sharpe < 0.5, PBO > 0.05, insignificant
- * DSR).
+ * configs and checks the result against the Stage 2 kill line in
+ * `docs/research/02-staged-deployment-plan.md` (OOS Sharpe < 0.5, PBO > 0.05,
+ * insignificant DSR).
  *
  * **Consumer, not new math.** Every statistic is computed by `overfitting.ts`
  * (#89, 117/117 tested, independently reviewed) — this module only assembles
@@ -21,8 +21,8 @@
  * `per_period_sharpe`/`annualization_factor`/`observations`, and
  * `generateSplits`'s `cscv` scheme produces the 6 purged held-out folds PBO
  * ranks configs across. Recorded in
- * docs/research/06-stage2-overfitting-verdict.md and P7 of
- * docs/research/11-pitfalls-and-improvements-2026-08-05.md.
+ * docs/research/archive/2026-07-29-stage2-overfitting-verdict.md and P7 of
+ * docs/research/14-backtest-pitfalls.md.
  *
  * The refusals that remain are honest ones — no trial data, a CSCV pass that
  * was not requested or that failed on a fold, a variance term the DSR formula

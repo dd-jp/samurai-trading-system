@@ -1,15 +1,17 @@
 # Stage 2 Verdict — First Real Run Against Live Market Data (2026-08-05)
 
+> **ARCHIVED — superseded by [`13-stage2-proxy-verdict.md`](../13-stage2-proxy-verdict.md).** Sharpe magnitudes here are understated (#420).
+
 **Status:** Recorded 2026-08-05. Issue [#245](../../issues/245) ("Stage 2: overfitting verdict +
-write-up"), Verdict module of [stage2-validation-execution-spec.md](../specs/stage2-validation-execution-spec.md),
+write-up"), Verdict module of [stage2-validation-execution-spec.md](../../specs/stage2-validation-execution-spec.md),
 wayfinder map [#154](../../issues/154).
 
 Supersedes the input-availability half of
-[06-stage2-overfitting-verdict.md](06-stage2-overfitting-verdict.md) (2026-07-29), which reported
+[06-stage2-overfitting-verdict.md](2026-07-29-stage2-overfitting-verdict.md) (2026-07-29), which reported
 "no verdict — the inputs do not exist yet". They exist now. The two structural gaps that document
 identified were unchanged at the time of this run; both were closed later the same day by
 [#406](../../issues/406) — see
-[12-stage2-pbo-dsr-first-computation-2026-08-05.md](12-stage2-pbo-dsr-first-computation-2026-08-05.md).
+[12-stage2-pbo-dsr-first-computation-2026-08-05.md](2026-08-05-stage2-pbo-dsr-first-computation.md).
 
 > **Sharpe magnitudes here are understated ([#420](../../issues/420)).** This run scored each asset
 > class over a timeline containing the other class's bars, which pads the return series with zeros
@@ -18,10 +20,10 @@ identified were unchanged at the time of this run; both were closed later the sa
 > are about cost attribution and data availability rather than about a Sharpe level. The corrected
 > figures are in `12-…md`.
 
-Raw run output: [stage2-run-2026-08-05.txt](stage2-run-2026-08-05.txt).
+Raw run output: [stage2-run-2026-08-05.txt](raw/2026-08-05-stage2-run.txt).
 
 > **Followed up 2026-08-05 by
-> [09-stage2-cost-decomposition-2026-08-05.md](09-stage2-cost-decomposition-2026-08-05.md).** The
+> [09-stage2-cost-decomposition-2026-08-05.md](2026-08-05-stage2-cost-decomposition.md).** The
 > "Turnover, not necessarily signal" question below is now answered: gross of modeled costs, 16 of
 > 24 pairs clear the kill line instead of 2, and all 24 improve. The kill is dominated by the cost
 > fixture. Two claims in this document are corrected there — the hedge in Finding 1 that the 2-year
@@ -151,7 +153,7 @@ contact with two years of real market data, and the sample is too short to suppo
 search in the first place.
 
 **Does not say:** that the LLM debate pipeline fails. Stage 2 evaluates the cost-model backtest's
-config grid — [ADR-0001](../adr/0001-technical-foundation-hybrid.md) is explicit that the backtest
+config grid — [ADR-0001](../../adr/0001-technical-foundation-hybrid.md) is explicit that the backtest
 substrate cannot host the live LLM debate. What the gate does establish is that the *baseline*
 this system is meant to beat is not itself profitable on this sample, and that
 `backtest_reference_sharpe` ([#375](../../issues/375)) has no positive value to freeze — the

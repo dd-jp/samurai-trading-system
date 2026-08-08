@@ -2,7 +2,7 @@
  * Real market-data `AlpacaClient` (ticket #273) — see
  * docs/specs/transport-layer-spec.md ("Module: AlpacaClient (market
  * data)"), Wayfinder map "Live Transport Layer" #259 (closed), decision
- * #260, and docs/research/alpaca-rest-api-surface-2026-07-29.md.
+ * #260, and docs/research/32-vendor-api-reference.md.
  *
  * Implements `alpaca-source.ts`'s `AlpacaClient` (`getBars`/
  * `getLatestQuote`) against Alpaca's Market Data API v2. No interface

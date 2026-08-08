@@ -1,5 +1,7 @@
 # Research: Polygon (now Massive.com) Aggregates API for real `PolygonClient`
 
+> **ARCHIVED — folded into [`32-vendor-api-reference.md`](../32-vendor-api-reference.md).**
+
 **Ticket:** #263 "Research: Polygon aggregates API for real PolygonClient" (child of wayfinder map #259 "Live Transport Layer")
 **Date:** 2026-07-31
 **Purpose:** Ground truth for implementing a real `PolygonClient` (`src/cost-model-backtest/stage2-historical-store.ts`) against Polygon's own current docs, so this file can be lifted directly into `docs/specs/transport-layer-spec.md`.

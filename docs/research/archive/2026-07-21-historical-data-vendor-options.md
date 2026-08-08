@@ -1,5 +1,7 @@
 # Historical Data Vendor Options — Stage 2 Validation
 
+> **ARCHIVED — superseded by [`30-data-vendor-decisions.md`](../30-data-vendor-decisions.md) and [`31-free-ohlcv-evidence.md`](../31-free-ohlcv-evidence.md).** The paid-Polygon recommendation is overturned; the tier/pricing facts survive in doc 30.
+
 Research for GitHub issue #155 (child of wayfinder map #154, "Stage 2 Validation Execution"). Feeds decision ticket #157 ("Decide: historical data source + storage for Stage 2").
 
 MVP universe: **SPY, QQQ, AAPL, TSLA** (US equities/ETFs) + **BTC-USD, ETH-USD** (crypto). MVP broker: **Alpaca** (paper). Long-term crypto plan: Kraken/Coinbase via `ccxt`.
