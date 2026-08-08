@@ -3,18 +3,9 @@
  * caller inside error-handling code depends on: nothing here can itself
  * throw, no matter how hostile the logger or the caught value is.
  */
+import { recordingLogger } from './recording-logger.js';
 import { describeThrown, logCaughtFailure, safeLog } from './safe-log.js';
-import type { LogEntry, Logger } from './types.js';
-
-function recordingLogger(): Logger & { entries: LogEntry[] } {
-  const entries: LogEntry[] = [];
-  return {
-    entries,
-    log(entry: LogEntry): void {
-      entries.push(entry);
-    },
-  };
-}
+import type { Logger } from './types.js';
 
 const TEMPLATE = { trace_id: 'trace-1', stage: 'execution', level: 'error' as const };
 

@@ -8,7 +8,8 @@
  */
 import type { CostModel } from '../cost-model-backtest/index.js';
 import type { MarketDataService } from '../market-data-service/index.js';
-import type { Clock, LogEntry, Logger, OpenPosition, OrderIntent } from '../shared/index.js';
+import type { Clock, Logger, OpenPosition, OrderIntent } from '../shared/index.js';
+import { recordingLogger } from '../shared/recording-logger.js';
 import type { VerdictDecision } from '../verdict/index.js';
 import { ExecutionImpl } from './execute.js';
 import { openTestExecutionStore, type TestExecutionStore } from './sqlite-store-harness.js';
@@ -178,17 +179,6 @@ function makeBroker(): BrokerAdapter & {
     },
     async cancel(): Promise<never> {
       throw new Error('makeBroker.cancel: reconcile() does not cancel');
-    },
-  };
-}
-
-/** Records every `logger.log` call — never throws itself. */
-function recordingLogger(): Logger & { entries: LogEntry[] } {
-  const entries: LogEntry[] = [];
-  return {
-    entries,
-    log(entry: LogEntry): void {
-      entries.push(entry);
     },
   };
 }

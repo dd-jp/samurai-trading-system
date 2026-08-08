@@ -991,9 +991,9 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // a DIFFERENT port than `ExecutionInput` (`ingestFills()` calls THIS
     // adapter, it is not called BY it), so wiring one in is a second,
     // unrecorded decision outside this ticket's scope, not a one-line reuse
-    // of the mechanism #573 added there. `production.ts` already has
-    // `logger` in scope at this adapter's construction site, so the fix is
-    // cheap whenever someone takes the ticket.
+    // of the mechanism #573 added there. Filed as #609 — `production.ts`
+    // already has `logger` in scope at this adapter's construction site, so
+    // that fix is cheap.
     if (fills.length === 0 && failures.length > 0) {
       throw new AggregateError(
         failures,

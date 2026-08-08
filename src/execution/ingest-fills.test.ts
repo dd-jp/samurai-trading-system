@@ -7,7 +7,8 @@
  */
 import type { CostModel } from '../cost-model-backtest/index.js';
 import type { MarketDataService } from '../market-data-service/index.js';
-import type { Clock, LogEntry, Logger, OpenPosition } from '../shared/index.js';
+import type { Clock, Logger, OpenPosition } from '../shared/index.js';
+import { recordingLogger } from '../shared/recording-logger.js';
 import { ExecutionImpl } from './execute.js';
 import { openTestExecutionStore, TestExecutionStore } from './sqlite-store-harness.js';
 import type {
@@ -159,17 +160,6 @@ function makeFlattenOverfillAlerts(): FlattenOverfillAlertChannel & {
     warnings,
     async postFlattenOverfillWarning(warning: FlattenOverfillWarning): Promise<void> {
       warnings.push(warning);
-    },
-  };
-}
-
-/** Records every `logger.log` call — never throws itself. */
-function recordingLogger(): Logger & { entries: LogEntry[] } {
-  const entries: LogEntry[] = [];
-  return {
-    entries,
-    log(entry: LogEntry): void {
-      entries.push(entry);
     },
   };
 }
