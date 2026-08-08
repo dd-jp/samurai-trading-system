@@ -1,0 +1,109 @@
+/**
+ * The Playwright harness entry (#544): the REAL dashboard server — same
+ * `createDashboardServer`, same static handler, same `buildSnapshot` — over a
+ * fixture `DashboardQueryStore` instead of SQLite.
+ *
+ * **This process opens no database.** It never calls `sharedStorePath()` or
+ * `openSharedStore()`, so it cannot create, migrate or touch
+ * `data/samurai-*.sqlite` — including the file a live paper soak is writing.
+ * The store seam is the only thing swapped; everything the browser talks to
+ * (the bundle bytes, the JSON projection, the wire shape) is production code.
+ *
+ * **It makes no third-party calls.** `src/dashboard/index.ts` builds an
+ * `AlpacaHttpBrokerClient` and starts `ProviderStatusPoller`, which probe
+ * Alpaca and Polygon over the network; this entry passes a static
+ * `ProviderStatusReader` instead, so the suite's "zero external network"
+ * acceptance criterion holds at the server as well as in the browser.
+ *
+ * `SAMURAI_MODE` is still mandatory and still resolved by `resolveStoreMode()`
+ * — the one derivation the production entry uses — so the page under test
+ * reports its mode the same way the real one does.
+ */
+import { fileURLToPath } from 'node:url';
+import { resolveStoreMode } from '../shared/store/index.js';
+import { InMemoryQueryStore } from './fixture-store.js';
+import type { ProviderStatusPanel, ProviderStatusReader } from './provider-status.js';
+import { createDashboardServer } from './server.js';
+import type { VerdictAuditEntry } from './types.js';
+
+/** Default harness port. Deliberately not 8787 — that is a developer's dashboard. */
+const DEFAULT_PORT = 8788;
+
+/**
+ * Verdict rows whose `trace_id`s are the PIPELINE fixture's trace ids.
+ *
+ * `InMemoryQueryStore`'s own verdict history uses a separate id space
+ * (`trace-001`…), so every ledger row's `verdictsByTrace.get(entry.trace_id)`
+ * misses and the gate wording, the HITL badge and the drawer's verdict line
+ * are all unreachable — the three things scenario 4 exists to assert. Aligning
+ * the ids is what puts them on screen.
+ *
+ * ETH carries `hitl_override` so the badge is rendered from the first paint,
+ * without the suite having to drive a settle first.
+ */
+const E2E_VERDICTS: VerdictAuditEntry[] = [
+  {
+    trace_id: 'trace-p-btc',
+    instrument: 'BTC-USD',
+    status: 'go',
+    reason: 'approved',
+    hitl_override: false,
+    timestamp: new Date('2026-07-19T14:27:08Z'),
+  },
+  {
+    trace_id: 'trace-p-eth',
+    instrument: 'ETH-USD',
+    status: 'no_go',
+    reason: 'risk_correlation',
+    hitl_override: true,
+    timestamp: new Date('2026-07-19T14:28:08Z'),
+  },
+];
+
+/** The fixture store, with its verdict history joined to the pipeline fixtures. */
+class E2eFixtureStore extends InMemoryQueryStore {
+  override getVerdictHistory(limit: number, _asOf: Date): VerdictAuditEntry[] {
+    return E2E_VERDICTS.slice(0, limit);
+  }
+}
+
+/**
+ * A polled panel, frozen. `ok` with a balance rather than `NULL_PROVIDER_STATUS`
+ * so the Alpaca tile renders numbers and the metrics sparkline receives a
+ * sample — the not-configured rendering is a different (also real) state, and
+ * the suite asserts the populated one.
+ */
+const FIXTURE_PROVIDERS: ProviderStatusPanel = {
+  alpaca: {
+    provider: 'alpaca',
+    state: 'ok',
+    detail: '',
+    observed_at: '2026-07-19T14:29:00.000Z',
+    balance: { cash: 24_180.55, equity: 101_402.31, buying_power: 48_361.1 },
+  },
+  polygon: {
+    provider: 'polygon',
+    state: 'ok',
+    detail: 'free tier · 5 req/min',
+    observed_at: '2026-07-19T14:29:00.000Z',
+  },
+};
+
+const providers: ProviderStatusReader = {
+  readProviderStatus: () => FIXTURE_PROVIDERS,
+};
+
+const server = createDashboardServer({
+  port: Number(process.env.PORT ?? DEFAULT_PORT),
+  host: process.env.HOST ?? '127.0.0.1',
+  store: new E2eFixtureStore(),
+  // Same module-relative resolution as `index.ts`: this file is
+  // `dist/dashboard/fixture-server.js` in the only form Playwright runs it,
+  // so its sibling is the built bundle.
+  bundleRoot: fileURLToPath(new URL('../dashboard-web/', import.meta.url)),
+  mode: resolveStoreMode(),
+  providers,
+});
+
+await server.start();
+console.log(`Samurai dashboard e2e fixture server → ${server.url}`);
