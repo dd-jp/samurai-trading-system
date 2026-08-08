@@ -262,6 +262,45 @@ describe('useWalkAnimation — re-placement must not cancel the walk (#595)', ()
     log.stop();
   });
 
+  it('ignores a later delivery that reports the size already placed against', async () => {
+    render(<Theater view={AT_ANALYSTS} previous={null} firstPaint={true} />);
+    // Let the initial observation land first, so the delivery below is an
+    // ordinary one — the case a resize-less `resize` event produces on mobile,
+    // where the URL bar collapses and the floor does not move at all.
+    await flushMicrotasks();
+    const log = recordStyle(chip());
+    harness.notifyObservers();
+
+    // `states()` always reports the current value, so one entry means no write.
+    expect(log.states()).toHaveLength(1);
+    log.stop();
+  });
+
+  it('ignores sub-pixel jitter, then re-places once the drift accumulates', async () => {
+    const placement = computeLayout(AT_ANALYSTS).chips[INSTRUMENT];
+    if (placement === undefined) throw new Error('no placement for the chip');
+
+    render(<Theater view={AT_ANALYSTS} previous={null} firstPaint={true} />);
+    await flushMicrotasks();
+    const log = recordStyle(chip());
+    const placed = chip().getAttribute('style');
+
+    // Four columns, so +0.1px of room is +0.4px of floor: under the threshold,
+    // and a `contentRect` comparison by `===` would have re-placed on it.
+    harness.resizeRoomsTo(200.1);
+    expect(chip().getAttribute('style')).toBe(placed);
+    expect(log.states()).toHaveLength(1);
+
+    // Drift is measured against the size the placement was derived from, not
+    // against the previous delivery, so the next nudge is +0.8px of floor and
+    // does cross — jitter is ignored without the guard going deaf.
+    harness.resizeRoomsTo(200.2);
+    expect(transformOf(chip().getAttribute('style') ?? '')).toEqual(
+      harness.pointFor(placement.room, placement.slot),
+    );
+    log.stop();
+  });
+
   it('re-aims a walking chip at a genuine resize instead of snapping it', async () => {
     const walk = plannedWalk(AT_ANALYSTS, AT_RISK);
     const view = render(<Theater view={AT_ANALYSTS} previous={null} firstPaint={true} />);
@@ -473,6 +512,34 @@ describe('usePrefersReducedMotion → the planner and the hook (#595)', () => {
     // And the hook's own rule-5 half: snap into place, wear the settle ring.
     expect(chip().classList.contains('chip-walking')).toBe(false);
     expect(chip().classList.contains('chip-settled')).toBe(true);
+    expect(transformOf(chip().getAttribute('style') ?? '')).toEqual(harness.pointFor('risk', 0));
+  });
+
+  it('degrades a session that starts with motion allowed and flips mid-run', async () => {
+    // The install-time reads above never exercise the `change` subscription:
+    // a user turning reduced motion on while the dashboard is open is a live
+    // event, and the plan has to follow it without a remount.
+    useHarness({ reducedMotion: false });
+    const plans: WalkPlan[] = [];
+    const onPlan = (plan: WalkPlan) => plans.push(plan);
+    const view = render(
+      <Theater view={AT_ANALYSTS} previous={null} firstPaint={true} onPlan={onPlan} />,
+    );
+    await flushMicrotasks();
+
+    act(() => {
+      harness.setReducedMotion(true);
+    });
+    view.rerender(
+      <Theater view={AT_RISK} previous={AT_ANALYSTS} firstPaint={false} onPlan={onPlan} />,
+    );
+    await flushMicrotasks();
+
+    // Same poll that walks four hops when motion is allowed.
+    const last = plans.at(-1);
+    expect(last?.motions.map((motion) => motion.kind)).toEqual(['snap']);
+    expect(last?.total_ms).toBe(0);
+    expect(chip().classList.contains('chip-walking')).toBe(false);
     expect(transformOf(chip().getAttribute('style') ?? '')).toEqual(harness.pointFor('risk', 0));
   });
 });

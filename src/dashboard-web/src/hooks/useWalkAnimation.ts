@@ -66,6 +66,13 @@ export const CHIP_ROW_HEIGHT = 28;
 const TRANSITION_FALLBACK_SLACK_MS = 90;
 /** How long the settle ring stays on a chip that changed room without walking. */
 export const SETTLE_RING_MS = 1_200;
+/**
+ * How far the floor must actually move before a `ResizeObserver` delivery
+ * counts as a resize, in px. `contentRect` is fractional, so an exact
+ * comparison is defeated by sub-pixel oscillation — pinch zoom, an animated
+ * sidebar — and would re-place every chip on every delivery.
+ */
+const RESIZE_EPSILON_PX = 0.5;
 
 export interface WalkAnimationInput {
   /**
@@ -325,12 +332,6 @@ export function useWalkAnimation(input: WalkAnimationInput): void {
       }
     }
 
-    // Re-place (never re-animate, and never SNAP a walking chip — see
-    // `placeAll`) whenever the geometry the placement was measured against
-    // can have moved underneath it.
-    const onResize = () => placeAll();
-    window.addEventListener('resize', onResize);
-
     /**
      * The floor size the current placement was measured against. `null` until
      * the observer's own first callback reports it: per spec `observe()`
@@ -355,7 +356,16 @@ export function useWalkAnimation(input: WalkAnimationInput): void {
               placedAgainst = size;
               return;
             }
-            if (size.width === placedAgainst.width && size.height === placedAgainst.height) return;
+            // `placedAgainst` is only advanced when a delivery actually
+            // re-places, so drift is always measured against the size the
+            // current placement was derived from and accumulates across
+            // sub-epsilon deliveries until it crosses the threshold.
+            if (
+              Math.abs(size.width - placedAgainst.width) < RESIZE_EPSILON_PX &&
+              Math.abs(size.height - placedAgainst.height) < RESIZE_EPSILON_PX
+            ) {
+              return;
+            }
             placedAgainst = size;
             // A genuine container resize DOES have to re-derive geometry: the
             // rooms moved, so every chip's target moved with them, including
@@ -363,6 +373,17 @@ export function useWalkAnimation(input: WalkAnimationInput): void {
             placeAll();
           });
     observer?.observe(floor);
+
+    // There is deliberately no `window` resize listener beside the observer.
+    // Any window resize that moves the floor resizes it, so the observer
+    // already covers that case with a guard the window event cannot share:
+    // `placedAgainst` holds content-box dimensions, and what a window handler
+    // could cheaply read (`clientWidth`) includes padding, so a size check
+    // there would misfire rather than suppress. Unguarded it was worse — a
+    // mobile URL-bar collapse fires `resize` with no geometry change at all
+    // and force-reflowed every non-walking chip for nothing. Where
+    // `ResizeObserver` is missing entirely, the next poll re-enters this
+    // effect (`layout` is recomputed per snapshot) and re-places anyway.
 
     // A late webfont swap reflows the rooms after the first measurement, and
     // no resize event fires for it. Only subscribe when the fonts have NOT
@@ -377,7 +398,6 @@ export function useWalkAnimation(input: WalkAnimationInput): void {
 
     return () => {
       cancelled = true;
-      window.removeEventListener('resize', onResize);
       observer?.disconnect();
       for (const timer of timers) clearTimeout(timer);
       // Motion rule 9: a new poll mid-walk wins. Outstanding hops are
