@@ -52,9 +52,9 @@ Knock-on: doc 15's **falsifier 3** cites the `current`-universe t = −1.07 as e
 
 Gate 6 quotes "STCG ~40.8% federal, ~194bps/yr at 100% turnover." The owner is UK-resident under HMRC (CLAUDE.md, "Key Constraints"). US federal short-term rates do not apply.
 
-The failure is specific: doc 15's *argument* is "monthly rebalancing in a taxable account realises **short-term** gains, and the drag plausibly exceeds the entire trend-vs-control differential." UK CGT has **no holding-period split** — the short-vs-long rate wedge that argument rests on does not exist here, so the argument does not transfer.
+The failure is specific: doc 15's *argument* rests on a **short-vs-long-term rate wedge** — "monthly rebalancing in a taxable account realises short-term gains, and the drag plausibly exceeds the entire trend-vs-control differential." Whether an equivalent turnover penalty exists under HMRC rules is a question about the UK regime that **this audit has not verified**, and the argument cannot be carried over until it is.
 
-The drag does not vanish: disposals are still taxable events, the annual exempt amount is small, and higher turnover still costs deferral. It is simply far smaller than a 40.8% short-term wedge implies. **Conclusion unquantified, not disproven** — re-derive at current-year UK rates before it is used against the trend-vs-control differential. (Do not lift a rate from this document; verify the 2026/27 figure.)
+The drag does not vanish either way: disposals are taxable events and higher turnover costs deferral regardless of regime. **Conclusion unquantified, not disproven** — re-derive the whole term under current-year UK rules before it is used against the trend-vs-control differential. Neither a rate nor a regime structure is asserted in this document; both need sourcing.
 
 **Neither doc carries an FX term.** A GBP-based owner holding a USD-denominated return stream at a ~10%/yr target is running an uncosted, unhedged GBP/USD exposure whose annual vol is comparable to a large fraction of the entire trend-vs-control differential. That is a bigger uncosted line than the tax one and it appears nowhere in doc 13, doc 15, or the script.
 
@@ -71,7 +71,7 @@ Falsifier 4: "net return below 60/40 over any rolling 3 years → apparatus void
 
 Two problems. It is **return-only against a risk-targeted strategy** — the exact comparison doc 13 Result 1 exists to prevent ("the control is the benchmark to beat, not SPY"). And "**any** rolling 3 years" over a decade is dozens of overlapping windows; a ~10%/yr, ~14%-vol strategy will underperform 60/40 in some of them with probability close to 1. As written it voids the apparatus unconditionally.
 
-The same flaw sits under **gate 3**'s patch: "Samurai lags SPY by ~5pts/yr" compares a de-levered, vol-targeted, drawdown-managed stream to 100% equity beta on return alone, over a decade containing one of the strongest equity runs on record. SPY's own max drawdown over that window is roughly −25% to −34%. Report risk-adjusted, or report return *and* drawdown together — otherwise the comparison argues for abandoning risk management, which is not what doc 15 means.
+The same flaw sits under **gate 3**'s patch: "Samurai lags SPY by ~5pts/yr" compares a de-levered, vol-targeted, drawdown-managed stream to 100% equity beta on return alone, over a decade containing one of the strongest equity runs on record. SPY carries full equity-beta drawdown across a window containing both 2020 and 2022 — a cost gate 3's comparison does not report at all. Report risk-adjusted, or report return *and* drawdown together — otherwise the comparison argues for abandoning risk management, which is not what doc 15 means.
 
 Keep gate 3's *intent* (an outside benchmark is a fair sanity check on absolute attractiveness), fix the metric, and keep the matched control as the attribution benchmark exactly as doc 13 insists.
 
@@ -119,7 +119,7 @@ Whether that is a good trade is exactly what a levered-bond position is: it work
 
 0. **Paired Sharpe-difference test (JKM / Ledoit-Wolf HAC)** on the existing 2570-day series. Decides whether trend's variance advantage is real before anything expensive runs. *(New — D1.)*
 1. **Bootstrap the drawdown distribution.** Doc 15 gate 2, unchanged. Commit to the 90th percentile.
-2. **ADR: is this strategy the thing we build?** Doc 15's gates presume a deployment that has no implementation. Resolve before spending on validation. *(New — see omission above.)*
+2. **Unresolved architecture decision: is this strategy the thing we build?** Doc 15's gates presume a deployment that has no implementation. Per Standing Pipeline Rule 7 this is a wayfinder map issue that resolves into an ADR, not an ADR written directly. Resolve before spending on validation. *(New — see omission above.)*
 3. **PBO on the Result 5 configuration** with the full grid. Note: PBO is not parameterised by a trial count — it is computed from the matrix of *all* trials over CSCV splits, so this means re-running the grid through `src/cost-model-backtest/`, not passing a number. Doc 15 gate 1, mechanism corrected.
 4. **Outside benchmarks, risk-adjusted** (SPY, 60/40), over the exact sample, reporting return *and* drawdown. Matched control retained for attribution. Doc 15 gate 3, metric corrected — D4.
 5. **UK tax + financing + FX drag**, re-derived at current HMRC rates, with the GBP/USD term added. Doc 15 gate 6, jurisdiction corrected — D2.
@@ -133,4 +133,5 @@ Falsifiers: fix falsifier 2 against the bootstrapped percentile (D3), drop or ri
 - The script was **not re-run** — it needs a downloaded Alpaca/Coinbase data directory. Every number quoted from docs 13/15 is taken as reported; only the *code paths that produce them* were read.
 - The external figures in doc 15's gate 3 patch (SPY 15.35%/yr, 60/40 9.6%) were **not independently verified**; doc 15 already labels them Medium confidence and pending exact-window recomputation.
 - The parent Obsidian report was not read (outside the repo).
-- No current-year UK CGT rate is asserted here — deliberately, per D2.
+- **No UK tax fact is asserted here** — neither a current-year rate nor the structure of the regime. D2 states that doc 15's US-based argument must be re-derived, not what the UK answer is.
+- SPY's max drawdown over the sample is referenced qualitatively, not as a figure.
