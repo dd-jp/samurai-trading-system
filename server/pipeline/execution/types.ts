@@ -34,7 +34,7 @@
  * table implies an order placed outside this system, which is out of scope.
  *
  * `OpenPosition` / `OrderState` are NOT redefined here — they are cross-spec
- * types owned by src/shared/types.ts (registry §4).
+ * types owned by server/shared/types.ts (registry §4).
  */
 
 export type {

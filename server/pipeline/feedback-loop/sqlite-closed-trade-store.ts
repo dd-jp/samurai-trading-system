@@ -2,7 +2,7 @@
  * SQLite-backed `ClosedTradeStore` — a READ-ONLY view over `closed_trades`
  * (#193/#195), the real store behind `InMemoryClosedTradeStore` (#91).
  * Execution is `closed_trades`' sole writer (shared-sqlite-store-spec.md,
- * cross-spec §4; `SqliteExecutionStore`, src/execution/sqlite-shared-store.ts)
+ * cross-spec §4; `SqliteExecutionStore`, server/pipeline/execution/sqlite-shared-store.ts)
  * — this class deliberately exposes only the one read the `ClosedTradeStore`
  * port declares, with no write method anywhere on it, so there is no way for
  * the Feedback Loop to accidentally mutate Execution's table.

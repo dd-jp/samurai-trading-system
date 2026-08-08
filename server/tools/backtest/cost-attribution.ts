@@ -168,7 +168,7 @@ export async function attributeRunCosts(
     };
     // Round-trip notional approximated as entry × size × 2, i.e. exit notional
     // is assumed equal to entry notional. `ClosedTrade` carries no exit price
-    // (`src/shared/types.ts` — entry, stop, filled_size, realized_pnl_net, but
+    // (`server/shared/types.ts` — entry, stop, filled_size, realized_pnl_net, but
     // no exit), so the exact `entry × size + exit × size` is not derivable
     // here. This only feeds `bps_of_notional`, a denominator for presenting
     // cost magnitude, and the error is second-order: it is the trade's own

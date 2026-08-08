@@ -74,7 +74,7 @@
  *
  * **Residual gap, stated rather than implied away:** this failover covers
  * ONLY this script's fetch path. The LIVE orchestrator
- * (`src/orchestrator/production.ts` -> `buildAlpacaDataSource`,
+ * (`server/apps/orchestrator/production.ts` -> `buildAlpacaDataSource`,
  * `./production/defaults.ts`) sources BOTH legs from Alpaca alone — crypto
  * included, not Coinbase/ccxt — and has no fallback at all. An Alpaca stall
  * during a live tick is not mitigated by this change.

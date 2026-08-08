@@ -11,7 +11,7 @@
  *
  * The Alpaca trading client is injected (`AlpacaClient`), mirroring the
  * injected-client pattern already used for market data
- * (src/market-data-service/sources/alpaca-source.ts): connection/auth is an
+ * (server/providers/market-data-service/sources/alpaca-source.ts): connection/auth is an
  * ops concern (trade-only key, withdrawals disabled, IP-whitelisted per
  * CONTEXT.md invariant 3), not something this adapter constructs.
  *
@@ -87,7 +87,7 @@ export const DEFAULT_UNPRICED_FILL_AGE_OUT_MS = 15 * 60_000;
 export interface AlpacaBrokerAdapterInput {
   client: AlpacaClient;
   /**
-   * Optional so existing wiring (src/orchestrator/production.ts) keeps
+   * Optional so existing wiring (server/apps/orchestrator/production.ts) keeps
    * working; when absent the adapter still paces itself rather than running
    * unlimited — see the default below.
    */
@@ -96,7 +96,7 @@ export interface AlpacaBrokerAdapterInput {
    * Durable home for the bracket index (#287). Optional for the same
    * compatibility reason as `rateLimiter`, but the two defaults are not
    * equivalent: that one is merely conservative, whereas the in-memory default
-   * here IS the #295 bug. src/orchestrator/production.ts injects
+   * here IS the #295 bug. server/apps/orchestrator/production.ts injects
    * `SqliteBrokerStateStore`.
    *
    * Alpaca's index is a cache of a venue-authoritative lookup, so persisting

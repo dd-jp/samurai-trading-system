@@ -12,7 +12,7 @@
  *    on the `asOf` bind alike. `closed_at <= ?` is a string comparison, which
  *    is only correct under one canonical, fixed-width format.
  * 2. **`instrument`/`asset_class`/`idempotency_key` come from the constructor**,
- *    not from `writeSetup`. The `SetupStore` port (src/shared/types.ts) carries
+ *    not from `writeSetup`. The `SetupStore` port (server/shared/types.ts) carries
  *    only `debate_id`/vector/`decided_at`, but all three columns are NOT NULL
  *    (and `asset_class` is CHECKed). They exist for retrieval scoping and FL's
  *    trade-close join — neither of which the port exercises today

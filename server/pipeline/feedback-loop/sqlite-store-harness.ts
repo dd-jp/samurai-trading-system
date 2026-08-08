@@ -4,7 +4,7 @@
  * `metrics.test.ts` build on in place of their former `InMemoryTuningStore`/
  * `InMemoryClosedTradeStore`/`InMemoryAdjustmentLog` fixtures, so the suites
  * exercise the real SQLite-backed stores rather than a Map's/array's
- * semantics. Mirrors `src/execution/sqlite-store-harness.ts`'s role for the
+ * semantics. Mirrors `server/pipeline/execution/sqlite-store-harness.ts`'s role for the
  * Execution cutover (#195).
  *
  * Each helper opens its own fresh `:memory:` store, so a call here is as

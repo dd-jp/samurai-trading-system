@@ -175,7 +175,7 @@ describe('paperStartingProfile', () => {
 
   it('reuses DEFAULT_TRADER_CONFIG rather than restating its values', () => {
     // One source of truth for the sizing constants: a copy here would drift
-    // silently from `src/trader/types.ts`.
+    // silently from `server/pipeline/trader/types.ts`.
     const { traderConfig } = paperStartingProfile('paper');
 
     expect(traderConfig.conviction_floor).toBe(DEFAULT_TRADER_CONFIG.conviction_floor);

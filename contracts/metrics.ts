@@ -2,7 +2,7 @@
  * The metrics suite — computed by the backtest validation library, written by
  * the Feedback Loop, and rendered by the dashboard's metrics panel.
  *
- * Moved here from `src/cost-model-backtest/validation-types.ts`. It was never
+ * Moved here from `server/tools/backtest/validation-types.ts`. It was never
  * a backtest-only shape: `feedback-loop/types/metrics.ts` recomposes it into
  * its live report and `DashboardSnapshot.metrics` puts it on the wire, so a
  * folder named for an offline research harness owned a type on the operator's

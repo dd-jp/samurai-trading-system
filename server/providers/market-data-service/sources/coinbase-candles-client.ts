@@ -2,7 +2,7 @@
  * Coinbase Exchange public candles — the crypto leg of the #512 warm-start
  * backfill script, and ONLY that. Not a `DataSource` port implementation
  * (`../market-data-service/sources/`); the live composition root
- * (`src/orchestrator/production.ts`) never imports this module.
+ * (`server/apps/orchestrator/production.ts`) never imports this module.
  *
  * ADR-0001 ("Appendix: Broker/Data — historical OHLCV sourcing" table,
  * `docs/adr/0001-technical-foundation-hybrid.md:60`) names Coinbase Exchange

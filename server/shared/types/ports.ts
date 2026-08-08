@@ -69,7 +69,7 @@ export interface VerdictLogStore {
 /**
  * Windowed read over the shared store's `ClosedTrade` rows — the Feedback
  * Loop's daily-cycle input (#91). Execution's own store port
- * (src/execution/types.ts `ExecutionStore`) only *writes* closed trades; FL
+ * (server/pipeline/execution/types.ts `ExecutionStore`) only *writes* closed trades; FL
  * is their reader, the same ownership split as `SetupStore`/`DebateLogStore`.
  * Synchronous like those two ports, so `runDailyCycle` keeps the synchronous
  * signature feedback-loop-spec.md gives it.

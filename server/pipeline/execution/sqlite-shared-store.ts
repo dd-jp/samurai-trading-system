@@ -1,5 +1,5 @@
 /**
- * SQLite-backed `SharedStore` (src/execution/types.ts) over `open_positions`,
+ * SQLite-backed `SharedStore` (server/pipeline/execution/types.ts) over `open_positions`,
  * `fills` and `closed_trades` (#193) — the real store behind Execution's
  * write-ahead port. See docs/specs/shared-sqlite-store-spec.md ("Execution"
  * schema section) and docs/specs/execution-spec.md ("Module: Idempotency &
@@ -11,7 +11,7 @@
  * is synchronous; the `Promise`-returning methods are the port's shape
  * (`SharedStore`), not evidence of async I/O.
  *
- * Two conventions carried from `SqliteSetupStore` (src/trader/sqlite-setup-store.ts):
+ * Two conventions carried from `SqliteSetupStore` (server/pipeline/trader/sqlite-setup-store.ts):
  *
  * 1. **Timestamps are ISO-8601 UTC TEXT** (`Date.toISOString()`) on write and
  *    read alike.

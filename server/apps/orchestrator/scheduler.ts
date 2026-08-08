@@ -7,7 +7,7 @@
  * (orchestrator-spec.md stories 1-2).
  *
  * The calendar is an injected dependency, not designed here — the port already
- * exists at src/market-data-service/trading-calendar.ts (#66), which is the
+ * exists at server/providers/market-data-service/trading-calendar.ts (#66), which is the
  * same seam the spec's "small injected dependency (holiday/session table)"
  * describes. The real holiday/session table implements it without touching
  * this file.

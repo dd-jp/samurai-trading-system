@@ -10,7 +10,7 @@
  * attributes back to the lot(s) it closed (#517), closing is still
  * `ingestFills()`'s job, not `execute()`'s. The only place a `ClosedTrade` is
  * ever produced is `ingestFills()` calling
- * `SharedStore.writeClosedTrade()` (src/execution/ingest-fills.ts), on its own
+ * `SharedStore.writeClosedTrade()` (server/pipeline/execution/ingest-fills.ts), on its own
  * polling path, independent of the per-instrument tick chain. So this module
  * decorates `writeClosedTrade` itself rather than reaching into the tick
  * chain — nothing here is a `TickSteps` member, and nothing here is called

@@ -5,7 +5,7 @@
  *
  * Closes `direct-bind.ts`'s `VolatilityReadingProvider` interface
  * (`getVolatilityReading(asOf): Promise<VolatilityReading>`). Reuses the
- * already-shipped pattern at `src/execution/simulated-adapter.ts`'s
+ * already-shipped pattern at `server/pipeline/execution/simulated-adapter.ts`'s
  * `buildMarketState` — `marketData.getIndicator(instrument,
  * config.volatility_indicator, now)` — no new data source.
  *

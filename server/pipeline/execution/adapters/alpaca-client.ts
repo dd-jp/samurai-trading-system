@@ -1,6 +1,6 @@
 /**
  * Injected Alpaca trading-API client (ticket #84) — mirrors the injected
- * `AlpacaClient` pattern in src/market-data-service/sources/alpaca-source.ts:
+ * `AlpacaClient` pattern in server/providers/market-data-service/sources/alpaca-source.ts:
  * connection/auth is an ops concern (execution-spec.md Dependencies — trade-
  * only key, withdrawals disabled, IP-whitelisted); this file only shapes the
  * wire contract the adapter needs.

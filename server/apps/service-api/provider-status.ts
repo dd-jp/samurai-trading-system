@@ -50,7 +50,7 @@ import { fetchWithTimeout } from '../../shared/http/fetch-with-timeout.js';
  * The split is along behavior: everything below this line does live HTTP
  * probing and holds mutable in-memory state, and none of it can cross to a
  * browser. `ProviderStatusPoller` in particular reaches `AlpacaClient` in
- * `src/execution/`, so moving it would have dragged the broker adapter types
+ * `server/pipeline/execution/`, so moving it would have dragged the broker adapter types
  * into the client's TypeScript program — the opposite of the point.
  */
 export type {

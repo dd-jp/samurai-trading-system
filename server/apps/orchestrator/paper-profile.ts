@@ -648,7 +648,7 @@ function buildFeedbackConfig(caps: RiskCaps): FeedbackConfig {
      * The blocker recorded here was a naming contract, not a number: nothing
      * had ever fixed which `risk_thresholds` key drives which `RiskConfig`
      * field, so declaring bounds "would put safety-limit bounds under keys
-     * nothing honours". `RISK_THRESHOLD_KEYS` (src/risk-manager/risk-thresholds.ts)
+     * nothing honours". `RISK_THRESHOLD_KEYS` (server/pipeline/risk-manager/risk-thresholds.ts)
      * is that contract, the composition root seeds the table from these same
      * caps, and `RiskManagerImpl` reads them live at `evaluate()`. All three
      * ends now agree, so the dials are declarable.
@@ -845,7 +845,7 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
   const caps = riskCapsFor(equityAnchorUsd);
 
   const traderConfig: TraderConfig = {
-    // SPEC — `DEFAULT_TRADER_CONFIG` (src/trader/types.ts) is the one set of
+    // SPEC — `DEFAULT_TRADER_CONFIG` (server/pipeline/trader/types.ts) is the one set of
     // sizing constants already checked in and already justified against
     // docs/research/02-staged-deployment-plan.md ("half- or quarter-Kelly,
     // never full Kelly; quarter-Kelly or less in fat-tailed markets"):
@@ -1618,7 +1618,7 @@ export function paperStartingProfile(
   if (mode === 'live') {
     throw new Error(
       'Orchestrator cannot start: SAMURAI_MODE=live was requested against the PAPER STARTING ' +
-        'PROFILE (src/orchestrator/paper-profile.ts) — a set of deliberately untuned starting ' +
+        'PROFILE (server/apps/orchestrator/paper-profile.ts) — a set of deliberately untuned starting ' +
         'values. Its volatility breaker baseline is uncalibrated and effectively inert, its ' +
         'exposure caps assume a $100,000 paper account, its drift tolerance is a fraction ' +
         'nobody has yet observed against a real fill, and its cadence and LLM budget are sized ' +
@@ -1627,10 +1627,10 @@ export function paperStartingProfile(
         'makes the circuit breakers and the notional caps the only stop. None of that may ' +
         'decide a real-money trade. ' +
         LIVE_MONEY_GATE_SUMMARY +
-        ' The live path is liveStartingProfile() in src/orchestrator/live-profile.ts, which ' +
+        ' The live path is liveStartingProfile() in server/apps/orchestrator/live-profile.ts, which ' +
         'derives its caps from SAMURAI_LIVE_MAX_CAPITAL_USD instead of a paper balance; or ' +
         'call startFromEnvironment() from your own composition root with a config you have ' +
-        'tuned against paper results — see ProductionConfig in src/orchestrator/production.ts.',
+        'tuned against paper results — see ProductionConfig in server/apps/orchestrator/production.ts.',
     );
   }
 

@@ -557,7 +557,7 @@ export function buildExecutionStep(deps: ExecutionStepDeps): TickSteps['executio
 
 /**
  * Execution's OTHER two surfaces — `reconcile()` and `ingestFills()` — bound
- * for the fill-sync loop (src/orchestrator/fill-sync.ts).
+ * for the fill-sync loop (server/apps/orchestrator/fill-sync.ts).
  *
  * Separate from `buildExecutionStep` because these are not tick steps: they
  * are not driven by a verdict, take no input, and run on their own cadence

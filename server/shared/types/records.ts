@@ -9,7 +9,7 @@ import type { AssetClass } from './primitives.js';
 /**
  * The bracket handed from the Trader to the Risk Manager. See
  * docs/specs/trader-spec.md ("Key Interfaces"). Defined here (not in
- * src/trader) because `metadata.debate_id` is the join key three other
+ * server/pipeline/trader) because `metadata.debate_id` is the join key three other
  * consumers (Verdict, cosine setup store, Feedback Loop) rely on — see
  * docs/specs/cross-spec-contracts.md registry #1.
  */
@@ -174,7 +174,7 @@ import type { OrderState } from '../../../contracts/primitives.js';
 
 /**
  * A live open lot — Trader position-awareness + Risk exposure. Defined here
- * (not in src/execution) because it is a cross-spec registry type: Execution
+ * (not in server/pipeline/execution) because it is a cross-spec registry type: Execution
  * is its SOLE writer, but Risk and the Trader read it
  * (docs/specs/cross-spec-contracts.md §4).
  *
@@ -254,7 +254,7 @@ export interface Fill {
 
 /**
  * Emitted on round-trip-to-flat — the realized record the Feedback Loop and
- * Risk consume. Defined here rather than in src/execution because it is a
+ * Risk consume. Defined here rather than in server/pipeline/execution because it is a
  * cross-spec registry type (§4): Execution is its sole writer, FL and Risk
  * read it. feedback-loop-spec references `ClosedTrade` but never defines it;
  * this is that definition (execution-spec.md cross-spec addition #1).

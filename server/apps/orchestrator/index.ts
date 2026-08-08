@@ -505,7 +505,7 @@ export function assertStorePathMatchesMode(deps: {
  * required dependency or credential is absent, or if the operator has not said
  * where alerts go (`SAMURAI_ALERTS`, #322 — see `./alert-transport.ts`).
  *
- * DB path convention matches `src/dashboard/index.ts` (both call
+ * DB path convention matches `server/apps/service-api/index.ts` (both call
  * `sharedStorePath`): `data/samurai-{mode}.sqlite`, one file per TRADING MODE
  * (shared-sqlite-store-spec.md § "DB file path convention", #168) — which is
  * what makes paper/live PnL cross-contamination physically impossible.
@@ -536,9 +536,9 @@ export async function startFromEnvironment(
         "selected by SAMURAI_ALERTS (#322) — telegram builds #275's TelegramBotApiClient, " +
         "log-only keeps the composition root's log-only stand-ins. For a paper run, pass the " +
         'checked-in starting profile: ' +
-        'startFromEnvironment(paperStartingProfile(mode)) from src/orchestrator/paper-profile.ts ' +
+        'startFromEnvironment(paperStartingProfile(mode)) from server/apps/orchestrator/paper-profile.ts ' +
         '— that is exactly what `yarn orchestrator` does. To supply your own, see ' +
-        'ProductionConfig in src/orchestrator/production.ts.',
+        'ProductionConfig in server/apps/orchestrator/production.ts.',
     );
   }
 
@@ -569,7 +569,7 @@ export async function startFromEnvironment(
   const logger = injected.logger ?? new JsonLogger();
 
   // `sharedStorePath()` is called with no argument, exactly as
-  // `src/dashboard/index.ts` calls it: the resolver reads `NODE_ENV` itself,
+  // `server/apps/service-api/index.ts` calls it: the resolver reads `NODE_ENV` itself,
   // so the writer and the reader cannot derive different paths. `env` above is
   // for the startup log line only.
   //

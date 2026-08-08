@@ -158,7 +158,7 @@ export interface TickOutcome {
  * `analysts` and `debate` bind through a thin adapter rather than directly:
  * `AnalystOrchestrator.runAnalysts`/`runDebate` don't match this shape 1:1
  * (extra positional args, a richer return type) — see
- * `src/orchestrator/production/analysts-adapter.ts` and `debate-adapter.ts`
+ * `server/apps/orchestrator/production/analysts-adapter.ts` and `debate-adapter.ts`
  * (ticket #235, ADR-0004 §3).
  */
 export interface TickSteps {

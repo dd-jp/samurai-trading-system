@@ -70,7 +70,7 @@ jobs:
   # gate the trading process.
   #
   # Requires NO repository secret: the suite serves the real bundle from
-  # `dist/dashboard/fixture-server.js` over an in-memory fixture store, and
+  # `dist/server/apps/service-api/fixture-server.js` over an in-memory store, and
   # fails itself if the page makes a single off-origin request.
   e2e:
     runs-on: ubuntu-latest

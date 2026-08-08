@@ -1,6 +1,6 @@
 /**
  * Typed error hierarchy for the real Alpaca market-data `AlpacaClient`
- * (ticket #273) — mirrors `src/debate-engine/llm/errors.ts`'s shape per
+ * (ticket #273) — mirrors `server/pipeline/debate-engine/llm/errors.ts`'s shape per
  * transport-layer-spec.md's "Shared Transport Conventions" module (issue
  * #271). Parallel to, but deliberately separate from,
  * `execution/adapters/alpaca-broker-errors.ts`'s hierarchy — see that

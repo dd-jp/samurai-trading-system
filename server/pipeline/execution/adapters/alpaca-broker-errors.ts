@@ -1,6 +1,6 @@
 /**
  * Typed error hierarchy for the real Alpaca broker `AlpacaClient` (ticket
- * #273) — mirrors `src/debate-engine/llm/errors.ts`'s shape per
+ * #273) — mirrors `server/pipeline/debate-engine/llm/errors.ts`'s shape per
  * transport-layer-spec.md's "Shared Transport Conventions" module (issue
  * #271): a `{Client}TimeoutError`, `{Client}RateLimitError` (with an
  * optional provider-supplied `retryAfterMs`), and a `{Client}ProviderError`

@@ -3,7 +3,7 @@
  * nothing under `lib/` imports this at runtime.
  *
  * Type-only imports from the wire contract, matching the modules under test:
- * the shapes come from `src/dashboard/pipeline-types.ts` and nothing here
+ * the shapes come from `server/apps/service-api/pipeline-types.ts` and nothing here
  * redefines them.
  */
 

@@ -1,7 +1,7 @@
 /**
  * Dashboard entry point — `npm run dashboard`. Wires the real SQLite-backed
  * `QueryStore` (#161) into the read-only HTTP server. Mirrors
- * `src/orchestrator/index.ts` as a secondary entry point.
+ * `server/apps/orchestrator/index.ts` as a secondary entry point.
  *
  * File-path convention follows shared-sqlite-store-spec.md's "one file per
  * MODE": `data/samurai-{mode}.sqlite`, relative to the process's working
@@ -70,7 +70,7 @@ const bundleRoot = fileURLToPath(new URL('../../../client/', import.meta.url));
  * `/api/snapshot` is its machine-readable half. Refusing to start would take
  * away the operator's view of an live trading system to punish a missing UI
  * build — and would take the supervisor's whole process group down with it
- * (`src/serve/supervisor.ts` stops the orchestrator when the dashboard dies),
+ * (`server/apps/supervisor/supervisor.ts` stops the orchestrator when the dashboard dies),
  * so a forgotten `yarn build:web` would halt trading. That is the same
  * priority ordering the Alpaca tile below already follows: a degraded view
  * beats no view. The 503 on the page and this log say the same words.

@@ -16,7 +16,7 @@
  * is pre-wire and stays server-side — which is why `VerdictAuditEntry`,
  * `AttributionSummary`, `PipelineStageEvent`, `PipelineLiveTick`,
  * `PipelineActivity`, `DashboardQueryStore` and `DashboardSnapshotBuilder`
- * remained in `src/dashboard/types.ts` when the rest of that file moved here.
+ * remained in `server/apps/service-api/types.ts` when the rest of that file moved here.
  * They are the store's shapes, not the wire's, and the two only look alike.
  */
 

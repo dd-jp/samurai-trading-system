@@ -43,7 +43,7 @@ export default defineConfig({
       // `node:http` process.
       '/api': {
         // Same variable and default the dashboard server itself binds on
-        // (src/dashboard/index.ts), so a nonstandard port only has to be set
+        // (server/apps/service-api/index.ts), so a nonstandard port only has to be set
         // once for both processes.
         target: `http://127.0.0.1:${process.env.PORT ?? 8787}`,
         changeOrigin: true,

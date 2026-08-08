@@ -2,7 +2,7 @@
  * Polygon free-tier aggregates — the EQUITIES FALLBACK for the #512
  * warm-start backfill script (#496), and ONLY that. Not a `DataSource` port
  * implementation (`../market-data-service/sources/`); the live composition
- * root (`src/orchestrator/production.ts`) never imports this module — see
+ * root (`server/apps/orchestrator/production.ts`) never imports this module — see
  * `backfill-market-data.ts`'s module doc for the composition-root trace and
  * the residual gap this leaves on the live equities leg.
  *

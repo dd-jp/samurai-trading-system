@@ -3,8 +3,8 @@
  * docs/specs/verdict-spec.md ("Module: Human-in-the-Loop"): the live
  * Telegram/Discord bot listener that will actually receive inbound
  * approve/reject webhooks is an ops/setup task (spec "Out of Scope: Channel
- * provisioning") — there is no live SDK wiring anywhere in `src/` yet
- * (mirrors src/market-intelligence/worldmonitor-adapter/cii-consumer.ts's
+ * provisioning") — there is no live SDK wiring anywhere in `server/` yet
+ * (mirrors server/providers/market-intelligence/worldmonitor-adapter/cii-consumer.ts's
  * "the seam that work will plug into"). This class is that seam: it owns
  * the pending-approval bookkeeping and the fail-safe timeout, and exposes
  * `handleCallback` for whatever future transport receives the raw inbound

@@ -41,7 +41,7 @@
  * analyst failed and WHY in short form, and both survive.
  *
  * Deliberately narrow. `sanitizeLogText` (moved to
- * `src/shared/sanitize-log-text.ts` in #364, when the debate adapter became
+ * `server/shared/sanitize-log-text.ts` in #364, when the debate adapter became
  * its second caller) masks only well-known credential-carrying SYNTAXES
  * (`bot<digits>:<token>`, `Bearer <token>`,
  * `key/secret/token/password/auth = <value>`), never anything that merely looks

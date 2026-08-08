@@ -12,7 +12,7 @@
  * string by the time it reaches this model, because `buildSnapshot` is the
  * single place that crosses the HTTP/JSON boundary.
  *
- * Moved here from `src/dashboard/pipeline-types.ts` unchanged apart from the
+ * Moved here from `server/apps/service-api/pipeline-types.ts` unchanged apart from the
  * `AssetClass` import — see `primitives.ts` for why that import had to stop
  * pointing at a server module.
  */
@@ -25,7 +25,7 @@ import type { AssetClass } from './primitives.js';
  * **Seven, not six.** `invalidation` was added between `trader` and `risk` on
  * 2026-08-05 (docs/specs/devils-advocate-spec.md; orchestrator-spec.md
  * "the pipeline is SEVEN stages"). The runtime `TickStage` union in
- * `src/orchestrator/types.ts` has not caught up yet — the stage is specced and
+ * `server/apps/orchestrator/types.ts` has not caught up yet — the stage is specced and
  * not built — so today nothing ever writes an `invalidation` row and its
  * column renders as never-reached for every lane.
  *

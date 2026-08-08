@@ -513,7 +513,7 @@ function printReport(
 /**
  * Entrypoint guard — only runs when this file is executed directly (`node
  * dist/scripts/run-stage2.js`), not when imported by a test. Mirrors
- * `src/orchestrator/index.ts` / `src/dashboard/index.ts`'s split between an
+ * `server/apps/orchestrator/index.ts` / `server/apps/service-api/index.ts`'s split between an
  * exported, testable function and a thin top-level invocation.
  */
 if (import.meta.url === `file://${process.argv[1]}`) {

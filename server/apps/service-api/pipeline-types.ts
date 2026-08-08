@@ -3,7 +3,7 @@
  * `contracts/pipeline.ts`.
  *
  * It moved because the browser renders every shape in it, and importing them
- * from `src/dashboard/` meant the client's TypeScript program included backend
+ * from `server/apps/service-api/` meant the client's TypeScript program included backend
  * source — the whole file was already a frozen contract between the query
  * layer and the render layer, so `contracts/` is simply where that contract
  * belongs. Nothing in it changed except where `AssetClass` comes from.

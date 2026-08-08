@@ -1,9 +1,9 @@
 /**
  * In-memory `DebateLogStore` for #63 — a concrete implementation of the
- * port (not a test-only mock), mirroring src/trader/fixture-setup-store.ts's
+ * port (not a test-only mock), mirroring server/pipeline/trader/fixture-setup-store.ts's
  * `FixtureSetupStore`. See docs/specs/debate-engine-spec.md
  * ("Debate log write"). The real SQLite-backed store is
- * `SqliteDebateLogStore` (#200, src/debate-engine/sqlite-debate-log-store.ts).
+ * `SqliteDebateLogStore` (#200, server/pipeline/debate-engine/sqlite-debate-log-store.ts).
  */
 import type { DebateLog, DebateLogStore } from '../../shared/index.js';
 import type { DebateResult } from './types.js';

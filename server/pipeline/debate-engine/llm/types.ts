@@ -142,7 +142,7 @@ export interface LlmClient {
 /**
  * Retry knobs (issue #31 AC: "Retry logic with exponential backoff
  * (configurable)"). Structurally identical to the generalized
- * `src/shared/http/retry.ts`'s `RetryConfig` (issue #271) — aliased rather
+ * `server/shared/http/retry.ts`'s `RetryConfig` (issue #271) — aliased rather
  * than duplicated so the two can't drift, while keeping this name as the
  * public export `debate-engine/index.ts` already carries.
  */

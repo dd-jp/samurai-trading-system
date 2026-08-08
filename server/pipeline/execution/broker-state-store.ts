@@ -199,7 +199,7 @@ export interface BrokerStateStore {
  * working, but note the asymmetry with the adapters' `rateLimiter` default:
  * that default is merely conservative, whereas THIS default IS the bug #287
  * exists to fix. Production wiring must inject `SqliteBrokerStateStore`
- * (src/orchestrator/production.ts does, for the Alpaca MVP path) or the
+ * (server/apps/orchestrator/production.ts does, for the Alpaca MVP path) or the
  * adapter silently starts every run with empty state while real positions sit
  * open at the broker — the same quiet failure `sharedStorePath` throws to
  * prevent.

@@ -56,8 +56,8 @@ export interface ConfigTrialLog {
 
 /**
  * In-memory `ConfigTrialLog` — a concrete implementation of the port, not a
- * test-only mock, mirroring src/trader/fixture-setup-store.ts and
- * src/market-data-service/fixture-data-source.ts.
+ * test-only mock, mirroring server/pipeline/trader/fixture-setup-store.ts and
+ * server/providers/market-data-service/fixture-data-source.ts.
  */
 export class InMemoryConfigTrialLog implements ConfigTrialLog {
   private readonly trials = new Map<string, BacktestReport>();

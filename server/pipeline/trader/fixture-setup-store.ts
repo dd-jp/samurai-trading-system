@@ -1,7 +1,7 @@
 /**
  * In-memory `SetupStore` for ticket #75 — a concrete implementation of the
  * store port (not a test-only mock), mirroring
- * src/market-data-service/fixture-data-source.ts. The Feedback Loop (#92)
+ * server/providers/market-data-service/fixture-data-source.ts. The Feedback Loop (#92)
  * owns the `labelSetup` side of this same port; the real SQLite-backed store
  * is still deferred.
  */

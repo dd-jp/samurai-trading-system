@@ -94,7 +94,7 @@
  * (`ExecutionImpl.execute()` returns a submission ack only, and
  * `intent_type: 'exit'` is unimplemented — #82/#83) — the only place one is
  * ever produced is `ingestFills()` calling `SharedStore.writeClosedTrade()`
- * (src/execution/ingest-fills.ts), on its own polling path. So
+ * (server/pipeline/execution/ingest-fills.ts), on its own polling path. So
  * `withOnTradeClose` (production/on-trade-close-hookup.ts) decorates
  * `writeClosedTrade` itself, using the real `SqliteSetupStore` (#198) FL
  * labels on trade close — not a `TickSteps` member, not reachable from

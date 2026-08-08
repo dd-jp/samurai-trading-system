@@ -21,7 +21,7 @@ import type { LogEntry, Logger } from './types.js';
  * `String(error)` alone degrades a plain-object throw to `"[object Object]"`
  * — technically not swallowed, but not preserved either. Every throw this
  * repo's own code produces is an `Error` (grepped: zero `throw {…}` literals
- * in `src/`), so this mainly guards a third-party dependency that rejects
+ * in `server/`), so this mainly guards a third-party dependency that rejects
  * with something else. `JSON.stringify` can itself throw on a circular
  * structure, which is exactly the kind of value most likely to reach this
  * fallback — so it degrades one step further to `String(error)` rather than

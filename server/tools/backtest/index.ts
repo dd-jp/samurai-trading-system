@@ -4,7 +4,7 @@
  *
  * Ticket #88 adds the replay harness — `BacktestHarness` (Seam 2), the
  * no-lookahead auditor and the survivorship-free universe check — plus the
- * stepped `SimulatedClock` (exported from src/shared/clock.ts, beside the
+ * stepped `SimulatedClock` (exported from server/shared/clock.ts, beside the
  * `Clock` every stage already injects).
  *
  * The harness drives the Orchestrator's `Scheduler` + `TickRunner` (#94)

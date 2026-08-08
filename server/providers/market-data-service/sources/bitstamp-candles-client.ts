@@ -2,7 +2,7 @@
  * Bitstamp OHLC — the CRYPTO FALLBACK for the #512 warm-start backfill
  * script (#496), and ONLY that. Not a `DataSource` port implementation
  * (`../market-data-service/sources/`); the live composition root
- * (`src/orchestrator/production.ts`) never imports this module — see
+ * (`server/apps/orchestrator/production.ts`) never imports this module — see
  * `backfill-market-data.ts`'s module doc for the composition-root trace.
  *
  * ADR-0001 / `docs/research/free-ohlcv-fallback-sources-2026-08-06.md` name

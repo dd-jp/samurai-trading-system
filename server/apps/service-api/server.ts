@@ -233,7 +233,7 @@ export function createDashboardServer(opts: DashboardServerOptions): DashboardSe
    * 404, unless the bundle itself is the problem — then say which problem.
    *
    * Re-checked per request rather than resolved once at construction: the
-   * supervisor (`src/serve/supervisor.ts`) must still boot a dashboard whose
+   * supervisor (`server/apps/supervisor/supervisor.ts`) must still boot a dashboard whose
    * bundle is absent — `/api/snapshot` is worth serving on its own — and a
    * build that lands after startup must start working without a restart.
    */

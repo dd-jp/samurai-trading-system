@@ -3,7 +3,7 @@
  * See docs/specs/risk-manager-spec.md ("Module: Circuit Breakers") and
  * docs/wayfinder/risk-manager-map.md ("Breaker thresholds & definitions").
  *
- * Produces the `BreakerState` the check pipeline (#76, src/risk-manager/index.ts)
+ * Produces the `BreakerState` the check pipeline (#76, server/pipeline/risk-manager/index.ts)
  * consumes as a pre-built input. `PortfolioView` only carries a single
  * portfolio-level `daily_pnl_pct` / `consecutive_losses` (no per-asset-class
  * breakdown — that shape is owned by #78), so those two breakers trip at the

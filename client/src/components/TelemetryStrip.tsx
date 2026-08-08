@@ -23,9 +23,9 @@ import { providerStateWord } from '../lib/vocabulary.ts';
  *
  * **This is a COPY, and there is nowhere to copy it from** (#606 item 6, and
  * the reason that item was declined rather than fixed). The enforced ceiling
- * is `ProductionConfig.llmBudgetUsd`, set in `src/orchestrator/paper-profile.ts`
+ * is `ProductionConfig.llmBudgetUsd`, set in `server/apps/orchestrator/paper-profile.ts`
  * and read by `SqliteSpendCap` — inside the ORCHESTRATOR process. The dashboard
- * is a second process (`src/dashboard/index.ts`) that shares only the SQLite
+ * is a second process (`server/apps/service-api/index.ts`) that shares only the SQLite
  * file, no environment variable carries the budget, and nothing persists it, so
  * this figure cannot be put on the wire without the dashboard first inventing
  * its own copy — which is the same duplication one indirection further from the

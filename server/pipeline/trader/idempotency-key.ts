@@ -9,7 +9,7 @@
  * across a re-run, so Execution dedupes a replayed decision to exactly one
  * fill (CONTEXT.md idempotency invariant).
  *
- * Mirrors the hashing convention of src/debate-engine/debate-id.ts: sha256
+ * Mirrors the hashing convention of server/pipeline/debate-engine/debate-id.ts: sha256
  * over a canonical JSON payload.
  */
 import { createHash } from 'node:crypto';

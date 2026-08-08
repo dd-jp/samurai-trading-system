@@ -47,7 +47,7 @@ export type {
 /**
  * One row of the Verdict/audit_log history (dashboard-spec.md "Module: Query
  * Store"). Dashboard-owned shape — the audit_log's generic entry
- * (src/orchestrator/audit-log.ts `AuditLogEntry`) is stage-agnostic
+ * (server/apps/orchestrator/audit-log.ts `AuditLogEntry`) is stage-agnostic
  * (`decision`/`input_digest`/`output_digest`); this is the go/no-go-specific
  * projection the spec freezes for the verdicts view.
  *
@@ -68,7 +68,7 @@ export interface VerdictAuditEntry {
  * Per-analyst rolling performance, as surfaced to the performance view
  * (dashboard-spec.md "Module: Query Store"). Dashboard-owned shape — narrower
  * than the Feedback Loop's internal `AnalystCredit`
- * (src/feedback-loop/attribution.ts), which carries raw credit/trade_count
+ * (server/pipeline/feedback-loop/attribution.ts), which carries raw credit/trade_count
  * rather than a windowed rolling-R.
  *
  * Server-side: the store returns these keyed by analyst; `buildSnapshot` joins

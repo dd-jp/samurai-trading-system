@@ -2,8 +2,8 @@
  * `InMemoryQueryStore` — a concrete implementation of the `DashboardQueryStore`
  * port (dashboard-spec.md "Module: Query Store"), seeded with realistic
  * fixture data so the dashboard runs out of the box. Mirrors the project's
- * existing in-memory store pattern (src/feedback-loop/fixture-stores.ts,
- * src/trader/fixture-setup-store.ts, src/debate-engine/debate-log-store.ts):
+ * existing in-memory store pattern (server/pipeline/feedback-loop/fixture-stores.ts,
+ * server/pipeline/trader/fixture-setup-store.ts, server/pipeline/debate-engine/debate-log-store.ts):
  * the real SQLite-backed shared store is deferred (no shared store exists
  * anywhere in the codebase yet — every stage's store is an in-memory
  * implementation of its port pending that build-out).

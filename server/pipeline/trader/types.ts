@@ -5,7 +5,7 @@
  * Implementation ticket #73 — the no-position entry path only.
  *
  * `OrderIntent` / `OrderIntentMetadata` are NOT redefined here: they are
- * cross-spec types owned by src/shared/types.ts (registry #1).
+ * cross-spec types owned by server/shared/types.ts (registry #1).
  */
 
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
@@ -135,7 +135,7 @@ export interface TraderInput {
    * #74: position-aware branching. Live snapshot, not point-in-time — the
    * Trader only ever runs on the current tick, unlike replay-scoped market
    * data. Narrowed to a single function (matching
-   * `src/orchestrator/production/direct-bind.ts`'s `getOpenPositions`
+   * `server/apps/orchestrator/production/direct-bind.ts`'s `getOpenPositions`
    * dependency), not the full `SharedStore`. `decide()` filters the
    * returned lots down to `instrument` itself.
    */

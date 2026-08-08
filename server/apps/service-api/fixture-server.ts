@@ -9,7 +9,7 @@
  * The store seam is the only thing swapped; everything the browser talks to
  * (the bundle bytes, the JSON projection, the wire shape) is production code.
  *
- * **It makes no third-party calls.** `src/dashboard/index.ts` builds an
+ * **It makes no third-party calls.** `server/apps/service-api/index.ts` builds an
  * `AlpacaHttpBrokerClient` and starts `ProviderStatusPoller`, which probe
  * Alpaca and Polygon over the network; this entry passes a static
  * `ProviderStatusReader` instead, so the suite's "zero external network"

@@ -83,7 +83,7 @@ export interface TuningProposal {
 /**
  * Approval seam for gated risk-threshold loosening.
  *
- * Deliberately NOT Verdict's `ApprovalChannel` (src/verdict/types.ts): that
+ * Deliberately NOT Verdict's `ApprovalChannel` (server/pipeline/verdict/types.ts): that
  * port's `ApprovalRequest` is order-shaped (`order_intent`, `risk_decision`)
  * and cannot describe a threshold move. Same trade channel, different
  * request shape.

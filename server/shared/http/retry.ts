@@ -1,7 +1,7 @@
 /**
  * Provider-agnostic exponential-backoff retry wrapper (issue #271,
  * generalized from the LLM-specific `withRetry` that shipped in
- * `src/debate-engine/llm/retry.ts` for ticket #31). Every real HTTP client
+ * `server/pipeline/debate-engine/llm/retry.ts` for ticket #31). Every real HTTP client
  * the transport-layer-spec.md "Shared Transport Conventions" module
  * introduces (Alpaca, Polygon, Telegram) — plus the pre-existing
  * `AnthropicLlmClient` — shares this loop; each call site supplies its own

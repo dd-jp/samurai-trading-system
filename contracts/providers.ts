@@ -1,14 +1,14 @@
 /**
  * The provider tiles as they appear on the wire.
  *
- * Split out of `src/dashboard/provider-status.ts`, which keeps the half that
+ * Split out of `server/apps/service-api/provider-status.ts`, which keeps the half that
  * is genuinely server-side: `ProviderStatusReader` (the synchronous seam
  * `buildSnapshot` reads) and the poller that does the live HTTP probing. Only
  * the rendered shapes belong here — a browser needs to know what a tile looks
  * like, never how it gets filled in.
  *
  * Note what is NOT here: `ProviderStatusPoller` and its `AlpacaClient`
- * dependency. That import chain reaches `src/execution/`, and pulling it
+ * dependency. That import chain reaches `server/pipeline/execution/`, and pulling it
  * across the boundary would put broker adapter types in the browser's
  * TypeScript program.
  */

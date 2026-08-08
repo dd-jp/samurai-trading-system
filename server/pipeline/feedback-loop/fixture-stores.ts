@@ -1,8 +1,8 @@
 /**
  * In-memory implementations of the Feedback Loop's store ports (#91) —
  * concrete implementations, not test-only mocks, mirroring
- * src/trader/fixture-setup-store.ts and
- * src/debate-engine/debate-log-store.ts's `InMemoryDebateLogStore`. The real
+ * server/pipeline/trader/fixture-setup-store.ts and
+ * server/pipeline/debate-engine/debate-log-store.ts's `InMemoryDebateLogStore`. The real
  * SQLite-backed stores are deferred: no shared store exists anywhere in the
  * codebase yet.
  */
