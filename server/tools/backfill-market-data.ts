@@ -99,6 +99,11 @@ import {
   type MarketDataStore,
   SqliteMarketDataStore,
 } from '../providers/market-data-service/index.js';
+import { BitstampCandlesClient } from '../providers/market-data-service/sources/bitstamp-candles-client.js';
+import { CoinbaseCandlesClient } from '../providers/market-data-service/sources/coinbase-candles-client.js';
+import type { FailoverAlerter } from '../providers/market-data-service/sources/ohlcv-failover.js';
+import { withOhlcvFailover } from '../providers/market-data-service/sources/ohlcv-failover.js';
+import { PolygonBarsClient } from '../providers/market-data-service/sources/polygon-bars-client.js';
 import {
   resolveBitstampPacing,
   resolveCoinbasePacing,
@@ -107,11 +112,6 @@ import {
   TokenBucket,
 } from '../shared/index.js';
 import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
-import { BitstampCandlesClient } from './bitstamp-candles-client.js';
-import { CoinbaseCandlesClient } from './coinbase-candles-client.js';
-import type { FailoverAlerter } from './ohlcv-failover.js';
-import { withOhlcvFailover } from './ohlcv-failover.js';
-import { PolygonBarsClient } from './polygon-bars-client.js';
 
 /** See the module doc "The derived timeframe list" above for the citation trail. */
 export const WARM_START_WINDOWS: readonly BarWindow[] = [
@@ -292,7 +292,7 @@ const alertFailover: FailoverAlerter = (event) => {
   );
 };
 
-async function runFromEnvironment(): Promise<void> {
+export async function runFromEnvironment(): Promise<void> {
   const dbPath = sharedStorePath();
   const db = openSharedStore(dbPath);
   const store = new SqliteMarketDataStore(db);

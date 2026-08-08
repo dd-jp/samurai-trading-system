@@ -30,9 +30,10 @@
  * widens `limit` past 1000 and starts paginating, or Bitstamp itself ever
  * repeats a boundary row within one response.
  */
-import type { Bar } from '../providers/market-data-service/index.js';
-import { closeTimeOf, timeframeToMs } from '../providers/market-data-service/index.js';
-import { fetchWithTimeout, type TokenBucket } from '../shared/index.js';
+
+import { fetchWithTimeout, type TokenBucket } from '../../../shared/index.js';
+import type { Bar } from '../index.js';
+import { closeTimeOf, timeframeToMs } from '../index.js';
 
 const BASE_URL = 'https://www.bitstamp.net';
 const DEFAULT_TIMEOUT_MS = 10_000;

@@ -16,7 +16,7 @@
  * `AlpacaDataUnderfetchError` — and this wrapper does not second-guess
  * either: a thrown error is the trigger, a short-but-returned array is not.
  */
-import type { Bar, BarWindow } from '../providers/market-data-service/index.js';
+import type { Bar, BarWindow } from '../index.js';
 
 export type BarFetcher = (symbol: string, window: BarWindow, asOf: Date) => Promise<Bar[]>;
 

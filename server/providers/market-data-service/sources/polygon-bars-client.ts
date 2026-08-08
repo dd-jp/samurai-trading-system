@@ -40,13 +40,10 @@
  * told apart from an Alpaca-sourced bar and re-derived from the primary
  * later.
  */
-import type { Bar } from '../providers/market-data-service/index.js';
-import {
-  closeTimeOf,
-  isDailyTimeframe,
-  timeframeToMs,
-} from '../providers/market-data-service/index.js';
-import { fetchWithTimeout, type TokenBucket, truncateForError } from '../shared/index.js';
+
+import { fetchWithTimeout, type TokenBucket, truncateForError } from '../../../shared/index.js';
+import type { Bar } from '../index.js';
+import { closeTimeOf, isDailyTimeframe, timeframeToMs } from '../index.js';
 
 const DEFAULT_BASE_URL = 'https://api.polygon.io';
 const DEFAULT_TIMEOUT_MS = 10_000;

@@ -9,10 +9,10 @@ import {
   SqliteMarketDataStore,
   timeframeToMs,
 } from '../providers/market-data-service/index.js';
+import { withOhlcvFailover } from '../providers/market-data-service/sources/ohlcv-failover.js';
 import type { Clock } from '../shared/index.js';
 import { openSharedStore } from '../shared/store/index.js';
 import { backfillMarketData, WARM_START_WINDOWS } from './backfill-market-data.js';
-import { withOhlcvFailover } from './ohlcv-failover.js';
 
 class ManualClock implements Clock {
   constructor(private time: Date) {}

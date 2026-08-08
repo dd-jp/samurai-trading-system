@@ -1,4 +1,4 @@
-import { TokenBucket } from '../shared/index.js';
+import { TokenBucket } from '../../../shared/index.js';
 import { PolygonBarsClient, toPolygonRange } from './polygon-bars-client.js';
 
 const SYMBOL = 'SPY';

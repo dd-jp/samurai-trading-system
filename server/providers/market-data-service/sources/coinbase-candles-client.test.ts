@@ -1,4 +1,4 @@
-import { TokenBucket } from '../shared/index.js';
+import { TokenBucket } from '../../../shared/index.js';
 import { CoinbaseCandlesClient } from './coinbase-candles-client.js';
 
 const SYMBOL = 'BTC-USD';

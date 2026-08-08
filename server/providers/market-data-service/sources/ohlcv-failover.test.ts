@@ -1,4 +1,4 @@
-import type { Bar, BarWindow } from '../providers/market-data-service/index.js';
+import type { Bar, BarWindow } from '../index.js';
 import { type FailoverEvent, withOhlcvFailover } from './ohlcv-failover.js';
 
 const ASOF = new Date('2026-08-07T12:00:00Z');

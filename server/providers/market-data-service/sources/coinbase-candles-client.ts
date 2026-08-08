@@ -24,9 +24,10 @@
  * the one place that mapping happens, and its test pins a fixture row where
  * `low !== open` specifically to catch that mistake.
  */
-import type { Bar } from '../providers/market-data-service/index.js';
-import { closeTimeOf, timeframeToMs } from '../providers/market-data-service/index.js';
-import { fetchWithTimeout, type TokenBucket } from '../shared/index.js';
+
+import { fetchWithTimeout, type TokenBucket } from '../../../shared/index.js';
+import type { Bar } from '../index.js';
+import { closeTimeOf, timeframeToMs } from '../index.js';
 
 const BASE_URL = 'https://api.exchange.coinbase.com';
 const DEFAULT_TIMEOUT_MS = 10_000;
