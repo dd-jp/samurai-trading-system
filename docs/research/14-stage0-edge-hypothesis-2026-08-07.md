@@ -46,7 +46,7 @@ What survived is different and better evidenced. Under an executable gross cap o
 
 **Commits to:**
 - **Target 0.04%/day (~10%/yr)** with a **−23% drawdown** accepted in advance, and multi-year stretches where nothing works.
-- **The benchmark is always-long-the-same-basket at the same vol target**, not SPY. Nothing has beaten it yet.
+- **The benchmark is always-long-the-same-basket at the same vol target**, not SPY. Nothing has beaten it in pre-registered trial accounting — the gross-cap-1.5 win above was found post-hoc, see "Status of the evidence".
 - Universe widening from the current 6 symbols (2.58 effective bets) to the 12-instrument set (4.60). Universe selection moved the headline Sharpe by more than 2x — more than any signal decision tested.
 
 **Forbids:**
