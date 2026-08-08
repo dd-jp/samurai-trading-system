@@ -30,6 +30,22 @@ import type { VerdictAuditEntry } from './types.js';
 const DEFAULT_PORT = 8788;
 
 /**
+ * `PORT`, validated here rather than handed to `listen()` as a `NaN`: an
+ * unparseable value fails inside the socket layer with a message that names
+ * neither the variable nor this process, and the Playwright output would show
+ * only "webServer was not able to start".
+ */
+function resolvePort(): number {
+  const raw = process.env.PORT;
+  if (raw === undefined || raw === '') return DEFAULT_PORT;
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port < 0 || port > 65_535) {
+    throw new Error(`PORT is not a usable port number: "${raw}"`);
+  }
+  return port;
+}
+
+/**
  * Verdict rows whose `trace_id`s are the PIPELINE fixture's trace ids.
  *
  * `InMemoryQueryStore`'s own verdict history uses a separate id space
@@ -132,7 +148,7 @@ if (mode !== 'paper') {
 }
 
 const server = createDashboardServer({
-  port: Number(process.env.PORT ?? DEFAULT_PORT),
+  port: resolvePort(),
   host: process.env.HOST ?? '127.0.0.1',
   store: new E2eFixtureStore(),
   // Same module-relative resolution as `index.ts`: this file is
