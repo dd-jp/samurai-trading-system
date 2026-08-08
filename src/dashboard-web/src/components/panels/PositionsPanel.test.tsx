@@ -42,6 +42,62 @@ describe('PositionsPanel', () => {
     }
   });
 
+  // #540. jsdom has no layout, so an overlap cannot be measured here — what
+  // these pin is the geometry that makes an overlap impossible, which is the
+  // part a browser screenshot cannot assert either way.
+  it('gives each below-rail label its own row, in left-to-right order', () => {
+    // A tight stop and a target a hair above the mark: centred labels at
+    // `translateX(-50%)` printed over each other exactly here, which is the
+    // moment the rail is most worth reading.
+    render(
+      <PositionsPanel
+        positions={[
+          makePosition({
+            stop: 3_400,
+            avg_entry_price: 3_412.5,
+            mark_price: 3_418,
+            target: 3_425,
+          }),
+        ]}
+      />,
+    );
+
+    const rail = screen.getByRole('img', { name: /stop 3,400\.00, entry/ });
+    const below = ['stop', 'entry', 'target'].map((key) => {
+      const tick = rail.querySelector<HTMLElement>(`.rail-${key}`);
+      if (tick === null) throw new Error(`no ${key} marker on the rail`);
+      return {
+        key,
+        left: Number.parseFloat(tick.style.left),
+        row: Number.parseInt(tick.style.getPropertyValue('--rail-row'), 10),
+      };
+    });
+
+    // Three distinct rows: no two below-rail labels can share a line to
+    // collide on, whatever the prices do.
+    expect(new Set(below.map((marker) => marker.row)).size).toBe(3);
+    // And the rows descend in the same direction the prices ascend, so the
+    // staircase reads as the rail rather than as an arbitrary shuffle.
+    const byPosition = [...below].sort((a, b) => a.left - b.left);
+    expect(byPosition.map((marker) => marker.row)).toEqual([0, 1, 2]);
+
+    // The mark keeps the row above the rail to itself.
+    const mark = rail.querySelector<HTMLElement>('.rail-mark');
+    expect(mark?.style.getPropertyValue('--rail-row')).toBe('0');
+  });
+
+  it('anchors the outermost labels to their markers so neither overflows the card', () => {
+    render(<PositionsPanel positions={[makePosition()]} />);
+
+    const rail = screen.getByRole('img', { name: /stop 3,310\.00, entry/ });
+    // `stop` is the axis minimum (3%) and `target` its maximum (97%): centred,
+    // each would hang half a label outside the position card.
+    expect(rail.querySelector('.rail-stop .rail-label')?.className).toContain('rail-label-start');
+    expect(rail.querySelector('.rail-target .rail-label')?.className).toContain('rail-label-end');
+    // An interior marker still centres on the price it names.
+    expect(rail.querySelector('.rail-mark .rail-label')?.className).toContain('rail-label-middle');
+  });
+
   it('names its reason instead of drawing a rail from a non-finite price', () => {
     render(<PositionsPanel positions={[makePosition({ mark_price: Number.NaN })]} />);
 

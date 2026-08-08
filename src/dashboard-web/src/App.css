@@ -598,6 +598,19 @@ main {
   border-color: var(--cyan);
 }
 
+/*
+ * The lane holding `pipeline.live_trace_id`. `SigilChip` has always set this
+ * class and nothing styled it, so the chip's only visual claim to being live
+ * was the shimmer — which `prefers-reduced-motion` suppresses, leaving a
+ * reduced-motion operator with no chip-level mark at all (#540). A static edge
+ * is the version of that signal which survives rule 5, and "live" is still a
+ * word in the room heading and in the chip's accessible name; nothing here is
+ * carried by colour alone.
+ */
+.chip-live {
+  border-color: var(--cyan);
+}
+
 .chip-go .chip-ring {
   border-color: var(--go);
   background: rgb(var(--go-rgb) / 0.25);
@@ -1023,9 +1036,16 @@ main {
   font-size: 15px;
 }
 
+/*
+ * Tall enough for the mark's label above the rail and THREE stacked label rows
+ * below it (#540). The height is a constant, not a function of how far apart
+ * this snapshot's prices happen to be: a poll must never change the page's
+ * geometry (spec, "WorldMonitor Deferred-Shell Contract"), and a rail that
+ * grew a row when a stop tightened would reflow the whole positions panel.
+ */
 .rail-wrap {
   position: relative;
-  height: 34px;
+  height: 58px;
   margin: 18px 0 6px;
 }
 
@@ -1047,15 +1067,34 @@ main {
   border-radius: 1px;
 }
 
+/*
+ * One row per below-rail label, assigned left-to-right in `PositionsPanel`, so
+ * two labels cannot overlap however tightly the prices cluster — which is
+ * precisely when the rail is worth reading.
+ */
 .rail-label {
   position: absolute;
-  top: 18px;
+  top: calc(18px + var(--rail-row, 0) * 13px);
   left: 50%;
   transform: translateX(-50%);
   font-size: 9px;
+  line-height: 13px;
   color: var(--muted);
   font-family: var(--font-mono);
   white-space: nowrap;
+}
+
+/* An outermost label anchors to its marker rather than straddling it, so the
+   price at either end of the axis cannot overflow the position card. */
+.rail-label-start {
+  left: 0;
+  transform: none;
+}
+
+.rail-label-end {
+  left: auto;
+  right: 0;
+  transform: none;
 }
 
 .rail-stop {

@@ -276,6 +276,62 @@ describe('mission control', () => {
     expect(document.activeElement).toBe(chip);
   });
 
+  // The spec asks for focus to survive repaints AND walks (Accessibility
+  // floor). The test above covers the repaint; a walk is the harder case,
+  // because `useWalkAnimation` reaches into the focused element imperatively —
+  // it rewrites `style.transform`, adds and removes classes, and attaches a
+  // `transitionend` listener to it — on every poll that moves a chip.
+  it('keeps keyboard focus on a chip while that chip walks between rooms', async () => {
+    const before = makeView([doneThrough('BTC-USD', 'trace-btc', 'debate')]);
+    const after = makeView([doneThrough('BTC-USD', 'trace-btc', 'risk')]);
+    renderApp([
+      makeSnapshot({ pipeline: before }),
+      makeSnapshot({
+        pipeline: after,
+        as_of: '2026-08-07T12:00:03.000Z',
+        generated_at: '2026-08-07T12:00:03.000Z',
+      }),
+    ]);
+
+    const chip = await screen.findByRole('button', { name: /BTC-USD/ });
+    chip.focus();
+    expect(document.activeElement).toBe(chip);
+
+    await screen.findByText('12:00:03Z');
+    // The walk is a class and transform change on the focused element; neither
+    // may take the caret with it.
+    expect(document.activeElement).toBe(chip);
+    // Same element, not a remount that happened to be re-found by name — a
+    // remounted chip would have dropped focus to `<body>` on the way.
+    expect(screen.getByRole('button', { name: /BTC-USD/ })).toBe(chip);
+  });
+
+  it('keeps keyboard focus on a ledger row across a poll that stamps a new one', async () => {
+    const settled = makeView([doneThrough('BTC-USD', 'trace-btc', 'verdict', { outcome: 'go' })]);
+    const plusOne = makeView([
+      doneThrough('BTC-USD', 'trace-btc', 'verdict', { outcome: 'go' }),
+      doneThrough('SPY', 'trace-spy', 'risk', { outcome: 'stopped' }),
+    ]);
+    renderApp([
+      makeSnapshot({ pipeline: settled }),
+      makeSnapshot({
+        pipeline: plusOne,
+        as_of: '2026-08-07T12:00:03.000Z',
+        generated_at: '2026-08-07T12:00:03.000Z',
+      }),
+    ]);
+
+    const ledger = screen.getByRole('region', { name: 'Verdict ledger' });
+    const row = await within(ledger).findByRole('button', { name: /BTC-USD/ });
+    row.focus();
+    expect(document.activeElement).toBe(row);
+
+    // A second row stamps in above it; the ledger is keyed by `trace_id`, so
+    // the focused row must not be recycled into the new one's position.
+    await within(ledger).findByRole('button', { name: /SPY/ });
+    expect(document.activeElement).toBe(row);
+  });
+
   it('carries both spend caveats whenever their counts are non-zero', async () => {
     // Both counts sit on `all_time` — the window the caveats report — because
     // the windows are nested and a call inside 24h is inside all time too.

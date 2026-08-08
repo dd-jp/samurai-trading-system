@@ -1,0 +1,29 @@
+-- Time-window index on `audit_log` (#619).
+--
+-- RETRACTS `0013_audit_log_instrument.sql`'s "NO INDEX HERE, DELIBERATELY"
+-- block. That note argued the read was safe because it is "bounded by a time
+-- window (`WHERE timestamp >= ?`)". A windowed WHERE without an index is still
+-- a full table scan — the window bounds the ROWS RETURNED, not the rows read.
+--
+-- `audit_log` grows with history forever (one row per stage per instrument per
+-- tick; ~5k rows/day at the current soak's cadence) and the only index on it
+-- leads with `trace_id`, which cannot serve a timestamp range. The dashboard's
+-- 3-second poll now runs TWO such ranges — `getPipelineActivity`'s lane
+-- universe and `pipelineEvents`' stage rows (sqlite-query-store.ts) — so the
+-- scan cost is paid twenty times a minute and grows for the life of the run.
+-- That is exactly `0005_hot_path_indexes.sql`'s stated criterion: "a
+-- full-table scan whose cost grows with history forever".
+--
+-- ON THE COLUMN LIST. `(timestamp)` alone, not a covering
+-- `(timestamp, instrument, asset_class)`. The range predicate is the whole of
+-- the cost here; a covering index would additionally spare the table lookups
+-- for the universe query, but `pipelineEvents` needs `trace_id`, `stage` and
+-- `decision` off the same scan and would fall back to the table anyway. The
+-- wider variant has not been measured, and 0005's precedent is to index what
+-- was measured and say so.
+--
+-- Write cost is one B-tree entry per audit row on the hot tick path.
+-- `timestamp` is written monotonically (`clock.now()`), so every insert lands
+-- at the right edge of the tree — no page splits mid-tree, no rebalancing.
+
+CREATE INDEX idx_audit_log_timestamp ON audit_log(timestamp);

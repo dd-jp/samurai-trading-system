@@ -128,9 +128,9 @@ const RECENT_DEBATES: DebateLog[] = [
     rounds: 3,
     created_at: hoursAgo(1.5),
     contributions: [
-      contribution('technical', 'bullish', 0.62),
-      contribution('fundamental', 'bullish', 0.24),
-      contribution('sentiment', 'neutral', 0.14),
+      contribution('technical', ['bearish', 'neutral', 'bullish'], 0.62),
+      contribution('fundamental', ['neutral', 'neutral', 'bullish'], 0.24),
+      contribution('sentiment', ['neutral', 'neutral', 'neutral'], 0.14),
     ],
   },
   {
@@ -141,9 +141,9 @@ const RECENT_DEBATES: DebateLog[] = [
     rounds: 2,
     created_at: hoursAgo(3),
     contributions: [
-      contribution('technical', 'bearish', 0.58),
-      contribution('fundamental', 'neutral', 0.21),
-      contribution('sentiment', 'bearish', 0.21),
+      contribution('technical', ['neutral', 'bearish'], 0.58),
+      contribution('fundamental', ['neutral', 'neutral'], 0.21),
+      unrecordedContribution('sentiment', 'bearish', 0.21),
     ],
   },
   {
@@ -154,9 +154,9 @@ const RECENT_DEBATES: DebateLog[] = [
     rounds: 3,
     created_at: hoursAgo(5),
     contributions: [
-      contribution('technical', 'bullish', 0.41),
-      contribution('fundamental', 'bullish', 0.39),
-      contribution('sentiment', 'neutral', 0.2),
+      contribution('technical', ['neutral', 'bullish', 'bullish'], 0.41),
+      contribution('fundamental', ['bearish', 'bearish', 'bullish'], 0.39),
+      contribution('sentiment', ['neutral', 'neutral', 'neutral'], 0.2),
     ],
   },
   {
@@ -167,24 +167,97 @@ const RECENT_DEBATES: DebateLog[] = [
     rounds: 3,
     created_at: hoursAgo(6),
     contributions: [
-      contribution('technical', 'neutral', 0.4),
-      contribution('fundamental', 'bearish', 0.33),
-      contribution('sentiment', 'bullish', 0.27),
+      contribution('technical', ['bearish', 'bullish', 'neutral'], 0.4),
+      contribution('fundamental', ['neutral', 'bearish', 'bearish'], 0.33),
+      contribution('sentiment', ['neutral', 'neutral', 'bullish'], 0.27),
     ],
   },
 ];
 
+/**
+ * A recorded stance history has one entry per debate round — otherwise the
+ * fixtures depict a 3-round debate with a 1-square strip (#618). An EMPTY
+ * history is the recorded-none case and is legal at any round count; it is
+ * "nothing was recorded", not a history that ran short.
+ *
+ * Checked at module load so editing a debate's `rounds` without its stance
+ * arrays (or the reverse) fails at import in every test run, rather than
+ * rendering a wrong strip nobody questions.
+ */
+function assertStanceLengthsMatchRounds(debates: readonly DebateLog[]): void {
+  for (const debate of debates) {
+    for (const entry of debate.contributions) {
+      const recorded = entry.stance_during_debate.length;
+      if (recorded !== 0 && recorded !== debate.rounds) {
+        throw new Error(
+          `fixture ${debate.debate_id}: ${entry.analyst_id} records ${recorded} round stance(s) for a ${debate.rounds}-round debate — expected ${debate.rounds} or 0 (none recorded)`,
+        );
+      }
+    }
+  }
+}
+
+assertStanceLengthsMatchRounds(RECENT_DEBATES);
+
+/**
+ * Indexed off the contract these helpers build rather than off `Direction`
+ * directly, so a widening of `AnalystContribution` (a nullable final position
+ * for an unresolved debate, say) reaches the fixtures as a compile error
+ * instead of a signature that silently no longer matches what it constructs.
+ */
+type Stance = AnalystContribution['stance_during_debate'][number];
+type FinalPosition = AnalystContribution['final_position'];
+
+/**
+ * A recorded round history: at least one round, oldest first, and as many
+ * entries as the owning debate's `rounds` (#618). Enforced at load by
+ * `assertStanceLengthsMatchRounds`.
+ */
+type RecordedStances = readonly [Stance, ...Stance[]];
+
+/**
+ * One analyst's contribution, built from its RECORDED round history.
+ *
+ * `final_position` reads off the last round; nothing here is derived from
+ * `final_position` (#618) — a history synthesized from where the analyst ended
+ * up makes one that was talked around indistinguishable from one that never
+ * moved, which is the fabrication #599 removed from the wire. A flat history
+ * in these fixtures is flat because it was recorded flat.
+ */
 function contribution(
   type: string,
-  final: AnalystContribution['final_position'],
+  stances: RecordedStances,
+  influence: number,
+): AnalystContribution {
+  const [opening, ...laterRounds] = stances;
+  return {
+    analyst_id: `${type}-analyst`,
+    analyst_type: type,
+    stance_during_debate: [...stances],
+    final_position: laterRounds.at(-1) ?? opening,
+    rationale: `Round-by-round ${type} read on the instrument.`,
+    influence_score: influence,
+  };
+}
+
+/**
+ * An analyst whose round stances were never recorded: `buildAnalystContributions`
+ * emits an empty `stance_during_debate` and falls back to the analyst's opening
+ * view for `final_position`, so this is the recorded-none case, NOT a history
+ * shorter than the debate's `rounds`. The strip renders it as its stated empty
+ * state.
+ */
+function unrecordedContribution(
+  type: string,
+  final: FinalPosition,
   influence: number,
 ): AnalystContribution {
   return {
     analyst_id: `${type}-analyst`,
     analyst_type: type,
-    stance_during_debate: [final],
+    stance_during_debate: [],
     final_position: final,
-    rationale: `Stance synthesized from the latest ${type} read on the instrument.`,
+    rationale: `Opening ${type} read on the instrument; no round stances recorded.`,
     influence_score: influence,
   };
 }
@@ -361,12 +434,11 @@ const LLM_SPEND_ALL = {
  *              two views of the live tick agree.
  *  - QQQ     — no trace at all: the idle lane (#413).
  *
- * AAPL and TSLA are the deliberate ones. Both are traces the SQLite store
- * cannot attribute today — `audit_log` has no instrument column, and a tick
- * that ends before Verdict leaves nothing to join on (see
- * `pipeline-query.ts`'s header). They are in the fixtures precisely because
- * the UI must be built against the short-circuits the operator will eventually
- * see, rather than against the subset the current schema can serve.
+ * AAPL and TSLA are the deliberate ones: short-circuits that end before
+ * Verdict, which the UI must draw and which the SQLite store now serves too
+ * (`audit_log.instrument`, migration 0013 — see `pipeline-query.ts`'s header).
+ * They stayed in the fixtures after that landed because a fixture the real
+ * store cannot reproduce is a fixture nobody can trust.
  */
 const PIPELINE_NOW = NOW;
 

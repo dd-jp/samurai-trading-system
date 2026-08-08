@@ -137,6 +137,7 @@ describe('openSharedStore', () => {
       { version: 22 },
       { version: 23 },
       { version: 24 },
+      { version: 25 },
     ]);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
@@ -164,6 +165,7 @@ describe('openSharedStore', () => {
       { version: 22 },
       { version: 23 },
       { version: 24 },
+      { version: 25 },
     ]);
   });
 
@@ -228,6 +230,22 @@ describe('openSharedStore', () => {
       residual_unprotected_since: '2026-08-07T16:00:00.000Z',
       residual_rearm_alerted_at: '2026-08-07T16:01:00.000Z',
     });
+  });
+
+  // Same reasoning as the 0024 assertion above: a recorded version alone would
+  // stay green through a typo'd index name or column. The dashboard's 3-second
+  // poll range-scans `audit_log.timestamp` twice, and without this index that
+  // is two full table scans of a table that grows forever (#619).
+  it('migration 0025 indexes audit_log by timestamp (#619)', () => {
+    const db = openSharedStore(':memory:');
+
+    const indexes = db.prepare('PRAGMA index_list(audit_log)').all() as { name: string }[];
+    expect(indexes.map((index) => index.name)).toContain('idx_audit_log_timestamp');
+
+    const columns = db.prepare("PRAGMA index_info('idx_audit_log_timestamp')").all() as {
+      name: string;
+    }[];
+    expect(columns.map((column) => column.name)).toEqual(['timestamp']);
   });
 
   it('sets WAL mode and synchronous=FULL on a file-backed connection', () => {

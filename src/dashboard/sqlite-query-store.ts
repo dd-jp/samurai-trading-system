@@ -394,60 +394,84 @@ export class SqliteQueryStore implements DashboardQueryStore {
 
   /**
    * The Pipeline view's read (#411) — lane universe, attributed stage rows,
-   * and in-flight ticks, in four bounded queries.
+   * and in-flight ticks, in three bounded queries.
    *
-   * ## Why the instrument is a join and not a column
+   * ## Where the instrument comes from
    *
-   * `audit_log` is `(trace_id, stage, decision, input_digest, output_digest,
-   * timestamp)` — no instrument — and `trace_id` is a bare `randomUUID()`
-   * minted per instrument per tick (tick-loop.ts). Only two tables carry both
-   * a `trace_id` and an instrument, so those are the only ways in:
+   * `audit_log.instrument` / `.asset_class`, since migration 0013. Both are
+   * written by tick-runner.ts's single `record` closure, so EVERY stage row of
+   * every tick carries them; tick-loop.ts's `crashed` row carries them too.
+   * The remaining NULLs are rows predating 0013 and the HITL Telegram callback
+   * path, which records under an existing `trace_id` with no `Signal` in scope
+   * — both mean "not attributable", never "no instrument", and neither may be
+   * guessed into a lane.
    *
-   *  - `current_tick` — the tick running right now, deleted at tick end.
-   *  - `verdict_log` — one row per `VerdictDecision`, so only traces that
-   *    actually reached Verdict.
-   *
-   * A tick that short-circuits at Analysts, Trader or Risk therefore writes
-   * its stage rows and stays unattributable. That gap is asserted in
-   * `sqlite-query-store.test.ts` rather than described here alone, and
-   * `pipeline-query.ts`'s header carries the whole consequence and the fix
-   * (one additive migration putting `instrument` on `audit_log`). Nothing else
-   * in the read path changes when it lands — only this method.
-   *
-   * `llm_spend.debate_id -> debate_log.instrument` would widen coverage a
-   * little and is deliberately NOT used: it still misses `quorum_skip` (the
-   * tick never reaches an LLM call), and `SqliteLlmSpendStore.record` swallows
-   * its write failures by design, so a metering hiccup would silently delete a
-   * lane. An identity index has to be a system of record; that table is not
-   * one.
+   * `llm_spend.debate_id -> debate_log.instrument` is deliberately NOT used as
+   * a second source: it misses `quorum_skip` (the tick never reaches an LLM
+   * call), and `SqliteLlmSpendStore.record` swallows its write failures by
+   * design, so a metering hiccup would silently delete a lane. An identity
+   * index has to be a system of record; that table is not one.
    *
    * Payload is bounded three ways for the 3-second poll: `maxLanes` caps the
    * universe, `lookbackMs` caps how far back a lane reaches (#413), and at
    * most one settled candidate plus one live trace per lane reach the audit
-   * query.
+   * query. Both timestamp ranges ride `idx_audit_log_timestamp` (migration
+   * 0025) rather than scanning the table.
    */
   getPipelineActivity(maxLanes: number, lookbackMs: number, asOf: Date): PipelineActivity {
     const until = asOf.toISOString();
     const from = new Date(asOf.getTime() - lookbackMs).toISOString();
 
-    // `latest_mark` is the closest thing the schema has to "the instruments
-    // this bot watches" — one upserted row per instrument the Market Data
-    // Service has priced. It is not the tick universe: it answers what has
-    // been PRICED, and the two diverge when the configured universe changes
-    // (and will again if Stage 0 selection lands, #397). `current_tick` is
-    // unioned in so an instrument mid-tick that has no mark yet still gets a
-    // lane — the one instrument doing something would otherwise be the one
-    // missing. The ORDER BY exists to make the LIMIT deterministic; wire order
-    // is `buildPipelineView`'s call.
+    // Three sources, and the invariant is that ACTIVITY defines the universe
+    // while PRICING only extends it (#619):
+    //
+    //  - `audit_log` in the window — every instrument the pipeline actually
+    //    ran. This is the source the lanes are built from, so a lane can no
+    //    longer be missing for an instrument whose trace is right there.
+    //  - `current_tick` in the window — a tick that has entered a stage but
+    //    not yet recorded one, so it has no audit row for a few seconds.
+    //  - `latest_mark` — one upserted row per instrument the Market Data
+    //    Service has PRICED, on demand rather than per tick. It is not the
+    //    tick universe and never was; it is here so a priced instrument with
+    //    no recent activity reads as an IDLE lane rather than vanishing (a
+    //    closed market is the common, correct reason to be quiet).
+    //
+    // No stage filter on the audit arm: any attributed audit row means the bot
+    // touched that instrument, so it belongs in the universe. Whether it gets
+    // a TRACE is `pipelineEvents`' stage filter's job.
+    //
+    // `active` decides who survives `maxLanes`, not who renders first: a
+    // stale priced instrument must never evict a live one at the cap, which is
+    // this ticket's own failure mode arriving by a different door. The outer
+    // ORDER BY restores lane order; wire order is `buildPipelineView`'s call.
+    //
+    // An instrument has exactly one asset class. `GROUP BY instrument` plus
+    // `MIN(asset_class)` is what makes a violation of that render the same way
+    // on every poll instead of flapping between the sources that disagree — an
+    // aggregate rather than a bare column, so nothing here rests on which row
+    // SQLite happens to pick. `MIN` because it also sorts the conflicted lane
+    // earliest below, so bad data cannot additionally cost it its lane at the
+    // cap.
     const universe = this.db
       .prepare(
-        `SELECT instrument, asset_class FROM latest_mark
-          UNION
-         SELECT instrument, asset_class FROM current_tick WHERE updated_at > ? AND updated_at <= ?
-          ORDER BY asset_class, instrument
-          LIMIT ?`,
+        `SELECT instrument, asset_class FROM (
+           SELECT instrument, MIN(asset_class) AS asset_class, MAX(active) AS active FROM (
+             SELECT DISTINCT instrument, asset_class, 1 AS active FROM audit_log
+               WHERE timestamp > ? AND timestamp <= ?
+                 AND instrument IS NOT NULL AND asset_class IS NOT NULL
+             UNION ALL
+             SELECT instrument, asset_class, 1 FROM current_tick
+               WHERE updated_at > ? AND updated_at <= ?
+             UNION ALL
+             SELECT instrument, asset_class, 0 FROM latest_mark
+           )
+           GROUP BY instrument
+           ORDER BY active DESC, asset_class, instrument
+           LIMIT ?
+         )
+         ORDER BY asset_class, instrument`,
       )
-      .all(from, until, maxLanes) as UniverseRow[];
+      .all(from, until, from, until, maxLanes) as UniverseRow[];
     const laneInstruments = new Set(universe.map((row) => row.instrument));
 
     // The window applies to `current_tick` too, unlike `getTickStatus`, which
@@ -493,6 +517,12 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * what makes `stopped` cells reachable in production and not only in
    * fixtures.
    *
+   * BOTH 0013 columns are required, matching `getPipelineActivity`'s universe
+   * arm word for word. The two must agree on what "attributed" means: a row
+   * naming an instrument with no asset class is not renderable, and letting it
+   * win `chosenTrace` would blank a lane whose real trace sits in the same
+   * window — the identical symptom, one path over.
+   *
    * The `stage IN (…)` filter is not defensive tidiness: `audit_log.stage` is
    * unconstrained TEXT and the HITL Telegram callback writes
    * `verdict.hitl.telegram_callback` rows under the pipeline's own `trace_id`
@@ -519,6 +549,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
         `SELECT trace_id, instrument, asset_class, stage, decision, timestamp FROM audit_log
           WHERE timestamp > ? AND timestamp <= ?
             AND instrument IS NOT NULL
+            AND asset_class IS NOT NULL
             AND stage IN (${stagePlaceholders})
           ORDER BY timestamp, rowid`,
       )
