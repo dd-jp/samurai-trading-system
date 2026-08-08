@@ -21,6 +21,7 @@ function makeExecution(overrides: Partial<FillSyncSurface> = {}): FillSyncSurfac
   return {
     reconcile: vi.fn().mockResolvedValue(makeReport()),
     ingestFills: vi.fn().mockResolvedValue(undefined),
+    sweepResidualProtection: vi.fn().mockResolvedValue({ checked: 0, divergences: [] }),
     ...overrides,
   };
 }
@@ -191,6 +192,115 @@ describe('startFillSync', () => {
 
     // Abandoning here could cut between writeFill and updatePositionFill.
     expect(finished).toBe(true);
+  });
+
+  // #549: the sweep-in-finally control flow, pinned. A rejecting poll is the
+  // case the sweep exists FOR (a failed poll is exactly what can leave a
+  // residual's re-arm unconfirmed), so it must still run — and its own
+  // throw is contained to a log line, never allowed to mask the poll's error.
+  describe('the residual-protection sweep leg (#549)', () => {
+    it('still runs the sweep when ingestFills rejects, and the logged poll failure is the INGEST error', async () => {
+      const logger = makeLogger();
+      const execution = makeExecution({
+        ingestFills: vi.fn().mockRejectedValue(new Error('venue unreachable')),
+      });
+      const sync = startFillSync({
+        execution,
+        clock: { now: () => new Date() },
+        logger,
+        fillPollIntervalMs: 1_000,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(execution.sweepResidualProtection).toHaveBeenCalledTimes(1);
+      expect(logger.entries).toContainEqual(
+        expect.objectContaining({
+          message: 'fill poll failed',
+          level: 'error',
+          payload: { error: 'venue unreachable' },
+        }),
+      );
+
+      await sync.stop();
+    });
+
+    it("contains a sweep throw to its own log line — it cannot mask the poll's error or end the run", async () => {
+      const logger = makeLogger();
+      const execution = makeExecution({
+        ingestFills: vi.fn().mockRejectedValue(new Error('venue unreachable')),
+        sweepResidualProtection: vi.fn().mockRejectedValue(new Error('marker store down')),
+      });
+      const sync = startFillSync({
+        execution,
+        clock: { now: () => new Date() },
+        logger,
+        fillPollIntervalMs: 1_000,
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      // Both failures surfaced, each under its own line — the sweep's throw
+      // did not replace the poll's error, and vice versa.
+      expect(logger.entries).toContainEqual(
+        expect.objectContaining({
+          message: 'residual-protection sweep failed',
+          level: 'error',
+          payload: { error: 'marker store down' },
+        }),
+      );
+      expect(logger.entries).toContainEqual(
+        expect.objectContaining({
+          message: 'fill poll failed',
+          level: 'error',
+          payload: { error: 'venue unreachable' },
+        }),
+      );
+      // And the loop survived to poll again.
+      expect(execution.ingestFills).toHaveBeenCalledTimes(2);
+
+      await sync.stop();
+    });
+
+    it('logs a sweep divergence on first observation and on state transitions, not on every pass (#342)', async () => {
+      const logger = makeLogger();
+      const undetermined = {
+        idempotency_key: 'lot-1',
+        instrument: 'AAPL',
+        store_state: 'partially_filled',
+        broker_state: null,
+        action: 'undetermined',
+        reason: 're-arm retry failed',
+      };
+      const adopted = { ...undetermined, action: 'adopted', reason: 're-armed' };
+      const execution = makeExecution({
+        sweepResidualProtection: vi
+          .fn()
+          .mockResolvedValueOnce({ checked: 1, divergences: [undetermined] })
+          .mockResolvedValueOnce({ checked: 1, divergences: [undetermined] })
+          .mockResolvedValueOnce({ checked: 1, divergences: [adopted] })
+          .mockResolvedValue({ checked: 0, divergences: [] }),
+      });
+      const sync = startFillSync({
+        execution,
+        clock: { now: () => new Date() },
+        logger,
+        fillPollIntervalMs: 1_000,
+      });
+
+      await vi.advanceTimersByTimeAsync(4_000);
+
+      const divergenceLines = logger.entries.filter(
+        (entry) => entry.message === 'residual-protection sweep divergence',
+      );
+      // Pass 1 logs the warn; pass 2 (same lot, same state) is deduped; pass
+      // 3's transition to adopted logs the info; pass 4 reports nothing.
+      expect(divergenceLines.map((entry) => entry.level)).toEqual(['warn', 'info']);
+      expect(divergenceLines[0]?.payload).toMatchObject({ action: 'undetermined' });
+      expect(divergenceLines[1]?.payload).toMatchObject({ action: 'adopted' });
+
+      await sync.stop();
+    });
   });
 
   it('stops polling after stop()', async () => {

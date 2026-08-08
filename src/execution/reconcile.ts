@@ -53,6 +53,7 @@
 
 import type { OpenPosition, OrderState } from '../shared/index.js';
 import { safeLog } from '../shared/index.js';
+import { sweepResidualProtection } from './residual-protection-sweep.js';
 import type {
   ExecutionInput,
   ReconcileDivergence,
@@ -92,10 +93,25 @@ export async function reconcile(input: ExecutionInput): Promise<ReconcileReport>
     if (divergence.action !== 'undetermined') corrected += 1;
   }
 
+  // #549 — the residual-protection sweep (residual-protection-sweep.ts):
+  // every lot still durably marked "partial-flatten residual observed,
+  // protection not confirmed" gets its re-arm retried idempotently, or its
+  // escalation raised. AFTER the flatten sweep above, deliberately: on the
+  // crypto path `resumeFlatten`'s side effect is what re-populates the
+  // adapter's process-local worklists a restart emptied, the same ordering
+  // reason `runStartupReconcile` runs before the first `ingestFills()`.
+  // Symmetric to the flatten sweep in the report too — its markers count in
+  // `checked`, its resolutions in `corrected`.
+  const residualSweep = await sweepResidualProtection(input);
+  for (const divergence of residualSweep.divergences) {
+    divergences.push(divergence);
+    if (divergence.action !== 'undetermined') corrected += 1;
+  }
+
   divergences.push(...(await findUnrecordedVenuePositions(input, positions)));
 
   return {
-    checked: inFlight.length + unresolvedFlattens.length,
+    checked: inFlight.length + unresolvedFlattens.length + residualSweep.checked,
     corrected,
     divergences,
     timestamp: now,

@@ -1407,7 +1407,26 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       const getOrderByClientOrderId = vi.fn(
         byClientOrderId({
           'key-1': { ...acceptedOrder(), id: 'bracket-venue-id' },
-          'key-1:rearm': { ...acceptedOrder(), id: 'rearm-venue-id' },
+          // A MATCHING live prior (#549's adopt-or-place compares qty/levels
+          // before adopting), so the rearm below adopts without cancelling.
+          'key-1:rearm': {
+            ...acceptedOrder(),
+            id: 'rearm-venue-id',
+            order_class: 'oco',
+            qty: '6',
+            limit_price: '110',
+            legs: [
+              {
+                id: 'rearm-stop-leg',
+                type: 'stop' as const,
+                status: 'held',
+                filled_qty: '0',
+                filled_avg_price: null,
+                filled_at: null,
+                stop_price: '95',
+              },
+            ],
+          },
         }),
       );
       const cancelOrder = vi.fn(async (id: string) => {
@@ -1500,7 +1519,10 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     const submitOcoOrder = vi
       .fn()
       .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-1', order_class: 'oco', legs: [] });
-    const adapter = adapterWith(makeClient({ submitOcoOrder }));
+    // #549 adopt-or-place: null = the venue authoritatively has no prior
+    // re-arm under the deterministic wire id, so this places afresh.
+    const getOrderByClientOrderId = vi.fn().mockResolvedValue(null);
+    const adapter = adapterWith(makeClient({ submitOcoOrder, getOrderByClientOrderId }));
 
     await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
 
@@ -1522,6 +1544,182 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       // take_profit.limit_price").
       take_profit: { limit_price: '110' },
       stop_loss: { stop_price: '95' },
+    });
+  });
+
+  // #549 adopt-or-place: the wire id is deterministic (`${key}:rearm`), so a
+  // re-arm that succeeded venue-side before a crash lost its confirmation is
+  // ADOPTED by the retry rather than double-submitted (or misread as a fresh
+  // failure when the venue rejects the duplicate client order id).
+  describe('re-arm adopt-or-place (#549)', () => {
+    /** A live prior OCO whose qty/levels match the canonical (6, 95, 110) request. */
+    function matchingPriorOco() {
+      return {
+        ...acceptedOrder(),
+        id: 'prior-rearm-oco',
+        client_order_id: 'key-1:rearm',
+        order_class: 'oco',
+        qty: '6',
+        limit_price: '110',
+        legs: [
+          {
+            id: 'prior-rearm-stop',
+            type: 'stop' as const,
+            status: 'held',
+            filled_qty: '0',
+            filled_avg_price: null,
+            filled_at: null,
+            stop_price: '95',
+          },
+        ],
+      };
+    }
+
+    it('adopts a live prior OCO that MATCHES the request instead of submitting again', async () => {
+      const submitOcoOrder = vi.fn();
+      const cancelOrder = vi.fn();
+      const getOrderByClientOrderId = vi.fn().mockResolvedValue(matchingPriorOco());
+      const adapter = adapterWith(
+        makeClient({ submitOcoOrder, cancelOrder, getOrderByClientOrderId }),
+      );
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+
+      expect(getOrderByClientOrderId).toHaveBeenCalledWith('key-1:rearm');
+      expect(submitOcoOrder).not.toHaveBeenCalled();
+      expect(cancelOrder).not.toHaveBeenCalled();
+    });
+
+    // #549 review: the wire id is per-lot and reused across attempts, so a
+    // resting prior sized for a DIFFERENT residual (further exit fills landed
+    // between the crashed attempt and this retry) must not be adopted — an
+    // oversized stop over-closes into a reverse position (#516's hazard).
+    it('cancels and replaces a live prior whose qty no longer matches the residual', async () => {
+      const submitOcoOrder = vi
+        .fn()
+        .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-2', order_class: 'oco', legs: [] });
+      const cancelOrder = vi.fn().mockResolvedValue(undefined);
+      // Sized for the OLD residual (9), request now wants 6.
+      const getOrderByClientOrderId = vi
+        .fn()
+        .mockResolvedValue({ ...matchingPriorOco(), qty: '9' });
+      const adapter = adapterWith(
+        makeClient({ submitOcoOrder, cancelOrder, getOrderByClientOrderId }),
+      );
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+
+      expect(cancelOrder).toHaveBeenCalledWith('prior-rearm-oco');
+      expect(submitOcoOrder).toHaveBeenCalledTimes(1);
+      expect(submitOcoOrder).toHaveBeenCalledWith(expect.objectContaining({ qty: '6' }));
+    });
+
+    it('refuses to adopt a prior whose price fields are missing — unverifiable protection is replaced', async () => {
+      const submitOcoOrder = vi
+        .fn()
+        .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-2', order_class: 'oco', legs: [] });
+      const cancelOrder = vi.fn().mockResolvedValue(undefined);
+      const prior = matchingPriorOco();
+      const getOrderByClientOrderId = vi
+        .fn()
+        .mockResolvedValue({ ...prior, limit_price: undefined });
+      const adapter = adapterWith(
+        makeClient({ submitOcoOrder, cancelOrder, getOrderByClientOrderId }),
+      );
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+
+      expect(cancelOrder).toHaveBeenCalledWith('prior-rearm-oco');
+      expect(submitOcoOrder).toHaveBeenCalledTimes(1);
+    });
+
+    // #549 review (cycle 2): a partially-consumed prior's fills are EXIT
+    // fills — every filled share already closed that much of the position —
+    // so its resting remainder equals what that episode still holds, while
+    // the caller's residual may be computed off a store that has not
+    // ingested those fills yet. Cancel-and-replace sized to that stale
+    // figure would over-arm; adoption is the safe answer, like `filled`.
+    it('adopts a PARTIALLY_FILLED prior without cancel-and-replace, even when the store-side residual disagrees', async () => {
+      const submitOcoOrder = vi.fn();
+      const cancelOrder = vi.fn();
+      const getOrderByClientOrderId = vi.fn().mockResolvedValue({
+        ...matchingPriorOco(),
+        // qty 6 with 2 filled: 4 rest, 4 held from this episode — while the
+        // request (computed off a store missing those fills) still says 6.
+        status: 'partially_filled',
+        filled_qty: '2',
+      });
+      const adapter = adapterWith(
+        makeClient({ submitOcoOrder, cancelOrder, getOrderByClientOrderId }),
+      );
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+
+      expect(submitOcoOrder).not.toHaveBeenCalled();
+      expect(cancelOrder).not.toHaveBeenCalled();
+    });
+
+    // #549 review (round 3): `mapOrderState` folds every unrecognized venue
+    // status — done_for_day, replaced, stopped — into 'submitted', so a
+    // blocklist of dead states would adopt a matching-but-not-resting prior
+    // as protection while nothing rests. Adoption is allowlisted on the raw
+    // resting statuses; anything else is retired and replaced.
+    it('does not adopt a matching prior in an unrecognized status (done_for_day) — cancels and replaces', async () => {
+      const submitOcoOrder = vi
+        .fn()
+        .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-2', order_class: 'oco', legs: [] });
+      const cancelOrder = vi.fn().mockResolvedValue(undefined);
+      const getOrderByClientOrderId = vi
+        .fn()
+        .mockResolvedValue({ ...matchingPriorOco(), status: 'done_for_day' });
+      const adapter = adapterWith(
+        makeClient({ submitOcoOrder, cancelOrder, getOrderByClientOrderId }),
+      );
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+
+      expect(cancelOrder).toHaveBeenCalledWith('prior-rearm-oco');
+      expect(submitOcoOrder).toHaveBeenCalledTimes(1);
+      expect(submitOcoOrder).toHaveBeenCalledWith(expect.objectContaining({ qty: '6' }));
+    });
+
+    it('adopts a FILLED prior regardless of size — its fill is already closing the residual', async () => {
+      const submitOcoOrder = vi.fn();
+      const cancelOrder = vi.fn();
+      const getOrderByClientOrderId = vi.fn().mockResolvedValue({
+        ...matchingPriorOco(),
+        qty: '9',
+        status: 'filled',
+        filled_qty: '9',
+      });
+      const adapter = adapterWith(
+        makeClient({ submitOcoOrder, cancelOrder, getOrderByClientOrderId }),
+      );
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+
+      expect(submitOcoOrder).not.toHaveBeenCalled();
+      expect(cancelOrder).not.toHaveBeenCalled();
+    });
+
+    it('places afresh when the prior attempt under the wire id is dead (cancelled)', async () => {
+      const submitOcoOrder = vi
+        .fn()
+        .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-2', order_class: 'oco', legs: [] });
+      const getOrderByClientOrderId = vi.fn().mockResolvedValue({
+        ...acceptedOrder(),
+        id: 'prior-rearm-oco',
+        client_order_id: 'key-1:rearm',
+        order_class: 'oco',
+        status: 'canceled',
+        legs: [],
+      });
+      const adapter = adapterWith(makeClient({ submitOcoOrder, getOrderByClientOrderId }));
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+
+      // A cancelled prior protects nothing — the retry submits.
+      expect(submitOcoOrder).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -1578,7 +1776,13 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         ],
       }),
     );
-    const adapter = adapterWith(makeClient({ submitOcoOrder, getOrder }));
+    const adapter = adapterWith(
+      makeClient({
+        submitOcoOrder,
+        getOrder,
+        getOrderByClientOrderId: vi.fn().mockResolvedValue(null),
+      }),
+    );
     await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
 
     const fills = await adapter.fetchNewFills(new Date(0));

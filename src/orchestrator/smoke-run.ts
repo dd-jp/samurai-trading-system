@@ -142,6 +142,7 @@ import type {
   NativeBracketRequest,
   NormalizedFill,
   NormalizedOrder,
+  ReconcileDivergence,
   ReconcileReport,
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
@@ -461,12 +462,19 @@ export class UnreachableAlpacaClient implements AlpacaClient {
  *    of one): asserts `reconcile()`'s flatten sweep finds the unresolved
  *    journal row, resolves it against the venue, and the lot still reaches
  *    `closed` afterward (#519, #526).
+ * 5. `EXIT_PATH_INSTRUMENTS.residualSweep` — a partial flatten (scenario 2's
+ *    technique) whose observing-poll re-arm is scripted to FAIL once, then a
+ *    restart: asserts the durable residual-protection marker (migration
+ *    0024) plus `reconcile()`'s #549 sweep re-arm the residual, clear the
+ *    marker, and page exactly once for the episode.
  */
 const EXIT_PATH_INSTRUMENTS = {
   fullExit: 'ETH-USD',
   partialFlatten: 'SOL-USD',
   twoLot: 'AVAX-USD',
   crashRestart: 'DOGE-USD',
+  /** Scenario 5 (#549): the residual-protection sweep across a restart. */
+  residualSweep: 'LINK-USD',
 } as const;
 
 /**
@@ -558,6 +566,8 @@ export class ExitPathBrokerAdapter implements BrokerAdapter {
   /** Every `cancel`/`submitBracket`/`submitFlatten`/`rearmProtectiveLegs` call, in call order. */
   readonly callSequence: string[] = [];
   private readonly partialFlattenFraction = new Map<string, number>();
+  /** Lots whose NEXT `rearmProtectiveLegs` call throws — scenario 5's one-shot failure (#549). */
+  private readonly rearmFailuresOnce = new Set<string>();
 
   /**
    * `delegate` is deliberately typed as the concrete `SimulatedBrokerAdapter`,
@@ -572,6 +582,17 @@ export class ExitPathBrokerAdapter implements BrokerAdapter {
   /** Opts `clientOrderId`'s flatten into a truncated fill — see the class docs. */
   truncateFlattenFill(clientOrderId: string, fraction: number): void {
     this.partialFlattenFraction.set(clientOrderId, fraction);
+  }
+
+  /**
+   * Makes this lot's NEXT `rearmProtectiveLegs` call throw, once (#549,
+   * scenario 5) — the deterministic stand-in for "the observing poll's
+   * re-arm did not confirm", which is what forces the durable marker to be
+   * the ONLY path back to protection. One-shot so the restarted process's
+   * sweep retry succeeds against the same adapter.
+   */
+  failRearmOnce(clientOrderId: string): void {
+    this.rearmFailuresOnce.add(clientOrderId);
   }
 
   /** Appends `action:clientOrderId` to `callSequence` — the one thing every recorded call shares. */
@@ -625,6 +646,11 @@ export class ExitPathBrokerAdapter implements BrokerAdapter {
     target: number,
   ): Promise<void> {
     this.record('rearmProtectiveLegs', clientOrderId);
+    if (this.rearmFailuresOnce.delete(clientOrderId)) {
+      throw new Error(
+        `smoke exit-path harness: scripted one-shot re-arm failure for '${clientOrderId}' (#549 scenario 5)`,
+      );
+    }
     return this.delegate.rearmProtectiveLegs(clientOrderId, instrument, side, qty, stop, target);
   }
 
@@ -755,6 +781,25 @@ export interface ExitPathEvidence {
   crashRestart: { lotKey: string; flattenKey: string; reconcileReport: ReconcileReport };
   /** Every flatten-reconcile alert posted anywhere during the run — a healthy scenario 4 posts none. */
   flattenReconcileAlerts: readonly FlattenReconcileAlert[];
+  /**
+   * Scenario 5 (#549): a partial flatten whose OBSERVING-POLL re-arm failed
+   * (scripted, one-shot), so the durable marker (migration 0024) + the
+   * restarted `reconcile()`'s residual-protection sweep are the ONLY path
+   * back to protection. The gate checks the sweep re-armed the residual
+   * (`protectedQty`), settled the marker (`markerCleared`), reported it
+   * (`sweepDivergenceAction: 'adopted'`), and paged exactly once for the
+   * whole episode — the observing poll's inline alert, never a second from
+   * the sweep (#342).
+   */
+  residualSweep: {
+    lotKey: string;
+    expectedResidual: number;
+    protectedQty: number | null;
+    /** `open_positions.residual_unprotected_since IS NULL` after the restarted sweep. */
+    markerCleared: boolean;
+    /** The restarted reconcile()'s divergence for the LOT's own key, if any. */
+    sweepDivergenceAction: ReconcileDivergence['action'] | undefined;
+  };
 }
 
 /**
@@ -953,9 +998,14 @@ async function runExitPathScenarios(input: {
   );
   await execution.ingestFills();
 
-  // --- Scenario 4 (#519/#526): a flatten that acks but is never swept for --
-  // fills before a "restart" — reconcile()'s flatten-journal sweep, not
-  // ingestFills() alone, is what recovers it.
+  // --- Scenario 4's ENTRY, hoisted ahead of scenario 5 -------------------
+  // (#549): scenario 5's failed re-arm must be the LAST thing any
+  // `ingestFills()` does before the restart — the Simulated feed re-offers a
+  // flatten's fill every poll, so any later poll would retry (and heal) the
+  // re-arm IN-PROCESS and the restart would find nothing to sweep. Scenario
+  // 4's own constraint is only that no ingest runs between its EXIT and the
+  // restart, so its entry fill is ingested here and its exit submitted after
+  // scenario 5's observing poll, below.
   const lot4 = 'smoke-exit-restart-lot';
   const lot4ExitKey = 'smoke-exit-restart-exit';
   await submit(
@@ -970,6 +1020,52 @@ async function runExitPathScenarios(input: {
     'scenario 4 entry',
   );
   await execution.ingestFills();
+
+  // --- Scenario 5 (#549): a partial flatten whose observing-poll re-arm ----
+  // FAILS (scripted, one-shot). The inline #525 alert fires once and the
+  // durable marker (migration 0024) is written; nothing in the poll path
+  // ever retries. The restarted `reconcile()`'s residual-protection sweep is
+  // what re-arms the residual and clears the marker — evidence read after
+  // the restart below.
+  const lot5 = 'smoke-exit-sweep-lot';
+  const lot5ExitKey = 'smoke-exit-sweep-exit';
+  await submit(
+    exitPathOrder(
+      EXIT_PATH_INSTRUMENTS.residualSweep,
+      lot5,
+      'buy',
+      'entry',
+      EXIT_PATH_LOT_SIZE,
+      tick(),
+    ),
+    'scenario 5 entry',
+  );
+  await execution.ingestFills();
+  broker.truncateFlattenFill(lot5ExitKey, PARTIAL_FLATTEN_FRACTION);
+  broker.failRearmOnce(lot5);
+  await submit(
+    exitPathOrder(
+      EXIT_PATH_INSTRUMENTS.residualSweep,
+      lot5ExitKey,
+      'sell',
+      'exit',
+      EXIT_PATH_LOT_SIZE,
+      tick(),
+    ),
+    'scenario 5 exit',
+  );
+  // The observing poll: the partial fill lands, the re-arm throws once, the
+  // lot's residual is left naked with only the marker pointing at it.
+  await execution.ingestFills();
+  const scenario5ExitFillQty = EXIT_PATH_LOT_SIZE * PARTIAL_FLATTEN_FRACTION;
+  // Same `filledSize - exitQty` expression as ingest-fills.ts — scenario 2's
+  // own float-identity reasoning, unchanged.
+  const scenario5ExpectedResidual = EXIT_PATH_LOT_SIZE - scenario5ExitFillQty;
+
+  // --- Scenario 4 (#519/#526): a flatten that acks but is never swept for --
+  // fills before a "restart" — reconcile()'s flatten-journal sweep, not
+  // ingestFills() alone, is what recovers it. Its entry was opened and
+  // ingested ABOVE, before scenario 5 (see the hoist comment there).
   await submit(
     exitPathOrder(
       EXIT_PATH_INSTRUMENTS.crashRestart,
@@ -1010,6 +1106,15 @@ async function runExitPathScenarios(input: {
   const restartReconcile = await restarted.reconcile();
   await restarted.ingestFills();
 
+  // Scenario 5's evidence, read AFTER the restarted reconcile+ingest: the
+  // sweep's own divergence keys on the LOT (a flatten's divergence keys on
+  // the flatten's own id, so the lookup cannot collide), the venue-side
+  // protection off the delegate adapter, and the marker column raw off the
+  // store — the durable effect the gate exists to enforce (#430).
+  const lot5MarkerRow = db
+    .prepare('SELECT residual_unprotected_since FROM open_positions WHERE idempotency_key = ?')
+    .get(lot5) as { residual_unprotected_since: string | null } | undefined;
+
   return {
     brokerCallSequence: broker.callSequence,
     residualAlerts: residualAlerts.alerts,
@@ -1022,6 +1127,16 @@ async function runExitPathScenarios(input: {
     twoLotFlatten: { lotKeys: [lot3Older, lot3Newer] },
     crashRestart: { lotKey: lot4, flattenKey: lot4ExitKey, reconcileReport: restartReconcile },
     flattenReconcileAlerts: flattenReconcileAlerts.alerts,
+    residualSweep: {
+      lotKey: lot5,
+      expectedResidual: scenario5ExpectedResidual,
+      protectedQty: broker.getProtectedQty(lot5),
+      markerCleared:
+        lot5MarkerRow !== undefined && lot5MarkerRow.residual_unprotected_since === null,
+      sweepDivergenceAction: restartReconcile.divergences.find(
+        (divergence) => divergence.idempotency_key === lot5,
+      )?.action,
+    },
   };
 }
 
@@ -1827,12 +1942,65 @@ export function evaluateSmokeGate(
         're-arm (#525) sized the wrong quantity',
     );
   }
-  if (residualAlerts.length > 0) {
+  // Scoped since #549: scenario 5 DELIBERATELY fails one re-arm, so exactly
+  // its one inline alert is expected — any OTHER lot alerting still means a
+  // re-arm failed on a deterministic offline broker.
+  const { residualSweep } = options.exitPath;
+  const strayResidualAlerts = residualAlerts.filter(
+    (alert) => alert.idempotency_key !== residualSweep.lotKey,
+  );
+  if (strayResidualAlerts.length > 0) {
     failures.push(
-      `${residualAlerts.length} residual-exposure alert(s) fired during the smoke run ` +
-        `(lot(s): ${residualAlerts.map((alert) => alert.idempotency_key).join(', ')}) — a ` +
+      `${strayResidualAlerts.length} residual-exposure alert(s) fired during the smoke run ` +
+        `(lot(s): ${strayResidualAlerts.map((alert) => alert.idempotency_key).join(', ')}) — a ` +
         'successful re-arm posts nothing (residual-exposure-alert.ts); an alert here means the ' +
         '#525 re-arm failed on a deterministic offline broker',
+    );
+  }
+
+  // #549 — the residual-protection sweep's ENFORCEMENT assertions (#430's
+  // convention, mirroring #519/#526's above): scenario 5's observing-poll
+  // re-arm was scripted to fail, so ONLY the durable marker + the restarted
+  // reconcile()'s sweep can have re-established protection. Each check names
+  // a different way the mechanism can silently stop being wired.
+  const scenario5Alerts = residualAlerts.filter(
+    (alert) => alert.idempotency_key === residualSweep.lotKey,
+  );
+  if (scenario5Alerts.length !== 1) {
+    failures.push(
+      `scenario 5's residual episode alerted ${scenario5Alerts.length} time(s), expected exactly 1 ` +
+        "(the observing poll's inline #525 alert) — 0 means the failed re-arm no longer pages at " +
+        'all; more than 1 means the once-per-episode dedup (#549/#342, ' +
+        'open_positions.residual_rearm_alerted_at) regressed and the sweep re-pages every pass',
+    );
+  }
+  if (residualSweep.sweepDivergenceAction === undefined) {
+    failures.push(
+      `the restarted Execution's reconcile() report named no divergence for scenario 5's lot ` +
+        `'${residualSweep.lotKey}' — the durable residual-protection marker (migration 0024) was ` +
+        'never written by the observing poll, or SharedStore.getUnprotectedResidualLots() found ' +
+        'nothing, so the #549 sweep either never ran or had nothing to find',
+    );
+  } else if (residualSweep.sweepDivergenceAction !== 'adopted') {
+    failures.push(
+      `the restarted Execution's residual-protection sweep settled scenario 5's lot with action ` +
+        `'${residualSweep.sweepDivergenceAction}', not 'adopted' — the retry against a healthy ` +
+        'deterministic broker should have re-armed and confirmed; anything else means the sweep ' +
+        'could not settle a marker it should have (#549)',
+    );
+  }
+  if (!residualSweep.markerCleared) {
+    failures.push(
+      `scenario 5's residual-protection marker (open_positions.residual_unprotected_since, lot ` +
+        `'${residualSweep.lotKey}') is still set after the restarted reconcile() — protection was ` +
+        'never CONFIRMED, so the lot would be re-swept forever (#549)',
+    );
+  }
+  if (residualSweep.protectedQty !== residualSweep.expectedResidual) {
+    failures.push(
+      `lot '${residualSweep.lotKey}' has ${residualSweep.protectedQty ?? 'no'} protected after ` +
+        `the #549 sweep's retry, expected the residual ${residualSweep.expectedResidual} — the ` +
+        'sweep either never re-armed (the lot is naked) or sized the wrong quantity',
     );
   }
 

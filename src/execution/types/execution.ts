@@ -205,6 +205,19 @@ export interface ReconcileDivergence {
   reason: string;
 }
 
+/**
+ * One #549 residual-protection sweep pass's outcome — see
+ * residual-protection-sweep.ts for the mechanism. `checked` counts markers
+ * examined (the same meaning `ReconcileReport.checked` gives its rows);
+ * `divergences` reuses `ReconcileDivergence` for the widening reason that
+ * type's own doc records — `adopted` means protection was confirmed and the
+ * marker cleared, `undetermined` means it could not be and the marker stays.
+ */
+export interface ResidualProtectionSweepResult {
+  checked: number;
+  divergences: ReconcileDivergence[];
+}
+
 /** What one `reconcile()` pass examined and corrected. */
 export interface ReconcileReport {
   /**
@@ -269,4 +282,15 @@ export interface Execution {
    * none is added by #519/#526 — see reconcile.ts's file doc.
    */
   reconcile(): Promise<ReconcileReport>;
+  /**
+   * One pass of the #549 residual-protection sweep on its own — see
+   * residual-protection-sweep.ts. `reconcile()` above already runs it as
+   * part of its pass (so startup is covered without a second wiring); this
+   * standalone surface exists for the WITHIN-PROCESS cadence: `startFillSync`
+   * (orchestrator/fill-sync.ts) calls it after every fill poll, because no
+   * recurring `reconcile()` schedule exists and a re-arm failure the process
+   * survives must not wait for the next restart to be retried. Idempotent
+   * and cheap when healthy — an empty marker worklist makes no broker call.
+   */
+  sweepResidualProtection(): Promise<ResidualProtectionSweepResult>;
 }

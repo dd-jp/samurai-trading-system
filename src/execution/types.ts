@@ -64,6 +64,7 @@ export type {
   ExecutionResult,
   ReconcileDivergence,
   ReconcileReport,
+  ResidualProtectionSweepResult,
   SimulatedAdapterConfig,
 } from './types/execution.js';
 export type {
@@ -71,5 +72,6 @@ export type {
   FlattenSubmissionWriteAhead,
   LotAdvance,
   SharedStore,
+  UnprotectedResidualLot,
   UnresolvedFlattenSubmission,
 } from './types/store.js';

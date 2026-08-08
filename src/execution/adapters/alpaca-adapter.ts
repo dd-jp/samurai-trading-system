@@ -669,6 +669,85 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     }
 
     const rearmClientOrderId = `${clientOrderId}:rearm`;
+
+    // ADOPT-OR-PLACE (#549, the #600/#603 posture): the wire id above is
+    // deterministic, so before submitting, ask the venue whether a prior
+    // attempt's OCO already lives under it — a re-arm that succeeded
+    // venue-side and then crashed (or lost its journaling) before the caller
+    // could confirm it would otherwise be DOUBLE-submitted by the
+    // residual-protection sweep's retry, or (Alpaca rejecting the duplicate
+    // client_order_id) read as a fresh failure and page the operator about a
+    // residual that is in fact protected.
+    //
+    // Adoption is CONDITIONAL on the prior matching THIS request (#549
+    // review): the wire id is per-lot and reused across attempts, so a
+    // still-resting prior sized for a DIFFERENT residual (further exit fills
+    // landed between the crashed attempt and this retry) must not be treated
+    // as confirmed protection — an oversized stop over-closes into a reverse
+    // position, the exact #516 hazard. A resting mismatch is CANCELLED here
+    // and the fresh place below replaces it; only `qty` can genuinely drift
+    // (the contract fixes `stop`/`target` to the lot's own unchanged
+    // levels), but all three are compared, and a prior whose price fields
+    // are missing fails the match — replacing real protection costs a
+    // round-trip, adopting stale protection costs money.
+    //
+    // A `filled` OR `partially_filled` prior is adopted regardless of the
+    // match (#549 review): an OCO's fills are EXIT fills — every share it
+    // filled has already closed that much of the position — so what remains
+    // resting (`qty − filled_qty`) is exactly what that episode still holds.
+    // The caller's `residual` is computed off the STORE, which has not
+    // necessarily ingested those very fills yet (the re-arm sweep in
+    // `fetchNewFills` below is what offers them), so a partially-consumed
+    // prior would compare against a stale figure: cancel-and-replace sized
+    // to that figure would re-arm quantity that is already closed —
+    // over-protection, whose leg fires into a smaller position and opens a
+    // reverse one (#516's hazard, from the other direction). Once the fills
+    // DO ingest, the recomputed residual and the prior's resting remainder
+    // agree by construction. A `cancelled`/`rejected`/`expired` prior
+    // protects nothing, so the code falls through and places afresh — if
+    // the venue then refuses the reused client_order_id, that throw is the
+    // honest answer and takes the caller's existing alert path.
+    //
+    // ADOPTION IS ALLOWLISTED on the RAW venue status (#549 review, round 3):
+    // `mapOrderState` folds every unrecognized status — `done_for_day`,
+    // `replaced`, `stopped`, `pending_cancel`... — into 'submitted', so a
+    // blocklist of dead states would let a matching-but-not-resting prior be
+    // adopted as protection while nothing rests at the venue: exactly the
+    // naked-residual-believed-protected hazard this method exists to close.
+    // Only statuses that mean RESTING may satisfy the match branch; anything
+    // unrecognized takes the cancel-and-replace path, where `cancelOrder`'s
+    // tolerance of already-terminal orders makes the defensive cancel free.
+    const RESTING_STATUSES = ['new', 'accepted', 'pending_new', 'accepted_for_bidding'];
+    const prior = await this.call('rearmProtectiveLegs', () =>
+      this.input.client.getOrderByClientOrderId(rearmClientOrderId),
+    );
+    if (
+      prior !== null &&
+      !['cancelled', 'rejected', 'expired'].includes(mapOrderState(prior.status))
+    ) {
+      const priorState = mapOrderState(prior.status);
+      if (
+        priorState === 'filled' ||
+        priorState === 'partially_filled' ||
+        (RESTING_STATUSES.includes(prior.status) && rearmOrderMatches(prior, qty, stop, target))
+      ) {
+        this.rearmedLegs.set(clientOrderId, prior.id);
+        // Same column semantics as the fresh-place path below — the OCO's
+        // parent id IS the take-profit (see that path's `.legs` note).
+        this.state.recordBracketOrderIds('alpaca', clientOrderId, {
+          entry_order_id: null,
+          stop_order_id: legOrderIds(prior.legs).stop_order_id,
+          target_order_id: prior.id,
+        });
+        return;
+      }
+      // Live but stale-sized: retire it before placing the right-sized
+      // replacement. `cancelOrder` resolves on 404/422 (already-terminal),
+      // so losing the race to the prior's own fill is not a failure here —
+      // the replacement submit below is what would surface a real problem.
+      await this.call('rearmProtectiveLegs', () => this.input.client.cancelOrder(prior.id));
+    }
+
     // The CLOSING side, mirroring `submitFlatten`'s own convention — `side`
     // here is the lot's HELD side (the `BrokerAdapter.rearmProtectiveLegs`
     // contract), so the order that reduces it takes the opposite one.
@@ -1109,6 +1188,27 @@ function symbolOf(order: AlpacaOrder): string {
  * Alpaca reports no such leg — which it legitimately does once a leg has been
  * cancelled — rather than an empty string standing in for "don't know".
  */
+/**
+ * Whether a prior re-arm OCO found under the deterministic `:rearm` wire id
+ * protects exactly what THIS attempt would place (#549 review) — same `qty`,
+ * same take-profit limit (the OCO's TOP-LEVEL `limit_price` — an OCO's
+ * take-profit is the parent order itself, `rearmProtectiveLegs`' own `.legs`
+ * note), same stop trigger on the stop child. Field comparisons are
+ * `Number(...) === value`: the request stringified these exact numbers on the
+ * way out (`String(qty)` etc.), and JS number->string->number round-trips
+ * losslessly, so a genuine match compares exactly. A prior missing any price
+ * field (Alpaca always returns them; a partial double might not) FAILS the
+ * match — replacing real protection costs one round-trip, adopting
+ * unverifiable protection costs money.
+ */
+function rearmOrderMatches(prior: AlpacaOrder, qty: number, stop: number, target: number): boolean {
+  if (Number(prior.qty) !== qty) return false;
+  if (prior.limit_price == null || Number(prior.limit_price) !== target) return false;
+  const stopLeg = prior.legs?.find((leg) => leg.type === 'stop');
+  if (stopLeg?.stop_price == null || Number(stopLeg.stop_price) !== stop) return false;
+  return true;
+}
+
 function legOrderIds(legs: AlpacaOrderLeg[] | undefined): {
   stop_order_id: string | null;
   target_order_id: string | null;
