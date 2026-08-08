@@ -1,8 +1,8 @@
 // Type-checks the Playwright suite, which no other project sees: the build
-// config is `src/**/*.ts` and the test config is the vitest suite, so without
-// this `yarn typecheck` would be green while an e2e file referenced a wire
-// field that no longer exists — the drift those two configs exist to prevent,
-// reintroduced one directory over. Run by `yarn typecheck`.
+// config is `server/**` + `contracts/**` and the test config is the vitest
+// suite, so without this `yarn typecheck` would be green while an e2e file
+// referenced a wire field that no longer exists — the drift those two configs
+// exist to prevent, reintroduced one directory over. Run by `yarn typecheck`.
 //
 // Standalone rather than extending `tsconfig.build.json`: this code runs in
 // Playwright's runner and in a browser, not in the Node service, so it needs

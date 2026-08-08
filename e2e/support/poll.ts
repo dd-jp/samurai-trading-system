@@ -8,7 +8,7 @@
  * assertions carry explicit timeouts.
  */
 import type { APIRequestContext, Page } from '@playwright/test';
-import type { DashboardSnapshot } from '../../src/dashboard/types.ts';
+import type { DashboardSnapshot } from '../../contracts/index.ts';
 import { expect } from './test.ts';
 
 const SNAPSHOT_GLOB = '**/api/snapshot';
