@@ -361,12 +361,11 @@ const LLM_SPEND_ALL = {
  *              two views of the live tick agree.
  *  - QQQ     — no trace at all: the idle lane (#413).
  *
- * AAPL and TSLA are the deliberate ones. Both are traces the SQLite store
- * cannot attribute today — `audit_log` has no instrument column, and a tick
- * that ends before Verdict leaves nothing to join on (see
- * `pipeline-query.ts`'s header). They are in the fixtures precisely because
- * the UI must be built against the short-circuits the operator will eventually
- * see, rather than against the subset the current schema can serve.
+ * AAPL and TSLA are the deliberate ones: short-circuits that end before
+ * Verdict, which the UI must draw and which the SQLite store now serves too
+ * (`audit_log.instrument`, migration 0013 — see `pipeline-query.ts`'s header).
+ * They stayed in the fixtures after that landed because a fixture the real
+ * store cannot reproduce is a fixture nobody can trust.
  */
 const PIPELINE_NOW = NOW;
 
