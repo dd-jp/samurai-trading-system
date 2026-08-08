@@ -14,7 +14,7 @@
  * words, so the strip is never read by colour alone.
  */
 
-import type { DebateRow } from '../../../dashboard/types.ts';
+import type { DebateRow } from '@contracts';
 
 type Direction = DebateRow['direction'];
 

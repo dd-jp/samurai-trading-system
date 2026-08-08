@@ -15,10 +15,10 @@
 // reachable: jsdom has no `ResizeObserver`, no `document.fonts`, no
 // `matchMedia`, and returns an all-zero rect for every element.
 
+import type { PipelineView } from '@contracts';
 import { render, screen, waitFor } from '@testing-library/react';
 import { act, useMemo, useRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { PipelineView } from '../../../dashboard/pipeline-types.ts';
 import { App } from '../App.tsx';
 import { RoomsGrid } from '../components/RoomsGrid.tsx';
 import { computeLayout, type RoomId } from '../lib/room-layout.ts';

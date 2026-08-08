@@ -161,16 +161,16 @@ export interface VerdictLog {
  * only produces `pending` (write-ahead) and `submitted` (post-ack); #83's
  * `ingestFills()` drives `partially_filled` → `filled` → `closed` as fills
  * arrive.
+ *
+ * Declared in `contracts/primitives.ts` and re-exported here: `PositionRow`
+ * carries it to the browser, which renders the state word and must not import
+ * the execution registry to learn the union.
  */
-export type OrderState =
-  | 'pending'
-  | 'submitted'
-  | 'partially_filled'
-  | 'filled'
-  | 'closed'
-  | 'cancelled'
-  | 'rejected'
-  | 'expired';
+export type { OrderState } from '../../contracts/primitives.js';
+
+// Also imported, not just re-exported: `export … from` publishes the name
+// without binding it locally, and `OpenPosition` below annotates with it.
+import type { OrderState } from '../../contracts/primitives.js';
 
 /**
  * A live open lot — Trader position-awareness + Risk exposure. Defined here

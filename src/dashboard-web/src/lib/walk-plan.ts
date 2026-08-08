@@ -21,11 +21,7 @@
  *     discards the outstanding plan when the next one arrives.
  */
 
-import type {
-  PipelineLane,
-  PipelineStage,
-  PipelineView,
-} from '../../../dashboard/pipeline-types.ts';
+import type { PipelineLane, PipelineStage, PipelineView } from '@contracts';
 import { type RoomId, roomFor, roomIndex, stageAt } from './room-layout.ts';
 
 /** Per-hop duration floor — a hop shorter than this reads as a teleport. */

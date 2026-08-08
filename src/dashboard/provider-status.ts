@@ -43,57 +43,33 @@ import type { AlpacaClient } from '../execution/adapters/alpaca-client.js';
 import { fetchWithTimeout } from '../shared/http/fetch-with-timeout.js';
 
 /**
- * Deliberately an enum of causes rather than a boolean, because the operator
- * response differs per cause: `unauthorized` is a wrong key, `forbidden` is a
- * plan that does not include the endpoint, `rate_limited` is a plan that does
- * but is being hit too hard. Collapsing those to "down" would throw away the
- * only part of the answer that tells you what to go fix.
+ * The rendered tile shapes live in `contracts/providers.ts` — the browser
+ * draws them, so they are wire, not server-internal. Re-exported here so the
+ * poller's own callers keep one import site.
+ *
+ * The split is along behavior: everything below this line does live HTTP
+ * probing and holds mutable in-memory state, and none of it can cross to a
+ * browser. `ProviderStatusPoller` in particular reaches `AlpacaClient` in
+ * `src/execution/`, so moving it would have dragged the broker adapter types
+ * into the client's TypeScript program — the opposite of the point.
  */
-export type ProviderState =
-  | 'ok'
-  | 'unauthorized'
-  | 'forbidden'
-  | 'rate_limited'
-  | 'error'
-  | 'not_configured';
+export type {
+  AlpacaBalanceWire,
+  AlpacaTile,
+  PolygonTile,
+  ProviderState,
+  ProviderStatusPanel,
+  ProviderTile,
+} from '../contracts/providers.js';
 
-/** Alpaca's account ledger, parsed for display. */
-export interface AlpacaBalanceWire {
-  cash: number;
-  equity: number;
-  /** `null` when Alpaca did not send it — see `AlpacaAccount.buying_power`. */
-  buying_power: number | null;
-}
-
-export interface ProviderTile {
-  /**
-   * Only the two providers this poller probes. Nous is deliberately NOT a
-   * member: it has no probe and no tile here, because there is nothing to
-   * probe — its dashboard figure comes from the `llm_spend` table instead.
-   * Listing it would advertise a tile this module never produces.
-   */
-  provider: 'alpaca' | 'polygon';
-  state: ProviderState;
-  /** Short human-readable cause. Never contains a credential. */
-  detail: string;
-  /** ISO-8601 UTC of the last completed probe, or `null` if none has run yet. */
-  observed_at: string | null;
-}
-
-export interface AlpacaTile extends ProviderTile {
-  provider: 'alpaca';
-  /** `null` unless `state === 'ok'` — a stale balance shown next to a failed probe reads as current. */
-  balance: AlpacaBalanceWire | null;
-}
-
-export interface PolygonTile extends ProviderTile {
-  provider: 'polygon';
-}
-
-export interface ProviderStatusPanel {
-  alpaca: AlpacaTile;
-  polygon: PolygonTile;
-}
+// Imported as well as re-exported above: `export … from` publishes a name
+// without binding it locally, and the poller below annotates with all four.
+import type {
+  AlpacaTile,
+  PolygonTile,
+  ProviderState,
+  ProviderStatusPanel,
+} from '../contracts/providers.js';
 
 /** The synchronous seam `buildSnapshot` reads. */
 export interface ProviderStatusReader {

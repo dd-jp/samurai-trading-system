@@ -45,10 +45,18 @@ export const STORE_ENVIRONMENTS = ['development', 'test', 'staging', 'production
 
 export type StoreEnvironment = (typeof STORE_ENVIRONMENTS)[number];
 
-/** The trading modes that may own a store file (shared-sqlite-store-spec.md #168). */
-export const STORE_MODES = ['paper', 'live', 'backtest'] as const;
+/**
+ * The trading modes that may own a store file (shared-sqlite-store-spec.md
+ * #168). Declared in `contracts/primitives.ts` and re-exported here:
+ * `DashboardSnapshot.mode` carries it to the browser, which cannot see the
+ * server's environment and must not import the store layer to name a mode.
+ */
+export { STORE_MODES, type StoreMode } from '../../contracts/primitives.js';
 
-export type StoreMode = (typeof STORE_MODES)[number];
+// Also imported, not just re-exported: `export … from` publishes the names
+// without binding them locally, and `resolveStoreMode` below both reads the
+// array at runtime and annotates with the type.
+import { STORE_MODES, type StoreMode } from '../../contracts/primitives.js';
 
 /**
  * Resolves the trading mode from `SAMURAI_MODE` — the ONE derivation both

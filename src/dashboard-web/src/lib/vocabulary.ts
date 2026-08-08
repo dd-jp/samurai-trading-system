@@ -10,12 +10,7 @@
  * rather than rendering blank somewhere on the screen.
  */
 
-import type {
-  PipelineCellState,
-  PipelineLane,
-  PipelineOutcome,
-  PipelineStage,
-} from '../../../dashboard/pipeline-types.ts';
+import type { PipelineCellState, PipelineLane, PipelineOutcome, PipelineStage } from '@contracts';
 import type { SettledOutcome } from './ledger.ts';
 import type { RoomId } from './room-layout.ts';
 

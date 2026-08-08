@@ -19,7 +19,7 @@
  *    final stage as the reason instead.
  */
 
-import type { VerdictRow } from '../../../dashboard/types.ts';
+import type { VerdictRow } from '@contracts';
 import { formatClockUtc, UNKNOWN } from '../lib/format.ts';
 import type { LedgerEntry } from '../lib/ledger.ts';
 import { OUTCOME_WORD, SEAL_GLYPH, stageName } from '../lib/vocabulary.ts';

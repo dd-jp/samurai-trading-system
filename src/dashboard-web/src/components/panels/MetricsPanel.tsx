@@ -21,7 +21,7 @@
  * exist to stop.
  */
 
-import type { MetricsSuiteWire } from '../../../../dashboard/types.ts';
+import type { MetricsSuiteWire } from '@contracts';
 import { formatFixed, formatPercent, formatUsd } from '../../lib/format.ts';
 
 /**

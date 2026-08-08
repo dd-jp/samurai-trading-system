@@ -15,8 +15,8 @@
  * ships its rows appear and this room lights up with no change to this file.
  */
 
+import type { PipelineLane, PipelineView } from '@contracts';
 import type { CSSProperties, RefObject } from 'react';
-import type { PipelineLane, PipelineView } from '../../../dashboard/pipeline-types.ts';
 import type { RoomId, RoomsLayout } from '../lib/room-layout.ts';
 import { ROOM_META } from '../lib/vocabulary.ts';
 import { SigilChip } from './SigilChip.tsx';

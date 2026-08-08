@@ -9,12 +9,7 @@
  * invisible in a verdict-table-only ledger.
  */
 
-import type {
-  PipelineLane,
-  PipelineOutcome,
-  PipelineStage,
-  PipelineView,
-} from '../../../dashboard/pipeline-types.ts';
+import type { PipelineLane, PipelineOutcome, PipelineStage, PipelineView } from '@contracts';
 
 /** The outcomes that settle a lane and earn a hanko stamp. */
 export type SettledOutcome = 'go' | 'no_go' | 'stopped' | 'quorum_skip';

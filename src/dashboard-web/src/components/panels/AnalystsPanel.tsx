@@ -8,7 +8,7 @@
  * "+1.84R" over 7 days and over 90 days are different claims.
  */
 
-import type { AnalystPerformanceRow } from '../../../../dashboard/types.ts';
+import type { AnalystPerformanceRow } from '@contracts';
 import { barWidth, formatCount, formatPercent, formatSignedR } from '../../lib/format.ts';
 
 export interface AnalystsPanelProps {

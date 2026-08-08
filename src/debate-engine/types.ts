@@ -9,8 +9,16 @@
  * Directional signal shared by AnalystView and the debate-engine outputs derived
  * from it. A structured union (not free text) so downstream consumers — notably
  * the mechanical Trader — can map straight to order side without parsing prose.
+ *
+ * Declared in `contracts/primitives.ts` and re-exported here: `DebateRow` puts
+ * each analyst's stance on the wire, so the browser needs this union and must
+ * not import the debate engine to get it.
  */
-export type Direction = 'bullish' | 'bearish' | 'neutral';
+export type { Direction } from '../contracts/primitives.js';
+
+// Also imported, not just re-exported: `export … from` publishes the name
+// without binding it locally, and the interfaces below annotate with it.
+import type { Direction } from '../contracts/primitives.js';
 
 /**
  * Upstream contract: what every Analyst must provide. This IS the Debate

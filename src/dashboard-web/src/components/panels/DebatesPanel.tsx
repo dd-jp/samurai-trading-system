@@ -10,7 +10,7 @@
  * the same facts is a way to disagree with it.
  */
 
-import type { DebateRow } from '../../../../dashboard/types.ts';
+import type { DebateRow } from '@contracts';
 import { formatClockUtc, formatFixed } from '../../lib/format.ts';
 import { StanceStrip } from '../StanceStrip.tsx';
 

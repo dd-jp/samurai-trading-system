@@ -18,9 +18,8 @@
  *    happen; neither is on any single snapshot.
  */
 
+import type { AnalystPerformanceRow, DebateRow, PipelineView, PositionRow } from '@contracts';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { PipelineView } from '../../dashboard/pipeline-types.ts';
-import type { AnalystPerformanceRow, DebateRow, PositionRow } from '../../dashboard/types.ts';
 import { DetailDrawer } from './components/DetailDrawer.tsx';
 import { AnalystsPanel } from './components/panels/AnalystsPanel.tsx';
 import { DebatesPanel } from './components/panels/DebatesPanel.tsx';

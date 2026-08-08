@@ -9,16 +9,16 @@
  * only the field it is about.
  */
 
-import type { PipelineView } from '../../dashboard/pipeline-types.ts';
 import type {
   AnalystPerformanceRow,
   DebateRow,
   LlmSpendSummary,
   LlmSpendWindow,
   MetricsSuiteWire,
+  PipelineView,
   PositionRow,
   VerdictRow,
-} from '../../dashboard/types.ts';
+} from '@contracts';
 import type { WireSnapshot } from './hooks/useSnapshot.ts';
 
 export const AS_OF = '2026-08-07T12:00:00.000Z';

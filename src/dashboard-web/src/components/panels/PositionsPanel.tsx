@@ -24,8 +24,8 @@
  * so the outermost price cannot overflow the card.
  */
 
+import type { PositionRow } from '@contracts';
 import type { CSSProperties } from 'react';
-import type { PositionRow } from '../../../../dashboard/types.ts';
 import { formatClockUtc, formatFixed, formatPrice, formatSignedUsd } from '../../lib/format.ts';
 import { sideWord } from '../../lib/vocabulary.ts';
 

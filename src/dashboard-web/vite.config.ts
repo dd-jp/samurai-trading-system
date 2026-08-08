@@ -16,6 +16,16 @@ export default defineConfig({
   // bundle is servable from disk without a path prefix").
   base: './',
   plugins: [react()],
+  resolve: {
+    alias: {
+      // The wire contract — the only thing this app may import from outside
+      // its own directory. Before it existed the components reached backend
+      // source directly (`../../../../dashboard/types.ts`), which put server
+      // modules in this app's TypeScript program. Keep in step with the
+      // `paths` entry in `tsconfig.json` and the alias in `vitest.config.ts`.
+      '@contracts': fileURLToPath(new URL('../contracts/index.ts', import.meta.url)),
+    },
+  },
   build: {
     // Outside the Vite `root`, so `emptyOutDir` must be explicit — Vite
     // otherwise warns and refuses to clean a directory it doesn't consider

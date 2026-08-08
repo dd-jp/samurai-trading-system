@@ -27,8 +27,8 @@
  *     like it is trying (#606 item 3).
  */
 
+import type { DashboardSnapshot, LlmSpendSummary } from '@contracts';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { DashboardSnapshot, LlmSpendSummary } from '../../../dashboard/types.ts';
 
 /** The modes the server may send (`DashboardSnapshot['mode']`, #539). */
 type ServerMode = DashboardSnapshot['mode'];

@@ -8,11 +8,16 @@
  */
 
 /**
- * The two markets this system trades. Canonical home (code-review 2026-08-01,
- * H5): component `types.ts` files re-export this rather than redeclaring the
- * union, so adding an asset class is one edit, not five.
+ * The two markets this system trades. Re-exported rather than declared: the
+ * canonical home is now `contracts/primitives.ts`, because the dashboard wire
+ * shapes reference it and the browser must not import a server module to learn
+ * what an asset class is.
+ *
+ * The rule from code-review 2026-08-01 (H5) is unchanged in substance —
+ * component `types.ts` files re-export rather than redeclaring the union, so
+ * adding an asset class is one edit — only the single edit's location moved.
  */
-export type AssetClass = 'crypto' | 'stocks';
+export type { AssetClass } from '../../contracts/primitives.js';
 
 /** One structured log line; `trace_id` threads every line (#95). */
 export interface LogEntry {

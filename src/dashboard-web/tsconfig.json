@@ -27,7 +27,18 @@
     "isolatedModules": true,
     "resolveJsonModule": true,
     "allowImportingTsExtensions": true,
-    "noEmit": true
+    "noEmit": true,
+    // The wire contract. This is the ONLY path out of this app's directory
+    // that resolves — the components previously reached backend source by
+    // relative path, which pulled server modules into this program. Mirrored
+    // by `resolve.alias` in `vite.config.ts` (bundling) and `vitest.config.ts`
+    // (tests); all three must name the same file.
+    //
+    // No `baseUrl` — TypeScript removed the option (TS5102), and without it
+    // `paths` entries resolve relative to THIS file, which is what is wanted.
+    "paths": {
+      "@contracts": ["../contracts/index.ts"]
+    }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"],
   "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.test.tsx"]

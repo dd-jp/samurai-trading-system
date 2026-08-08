@@ -1,7 +1,18 @@
+import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      // The web app's half of the wire boundary. Must agree with the `paths`
+      // entry in `src/dashboard-web/tsconfig.json` and the `resolve.alias` in
+      // its `vite.config.ts` — three declarations of one mapping, because
+      // type-checking, bundling and testing each resolve independently.
+      // A disagreement surfaces as a module-not-found in whichever one drifted.
+      '@contracts': fileURLToPath(new URL('./src/contracts/index.ts', import.meta.url)),
+    },
+  },
   // Needed so the JSX transform in `src/dashboard-web/src/App.test.tsx`
   // (issue #536's smoke test) is not left to esbuild defaults. Scoped to the
   // web app's `.tsx` files because the plugin's default include

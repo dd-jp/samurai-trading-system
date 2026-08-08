@@ -15,12 +15,7 @@
  * last 15 minutes".
  */
 
-import type {
-  PipelineCell,
-  PipelineLane,
-  PipelineStage,
-} from '../../../dashboard/pipeline-types.ts';
-import type { DebateRow, VerdictRow } from '../../../dashboard/types.ts';
+import type { DebateRow, PipelineCell, PipelineLane, PipelineStage, VerdictRow } from '@contracts';
 import { formatClockUtc, formatFixed, formatStageDuration, UNKNOWN } from '../lib/format.ts';
 import { ROOM_ORDER } from '../lib/room-layout.ts';
 import { CELL_STATE_WORD, OUTCOME_WORD, stageName } from '../lib/vocabulary.ts';

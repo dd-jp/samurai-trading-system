@@ -14,7 +14,7 @@ import type {
   PipelineOutcome,
   PipelineStage,
   PipelineView,
-} from '../../../dashboard/pipeline-types.ts';
+} from '@contracts';
 
 /** Stage order per `PIPELINE_STAGES` (pipeline-types.ts) — redeclared here so fixtures stay value-import-free. */
 const STAGES: readonly PipelineStage[] = [

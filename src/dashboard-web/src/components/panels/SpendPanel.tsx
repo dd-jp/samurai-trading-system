@@ -20,7 +20,7 @@
  *    in ADR-0009; the numbers were always right, only the label was wrong.
  */
 
-import type { LlmSpendSummary, LlmSpendWindow } from '../../../../dashboard/types.ts';
+import type { LlmSpendSummary, LlmSpendWindow } from '@contracts';
 import { formatCount, formatStageDuration, formatUsd, formatUsdPrecise } from '../../lib/format.ts';
 
 export interface SpendPanelProps {

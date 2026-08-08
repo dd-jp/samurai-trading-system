@@ -9,7 +9,7 @@
  * alone (spec, Accessibility floor).
  */
 
-import type { PipelineLane } from '../../../dashboard/pipeline-types.ts';
+import type { PipelineLane } from '@contracts';
 import { assetGlyph, OUTCOME_WORD } from '../lib/vocabulary.ts';
 
 export interface SigilChipProps {
