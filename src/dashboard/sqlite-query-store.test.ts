@@ -733,6 +733,43 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
     expect(activity.universe).toEqual([{ instrument: 'ZETA', asset_class: 'stocks' }]);
   });
 
+  it('resolves an instrument whose sources disagree on asset class to one stable lane', () => {
+    const db = makeDb();
+    // An instrument has exactly one asset class, so this is corrupt data by
+    // construction. What it must NOT do is produce two lanes for one
+    // instrument, or a class that changes between polls — a lane that flips
+    // asset class reshuffles the hero under the operator's pointer, and
+    // `MIN(asset_class)` is what pins the answer regardless of which row the
+    // query plan reaches first.
+    seedMark(db, 'AAPL', 'stocks');
+    seedTick(db, {
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+      stage: 'debate',
+      trace_id: 'trace-live',
+      at: minutesBefore(1),
+    });
+    seedAudit(db, {
+      trace_id: 'trace-live',
+      stage: 'analysts',
+      decision: 'quorum_met',
+      at: minutesBefore(2),
+      instrument: 'AAPL',
+      asset_class: 'crypto',
+    });
+
+    const store = new SqliteQueryStore(db);
+
+    expect(store.getPipelineActivity(10, LOOKBACK_MS, NOW).universe).toEqual([
+      { instrument: 'AAPL', asset_class: 'crypto' },
+    ]);
+    // Repeated because the failure this guards is a value that VARIES, which a
+    // single assertion cannot distinguish from a value that is merely lucky.
+    expect(store.getPipelineActivity(10, LOOKBACK_MS, NOW).universe).toEqual([
+      { instrument: 'AAPL', asset_class: 'crypto' },
+    ]);
+  });
+
   it('attributes a settled trace to its instrument through verdict_log', () => {
     const db = makeDb();
     seedMark(db, 'AAPL', 'stocks');

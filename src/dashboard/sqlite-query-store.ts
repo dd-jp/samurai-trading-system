@@ -444,13 +444,18 @@ export class SqliteQueryStore implements DashboardQueryStore {
     // stale priced instrument must never evict a live one at the cap, which is
     // this ticket's own failure mode arriving by a different door. The outer
     // ORDER BY restores lane order; wire order is `buildPipelineView`'s call.
-    // `GROUP BY instrument` collapses an instrument that disagrees about its
-    // asset class across tables into one lane — SQLite's documented bare-column
-    // rule takes `asset_class` from the row that produced `MAX(active)`.
+    //
+    // An instrument has exactly one asset class. `GROUP BY instrument` plus
+    // `MIN(asset_class)` is what makes a violation of that render the same way
+    // on every poll instead of flapping between the sources that disagree — an
+    // aggregate rather than a bare column, so nothing here rests on which row
+    // SQLite happens to pick. `MIN` because it also sorts the conflicted lane
+    // earliest below, so bad data cannot additionally cost it its lane at the
+    // cap.
     const universe = this.db
       .prepare(
         `SELECT instrument, asset_class FROM (
-           SELECT instrument, asset_class, MAX(active) AS active FROM (
+           SELECT instrument, MIN(asset_class) AS asset_class, MAX(active) AS active FROM (
              SELECT DISTINCT instrument, asset_class, 1 AS active FROM audit_log
                WHERE timestamp > ? AND timestamp <= ?
                  AND instrument IS NOT NULL AND asset_class IS NOT NULL
