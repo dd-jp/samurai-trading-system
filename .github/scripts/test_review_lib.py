@@ -755,6 +755,247 @@ def test_a_non_status_exception_still_propagates_even_when_later_slices_are_fine
         review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
 
 
+def test_findings_kept_from_an_incomplete_slice_are_declared_as_such():
+    """The banner said a slice went unreviewed while that slice's findings sat
+    on the same page. They are kept — an anchored finding is worth reading —
+    but the body now says where they came from."""
+    diff = _file_diff("src/trader/x.ts", lines_per_hunk=40) + _file_diff("src/b.ts", lines_per_hunk=40)
+    results = [
+        {"summary_markdown": "", "inline_comments": [], "verdict": "APPROVE"},
+        {
+            "summary_markdown": "",
+            "inline_comments": [
+                {"file": "src/trader/x.ts", "line": 1, "body": "half-read finding"}
+            ],
+            "verdict": None,  # slice never completed
+        },
+    ]
+    calls = []
+
+    def fake_call(diff, changed_files, **kwargs):
+        calls.append(1)
+        return results[len(calls) - 1]
+
+    # 1500, not 1200: at 1200 the first file exceeds the cap on its own and is
+    # skipped before any call happens, which tests a different thing.
+    payload = review_lib.review_diff(diff, [], call=fake_call, max_chars=1500)
+    summary = payload["summary_markdown"]
+
+    # Kept…
+    assert [c["body"] for c in payload["comments"]] == ["half-read finding"]
+    # …and declared.
+    assert "1 inline comment below came from a slice that did not complete" in summary
+    assert "Partial review" in summary
+    assert payload["verdict"] != "APPROVE"
+
+
+def test_no_partial_findings_note_when_every_slice_completed():
+    def fake_call(diff, changed_files, **kwargs):
+        return {
+            "summary_markdown": "",
+            "inline_comments": [{"file": "src/trader/x.ts", "line": 1, "body": "x"}],
+            "verdict": "APPROVE_WITH_COMMENTS",
+        }
+
+    payload = review_lib.review_diff(DIFF, [], call=fake_call)
+
+    assert payload["comments"]
+    assert "did not complete" not in payload["summary_markdown"]
+
+
+def test_an_auth_refusal_stops_immediately_instead_of_paying_for_the_rest():
+    """401/403 is about the shared key or endpoint, never one slice's content,
+    so every remaining slice would fail identically at full price."""
+    diff = "".join(
+        _file_diff(p, lines_per_hunk=40) for p in ("src/a.ts", "src/b.ts", "src/c.ts")
+    )
+    calls = []
+
+    def fake_call(diff, changed_files, **kwargs):
+        calls.append(changed_files[0])
+        exc = RuntimeError("401 Unauthorized")
+        exc.status_code = 401
+        raise exc
+
+    with pytest.raises(RuntimeError, match="credentials or endpoint rejected"):
+        review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
+
+    assert calls == ["src/a.ts"], "must not pay for slices 2 and 3"
+
+
+def test_a_content_refusal_does_not_short_circuit():
+    """400 CAN be slice-specific, so the remaining slices are still attempted."""
+    diff = "".join(
+        _file_diff(p, lines_per_hunk=40) for p in ("src/a.ts", "src/b.ts", "src/c.ts")
+    )
+    calls = []
+
+    def fake_call(diff, changed_files, **kwargs):
+        calls.append(changed_files[0])
+        if changed_files == ["src/a.ts"]:
+            exc = RuntimeError("400 content filter")
+            exc.status_code = 400
+            raise exc
+        return {"summary_markdown": "", "inline_comments": [], "verdict": "APPROVE"}
+
+    payload = review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
+
+    assert calls == ["src/a.ts", "src/b.ts", "src/c.ts"]
+    assert "Partial review" in payload["summary_markdown"]
+
+
+def test_the_all_refused_error_is_scrubbed():
+    """It dies loudly, but the Actions log gets the scrubbed reason, not a
+    gateway's echo of the request."""
+    diff = _file_diff("src/a.ts", lines_per_hunk=40) + _file_diff("src/b.ts", lines_per_hunk=40)
+
+    def fake_call(diff, changed_files, **kwargs):
+        exc = RuntimeError(
+            "400 max_tokens is too large: 32768 "
+            "(https://gw.internal/v1?key=sk-leak0123456789abcdefghijkl)"
+        )
+        exc.status_code = 400
+        raise exc
+
+    with pytest.raises(RuntimeError) as caught:
+        review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
+
+    message = str(caught.value)
+    assert "sk-leak0123456789abcdefghijkl" not in message
+    assert "gw.internal" not in message
+    # The provider's actual reason still survives — that is the whole point.
+    assert "max_tokens is too large: 32768" in message
+    # No chained original, which would print the unscrubbed text anyway.
+    assert caught.value.__cause__ is None and caught.value.__context__ is None
+
+
+def test_the_auth_short_circuit_error_is_scrubbed_too():
+    diff = _file_diff("src/a.ts", lines_per_hunk=40) + _file_diff("src/b.ts", lines_per_hunk=40)
+
+    def fake_call(diff, changed_files, **kwargs):
+        exc = RuntimeError("403 forbidden for token: sk-secret0123456789abcdefghijklmn")
+        exc.status_code = 403
+        raise exc
+
+    with pytest.raises(RuntimeError) as caught:
+        review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
+
+    assert "sk-secret0123456789abcdefghijklmn" not in str(caught.value)
+    # Raised inside the `except`, so __context__ still holds the original —
+    # `from None` sets __suppress_context__, which is what stops the traceback
+    # printing the unscrubbed text.
+    assert caught.value.__cause__ is None
+    assert caught.value.__suppress_context__ is True
+
+
+# --- read-time ceiling ------------------------------------------------------
+
+
+def test_a_diff_under_the_ceiling_is_read_whole(tmp_path):
+    path = tmp_path / "diff.txt"
+    path.write_text(DIFF)
+
+    text, skipped = review_lib.read_capped_diff(str(path))
+
+    assert text == DIFF
+    assert skipped == []
+
+
+def test_an_oversized_diff_is_cut_on_a_file_boundary_and_the_rest_named(tmp_path):
+    """Removing the 60k truncation was the ticket; removing it with no ceiling
+    at all trades a silent lie for a dead runner. The ceiling discloses."""
+    paths = [f"src/gen/f{i}.ts" for i in range(6)]
+    diff = "".join(_file_diff(p, hunks=1, lines_per_hunk=30) for p in paths)
+    path = tmp_path / "diff.txt"
+    path.write_text(diff)
+
+    text, skipped = review_lib.read_capped_diff(str(path), limit=1500)
+
+    assert len(text) <= 1500
+    # Cut on a boundary: whatever was kept is a whole number of file entries.
+    assert text.startswith("diff --git ")
+    kept = review_lib.changed_files_from_diff(text)
+    assert kept and all(diff.count(f"+++ b/{f}\n") == 1 for f in kept)
+    plan = review_lib.split_diff_into_slices(text)
+    assert "".join(s.text for s in plan.slices) == text
+
+    # Everything dropped is named.
+    assert len(skipped) == 1
+    for missing in set(paths) - set(kept):
+        assert missing in skipped[0]
+    assert "NOT reviewed" in skipped[0]
+
+
+def test_the_read_ceiling_disclosure_reaches_the_banner_and_blocks_approve():
+    def fake_call(diff, changed_files, **kwargs):
+        return {"summary_markdown": "", "inline_comments": [], "verdict": "APPROVE"}
+
+    payload = review_lib.review_diff(
+        DIFF,
+        ["src/trader/x.ts"],
+        call=fake_call,
+        extra_skipped=["the diff is larger than the ceiling … `src/gen/huge.ts`"],
+    )
+
+    assert payload["event"] == "COMMENT"
+    assert payload["verdict"] != "APPROVE"
+    assert "src/gen/huge.ts" in payload["summary_markdown"]
+
+
+def test_a_single_file_bigger_than_the_whole_ceiling_keeps_nothing_and_says_so(tmp_path):
+    diff = _file_diff("src/gen/huge.ts", hunks=1, lines_per_hunk=400)
+    path = tmp_path / "diff.txt"
+    path.write_text(diff)
+
+    text, skipped = review_lib.read_capped_diff(str(path), limit=200)
+
+    assert text == ""
+    assert "src/gen/huge.ts" in skipped[0]
+
+
+# --- markdown injection via a path ------------------------------------------
+
+
+def test_a_path_cannot_break_out_of_its_code_span():
+    assert review_lib.md_code("src/a.ts") == "`src/a.ts`"
+    # A backtick in the path would close the span early and inject markdown.
+    fenced = review_lib.md_code("src/we`ird.ts")
+    assert "we`ird" in fenced and fenced.startswith("``") and fenced.endswith("``")
+    assert review_lib.md_code("`lead.ts") == "`` `lead.ts ``"
+    # Newlines (decodable out of a C-quoted path) can't break the banner line.
+    assert "\n" not in review_lib.md_code("a\nb.ts")
+
+
+def test_a_hostile_path_does_not_inject_markdown_into_the_posted_banner():
+    hostile = "src/x`.ts](javascript:alert(1))"
+    diff = _file_diff(hostile, hunks=1, lines_per_hunk=200)
+
+    plan = review_lib.split_diff_into_slices(diff, max_chars=500)
+    payload = review_lib.review_diff(diff, [], call=lambda **_k: None, max_chars=500)
+    summary = payload["summary_markdown"]
+
+    assert plan.skipped_files == (hostile,)
+    # The path is present but fenced so its backtick can't close the span.
+    assert hostile in summary
+    assert "``" in summary
+
+
+def test_a_refused_slices_filenames_are_fenced_too():
+    hostile = "src/a`b.ts"
+    diff = _file_diff(hostile, lines_per_hunk=40) + _file_diff("src/c.ts", lines_per_hunk=40)
+
+    def fake_call(diff, changed_files, **kwargs):
+        if changed_files == [hostile]:
+            exc = RuntimeError("400 refused")
+            exc.status_code = 400
+            raise exc
+        return {"summary_markdown": "", "inline_comments": [], "verdict": "APPROVE"}
+
+    payload = review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
+
+    assert f"``{hostile}``" in payload["summary_markdown"]
+
+
 def test_a_refused_slice_still_contributes_exactly_one_result():
     """`merge_model_results` labels summaries by index against
     `[s.files for s in plan.slices]`. If a refusal ever skipped appending a

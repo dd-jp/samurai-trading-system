@@ -87,9 +87,17 @@ jobs:
           else
             PR="$PR_EVENT"
           fi
+          # Rejects empty, non-digits, and leading zeros. `0` and `00` passed
+          # the digits-only test and then failed downstream as a confusing
+          # `pulls/0` 404 rather than as a bad input.
           case "$PR" in
-            ''|*[!0-9]*)
-              echo "::error::pr_number must be a positive integer, got '$PR'"
+            ''|*[!0-9]*|0*)
+              # NOT "$PR" verbatim: a `::error::` line is a workflow COMMAND,
+              # so a newline in the value makes every following line parse as
+              # another command. Strip to printable, drop the `::` delimiter,
+              # and bound the length before it can reach the log.
+              SAFE=$(printf '%s' "$PR" | tr -cd '[:alnum:]._/-' | cut -c1-32)
+              echo "::error::pr_number must be a positive integer without leading zeros (got: '${SAFE}')"
               exit 1
               ;;
           esac

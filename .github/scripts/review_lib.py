@@ -1,8 +1,10 @@
+import itertools
 import json
 import re
 import subprocess
 import sys
 import time
+from collections.abc import Sequence
 from typing import Callable, NamedTuple
 
 from openai import OpenAI
@@ -21,6 +23,21 @@ MAX_SLICE_CHARS = 60000
 # files route through the same partial-coverage disclosure as any other
 # unreviewed content, which is what makes the cap safe to have at all.
 MAX_SLICES = 10
+
+# Hard ceiling on how much diff is read into memory at all. Removing the old
+# 60k truncation was the point of #594, but removing it with NO ceiling trades
+# a silent lie for a dead runner: the whole file is read, then multiplied by
+# `splitlines(keepends=True)` and the per-block joins, so a PR carrying large
+# generated files could OOM the job and post nothing.
+#
+# Sized well above what can actually be reviewed (MAX_SLICES * MAX_SLICE_CHARS
+# = 600k) so it only ever bites content that was never going to be read
+# anyway, and 12x #591's 162k. Crucially this is NOT a silent truncation: the
+# cut lands on a file boundary and every dropped file is named in the banner.
+MAX_TOTAL_DIFF_CHARS = 2_000_000
+
+# Cap on how many dropped filenames to name individually in the banner.
+_MAX_NAMED_DROPPED_FILES = 20
 
 # GitHub rejects a review body over 65536 chars with a 422, and the workflow's
 # fallback only retries a 422 whose message matches /could not be resolved/ —
@@ -203,7 +220,8 @@ def get_changed_files(base_ref: str | None) -> list[str]:
 # workflow additionally sets `core.quotePath=false` so the quoted form should
 # not arise in the first place.
 _QUOTED_PATH = r'"(?:[^"\\]|\\.)*"'
-_DIFF_GIT_HEADER = re.compile(rf"^diff --git ({_QUOTED_PATH}|a/.+?) ({_QUOTED_PATH}|b/.+)$")
+_DIFF_GIT_QUOTED = re.compile(rf"^diff --git ({_QUOTED_PATH}) ({_QUOTED_PATH})$")
+_DIFF_GIT_PREFIX = "diff --git "
 
 _C_ESCAPES = {
     "a": "\a", "b": "\b", "f": "\f", "n": "\n",
@@ -230,28 +248,134 @@ def _unquote_git_path(token: str, prefix: str) -> str:
             out.extend(_C_ESCAPES[nxt].encode("utf-8"))
             i += 2
             continue
-        try:
-            out.append(int(body[i + 1 : i + 4], 8))
-        except ValueError:
-            # Not a valid \NNN octal escape: keep the backslash verbatim
-            # rather than dropping bytes out of a path.
-            out.extend(char.encode("utf-8"))
-            i += 1
-        else:
-            i += 4
+        # Exactly three octal digits, in range. git always emits all three
+        # (`\303`), so a 1-2 digit prefix at end-of-string is malformed input,
+        # not a short escape — accepting it would silently mangle the path.
+        # The range check is separate from the digit check on purpose: \777
+        # parses fine as octal but is not a byte, and folding both into one
+        # `except ValueError` reported the second as "not valid octal".
+        octal = body[i + 1 : i + 4]
+        if len(octal) == 3 and all(c in "01234567" for c in octal):
+            value = int(octal, 8)
+            if value <= 0xFF:
+                out.append(value)
+                i += 4
+                continue
+        # Not a usable escape: keep the backslash verbatim rather than
+        # dropping bytes out of a path.
+        out.extend(char.encode("utf-8"))
+        i += 1
     path = out.decode("utf-8", errors="replace")
     return path[len(prefix):] if path.startswith(prefix) else path
 
 
 def diff_git_paths(raw_line: str) -> tuple[str, str] | None:
-    """(old_path, new_path) from a `diff --git` line, quoted form included."""
-    match = _DIFF_GIT_HEADER.match(raw_line)
-    if not match:
+    """(old_path, new_path) from a `diff --git` line, quoted form included.
+
+    The unquoted form `diff --git a/X b/Y` is genuinely ambiguous when a path
+    contains the literal `" b/"` — git emits it anyway. Splitting at the first
+    occurrence gets it wrong (both paths come out wrong, and the file is then
+    tracked under a mangled name); so the equal-paths split is preferred
+    first, which resolves every case except a rename where the path also
+    contains `" b/"`. That residue is unresolvable from this line alone, and
+    it fails safe: the coverage cross-check reports the file as unsliced."""
+    if not raw_line.startswith(_DIFF_GIT_PREFIX):
         return None
-    return (
-        _unquote_git_path(match.group(1), "a/"),
-        _unquote_git_path(match.group(2), "b/"),
+
+    quoted = _DIFF_GIT_QUOTED.match(raw_line)
+    if quoted:
+        return (
+            _unquote_git_path(quoted.group(1), "a/"),
+            _unquote_git_path(quoted.group(2), "b/"),
+        )
+
+    rest = raw_line[len(_DIFF_GIT_PREFIX) :]
+    if not rest.startswith("a/"):
+        return None
+    splits = [m.start() for m in re.finditer(r" b/", rest)]
+    if not splits:
+        return None
+    # Same path both sides — the non-rename case, which is nearly all of them.
+    for index in splits:
+        old, new = rest[2:index], rest[index + 3 :]
+        if old == new:
+            return (old, new)
+    return (rest[2 : splits[0]], rest[splits[0] + 3 :])
+
+
+def read_capped_diff(
+    path: str, limit: int = MAX_TOTAL_DIFF_CHARS
+) -> tuple[str, list[str]]:
+    """Read a diff file, bounded, cutting on a file boundary.
+
+    Returns (diff_text, skipped_reasons). The remainder past the cut is
+    streamed a line at a time — never held in memory — purely to NAME the
+    files being dropped, so the banner can say what went unreviewed instead
+    of the run silently reviewing a prefix.
+    """
+    with open(path) as handle:
+        text = handle.read(limit + 1)
+        if len(text) <= limit:
+            return text, []
+
+        # Cut back to the last complete file entry so no half-file is handed
+        # to the slicer. Search from the end; the leading `\n` keeps us from
+        # matching the string inside a diff body line.
+        boundary = text.rfind("\n" + _DIFF_GIT_PREFIX)
+        if boundary <= 0:
+            # One file bigger than the whole cap: nothing can be safely kept.
+            kept, tail_start = "", text
+        else:
+            kept, tail_start = text[: boundary + 1], text[boundary + 1 :]
+
+        dropped: list[str] = []
+        truncated_names = False
+        # Stitched, not chained: `read()` can stop mid-line, so a `diff --git`
+        # header straddling the boundary would be missed by any scheme that
+        # treats the two halves as separate chunks. `pending` carries the
+        # trailing partial line forward and never grows past one line.
+        pending = tail_start
+        for chunk in itertools.chain([""], handle):
+            pending += chunk
+            lines = pending.split("\n")
+            pending = lines.pop()
+            for raw in lines:
+                paths = diff_git_paths(raw)
+                if paths is None:
+                    continue
+                if len(dropped) < _MAX_NAMED_DROPPED_FILES:
+                    dropped.append(paths[1])
+                else:
+                    truncated_names = True
+        for raw in [pending]:
+            paths = diff_git_paths(raw)
+            if paths is not None and len(dropped) < _MAX_NAMED_DROPPED_FILES:
+                dropped.append(paths[1])
+
+    listed = ", ".join(md_code(f) for f in dropped) or "(no file headers found)"
+    if truncated_names:
+        listed += ", …"
+    reason = (
+        f"the diff is larger than the {limit}-char per-run ceiling, so "
+        f"{len(text) - len(kept)}+ chars were never read and NOT reviewed, covering: {listed}"
     )
+    return kept, [reason]
+
+
+def md_code(text: object) -> str:
+    """Wrap text as a markdown code span that it cannot escape from.
+
+    Paths reach a posted review body, and a path is untrusted text: it comes
+    from the diff, and `_unquote_git_path` can decode a backtick or even a
+    newline out of a C-quoted name. Naive f"`{path}`" lets that close the
+    span early and inject markdown into a durable body — the same family as
+    the upstream-error leak. Fenced per CommonMark: one more backtick than
+    the longest run inside, padded when it starts or ends with one."""
+    flat = " ".join(str(text).split())
+    longest = max((len(run) for run in re.findall(r"`+", flat)), default=0)
+    fence = "`" * (longest + 1)
+    pad = " " if flat.startswith("`") or flat.endswith("`") else ""
+    return f"{fence}{pad}{flat}{pad}{fence}"
 
 
 def changed_files_from_diff(diff_text: str) -> list[str]:
@@ -346,6 +470,11 @@ class ReviewCoverage(NamedTuple):
     #: from the generic "N slice(s) produced no usable review" line so one
     #: loss is never counted as two — same rule as `SlicePlan.skipped_files`.
     failures_explained: int = 0
+    #: Inline comments carried over from slices that did NOT complete. They
+    #: are kept because an anchored finding is worth more than the tidiness
+    #: of dropping it, but the banner must then say the page contains
+    #: findings from a slice it also calls unreviewed.
+    partial_comments: int = 0
 
     @property
     def is_complete(self) -> bool:
@@ -367,6 +496,14 @@ class ReviewCoverage(NamedTuple):
         if failed > 0:
             lines.append(f"> - {failed} diff slice(s) produced no usable review.")
         lines.extend(f"> - {reason}" for reason in self.skipped)
+        if self.partial_comments:
+            plural = "" if self.partial_comments == 1 else "s"
+            lines.append(
+                f"> - {self.partial_comments} inline comment{plural} below came from a slice "
+                f"that did not complete. They are findings from a partial pass, kept because "
+                f"an anchored finding is still worth reading — not evidence that the rest of "
+                f"that slice is clean."
+            )
         lines.append("> - The verdict is capped below APPROVE while any of the diff is unread.")
         return "\n".join(lines)
 
@@ -393,9 +530,14 @@ def _split_file_block(header: str, hunks: list[str], max_chars: int) -> tuple[li
             # twice to read one line is 60k of needless copying.
             hunk_lines = hunk.splitlines()
             first_line = hunk_lines[0] if hunk_lines else "@@"
+            # State which side actually blew the cap. The condition is
+            # header + hunk, so a modest hunk behind a large file header hits
+            # this too — reporting that as "the hunk is too big" sends whoever
+            # triages it looking at the wrong thing.
             skipped.append(
-                f"hunk `{first_line.strip()}` is {len(hunk)} chars on its own "
-                f"(> {max_chars} cap) and could not be split further — NOT reviewed"
+                f"hunk {md_code(first_line.strip())} ({len(hunk)} chars) plus the "
+                f"{len(header)}-char file header exceeds the {max_chars} cap and could "
+                f"not be split further — NOT reviewed"
             )
             continue
         if current and len(header) + len(current) + len(hunk) > max_chars:
@@ -483,7 +625,7 @@ def split_diff_into_slices(
         # Oversized file: it gets its own slices, split on hunk boundaries.
         close_slice()
         chunks, chunk_skips = _split_file_block(file_header, file_hunks, max_chars)
-        skipped.extend(f"`{file_path}`: {reason}" for reason in chunk_skips)
+        skipped.extend(f"{md_code(file_path)}: {reason}" for reason in chunk_skips)
         if chunk_skips:
             skipped_files.append(file_path)
         for chunk in chunks:
@@ -496,7 +638,7 @@ def split_diff_into_slices(
         dropped_files = sorted({f for s in dropped for f in s.files})
         skipped.append(
             f"{len(dropped)} slice(s) over the {max_slices}-slice per-run cap were NOT "
-            f"reviewed, covering: {', '.join(f'`{f}`' for f in dropped_files)}"
+            f"reviewed, covering: {', '.join(md_code(f) for f in dropped_files)}"
         )
         skipped_files.extend(dropped_files)
         slices = slices[:max_slices]
@@ -582,8 +724,10 @@ def merge_model_results(results: list[dict], slice_files: list[tuple[str, ...]])
     summaries: list[str] = []
     severity = -1
     any_unusable = False
+    partial_comments = 0
 
     for index, result in enumerate(results):
+        usable = slice_is_usable(result)
         for comment in result.get("inline_comments") or []:
             if not isinstance(comment, dict):
                 continue  # not a comment shape; build_review_payload would reject it anyway
@@ -600,6 +744,13 @@ def merge_model_results(results: list[dict], slice_files: list[tuple[str, ...]])
                 continue
             seen.add(key)
             comments.append(comment)
+            if not usable:
+                # Kept, not dropped: an anchored finding on a live-money repo
+                # is worth more than the tidiness of discarding it. But the
+                # banner says this slice was never reviewed, so the body has
+                # to say these came from it — otherwise the page contradicts
+                # itself, which is the exact failure this change exists to fix.
+                partial_comments += 1
 
         summary = (result.get("summary_markdown") or "").strip()
         if summary:
@@ -607,7 +758,7 @@ def merge_model_results(results: list[dict], slice_files: list[tuple[str, ...]])
                 files = slice_files[index] if index < len(slice_files) else ()
                 # Named files, capped: a slice can hold a dozen paths and the
                 # heading would otherwise be longer than the review under it.
-                label = ", ".join(f"`{f}`" for f in files[:3]) or "(unknown files)"
+                label = ", ".join(md_code(f) for f in files[:3]) or "(unknown files)"
                 if len(files) > 3:
                     label += f" +{len(files) - 3} more"
                 summary = f"#### Slice {index + 1} of {len(results)} — {label}\n\n{summary}"
@@ -621,7 +772,7 @@ def merge_model_results(results: list[dict], slice_files: list[tuple[str, ...]])
         # paid for. Unknowns route through the unusable path, which discloses
         # rather than guesses. Sharing the predicate with the coverage count
         # is also what stops the two definitions drifting apart again.
-        if slice_is_usable(result):
+        if usable:
             severity = max(severity, _VERDICT_SEVERITY[result["verdict"]])
         else:
             any_unusable = True
@@ -634,6 +785,7 @@ def merge_model_results(results: list[dict], slice_files: list[tuple[str, ...]])
         "summary_markdown": "\n\n".join(summaries),
         "inline_comments": comments,
         "verdict": merged_verdict,
+        "partial_comments": partial_comments,
     }
 
 
@@ -644,6 +796,7 @@ def review_diff(
     call: Callable[..., dict] | None = None,
     max_chars: int = MAX_SLICE_CHARS,
     max_slices: int = MAX_SLICES,
+    extra_skipped: Sequence[str] = (),
     **model_kwargs,
 ) -> dict:
     """Review a whole diff, in slices, and return the payload to post.
@@ -667,11 +820,14 @@ def review_diff(
     unsliced = [
         f for f in changed_files if f not in sliced_files and f not in already_disclosed
     ]
-    skipped = list(plan.skipped)
+    # `extra_skipped` carries losses that happened before slicing — the
+    # read-time ceiling in `read_capped_diff`. They belong in the same banner
+    # as everything else that went unread.
+    skipped = list(extra_skipped) + list(plan.skipped)
     if unsliced:
         skipped.append(
             f"{len(unsliced)} changed file(s) matched no diff slice and were NOT "
-            f"reviewed: {', '.join(f'`{f}`' for f in unsliced[:10])}"
+            f"reviewed: {', '.join(md_code(f) for f in unsliced[:10])}"
             + (" …" if len(unsliced) > 10 else "")
         )
 
@@ -716,6 +872,16 @@ def review_diff(
             # would never surface. Anything that is not a refusal propagates.
             if not _is_fatal_request_error(exc):
                 raise
+            detail = safe_error_text(exc)
+            # An auth-class refusal can never be slice-specific: the key and
+            # the endpoint are shared by every call. Carrying on would buy up
+            # to MAX_SLICES-1 more guaranteed-identical failures at full
+            # price, so stop at the first one.
+            if _is_auth_request_error(exc):
+                raise RuntimeError(
+                    f"reviewer credentials or endpoint rejected on slice "
+                    f"{index + 1}/{len(plan.slices)}; no further slices attempted: {detail}"
+                ) from None
             # A refusal about this slice's CONTENT (a provider content filter
             # tripping on one file) must not discard every other slice's
             # completed, paid-for review, so it is routed through the
@@ -723,10 +889,9 @@ def review_diff(
             # A configuration fault does not single out one slice, so if EVERY
             # slice refuses there is nothing slice-local to explain and no paid
             # work to preserve — re-raised below instead.
-            detail = safe_error_text(exc)
             print(f"warning: slice {index + 1} refused: {detail}", file=sys.stderr)
             fatal_errors.append(exc)
-            files = ", ".join(f"`{f}`" for f in diff_slice.files[:5])
+            files = ", ".join(md_code(f) for f in diff_slice.files[:5])
             skipped.append(
                 f"slice {index + 1} of {len(plan.slices)} ({files}) was refused by the "
                 f"provider and NOT reviewed: {detail}"
@@ -740,7 +905,14 @@ def review_diff(
             reviewed += 1
 
     if len(fatal_errors) == len(plan.slices):
-        raise fatal_errors[0]
+        # Wrapped, not re-raised raw: the traceback lands in the Actions log,
+        # and an upstream error is the most likely thing to have echoed
+        # request details back at us. The provider's own reason survives the
+        # scrub, so this is still the loud failure #594 asked for.
+        # `from None` because chaining would print the unscrubbed original.
+        raise RuntimeError(
+            f"every slice was refused by the provider: {safe_error_text(fatal_errors[0])}"
+        ) from None
 
     merged = merge_model_results(results, [s.files for s in plan.slices])
     coverage = ReviewCoverage(
@@ -751,6 +923,7 @@ def review_diff(
         # would also swell the generic failed-slice count and read as two
         # separate losses.
         failures_explained=len(fatal_errors),
+        partial_comments=merged.get("partial_comments", 0),
     )
     # The FULL diff, not the slice: a comment is anchorable if the line is in
     # any hunk of the PR, and the merged comments span every slice.
@@ -803,18 +976,32 @@ def parse_model_output(raw: str | None) -> dict | None:
 # two retries, a wrongly-fatal one costs the entire review.
 _FATAL_STATUS_CODES = frozenset({400, 401, 403, 404, 422})
 
+# The subset that cannot possibly be about one slice's content: the key and
+# the endpoint are shared by every call, so slice 2 will fail exactly as
+# slice 1 did. Short-circuited rather than retried across the remaining
+# slices, each of which is a paid call.
+_AUTH_STATUS_CODES = frozenset({401, 403})
+
+
+def _request_status(exc: BaseException) -> int | None:
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+    # isinstance: `status` comes off an arbitrary exception object and an
+    # unhashable value would make the membership tests below raise.
+    return status if isinstance(status, int) else None
+
+
+def _is_auth_request_error(exc: BaseException) -> bool:
+    return _request_status(exc) in _AUTH_STATUS_CODES
+
 
 def _is_fatal_request_error(exc: BaseException) -> bool:
     """True for provider responses that will never succeed on retry.
 
     Classified on the status code, not on a message match, so a rejected
     `max_tokens` and a rejected model name are both caught."""
-    status = getattr(exc, "status_code", None)
-    if status is None:
-        status = getattr(getattr(exc, "response", None), "status_code", None)
-    # isinstance first: `status` comes off an arbitrary exception object and
-    # an unhashable value would make the membership test raise.
-    return isinstance(status, int) and status in _FATAL_STATUS_CODES
+    return _request_status(exc) in _FATAL_STATUS_CODES
 
 
 def call_model(
