@@ -2,7 +2,19 @@
 
 **Date:** 2026-08-07
 **Supersedes / relates to:** [`13-trend-signal-measurement-2026-08-07.md`](13-trend-signal-measurement-2026-08-07.md)
-**Parent report (Obsidian):** `~/Documents/Obsidian/research/most-profitable-trading-algorithm-edge-hypothesis-2026-08-07-report.md`
+**Parent report:** `~/Documents/Obsidian/research/most-profitable-trading-algorithm-edge-hypothesis-2026-08-07-report.md` — **local-only, outside this repo**; the path resolves on the owner's machine and nowhere else.
+
+> **⚠ Errata — 2026-08-08. Do not execute the gate list below verbatim.**
+>
+> This document was audited the day after it was written: [`edge-hypothesis-evaluation-audit-2026-08-08.md`](../reviews/edge-hypothesis-evaluation-audit-2026-08-08.md). The body is preserved as written, so four items below are still on the page and are wrong. Named here so no one acts on them by skimming:
+>
+> - **"What is wrong" item 1 — "SE ≈ 1.1 Sharpe units" and the "+1.2 / −0.9 overlay" band.** Back-solved by dividing a Sharpe difference by a t-statistic on *daily mean returns*; the two are not the same quantity, so the band is not a confidence interval. The "we learned nothing" conclusion survives for a stronger reason the audit supplies — a paired t on mean returns has no power against a *variance* claim, which is where doc 13 locates trend's advantage. Audit **D1**, which adds a paired Sharpe-difference test (Jobson-Korkie-Memmel / Ledoit-Wolf HAC) as a cheap **gate 0** ahead of the PBO run.
+> - **Falsifier 3 — "already fails on Sharpe there: t = −1.07".** Same defect: that t is also a mean-return statistic and establishes nothing about Sharpe. Drop the citation. Audit **D1**.
+> - **Gate 6 — "STCG ~40.8% federal, ~194bps/yr at 100% turnover".** A US federal rate priced for a UK-resident owner (HMRC). The short-vs-long-term wedge the argument rests on has to be re-derived under UK rules before it can be weighed against the trend-vs-control differential; the audit asserts no UK rate or regime structure, only that this one does not carry over. It also notes neither doc carries a **GBP/USD FX term**, an uncosted exposure larger than the tax one. Audit **D2**.
+> - **Falsifier 2 — "realized drawdown > −23% … → survivability claim falsified".** Contradicts gate 2 in this same document, which says to discard the realized −23.2% and commit to a bootstrapped 90th percentile of −30% to −40%. Adopting both means agreeing to declare failure at a level gate 2 expects to be exceeded. Re-anchor to the bootstrapped percentile. Audit **D3**.
+> - **Falsifier 4 and gate 3's SPY / 60-40 patch.** Return-only comparisons against a vol-targeted, drawdown-managed stream — the exact comparison doc 13's matched control exists to prevent — and "*any* rolling 3 years" over a decade voids the apparatus with probability near 1. Report risk-adjusted, or return *and* drawdown together. Audit **D4**.
+>
+> The audit also records the largest omission: the measured trend / vol-target strategy **has no implementation in `src/`** (no vol targeting, no trend signal, no inverse-vol weighting — `src/trader/decide.ts` does ATR-stop fixed-fractional sizing off LLM verdicts). These gates therefore guard a configuration Samurai cannot execute. Use the audit's **replacement gate order**, in which that architecture decision is itself a gate.
 
 ## Bottom line
 
@@ -77,4 +89,4 @@ Ranked by realistic, capacity-adjusted, decay-aware Sharpe for weeks-to-months h
 - Alpha Architect/Kaminski 2026 — trend fails in fast crashes (Apr 2025), trend mean-reverts post-drawdown
 - Kaminski & Lo 2014 — stop rules conditionally effective
 
-*Handoff for the implementing agent. Parent report (full synthesis, confidence scoring, knowledge gaps) at `~/Documents/Obsidian/research/most-profitable-trading-algorithm-edge-hypothesis-2026-08-07-report.md`. Raw streams: `-web-raw.md`, `-opus-raw.md` in the same directory.*
+*Handoff for the implementing agent — read the errata banner at the top first. Parent report (full synthesis, confidence scoring, knowledge gaps) at `~/Documents/Obsidian/research/most-profitable-trading-algorithm-edge-hypothesis-2026-08-07-report.md`, with raw streams `-web-raw.md` and `-opus-raw.md` in the same directory. **Local-only — that directory is outside this repo and resolves on the owner's machine only; nothing in this document depends on reading it.***
