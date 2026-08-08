@@ -204,9 +204,14 @@ async function sweepOne(
 
   // Fail-closed, `maybeRearmResidual`'s own guard verbatim: a garbage
   // residual while `coversQty` says "not flat" is a store divergence to
-  // surface, never a quantity to hand the broker.
+  // surface, never a quantity to hand the broker — and never a quantity to
+  // hand the OPERATOR either (#549 review, round 3): NaN serializes to null
+  // in the page payload and a negative reads as nonsense, so the alert
+  // carries the upper-bound `requested_size` with the upper-bound flag, the
+  // same shape as the fill-read-failure path above. The divergence reason
+  // below still names the real recomputed value for diagnosis.
   if (!(residual > 0) || !Number.isFinite(residual)) {
-    await alertResidualExposureOnce(input, row, residual, now, false);
+    await alertResidualExposureOnce(input, row, position.requested_size, now, true);
     return {
       idempotency_key: key,
       instrument: position.instrument,
@@ -214,8 +219,8 @@ async function sweepOne(
       broker_state: null,
       action: 'undetermined',
       reason:
-        'marked residual recomputes non-finite or non-positive while the fill record reads ' +
-        'not-flat — refusing to re-arm a garbage quantity; check the store by hand',
+        `marked residual recomputes to ${residual} (non-finite or non-positive) while the fill ` +
+        'record reads not-flat — refusing to re-arm a garbage quantity; check the store by hand',
     };
   }
 

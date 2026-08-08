@@ -1659,6 +1659,30 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       expect(cancelOrder).not.toHaveBeenCalled();
     });
 
+    // #549 review (round 3): `mapOrderState` folds every unrecognized venue
+    // status — done_for_day, replaced, stopped — into 'submitted', so a
+    // blocklist of dead states would adopt a matching-but-not-resting prior
+    // as protection while nothing rests. Adoption is allowlisted on the raw
+    // resting statuses; anything else is retired and replaced.
+    it('does not adopt a matching prior in an unrecognized status (done_for_day) — cancels and replaces', async () => {
+      const submitOcoOrder = vi
+        .fn()
+        .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-2', order_class: 'oco', legs: [] });
+      const cancelOrder = vi.fn().mockResolvedValue(undefined);
+      const getOrderByClientOrderId = vi
+        .fn()
+        .mockResolvedValue({ ...matchingPriorOco(), status: 'done_for_day' });
+      const adapter = adapterWith(
+        makeClient({ submitOcoOrder, cancelOrder, getOrderByClientOrderId }),
+      );
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+
+      expect(cancelOrder).toHaveBeenCalledWith('prior-rearm-oco');
+      expect(submitOcoOrder).toHaveBeenCalledTimes(1);
+      expect(submitOcoOrder).toHaveBeenCalledWith(expect.objectContaining({ qty: '6' }));
+    });
+
     it('adopts a FILLED prior regardless of size — its fill is already closing the residual', async () => {
       const submitOcoOrder = vi.fn();
       const cancelOrder = vi.fn();

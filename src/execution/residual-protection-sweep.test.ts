@@ -547,7 +547,15 @@ describe('residual-protection sweep (#549)', () => {
 
       expect(broker.rearmCalls).toEqual([]);
       expect(alerts.alerts).toHaveLength(1);
+      // #549 review (round 3): the page must never carry the garbage value —
+      // NaN serializes to null and a negative reads as nonsense. It carries
+      // the upper-bound requested_size with the upper-bound flag, mirroring
+      // the fill-read-failure path; the divergence reason keeps the real
+      // recomputed value for diagnosis.
+      expect(alerts.alerts[0]?.residual_qty).toBe(10);
+      expect(alerts.alerts[0]?.residual_qty_is_upper_bound).toBe(true);
       expect(result.divergences.map((entry) => entry.action)).toEqual(['undetermined']);
+      expect(result.divergences[0]?.reason).toContain('NaN');
       expect(
         (await garbageStore.getResidualProtectionMarker(LOT))?.unprotected_since,
       ).not.toBeNull();

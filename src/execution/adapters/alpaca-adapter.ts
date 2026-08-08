@@ -707,6 +707,17 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // protects nothing, so the code falls through and places afresh — if
     // the venue then refuses the reused client_order_id, that throw is the
     // honest answer and takes the caller's existing alert path.
+    //
+    // ADOPTION IS ALLOWLISTED on the RAW venue status (#549 review, round 3):
+    // `mapOrderState` folds every unrecognized status — `done_for_day`,
+    // `replaced`, `stopped`, `pending_cancel`... — into 'submitted', so a
+    // blocklist of dead states would let a matching-but-not-resting prior be
+    // adopted as protection while nothing rests at the venue: exactly the
+    // naked-residual-believed-protected hazard this method exists to close.
+    // Only statuses that mean RESTING may satisfy the match branch; anything
+    // unrecognized takes the cancel-and-replace path, where `cancelOrder`'s
+    // tolerance of already-terminal orders makes the defensive cancel free.
+    const RESTING_STATUSES = ['new', 'accepted', 'pending_new', 'accepted_for_bidding'];
     const prior = await this.call('rearmProtectiveLegs', () =>
       this.input.client.getOrderByClientOrderId(rearmClientOrderId),
     );
@@ -718,7 +729,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       if (
         priorState === 'filled' ||
         priorState === 'partially_filled' ||
-        rearmOrderMatches(prior, qty, stop, target)
+        (RESTING_STATUSES.includes(prior.status) && rearmOrderMatches(prior, qty, stop, target))
       ) {
         this.rearmedLegs.set(clientOrderId, prior.id);
         // Same column semantics as the fresh-place path below — the OCO's
