@@ -119,8 +119,12 @@ test.describe('reduced motion', () => {
       samples.some((sample) => sample.settled),
       'the settle ring must appear',
     ).toBe(true);
-    // Two positions — the origin room and the destination room.
-    expect(distinctPositions(samples)).toBeLessThanOrEqual(3);
+    // Exactly two positions — the origin room and the destination room, with
+    // nothing in between. A snap writes `transition: none` and forces a reflow
+    // before restoring it, so there is no interpolated frame for the sampler to
+    // catch: measured over ~295 samples, every one of them sat on one of the
+    // two room anchors. Anything above two is a chip that moved.
+    expect(distinctPositions(samples)).toBeLessThanOrEqual(2);
 
     const anchor = (room: string) => anchorFor(boxes, room, resting, 'execution');
     for (const room of WALKED_ROOMS.filter((walked) => walked !== 'execution')) {
