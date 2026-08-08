@@ -129,7 +129,7 @@ export function withOnTradeClose(
     confirmResidualProtected: (idempotency_key: string): Promise<void> =>
       store.confirmResidualProtected(idempotency_key),
 
-    markResidualAlerted: (idempotency_key: string, alerted_at: Date): Promise<void> =>
+    markResidualAlerted: (idempotency_key: string, alerted_at: Date): Promise<boolean> =>
       store.markResidualAlerted(idempotency_key, alerted_at),
 
     getUnprotectedResidualLots: (): Promise<UnprotectedResidualLot[]> =>

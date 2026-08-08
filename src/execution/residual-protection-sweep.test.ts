@@ -477,6 +477,148 @@ describe('residual-protection sweep (#549)', () => {
     expect(await store.getUnprotectedResidualLots()).toEqual([]);
   });
 
+  // #549 review (cycle 2): every containment branch of `sweepOne`, pinned
+  // directly — not through the smoke run's happy path and not through
+  // fill-sync's mocked surface.
+  describe('sweep containment branches', () => {
+    it('pages the upper-bound requested_size and keeps the marker when the fill read fails', async () => {
+      const { db, store } = openTestExecutionStore();
+      await seedPosition(store);
+      await seedPartiallyFlattenedFills(store);
+      await store.markResidualUnprotected(LOT, NOW);
+
+      const failingStore = new (class extends TestExecutionStore {
+        override async getFills(): Promise<never> {
+          throw new Error('fills table unreadable');
+        }
+      })(db);
+      const broker = new SweepBroker();
+      const alerts = makeResidualExposureAlerts();
+      const result = await new ExecutionImpl(
+        makeInput(broker, failingStore, alerts),
+      ).sweepResidualProtection();
+
+      // The exact residual is unknowable — the page carries the lot's whole
+      // requested size, flagged as an upper bound (#569's semantics).
+      expect(alerts.alerts).toEqual([
+        expect.objectContaining({
+          idempotency_key: LOT,
+          residual_qty: 10,
+          residual_qty_is_upper_bound: true,
+        }),
+      ]);
+      // No re-arm was attempted off a figure that could not be computed.
+      expect(broker.rearmCalls).toEqual([]);
+      expect(result.divergences.map((entry) => entry.action)).toEqual(['undetermined']);
+      // The marker stays for the next pass's fresh read.
+      expect(
+        (await failingStore.getResidualProtectionMarker(LOT))?.unprotected_since,
+      ).not.toBeNull();
+    });
+
+    it('refuses a non-finite recomputed residual — alert, no broker call, marker stays', async () => {
+      const { db, store } = openTestExecutionStore();
+      await seedPosition(store);
+      await store.markResidualUnprotected(LOT, NOW);
+
+      // Entry and exit both sum to Infinity: `coversQty(Inf, Inf)` is false
+      // (Inf − Inf·ε is NaN, and Inf >= NaN is false) so the lot reads
+      // not-flat, while the residual recomputes to NaN — the exact
+      // store-numbers-disagree shape the guard refuses to hand the broker.
+      const garbageStore = new (class extends TestExecutionStore {
+        override async getFills(): Promise<Fill[]> {
+          const base = {
+            idempotency_key: LOT,
+            price: 100,
+            fee: 0,
+            timestamp: new Date('2026-08-07T15:00:00Z'),
+          };
+          return [
+            { ...base, broker_fill_id: 'e1', leg: 'entry', qty: Number.POSITIVE_INFINITY },
+            { ...base, broker_fill_id: 'x1', leg: 'exit', qty: Number.POSITIVE_INFINITY },
+          ];
+        }
+      })(db);
+      const broker = new SweepBroker();
+      const alerts = makeResidualExposureAlerts();
+      const result = await new ExecutionImpl(
+        makeInput(broker, garbageStore, alerts),
+      ).sweepResidualProtection();
+
+      expect(broker.rearmCalls).toEqual([]);
+      expect(alerts.alerts).toHaveLength(1);
+      expect(result.divergences.map((entry) => entry.action)).toEqual(['undetermined']);
+      expect(
+        (await garbageStore.getResidualProtectionMarker(LOT))?.unprotected_since,
+      ).not.toBeNull();
+    });
+
+    it('contains a confirm-write failure after a successful re-arm — undetermined, no page, next pass re-verifies', async () => {
+      const { db, store } = openTestExecutionStore();
+      await seedPosition(store);
+      await seedPartiallyFlattenedFills(store);
+      await store.markResidualUnprotected(LOT, NOW);
+
+      const confirmFailingStore = new (class extends TestExecutionStore {
+        failConfirm = true;
+        override async confirmResidualProtected(idempotency_key: string): Promise<void> {
+          if (this.failConfirm) throw new Error('marker write refused');
+          return super.confirmResidualProtected(idempotency_key);
+        }
+      })(db);
+      const broker = new SweepBroker();
+      const alerts = makeResidualExposureAlerts();
+      const execution = new ExecutionImpl(makeInput(broker, confirmFailingStore, alerts));
+
+      const first = await execution.sweepResidualProtection();
+
+      // The re-arm itself succeeded — a bookkeeping failure is NOT a naked
+      // residual, so nobody is paged; the outer containment reports it and
+      // the marker survives for the next pass's idempotent re-verify.
+      expect(broker.rearmCalls).toHaveLength(1);
+      expect(alerts.alerts).toEqual([]);
+      expect(first.divergences.map((entry) => entry.action)).toEqual(['undetermined']);
+      expect(
+        (await confirmFailingStore.getResidualProtectionMarker(LOT))?.unprotected_since,
+      ).not.toBeNull();
+
+      // The store heals: the next pass re-verifies (idempotent re-arm) and
+      // finally clears the marker.
+      confirmFailingStore.failConfirm = false;
+      const second = await execution.sweepResidualProtection();
+      expect(second.divergences.map((entry) => entry.action)).toEqual(['adopted']);
+      expect(await confirmFailingStore.getResidualProtectionMarker(LOT)).toEqual({
+        unprotected_since: null,
+        alerted_at: null,
+      });
+    });
+
+    it('contains an alert-dedup mark failure — the page went out, the pass survives, the next pass may re-page', async () => {
+      const { db, store } = openTestExecutionStore();
+      await seedPosition(store);
+      await seedPartiallyFlattenedFills(store);
+      await store.markResidualUnprotected(LOT, NOW);
+
+      const markFailingStore = new (class extends TestExecutionStore {
+        override async markResidualAlerted(): Promise<never> {
+          throw new Error('dedup write refused');
+        }
+      })(db);
+      const broker = new SweepBroker();
+      broker.rearmFailure = new Error('venue still down');
+      const alerts = makeResidualExposureAlerts();
+      const execution = new ExecutionImpl(makeInput(broker, markFailingStore, alerts));
+
+      const first = await execution.sweepResidualProtection();
+      expect(alerts.alerts).toHaveLength(1);
+      expect(first.divergences.map((entry) => entry.action)).toEqual(['undetermined']);
+      // The dedup never persisted, so the next pass re-pages — noisy, not
+      // unsafe, exactly the trade the catch documents.
+      await execution.sweepResidualProtection();
+      expect(alerts.alerts).toHaveLength(2);
+    });
+  });
+
   describe('the marker store methods (migration 0024)', () => {
     it('markResidualUnprotected keeps the FIRST observation and never resets the alert dedup', async () => {
       const { store } = openTestExecutionStore();
@@ -501,6 +643,28 @@ describe('residual-protection sweep (#549)', () => {
       await expect(store.markResidualUnprotected('no-such-lot', NOW)).rejects.toThrow(
         /no open_positions row/,
       );
+    });
+
+    it('markResidualAlerted is first-writer-wins: conditional on the episode being un-alerted, reporting who won (#549 review)', async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store);
+      await store.markResidualUnprotected(LOT, NOW);
+
+      const later = new Date('2026-08-07T17:00:00Z');
+      await expect(store.markResidualAlerted(LOT, NOW)).resolves.toBe(true);
+      // A second surface arriving later does NOT overwrite the record — the
+      // dedup holds regardless of caller ordering.
+      await expect(store.markResidualAlerted(LOT, later)).resolves.toBe(false);
+      expect((await store.getResidualProtectionMarker(LOT))?.alerted_at).toBe(NOW.toISOString());
+      // An unknown key is `false`, never a throw — the write is a claim, not
+      // an assertion the lot exists.
+      await expect(store.markResidualAlerted('no-such-lot', NOW)).resolves.toBe(false);
+
+      // The claim re-opens with the episode: confirm clears both columns,
+      // and a NEW episode's first writer wins again.
+      await store.confirmResidualProtected(LOT);
+      await store.markResidualUnprotected(LOT, later);
+      await expect(store.markResidualAlerted(LOT, later)).resolves.toBe(true);
     });
 
     it('confirmResidualProtected clears both columns and is a no-op on an unmarked lot', async () => {

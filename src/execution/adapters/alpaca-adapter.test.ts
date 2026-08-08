@@ -1633,6 +1633,32 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       expect(submitOcoOrder).toHaveBeenCalledTimes(1);
     });
 
+    // #549 review (cycle 2): a partially-consumed prior's fills are EXIT
+    // fills — every filled share already closed that much of the position —
+    // so its resting remainder equals what that episode still holds, while
+    // the caller's residual may be computed off a store that has not
+    // ingested those fills yet. Cancel-and-replace sized to that stale
+    // figure would over-arm; adoption is the safe answer, like `filled`.
+    it('adopts a PARTIALLY_FILLED prior without cancel-and-replace, even when the store-side residual disagrees', async () => {
+      const submitOcoOrder = vi.fn();
+      const cancelOrder = vi.fn();
+      const getOrderByClientOrderId = vi.fn().mockResolvedValue({
+        ...matchingPriorOco(),
+        // qty 6 with 2 filled: 4 rest, 4 held from this episode — while the
+        // request (computed off a store missing those fills) still says 6.
+        status: 'partially_filled',
+        filled_qty: '2',
+      });
+      const adapter = adapterWith(
+        makeClient({ submitOcoOrder, cancelOrder, getOrderByClientOrderId }),
+      );
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+
+      expect(submitOcoOrder).not.toHaveBeenCalled();
+      expect(cancelOrder).not.toHaveBeenCalled();
+    });
+
     it('adopts a FILLED prior regardless of size — its fill is already closing the residual', async () => {
       const submitOcoOrder = vi.fn();
       const cancelOrder = vi.fn();

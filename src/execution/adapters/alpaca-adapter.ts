@@ -691,14 +691,22 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // are missing fails the match — replacing real protection costs a
     // round-trip, adopting stale protection costs money.
     //
-    // A `filled` prior is adopted regardless: the protection already did its
-    // job (its fill closes the residual; the re-arm sweep in `fetchNewFills`
-    // below offers it), and cancel-and-replace against a residual the store
-    // has not ingested that fill for yet would re-arm quantity that is
-    // already closing. A `cancelled`/`rejected`/`expired` prior protects
-    // nothing, so the code falls through and places afresh — if the venue
-    // then refuses the reused client_order_id, that throw is the honest
-    // answer and takes the caller's existing alert path.
+    // A `filled` OR `partially_filled` prior is adopted regardless of the
+    // match (#549 review): an OCO's fills are EXIT fills — every share it
+    // filled has already closed that much of the position — so what remains
+    // resting (`qty − filled_qty`) is exactly what that episode still holds.
+    // The caller's `residual` is computed off the STORE, which has not
+    // necessarily ingested those very fills yet (the re-arm sweep in
+    // `fetchNewFills` below is what offers them), so a partially-consumed
+    // prior would compare against a stale figure: cancel-and-replace sized
+    // to that figure would re-arm quantity that is already closed —
+    // over-protection, whose leg fires into a smaller position and opens a
+    // reverse one (#516's hazard, from the other direction). Once the fills
+    // DO ingest, the recomputed residual and the prior's resting remainder
+    // agree by construction. A `cancelled`/`rejected`/`expired` prior
+    // protects nothing, so the code falls through and places afresh — if
+    // the venue then refuses the reused client_order_id, that throw is the
+    // honest answer and takes the caller's existing alert path.
     const prior = await this.call('rearmProtectiveLegs', () =>
       this.input.client.getOrderByClientOrderId(rearmClientOrderId),
     );
@@ -706,7 +714,12 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       prior !== null &&
       !['cancelled', 'rejected', 'expired'].includes(mapOrderState(prior.status))
     ) {
-      if (mapOrderState(prior.status) === 'filled' || rearmOrderMatches(prior, qty, stop, target)) {
+      const priorState = mapOrderState(prior.status);
+      if (
+        priorState === 'filled' ||
+        priorState === 'partially_filled' ||
+        rearmOrderMatches(prior, qty, stop, target)
+      ) {
         this.rearmedLegs.set(clientOrderId, prior.id);
         // Same column semantics as the fresh-place path below — the OCO's
         // parent id IS the take-profit (see that path's `.legs` note).

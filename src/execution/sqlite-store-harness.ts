@@ -123,7 +123,7 @@ export class TestExecutionStore extends SqliteExecutionStore {
     return super.confirmResidualProtected(idempotency_key);
   }
 
-  override async markResidualAlerted(idempotency_key: string, alerted_at: Date): Promise<void> {
+  override async markResidualAlerted(idempotency_key: string, alerted_at: Date): Promise<boolean> {
     this.writeLog.push(`mark-residual-alerted:${idempotency_key}`);
     return super.markResidualAlerted(idempotency_key, alerted_at);
   }

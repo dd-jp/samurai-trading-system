@@ -61,7 +61,7 @@
  * returns, which both callers log per entry.
  */
 
-import { logCaughtFailure } from '../shared/index.js';
+import { logCaughtFailure, safeLog } from '../shared/index.js';
 import { alertResidualExposure, coversQty, recordedExposure } from './ingest-fills.js';
 import type {
   ExecutionInput,
@@ -287,6 +287,22 @@ async function sweepOne(
  * must leave the episode un-alerted, so the NEXT pass pages again instead of
  * the one failed attempt permanently silencing the only page for a
  * still-naked residual.
+ *
+ * ORDERING (#549 review, cycle 2): `row.alerted_at` is the pass-start
+ * worklist snapshot, and `markResidualAlerted` is CONDITIONAL
+ * (first-writer-wins on `residual_rearm_alerted_at IS NULL`, reporting
+ * whether this call won), so the durable dedup holds regardless of which
+ * alert surface runs first or in what order. The two surfaces cannot
+ * actually interleave in-process today — `runStartupReconcile` is awaited
+ * before `startFillSync` ever arms its first timer (production.ts
+ * `start()`), and within the fill-sync loop `runPoll` awaits `ingestFills`
+ * (the inline alert path) before the sweep, under an `inFlight` guard that
+ * serializes passes — so a lost race is a composition change away, not a
+ * live behaviour; the conditional write is the durable backstop that keeps
+ * the record single-writer even then. In the worst interleave the page
+ * itself could go out twice (delivery precedes the claim, deliberately —
+ * claim-first would re-create the suppressed-page bug the delivery gate
+ * above closes); the RECORD never does.
  */
 async function alertResidualExposureOnce(
   input: ExecutionInput,
@@ -305,7 +321,21 @@ async function alertResidualExposureOnce(
   );
   if (!delivered) return;
   try {
-    await input.store.markResidualAlerted(row.position.idempotency_key, now);
+    const recorded = await input.store.markResidualAlerted(row.position.idempotency_key, now);
+    if (!recorded) {
+      // Another surface recorded the episode's page between this pass's
+      // worklist snapshot and now — the durable dedup already held, this
+      // pass's page was the (worst-case) duplicate the doc above accepts.
+      safeLog(input.logger, {
+        trace_id: input.trace_id,
+        stage: 'execution',
+        level: 'info',
+        message:
+          "residual-exposure page dedup was already held by another surface — this pass's page " +
+          'was a duplicate; the durable record stays single-writer',
+        payload: { idempotency_key: row.position.idempotency_key },
+      });
+    }
   } catch (error) {
     logCaughtFailure(
       input.logger,

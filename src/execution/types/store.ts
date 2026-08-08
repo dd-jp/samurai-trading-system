@@ -214,12 +214,21 @@ export interface SharedStore {
   confirmResidualProtected(idempotency_key: string): Promise<void>;
   /**
    * Once-per-episode alert dedup for the #549 sweep (#342's repeated-line
-   * lesson): recorded when `ResidualExposureAlertChannel` is posted for an
-   * unprotected episode, checked by the sweep so a marker that stays
-   * unprotected across many passes pages the operator once, not once per
-   * pass. Cleared together with the marker by `confirmResidualProtected`.
+   * lesson): recorded when `ResidualExposureAlertChannel` accepted a
+   * delivery for an unprotected episode, checked by the sweep so a marker
+   * that stays unprotected across many passes pages the operator once, not
+   * once per pass. Cleared together with the marker by
+   * `confirmResidualProtected`.
+   *
+   * CONDITIONAL (#549 review): records only when the episode has no
+   * alerted-at yet (`... AND residual_rearm_alerted_at IS NULL`) and
+   * returns whether THIS call won that write — first-writer-wins durably,
+   * so the dedup holds regardless of which alert surface (the observing
+   * poll's inline path, the sweep) got there first or in what order.
+   * `false` means another surface already recorded the episode's page (or
+   * the key names no lot) — never an error.
    */
-  markResidualAlerted(idempotency_key: string, alerted_at: Date): Promise<void>;
+  markResidualAlerted(idempotency_key: string, alerted_at: Date): Promise<boolean>;
   /**
    * The #549 sweep's worklist: every NON-TERMINAL lot still marked
    * unprotected. Bounded the same way `getOpenPositions()` is — a terminal

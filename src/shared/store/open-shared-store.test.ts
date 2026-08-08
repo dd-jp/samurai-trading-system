@@ -167,6 +167,69 @@ describe('openSharedStore', () => {
     ]);
   });
 
+  // #549 review: version 24 in `schema_migrations` alone would stay green
+  // through a column-name typo in the migration file — every marker query
+  // would then fail only at runtime. Asserted against the SCHEMA the
+  // migration actually produced, plus a write/read round-trip through the
+  // exact column names the store's SQL uses.
+  it('migration 0024 adds the residual-protection marker columns as nullable TEXT (#549)', () => {
+    const db = openSharedStore(':memory:');
+
+    const columns = db.prepare('PRAGMA table_info(open_positions)').all() as {
+      name: string;
+      type: string;
+      notnull: number;
+      dflt_value: unknown;
+    }[];
+    const byName = new Map(columns.map((column) => [column.name, column]));
+
+    for (const name of ['residual_unprotected_since', 'residual_rearm_alerted_at']) {
+      const column = byName.get(name);
+      expect(column, `open_positions is missing column ${name}`).toBeDefined();
+      expect(column?.type).toBe('TEXT');
+      // Nullable with no default: NULL IS the "no open episode" state
+      // (migration 0024's own doc), for pre-migration rows and fresh ones
+      // alike.
+      expect(column?.notnull).toBe(0);
+      expect(column?.dflt_value).toBeNull();
+    }
+
+    // Round-trip through the exact column names the store's marker SQL uses.
+    db.prepare(
+      `INSERT INTO open_positions (
+         idempotency_key, debate_id, instrument, asset_class, side, intent_type,
+         requested_size, filled_size, avg_entry_price, stop, target,
+         order_state, broker_order_ids, opened_at, decision_timestamp,
+         conviction, converged
+       ) VALUES ('k1', 'd1', 'AAPL', 'stocks', 'buy', 'entry',
+         10, 0, 0, 95, 110, 'submitted', '[]', '2026-08-07T14:00:00.000Z',
+         '2026-08-07T14:00:00.000Z', 0.7, 1)`,
+    ).run();
+    const fresh = db
+      .prepare(
+        'SELECT residual_unprotected_since, residual_rearm_alerted_at FROM open_positions ' +
+          "WHERE idempotency_key = 'k1'",
+      )
+      .get() as { residual_unprotected_since: unknown; residual_rearm_alerted_at: unknown };
+    expect(fresh).toEqual({ residual_unprotected_since: null, residual_rearm_alerted_at: null });
+
+    db.prepare(
+      `UPDATE open_positions SET residual_unprotected_since = '2026-08-07T16:00:00.000Z',
+        residual_rearm_alerted_at = '2026-08-07T16:01:00.000Z' WHERE idempotency_key = 'k1'`,
+    ).run();
+    expect(
+      db
+        .prepare(
+          'SELECT residual_unprotected_since, residual_rearm_alerted_at FROM open_positions ' +
+            "WHERE idempotency_key = 'k1'",
+        )
+        .get(),
+    ).toEqual({
+      residual_unprotected_since: '2026-08-07T16:00:00.000Z',
+      residual_rearm_alerted_at: '2026-08-07T16:01:00.000Z',
+    });
+  });
+
   it('sets WAL mode and synchronous=FULL on a file-backed connection', () => {
     const db = openSharedStore(tempDbPath());
 

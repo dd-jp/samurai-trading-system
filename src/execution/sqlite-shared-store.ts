@@ -701,17 +701,22 @@ export class SqliteExecutionStore implements SharedStore {
       .run(idempotency_key);
   }
 
-  /** The #549 once-per-episode alert dedup — see `SharedStore.markResidualAlerted`. */
-  async markResidualAlerted(idempotency_key: string, alerted_at: Date): Promise<void> {
+  /**
+   * The #549 once-per-episode alert dedup — see `SharedStore.markResidualAlerted`
+   * for the first-writer-wins contract this WHERE clause implements: the
+   * write lands only while the episode is still un-alerted, and `changes`
+   * reports whether THIS call was the one that landed it.
+   */
+  async markResidualAlerted(idempotency_key: string, alerted_at: Date): Promise<boolean> {
     const result = this.db
-      .prepare('UPDATE open_positions SET residual_rearm_alerted_at = ? WHERE idempotency_key = ?')
+      .prepare(
+        `UPDATE open_positions
+            SET residual_rearm_alerted_at = ?
+          WHERE idempotency_key = ? AND residual_rearm_alerted_at IS NULL`,
+      )
       .run(alerted_at.toISOString(), idempotency_key);
 
-    if (result.changes === 0) {
-      throw new Error(
-        `SqliteExecutionStore.markResidualAlerted: no open_positions row for '${idempotency_key}'`,
-      );
-    }
+    return result.changes > 0;
   }
 
   /**
