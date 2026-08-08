@@ -10,11 +10,14 @@
  * surface as a named failure instead of a silent dependency on the machine
  * having internet.
  *
- * **Registration order is load-bearing.** Playwright runs the most recently
- * registered matching handler first, so this guard — installed during fixture
- * setup, before the test body runs — sits UNDER the per-test `/api/snapshot`
- * routes. Register it inside a test body instead and the catch-all would
- * swallow the snapshot routes with no error at all.
+ * **Installed at fixture setup, not in a test body** — for coverage, not
+ * precedence. Either order routes correctly: Playwright runs the most recently
+ * registered handler first, and this guard's same-origin branch calls
+ * `route.fallback()`, which chains back to earlier-registered handlers. What a
+ * late registration loses is every request the page has ALREADY made — the
+ * bundle, its fonts, the first poll — and those are exactly where an
+ * off-origin dependency would hide, so it would turn "zero external network
+ * calls" from an assertion into a sample.
  */
 import { test as base, expect } from '@playwright/test';
 
