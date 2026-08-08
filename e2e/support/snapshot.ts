@@ -26,8 +26,8 @@ import type { DashboardSnapshot, VerdictRow } from '../../src/dashboard/types.ts
  * Chosen so the replay is deterministic rather than timing-lucky: every gap
  * exceeds `HOP_MAX_MS` (450ms), so all four hops clamp to the ceiling, and the
  * 1800ms total then scales to the 1200ms `WALK_BUDGET_MS` as 300ms per hop
- * with nothing pinned at the floor. A ~1.2s walk sampled every 25ms is dozens
- * of intermediate positions.
+ * with nothing pinned at the floor. A ~1.2s walk, sampled at `motion.ts`'s
+ * `SAMPLE_INTERVAL_MS`, is dozens of intermediate positions.
  */
 export const STAGE_GAP_MS = 20_000;
 

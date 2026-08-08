@@ -25,7 +25,13 @@ export const test = base.extend<{ offOriginRequests: string[] }>({
   /** Every off-origin URL the page asked for. Must still be empty at teardown. */
   offOriginRequests: [
     async ({ page, baseURL }, use) => {
-      const origin = new URL(baseURL ?? '').origin;
+      // Named rather than left to `new URL(undefined)`'s bare "Invalid URL":
+      // without an origin this guard cannot tell a local request from a remote
+      // one, so it must fail pointing at the setting that is missing.
+      if (baseURL === undefined) {
+        throw new Error('the off-origin guard needs `use.baseURL` in playwright.config.ts');
+      }
+      const origin = new URL(baseURL).origin;
       const offOrigin: string[] = [];
       await page.route('**/*', async (route) => {
         const url = route.request().url();
