@@ -9,10 +9,14 @@
  * would catch a break in the server half of the dashboard.
  *
  * Assertions are on roles and accessible names wherever the scenario allows,
- * because #540 is reshaping this page's classes and spacing in parallel. Two
- * deliberate exceptions, both data attributes rather than styling hooks:
- * `[data-room]` for the lights-off room and `[data-instrument]` for the
- * keyboard walk, since neither state has an accessible name of its own.
+ * because #540 is reshaping this page's classes and spacing in parallel. Three
+ * deliberate exceptions, all data attributes rather than styling hooks:
+ * `[data-room]` for the lights-off room, which carries no accessible name at
+ * all; and `[data-instrument]` plus `[data-trace-id]` for the keyboard walk,
+ * which asks whether `document.activeElement` IS a given element — a question
+ * only a selector can answer from inside the page. The ledger row is doubly
+ * unnameable there: its accessible name states instrument, outcome, clock and
+ * reason, never the `trace_id` that picks one row out of several.
  */
 import { expect, test } from './support/test.ts';
 
