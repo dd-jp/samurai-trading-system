@@ -30,7 +30,7 @@ Every gate below guards a capital commitment to a configuration that exists only
 
 **Economic point worth testing:** inverse-vol sizing hands IEF/TLT most of the gross budget, so the 1.5 cap binds *because of bonds*, and ~6% financing is paid to hold duration. That is a plausible mechanical explanation for the Sharpe halving across sample halves. Testable by re-running the wide basket minus the duration sleeve.
 
-> **Script line numbers.** D1's evidence is `L383`/`L385` of the measurement script **as of commit `12c00fd`**, which produced doc 11's numbers. The file is now [`11-trend-signal-measurement.py`](11-trend-signal-measurement.py); line numbers in a live script drift, so read them at that commit.
+> **Script line numbers.** D1's evidence is `L383`/`L385` of the measurement script **as of commit `12c00fd`**, which produced doc 11's numbers — verified: `L383` is `t_stat = mean(diff) / (stdev(diff) / math.sqrt(n))` and `L385` is `se = math.sqrt((1 + 0.5 * sharpe ** 2) / years)`. The file is now [`11-trend-signal-measurement.py`](11-trend-signal-measurement.py); line numbers in a live script drift, so read them at that commit.
 
 ## Gate order — use this one
 
