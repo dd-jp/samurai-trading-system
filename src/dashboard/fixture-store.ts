@@ -16,7 +16,7 @@
  */
 
 import type { MetricsSuite } from '../cost-model-backtest/index.js';
-import type { AnalystContribution } from '../debate-engine/index.js';
+import type { AnalystContribution, Direction } from '../debate-engine/index.js';
 import type { Mark } from '../market-data-service/index.js';
 import type { DebateLog, OpenPosition } from '../shared/index.js';
 import type { PipelineStage } from './pipeline-types.js';
@@ -128,9 +128,9 @@ const RECENT_DEBATES: DebateLog[] = [
     rounds: 3,
     created_at: hoursAgo(1.5),
     contributions: [
-      contribution('technical', 'bullish', 0.62),
-      contribution('fundamental', 'bullish', 0.24),
-      contribution('sentiment', 'neutral', 0.14),
+      contribution('technical', ['bearish', 'neutral', 'bullish'], 0.62),
+      contribution('fundamental', ['neutral', 'neutral', 'bullish'], 0.24),
+      contribution('sentiment', ['neutral', 'neutral', 'neutral'], 0.14),
     ],
   },
   {
@@ -141,9 +141,9 @@ const RECENT_DEBATES: DebateLog[] = [
     rounds: 2,
     created_at: hoursAgo(3),
     contributions: [
-      contribution('technical', 'bearish', 0.58),
-      contribution('fundamental', 'neutral', 0.21),
-      contribution('sentiment', 'bearish', 0.21),
+      contribution('technical', ['neutral', 'bearish'], 0.58),
+      contribution('fundamental', ['neutral', 'neutral'], 0.21),
+      unrecordedContribution('sentiment', 'bearish', 0.21),
     ],
   },
   {
@@ -154,9 +154,9 @@ const RECENT_DEBATES: DebateLog[] = [
     rounds: 3,
     created_at: hoursAgo(5),
     contributions: [
-      contribution('technical', 'bullish', 0.41),
-      contribution('fundamental', 'bullish', 0.39),
-      contribution('sentiment', 'neutral', 0.2),
+      contribution('technical', ['neutral', 'bullish', 'bullish'], 0.41),
+      contribution('fundamental', ['bearish', 'bearish', 'bullish'], 0.39),
+      contribution('sentiment', ['neutral', 'neutral', 'neutral'], 0.2),
     ],
   },
   {
@@ -167,24 +167,62 @@ const RECENT_DEBATES: DebateLog[] = [
     rounds: 3,
     created_at: hoursAgo(6),
     contributions: [
-      contribution('technical', 'neutral', 0.4),
-      contribution('fundamental', 'bearish', 0.33),
-      contribution('sentiment', 'bullish', 0.27),
+      contribution('technical', ['bearish', 'bullish', 'neutral'], 0.4),
+      contribution('fundamental', ['neutral', 'bearish', 'bearish'], 0.33),
+      contribution('sentiment', ['neutral', 'neutral', 'bullish'], 0.27),
     ],
   },
 ];
 
+/**
+ * A recorded round history: at least one round, oldest first, and as many
+ * entries as the owning debate's `rounds` (#618).
+ */
+type RecordedStances = readonly [Direction, ...Direction[]];
+
+/**
+ * One analyst's contribution, built from its RECORDED round history.
+ *
+ * `final_position` reads off the last round; nothing here is derived from
+ * `final_position` (#618) — a history synthesized from where the analyst ended
+ * up makes one that was talked around indistinguishable from one that never
+ * moved, which is the fabrication #599 removed from the wire. A flat history
+ * in these fixtures is flat because it was recorded flat.
+ */
 function contribution(
   type: string,
-  final: AnalystContribution['final_position'],
+  stances: RecordedStances,
+  influence: number,
+): AnalystContribution {
+  const [opening, ...laterRounds] = stances;
+  return {
+    analyst_id: `${type}-analyst`,
+    analyst_type: type,
+    stance_during_debate: [...stances],
+    final_position: laterRounds.at(-1) ?? opening,
+    rationale: `Round-by-round ${type} read on the instrument.`,
+    influence_score: influence,
+  };
+}
+
+/**
+ * An analyst whose round stances were never recorded: `buildAnalystContributions`
+ * emits an empty `stance_during_debate` and falls back to the analyst's opening
+ * view for `final_position`, so this is the recorded-none case, NOT a history
+ * shorter than the debate's `rounds`. The strip renders it as its stated empty
+ * state.
+ */
+function unrecordedContribution(
+  type: string,
+  final: Direction,
   influence: number,
 ): AnalystContribution {
   return {
     analyst_id: `${type}-analyst`,
     analyst_type: type,
-    stance_during_debate: [final],
+    stance_during_debate: [],
     final_position: final,
-    rationale: `Stance synthesized from the latest ${type} read on the instrument.`,
+    rationale: `Opening ${type} read on the instrument; no round stances recorded.`,
     influence_score: influence,
   };
 }
