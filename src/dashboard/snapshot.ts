@@ -11,6 +11,7 @@
  * what actually filled. Recent-history window is fixed
  * (`RECENT_DEBATES_LIMIT` / `RECENT_VERDICTS_LIMIT`), no config surface yet.
  */
+import type { AnalystContribution, Direction } from '../debate-engine/index.js';
 import type { Mark } from '../market-data-service/index.js';
 import type { OpenPosition } from '../shared/index.js';
 import type { StoreMode } from '../shared/store/index.js';
@@ -21,6 +22,33 @@ import type { DashboardQueryStore, DashboardSnapshot, PositionRow } from './type
 /** Matches the CLI views' default recent-history window; no config surface yet. */
 const RECENT_DEBATES_LIMIT = 10;
 const RECENT_VERDICTS_LIMIT = 10;
+
+/**
+ * The directions the wire may carry, as a value rather than a type. Same
+ * `Record<Union, true>` device as `pipeline-query.ts`'s `RUNTIME_STAGES`: the
+ * `Direction` union is the authority, so a new member stops this compiling
+ * instead of silently passing an unrenderable stance through.
+ */
+const WIRE_DIRECTIONS: Record<Direction, true> = { bullish: true, bearish: true, neutral: true };
+
+function isDirection(value: unknown): value is Direction {
+  return typeof value === 'string' && Object.hasOwn(WIRE_DIRECTIONS, value);
+}
+
+/**
+ * Per-round stances, projected only when EVERY element is a `Direction` —
+ * `contributions` is `JSON.parse` output of `debate_log.contributions_json`,
+ * so its declared type is a claim about the row, not a guarantee. Missing or
+ * corrupt omits the field, which the strip renders as its stated empty state;
+ * filtering bad elements out would show a 3-round debate as a 2-round history.
+ */
+function stanceDuringDebate(
+  contribution: AnalystContribution,
+): { stance_during_debate: Direction[] } | Record<string, never> {
+  const stances = contribution.stance_during_debate;
+  if (!Array.isArray(stances) || !stances.every(isDirection)) return {};
+  return { stance_during_debate: stances };
+}
 
 /**
  * Unrealized PnL from the current mark. Buy: mark − entry; sell: entry − mark.
@@ -93,18 +121,8 @@ export function buildSnapshot(
       analyst_type: c.analyst_type,
       final_position: c.final_position,
       influence_score: c.influence_score,
-      // #427/#599. Where an analyst ended up is not how it got there: without
-      // this the drawer's stance strip has no source and an analyst that was
-      // talked around reads identically to one that never moved.
-      //
-      // `contributions` comes from `JSON.parse` of `debate_log
-      // .contributions_json`, so the declared `Direction[]` is a claim about
-      // the row, not a runtime guarantee — a row lacking the field is left
-      // absent on the wire, so the strip shows its stated empty state rather
-      // than a fabricated flat line.
-      ...(Array.isArray(c.stance_during_debate)
-        ? { stance_during_debate: c.stance_during_debate }
-        : {}),
+      // #427/#599: how an analyst got there, not only where it ended up.
+      ...stanceDuringDebate(c),
     })),
   }));
 

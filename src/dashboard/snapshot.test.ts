@@ -266,6 +266,29 @@ describe('buildSnapshot', () => {
     expect(snap.debates[0]?.contributions[0]?.stance_during_debate).toBeUndefined();
   });
 
+  it('omits the whole stance list when any element is not a Direction', () => {
+    // A corrupted `contributions_json` row. Dropping only the bad element
+    // would render this three-round debate as a confident two-round history;
+    // the whole field goes, so the strip states it has nothing to show.
+    const corrupt = [
+      {
+        analyst_id: 'technical-analyst',
+        analyst_type: 'technical',
+        stance_during_debate: ['bullish', 42, null],
+        final_position: 'bullish',
+        rationale: 'corrupt row',
+        influence_score: 0,
+      } as unknown as AnalystContribution,
+    ];
+    const store = fakeStore({
+      getRecentDebates: () => [makeDebate({ contributions: corrupt, rounds: 3 })],
+    });
+
+    const snap = buildSnapshot(store, AS_OF, 'paper');
+
+    expect(snap.debates[0]?.contributions[0]?.stance_during_debate).toBeUndefined();
+  });
+
   it('projects the tick-in-progress status line verbatim', () => {
     const tick: TickStatus = {
       instrument: 'SPY',
