@@ -201,6 +201,71 @@ describe('buildSnapshot', () => {
     expect(sent).toMatchObject({ weight: 0.6, rolling_r: 0, window_days: 0 });
   });
 
+  it('projects each analyst per-round stance onto the wire, in order (#427/#599)', () => {
+    // The stances differ from each other AND end somewhere the final position
+    // alone cannot reconstruct, so this fails both ways the strip can be
+    // wrong: a dropped projection, and a fabricated flat line derived from
+    // `final_position`. `stance_during_debate` is OPTIONAL on `DebateRow`, so
+    // dropping the projection still compiles — this assertion is the only
+    // guard against that.
+    const contributions: AnalystContribution[] = [
+      {
+        analyst_id: 'technical-analyst',
+        analyst_type: 'technical',
+        stance_during_debate: ['bearish', 'neutral', 'bullish'],
+        final_position: 'bullish',
+        rationale: 'talked around',
+        influence_score: 0.67,
+      },
+      {
+        analyst_id: 'sentiment-analyst',
+        analyst_type: 'sentiment',
+        stance_during_debate: ['bullish', 'bullish', 'bullish'],
+        final_position: 'bullish',
+        rationale: 'never moved',
+        influence_score: 0,
+      },
+    ];
+    const store = fakeStore({
+      getRecentDebates: () => [makeDebate({ contributions, rounds: 3 })],
+    });
+
+    const snap = buildSnapshot(store, AS_OF, 'paper');
+
+    expect(snap.debates[0]?.contributions[0]?.stance_during_debate).toEqual([
+      'bearish',
+      'neutral',
+      'bullish',
+    ]);
+    // The analyst that never moved is the control: identical `final_position`,
+    // a different history, and the wire must keep them distinguishable.
+    expect(snap.debates[0]?.contributions[1]?.stance_during_debate).toEqual([
+      'bullish',
+      'bullish',
+      'bullish',
+    ]);
+  });
+
+  it('leaves stance_during_debate absent for a debate_log row that recorded none', () => {
+    // `contributions` is `JSON.parse` output: a row written without the field
+    // yields `undefined` here, and the strip's empty state ("no per-round
+    // stance recorded") is the honest rendering of that — never a flat line.
+    const legacy = [
+      {
+        analyst_id: 'technical-analyst',
+        analyst_type: 'technical',
+        final_position: 'bullish',
+        rationale: 'pre-#427 row',
+        influence_score: 0,
+      } as AnalystContribution,
+    ];
+    const store = fakeStore({ getRecentDebates: () => [makeDebate({ contributions: legacy })] });
+
+    const snap = buildSnapshot(store, AS_OF, 'paper');
+
+    expect(snap.debates[0]?.contributions[0]?.stance_during_debate).toBeUndefined();
+  });
+
   it('projects the tick-in-progress status line verbatim', () => {
     const tick: TickStatus = {
       instrument: 'SPY',

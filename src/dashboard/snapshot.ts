@@ -93,6 +93,18 @@ export function buildSnapshot(
       analyst_type: c.analyst_type,
       final_position: c.final_position,
       influence_score: c.influence_score,
+      // #427/#599. Where an analyst ended up is not how it got there: without
+      // this the drawer's stance strip has no source and an analyst that was
+      // talked around reads identically to one that never moved.
+      //
+      // `contributions` comes from `JSON.parse` of `debate_log
+      // .contributions_json`, so the declared `Direction[]` is a claim about
+      // the row, not a runtime guarantee — a row lacking the field is left
+      // absent on the wire, so the strip shows its stated empty state rather
+      // than a fabricated flat line.
+      ...(Array.isArray(c.stance_during_debate)
+        ? { stance_during_debate: c.stance_during_debate }
+        : {}),
     })),
   }));
 
