@@ -137,6 +137,18 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
   /** The current pass, so `stop()` awaits it rather than cutting it off. */
   let inFlight: Promise<void> | undefined;
   let handle: NodeJS.Timeout | undefined;
+  /**
+   * Per-lot dedup for the sweep-divergence log line (#549 review, #342's
+   * repeated-line lesson): a lot stuck `undetermined` is returned by EVERY
+   * pass, and a warn re-fired on every poll cadence indefinitely is a line
+   * nobody reads. Logged on first observation and on state TRANSITIONS
+   * (`undetermined` -> `adopted` and vice versa) only; a lot that leaves the
+   * sweep's report is forgotten here, so a LATER episode on the same lot
+   * logs afresh — the same episode scoping the durable alert dedup uses.
+   * In-memory deliberately: this dedups a log line, not the page, and a
+   * restart re-logging current state once is a feature.
+   */
+  const lastSweepAction = new Map<string, string>();
 
   /**
    * One pass: the fill poll, then the #549 residual-protection sweep. The
@@ -152,7 +164,12 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
     } finally {
       try {
         const sweep = await deps.execution.sweepResidualProtection();
+        const reportedThisPass = new Set<string>();
         for (const divergence of sweep.divergences) {
+          reportedThisPass.add(divergence.idempotency_key);
+          // Repeat pass, same state: already logged — see `lastSweepAction`.
+          if (lastSweepAction.get(divergence.idempotency_key) === divergence.action) continue;
+          lastSweepAction.set(divergence.idempotency_key, divergence.action);
           deps.logger.log({
             trace_id: FILL_SYNC_TRACE_ID,
             stage: 'execution',
@@ -163,6 +180,9 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
             message: 'residual-protection sweep divergence',
             payload: { ...divergence },
           });
+        }
+        for (const key of [...lastSweepAction.keys()]) {
+          if (!reportedThisPass.has(key)) lastSweepAction.delete(key);
         }
       } catch (sweepError) {
         deps.logger.log({

@@ -941,9 +941,13 @@ async function maybeRearmResidual(
       // #549: marked BEFORE the alert — the residual cannot be recomputed
       // right now, which is exactly a "protection not confirmed" state the
       // sweep must keep retrying with a fresh read.
-      await markResidualUnprotectedBestEffort(input, position, now);
-      await alertResidualExposure(input, position, position.requested_size, now, true);
-      await markResidualAlertedBestEffort(input, position, now);
+      await bestEffortMarkerWrite(input, position, now, 'mark-unprotected');
+      // #549 review: the alert-dedup marker records only a delivery the
+      // channel ACCEPTED — a swallowed transport failure must leave the
+      // episode un-alerted so the sweep pages again on its next pass.
+      if (await alertResidualExposure(input, position, position.requested_size, now, true)) {
+        await bestEffortMarkerWrite(input, position, now, 'mark-alerted');
+      }
       return;
     }
     ({ filledSize, exitQty } = recordedExposure(recorded));
@@ -963,7 +967,7 @@ async function maybeRearmResidual(
   // arithmetic) is cleared here off the fuller persisted record — flat IS
   // "nothing left unprotected", confirmed.
   if (coversQty(exitQty, filledSize)) {
-    await confirmResidualProtectedBestEffort(input, position);
+    await bestEffortMarkerWrite(input, position, now, 'confirm-protected');
     return;
   }
 
@@ -980,7 +984,7 @@ async function maybeRearmResidual(
   // a flat read) clears it. Best-effort, never throwing (this function's own
   // contract): a failed marker write is logged and must not stop the actual
   // re-arm attempt, which matters more than its bookkeeping.
-  await markResidualUnprotectedBestEffort(input, position, now);
+  await bestEffortMarkerWrite(input, position, now, 'mark-unprotected');
 
   // Fail-closed (`executeExit`'s precedent, execute.ts): a non-finite or
   // non-positive residual while `coversQty` above says "not flat" means the
@@ -989,8 +993,9 @@ async function maybeRearmResidual(
   // alerting instead is the same posture `executeExit` takes on a
   // store/venue size mismatch — surface it, never guess.
   if (!(residual > 0) || !Number.isFinite(residual)) {
-    await alertResidualExposure(input, position, residual, now);
-    await markResidualAlertedBestEffort(input, position, now);
+    if (await alertResidualExposure(input, position, residual, now)) {
+      await bestEffortMarkerWrite(input, position, now, 'mark-alerted');
+    }
     return;
   }
 
@@ -1009,7 +1014,7 @@ async function maybeRearmResidual(
     // already in place, which every adapter path tolerates (equities
     // adopt-or-place on the deterministic `:rearm` wire id; crypto emulation
     // retires stale legs before arming; Simulated re-sets the same qty).
-    await confirmResidualProtectedBestEffort(input, position);
+    await bestEffortMarkerWrite(input, position, now, 'confirm-protected');
   } catch (error) {
     // The broker's own error is not forwarded to the ALERT — see
     // `ResidualExposureAlert`'s CREDENTIALS note: this channel carries only
@@ -1032,31 +1037,60 @@ async function maybeRearmResidual(
       error,
       { idempotency_key: position.idempotency_key, residual_qty: residual },
     );
-    await alertResidualExposure(input, position, residual, now);
-    // #549: the marker stays set (protection is NOT confirmed) and the
-    // episode is recorded as already-alerted, so the sweep retries the
-    // re-arm on cadence without paging again for the same episode (#342).
-    await markResidualAlertedBestEffort(input, position, now);
+    // #549: the marker stays set (protection is NOT confirmed). The episode
+    // is recorded as already-alerted ONLY when the channel accepted the
+    // delivery (#549 review) — so the sweep retries the re-arm on cadence
+    // without paging again for a page that actually landed (#342), and DOES
+    // page again for one a transport outage swallowed.
+    if (await alertResidualExposure(input, position, residual, now)) {
+      await bestEffortMarkerWrite(input, position, now, 'mark-alerted');
+    }
   }
 }
 
 /**
- * The three best-effort #549 marker writes. Each swallows its own store
- * failure — `maybeRearmResidual`'s "never throws" contract, and the same
- * reasoning as this file's other contained writes: the marker is recovery
- * BOOKKEEPING, and losing a bookkeeping write must never abort the actual
- * re-arm (or the poll) it books. Logged at `warn` via `logCaughtFailure`
- * (#608): a marker that failed to persist narrows the #549 crash coverage
- * back to the old poll-scoped window, which an operator grepping after an
- * incident needs to be able to see.
+ * The best-effort #549 marker writes, one parameterized helper (#549
+ * review). Each op swallows its own store failure — `maybeRearmResidual`'s
+ * "never throws" contract, and the same reasoning as this file's other
+ * contained writes: the marker is recovery BOOKKEEPING, and losing a
+ * bookkeeping write must never abort the actual re-arm (or the poll) it
+ * books. Logged at `warn` via `logCaughtFailure` (#608) with an op-specific
+ * message: what a failed write COSTS differs per op, and that is exactly
+ * what an operator grepping after an incident needs to see.
  */
-async function markResidualUnprotectedBestEffort(
+const MARKER_WRITES = {
+  'mark-unprotected': {
+    write: (input: ExecutionInput, key: string, now: Date) =>
+      input.store.markResidualUnprotected(key, now),
+    failureMessage:
+      'markResidualUnprotected failed — if this process dies before the re-arm is confirmed, ' +
+      'the #549 sweep will not know to retry this lot',
+  },
+  'confirm-protected': {
+    write: (input: ExecutionInput, key: string, _now: Date) =>
+      input.store.confirmResidualProtected(key),
+    failureMessage:
+      'confirmResidualProtected failed — the lot stays marked and the #549 sweep will ' +
+      're-verify a protection that is already in place (idempotent on every adapter path)',
+  },
+  'mark-alerted': {
+    write: (input: ExecutionInput, key: string, now: Date) =>
+      input.store.markResidualAlerted(key, now),
+    failureMessage:
+      'markResidualAlerted failed — the #549 sweep may page a second time for an episode ' +
+      'that was already alerted (noisy, not unsafe)',
+  },
+} as const;
+
+async function bestEffortMarkerWrite(
   input: ExecutionInput,
   position: OpenPosition,
   now: Date,
+  op: keyof typeof MARKER_WRITES,
 ): Promise<void> {
+  const { write, failureMessage } = MARKER_WRITES[op];
   try {
-    await input.store.markResidualUnprotected(position.idempotency_key, now);
+    await write(input, position.idempotency_key, now);
   } catch (error) {
     logCaughtFailure(
       input.logger,
@@ -1064,58 +1098,7 @@ async function markResidualUnprotectedBestEffort(
         trace_id: input.trace_id,
         stage: 'execution',
         level: 'warn',
-        message:
-          'markResidualUnprotected failed — if this process dies before the re-arm is confirmed, ' +
-          'the #549 sweep will not know to retry this lot',
-      },
-      error,
-      { idempotency_key: position.idempotency_key },
-    );
-  }
-}
-
-/** See `markResidualUnprotectedBestEffort` above — same posture, the confirmed-protected clear. */
-async function confirmResidualProtectedBestEffort(
-  input: ExecutionInput,
-  position: OpenPosition,
-): Promise<void> {
-  try {
-    await input.store.confirmResidualProtected(position.idempotency_key);
-  } catch (error) {
-    logCaughtFailure(
-      input.logger,
-      {
-        trace_id: input.trace_id,
-        stage: 'execution',
-        level: 'warn',
-        message:
-          'confirmResidualProtected failed — the lot stays marked and the #549 sweep will ' +
-          're-verify a protection that is already in place (idempotent on every adapter path)',
-      },
-      error,
-      { idempotency_key: position.idempotency_key },
-    );
-  }
-}
-
-/** See `markResidualUnprotectedBestEffort` above — same posture, the once-per-episode alert dedup. */
-async function markResidualAlertedBestEffort(
-  input: ExecutionInput,
-  position: OpenPosition,
-  now: Date,
-): Promise<void> {
-  try {
-    await input.store.markResidualAlerted(position.idempotency_key, now);
-  } catch (error) {
-    logCaughtFailure(
-      input.logger,
-      {
-        trace_id: input.trace_id,
-        stage: 'execution',
-        level: 'warn',
-        message:
-          'markResidualAlerted failed — the #549 sweep may page a second time for an episode ' +
-          'that was already alerted (noisy, not unsafe)',
+        message: failureMessage,
       },
       error,
       { idempotency_key: position.idempotency_key },
@@ -1134,6 +1117,13 @@ async function markResidualAlertedBestEffort(
  * whose escalation is the SAME alert with the same CREDENTIALS boundary —
  * a second hand-rolled copy of this channel's swallow/trace posture is
  * exactly the drift `shared/safe-log.ts` was extracted to prevent.
+ *
+ * Returns whether the channel RESOLVED (#549 review): the once-per-episode
+ * dedup (`markResidualAlerted`) may only be recorded against a delivery the
+ * channel accepted — marking it after a swallowed failure would let a
+ * transient transport outage permanently suppress the only page for a
+ * still-naked residual. The swallow itself is unchanged; only the caller's
+ * bookkeeping branches on the answer.
  */
 export async function alertResidualExposure(
   input: ExecutionInput,
@@ -1146,7 +1136,7 @@ export async function alertResidualExposure(
    * (#569 review). Defaulted so the two exact call sites read unchanged.
    */
   residualQtyIsUpperBound = false,
-): Promise<void> {
+): Promise<boolean> {
   try {
     await input.residualExposureAlerts.postResidualExposureAlert({
       idempotency_key: position.idempotency_key,
@@ -1158,6 +1148,7 @@ export async function alertResidualExposure(
       target: position.target,
       observed_at: now,
     });
+    return true;
   } catch {
     // The redistribution/advance this alert reports on already completed —
     // see this function's doc comment for why that must not be undone here.
@@ -1181,6 +1172,7 @@ export async function alertResidualExposure(
         residual_qty_is_upper_bound: residualQtyIsUpperBound,
       },
     });
+    return false;
   }
 }
 

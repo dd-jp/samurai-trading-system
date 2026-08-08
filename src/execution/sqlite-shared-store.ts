@@ -730,14 +730,25 @@ export class SqliteExecutionStore implements SharedStore {
       )
       .all(...TERMINAL_STATES) as OpenPositionRow[];
 
-    return rows.map((row) => ({
-      position: fromPositionRow(row),
-      // Non-null by the WHERE clause; the cast-free fallback keeps the
-      // mapping total if a future edit widens the query.
-      unprotected_since: new Date(row.residual_unprotected_since ?? 0),
-      alerted_at:
-        row.residual_rearm_alerted_at === null ? null : new Date(row.residual_rearm_alerted_at),
-    }));
+    return rows.map((row) => {
+      // Non-null by the WHERE clause — a null here means the row (or the
+      // query) is corrupted, and mapping it to some default would hand the
+      // sweep a fabricated observation time. Fail loudly instead (#549
+      // review); the sweep's caller treats an unreadable worklist as "no
+      // pass", which is the honest answer.
+      if (row.residual_unprotected_since === null) {
+        throw new Error(
+          `SqliteExecutionStore.getUnprotectedResidualLots: row '${row.idempotency_key}' ` +
+            'matched the marker query but residual_unprotected_since reads NULL',
+        );
+      }
+      return {
+        position: fromPositionRow(row),
+        unprotected_since: new Date(row.residual_unprotected_since),
+        alerted_at:
+          row.residual_rearm_alerted_at === null ? null : new Date(row.residual_rearm_alerted_at),
+      };
+    });
   }
 }
 

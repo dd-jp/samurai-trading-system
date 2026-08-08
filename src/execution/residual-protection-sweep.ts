@@ -280,7 +280,13 @@ async function sweepOne(
  * (through `alertResidualExposure`'s swallow/CREDENTIALS posture, unchanged)
  * only when this episode has never alerted, then records the dedup durably.
  * A suppressed duplicate is not silent: every suppressing pass still emits
- * its `undetermined` divergence, which both callers log per entry.
+ * its `undetermined` divergence, which both callers log.
+ *
+ * The dedup is recorded ONLY when the channel accepted the delivery (#549
+ * review — `alertResidualExposure`'s boolean): a swallowed transport outage
+ * must leave the episode un-alerted, so the NEXT pass pages again instead of
+ * the one failed attempt permanently silencing the only page for a
+ * still-naked residual.
  */
 async function alertResidualExposureOnce(
   input: ExecutionInput,
@@ -290,7 +296,14 @@ async function alertResidualExposureOnce(
   residualQtyIsUpperBound: boolean,
 ): Promise<void> {
   if (row.alerted_at !== null) return;
-  await alertResidualExposure(input, row.position, residualQty, now, residualQtyIsUpperBound);
+  const delivered = await alertResidualExposure(
+    input,
+    row.position,
+    residualQty,
+    now,
+    residualQtyIsUpperBound,
+  );
+  if (!delivered) return;
   try {
     await input.store.markResidualAlerted(row.position.idempotency_key, now);
   } catch (error) {

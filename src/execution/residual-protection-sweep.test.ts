@@ -388,6 +388,46 @@ describe('residual-protection sweep (#549)', () => {
     });
   });
 
+  it('re-pages on the next pass when the alert channel swallowed the first delivery — dedup records only accepted pages (#549 review)', async () => {
+    const { db, store } = openTestExecutionStore();
+    await seedPosition(store);
+    await seedPartiallyFlattenedFills(store);
+    await store.markResidualUnprotected(LOT, NOW);
+
+    const restartedStore = new TestExecutionStore(db);
+    const broker = new SweepBroker();
+    broker.rearmFailure = new Error('venue still down');
+    // A transport that is DOWN for the first delivery and healthy after —
+    // the transient outage that must not permanently silence the page.
+    const delivered: ResidualExposureAlert[] = [];
+    let failDeliveriesRemaining = 1;
+    const flakyChannel: ResidualExposureAlertChannel = {
+      async postResidualExposureAlert(alert: ResidualExposureAlert): Promise<void> {
+        if (failDeliveriesRemaining > 0) {
+          failDeliveriesRemaining -= 1;
+          throw new Error('alert transport outage');
+        }
+        delivered.push(alert);
+      },
+    };
+    const execution = new ExecutionImpl(makeInput(broker, restartedStore, flakyChannel));
+
+    await execution.sweepResidualProtection();
+    // The delivery was swallowed, so the episode must NOT read as alerted.
+    expect(delivered).toHaveLength(0);
+    expect((await restartedStore.getResidualProtectionMarker(LOT))?.alerted_at).toBeNull();
+
+    // Next pass: still failing, transport healthy — the page goes out now,
+    // and only now is the dedup recorded.
+    await execution.sweepResidualProtection();
+    expect(delivered).toHaveLength(1);
+    expect((await restartedStore.getResidualProtectionMarker(LOT))?.alerted_at).not.toBeNull();
+
+    // And a third pass stays deduped.
+    await execution.sweepResidualProtection();
+    expect(delivered).toHaveLength(1);
+  });
+
   it('clears a marker whose lot reads flat on the persisted record without any broker call', async () => {
     const { store } = openTestExecutionStore();
     await seedPosition(store);

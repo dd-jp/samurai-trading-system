@@ -1407,7 +1407,26 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       const getOrderByClientOrderId = vi.fn(
         byClientOrderId({
           'key-1': { ...acceptedOrder(), id: 'bracket-venue-id' },
-          'key-1:rearm': { ...acceptedOrder(), id: 'rearm-venue-id' },
+          // A MATCHING live prior (#549's adopt-or-place compares qty/levels
+          // before adopting), so the rearm below adopts without cancelling.
+          'key-1:rearm': {
+            ...acceptedOrder(),
+            id: 'rearm-venue-id',
+            order_class: 'oco',
+            qty: '6',
+            limit_price: '110',
+            legs: [
+              {
+                id: 'rearm-stop-leg',
+                type: 'stop' as const,
+                status: 'held',
+                filled_qty: '0',
+                filled_avg_price: null,
+                filled_at: null,
+                stop_price: '95',
+              },
+            ],
+          },
         }),
       );
       const cancelOrder = vi.fn(async (id: string) => {
@@ -1533,13 +1552,15 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
   // ADOPTED by the retry rather than double-submitted (or misread as a fresh
   // failure when the venue rejects the duplicate client order id).
   describe('re-arm adopt-or-place (#549)', () => {
-    it('adopts a live prior OCO under the deterministic wire id instead of submitting again', async () => {
-      const submitOcoOrder = vi.fn();
-      const getOrderByClientOrderId = vi.fn().mockResolvedValue({
+    /** A live prior OCO whose qty/levels match the canonical (6, 95, 110) request. */
+    function matchingPriorOco() {
+      return {
         ...acceptedOrder(),
         id: 'prior-rearm-oco',
         client_order_id: 'key-1:rearm',
         order_class: 'oco',
+        qty: '6',
+        limit_price: '110',
         legs: [
           {
             id: 'prior-rearm-stop',
@@ -1548,15 +1569,87 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
             filled_qty: '0',
             filled_avg_price: null,
             filled_at: null,
+            stop_price: '95',
           },
         ],
-      });
-      const adapter = adapterWith(makeClient({ submitOcoOrder, getOrderByClientOrderId }));
+      };
+    }
+
+    it('adopts a live prior OCO that MATCHES the request instead of submitting again', async () => {
+      const submitOcoOrder = vi.fn();
+      const cancelOrder = vi.fn();
+      const getOrderByClientOrderId = vi.fn().mockResolvedValue(matchingPriorOco());
+      const adapter = adapterWith(
+        makeClient({ submitOcoOrder, cancelOrder, getOrderByClientOrderId }),
+      );
 
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
 
       expect(getOrderByClientOrderId).toHaveBeenCalledWith('key-1:rearm');
       expect(submitOcoOrder).not.toHaveBeenCalled();
+      expect(cancelOrder).not.toHaveBeenCalled();
+    });
+
+    // #549 review: the wire id is per-lot and reused across attempts, so a
+    // resting prior sized for a DIFFERENT residual (further exit fills landed
+    // between the crashed attempt and this retry) must not be adopted — an
+    // oversized stop over-closes into a reverse position (#516's hazard).
+    it('cancels and replaces a live prior whose qty no longer matches the residual', async () => {
+      const submitOcoOrder = vi
+        .fn()
+        .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-2', order_class: 'oco', legs: [] });
+      const cancelOrder = vi.fn().mockResolvedValue(undefined);
+      // Sized for the OLD residual (9), request now wants 6.
+      const getOrderByClientOrderId = vi
+        .fn()
+        .mockResolvedValue({ ...matchingPriorOco(), qty: '9' });
+      const adapter = adapterWith(
+        makeClient({ submitOcoOrder, cancelOrder, getOrderByClientOrderId }),
+      );
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+
+      expect(cancelOrder).toHaveBeenCalledWith('prior-rearm-oco');
+      expect(submitOcoOrder).toHaveBeenCalledTimes(1);
+      expect(submitOcoOrder).toHaveBeenCalledWith(expect.objectContaining({ qty: '6' }));
+    });
+
+    it('refuses to adopt a prior whose price fields are missing — unverifiable protection is replaced', async () => {
+      const submitOcoOrder = vi
+        .fn()
+        .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-2', order_class: 'oco', legs: [] });
+      const cancelOrder = vi.fn().mockResolvedValue(undefined);
+      const prior = matchingPriorOco();
+      const getOrderByClientOrderId = vi
+        .fn()
+        .mockResolvedValue({ ...prior, limit_price: undefined });
+      const adapter = adapterWith(
+        makeClient({ submitOcoOrder, cancelOrder, getOrderByClientOrderId }),
+      );
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+
+      expect(cancelOrder).toHaveBeenCalledWith('prior-rearm-oco');
+      expect(submitOcoOrder).toHaveBeenCalledTimes(1);
+    });
+
+    it('adopts a FILLED prior regardless of size — its fill is already closing the residual', async () => {
+      const submitOcoOrder = vi.fn();
+      const cancelOrder = vi.fn();
+      const getOrderByClientOrderId = vi.fn().mockResolvedValue({
+        ...matchingPriorOco(),
+        qty: '9',
+        status: 'filled',
+        filled_qty: '9',
+      });
+      const adapter = adapterWith(
+        makeClient({ submitOcoOrder, cancelOrder, getOrderByClientOrderId }),
+      );
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+
+      expect(submitOcoOrder).not.toHaveBeenCalled();
+      expect(cancelOrder).not.toHaveBeenCalled();
     });
 
     it('places afresh when the prior attempt under the wire id is dead (cancelled)', async () => {

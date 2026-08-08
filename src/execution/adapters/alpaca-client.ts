@@ -21,6 +21,15 @@ export interface AlpacaOrderLeg {
   filled_qty: string;
   filled_avg_price: string | null;
   filled_at: string | null;
+  /**
+   * The stop trigger, present on a `type: 'stop'` leg. Optional here because
+   * the wire client passes payloads through UNMODIFIED and older doubles do
+   * not set it — declared (#549) so `rearmOrderMatches`
+   * (alpaca-adapter.ts) can verify a prior re-arm's levels without a cast.
+   */
+  stop_price?: string | null;
+  /** The leg's limit price, present on a `type: 'limit'` leg — same optionality reasoning as `stop_price`. */
+  limit_price?: string | null;
 }
 
 /** Alpaca's order payload, as returned by both submit and get-order. */
@@ -37,6 +46,14 @@ export interface AlpacaOrder {
   filled_at: string | null;
   /** Present on the bracket parent: [take_profit_leg, stop_loss_leg]. */
   legs?: AlpacaOrderLeg[];
+  /**
+   * The order's own limit price — for an OCO this IS the take-profit level
+   * (the take-profit is the top-level order; only the stop is a child leg).
+   * Optional for `AlpacaOrderLeg.stop_price`'s reason: the wire client
+   * passes payloads through unmodified, and this field was undeclared until
+   * `rearmOrderMatches` (#549) needed to read it.
+   */
+  limit_price?: string | null;
 }
 
 export interface AlpacaBracketOrderRequest {
