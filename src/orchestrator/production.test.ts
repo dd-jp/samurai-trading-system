@@ -409,6 +409,32 @@ describe('buildProductionComponents', () => {
     expect(submitSpy).toHaveBeenCalledTimes(1);
   });
 
+  it(
+    "wires the run's own Logger into the execution surface's ExecutionInput.logger " +
+      '(#573) — not a fresh default, and not silently dropped',
+    () => {
+      // #573's whole point: a store/broker/alert failure `ingestFills()`/
+      // `reconcile()` catches gets a local trace ONLY if the `Logger` they
+      // were handed is the real one, not a default a dropped composition-root
+      // wire would fall back to (or worse, no logger reachable at all). A
+      // unit test on `ingestFills()` alone cannot catch that regression —
+      // it constructs `ExecutionInput` by hand, so it can't tell whether
+      // `buildProductionComponents` actually threads the real instance
+      // through. This is the seam that can: `components.executionDeps` is the
+      // SAME object `buildExecutionStep`/`buildExecutionSurface`
+      // (production/direct-bind.ts) copy `logger: deps.logger` from,
+      // unchanged, into every `ExecutionInput` they construct — the same
+      // "assert the composition root, not just the unit" reasoning the
+      // broker-identity test just above takes for `components.broker`.
+      const logger = recordingLogger();
+      const config = stubConfig(db, { logger });
+
+      const components = buildProductionComponents(config);
+
+      expect(components.executionDeps.logger).toBe(logger);
+    },
+  );
+
   it('buildProductionTickRunner returns a SequentialTickRunner', () => {
     expect(buildProductionTickRunner(stubConfig(db))).toBeInstanceOf(SequentialTickRunner);
   });
