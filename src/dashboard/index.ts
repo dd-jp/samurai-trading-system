@@ -4,8 +4,12 @@
  * `src/orchestrator/index.ts` as a secondary entry point.
  *
  * File-path convention follows shared-sqlite-store-spec.md's "one file per
- * environment": `data/samurai-{env}.sqlite` at repo root, selected via
- * `NODE_ENV` (defaults to `development`).
+ * MODE": `data/samurai-{mode}.sqlite`, relative to the process's working
+ * directory, selected via `SAMURAI_MODE` — which `resolveStoreMode` refuses to
+ * default (#330). The path being relative is why the dashboard must be started
+ * from the repo root: elsewhere `openSharedStore` creates and migrates an empty
+ * database and the page renders healthy and blank. See README, "Running it
+ * locally against real orchestrator data".
  *
  * Also starts the provider-status poller (provider-status.ts) for the Alpaca
  * balance and Polygon health tiles. Those are live third-party reads rather

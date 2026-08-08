@@ -173,7 +173,47 @@ An **offline** end-to-end run through all six stages with no Alpaca call — it 
 yarn dashboard          # http://127.0.0.1:8787
 ```
 
-Read-only HTTP view over the same SQLite file the orchestrator writes: pipeline lanes per instrument, positions, debates, verdicts, per-analyst performance, LLM spend against the cap, and provider-status tiles. It resolves the store path from `SAMURAI_MODE`/`NODE_ENV` exactly as the orchestrator does, so it cannot show a healthy, empty system from the wrong file. Provider credentials are optional here — a missing key degrades that tile to `not_configured` rather than blocking startup.
+Read-only HTTP view over the same SQLite file the orchestrator writes: pipeline lanes per instrument, positions, debates, verdicts, per-analyst performance, LLM spend against the cap, and provider-status tiles. It resolves the store path from `SAMURAI_MODE` exactly as the orchestrator does — `NODE_ENV` stopped selecting the file in #330 — so it cannot show a healthy, empty system from the wrong file. Provider credentials are optional here — a missing key degrades that tile to `not_configured` rather than blocking startup.
+
+#### Running it locally against real orchestrator data
+
+**`SAMURAI_MODE` is mandatory.** `resolveStoreMode()` throws rather than defaulting, and `src/dashboard/index.ts` calls it before anything else, so a dashboard started without it does not come up at all. That refusal is the point: the alternative is a process that guesses a mode, opens the wrong file, and renders a healthy, empty page while the orchestrator is trading in the other one.
+
+| `SAMURAI_MODE` | Store file the dashboard opens |
+| --- | --- |
+| `paper` | `data/samurai-paper.sqlite` |
+| `backtest` | `data/samurai-backtest.sqlite` |
+| `live` | `data/samurai-live.sqlite` |
+
+**Two ways to run it.**
+
+```bash
+# 1. Built bundle, one process — what an operator runs, and what `yarn dashboard` does.
+#    The same node:http server serves the React bundle from dist/dashboard-web/ AND /api/snapshot.
+yarn build
+SAMURAI_MODE=paper node dist/dashboard/index.js        # http://127.0.0.1:8787
+
+# 2. Vite dev server — hot reload while working on src/dashboard-web/.
+#    TWO processes: Vite serves the page, the dashboard server still serves the data.
+SAMURAI_MODE=paper PORT=8799 node dist/dashboard/index.js &   # data
+PORT=8799 yarn dev:web                                        # page → http://localhost:5173
+```
+
+`vite.config.ts` proxies `/api` to `http://127.0.0.1:${PORT ?? 8787}`, so **both processes must agree on `PORT`** — export it for the dev server too, or the page loads and every poll 404s. Production never proxies; there is one process and no dev server. Vite's dev server binds IPv6 first, so reach it as `localhost`, not `127.0.0.1`; the dashboard server itself binds `127.0.0.1`.
+
+Check the data path before trusting the page:
+
+```bash
+curl -s http://127.0.0.1:8787/api/snapshot | head -c 400
+```
+
+`mode` must be the mode you started with, and the store-backed figures — `debates`, `analysts`, `llm_spend.all_time.cost_usd` — must carry real numbers. Those are the honest check that the page is reading the orchestrator's file.
+
+**`pipeline.lanes` is not that check.** The lane universe is `latest_mark ∪ current_tick`, and `latest_mark` holds one row per instrument the Market Data Service has *priced on demand* — which is neither the tick universe nor a record of what ticked recently. So the hero can show idle chips for instruments that last traded days ago while omitting an instrument that completed a trace a minute ago. See [#619](https://github.com/dd-jp/samurai-trading-system/issues/619).
+
+**An empty-but-healthy page almost always means the wrong working directory.** `sharedStorePath()` returns a **relative** path (`data/samurai-<mode>.sqlite`), which the server resolves against its own cwd, and `openSharedStore()` **creates and migrates** a database that isn't there. Started from a directory with no `data/`, the dashboard therefore opens a brand-new empty store and renders a perfectly healthy screen with nothing in it. Run it from the repo root — the same directory the orchestrator runs from. That relative path is also why a second checkout (a git worktree, say) must **copy** the store rather than point at the running one: opening it read-write would migrate a live database under a running process.
+
+An orchestrator that is up but between ticks legitimately shows idle chips in the Lobby — that is a reading, not a fault. `tick_status: null` with lanes present means no pass is in flight right now.
 
 ### Both together
 
