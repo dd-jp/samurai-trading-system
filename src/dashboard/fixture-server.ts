@@ -53,16 +53,14 @@ function fixtureVerdictTime(secondsAgo: number): Date {
   return new Date(FIXTURE_NOW.getTime() - secondsAgo * 1_000);
 }
 
+/**
+ * Newest first, matching `SqliteQueryStore.getVerdictHistory` — which is also
+ * what makes the inherited `slice(0, limit)` keep the RECENT rows rather than
+ * the oldest ones. Consumers join by `trace_id`, but a fixture whose order
+ * contradicted the real store would be a lie the day one of them reads
+ * `verdicts[0]`.
+ */
 const E2E_VERDICTS: VerdictAuditEntry[] = [
-  {
-    trace_id: 'trace-p-btc',
-    instrument: 'BTC-USD',
-    status: 'go',
-    reason: 'approved',
-    hitl_override: false,
-    // The BTC lane's Execution row is 170s old; its verdict is the row before it.
-    timestamp: fixtureVerdictTime(172),
-  },
   {
     trace_id: 'trace-p-eth',
     instrument: 'ETH-USD',
@@ -71,6 +69,15 @@ const E2E_VERDICTS: VerdictAuditEntry[] = [
     hitl_override: true,
     // The ETH lane's Verdict row, to the second.
     timestamp: fixtureVerdictTime(112),
+  },
+  {
+    trace_id: 'trace-p-btc',
+    instrument: 'BTC-USD',
+    status: 'go',
+    reason: 'approved',
+    hitl_override: false,
+    // The BTC lane's Execution row is 170s old; its verdict is the row before it.
+    timestamp: fixtureVerdictTime(172),
   },
 ];
 
