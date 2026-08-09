@@ -44,7 +44,7 @@ Market Intelligence ─┘                                                      
 - **Package manager:** Yarn 4.18.0 (via Corepack; `packageManager` field). There is no `package-lock.json`
 - **Tests:** Vitest
 - **Linter/formatter:** Biome
-- **State:** SQLite via `better-sqlite3`, one file per environment (`data/samurai-<env>.sqlite`), 20 forward migrations
+- **State:** SQLite via `better-sqlite3`, one file per environment (`data/samurai-<env>.sqlite`), 25 forward migrations
 - **Brokers:** Alpaca (MVP paper), Simulated (backtest); ccxt/IBKR are long-term targets behind the same `BrokerAdapter` interface
 - **LLM:** single provider — Nous (ADR-0009), per-role models
 
@@ -75,7 +75,11 @@ yarn lint
 yarn lint:fix
 ```
 
-`yarn precommit` runs format → lint:fix → typecheck → test:coverage in one pass.
+`yarn precommit` runs lint:fix → typecheck → test:coverage in one pass. There is
+no separate format step: `biome check` **is** the formatter as well as the
+linter, so `yarn lint` already fails on an unformatted file and `yarn lint:fix`
+already rewrites it. A check-only `yarn format` used to lead that chain, which
+made the gate abort on precisely the fault the next step existed to fix.
 
 ## Running the System
 
@@ -264,11 +268,16 @@ yarn test:watch
 # With coverage
 yarn test:coverage
 
+# Only what your branch touched — vitest --changed against origin/main.
+# A fast inner-loop check, NOT a substitute for the full run: it needs an
+# up-to-date origin/main, and it cannot see a break in a file you did not edit.
+yarn test:local
+
 # Specific stage
 yarn vitest run server/pipeline/debate-engine/
 ```
 
-The suite is **2466 tests across 165 files** (2465 passing; one `describe.skipIf` integration test that runs only when live LLM credentials are present).
+The suite is **2920 tests across 188 files** (2919 passing; one `describe.skipIf` integration test that runs only when live LLM credentials are present). Measured 2026-08-09 on `yarn test`.
 
 CI (`.github/workflows/ci.yml`) runs on every PR and has two jobs:
 
@@ -346,26 +355,60 @@ dist/server/apps/supervisor/index.js      # yarn start
 
 ## Scripts
 
+Every script in `package.json`, all 23 of them. There are no others.
+
 | Tier | Script | What it does |
 | --- | --- | --- |
 | dev | `yarn dev:web` | Vite dev server for `client/` → `localhost:5173`. Proxies `/api` to the service API |
 | dev | `yarn dev:api` | Service API from source under `tsx`, restarts on edit. Run alongside `dev:web` |
-| build | `yarn build` | `tsc` + migrations copy + `vite build`. Emits `dist/` |
+| build | `yarn build` | `tsc` + `build:migrations` + `build:web`. Emits `dist/` |
+| build | `yarn build:migrations` | Copies `server/shared/store/migrations/*.sql` into `dist/`. `tsc` emits no `.sql`, so without it the built orchestrator finds no migrations to apply. Sub-step of `build` |
+| build | `yarn build:web` | Client `tsc` + `vite build`. Sub-step of `build`, and **also its own CI step** (`ci.yml`) so a frontend-toolchain failure is named as one instead of surfacing as "build failed" |
 | run | **`yarn start`** | **The one full-system command.** Builds, then supervises orchestrator + service API |
+| run | `yarn serve` | Alias for `yarn start` |
 | run | `yarn orchestrator` | Money path alone — the unattended-soak entrypoint |
 | run | `yarn api` | Operator view alone |
+| run | `yarn dashboard` | Alias for `yarn api` |
 | run | `yarn smoke` | Offline end-to-end gate |
-| data | `yarn data <cmd>` | `ingest-history` / `backfill-market-data` |
-| quality | `yarn test` `yarn typecheck` `yarn lint` `yarn e2e` `yarn precommit` | |
+| data | `yarn data <cmd>` | Dispatcher: `ingest-history` / `backfill-market-data`. Bare `yarn data` prints usage and exits 1 |
+| data | `yarn ingest-history` | Alias for `yarn data ingest-history` |
+| data | `yarn backfill-market-data` | Alias for `yarn data backfill-market-data` |
+| quality | `yarn typecheck` | Four projects: server, tests, client tests, e2e |
+| quality | `yarn test` | Full vitest suite |
+| quality | `yarn test:coverage` | Same suite under v8 coverage. What `precommit` runs |
+| quality | `yarn test:local` | `vitest --changed origin/main` — only what the branch touched. Inner loop, not a gate |
+| quality | `yarn test:watch` | Vitest in watch mode |
+| quality | `yarn e2e` | Playwright suite against the built bundle on `:8788`. CI job of its own |
+| quality | `yarn lint` | `biome check .` — lint **and** formatting, both gated in CI |
+| quality | `yarn lint:fix` | `biome check --write .` — fixes both |
+| quality | `yarn precommit` | `lint:fix` → `typecheck` → `test:coverage` |
 
-Every run script builds first, deliberately. A stale `dist/` fails *silently* —
-the process boots and serves the previous build — and `sharedStorePath()`
-resolving against the working directory means the wrong cwd yields a fresh empty
-database and a healthy-looking blank page. Six redundant `tsc` invocations are
-the cheaper side of that trade.
+**Five run scripts build first** (`start`, `orchestrator`, `api`, `smoke`,
+`data`), deliberately. A stale `dist/` fails *silently* — the process boots and
+serves the previous build — and `sharedStorePath()` resolving against the
+working directory means the wrong cwd yields a fresh empty database and a
+healthy-looking blank page. Redundant `tsc` invocations are the cheaper side of
+that trade. The two `dev:*` scripts are the exception: they run from source
+(Vite, `tsx`), which is the whole point of them.
 
-`yarn serve` and `yarn dashboard` still work; they delegate to `yarn start` and
-`yarn api`.
+**The four aliases are kept on purpose**, not left over. `serve`/`dashboard`
+are the names an operator's muscle memory and several source comments still
+use (`server/apps/supervisor/supervisor.ts`, `e2e/playwright.config.ts`);
+`ingest-history`/`backfill-market-data` predate the `yarn data` dispatcher and
+survive because a runbook or cron entry may name either (see the header of
+`server/tools/data-cli.ts`). Renaming a script an unattended job invokes fails
+silently outside the checkout, where nothing here can see it.
+
+**There is no `format` script.** `biome check` formats as well as lints, so
+`yarn lint` already fails on an unformatted file and `yarn lint:fix` already
+rewrites it — a check-only `format` was a strict subset of `lint` that could
+only ever duplicate its verdict.
+
+The Stage-2 tools (`run-stage2`, `run-spread-calibration`,
+`run-stage2-cost-decomposition`) have **no** script and are not missing one.
+They are hand-run research jobs, invoked as `node --env-file=.env.local
+dist/server/tools/<name>.js` after a build — see
+[Stage-2 backtest / validation](#stage-2-backtest--validation).
 
 ## Documentation
 
