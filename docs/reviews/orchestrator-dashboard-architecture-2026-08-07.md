@@ -11,7 +11,7 @@ The shipped topology — one orchestrator process and one read-only dashboard pr
 **Process model.** Two entrypoints plus a supervisor:
 
 - `yarn orchestrator` → `dist/orchestrator/index.js` — the money path (`package.json:21`). Entrypoint guard + `startFromEnvironment` (`server/apps/orchestrator/index.ts:613-641`, `:466-558`) fails fast on missing credentials/config, opens the store, and calls `buildProductionOrchestrator`.
-- `yarn dashboard` → `dist/dashboard/index.js` (`package.json:23`) — a separate read-only HTTP process (`server/apps/service-api/index.ts`), GET-only by construction (`server/apps/service-api/server.ts:59-87`: `/`, `/api/snapshot`, 405 on non-GET).
+- `yarn dashboard` → `dist/server/apps/service-api/index.js` (`package.json:23`) — a separate read-only HTTP process (`server/apps/service-api/index.ts`), GET-only by construction (`server/apps/service-api/server.ts:59-87`: `/`, `/api/snapshot`, 405 on non-GET).
 - `yarn serve` → supervises both as children of one foreground process, migrating the store once before spawning either, forwarding signals, and taking both down if either dies (`server/apps/supervisor/index.ts:1-12`, `server/apps/supervisor/supervisor.ts:34-44`, `:150-255`).
 
 This matches orchestrator-spec.md exactly: "a **single TypeScript process** … one scheduler and one tick loop" (orchestrator-spec.md:15), "Single process, single host — matches the MacBook always-on deployment target; no message broker" (:24), with `current_tick` existing "solely so a separate process … can observe 'tick in progress'" (:149, story 13b at :57).
@@ -47,7 +47,7 @@ Two related facts:
 
 ### F4 (MEDIUM, prior finding — referenced, not re-filed) — Runner and dashboard disagree on the stage count
 
-Runtime `TickStage` is six stages (`server/apps/orchestrator/types.ts:77`); the dashboard renders seven including the specced-unbuilt `invalidation` (`contracts/pipeline.ts:38-47`). Filed as finding 5 / D5 in [codebase-review-2026-08-06.md](codebase-review-2026-08-06.md); D5 records it as David's deliberate placeholder. It is *not* an architecture blocker — `audit_log.stage` is unconstrained TEXT, so the room fills in when the stage ships with no read-path change (`contracts/pipeline.ts:24-37`) — but the v2 "rooms" hero makes the placeholder permanently visible (room 04 "lights-off", dashboard-spec.md §"Seven stages, not six"), so the pressure to build #291's stage rises with v2.
+Runtime `TickStage` is six stages (`server/apps/orchestrator/types.ts:77`); the dashboard renders seven including the specced-unbuilt `invalidation` (`contracts/pipeline.ts:38-47` (repo-root `contracts/`, alongside `server/` and `client/`)). Filed as finding 5 / D5 in [codebase-review-2026-08-06.md](codebase-review-2026-08-06.md); D5 records it as David's deliberate placeholder. It is *not* an architecture blocker — `audit_log.stage` is unconstrained TEXT, so the room fills in when the stage ships with no read-path change (`contracts/pipeline.ts:24-37`) — but the v2 "rooms" hero makes the placeholder permanently visible (room 04 "lights-off", dashboard-spec.md §"Seven stages, not six"), so the pressure to build #291's stage rises with v2.
 
 ### F5 (LOW) — `mode` wire field not yet implemented
 

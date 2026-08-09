@@ -46,7 +46,7 @@ This is a well-kept codebase. Comment density is unusually high and the comments
 
 `server/providers/market-data-service/sources/alpaca-http-client.ts:515,531,615,635`
 `server/tools/backtest/http-polygon-client.ts:128`
-`src/debate-engine/llm/anthropic-http-client.ts:117,179`
+`server/pipeline/debate-engine/llm/anthropic-client.ts:117,179`
 
 ```ts
 )) as CryptoBarsResponse;      // alpaca-http-client.ts:515
@@ -155,7 +155,7 @@ That gate immediately earned itself. Merging `main` back into this branch surfac
 `server/providers/market-data-service/sources/alpaca-data-errors.ts` (170 lines)
 `server/pipeline/execution/adapters/alpaca-broker-errors.ts` (111)
 `server/pipeline/verdict/notifications/telegram/telegram-errors.ts`
-`src/debate-engine/llm/anthropic-http-client.ts` + `llm/errors.ts`
+`server/pipeline/debate-engine/llm/anthropic-client.ts` + `llm/errors.ts`
 
 Each independently defines the identical five-part shape:
 
