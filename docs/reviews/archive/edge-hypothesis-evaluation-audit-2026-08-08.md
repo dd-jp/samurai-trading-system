@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-08
 **Subject:** [`docs/research/archive/2026-08-07-edge-hypothesis-evaluation.md`](../../research/archive/2026-08-07-edge-hypothesis-evaluation.md) (the critique)
-**Also read:** [`11-trend-signal-measurement.md`](../../research/11-trend-signal-measurement.md) (the measurement it critiques), [`11-trend-signal-measurement.py`](../../research/11-trend-signal-measurement.py) (the code that produced the numbers), `src/trader/decide.ts`, `src/risk-manager/`
+**Also read:** [`11-trend-signal-measurement.md`](../../research/11-trend-signal-measurement.md) (the measurement it critiques), [`11-trend-signal-measurement.py`](../../research/11-trend-signal-measurement.py) (the code that produced the numbers), `server/pipeline/trader/decide.ts`, `server/pipeline/risk-manager/`
 
 > **Note on numbering.** This audit was written before the 2026-08-08 research consolidation and refers to its subjects by their old numbers throughout. Read them as:
 > - **"doc 13"** = [`11-trend-signal-measurement.md`](../../research/11-trend-signal-measurement.md) (the measurement)
@@ -22,7 +22,7 @@ Treat doc 15 as a strong critique needing four corrections and one addition, not
 ## What survives intact (do not rewrite)
 
 - **§3, the mechanism contradiction.** "We hold what others abandon under stress" is false of this machinery: vol targeting de-levers *as* vol rises, trend exits *after* prices fall. The Fung-Hsieh / Kaminski-Lo long-gamma lookback-straddle framing is the correct characterisation — trend earns by *avoiding* drawdown. Doc 13's own Result 3 (smaller left tail at equal return) is the internal evidence. This is doc 15's best original work.
-  **It applies *a fortiori* to the live system**, which is coarser still: `src/risk-manager/breakers.ts` runs a binary `volatility_halt:<class>` that flattens/blocks at a multiple of baseline realized vol. That is the most extreme form of "abandon under stress" available.
+  **It applies *a fortiori* to the live system**, which is coarser still: `server/pipeline/risk-manager/breakers.ts` runs a binary `volatility_halt:<class>` that flattens/blocks at a multiple of baseline realized vol. That is the most extreme form of "abandon under stress" available.
 - **§4, unfalsifiability.** "Every mechanism exists for survivability" survives every outcome. Correct objection.
 - **Gate 2, bootstrap the drawdown distribution.** Methodologically the soundest item in the doc. Doc 13 already concedes max DD is one number from one path; a stationary/block bootstrap or purged CPCV is exactly the fix.
 - **Gate 1, PBO on the true trial count.** Correct in principle (see G1 caveat below).
@@ -104,10 +104,10 @@ Doc 13 self-flags the Result 5 configuration as post-hoc and unvalidated (its li
 
 Doc 15 opens "do not ship capital until the PBO gate closes," which presumes a configuration awaiting deployment. Checked against `src/`:
 
-- **No vol targeting.** No `volTarget`, `volatilityTarget`, `inverseVol`, or `trendLookback` anywhere in `src/`. `src/risk-manager/breakers.ts` has a binary `volatility_halt` circuit breaker — a halt, not a continuous scaler.
+- **No vol targeting.** No `volTarget`, `volatilityTarget`, `inverseVol`, or `trendLookback` anywhere in `src/`. `server/pipeline/risk-manager/breakers.ts` has a binary `volatility_halt` circuit breaker — a halt, not a continuous scaler.
 - **No trend signal, no monthly rebalance, no inverse-vol weighting.** No component computes trailing-return sign or vol-scaled target weights.
-- **Sizing is a different animal entirely.** `src/trader/decide.ts:248` — `const size = (equity * riskFraction) / stopDistance` — ATR-stop fixed-fractional risk sizing, per trade, event-driven from LLM verdicts.
-- **What does exist:** a `portfolio_gross_cap` risk threshold (`src/risk-manager/risk-thresholds.ts:65`) — a hard cap, not a targeter.
+- **Sizing is a different animal entirely.** `server/pipeline/trader/decide.ts:248` — `const size = (equity * riskFraction) / stopDistance` — ATR-stop fixed-fractional risk sizing, per trade, event-driven from LLM verdicts.
+- **What does exist:** a `portfolio_gross_cap` risk threshold (`server/pipeline/risk-manager/risk-thresholds.ts:65`) — a hard cap, not a targeter.
 
 **Consequence:** doc 15's gates guard a capital commitment to a configuration that exists only in `docs/research/11-trend-signal-measurement.py`. Closing all six gates would validate a strategy Samurai cannot currently execute. The real decision in front of the project is not "PBO then ship" — it is **"is the measured trend/vol-target portfolio the thing we build, replacing or wrapping the LLM pipeline?"** That is an ADR, and it is upstream of every gate in doc 15.
 
@@ -127,7 +127,7 @@ Whether that is a good trade is exactly what a levered-bond position is: it work
 0. **Paired Sharpe-difference test (JKM / Ledoit-Wolf HAC)** on the existing 2570-day series. Decides whether trend's variance advantage is real before anything expensive runs. *(New — D1.)*
 1. **Bootstrap the drawdown distribution.** Doc 15 gate 2, unchanged. Commit to the 90th percentile.
 2. **Unresolved architecture decision: is this strategy the thing we build?** Doc 15's gates presume a deployment that has no implementation. Per Standing Pipeline Rule 7 this is a wayfinder map issue that resolves into an ADR, not an ADR written directly. Resolve before spending on validation. *(New — see omission above.)*
-3. **PBO on the Result 5 configuration** with the full grid. Note: PBO is not parameterised by a trial count — it is computed from the matrix of *all* trials over CSCV splits, so this means re-running the grid through `src/cost-model-backtest/`, not passing a number. Doc 15 gate 1, mechanism corrected.
+3. **PBO on the Result 5 configuration** with the full grid. Note: PBO is not parameterised by a trial count — it is computed from the matrix of *all* trials over CSCV splits, so this means re-running the grid through `server/tools/backtest/`, not passing a number. Doc 15 gate 1, mechanism corrected.
 4. **Outside benchmarks, risk-adjusted** (SPY, 60/40), over the exact sample, reporting return *and* drawdown. Matched control retained for attribution. Doc 15 gate 3, metric corrected — D4.
 5. **UK tax + financing + FX drag**, re-derived at current HMRC rates, with the GBP/USD term added. Doc 15 gate 6, jurisdiction corrected — D2.
 6. **Crypto 1x** — applies to the gross-2.44 configuration; verify against the committed config rather than assuming. Doc 15 gate 5, scope corrected — D5.

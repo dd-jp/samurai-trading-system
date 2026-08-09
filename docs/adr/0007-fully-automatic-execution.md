@@ -30,9 +30,9 @@ The question was therefore live: finish wiring it, or decide against it.
 ### What made the decision, and it is structural rather than a preference
 
 `VerdictImpl.decide` **awaits** `approvals.requestApproval` inside the
-instrument pass (gate 6, `src/verdict/index.ts`). `runTickPlan` runs
+instrument pass (gate 6, `server/pipeline/verdict/index.ts`). `runTickPlan` runs
 instruments at `max_concurrent_instruments`, which is **1**
-(`src/orchestrator/tick-loop.ts`; `production.ts` documents why raising it is
+(`server/apps/orchestrator/tick-loop.ts`; `production.ts` documents why raising it is
 not free). `human_timeout` was 15 minutes.
 
 Composing those three: **one trade awaiting a human tap blocks every other

@@ -31,7 +31,7 @@ Four candidates were drafted and three were dropped on evidence, not preference:
 |---|---|
 | **C1** — crypto liquidity provision into forced deleveraging | Dropped. 0.5% round-trip cost against an hours-horizon move requires capturing ~40% of the daily range per trade. Crypto is retained inside the basket as a diversifier instead. |
 | **C2** — perpetual funding carry | Dropped. Needs a derivatives venue (ADR-0001 routes the MVP through Alpaca spot), and the FCA prohibits crypto derivatives to UK retail. |
-| **E2** — overnight gap premium | Dropped. `time_in_force.stocks = 'day'` (`DEFAULT_TRADER_CONFIG` in `src/trader/types.ts`) leaves the overnight lot unprotected, and the premium itself is contested. |
+| **E2** — overnight gap premium | Dropped. `time_in_force.stocks = 'day'` (`DEFAULT_TRADER_CONFIG` in `server/pipeline/trader/types.ts`) leaves the overnight lot unprotected, and the premium itself is contested. |
 | **E1** — conditional equity risk premium | **Adopted**, with its rationale rewritten — see below. |
 
 An earlier candidate — that an LLM debate extracts signal from indicator conjunctions a fixed rule cannot — was not adopted because nothing in the system measures it. That remains untested rather than rejected; see "Consequences" below.
