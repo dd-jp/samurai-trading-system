@@ -3,6 +3,12 @@
 **Status:** Consolidated 2026-08-08. Merges the critique ([archived](archive/2026-08-07-edge-hypothesis-evaluation.md)) with the code-verified audit that corrected it ([`../reviews/archive/edge-hypothesis-evaluation-audit-2026-08-08.md`](../reviews/archive/edge-hypothesis-evaluation-audit-2026-08-08.md)).
 **Use the gate order in this document.** The archived critique's gate list must not be executed verbatim — four of its items were wrong and the largest problem was one it never raised.
 
+> **Gate 2 resolved 2026-08-09 — answer: "neither".** [#632](https://github.com/dd-jp/samurai-trading-system/issues/632), under [map #631](https://github.com/dd-jp/samurai-trading-system/issues/631), ruled that the measured portfolio neither replaces nor wraps the LLM pipeline: David requires an **intraday** horizon and [doc 10](10-edge-hypothesis.md) commits to weeks-to-months, so doc 10 is **superseded on horizon**. `CONTEXT.md`'s debate-as-edge thesis is the recorded one.
+>
+> **Consequence for this document.** The **doc-10-vs-long-gamma characterisation dispute is moot** — it distinguishes two economic stories over identical mechanics that are no longer being built, so it is not adjudicated here and does not need to be. Gates keyed to validating the doc-10 portfolio (0, 1, 3, 4, 6) are **not scheduled**.
+>
+> **What transfers to the intraday horizon and stays live:** the "largest problem" finding (the measured strategy has no implementation in `src/`); the unfalsifiability objection, which is *why* the recorded thesis carries an explicit two-arm falsification test; **D1**'s wrong-moment critique; **D2**'s UK tax and missing FX term; **D4**'s ban on return-only comparisons against a risk-targeted stream, which now governs [#636](https://github.com/dd-jp/samurai-trading-system/issues/636); and **D6**, which the restated falsifier arm 2 in `CONTEXT.md` now answers by making the LLM ablation runnable as a live-system experiment.
+
 Reads against [`10-edge-hypothesis.md`](10-edge-hypothesis.md) (the claim) and [`11-trend-signal-measurement.md`](11-trend-signal-measurement.md) (the evidence).
 
 ## What survives the audit intact

@@ -25,11 +25,13 @@ Rules:
 
 ## Live frontier — read these first
 
+> **The recorded Stage 0 thesis is no longer in this folder (2026-08-09).** [#632](https://github.com/dd-jp/samurai-trading-system/issues/632) recorded **`CONTEXT.md`'s debate-as-edge thesis at an intraday, flat-by-close horizon**, and superseded docs 10 and 12 **on horizon** — David requires intraday; both describe a weeks-to-months, monthly-rebalance strategy. Doc 12's gate 2 architecture ADR resolves to **"neither"**. Read `CONTEXT.md` for the claim; the docs below for the evidence that still stands.
+
 | Topic | Doc | Status |
 |---|---|---|
-| **The hypothesis** | [`10-edge-hypothesis.md`](10-edge-hypothesis.md) | RECORDED — the stated, falsifiable claim. E1 adopted, C1/C2/E2 dropped |
-| **The measurement** | [`11-trend-signal-measurement.md`](11-trend-signal-measurement.md) | MEASURED — 10.0y, 16 pre-registered configs, trend vs always-long control |
-| **The critique** | [`12-edge-hypothesis-critique.md`](12-edge-hypothesis-critique.md) | **Use this gate order.** Audit corrections folded in |
+| **The hypothesis** | [`10-edge-hypothesis.md`](10-edge-hypothesis.md) | **SUPERSEDED ON HORIZON** (#632) — not on quality. Measurements, C1/C2/E2 eliminations and the "targets set from desire" forbid all still stand |
+| **The measurement** | [`11-trend-signal-measurement.md`](11-trend-signal-measurement.md) | MEASURED — 10.0y, 16 pre-registered configs, trend vs always-long control. **Daily bars, monthly rebalance: does not transfer to intraday** |
+| **The critique** | [`12-edge-hypothesis-critique.md`](12-edge-hypothesis-critique.md) | **Gate 2 resolved (#632) — "neither".** D1/D2/D4/D6 and the no-implementation finding transfer; the doc-10-vs-long-gamma dispute is moot |
 | **Stage 2 proxy** | [`13-stage2-proxy-verdict.md`](13-stage2-proxy-verdict.md) | KILL, terminal — and it is about a proxy, not the hypothesis |
 | **Crypto / LLM** | [`15-crypto-premia-and-llm-layer.md`](15-crypto-premia-and-llm-layer.md) | Carry rejected (FCA), momentum rejected (N=2), LLM shadow-mode only |
 | **Market intelligence** | [`20-mi-decisions.md`](20-mi-decisions.md) | DECIDED — Alpaca News + GDELT + calendar spine; Massive and Guardian killed |
@@ -50,7 +52,7 @@ Rules:
 
 ## Open questions — unresolved, and someone has to decide
 
-1. **Tick cadence: daily or 15-minute?** [`10-edge-hypothesis.md`](10-edge-hypothesis.md) says a weeks-to-months premium harvest needs a **daily** tick and that cadence is not load-bearing. ADR-0008, [`23-polymarket-source.md`](23-polymarket-source.md) and every MI quota estimate assume **15 minutes**. Both are current, and this sets live trading behaviour. **Unowned.**
+1. ~~**Tick cadence: daily or 15-minute?**~~ **Half-resolved 2026-08-09 (#632).** The daily-tick argument came from [`10-edge-hypothesis.md`](10-edge-hypothesis.md)'s weeks-to-months horizon, now superseded — the recorded thesis is **intraday**, so a daily tick is off the table and ADR-0008's 15 minutes is the floor, not a choice. What replaces the question is **catalyst-gating**: on the recorded £1,500 book (£750 equity / £750 crypto), running the debate on every 15-minute tick costs **~£862/yr** of LLM spend, while conservative catalyst-gating (~40 passes/day) costs **~£116/yr** — against a **projected** ~£1,226/yr gross, i.e. ~70% of gross versus ~9%. Both cost figures and the £1,226 come from [#660](https://github.com/dd-jp/samurai-trading-system/issues/660) (cadence/cost table in the body; the £1,500 split and its projected return in the resolution comment); the earlier ~£627/yr figure in [#658](https://github.com/dd-jp/samurai-trading-system/issues/658) is superseded — it was computed at £1,000 on trade counts #660 corrects. **The gross figure is a conditional projection, not a measurement.** It rests on an assumed 55% blended win rate that has never been observed — #625 measured the selector at 96 debates and 0 trades — and #660's own sensitivity shows the blended edge inverting below ~50%. Read it as "sufficient *if* the selector works", per doc 10's forbid on targets set from desire rather than measurement. **Now owned by #658 and [#657](https://github.com/dd-jp/samurai-trading-system/issues/657).**
 2. **Is Samurai "commercial"?** Private, single-user, real money, for profit. Gates Alpaca's 30-day notice; blocks nothing in v1.
 3. **Massive's derivative-works clause on OHLCV bars already in live use** — the only licensing finding that reaches shipped code.
 4. **Dashboard authentication** — `GET /api/snapshot` serves positions, P&L and LLM spend with zero auth. Precondition on any exposure.
