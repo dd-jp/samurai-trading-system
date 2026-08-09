@@ -1,5 +1,8 @@
 # Cross-Spec Verification Pass — 2026-07-26 (full, supersedes same-day partial pass)
 
+> **Drained 2026-08-09 and moved here from `docs/specs/`.** Its surviving findings are consolidated in [`cross-verify-2026-08-09.md`](cross-verify-2026-08-09.md) as CV-1, CV-2, CV-5, CV-6, CV-7, CV-8, and registered in [`../specs/cross-spec-contracts.md`](../specs/cross-spec-contracts.md). Preserved verbatim below — this file remains the audit trail other documents cite. Read the 2026-08-09 pass for what is still open; several findings here have since been resolved.
+
+
 Specs reviewed (folder: `docs/specs/`): `analysts-spec.md`, `cost-model-backtest-spec.md`, `dashboard-spec.md`, `debate-engine-spec.md`, `execution-spec.md`, `feedback-loop-spec.md`, `market-data-service-spec.md`, `market-intelligence-spec.md`, `orchestrator-spec.md`, `risk-manager-spec.md`, `shared-sqlite-store-spec.md`, `trader-spec.md`, `verdict-spec.md` (13 specs).
 
 An earlier pass timestamped the same day exists at this same path but only covered 12 specs — it predates `shared-sqlite-store-spec.md` (added in commit #188, immediately before this run) and is superseded by this one. `cross-spec-contracts.md` was read as the existing frozen registry (last full sweep 2026-07-14) and excluded from the reviewed set; contradictions with it are treated as HIGH per this run's severity convention, same as the prior pass. All findings below were checked against the actual spec text (grepped line numbers, not just the extraction pass's paraphrase) before being written up — see inline quotes.

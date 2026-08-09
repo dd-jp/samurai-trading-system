@@ -4,6 +4,8 @@
 **Owner:** David (Deepak)  
 **Date:** 2026-07-13
 
+> **[ADR-0012](../adr/0012-no-human-gate-anywhere.md) (2026-08-09) removed every remaining human gate.** The hard drawdown breaker and the kill-switch **auto-re-arm in all modes** — the `manual re-arm` language throughout this spec is superseded. Breakers still halt entries and never exits; what changed is that clearing a halt no longer waits on a person. The mechanical re-arm condition is specified with the threshold work in [#634](../../issues/634). Because nothing is cleared by hand any more, the numeric thresholds are the only stop left, which makes GAP-6's clamp (config values hard-limited in code) a precondition rather than a tidiness item.
+
 ## Problem Statement
 
 The Trader produces order intents sized on conviction, volatility, and precedent — but sized in isolation, one trade at a time, with no view of what the whole portfolio already holds or how much the account has drawn down. Left unchecked, a run of individually-reasonable orders can pile into correlated exposure, breach the account's risk tolerance, or keep trading straight through a drawdown that should have stopped it. This is where live money is lost.

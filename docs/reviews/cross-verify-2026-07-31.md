@@ -1,8 +1,11 @@
 # Cross-Spec Verification Pass — 2026-07-31
 
+> **Drained 2026-08-09 and moved here from `docs/specs/`.** Its surviving findings are consolidated in [`cross-verify-2026-08-09.md`](cross-verify-2026-08-09.md) as CV-13, and registered in [`../specs/cross-spec-contracts.md`](../specs/cross-spec-contracts.md). Preserved verbatim below — this file remains the audit trail other documents cite. Read the 2026-08-09 pass for what is still open; several findings here have since been resolved.
+
+
 Specs reviewed (docs/specs/): analysts-spec.md, cost-model-backtest-spec.md, dashboard-spec.md, debate-engine-spec.md, execution-spec.md, feedback-loop-spec.md, market-data-service-spec.md, market-intelligence-spec.md, orchestrator-spec.md, risk-manager-spec.md, shared-sqlite-store-spec.md, stage2-validation-execution-spec.md, trader-spec.md, transport-layer-spec.md, verdict-spec.md.
 
-`docs/specs/cross-spec-contracts.md` (frozen 2026-07-13/14) and `docs/specs/cross-verify-2026-07-26.md`/`cross-verify-2026-07-28.md` were read as existing registries, not re-reviewed as targets. Contradictions with the frozen registry are ranked HIGH per its own stated authority. This pass runs immediately after `transport-layer-spec.md` was added (closing the Live Transport Layer wayfinder map, issue #259) — the primary new surface is that spec against the 14 specs it touches, but this is a full 15-spec sweep, and it also re-checked whether the six open findings from the 2026-07-28 pass were fixed.
+`docs/specs/cross-spec-contracts.md` (frozen 2026-07-13/14) and `docs/reviews/cross-verify-2026-07-26.md`/`cross-verify-2026-07-28.md` (moved from `docs/specs/` 2026-08-09) were read as existing registries, not re-reviewed as targets. Contradictions with the frozen registry are ranked HIGH per its own stated authority. This pass runs immediately after `transport-layer-spec.md` was added (closing the Live Transport Layer wayfinder map, issue #259) — the primary new surface is that spec against the 14 specs it touches, but this is a full 15-spec sweep, and it also re-checked whether the six open findings from the 2026-07-28 pass were fixed.
 
 ## Contradiction matrix
 
