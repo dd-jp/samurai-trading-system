@@ -23,7 +23,7 @@ Read/Write these as the project evolves:
 | `docs/techstack.md` | Libraries, versions, why-chosen. Update as stack choices lock in. A living register, not a dated research artifact — moved out of `docs/research/` 2026-08-08. |
 | `docs/wayfinder/` | Historical/reference only — earlier maps written as local markdown before the switch to GitHub issues (2026-07-22). New wayfinder maps live as GitHub issues (see Standing Pipeline Rule 1), not here. |
 | `docs/specs/` | Synthesized specs (PRDs) per stage, `<stage>-spec.md`. Produced from the wayfinder map via `/to-spec`. |
-| `docs/reviews/` | Audit/review reports (code quality, spec conformance, readiness), dated `<topic>-<date>.md`. Findings ranked, prior findings referenced not re-filed. Standards fallout goes to `docs/coding-standards.md` in the same change. |
+| `docs/reviews/` | Audit/review reports (code quality, spec conformance, readiness), dated `<topic>-<date>.md`. Findings ranked, prior findings referenced not re-filed. Standards fallout goes to `docs/coding-standards.md` in the same change. **Navigation starts at `docs/reviews/README.md`** (live vs archived, with successor pointers). A report moves to `docs/reviews/archive/` — same file name, never deleted — once every finding is closed or a named successor carries its substance. |
 
 When in doubt, grep existing docs before writing new ones.
 

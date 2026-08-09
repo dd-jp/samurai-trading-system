@@ -41,7 +41,7 @@ fixed. It was withdrawn rather than published. Every finding below was re-verifi
 **Baseline.** `yarn build` clean. `yarn test` — **1943 passed, 1 skipped (1944), zero
 failures**. See F-12 for one flake observed on the older base that did not recur here.
 
-**Relationship to prior audits.** `docs/paper-trading-readiness-2026-08-03.md` deliberately
+**Relationship to prior audits.** [`archive/paper-trading-readiness-2026-08-03.md`](archive/paper-trading-readiness-2026-08-03.md) (archived 2026-08-09) deliberately
 did *not* read the specs ("Not read: the 19 specs in full … so the divergence half of the
 question is answered from targeted checks"). This audit is that missing half. Its Tier-1
 items 1 and 3 and divergence D2 have since closed; its D3 survives here as F-8.

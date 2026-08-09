@@ -30,8 +30,7 @@
     "e2e": "playwright test --config e2e/playwright.config.ts",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "format": "biome format .",
-    "precommit": "yarn format && yarn lint:fix && yarn typecheck && yarn test:coverage"
+    "precommit": "yarn lint:fix && yarn typecheck && yarn test:coverage"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.3",

@@ -1,13 +1,13 @@
 # Audit — the edge-hypothesis critique
 
 **Date:** 2026-08-08
-**Subject:** [`docs/research/archive/2026-08-07-edge-hypothesis-evaluation.md`](../research/archive/2026-08-07-edge-hypothesis-evaluation.md) (the critique)
-**Also read:** [`11-trend-signal-measurement.md`](../research/11-trend-signal-measurement.md) (the measurement it critiques), [`11-trend-signal-measurement.py`](../research/11-trend-signal-measurement.py) (the code that produced the numbers), `server/pipeline/trader/decide.ts`, `server/pipeline/risk-manager/`
+**Subject:** [`docs/research/archive/2026-08-07-edge-hypothesis-evaluation.md`](../../research/archive/2026-08-07-edge-hypothesis-evaluation.md) (the critique)
+**Also read:** [`11-trend-signal-measurement.md`](../../research/11-trend-signal-measurement.md) (the measurement it critiques), [`11-trend-signal-measurement.py`](../../research/11-trend-signal-measurement.py) (the code that produced the numbers), `server/pipeline/trader/decide.ts`, `server/pipeline/risk-manager/`
 
 > **Note on numbering.** This audit was written before the 2026-08-08 research consolidation and refers to its subjects by their old numbers throughout. Read them as:
-> - **"doc 13"** = [`11-trend-signal-measurement.md`](../research/11-trend-signal-measurement.md) (the measurement)
-> - **"doc 15"** = [`archive/2026-08-07-edge-hypothesis-evaluation.md`](../research/archive/2026-08-07-edge-hypothesis-evaluation.md) (the critique). Its corrected successor, which folds in the findings below, is [`12-edge-hypothesis-critique.md`](../research/12-edge-hypothesis-critique.md)
-> - **"doc 14"** = [`10-edge-hypothesis.md`](../research/10-edge-hypothesis.md) (the hypothesis)
+> - **"doc 13"** = [`11-trend-signal-measurement.md`](../../research/11-trend-signal-measurement.md) (the measurement)
+> - **"doc 15"** = [`archive/2026-08-07-edge-hypothesis-evaluation.md`](../../research/archive/2026-08-07-edge-hypothesis-evaluation.md) (the critique). Its corrected successor, which folds in the findings below, is [`12-edge-hypothesis-critique.md`](../../research/12-edge-hypothesis-critique.md)
+> - **"doc 14"** = [`10-edge-hypothesis.md`](../../research/10-edge-hypothesis.md) (the hypothesis)
 >
 > **On the script line numbers below:** D1 cites `L383`/`L385`, which refer to the script **as of commit `12c00fd`**, the run that produced the measurement's numbers. The file is now `11-trend-signal-measurement.py`, and line numbers in a live script drift — read them at that commit.
 
