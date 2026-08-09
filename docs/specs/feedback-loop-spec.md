@@ -4,7 +4,7 @@
 **Owner:** David (Deepak)  
 **Date:** 2026-07-13
 
-> **[ADR-0012](../adr/0012-no-human-gate-anywhere.md) (2026-08-09) removed every remaining human gate.** Three changes to this spec, superseding the language below wherever it conflicts:
+> **[ADR-0013](../adr/0013-no-human-gate-anywhere.md) (2026-08-09) removed every remaining human gate.** Three changes to this spec, superseding the language below wherever it conflicts:
 >
 > 1. **Risk-threshold loosening applies without approval.** `loosen_pending_approval[]` is no longer a gate. Every dial change is applied, logged and reversible.
 > 2. **The hard bounds survive and are the control.** `human-set hard floors/ceilings` (story 6) and "hard bounds never crossed" stay, enforced in code — a loosening that would cross one is rejected, not queued. The surviving asymmetry is that loosening is bounded where tightening is free, not that one waits on a person.

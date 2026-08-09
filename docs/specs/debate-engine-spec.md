@@ -417,7 +417,7 @@ The hard cap ensures debates don't block trading indefinitely. When `converged: 
 
 This is a feature, not a bug — it surfaces uncertainty rather than hiding it.
 
-*Amended 2026-08-09.* This list originally routed a non-converged debate to "manual approval" (Risk) and "human review" (Verdict). Neither exists: [ADR-0007](../adr/0007-fully-automatic-execution.md) removed the trade-approval gate in paper and live, and [ADR-0012](../adr/0012-no-human-gate-anywhere.md) removed every remaining human gate. A non-converged debate must therefore be handled by a **mechanical** response — the Trader's existing non-convergence haircut is that response — not deferred to a person. What survives unchanged is the principle: non-convergence propagates as reduced size, not as a hidden certainty.
+*Amended 2026-08-09.* This list originally routed a non-converged debate to "manual approval" (Risk) and "human review" (Verdict). Neither exists: [ADR-0007](../adr/0007-fully-automatic-execution.md) removed the trade-approval gate in paper and live, and [ADR-0013](../adr/0013-no-human-gate-anywhere.md) removed every remaining human gate. A non-converged debate must therefore be handled by a **mechanical** response — the Trader's existing non-convergence haircut is that response — not deferred to a person. What survives unchanged is the principle: non-convergence propagates as reduced size, not as a hidden certainty.
 
 ### Future Extensions
 

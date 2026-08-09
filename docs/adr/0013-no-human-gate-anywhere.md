@@ -1,4 +1,4 @@
-# ADR-0012 — No human gate anywhere: breaker re-arm and risk-threshold loosening go automatic
+# ADR-0013 — No human gate anywhere: breaker re-arm and risk-threshold loosening go automatic
 
 - **Status:** Accepted
 - **Date:** 2026-08-09
@@ -56,7 +56,7 @@ The gate is asynchronous, so no serialization argument applies. It goes because 
 approvals: ApprovalChannel;   // for gated risk-threshold loosening + breach alerts
 ```
 
-`ApprovalChannel` is a single type (`src/verdict/types.ts:41`, `requestApproval`). Removing the field to kill the loosen gate would kill **breach alerting with it** — and under full automation that alert is the only way an operator ever learns the edge died. Splitting the two concerns is mandatory: the *approval* half goes, the *notification* half stays and becomes more important, not less.
+`ApprovalChannel` is a single type (`server/pipeline/verdict/types.ts:44`, `requestApproval`). Removing the field to kill the loosen gate would kill **breach alerting with it** — and under full automation that alert is the only way an operator ever learns the edge died. Splitting the two concerns is mandatory: the *approval* half goes, the *notification* half stays and becomes more important, not less.
 
 This is the same class of defect ADR-0007 guarded against when it replaced the auto-approving default with a throwing one: a control that reads as present while doing nothing.
 
