@@ -4,6 +4,15 @@
 **Owner:** David (Deepak)  
 **Date:** 2026-07-13
 
+> **PARTIALLY SUPERSEDED — the recorded Stage 0 thesis changed horizon on 2026-08-09 ([#632](https://github.com/dd-jp/samurai-trading-system/issues/632), map [#631](https://github.com/dd-jp/samurai-trading-system/issues/631)).** `CONTEXT.md`'s debate-as-edge thesis is now recorded at an **intraday, flat-by-close** horizon. Read the following as pending re-specification, not as current:
+>
+> - **The exit model.** This spec sizes per-trade off ATR with a vol floor and holds to a stop/target. The recorded strategy exits via a **tranche profit ladder with a hard −0.5% stop and an indicator-based early exit**, with **per-asset-class levels** (crypto ~4%/2%). See [#654](https://github.com/dd-jp/samurai-trading-system/issues/654).
+> - **The horizon.** No overnight carry. A **forced end-of-session flatten** is required and is not specified here. See [#657](https://github.com/dd-jp/samurai-trading-system/issues/657).
+> - **Threshold derivation.** Fixed percentages are replaced by levels derived from an event study — open between a global `k x ATR14` formula and per-instrument fits. See [#653](https://github.com/dd-jp/samurai-trading-system/issues/653).
+> - **The execution venue.** This spec assumes Alpaca. Live equities route through the **Trading 212 ISA**, restricted to **GBP LSE-listed ETFs/ETCs** — US stocks are negative-expectancy there at a 0.30% FX round trip. A `Trading212Adapter` does not exist. See [#659](https://github.com/dd-jp/samurai-trading-system/issues/659).
+>
+> **Not superseded:** conviction-scaled sizing off `DebateResult` remains the design — the recorded thesis makes the LLM the *generator*, so [#633](https://github.com/dd-jp/samurai-trading-system/issues/633)'s veto-only alternative is the premise that died, not this one.
+
 ## Problem Statement
 
 Samurai's Debate Engine produces a conviction-scored synthesis of analyst views (`DebateResult`), but a synthesis is not a trade. Something has to turn "the system believes bullish with conviction 0.72, not fully converged" into a concrete, broker-ready order — with a size, an entry, a protective stop, a target, and a time-in-force — while accounting for what the portfolio already holds and what similar past setups actually returned.

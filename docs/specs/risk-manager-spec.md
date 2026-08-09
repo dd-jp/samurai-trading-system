@@ -4,6 +4,14 @@
 **Owner:** David (Deepak)  
 **Date:** 2026-07-13
 
+> **PARTIALLY SUPERSEDED — the recorded Stage 0 thesis changed horizon on 2026-08-09 ([#632](https://github.com/dd-jp/samurai-trading-system/issues/632), map [#631](https://github.com/dd-jp/samurai-trading-system/issues/631)).** `CONTEXT.md`'s debate-as-edge thesis is now recorded at an **intraday, flat-by-close** horizon. Read the following as pending re-derivation:
+>
+> - **The ~20-25% hard drawdown breaker (`:170`)** was set alongside `docs/research/10-edge-hypothesis.md`'s −23% pre-accepted drawdown, which belongs to the **superseded weeks-to-months** horizon. There is currently **no drawdown commitment derived for the intraday book**. Treat the figure as inherited, not re-validated. Derivation is [#653](https://github.com/dd-jp/samurai-trading-system/issues/653); the breaker level itself is [#634](https://github.com/dd-jp/samurai-trading-system/issues/634), whose original premise (the −23% collision) is gone even though the ticket survives.
+> - **The binary volatility halt (`:170`)** is separately contested on shape rather than level — doc 12 called it "the most extreme form of 'abandon under stress' available". An intraday book required to place at least one trade per day is *more* exposed to a binary halt, not less. Also [#634](https://github.com/dd-jp/samurai-trading-system/issues/634).
+> - **A forced end-of-session flatten** is now required and is not specified here. See [#657](https://github.com/dd-jp/samurai-trading-system/issues/657).
+>
+> **Not superseded:** breakers halt entries and never exits (`:15`) — that invariant is horizon-independent and still holds.
+
 > **[ADR-0013](../adr/0013-no-human-gate-anywhere.md) (2026-08-09) removed every remaining human gate.** The hard drawdown breaker and the kill-switch **auto-re-arm in all modes** — the `manual re-arm` language throughout this spec is superseded. Breakers still halt entries and never exits; what changed is that clearing a halt no longer waits on a person. The mechanical re-arm condition is specified with the threshold work in [#634](https://github.com/dd-jp/samurai-trading-system/issues/634). Because nothing is cleared by hand any more, the numeric thresholds are the only stop left, which makes GAP-6's clamp (config values hard-limited in code) a precondition rather than a tidiness item.
 
 ## Problem Statement

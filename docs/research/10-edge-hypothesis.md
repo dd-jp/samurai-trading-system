@@ -1,5 +1,11 @@
 # Stage 0 — the edge hypothesis, recorded 2026-08-07
 
+> **SUPERSEDED ON HORIZON — 2026-08-09, not superseded on quality.** David requires **intraday / day trading**; this document commits to a **weeks-to-months** horizon (Box 3) measured at monthly rebalance on a 63-day lookback ([doc 11](11-trend-signal-measurement.md) lines 16/18). [#632](https://github.com/dd-jp/samurai-trading-system/issues/632) therefore recorded `CONTEXT.md`'s debate-as-edge thesis instead, and answered [map #631](https://github.com/dd-jp/samurai-trading-system/issues/631) — and [doc 12](12-edge-hypothesis-critique.md)'s gate 2 architecture ADR — with **"neither": the measured portfolio is not the thing we build.**
+>
+> **What no longer applies to the product:** Box 1's economic sentence, Box 3's horizon and strategy family, the 0.04%/day and −23% commitments, the always-long-the-same-basket benchmark, Consequence 2's veto-only design, and Consequence 4's Stage 2 proxy replacement. Doc 11's ten years of daily-bar evidence does **not** transfer to an intraday system at any confidence.
+>
+> **What still stands and remains citable:** every measurement in doc 11; the C1/C2/E2 candidate eliminations and their reasoning (C1's "~40% of the daily range per trade" cost bar is still the sharpest statement of why intraday capture is hard); the E2 overnight-carry finding, which is *why* the recorded thesis is flat-by-close; and the "Forbids" section — especially *"any return target set from desire rather than measurement; a target manufactures the overfit; PBO 0.85 is what that looked like here"*, which now governs [#653](https://github.com/dd-jp/samurai-trading-system/issues/653).
+
 Closes the first gate of [`02-staged-deployment-plan.md`](02-staged-deployment-plan.md), open and unrecorded since the plan was written. Stage 0's own warning is the reason it matters: *"If you can't name it, you don't have a strategy — you have a curve fit."*
 
 ## Box 1 — the economic reason

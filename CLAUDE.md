@@ -7,6 +7,8 @@ Read this on every session start.
 - **Codename:** Samurai
 - **Goal:** Live-money multi-agent trading system covering crypto AND stocks
 - **Owner:** David (Deepak)
+- **Edge thesis + horizon:** `CONTEXT.md`'s **debate-as-edge** thesis, at an **intraday, flat-by-close** horizon. Recorded 2026-08-09 by [#632](https://github.com/dd-jp/samurai-trading-system/issues/632) under map [#631](https://github.com/dd-jp/samurai-trading-system/issues/631). `docs/research/10-edge-hypothesis.md` and `12-edge-hypothesis-critique.md` are **superseded on horizon** — they describe a weeks-to-months monthly-rebalance strategy and are no longer the product. Do not spec or grill against doc 10's commitments (0.04%/day, −23% drawdown, always-long-basket benchmark, veto-only, 6→12 effective bets).
+- **Live capital:** £1,500, split £750 equity / £750 crypto ([#660](https://github.com/dd-jp/samurai-trading-system/issues/660)). Equity leg via the **Trading 212 ISA**, restricted to **GBP LSE-listed ETFs/ETCs**; crypto on a separate `ccxt` exchange account, since crypto is barred from a S&S ISA ([#659](https://github.com/dd-jp/samurai-trading-system/issues/659)).
 - **Architecture:** Analysts → Debate → Trader → [Invalidation] → Risk → Verdict → **Execution**, with a Feedback Loop adjusting analyst weights and risk thresholds post-trade. `invalidation` is specced and NOT built (added 2026-08-05, see `docs/specs/devils-advocate-spec.md`), so the runtime chain is six stages and goes Trader → Risk today. This line previously omitted Execution and listed Feedback Loop as the seventh stage; `RUNTIME_STAGES` and the README are the authority.
 - **Repo layout:** `client/` (Vite+React UI) + `server/` (Node: `apps/`, `pipeline/`, `providers/`, `shared/`, `tools/`) + `contracts/` (the wire model both import and neither owns). There is no root `src/`. Neither runtime imports the other; both import `contracts/`.
 - **Status:** Implemented and under test — all twelve charted components built, ~2900 tests, end-to-end offline run green (`yarn smoke`). Paper soak has run. Not yet cleared: one real Alpaca paper tick (ADR-0004 §5).
@@ -90,7 +92,7 @@ New research goes to `~/hermes-assistant/research/<topic>-<date>-raw.md` (raw) a
 - Persistent state (SQLite/Postgres) — crash-restart must not lose open positions
 - Idempotent order IDs, partial-fill handling, rate-limit resilient
 - API keys: trade-only permissions, **withdrawals disabled**, IP-whitelisted
-- Log every signal, every fill. Track PnL, max drawdown, win rate vs buy-and-hold
+- Log every signal, every fill. Track PnL, max drawdown, win rate — **risk-adjusted against a matched control, never return-only against buy-and-hold.** `docs/research/12-edge-hypothesis-critique.md` **D4** rules out return-only comparisons against a risk-targeted stream. The primary control is the recorded thesis's falsifier arm 2 (same name, same ladder, same stop, entry by indicator alone, no LLM); outside benchmarks report return *and* drawdown together. Owned by [#636](https://github.com/dd-jp/samurai-trading-system/issues/636).
 
 ## When in doubt
 

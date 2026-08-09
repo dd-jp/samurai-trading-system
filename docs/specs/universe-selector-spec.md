@@ -5,6 +5,15 @@
 **Date:** 2026-08-07
 **Wayfinder map:** [Wayfinder: Universe Selector (Stage 0) + tick cadence gating](../../issues/397) — closed 2026-08-06, all four children resolved ([#398](../../issues/398), [#399](../../issues/399), [#401](../../issues/401), [#402](../../issues/402); [#400](../../issues/400) resolved and then superseded).
 
+> **PARTIALLY SUPERSEDED — the recorded Stage 0 thesis changed horizon on 2026-08-09 ([#632](https://github.com/dd-jp/samurai-trading-system/issues/632), map [#631](https://github.com/dd-jp/samurai-trading-system/issues/631)).** `CONTEXT.md`'s debate-as-edge thesis is now recorded at an **intraday, flat-by-close** horizon.
+>
+> - **The candidate pool changes entirely.** Live equities route through the **Trading 212 ISA**, where only **GBP LSE-listed ETFs and ETCs** are cost-viable: US stocks cost 0.30% round trip on FX and are negative-expectancy, and UK individual shares carry 0.5% stamp duty. The default universe (SPY, QQQ, AAPL, TSLA) is **not tradeable** on the live path. That one class does, however, cover equity indices, gold, oil and bonds. Crypto is barred from a S&S ISA and runs on a separate `ccxt` exchange account. See [#659](https://github.com/dd-jp/samurai-trading-system/issues/659).
+> - **The mover-screener objective (`:182`) survives and is now the live one.** `docs/research/10-edge-hypothesis.md`'s competing effective-bets objective (2.58 → 4.60, the 12-instrument diversified basket) is **superseded on horizon** along with the rest of doc 10. [#635](https://github.com/dd-jp/samurai-trading-system/issues/635) is re-scoped accordingly.
+> - **Open:** how many names are held at once — David's initial intent is a single name per asset class per day, with the universe widening later. N=1 is 1.0 effective bets and uncapped idiosyncratic risk. Also [#635](https://github.com/dd-jp/samurai-trading-system/issues/635).
+> - **The measured spread table is stale for this purpose.** `docs/research/archive/2026-08-05-cost-model-calibration.md` sampled Alpaca quotes for instruments that are no longer tradeable. LSE ETF spreads must be measured, not assumed.
+>
+> **Not superseded:** `docs/research/17-universe-manipulation-guardrails.md` (`:89`) constrains *which* names are eligible — orthogonal to what the universe is selected for, and unaffected by the horizon change.
+
 ## Corrections to map #397's body — read before the rest
 
 The map's body was written 2026-08-05 and four of its factual claims no longer hold. They are corrected here rather than silently rewritten downstream, because each one changes what gets built.
