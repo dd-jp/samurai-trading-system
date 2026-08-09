@@ -7,8 +7,8 @@ Read this on every session start.
 - **Codename:** Samurai
 - **Goal:** Live-money multi-agent trading system covering crypto AND stocks
 - **Owner:** David (Deepak)
-- **Edge thesis + horizon:** `CONTEXT.md`'s **debate-as-edge** thesis, at an **intraday, flat-by-close** horizon. Recorded 2026-08-09 by [#632](https://github.com/dd-jp/samurai-trading-system/issues/632) under map [#631](https://github.com/dd-jp/samurai-trading-system/issues/631). `docs/research/10-edge-hypothesis.md` and `12-edge-hypothesis-critique.md` are **superseded on horizon** — they describe a weeks-to-months monthly-rebalance strategy and are no longer the product. Do not spec or grill against doc 10's commitments (0.04%/day, −23% drawdown, always-long-basket benchmark, veto-only, the 6→12-instrument widening to 4.60 effective bets).
-- **Live capital:** £1,500, split £750 equity / £750 crypto ([#660](https://github.com/dd-jp/samurai-trading-system/issues/660)). Equity leg via the **Trading 212 ISA**, restricted to **GBP LSE-listed ETFs/ETCs**; crypto on a separate `ccxt` exchange account, since crypto is barred from a S&S ISA ([#659](https://github.com/dd-jp/samurai-trading-system/issues/659)).
+- **Edge thesis + horizon:** `CONTEXT.md`'s **debate-as-edge** thesis, at an **intraday, flat-by-close** horizon. Recorded 2026-08-09 by [#632](https://github.com/dd-jp/samurai-trading-system/issues/632) under map [#631](https://github.com/dd-jp/samurai-trading-system/issues/631), and written up as **[ADR-0014](docs/adr/0014-intraday-flat-by-close-horizon.md)**. `docs/research/10-edge-hypothesis.md` and `12-edge-hypothesis-critique.md` are **superseded on horizon** — they describe a weeks-to-months monthly-rebalance strategy and are no longer the product. Do not spec or grill against doc 10's commitments (0.04%/day, −23% drawdown, always-long-basket benchmark, veto-only, the 6→12-instrument widening to 4.60 effective bets).
+- **Live capital:** £1,500, split £750 equity / £750 crypto ([#660](https://github.com/dd-jp/samurai-trading-system/issues/660)). Equity leg via the **Trading 212 ISA**, restricted to **GBP LSE-listed ETFs/ETCs**; crypto on a separate `ccxt` exchange account, since crypto is barred from a S&S ISA ([#659](https://github.com/dd-jp/samurai-trading-system/issues/659)). Both in **[ADR-0015](docs/adr/0015-live-venue-account-and-book-split.md)**. **The SPY/QQQ/AAPL/TSLA default universe is not tradeable live** — instruments are LSE leveraged ETPs per **[ADR-0016](docs/adr/0016-universe-leveraged-etps-ungated.md)**.
 - **Architecture:** Analysts → Debate → Trader → [Invalidation] → Risk → Verdict → **Execution**, with a Feedback Loop adjusting analyst weights and risk thresholds post-trade. `invalidation` is specced and NOT built (added 2026-08-05, see `docs/specs/devils-advocate-spec.md`), so the runtime chain is six stages and goes Trader → Risk today. This line previously omitted Execution and listed Feedback Loop as the seventh stage; `RUNTIME_STAGES` and the README are the authority.
 - **Repo layout:** `client/` (Vite+React UI) + `server/` (Node: `apps/`, `pipeline/`, `providers/`, `shared/`, `tools/`) + `contracts/` (the wire model both import and neither owns). There is no root `src/`. Neither runtime imports the other; both import `contracts/`.
 - **Status:** Implemented and under test — all twelve charted components built, ~2900 tests, end-to-end offline run green (`yarn smoke`). Paper soak has run. Not yet cleared: one real Alpaca paper tick (ADR-0004 §5).
@@ -22,6 +22,8 @@ Read/Write these as the project evolves:
 | ------ | --------- |
 | `CONTEXT.md` (repo root) | Domain glossary. Terms, relationships, invariants. No implementation details. Update inline as terms resolve. |
 | `docs/adr/` | Architecture Decision Records. Only create when (1) hard to reverse, (2) surprising without context, (3) real trade-off. |
+
+**The intraday product is defined by ADR-0014 through ADR-0017 (all 2026-08-09) plus the ADR-0008 §2 amendment.** Read those five before speccing or implementing anything on the trading path — they carry the horizon, the venue and book, the universe and gating rule, the validation gates, and the measured cadence economics.
 | `docs/techstack.md` | Libraries, versions, why-chosen. Update as stack choices lock in. A living register, not a dated research artifact — moved out of `docs/research/` 2026-08-08. |
 | `docs/wayfinder/` | Historical/reference only — earlier maps written as local markdown before the switch to GitHub issues (2026-07-22). New wayfinder maps live as GitHub issues (see Standing Pipeline Rule 1), not here. |
 | `docs/specs/` | Synthesized specs (PRDs) per stage, `<stage>-spec.md`. Produced from the wayfinder map via `/to-spec`. |
@@ -64,6 +66,8 @@ Key docs:
 - `docs/research/13-stage2-proxy-verdict.md` — the whole Stage 2 chain, terminal KILL on the proxy
 - `docs/research/15-crypto-premia-and-llm-layer.md` — crypto/LLM opportunity evaluation
 - `docs/research/20-mi-decisions.md` / `30-data-vendor-decisions.md` — the settled MI and data-vendor stacks
+- `docs/research/18-intraday-instrument-physics.md` — why a broad tracker cannot support an intraday take-profit; the movers/leveraged-ETP case
+- `docs/research/41-tick-latency-economics.md` — measured drift and tail; the tick-interval optimum and ADR-0008's 3.4x cost overestimate
 - `docs/research/00-summary.md` / `01-full-report-with-sources.md` / `02-staged-deployment-plan.md` — strategy eval + staged plan
 
 New research goes to `~/hermes-assistant/research/<topic>-<date>-raw.md` (raw) and `<topic>-<date>-analysis.md` (synthesized).

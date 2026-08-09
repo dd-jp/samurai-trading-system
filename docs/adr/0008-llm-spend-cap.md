@@ -107,6 +107,40 @@ the soak from a fresh store if it is meant to have the full budget.**
 
 ### 2. Cadence: 15 minutes for the paper soak
 
+> **Amended by [#657](https://github.com/dd-jp/samurai-trading-system/issues/657)
+> and [#670](https://github.com/dd-jp/samurai-trading-system/issues/670)
+> (2026-08-09) — the table below is an estimate and it is wrong by 3.4×.**
+> Measured against the soak's actual `llm_spend` (1,151 calls over 42.6h), real
+> spend at this cadence is **$0.878/day**, not $3.00 — **25% of the cap, not
+> 84%**. The unit is **4 calls, ~13s and $0.0060 per debate run**. Every ticket
+> body quoting "$42/14d ≈ 84% of the cap" inherits the estimate and should be
+> read against this line instead.
+>
+> Two further corrections to how this section reasons:
+>
+> 1. **Passes are not debates.** `debate_log` stores one row per bar, which
+>    makes the debate *look* bar-gated. It is not — one `debate_id` spans 46.5
+>    minutes across four 4-call clusters, one per tick, because the id hashes
+>    the same three inputs. That is
+>    [#617](https://github.com/dd-jp/samurai-trading-system/issues/617), still
+>    open: 4 runs per bar, 3 discarded and paid for. Price cadence from **runs
+>    in `llm_spend`**, never rows in `debate_log`.
+> 2. **The cadence optimum is slower than 15 minutes, not faster.** Minimising
+>    `T(τ) = C/τ + B·√τ` over measured drift and tail data gives **τ\* = 21.8
+>    min**, robust from CVaR25 to CVaR1 and never below 15. The cap alone
+>    independently forbids τ < 3.69 min. Derivation and measurement in
+>    [`docs/research/41-tick-latency-economics.md`](../research/41-tick-latency-economics.md).
+>
+> **Net: 15 minutes stands, for better reasons than it was chosen with.** It
+> does not go lower until #617 lands, after which spend stops depending on τ
+> and the optimum jumps to ~1 minute. Sequencing in #670.
+>
+> Note also that [ADR-0009](0009-single-provider-nous.md)'s "~$5 per 14 days on
+> `openai/gpt-5.6-luna`" does **not** describe the running system:
+> `server/shared/llm/nous-config.ts:98` pins
+> `debate: 'anthropic/claude-haiku-4.5'`, chosen later on measured latency while
+> explicitly accepting the higher bill.
+
 `paperStartingProfile` now carries `tickIntervalMs: 15 * 60_000`, up from the
 60s `DEFAULT_TICK_INTERVAL_MS`, and `llmBudgetUsd: 50`.
 
