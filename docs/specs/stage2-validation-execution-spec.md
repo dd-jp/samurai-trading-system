@@ -10,7 +10,7 @@
 >
 > **What this verdict is not.** The strategy killed here is the **dual-SMA proxy**, which exists only to prove the harness (see the Problem Statement below and `CONTEXT.md`'s Edge Thesis entry, which has said since 2026-07 that the proxy's results must never be read as evidence for or against the edge claim). It says nothing about the Stage 0 hypothesis in [`../research/10-edge-hypothesis.md`](../research/10-edge-hypothesis.md) — **that strategy has never been through Stage 2.** The harness itself passed: MinBTL headroom is now 812 configs against a 12-config grid.
 >
-> The escalation in "Exit Condition" below — on a kill, the in-flight Production Composition Root work "should be flagged, not silently continued past a failed gate" — is **not** treated as fired by this verdict, for the scoping reason above. Whether Stage 3 should proceed while Stage 2's gate remains unproduced *for the claimed strategy* is open, and is the subject of [`../reviews/spec-research-alignment-2026-08-09.md`](../reviews/spec-research-alignment-2026-08-09.md) F2/F4 and its proposed parent ticket T1.
+> **This recording does not itself fire the "Exit Condition" escalation below** — on a kill, the in-flight Production Composition Root work "should be flagged, not silently continued past a failed gate". Whether it *should* fire is a live question and not one this entry settles: the scoping note above is the argument that it should not, and the counter-argument is that Stage 2's gate remains unproduced for the strategy actually claimed. Both are in [`../reviews/spec-research-alignment-2026-08-09.md`](../reviews/spec-research-alignment-2026-08-09.md) F2/F4, under proposed parent ticket T1.
 
 ## Problem Statement
 

@@ -10,7 +10,7 @@
 
 > **Gate 2 — Architecture ADR — is the measured strategy the thing we build?** Wayfinder map → ADR, per Standing Pipeline Rule 7. **Upstream of all validation spend.**
 
-So: **yes, grilling tickets are needed.** Six are proposed at the end, one question each. None have been opened — that is David's call.
+So: **yes, grilling tickets are needed.** Six are proposed at the end with one question each, plus a seventh that is an implementation ticket rather than a grilling one; a further candidate is folded into T1 as contingent rather than filed separately. **None have been opened** — that is David's call.
 
 ---
 
@@ -49,17 +49,24 @@ This is doc 12's gate 2 and it is **upstream of all validation spend** — inclu
 
 ---
 
-### F3 — HIGH. `CONTEXT.md`'s Sharpe target is the thing doc 10 explicitly forbids
+### F3 — HIGH. MinBTL's trial headroom assumes a Sharpe of 1.0; at the only Sharpe the corpus has ever measured, it collapses 17×
 
-`CONTEXT.md:57` — *"Sharpe Ratio. Live system target: ~1.5."*
+`overfitting.ts:50` hardcodes `MINBTL_TARGET_ANNUAL_SHARPE = 1`, and MinBTL divides by that term **squared** (`:247`). Every trial-budget number the project has quoted inherits it. Doc 10's committed configuration measures **0.71**. Re-running the same function at that value:
 
-Doc 10's committed configuration measures **0.71**, and doc 12's calibration check finds that "a 0.71 Sharpe is in-band for this literature, not exceptional." Doc 10's Forbids clause is unambiguous:
+| E[SR] | cap @ 1.99y | cap @ 5y | cap @ 10.2y |
+|---|---|---|---|
+| **1.00** (hardcoded) | 7 | 45 | **807** |
+| **0.71** (doc 10, measured) | 3 | 10 | **48** |
 
-> Any return target set from desire rather than measurement. **A target manufactures the overfit; PBO 0.85 is what that looked like here.**
+The E[SR] = 1.0 row reproduces every published number exactly — the 7 that #405 sized the grid to, the spec's "~45 / 5 yr", and doc 13's 812-at-10.2y within window rounding. So the arithmetic is confirmed, and the substitution is the only thing changing.
 
-A standing 1.5 target against a measured 0.71 is a 2× gap that will be closed by search, not by edge. The `> 3–4 is a red flag` guidance on the same line is sound and unaffected.
+**What this undermines.** Doc 13 closes with *"The harness is now good. MinBTL headroom is 812 configs against a fixed 12-config grid… whatever strategy is validated next, the machinery is no longer the limit."* At 0.71 the headroom is 48, not 812 — still comfortably above a 12-config grid, so the *proxy* verdict is unaffected, but "no longer the limit" is a 17× overstatement and would not survive a realistic grid for the doc-10 strategy. The gap is widest exactly where the next Stage 2 run will be planned.
 
-Related and consistent: doc 10 commits to **0.04%/day (~10%/yr)**. No spec states a return target at all, so there is nothing to contradict — but nothing to enforce either.
+**Why 1.0 is a defensible default and still worth revisiting.** MinBTL's E[SR] is the Sharpe you are *searching for* — the level at which you want the sample to distinguish skill from noise. Setting it to a strategy's realized Sharpe is not automatically correct. But a hardcoded constant chosen before any strategy was measured, whose only measured counterpart is 29% lower, should be a stated assumption rather than a private constant. `stage2-validation-execution-spec.md:169` is the only place it surfaces at all ("~45 at the reference 1.0 annual Sharpe target"), and `CONTEXT.md` never mentions it.
+
+**Downgraded from the finding this replaces.** The original F3 claimed `CONTEXT.md:57`'s "Sharpe Ratio. Live system target: ~1.5" was the "target set from desire rather than measurement" doc 10 forbids. **That was wrong** and the check that killed it is worth recording: nothing in `src/` consumes the 1.5. It appears in `feedback-loop-spec.md:234` and `cost-model-backtest-spec.md:366` as one term in a *credible fingerprint* — "Sharpe ~1.5, maxDD ~20%, PF ~1.8, Calmar ~1.2 as reference; Sharpe > 3 non-HFT = red flag" — which is a plausibility band for detecting implausibly-good results, i.e. an overfitting **detector**, the opposite of a search target. `backtest_reference_sharpe` is fed from the frozen selected config at runtime (`stage2-selection.ts`), not from this number; the constant `BACKTEST_REFERENCE_SHARPE = 1.5` exists only in test fixtures. Worth one note only: three Sharpe reference values now coexist — 1.5 (fingerprint), 1.0 (MinBTL), 0.71 (measured) — and no document relates them.
+
+Separately, doc 10 commits to a return target of **0.04%/day (~10%/yr)**. No spec states a return target at all, so there is nothing to contradict — but nothing to enforce either.
 
 ---
 
@@ -130,7 +137,7 @@ Open issue [#552](../../issues/552) is titled *"Wayfinder: MI rework — determi
 
 ## Confirmed clean
 
-- **MinBTL.** `cost-model-backtest-spec.md:71,267` cites "~45 / 5 yr" while doc 13 reports 812-config headroom at 10.2y. Not a contradiction: `sizeTrialGridToSample` calls `minbtl(window)`, which inverts the López de Prado formula numerically per window rather than reading a constant (`trial-execution.ts:167–171`; `overfitting.ts:188–200`, whose docblock ends "The spec's calibration falls straight out: 5 years of data supports ~45 trials"). The spec's number is a derived illustration, and 812 at 10.2y is the same function evaluated elsewhere. **No defect.**
+- **MinBTL's per-window computation.** `cost-model-backtest-spec.md:71,267` cites "~45 / 5 yr" while doc 13 reports 812-config headroom at 10.2y, which looks like a stale constant. It isn't: `sizeTrialGridToSample` calls `minbtl(window)`, which inverts the López de Prado formula numerically per window (`trial-execution.ts:167–171`; `overfitting.ts:188–200`, whose docblock ends "The spec's calibration falls straight out: 5 years of data supports ~45 trials"). The spec's number is a derived illustration and 812 is the same function evaluated on a longer window. **No defect here** — F3 concerns the *E[SR] denominator* inside that function, which is a separate question and does not make the spec's constant wrong.
 - **Proxy-kill scoping.** `CONTEXT.md:51` says the dual-SMA proxy's results "must never be read as evidence for or against this edge claim"; doc 13 says "Do not cite this KILL as evidence against the hypothesis." Written seven weeks apart, in agreement.
 - **Drawdown magnitude.** `CONTEXT.md:60`'s 20–25% and doc 10's −23% are the same order and were derived independently. Only the breaker *behaviour* at that level is at issue (F5).
 - **PBO 0.05.** Consistent everywhere — `CONTEXT.md:54`, `cost-model-backtest-spec.md:266`, `02-staged-deployment-plan.md`, doc 13's chain table. The pre-existing note that it is exposed as tunable config is already filed in `cross-spec-contracts.md:109` and is not re-filed.
@@ -153,9 +160,10 @@ One question each, per Standing Pipeline Rule 1. **T1 is the parent and doc 12 p
 |---|---|---|
 | **T1** | **Wayfinder map: is the measured premium harvest the thing we build?** (doc 12 gate 2 — an architecture ADR) | Does the doc-10 strategy **replace** the LLM pipeline, **wrap** it (veto-only), or remain a research artifact while the pipeline stays the product? |
 | T2 | Reconcile the Stage 0 edge thesis in `CONTEXT.md` | Of the three live framings — `CONTEXT.md`'s debate-as-edge, doc 10's bear-the-drawdown premium, doc 12's long-gamma avoid-the-drawdown correction — which one is the recorded thesis? |
-| T3 | Signal generation: veto-only vs conviction-scaled | Does trend generate and the LLM only refuse (doc 10 Consequence 2), or does `DebateResult` stay the Trader's input (`trader-spec.md` stories 5–8)? |
+| ~~T3~~ | *Contingent on T1 — do not file separately.* Signal generation: veto-only vs conviction-scaled | This is T1's second branch. If T1 answers "wrap (veto-only)", T3 is answered with it; only file it if T1 resolves in a way that leaves the Trader's input open |
 | T4 | Drawdown breaker threshold and re-arm | If −23% is pre-accepted, what should the hard breaker's level be, and may it re-arm without a human under ADR-0007? |
 | T5 | Universe objective: effective bets vs movers | Does the Universe Selector target doc 10's 12-instrument diversified basket (4.60 effective bets), screen for movers, or both on separate paths? |
 | T6 | Benchmark definition for the metrics suite | What does the system have to beat — always-long-same-basket at the same vol target, SPY/60-40 risk-adjusted, or both — and which spec owns computing it? |
+| T7 | MinBTL's E[SR] denominator (F3) — an **implementation** ticket, not a grilling one, but the value is a judgement | Should `MINBTL_TARGET_ANNUAL_SHARPE` stay at 1.0, and either way should it become a stated, surfaced assumption rather than a private constant? |
 
 Two rulings already recorded as OPEN in [`../research/README.md`](../research/README.md) — **tick cadence** (doc 10's daily vs ADR-0008's 15 minutes) and **"is Samurai commercial"** — are referenced, not re-litigated here. Cadence touches T1: doc 10 Consequence 3 argues a weeks-to-months harvest needs only a daily tick, which would cut LLM spend rather than raise it.
