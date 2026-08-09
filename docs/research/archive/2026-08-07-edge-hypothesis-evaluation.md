@@ -8,7 +8,7 @@
 
 > **⚠ Errata — 2026-08-08. Do not execute the gate list below verbatim.**
 >
-> This document was audited the day after it was written: [`edge-hypothesis-evaluation-audit-2026-08-08.md`](../../reviews/edge-hypothesis-evaluation-audit-2026-08-08.md). The body is preserved as written, so the passages the audit invalidates are still on the page — five of them, across audit defects **D1-D4**. Named here so no one acts on them by skimming:
+> This document was audited the day after it was written: [`edge-hypothesis-evaluation-audit-2026-08-08.md`](../../reviews/archive/edge-hypothesis-evaluation-audit-2026-08-08.md). The body is preserved as written, so the passages the audit invalidates are still on the page — five of them, across audit defects **D1-D4**. Named here so no one acts on them by skimming:
 >
 > - **"What is wrong" item 1 — "SE ≈ 1.1 Sharpe units" and the "+1.2 / −0.9 overlay" band.** Back-solved by dividing a Sharpe difference by a t-statistic on *daily mean returns*; the two are not the same quantity, so the band is not a confidence interval. The "we learned nothing" conclusion survives for a stronger reason the audit supplies — a paired t on mean returns has no power against a *variance* claim, which is where doc 13 locates trend's advantage. Audit **D1**, which adds a paired Sharpe-difference test (Jobson-Korkie-Memmel / Ledoit-Wolf HAC) as a cheap **gate 0** ahead of the PBO run.
 > - **Falsifier 3 — "already fails on Sharpe there: t = −1.07".** Same defect: that t is also a mean-return statistic and establishes nothing about Sharpe. Drop the citation. Audit **D1**.

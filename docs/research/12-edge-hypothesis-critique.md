@@ -1,6 +1,6 @@
 # The edge hypothesis, critiqued and corrected
 
-**Status:** Consolidated 2026-08-08. Merges the critique ([archived](archive/2026-08-07-edge-hypothesis-evaluation.md)) with the code-verified audit that corrected it ([`../reviews/edge-hypothesis-evaluation-audit-2026-08-08.md`](../reviews/edge-hypothesis-evaluation-audit-2026-08-08.md)).
+**Status:** Consolidated 2026-08-08. Merges the critique ([archived](archive/2026-08-07-edge-hypothesis-evaluation.md)) with the code-verified audit that corrected it ([`../reviews/archive/edge-hypothesis-evaluation-audit-2026-08-08.md`](../reviews/archive/edge-hypothesis-evaluation-audit-2026-08-08.md)).
 **Use the gate order in this document.** The archived critique's gate list must not be executed verbatim — four of its items were wrong and the largest problem was one it never raised.
 
 Reads against [`10-edge-hypothesis.md`](10-edge-hypothesis.md) (the claim) and [`11-trend-signal-measurement.md`](11-trend-signal-measurement.md) (the evidence).
