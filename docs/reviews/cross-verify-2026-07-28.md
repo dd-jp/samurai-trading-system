@@ -1,8 +1,11 @@
 # Cross-Spec Verification Pass — 2026-07-28
 
+> **Drained 2026-08-09 and moved here from `docs/specs/`.** Its surviving findings are consolidated in [`cross-verify-2026-08-09.md`](cross-verify-2026-08-09.md) as CV-3/CV-15, CV-4, CV-9, CV-10, CV-11, CV-12, and registered in [`../specs/cross-spec-contracts.md`](../specs/cross-spec-contracts.md). Preserved verbatim below — this file remains the audit trail other documents cite. Read the 2026-08-09 pass for what is still open; several findings here have since been resolved.
+
+
 Specs reviewed (docs/specs/): analysts-spec.md, cost-model-backtest-spec.md, dashboard-spec.md, debate-engine-spec.md, execution-spec.md, feedback-loop-spec.md, market-data-service-spec.md, market-intelligence-spec.md, orchestrator-spec.md, risk-manager-spec.md, shared-sqlite-store-spec.md, trader-spec.md, verdict-spec.md.
 
-`docs/specs/cross-spec-contracts.md` (frozen 2026-07-13/14) and `docs/specs/cross-verify-2026-07-26.md` were read as existing registries, not re-reviewed as targets. Any contradiction with the frozen registry is ranked HIGH per its own stated authority ("this file wins and the spec is wrong"). This pass runs after `/to-spec` closed wayfinder map #224 (production composition root) — orchestrator-spec.md was checked specifically for whether it actually absorbed that decision.
+`docs/specs/cross-spec-contracts.md` (frozen 2026-07-13/14) and `docs/reviews/cross-verify-2026-07-26.md` (moved from `docs/specs/` 2026-08-09) were read as existing registries, not re-reviewed as targets. Any contradiction with the frozen registry is ranked HIGH per its own stated authority ("this file wins and the spec is wrong"). This pass runs after `/to-spec` closed wayfinder map #224 (production composition root) — orchestrator-spec.md was checked specifically for whether it actually absorbed that decision.
 
 ## Contradiction matrix
 
