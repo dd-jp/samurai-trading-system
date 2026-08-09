@@ -4,7 +4,7 @@
 
 **Short answer:** the stage logic is essentially complete and tracks its specs. What is missing is *between* the stages — nothing schedules the fill-ingestion loop, and nothing constructs the composition root's 16 required dependencies. A paper run today would submit orders and then never learn what happened to them.
 
-> **FULLY CLOSED as of 2026-08-06 — retained for history only. See [triage-2026-08-06.md](triage-2026-08-06.md).**
+> **FULLY CLOSED as of 2026-08-06 — retained for history only. See [triage-2026-08-06.md](../triage-2026-08-06.md).**
 > Every item in this file is now closed, verified at `9b026c4` against call sites rather than
 > commit titles. The last two to close: **Tier 0** (an unknown daily figure now feeds
 > `portfolio_tripped` — `risk-manager/breakers.ts:212,255-259`, #333) and **D3** (`submitFlatten`
@@ -12,7 +12,7 @@
 > survives, but is owned by the newer audit as F-7, not by this file. Do not use this document
 > as a live checklist.
 
-> **Partly superseded 2026-08-05 by [spec-conformance-2026-08-05.md](spec-conformance-2026-08-05.md).**
+> **Partly superseded 2026-08-05 by [spec-conformance-2026-08-05.md](../spec-conformance-2026-08-05.md).**
 > That audit is the spec-by-spec half this one explicitly did not do (see Method below), and it
 > re-verified the wiring findings here against current `main`. **Closed since:** Tier-1 item 1
 > (`ingestFills()`/`reconcile()` are now scheduled — `orchestrator/fill-sync.ts`, driven from
