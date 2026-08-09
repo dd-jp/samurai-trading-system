@@ -1,4 +1,4 @@
-# 07 — Stock Selection: Manipulation Guardrails
+# Stock Selection: Manipulation Guardrails
 
 **Date:** 2026-08-02
 **Status:** Research complete. Feeds future Stage 0 wayfinder map.
