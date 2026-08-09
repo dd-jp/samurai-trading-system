@@ -12,7 +12,7 @@ Two further 10s-band docs were read and produced no finding — recorded so the 
 
 > **Gate 2 — Architecture ADR — is the measured strategy the thing we build?** Wayfinder map → ADR, per Standing Pipeline Rule 7. **Upstream of all validation spend.**
 
-So: **yes, grilling tickets are needed.** Seven are proposed at the end with one question each — six grilling plus T7, which is an implementation ticket. T3 is contingent on T1 and should not be worked before it.
+So: **yes, grilling tickets are needed.** Seven were opened on 2026-08-09 with one question each — the parent map [#631](../../issues/631), grilling tickets [#632](../../issues/632)–[#636](../../issues/636), and implementation ticket [#637](../../issues/637). [#633](../../issues/633) is contingent on [#631](../../issues/631) and should not be worked before it.
 
 ---
 
@@ -167,18 +167,18 @@ All are recordings of established fact, not decisions:
 2. **`stage2-validation-execution-spec.md`** — the terminal KILL is recorded against story 14, citing doc 13, with its scope note carried across so the verdict is not misread as a verdict on the Stage 0 hypothesis, and the MinBTL-812 figure carries F3's caveat inline. The header's Status/Date now say the spec was executed rather than still reading Draft 2026-07-28.
 3. **`16-risk-debate-finding.md` and `17-universe-manipulation-guardrails.md`** — H1 titles still opened "# 05 —" and "# 07 —", their pre-consolidation numbers, missed by the 2026-08-08 rename sweep. Numbers dropped; slugs and content untouched.
 
-## Proposed grilling tickets — not opened
+## Tickets — opened 2026-08-09
 
-One question each, per Standing Pipeline Rule 1. **T1 is the parent and doc 12 places it upstream of all validation spend**; the rest are downstream of its answer and should not be worked before it.
+One question each, per Standing Pipeline Rule 1. **[#631](../../issues/631) is the parent map and doc 12 places it upstream of all validation spend**; the rest are downstream of its answer.
 
 | # | Ticket | The one question |
 |---|---|---|
-| **T1** | **Wayfinder map: is the measured premium harvest the thing we build?** (doc 12 gate 2 — an architecture ADR) | Does the doc-10 strategy **replace** the LLM pipeline, **wrap** it (veto-only), or remain a research artifact while the pipeline stays the product? |
-| T2 | Reconcile the Stage 0 edge thesis in `CONTEXT.md` | Of the three live framings — `CONTEXT.md`'s debate-as-edge, doc 10's bear-the-drawdown premium, doc 12's long-gamma avoid-the-drawdown correction — which one is the recorded thesis? |
-| T3 | Signal generation: veto-only vs conviction-scaled — **contingent on T1**, its parent | Does trend generate and the LLM only refuse (doc 10 Consequence 2), or does `DebateResult` stay the Trader's input (`trader-spec.md` stories 5–8)? If T1 answers "wrap (veto-only)", this is answered with it |
-| T4 | Drawdown breaker threshold and re-arm | If −23% is pre-accepted, what should the hard breaker's level be, and may it re-arm without a human under ADR-0007? |
-| T5 | Universe objective: effective bets vs movers | Does the Universe Selector target doc 10's 12-instrument diversified basket (4.60 effective bets), screen for movers, or both on separate paths? |
-| T6 | Benchmark definition for the metrics suite | What does the system have to beat — always-long-same-basket at the same vol target, SPY/60-40 risk-adjusted, or both — and which spec owns computing it? |
-| T7 | MinBTL's E[SR] denominator (F3) — an **implementation** ticket, not a grilling one, but the value is a judgement | Should `MINBTL_TARGET_ANNUAL_SHARPE` stay at 1.0, and either way should it become a stated, surfaced assumption rather than a private constant? |
+| **[#631](../../issues/631)** | **Wayfinder map: is the measured premium harvest the thing we build?** (doc 12 gate 2 — an architecture ADR) | Does the doc-10 strategy **replace** the LLM pipeline, **wrap** it (veto-only), or remain a research artifact while the pipeline stays the product? |
+| [#632](../../issues/632) | Reconcile the Stage 0 edge thesis in `CONTEXT.md` | Of the three live framings — `CONTEXT.md`'s debate-as-edge, doc 10's bear-the-drawdown premium, doc 12's long-gamma avoid-the-drawdown correction — which one is the recorded thesis? |
+| [#633](../../issues/633) | Signal generation: veto-only vs conviction-scaled — **contingent on [#631](../../issues/631)**, its parent | Does trend generate and the LLM only refuse (doc 10 Consequence 2), or does `DebateResult` stay the Trader's input (`trader-spec.md` stories 5–8)? If T1 answers "wrap (veto-only)", this is answered with it |
+| [#634](../../issues/634) | Drawdown breaker threshold and re-arm | If −23% is pre-accepted, what should the hard breaker's level be, and may it re-arm without a human under ADR-0007? |
+| [#635](../../issues/635) | Universe objective: effective bets vs movers | Does the Universe Selector target doc 10's 12-instrument diversified basket (4.60 effective bets), screen for movers, or both on separate paths? |
+| [#636](../../issues/636) | Benchmark definition for the metrics suite | What does the system have to beat — always-long-same-basket at the same vol target, SPY/60-40 risk-adjusted, or both — and which spec owns computing it? |
+| [#637](../../issues/637) | MinBTL's E[SR] denominator (F3) — an **implementation** ticket, not a grilling one, but the value is a judgement | Should `MINBTL_TARGET_ANNUAL_SHARPE` stay at 1.0, and either way should it become a stated, surfaced assumption rather than a private constant? |
 
 Two rulings already recorded as OPEN in [`../research/README.md`](../research/README.md) — **tick cadence** (doc 10's daily vs ADR-0008's 15 minutes) and **"is Samurai commercial"** — are referenced, not re-litigated here. Cadence touches T1: doc 10 Consequence 3 argues a weeks-to-months harvest needs only a daily tick, which would cut LLM spend rather than raise it.
