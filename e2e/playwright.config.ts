@@ -9,7 +9,7 @@
  *
  * Two seams serve `/api/snapshot`, chosen per scenario and named in each spec:
  *
- *  1. **The real server over a fixture store** — `dist/dashboard/fixture-server.js`
+ *  1. **The real server over a fixture store** — `dist/server/apps/service-api/fixture-server.js`
  *     boots `createDashboardServer` with an in-memory `DashboardQueryStore`
  *     (see that file). Boot, placement, drawer and keyboard scenarios read it,
  *     so those assertions cover the production static handler, `buildSnapshot`
@@ -72,7 +72,7 @@ export default defineConfig({
   webServer: {
     // Builds what it serves: the point of this suite is the real bundle, and a
     // stale `dist/` would test bytes nobody is shipping.
-    command: 'yarn build && node dist/dashboard/fixture-server.js',
+    command: 'yarn build && node dist/server/apps/service-api/fixture-server.js',
     cwd: repoRoot,
     url: `${BASE_URL}/api/snapshot`,
     // `tsc` + `vite build` from cold; the 60s default is not enough.

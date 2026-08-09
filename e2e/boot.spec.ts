@@ -3,7 +3,7 @@
  * server (#544 scenarios 1, 2, 4-partial, 5, 8).
  *
  * Seam: no `page.route` for `/api/snapshot` at all. These tests read
- * `dist/dashboard/fixture-server.js` — production `createDashboardServer`,
+ * `dist/server/apps/service-api/fixture-server.js` — production `createDashboardServer`,
  * production static handler, production `buildSnapshot`, production wire shape
  * — over an in-memory fixture store. That makes them the only tests here that
  * would catch a break in the server half of the dashboard.

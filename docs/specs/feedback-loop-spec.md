@@ -4,7 +4,7 @@
 **Owner:** David (Deepak)  
 **Date:** 2026-07-13
 
-> **[ADR-0012](../adr/0012-no-human-gate-anywhere.md) (2026-08-09) removed every remaining human gate.** Three changes to this spec, superseding the language below wherever it conflicts:
+> **[ADR-0013](../adr/0013-no-human-gate-anywhere.md) (2026-08-09) removed every remaining human gate.** Three changes to this spec, superseding the language below wherever it conflicts:
 >
 > 1. **Risk-threshold loosening applies without approval.** `loosen_pending_approval[]` is no longer a gate. Every dial change is applied, logged and reversible.
 > 2. **The hard bounds survive and are the control.** `human-set hard floors/ceilings` (story 6) and "hard bounds never crossed" stay, enforced in code — a loosening that would cross one is rejected, not queued. The surviving asymmetry is that loosening is bounded where tightening is free, not that one waits on a person.
@@ -166,7 +166,7 @@ Added 2026-08-05 ([#359](https://github.com/dd-jp/samurai-trading-system/issues/
 
 - **Phasing of the three dials (#433).** They are at different stages, and the difference is deliberate rather than an oversight:
   - **`analyst_weights`** — live at both ends since #371 (seeded at startup, stepped by the daily cycle, read at tick start).
-  - **`risk_thresholds`** — live at both ends since #433. `RISK_THRESHOLD_KEYS` (`src/risk-manager/risk-thresholds.ts`) fixes which key drives which `RiskConfig` field; the composition root seeds the table from the run's `RiskConfig`; `RiskManagerImpl.evaluate()` resolves the live values on every call. The keys are the six notional caps, all of which tighten by decreasing. `concentration.threshold`, `min_viable_size` and `cii_threshold` are deliberately excluded — see that module's doc for why each.
+  - **`risk_thresholds`** — live at both ends since #433. `RISK_THRESHOLD_KEYS` (`server/pipeline/risk-manager/risk-thresholds.ts`) fixes which key drives which `RiskConfig` field; the composition root seeds the table from the run's `RiskConfig`; `RiskManagerImpl.evaluate()` resolves the live values on every call. The keys are the six notional caps, all of which tighten by decreasing. `concentration.threshold`, `min_viable_size` and `cii_threshold` are deliberately excluded — see that module's doc for why each.
   - **`strategy_params`** — **dead at both ends, and left that way on purpose.** Nothing in the repo produces a `TuningProposal` for one, and `buildTraderStep` passes a frozen `deps.config` into `decide()`. Building a reader for a writer that does not exist would add a live-config path exercising nothing, on the stage that sizes positions. It becomes worth doing when a proposer exists; until then the Trader's static config is the honest description of the system.
 
 ### Module: Setup Store Labelling

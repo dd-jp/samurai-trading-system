@@ -1,0 +1,45 @@
+// Owns its own TypeScript project — Vite compiles this app, not `tsc`
+// (dashboard-spec.md, "Module: Web client": "the build becomes `tsc &&
+// vite build`"). This config is what that `tsc` pass checks against; `vite
+// build` itself only transpiles (esbuild), it does not type-check.
+//
+// Deliberately NOT part of the root `tsconfig.json` project references and
+// excluded from both `tsconfig.build.json` and `tsconfig.test.json` (see
+// their `exclude` arrays) — this app has its own `jsx`/DOM lib needs that
+// must never leak into the strict backend build project or the Node-only
+// test project. This app's own test files are excluded here too — they are
+// type-checked by the sibling `tsconfig.test.json` project instead.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    // The wire contract. This is the ONLY path out of this app's directory
+    // that resolves — the components previously reached backend source by
+    // relative path, which pulled server modules into this program. Mirrored
+    // by `resolve.alias` in `vite.config.ts` (bundling) and `vitest.config.ts`
+    // (tests); all three must name the same file.
+    //
+    // No `baseUrl` — TypeScript removed the option (TS5102), and without it
+    // `paths` entries resolve relative to THIS file, which is what is wanted.
+    "paths": {
+      "@contracts": ["../contracts/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"],
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.test.tsx"]
+}

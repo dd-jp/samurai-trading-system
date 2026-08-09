@@ -41,7 +41,7 @@ counts dollars.
 
 ### 1. `SpendCap`, checked before a debate is admitted
 
-`src/debate-engine/llm/spend-cap.ts`. `SqliteSpendCap` sums `llm_spend.cost_usd`
+`server/pipeline/debate-engine/llm/spend-cap.ts`. `SqliteSpendCap` sums `llm_spend.cost_usd`
 — the same table `SqliteLlmSpendStore` already writes, priced at write time —
 and refuses to admit a debate once cumulative spend reaches the budget.
 

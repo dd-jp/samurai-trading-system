@@ -6,7 +6,7 @@
 - **Supersedes:** verdict-spec.md "Notes & Rationale" — the `manual` → `semi_auto` → `auto` staging
 - **Related:** [#275](https://github.com/dd-jp/samurai-trading-system/issues/275) (built the Telegram approval transport), [#384](https://github.com/dd-jp/samurai-trading-system/issues/384), [#375](https://github.com/dd-jp/samurai-trading-system/issues/375), [#333](https://github.com/dd-jp/samurai-trading-system/issues/333) (the breakers that must work now that this gate does not exist)
 
-> **Amended by [ADR-0012](0012-no-human-gate-anywhere.md) (2026-08-09).** This ADR removed the human from the **trade approval** path only. ADR-0012 extends the same posture to the two human gates that survived it — the hard breaker's **manual re-arm** and the Feedback Loop's **risk-threshold loosening approval** — so no gate anywhere waits on a person. It does so on separate reasoning: the serialization argument below applies to a blocking `await` in the instrument pass and does not carry to either of those, since neither blocks anything. ADR-0012 also keeps the Feedback Loop's static hard bounds, which are limits rather than approvals, and requires that breach **alerting** survive the removal of the approval channel it currently shares a field with.
+> **Amended by [ADR-0013](0013-no-human-gate-anywhere.md) (2026-08-09).** This ADR removed the human from the **trade approval** path only. ADR-0013 extends the same posture to the two human gates that survived it — the hard breaker's **manual re-arm** and the Feedback Loop's **risk-threshold loosening approval** — so no gate anywhere waits on a person. It does so on separate reasoning: the serialization argument below applies to a blocking `await` in the instrument pass and does not carry to either of those, since neither blocks anything. ADR-0013 also keeps the Feedback Loop's static hard bounds, which are limits rather than approvals, and requires that breach **alerting** survive the removal of the approval channel it currently shares a field with.
 
 ## Context
 
@@ -30,9 +30,9 @@ The question was therefore live: finish wiring it, or decide against it.
 ### What made the decision, and it is structural rather than a preference
 
 `VerdictImpl.decide` **awaits** `approvals.requestApproval` inside the
-instrument pass (gate 6, `src/verdict/index.ts`). `runTickPlan` runs
+instrument pass (gate 6, `server/pipeline/verdict/index.ts`). `runTickPlan` runs
 instruments at `max_concurrent_instruments`, which is **1**
-(`src/orchestrator/tick-loop.ts`; `production.ts` documents why raising it is
+(`server/apps/orchestrator/tick-loop.ts`; `production.ts` documents why raising it is
 not free). `human_timeout` was 15 minutes.
 
 Composing those three: **one trade awaiting a human tap blocks every other

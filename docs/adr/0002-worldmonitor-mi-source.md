@@ -64,8 +64,8 @@ Full detail in [architecture-patterns grilling — #177](https://github.com/dd-j
 ## Consequences
 
 **Code changes needed at implementation time** (not made by this ADR — this is a decision record, `/to-tickets` generates the implementation issues):
-- New module `src/market-intelligence/worldmonitor-adapter/` (client, normalizer, adapter, cii-consumer + tests).
-- New module `src/market-intelligence/convergence-engine/` replacing the existing Conflict Resolution Engine module wholesale (snapshot, signals, clustering, taxonomy + tests).
+- New module `server/providers/market-intelligence/worldmonitor-adapter/` (client, normalizer, adapter, cii-consumer + tests).
+- New module `server/providers/market-intelligence/convergence-engine/` replacing the existing Conflict Resolution Engine module wholesale (snapshot, signals, clustering, taxonomy + tests).
 - `types.ts`: widen `AgentIntelligence.agent_id` to `'deepresearch' | 'grok' | 'worldmonitor'`.
 - `RiskDecision` gains an advisory `warnings` / `macro_risk_flag` field for the CII signal.
 

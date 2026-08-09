@@ -28,7 +28,7 @@ The four `cross-*.md` files were read as existing registries, not as audit targe
 was applied throughout: this repo's dominant defect class is a *tested mechanism nothing
 calls*, so for every requirement that is a runtime behaviour rather than a pure function, the
 question asked was "is it reachable from the composition root?", not "does the code exist?".
-The wiring inventory was built once from `src/orchestrator/production.ts`,
+The wiring inventory was built once from `server/apps/orchestrator/production.ts`,
 `production/direct-bind.ts`, `orchestrator/index.ts` and `alert-transport.ts`.
 
 **Base commit.** `7862e3a` (*"run Stage 2 against real market data and record the verdict
@@ -41,7 +41,7 @@ fixed. It was withdrawn rather than published. Every finding below was re-verifi
 **Baseline.** `yarn build` clean. `yarn test` — **1943 passed, 1 skipped (1944), zero
 failures**. See F-12 for one flake observed on the older base that did not recur here.
 
-**Relationship to prior audits.** `docs/paper-trading-readiness-2026-08-03.md` deliberately
+**Relationship to prior audits.** [`archive/paper-trading-readiness-2026-08-03.md`](archive/paper-trading-readiness-2026-08-03.md) (archived 2026-08-09) deliberately
 did *not* read the specs ("Not read: the 19 specs in full … so the divergence half of the
 question is answered from targeted checks"). This audit is that missing half. Its Tier-1
 items 1 and 3 and divergence D2 have since closed; its D3 survives here as F-8.
@@ -54,12 +54,12 @@ items 1 and 3 and divergence D2 have since closed; its D3 survives here as F-8.
 
 trader-spec.md devotes stories 12–16 and an entire module ("Module: Cosine Precedent
 Retrieval") to sizing modulation by similarity-weighted precedent. The mechanism exists:
-`src/trader/cosine-precedent.ts` (`retrieveCosinePrecedent`), `SqliteSetupStore`,
+`server/pipeline/trader/cosine-precedent.ts` (`retrieveCosinePrecedent`), `SqliteSetupStore`,
 `FixtureSetupStore`, and the `SetupStore` port in `shared/types.ts`. **None of it has a
 production caller.**
 
 - `retrieveCosinePrecedent` is imported by nothing outside its own test.
-- `src/trader/decide.ts:35` hardcodes `NO_PRECEDENT_COSINE_MULTIPLIER = 0.75` and emits
+- `server/pipeline/trader/decide.ts:35` hardcodes `NO_PRECEDENT_COSINE_MULTIPLIER = 0.75` and emits
   `neighbor_count: 0, weighted_mean_r: null, no_precedent: true` on **every** intent
   (`decide.ts:245-251`, `decide.ts:305-312`).
 - `SetupStore.writeSetup` has **no caller anywhere in `src/`** outside tests — story 16
@@ -92,7 +92,7 @@ static config baked in at startup … the cross-spec pass must confirm they read
 |---|---|---|
 | `risk_thresholds` | **yes** — `autoTighten` calls `tuning.setRiskThreshold` (`metrics.ts:106`) on a kill-line breach | **no** — `RiskManagerImpl` (`index.ts:140`) holds a frozen `RiskConfig` from its constructor |
 | `strategy_params` | **no** — moved only by `proposals`, and nothing in the repo produces one | **no** — `buildTraderStep` (`direct-bind.ts:117`) passes a frozen `deps.config` into `decide()` |
-| `analyst_weights` | **yes** — seeded at startup, stepped daily by attribution | **no** — `src/debate-engine/` contains zero non-test occurrences of "weight" |
+| `analyst_weights` | **yes** — seeded at startup, stepped daily by attribution | **no** — `server/pipeline/debate-engine/` contains zero non-test occurrences of "weight" |
 
 **Failure scenario — the `risk_thresholds` row is the sharp one.** It is live at the write end
 and dead at the read end. `computeMetrics` detects a kill-threshold breach, calls
@@ -119,7 +119,7 @@ has no `weights` field. So this limb needs a spec decision before it needs code.
 ### F-3 (HIGH) — Market Intelligence has no ingestion path: two of three analysts are constant-neutral
 
 market-intelligence-spec.md is the largest spec in the repo (652 lines) and defines eight
-modules. `src/market-intelligence/` implements the store type and the WorldMonitor CII
+modules. `server/providers/market-intelligence/` implements the store type and the WorldMonitor CII
 consumer. **DeepResearch Agent, Grok Agent, WorldMonitor news Agent, Convergence Engine, Data
 Delivery, Health & Metrics and the Backtesting Replay Store do not exist** — grep for
 `deepresearch|grok|convergence` across `src/` returns nothing outside tests.
@@ -235,7 +235,7 @@ that looks like a transport fault.
 ### F-8 (MEDIUM) — `BrokerAdapter` is missing three specced methods
 
 execution-spec.md:133-137 defines `submitFlatten`, `cancel` and `getOpenPositions` on
-`BrokerAdapter`. `src/execution/types.ts:120-159` has none of them — only `submitBracket`,
+`BrokerAdapter`. `server/pipeline/execution/types/broker.ts:117-156` has none of them — only `submitBracket`,
 `getOrder`, `fetchNewFills`, `resizeProtectiveLegs`. Unchanged since the 2026-08-03 audit
 flagged it as D3, and still unresolved as *drift vs deliberate descope*
 (`cross-verify-2026-07-31.md` GAP-2 owns the phasing question). Either way the capability is
@@ -279,12 +279,12 @@ spec was never amended.
 
 Two smaller items in the same spec: the Backtest Harness's "FL walk-forward replay" (the
 harness reusing FL's daily-batch code path so weights evolve point-in-time) has no
-implementation — no `runDailyCycle` reference anywhere in `src/cost-model-backtest/`. Given
+implementation — no `runDailyCycle` reference anywhere in `server/tools/backtest/`. Given
 F-2, nothing would read the resulting trajectory anyway.
 
 ### F-11 — Verdict story 14 (fills and no-gos posted to the trade channel) unimplemented
 
-`NotifyingVerdict` (`src/verdict/notifying-verdict.ts`) has **zero callers** — no reference
+`NotifyingVerdict` (`server/pipeline/verdict/notifying-verdict.ts`) has **zero callers** — no reference
 outside its own file and test. `direct-bind.ts` wires `LoggingVerdict` only, and records why:
 "#307 is the open ticket deciding whether one …". The operator gets no per-decision visibility
 over Telegram; only the 15-minute heartbeat and the four escalations flow.
@@ -340,7 +340,7 @@ this repo. Treat ○ as "nothing surfaced", not as "audited".
   repo's defect class, and #392 has since given the latency budget a live caller too.
   ○ conviction score, disagreement detection, round structure, debate logger, contributions,
   persona prompt-injection wrapping.
-- ✓ **Transport layer** — `src/shared/http/` has `retry.ts`, `fetch-with-timeout.ts`,
+- ✓ **Transport layer** — `server/shared/http/` has `retry.ts`, `fetch-with-timeout.ts`,
   `token-bucket.ts`, `venue-pacing.ts`; the retired `sendApprovalRequest`/`requestApproval`
   dead code is gone; `AccountStateProvider` and `MarketDataVolatilityReadingProvider` are
   built and wired by default in `production.ts`. ○ per-client error taxonomies.

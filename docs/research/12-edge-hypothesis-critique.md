@@ -1,6 +1,6 @@
 # The edge hypothesis, critiqued and corrected
 
-**Status:** Consolidated 2026-08-08. Merges the critique ([archived](archive/2026-08-07-edge-hypothesis-evaluation.md)) with the code-verified audit that corrected it ([`../reviews/edge-hypothesis-evaluation-audit-2026-08-08.md`](../reviews/edge-hypothesis-evaluation-audit-2026-08-08.md)).
+**Status:** Consolidated 2026-08-08. Merges the critique ([archived](archive/2026-08-07-edge-hypothesis-evaluation.md)) with the code-verified audit that corrected it ([`../reviews/archive/edge-hypothesis-evaluation-audit-2026-08-08.md`](../reviews/archive/edge-hypothesis-evaluation-audit-2026-08-08.md)).
 **Use the gate order in this document.** The archived critique's gate list must not be executed verbatim — four of its items were wrong and the largest problem was one it never raised.
 
 Reads against [`10-edge-hypothesis.md`](10-edge-hypothesis.md) (the claim) and [`11-trend-signal-measurement.md`](11-trend-signal-measurement.md) (the evidence).
@@ -37,7 +37,7 @@ Every gate below guards a capital commitment to a configuration that exists only
 0. **Paired Sharpe-difference test** (Jobson-Korkie-Memmel / Ledoit-Wolf HAC) on the existing 2570-day series. Cheap, and the arms are highly correlated so the SE is tight.
 1. **Bootstrap the drawdown distribution**; commit to the 90th percentile.
 2. **Architecture ADR — is the measured strategy the thing we build?** Wayfinder map → ADR, per Standing Pipeline Rule 7. Upstream of all validation spend.
-3. **PBO on the Result 5 config** through `src/cost-model-backtest/`. Note PBO is computed from all trials over CSCV splits; it is not parameterised by a trial count.
+3. **PBO on the Result 5 config** through `server/tools/backtest/`. Note PBO is computed from all trials over CSCV splits; it is not parameterised by a trial count.
 4. **Outside benchmarks, risk-adjusted** (SPY, 60/40), reporting return *and* drawdown; keep the matched control for attribution.
 5. **UK tax + financing + FX drag**, re-derived at current HMRC rates.
 6. **Crypto 1x** verified against the committed config (binds at gross 2.44, not 1.22).

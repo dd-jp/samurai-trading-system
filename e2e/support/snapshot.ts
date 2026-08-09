@@ -14,11 +14,12 @@
  * to resolve them.
  */
 import type {
+  DashboardSnapshot,
   PipelineCell,
   PipelineLane,
   PipelineStage,
-} from '../../src/dashboard/pipeline-types.ts';
-import type { DashboardSnapshot, VerdictRow } from '../../src/dashboard/types.ts';
+  VerdictRow,
+} from '../../contracts/index.ts';
 
 /**
  * Recorded gap between the settled stages below.

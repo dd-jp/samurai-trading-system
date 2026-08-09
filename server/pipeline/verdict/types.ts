@@ -1,0 +1,152 @@
+/**
+ * Domain types for the Verdict (Stage 5) core gate sequence.
+ * See docs/specs/verdict-spec.md ("Key Interfaces", "Module: Gate Sequence",
+ * "Module: Human-in-the-Loop") and docs/specs/cross-spec-contracts.md.
+ * Implementation tickets #79 (gate sequence) and #80 (HITL automation dial
+ * + flag routing).
+ */
+
+import type {
+  MarketDataService,
+  TradingCalendar,
+} from '../../providers/market-data-service/index.js';
+import type { Clock, OrderIntent } from '../../shared/index.js';
+import type { BreakerState, RiskDecision } from '../risk-manager/index.js';
+
+/**
+ * Dedup seam over the shared store's order/fill records, keyed on
+ * `idempotency_key`. Execution (#82) is the store's real owner and sole
+ * writer (docs/specs/execution-spec.md "Module: Idempotency &
+ * Crash-Restart") — Verdict consumes it read-only, like Risk consumes
+ * `PortfolioView`/`BreakerState` as pre-built inputs.
+ */
+export interface PositionStore {
+  /** True if an order or fill already exists under this idempotency key. */
+  findByKey(idempotency_key: string): Promise<boolean>;
+}
+
+export interface ApprovalRequest {
+  order_intent: OrderIntent;
+  risk_decision: RiskDecision;
+  trace_id: string;
+  /** Elapsed time after which a non-response resolves as 'timeout'. */
+  timeout_ms: number;
+}
+
+export type ApprovalOutcome = 'approved' | 'rejected' | 'timeout';
+
+/**
+ * Telegram/Discord trade-channel gate (docs/specs/verdict-spec.md "Module:
+ * Human-in-the-Loop"). The channel owns timeout mechanics itself (real
+ * timers live; no-op auto-approve in backtest) so `Verdict.decide` stays a
+ * plain await — deterministic and clock-injectable.
+ */
+export interface ApprovalChannel {
+  requestApproval(request: ApprovalRequest): Promise<ApprovalOutcome>;
+}
+
+/**
+ * Static, config-driven thresholds the gate sequence checks against. Exact
+ * values are tuned in paper trading (verdict-spec.md "Out of Scope: Exact
+ * thresholds") — this is the shape, not the numbers.
+ */
+export interface VerdictConfig {
+  /**
+   * HITL automation dial, per asset class (verdict-spec.md "Module:
+   * Human-in-the-Loop"). `manual` engages HITL for every trade, `auto`
+   * never engages it, `semi_auto` engages it only for flagged trades.
+   */
+  automation_level: Record<'crypto' | 'stocks', 'manual' | 'semi_auto' | 'auto'>;
+  /** Staleness bound: max signal age before no-go, per asset class. */
+  max_signal_age: Record<'crypto' | 'stocks', number>;
+  /**
+   * Drift bound as a **fraction of the bracket's own entry price**, per asset
+   * class: the gate fires when `|mark.price - entry| > entry * this`. So
+   * `0.005` is "half a percent away from where we decided to enter",
+   * whatever the instrument costs.
+   *
+   * ## Why fractional, and why this field was renamed (#381)
+   *
+   * This replaces `drift_tolerance`, which was an **absolute price distance**
+   * in the instrument's own currency. That shape cannot be set correctly for
+   * more than one instrument at a time, and the failure is asymmetric in the
+   * dangerous direction: a value sized for a six-figure BTC-USD (500, i.e.
+   * ~0.5%) is 250% of a $200 equity, so the gate could never fire and Verdict
+   * would execute on an arbitrarily stale bracket.
+   *
+   * Per-asset-class **absolute** values were the other candidate and were
+   * rejected: they only move the same bug one level down. A single absolute
+   * number for `stocks` is still incommensurable *within* the equity class —
+   * `SMOKE_TEST_UNIVERSE`'s successor holds SPY (~$600) alongside names an
+   * order of magnitude cheaper, and one dollar figure cannot be half a percent
+   * of both. A fraction is the only shape that is correct for an instrument
+   * whose price the config author never saw, which is the property a universe
+   * that changes without a code change (`DEFAULT_UNIVERSE`) actually needs.
+   *
+   * **Renamed rather than reinterpreted, deliberately.** Had the fractional
+   * reading been given to the old `drift_tolerance` name, a config still
+   * carrying the checked-in `500` would have meant 50,000% — a gate that
+   * silently never fires, which is exactly the hazard being fixed. The rename
+   * makes such a config a compile error instead.
+   *
+   * Kept per-asset-class rather than collapsed to one fraction because the
+   * tolerable drift is paired with the staleness window it sits behind, and
+   * `max_signal_age` already differs by class. The two dials are read
+   * together.
+   */
+  drift_tolerance_pct: Record<'crypto' | 'stocks', number>;
+  /** HITL response window; a non-response past this defaults to no-go. */
+  human_timeout: number;
+  /** Stocks-only: closed session still passes the market-open gate. */
+  allow_extended_hours: boolean;
+  /**
+   * What "flagged" means under `semi_auto` (verdict-spec.md "Module:
+   * Human-in-the-Loop"). Non-converged, no-precedent, and near-limit flags
+   * are read directly from `order.metadata` / `risk_decision.modifications`
+   * and need no threshold.
+   */
+  flag_thresholds: {
+    size_over: number;
+  };
+}
+
+export interface VerdictInput {
+  /** Cross-cutting correlation ID threaded from the Orchestrator's tick — not business data. */
+  trace_id: string;
+  /** Approved only — Verdict trusts Risk's approval and only adds final gates. */
+  risk_decision: RiskDecision;
+  clock: Clock;
+  marketData: MarketDataService;
+  tradingCalendar: TradingCalendar;
+  positionStore: PositionStore;
+  breakers: BreakerState;
+  config: VerdictConfig;
+  /** backtest bypasses HITL (auto-approve), recording would_require_approval; paper behaves like live. */
+  mode: 'live' | 'paper' | 'backtest';
+  approvals: ApprovalChannel;
+}
+
+export interface VerdictDecision {
+  status: 'go' | 'no_go';
+  /** Present iff go. */
+  order: OrderIntent | null;
+  no_go_reason:
+    | 'staleness'
+    | 'drift'
+    | 'dedup'
+    | 'market_closed'
+    | 'breaker'
+    | 'timeout'
+    | 'human_rejected'
+    | null;
+  approval_path: 'automated' | 'human' | 'human_timeout';
+  /** Recorded even when the gate is bypassed (backtest) or never reached (earlier no-go). */
+  would_require_approval: boolean;
+  idempotency_key: string;
+  timestamp: Date;
+}
+
+/** Single test seam. Deterministic given inputs; HITL is injected (auto in backtest). */
+export interface Verdict {
+  decide(input: VerdictInput): Promise<VerdictDecision>;
+}

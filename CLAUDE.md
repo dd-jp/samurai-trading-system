@@ -7,8 +7,9 @@ Read this on every session start.
 - **Codename:** Samurai
 - **Goal:** Live-money multi-agent trading system covering crypto AND stocks
 - **Owner:** David (Deepak)
-- **Architecture:** 7-stage pipeline — Analysts → Debate → Trader → Invalidation → Risk → Verdict → Feedback Loop (`invalidation` added 2026-08-05, see `docs/specs/devils-advocate-spec.md`)
-- **Status:** Design phase complete (12 components charted, specced, cross-verified; 49 GitHub tickets published). Project scaffolded — TypeScript, npm, vitest, Biome. Implementation not yet started (see `src/` for the skeleton, `docs/specs/` for what fills it in).
+- **Architecture:** Analysts → Debate → Trader → [Invalidation] → Risk → Verdict → **Execution**, with a Feedback Loop adjusting analyst weights and risk thresholds post-trade. `invalidation` is specced and NOT built (added 2026-08-05, see `docs/specs/devils-advocate-spec.md`), so the runtime chain is six stages and goes Trader → Risk today. This line previously omitted Execution and listed Feedback Loop as the seventh stage; `RUNTIME_STAGES` and the README are the authority.
+- **Repo layout:** `client/` (Vite+React UI) + `server/` (Node: `apps/`, `pipeline/`, `providers/`, `shared/`, `tools/`) + `contracts/` (the wire model both import and neither owns). There is no root `src/`. Neither runtime imports the other; both import `contracts/`.
+- **Status:** Implemented and under test — all twelve charted components built, ~2900 tests, end-to-end offline run green (`yarn smoke`). Paper soak has run. Not yet cleared: one real Alpaca paper tick (ADR-0004 §5).
 - **Language:** TypeScript (Node 22+). Resolved in [ADR-0001](docs/adr/0001-technical-foundation-hybrid.md) — no hard dependency on the Python repos mined for patterns.
 
 ## Docs Convention
@@ -22,7 +23,7 @@ Read/Write these as the project evolves:
 | `docs/techstack.md` | Libraries, versions, why-chosen. Update as stack choices lock in. A living register, not a dated research artifact — moved out of `docs/research/` 2026-08-08. |
 | `docs/wayfinder/` | Historical/reference only — earlier maps written as local markdown before the switch to GitHub issues (2026-07-22). New wayfinder maps live as GitHub issues (see Standing Pipeline Rule 1), not here. |
 | `docs/specs/` | Synthesized specs (PRDs) per stage, `<stage>-spec.md`. Produced from the wayfinder map via `/to-spec`. |
-| `docs/reviews/` | Audit/review reports (code quality, spec conformance, readiness), dated `<topic>-<date>.md`. Findings ranked, prior findings referenced not re-filed. Standards fallout goes to `docs/coding-standards.md` in the same change. |
+| `docs/reviews/` | Audit/review reports (code quality, spec conformance, readiness), dated `<topic>-<date>.md`. Findings ranked, prior findings referenced not re-filed. Standards fallout goes to `docs/coding-standards.md` in the same change. **Navigation starts at `docs/reviews/README.md`** (live vs archived, with successor pointers). A report moves to `docs/reviews/archive/` — same file name, never deleted — once every finding is closed or a named successor carries its substance. |
 
 When in doubt, grep existing docs before writing new ones.
 
@@ -54,6 +55,7 @@ Existing research (DON'T overwrite, reference) — all live under `docs/research
 **Naming scheme (consolidated 2026-08-08).** Live docs are `NN-slug.md` with no date suffix and a unique number, banded by track: `00`–`02` foundations (numbers frozen — specs cite them as "docs 00/01/02" by number), `10`s strategy/edge, `20`s market intelligence, `30`s data vendors, `40`s infra. Superseded run-records live in `docs/research/archive/` as `YYYY-MM-DD-slug.md`, preserved verbatim — **never deleted**, and raw run logs under `archive/raw/`.
 
 Key docs:
+
 - `docs/research/10-edge-hypothesis.md` — the edge hypothesis (C1/C2/E2/E1), Stage 0 gate
 - `docs/research/11-trend-signal-measurement.md` — 10.0y trend vs always-long measurement (+ the `.py` that produced it)
 - `docs/research/12-edge-hypothesis-critique.md` — the critique with its audit corrections folded in; use this gate order

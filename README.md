@@ -2,9 +2,9 @@
 
 Live-money multi-agent trading system covering **crypto and stocks**.
 
-The runtime tick is **six stages** — Analysts → Debate → Trader → Risk → Verdict → Execution — driven by `SequentialTickRunner` (`src/orchestrator/tick-runner.ts`), with a Feedback Loop that adjusts analyst weights and risk thresholds post-trade.
+The runtime tick is **six stages** — Analysts → Debate → Trader → Risk → Verdict → Execution — driven by `SequentialTickRunner` (`server/apps/orchestrator/tick-runner.ts`), with a Feedback Loop that adjusts analyst weights and risk thresholds post-trade.
 
-A seventh stage, **Invalidation** (the devil's-advocate critic, between Trader and Risk), is **specced but not built** — see `docs/specs/devils-advocate-spec.md`. The dashboard already renders its column at full width so its rows appear the day it ships (`src/dashboard/pipeline-types.ts`), but nothing writes an `invalidation` row today.
+A seventh stage, **Invalidation** (the devil's-advocate critic, between Trader and Risk), is **specced but not built** — see `docs/specs/devils-advocate-spec.md`. The dashboard already renders its column at full width so its rows appear the day it ships (`server/apps/service-api/pipeline-types.ts`), but nothing writes an `invalidation` row today.
 
 ## Architecture
 
@@ -20,21 +20,23 @@ Market Intelligence ─┘                                                      
 
 | Stage | Directory | What it does |
 |-------|-----------|-------------|
-| Market Data Service | `src/market-data-service/` | OHLCV bars + deterministic technical indicators (RSI, ATR, moving averages) with point-in-time discipline. Sources: Alpaca (equities+crypto), ccxt, IBKR, routed by asset class |
-| Market Intelligence | `src/market-intelligence/` | Sentiment/news context via the Grok agent over Nous; WorldMonitor CII consumer (adapter parked until `WORLDMONITOR_API_KEY` is set) |
-| Analysts | `src/analysts/` | Stateless per-tick agents (technical, fundamental, sentiment). Pure function of data + weight |
-| Debate Engine | `src/debate-engine/` | Bull/Bear/Mediator personas, round orchestration, semantic disagreement detection, weighted conviction scoring, LLM rate limiting + spend cap |
-| Trader | `src/trader/` | Consolidates debate result into broker-agnostic bracket (OrderIntent). Position-aware branching, setup vectors, cosine precedent lookup |
-| Risk Manager | `src/risk-manager/` | Position-size caps, drawdown/volatility circuit breakers, portfolio exposure limits, correlation checks, CII mapping, live-read risk thresholds |
-| Verdict | `src/verdict/` | Final go/no-go gate. Idempotency dedup, market-open check, kill-switch re-check, Telegram/Discord notification + approval callbacks |
-| Execution | `src/execution/` | Broker abstraction (Alpaca MVP, Simulated for backtest; ccxt/IBKR sources exist, adapters are long-term). Bracket expansion, fill ingestion, reconcile-on-restart, unpriced-fill alerting |
-| Feedback Loop | `src/feedback-loop/` | Post-trade attribution, bounded weight adjustment, daily cycle, metrics suite (Sharpe/Sortino/etc.), kill-threshold guardrails |
-| Cost Model / Backtest | `src/cost-model-backtest/` | Pessimistic fill simulation, full validation suite (walk-forward, CPCV, PBO, MinBTL, DSR), injected-clock replay, Stage-2 selection + verdict |
-| Orchestrator | `src/orchestrator/` | Tick loop scheduler, trace-ID propagation, audit log, dead-man's-switch heartbeat, alert channels, rotating log sink, production composition root (ADR-0004) |
-| Dashboard | `src/dashboard/` | Read-only HTTP operator view: pipeline lanes per instrument, positions, verdicts, provider-status tiles |
-| Serve | `src/serve/` | Supervises orchestrator + dashboard as one foreground process |
-| Scripts | `src/scripts/` | Hand-run Stage-2 tooling: history ingestion, spread calibration, cost decomposition, Stage-2 evaluation |
-| Shared | `src/shared/` | Types/ports, clock injection, SQLite store + migrations, HTTP (token-bucket pacing, retry, timeouts), Nous LLM client + pricing |
+| Market Data Service | `server/providers/market-data-service/` | OHLCV bars + deterministic technical indicators (RSI, ATR, moving averages) with point-in-time discipline. Sources: Alpaca (equities+crypto), ccxt, IBKR, routed by asset class |
+| Market Intelligence | `server/providers/market-intelligence/` | Sentiment/news context via the Grok agent over Nous; WorldMonitor CII consumer (adapter parked until `WORLDMONITOR_API_KEY` is set) |
+| Analysts | `server/pipeline/analysts/` | Stateless per-tick agents (technical, fundamental, sentiment). Pure function of data + weight |
+| Debate Engine | `server/pipeline/debate-engine/` | Bull/Bear/Mediator personas, round orchestration, semantic disagreement detection, weighted conviction scoring, LLM rate limiting + spend cap |
+| Trader | `server/pipeline/trader/` | Consolidates debate result into broker-agnostic bracket (OrderIntent). Position-aware branching, setup vectors, cosine precedent lookup |
+| Risk Manager | `server/pipeline/risk-manager/` | Position-size caps, drawdown/volatility circuit breakers, portfolio exposure limits, correlation checks, CII mapping, live-read risk thresholds |
+| Verdict | `server/pipeline/verdict/` | Final go/no-go gate. Idempotency dedup, market-open check, kill-switch re-check, Telegram/Discord notification + approval callbacks |
+| Execution | `server/pipeline/execution/` | Broker abstraction (Alpaca MVP, Simulated for backtest; ccxt/IBKR sources exist, adapters are long-term). Bracket expansion, fill ingestion, reconcile-on-restart, unpriced-fill alerting |
+| Feedback Loop | `server/pipeline/feedback-loop/` | Post-trade attribution, bounded weight adjustment, daily cycle, metrics suite (Sharpe/Sortino/etc.), kill-threshold guardrails |
+| Cost Model / Backtest | `server/tools/backtest/` | Pessimistic fill simulation, full validation suite (walk-forward, CPCV, PBO, MinBTL, DSR), injected-clock replay, Stage-2 selection + verdict |
+| Orchestrator | `server/apps/orchestrator/` | Tick loop scheduler, trace-ID propagation, audit log, dead-man's-switch heartbeat, alert channels, rotating log sink, production composition root (ADR-0004). Opens no socket |
+| Service API | `server/apps/service-api/` | Read-only HTTP backend on `:8787`: `GET /api/snapshot` plus the built client bundle. Pipeline lanes per instrument, positions, verdicts, provider-status tiles |
+| Supervisor | `server/apps/supervisor/` | Runs the orchestrator and the service API as children of one foreground process |
+| Tools | `server/tools/` | Hand-run Stage-2 tooling: history ingestion, spread calibration, cost decomposition, Stage-2 evaluation |
+| Shared | `server/shared/` | Types/ports, clock injection, SQLite store + migrations, HTTP (token-bucket pacing, retry, timeouts), Nous LLM client + pricing |
+| Client | `client/` | The Vite + React operator UI (ADR-0010). Built to `dist/client/` and served by the service API — it is not a running process |
+| Contracts | `contracts/` | The wire model both runtimes import and neither owns. JSON-serializable shapes only |
 
 ## Tech Stack
 
@@ -42,7 +44,7 @@ Market Intelligence ─┘                                                      
 - **Package manager:** Yarn 4.18.0 (via Corepack; `packageManager` field). There is no `package-lock.json`
 - **Tests:** Vitest
 - **Linter/formatter:** Biome
-- **State:** SQLite via `better-sqlite3`, one file per environment (`data/samurai-<env>.sqlite`), 20 forward migrations
+- **State:** SQLite via `better-sqlite3`, one file per environment (`data/samurai-<env>.sqlite`), 25 forward migrations
 - **Brokers:** Alpaca (MVP paper), Simulated (backtest); ccxt/IBKR are long-term targets behind the same `BrokerAdapter` interface
 - **LLM:** single provider — Nous (ADR-0009), per-role models
 
@@ -62,10 +64,10 @@ yarn install --immutable
 # Run tests
 yarn test
 
-# Type-check (src + test projects)
+# Type-check (server, tests, client, e2e — four projects)
 yarn typecheck
 
-# Build (emits dist/, copies SQL migrations)
+# Build (emits dist/server + dist/contracts + dist/client, copies SQL migrations)
 yarn build
 
 # Lint
@@ -73,7 +75,11 @@ yarn lint
 yarn lint:fix
 ```
 
-`yarn precommit` runs format → lint:fix → typecheck → test:coverage in one pass.
+`yarn precommit` runs lint:fix → typecheck → test:coverage in one pass. There is
+no separate format step: `biome check` **is** the formatter as well as the
+linter, so `yarn lint` already fails on an unformatted file and `yarn lint:fix`
+already rewrites it. A check-only `yarn format` used to lead that chain, which
+made the gate abort on precisely the fault the next step existed to fix.
 
 ## Running the System
 
@@ -83,17 +89,17 @@ yarn lint:fix
 yarn orchestrator
 ```
 
-Runs the full pipeline: market data → analysts → debate → trader → risk → verdict → execution. The scheduler routes crypto (24/7) and stocks (market hours via the trading calendar). Default universe is SPY, QQQ, AAPL, TSLA, BTC-USD, ETH-USD (`DEFAULT_UNIVERSE` in `src/orchestrator/scheduler.ts`).
+Runs the full pipeline: market data → analysts → debate → trader → risk → verdict → execution. The scheduler routes crypto (24/7) and stocks (market hours via the trading calendar). Default universe is SPY, QQQ, AAPL, TSLA, BTC-USD, ETH-USD (`DEFAULT_UNIVERSE` in `server/apps/orchestrator/scheduler.ts`).
 
-`yarn orchestrator` builds first, then runs `node --env-file=.env.local dist/orchestrator/index.js`. The built entrypoint does **not** read a `.env` file on its own — pass `--env-file` or export the variables. The tracked `.env` holds empty placeholders and is not a configured environment; real credentials belong in the gitignored `.env.local`. An empty or whitespace-only value counts as **missing**, not as configured.
+`yarn orchestrator` builds first, then runs `node --env-file=.env.local dist/server/apps/orchestrator/index.js`. The built entrypoint does **not** read a `.env` file on its own — pass `--env-file` or export the variables. The tracked `.env` holds empty placeholders and is not a configured environment; real credentials belong in the gitignored `.env.local`. An empty or whitespace-only value counts as **missing**, not as configured.
 
 #### Required environment
 
-The orchestrator refuses to start rather than guess, and names *every* missing variable in one error (`missingCredentialEnvVars`, `src/orchestrator/index.ts`).
+The orchestrator refuses to start rather than guess, and names *every* missing variable in one error (`missingCredentialEnvVars`, `server/apps/orchestrator/index.ts`).
 
 | Variable | Values | Purpose |
 | --- | --- | --- |
-| `SAMURAI_MODE` | `paper` (default) / `backtest` / `live` | Selects the broker environment and HITL posture. Not trimmed on purpose — `live` is reachable only by typing it exactly. The shipped entrypoint refuses `live`; see `src/orchestrator/paper-profile.ts` |
+| `SAMURAI_MODE` | `paper` (default) / `backtest` / `live` | Selects the broker environment and HITL posture. Not trimmed on purpose — `live` is reachable only by typing it exactly. The shipped entrypoint refuses `live`; see `server/apps/orchestrator/paper-profile.ts` |
 | `SAMURAI_ALERTS` | `telegram` / `log-only` — **required, no default** | Where operator alerts go |
 | `ALPACA_API_KEY`, `ALPACA_API_SECRET` | | Broker + market data (one per-account rate budget covers both) |
 | `NOUS_BASE_URL` | | LLM endpoint. Unconditional — there is deliberately no default in source |
@@ -103,7 +109,7 @@ The orchestrator refuses to start rather than guess, and names *every* missing v
 
 #### Optional — LLM roles and models
 
-Two roles, each with its own default model. Set a `_MODEL` override only if you mean to; a model with no rate in `src/shared/llm/pricing.ts` is **refused at startup**, because an unpriced call records a null cost and the spend cap sums nulls as zero — silently removing ADR-0008's ceiling.
+Two roles, each with its own default model. Set a `_MODEL` override only if you mean to; a model with no rate in `server/shared/llm/pricing.ts` is **refused at startup**, because an unpriced call records a null cost and the spend cap sums nulls as zero — silently removing ADR-0008's ceiling.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -123,7 +129,7 @@ Two roles, each with its own default model. Set a `_MODEL` override only if you 
 
 #### Optional — venue pacing
 
-Each broker adapter paces its own outbound calls through a token bucket, so the system stops issuing the request that earns a 429 rather than only retrying after one. The checked-in defaults are in `src/shared/http/venue-pacing.ts`, where every value carries its provenance — whether the figure is the venue's published limit (cited by URL) or a conservative placeholder that could not be verified.
+Each broker adapter paces its own outbound calls through a token bucket, so the system stops issuing the request that earns a 429 rather than only retrying after one. The checked-in defaults are in `server/shared/http/venue-pacing.ts`, where every value carries its provenance — whether the figure is the venue's published limit (cited by URL) or a conservative placeholder that could not be verified.
 
 They are overridable because **a rate limit is a property of the account, not of the code**: two operators on different tiers cannot both be right about a compiled-in literal. `<VENUE>` is `ALPACA`, `CCXT` or `IBKR`.
 
@@ -167,17 +173,17 @@ yarn smoke
 
 An **offline** end-to-end run through all six stages with no Alpaca call — it proves the wiring, not the credentials or venue semantics. Universe is BTC-USD only, so a closed US session cannot make an empty tick plan look like a clean run. It does not clear ADR-0004 §5's "wiring validated" bar, which needs one real paper tick.
 
-### Dashboard (operator view)
+### Service API + client (operator view)
 
 ```bash
-yarn dashboard          # http://127.0.0.1:8787
+yarn api                # http://127.0.0.1:8787   (alias: yarn dashboard)
 ```
 
 Read-only HTTP view over the same SQLite file the orchestrator writes: pipeline lanes per instrument, positions, debates, verdicts, per-analyst performance, LLM spend against the cap, and provider-status tiles. It resolves the store path from `SAMURAI_MODE` exactly as the orchestrator does — `NODE_ENV` stopped selecting the file in #330 — so it cannot show a healthy, empty system from the wrong file. Provider credentials are optional here — a missing key degrades that tile to `not_configured` rather than blocking startup.
 
 #### Running it locally against real orchestrator data
 
-**`SAMURAI_MODE` is mandatory.** `resolveStoreMode()` throws rather than defaulting, and `src/dashboard/index.ts` calls it before anything else, so a dashboard started without it does not come up at all. That refusal is the point: the alternative is a process that guesses a mode, opens the wrong file, and renders a healthy, empty page while the orchestrator is trading in the other one.
+**`SAMURAI_MODE` is mandatory.** `resolveStoreMode()` throws rather than defaulting, and `server/apps/service-api/index.ts` calls it before anything else, so a dashboard started without it does not come up at all. That refusal is the point: the alternative is a process that guesses a mode, opens the wrong file, and renders a healthy, empty page while the orchestrator is trading in the other one.
 
 | `SAMURAI_MODE` | Store file the dashboard opens |
 | --- | --- |
@@ -188,16 +194,23 @@ Read-only HTTP view over the same SQLite file the orchestrator writes: pipeline 
 **Two ways to run it.**
 
 ```bash
-# 1. Built bundle, one process — what an operator runs, and what `yarn dashboard` does.
-#    The same node:http server serves the React bundle from dist/dashboard-web/ AND /api/snapshot.
+# 1. Built bundle, one process — what an operator runs, and what `yarn api` does.
+#    The same node:http server serves the React bundle from dist/client/ AND /api/snapshot.
 yarn build
-SAMURAI_MODE=paper node dist/dashboard/index.js        # http://127.0.0.1:8787
+SAMURAI_MODE=paper node dist/server/apps/service-api/index.js        # http://127.0.0.1:8787
 
-# 2. Vite dev server — hot reload while working on src/dashboard-web/.
-#    TWO processes: Vite serves the page, the dashboard server still serves the data.
-SAMURAI_MODE=paper PORT=8799 node dist/dashboard/index.js &   # data
+# 2. Vite dev server — hot reload while working on client/.
+#    TWO terminals: Vite serves the page, the service API still serves the data.
+SAMURAI_MODE=paper PORT=8799 yarn dev:api                     # data  (tsx watch, no build)
 PORT=8799 yarn dev:web                                        # page → http://localhost:5173
 ```
+
+`yarn dev:api` runs the service API from source under `tsx`, so it restarts on
+edit and needs no `yarn build`. It always prints the
+`*** DASHBOARD UI NOT SERVABLE ***` banner, and in dev that is expected noise
+rather than a fault: from source `bundleRoot` resolves to `client/`, the Vite
+*source* template, because in this mode the page is Vite's job on `:5173` and
+the API's job is only `/api/snapshot`.
 
 `vite.config.ts` proxies `/api` to `http://127.0.0.1:${PORT ?? 8787}`, so **both processes must agree on `PORT`** — export it for the dev server too, or the page loads and every poll 404s. Production never proxies; there is one process and no dev server. Vite's dev server binds IPv6 first, so reach it as `localhost`, not `127.0.0.1`; the dashboard server itself binds `127.0.0.1`.
 
@@ -215,13 +228,13 @@ curl -s http://127.0.0.1:8787/api/snapshot | head -c 400
 
 An orchestrator that is up but between ticks legitimately shows idle chips in the Lobby — that is a reading, not a fault. `tick_status: null` with lanes present means no pass is in flight right now.
 
-### Both together
+### Both together — the one command an operator runs
 
 ```bash
-yarn serve
+yarn start              # alias: yarn serve
 ```
 
-Builds once, then supervises the orchestrator and the dashboard as one foreground process; a single Ctrl-C stops both. Signals are forwarded to the children and the supervisor waits for both to exit rather than exiting first — killing it mid-tick is what creates an orphaned verdict. Either child dying takes the other down with a non-zero exit. `yarn orchestrator` remains the money-path entrypoint for the unattended soak.
+Builds once, then supervises the orchestrator and the service API as one foreground process; a single Ctrl-C stops both. There is no third process for the UI: the client is a static bundle that the service API serves. Signals are forwarded to the children and the supervisor waits for both to exit rather than exiting first — killing it mid-tick is what creates an orphaned verdict. Either child dying takes the other down with a non-zero exit. `yarn orchestrator` remains the money-path entrypoint for the unattended soak.
 
 ### Stage-2 backtest / validation
 
@@ -229,13 +242,16 @@ Hand-run scripts, not part of the tick loop:
 
 ```bash
 # Tiingo history → SQLite (needs TIINGO_API_KEY)
-yarn ingest-history
+yarn data ingest-history        # alias: yarn ingest-history
+
+# Warm-start OHLCV bars for the live universe, from the free stack
+yarn data backfill-market-data  # alias: yarn backfill-market-data
 
 # The rest run against dist/ after `yarn build`. They read POLYGON_API_KEY /
 # TIINGO_API_KEY, so pass the env file the same way `yarn orchestrator` does.
-node --env-file=.env.local dist/scripts/run-stage2.js                   # walk-forward / CPCV / PBO / MinBTL / DSR
-node --env-file=.env.local dist/scripts/run-spread-calibration.js       # measured spreads for the cost model
-node --env-file=.env.local dist/scripts/run-stage2-cost-decomposition.js
+node --env-file=.env.local dist/server/tools/run-stage2.js                   # walk-forward / CPCV / PBO / MinBTL / DSR
+node --env-file=.env.local dist/server/tools/run-spread-calibration.js       # measured spreads for the cost model
+node --env-file=.env.local dist/server/tools/run-stage2-cost-decomposition.js
 ```
 
 `SAMURAI_STAGE2_COST_CONFIG=pessimistic` selects the pessimistic cost config for a direct Stage-2 run; anything else uses the calibrated one.
@@ -252,11 +268,16 @@ yarn test:watch
 # With coverage
 yarn test:coverage
 
+# Only what your branch touched — vitest --changed against origin/main.
+# A fast inner-loop check, NOT a substitute for the full run: it needs an
+# up-to-date origin/main, and it cannot see a break in a file you did not edit.
+yarn test:local
+
 # Specific stage
-yarn vitest run src/debate-engine/
+yarn vitest run server/pipeline/debate-engine/
 ```
 
-The suite is **2466 tests across 165 files** (2465 passing; one `describe.skipIf` integration test that runs only when live LLM credentials are present).
+The suite is **2920 tests across 188 files** (2919 passing; one `describe.skipIf` integration test that runs only when live LLM credentials are present). Measured 2026-08-09 on `yarn test`.
 
 CI (`.github/workflows/ci.yml`) runs on every PR and has two jobs:
 
@@ -267,26 +288,46 @@ Both must pass before merge.
 
 ## Project Structure
 
+Two runtimes with two toolchains, and one contract between them. **`client/` and
+`server/` never import each other; both import `contracts/`.** That single rule
+is what the layout encodes — it replaced a browser app nested five levels inside
+the backend's compilation unit, and the pair of `exclude` entries that
+arrangement needed in both root tsconfigs.
+
 ```
 samurai-trading-system/
-├── src/
-│   ├── analysts/          # Stateless per-tick agents
-│   ├── cost-model-backtest/  # Fill simulation, validation, replay, Stage-2 selection
-│   ├── dashboard/         # Read-only operator HTTP view
-│   ├── debate-engine/     # Bull/Bear/Mediator, rounds, conviction, LLM client
-│   ├── execution/         # Broker adapters, bracket expansion, fills, reconcile
-│   ├── feedback-loop/     # Attribution, weights, metrics, guardrails
-│   ├── market-data-service/  # OHLCV + indicators + sources
-│   ├── market-intelligence/  # Sentiment (Grok/Nous), WorldMonitor CII
-│   ├── orchestrator/      # Tick loop, scheduler, audit, heartbeat, composition root
-│   ├── risk-manager/      # Caps, breakers, portfolio view, correlation
-│   ├── scripts/           # Hand-run Stage-2 tooling
-│   ├── serve/             # Orchestrator + dashboard supervisor
+├── client/                # BROWSER — Vite owns this folder end to end
+│   ├── index.html
+│   ├── vite.config.ts     # its own app root, not a stray config in the backend tree
+│   ├── tsconfig.json      # DOM + JSX; never sees server source
+│   └── src/               # main.tsx, components/, hooks/, lib/
+│
+├── server/                # NODE — tsc owns this folder end to end
+│   ├── apps/              # the three runnable programs
+│   │   ├── orchestrator/  # Tick loop, scheduler, audit, heartbeat, composition root
+│   │   ├── service-api/   # Read-only HTTP :8787; serves /api/snapshot + the bundle
+│   │   └── supervisor/    # Runs orchestrator + service-api as one foreground process
+│   ├── pipeline/          # the seven stages
+│   │   ├── analysts/      # Stateless per-tick agents
+│   │   ├── debate-engine/ # Bull/Bear/Mediator, rounds, conviction, LLM client
+│   │   ├── trader/        # OrderIntent, position-aware branching, setup vectors
+│   │   ├── risk-manager/  # Caps, breakers, portfolio view, correlation
+│   │   ├── verdict/       # Final gate, notifications, approval callbacks
+│   │   ├── execution/     # Broker adapters, bracket expansion, fills, reconcile
+│   │   └── feedback-loop/ # Attribution, weights, metrics, guardrails
+│   ├── providers/         # external data
+│   │   ├── market-data-service/   # OHLCV + indicators + sources (incl. the free stack)
+│   │   └── market-intelligence/   # Sentiment (Grok/Nous), WorldMonitor CII
 │   ├── shared/            # Types, clock, SQLite store + migrations, HTTP, LLM
-│   ├── trader/            # OrderIntent, position-aware branching, setup vectors
-│   └── verdict/           # Final gate, notifications, approval callbacks
+│   └── tools/             # offline only, never on the money path
+│       ├── backtest/      # Fill simulation, validation, replay, Stage-2 selection
+│       └── data-cli.ts    # `yarn data` — history ingestion, market-data backfill
+│
+├── contracts/             # THE WIRE BOUNDARY — imported by both, importing neither
+│                          # JSON-serializable shapes only; boundary.test.ts enforces it
+├── e2e/                   # Playwright suite
 ├── docs/
-│   ├── adr/               # Architecture Decision Records (0001–0009)
+│   ├── adr/               # Architecture Decision Records
 │   ├── prototypes/        # Throwaway design probes
 │   ├── research/          # Strategy evaluation, deployment plan, provider research
 │   ├── reviews/           # Audit + readiness reports
@@ -298,9 +339,76 @@ samurai-trading-system/
 ├── CONTEXT.md             # Domain glossary
 ├── package.json
 ├── tsconfig.json          # Solution file — references the two below, for editors
-├── tsconfig.build.json    # Build/emit config: src/ only, no tests
+├── tsconfig.build.json    # Build/emit: server/ + contracts/, no tests
 └── tsconfig.test.json     # Type-checks the test suite
 ```
+
+`dist/` mirrors the source, which is why the entry points can find each other
+without knowing the working directory:
+
+```
+dist/client/                              # vite outDir — the bundle
+dist/server/apps/service-api/index.js     # resolves the bundle as ../../../client/
+dist/server/apps/orchestrator/index.js    # spawned by the supervisor
+dist/server/apps/supervisor/index.js      # yarn start
+```
+
+## Scripts
+
+Every script in `package.json`, all 23 of them. There are no others.
+
+| Tier | Script | What it does |
+| --- | --- | --- |
+| dev | `yarn dev:web` | Vite dev server for `client/` → `localhost:5173`. Proxies `/api` to the service API |
+| dev | `yarn dev:api` | Service API from source under `tsx`, restarts on edit. Run alongside `dev:web` |
+| build | `yarn build` | `tsc` + `build:migrations` + `build:web`. Emits `dist/` |
+| build | `yarn build:migrations` | Copies `server/shared/store/migrations/*.sql` into `dist/`. `tsc` emits no `.sql`, so without it the built orchestrator finds no migrations to apply. Sub-step of `build` |
+| build | `yarn build:web` | Client `tsc` + `vite build`. Sub-step of `build`, and **also its own CI step** (`ci.yml`) so a frontend-toolchain failure is named as one instead of surfacing as "build failed" |
+| run | **`yarn start`** | **The one full-system command.** Builds, then supervises orchestrator + service API |
+| run | `yarn serve` | Alias for `yarn start` |
+| run | `yarn orchestrator` | Money path alone — the unattended-soak entrypoint |
+| run | `yarn api` | Operator view alone |
+| run | `yarn dashboard` | Alias for `yarn api` |
+| run | `yarn smoke` | Offline end-to-end gate |
+| data | `yarn data <cmd>` | Dispatcher: `ingest-history` / `backfill-market-data`. Bare `yarn data` prints usage and exits 1 |
+| data | `yarn ingest-history` | Alias for `yarn data ingest-history` |
+| data | `yarn backfill-market-data` | Alias for `yarn data backfill-market-data` |
+| quality | `yarn typecheck` | Four projects: server, tests, client tests, e2e |
+| quality | `yarn test` | Full vitest suite |
+| quality | `yarn test:coverage` | Same suite under v8 coverage. What `precommit` runs |
+| quality | `yarn test:local` | `vitest --changed origin/main` — only what the branch touched. Inner loop, not a gate |
+| quality | `yarn test:watch` | Vitest in watch mode |
+| quality | `yarn e2e` | Playwright suite against the built bundle on `:8788`. CI job of its own |
+| quality | `yarn lint` | `biome check .` — lint **and** formatting, both gated in CI |
+| quality | `yarn lint:fix` | `biome check --write .` — fixes both |
+| quality | `yarn precommit` | `lint:fix` → `typecheck` → `test:coverage` |
+
+**Five run scripts build first** (`start`, `orchestrator`, `api`, `smoke`,
+`data`), deliberately. A stale `dist/` fails *silently* — the process boots and
+serves the previous build — and `sharedStorePath()` resolving against the
+working directory means the wrong cwd yields a fresh empty database and a
+healthy-looking blank page. Redundant `tsc` invocations are the cheaper side of
+that trade. The two `dev:*` scripts are the exception: they run from source
+(Vite, `tsx`), which is the whole point of them.
+
+**The four aliases are kept on purpose**, not left over. `serve`/`dashboard`
+are the names an operator's muscle memory and several source comments still
+use (`server/apps/supervisor/supervisor.ts`, `e2e/playwright.config.ts`);
+`ingest-history`/`backfill-market-data` predate the `yarn data` dispatcher and
+survive because a runbook or cron entry may name either (see the header of
+`server/tools/data-cli.ts`). Renaming a script an unattended job invokes fails
+silently outside the checkout, where nothing here can see it.
+
+**There is no `format` script.** `biome check` formats as well as lints, so
+`yarn lint` already fails on an unformatted file and `yarn lint:fix` already
+rewrites it — a check-only `format` was a strict subset of `lint` that could
+only ever duplicate its verdict.
+
+The Stage-2 tools (`run-stage2`, `run-spread-calibration`,
+`run-stage2-cost-decomposition`) have **no** script and are not missing one.
+They are hand-run research jobs, invoked as `node --env-file=.env.local
+dist/server/tools/<name>.js` after a build — see
+[Stage-2 backtest / validation](#stage-2-backtest--validation).
 
 ## Documentation
 
@@ -308,7 +416,7 @@ samurai-trading-system/
 - **[CONTEXT.md](CONTEXT.md)** — Domain glossary: terms, relationships, invariants
 - **[docs/specs/](docs/specs/)** — Full specs (PRDs) for each pipeline stage, plus cross-spec contracts
 - **[docs/adr/](docs/adr/)** — Architecture Decision Records
-- **[docs/reviews/](docs/reviews/)** — Code-quality, spec-conformance and readiness audits
+- **[docs/reviews/](docs/reviews/)** — Code-quality, spec-conformance and readiness audits. Start at [docs/reviews/README.md](docs/reviews/README.md); closed/superseded reports live in [docs/reviews/archive/](docs/reviews/archive/)
 - **[docs/research/](docs/research/)** — Strategy evaluation, tech stack research, deployment plan
 - **[docs/coding-standards.md](docs/coding-standards.md)** — Repo coding standards
 - **[docs/wayfinder/](docs/wayfinder/)** — Historical design maps (current ones live as GitHub issues)
