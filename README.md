@@ -416,7 +416,7 @@ dist/server/tools/<name>.js` after a build — see
 - **[CONTEXT.md](CONTEXT.md)** — Domain glossary: terms, relationships, invariants
 - **[docs/specs/](docs/specs/)** — Full specs (PRDs) for each pipeline stage, plus cross-spec contracts
 - **[docs/adr/](docs/adr/)** — Architecture Decision Records
-- **[docs/reviews/](docs/reviews/)** — Code-quality, spec-conformance and readiness audits
+- **[docs/reviews/](docs/reviews/)** — Code-quality, spec-conformance and readiness audits. Start at [docs/reviews/README.md](docs/reviews/README.md); closed/superseded reports live in [docs/reviews/archive/](docs/reviews/archive/)
 - **[docs/research/](docs/research/)** — Strategy evaluation, tech stack research, deployment plan
 - **[docs/coding-standards.md](docs/coding-standards.md)** — Repo coding standards
 - **[docs/wayfinder/](docs/wayfinder/)** — Historical design maps (current ones live as GitHub issues)
