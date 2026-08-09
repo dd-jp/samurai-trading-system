@@ -1,4 +1,4 @@
-# 05 — TradingAgents 3-Persona Risk Debate: Finding for Risk-Manager Wayfinder
+# TradingAgents 3-Persona Risk Debate: Finding for Risk-Manager Wayfinder
 
 **Status:** Research finding — pending wayfinder grilling (not yet charted)
 **Owner:** David (Deepak)
