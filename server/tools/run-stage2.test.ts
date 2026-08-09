@@ -193,7 +193,7 @@ describe('runStage2', () => {
 
 /**
  * The first live run (2026-08-05) asked for 5 years and the Polygon plan
- * served 2 — see docs/research/08-stage2-verdict-first-real-run-2026-08-05.md.
+ * served 2 — see docs/research/archive/2026-08-05-stage2-verdict-first-real-run.md.
  * MinBTL's trial cap is a function of sample LENGTH, so a verdict rendered
  * over a window the data does not cover overstates how many configs the
  * sample supports: the exact overfitting that number exists to catch.

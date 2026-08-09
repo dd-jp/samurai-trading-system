@@ -23,7 +23,7 @@
  * shared `Logger` interface (shared/types.ts), so pino would arrive as a
  * second logging abstraction wrapped by the first, not as the logger. What is
  * actually needed is one `write(line)` byte sink. See
- * docs/research/techstack.md § Logging.
+ * docs/techstack.md § Logging.
  *
  * ## The failure modes a hand-rolled rotator gets wrong, and what is done here
  *

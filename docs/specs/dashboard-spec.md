@@ -369,8 +369,8 @@ function buildSnapshot(store: DashboardQueryStore, asOf: Date): DashboardSnapsho
 
 **Structure**
 - **Vite + React**, output to `dist/client/` with a relative `base` so the bundle is servable from disk without a path prefix.
-- `react`, `react-dom`, `vite`, `@vitejs/plugin-react`, the `@fontsource` packages and the test tooling are **devDependencies**. `dependencies` remains exactly `better-sqlite3`. The build becomes `tsc && vite build`; `client/` is excluded from `tsconfig.build.json` and owns its own tsconfig.
-- **`src/lib/` is pure and React-free** — this is where the client's real logic lives and where it is tested:
+- `react`, `react-dom`, `vite`, `@vitejs/plugin-react`, the `@fontsource` packages and the test tooling are **devDependencies**. `dependencies` remains exactly `better-sqlite3`. The build becomes `tsc && vite build`; `client/` falls outside `tsconfig.build.json`'s `include` (`server/` + `contracts/`) and owns its own tsconfig. It needs no `exclude` entry — being a sibling of `server/` rather than a directory inside it is what removed the need.
+- **`client/src/lib/` is pure and React-free** — this is where the client's real logic lives and where it is tested:
   - `room-layout.ts` — which room a lane occupies (a `live` cell wins outright; otherwise the furthest `done`/`stopped` stage; otherwise the Lobby), stable slot assignment within a room across polls, and the `>3 → +N` collapse.
   - `walk-plan.ts` — `computeWalkPlan(prev, next, opts)` implementing the Motion rules as a pure function of two snapshots. Every rule in the Motion section is a test case here.
   - `ledger.ts` — settle detection, `trace_id` dedupe, ordering, the 30-entry cap, and first-paint seeding.

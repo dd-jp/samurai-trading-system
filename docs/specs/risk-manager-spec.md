@@ -208,7 +208,7 @@ The gap: check-pipeline step 6 reads an instrument absent from `CorrelationEstim
 
 ### Module: Risk Critic
 
-Adopted per [ADR-0003](../adr/0003-risk-manager-critic-layer.md) (Risk Manager gains a single red-team critic), resolved via [#186](https://github.com/dd-jp/samurai-trading-system/issues/186) grilling. Answers the question `05-tradingagents-risk-debate-finding.md` raised: the mechanical checks (including the now-dynamic correlation concentration check, step 6) cover quantitative risk well; this module exists only for the narrative/qualitative risk they structurally cannot express.
+Adopted per [ADR-0003](../adr/0003-risk-manager-critic-layer.md) (Risk Manager gains a single red-team critic), resolved via [#186](https://github.com/dd-jp/samurai-trading-system/issues/186) grilling. Answers the question `../research/16-risk-debate-finding.md` raised: the mechanical checks (including the now-dynamic correlation concentration check, step 6) cover quantitative risk well; this module exists only for the narrative/qualitative risk they structurally cannot express.
 
 - **Scope: single critic, not a 3-persona debate.** The Debate Engine (Stage 3) already spends the multi-persona-adversarial-tension budget; a second full debate in Stage 4 is redundant given how narrow the blind spot is. One LLM pass, framed as "argue why this trade should be trimmed or rejected."
 - **Trigger: every gated `OrderIntent`, single-pass, no rebuttal round.** Runs regardless of whether the mechanical steps already trimmed the intent — a narrative-risk trade can pass every quantitative check clean, which is the scenario this module exists to catch. No second round arguing with itself.

@@ -1,8 +1,10 @@
 # Free 5-year daily OHLCV for BTC-USD / ETH-USD — verification
 
+> **ARCHIVED — merged into [`31-free-ohlcv-evidence.md`](../31-free-ohlcv-evidence.md).** Full probe log kept here.
+
 **Ticket:** [#484 Wayfinder: research — free 5y crypto OHLCV (Coinbase/Binance/Tiingo vs Kraken 720-cap)](https://github.com/dd-jp/samurai-trading-system/issues/484)
 **Map:** [#482 Wayfinder: free 5-year historical OHLCV for the MVP universe — revisit Polygon paid decision](https://github.com/dd-jp/samurai-trading-system/issues/482)
-**Sibling:** [#483](https://github.com/dd-jp/samurai-trading-system/issues/483) resolved the equities leg (`docs/research/free-equities-ohlcv-2026-08-06.md`).
+**Sibling:** [#483](https://github.com/dd-jp/samurai-trading-system/issues/483) resolved the equities leg (`docs/research/archive/2026-08-06-free-equities-ohlcv.md`).
 **Date:** 2026-08-06 · **Probed from:** the deployment host (UK residential IP, no VPN)
 
 Every claim below is labelled **PROBED** (I called the endpoint and read the bytes) or **DOC** (vendor documentation, unverified against a live call). Nothing here is inferred from a README alone — that was the explicit instruction on map #482.
@@ -31,7 +33,7 @@ What actually discriminates free crypto sources is **whose tape it is**, and spe
 | `technical-analyst` | `src/analysts/technical-analyst.ts:113` | `avgVolume` goes into the LLM prompt as liquidity context. |
 | `sentiment-analyst` | `src/analysts/sentiment-analyst.ts:74` | Same — volume is the "normalize crowd" context. |
 
-Given `docs/research/10-cost-model-calibration-2026-08-05.md` and the Stage 2 history — where a *miscalibrated cost model*, not the signal, produced a KILL verdict — a source that silently understates crypto ADV is the single most expensive mistake available on this ticket.
+Given `docs/research/archive/2026-08-05-cost-model-calibration.md` and the Stage 2 history — where a *miscalibrated cost model*, not the signal, produced a KILL verdict — a source that silently understates crypto ADV is the single most expensive mistake available on this ticket.
 
 ---
 
@@ -159,7 +161,7 @@ Crypto is 24/7, so "daily" is a convention, and [#420](https://github.com/dd-jp/
 1. **Source crypto daily history from Coinbase Exchange public candles**, paginated in 300-day windows. No key, so no new precondition — combined with #483's equities result, **#241's Polygon API-key precondition is fully removable.**
 2. **The seam already exists and needs no new dependency.** `src/market-data-service/sources/ccxt-source.ts` defines `CcxtClient` as a *structural* interface (`fetchOHLCV` / `fetchTicker`) with the client **injected**, and **`ccxt` is not in `package.json`**. A small Coinbase REST client satisfying `CcxtClient`, constructed with `{ source: 'coinbase' }`, drops straight into `CcxtDataSource`.
 3. **Use Alpaca crypto as a free price cross-check**, not a source: it is one request for the whole history and agrees with Coinbase to 0.02% median. Diffing the two at ingestion is a near-zero-cost data-quality gate. **Never let its volume column reach `getADV()`.**
-4. ⚠️ **Recalibration flag, for #241 not for this ticket:** Coinbase's volume is also *single-venue* — real, continuous, and far larger than Alpaca's, but not consolidated crypto volume. Adopting it changes the liquidity denominator in the cost model's √(size/adv) term relative to whatever the existing calibration (`docs/research/10-cost-model-calibration-2026-08-05.md`) assumed. Worth one look when the crypto backfill lands; not chased here.
+4. ⚠️ **Recalibration flag, for #241 not for this ticket:** Coinbase's volume is also *single-venue* — real, continuous, and far larger than Alpaca's, but not consolidated crypto volume. Adopting it changes the liquidity denominator in the cost model's √(size/adv) term relative to whatever the existing calibration (`docs/research/archive/2026-08-05-cost-model-calibration.md`) assumed. Worth one look when the crypto backfill lands; not chased here.
 
 ### Two defects this ticket found in code that already exists
 

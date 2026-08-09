@@ -1,12 +1,14 @@
 # Edge Hypothesis Evaluation — Decision Review (15)
 
+> **ARCHIVED — superseded by [`12-edge-hypothesis-critique.md`](../12-edge-hypothesis-critique.md),** which folds in the audit corrections. Do not execute the gate list below verbatim; see the errata banner already in the body.
+
 **Date:** 2026-08-07
-**Supersedes / relates to:** [`13-trend-signal-measurement-2026-08-07.md`](13-trend-signal-measurement-2026-08-07.md)
+**Supersedes / relates to:** [`../11-trend-signal-measurement.md`](../11-trend-signal-measurement.md)
 **Parent report:** `~/Documents/Obsidian/research/most-profitable-trading-algorithm-edge-hypothesis-2026-08-07-report.md` — **local-only, outside this repo**; the path resolves on the owner's machine and nowhere else.
 
 > **⚠ Errata — 2026-08-08. Do not execute the gate list below verbatim.**
 >
-> This document was audited the day after it was written: [`edge-hypothesis-evaluation-audit-2026-08-08.md`](../reviews/edge-hypothesis-evaluation-audit-2026-08-08.md). The body is preserved as written, so the passages the audit invalidates are still on the page — five of them, across audit defects **D1-D4**. Named here so no one acts on them by skimming:
+> This document was audited the day after it was written: [`edge-hypothesis-evaluation-audit-2026-08-08.md`](../../reviews/edge-hypothesis-evaluation-audit-2026-08-08.md). The body is preserved as written, so the passages the audit invalidates are still on the page — five of them, across audit defects **D1-D4**. Named here so no one acts on them by skimming:
 >
 > - **"What is wrong" item 1 — "SE ≈ 1.1 Sharpe units" and the "+1.2 / −0.9 overlay" band.** Back-solved by dividing a Sharpe difference by a t-statistic on *daily mean returns*; the two are not the same quantity, so the band is not a confidence interval. The "we learned nothing" conclusion survives for a stronger reason the audit supplies — a paired t on mean returns has no power against a *variance* claim, which is where doc 13 locates trend's advantage. Audit **D1**, which adds a paired Sharpe-difference test (Jobson-Korkie-Memmel / Ledoit-Wolf HAC) as a cheap **gate 0** ahead of the PBO run.
 > - **Falsifier 3 — "already fails on Sharpe there: t = −1.07".** Same defect: that t is also a mean-return statistic and establishes nothing about Sharpe. Drop the citation. Audit **D1**.

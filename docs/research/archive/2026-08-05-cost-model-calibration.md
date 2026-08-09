@@ -1,13 +1,15 @@
 # Cost Model Calibration — Measured, Not Assumed (2026-08-05)
 
+> **ARCHIVED — superseded by [`13-stage2-proxy-verdict.md`](../13-stage2-proxy-verdict.md).** The measured-spread calibration it establishes is still the basis of the live cost model.
+
 **Status:** Recorded 2026-08-05. Follows
-[09-stage2-cost-decomposition-2026-08-05.md](09-stage2-cost-decomposition-2026-08-05.md), whose
+[09-stage2-cost-decomposition-2026-08-05.md](2026-08-05-stage2-cost-decomposition.md), whose
 first recommendation was "calibrate the cost model before buying history". Commissioned by David:
 *"caliberate cost and based on runs so far identify pitfalls and improvements"*. The pitfalls half
-is [11-pitfalls-and-improvements-2026-08-05.md](11-pitfalls-and-improvements-2026-08-05.md).
+is [11-pitfalls-and-improvements-2026-08-05.md](2026-08-05-pitfalls-and-improvements.md).
 
-Raw output: [spread-calibration-2026-08-05.txt](spread-calibration-2026-08-05.txt),
-[stage2-calibrated-run-2026-08-05.txt](stage2-calibrated-run-2026-08-05.txt).
+Raw output: [spread-calibration-2026-08-05.txt](raw/2026-08-05-spread-calibration.txt),
+[stage2-calibrated-run-2026-08-05.txt](raw/2026-08-05-stage2-calibrated-run.txt).
 Code: `src/scripts/run-spread-calibration.ts`, `CALIBRATED_COST_CONFIG` in `src/scripts/run-stage2.ts`.
 
 > **Sharpe magnitudes here are understated ([#420](../../issues/420)).** This run scored each asset
@@ -16,7 +18,7 @@ Code: `src/scripts/run-spread-calibration.ts`, `CALIBRATED_COST_CONFIG` in `src/
 > for crypto. Fixed after the fact; on the corrected timeline the pass count is **14 of 24**, not 12.
 > Not re-run here, because everything below is about *cost attribution* — the ratios between cost
 > components, which the defect scaled identically on both sides. See
-> [12-stage2-pbo-dsr-first-computation-2026-08-05.md](12-stage2-pbo-dsr-first-computation-2026-08-05.md).
+> [12-stage2-pbo-dsr-first-computation-2026-08-05.md](2026-08-05-stage2-pbo-dsr-first-computation.md).
 
 ## Headline
 
@@ -157,7 +159,7 @@ pitfall P6 in the companion document, and the first calibrated run was made befo
 the entrypoint now passes the pinned window.
 
 **The archived log predates the pin — check the header before treating it as reproducible.**
-[stage2-calibrated-run-2026-08-05.txt](stage2-calibrated-run-2026-08-05.txt) line 1 records a
+[stage2-calibrated-run-2026-08-05.txt](raw/2026-08-05-stage2-calibrated-run.txt) line 1 records a
 requested window of `2021-08-06T20:17:26.360Z .. 2026-08-05T20:17:26.360Z`, i.e. a
 `new Date()`-relative range, and not `STAGE2_PINNED_WINDOW`'s `18:17:07.694Z` — a different instant
 from the decomposition run archived beside it. The effective window after intersection is

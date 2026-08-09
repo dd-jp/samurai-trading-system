@@ -3,7 +3,7 @@
 **Date:** 2026-08-07
 **Question (David):** What other ways/options exist for the market-intelligence layer? Come up with a smart solution that fetches current affairs and global news. The Grok solution seems sub-par, non-deterministic, and has no validation.
 **Status:** Research finding. Adopting any of it needs a new ADR (touches ADR-0002 and ADR-0009) plus MI spec revision — this document does not change a decision.
-**Method:** Three parallel research agents against primary sources (official API docs, live probes from this host, source reads), synthesized with `docs/research/13-live-news-sources-and-worldmonitor-value-2026-08-07.md` (referenced, not redone) and the current code baseline.
+**Method:** Three parallel research agents against primary sources (official API docs, live probes from this host, source reads), synthesized with `docs/research/archive/2026-08-07-live-news-sources-and-worldmonitor-value.md` (referenced, not redone) and the current code baseline.
 
 ---
 

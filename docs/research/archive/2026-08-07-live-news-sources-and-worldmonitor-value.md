@@ -1,8 +1,10 @@
 # Live News Sources, WorldMonitor Pricing, and Self-Hosting — Evaluation
 
+> **ARCHIVED — conclusions carried into [`20-mi-decisions.md`](../20-mi-decisions.md).** This doc's WorldMonitor pricing and self-hosting findings are the authoritative ones over the 2026-07-22 handoff.
+
 **Date:** 2026-08-07
 **Question (David):** What other live-news sources can we use instead of the WorldMonitor dashboard? Is WorldMonitor worth $49/mo? If it beats the alternatives, should we self-host — and what does self-hosting require?
-**Status:** Research finding. Falsifies premises in [ADR-0002](../adr/0002-worldmonitor-mi-source.md) §1/§2/§4 and in `docs/research/04-worldmonitor-as-mi-source.md`. Adopting anything here needs a new ADR — this document does not change a decision.
+**Status:** Research finding. Falsifies premises in [ADR-0002](../../adr/0002-worldmonitor-mi-source.md) §1/§2/§4 and in `docs/research/archive/2026-07-22-worldmonitor-as-mi-source.md`. Adopting anything here needs a new ADR — this document does not change a decision.
 **Method:** WorldMonitor pricing/docs pages, plus direct reads of the AGPL platform source at `koala73/worldmonitor` (read for evaluation only, nothing copied).
 
 ---
@@ -20,7 +22,7 @@
 
 ## 1. What WorldMonitor actually is in our architecture
 
-Per `04-worldmonitor-as-mi-source.md` §1.3, WorldMonitor is explicitly **not**:
+Per `2026-07-22-worldmonitor-as-mi-source.md` §1.3, WorldMonitor is explicitly **not**:
 
 - ticker-specific financial news (no SEC filings, earnings, company PR),
 - per-item sentiment scoring,
@@ -191,4 +193,4 @@ Self-host over **REST**, pinned to a specific image tag, on a box whose resource
 
 - **Correct `worldmonitor-adapter-parked` memory** — its "60+ data subscriptions" rationale is false (done alongside this doc).
 - **ADR-0002 needs revisiting** if self-hosting is ever adopted: §1 (never self-hosted), §2 (tier/price — both the price and the access shape are wrong), §4 (single-maintainer risk is stale: the repo has multiple active contributors and was pushed to on 2026-08-07). Offer an ADR; do not edit the accepted record.
-- **`04-worldmonitor-as-mi-source.md`** states "$39.99/mo Pro or $99.99/mo API Starter" and "do NOT self-host." Both premises are superseded by this document; leave the file as the historical record and cite this one.
+- **`2026-07-22-worldmonitor-as-mi-source.md`** states "$39.99/mo Pro or $99.99/mo API Starter" and "do NOT self-host." Both premises are superseded by this document; leave the file as the historical record and cite this one.

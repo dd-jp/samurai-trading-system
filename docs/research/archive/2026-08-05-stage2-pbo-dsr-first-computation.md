@@ -1,12 +1,14 @@
 # PBO and DSR, Computed for the First Time (2026-08-05)
 
+> **ARCHIVED — superseded by [`13-stage2-proxy-verdict.md`](../13-stage2-proxy-verdict.md).** First computation of PBO/DSR and the record of the #420 merged-timeline defect.
+
 **Status:** Recorded 2026-08-05, from the first Stage 2 run in which the PBO and DSR kill-line
 terms were computable at all ([#406](../../issues/406), improvement I2 in
-[11-pitfalls-and-improvements-2026-08-05.md](11-pitfalls-and-improvements-2026-08-05.md)).
+[11-pitfalls-and-improvements-2026-08-05.md](2026-08-05-pitfalls-and-improvements.md)).
 
-Raw output: [stage2-pbo-dsr-corrected-2026-08-05.txt](stage2-pbo-dsr-corrected-2026-08-05.txt)
+Raw output: [stage2-pbo-dsr-corrected-2026-08-05.txt](raw/2026-08-05-stage2-pbo-dsr-corrected.txt)
 (**authoritative** — after the [#420](../../issues/420) timeline fix). The original run is kept as
-[stage2-pbo-dsr-2026-08-05.txt](stage2-pbo-dsr-2026-08-05.txt) for comparison.
+[stage2-pbo-dsr-2026-08-05.txt](raw/2026-08-05-stage2-pbo-dsr.txt) for comparison.
 Code: `cscv` scheme in `src/cost-model-backtest/splits.ts`, DSR inputs on `MetricsSuite`
 (`metrics.ts`), both consumed by `stage2-verdict.ts`.
 
@@ -124,8 +126,8 @@ changing hands.
 
 **What it does change is the OOS Sharpe count: 12 → 14 of 24**, with stocks going 6 → 8 since their
 Sharpes were the more understated. That is the number the earlier write-ups quote, so
-[08-…md](08-stage2-verdict-first-real-run-2026-08-05.md) and
-[10-…md](10-cost-model-calibration-2026-08-05.md) both under-report it; neither has been re-run.
+[08-…md](2026-08-05-stage2-verdict-first-real-run.md) and
+[10-…md](2026-08-05-cost-model-calibration.md) both under-report it; neither has been re-run.
 
 **Why the field earned its place.** This is precisely the P2/P12 pattern — a value nothing in the
 output distinguished from a correct one. Two asset classes had been quietly reporting the same
@@ -187,7 +189,7 @@ itself move PBO, which is measured over whatever configs remain.
    were blocked on exactly these two seams, and both are now unblocked.
 5. **Done — #420.** Each asset class now has its own replay timeline and this gate has been re-run;
    the numbers above are the corrected ones. The Sharpe magnitudes in
-   [08-…md](08-stage2-verdict-first-real-run-2026-08-05.md) and
-   [10-…md](10-cost-model-calibration-2026-08-05.md) are still the pre-fix ones — understated, and
+   [08-…md](2026-08-05-stage2-verdict-first-real-run.md) and
+   [10-…md](2026-08-05-cost-model-calibration.md) are still the pre-fix ones — understated, and
    not worth a re-run on their own, since both documents' conclusions were about cost attribution
    rather than about a Sharpe level.

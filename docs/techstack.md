@@ -48,8 +48,8 @@ Locked-in choices, versions, and rationale. Update as stack crystallizes.
 
 | Component | Choice | Why |
 |-----------|--------|-----|
-| Structured log format | Hand-rolled one-JSON-line-per-entry (`JsonLogger`, `src/orchestrator/logger.ts`) | Every stage already logs through one shared `Logger` interface (`src/shared/types.ts`); the format is six fields. |
-| Sinks | stdout + hand-rolled size-rotating file (`src/orchestrator/rotating-file-sink.ts`) | **#325, decided against adding `pino` + `pino-roll`.** ADR-0001's posture is minimal hard dependencies, and the library would not *replace* anything here: the stages log through the shared `Logger` interface, so pino would arrive as a second logging abstraction wrapped by the first. What was actually missing is one `write(line)` byte sink — ~150 lines, synchronous (a line written the instant it is produced survives the crash it describes), degrading to stdout-only on any I/O failure rather than throwing into a tick. |
+| Structured log format | Hand-rolled one-JSON-line-per-entry (`JsonLogger`, `server/apps/orchestrator/logger.ts`) | Every stage already logs through one shared `Logger` interface (`server/shared/types.ts`); the format is six fields. |
+| Sinks | stdout + hand-rolled size-rotating file (`server/apps/orchestrator/rotating-file-sink.ts`) | **#325, decided against adding `pino` + `pino-roll`.** ADR-0001's posture is minimal hard dependencies, and the library would not *replace* anything here: the stages log through the shared `Logger` interface, so pino would arrive as a second logging abstraction wrapped by the first. What was actually missing is one `write(line)` byte sink — ~150 lines, synchronous (a line written the instant it is produced survives the crash it describes), degrading to stdout-only on any I/O failure rather than throwing into a tick. |
 | Rotation / retention | Size-based, `SAMURAI_LOG_MAX_BYTES` (16 MiB) × `SAMURAI_LOG_MAX_FILES` (10 rotated generations) | Bounded at ~176 MiB, which a 14-day soak (#238) fits inside. Short on purpose: these files are the *diagnostic* record only. The durable trade record — every signal, order and fill, and therefore the UK CGT disposal history CLAUDE.md requires — is SQLite, and nothing in it depends on a rotated log generation surviving. |
 | Log shipping / aggregation | None | Single-operator, single-host (MacBook). Revisit with the observability-stack open decision below. |
 
@@ -71,8 +71,8 @@ Locked-in choices, versions, and rationale. Update as stack crystallizes.
 
 | Component | Choice | Why |
 |-----------|--------|-----|
-| Rendering | Single static HTML page, no framework/bundler | Lower build cost; zero new runtime dependencies (Node 22's built-in `http`), matches ADR-0001's dependency-light TS core. |
-| Transport | One `http` server, two `GET` routes (`/`, `/api/snapshot`) | One process, one command (`npm run dashboard`) starts everything — no separate frontend build/serve step. |
+| Rendering | **Vite + React**, self-hosted alongside the orchestrator | Resolved by [ADR-0010](adr/0010-dashboard-vite-react-rewrite.md) and [`research/40-dashboard-framework-and-hosting.md`](research/40-dashboard-framework-and-hosting.md). The static-page approach broke down on three counts: `server.ts` has no route that can serve a file, the client was composed by `Function.prototype.toString()` over 16 hand-listed functions, and 339 lines of browser JS sat outside tsc and Biome. Vercel is out — read-only FS, archived-when-idle, and a Hobby-tier commercial-use ban. |
+| Transport | One `http` server serving the built client plus `GET /api/snapshot` | Still one process and one command at runtime, but ADR-0010 adds a Vite build step ahead of it — the server now needs a route that can serve static assets from `dist/client/`, which the original static-page design lacked. ⚠️ `/api/snapshot` currently exposes positions, P&L and LLM spend with **zero auth** — a hard precondition on any exposure beyond localhost. |
 | Refresh | Client-side polling | No real-time push needed at single-operator scale; matches the original CLI decision's "a few seconds of staleness is fine" reasoning. |
 | Read path | Direct SQLite queries via `QueryStore` | No new message bus; Dashboard is a pure read-only consumer of the shared store (dashboard-spec.md), reusing the CLI's original `QueryStore` port unchanged. |
 
@@ -89,4 +89,4 @@ Locked-in choices, versions, and rationale. Update as stack crystallizes.
 - [ ] Analyst persona registry (static config vs dynamic LLM-generated)
 - [ ] Monitoring / observability stack beyond structured logs + Telegram (Grafana/Prometheus, or logs+Telegram is sufficient for v1?)
 - [ ] Multi-strategy support: shared broker abstraction per-strategy, or unified? (post-MVP question)
-- [ ] Framework/library, if any, if the dashboard ever grows past one static page (see Dashboard row above)
+- [x] ~~Framework/library, if any, if the dashboard ever grows past one static page~~ — **resolved 2026-08-06: Vite + React, self-hosted** (ADR-0010; see Dashboard row above)

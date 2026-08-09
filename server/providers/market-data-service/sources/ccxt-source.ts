@@ -98,7 +98,7 @@ const DEFAULT_GAP_TOLERANCE_MS = 7 * 86_400_000;
  * Bars asked for per request, set to the SMALLEST cap among the venues #487
  * put in play so the default is correct everywhere rather than optimal
  * somewhere: Coinbase 300 and Crypto.com 300 (Bitstamp allows 1000, Kraken
- * 720 — see `docs/research/free-ohlcv-fallback-sources-2026-08-06.md`).
+ * 720 — see `docs/research/31-free-ohlcv-evidence.md`).
  *
  * Asking for more than a venue serves is not an error — it silently returns
  * its cap, which is exactly the failure #497 is about. The loop below does

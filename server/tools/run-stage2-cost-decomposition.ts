@@ -2,7 +2,7 @@
  * Stage 2 gross-vs-net cost decomposition.
  *
  * Answers the one question the 2026-08-05 Stage 2 kill left open
- * (docs/research/08-stage2-verdict-first-real-run-2026-08-05.md, "Turnover,
+ * (docs/research/archive/2026-08-05-stage2-verdict-first-real-run.md, "Turnover,
  * not necessarily signal"): is a negative out-of-sample Sharpe in 22 of 24
  * (config, asset class) pairs a signal with no information in it, or a thin
  * gross edge churned 115–556 times over and eaten by `PESSIMISTIC_COST_CONFIG`?

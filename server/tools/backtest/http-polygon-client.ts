@@ -1,7 +1,7 @@
 /**
  * Real `PolygonClient` (ticket #266) — see
  * docs/specs/stage2-validation-execution-spec.md ("Module: Historical Data
- * Ingestion") and docs/research/polygon-aggregates-api-2026-07-31.md (ticket
+ * Ingestion") and docs/research/32-vendor-api-reference.md (ticket
  * #263's primary-source research this implementation follows directly).
  *
  * Implements `PolygonClient.fetchAggregates` (stage2-historical-store.ts)

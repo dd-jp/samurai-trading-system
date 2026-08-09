@@ -4,11 +4,11 @@
  * Why this exists: `HttpPolygonClient` is the only aggregates source Stage 2
  * has ever had, and the Polygon plan serves **two years** against a five-year
  * request. Every Stage 2 verdict to date was therefore computed on ~500 stock
- * bars, and `11-stage2-verdict-post-405-2026-08-06.md` named sample length as
+ * bars, and `archive/2026-08-06-stage2-verdict-post-405.md` named sample length as
  * "the one lever that would change this", assuming deeper history had to be
  * bought. It does not: measured 2026-08-07, Alpaca serves SPY daily from
  * **2016-01-04** and Coinbase serves BTC-USD daily from **2015-07-20**, both
- * on keys already held, at £0. See `docs/research/13-trend-signal-measurement`
+ * on keys already held, at £0. See `docs/research/11-trend-signal-measurement.md`
  * for the measurement that used this data directly.
  *
  * ADR-0001 (#494/#499) already designates this stack as primary — Alpaca for

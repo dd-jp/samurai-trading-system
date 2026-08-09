@@ -1,5 +1,7 @@
 # Research: Alpaca REST API surface for `AlpacaClient` (2026-07-29)
 
+> **ARCHIVED — folded into [`32-vendor-api-reference.md`](../32-vendor-api-reference.md).** The crypto-path correction below is preserved there verbatim; it documents a bug that shipped.
+
 Ticket: Research: Alpaca REST API surface for AlpacaClient (broker + data), part of
 [Live Transport Layer: Alpaca / Polygon / Anthropic / Telegram HTTP clients + account-state](https://github.com/dd-jp/samurai-trading-system/issues/259).
 

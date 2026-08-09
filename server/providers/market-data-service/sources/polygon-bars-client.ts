@@ -6,7 +6,7 @@
  * `backfill-market-data.ts`'s module doc for the composition-root trace and
  * the residual gap this leaves on the live equities leg.
  *
- * ADR-0001 / `docs/research/free-ohlcv-fallback-sources-2026-08-06.md` name
+ * ADR-0001 / `docs/research/31-free-ohlcv-evidence.md` name
  * Polygon free tier as the equities fallback:
  *
  *   GET /v2/aggs/ticker/{ticker}/range/{multiplier}/{timespan}/{from}/{to}

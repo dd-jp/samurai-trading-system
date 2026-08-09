@@ -54,7 +54,7 @@ export interface MetricsSuite {
    * sample autocorrelation, so it is not a naive ×√periodsPerYear away and
    * cannot be inverted from the suite. Before this field existed, DSR was
    * structurally uncomputable on every run (#406, and P7 in
-   * docs/research/11-pitfalls-and-improvements-2026-08-05.md).
+   * docs/research/14-backtest-pitfalls.md).
    *
    * It lives here, rather than behind a `sharpeDecomposition()` export, so it
    * cannot desync from the sample it describes — see `observations`.
