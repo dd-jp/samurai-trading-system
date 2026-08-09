@@ -17,7 +17,8 @@
  * the source ADR-0001 demoted to fallback-only". This closes that gap for the
  * Stage 2 path specifically.
  *
- * **Why not reuse `scripts/coinbase-candles-client.ts` or
+ * **Why not reuse
+ * `providers/market-data-service/sources/coinbase-candles-client.ts` or
  * `AlpacaHttpDataClient`.** Both are `(symbol, timeframe, asOf, limit)`-shaped
  * — they answer "the last N bars as of a moment", which is what the live and
  * backfill paths need. The `PolygonClient` seam is window-shaped

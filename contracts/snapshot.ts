@@ -21,7 +21,7 @@
  */
 
 import type { MetricsSuite } from './metrics.js';
-import type { PipelineView } from './pipeline.js';
+import type { PipelineStage, PipelineView } from './pipeline.js';
 import type { AssetClass, Direction, OrderState, StoreMode } from './primitives.js';
 import type { ProviderStatusPanel } from './providers.js';
 
@@ -34,7 +34,15 @@ import type { ProviderStatusPanel } from './providers.js';
 export interface TickStatus {
   instrument: string;
   asset_class: AssetClass;
-  stage: 'analysts' | 'debate' | 'trader' | 'risk' | 'verdict' | 'execution';
+  /**
+   * Derived from `PipelineStage` rather than re-typed, so this directory
+   * publishes ONE stage vocabulary. `invalidation` is excluded because it is
+   * specced and not built (see `PIPELINE_STAGES`): the runtime chain is six
+   * stages and a tick can never report standing in a stage that does not run.
+   * Deriving it means a seventh stage becoming real surfaces here as a type
+   * error instead of silently going unreported.
+   */
+  stage: Exclude<PipelineStage, 'invalidation'>;
   trace_id: string;
 }
 

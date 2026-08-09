@@ -9,12 +9,12 @@
  * `contracts/` is simply where that contract belongs. Nothing in it changed
  * except where `AssetClass` comes from.
  *
- * This shim exists so the ~12 server-side import sites did not have to churn
- * in the same commit as the move. It is deliberately still here: repointing
- * those sites is a mechanical follow-up worth doing on its own, where the
- * diff is legible, rather than buried in a tree-wide rename. It retires when
- * they import `contracts/pipeline.js` directly and nothing references this
- * file — `grep -rn 'service-api/pipeline-types' server/` is the check.
+ * This shim exists so the server-side import sites did not have to churn in
+ * the same commit as the move. There are four — `pipeline-query.ts`,
+ * `pipeline-query.test.ts`, `sqlite-query-store.ts`, `fixture-store.ts`, all
+ * in this directory — so retiring it is four edits, not a project. It retires
+ * when they import `contracts/pipeline.js` directly and nothing references
+ * this file: `grep -rn 'pipeline-types' server/` is the check.
  */
 
 export {

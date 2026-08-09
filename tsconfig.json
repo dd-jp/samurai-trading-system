@@ -11,7 +11,7 @@
 // `yarn typecheck` was green throughout — but the editor could not see it.
 //
 // With `references`, tsserver finds the file in a referenced project and loads
-// THAT project's options, so tests get `vitest/globals` and `src/` keeps the
+// THAT project's options, so tests get `vitest/globals` and `server/` keeps the
 // strict build settings. The two projects stay separate on purpose:
 // production code must not see the test globals, and the two disagree about
 // `noUncheckedIndexedAccess` (see tsconfig.test.json for why).
@@ -20,9 +20,10 @@
 // its default include (`**/*`) and claim every file for itself.
 //
 // The ORDER of `references` is load-bearing — do not reorder. `tsconfig.test.json`
-// inherits `include: ["src/**/*.ts"]`, so it contains every production file too,
+// inherits `include: ["server/**/*.ts", "contracts/**/*.ts"]`, so it contains every
+// production file too,
 // and tsserver assigns a file to the FIRST referenced project containing it.
-// Build listed first is the only reason `src/**/*.ts` resolves to the strict
+// Build listed first is the only reason those files resolve to the strict
 // build project. Swap the two and every production file silently picks up the
 // test project's relaxed `noUncheckedIndexedAccess` in-editor while CI, which
 // runs both projects explicitly, stays green — the exact class of drift this
@@ -31,7 +32,7 @@
 // Neither referenced project sets `composite: true`, because nothing builds
 // through this file — `yarn build` and `yarn typecheck` invoke the two projects
 // directly with `-p`. Editor resolution does not need it (verified against
-// tsserver: test files report `tsconfig.test.json`, `src/` files report
+// tsserver: test files report `tsconfig.test.json`, `server/` files report
 // `tsconfig.build.json`). `tsc -b` WOULD need it, so add it there if a
 // build-mode invocation is ever introduced. `tsc -p tsconfig.json` compiles
 // nothing by design.

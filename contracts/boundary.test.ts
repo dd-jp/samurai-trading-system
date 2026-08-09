@@ -15,7 +15,6 @@
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
 
 const CONTRACTS_DIR = fileURLToPath(new URL('.', import.meta.url));
 
@@ -94,11 +93,17 @@ describe('contracts boundary', () => {
     // The boundary rule, checked rather than documented: anything with a
     // `Date` is pre-serialization and belongs to the runtime that owns it.
     // ISO strings cross the wire; `Date` objects do not survive JSON.
+    //
+    // Matches `Date` ANYWHERE in a type position, not just `: Date` — the
+    // narrow form let `Date[]`, `readonly Date[]`, `Map<string, Date>` and
+    // `Date | null` through, and a guard that admits the container forms while
+    // rejecting the bare one fails open exactly where a real contract would
+    // reach for a collection.
     for (const file of sourceFiles()) {
       const text = readFileSync(`${CONTRACTS_DIR}${file}`, 'utf8');
       const declarations = text
         .split('\n')
-        .filter((line) => /:\s*Date\b/.test(line) && !line.trimStart().startsWith('*'));
+        .filter((line) => /\bDate\b/.test(line) && !line.trimStart().startsWith('*'));
       expect(
         declarations,
         `${file} declares a Date field. Serialize it to an ISO string at the ` +

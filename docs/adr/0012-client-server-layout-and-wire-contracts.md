@@ -66,6 +66,21 @@ The primitives the wire references — `AssetClass`, `Direction`, `StoreMode`,
 an asset class is has not moved the boundary, only hidden it. Their previous
 locations re-export, so no unrelated import site churned.
 
+**`CostModel` did NOT move, against the plan.** The approved plan put
+`CostModel` in `contracts/` alongside `MetricsSuite`, on the finding that a
+folder named for an offline research harness owned a type the money path
+imports. That finding is right about the problem and wrong about this fix:
+`CostModel` is `{ fill(request, marketState): CostModelResult }` — a
+behavioural seam, not a serialized shape. It never crosses the wire, the
+browser never sees it, and admitting it would make `contracts/` a
+grab-bag of "types more than one folder wants" rather than the wire model,
+which is the distinction the directory exists to hold. It stays at
+`server/tools/backtest/types.ts`. `MetricsSuite`, which IS a wire shape
+(`DashboardSnapshot.metrics` renders it), moved as planned — so the half of
+the finding that concerns the browser is resolved. The half that concerns
+`backtest/` owning a money-path behavioural interface is NOT, and wants a
+different fix — relocating the seam, not re-filing it as a contract.
+
 ### Enforcement
 
 `contracts/boundary.test.ts` asserts on source text that nothing in the
