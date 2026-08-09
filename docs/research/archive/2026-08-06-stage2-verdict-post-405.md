@@ -1,8 +1,10 @@
 # Stage 2 verdict — re-run after #405/#375, 2026-08-06
 
+> **ARCHIVED — superseded by [`13-stage2-proxy-verdict.md`](../13-stage2-proxy-verdict.md),** which pulls this doc's one remaining lever (sample length) and finds the verdict unchanged.
+
 **Verdict: KILL/INCOMPLETE.** The proxy strategy does not survive selection accounting on the sample the data provider actually serves.
 
-This is the run [#245](https://github.com/dd-jp/samurai-trading-system/issues/245) was waiting on, executed against live Polygon on the merged `main` (through #459). It supersedes [08-stage2-verdict-first-real-run-2026-08-05.md](08-stage2-verdict-first-real-run-2026-08-05.md) and [10-cost-model-calibration-2026-08-05.md](10-cost-model-calibration-2026-08-05.md)'s open question about what the calibrated costs would produce.
+This is the run [#245](https://github.com/dd-jp/samurai-trading-system/issues/245) was waiting on, executed against live Polygon on the merged `main` (through #459). It supersedes [08-stage2-verdict-first-real-run-2026-08-05.md](2026-08-05-stage2-verdict-first-real-run.md) and [10-cost-model-calibration-2026-08-05.md](2026-08-05-cost-model-calibration.md)'s open question about what the calibrated costs would produce.
 
 ## What changed since the last run
 

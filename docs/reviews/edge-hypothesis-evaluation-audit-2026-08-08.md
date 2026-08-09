@@ -1,8 +1,15 @@
-# Audit — `15-edge-hypothesis-evaluation-2026-08-07.md`
+# Audit — the edge-hypothesis critique
 
 **Date:** 2026-08-08
-**Subject:** [`docs/research/15-edge-hypothesis-evaluation-2026-08-07.md`](../research/15-edge-hypothesis-evaluation-2026-08-07.md) (the critique)
-**Also read:** [`13-trend-signal-measurement-2026-08-07.md`](../research/13-trend-signal-measurement-2026-08-07.md) (the measurement it critiques), [`trend-signal-measurement-2026-08-07.py`](../research/trend-signal-measurement-2026-08-07.py) (the code that produced the numbers), `src/trader/decide.ts`, `src/risk-manager/`
+**Subject:** [`docs/research/archive/2026-08-07-edge-hypothesis-evaluation.md`](../research/archive/2026-08-07-edge-hypothesis-evaluation.md) (the critique)
+**Also read:** [`11-trend-signal-measurement.md`](../research/11-trend-signal-measurement.md) (the measurement it critiques), [`11-trend-signal-measurement.py`](../research/11-trend-signal-measurement.py) (the code that produced the numbers), `src/trader/decide.ts`, `src/risk-manager/`
+
+> **Note on numbering.** This audit was written before the 2026-08-08 research consolidation and refers to its subjects by their old numbers throughout. Read them as:
+> - **"doc 13"** = [`11-trend-signal-measurement.md`](../research/11-trend-signal-measurement.md) (the measurement)
+> - **"doc 15"** = [`archive/2026-08-07-edge-hypothesis-evaluation.md`](../research/archive/2026-08-07-edge-hypothesis-evaluation.md) (the critique). Its corrected successor, which folds in the findings below, is [`12-edge-hypothesis-critique.md`](../research/12-edge-hypothesis-critique.md)
+> - **"doc 14"** = [`10-edge-hypothesis.md`](../research/10-edge-hypothesis.md) (the hypothesis)
+>
+> **On the script line numbers below:** D1 cites `L383`/`L385`, which refer to the script **as of commit `12c00fd`**, the run that produced the measurement's numbers. The file is now `11-trend-signal-measurement.py`, and line numbers in a live script drift — read them at that commit.
 
 ## Verdict
 
@@ -102,7 +109,7 @@ Doc 15 opens "do not ship capital until the PBO gate closes," which presumes a c
 - **Sizing is a different animal entirely.** `src/trader/decide.ts:248` — `const size = (equity * riskFraction) / stopDistance` — ATR-stop fixed-fractional risk sizing, per trade, event-driven from LLM verdicts.
 - **What does exist:** a `portfolio_gross_cap` risk threshold (`src/risk-manager/risk-thresholds.ts:65`) — a hard cap, not a targeter.
 
-**Consequence:** doc 15's gates guard a capital commitment to a configuration that exists only in `docs/research/trend-signal-measurement-2026-08-07.py`. Closing all six gates would validate a strategy Samurai cannot currently execute. The real decision in front of the project is not "PBO then ship" — it is **"is the measured trend/vol-target portfolio the thing we build, replacing or wrapping the LLM pipeline?"** That is an ADR, and it is upstream of every gate in doc 15.
+**Consequence:** doc 15's gates guard a capital commitment to a configuration that exists only in `docs/research/11-trend-signal-measurement.py`. Closing all six gates would validate a strategy Samurai cannot currently execute. The real decision in front of the project is not "PBO then ship" — it is **"is the measured trend/vol-target portfolio the thing we build, replacing or wrapping the LLM pipeline?"** That is an ADR, and it is upstream of every gate in doc 15.
 
 ## One economic point neither doc makes
 

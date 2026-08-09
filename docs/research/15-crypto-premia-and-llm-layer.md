@@ -1,7 +1,7 @@
-# Crypto Premia & LLM Layer — Opportunity and Measurement (16)
+# Crypto Premia & LLM Layer — Opportunity and Measurement
 
 **Date:** 2026-08-08
-**Relates to:** [`15-edge-hypothesis-evaluation-2026-08-07.md`](15-edge-hypothesis-evaluation-2026-08-07.md), [`13-trend-signal-measurement-2026-08-07.md`](13-trend-signal-measurement-2026-08-07.md)
+**Relates to:** [`archive/2026-08-07-edge-hypothesis-evaluation.md`](archive/2026-08-07-edge-hypothesis-evaluation.md), [`11-trend-signal-measurement.md`](11-trend-signal-measurement.md)
 **Parent report (Obsidian):** `~/Documents/Obsidian/research/crypto-premia-llm-layer-2026-08-08-report.md`
 
 ## Bottom line

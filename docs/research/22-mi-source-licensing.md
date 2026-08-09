@@ -11,7 +11,7 @@ contractual."* This document reads the contracts.
 
 Everything below is quoted from the vendor's own terms, retrieved 2026-08-07. Where a document could
 not be retrieved it is marked **UNVERIFIED** rather than inferred — inference from marketing copy is
-the exact failure doc 14 named.
+the exact failure doc 21 named.
 
 ---
 
@@ -20,7 +20,7 @@ the exact failure doc 14 named.
 Two facts about Samurai change which clause bites, and both were verified in-repo rather than
 assumed:
 
-1. **The dashboard is a single-operator console on localhost.** `docs/research/13-dashboard-framework-and-hosting-2026-08-06.md`
+1. **The dashboard is a single-operator console on localhost.** `docs/research/40-dashboard-framework-and-hosting.md`
    §2.5: *"a single-operator console on localhost: no SEO, no public traffic, no multi-tenant auth,
    no user-generated content"*. ADR-0010 §4 adds that the built page reaches no host but its own
    origin. Exposure, if any, is planned behind Cloudflare Zero Trust or Tailscale — still no public
@@ -48,7 +48,7 @@ A second question, mostly independent of the first, decides Massive:
 
 The governing document is [Alpaca Terms and
 Conditions](https://files.alpaca.markets/disclosures/library/TermsAndConditions.pdf), not the
-endpoint docs. It is not silent — doc 14 looked in the wrong place.
+endpoint docs. It is not silent — doc 21 looked in the wrong place.
 
 **News is explicitly inside the licensed "Content".** The T&C define Content to include *"(2) general
 news and information, commentary, research reports, educational material and information and data
@@ -69,7 +69,7 @@ Three things follow:
 
 - **There is no display-only clause and no redistribution prohibition** on Content in this agreement.
   Displaying retrieved headlines on the localhost console is not restricted by anything in it. The
-  open item doc 14 flagged resolves in our favour.
+  open item doc 21 flagged resolves in our favour.
 - **There is no prohibition on non-display / analytical use.** Unlike the exchange-data agreements
   (§3), the Alpaca T&C contains no derived-data clause. Feeding article text to the scorer is not
   addressed, therefore not forbidden.
@@ -197,17 +197,17 @@ The canonical BBC feeds terms page could not be retrieved (404 on
 `bbc.co.uk/usingthebbc/terms/can-i-use-bbc-rss-feeds/`; no current replacement URL found). Secondary
 sources consistently describe BBC RSS as personal-use-only with a prescribed attribution, later
 expanded to permit some third-party reuse. **Recorded as unverified rather than inferred.** If the
-RSS fleet ships (it is v1.2+ at the earliest per doc 14's ordering), this must be read before BBC goes
+RSS fleet ships (it is v1.2+ at the earliest per doc 21's ordering), this must be read before BBC goes
 in.
 
 ### Bloomberg, CNBC, CoinDesk, CoinTelegraph, MarketWatch, Fed, SEC — **not individually read**
 
-Out of time-box for this ticket and not yet needed: doc 14's recommended ordering puts the RSS fleet
+Out of time-box for this ticket and not yet needed: doc 21's recommended ordering puts the RSS fleet
 behind Alpaca News and GDELT, so no RSS terms gate v1. Fed and SEC are US government works and carry
 no such restriction. The rest inherit the same gray posture and the same §7 question.
 
 **Net effect on the fleet:** the RSS layer's licensing posture is materially weaker than the
-structured sources', and it is also the layer with **zero backfill** (doc 14: its backtest value
+structured sources', and it is also the layer with **zero backfill** (doc 21: its backtest value
 starts only at go-live). Those two facts point the same way — the argument for shipping RSS early was
 never strong, and licensing does not strengthen it.
 

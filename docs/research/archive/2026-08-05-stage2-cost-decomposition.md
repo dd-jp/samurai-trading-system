@@ -1,12 +1,14 @@
 # Stage 2 Cost Decomposition — Gross vs Net (2026-08-05)
 
+> **ARCHIVED — superseded by [`13-stage2-proxy-verdict.md`](../13-stage2-proxy-verdict.md).** Its headline ("the kill is a cost-model artifact") did not survive: the strategy fails on selection accounting independently of the cost model.
+
 **Status:** Recorded 2026-08-05. Follows
-[08-stage2-verdict-first-real-run-2026-08-05.md](08-stage2-verdict-first-real-run-2026-08-05.md),
+[08-stage2-verdict-first-real-run-2026-08-05.md](2026-08-05-stage2-verdict-first-real-run.md),
 whose "Turnover, not necessarily signal" section flagged this as an open question and recommended it
 as the cheapest next decision. Commissioned by David on 2026-08-05: *"c and then a based on c
 findings"* — decompose gross vs net first, then decide the Polygon-history question in light of it.
 
-Raw run output: [stage2-cost-decomposition-2026-08-05.txt](stage2-cost-decomposition-2026-08-05.txt).
+Raw run output: [stage2-cost-decomposition-2026-08-05.txt](raw/2026-08-05-stage2-cost-decomposition.txt).
 Runner: `src/scripts/run-stage2-cost-decomposition.ts`. Attribution: `src/cost-model-backtest/cost-attribution.ts`.
 
 ## Headline
@@ -111,7 +113,7 @@ level at which the verdict flips.
 > `scaleCostConfig` multiplies all four coefficients uniformly, and a real calibration does not move
 > them uniformly — for crypto it moves two of them in *opposite* directions. Spread and slippage
 > come down hard (0.25 ATR of half-spread against a real BTC/ETH quoted spread that the
-> calibration in [10-cost-model-calibration-2026-08-05.md](10-cost-model-calibration-2026-08-05.md)
+> calibration in [10-cost-model-calibration-2026-08-05.md](2026-08-05-cost-model-calibration.md)
 > went on to measure at a median of 11.72 bps for BTC and 13.34 bps for ETH — still far below the
 > fixture, though an order of magnitude above the "about a basis point" this paragraph originally
 > guessed at before those quotes were sampled). But the fixture's `commissionRate: 0.001` is 10bps

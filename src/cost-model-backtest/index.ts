@@ -97,7 +97,7 @@
  * Ticket #245 adds `stage2-verdict.ts` — `renderStage2Verdict`, which checks
  * `TrialGridResult[]` (#244) against the spec's kill line via `overfitting.ts`
  * (#89) unchanged. As of this ticket no real trial data exists (no Polygon
- * ingestion has ever run — see docs/research/06-stage2-overfitting-verdict.md),
+ * ingestion has ever run — see docs/research/archive/2026-07-29-stage2-overfitting-verdict.md),
  * so `renderStage2Verdict` reports MinBTL for real (window/N only) and typed
  * `NotComputableReason`s for PBO (the spec's 5-fold walk-forward split is not
  * the even-count symmetric CSCV partition `pbo()` requires) and DSR
@@ -109,7 +109,7 @@
  * (#241 deliberately left it interface-only, ops/setup out of scope). It
  * follows `.next_url` pagination and maps this repo's `<BASE>-USD` crypto
  * symbols to Polygon's `X:<BASE>USD` ticker format, per
- * docs/research/polygon-aggregates-api-2026-07-31.md (#263). This ticket
+ * docs/research/32-vendor-api-reference.md (#263). This ticket
  * also adds `scripts/run-stage2.ts`, the one-shot runner wiring ingestion ->
  * `TrialGridAssetClass`es -> `runTrialGrid` -> `renderStage2Verdict` into a
  * runnable path — glue, not new design. Neither piece was exercised against

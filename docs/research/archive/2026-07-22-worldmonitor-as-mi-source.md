@@ -1,5 +1,7 @@
 # WorldMonitor as a Market Intelligence Data Source — Research Handoff
 
+> **ARCHIVED — both top-line decisions reversed.** Superseded by [`20-mi-decisions.md`](../20-mi-decisions.md): WorldMonitor is parked, and self-hosting is viable over REST (this doc forbids it). Pricing here is wrong — it omits the $49.99 tier and lists $249.99 where the top tier is $299.99. The convergence algorithm and CII formula are still the fullest record and are why this is kept.
+
 **For:** Implementation agent (Samurai project)
 **From:** Einstein (researcher profile), 2026-07-22
 **Parent research:** `~/Documents/Obsidian/research/worldmonitor-2026-07-22-report.md` (full deep analysis, 13 sections)

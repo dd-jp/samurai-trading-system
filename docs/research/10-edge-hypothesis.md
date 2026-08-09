@@ -38,7 +38,7 @@ An earlier candidate — that an LLM debate extracts signal from indicator conju
 
 ## Why E1's rationale changed
 
-E1 was originally justified as *avoiding being timed out of the premium*. [Measurement](13-trend-signal-measurement-2026-08-07.md) killed that justification: over 10 years the trend overlay beats an always-long control by 0.17 Sharpe with a paired **t of 0.15**. The timing does not add return.
+E1 was originally justified as *avoiding being timed out of the premium*. [Measurement](11-trend-signal-measurement.md) killed that justification: over 10 years the trend overlay beats an always-long control by 0.17 Sharpe with a paired **t of 0.15**. The timing does not add return.
 
 What survived is different and better evidenced. Under an executable gross cap of 1.5, trend beats the control on **both** return and drawdown — 10.20%/yr at Sharpe 0.71 and −23.2% max drawdown, against 6.18% at 0.41 and −34.0% — because it goes flat in bad regimes and stays off the cap while the control pins against it. The overlay is not a return generator; it is what lets a financed, capped account carry the premium at size instead of abandoning it at the bottom. That is what the recorded sentence says.
 
@@ -62,4 +62,4 @@ What survived is different and better evidenced. Under an executable gross cap o
 
 ## Status of the evidence
 
-The measurement behind this is [13-trend-signal-measurement-2026-08-07.md](13-trend-signal-measurement-2026-08-07.md): 16 pre-registered configurations, MinBTL 3.2 years against a 10.0-year sample. **PBO is not computed and this is not a Stage 2 pass.** The leverage and gross-cap settings that produced the headline configuration were explored post-hoc and are explicitly outside the trial accounting. Stage 0 requires a *stated, falsifiable* hypothesis, not a validated one — that is Stage 2's job, and it is still open.
+The measurement behind this is [11-trend-signal-measurement.md](11-trend-signal-measurement.md): 16 pre-registered configurations, MinBTL 3.2 years against a 10.0-year sample. **PBO is not computed and this is not a Stage 2 pass.** The leverage and gross-cap settings that produced the headline configuration were explored post-hoc and are explicitly outside the trial accounting. Stage 0 requires a *stated, falsifiable* hypothesis, not a validated one — that is Stage 2's job, and it is still open.

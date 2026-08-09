@@ -1,5 +1,7 @@
 # Trading Agent — Handover Brief
 
+> **ARCHIVED — historical origin brief.** The pre-code scoping handover. Superseded in every detail by [ADR-0001](../../adr/0001-technical-foundation-hybrid.md) (Alpaca-first, not Kraken-first) and `CLAUDE.md`. Kept for the deployment-risk and UK-tax posture it records.
+
 **Owner:** Deepak (Lead Web Developer, React/TypeScript)
 **Status:** Scoping complete, no code written yet
 **Goal:** Build a live-money trading agent covering both crypto and stocks

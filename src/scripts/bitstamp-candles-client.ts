@@ -5,7 +5,7 @@
  * (`src/orchestrator/production.ts`) never imports this module — see
  * `backfill-market-data.ts`'s module doc for the composition-root trace.
  *
- * ADR-0001 / `docs/research/free-ohlcv-fallback-sources-2026-08-06.md` name
+ * ADR-0001 / `docs/research/31-free-ohlcv-evidence.md` name
  * Bitstamp `/api/v2/ohlc` as the crypto fallback: no key, no account, true
  * USD pairs (`btcusd`/`ethusd` — not USDT proxies), depth back to
  * 2011-08-18 for BTC:

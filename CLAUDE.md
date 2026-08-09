@@ -19,7 +19,7 @@ Read/Write these as the project evolves:
 | ------ | --------- |
 | `CONTEXT.md` (repo root) | Domain glossary. Terms, relationships, invariants. No implementation details. Update inline as terms resolve. |
 | `docs/adr/` | Architecture Decision Records. Only create when (1) hard to reverse, (2) surprising without context, (3) real trade-off. |
-| `docs/research/techstack.md` | Libraries, versions, why-chosen. Update as stack choices lock in. |
+| `docs/techstack.md` | Libraries, versions, why-chosen. Update as stack choices lock in. A living register, not a dated research artifact — moved out of `docs/research/` 2026-08-08. |
 | `docs/wayfinder/` | Historical/reference only — earlier maps written as local markdown before the switch to GitHub issues (2026-07-22). New wayfinder maps live as GitHub issues (see Standing Pipeline Rule 1), not here. |
 | `docs/specs/` | Synthesized specs (PRDs) per stage, `<stage>-spec.md`. Produced from the wayfinder map via `/to-spec`. |
 | `docs/reviews/` | Audit/review reports (code quality, spec conformance, readiness), dated `<topic>-<date>.md`. Findings ranked, prior findings referenced not re-filed. Standards fallout goes to `docs/coding-standards.md` in the same change. |
@@ -49,12 +49,18 @@ This rule is NON-NEGOTIABLE. Never fill the gap with your own code.
 
 ## Research Artifacts to Preserve
 
-Existing research (DON'T overwrite, reference) — all live under `docs/research/`:
+Existing research (DON'T overwrite, reference) — all live under `docs/research/`. **Navigation starts at `docs/research/README.md`**, which holds the live frontier, the supersession map, and the old→new rename table.
 
-- `docs/research/00-summary.md` — Strategy eval summary
-- `docs/research/01-full-report-with-sources.md` — Full strategy eval research
-- `docs/research/02-staged-deployment-plan.md` — Stage-gated deployment plan
-- `docs/research/trading-agent-handover.md` — Scoping brief (crypto + stocks, UK hosting, Mac server, Kraken/IBKR, ccxt)
+**Naming scheme (consolidated 2026-08-08).** Live docs are `NN-slug.md` with no date suffix and a unique number, banded by track: `00`–`02` foundations (numbers frozen — specs cite them as "docs 00/01/02" by number), `10`s strategy/edge, `20`s market intelligence, `30`s data vendors, `40`s infra. Superseded run-records live in `docs/research/archive/` as `YYYY-MM-DD-slug.md`, preserved verbatim — **never deleted**, and raw run logs under `archive/raw/`.
+
+Key docs:
+- `docs/research/10-edge-hypothesis.md` — the edge hypothesis (C1/C2/E2/E1), Stage 0 gate
+- `docs/research/11-trend-signal-measurement.md` — 10.0y trend vs always-long measurement (+ the `.py` that produced it)
+- `docs/research/12-edge-hypothesis-critique.md` — the critique with its audit corrections folded in; use this gate order
+- `docs/research/13-stage2-proxy-verdict.md` — the whole Stage 2 chain, terminal KILL on the proxy
+- `docs/research/15-crypto-premia-and-llm-layer.md` — crypto/LLM opportunity evaluation
+- `docs/research/20-mi-decisions.md` / `30-data-vendor-decisions.md` — the settled MI and data-vendor stacks
+- `docs/research/00-summary.md` / `01-full-report-with-sources.md` / `02-staged-deployment-plan.md` — strategy eval + staged plan
 
 New research goes to `~/hermes-assistant/research/<topic>-<date>-raw.md` (raw) and `<topic>-<date>-analysis.md` (synthesized).
 

@@ -6,7 +6,7 @@
 
 This supersedes the trend-following recommendation made in conversation on 2026-08-07, which assumed the literature's diversified-futures result would carry over to a 12-instrument spot basket. It does not carry over cleanly, and the control arm is why we know.
 
-Companion script: [`trend-signal-measurement-2026-08-07.py`](trend-signal-measurement-2026-08-07.py). Dependency-free, re-runnable.
+Companion script: [`11-trend-signal-measurement.py`](11-trend-signal-measurement.py). Dependency-free, re-runnable.
 
 ## What was tested
 
@@ -166,5 +166,5 @@ curl -H "APCA-API-KEY-ID: $ALPACA_API_KEY" -H "APCA-API-SECRET-KEY: $ALPACA_API_
 # crypto (Coinbase, free, 300 candles/request — needs a paging loop)
 curl "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=86400&start=...&end=..."
 
-python3 docs/research/trend-signal-measurement-2026-08-07.py <data_dir>
+python3 docs/research/11-trend-signal-measurement.py <data_dir>
 ```
