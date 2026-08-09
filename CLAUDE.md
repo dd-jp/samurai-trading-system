@@ -55,6 +55,7 @@ Existing research (DON'T overwrite, reference) — all live under `docs/research
 **Naming scheme (consolidated 2026-08-08).** Live docs are `NN-slug.md` with no date suffix and a unique number, banded by track: `00`–`02` foundations (numbers frozen — specs cite them as "docs 00/01/02" by number), `10`s strategy/edge, `20`s market intelligence, `30`s data vendors, `40`s infra. Superseded run-records live in `docs/research/archive/` as `YYYY-MM-DD-slug.md`, preserved verbatim — **never deleted**, and raw run logs under `archive/raw/`.
 
 Key docs:
+
 - `docs/research/10-edge-hypothesis.md` — the edge hypothesis (C1/C2/E2/E1), Stage 0 gate
 - `docs/research/11-trend-signal-measurement.md` — 10.0y trend vs always-long measurement (+ the `.py` that produced it)
 - `docs/research/12-edge-hypothesis-critique.md` — the critique with its audit corrections folded in; use this gate order
