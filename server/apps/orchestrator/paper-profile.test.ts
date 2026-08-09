@@ -8,7 +8,6 @@
  * then rejects or halts everything is indistinguishable, at a glance, from a
  * clean run that decided not to trade (`SMOKE_TEST_UNIVERSE`'s doc comment).
  */
-
 import { InMemoryDebateLogStore, LATENCY_BUDGET_MS } from '../../pipeline/debate-engine/index.js';
 import {
   InMemoryClosedTradeStore,

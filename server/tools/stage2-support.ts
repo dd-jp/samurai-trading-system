@@ -4,7 +4,6 @@
  * `run-stage2-cost-decomposition.ts`, each carrying its own copy of the #420
  * per-asset-class timeline rationale.
  */
-
 import { SimulatedClock } from '../shared/index.js';
 import type {
   CostModelImpl,

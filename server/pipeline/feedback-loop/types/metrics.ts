@@ -4,7 +4,6 @@
  * Separate from `tuning.ts` because measuring and adjusting change for
  * different reasons.
  */
-
 import type { Clock, TuningStore } from '../../../shared/index.js';
 import type { MetricsSuite } from '../../../tools/backtest/index.js';
 import type { AdjustmentLog, FeedbackConfig } from './tuning.js';

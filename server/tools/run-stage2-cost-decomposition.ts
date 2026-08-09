@@ -31,7 +31,7 @@
  * moves every day, which would silently shift the effective window and stop
  * this decomposition lining up with the numbers in the committed verdict.
  *
- * Usage: `POLYGON_API_KEY=... node dist/scripts/run-stage2-cost-decomposition.js`
+ * Usage: `POLYGON_API_KEY=... node dist/server/tools/run-stage2-cost-decomposition.js`
  */
 import {
   attributeRunCosts,

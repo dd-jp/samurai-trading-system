@@ -3,7 +3,6 @@
  * the reconcile report. See `broker.ts` for the venue seam underneath and
  * `store.ts` for what it persists through.
  */
-
 import type {
   BarWindow,
   IndicatorSpec,

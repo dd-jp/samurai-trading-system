@@ -1464,7 +1464,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
                 'frozen Stage 2 selection exists — none persisted, all older than ' +
                 `${DEFAULT_STAGE2_MAX_AGE_DAYS} days, or PBO/DSR refused. Expect these three in ` +
                 '`not_evaluated` on every cycle (un-run, NOT passed) until a direct Stage 2 run ' +
-                '(`node dist/scripts/run-stage2.js`) freezes a fresh selection (#384, #579).',
+                '(`node dist/server/tools/run-stage2.js`) freezes a fresh selection (#384, #579).',
               payload: {
                 kill_lines_gated_on_revalidation: revalidationGatedKillLines,
                 persisted_selections: revalidationSelections.length,

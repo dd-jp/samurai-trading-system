@@ -11,7 +11,6 @@
  * Pure: computes targets, writes nothing. Bounding and persistence are
  * guardrails.ts / daily-cycle.ts.
  */
-
 import type { ClosedTrade, DebateLogStore } from '../../shared/index.js';
 import type { AnalystContribution, Direction } from '../debate-engine/index.js';
 import { getContributionsForAttribution } from './debate-attribution-lookup.js';

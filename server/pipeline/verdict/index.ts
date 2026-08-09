@@ -13,7 +13,6 @@
  * flag is set (non-converged, no-precedent, size-over, or near-limit —
  * `risk_decision.modifications != null`).
  */
-
 import type { OrderIntent } from '../../shared/index.js';
 import type { RiskDecision } from '../risk-manager/index.js';
 import type {

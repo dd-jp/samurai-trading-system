@@ -4,7 +4,6 @@
  * depends on: scale-invariance across instruments, and a stable feature
  * layout.
  */
-
 import type { Bar } from '../../providers/market-data-service/index.js';
 import type { DebateResult } from '../debate-engine/index.js';
 import { cosineSimilarity } from './cosine-precedent.js';

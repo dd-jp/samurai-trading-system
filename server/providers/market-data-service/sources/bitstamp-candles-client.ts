@@ -30,7 +30,6 @@
  * widens `limit` past 1000 and starts paginating, or Bitstamp itself ever
  * repeats a boundary row within one response.
  */
-
 import { fetchWithTimeout, type TokenBucket } from '../../../shared/index.js';
 import type { Bar } from '../index.js';
 import { closeTimeOf, timeframeToMs } from '../index.js';

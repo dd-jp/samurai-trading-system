@@ -19,10 +19,9 @@
  * producing a written Stage 2 verdict is a follow-up manual/ops step — see
  * #245's still-open AC2/4/5, which this ticket does not attempt to close.
  *
- * Usage: `POLYGON_API_KEY=... npx tsc -p tsconfig.build.json && node dist/scripts/run-stage2.js`
+ * Usage: `POLYGON_API_KEY=... npx tsc -p tsconfig.build.json && node dist/server/tools/run-stage2.js`
  * (or wire an `npm run stage2` script once this has been run for real once).
  */
-
 import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
 import {
   type CostConfig,
@@ -512,7 +511,7 @@ function printReport(
 
 /**
  * Entrypoint guard — only runs when this file is executed directly (`node
- * dist/scripts/run-stage2.js`), not when imported by a test. Mirrors
+ * dist/server/tools/run-stage2.js`), not when imported by a test. Mirrors
  * `server/apps/orchestrator/index.ts` / `server/apps/service-api/index.ts`'s split between an
  * exported, testable function and a thin top-level invocation.
  */

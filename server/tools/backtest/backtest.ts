@@ -20,7 +20,6 @@
  * fails the whole run, so no report and no trades are produced from a replay
  * that peeked at the future.
  */
-
 import type {
   Scheduler,
   TickContext,

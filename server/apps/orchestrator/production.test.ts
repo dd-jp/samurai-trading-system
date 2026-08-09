@@ -10,7 +10,6 @@
  * own suite owns that) and a live broker round-trip (ADR-0004's "wiring
  * validated" bar is a manual E2E run, not a unit test).
  */
-
 import {
   AnthropicLlmClient,
   MockLlmClient,

@@ -92,7 +92,7 @@ Resolved: **the Universe Selector is not a pipeline stage at all.** It runs *bet
 
 ### Module and entrypoint
 
-A new `src/universe-selector/` module with a `yarn screener` entrypoint, scheduled out of hours by launchd. It is a batch program, not a service: it reads bars, ranks, writes a watchlist, exits. It holds no state between runs beyond the watchlist itself.
+A new `server/pipeline/universe-selector/` module with a `yarn screener` entrypoint, scheduled out of hours by launchd. It is a batch program, not a service: it reads bars, ranks, writes a watchlist, exits. It holds no state between runs beyond the watchlist itself.
 
 ### The selection pipeline (#398)
 

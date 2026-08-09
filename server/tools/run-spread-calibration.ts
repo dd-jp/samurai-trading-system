@@ -47,7 +47,7 @@
  * at all.
  *
  * Usage: `ALPACA_API_KEY=... ALPACA_API_SECRET=... POLYGON_API_KEY=... \
- *   node dist/scripts/run-spread-calibration.js`
+ *   node dist/server/tools/run-spread-calibration.js`
  */
 
 import type { Bar } from '../providers/market-data-service/index.js';

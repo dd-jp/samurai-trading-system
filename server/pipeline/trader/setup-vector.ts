@@ -15,7 +15,6 @@
  * Dividing the price-unit features by `entry` is what makes a cross-instrument
  * neighbor search meaningful at all.
  */
-
 import type { Bar } from '../../providers/market-data-service/index.js';
 import type { SetupVector } from '../../shared/index.js';
 import type { DebateResult } from '../debate-engine/index.js';

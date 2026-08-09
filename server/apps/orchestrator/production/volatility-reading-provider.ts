@@ -43,7 +43,6 @@
  * other required field `computeCurrentPortfolioAndBreakers` needs alongside
  * it — has no in-repo implementation yet either).
  */
-
 import type { VolatilityReading } from '../../../pipeline/risk-manager/index.js';
 import type {
   IndicatorSpec,

@@ -6,7 +6,6 @@
  * Also asserts the read-only contract is structural: the fake store exposes
  * no setters, and the snapshot function calls only get-* methods.
  */
-
 import type { AnalystContribution } from '../../pipeline/debate-engine/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
 import type { DebateLog, OpenPosition } from '../../shared/index.js';

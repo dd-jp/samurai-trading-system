@@ -2,9 +2,12 @@
  * In-memory implementations of the Feedback Loop's store ports (#91) —
  * concrete implementations, not test-only mocks, mirroring
  * server/pipeline/trader/fixture-setup-store.ts and
- * server/pipeline/debate-engine/debate-log-store.ts's `InMemoryDebateLogStore`. The real
- * SQLite-backed stores are deferred: no shared store exists anywhere in the
- * codebase yet.
+ * server/pipeline/debate-engine/debate-log-store.ts's `InMemoryDebateLogStore`.
+ *
+ * These are no longer the only implementations: `SqliteTuningStore`,
+ * `SqliteClosedTradeStore` and `SqliteAdjustmentLog` sit beside this file and
+ * are what production wires. These survive as the in-memory pair for tests and
+ * for the offline backtest, where a database file would be pure overhead.
  */
 import type { ClosedTrade, ClosedTradeStore, TuningStore } from '../../shared/index.js';
 import type { Adjustment, AdjustmentLog, BreachAlert, BreachAlertChannel } from './types.js';

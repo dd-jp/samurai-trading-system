@@ -6,7 +6,6 @@
  * and does not crash with us). That is the whole shape of the scenario: the
  * process forgets, the store and the venue do not.
  */
-
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import type { Clock, Logger, OpenPosition, OrderIntent } from '../../shared/index.js';
 import { recordingLogger } from '../../shared/recording-logger.js';

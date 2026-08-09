@@ -57,7 +57,6 @@
  * in the first place. Making the caps equity-relative at evaluate time is a
  * separate change to the Risk Manager, not a config edit.
  */
-
 import { DEFAULT_TRADER_CONFIG } from '../../pipeline/trader/index.js';
 import type { Logger } from '../../shared/index.js';
 import { LIVE_MONEY_GATE_SUMMARY } from './live-money-gates.js';

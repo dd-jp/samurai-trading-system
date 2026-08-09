@@ -7,7 +7,6 @@
  * `OrderIntent` / `OrderIntentMetadata` are NOT redefined here: they are
  * cross-spec types owned by server/shared/types.ts (registry #1).
  */
-
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 /** Asset classes the risk multiplier is keyed on, matching `Mark.asset_class`. */
 import type {

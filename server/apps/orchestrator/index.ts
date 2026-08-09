@@ -434,8 +434,8 @@ function assertCredentialsPresent(
           'sharing the escalation chat is what drives an operator to mute the one channel ' +
           'that carries orphaned go verdicts, stuck lots and kill-threshold breaches. '
         : '') +
-      'Note that `node dist/orchestrator/index.js` does not read any .env file on its own — ' +
-      'use `node --env-file=.env.local dist/orchestrator/index.js` or export the variables.',
+      'Note that `node dist/server/apps/orchestrator/index.js` does not read any .env file on its own — ' +
+      'use `node --env-file=.env.local dist/server/apps/orchestrator/index.js` or export the variables.',
   );
 }
 

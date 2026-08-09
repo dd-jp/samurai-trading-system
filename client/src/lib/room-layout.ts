@@ -19,8 +19,16 @@ import type { PipelineLane, PipelineStage, PipelineView } from '@contracts';
 export type RoomId = PipelineStage | 'lobby';
 
 /**
- * Stage order, redeclared from `PIPELINE_STAGES` (pipeline-types.ts) so this
- * module needs only type imports and the backend never enters the bundle.
+ * Stage order, redeclared from `PIPELINE_STAGES` (`contracts/pipeline.ts`).
+ *
+ * The original reason for redeclaring — "so the backend never enters the
+ * bundle" — no longer applies: `contracts/` is dependency-free by construction
+ * and `contracts/boundary.test.ts` enforces it, so importing the value would
+ * drag nothing server-side along with it. The list stays because it now earns
+ * its keep differently: this is the order rooms are DRAWN in, which is the
+ * client's business, and pinning it here means a future reordering of the wire
+ * constant cannot silently rearrange the theater.
+ *
  * `satisfies` pins every member to the wire type; the `Exclude` check below
  * fails to compile if the wire union ever grows a stage this list is missing.
  */

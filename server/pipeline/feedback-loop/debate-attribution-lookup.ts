@@ -6,7 +6,6 @@
  * log at trade close, joined by `debate_id` — not from the ephemeral,
  * no-persistence `DebateResult` (decision #10).
  */
-
 import type { DebateLogStore } from '../../shared/index.js';
 import type { AnalystContribution } from '../debate-engine/index.js';
 

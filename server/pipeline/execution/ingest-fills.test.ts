@@ -5,7 +5,6 @@
  * resize, and `ClosedTrade` emission are asserted in isolation from any real
  * venue's timing.
  */
-
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import type { Clock, Logger, OpenPosition } from '../../shared/index.js';
 import { recordingLogger } from '../../shared/recording-logger.js';

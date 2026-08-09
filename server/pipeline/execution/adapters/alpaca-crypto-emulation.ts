@@ -9,7 +9,9 @@
  * equities. The owner's recorded decision on #586 is option (a): keep the
  * guarantee BY HAND, below the `BrokerAdapter` seam, exactly as the retired
  * ccxt adapter did for venues without native brackets (its emulation is the
- * pattern this module ports — `git show fe79f26 -- server/pipeline/execution/ccxt-adapter.ts`).
+ * pattern this module ports — `git show fe79f26 -- src/execution/ccxt-adapter.ts`;
+ * the pathspec is the pre-`client/`+`server/` path deliberately, because that
+ * is where the file stood at that commit and any newer path matches nothing).
  *
  * The lifecycle, all of it journalled in `broker_brackets` (venue 'alpaca',
  * distinguishable from native rows by `asset_class = 'crypto'` on the

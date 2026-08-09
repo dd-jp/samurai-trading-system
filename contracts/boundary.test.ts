@@ -20,13 +20,30 @@ import { describe, expect, it } from 'vitest';
 const CONTRACTS_DIR = fileURLToPath(new URL('.', import.meta.url));
 
 /**
- * Matches the specifier of any static or type-only import/export-from.
+ * Every form that can name a module, because a check that covers only one of
+ * them fails OPEN — the import it misses is exactly the one that reintroduces
+ * the coupling, and nothing else in the build would object.
+ *
  * Deliberately regex over source text rather than an AST walk: the property
  * being checked is "does this string escape the directory", which is a
  * property of the specifier itself, and a dependency-free check cannot drift
  * from the parser the build uses.
  */
-const SPECIFIER = /(?:import|export)\s[^;]*?from\s+['"]([^'"]+)['"]/g;
+const SPECIFIER_PATTERNS = [
+  /** `import x from 'm'`, `import type { X } from 'm'`, `export { X } from 'm'`. */
+  /(?:import|export)\s[^;]*?from\s+['"]([^'"]+)['"]/g,
+  /**
+   * `import 'm'` — a side-effect import, which has no `from` clause at all.
+   * It names no binding, so it is the one form a reader skims past, and it
+   * pulls in the module graph just as completely as a named import does.
+   */
+  /(?:^|[;}])\s*import\s+['"]([^'"]+)['"]/gm,
+  /**
+   * `await import('m')` — deferred, but still a dependency, and one that a
+   * bundler resolves at build time into the same graph.
+   */
+  /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+];
 
 function sourceFiles(): string[] {
   return readdirSync(CONTRACTS_DIR)
@@ -36,7 +53,9 @@ function sourceFiles(): string[] {
 
 function specifiersOf(file: string): string[] {
   const text = readFileSync(`${CONTRACTS_DIR}${file}`, 'utf8');
-  return [...text.matchAll(SPECIFIER)].map((match) => match[1] as string);
+  return SPECIFIER_PATTERNS.flatMap((pattern) =>
+    [...text.matchAll(pattern)].map((match) => match[1] as string),
+  );
 }
 
 describe('contracts boundary', () => {

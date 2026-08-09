@@ -4,7 +4,6 @@
  * Decisions): a DebateResult + a fixture MarketDataService + a mock clock,
  * asserting on the returned OrderIntent (or null). There is no LLM to mock.
  */
-
 import type {
   Bar,
   BarWindow,

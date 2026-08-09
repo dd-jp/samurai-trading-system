@@ -9,7 +9,7 @@
  * check skips the fetch entirely once the window is covered — so re-running
  * this after the first success costs zero API calls.
  *
- * After this has run once, `node dist/scripts/run-stage2.js` reads the same
+ * After this has run once, `node dist/server/tools/run-stage2.js` reads the same
  * file and its own (free-tier, 2-year-capped) Polygon ingest finds nothing
  * to add — the 5-year MinBTL verdict becomes computable without any Polygon
  * entitlement.

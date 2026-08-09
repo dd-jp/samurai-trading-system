@@ -1,7 +1,7 @@
 /**
  * Dashboard server acceptance: real HTTP round-trip against a server bound
  * to an ephemeral port (127.0.0.1:0), fed by the in-memory fixture store and
- * a temp directory standing in for `dist/dashboard-web/`.
+ * a temp directory standing in for `dist/client/`.
  *
  * Asserts the read-only contract by construction: only `GET` is served,
  * every other method is 405, unknown paths 404 — and, since #539, that the
@@ -50,7 +50,7 @@ let bundleRoot: string;
 
 beforeAll(async () => {
   parent = await mkdtemp(join(tmpdir(), 'samurai-dashboard-'));
-  bundleRoot = join(parent, 'dashboard-web');
+  bundleRoot = join(parent, 'client');
   await mkdir(join(bundleRoot, 'assets'), { recursive: true });
   await writeFile(join(bundleRoot, 'index.html'), INDEX_HTML);
   await writeFile(join(bundleRoot, 'assets', 'index-abc123.js'), APP_JS);
@@ -68,8 +68,8 @@ beforeAll(async () => {
   // so a broken guard returns 200 with a body rather than a 404 that would
   // pass for the right reason by accident.
   await writeFile(join(parent, 'outside.html'), OUTSIDE_HTML);
-  await mkdir(join(parent, 'dashboard-web-evil'), { recursive: true });
-  await writeFile(join(parent, 'dashboard-web-evil', 'secret.html'), SIBLING_HTML);
+  await mkdir(join(parent, 'client-evil'), { recursive: true });
+  await writeFile(join(parent, 'client-evil', 'secret.html'), SIBLING_HTML);
 
   server = createDashboardServer({
     port: 0,
@@ -141,8 +141,8 @@ describe('dashboard server — path traversal', () => {
   it.each([
     ['%2e%2e%2foutside.html'],
     ['..%2foutside.html'],
-    ['%2e%2e%2fdashboard-web-evil%2fsecret.html'],
-    ['..%2fdashboard-web-evil%2fsecret.html'],
+    ['%2e%2e%2fclient-evil%2fsecret.html'],
+    ['..%2fclient-evil%2fsecret.html'],
   ])('404s the encoded escape /%s', async (path) => {
     const r = await fetch(`${base}/${path}`);
     expect(r.status).toBe(404);
@@ -170,7 +170,7 @@ describe('dashboard server — path traversal', () => {
 });
 
 describe('resolveBundlePath', () => {
-  const root = '/srv/app/dist/dashboard-web';
+  const root = '/srv/app/dist/client';
 
   it('maps / and an empty path to index.html', () => {
     expect(resolveBundlePath(root, '/')).toBe(`${root}/index.html`);
@@ -192,10 +192,8 @@ describe('resolveBundlePath', () => {
   it('rejects a SIBLING directory that merely shares the root prefix', () => {
     // The case `resolved.startsWith(root)` passes and containment does not:
     // no `..` remains after normalisation, and the string prefix matches.
-    expect(resolveBundlePath(root, '/../dashboard-web-evil/secret.html')).toBeNull();
-    expect(
-      resolveBundlePath('/srv/app/dist/dashboard-web', '/../dashboard-web.bak/x.js'),
-    ).toBeNull();
+    expect(resolveBundlePath(root, '/../client-evil/secret.html')).toBeNull();
+    expect(resolveBundlePath('/srv/app/dist/client', '/../client.bak/x.js')).toBeNull();
   });
 
   it('rejects the root directory itself', () => {

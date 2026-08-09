@@ -40,7 +40,6 @@
  * told apart from an Alpaca-sourced bar and re-derived from the primary
  * later.
  */
-
 import { fetchWithTimeout, type TokenBucket, truncateForError } from '../../../shared/index.js';
 import type { Bar } from '../index.js';
 import { closeTimeOf, isDailyTimeframe, timeframeToMs } from '../index.js';

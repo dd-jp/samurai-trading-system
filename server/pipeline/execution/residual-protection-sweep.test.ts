@@ -5,7 +5,6 @@
  * `SqliteExecutionStore` on the SAME database handle — everything in-memory
  * is gone, everything durable survives.
  */
-
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import type { Clock, Fill, Logger, OpenPosition } from '../../shared/index.js';
 import { recordingLogger } from '../../shared/recording-logger.js';

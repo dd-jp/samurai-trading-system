@@ -82,7 +82,6 @@
  * answer, so #366 resolved it from `SAMURAI_ALERTS` like the outbound four and
  * the `feedback` block below names no transport either.
  */
-
 import type { RateLimitConfig } from '../../pipeline/debate-engine/index.js';
 import type { ExecutionConfig } from '../../pipeline/execution/index.js';
 import type { FeedbackConfig, TunableDial } from '../../pipeline/feedback-loop/index.js';
