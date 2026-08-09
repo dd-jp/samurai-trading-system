@@ -4,7 +4,7 @@
 
 Research for GitHub issue [#483](https://github.com/dd-jp/samurai-trading-system/issues/483) (child of wayfinder map [#482](https://github.com/dd-jp/samurai-trading-system/issues/482), "free 5-year historical OHLCV for the MVP universe — revisit Polygon paid decision").
 
-Supersedes the equities half of [#155](https://github.com/dd-jp/samurai-trading-system/issues/155) / `03-historical-data-vendor-options.md`. Crypto leg is [#484](https://github.com/dd-jp/samurai-trading-system/issues/484) — **not** covered here.
+Supersedes the equities half of [#155](https://github.com/dd-jp/samurai-trading-system/issues/155) / `2026-07-21-historical-data-vendor-options.md`. Crypto leg is [#484](https://github.com/dd-jp/samurai-trading-system/issues/484) — **not** covered here.
 
 Probes run 2026-08-06 against live endpoints.
 

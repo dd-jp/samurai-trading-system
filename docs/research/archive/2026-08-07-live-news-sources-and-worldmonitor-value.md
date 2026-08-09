@@ -22,7 +22,7 @@
 
 ## 1. What WorldMonitor actually is in our architecture
 
-Per `04-worldmonitor-as-mi-source.md` §1.3, WorldMonitor is explicitly **not**:
+Per `2026-07-22-worldmonitor-as-mi-source.md` §1.3, WorldMonitor is explicitly **not**:
 
 - ticker-specific financial news (no SEC filings, earnings, company PR),
 - per-item sentiment scoring,
@@ -193,4 +193,4 @@ Self-host over **REST**, pinned to a specific image tag, on a box whose resource
 
 - **Correct `worldmonitor-adapter-parked` memory** — its "60+ data subscriptions" rationale is false (done alongside this doc).
 - **ADR-0002 needs revisiting** if self-hosting is ever adopted: §1 (never self-hosted), §2 (tier/price — both the price and the access shape are wrong), §4 (single-maintainer risk is stale: the repo has multiple active contributors and was pushed to on 2026-08-07). Offer an ADR; do not edit the accepted record.
-- **`04-worldmonitor-as-mi-source.md`** states "$39.99/mo Pro or $99.99/mo API Starter" and "do NOT self-host." Both premises are superseded by this document; leave the file as the historical record and cite this one.
+- **`2026-07-22-worldmonitor-as-mi-source.md`** states "$39.99/mo Pro or $99.99/mo API Starter" and "do NOT self-host." Both premises are superseded by this document; leave the file as the historical record and cite this one.

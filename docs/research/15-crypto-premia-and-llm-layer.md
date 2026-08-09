@@ -1,4 +1,4 @@
-# Crypto Premia & LLM Layer — Opportunity and Measurement (16)
+# Crypto Premia & LLM Layer — Opportunity and Measurement
 
 **Date:** 2026-08-08
 **Relates to:** [`archive/2026-08-07-edge-hypothesis-evaluation.md`](archive/2026-08-07-edge-hypothesis-evaluation.md), [`11-trend-signal-measurement.md`](11-trend-signal-measurement.md)

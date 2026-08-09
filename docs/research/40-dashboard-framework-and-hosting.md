@@ -410,9 +410,12 @@ All retrieved 2026-08-06. ADR-0008's cap is **$50 per 14 days**, verified by rea
 `docs/adr/0008-llm-spend-cap.md` on branch `worktree-semi-auto-readiness`
 ([PR #428](https://github.com/dd-jp/samurai-trading-system/pull/428)) — David's words, quoted there:
 *"for paper trading lets keep 50$ / 14 day budget."* Both ADR-0007 and ADR-0008 live on that branch
-and are **not yet merged to `main`**, so `docs/adr/` on `main` still ended at 0006 when this was written (it now ends at 0011). That also means
-**the ADR number proposed in §8 must be re-checked before it is written** — 0009 is only free once
-#428 merges.
+and were **not yet merged to `main`** when this was written, so `docs/adr/` on `main` still ended at
+0006. That also meant **the ADR number proposed in §8 had to be re-checked before it was written**.
+
+> **Resolved since.** #428 merged; `docs/adr/` now ends at 0011. The number 0009 was taken by
+> `0009-single-provider-nous.md`, so the dashboard decision landed as
+> [ADR-0010](../adr/0010-dashboard-vite-react-rewrite.md) — see the note at the end of §8.
 
 | option | recurring cost | fits the $50/14d cap? |
 |---|---|---|

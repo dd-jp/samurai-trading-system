@@ -8,7 +8,7 @@ Scope discipline: `docs/reviews/code-quality-2026-08-05.md` and `spec-conformanc
 
 ## Premise correction: the Polygon subscription
 
-The review was commissioned partly on the premise "we pay $49/mo for Polygon pro to fetch 5-year data." Verified against in-repo probes (`docs/research/archive/2026-08-05-stage2-verdict-first-real-run.md:54-66`, `09-…:127-140`, both 2026-08-05):
+The review was commissioned partly on the premise "we pay $49/mo for Polygon pro to fetch 5-year data." Verified against in-repo probes (`docs/research/archive/2026-08-05-stage2-verdict-first-real-run.md:54-66`, `docs/research/archive/2026-08-05-stage2-cost-decomposition.md:127-140`, both 2026-08-05):
 
 - The key serves **2-year** history on both asset classes — free-tier depth. A 3-year request returns `{"status":"NOT_AUTHORIZED","message":"Your plan doesn't include this data timeframe."}`.
 - There are **zero scheduled Polygon data calls** in the codebase. Total data load: 6 requests per manual Stage-2 script run (`run-stage2.ts`, no npm script, hand-invoked).

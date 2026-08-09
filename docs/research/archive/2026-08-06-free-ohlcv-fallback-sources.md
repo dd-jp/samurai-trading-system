@@ -196,14 +196,14 @@ Any "TradingView data" one sees in the wild comes from reverse-engineering their
 
 ### 5. Already ruled out by #483 — not re-probed
 
-Tiingo (free tier "Internal Use Only" licence, a live problem given the dashboard component), Alpha Vantage (25 req/day), EODHD (20 calls/day), Finnhub (unverified, pricing page would not render). See `free-equities-ohlcv-2026-08-06.md`.
+Tiingo (free tier "Internal Use Only" licence, a live problem given the dashboard component), Alpha Vantage (25 req/day), EODHD (20 calls/day), Finnhub (unverified, pricing page would not render). See `2026-08-06-free-equities-ohlcv.md`.
 
 ---
 
 ## Corrections this research forces on map #482
 
 1. **"Polygon/Massive API key is still an unprovisioned precondition" is wrong.** The key is provisioned and works. It is free tier — 2y window, 5 req/min, PROBED. It is a usable fallback today.
-2. The #483 and #484 writeups (`docs/research/archive/2026-08-06-free-equities-ohlcv.md`, `free-crypto-ohlcv-2026-08-06.md`) are **not on `main`** — they live on the unmerged branches `origin/worktree-wayfinder-483-free-equities-ohlcv` and `origin/worktree-wayfinder-484-free-crypto-ohlcv`. Anyone reading `docs/research/` on `main` will not find the evidence the map's decisions cite.
+2. The #483 and #484 writeups (`docs/research/archive/2026-08-06-free-equities-ohlcv.md`, `2026-08-06-free-crypto-ohlcv.md`) are **not on `main`** — they live on the unmerged branches `origin/worktree-wayfinder-483-free-equities-ohlcv` and `origin/worktree-wayfinder-484-free-crypto-ohlcv`. Anyone reading `docs/research/` on `main` will not find the evidence the map's decisions cite.
 
 ---
 

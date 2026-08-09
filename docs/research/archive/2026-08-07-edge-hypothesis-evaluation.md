@@ -3,7 +3,7 @@
 > **ARCHIVED — superseded by [`12-edge-hypothesis-critique.md`](../12-edge-hypothesis-critique.md),** which folds in the audit corrections. Do not execute the gate list below verbatim; see the errata banner already in the body.
 
 **Date:** 2026-08-07
-**Supersedes / relates to:** [`13-trend-signal-measurement-2026-08-07.md`](../11-trend-signal-measurement.md)
+**Supersedes / relates to:** [`../11-trend-signal-measurement.md`](../11-trend-signal-measurement.md)
 **Parent report:** `~/Documents/Obsidian/research/most-profitable-trading-algorithm-edge-hypothesis-2026-08-07-report.md` — **local-only, outside this repo**; the path resolves on the owner's machine and nowhere else.
 
 > **⚠ Errata — 2026-08-08. Do not execute the gate list below verbatim.**

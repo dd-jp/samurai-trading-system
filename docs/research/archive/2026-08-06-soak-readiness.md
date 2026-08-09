@@ -24,7 +24,7 @@ Budget and cadence match ADR-0008 exactly: $50 over 14 days at a 15-minute caden
 
 ### 1. The soak will measure a system whose mechanical layer has no demonstrated edge
 
-The Stage 2 re-run (`11-stage2-verdict-post-405-2026-08-06.md`) came back **KILL/INCOMPLETE**, and this time not on a technicality: MinBTL now passes because the grid is sized to the sample, and it still fails PBO (0.85 stocks / 0.55 crypto against a 0.05 line) and DSR (0.36 / 0.39).
+The Stage 2 re-run (`2026-08-06-stage2-verdict-post-405.md`) came back **KILL/INCOMPLETE**, and this time not on a technicality: MinBTL now passes because the grid is sized to the sample, and it still fails PBO (0.85 stocks / 0.55 crypto against a 0.05 line) and DSR (0.36 / 0.39).
 
 That verdict is about the **proxy** strategy — a moving-average cross that exists to exercise the cost model and replay harness — not about the LLM debate pipeline the soak actually runs. No backtest can host that pipeline (ADR-0001). So the soak is not invalidated by it.
 
