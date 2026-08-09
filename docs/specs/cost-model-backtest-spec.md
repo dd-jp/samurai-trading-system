@@ -306,7 +306,7 @@ interface MetricsSuite {                  // reported together — never one num
 
 **The strategy / market model itself** — the harness evaluates strategies; it does not contain one (CONTEXT.md invariant).
 
-**FL's cadence, breach-response, and kill/rework flow** — FL owns the live cadence and the human-owned kill decision; this component provides the primitives FL calls. No duplication of cadence logic here.
+**FL's cadence, breach-response, and kill/rework flow** — FL owns the live cadence and the kill decision; this component provides the primitives FL calls. No duplication of cadence logic here. *(Amended 2026-08-09 by [ADR-0012](../adr/0012-no-human-gate-anywhere.md): the kill is no longer "human-owned". Nothing about this component's ownership boundary changes — only the actor on FL's side of it.)*
 
 **Execution / broker order placement** — the real Kraken/IBKR adapters, partial fills, retries, and idempotent order IDs live in Execution (uncharted). This component defines the `CostModel.fill` seam the **simulated** adapter uses, not the adapter itself.
 

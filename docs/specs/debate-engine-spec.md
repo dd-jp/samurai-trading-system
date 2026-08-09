@@ -412,10 +412,12 @@ Semantic conflict detection runs once per debate via LLM call. This is a core co
 
 The hard cap ensures debates don't block trading indefinitely. When `converged: false`, downstream components should:
 - **Trader**: may still produce a recommendation, but with lower confidence
-- **Risk Manager**: may apply tighter limits or require manual approval
-- **Verdict**: may defer execution or require human review
+- **Risk Manager**: may apply tighter limits
+- **Verdict**: may no-go on its own gates
 
 This is a feature, not a bug — it surfaces uncertainty rather than hiding it.
+
+*Amended 2026-08-09.* This list originally routed a non-converged debate to "manual approval" (Risk) and "human review" (Verdict). Neither exists: [ADR-0007](../adr/0007-fully-automatic-execution.md) removed the trade-approval gate in paper and live, and [ADR-0012](../adr/0012-no-human-gate-anywhere.md) removed every remaining human gate. A non-converged debate must therefore be handled by a **mechanical** response — the Trader's existing non-convergence haircut is that response — not deferred to a person. What survives unchanged is the principle: non-convergence propagates as reduced size, not as a hidden certainty.
 
 ### Future Extensions
 

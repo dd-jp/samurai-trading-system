@@ -4,6 +4,14 @@
 **Owner:** David (Deepak)  
 **Date:** 2026-07-13
 
+> **[ADR-0012](../adr/0012-no-human-gate-anywhere.md) (2026-08-09) removed every remaining human gate.** Three changes to this spec, superseding the language below wherever it conflicts:
+>
+> 1. **Risk-threshold loosening applies without approval.** `loosen_pending_approval[]` is no longer a gate. Every dial change is applied, logged and reversible.
+> 2. **The hard bounds survive and are the control.** `human-set hard floors/ceilings` (story 6) and "hard bounds never crossed" stay, enforced in code — a loosening that would cross one is rejected, not queued. The surviving asymmetry is that loosening is bounded where tightening is free, not that one waits on a person.
+> 3. **The kill/rework call is no longer human.** Under full automation nobody owns it. A kill-threshold breach must produce a mechanical response — defensive auto-tighten, and a halt if it persists — rather than an alert that waits for a decision.
+>
+> **Alerting must survive this.** `approvals: ApprovalChannel` (below) is one field doing two jobs — gated loosening *and* breach alerts. Only the first is removed. Under full automation the breach alert is the sole way an operator learns the edge died, so the notification half must be split out and kept.
+
 ## Problem Statement
 
 The pipeline makes decisions but never learns from whether they were right. Analyst weights sit static, so a consistently-wrong lens keeps its say and a quietly-correct one never earns more; the cosine setup store fills with setups that have no outcomes attached; and no one is watching whether the strategy's live performance still resembles its backtest — the exact drift (edge decay, regime change, creeping overfitting) that turns a working system into a losing one silently.

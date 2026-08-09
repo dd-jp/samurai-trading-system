@@ -50,7 +50,7 @@ Reconciles the accumulated additions from all 10 specs + the 3 newly-charted com
   - `MetricsReport.daily` **= `MetricsSuite`** (Sharpe, Sortino, Calmar, max_drawdown, profit_factor, expectancy, skew, kurtosis, turnover, exposure).
   - `MetricsReport.revalidation` = the library's DSR/PBO/walk-forward output.
   - `MetricsReport.breaches` stays FL-only.
-- **FL owns cadence + breach-response + human-owned kill; the library owns the math.** No duplication.
+- **FL owns cadence + breach-response + the kill decision; the library owns the math.** No duplication. *(Amended 2026-08-09 by [ADR-0012](../adr/0012-no-human-gate-anywhere.md): the kill is no longer "human-owned" — under full automation nobody owns it, so a breach must produce a mechanical response rather than an alert awaiting a decision.)*
 - **`config_trials` log** (shared SQLite): N = **distinct configs evaluated for selection**, keyed by config hash. Re-runs and in-bounds FL auto-tuning do NOT increment N. FL revalidation reads frozen N, never appends. Getting this wrong makes DSR/PBO/MinBTL kill healthy strategies by construction.
 
 ## 6. `CostModel.fill` ↔ `SimulatedBrokerAdapter` ↔ `MarketState`
@@ -164,3 +164,25 @@ The prior sweep above ran BEFORE the Orchestrator and CLI specs existed and befo
 - **Re-checked, FALSE ALARMS (no action needed):** audit-trail ownership (Verdict logs its own decision per its own spec; the Orchestrator's `audit_log` table is the one persisted store, no double-ownership — cli-spec.md's "audit_log filtered to stage=verdict" is correct, not a papered-over conflict); GAP-F rename (fully applied, single-source field mapping); GAP-E/G (both confirmed present in current spec text, not just propagation-log checkmarks).
 
 **All 12 specs now cross-verified against each other, including Orchestrator and CLI.**
+
+---
+
+## Live findings register (opened 2026-08-09)
+
+The three dated `cross-verify-*.md` passes previously held findings with no living home; they sat in `docs/specs/` and were never drained. All 17 were re-verified on 2026-08-09 — 4 had been resolved, 13 were still live — and consolidated into [`../reviews/cross-verify-2026-08-09.md`](../reviews/cross-verify-2026-08-09.md). The passes themselves moved to `docs/reviews/`, preserved verbatim.
+
+**This section is the register from now on.** New cross-spec findings land here; the dated pass record is the run log, not the tracker.
+
+| ID | Sev | Finding | Issue |
+|---|---|---|---|
+| CV-15 | **BLOCKING (live path)** | With ADR-0012 removing every human gate, the numeric thresholds are the only remaining control — and both `risk-manager-spec.md` and `cost-model-backtest-spec.md` still expose them as unclamped config. A config edit is now the whole distance to an arbitrary risk limit | [#638](../../issues/638) |
+| CV-14 | HIGH | `feedback-loop-spec.md:91`'s `approvals: ApprovalChannel` does two jobs — gated loosening *and* breach alerts. Removing the gate must not remove the alert, the only way an operator learns the edge died | [#639](../../issues/639) |
+| CV-2 | HIGH | `risk-manager-spec.md` states no behaviour on upstream read failure, in the stage billed "must be trusted absolutely under stress" | [#640](../../issues/640) |
+| CV-6 | MEDIUM | `stale_feed` gate described as live by `market-data-service-spec.md` and this registry §3; absent from `verdict-spec.md` | [#641](../../issues/641) |
+| CV-4, CV-5 | MEDIUM | `risk-manager-spec.md:11`/`:77` claim "fully mechanical, no LLM" / "fully deterministic" while the spec's own Risk Critic (ADR-0003) makes a binding LLM call | [#642](../../issues/642) |
+| CV-9, CV-10, CV-11 | MEDIUM | Three stale/self-inconsistent passages in `trader-spec.md`: fields "must be reconciled" that already were; position-aware branching as MVP when [#224](../../issues/224) deferred it; a `flip` routing case tested but absent from `intent_type` | [#643](../../issues/643) |
+| CV-7, CV-8, CV-13 | LOW | Shared-type drift: `Direction` undefined at spec level (code has it); `ClosedTrade` promised as a dashboard read that does not exist; `AlpacaClient` name collision; `DateRange` consumed by three specs and defined by none; no transport↔`BrokerAdapter` cross-reference | [#644](../../issues/644) |
+| CV-1 | LOW | `mode` unions omit `'paper'` in three specs while `execution-spec.md:103` includes it. Downgraded 2026-08-09 — ADR-0012 made breaker re-arm mode-independent, so this is type accuracy, not a safety fork | [#644](../../issues/644) |
+| CV-12, CV-17 | LOW | `risk-manager-spec.md` stale "v1 static concentration buckets"; `TELEGRAM_ALLOWED_USER_IDS` validated at boot for a gate that cannot fire | [#644](../../issues/644) |
+
+**Closed in the same pass, not filed:** CV-16 (two specs still routing decisions to a human — fixed directly, since an accepted ADR makes them factually wrong). **Moot:** the 2026-07-26 `ApprovalChannel` authn finding — nothing authorises a decision any more, though CV-14 keeps the channel alive for alerting. **Re-affirmed clean:** `execution-spec.md:316`'s broker-cutover manual sign-off, which is an infrequent operator action outside the tick loop and survives ADR-0007 and ADR-0012 on its own stated reasoning.
