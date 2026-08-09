@@ -86,13 +86,13 @@ The crypto pair is out of the screener's reach entirely: BTC-USD and ETH-USD are
 
 ### Naming — the Universe Selector is not "Stage 0"
 
-The map inherits the label "Stage 0" from `docs/research/17-universe-manipulation-guardrails.md`, and it collides. `CONTEXT.md` already uses Stage 0 for the **data layer** — Market Intelligence is "the news/sentiment half of the Stage 0 data layer" and the Market Data Service is "a dedicated Stage 0-level data layer, parallel to Market Intelligence". `src/market-data-service/types.ts` says the same in code.
+The map inherits the label "Stage 0" from `docs/research/17-universe-manipulation-guardrails.md`, and it collides. `CONTEXT.md` already uses Stage 0 for the **data layer** — Market Intelligence is "the news/sentiment half of the Stage 0 data layer" and the Market Data Service is "a dedicated Stage 0-level data layer, parallel to Market Intelligence". `server/providers/market-data-service/types.ts` says the same in code.
 
 Resolved: **the Universe Selector is not a pipeline stage at all.** It runs *between* sessions, not inside a tick, and produces configuration for the next session rather than a decision within one. It is the **pre-session selector**; the pipeline it feeds still starts at Stage 0's data layer. `CONTEXT.md` gains the term with this disambiguation.
 
 ### Module and entrypoint
 
-A new `src/universe-selector/` module with a `yarn screener` entrypoint, scheduled out of hours by launchd. It is a batch program, not a service: it reads bars, ranks, writes a watchlist, exits. It holds no state between runs beyond the watchlist itself.
+A new `server/pipeline/universe-selector/` module with a `yarn screener` entrypoint, scheduled out of hours by launchd. It is a batch program, not a service: it reads bars, ranks, writes a watchlist, exits. It holds no state between runs beyond the watchlist itself.
 
 ### The selection pipeline (#398)
 
@@ -122,7 +122,7 @@ Both the weights and the quartile threshold are config, and **the shortlist must
 
 Three axes, all computable from daily bars: **volatility** (ATR as a percentage of price), **gap/momentum**, and **range position**.
 
-ATR already exists but is **not reachable**: `atr()` in `src/market-data-service/indicators.ts` is module-private, and the public surface is `computeIndicator(bars, spec)` / `minimumBarsFor(spec)` with `'atr'` as an indicator kind. Two options, and the choice matters for consistency rather than effort:
+ATR already exists but is **not reachable**: `atr()` in `server/providers/market-data-service/indicators.ts` is module-private, and the public surface is `computeIndicator(bars, spec)` / `minimumBarsFor(spec)` with `'atr'` as an indicator kind. Two options, and the choice matters for consistency rather than effort:
 
 - **Preferred:** export the existing implementation (or call it through `computeIndicator`), so the screener and the live Trader compute ATR identically. The live path's ATR feeds bracket construction; a screener that ranked on a *different* ATR would be selecting for something the trader does not see.
 - **Rejected:** reimplement ATR inside the selector. Cheap now, and guarantees the two drift.
@@ -151,7 +151,7 @@ The pool is **load-bearing for routing, not just an input to scoring**. `AssetCl
 
 Pool size is a config value (S&P 100 for v1) so the S&P 500 is a later dial. Nothing above the pool cares which index it is.
 
-**`InstrumentRegistry` is not reused.** The port at `src/cost-model-backtest/universe.ts` answers a different question — `membershipDuring(window)` is *point-in-time* membership for survivorship-free backtesting, paired with `SurvivorshipViolationError`. The live pool is a present-tense list with no window and no survivorship assertion. Reusing the port would force a fake window argument and inherit a guard that means nothing here.
+**`InstrumentRegistry` is not reused.** The port at `server/tools/backtest/universe.ts` answers a different question — `membershipDuring(window)` is *point-in-time* membership for survivorship-free backtesting, paired with `SurvivorshipViolationError`. The live pool is a present-tense list with no window and no survivorship assertion. Reusing the port would force a fake window argument and inherit a guard that means nothing here.
 
 ### The active list and rotation (#399)
 

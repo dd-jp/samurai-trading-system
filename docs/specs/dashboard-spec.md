@@ -105,7 +105,7 @@ Driven by `invalidation_log`, joined on `(instrument, bar_timestamp)`. Showing d
 
 ### Providers & LLM Spend
 
-**This section documents shipped code that predated it** (retro-documented 2026-08-06). `providers` and `llm_spend` have been on `DashboardSnapshot` since [#326](https://github.com/dd-jp/samurai-trading-system/issues/326)/[#367](https://github.com/dd-jp/samurai-trading-system/issues/367) (`src/dashboard/provider-status.ts`, `src/dashboard/types.ts`) while this spec still described four views and no spend surface. Written down so the spec stops understating what the page shows — particularly with [ADR-0008](../adr/0008-llm-spend-cap.md)'s $50/14-day cap live, which makes the spend surface a budget instrument, not a curiosity.
+**This section documents shipped code that predated it** (retro-documented 2026-08-06). `providers` and `llm_spend` have been on `DashboardSnapshot` since [#326](https://github.com/dd-jp/samurai-trading-system/issues/326)/[#367](https://github.com/dd-jp/samurai-trading-system/issues/367) (`server/apps/service-api/provider-status.ts`, `server/apps/service-api/types.ts`) while this spec still described four views and no spend surface. Written down so the spec stops understating what the page shows — particularly with [ADR-0008](../adr/0008-llm-spend-cap.md)'s $50/14-day cap live, which makes the spend surface a budget instrument, not a curiosity.
 
 17. As an operator, I want my live Alpaca account balance on the page, so that I can see the broker's own view of equity without opening Alpaca.
 18. As an operator, I want to know whether Polygon is reachable, so that a dead market-data key is visible as itself rather than as an inexplicably quiet pipeline.
@@ -339,7 +339,7 @@ function buildSnapshot(store: DashboardQueryStore, asOf: Date): DashboardSnapsho
 
 ### Module: Provider Status & LLM Spend
 
-**Retro-documented from shipped code** (`src/dashboard/provider-status.ts`, `LlmSpendSummary`/`LlmSpendWindow`/`LlmPerDebateStats` in `src/dashboard/types.ts`).
+**Retro-documented from shipped code** (`server/apps/service-api/provider-status.ts`, `LlmSpendSummary`/`LlmSpendWindow`/`LlmPerDebateStats` in `server/apps/service-api/types.ts`).
 
 **Three providers, three different shapes — because the facts differ, not for presentational convenience.**
 
@@ -362,15 +362,15 @@ function buildSnapshot(store: DashboardQueryStore, asOf: Date): DashboardSnapsho
 
 **The `Anthropic` label dies with the old UI.** v1's rendered tile header read `Anthropic · spend 24h`, naming a provider this system no longer talks to since [ADR-0009](../adr/0009-single-provider-nous.md) moved all LLM traffic to **Nous** — a known, untracked follow-up that this spec sentence was the closest thing to a ticket for. The v2 spend panel is written from scratch and must not carry the word forward; the doc comments in `types.ts` that still say "Anthropic" remain a separate mechanical rename. The numbers were always correct; only the word was wrong.
 
-### Module: Web client (`src/dashboard-web/`)
+### Module: Web client (`client/`)
 
 **Responsibilities**
 - Render the mission-control screen from `DashboardSnapshot`, and nothing else. It holds no domain logic: every number it shows is computed server-side.
 
 **Structure**
-- **Vite + React**, output to `dist/dashboard-web/` with a relative `base` so the bundle is servable from disk without a path prefix.
-- `react`, `react-dom`, `vite`, `@vitejs/plugin-react`, the `@fontsource` packages and the test tooling are **devDependencies**. `dependencies` remains exactly `better-sqlite3`. The build becomes `tsc && vite build`; `src/dashboard-web/` is excluded from `tsconfig.build.json` and owns its own tsconfig.
-- **`src/lib/` is pure and React-free** — this is where the client's real logic lives and where it is tested:
+- **Vite + React**, output to `dist/client/` with a relative `base` so the bundle is servable from disk without a path prefix.
+- `react`, `react-dom`, `vite`, `@vitejs/plugin-react`, the `@fontsource` packages and the test tooling are **devDependencies**. `dependencies` remains exactly `better-sqlite3`. The build becomes `tsc && vite build`; `client/` falls outside `tsconfig.build.json`'s `include` (`server/` + `contracts/`) and owns its own tsconfig. It needs no `exclude` entry — being a sibling of `server/` rather than a directory inside it is what removed the need.
+- **`client/src/lib/` is pure and React-free** — this is where the client's real logic lives and where it is tested:
   - `room-layout.ts` — which room a lane occupies (a `live` cell wins outright; otherwise the furthest `done`/`stopped` stage; otherwise the Lobby), stable slot assignment within a room across polls, and the `>3 → +N` collapse.
   - `walk-plan.ts` — `computeWalkPlan(prev, next, opts)` implementing the Motion rules as a pure function of two snapshots. Every rule in the Motion section is a test case here.
   - `ledger.ts` — settle detection, `trace_id` dedupe, ordering, the 30-entry cap, and first-paint seeding.
@@ -403,9 +403,9 @@ interface DashboardServer {
 }
 ```
 
-- Two `GET` surfaces: the static bundle in `dist/dashboard-web/` (`/` → `index.html`, plus hashed JS/CSS/font assets) and `/api/snapshot` → `buildSnapshot(store, new Date())` as JSON. Everything else → `404`.
+- Two `GET` surfaces: the static bundle in `dist/client/` (`/` → `index.html`, plus hashed JS/CSS/font assets) and `/api/snapshot` → `buildSnapshot(store, new Date())` as JSON. Everything else → `404`.
 - The static handler is hand-rolled (~30 lines): resolve the request path against the bundle root and **reject anything that is not contained by it**, plus a small content-type map (`html`, `js`, `css`, `svg`, `woff2`, `map`). Serving files from disk is the one genuinely new attack surface v2 introduces, and the guard is a required test, not a nicety.
-  - **Containment, not string prefix.** `resolved.startsWith(root)` is *not* the check: it accepts any sibling directory whose name merely begins with the root's, so a `dist/dashboard-web-evil/` next to `dist/dashboard-web/` escapes the bundle without using a single `..` segment. Use `!path.relative(root, resolved).startsWith('..')` — or a prefix check against `root + path.sep` — which asks about directory containment rather than about characters. See [ADR-0010](../adr/0010-dashboard-vite-react-rewrite.md).
+  - **Containment, not string prefix.** `resolved.startsWith(root)` is *not* the check: it accepts any sibling directory whose name merely begins with the root's, so a `dist/client-evil/` next to `dist/client/` escapes the bundle without using a single `..` segment. Use `!path.relative(root, resolved).startsWith('..')` — or a prefix check against `root + path.sep` — which asks about directory containment rather than about characters. See [ADR-0010](../adr/0010-dashboard-vite-react-rewrite.md).
 - Any non-`GET` method to a known path → `405` (not a silent `404`), so a misuse is obvious in dev tools. No `POST`/`PUT`/`DELETE` handlers exist by construction — the write-path exclusion is structural, not a convention.
 - Built on Node's built-in `http` module — **no new runtime dependency**; the bundle is bytes on disk, and the framework that produced it exists only at build time.
 - `host` defaults to `127.0.0.1`; set via `HOST` env var to opt into LAN reachability. `port` defaults to `8787`, via `PORT` env var.
@@ -425,11 +425,11 @@ Non-negotiable, and unchanged in spirit from v1 — the screen got more visual, 
 ## Testing Decisions
 
 - **Server seam: `buildSnapshot`.** Good tests assert on the *returned snapshot given fixed `DashboardQueryStore` data* (e.g., a fake store returning two open positions produces two `PositionRow`s with correct PnL), not on HTTP internals or real database state.
-- **Client seam: `src/dashboard-web/src/lib/`.** The walk plan, room layout and ledger are pure functions of two snapshots and are tested without a DOM: first-paint snap, single hop, multi-hop skipping an unrecorded stage, trace rotation via Analysts, appear/depart, duration clamps and the 1.2 s budget, ledger dedupe/cap/ordering/seeding, room precedence (live wins → furthest → Lobby), stable slots across polls, `+N` collapse.
+- **Client seam: `client/src/lib/`.** The walk plan, room layout and ledger are pure functions of two snapshots and are tested without a DOM: first-paint snap, single hop, multi-hop skipping an unrecorded stage, trace rotation via Analysts, appear/depart, duration clamps and the 1.2 s budget, ledger dedupe/cap/ordering/seeding, room precedence (live wins → furthest → Lobby), stable slots across polls, `+N` collapse.
 - **Component tests (RTL)** cover what a screenshot cannot: chip `aria-label` wording, ledger dedupe as rendered, the HITL badge, drawer empty-state wording, the stale banner, and a hostile instrument string rendering inert.
-- **Server tests** assert on HTTP status/body for each route (`GET /`, a bundle asset, `GET /api/snapshot`, unknown path, non-`GET` method) and on the **static containment guard** against an injected fake store — no real network dependency beyond binding to an ephemeral port (`port: 0`). Two escapes must both be covered: `..`/percent-encoded-`..` traversal, **and** a sibling directory whose name shares the bundle root's prefix (`dist/dashboard-web-evil/`). The second is the one a naive `startsWith` passes the first test while remaining open to, so a suite that only tests `..` proves nothing about it.
+- **Server tests** assert on HTTP status/body for each route (`GET /`, a bundle asset, `GET /api/snapshot`, unknown path, non-`GET` method) and on the **static containment guard** against an injected fake store — no real network dependency beyond binding to an ephemeral port (`port: 0`). Two escapes must both be covered: `..`/percent-encoded-`..` traversal, **and** a sibling directory whose name shares the bundle root's prefix (`dist/client-evil/`). The second is the one a naive `startsWith` passes the first test while remaining open to, so a suite that only tests `..` proves nothing about it.
 - **`QueryStore` implementation** is tested against a real (test) SQLite instance seeded with rows matching the other components' own fixture patterns — reuses their existing test data shapes, no new schema.
-- **Offline check is part of acceptance:** the built bundle contains no external URL. A grep for `https://` over `dist/dashboard-web/` is the crude version; the network panel showing zero third-party requests is the real one.
+- **Offline check is part of acceptance:** the built bundle contains no external URL. A grep for `https://` over `dist/client/` is the crude version; the network panel showing zero third-party requests is the real one.
 - No end-to-end trading test needed — this component cannot affect trading outcomes by construction (read-only).
 
 ## Out of Scope
@@ -454,6 +454,6 @@ Two architectural reversals ride with this rewrite and are recorded as ADRs rath
 
 This closes OPEN-GAP-B (docs/specs/cross-spec-contracts.md) — the Dashboard is the 12th and final charted/specced component. It has zero write-path risk by construction, so it can be implemented and iterated on independently of the trading-critical components without affecting their correctness.
 
-**Supersedes the CLI spec (2026-07-14).** OPEN-GAP-B originally resolved to a terminal CLI, explicitly declining a web dashboard. That decision was reversed on 2026-07-21 after `src/dashboard/` was built ahead of any map or spec (discovered during a project health check) and grilled to a decision: the dashboard replaces the CLI rather than complementing it, since it subsumes every read the CLI provided with better ergonomics. `src/cli/` (render functions + types, tested, but with a placeholder entry point never wired to a runnable command) was removed in that change. This file was `cli-spec.md`, renamed and rewritten in place, then rewritten again here for v2.
+**Supersedes the CLI spec (2026-07-14).** OPEN-GAP-B originally resolved to a terminal CLI, explicitly declining a web dashboard. That decision was reversed on 2026-07-21 after `src/dashboard/` (now `server/apps/service-api/`) was built ahead of any map or spec (discovered during a project health check) and grilled to a decision: the dashboard replaces the CLI rather than complementing it, since it subsumes every read the CLI provided with better ergonomics. `src/cli/` (render functions + types, tested, but with a placeholder entry point never wired to a runnable command) was removed in that change. This file was `cli-spec.md`, renamed and rewritten in place, then rewritten again here for v2.
 
 **WorldMonitor Deferred-Shell Contract (#177 resolution), now discharged.** The pattern — reserve a live-updating region's slot before its async data arrives, rather than reflowing the layout when it does — is exactly what the rooms grid, the telemetry strip and the bento panels do: the grid is drawn at full size from first paint, empty rooms and unavailable tiles included, and data fills reserved space. A poll must never change the page's geometry.

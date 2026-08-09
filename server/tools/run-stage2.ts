@@ -1,0 +1,548 @@
+/**
+ * Stage 2 runner (ticket #266) — see
+ * docs/specs/stage2-validation-execution-spec.md and wayfinder map #154
+ * (decisions #155/#157). One-shot (re-runnable) glue: ingests real Polygon
+ * OHLCV for the MVP universe, runs the 12-config grid across stock and
+ * crypto asset classes, and renders the Stage 2 overfitting verdict.
+ *
+ * **Ops/setup, not new design.** Every seam this wires already exists and is
+ * tested (`Stage2HistoricalStore` #241, `ReplayDriver` #243, `runTrialGrid`
+ * #244, `renderStage2Verdict` #245). `HttpPolygonClient` (#266,
+ * `../cost-model-backtest/http-polygon-client.js`) is the one new piece of
+ * logic this file's neighbor supplies; this file only sequences calls.
+ *
+ * **Not exercised against live Polygon traffic.** This sandboxed environment
+ * has no network access, so the real ~5-year, 6-symbol ingestion this script
+ * is built to run has never actually executed here. `runStage2` is unit-
+ * tested against a fake `PolygonClient` (`run-stage2.test.ts`) to verify the
+ * wiring/typechecking is correct; running it for real against Polygon and
+ * producing a written Stage 2 verdict is a follow-up manual/ops step — see
+ * #245's still-open AC2/4/5, which this ticket does not attempt to close.
+ *
+ * Usage: `POLYGON_API_KEY=... npx tsc -p tsconfig.build.json && node dist/server/tools/run-stage2.js`
+ * (or wire an `npm run stage2` script once this has been run for real once).
+ */
+import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
+import {
+  type CostConfig,
+  CostModelImpl,
+  CRYPTO_PERIODS_PER_YEAR,
+  type DateRange,
+  InMemoryConfigTrialLog,
+  type PolygonClient,
+  renderStage2Verdict,
+  runTrialGrid,
+  SqliteStage2SelectionStore,
+  STOCK_PERIODS_PER_YEAR,
+  Stage2HistoricalStore,
+  type Stage2Selection,
+  type Stage2Verdict,
+  selectionsFrom,
+  type TrialGridResult,
+} from './backtest/index.js';
+import { resolveStage2Source } from './stage2-source.js';
+import { makeAssetClass } from './stage2-support.js';
+
+/** The fixed MVP universe (CLAUDE.md "Broker Plan" / spec "User Stories"). */
+export const STOCK_SYMBOLS = ['SPY', 'QQQ', 'AAPL', 'TSLA'] as const;
+export const CRYPTO_SYMBOLS = ['BTC-USD', 'ETH-USD'] as const;
+
+const FIVE_YEARS_MS = 5 * 365 * 86_400_000;
+export const DEFAULT_CAPITAL_PER_TRADE = 10_000;
+export const DEFAULT_AVERAGE_CAPITAL = 10_000;
+
+/**
+ * Pessimistic cost-model defaults — mirrors `cost-model.test.ts`'s
+ * `PESSIMISTIC_CONFIG` fixture, the only asset-class cost values this repo
+ * has settled on so far. Overridable via `RunStage2Deps.costConfig` once a
+ * real config is decided; using the same fixture here keeps this script's
+ * numbers directly comparable to the unit-tested cost model behaviour.
+ */
+export const PESSIMISTIC_COST_CONFIG: CostConfig = {
+  crypto: {
+    spreadVolatilityCoefficient: 0.5,
+    commissionRate: 0.001,
+    slippageCoefficient: 0.2,
+    impactK: 0.1,
+  },
+  stocks: {
+    spreadVolatilityCoefficient: 0.1,
+    commissionRate: 0.0005,
+    slippageCoefficient: 0.05,
+    impactK: 0.05,
+  },
+};
+
+/**
+ * Cost config calibrated against measured market data and published fee
+ * schedules (2026-08-05). See
+ * `docs/research/archive/2026-08-05-cost-model-calibration.md`.
+ *
+ * Every number below has a stated basis. That is the whole point: the fixture
+ * above did not, and the gross-vs-net decomposition (#403) showed it was
+ * single-handedly responsible for the Stage 2 KILL — charging crypto 211bps a
+ * round trip, an adverse move of 0.45 ATR per fill against 3-4 ATR targets.
+ *
+ * **spreadVolatilityCoefficient — MEASURED.** `run-spread-calibration.ts`
+ * sampled 36,617 real Alpaca quotes across 24 dates spanning the same 2-year
+ * window the grid replays, taken in the five minutes before each bar's close
+ * (where the replay actually fills) and stopping short of the bell so
+ * closing-auction artifacts are excluded. Per-symbol median spread/ATR14:
+ * SPY 0.0022, QQQ 0.0022, AAPL 0.0051, TSLA 0.0063, BTC 0.0340, ETH 0.0220.
+ * The fitted per-asset-class medians are the values used here. The fixture's
+ * 0.1 / 0.5 were 27x and 18x those.
+ *
+ * **commissionRate — PUBLISHED.** Crypto is Alpaca's base-tier TAKER fee of
+ * 0.25% (docs.alpaca.markets/docs/crypto-fees, retrieved 2026-08-05); taker,
+ * not maker, because `ReplayDriver` issues market orders. Note this is the one
+ * term the old fixture set too LOW, at 0.001. US equities are commission-free
+ * at Alpaca, with only SEC/FINRA-TAF/CAT regulatory fees passed through on
+ * sells, so this is 0 — whereupon `CostModelImpl`'s structural 1bp floor
+ * applies anyway, which is already more than the real pass-through. The floor
+ * is left to do that job rather than a fabricated rate being written here.
+ *
+ * **slippageCoefficient — ASSUMPTION, and flagged as one.** Slippage cannot be
+ * measured without live fills, and inventing a coefficient is the exact defect
+ * this calibration exists to remove. So it is *derived* from the measured
+ * spread instead: set to `spreadVolatilityCoefficient / 4`, i.e. half of the
+ * half-spread, a conservative buffer on top of the modeled crossing cost. The
+ * fraction is a judgement call, not a measurement. Replace it with the real
+ * figure once the paper soak (#238) has produced live fills to compare
+ * modeled against realized — which is also the divergence check the Feedback
+ * Loop already wants (cross-spec GAP-F).
+ *
+ * **impactK — UNCHANGED, deliberately.** Market impact totalled 54 currency
+ * units out of 62,393 in the worst decomposition row: negligible at
+ * $10k-per-trade in this universe. There is no measurement basis to revise it
+ * and no benefit to loosening it, so the fixture's pessimistic value stands.
+ */
+export const CALIBRATED_COST_CONFIG: CostConfig = {
+  crypto: {
+    spreadVolatilityCoefficient: 0.028,
+    commissionRate: 0.0025,
+    slippageCoefficient: 0.007,
+    impactK: 0.1,
+  },
+  stocks: {
+    spreadVolatilityCoefficient: 0.0037,
+    commissionRate: 0,
+    slippageCoefficient: 0.000925,
+    impactK: 0.05,
+  },
+};
+
+/**
+ * Which cost config a direct run uses. `SAMURAI_STAGE2_COST_CONFIG=pessimistic`
+ * re-runs against the old fixture for comparison; the calibrated one is the
+ * default because it is the one with a stated basis for every number.
+ */
+export function costConfigFromEnv(env: NodeJS.ProcessEnv = process.env): CostConfig {
+  return env.SAMURAI_STAGE2_COST_CONFIG?.trim() === 'pessimistic'
+    ? PESSIMISTIC_COST_CONFIG
+    : CALIBRATED_COST_CONFIG;
+}
+
+/** Default window: the last 5 years, ending "now" — the spec's Starter-tier depth. */
+export function defaultFiveYearWindow(now: Date = new Date()): DateRange {
+  return { start: new Date(now.getTime() - FIVE_YEARS_MS), end: now };
+}
+
+/**
+ * The exact window the 2026-08-05 verdict requested, to the millisecond.
+ *
+ * A direct run uses this rather than `defaultFiveYearWindow()`, which reads
+ * `new Date()` and therefore shifts the effective window — and with it every
+ * walk-forward fold boundary — on each new day. A gate verdict that cannot be
+ * reproduced tomorrow is not evidence, and the first real Stage 2 run was
+ * recorded before that was noticed.
+ *
+ * Now defined in `stage2-source.ts` alongside the free stack's ten-year
+ * window, and re-exported here so `run-stage2-cost-decomposition.ts` and
+ * `ingest-tiingo-history.ts` keep importing it from where they always have.
+ */
+export { STAGE2_FREE_STACK_WINDOW, STAGE2_PINNED_WINDOW } from './stage2-source.js';
+
+/**
+ * Where a DIRECT run keeps its ingested bars (#495).
+ *
+ * Not `:memory:`, which is what a direct run silently got by passing no
+ * `dbPath` at all: every run started from an empty database and re-pulled the
+ * whole five-year window from the vendor. Persisting it is the load-bearing
+ * precondition for the free-data decision (#487) — a free, no-SLA source is
+ * only acceptable if history survives on disk so a dead vendor costs new bars
+ * alone.
+ *
+ * Deliberately NOT `sharedStorePath()`. This is research scratch with a
+ * private schema (`stage2_bars`, `stage2_listing`); the shared store holds
+ * live run state, and the two must not share a file. Same `data/` directory,
+ * so the existing `*.sqlite` gitignore rule already covers it.
+ *
+ * `runStage2`'s own default stays `:memory:` — that shape is deliberate (see
+ * `Stage2HistoricalStore`'s module docstring) and is what keeps tests from
+ * touching the filesystem or reading each other's bars.
+ */
+export const STAGE2_SCRATCH_DB_PATH = 'data/stage2-bars.sqlite';
+
+export interface RunStage2Deps {
+  polygonClient: PolygonClient;
+  window?: DateRange;
+  /** Scratch SQLite path for `Stage2HistoricalStore`. Defaults to `:memory:`. */
+  dbPath?: string;
+  capitalPerTrade?: number;
+  averageCapital?: number;
+  costConfig?: CostConfig;
+  /** Sink for the printed report — defaults to `console.log`. */
+  print?: (line: string) => void;
+  /**
+   * Where the run's selected config is frozen (#375, #384) — the SHARED store,
+   * not the scratch one `dbPath` opens: the Feedback Loop reads it at runtime,
+   * and a verdict written to a research scratch file would be a verdict nobody
+   * can act on.
+   *
+   * Optional: a caller that supplies none is doing a dry run, and writing to a
+   * database it did not ask for would be the surprising behaviour.
+   */
+  selections?: { record(selection: Stage2Selection): void };
+  /** Stamps the selection; defaults to wall clock. Injected so a test can pin it. */
+  now?: () => Date;
+}
+
+/**
+ * The run's shared replay context — identical across every asset class this
+ * script builds (`store`, `costModel`, `window`, `capitalPerTrade`). Bundled
+ * so `makeAssetClass` takes one context plus the three fields that actually
+ * vary per asset class, instead of the same four values traveling as
+ * separate positional params on every call.
+ */
+interface ReplayContext {
+  store: Stage2HistoricalStore;
+  costModel: CostModelImpl;
+  window: DateRange;
+  capitalPerTrade: number;
+}
+
+/**
+ * The sub-window of `requested` that EVERY symbol actually has bars for.
+ *
+ * Intersected, not unioned: the grid replays one universe per asset class, and
+ * a fold whose range predates a symbol's first bar is what produced the
+ * `toReturnSeries: no bars in the sample` abort on the first live run. Taking
+ * the latest first-bar and earliest last-bar across symbols gives the range
+ * where the whole universe is present.
+ *
+ * A symbol with NO bars at all is a hard failure, not a narrowing: silently
+ * dropping it would change what the verdict is a verdict ABOUT. So is an
+ * EMPTY intersection (start >= end), which is what disjoint coverage across
+ * symbols produces — one symbol's history ending before another's begins.
+ * Returning an inverted range there would hand replay/folds/MinBTL a window
+ * they cannot sample, reproducing the same opaque `toReturnSeries` abort this
+ * function exists to prevent, just one layer further down.
+ *
+ * Bar bounds are computed by min/max rather than by taking `bars[0]` and
+ * `bars.at(-1)`: `Stage2HistoricalStore.bars` does `ORDER BY close_time ASC`
+ * today, but the structural parameter type above cannot state that, and a
+ * store that ever returned bars unordered would silently mis-narrow the
+ * window rather than fail.
+ */
+export function effectiveWindow(
+  store: { bars: (symbol: string, window: DateRange) => Array<{ close_time: Date }> },
+  requested: DateRange,
+): DateRange {
+  let start = requested.start;
+  let end = requested.end;
+
+  for (const symbol of [...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS]) {
+    const bars = store.bars(symbol, requested);
+    let first: Date | undefined;
+    let last: Date | undefined;
+    for (const bar of bars) {
+      if (first === undefined || bar.close_time.getTime() < first.getTime()) first = bar.close_time;
+      if (last === undefined || bar.close_time.getTime() > last.getTime()) last = bar.close_time;
+    }
+    if (first === undefined || last === undefined) {
+      throw new Error(
+        `runStage2: ${symbol} has no bars in ${requested.start.toISOString()} .. ` +
+          `${requested.end.toISOString()}, so the 12-config grid cannot be evaluated over the ` +
+          'MVP universe. Check the symbol is served by this Polygon plan before reading any ' +
+          'verdict — a grid missing a symbol is not the grid the Stage 2 gate is defined on.',
+      );
+    }
+
+    if (first.getTime() > start.getTime()) start = first;
+    if (last.getTime() < end.getTime()) end = last;
+  }
+
+  if (start.getTime() >= end.getTime()) {
+    throw new Error(
+      `runStage2: the MVP universe has no window every symbol covers — the intersection of ` +
+        `per-symbol coverage across ${requested.start.toISOString()} .. ` +
+        `${requested.end.toISOString()} collapsed to ${start.toISOString()} .. ` +
+        `${end.toISOString()}. At least one symbol's history ends before another's begins, so ` +
+        'there is no sample the 12-config grid can be evaluated on. Widen the requested window ' +
+        'or check which symbol this Polygon plan is serving short.',
+    );
+  }
+
+  return { start, end };
+}
+
+/** One asset class's fixed symbol/periodsPerYear pairing this script drives. */
+
+/**
+ * Ingests the full MVP universe, runs the 12-config grid across stocks and
+ * crypto, and renders the Stage 2 verdict. Returns the verdict (and prints
+ * the full metrics suite per config plus the pass/kill decision via
+ * `deps.print`) so a caller/test can assert on the structured result without
+ * scraping stdout.
+ */
+export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
+  const window = deps.window ?? defaultFiveYearWindow();
+  const print = deps.print ?? console.log;
+  const capitalPerTrade = deps.capitalPerTrade ?? DEFAULT_CAPITAL_PER_TRADE;
+  const averageCapital = deps.averageCapital ?? DEFAULT_AVERAGE_CAPITAL;
+
+  const store = new Stage2HistoricalStore(deps.polygonClient, deps.dbPath ?? ':memory:');
+
+  print(
+    `Stage 2: ingesting ${STOCK_SYMBOLS.length + CRYPTO_SYMBOLS.length} MVP-universe symbols ` +
+      `over ${window.start.toISOString()} .. ${window.end.toISOString()}`,
+  );
+  for (const symbol of [...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS]) {
+    await store.ingest(symbol, window);
+    const barCount = store.bars(symbol, window).length;
+    print(`  ingested ${symbol}: ${barCount} bars`);
+  }
+
+  // The window the data can actually support, which is NOT always the window
+  // asked for: a Polygon plan serves a bounded history, and the first real run
+  // of this script (2026-08-05) asked for 5 years and received 2 — 501 stock
+  // bars, earliest 2024-08-06. Replaying the requested window against that
+  // produced `toReturnSeries: no bars in the sample` from inside the first
+  // fold, an opaque failure four layers down from its cause.
+  //
+  // So the effective window is INTERSECTED across symbols and everything
+  // downstream — replay, folds, and crucially MinBTL — runs on it. MinBTL's
+  // trial cap is a function of sample length, so computing it over a window
+  // the data does not cover would overstate how many configs the sample can
+  // support, which is the one number in this verdict that exists to prevent
+  // exactly that kind of overfitting.
+  // Warn when EITHER boundary moved, naming which. A provider whose history
+  // lags the request narrows the END instead of the start (stale or partial
+  // vendor data), and warning only on the start would let that shrink the
+  // sample invisibly — the run output would read as a full-window run.
+  const effective = effectiveWindow(store, window);
+  const narrowedStart = effective.start.getTime() > window.start.getTime();
+  const narrowedEnd = effective.end.getTime() < window.end.getTime();
+  if (narrowedStart || narrowedEnd) {
+    const narrowing: string[] = [];
+    if (narrowedStart) {
+      narrowing.push(
+        `requested a start of ${window.start.toISOString().slice(0, 10)} but the data starts ` +
+          `${effective.start.toISOString().slice(0, 10)}`,
+      );
+    }
+    if (narrowedEnd) {
+      narrowing.push(
+        `requested an end of ${window.end.toISOString().slice(0, 10)} but the data ends ` +
+          `${effective.end.toISOString().slice(0, 10)}`,
+      );
+    }
+    print('');
+    print(
+      `Stage 2: WARNING — ${narrowing.join('; ')}. Running on the ` +
+        `${((effective.end.getTime() - effective.start.getTime()) / (365 * 86_400_000)).toFixed(2)}` +
+        '-year sample the provider actually served. MinBTL below is computed on THAT window, so ' +
+        'a tighter trial cap here is a real constraint of the sample, not a spec change.',
+    );
+    print('');
+  }
+
+  const costModel = new CostModelImpl(deps.costConfig ?? PESSIMISTIC_COST_CONFIG);
+  const configTrialLog = new InMemoryConfigTrialLog();
+  const ctx: ReplayContext = { store, costModel, window: effective, capitalPerTrade };
+
+  const stocks = makeAssetClass(ctx, 'stocks', STOCK_SYMBOLS, STOCK_PERIODS_PER_YEAR);
+  const crypto = makeAssetClass(ctx, 'crypto', CRYPTO_SYMBOLS, CRYPTO_PERIODS_PER_YEAR);
+
+  // #405: state the sizing POSITIVELY, before the run, rather than reporting
+  // `exceeded: true` after 12 trials have already been spent. The cap exists
+  // to constrain the search; a reader should see what it constrained it to.
+  const results = await runTrialGrid({
+    assetClasses: [stocks, crypto],
+    window: effective,
+    averageCapital,
+    configTrialLog,
+    // Printed from INSIDE the run, off the sizing it actually used, rather
+    // than from a second `sizeTrialGridToSample` call here. The two agreed —
+    // same pure function, same window — but a verdict's audit trail should
+    // report what ran, not something computed alongside it.
+    //
+    // N is `selected.length`, NOT `limit`. They differ whenever the cap does
+    // not bind — a 5-year window supports ~45 trials and the cross-product
+    // only asks for 12, where printing `limit` would announce a 45-config grid
+    // and then run 12. That is the same reported-vs-actual divergence this
+    // change exists to remove, one line further along.
+    announceSizing: (sizing) =>
+      print(
+        `Stage 2: grid sized to N=${sizing.selected.length} from a ` +
+          `${sizing.years.toFixed(1)}-year effective sample (the full cross-product asks ` +
+          `for ${sizing.requested}; MinBTL supports ${sizing.limit}). ` +
+          'Running across stocks + crypto...',
+      ),
+    // The gate run is the one caller that needs the CSCV pass: without it PBO
+    // has no configs x folds matrix to rank across and the verdict can only
+    // refuse (#406). Costs a second evaluate() per pair over the same replay.
+    includeCscvPass: true,
+  });
+
+  const verdict = renderStage2Verdict({
+    results,
+    distinctTrialCount: configTrialLog.distinctTrialCount(),
+    window: effective,
+  });
+
+  printReport(results, verdict, print);
+
+  /**
+   * Freeze the selection (#375, #384).
+   *
+   * Without this the run is a printout: the trial log was in-memory, so
+   * nothing survived the process that computed it, and the Feedback Loop had
+   * neither a backtest Sharpe to measure divergence against nor a
+   * `revalidation` snapshot to evaluate PBO/OOS-Sharpe/DSR with. Four
+   * kill-lines out of four were unevaluable for exactly that reason.
+   *
+   * Optional, and absent in the unit tests: a caller that supplies no store is
+   * doing a dry run, and writing to a database it did not ask for would be the
+   * surprising behaviour.
+   */
+  if (deps.selections !== undefined) {
+    const frozen = selectionsFrom({
+      verdict,
+      results,
+      window: effective,
+      selectedAt: deps.now?.() ?? new Date(),
+    });
+    for (const selection of frozen) deps.selections.record(selection);
+    print(
+      frozen.length === 0
+        ? 'Stage 2: nothing to freeze — no config was evaluated, so the kill-lines stay inert.'
+        : `Stage 2: froze ${frozen.length} selection(s) — the Feedback Loop can now evaluate ` +
+            'the divergence and revalidation kill-lines against this run.',
+    );
+  }
+
+  return verdict;
+}
+
+/** Prints the full metrics suite per (config, asset class) plus the pass/kill decision. */
+function printReport(
+  results: readonly TrialGridResult[],
+  verdict: Stage2Verdict,
+  print: (line: string) => void,
+): void {
+  print('');
+  print('=== Stage 2: per-config metrics ===');
+  for (const result of results) {
+    const m = result.report.window;
+    print(
+      `[${result.asset_class}] ${result.config_hash} ` +
+        `fastWindow=${result.config.fastWindow} slowWindow=${result.config.slowWindow} ` +
+        `atrStopMult=${result.config.atrStopMult} atrTargetMult=${result.config.atrTargetMult}`,
+    );
+    print(
+      `    window: sharpe=${m.sharpe.toFixed(3)} sortino=${m.sortino.toFixed(3)} ` +
+        `calmar=${m.calmar.toFixed(3)} max_drawdown=${m.max_drawdown.toFixed(3)} ` +
+        `profit_factor=${m.profit_factor.toFixed(3)} expectancy=${m.expectancy.toFixed(3)} ` +
+        `skew=${m.skew.toFixed(3)} kurtosis=${m.kurtosis.toFixed(3)} ` +
+        `turnover=${m.turnover.toFixed(3)} exposure=${m.exposure.toFixed(3)}`,
+    );
+    print(
+      `    dsr inputs: per_period_sharpe=${m.per_period_sharpe.toFixed(4)} ` +
+        `annualization_factor=${m.annualization_factor.toFixed(3)} ` +
+        `observations=${m.observations}`,
+    );
+    for (const split of result.report.splits) {
+      print(`    fold sharpe=${split.metrics.sharpe.toFixed(3)}`);
+    }
+    if (result.cscv !== undefined) {
+      print(
+        `    cscv folds: ${
+          'error' in result.cscv
+            ? `UNAVAILABLE (${result.cscv.error})`
+            : result.cscv.report.splits.map((s) => s.metrics.sharpe.toFixed(3)).join(' ')
+        }`,
+      );
+    }
+  }
+
+  print('');
+  print('=== Stage 2: kill-line checks (OOS Sharpe) ===');
+  for (const check of verdict.kill_line_checks) {
+    print(
+      `[${check.asset_class}] ${check.config_hash} oos_sharpe=${check.oos_sharpe.toFixed(3)} ` +
+        `window_sharpe=${check.window_sharpe.toFixed(3)} ` +
+        `passes=${check.passes_oos_sharpe_line}`,
+    );
+  }
+
+  print('');
+  print('=== Stage 2: MinBTL ===');
+  print(
+    `n_distinct_trials=${verdict.n_distinct_trials} exceeded=${verdict.min_btl.exceeded} ` +
+      JSON.stringify(verdict.min_btl),
+  );
+
+  print('');
+  print('=== Stage 2: PBO ===');
+  for (const outcome of verdict.pbo) {
+    print(JSON.stringify(outcome));
+  }
+
+  print('');
+  print('=== Stage 2: DSR ===');
+  for (const outcome of verdict.dsr) {
+    print(JSON.stringify(outcome));
+  }
+
+  print('');
+  print(`=== Stage 2 VERDICT: ${verdict.overall_pass ? 'PASS' : 'KILL/INCOMPLETE'} ===`);
+}
+
+/**
+ * Entrypoint guard — only runs when this file is executed directly (`node
+ * dist/server/tools/run-stage2.js`), not when imported by a test. Mirrors
+ * `server/apps/orchestrator/index.ts` / `server/apps/service-api/index.ts`'s split between an
+ * exported, testable function and a thin top-level invocation.
+ */
+if (import.meta.url === `file://${process.argv[1]}`) {
+  // Polygon (2y) unless `STAGE2_SOURCE=free-stack` asks for the ten-year free
+  // stack — see `stage2-source.ts` for why the old path stays the default.
+  const { client: polygonClient, window: runWindow, label } = resolveStage2Source();
+  console.log(
+    `Stage 2 source: ${label} over ${runWindow.start.toISOString()} .. ` +
+      `${runWindow.end.toISOString()}`,
+  );
+  // Stated explicitly at the entrypoint rather than by changing `runStage2`'s
+  // own default, so every existing caller and test keeps the cost config it
+  // was written against and only a direct run picks up the calibrated one.
+  // The SHARED store, not the scratch `dbPath` this script opens for bars
+  // (#375, #384): the Feedback Loop reads the frozen selection at runtime, and
+  // a verdict written to a research scratch file is a verdict nobody can act
+  // on. A direct run is the only caller that freezes; `runStage2`'s own tests
+  // pass no store and stay a dry run.
+  const shared = openSharedStore(sharedStorePath());
+  runStage2({
+    polygonClient,
+    costConfig: costConfigFromEnv(),
+    window: runWindow,
+    // Stated here rather than by changing `runStage2`'s `:memory:` default, so
+    // only a direct run persists bars and every existing caller and test keeps
+    // the isolated in-memory store it was written against (#495).
+    dbPath: STAGE2_SCRATCH_DB_PATH,
+    selections: new SqliteStage2SelectionStore(shared),
+  }).catch((error: unknown) => {
+    console.error('Stage 2 run failed:', error);
+    process.exitCode = 1;
+  });
+}
