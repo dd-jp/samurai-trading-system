@@ -8,12 +8,12 @@
 
 Code review 2026-08-01 (M1) and the security review of the same day (duplicate issue [#296](../../issues/296)) both flagged that every monetary quantity in this system is a TypeScript `number`, i.e. IEEE-754 binary64. Nothing in any spec mandates otherwise — this is a domain risk, not a spec violation. The named call sites:
 
-- `src/execution/ingest-fills.ts` — `weightedAvgPrice()` (Σ price×qty ÷ Σ qty), `totalQty()`, and the `ClosedTrade` money fields (`gross`, `fees_total`, `realized_pnl_net`).
-- `src/risk-manager/portfolio-view.ts` — per-position notional (`filled_size × mark`), `gross_exposure`, `equity`, `drawdown_pct`.
-- `src/risk-manager/index.ts:168,243` — the sizing round trip `notional = size × entry` … `finalSize = notional ÷ entry`.
-- `src/feedback-loop/attribution.ts` — `realizedR()` = `realized_pnl_net ÷ (|entry − stop| × filled_size)`, which #288 correctly identifies as the amplifier: the denominator is a subtraction of two near-equal prices, so a tight stop multiplies any absolute price error by `entry ÷ |entry − stop|`.
+- `server/pipeline/execution/ingest-fills.ts` — `weightedAvgPrice()` (Σ price×qty ÷ Σ qty), `totalQty()`, and the `ClosedTrade` money fields (`gross`, `fees_total`, `realized_pnl_net`).
+- `server/pipeline/risk-manager/portfolio-view.ts` — per-position notional (`filled_size × mark`), `gross_exposure`, `equity`, `drawdown_pct`.
+- `server/pipeline/risk-manager/index.ts:168,243` — the sizing round trip `notional = size × entry` … `finalSize = notional ÷ entry`.
+- `server/pipeline/feedback-loop/attribution.ts` — `realizedR()` = `realized_pnl_net ÷ (|entry − stop| × filled_size)`, which #288 correctly identifies as the amplifier: the denominator is a subtraction of two near-equal prices, so a tight stop multiplies any absolute price error by `entry ÷ |entry − stop|`.
 
-Persistence is not a second precision layer: every money column in `src/shared/store/migrations/0001_init.sql` (`price`, `qty`, `fee`, `filled_size`, `avg_entry_price`, `entry`, `stop`, `realized_pnl_net`, `fees_total`, `r_multiple`) is SQLite `REAL`, which is float64 — an exact round trip, no digits lost at the store boundary.
+Persistence is not a second precision layer: every money column in `server/shared/store/migrations/0001_init.sql` (`price`, `qty`, `fee`, `filled_size`, `avg_entry_price`, `entry`, `stop`, `realized_pnl_net`, `fees_total`, `r_multiple`) is SQLite `REAL`, which is float64 — an exact round trip, no digits lost at the store boundary.
 
 #288 offers three options: (A) a decimal library at the accounting boundary only, (B) integer minor units in the store, (C) keep float64, document the bound, and pin it with an invariant test. It also notes the paper-trading soak ([#238](../../issues/238)) can quantify real drift before choosing.
 
@@ -21,7 +21,7 @@ Persistence is not a second precision layer: every money column in `src/shared/s
 
 **Option C, provisionally: money math stays float64 through paper trading. Options A and B stay open, and the #238 soak is the gate that decides between them.**
 
-No new dependency (`decimal.js`, `big.js`) is added, and no store migration to integer minor units happens now. The bound below is derived from the real code, then measured against it, and the measurement is pinned as an executable invariant in `src/execution/money-math-precision.test.ts`.
+No new dependency (`decimal.js`, `big.js`) is added, and no store migration to integer minor units happens now. The bound below is derived from the real code, then measured against it, and the measurement is pinned as an executable invariant in `server/pipeline/execution/money-math-precision.test.ts`.
 
 ### 1. The derived bound
 
@@ -39,7 +39,7 @@ No new dependency (`decimal.js`, `big.js`) is added, and no store migration to i
 
 ### 2. The measured bound
 
-`src/execution/money-math-precision.test.ts` drives the real `ExecutionImpl.ingestFills()` against the real SQLite store with 250 partial fills per leg, released 37 per poll across ~14 polls (so the recompute-from-persisted-rows convergence above is exercised, not bypassed by one all-at-once ingest), then compares the persisted `ClosedTrade` against an exact BigInt fixed-point oracle at scale 1e-24 (differences are taken in exact space and only then converted to `Number`, because `ulp(1e5)` ≈ 1.5e-11 would otherwise swallow the quantity being measured).
+`server/pipeline/execution/money-math-precision.test.ts` drives the real `ExecutionImpl.ingestFills()` against the real SQLite store with 250 partial fills per leg, released 37 per poll across ~14 polls (so the recompute-from-persisted-rows convergence above is exercised, not bypassed by one all-at-once ingest), then compares the persisted `ClosedTrade` against an exact BigInt fixed-point oracle at scale 1e-24 (differences are taken in exact space and only then converted to `Number`, because `ulp(1e5)` ≈ 1.5e-11 would otherwise swallow the quantity being measured).
 
 | Quantity | Magnitude | Measured drift |
 | --- | --- | --- |
@@ -91,7 +91,7 @@ Absent all four, Option C carries into live money with the same invariant test a
 - **Accepted:** monetary values are approximations, exact to ~1e-10 USD per trade rather than exact by construction. Comparisons of money for equality are unsafe anywhere in this codebase, and the `coversQty` epsilon in `ingest-fills.ts` is the pattern for any future quantity comparison. Nothing here makes float64 *correct* — it makes it demonstrably below the noise floor of the thing being measured.
 - **Bought:** no dependency, no store migration, no serialization boundary between decimal objects and SQLite `REAL`, and no risk of a half-migrated codebase where some paths are decimal and others are not — which is the realistic failure mode of adopting Option A under time pressure before the soak has produced any evidence.
 - **`docs/specs/execution-spec.md`** gains the float-tolerant restatement of round-trip-to-flat (Module: Order State Machine & Partial Fills).
-- **`src/execution/money-math-precision.test.ts`** is the executable half of this ADR. If it is deleted or its thresholds loosened, this decision loses its justification — the numbers in §2 are only true while that test runs green.
+- **`server/pipeline/execution/money-math-precision.test.ts`** is the executable half of this ADR. If it is deleted or its thresholds loosened, this decision loses its justification — the numbers in §2 are only true while that test runs green.
 - **#238's soak instrumentation** must record the four observables above; without them the revisit trigger cannot fire and this ADR silently becomes permanent by default.
 - Closes [#288](../../issues/288) and its duplicate [#296](../../issues/296).
 

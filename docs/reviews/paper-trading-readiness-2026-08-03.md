@@ -53,7 +53,7 @@
 
 The single most consequential gap, and the only Tier-1 item with no ticket.
 
-Both surfaces are **fully implemented** (`src/execution/ingest-fills.ts`, `src/execution/reconcile.ts`) and exposed on `ExecutionImpl` (`execute.ts:32`, `execute.ts:43`). Nothing calls either one outside tests. The composition root says so itself, twice, in `production.ts:67-70` and `production/on-trade-close-hookup.ts:16`.
+Both surfaces are **fully implemented** (`server/pipeline/execution/ingest-fills.ts`, `server/pipeline/execution/reconcile.ts`) and exposed on `ExecutionImpl` (`execute.ts:32`, `execute.ts:43`). Nothing calls either one outside tests. The composition root says so itself, twice, in `production.ts:67-70` and `production/on-trade-close-hookup.ts:16`.
 
 Verified three ways, since this is an absence-of-evidence claim: no textual caller outside `execution/`; no indirect dispatch through the port either — the orchestrator reaches Execution at exactly one place, `direct-bind.ts:250`, and it calls `execute()` only; and no ticket exists in **any** state (#83 and #86 built these surfaces and are closed; #224/#236/#237 did the wiring and are closed).
 

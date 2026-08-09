@@ -83,9 +83,9 @@ ADR-0007 left this as an explicit loose end. ADR-0013 closes the question: with 
 
 No link checker catches these. They are inline path citations in backticks, not markdown links, so they fail exactly the way [#626](../../issues/626)'s bare-filename problem did — one directory level up, and for the same reason.
 
-**Line numbers drifted too**, so a path-only sweep would land on the wrong lines while looking correct. Two confirmed: `ApprovalChannel` moved `src/verdict/types.ts:41` → `server/pipeline/verdict/types.ts:44`; `type Direction` left `src/debate-engine/types.ts:13` entirely for `contracts/primitives.ts:22`.
+**Line numbers drifted too**, so a path-only sweep would land on the wrong lines while looking correct. Two confirmed: `ApprovalChannel` moved `server/pipeline/verdict/types.ts:41` → `server/pipeline/verdict/types.ts:44`; `type Direction` left `server/pipeline/debate-engine/types.ts:13` entirely for `contracts/primitives.ts:22`.
 
-This matters beyond tidiness — ADR-0007 cites `src/verdict/index.ts` and `src/orchestrator/tick-loop.ts` as the evidence for its central serialization argument, and a reader who cannot resolve those cannot check the reasoning.
+This matters beyond tidiness — ADR-0007 cites `server/pipeline/verdict/index.ts` and `server/apps/orchestrator/tick-loop.ts` as the evidence for its central serialization argument, and a reader who cannot resolve those cannot check the reasoning.
 
 Filed as [#645](../../issues/645), including the full path mapping and a request to extend the link checker so the next refactor fails loudly. **The documents authored in this pass are already correct and re-verified against the new layout.**
 

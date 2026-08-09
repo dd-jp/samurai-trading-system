@@ -44,8 +44,8 @@ This is a well-kept codebase. Comment density is unusually high and the comments
 > **Still open:** the wire-level validation. `alpaca-http-client.ts`, `http-polygon-client.ts` and `anthropic-http-client.ts` still cast unvalidated JSON — Trader now refuses the bad value instead of trading on it, but every other consumer of those clients is still unguarded.
 
 
-`src/market-data-service/sources/alpaca-http-client.ts:515,531,615,635`
-`src/cost-model-backtest/http-polygon-client.ts:128`
+`server/providers/market-data-service/sources/alpaca-http-client.ts:515,531,615,635`
+`server/tools/backtest/http-polygon-client.ts:128`
 `src/debate-engine/llm/anthropic-http-client.ts:117,179`
 
 ```ts
@@ -152,9 +152,9 @@ That gate immediately earned itself. Merging `main` back into this branch surfac
 
 ### M1. Four hand-copied vendor error hierarchies
 
-`src/market-data-service/sources/alpaca-data-errors.ts` (170 lines)
-`src/execution/adapters/alpaca-broker-errors.ts` (111)
-`src/verdict/notifications/telegram/telegram-errors.ts`
+`server/providers/market-data-service/sources/alpaca-data-errors.ts` (170 lines)
+`server/pipeline/execution/adapters/alpaca-broker-errors.ts` (111)
+`server/pipeline/verdict/notifications/telegram/telegram-errors.ts`
 `src/debate-engine/llm/anthropic-http-client.ts` + `llm/errors.ts`
 
 Each independently defines the identical five-part shape:
@@ -199,15 +199,15 @@ Each vendor module then keeps its own three error classes, its own union, its ow
 
 ### M2. `ClosedTradeRow` + `fromClosedTradeRow` triplicated byte-for-byte
 
-`src/dashboard/sqlite-query-store.ts:117,182`
-`src/feedback-loop/sqlite-closed-trade-store.ts:19,50`
-`src/execution/sqlite-store-harness.ts:35,94`
+`server/apps/service-api/sqlite-query-store.ts:117,182`
+`server/pipeline/feedback-loop/sqlite-closed-trade-store.ts:19,50`
+`server/pipeline/execution/sqlite-store-harness.ts:35,94`
 
 The three `fromClosedTradeRow` bodies hash identically (`md5 995699e4…`). The three `ClosedTradeRow` interfaces differ only in writing `asset_class: AssetClass` vs the inlined `'crypto' | 'stocks'` — which `shared/types.ts:15` defines as exactly that union, so they are the same type spelled two ways.
 
 Note that keeping `ClosedTradeRow` (`opened_at: string`) separate from `ClosedTrade` (`opened_at: Date`) is the right call — see "Examined, not a defect". The defect is having **three copies of the same row type**, one of which is in test-only scaffolding.
 
-**Fix.** `src/shared/store/closed-trade-row.ts` exporting `ClosedTradeRow` and `fromClosedTradeRow`; the three sites import it. `sqlite-shared-store.ts:30` already gestures at this ("Exported for `sqlite-store-harness.ts`, which reads the same row shape") — finish the move. Effort: ~1 hour. Zero behavioural risk; the mappers are provably identical.
+**Fix.** `server/shared/store/closed-trade-row.ts` exporting `ClosedTradeRow` and `fromClosedTradeRow`; the three sites import it. `sqlite-shared-store.ts:30` already gestures at this ("Exported for `sqlite-store-harness.ts`, which reads the same row shape") — finish the move. Effort: ~1 hour. Zero behavioural risk; the mappers are provably identical.
 
 ### M3. 209 hand-rolled test fixture builders, no shared module
 
@@ -245,7 +245,7 @@ Effort: under an hour total.
 
 ### P1. `ingest-fills` is O(positions × fills)
 
-`src/execution/ingest-fills.ts:36-56`
+`server/pipeline/execution/ingest-fills.ts:36-56`
 
 ```ts
 const fills = await broker.fetchNewFills(since);
@@ -273,7 +273,7 @@ then `advanceLot` takes `byLot.get(position.idempotency_key) ?? []`. The `timest
 
 ### P2. Serialized broker round-trips in `reconcile`
 
-`src/execution/reconcile.ts:45`
+`server/pipeline/execution/reconcile.ts:45`
 
 ```ts
 for (const position of inFlight) {
@@ -289,7 +289,7 @@ Effort: 2 hours including the pacing verification. Low payoff — startup-only. 
 
 ### P3. Dashboard N+1 on marks
 
-`src/dashboard/snapshot.ts:48` calls `store.getMark(position.instrument, asOf)` inside the position loop; `sqlite-query-store.ts:331` runs `SELECT * FROM latest_mark WHERE instrument = ?` per call, re-compiling the statement each time. One HTTP request to the dashboard = one query per open position.
+`server/apps/service-api/snapshot.ts:48` calls `store.getMark(position.instrument, asOf)` inside the position loop; `sqlite-query-store.ts:331` runs `SELECT * FROM latest_mark WHERE instrument = ?` per call, re-compiling the statement each time. One HTTP request to the dashboard = one query per open position.
 
 **Fix.** Add `getMarks(instruments: string[]): Map<string, Mark>` using `WHERE instrument IN (...)`, keep `getMark` delegating to it for the single-instrument callers. Effort: ~1 hour.
 

@@ -10,7 +10,7 @@
 
 This ADR synthesizes the resolved wayfinder ticket [Risk Manager: 3-persona risk debate (advisory) vs mechanical-only — #186](https://github.com/dd-jp/samurai-trading-system/issues/186), grilled against the research finding's five open questions.
 
-**Correction made during grilling:** the finding's framing assumed the concentration check was still static v1 buckets — the actual blind spot it should have cited is narrower. [Risk Manager v2: dynamic correlation-matrix concentration check — #50](https://github.com/dd-jp/samurai-trading-system/issues/50) already shipped (`src/risk-manager/correlation.ts` — point-in-time Pearson correlation over trailing returns), so quantitative correlation risk is already covered. The residual gap is purely narrative/qualitative risk no formula encodes (e.g., several open positions quietly leveraged to the same macro catalyst this week, with no shared price history yet to trip the correlation check).
+**Correction made during grilling:** the finding's framing assumed the concentration check was still static v1 buckets — the actual blind spot it should have cited is narrower. [Risk Manager v2: dynamic correlation-matrix concentration check — #50](https://github.com/dd-jp/samurai-trading-system/issues/50) already shipped (`server/pipeline/risk-manager/correlation.ts` — point-in-time Pearson correlation over trailing returns), so quantitative correlation risk is already covered. The residual gap is purely narrative/qualitative risk no formula encodes (e.g., several open positions quietly leveraged to the same macro catalyst this week, with no shared price history yet to trip the correlation check).
 
 ## Decision
 

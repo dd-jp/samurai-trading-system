@@ -37,7 +37,7 @@ Three things changed.
 ## Decision
 
 **Rewrite the dashboard UI as a Vite + React application at
-`src/dashboard-web/`, built to static assets and served from disk by the
+`client/`, built to static assets and served from disk by the
 existing `node:http` server. The v1 vanilla UI is deleted, not ported.**
 
 This explicitly reverses the "no framework SPA / no build step / zero new
