@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-08-09
 - **Decided by:** David — *"will run paper for 14 days and then decide whether live. will start with 1500£"*, *"i already have crypto.com account. you decide how 1500 is split based on maths"*
-- **Related:** [#659](https://github.com/dd-jp/samurai-trading-system/issues/659) (broker reality check), [#660](https://github.com/dd-jp/samurai-trading-system/issues/660) (book split), [#671](https://github.com/dd-jp/samurai-trading-system/issues/671) (the fee-tier verification that can overturn the split), map [#631](https://github.com/dd-jp/samurai-trading-system/issues/631)
+- **Related:** [#659](https://github.com/dd-jp/samurai-trading-system/issues/659) (broker reality check), [#660](https://github.com/dd-jp/samurai-trading-system/issues/660) (book split), [#671](https://github.com/dd-jp/samurai-trading-system/issues/671) (crypto fee schedules — **resolved**, see the 2026-08-10 amendment), [#673](https://github.com/dd-jp/samurai-trading-system/issues/673) (the two account facts that pick the venue), [#667](https://github.com/dd-jp/samurai-trading-system/issues/667) (the crypto calendar, which sets the fee tier), map [#631](https://github.com/dd-jp/samurai-trading-system/issues/631)
 - **Does not supersede** [ADR-0001](0001-technical-foundation-hybrid.md) — Alpaca remains the paper and backtest data path. This ADR decides the **live** venue only.
 
 ## Context
@@ -40,6 +40,8 @@ Driven by a **fee-tier cliff**, not by risk balance. Crypto's two-way monthly vo
 
 **Minimum viable book: ~£1,400.** £1,500 clears it.
 
+> **The cliff's premise, made explicit (2026-08-10, [#671](https://github.com/dd-jp/samurai-trading-system/issues/671)).** "60× capital" is **365 crypto trades/yr** — one per *calendar* day. At £750 a side a round trip is £1,500 ≈ $1,905, so 365/yr is $57.9K/month and clears the $50K tier boundary; **252/yr — crypto following the equity session — is $40.0K/month and does not.** On a 252-day crypto calendar the cliff moves to **~£937** and £750 misses it. The premise holds or fails on [#667](https://github.com/dd-jp/samurai-trading-system/issues/667), which is therefore a fee decision as well as a session-boundary one. The cliff is arithmetically sound; it is conditional, not unconditional.
+
 ## Consequences
 
 **The default universe is not tradeable on the live path.** SPY / QQQ / AAPL / TSLA / BTC-USD / ETH-USD is an *Alpaca* universe. It remains correct for paper and backtest data and must not be assumed for live instruments, spreads or fees. Instrument selection is [ADR-0016](0016-universe-leveraged-etps-ungated.md).
@@ -52,8 +54,38 @@ Driven by a **fee-tier cliff**, not by risk balance. Crypto's two-way monthly vo
 
 **UK tax.** CGT is immaterial at £1,500 against a £3,000 annual exempt amount, but every crypto disposal and equity trade is still a recordable event, and HMRC badges-of-trade reclassification to income remains a theoretical exposure at high trade counts.
 
-## Known weakness
+## Amendment, 2026-08-10 — the crypto fee schedule, measured ([#671](https://github.com/dd-jp/samurai-trading-system/issues/671))
 
-**The crypto fee assumption is unverified and it is the largest single term in the book's economics.** At Crypto.com's base tier (0.25% maker / 0.50% taker) the crypto leg returns **£0/yr** — a 0.75% mixed round trip against a 0.75% gross edge. At a reported 0.0725%/side via CRO staking it returns roughly **£590/yr**.
+This section previously read *"the crypto fee assumption is unverified… a number nobody has checked."* It has now been checked. Full working in [`docs/research/19-crypto-venue-fees.md`](../research/19-crypto-venue-fees.md); the load-bearing results:
 
-Half the book therefore sits between "worthless" and "the best line in the plan" depending on a number nobody has checked. [#671](https://github.com/dd-jp/samurai-trading-system/issues/671) owns it and **may overturn this ADR's split**, including a venue switch to Coinbase Advanced — #660's instruction was explicit that an account already held is not worth a worse fee schedule.
+**1. The Crypto.com App and the Crypto.com Exchange are different products, and the App is unusable.** The App embeds its cost in a ~0.5–1% spread — **negative-expectancy against a 0.75% gross edge**, before anything else. David's existing Crypto.com account is almost certainly the App and **confers nothing**; the Exchange is a separate signup. This ADR means the **Exchange** wherever it says Crypto.com.
+
+**2. The schedules, as net expectancy per trade against the 0.75% gross edge.** Per-trade is the stable unit — annual figures embed a trade count [#667](https://github.com/dd-jp/samurai-trading-system/issues/667) has not yet decided:
+
+| branch | round trip | net/trade |
+| --- | --- | --- |
+| Crypto.com App | ~1.0–2.0% | **strongly negative** |
+| Crypto.com Exchange, base tier | 0.75% | **£0 — exactly break-even** |
+| Coinbase tier 2 ($10–50K), taker-only | 0.80% | **−0.05% — negative** |
+| Coinbase tier 2, maker-only | 0.50% | +0.25% |
+| Coinbase tier 3 ($50–100K), maker-only | 0.30% | +0.45% |
+| **Crypto.com Exchange + 5,000 CRO staked** | **0.145%** | **+0.605%** |
+
+**3. This ADR's split survives; its stated reason is conditional.** See the note under *The book* above — the £656 cliff assumes 365 crypto trades/yr. It is #667's to confirm.
+
+**4. CRO staking is the only branch whose cost is not an uncontrolled variable.** At a flat 0.0725% both sides, the fee depends on neither volume tier nor maker/taker fill. Every Coinbase branch depends on both, and Coinbase's tier is set by *trailing 30-day* volume — a quiet fortnight reprices the leg downward mid-month, in the direction the strategy does not choose. The stake costs **£178**, locks **180 days**, pays back in **~39 trades (6–8 weeks)**, and is an **unhedged CRO position** that should be booked as one, not as a fee.
+
+**5. `ccxt` supports both venues.** The choice is not constrained by the client library.
+
+### Still open — [#673](https://github.com/dd-jp/samurai-trading-system/issues/673) settles the venue
+
+Two facts could not be established from public sources and need David's account: **whether a UK resident can open the Crypto.com *Exchange*** (the App and card are confirmed; the Exchange carries separate geo-restrictions), and **whether 5,000 CRO gives a flat 0.0725% or merely "a 10% discount"** (the latter is +0.075%/trade — worse than every Coinbase branch but tier 2 taker-only).
+
+**Decision rule, recorded so an implementation agent does not have to re-derive it:**
+
+- **Both confirmed** → Crypto.com Exchange with 5,000 CRO staked. Best expectancy, and execution style stops mattering.
+- **Either fails** → **Coinbase Advanced, maker-only execution mandatory.** Taker-only at tier 2 is negative-expectancy, so this is a hard constraint on the execution layer, not a preference — it couples directly to the exit ladder ([#654](https://github.com/dd-jp/samurai-trading-system/issues/654)).
+
+Coinbase's UK regulatory position is materially the stronger of the two (FCA MiFID-equivalent investment-services licence, July 2026, on top of crypto registration from February 2025), which is precisely the risk #673 carries for Crypto.com.
+
+**Unchanged by this amendment:** the £750/£750 split, the ISA restriction, and the equity leg. **#660's Coinbase assumption of 0.15/0.25 was correct** at tier 3 — an earlier correction filed against it has been withdrawn.

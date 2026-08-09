@@ -56,7 +56,7 @@ Gating is an **expectancy** question, not a cost question. It pays only if catal
 
 **Ranked levers on the book's economics, by measured value:**
 
-1. **The crypto fee tier** — £0 → £590/yr ([#671](https://github.com/dd-jp/samurai-trading-system/issues/671))
+1. **The crypto fee schedule** — £0 → **£1,140–1,660/yr** ([#671](https://github.com/dd-jp/samurai-trading-system/issues/671), measured; the range is the crypto calendar, [#667](https://github.com/dd-jp/samurai-trading-system/issues/667)). The earlier £590 figure used 130 trades/yr, below ADR-0014's recorded floor of one crypto trade per day. **The ordering is unchanged and the gap widens.**
 2. **#617** — £252 → £89/yr
 3. **Catalyst-gating** — ~£5/yr, and likely net negative
 
