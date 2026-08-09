@@ -38,9 +38,9 @@ Gating was proposed to fix a cost problem. Measurement shows the problem does no
 
 **The cost premise was a 3.4× overestimate.** #658 built on ADR-0008's *estimated* $3.0/day. The soak's actual `llm_spend` measures **$0.878/day = £252/yr**, falling to **£89/yr** once [#617](https://github.com/dd-jp/samurai-trading-system/issues/617) lands. Corrected, the book is **+£139/yr** with crypto at base fees and **+£729/yr** with the fee lever pulled — not the −£237/yr the ticket claimed.
 
-**Gating aims at the wrong 14%.** Post-#617 the intraday shape is **48 crypto runs/day against 8 equity runs — crypto is 86% of the bill**, runs 24/7, and has no dividend or earnings calendar to gate against. Gating the equity leg to 3-of-5 days saves ~**£12/yr**.
+**Gating aims at the wrong 14%.** Post-#617 the intraday shape is **48 crypto runs/day against 8 equity runs — crypto is 86% of the bill**, runs 24/7, and has no dividend or earnings calendar to gate against. The equity leg is the other 14% — **~£12/yr of the £89 bill in total** — and gating it to 3-of-5 days removes only two fifths of that, so it saves ~**£5/yr**.
 
-**And gating is not free.** It removes trading days, so it removes gross edge with them. Cutting 252 equity trades to 156 costs ~**£141/yr of gross** to save ~£12/yr of spend.
+**And gating is not free.** It removes trading days, so it removes gross edge with them. Cutting 252 equity trades to 156 costs ~**£141/yr of gross** to save ~£5/yr of spend — a 28:1 loss.
 
 ### The bar for revisiting
 
@@ -58,7 +58,7 @@ Gating is an **expectancy** question, not a cost question. It pays only if catal
 
 1. **The crypto fee tier** — £0 → £590/yr ([#671](https://github.com/dd-jp/samurai-trading-system/issues/671))
 2. **#617** — £252 → £89/yr
-3. **Catalyst-gating** — £12/yr, and likely net negative
+3. **Catalyst-gating** — ~£5/yr, and likely net negative
 
 Anything proposing to improve the economics should be checked against this ordering first.
 

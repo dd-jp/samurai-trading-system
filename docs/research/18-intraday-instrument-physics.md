@@ -1,4 +1,4 @@
-# 14 — Intraday instrument physics: what an instrument must do to support a same-day take-profit
+# 18 — Intraday instrument physics: what an instrument must do to support a same-day take-profit
 
 **Produced:** 2026-08-09, resolving [#635](https://github.com/dd-jp/samurai-trading-system/issues/635) and informing [#657](https://github.com/dd-jp/samurai-trading-system/issues/657), under map [#631](https://github.com/dd-jp/samurai-trading-system/issues/631).
 **Feeds:** [ADR-0016](../adr/0016-universe-leveraged-etps-ungated.md).

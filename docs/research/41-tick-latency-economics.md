@@ -60,7 +60,15 @@ Both fit **g(D) = a·√D** to within **3.5%** across the whole range: `a = 0.52
 
 ## Solving
 
-With delay uniform on (0, τ), mean delay is τ/2, so tail cost per day is `N·K·λ·a·√(τ/2)`. At N = 1 exit per leg, K = £750, λ = 0.05: **B = 0.204 £/√min**.
+With delay uniform on (0, τ), mean delay is τ/2, so tail cost per day for one leg is `N·K·λ·a·√(τ/2)` = `(N·K·λ·a/√2)·√τ`. The two legs carry **different** `a`, so B is their sum — at N = 1 exit per leg, K = £750 per leg, λ = 0.05:
+
+| leg | `a` (%/√min) | `N·K·λ·(a/100)/√2` | £/√min |
+| --- | --- | --- | --- |
+| 3× equity ETP | 0.525 | 750 × 0.05 × 0.00525 / √2 | 0.139 |
+| BTC | 0.243 | 750 × 0.05 × 0.00243 / √2 | 0.064 |
+| | | **B** | **0.204** |
+
+Both legs use the same λ = 0.05; only `a` differs between them. Re-derive B leg by leg when either `a`, K or λ changes.
 
 ```
 dT/dτ = −C/τ² + B/(2√τ) = 0     ⇒     τ* = (2C/B)^(2/3)
