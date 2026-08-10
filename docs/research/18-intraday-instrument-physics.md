@@ -35,6 +35,60 @@ This is the part most easily misread. Leverage scales gains and losses alike, so
 
 **Daily-reset decay does not apply.** It punishes *holding* leveraged ETPs across sessions; a flat-by-close strategy never holds one overnight.
 
+> **Superseded 2026-08-10 by Result 4.** The table above is wrong in sign at 3×. Its error is the phrase *"fixed-percentage cost"* — the cost is not fixed across the leverage step. Keep reading for the measurement that replaces it.
+
+## Result 4 — the same test run properly: every threshold pair is negative on unconditional entry
+
+Produced 2026-08-10 for [#653](https://github.com/dd-jp/samurai-trading-system/issues/653), which asked whether thresholds should be fitted per-instrument or pooled, and whether event-conditioned levels beat pooled ones. Answering it required simulating the exit rule rather than counting reach rates, and that inverted Result 2.
+
+**Method.** Enter long at the session open, exit on the first of take-profit, stop, or the close. Underlying US tape scaled by the ETP leverage factor — intraday a 3× ETP tracks 3× the underlying's move from the daily reset, with no path dependency inside one session. Alpaca SIP, **2016-01-04 → 2026-07-31**, regular hours only: SPY 5-minute (2,659 sessions), TSLA **1-minute, 1.92M bars** (2,657 sessions). In-sample ≤2022, out-of-sample ≥2023. Where a single bar spans both levels the **stop is assumed to fill first**; at 5-minute resolution that convention alone moved TSLA by 0.43%/trade, which is why TSLA was refetched at 1 minute.
+
+### The reach rates reproduce. The expectancy does not.
+
+SPY at +1% / −0.5%: take-profit reached first **11.6%** of sessions, stop first **37.6%**, closed out **50.9%**. Result 1 measured 9.8% and 45.5% over two years counting touches without ordering — consistent.
+
+| | Result 2 claimed | measured over 10.6y |
+| --- | --- | --- |
+| SPY 1×, +1/−0.5, cost 0.003% | +0.063%/trade | **+0.0119%** |
+| 3× index ETP, +3/−1.5, cost 0.18% | **+0.195%/trade** | **−0.135%** |
+| 3× single-stock ETP (TSLA), best of 6 configs, cost 0.41% | — | **−0.463%** |
+
+**The error is one word.** Result 2 argued leverage "enlarges each win against a **fixed-percentage** cost". SPY's round trip is 0.003%; 3USL's observed round trip is 0.18% — **60× larger**. Leverage multiplies the gross move by 3 and the cost by 60. Gross expectancy at 1× is 0.0149%; at 3× it is 0.0447%, against a 0.18% cost. The sign follows from that and nothing else.
+
+**Every cell is negative** — all six configurations, both instruments, in-sample and out. This is not "the best pair is thin"; **no take-profit/stop pair makes an unconditionally-entered position profitable.**
+
+### Event-conditioned levels are worse, and cannot matter anyway
+
+Earnings-reaction sessions identified from the Benzinga wire via Alpaca's news API — the release headline plus a next-session/same-session rule. **46 reaction days** for TSLA across 10.6 years, 28 in-sample and 18 out. (The headline format changed in 2023 from *"Tesla Reports Q4 Adj. EPS…"* to *"Tesla Q4 Adj. EPS … Beats … Estimate"*; matching only the first form silently loses every post-2022 event.)
+
+Out-of-sample, levels frozen from the in-sample fits:
+
+| strategy | expectancy/trade | n | SE | t |
+| --- | --- | --- | --- | --- |
+| **Grid** — one pooled level pair, every session | **−0.4257%** | 897 | 0.137 | −3.10 |
+| ordinary sessions only | −0.4098% | 879 | 0.139 | −2.95 |
+| **Event-only** — trade earnings reactions alone | **−1.3267%** | 18 | 0.316 | **−4.19** |
+| **Combination** — event levels on event days, pooled elsewhere | **−0.4282%** | 897 | 0.137 | −3.12 |
+
+**Earnings days are significantly *worse*, not better**: −0.92%/trade against ordinary sessions, SE 0.345, **t = −2.66**. Not a stop-width artefact — gross of cost and with stops widened to −6%, every event-day configuration is still negative. The mechanism is that an earnings reaction raises intraday volatility without supplying direction, so a fixed stop is reached far sooner while the take-profit is not.
+
+**And the combination is arithmetically incapable of mattering.** Events are **46 of 2,657 sessions — 1.73%**. Even levels that were dramatically better on event days would move the blended expectancy by about 2%. Event-conditioned thresholds could only matter to an event-*only* strategy, which yields ~4 trades/yr/name and cannot meet ADR-0014's one-trade-per-day floor.
+
+**This confirms the sample-size arithmetic #653 wrote down before any data was pulled** — ~40 events per name in 10 years, too few to resolve the effect being sought.
+
+### What the study actually produces
+
+Not a profit estimate. **The bar the entry signal has to clear:**
+
+| instrument class | round trip | signal must add ≥ |
+| --- | --- | --- |
+| 3× index ETP | 0.18% | **+0.135%/trade** |
+| 3× single-stock ETP | 0.41% | **+0.463%/trade** |
+
+This is the first quantity in the project that makes the debate layer's contribution falsifiable: it is exactly what the LLM path must deliver over a random open-entry before the leveraged-ETP universe returns anything. It also sharpens [#625](https://github.com/dd-jp/samurai-trading-system/issues/625) — a system producing zero trades has never been tested against a bar this specific.
+
+**Limitations, which cut both ways.** Entry at the open with no signal is deliberately naive and understates any real system — that is the point of a baseline, but it is not a claim the strategy loses money. Long-only. Underlying tape rather than ETP tape, so no tracking error, no ETP spread beyond the assumed round trip, and no GBP/USD leg. Same-bar ordering is resolved pessimistically throughout. Two instruments, not the full universe.
+
 ## Result 3 — the LSE/US overlap holds most of the day's range
 
 Run to test whether a London-hours strategy on a US-underlying ETP gives up too much. SPY 5-minute bars, 125 sessions, 2026-02-01 → 2026-08-01:
