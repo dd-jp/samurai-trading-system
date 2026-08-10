@@ -15,7 +15,7 @@ This is the finding that matters most and was not in the ticket's scope.
 
 **The Crypto.com App embeds its cost in a spread of roughly 0.5–1%** rather than charging a visible maker/taker fee. Against a 0.75% gross edge that is **negative-expectancy outright**, before any other cost.
 
-**The Crypto.com Exchange is a separate platform with a separate signup**, and it is the one with the maker/taker schedule. Reported cost difference between the two is 3–5×.
+**The Crypto.com Exchange is a separate platform, a separate signup and — confirmed 2026-08-10 — a separate legal entity**: **Foris DAX Limited** (Cayman Islands), against the UK App business's **Foris DAX UK Limited**. It is the one with the maker/taker schedule. Reported cost difference between the two is 3–5×. See Finding 6 for what the entity split costs.
 
 David's stated *"i already have crypto.com account"* almost certainly refers to the App. **Having it confers nothing for this strategy.**
 
@@ -140,9 +140,41 @@ Coinbase's two columns are **different fee schedules**, not one schedule at two 
 
 **Decision rule:** if #673 confirms UK access **and** the flat 0.0725%, stay with Crypto.com. If either fails — including the "10% discount" reading, which drops the leg to +0.075%/trade — **switch to Coinbase with maker-only execution**. A certain +0.25–0.45%/trade beats an uncertain +0.605%.
 
+## Finding 6 — the Exchange is a **Cayman Islands** entity, and the FCA registration does not reach it
+
+Added 2026-08-10, prompted by David: *"the exchange is developed by Foris DAX Limited… crypto.com app is developed by crypto.com"*. He is right, and the entity split is the substance of Finding 1, not a labelling quirk.
+
+| | operator | UK regulatory status |
+| --- | --- | --- |
+| Crypto.com **App** (UK) | **Foris DAX UK Limited** | **FCA-registered** for cryptoasset activities under the MLRs 2017, **FRN 941745** |
+| Crypto.com **Exchange** | **Foris DAX Limited** — *"an exempted company incorporated in the Cayman Islands with limited liability"* | **none** — not the FCA-registered entity |
+
+The Exchange Terms and Conditions (last updated 22 December 2025) are **"Published by Foris DAX Limited"** and define **"Crypto.com means Foris DAX Limited."** They are a different contract with a different counterparty from the App's.
+
+**Eligibility is defined positively, then negatively.** Clause 14.1 requires that you are *"(a) a resident of an Available Jurisdiction; (b) not located in, under the jurisdiction of, or a national or resident of any of the countries, states, and jurisdictions listed here"*, and clause 18.2(a) repeats it as a warranty. **"Available Jurisdiction means a jurisdiction which is stated here, where the Exchange is available for service"** — and that positive list is behind a link that resolves to no public page.
+
+**The negative list is public, and the UK is not on it.** The Exchange's spot-trading geo-restrictions article names **41 restricted locations** — Afghanistan, Bangladesh, Bolivia, Burundi, Central African Republic, DR Congo, Cuba, Ecuador, Eritrea, Guinea, Guinea-Bissau, **Hong Kong**, Iran, Iraq, Kyrgyzstan, Lebanon, Libya, Mali, **Malta**, Myanmar, Namibia, Nepal, North Korea, Palau, **China**, **Russia**, Somalia, South Sudan, Sudan, Syria, occupied regions of Ukraine, Venezuela, Yemen, Zimbabwe. **The United Kingdom does not appear.**
+
+### What this changes
+
+**UK access is now probable rather than unknown**, which upgrades question 1 from a hard unknown to a signup formality. It cannot be called *confirmed* — absence from a restriction list is not presence on an availability list, and only the live signup settles it.
+
+**But a new cost appears on the Crypto.com side, and it is not a fee.** Trading the Exchange as a UK resident means contracting with a **Cayman company that holds no UK registration**: no FCA cryptoasset registration covering that entity, no FSCS, and UK recourse running through a foreign counterparty. The App's FRN 941745 provides none of this protection, because the App is a different company.
+
+**This sharpens the venue comparison rather than settling it.** The choice is now explicitly:
+
+| | Crypto.com Exchange (staked) | Coinbase Advanced |
+| --- | --- | --- |
+| expectancy | **+0.605%/trade** | +0.25% to +0.45%/trade |
+| depends on volume tier / fill type | **no** | **yes, both** |
+| UK counterparty | **Cayman, unregistered in the UK** | **FCA MiFID-equivalent licence (July 2026) + crypto registration (Feb 2025)** |
+| capital at risk beyond the book | **£178 in CRO, locked 180 days** | none |
+
+At £750 the counterparty exposure is bounded by the leg itself, so this is a judgement about tail risk on a small book, not a disqualifier. **It should be David's call, made explicitly.** Recorded on [#673](https://github.com/dd-jp/samurai-trading-system/issues/673).
+
 ## Open — needs David's account, cannot be verified by research
 
-1. **Can a UK resident open the Crypto.com *Exchange*?** The App and card are confirmed available (Foris DAX UK Ltd, FCA-registered under the MLRs as of June 2026). The Exchange is a separate platform carrying its own geo-restrictions, and UK eligibility could not be confirmed from public sources. **This is a hard precondition** — if the answer is no, the recommendation above is void.
+1. **Can a UK resident open the Crypto.com *Exchange*?** **Largely answered 2026-08-10 — see Finding 6. Probable, but on a Cayman entity outside FCA registration.** What remains is a live signup attempt, since the positive "Available Jurisdiction" list is not public.
 2. **The 0.0725% figure needs confirming in-account.** Multiple secondary sources agree on it, but the primary fee page is JavaScript-rendered and could not be fetched. One source instead describes 5,000 CRO as buying "a 10% discount", which would give 0.225/0.45 — round trip 0.675%, net **+0.075%/trade** — ~£140–205/yr rather than £1,140–1,660, and **worse than every Coinbase branch except tier 2 taker-only**. **The entire recommendation turns on which is right.**
 3. **Maker/taker realism.** At 0.0725% both sides this stops mattering, which is a further argument for staking. At base fees it is decisive: taker-only puts the leg at −0.25%/trade.
 
@@ -164,3 +196,8 @@ UK spot crypto trading is permitted; the FCA ban covers derivatives for retail. 
 - [Crypto.com Soft Lockup — Help Center](https://help.crypto.com/en/articles/3744398-crypto-com-soft-lockup)
 - [UK Crypto Regulations 2026 — Bitget Academy](https://www.bitget.com/academy/uk-crypto-regulation)
 - [Crypto.com Supported & Restricted Countries — Datawallet](https://www.datawallet.com/crypto/crypto-com-countries)
+- [Exchange Terms and Conditions, published by Foris DAX Limited, 22 Dec 2025 (PDF)](https://static2.crypto.com/exchange/assets/documents/tnc.pdf) — clauses 14.1, 18.2; definitions of *Available Jurisdiction* and *Crypto.com*
+- [Spot trading geo-restrictions — Crypto.com Help Center](https://help.crypto.com/en/articles/6320975-spot-trading-geo-restrictions) — the 41 restricted locations; the UK is absent
+- [Foris DAX Limited Privacy Notice (Exchange)](https://static2.crypto.com/exchange/assets/documents/privacy.pdf) — Cayman Islands incorporation
+- [FORIS DAX UK LIMITED — FCA Register](https://register.fca.org.uk/s/firm?id=0014G00002antHVQAY) — FRN 941745, cryptoasset registration under the MLRs 2017
+- [FORIS DAX UK LIMITED — Companies House](https://find-and-update.company-information.service.gov.uk/company/12843841)
