@@ -76,6 +76,49 @@ Out-of-sample, levels frozen from the in-sample fits:
 
 **This confirms the sample-size arithmetic #653 wrote down before any data was pulled** — ~40 events per name in 10 years, too few to resolve the effect being sought.
 
+### The neutral bracket — the levels this produces
+
+Take-profit and stop set so both are **equally likely to be hit first**. At that bracket the unconditional position is a fair coin, so the entry signal's only job is directional accuracy and the edge required is exactly the round-trip cost amortised over the bracket width.
+
+| 3× index ETP (SPY, cost 0.18%) | neutral stop | resolves | closes out | accuracy edge needed |
+| --- | --- | --- | --- | --- |
+| TP +1.0% | −1.03% | 85.0% | 15.0% | +8.86 pp |
+| TP +1.5% | −1.58% | 65.7% | 34.3% | +5.84 pp |
+| **TP +2.0%** | **−2.16%** | 48.8% | 51.2% | **+4.33 pp** |
+| TP +3.0% | −3.35% | 26.3% | 73.7% | +2.83 pp |
+| TP +4.5% | −5.75% | 9.6% | 90.4% | +1.76 pp |
+
+| 3× single-stock ETP (TSLA, cost 0.41%) | neutral stop | resolves | closes out | accuracy edge needed |
+| --- | --- | --- | --- | --- |
+| TP +2.0% | −2.10% | 99.7% | 0.3% | +9.99 pp |
+| TP +4.0% | −4.14% | 91.4% | 8.6% | +5.04 pp |
+| **TP +6.0%** | **−6.25%** | 71.6% | 28.4% | **+3.35 pp** |
+| TP +9.0% | −9.38% | 44.4% | 55.6% | +2.23 pp |
+
+The neutral bracket is close to symmetric — stop ≈ 1.03–1.12 × take-profit — which is itself a result: intraday the underlying is near driftless at these horizons, so the asymmetry is small and comes from the close-out bucket rather than from any trend.
+
+**Narrow brackets make the ladder fire often but demand a large edge; wide brackets need almost none but degenerate into hold-to-close.** That trade-off, not leverage, is what governs the economics. **It is bracket width relative to a fixed cost that matters** — leverage only helps by making a wide ETP-percentage bracket reachable inside one session, and it inflates the spread at the same time. This is the correct form of the argument Result 2 got wrong.
+
+The bracketed rows are the levels recorded by [ADR-0018](../adr/0018-intraday-thresholds-sizing-and-the-signal-bar.md): the widest that still resolve a meaningful share of trades, and both requiring less accuracy than the ~55% win rate ADR-0017 already assumes.
+
+### The volatility envelope, and why it fixes position size
+
+Drift removed, so this is shape with zero edge assumed:
+
+| subclass | per-trade sd | annualised vol | max drawdown at full £750 |
+| --- | --- | --- | --- |
+| 3× index ETP | 1.55% | 24.6% | **55.6%** |
+| 3× single-stock ETP | 4.01% | 63.6% | **88.0%** |
+
+Against `CONTEXT.md`'s recorded 20–25% tolerance, full deployment is 2.2–3.5× too large **before any edge exists**. Sizing to hold the tolerance:
+
+| fraction of the £750 leg | 3× index | 3× single-stock |
+| --- | --- | --- |
+| £750 (100%) | 55.6% | 88.0% |
+| £375 (50%) | 31.6% | 50.0% |
+| **£262 (35%)** | **23.1%** | 35.8% |
+| **£188 (25%)** | 17.0% | **26.2%** |
+
 ### What the study actually produces
 
 Not a profit estimate. **The bar the entry signal has to clear:**

@@ -66,6 +66,8 @@ Risk-adjusted return metric. Live system target: ~1.5. Anything > 3-4 for non-HF
 **Drawdown**
 Peak-to-trough loss. Live system target: max ~20-25%. Full Kelly sizing implies 50-80% drawdowns — never use it.
 
+> **Restated 2026-08-10 by [ADR-0018](docs/adr/0018-intraday-thresholds-sizing-and-the-signal-bar.md) — this is a sizing constraint, not an outcome to accept.** Measured on a drift-removed series (zero edge assumed), the intraday universe's own volatility envelope at full £750 deployment is **55.6% for a 3× index ETP and 88.0% for a 3× single-stock ETP** — 2.2× to 3.5× outside the tolerance above, before any edge exists. Holding 20–25% therefore fixes position size: **~35% of the equity leg for index ETPs, ~25% for single-stock ETPs**. The superseded −23% *pre-accepted* drawdown belonged to doc 10's weeks-to-months strategy and is not a commitment of this system.
+
 > **Pending re-derivation (2026-08-09, #632).** The ~20-25% figure was set alongside `docs/research/10-edge-hypothesis.md`'s −23% pre-accepted drawdown, which belongs to the superseded weeks-to-months horizon. **There is currently no drawdown commitment derived for the intraday book.** Deriving one is [#653](https://github.com/dd-jp/samurai-trading-system/issues/653). Treat the number above as inherited, not re-validated. `docs/specs/risk-manager-spec.md:170` carries the same figure and the same caveat.
 
 **Paper Trading**

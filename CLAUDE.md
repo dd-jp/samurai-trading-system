@@ -27,7 +27,7 @@ Read/Write these as the project evolves:
 | `docs/specs/` | Synthesized specs (PRDs) per stage, `<stage>-spec.md`. Produced from the wayfinder map via `/to-spec`. |
 | `docs/reviews/` | Audit/review reports (code quality, spec conformance, readiness), dated `<topic>-<date>.md`. Findings ranked, prior findings referenced not re-filed. Standards fallout goes to `docs/coding-standards.md` in the same change. **Navigation starts at `docs/reviews/README.md`** (live vs archived, with successor pointers). A report moves to `docs/reviews/archive/` — same file name, never deleted — once every finding is closed or a named successor carries its substance. |
 
-**The intraday product is defined by ADR-0014 through ADR-0017 (all 2026-08-09) plus the ADR-0008 §2 amendment.** Read those five before speccing or implementing anything on the trading path — they carry the horizon, the venue and book, the universe and gating rule, the validation gates, and the measured cadence economics.
+**The intraday product is defined by ADR-0014 through ADR-0018 plus the ADR-0008 §2 amendment.** Read those six before speccing or implementing anything on the trading path — they carry the horizon, the venue and book, the universe and gating rule, the validation gates, the measured cadence economics, and the thresholds/sizing. **[ADR-0018](docs/adr/0018-intraday-thresholds-sizing-and-the-signal-bar.md) (2026-08-10) also amends ADR-0016's expectancy figures, which were wrong in sign** — the leveraged-ETP universe is not profitable on unconditional entry, and ADR-0018 states the bar the signal must clear instead. ADR-0015 carries a 2026-08-10 amendment recording the crypto fee schedules.
 
 When in doubt, grep existing docs before writing new ones.
 
