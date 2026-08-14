@@ -24,6 +24,7 @@ import {
   type OrderIntent,
   totalHeldQuantity,
 } from '../../shared/index.js';
+import { floorToBar } from '../debate-engine/index.js';
 import { NO_PRECEDENT_MULTIPLIER, retrieveCosinePrecedent } from './cosine-precedent.js';
 import { computeIdempotencyKey } from './idempotency-key.js';
 import { buildSetupVector } from './setup-vector.js';
@@ -123,6 +124,36 @@ function atrFor(
 
   const atr = computeIndicator(bars, spec);
   return Number.isFinite(atr) ? { atr, reason: null } : { atr: null, reason: 'atr_not_finite' };
+}
+
+/**
+ * The decision's BAR COORDINATE — the input `computeIdempotencyKey` needs to
+ * be stable across every tick that shares a bar (#616).
+ *
+ * This used to be `mark.observed_at`, and in backtest that is a real bar
+ * coordinate (`deriveBacktestMark` derives it from the bar). **In paper and
+ * live it is the venue's latest-quote wire timestamp at millisecond
+ * resolution** — Alpaca's `quote.t`, and the same shape in the ccxt and IBKR
+ * sources. Paper runs the live branch, and the mark cache cannot bridge ticks
+ * (`markTtlMs` defaults to 5s against a 15-minute tick), so the key changed on
+ * every pass.
+ *
+ * That made every key-based dedup layer inert in production at once: local
+ * `findByKey`, the `open_positions` primary key backstop, and the broker
+ * `client_order_id`. Crash-replay protection — the exact scenario the key
+ * exists for — was gone in precisely the two modes that trade real orders,
+ * while the backtest path kept the invariant looking held, which is why no
+ * test caught it.
+ *
+ * Flooring `asOf` rather than the mark's timestamp is deliberate: `asOf` is
+ * `clock.now()`, the same value `buildDebateStep` floors for `debate_id`, so
+ * the Trader's bar and the debate's bar are provably the same coordinate
+ * rather than two clocks that agree most of the time. A mark observed a
+ * fraction after an hour boundary would otherwise floor to the next bar and
+ * silently split the pair.
+ */
+function decisionBarFor(asOf: Date): Date {
+  return floorToBar(asOf);
 }
 
 /**
@@ -276,10 +307,7 @@ async function buildBracket(
   const side = sideFor(debate.direction);
   const direction = side === 'buy' ? 1 : -1;
 
-  // The mark's OBSERVATION time is the decision bar coordinate — not
-  // clock.now(), which differs across a crash-restart re-run of the same bar
-  // and would break the idempotency guarantee.
-  const decisionBar = mark.observed_at;
+  const decisionBar = decisionBarFor(asOf);
 
   return emit(
     {
@@ -366,7 +394,7 @@ async function buildExitIntent(
 
   const asOf = clock.now();
   const mark = await marketData.getMark(instrument, asOf);
-  const decisionBar = mark.observed_at;
+  const decisionBar = decisionBarFor(asOf);
 
   return emit(
     {
