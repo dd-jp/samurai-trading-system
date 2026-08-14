@@ -126,6 +126,23 @@ export interface DebateLog {
    * trace that actually ran the debate owns the row.
    */
   trace_id?: string;
+  /**
+   * What the Trader actually read, so this row can REPLAY the debate rather
+   * than merely describe it (#617).
+   *
+   * All optional together, and absent rather than null on the domain object:
+   * rows written before migration 0026 carry none of them. The replay path
+   * treats a row without `confidence` as un-replayable and re-runs the debate,
+   * so an old row degrades to pre-#617 behaviour instead of a fabricated
+   * position — `confidence` is the field position sizing is a function of, and
+   * `debate_log` had no column for it at all until 0026.
+   */
+  confidence?: number;
+  synthesis?: string;
+  position?: string;
+  disagreement_summary?: string;
+  open_items?: string[];
+  converged?: boolean;
 }
 
 /**

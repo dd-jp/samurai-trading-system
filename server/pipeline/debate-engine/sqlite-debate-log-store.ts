@@ -28,6 +28,14 @@ interface DebateLogRow {
   created_at: string;
   /** #426. Null for a row written before the column existed. */
   trace_id: string | null;
+  /** #617 replay fields (migration 0026). Null for a row written before them. */
+  confidence: number | null;
+  synthesis: string | null;
+  position: string | null;
+  disagreement_summary: string | null;
+  open_items_json: string | null;
+  /** SQLite has no boolean — 1/0, or null on a pre-0026 row. */
+  converged: number | null;
 }
 
 export class SqliteDebateLogStore implements DebateLogStore {
@@ -39,8 +47,9 @@ export class SqliteDebateLogStore implements DebateLogStore {
         .prepare(
           `INSERT INTO debate_log (
              debate_id, instrument, bar_timestamp, contributions_json, direction, rounds,
-             created_at, trace_id
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+             created_at, trace_id, confidence, synthesis, position, disagreement_summary,
+             open_items_json, converged
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           entry.debate_id,
@@ -56,6 +65,16 @@ export class SqliteDebateLogStore implements DebateLogStore {
           // actually ran the debate (the PK conflict below is what enforces
           // that — first write wins).
           entry.trace_id ?? null,
+          // #617 replay fields. Null when the caller supplies none, which keeps
+          // the pre-0026 callers (tests, backtest) writing valid rows; the
+          // replay path reads a null `confidence` as "cannot replay this" and
+          // re-runs the debate rather than trading on a reconstructed blank.
+          entry.confidence ?? null,
+          entry.synthesis ?? null,
+          entry.position ?? null,
+          entry.disagreement_summary ?? null,
+          entry.open_items === undefined ? null : JSON.stringify(entry.open_items),
+          entry.converged === undefined ? null : entry.converged ? 1 : 0,
         );
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {
@@ -91,6 +110,27 @@ export class SqliteDebateLogStore implements DebateLogStore {
       // .trace_id` is optional, and a pre-#426 row genuinely has no trace
       // rather than a null one.
       ...(row.trace_id === null || row.trace_id === undefined ? {} : { trace_id: row.trace_id }),
+      // Same convention for the #617 replay fields — a pre-0026 row genuinely
+      // has no confidence, and the replay path distinguishes "absent" from
+      // "zero" to decide whether it may skip the LLM calls.
+      ...nullableField('confidence', row.confidence),
+      ...nullableField('synthesis', row.synthesis),
+      ...nullableField('position', row.position),
+      ...nullableField('disagreement_summary', row.disagreement_summary),
+      ...(row.open_items_json === null || row.open_items_json === undefined
+        ? {}
+        : { open_items: JSON.parse(row.open_items_json) as string[] }),
+      ...(row.converged === null || row.converged === undefined
+        ? {}
+        : { converged: row.converged === 1 }),
     };
   }
+}
+
+/** `{ key: value }` when the column has a value, `{}` when it is null/absent. */
+function nullableField<K extends string, V>(
+  key: K,
+  value: V | null | undefined,
+): Record<K, V> | Record<string, never> {
+  return value === null || value === undefined ? {} : ({ [key]: value } as Record<K, V>);
 }

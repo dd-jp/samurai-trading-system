@@ -51,7 +51,29 @@ describe('buildDebateLog', () => {
       direction: 'bullish',
       rounds: 2,
       created_at,
+      // #617: what the Trader actually read, so a later same-bar tick can
+      // replay this row instead of paying for an identical debate.
+      confidence: result.confidence,
+      synthesis: result.synthesis,
+      position: result.position,
+      disagreement_summary: result.disagreement_summary,
+      open_items: result.open_items,
+      converged: result.converged,
     });
+  });
+
+  it('#617 — carries confidence, the field position sizing is a function of', () => {
+    // The whole replay path hinges on this one field: until migration 0026
+    // `debate_log` had no column for it, so a persisted row could describe a
+    // debate but never stand in for one.
+    const log = buildDebateLog(
+      makeResult({ confidence: 0.83 }),
+      'BTC-USD',
+      new Date('2026-07-14T09:00:00Z'),
+      new Date('2026-07-14T09:00:08Z'),
+    );
+
+    expect(log.confidence).toBe(0.83);
   });
 });
 

@@ -288,11 +288,21 @@ describe('buildDebateStep', () => {
     expect(missed?.message).toContain('no debate_log row');
   });
 
-  it('does not double-write when the same tick re-runs (same instrument, bar and views)', async () => {
+  it('replays the persisted debate when the same bar ticks again, spending nothing (#617)', async () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteDebateLogStore(db);
     const { logger, entries } = recordingLogger();
-    const step = buildDebateStep(fakeLlmClient(), store, unlimited(), UNCAPPED_SPEND, logger);
+
+    let llmCalls = 0;
+    const counting = fakeLlmClient();
+    const countingClient: LlmClient = {
+      async complete(request) {
+        llmCalls++;
+        return counting.complete(request);
+      },
+    };
+
+    const step = buildDebateStep(countingClient, store, unlimited(), UNCAPPED_SPEND, logger);
     const input = {
       trace_id: 'trace-1',
       instrument: 'AAPL',
@@ -302,17 +312,67 @@ describe('buildDebateStep', () => {
     };
 
     const first = await step(input);
+    const callsAfterFirst = llmCalls;
+    expect(callsAfterFirst).toBeGreaterThan(0);
+
     // Same clock, same views, same instrument → the same content-hash
-    // debate_id, which is exactly what a retried tick produces.
+    // debate_id. At a 15-minute cadence on a 1h bar this is not a retry, it is
+    // three of every four scheduled ticks.
     const second = await step({ ...input, trace_id: 'trace-1-retry' });
+
     expect(second.debate_id).toBe(first.debate_id);
+
+    // The point of #617: the duplicate debate is not run at all. Before this,
+    // the LLM calls were made and the result discarded at the write.
+    expect(llmCalls).toBe(callsAfterFirst);
+
+    // And the Trader gets the SAME conviction the row holds — the defect was
+    // that debate_log kept tick 1 while the Trader sized on tick N's fresh
+    // sample, so the Feedback Loop attributed trades to a different sampling
+    // of the same debate.
+    expect(second.confidence).toBe(first.confidence);
+    expect(second.direction).toBe(first.direction);
+    expect(second.confidence).toBe(store.getByDebateId(first.debate_id)?.confidence);
 
     const count = db.prepare('SELECT COUNT(*) AS n FROM debate_log').get() as { n: number };
     expect(count.n).toBe(1);
 
-    const duplicate = entries.find((entry) => entry.message.includes('already has a debate_log'));
-    expect(duplicate).toBeDefined();
-    expect(duplicate?.level).toBe('warn');
+    // Replay is expected traffic on a shared bar, so it is info — not the
+    // `warn` the old duplicate-write path emitted after already paying.
+    const replayed = entries.find((entry) => entry.message.includes('replayed from debate_log'));
+    expect(replayed).toBeDefined();
+    expect(replayed?.level).toBe('info');
+    expect(entries.some((entry) => entry.message.includes('already has a debate_log'))).toBe(false);
+  });
+
+  it('re-runs the debate when the persisted row predates the replay fields', async () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    const step = buildDebateStep(fakeLlmClient(), store, unlimited(), UNCAPPED_SPEND);
+    const views = [makeView()];
+    const debate_id = computeDebateId('AAPL', NOW, views);
+
+    // A row as migration 0025 would have left it: no confidence, so nothing to
+    // size a position on. Degrading to a re-run is the safe direction; replaying
+    // it would trade on a reconstructed blank.
+    db.prepare(
+      `INSERT INTO debate_log (debate_id, instrument, bar_timestamp, contributions_json,
+         direction, rounds, created_at)
+       VALUES (?, 'AAPL', ?, '[]', 'bullish', 1, ?)`,
+    ).run(debate_id, NOW.toISOString(), NOW.toISOString());
+
+    const result = await step({
+      trace_id: 'trace-1',
+      instrument: 'AAPL',
+      views,
+      asset_class: ASSET_CLASS,
+      clock: CLOCK,
+    });
+
+    expect(result.debate_id).toBe(debate_id);
+    // The live debate ran and produced a real conviction, rather than the 0 a
+    // blank reconstruction would have handed the Trader.
+    expect(result.confidence).toBeGreaterThan(0);
   });
 
   it("produces rows the Feedback Loop's attribution reader can consume end to end", async () => {
