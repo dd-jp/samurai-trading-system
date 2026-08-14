@@ -17,10 +17,22 @@
  *   is its own upstream `AnalystView.direction` — exactly what
  *   round-orchestrator.test.ts's fake mediator does
  *   (`context.views.map(v => ({ analyst_id: v.analyst_id, stance: v.direction }))`).
- * - `confidence`: `computeConvictionScore(views, roundStances)` — a real,
- *   existing function. `roundStances` (cumulative across rounds) is
+ * - `confidence`: `computeConvictionScore(views, roundStances, mediatorStance)`
+ *   — a real, existing function. `roundStances` (cumulative across rounds) is
  *   accumulated in this closure the same way `runDebate` accumulates its
  *   own copy internally, since `RoundContext` doesn't expose one.
+ *
+ *   **The third argument is #625's fix and the reason this mapping is no
+ *   longer circular.** Because the `stances` above echo `view.direction`, and
+ *   `finalPositionFor` falls back to `view.direction` when an analyst has no
+ *   round stance, conviction used to be a pure function of the analyst views:
+ *   the debate could not move it by any amount, in any direction, on any
+ *   round — four LLM calls per run producing a number that was already
+ *   determined before the first one was made. Measured over 96 debates, it
+ *   contributed exactly zero. Passing the mediator's own `stance` makes the
+ *   debate's verdict a participant in the score. Bull and bear are still not
+ *   passed: they argue the side they were assigned, so their stance carries
+ *   no information about conviction.
  * - `disagreement_summary`/`open_items`: `detectDisagreements(views,
  *   llmClient)` — a real, existing function — mapped `summary` ->
  *   `disagreement_summary`, `conflicts.map(c => c.nature)` -> `open_items`.
@@ -237,7 +249,16 @@ export function buildDebatePersonas(
           })
         : { summary: '', conflicts: [], method: 'directional_fallback' as const };
 
-      const confidence = computeConvictionScore(context.views, accumulatedStances);
+      // `response.stance` — the mediator's actual verdict — is passed as a
+      // participant so the debate can move conviction at all (#625 defect 2).
+      // Before this, conviction was a pure function of the analyst views: the
+      // `stances` built above echo `view.direction`, and `finalPositionFor`
+      // falls back to `view.direction` anyway, so every round contributed
+      // exactly zero to a score we were paying four LLM calls per run to
+      // produce. The mediator is the only debate output carrying information —
+      // bull and bear argue the side they were assigned, so their stance says
+      // nothing about conviction (see `computeDirectionalConsensus`).
+      const confidence = computeConvictionScore(context.views, accumulatedStances, response.stance);
 
       // Recorded AFTER the round's LLM calls returned, so this is always a
       // completed round (#374). `debate_id` is required by

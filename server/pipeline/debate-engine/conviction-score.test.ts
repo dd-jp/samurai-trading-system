@@ -1,3 +1,4 @@
+import { NO_DATA_MARKER } from '../analysts/types.js';
 import type { AnalystRoundStance } from './analyst-contribution.js';
 import { computeConvictionScore } from './conviction-score.js';
 import type { AnalystView } from './types.js';
@@ -116,7 +117,7 @@ describe('computeConvictionScore', () => {
     expect(score).toBeLessThanOrEqual(1);
   });
 
-  it('scores partial agreement as a spread between the extremes on the bearish-bullish axis', () => {
+  it('scores partial agreement by how many participants hold the direction', () => {
     const views = [
       makeView({ analyst_id: 'a1', confidence: 1, key_points: Array(3).fill('point') }),
       makeView({ analyst_id: 'a2', confidence: 1, key_points: Array(3).fill('point') }),
@@ -128,9 +129,112 @@ describe('computeConvictionScore', () => {
       { analyst_id: 'a3', round: 1, stance: 'neutral' },
     ];
 
-    // Disagreement metric: spread 1 (bullish=1, neutral=0) on a [-1,1] axis -> 1 - 1/2 = 0.5.
+    // Directional consensus: mean(1, 1, 0) = 0.667 on a [-1,1] axis.
     // Evidence strength: 1.0 (saturated key points, full confidence).
-    // score = 0.6 * 0.5 + 0.4 * 1 = 0.7
-    expect(computeConvictionScore(views, roundStances)).toBeCloseTo(0.7, 5);
+    // score = 0.6 * 0.667 + 0.4 * 1 = 0.8
+    //
+    // Was 0.7 before #625, under `1 - spread/2`. The difference IS the fix:
+    // spread is blind to counts, so it scored two-of-three-bullish exactly the
+    // same as one-of-three-bullish. A mean does not.
+    expect(computeConvictionScore(views, roundStances)).toBeCloseTo(0.8, 5);
+  });
+
+  describe('#625 — the three defects that made the system unable to trade', () => {
+    /**
+     * The production stock shape measured in #625: the technical analyst forms
+     * a directional view, while sentiment and fundamental are pinned neutral at
+     * confidence 0.05 by the #436 NO_DATA branch because the Market
+     * Intelligence store returns `[]` on every refresh (#552).
+     */
+    function stockDesk(technicalDirection: 'bullish' | 'bearish' | 'neutral'): AnalystView[] {
+      const absent = (id: string, type: string): AnalystView =>
+        makeView({
+          analyst_id: id,
+          analyst_type: type,
+          direction: 'neutral',
+          confidence: 0.05,
+          key_points: [
+            `${NO_DATA_MARKER}: no items available for this window`,
+            'weight it accordingly',
+          ],
+        });
+
+      return [
+        makeView({
+          analyst_id: 'tech',
+          analyst_type: 'technical',
+          direction: technicalDirection,
+          confidence: 0.95,
+          key_points: Array(4).fill('point'),
+        }),
+        absent('sent', 'sentiment'),
+        absent('fund', 'fundamental'),
+      ];
+    }
+
+    const CONVICTION_FLOOR = 0.55; // DEFAULT_TRADER_CONFIG.conviction_floor
+
+    it('defect 1 — a stock with a directional signal the mediator agrees with clears the floor', () => {
+      // Pre-#625 this branch had a CEILING of 0.5478 against a 0.55 floor, so
+      // a stock could never trade at any RSI, in any market. Gap: 0.0022.
+      const score = computeConvictionScore(stockDesk('bullish'), [], 'bullish');
+
+      expect(score).toBeGreaterThan(CONVICTION_FLOOR);
+    });
+
+    it('defect 2 — the mediator verdict moves the score', () => {
+      const views = stockDesk('bullish');
+
+      const agreeing = computeConvictionScore(views, [], 'bullish');
+      const dissenting = computeConvictionScore(views, [], 'bearish');
+      const abstaining = computeConvictionScore(views, [], 'neutral');
+
+      // Pre-#625 all three were identical: the adapter echoed analyst input
+      // directions back as round stances, so the debate contributed zero.
+      expect(agreeing).toBeGreaterThan(abstaining);
+      expect(abstaining).toBeGreaterThan(dissenting);
+    });
+
+    it('defect 3 — a silent desk scores LOWER than a directional one, not higher', () => {
+      const silent = computeConvictionScore(stockDesk('neutral'), [], 'neutral');
+      const directional = computeConvictionScore(stockDesk('bullish'), [], 'bullish');
+
+      // Pre-#625 this was inverted: all-neutral had zero spread and scored
+      // ~0.81-0.85, while a real directional opinion collapsed to ~0.53.
+      expect(silent).toBeLessThan(directional);
+      expect(silent).toBeLessThan(CONVICTION_FLOOR);
+    });
+
+    it('a mediator override with no analyst backing cannot authorise a trade', () => {
+      // The only branch with headroom above the floor pre-#625, and the one
+      // that produced both observed bearish debates — in each, the mediator
+      // emitted a direction no analyst agreed with.
+      const score = computeConvictionScore(stockDesk('neutral'), [], 'bearish');
+
+      expect(score).toBeLessThan(CONVICTION_FLOOR);
+    });
+
+    it('with no directional lean the score cannot reach any shipped floor', () => {
+      // Structural, not a tuned threshold: the first term is 0 without a lean,
+      // so the score is capped at EVIDENCE_WEIGHT = 0.4.
+      const perfectEvidenceNoDirection = [
+        makeView({
+          analyst_id: 'a1',
+          direction: 'bullish',
+          confidence: 1,
+          key_points: Array(9).fill('p'),
+        }),
+        makeView({
+          analyst_id: 'a2',
+          direction: 'bearish',
+          confidence: 1,
+          key_points: Array(9).fill('p'),
+        }),
+      ];
+
+      expect(computeConvictionScore(perfectEvidenceNoDirection, [], 'neutral')).toBeLessThanOrEqual(
+        0.4,
+      );
+    });
   });
 });

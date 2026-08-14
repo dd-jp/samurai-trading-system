@@ -156,10 +156,22 @@ This is a minimum-bar mitigation (structural prompt delimiting), not a guarantee
 **Algorithm**
 
 Conviction score is a hybrid combination:
-- **Disagreement metric**: inverse of bull/bear divergence (normalized 0-1, where 1 = full agreement)
+- **Directional consensus**: how strongly participants lean one way (normalized 0-1)
 - **Evidence strength**: quality/quantity of arguments and citations presented during debate
 
-Exact formula and weighting TBD during implementation — will be refined in Stage 1 based on empirical testing. The score is meant to be a scalar measure of consensus strength that the Trader can use for position sizing and risk assessment.
+`score = 0.6 × directional_consensus + 0.4 × evidence_strength`
+
+**RESOLVED (#625, 2026-08-14).** This section previously read "Exact formula and weighting TBD during implementation — will be refined in Stage 1 based on empirical testing." This is that refinement, and it was forced: [#625](https://github.com/dd-jp/samurai-trading-system/issues/625) measured 96 debates and 268 trader decisions that produced **zero orders, zero positions, zero closed trades**, and traced it to three compounding defects in the first version of this algorithm.
+
+- **Directional consensus is `|mean|` over participants' final positions** on a bearish(−1)…bullish(+1) axis — *not* the inverse spread `1 − (max − min)/2` originally shipped. Spread is blind to how many participants hold each position, so a table of silent analysts had zero spread and scored **1.0 — full conviction** — while one analyst forming a real directional opinion introduced a spread and collapsed the score to ~0.5. The system was most confident precisely when nobody had said anything. A mean counts participants, so silence and disagreement both score 0.
+- **The mediator's final stance is counted as one more participant.** Without it conviction is a pure function of the analyst views — the per-round `stances` echo `AnalystView.direction` and `finalPositionFor` falls back to the same field — so the debate contributed *exactly zero* to a score costing four LLM calls per run. **Bull and bear stances are excluded**: their direction is an assigned role, not an opinion, and counting them would add a permanent −1 and +1 to every debate.
+- **Analysts reporting `NO_DATA_MARKER` are excluded from the evidence average**, though they still count as neutral votes in consensus. They never looked; averaging their floor confidence in as weak evidence is the opposite of what that marker's own contract says. This, not the consensus term, is what produced the headline defect: with sentiment and fundamental pinned at 0.05 by the #436 NO_DATA branch, `avgConfidence` was fixed at `(0.95 + 0.05 + 0.05)/3 = 0.35` however strong the one analyst that did look was, capping stocks at **0.5478** against a **0.55** conviction floor. Both the old and new consensus metrics yield 0.5 for that shape, so no change to the formula's shape moves it — the ceiling was the muted analysts, and it dissolves as [#552](https://github.com/dd-jp/samurai-trading-system/issues/552) gives them real input, without retuning a threshold.
+
+**Structural invariant.** With no directional lean the first term is 0, so the score cannot exceed `EVIDENCE_WEIGHT` = 0.4 — below every conviction floor the Trader ships. A debate in which nobody takes a side can never open a position *arithmetically*, rather than by a threshold that could later be retuned.
+
+**Still empirical.** The 0.6/0.4 weighting and `KEY_POINTS_SATURATION = 3` remain named constants carried over unchanged; #625 corrected the defects, not the weights. [ADR-0018](../adr/0018-intraday-thresholds-sizing-and-the-signal-bar.md) states the bar this score ultimately has to clear — the signal must add **+0.18%/trade** (index ETP) or **+0.41%** (single-stock ETP) over a coin flip — which is measurable only once the system trades at all.
+
+The score is a scalar measure of consensus strength that the Trader uses for position sizing and risk assessment: it is threshold-gated at `conviction_floor` and then scales risk linearly from 0 at the floor to 1 at conviction 1.0, so a score just above the floor takes just above zero risk.
 
 ### Module: Weighted Debates (analyst track record)
 
