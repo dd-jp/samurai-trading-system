@@ -955,14 +955,45 @@ export function buildProductionTickRunner(config: ProductionConfig): SequentialT
 }
 
 /**
- * The tick loop. Self-scheduling (`setTimeout` after each tick completes)
- * rather than `setInterval`, plus an explicit in-flight guard: a tick that
- * outruns `tickIntervalMs` must not have a second tick stacked behind it.
- * Overlapping ticks would multiply concurrent LLM calls beyond
- * `max_concurrent_instruments`' cap — the cap bounds instruments *within* a
- * tick and knows nothing about ticks racing each other — and CLAUDE.md
- * treats LLM rate limiting as a hard stop. Belt and braces: the guard also
- * covers a caller supplying its own timer seam that fires eagerly.
+ * The tick loop. Self-scheduling (`setTimeout`) rather than `setInterval`, with
+ * a PER-INSTRUMENT in-flight guard.
+ *
+ * ## Why the guard is per-instrument (#669)
+ *
+ * It used to be global: one `inFlight` promise, and a tick arriving while any
+ * instrument was still working was dropped whole, logging "tick skipped:
+ * previous tick still running". That made starvation systematically
+ * one-directional. A debate is 4 LLM calls and ~13s measured, crypto runs 24/7
+ * and produced 33 debates per instrument against 7 per equity instrument over
+ * 42.6h — so in practice it was always a slow CRYPTO debate costing the equity
+ * leg a tick, never the reverse. Under the old weeks-to-months horizon that was
+ * nearly free. Under ADR-0014's intraday horizon the equity leg's window is
+ * about two hours, and David's stop rule is −0.5% with an indicator-based early
+ * exit, so on a 3x leveraged ETP a lost tick is real slippage on the exit.
+ *
+ * ## Why dropping the global guard is safe
+ *
+ * The original doc justified it as LLM-concurrency control: "overlapping ticks
+ * would multiply concurrent LLM calls beyond `max_concurrent_instruments`'
+ * cap — the cap bounds instruments *within* a tick and knows nothing about
+ * ticks racing each other". That reasoning predates the mechanisms that now own
+ * this. `RateLimiter.reserve` (#388) admits or refuses every debate against a
+ * per-asset-class window BEFORE any call is made, and `SpendCap` (ADR-0008)
+ * bounds total dollars. Both are indifferent to which tick a debate belongs to.
+ * The global lock was doing rate limiting's job, coarsely, and paying for it in
+ * dropped equity ticks.
+ *
+ * What remains genuinely per-instrument is pipeline reentrancy: one instrument
+ * must not have two passes in flight, or the second would decide against
+ * position state the first has not finished writing. That is exactly what
+ * `running` guards, and nothing wider.
+ *
+ * ## Scheduling
+ *
+ * The next tick is scheduled when the previous pass STARTS, not when it
+ * finishes, so the cadence is the interval rather than interval-plus-duration.
+ * Under the old shape a 40-second pass stretched every subsequent tick by 40
+ * seconds, which is the same starvation seen from the other end.
  *
  * The first tick fires one interval after `start()`, not immediately: startup
  * (orphan scan, heartbeat) should settle before the first pipeline pass, and
@@ -979,29 +1010,84 @@ export function startTickLoop(deps: {
   maxConcurrentInstruments: number;
 }): { stop: () => Promise<void> } {
   let stopped = false;
-  /** The current pass, so `stop()` can await it instead of abandoning it mid-pipeline. */
-  let inFlight: Promise<void> | undefined;
+  /** Instruments with a pass still in flight — the reentrancy guard (#669). */
+  const running = new Set<string>();
+  /** Outstanding passes, so `stop()` awaits them instead of abandoning them mid-pipeline. */
+  const passes = new Set<Promise<void>>();
   let handle: NodeJS.Timeout | undefined;
 
+  /**
+   * Clears each instrument's guard when THAT instrument's pipeline settles,
+   * rather than when the whole pass does.
+   *
+   * The distinction is the entire point of #669 and is easy to get wrong — I
+   * did, first time. Releasing on pass completion is still a per-PASS guard
+   * wearing a per-instrument shape: a two-instrument plan where one is slow
+   * keeps the fast one marked running until the slow one finishes, which
+   * reproduces exactly the starvation this ticket exists to remove.
+   *
+   * Wrapping the runner is what makes it genuinely per-instrument, and it is
+   * also the narrowest seam that knows an instrument is done — `runTickPlan`
+   * reports only the whole plan's completion.
+   */
+  const guardedRunner: TickRunner = {
+    runInstrument: async (signal, ctx) => {
+      try {
+        return await deps.runner.runInstrument(signal, ctx);
+      } finally {
+        running.delete(signal.asset);
+      }
+    },
+  };
+
   const runOnce = async (): Promise<void> => {
-    if (inFlight !== undefined) {
-      deps.logger.log({
-        trace_id: 'tick-loop',
-        stage: 'tick-loop',
-        level: 'warn',
-        message: 'tick skipped: previous tick still running',
-      });
-      return;
-    }
     try {
       const plan = deps.scheduler.nextTick(deps.clock);
-      inFlight = runTickPlan(plan, deps.runner, deps.clock, {
+      const ready = plan.instruments.filter((instrument) => !running.has(instrument.asset));
+
+      if (ready.length < plan.instruments.length) {
+        const busy = plan.instruments
+          .filter((instrument) => running.has(instrument.asset))
+          .map((instrument) => instrument.asset);
+        deps.logger.log({
+          trace_id: 'tick-loop',
+          stage: 'tick-loop',
+          level: 'warn',
+          // Named, not counted. The whole point of #669 is that WHICH
+          // instrument is late decides whether this is benign; a bare count
+          // cannot distinguish "crypto is slow again" from "the equity leg has
+          // stopped keeping up inside its two-hour window".
+          message: `tick: ${busy.length} instrument(s) still running from a previous pass, skipped this tick`,
+          payload: { skipped: busy, ran: ready.length },
+        });
+      }
+
+      if (ready.length === 0) return;
+
+      for (const instrument of ready) running.add(instrument.asset);
+
+      const pass = runTickPlan({ ...plan, instruments: ready }, guardedRunner, deps.clock, {
         max_concurrent_instruments: deps.maxConcurrentInstruments,
         logger: deps.logger,
         auditLog: deps.persistence.auditLog,
         currentTickStore: deps.persistence.currentTickStore,
-      }).then(() => undefined);
-      await inFlight;
+      })
+        .then(() => undefined)
+        .finally(() => {
+          // Backstop only — `guardedRunner` clears each instrument as its own
+          // pipeline settles. This catches an instrument the plan claimed but
+          // `runTickPlan` never dispatched (a throw between claim and call),
+          // which would otherwise leave it marked running forever and silently
+          // stop trading it for the rest of the process.
+          for (const instrument of ready) running.delete(instrument.asset);
+        });
+
+      passes.add(pass);
+      try {
+        await pass;
+      } finally {
+        passes.delete(pass);
+      }
     } catch (error) {
       // A thrown tick must not kill the process: the heartbeat's silence is
       // the intended external failure signal, and a transient stage/transport
@@ -1014,15 +1100,21 @@ export function startTickLoop(deps: {
         message: 'tick failed',
         payload: { error: error instanceof Error ? error.message : String(error) },
       });
-    } finally {
-      inFlight = undefined;
     }
   };
 
   const schedule = (): void => {
     if (stopped) return;
     handle = setTimeout(() => {
-      void runOnce().then(schedule);
+      // Re-armed BEFORE the pass rather than after it (#669). Chaining on
+      // completion made the real period `interval + passDuration`, so one slow
+      // crypto debate pushed back every instrument's next tick — the same
+      // starvation the per-instrument guard removes, arriving by the other
+      // route. The guard is what makes this safe: an instrument still working
+      // is skipped by name, so re-arming cannot stack two passes on one
+      // instrument.
+      schedule();
+      void runOnce();
     }, deps.tickIntervalMs);
   };
 
@@ -1035,8 +1127,11 @@ export function startTickLoop(deps: {
         clearTimeout(handle);
         handle = undefined;
       }
-      // `runOnce` swallows its own errors, so this only ever waits.
-      await inFlight;
+      // Every outstanding pass, not just the newest: with the interval re-armed
+      // ahead of the pass, more than one can legitimately be in flight across
+      // different instruments. `runOnce` swallows its own errors, so this only
+      // ever waits.
+      await Promise.all([...passes]);
     },
   };
 }
