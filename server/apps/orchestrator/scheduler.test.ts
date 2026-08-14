@@ -23,6 +23,8 @@ function calendarOpenAt(...openInstants: Date[]): TradingCalendar {
     isOpen: (instant) => open.has(instant.getTime()),
     isTradingDay: (instant) => open.has(instant.getTime()),
     sessionStart: (instant) => SESSION_BOUNDARY.sessionStart(instant),
+    // #668 — this double predates `sessionEnd`; no test here asks about it.
+    sessionEnd: () => null,
   };
 }
 
@@ -77,6 +79,8 @@ describe('UniverseScheduler.nextTick', () => {
       isOpen: (instant) => instant.getTime() < close.getTime(),
       isTradingDay: () => true,
       sessionStart: (instant) => SESSION_BOUNDARY.sessionStart(instant),
+      // #668 — this double predates `sessionEnd`; no test here asks about it.
+      sessionEnd: () => null,
     };
     const scheduler = makeScheduler({ calendar });
 
@@ -100,6 +104,8 @@ describe('UniverseScheduler.nextTick', () => {
       },
       isTradingDay: () => true,
       sessionStart: (instant) => SESSION_BOUNDARY.sessionStart(instant),
+      // #668 — this double predates `sessionEnd`; no test here asks about it.
+      sessionEnd: () => null,
     };
 
     makeScheduler({ calendar }).nextTick(clockAt(MARKET_OPEN));

@@ -7,7 +7,10 @@
  * `OrderIntent` / `OrderIntentMetadata` are NOT redefined here: they are
  * cross-spec types owned by server/shared/types.ts (registry #1).
  */
-import type { MarketDataService } from '../../providers/market-data-service/index.js';
+import type {
+  MarketDataService,
+  TradingCalendar,
+} from '../../providers/market-data-service/index.js';
 /** Asset classes the risk multiplier is keyed on, matching `Mark.asset_class`. */
 import type {
   AssetClass,
@@ -29,6 +32,20 @@ export type { AssetClass };
 export interface TraderConfig {
   /** Below this conviction there is no edge to act on — no entry. */
   conviction_floor: number;
+  /**
+   * How long before the session close the book must be flat (#668).
+   *
+   * ADR-0014 records the horizon as **intraday, flat by market close, no
+   * overnight carry**, and #657 fixed the rule at **close − 5 minutes**
+   * resolved through the instrument's own `TradingCalendar`. An OFFSET rather
+   * than a wall-clock constant, deliberately: the paper venue closes 16:00 ET
+   * and the live LSE leg closes 16:30 London (12:30 on a half-day), and #656
+   * measured only a two-hour overlap between the two sessions, so any shared
+   * constant would be wrong for one of them.
+   *
+   * Inside this window the Trader flattens what it holds and opens nothing new.
+   */
+  flatten_before_close_ms: number;
   /**
    * Hard per-trade risk cap as a fraction of equity, reached at conviction
    * 1.0. Deliberately a small fraction, well under Kelly (research: full
@@ -111,6 +128,7 @@ export const DEFAULT_TRADER_CONFIG: TraderConfig = {
   min_viable_notional: 10,
   time_in_force: { crypto: 'gtc', stocks: 'day' },
   scale_in_conviction_delta: 0.1,
+  flatten_before_close_ms: 5 * 60 * 1_000,
 };
 
 /** Fully deterministic given its inputs + the clock-scoped market data. */
@@ -130,6 +148,21 @@ export interface TraderInput {
   marketData: MarketDataService;
   equity: number;
   config: TraderConfig;
+  /**
+   * When each asset class's venue closes (#668) — the input the flat-by-close
+   * rule resolves through.
+   *
+   * REQUIRED and not optional, on purpose. This repo's dominant defect class is
+   * a tested mechanism nothing calls (#364's store, #388's rate limiter), and
+   * an optional calendar here would let the composition root drop it and leave
+   * the flatten silently unarmed — which looks exactly like a quiet market in a
+   * soak log. Keyed by asset class rather than by instrument because that is
+   * the shape the composition root already builds (`sessionCalendars`), and
+   * because the choice must follow the INSTRUMENT rather than the runtime
+   * mode: the crypto leg and the equity leg run under different venues in the
+   * same process.
+   */
+  sessionCalendars: Record<AssetClass, TradingCalendar>;
   /**
    * #74: position-aware branching. Live snapshot, not point-in-time — the
    * Trader only ever runs on the current tick, unlike replay-scoped market

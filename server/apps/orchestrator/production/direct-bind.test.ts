@@ -8,6 +8,10 @@ import type {
   VerdictConfig,
   VerdictDecision,
 } from '../../../pipeline/verdict/index.js';
+import {
+  AlwaysOpenCalendar,
+  UsEquityRegularHoursCalendar,
+} from '../../../providers/market-data-service/index.js';
 import type { Clock, OpenPosition, OrderIntent } from '../../../shared/index.js';
 import { openSharedStore } from '../../../shared/store/index.js';
 import { OrphanVerdictScanner } from '../orphan-verdict-scan.js';
@@ -114,6 +118,7 @@ describe('buildTraderStep', () => {
       min_viable_notional: 10,
       scale_in_conviction_delta: 0.1,
       time_in_force: { crypto: 'gtc', stocks: 'day' },
+      flatten_before_close_ms: 5 * 60 * 1_000,
     };
     const step = buildTraderStep({
       marketData: FAKE_MARKET_DATA,
@@ -135,6 +140,12 @@ describe('buildTraderStep', () => {
       setupStore: new FixtureSetupStore(),
       // #568: no lot open in these cases, so nothing to look an exit fill up for.
       getExitFillSizes: async () => new Map<string, number>(),
+      // #668: the Trader resolves flat-by-close through the instrument's own
+      // venue calendar, so the step needs the same pair production builds once.
+      sessionCalendars: {
+        crypto: new AlwaysOpenCalendar(),
+        stocks: new UsEquityRegularHoursCalendar(),
+      },
     });
 
     const intent = await step({
@@ -164,6 +175,7 @@ describe('buildTraderStep', () => {
       min_viable_notional: 10,
       scale_in_conviction_delta: 0.1,
       time_in_force: { crypto: 'gtc', stocks: 'day' },
+      flatten_before_close_ms: 5 * 60 * 1_000,
     };
     const step = buildTraderStep({
       marketData: FAKE_MARKET_DATA,
@@ -185,6 +197,12 @@ describe('buildTraderStep', () => {
       setupStore: new FixtureSetupStore(),
       // #568: no lot open in these cases, so nothing to look an exit fill up for.
       getExitFillSizes: async () => new Map<string, number>(),
+      // #668: the Trader resolves flat-by-close through the instrument's own
+      // venue calendar, so the step needs the same pair production builds once.
+      sessionCalendars: {
+        crypto: new AlwaysOpenCalendar(),
+        stocks: new UsEquityRegularHoursCalendar(),
+      },
     });
 
     const intent = await step({
@@ -217,6 +235,7 @@ describe('buildTraderStep', () => {
       min_viable_notional: 10,
       scale_in_conviction_delta: 0.1,
       time_in_force: { crypto: 'gtc', stocks: 'day' },
+      flatten_before_close_ms: 5 * 60 * 1_000,
     };
     const store = new SqliteExecutionStore(openSharedStore(':memory:'));
     await store.writeAheadPosition({
@@ -274,6 +293,12 @@ describe('buildTraderStep', () => {
       portfolioSnapshots: new Map(),
       config,
       setupStore: new FixtureSetupStore(),
+      // #668: the Trader resolves flat-by-close through the instrument's own
+      // venue calendar, so the step needs the same pair production builds once.
+      sessionCalendars: {
+        crypto: new AlwaysOpenCalendar(),
+        stocks: new UsEquityRegularHoursCalendar(),
+      },
     });
 
     const intent = await step({
@@ -333,6 +358,7 @@ describe('buildTraderStep capital ceiling (#511)', () => {
     min_viable_notional: 0.01,
     scale_in_conviction_delta: 0.1,
     time_in_force: { crypto: 'gtc', stocks: 'day' },
+    flatten_before_close_ms: 5 * 60 * 1_000,
   };
 
   function stepWithCeiling(capitalCeilingUsd?: number) {
@@ -357,6 +383,12 @@ describe('buildTraderStep capital ceiling (#511)', () => {
       setupStore: new FixtureSetupStore(),
       // #568: no lot open in these cases, so nothing to look an exit fill up for.
       getExitFillSizes: async () => new Map<string, number>(),
+      // #668: the Trader resolves flat-by-close through the instrument's own
+      // venue calendar, so the step needs the same pair production builds once.
+      sessionCalendars: {
+        crypto: new AlwaysOpenCalendar(),
+        stocks: new UsEquityRegularHoursCalendar(),
+      },
       ...(capitalCeilingUsd === undefined ? {} : { capitalCeilingUsd }),
     });
   }

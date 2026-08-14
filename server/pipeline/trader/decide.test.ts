@@ -4,12 +4,15 @@
  * Decisions): a DebateResult + a fixture MarketDataService + a mock clock,
  * asserting on the returned OrderIntent (or null). There is no LLM to mock.
  */
-import type {
-  Bar,
-  BarWindow,
-  IndicatorValue,
-  Mark,
-  MarketDataService,
+import {
+  AlwaysOpenCalendar,
+  type Bar,
+  type BarWindow,
+  type IndicatorValue,
+  LseRegularHoursCalendar,
+  type Mark,
+  type MarketDataService,
+  UsEquityRegularHoursCalendar,
 } from '../../providers/market-data-service/index.js';
 import type { Clock, OpenPosition } from '../../shared/index.js';
 import type { DebateResult } from '../debate-engine/index.js';
@@ -160,6 +163,15 @@ function traderInput(overrides: Partial<TraderInput> = {}): TraderInput {
     // quantity is `filled_size`, which is what every pre-#568 case here means.
     exitFillSizes: async () => new Map<string, number>(),
     setupStore: new FixtureSetupStore(),
+    // #668. The real calendars, not stubs — DECISION_BAR is 10:00 UTC (06:00
+    // ET), ten hours from the 16:00 ET close, so every pre-#668 case here sits
+    // far outside the flatten window and is unaffected. The flat-by-close cases
+    // below move the clock instead of swapping the calendar, which is what makes
+    // them exercise the boundary the production path actually resolves.
+    sessionCalendars: {
+      crypto: new AlwaysOpenCalendar(),
+      stocks: new UsEquityRegularHoursCalendar(),
+    },
     ...overrides,
   };
 }
@@ -654,6 +666,173 @@ describe('decide — determinism & idempotency', () => {
     );
 
     expect(next?.idempotency_key).not.toBe(first?.idempotency_key);
+  });
+});
+
+/**
+ * #668 — ADR-0014's "intraday, flat by market close, no overnight carry".
+ *
+ * 2026-07-15 is a Wednesday; the US close is 20:00 UTC (16:00 EDT), so the
+ * default 5-minute window opens at 19:55 UTC.
+ */
+describe('decide — flat by close (#668)', () => {
+  const CLOSE = new Date('2026-07-15T20:00:00Z');
+  const INSIDE_WINDOW = new Date('2026-07-15T19:56:00Z');
+  const OUTSIDE_WINDOW = new Date('2026-07-15T19:50:00Z');
+
+  function holding(overrides: Partial<OpenPosition> = {}): OpenPosition {
+    return openPosition({ side: 'buy', filled_size: 10, ...overrides });
+  }
+
+  it('flattens a held position inside the window', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(INSIDE_WINDOW),
+        positionState: async () => [holding()],
+      }),
+    );
+
+    expect(outcome.intent?.intent_type).toBe('exit');
+    expect(outcome.intent?.side).toBe('sell');
+  });
+
+  /**
+   * The ordering assertion, and the reason the check sits above every other
+   * holding branch. `neutral` was 92 of the 94 debates in the soak — if the
+   * neutral skip ran first it would suppress the flatten on almost every tick
+   * and carry the book overnight, which is the exact failure the rule exists
+   * to prevent.
+   */
+  it('flattens even when the debate is neutral — the commonest branch must not suppress it', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(INSIDE_WINDOW),
+        debate: debateResult({ direction: 'neutral' }),
+        positionState: async () => [holding()],
+      }),
+    );
+
+    expect(outcome.skip_reason).not.toBe('holding_neutral_or_non_converged');
+    expect(outcome.intent?.intent_type).toBe('exit');
+  });
+
+  it('flattens a non-converged debate too — ADR-0013 leaves no human to defer to', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(INSIDE_WINDOW),
+        debate: debateResult({ converged: false }),
+        positionState: async () => [holding()],
+      }),
+    );
+
+    expect(outcome.intent?.intent_type).toBe('exit');
+  });
+
+  it('holds normally just outside the window', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(OUTSIDE_WINDOW),
+        debate: debateResult({ direction: 'neutral' }),
+        positionState: async () => [holding()],
+      }),
+    );
+
+    expect(outcome.intent).toBeNull();
+    expect(outcome.skip_reason).toBe('holding_neutral_or_non_converged');
+  });
+
+  it('opens nothing new inside the window', async () => {
+    const outcome = await decideWithReason(
+      traderInput({ clock: new ManualClock(INSIDE_WINDOW), positionState: async () => [] }),
+    );
+
+    expect(outcome.intent).toBeNull();
+    expect(outcome.skip_reason).toBe('session_closing');
+  });
+
+  it('still opens just outside the window', async () => {
+    const outcome = await decideWithReason(
+      traderInput({ clock: new ManualClock(OUTSIDE_WINDOW), positionState: async () => [] }),
+    );
+
+    expect(outcome.intent?.intent_type).toBe('entry');
+  });
+
+  it('fires exactly at the window boundary, not a tick later', async () => {
+    const atBoundary = new Date(CLOSE.getTime() - DEFAULT_TRADER_CONFIG.flatten_before_close_ms);
+
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(atBoundary),
+        debate: debateResult({ direction: 'neutral' }),
+        positionState: async () => [holding()],
+      }),
+    );
+
+    expect(outcome.intent?.intent_type).toBe('exit');
+  });
+
+  /**
+   * #668 is explicit that a crypto flatten must NOT be implemented ahead of
+   * #667, which is David's thesis amendment. `AlwaysOpenCalendar.sessionEnd`
+   * returns null and the rule declines to act, rather than inventing one of
+   * #667's four options.
+   */
+  it('does not flatten crypto — #667 has not decided what its close means', async () => {
+    const marketData = new FixtureMarketData(bars(15, 2), 'crypto');
+
+    const outcome = await decideWithReason(
+      traderInput({
+        marketData,
+        clock: new ManualClock(INSIDE_WINDOW),
+        debate: debateResult({ direction: 'neutral' }),
+        positionState: async () => [holding({ asset_class: 'crypto' })],
+      }),
+    );
+
+    expect(outcome.intent).toBeNull();
+    expect(outcome.skip_reason).toBe('holding_neutral_or_non_converged');
+  });
+
+  /**
+   * The rule follows the INSTRUMENT'S venue, not the runtime mode. #656
+   * measured LSE 08:00-16:30 London against US 14:30-21:00 UTC — only two
+   * hours of overlap — so a shared wall-clock constant would be wrong for one
+   * leg. At 19:56 UTC the LSE has been shut for hours; its next close is the
+   * following day, so this instant is nowhere near ITS window.
+   */
+  it('uses the venue calendar it is given, so the LSE leg does not flatten on the US close', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(INSIDE_WINDOW),
+        debate: debateResult({ direction: 'neutral' }),
+        positionState: async () => [holding()],
+        sessionCalendars: {
+          crypto: new AlwaysOpenCalendar(),
+          stocks: new LseRegularHoursCalendar(),
+        },
+      }),
+    );
+
+    expect(outcome.intent).toBeNull();
+    expect(outcome.skip_reason).toBe('holding_neutral_or_non_converged');
+  });
+
+  it('flattens the LSE leg at ITS 16:30 London close', async () => {
+    // 16:26 London in July (BST) = 15:26 UTC, inside the 15:25 window.
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(new Date('2026-07-15T15:26:00Z')),
+        debate: debateResult({ direction: 'neutral' }),
+        positionState: async () => [holding()],
+        sessionCalendars: {
+          crypto: new AlwaysOpenCalendar(),
+          stocks: new LseRegularHoursCalendar(),
+        },
+      }),
+    );
+
+    expect(outcome.intent?.intent_type).toBe('exit');
   });
 });
 

@@ -749,11 +749,13 @@ describe('AlpacaAccountStateProvider — calendar wiring', () => {
         isOpen: () => true,
         isTradingDay: () => true,
         sessionStart: vi.fn().mockReturnValue(cryptoStart),
+        sessionEnd: () => null,
       };
       const stocks: TradingCalendar = {
         isOpen: () => true,
         isTradingDay: () => true,
         sessionStart: vi.fn().mockReturnValue(stocksStart),
+        sessionEnd: () => null,
       };
 
       await makeProvider(harness, { calendars: { crypto, stocks } }).getAccountState(

@@ -867,6 +867,12 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     trader: buildTraderStep({
       ...breakerStateDeps,
       config: config.traderConfig,
+      // #668: THE pair built above, not a fresh one. ADR-0014's flat-by-close
+      // resolves through the instrument's own venue, so the Trader has to read
+      // the same calendars the daily-PnL boundary and the volatility reading
+      // do — a second literal here would be a second place for an override to
+      // land on only some consumers.
+      sessionCalendars,
       // #568: literally the `executionStore` above — the same instance
       // `getOpenPositions` reads and `ingestFills()` writes fills through — so
       // the Trader sizes an exit off the same fill record `executeExit`

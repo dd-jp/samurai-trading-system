@@ -232,6 +232,7 @@ describe('market-hours gating', () => {
       isOpen: () => false,
       isTradingDay: () => false,
       sessionStart: (instant) => alwaysOpen.sessionStart(instant),
+      sessionEnd: () => null,
     };
     const source = new IbkrDataSource(ibkrClient, { calendar: closedAllWeek });
 

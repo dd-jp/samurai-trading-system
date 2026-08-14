@@ -68,6 +68,7 @@ const NEVER_OPEN: TradingCalendar = {
   isOpen: () => false,
   isTradingDay: () => false,
   sessionStart: (instant) => instant,
+  sessionEnd: () => null,
 };
 
 describe('the in-session bar count is what the guarantee is enforced on (#386)', () => {
@@ -168,6 +169,7 @@ describe('the widen targets the count the caller asked for, not one more', () =>
     isOpen: (instant) => instant.getUTCHours() % 5 === 0,
     isTradingDay: () => true,
     sessionStart: (instant) => instant,
+    sessionEnd: () => null,
   };
 
   it('sizes the widen off window.lookback, not lookback + FORMING_BAR_FETCH_MARGIN', async () => {
@@ -218,6 +220,7 @@ describe('the retry is bounded, and exhaustion is loud', () => {
       isOpen: (instant) => instant.getTime() > inSessionFrom,
       isTradingDay: () => true,
       sessionStart: (instant) => instant,
+      sessionEnd: () => null,
     };
     const { client, limits } = recordingClient((limit) => hourlyCandles(SESSION_SHUT, limit));
     const source = new AlpacaDataSource(client, { asset_class: 'stocks', calendar: trickle });
