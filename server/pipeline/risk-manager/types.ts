@@ -179,6 +179,22 @@ export interface RiskConfig {
   min_viable_size: number;
   /** CII soft signal (#205): absolute WorldMonitor CII level (0-100) above which a warning fires. Unpinned, tuned in paper trading. */
   cii_threshold: number;
+  /**
+   * #640: max age of a mark used to VALUE a held position, per asset class,
+   * before `computePortfolioView` refuses to produce a view at all.
+   *
+   * A risk bound rather than a data-service one. Every number the Risk
+   * Manager gates on — gross exposure, per-class exposure, drawdown, daily
+   * PnL — is computed from these marks, so a frozen price does not degrade
+   * the view, it freezes every limit that reads it. The spec bills this stage
+   * as "trusted absolutely under stress"; that claim needs the marks under it
+   * to be current, and nothing checked until this field existed.
+   *
+   * `evaluate()` itself stays pure and synchronous and does NOT read this —
+   * it never touches the data service. The bound binds where the reads
+   * actually happen, which is `computePortfolioView`.
+   */
+  max_mark_age: Record<'crypto' | 'stocks', number>;
 }
 
 /** The red-team critic's verdict on one gated `OrderIntent` (ADR-0003, #204). Produced *outside* `evaluate()` by critic.ts and consumed here as pre-built data.

@@ -4,15 +4,21 @@
  * See docs/specs/verdict-spec.md (Module: Gate Sequence, Module:
  * Human-in-the-Loop).
  *
- * Deterministic decision gate: staleness -> drift -> dedup -> market-open ->
- * breaker re-check -> HITL. First failing gate short-circuits to `no_go`
- * with its reason; a full pass (auto or human-approved) produces `go`.
+ * Deterministic decision gate: staleness -> stale_feed -> drift -> dedup ->
+ * market-open -> breaker re-check -> HITL. First failing gate short-circuits
+ * to `no_go` with its reason; a full pass (auto or human-approved) produces
+ * `go`.
+ *
+ * The first two gates read as one word and are two different questions:
+ * `staleness` bounds how old our DECISION is, `stale_feed` (#641) bounds how
+ * old the PRICE is. Neither implies the other.
  *
  * HITL only engages per the per-asset-class automation dial: `manual`
  * always engages it, `auto` never does, `semi_auto` engages it only when a
  * flag is set (non-converged, no-precedent, size-over, or near-limit —
  * `risk_decision.modifications != null`).
  */
+import { isMarkStale } from '../../providers/market-data-service/index.js';
 import type { OrderIntent } from '../../shared/index.js';
 import type { RiskDecision } from '../risk-manager/index.js';
 import type {
@@ -43,8 +49,9 @@ function isFlagged(
  * `VerdictImpl` — the HITL path still has tests, and they construct the
  * verdict directly.
  *
- * The gate is not merely unused, it is UNSOUND. Gates 1 (staleness) and 2
- * (drift) run before the approval `await` and are never re-evaluated, so an
+ * The gate is not merely unused, it is UNSOUND. The freshness gates
+ * (staleness, stale_feed, drift) run before the approval `await` and are never
+ * re-evaluated, so an
  * approval returning after `human_timeout` submits at a price last checked
  * that long ago: with `max_signal_age.crypto` at 5 minutes and a 15-minute
  * human timeout, a gate that reads as a freshness guarantee is not one.
@@ -147,6 +154,24 @@ export class VerdictImpl implements Verdict {
     // unbounded drift. A bracket with no positive entry price is not a bracket
     // this gate can reason about, so it is refused rather than waved through.
     const mark = await marketData.getMark(orderIntent.instrument, now);
+
+    // Gate 2a: FEED staleness (#641) — how long ago the market last spoke,
+    // measured off `Mark.observed_at`.
+    //
+    // Ordered BEFORE the drift gate, and on the same `mark` that gate reads
+    // rather than a second fetch. A stale mark does not merely weaken the
+    // drift comparison, it breaks it in both directions: a price frozen at the
+    // bracket's entry passes a gate that is supposed to be measuring live
+    // movement, and one frozen far from it fires a `drift` no-go that names
+    // the wrong cause. Running this first means a `drift` verdict always
+    // refers to real movement, and a dead feed is reported as a dead feed.
+    //
+    // Distinct from gate 1: that bounds how old our DECISION is, this bounds
+    // how old the PRICE is. Both must hold — see `VerdictConfig.max_mark_age`.
+    if (isMarkStale(mark, now, config.max_mark_age[orderIntent.asset_class])) {
+      return noGo('stale_feed', idempotencyKey, now);
+    }
+
     if (!(orderIntent.entry > 0)) {
       return noGo('drift', idempotencyKey, now);
     }
@@ -191,7 +216,8 @@ export class VerdictImpl implements Verdict {
 
     // KNOWN HAZARD IF THE DIAL IS EVER TURNED BACK (#434, ADR-0007).
     //
-    // Gates 1 (staleness) and 2 (drift) ran ABOVE, and nothing re-evaluates
+    // The freshness gates (staleness, stale_feed, drift) ran ABOVE, and
+    // nothing re-evaluates
     // them after this await returns. So an approved trade submits at a price
     // last checked `human_timeout` ago: with `max_signal_age.crypto` at 5
     // minutes and `human_timeout` at 15, a 15-minute-old approval sails past a

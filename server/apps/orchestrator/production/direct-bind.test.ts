@@ -83,6 +83,14 @@ const FAKE_VOLATILITY = {
 
 const NO_POSITIONS: OpenPosition[] = [];
 
+/**
+ * The #640 valuation-freshness bound for these binds. Wide, because these
+ * tests exercise wiring rather than freshness — `FAKE_MARKET_DATA` observes
+ * every mark at the clock's own `now`, so the bound is never the reason a case
+ * here passes or fails. `portfolio-view.test.ts` owns the gate's behaviour.
+ */
+const TEST_MAX_MARK_AGE = { crypto: 2 * 60_000, stocks: 15 * 60_000 };
+
 /** B1 persistence seam — a sink; these tests assert step behavior, not the write. */
 const NOOP_BREAKER_STATE = { save: () => {} };
 
@@ -133,6 +141,7 @@ describe('buildTraderStep', () => {
       accountState: FAKE_ACCOUNT_STATE,
       volatility: FAKE_VOLATILITY,
       getOpenPositions: async () => NO_POSITIONS,
+      maxMarkAge: TEST_MAX_MARK_AGE,
       mode: 'paper',
       breakerState: NOOP_BREAKER_STATE,
       portfolioSnapshots: new Map(),
@@ -190,6 +199,7 @@ describe('buildTraderStep', () => {
       accountState: FAKE_ACCOUNT_STATE,
       volatility: FAKE_VOLATILITY,
       getOpenPositions: async () => NO_POSITIONS,
+      maxMarkAge: TEST_MAX_MARK_AGE,
       mode: 'paper',
       breakerState: NOOP_BREAKER_STATE,
       portfolioSnapshots: new Map(),
@@ -287,6 +297,7 @@ describe('buildTraderStep', () => {
       accountState: FAKE_ACCOUNT_STATE,
       volatility: FAKE_VOLATILITY,
       getOpenPositions: () => store.getOpenPositions(),
+      maxMarkAge: TEST_MAX_MARK_AGE,
       getExitFillSizes: (idempotency_keys) => store.getExitFillSizes(idempotency_keys),
       mode: 'paper',
       breakerState: NOOP_BREAKER_STATE,
@@ -376,6 +387,7 @@ describe('buildTraderStep capital ceiling (#511)', () => {
       accountState: FAKE_ACCOUNT_STATE,
       volatility: FAKE_VOLATILITY,
       getOpenPositions: async () => NO_POSITIONS,
+      maxMarkAge: TEST_MAX_MARK_AGE,
       mode: 'paper',
       breakerState: NOOP_BREAKER_STATE,
       portfolioSnapshots: new Map(),
@@ -441,6 +453,7 @@ describe('buildRiskStep', () => {
     concentration: { cap: 100_000, threshold: 0.9 },
     min_viable_size: 1,
     cii_threshold: 80,
+    max_mark_age: TEST_MAX_MARK_AGE,
   };
 
   function makeIntent(overrides: Partial<OrderIntent> = {}): OrderIntent {
@@ -489,6 +502,7 @@ describe('buildRiskStep', () => {
       accountState: FAKE_ACCOUNT_STATE,
       volatility: FAKE_VOLATILITY,
       getOpenPositions: async () => NO_POSITIONS,
+      maxMarkAge: TEST_MAX_MARK_AGE,
       mode: 'paper',
       breakerState: NOOP_BREAKER_STATE,
       portfolioSnapshots: new Map(),
@@ -532,6 +546,7 @@ describe('buildRiskStep', () => {
       },
       volatility: FAKE_VOLATILITY,
       getOpenPositions: async () => NO_POSITIONS,
+      maxMarkAge: TEST_MAX_MARK_AGE,
       mode: 'paper',
       breakerState: NOOP_BREAKER_STATE,
       portfolioSnapshots: new Map(),
@@ -548,6 +563,7 @@ describe('buildVerdictStep', () => {
   const VERDICT_CONFIG: VerdictConfig = {
     automation_level: { crypto: 'auto', stocks: 'auto' },
     max_signal_age: { crypto: 60_000, stocks: 60_000 },
+    max_mark_age: TEST_MAX_MARK_AGE,
     drift_tolerance_pct: { crypto: 0.05, stocks: 0.05 },
     human_timeout: 60_000,
     allow_extended_hours: true,
@@ -612,6 +628,7 @@ describe('buildVerdictStep', () => {
       accountState: FAKE_ACCOUNT_STATE,
       volatility: FAKE_VOLATILITY,
       getOpenPositions: async () => NO_POSITIONS,
+      maxMarkAge: TEST_MAX_MARK_AGE,
       mode: 'paper',
       breakerState: NOOP_BREAKER_STATE,
       portfolioSnapshots: new Map(),
@@ -681,6 +698,7 @@ describe('buildVerdictStep', () => {
       accountState: FAKE_ACCOUNT_STATE,
       volatility: FAKE_VOLATILITY,
       getOpenPositions: async () => NO_POSITIONS,
+      maxMarkAge: TEST_MAX_MARK_AGE,
       mode: 'paper',
       breakerState: NOOP_BREAKER_STATE,
       portfolioSnapshots: new Map(),
@@ -714,6 +732,7 @@ describe('buildExecutionStep', () => {
       writeAheadPosition: vi.fn(async () => {}),
       updatePositionState: vi.fn(async () => {}),
       getOpenPositions: vi.fn(async () => []),
+      maxMarkAge: TEST_MAX_MARK_AGE,
       writeClosedTrade: vi.fn(async () => {}),
     };
     const broker = {

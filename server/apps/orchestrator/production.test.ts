@@ -289,10 +289,16 @@ const REAL_CONFIGS = {
     concentration: { cap: 100_000, threshold: 0.9 },
     min_viable_size: 0.0001,
     cii_threshold: 80,
+    // An hour, matching `max_signal_age` below: this integration test drives
+    // the composed chain against fixture marks, and a freshness bound sized
+    // for production would make it a clock test. #640's behaviour is covered
+    // in `portfolio-view.test.ts`.
+    max_mark_age: { crypto: 3_600_000, stocks: 3_600_000 },
   },
   verdictConfig: {
     automation_level: { crypto: 'auto', stocks: 'auto' },
     max_signal_age: { crypto: 3_600_000, stocks: 3_600_000 },
+    max_mark_age: { crypto: 3_600_000, stocks: 3_600_000 },
     drift_tolerance_pct: { crypto: 0.5, stocks: 0.5 },
     human_timeout: 60_000,
     allow_extended_hours: true,

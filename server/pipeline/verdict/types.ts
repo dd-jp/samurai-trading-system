@@ -60,6 +60,25 @@ export interface VerdictConfig {
   /** Staleness bound: max signal age before no-go, per asset class. */
   max_signal_age: Record<'crypto' | 'stocks', number>;
   /**
+   * FEED staleness bound (#641): max `now - Mark.observed_at`, per asset
+   * class, before the `stale_feed` no-go.
+   *
+   * Distinct from `max_signal_age` above, and deliberately a second field
+   * rather than a reuse of it. That one measures how long ago WE decided
+   * (`decision_timestamp`); this measures how long ago the MARKET last spoke
+   * (`observed_at`). A four-second-old decision priced off yesterday's close
+   * passes the first gate cleanly — which is the exact trade this field
+   * exists to stop. Collapsing the two would restore that hole under a name
+   * that reads as if it were closed.
+   *
+   * Per asset class because the classes genuinely differ: crypto prints
+   * continuously and a minute of silence is already anomalous, while an LSE
+   * leveraged ETP (ADR-0016) is thin enough to go minutes between prints
+   * inside a normal session. One number would either fire constantly on
+   * equities or never fire on crypto.
+   */
+  max_mark_age: Record<'crypto' | 'stocks', number>;
+  /**
    * Drift bound as a **fraction of the bracket's own entry price**, per asset
    * class: the gate fires when `|mark.price - entry| > entry * this`. So
    * `0.005` is "half a percent away from where we decided to enter",
@@ -132,6 +151,8 @@ export interface VerdictDecision {
   order: OrderIntent | null;
   no_go_reason:
     | 'staleness'
+    /** #641: the FEED is stale — `Mark.observed_at` older than the bound, or ahead of our clock. */
+    | 'stale_feed'
     | 'drift'
     | 'dedup'
     | 'market_closed'

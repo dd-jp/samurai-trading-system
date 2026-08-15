@@ -13,7 +13,7 @@
  * it in the account provider instead would mean a second round of `getMark`
  * calls for the same instruments at the same instant.
  */
-import type { MarketDataService } from '../../providers/market-data-service/index.js';
+import { isMarkStale, type MarketDataService } from '../../providers/market-data-service/index.js';
 import type { AssetClass, OpenPosition } from '../../shared/index.js';
 import type { DailyPnl, PortfolioView, SessionBasis, SessionBasisByClass } from './types.js';
 
@@ -31,6 +31,55 @@ export interface PortfolioAccountingInput {
   daily_basis: SessionBasisByClass;
   /** Realized, from fills — not computed here (#83). */
   consecutive_losses: number;
+  /**
+   * FEED staleness bound per asset class (#640): max `asOf -
+   * Mark.observed_at` for a mark used to value a held position.
+   *
+   * Required, not optional-with-a-default. This function's answer feeds every
+   * exposure cap, the drawdown breaker and the daily-loss breaker, so a
+   * default here would be a risk limit chosen by omission — and the caller
+   * that forgets it is exactly the caller whose marks nobody is watching. A
+   * required field makes each such site a compile error instead.
+   *
+   * Its own field rather than a shared object with `VerdictConfig.max_mark_age`
+   * (see `mark-freshness.ts`): the two gate different things — one
+   * instrument's mark at fire time versus every held instrument's valuation
+   * mark — and may legitimately want different numbers, since refusing to
+   * VALUE the book is a much heavier action than declining one trade.
+   */
+  max_mark_age: Record<AssetClass, number>;
+}
+
+/**
+ * Thrown when a held instrument's mark is too old to value the book with
+ * (#640).
+ *
+ * A named type rather than a bare `Error` because the caller has to be able to
+ * tell this apart from a transport failure without matching on message text:
+ * both abort the pass, but only this one means "the feed is alive and lying",
+ * which is the signal an operator alert should escalate on differently from a
+ * timeout. It carries the numbers so the log line can say how stale, not just
+ * that it was stale.
+ */
+export class StaleMarkError extends Error {
+  constructor(
+    readonly instrument: string,
+    readonly observed_at: Date,
+    readonly asOf: Date,
+    readonly max_age_ms: number,
+  ) {
+    const ageMs = asOf.getTime() - observed_at.getTime();
+    super(
+      `computePortfolioView: mark for held instrument '${instrument}' was observed ` +
+        `${observed_at.toISOString()}, ${ageMs}ms before ${asOf.toISOString()}, which exceeds ` +
+        `the ${max_age_ms}ms bound for its asset class` +
+        (ageMs < 0 ? ' (the mark is AHEAD of our clock — the two disagree)' : '') +
+        '. Refusing to value the book on a price the market may no longer support: exposure, ' +
+        'drawdown and daily PnL all derive from these marks, so a frozen price freezes every ' +
+        'risk limit that reads them.',
+    );
+    this.name = 'StaleMarkError';
+  }
 }
 
 /**
@@ -96,13 +145,50 @@ function dailyPnlFor(basis: SessionBasis, unrealized: number): DailyPnl {
 export async function computePortfolioView(
   input: PortfolioAccountingInput,
 ): Promise<PortfolioView> {
-  const { positions, marketData, asOf, cash, peak_equity, daily_basis, consecutive_losses } = input;
+  const {
+    positions,
+    marketData,
+    asOf,
+    cash,
+    peak_equity,
+    daily_basis,
+    consecutive_losses,
+    max_mark_age,
+  } = input;
 
-  const instruments = [...new Set(positions.map((position) => position.instrument))];
+  // The asset class each held instrument is valued under, so the freshness
+  // bound below can be the right one per class. Taken from the POSITIONS
+  // rather than from the returned `Mark.asset_class`: the bound is a property
+  // of what we hold, and reading it off the data source's own answer would let
+  // a mis-classified mark select the more permissive bound for itself.
+  const classByInstrument = new Map<string, AssetClass>(
+    positions.map((position) => [position.instrument, position.asset_class]),
+  );
+
+  const instruments = [...classByInstrument.keys()];
   const marks = new Map<string, number>(
     await Promise.all(
       instruments.map(async (instrument) => {
         const mark = await marketData.getMark(instrument, asOf);
+        // #640: fail closed on a STALE mark, not merely on a missing one.
+        //
+        // `getMark` answering is not evidence the feed is alive — in live it
+        // may serve from a TTL cache, and a halted or thin instrument keeps
+        // returning its last trade indefinitely. Valuing the book off that
+        // price is the failure the Risk Manager exists to prevent: exposure,
+        // drawdown and daily PnL are all computed from these marks, so a
+        // frozen price silently freezes the drawdown breaker at whatever it
+        // read last and hands every cap a number that stopped being true.
+        //
+        // Throwing (rather than skipping the instrument) is the same posture
+        // as `markFor` below and for the same reason: a partial view is not a
+        // conservative view. The throw aborts this instrument's pass, which
+        // places no order — the existing fail-closed behaviour on a read that
+        // FAILS, now extended to a read that merely LIES.
+        const assetClass = classByInstrument.get(instrument) ?? mark.asset_class;
+        if (isMarkStale(mark, asOf, max_mark_age[assetClass])) {
+          throw new StaleMarkError(instrument, mark.observed_at, asOf, max_mark_age[assetClass]);
+        }
         return [instrument, mark.price] as const;
       }),
     ),

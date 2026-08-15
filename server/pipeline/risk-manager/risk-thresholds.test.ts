@@ -18,6 +18,7 @@ function makeConfig(overrides: Partial<RiskConfig> = {}): RiskConfig {
     concentration: { cap: 20_000, threshold: 0.7 },
     min_viable_size: 100,
     cii_threshold: 70,
+    max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
     ...overrides,
   };
 }

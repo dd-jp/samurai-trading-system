@@ -14,6 +14,7 @@ export { buildIndicatorCacheKey, IndicatorCache } from './indicator-cache.js';
 export { computeIndicator, InsufficientBarsError, minimumBarsFor } from './indicators.js';
 export type { NormalizeContext, RawCandle } from './ingestion.js';
 export { completedBars, deriveBacktestMark, normalizeBars } from './ingestion.js';
+export { isMarkStale, markAgeMs } from './mark-freshness.js';
 export { MarketDataServiceImpl } from './service.js';
 export type { DataSourceConfig } from './source-factory.js';
 export { createDataSource } from './source-factory.js';

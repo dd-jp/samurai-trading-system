@@ -99,6 +99,12 @@ describe('PAPER_PROFILE_PROVENANCE', () => {
       'feedback.config.kill_thresholds.max_live_backtest_divergence',
       'riskConfig.cii_threshold',
       'riskConfig.concentration.threshold',
+      // #640/#641: two feed-staleness bounds, four values, all guesses. No
+      // measurement in this repo bounds inter-print gaps on the live universe
+      // — the soak is what produces that distribution, and these are the
+      // first entries here that have a named experiment behind them.
+      'riskConfig.max_mark_age.crypto',
+      'riskConfig.max_mark_age.stocks',
       'riskConfig.max_position_size',
       'riskConfig.per_asset_cap',
       'riskConfig.per_asset_class_cap.crypto',
@@ -106,6 +112,8 @@ describe('PAPER_PROFILE_PROVENANCE', () => {
       'verdictConfig.drift_tolerance_pct.crypto',
       'verdictConfig.drift_tolerance_pct.stocks',
       'verdictConfig.human_timeout',
+      'verdictConfig.max_mark_age.crypto',
+      'verdictConfig.max_mark_age.stocks',
       'verdictConfig.max_signal_age.crypto',
       'verdictConfig.max_signal_age.stocks',
     ]);
