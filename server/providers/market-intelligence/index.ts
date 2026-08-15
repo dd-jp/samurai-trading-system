@@ -230,6 +230,17 @@ export class MarketIntelligenceStore {
     }
   }
 }
+
+// The deterministic ingestion path (map #552) — the writer that actually fills
+// `MarketIntelligenceStore`, replacing a retrieval design that ingests `[]` by
+// construction.
+export {
+  type ArchivedItem,
+  type ArchiveFidelity,
+  MiArchiveStore,
+  miArchivePath,
+  type RawArchiveRow,
+} from './archive/mi-archive-store.js';
 export {
   floorToRefreshBucket,
   GROK_REFRESH_MS,
@@ -242,3 +253,6 @@ export {
   NousSentimentClient,
   type NousSentimentClientOptions,
 } from './grok/nous-sentiment-client.js';
+export { MiIngestAgent, type MiIngestAgentDeps, wireSymbol } from './mi-ingest-agent.js';
+export { type ScorableItem, scoreItems, UNSCORED } from './scoring/item-scorer.js';
+export { type AlpacaNewsArticle, AlpacaNewsClient } from './sources/alpaca-news-client.js';
