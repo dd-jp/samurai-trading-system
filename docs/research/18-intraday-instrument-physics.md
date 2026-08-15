@@ -37,6 +37,24 @@ This is the part most easily misread. Leverage scales gains and losses alike, so
 
 > **Superseded 2026-08-10 by Result 4.** The table above is wrong in sign at 3×. Its error is the phrase *"fixed-percentage cost"* — the cost is not fixed across the leverage step. Keep reading for the measurement that replaces it.
 
+## Result 3 — the LSE/US overlap holds most of the day's range
+
+Run to test whether a London-hours strategy on a US-underlying ETP gives up too much. SPY 5-minute bars, 125 sessions, 2026-02-01 → 2026-08-01:
+
+| window | % of day's range realised | reached +0.5% |
+| --- | --- | --- |
+| 1st hour (LDN 14:30–15:30) | **51.1%** | 9.6% |
+| **first 2h (LDN 14:30–16:30) — LSE overlap ends** | **72.4%** | 26.4% |
+| 3h | 80.8% | 32.8% |
+| 4.5h | 89.8% | 39.2% |
+| full session | 100% | 44.8% |
+
+**The overlap contains 72.4% of the day's movement in 23.5% of the LSE session**, and 59% of the full-session chance of reaching +0.5% survives inside it.
+
+It is doubly favourable: 14:30–16:30 London is both where the range concentrates *and* the window in which LSE and US are simultaneously open, so LSE-side spreads on a US-underlying ETP are tightest exactly then. The London morning is the worst of both — thin LSE liquidity against a shut underlying, where an RSI reading is computed on a market-maker's guess rather than a live market.
+
+**This does not decide the session window.** It is an input to [#666](https://github.com/dd-jp/samurai-trading-system/issues/666), which measures LSE ETP behaviour directly rather than inferring it from the underlying.
+
 ## Result 4 — the same test run properly: every threshold pair is negative on unconditional entry
 
 Produced 2026-08-10 for [#653](https://github.com/dd-jp/samurai-trading-system/issues/653), which asked whether thresholds should be fitted per-instrument or pooled, and whether event-conditioned levels beat pooled ones. Answering it required simulating the exit rule rather than counting reach rates, and that inverted Result 2.
@@ -131,24 +149,6 @@ Not a profit estimate. **The bar the entry signal has to clear:**
 This is the first quantity in the project that makes the debate layer's contribution falsifiable: it is exactly what the LLM path must deliver over a random open-entry before the leveraged-ETP universe returns anything. It also sharpens [#625](https://github.com/dd-jp/samurai-trading-system/issues/625) — a system producing zero trades has never been tested against a bar this specific.
 
 **Limitations, which cut both ways.** Entry at the open with no signal is deliberately naive and understates any real system — that is the point of a baseline, but it is not a claim the strategy loses money. Long-only. Underlying tape rather than ETP tape, so no tracking error, no ETP spread beyond the assumed round trip, and no GBP/USD leg. Same-bar ordering is resolved pessimistically throughout. Two instruments, not the full universe.
-
-## Result 3 — the LSE/US overlap holds most of the day's range
-
-Run to test whether a London-hours strategy on a US-underlying ETP gives up too much. SPY 5-minute bars, 125 sessions, 2026-02-01 → 2026-08-01:
-
-| window | % of day's range realised | reached +0.5% |
-| --- | --- | --- |
-| 1st hour (LDN 14:30–15:30) | **51.1%** | 9.6% |
-| **first 2h (LDN 14:30–16:30) — LSE overlap ends** | **72.4%** | 26.4% |
-| 3h | 80.8% | 32.8% |
-| 4.5h | 89.8% | 39.2% |
-| full session | 100% | 44.8% |
-
-**The overlap contains 72.4% of the day's movement in 23.5% of the LSE session**, and 59% of the full-session chance of reaching +0.5% survives inside it.
-
-It is doubly favourable: 14:30–16:30 London is both where the range concentrates *and* the window in which LSE and US are simultaneously open, so LSE-side spreads on a US-underlying ETP are tightest exactly then. The London morning is the worst of both — thin LSE liquidity against a shut underlying, where an RSI reading is computed on a market-maker's guess rather than a live market.
-
-**This does not decide the session window.** It is an input to [#666](https://github.com/dd-jp/samurai-trading-system/issues/666), which measures LSE ETP behaviour directly rather than inferring it from the underlying.
 
 ## Limitations
 
