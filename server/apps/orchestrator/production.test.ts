@@ -266,10 +266,20 @@ function goVerdict(): VerdictDecision {
   };
 }
 
-/** Real per-stage config values (same shapes direct-bind.test.ts pins). */
+/**
+ * Real per-stage config values (same shapes direct-bind.test.ts pins).
+ *
+ * This is cast to its stage types at the use site, so a field going missing
+ * here does not fail the typecheck — it fails as behaviour, or it does not fail
+ * at all. `flatten_before_close_ms` was absent until #691's guard made it
+ * throw: without the guard these three integration tests ran the composed
+ * chain with flat-by-close silently inert, which is the same hole the guard
+ * exists to close, one layer up in the test fixture.
+ */
 const REAL_CONFIGS = {
   traderConfig: {
     conviction_floor: 0.5,
+    flatten_before_close_ms: 5 * 60 * 1_000,
     max_risk_per_trade: 0.01,
     asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
     atr_timeframe: '1h',
@@ -1324,6 +1334,92 @@ describe('startTickLoop', () => {
     release();
     await stopping;
     expect(finished).toBe(true);
+  });
+
+  /**
+   * #692 — `stop()` must resolve even when a pass fails while it is awaiting.
+   *
+   * Be precise about what this does and does not prove. It PINS the outcome; it
+   * does not demonstrate the shield, because `runTickPlan` cannot currently
+   * reject at all — #507's per-worker try/catch means an instrument throw never
+   * reaches its `Promise.all`. So today `stop()` is safe for a reason that
+   * lives in tick-loop.ts, not here.
+   *
+   * That is exactly why the shield is worth its line. The comment above
+   * `Promise.all` used to claim the safety came from `runOnce` swallowing its
+   * own errors, which is false — `runOnce`'s catch covers its own `await` and
+   * marks nothing handled for a second consumer of the same promise. Anyone
+   * adding an await outside the worker's try/catch would have made `stop()`
+   * reject and abandon every other in-flight pass, with the comment here
+   * asserting that could not happen.
+   */
+  it('stop() resolves rather than rejecting when the in-flight pass fails (#692)', async () => {
+    let release!: () => void;
+    const runInstrument = vi.fn(async (): Promise<TickOutcome> => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      throw new Error('pipeline blew up during shutdown');
+    });
+
+    const loop = startTickLoop({
+      scheduler: planScheduler(plan),
+      runner: { runInstrument } as TickRunner,
+      clock: new SimulatedClock(START),
+      logger: recordingLogger(),
+      persistence: persistence() as never,
+      tickIntervalMs: 1_000,
+      maxConcurrentInstruments: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    // stop() snapshots `passes` here, BEFORE the pass fails — the ordering the
+    // finding turns on. A raw chain in that set would reject `Promise.all`.
+    const stopping = loop.stop();
+    release();
+
+    await expect(stopping).resolves.toBeUndefined();
+  });
+
+  it('reports a duplicated instrument as a scheduler fault, not as a slow previous pass (#692)', async () => {
+    // The two skips share a code path and mean opposite things: a still-running
+    // instrument is the steady state #669 exists to tolerate, while the same
+    // asset twice in one plan is a malformed plan. Reporting the second as
+    // "still running from a previous pass" hid it precisely when caught.
+    const logger = recordingLogger();
+    const duplicatePlan = {
+      instruments: [
+        { asset: 'BTC-USD', asset_class: 'crypto' as const },
+        { asset: 'BTC-USD', asset_class: 'crypto' as const },
+      ],
+      tick_time: START,
+    };
+    const runInstrument = vi.fn(
+      async (): Promise<TickOutcome> => ({ trace_id: 't', final_stage: 'analysts' }),
+    );
+
+    const loop = startTickLoop({
+      scheduler: planScheduler(duplicatePlan),
+      runner: { runInstrument } as TickRunner,
+      clock: new SimulatedClock(START),
+      logger,
+      persistence: persistence() as never,
+      tickIntervalMs: 1_000,
+      maxConcurrentInstruments: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await loop.stop();
+
+    // The guard still holds: the duplicate lost to itself, one run only.
+    expect(runInstrument).toHaveBeenCalledTimes(1);
+    expect(logger.entries.some((entry) => entry.message.includes('duplicate instrument'))).toBe(
+      true,
+    );
+    expect(
+      logger.entries.some((entry) => entry.message.includes('still running from a previous pass')),
+    ).toBe(false);
   });
 
   it('stops scheduling further ticks after stop()', async () => {

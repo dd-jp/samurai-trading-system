@@ -2,7 +2,8 @@
 
 **Status:** Draft (resolved wayfinder tickets synthesized)  
 **Owner:** David (Deepak)  
-**Date:** 2026-07-13
+**Date:** 2026-07-13  
+**Last revised:** 2026-08-15 — see the banner below; it supersedes two sections of what follows.
 
 > ## REVISED 2026-08-15 — the MI rework ([#552](https://github.com/dd-jp/samurai-trading-system/issues/552)) supersedes two sections of this spec
 >

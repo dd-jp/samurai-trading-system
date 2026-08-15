@@ -146,11 +146,44 @@ function atrFor(
  * because the market is closed — does not exist on a 24/7 venue with a live
  * bracket leg.
  *
- * No upper guard is needed beyond `sessionEnd` being strictly future: the
- * calendar only ever returns a close after `now`, so `remaining` is positive by
- * construction and the window cannot wrap onto the previous session.
+ * **`remaining` is checked for a lower bound as well as an upper one (#691).**
+ * This used to argue the lower bound away: `sessionEnd` is strictly future, so
+ * `remaining` is positive by construction. That is true of both calendars in
+ * this tree — each compares `close.getTime() > instant.getTime()` before
+ * returning — but it is a property of the current IMPLEMENTERS, not of the
+ * seam. `sessionCalendars` is injected, and `ProductionConfig.tradingCalendar`
+ * overrides both production calendars by design.
+ *
+ * The asymmetry is what makes the guard worth its line. `remaining <= window`
+ * is also true for every NEGATIVE remaining, so a calendar returning a past
+ * close does not merely mis-time one flatten — it pins the trader inside the
+ * flatten window permanently, for that asset class, for the life of the
+ * process. Under ADR-0014 that is a system that can only ever exit.
+ *
+ * It THROWS rather than returning false, because both answers are wrong and
+ * only one of them is audible. A past close means the calendar is broken, and
+ * silently declining to flatten on a broken calendar is the overnight carry
+ * #668 exists to prevent, arriving quietly. The tick loop catches and logs, so
+ * this costs the tick rather than the run.
  */
 function withinFlattenWindow(input: TraderInput, assetClass: AssetClass): boolean {
+  // Checked here rather than at construction because `TraderConfig` is a plain
+  // interface with no validation seam — nothing between the config literal and
+  // this comparison inspects the value. Written as `!(x > 0)` so `NaN` fails
+  // too; `x <= 0` would let it through and make the window silently never open.
+  //
+  // Zero or negative disables flat-by-close ENTIRELY and quietly: the window
+  // never opens, the Trader never flattens, and every position carries
+  // overnight against ADR-0014 with nothing in `trader_log` marking it. A
+  // safety rule that can be switched off by a plausible-looking config value
+  // has to say so.
+  if (!(input.config.flatten_before_close_ms > 0)) {
+    throw new Error(
+      `flatten_before_close_ms must be > 0 (got ${input.config.flatten_before_close_ms}); ` +
+        `a non-positive window disables flat-by-close, which ADR-0014 requires`,
+    );
+  }
+
   const calendar = input.sessionCalendars[assetClass];
   const now = input.clock.now();
   const sessionEnd = calendar.sessionEnd(now);
@@ -158,6 +191,14 @@ function withinFlattenWindow(input: TraderInput, assetClass: AssetClass): boolea
   if (sessionEnd === null) return false;
 
   const remaining = sessionEnd.getTime() - now.getTime();
+
+  if (remaining < 0) {
+    throw new Error(
+      `${assetClass} calendar returned a session close before now ` +
+        `(close ${sessionEnd.toISOString()}, now ${now.toISOString()}); ` +
+        `sessionEnd is contractually strictly future`,
+    );
+  }
 
   return remaining <= input.config.flatten_before_close_ms;
 }

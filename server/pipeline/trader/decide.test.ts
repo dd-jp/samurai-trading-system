@@ -12,6 +12,7 @@ import {
   LseRegularHoursCalendar,
   type Mark,
   type MarketDataService,
+  type TradingCalendar,
   UsEquityRegularHoursCalendar,
 } from '../../providers/market-data-service/index.js';
 import type { Clock, OpenPosition } from '../../shared/index.js';
@@ -895,6 +896,61 @@ describe('decide — flat by close (#668)', () => {
     );
 
     expect(outcome.intent?.intent_type).toBe('exit');
+  });
+
+  /**
+   * #691 — the two invariants `withinFlattenWindow` depended on and did not
+   * check. Both are asserted through `decide` rather than against the helper,
+   * because the helper is private and because the point is what the MONEY PATH
+   * does, not what an internal predicate returns.
+   *
+   * Neither is reachable through the two calendars in this tree — both compare
+   * `close > instant` before returning, and the shipped config is 5 minutes.
+   * That was the old argument for leaving them unchecked, and it is an argument
+   * about the current implementers rather than about the seam: both the
+   * calendar map and the config are injected, and `ProductionConfig
+   * .tradingCalendar` overrides the production calendars by design.
+   */
+  it('throws rather than flattening forever when the calendar returns a past close', async () => {
+    // The failure this guards is not a mis-timed flatten. `remaining <= window`
+    // is also true for every NEGATIVE remaining, so a past close pins the
+    // trader inside the window permanently — under ADR-0014, a system that can
+    // only ever exit, with each tick's skip looking ordinary in `trader_log`.
+    const pastClose = new Date('2026-07-15T19:00:00Z');
+    const stuckCalendar = {
+      isOpen: () => true,
+      isTradingDay: () => true,
+      sessionStart: () => pastClose,
+      sessionEnd: () => pastClose,
+    } as unknown as TradingCalendar;
+
+    await expect(
+      decide(
+        traderInput({
+          clock: new ManualClock(new Date('2026-07-15T19:56:00Z')),
+          debate: debateResult({ direction: 'neutral' }),
+          positionState: async () => [holding()],
+          sessionCalendars: { crypto: new AlwaysOpenCalendar(), stocks: stuckCalendar },
+        }),
+      ),
+    ).rejects.toThrow(/session close before now/);
+  });
+
+  it('throws on a non-positive flatten window rather than silently disabling flat-by-close', async () => {
+    // Zero is the dangerous value, not negative: it reads like "no offset" and
+    // is what someone reaches for to "turn the window off", when what it
+    // actually turns off is ADR-0014's flat-by-close rule entirely — silently,
+    // and only visibly as positions carrying overnight.
+    await expect(
+      decide(
+        traderInput({
+          clock: new ManualClock(INSIDE_WINDOW),
+          debate: debateResult({ direction: 'neutral' }),
+          positionState: async () => [holding()],
+          config: { ...DEFAULT_TRADER_CONFIG, flatten_before_close_ms: 0 },
+        }),
+      ),
+    ).rejects.toThrow(/flatten_before_close_ms must be > 0/);
   });
 
   /**
