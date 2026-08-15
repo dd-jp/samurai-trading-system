@@ -1071,7 +1071,9 @@ export function equityCalendarFor(config: ProductionConfig): TradingCalendar {
     return config.tradingCalendar;
   }
 
-  return config.mode === 'live' ? new LseRegularHoursCalendar() : new UsEquityRegularHoursCalendar();
+  return config.mode === 'live'
+    ? new LseRegularHoursCalendar()
+    : new UsEquityRegularHoursCalendar();
 }
 
 /**
