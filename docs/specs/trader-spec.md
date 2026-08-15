@@ -114,13 +114,23 @@ interface TraderInput {
 
 // The bracket handed to the Risk Manager.
 interface OrderIntent {
-  idempotency_key: string;       // hash(instrument + bar/timestamp) — the market
+  idempotency_key: string;       // hash(instrument + bar + side) — the market
                                  // decision coordinate. Deliberately NOT keyed on
                                  // debate_id: the Debate Engine re-runs debates from
                                  // scratch on crash (no persistence), so a debate id
-                                 // is volatile; keying on (instrument + bar) keeps the
-                                 // key stable across re-runs so Execution dedupes to one
-                                 // fill (CONTEXT.md idempotency invariant).
+                                 // is volatile; keying on the bar keeps the key stable
+                                 // across re-runs so Execution dedupes to one fill
+                                 // (CONTEXT.md idempotency invariant).
+                                 //
+                                 // `side` is 'open' | 'close' — AMENDED by #686. Without
+                                 // it, a same-bar entry and the mandatory flat-by-close
+                                 // exit (#668) hashed identically, and the exit lost:
+                                 // a suppressed mandatory exit carries a position
+                                 // overnight, which ADR-0014 forbids. It is open/close
+                                 // rather than the full intent_type deliberately —
+                                 // entry and scale_in MUST keep sharing a key, or a
+                                 // crash-replay of a bar that produced both would place
+                                 // two orders instead of deduping to one.
   instrument: string;
   asset_class: 'crypto' | 'stocks';
   side: 'buy' | 'sell';
