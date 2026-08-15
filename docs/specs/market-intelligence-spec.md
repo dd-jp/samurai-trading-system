@@ -4,6 +4,33 @@
 **Owner:** David (Deepak)  
 **Date:** 2026-07-13
 
+> ## REVISED 2026-08-15 — the MI rework ([#552](https://github.com/dd-jp/samurai-trading-system/issues/552)) supersedes two sections of this spec
+>
+> Map #552 closed 2026-08-15 with all children resolved: [#553](https://github.com/dd-jp/samurai-trading-system/issues/553) (fetcher set), [#554](https://github.com/dd-jp/samurai-trading-system/issues/554) (archive schema), [#555](https://github.com/dd-jp/samurai-trading-system/issues/555) (scoring policy), [#556](https://github.com/dd-jp/samurai-trading-system/issues/556) (GDELT windowing), [#557](https://github.com/dd-jp/samurai-trading-system/issues/557) (licensing), [#558](https://github.com/dd-jp/samurai-trading-system/issues/558) (replay). Research: `docs/research/21-mi-ingestion-architecture.md`, `22-mi-source-licensing.md`.
+>
+> **The premise that forced this.** `NousSentimentClient` hard-codes `retrievalEvidence: false`, and `GrokAgent.refresh` discards every item without evidence — so **`MarketIntelligenceStore` ingests `[]` on every refresh**, and `sentiment`/`fundamental` return `NO_DATA_MARKER` on every production tick. [#625](https://github.com/dd-jp/samurai-trading-system/issues/625) then measured the cost precisely: the stocks conviction ceiling was **0.5478 against a 0.55 floor**, so a stock could never trade at any RSI. That ceiling was caused by the muted analysts, **not** by the conviction formula — fixing the formula's consensus term alone reproduced it to four decimal places. This layer being empty is why the system could not trade stocks at all.
+>
+> **What changes, in one line:** retrieval is decoupled from scoring. Deterministic fetchers write an append-only archive; scoring is a separate pass over text we already hold.
+>
+> **The six resolutions:**
+>
+> 1. **v1 ships two fetchers — Alpaca News REST, then GDELT 15-minute files** (#553). Doc 14 recommended Alpaca alone; that recommendation predates [ADR-0016](../adr/0016-universe-leveraged-etps-ungated.md)'s LSE ETP universe. Measured against the live API, **Alpaca News returns 0 items for 3USL/3LDE/SGLN and 5 each for AAPL/SPY/BTCUSD** — it fully unblocks the paper soak and does nothing for the live equity leg. Shipping it alone would make paper and live *different experiments*, breaking [#661](https://github.com/dd-jp/samurai-trading-system/issues/661)'s paper→live expectancy transfer at the ~126-trade thesis gate. Calendar spine and RSS stay behind v1; Polymarket keeps its own lineage.
+> 2. **Two tables in a separate database** (#554). `mi_archive_raw(source, native_id, updated_at, payload, ingested_at, fidelity)` holds immutable vendor bytes; `mi_items(...)` holds normalized `IntelligenceItem`s derived from them — so a normalizer bug is fixable **retroactively** across collected history. They live in `data/samurai-mi-{mode}.sqlite` — a SEPARATE database file from the main one, not separate tables within it. That is the scale valve `market-data-service-spec.md`'s **Future Extensions** section documents but defers for its own store; MI adopts it now, because the constraint bites here first: **SQLite has a single writer**, and a GDELT pull must not hold the lock while Execution journals a flatten. `native_id` is TEXT to carry Alpaca int64 ids and GDELT URLs alike. Retention is append-only for v1 (RSS, the fastest-growing source, is not in scope). Revisions are **appended** as rows keyed `(source, native_id, updated_at)`, not collapsed to first-seen.
+> 3. **Scoring is REQUIRED, per item** (#555). Not optional, and this is settled by the analyst code rather than by preference: the analysts are deterministic, `fundamental` averages `item.sentiment` and `item.confidence`, and both are required fields. Unscored items would leave `fundamental` **permanently neutral with a full `.news` array** *and* remove the `NO_DATA_MARKER` that lets the conviction score exclude a mute analyst — silently reinstating #625's ceiling on a system that looked fixed. A one-score-per-bucket digest is rejected for the same family of reason: it degenerates the analyst's own average.
+> 4. **`retrievalEvidence` is redefined as archive-row provenance** (#555). An item is evidenced iff it links rows in `mi_archive_raw`. The #485 fail-closed guard keeps its shape; `NousSentimentClient`'s hard-coded `false` becomes obsolete with the retrieval-from-LLM design it belonged to.
+> 5. **GDELT is windowed and scored mechanically** (#556). A **1h signal window against a trailing 24h baseline** of the same theme — a count of 2 means nothing until you know 2 is unusual. `sentiment = sign(toneDelta)`, `confidence = f(|toneDelta|)`: **no LLM call**, so the macro layer stays replayable without a model, which matters most because it is the layer that serves the live LSE leg.
+>
+>    *`f` is not pinned to a curve, and deliberately so — but it is not free either.* #556 resolved the shape without naming the mapping, and no curve can be calibrated before there is history to calibrate against (the probe matched 2 of 881 records in one batch). Any v1 `f` must satisfy: **bounded to `[0, 1]`** (it lands in `IntelligenceItem.confidence`, which `fundamental` averages); **monotone non-decreasing** in `|toneDelta|`, since a larger move from baseline is never weaker evidence; **`f(0) = 0`**, so a theme sitting exactly at its baseline contributes no confidence rather than a floor of it; and **pure and deterministic**, per the replay rule below. An implementer choosing a saturating curve within those bounds is inside spec; one choosing a step function, or an unbounded linear map, is not. Calibration against collected history is [#688](https://github.com/dd-jp/samurai-trading-system/issues/688), and until it lands the curve is a **tunable, not a finding** — no expectancy claim may rest on the particular `f` in force. Aggregates are derived **at read**, so window and baseline stay changeable retroactively. Theme watchlist is per asset class. The DOC API stays banned in production.
+> 6. **Replay reads the archive at `ingested_at <= t`** (#558), on the live `floorToRefreshBucket` grid. `ingested_at` is *our* knowledge time; `updated_at` is the *vendor's* revision stamp and can be back-dated relative to receipt, so it orders revisions within what `ingested_at` admits and is never the visibility gate. **Stored scores are replayed, never re-computed** — LLM non-determinism would make two runs of one backtest disagree, disqualified under ADR-0003 §2. `backtest` mode opens `samurai-mi-paper.sqlite` read-only.
+>
+>    *Which database backfill lands in, since the read above makes it load-bearing:* **`samurai-mi-paper.sqlite`**, the one `backtest` opens. This follows from the read rather than adding a decision — backfill exists to be replayed, and a backfill written into `samurai-mi-live.sqlite` would be invisible to every backtest. Rows carry the `fidelity` marker of resolution 2 so a replay can tell reconstructed history from observed history.
+>
+>    *And the limitation that falls out of it:* pinning `backtest` to the paper database means **live-mode archive rows are never replayable** in v1. Accepted, not overlooked. Backtest replays the paper experiment, which is the arm [#661](https://github.com/dd-jp/samurai-trading-system/issues/661) transfers to live; a backtest silently mixing the two books' knowledge streams would be a worse failure than not reading the live one. Revisit when the live leg has enough history to backtest against ([#689](https://github.com/dd-jp/samurai-trading-system/issues/689)).
+>
+> **Two sections below are superseded outright** and are marked in place: **Implementation Constraint: No Persistence** (the store becomes a read-through view over a durable archive) and **Module: Backtesting Replay Store** (it becomes a property of the archive, not a separate service). Read them as history — **with one exception, because "history" is not the same as "skippable".** The replay section retains two decisions that resolution 6 compresses and that nothing else states: **why the replay-never-recompute rule stays uniform** even though GDELT's mechanical scores would be safe to re-derive, and **what the `fidelity` marker means per source** — in particular that an Alpaca backfill row asserts we would have seen an item the instant it published, which is optimistic by an unknown margin and is the likeliest way a promising backtest turns out to have been reading the future. Both bear on resolutions 2 and 6. They are flagged in place under that section's banner.
+>
+> **Analyst fallout:** `sentiment` **stays `optional`**. With real `.news`, spec-`mandatory` `fundamental` stops being a constant and #436's pre-live-equities blocker closes. Leaving `sentiment` optional costs nothing mechanically — a mute analyst is now *excluded* from the evidence average rather than dragging it — so an MI outage narrows the desk to two analysts instead of halting trading.
+
 ## Problem Statement
 
 Samurai's trading decisions require comprehensive market context beyond raw price — news, social sentiment, and fundamental signals. Without a unified intelligence layer that aggregates and validates multiple sources, individual analysts operate on incomplete or conflicting information, leading to poor trading decisions.
@@ -405,6 +432,17 @@ delivery_errors_total{analyst_id}
 
 ### Module: Backtesting Replay Store
 
+> **SUPERSEDED 2026-08-15 by [#558](https://github.com/dd-jp/samurai-trading-system/issues/558) (map [#552](https://github.com/dd-jp/samurai-trading-system/issues/552)). Read this section as history.**
+>
+> This module **was never built** (#436), and the rework retires it as a separate concern rather than scheduling it: replay becomes a **property of the archive** #554 defines, not a service alongside it. There is nothing to keep in sync, because live ingestion and replay read the same rows.
+>
+> **The replacing contract is resolution 6 in the revision banner at the top of this file.** Deliberately not restated here, not even in summary — two copies of a contract drift, and the summary that was here is exactly the thing that would have gone stale first.
+>
+> **RETAINED, NOT HISTORY — the two bullets below are normative.** Everything else in this section is superseded, but these are decisions resolution 6 compresses and no other section states. Do not skip them on the strength of the banner above:
+>
+> - **Why the replay-never-recompute rule stays uniform.** GDELT's scores are mechanical and *would* be safe to re-derive; the contract does not carve them out, because one rule beats a per-source exception and the raw rows remain for deliberate offline re-derivation.
+> - **Backfilled history carries a `fidelity` marker.** GDELT backfill is highest — its batch timestamp *is* the knowledge timestamp, MD5-checked from `masterfilelist.txt` (2015-02-18→). Alpaca backfill is lower: `created_at` is *publisher* time, so a backfilled row asserts we would have seen the item the instant it published, which is optimistic by an unknown margin and the likeliest way a promising backtest turns out to have been reading the future. RSS and the calendar spine have no backfill at all — their history starts at go-live, which is the one argument for shipping them earlier than their signal value alone justifies.
+
 **Responsibilities**
 - Record live MI outputs (both raw agent outputs and normalized IntelligenceItems) during normal operation
 - Serve historical IntelligenceItems to the backtest replay engine on demand via a cursor/iterator interface
@@ -478,7 +516,15 @@ Convergence-signal detection must be deterministic given the same IntelligenceIt
 
 ### Implementation Constraint: No Persistence
 
-**Decision: No state persistence — restart cleanly after crashes.**
+> **SUPERSEDED 2026-08-15 by [#554](https://github.com/dd-jp/samurai-trading-system/issues/554) (map [#552](https://github.com/dd-jp/samurai-trading-system/issues/552)). Read this section as history.**
+>
+> The MI layer **does** persist now: an append-only archive in `data/samurai-mi-{mode}.sqlite`, and `MarketIntelligenceStore` becomes a **read-through view over it** rather than an in-memory array.
+>
+> The rationale below is not wrong so much as answering a different question. "Intelligence is time-sensitive, so losing recent intelligence is acceptable" is a claim about the *live* path, and it holds there. What it misses is that the same store is the **only lookahead-safe input a backtest of this layer can ever have** — #558 makes replay a property of the archive, so discarding it on restart discards the evidence, not just the freshness. It also understated the live cost: today's store empties on restart, so a soak restart loses every item ingested before it, and the run silently measures less than it appears to.
+>
+> "Re-ingestion is fast (agents resume from source APIs)" is also now false for one of the two v1 sources: **GDELT's 15-minute files are not re-queryable on demand** — the DOC API is banned in production (live-verified >20-minute floor, 3-month window, 30+ minute opaque IP block), so a missed batch is missed unless it was archived.
+
+**Decision (superseded): No state persistence — restart cleanly after crashes.**
 
 The Market Intelligence layer does not persist state (no database, no checkpoint files). On crash:
 - Restart all agents

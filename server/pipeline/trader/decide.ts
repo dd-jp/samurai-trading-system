@@ -24,7 +24,10 @@ import {
   type OrderIntent,
   totalHeldQuantity,
 } from '../../shared/index.js';
-import { floorToBar } from '../debate-engine/index.js';
+// Imported from the defining module rather than the debate-engine barrel: the
+// barrel pulls the whole engine's module graph into the Trader path and would
+// make a future debate-engine -> trader import a cycle.
+import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../debate-engine/debate-log-store.js';
 import { NO_PRECEDENT_MULTIPLIER, retrieveCosinePrecedent } from './cosine-precedent.js';
 import { computeIdempotencyKey } from './idempotency-key.js';
 import { buildSetupVector } from './setup-vector.js';
@@ -180,13 +183,32 @@ function withinFlattenWindow(input: TraderInput, assetClass: AssetClass): boolea
  *
  * Flooring `asOf` rather than the mark's timestamp is deliberate: `asOf` is
  * `clock.now()`, the same value `buildDebateStep` floors for `debate_id`, so
- * the Trader's bar and the debate's bar are provably the same coordinate
- * rather than two clocks that agree most of the time. A mark observed a
- * fraction after an hour boundary would otherwise floor to the next bar and
- * silently split the pair.
+ * the two land on the same coordinate **whenever both clock reads fall in the
+ * same bar** — which is the guarantee, and it is weaker than "provably the same
+ * coordinate". A bar boundary falling between the Debate stage's read and this
+ * one, or a crash-restart resuming in the next bar, still splits the key from
+ * its `debate_id`. What it does remove is the mark-timestamp split: a mark
+ * observed a fraction after an hour boundary would otherwise floor to the next
+ * bar on every tick rather than occasionally.
+ *
+ * **The grid is stated, not inherited.** `floorToBar`'s timeframe argument is
+ * passed explicitly as `DEBATE_BAR_TIMEFRAME_MS` rather than left to its
+ * default, because the coupling is the point: the decision bar IS the debate's
+ * bar, by definition, and the two must move together or not at all. Relying on
+ * a shared default made that look like a coincidence — change `floorToBar`'s
+ * default for some other caller and this silently re-grids, which is #616's
+ * failure mode inverted. A finer grid here would collapse several decision bars
+ * onto one key, so `findByKey` and the broker `client_order_id` would suppress
+ * legitimate orders; a suppressed order is indistinguishable from a skip in
+ * `trader_log`, which is exactly why #616 went unnoticed for as long as it did.
+ *
+ * Deliberately NOT `config.atr_timeframe`. That is the window the ATR is
+ * measured over — a volatility-estimation choice, independently tunable, and
+ * pinned to something other than 1h by its own test. Keying the decision bar on
+ * it would tie the order-dedup coordinate to a risk-tuning knob.
  */
 function decisionBarFor(asOf: Date): Date {
-  return floorToBar(asOf);
+  return floorToBar(asOf, DEBATE_BAR_TIMEFRAME_MS);
 }
 
 /**

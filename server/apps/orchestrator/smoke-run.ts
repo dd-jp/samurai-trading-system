@@ -229,25 +229,82 @@ const SMOKE_BAR_SERIES: readonly { timeframe: string; count: number; stepMs: num
 const SMOKE_MARK_PRICE = 160;
 
 /**
- * A monotonically rising fixture series, ending just under `SMOKE_MARK_PRICE`.
+ * One cycle of the fixture's close-to-close moves: three down bars, then four
+ * up, netting `+5` every seven bars and ending on an up bar.
+ *
+ * **A rising series is not enough — it has to rise with pullbacks.** The
+ * technical analyst reads `bullish` only when the last close is above its
+ * SMA(14) AND RSI(14) is under 70 (`technical-analyst.ts` `directionFrom`), and
+ * a monotonic ramp has no down bars at all, so its RSI is exactly 100: the
+ * analyst returns `neutral`, "overbought", on the strongest possible uptrend.
+ * These pullbacks put RSI at **63.16** and the close above its SMA, which is
+ * what the analyst actually needs.
+ *
+ * The RSI is identical for every entry in `SMOKE_BAR_SERIES` because the
+ * indicator reads back exactly 15 closes — two whole cycles of this pattern —
+ * so the timeframe's bar count cannot shift it.
+ */
+const SMOKE_CLOSE_CYCLE: readonly number[] = [-2, -2, -3, 3, 3, 3, 3];
+
+/**
+ * `count` closes ending exactly at `lastClose`, walking `SMOKE_CLOSE_CYCLE`
+ * backwards so the final bar is always the cycle's last up bar.
+ */
+export function buildTrendingCloses(count: number, lastClose: number): number[] {
+  const length = SMOKE_CLOSE_CYCLE.length;
+  const closes = new Array<number>(count);
+  closes[count - 1] = lastClose;
+
+  for (let step = 1; step < count; step += 1) {
+    // `((x % n) + n) % n` — a bare `%` goes negative once `step` passes the
+    // cycle length, which silently reads past the end of the array.
+    const delta = SMOKE_CLOSE_CYCLE[(((length - step) % length) + length) % length];
+    const next = closes[count - step];
+    if (delta === undefined || next === undefined) {
+      // Unreachable after the guarded modulo, and thrown rather than defaulted:
+      // substituting a price here would quietly produce a fixture whose exact
+      // closes the calendar/RSI assertions are pinned to, turning an indexing
+      // bug into a wrong-but-plausible series.
+      throw new Error(`buildTrendingCloses: no close or delta at step ${step} of ${count}`);
+    }
+    closes[count - 1 - step] = next - delta;
+  }
+
+  return closes;
+}
+
+/**
+ * A rising fixture series with pullbacks, ending just under `SMOKE_MARK_PRICE`.
  *
  * The trend is deliberate and is what lets the run reach a `go` at all: the
  * Analysts have to agree directionally for `computeConvictionScore`'s
- * disagreement term to clear `traderConfig.conviction_floor` (0.55 via
+ * consensus term to clear `traderConfig.conviction_floor` (0.55 via
  * `DEFAULT_TRADER_CONFIG`), and a flat or noisy series produces a split view
  * set, a sub-floor conviction and a `trader: no_trade` short-circuit. Same
  * shape as the `composed tick chain (integration)` fixtures in
  * `production.test.ts`, re-anchored to `SMOKE_RUN_INSTANT`.
  *
- * The `+/- 2` high/low band around each close gives a true range of 2 and a
- * non-degenerate ATR, so the Trader's stop distance (`atr_k * ATR`) is a real
- * number rather than a floor artefact.
+ * **This series used to be a monotonic ramp**, which pinned RSI at 100 and made
+ * the technical analyst read `neutral` — so the run's only directional
+ * participant was the mediator, and the `go` came through the mediator-override
+ * branch #625 exists to close rather than through a desk that agreed. The
+ * comment claimed analyst agreement while the fixture never produced it. See
+ * `SMOKE_CLOSE_CYCLE`.
+ *
+ * The `+/- 2` high/low band around each close gives a true range of at least 4
+ * and a non-degenerate ATR, so the Trader's stop distance (`atr_k * ATR`) is a
+ * real number rather than a floor artefact.
  */
 export function buildSmokeFixtureBars(instrument: string = SMOKE_INSTRUMENT): Bar[] {
-  return SMOKE_BAR_SERIES.flatMap(({ timeframe, count, stepMs }) =>
-    Array.from({ length: count }, (_, index) => {
+  return SMOKE_BAR_SERIES.flatMap(({ timeframe, count, stepMs }) => {
+    const closes = buildTrendingCloses(count, SMOKE_MARK_PRICE - 1);
+
+    return Array.from({ length: count }, (_, index) => {
       const close_time = new Date(SMOKE_RUN_INSTANT.getTime() - (count - index) * stepMs);
-      const close = SMOKE_MARK_PRICE - count + index;
+      const close = closes[index];
+      if (close === undefined) {
+        throw new Error(`buildSmokeFixtureBars: no close at index ${index} of ${count}`);
+      }
       return {
         instrument,
         timeframe,
@@ -260,8 +317,8 @@ export function buildSmokeFixtureBars(instrument: string = SMOKE_INSTRUMENT): Ba
         volume: 1_000,
         source: 'smoke-fixture',
       };
-    }),
-  );
+    });
+  });
 }
 
 /**

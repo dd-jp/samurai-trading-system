@@ -385,10 +385,11 @@ function persistDebateLog(params: {
   clock: Clock;
   trace_id: string;
   logger: Logger | undefined;
-}): void {
+}): DebateLog | undefined {
   const { store, result, instrument, bar, clock, trace_id, logger } = params;
 
-  if (store.getByDebateId(result.debate_id) !== undefined) {
+  const winner = store.getByDebateId(result.debate_id);
+  if (winner !== undefined) {
     logger?.log({
       trace_id,
       stage: 'debate',
@@ -402,7 +403,13 @@ function persistDebateLog(params: {
         'process against the same shared store.',
       payload: { instrument, debate_id: result.debate_id },
     });
-    return;
+
+    // Handed back so the caller can converge on the STORED row rather than
+    // returning its own discarded sample. First-write-wins on the table but
+    // last-write-wins in the Trader is the attribution mismatch #617 exists to
+    // remove: the Feedback Loop would later attribute the trade to the winner's
+    // row while the position was sized on the loser's confidence.
+    return winner;
   }
 
   // `trace_id` (#426): the tick that actually ran this debate. First-write-wins
@@ -412,6 +419,8 @@ function persistDebateLog(params: {
   // `debate_id` and must not overwrite the attribution of the debate it did
   // not run.
   store.writeLog(buildDebateLog(result, instrument, bar, clock.now(), trace_id));
+
+  return undefined;
 }
 
 /**
@@ -532,24 +541,69 @@ export function spendCappedDebateResult(debate_id: string, reason: string): Deba
  * debate's latency belongs to the tick that ran it, and `llm_spend` already
  * records it there (#326).
  *
- * Caller must have checked `persisted.confidence !== undefined`; the remaining
- * fields fall back only because they are optional on rows written before
- * migration 0026, which that check already excludes.
+ * Takes a `ReplayableDebateLog`, so the six replay fields are required by the
+ * TYPE rather than defaulted at the point of use. There are no `??` fallbacks
+ * here for that reason: a row missing any of them cannot reach this function,
+ * because `isReplayable` is what narrows it. The previous shape defaulted them
+ * and so could silently emit `synthesis: ''` on a partial row.
+ *
+ * `debate_id` is read off the row rather than taken as a parameter: the row was
+ * looked up BY that id, so a second copy could only ever be the same value or a
+ * bug, and two sources of truth for the id the Trader, Verdict and Feedback Loop
+ * all join on is not a trade worth making.
  */
-export function replayedDebateResult(persisted: DebateLog, debate_id: string): DebateResult {
+export function replayedDebateResult(persisted: ReplayableDebateLog): DebateResult {
   return {
-    synthesis: persisted.synthesis ?? '',
-    position: persisted.position ?? '',
-    confidence: persisted.confidence ?? 0,
+    synthesis: persisted.synthesis,
+    position: persisted.position,
+    confidence: persisted.confidence,
     contributions: persisted.contributions,
-    disagreement_summary: persisted.disagreement_summary ?? '',
-    open_items: persisted.open_items ?? [],
-    converged: persisted.converged ?? false,
+    disagreement_summary: persisted.disagreement_summary,
+    open_items: persisted.open_items,
+    converged: persisted.converged,
     rounds_completed: persisted.rounds,
     latency_ms: 0,
     direction: persisted.direction,
-    debate_id,
+    debate_id: persisted.debate_id,
   };
+}
+
+/** A `DebateLog` carrying every replay field the Trader consumes. */
+export type ReplayableDebateLog = DebateLog & Required<Pick<DebateLog, ReplayField>>;
+
+type ReplayField =
+  | 'confidence'
+  | 'synthesis'
+  | 'position'
+  | 'disagreement_summary'
+  | 'open_items'
+  | 'converged';
+
+const REPLAY_FIELDS: readonly ReplayField[] = [
+  'confidence',
+  'synthesis',
+  'position',
+  'disagreement_summary',
+  'open_items',
+  'converged',
+];
+
+/**
+ * Whether a persisted row can stand in for a live debate.
+ *
+ * **Checking `confidence` alone was not enough.** The six replay fields are
+ * independently optional on `DebateLog` and `writeLog` persists whatever subset
+ * it is given, so "written after migration 0026" and "carries all six" are not
+ * the same statement. A row with a confidence and nothing else replayed as
+ * `synthesis: ''`, `position: ''`, `converged: false` — a fabricated debate
+ * presented to the Trader as a real one, which is worse than the pre-#617
+ * behaviour of simply re-running it.
+ *
+ * All six or none: a partial row falls through and the debate re-runs, which is
+ * the same degradation path a pre-0026 row already takes.
+ */
+export function isReplayable(persisted: DebateLog | undefined): persisted is ReplayableDebateLog {
+  return persisted !== undefined && REPLAY_FIELDS.every((field) => persisted[field] !== undefined);
 }
 
 export function buildDebateStep(
@@ -636,12 +690,14 @@ export function buildDebateStep(
     // question, never a different answer to a new one. Intra-bar price still
     // reaches the Trader through `mark`, which is a separate input and unchanged.
     //
-    // A row written before migration 0026 carries no `confidence`, and confidence
-    // is what position sizing is a function of. Such a row is not replayable, so
-    // this falls through and re-runs the debate rather than trading on a
-    // reconstructed blank.
+    // A row written before migration 0026 carries none of the six replay fields,
+    // and confidence is what position sizing is a function of. Such a row is not
+    // replayable, so this falls through and re-runs the debate rather than
+    // trading on a reconstructed blank. `isReplayable` demands all six rather
+    // than confidence alone, because they are independently optional and a
+    // partial row would otherwise replay as a fabricated empty debate.
     const persisted = debateLog.getByDebateId(debate_id);
-    if (persisted?.confidence !== undefined) {
+    if (isReplayable(persisted)) {
       logger?.log({
         trace_id,
         stage: 'debate',
@@ -652,7 +708,7 @@ export function buildDebateStep(
           'fresh debate would re-sample an identical question. No LLM call was made.',
         payload: { instrument, asset_class, debate_id, replayed: true },
       });
-      return replayedDebateResult(persisted, debate_id);
+      return replayedDebateResult(persisted);
     }
 
     // ADMISSION, once, before anything is spent (#388). `reserve` is
@@ -808,7 +864,7 @@ export function buildDebateStep(
         ? result
         : applyAnalystWeights(result, analystWeights.getAnalystWeights());
 
-    persistDebateLog({
+    const raced = persistDebateLog({
       store: debateLog,
       result: weighted,
       instrument,
@@ -817,6 +873,20 @@ export function buildDebateStep(
       trace_id,
       logger,
     });
+
+    // Lost the write race: another writer already owns this `debate_id`'s row.
+    // Return THEIR row, so the Trader sizes on the same bytes the Feedback Loop
+    // will later attribute the trade to. Without this the backstop reproduced
+    // #617's defect in miniature — the duplicate write was skipped, but the
+    // loser still handed its own discarded sample to the Trader.
+    //
+    // A raced row that is not fully replayable falls back to the fresh result:
+    // an incomplete row is not a better answer than a complete one, and the
+    // mismatch it would leave is the lesser of the two problems.
+    if (isReplayable(raced)) {
+      return replayedDebateResult(raced);
+    }
+
     return weighted;
   };
 }

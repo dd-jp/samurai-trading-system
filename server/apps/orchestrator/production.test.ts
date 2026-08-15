@@ -28,6 +28,7 @@ import type {
 import type { AlpacaBar, AlpacaQuote, Bar } from '../../providers/market-data-service/index.js';
 import {
   AlpacaDataSource,
+  AlwaysOpenCalendar,
   AssetClassRoutingDataSource,
   FixtureDataSource,
   MarketDataServiceImpl,
@@ -52,6 +53,7 @@ import {
   type DailyMetricsConfig,
   DEFAULT_HEARTBEAT_INTERVAL_MS,
   DEFAULT_LLM_CLIENT_CONFIG,
+  equityCalendarFor,
   type FeedbackCycleConfig,
   type ProductionConfig,
   SMOKE_TEST_UNIVERSE,
@@ -59,6 +61,7 @@ import {
   universeAssetClasses,
 } from './production.js';
 import { DEFAULT_UNIVERSE } from './scheduler.js';
+import { buildTrendingCloses } from './smoke-run.js';
 import { SqliteDailyEquityStore } from './sqlite-daily-equity-store.js';
 import { SequentialTickRunner } from './tick-runner.js';
 import type { Logger, Scheduler, TickOutcome, TickPlan, TickRunner } from './types.js';
@@ -343,11 +346,26 @@ const REAL_CONFIGS = {
   | 'costConfig'
 >;
 
-/** An hourly bar series long enough for the ATR/ADV lookbacks the chain reads. */
+/**
+ * An hourly bar series long enough for the ATR/ADV lookbacks the chain reads.
+ *
+ * Rises **with pullbacks** (`buildTrendingCloses`), not monotonically. A
+ * monotonic ramp has no down bars, so its RSI is exactly 100 and the technical
+ * analyst reads `neutral` — "overbought" — on the strongest possible uptrend.
+ * That left the mediator as the chain's only directional participant, so the
+ * `go` these tests assert came through the mediator-override branch #625 exists
+ * to close rather than through a desk that agreed on a direction.
+ */
 function fixtureBars(instrument: string, timeframe: string, count: number, stepMs: number): Bar[] {
+  const closes = buildTrendingCloses(count, 99 + count);
+
   return Array.from({ length: count }, (_, index) => {
     const close_time = new Date(START.getTime() - (count - index) * stepMs);
-    const price = 100 + index;
+    // Indexed directly, no `?? 100` fallback: `buildTrendingCloses` returns
+    // exactly `count` entries, and silently substituting a flat price would
+    // corrupt the RSI/SMA these fixtures exist to produce.
+    const price = closes[index];
+    if (price === undefined) throw new Error(`fixtureBars: no close at index ${index}`);
     return {
       instrument,
       timeframe,
@@ -367,6 +385,46 @@ describe('SMOKE_TEST_UNIVERSE', () => {
   it('is a narrow, crypto-only universe (ADR-0004 §4)', () => {
     expect(SMOKE_TEST_UNIVERSE).toHaveLength(1);
     expect(SMOKE_TEST_UNIVERSE[0]).toEqual({ asset: 'BTC-USD', asset_class: 'crypto' });
+  });
+});
+
+describe('equityCalendarFor', () => {
+  /**
+   * #668 landed `LseRegularHoursCalendar` with NO production caller — this
+   * repo's dominant defect shape, and the worst possible instance of it: every
+   * flatten on the live leg would have resolved through the US 16:00 ET
+   * boundary, which is 20:00/21:00 London, hours after the 16:30 LSE close.
+   * The overnight carry #668 exists to prevent, arriving through the
+   * composition root rather than through the rule.
+   */
+  it('gives the live equity leg the LSE calendar (ADR-0015: T212 ISA, LSE ETPs)', () => {
+    const calendar = equityCalendarFor({ mode: 'live' } as unknown as ProductionConfig);
+
+    // 2026-07-15 is a Wednesday. 16:25 London (BST) = 15:25 UTC — inside the
+    // LSE session, and already an hour past it under the US calendar's clock.
+    expect(calendar.isOpen(new Date('2026-07-15T15:25:00Z'))).toBe(true);
+    // 17:00 London = 16:00 UTC, after the 16:30 LSE close but well inside the
+    // US session. This is the assertion that fails if the US calendar is used.
+    expect(calendar.isOpen(new Date('2026-07-15T16:00:00Z'))).toBe(false);
+    expect(calendar.sessionEnd(new Date('2026-07-15T10:00:00Z'))?.toISOString()).toBe(
+      '2026-07-15T15:30:00.000Z',
+    );
+  });
+
+  it('leaves paper on the US calendar, which is the venue paper actually trades', () => {
+    const calendar = equityCalendarFor({ mode: 'paper' } as unknown as ProductionConfig);
+
+    expect(calendar.sessionEnd(new Date('2026-07-15T10:00:00Z'))?.toISOString()).toBe(
+      '2026-07-15T20:00:00.000Z',
+    );
+  });
+
+  it('honours an explicit override in either mode', () => {
+    const injected = new AlwaysOpenCalendar();
+
+    expect(
+      equityCalendarFor({ mode: 'live', tradingCalendar: injected } as unknown as ProductionConfig),
+    ).toBe(injected);
   });
 });
 
@@ -1116,6 +1174,123 @@ describe('startTickLoop', () => {
 
     // The later SLOW pass's own gate, so `stop()` doesn't wait forever.
     releaseSlow();
+    await loop.stop();
+  });
+
+  it('a slow pass settling does not release an instrument a newer pass re-claimed', async () => {
+    // The fast-reclaim-then-slow-settle ordering, which the guard's own
+    // backstop used to break.
+    //
+    // Pass 1 claims FAST and SLOW. FAST settles almost immediately and is
+    // released, so tick 2 legitimately re-claims FAST into pass 2 — which then
+    // blocks. SLOW finally settles, pass 1 completes, and its `finally`
+    // backstop ran `delete` over EVERY asset pass 1 had claimed, FAST included
+    // — clearing a guard pass 2 owned. The next tick then started a second
+    // concurrent pass on FAST: the exact reentrancy #669 exists to prevent,
+    // reintroduced by the backstop meant to protect it.
+    //
+    // Ownership tokens make the stale release a no-op.
+    const gates: Record<string, (() => void) | undefined> = {};
+    let fastCallCount = 0;
+    const twoInstrumentPlan: TickPlan = {
+      instruments: [
+        { asset: 'FAST', asset_class: 'crypto' },
+        { asset: 'SLOW', asset_class: 'crypto' },
+      ],
+      tick_time: START,
+    };
+    const runInstrument = vi.fn(async (signal): Promise<TickOutcome> => {
+      if (signal.asset === 'SLOW') {
+        await new Promise<void>((resolve) => {
+          gates.SLOW = resolve;
+        });
+        return { trace_id: 't', final_stage: 'execution' };
+      }
+
+      fastCallCount += 1;
+      // The FIRST FAST pass settles at once (so it can be re-claimed); every
+      // later one blocks, so a second concurrent FAST pass would be visible as
+      // a call count that keeps climbing while one is still gated.
+      if (fastCallCount === 1) {
+        return { trace_id: 't', final_stage: 'execution' };
+      }
+      await new Promise<void>((resolve) => {
+        gates.FAST = resolve;
+      });
+      return { trace_id: 't', final_stage: 'execution' };
+    });
+
+    const loop = startTickLoop({
+      scheduler: { nextTick: (): TickPlan => twoInstrumentPlan },
+      runner: { runInstrument } as TickRunner,
+      clock: new SimulatedClock(START),
+      logger: recordingLogger(),
+      persistence: persistence() as never,
+      tickIntervalMs: 1_000,
+      maxConcurrentInstruments: 2,
+    });
+
+    // Tick 1: FAST settles immediately, SLOW blocks.
+    await vi.advanceTimersByTimeAsync(1_000);
+    // Tick 2: FAST is free, so it is re-claimed into a new pass — and blocks.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fastCallCount).toBe(2);
+
+    // SLOW settles, completing pass 1 and firing its backstop over FAST too.
+    gates.SLOW?.();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Several more ticks. FAST's pass 2 is still gated, so the guard must hold.
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(fastCallCount).toBe(2);
+
+    gates.FAST?.();
+    await vi.advanceTimersByTimeAsync(0);
+    gates.SLOW?.();
+    await vi.advanceTimersByTimeAsync(0);
+    gates.FAST?.();
+    gates.SLOW?.();
+    await loop.stop();
+  });
+
+  it('claims atomically, so a duplicated asset in one plan cannot run twice', async () => {
+    // Check-and-claim used to be `filter` then a separate `add` loop, which is
+    // not atomic per asset: both copies passed the filter before either was
+    // claimed. `nextTick` returning a duplicate is not expected — but "not
+    // expected" is what the guard is for, and the failure is silent.
+    const duplicatePlan: TickPlan = {
+      instruments: [
+        { asset: 'BTC-USD', asset_class: 'crypto' },
+        { asset: 'BTC-USD', asset_class: 'crypto' },
+      ],
+      tick_time: START,
+    };
+    let release!: () => void;
+    const runInstrument = vi.fn(async (): Promise<TickOutcome> => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { trace_id: 't', final_stage: 'execution' };
+    });
+
+    const loop = startTickLoop({
+      scheduler: { nextTick: (): TickPlan => duplicatePlan },
+      runner: { runInstrument } as TickRunner,
+      clock: new SimulatedClock(START),
+      logger: recordingLogger(),
+      persistence: persistence() as never,
+      tickIntervalMs: 1_000,
+      maxConcurrentInstruments: 2,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(runInstrument).toHaveBeenCalledTimes(1);
+
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    release();
     await loop.stop();
   });
 

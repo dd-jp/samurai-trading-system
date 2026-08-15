@@ -151,6 +151,7 @@ import { assertAutomationLevelSupported } from '../../pipeline/verdict/index.js'
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import {
   AlwaysOpenCalendar,
+  LseRegularHoursCalendar,
   MarketDataServiceImpl,
   SqliteMarketDataStore,
   type TradingCalendar,
@@ -456,7 +457,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     config.llmRateLimiter ??
     new RateLimiter(clock, config.rateLimiterConfig ?? DEFAULT_LLM_RATE_LIMIT_CONFIG);
 
-  const tradingCalendar = config.tradingCalendar ?? new UsEquityRegularHoursCalendar();
+  const tradingCalendar = equityCalendarFor(config);
   /**
    * ONE calendar pair, shared by every consumer that needs to know when a
    * venue is open — the daily-PnL boundary (#331/#332) and the volatility
@@ -1102,6 +1103,27 @@ function buildMiIngestAgent(deps: {
  * position state the first has not finished writing. That is exactly what
  * `running` guards, and nothing wider.
  *
+ * ### Persistence under interleaved passes
+ *
+ * The argument above covers LLM concurrency but not the two stores every pass
+ * writes, and passes from different ticks CAN now overlap — a state the global
+ * lock made unreachable by construction. Audited rather than assumed:
+ *
+ * - **`current_tick` is keyed `instrument TEXT PRIMARY KEY`** (migration 0001),
+ *   and `SqliteCurrentTickStore` only ever upserts or deletes BY instrument.
+ *   Two overlapping passes therefore touch different rows unless they share an
+ *   instrument — which the guard makes impossible. There is no last-write-wins
+ *   hazard to key around; the row is already keyed more finely than a pass.
+ * - **`audit_log` is append-only** — `SqliteAuditLog.record` is a bare INSERT
+ *   with no key to collide on, so interleaving reorders rows at worst, and
+ *   readers already sort (`ORDER BY timestamp, rowid`).
+ * - **Writes are synchronous.** `better-sqlite3` statements do not yield, so
+ *   there is no interleaving *within* a statement for either store — only
+ *   between them, which is what the two points above cover.
+ *
+ * So neither store assumes a single writer; both assume a single writer PER
+ * INSTRUMENT, which is precisely the invariant this guard holds.
+ *
  * ## Scheduling
  *
  * The next tick is scheduled when the previous pass STARTS, not when it
@@ -1124,11 +1146,35 @@ export function startTickLoop(deps: {
   maxConcurrentInstruments: number;
 }): { stop: () => Promise<void> } {
   let stopped = false;
-  /** Instruments with a pass still in flight — the reentrancy guard (#669). */
-  const running = new Set<string>();
+  /**
+   * Instruments with a pass still in flight — the reentrancy guard (#669) —
+   * each mapped to the TOKEN of the claim that owns it.
+   *
+   * A bare `Set` was not enough, and the failure needs three passes to see.
+   * Claims are released per instrument as each pipeline settles, so a fast
+   * instrument is free again long before its own pass finishes. Suppose pass 1
+   * claims A and B; A settles at t+100ms and is released; tick 2 fires and
+   * re-claims A into pass 2; B settles at t+4s and pass 1's backstop finally
+   * runs, deleting EVERY asset pass 1 claimed — including A, which pass 2 now
+   * owns. Tick 3 then starts a second concurrent pass on A: precisely the
+   * reentrancy #669 exists to prevent, reintroduced by the guard meant to
+   * protect it.
+   *
+   * The token makes release ownership-aware: a holder deletes the entry only
+   * if it is still its own. A stale release is then a no-op instead of
+   * unlocking someone else's claim.
+   */
+  const running = new Map<string, symbol>();
   /** Outstanding passes, so `stop()` awaits them instead of abandoning them mid-pipeline. */
   const passes = new Set<Promise<void>>();
   let handle: NodeJS.Timeout | undefined;
+
+  /** Releases `asset` only if `token` still owns it. See `running`. */
+  const release = (asset: string, token: symbol): void => {
+    if (running.get(asset) === token) {
+      running.delete(asset);
+    }
+  };
 
   /**
    * Clears each instrument's guard when THAT instrument's pipeline settles,
@@ -1143,30 +1189,61 @@ export function startTickLoop(deps: {
    * Wrapping the runner is what makes it genuinely per-instrument, and it is
    * also the narrowest seam that knows an instrument is done — `runTickPlan`
    * reports only the whole plan's completion.
+   *
+   * Built PER PASS rather than once, so it closes over that pass's claim
+   * tokens and can release only what it actually claimed.
    */
-  const guardedRunner: TickRunner = {
+  const buildGuardedRunner = (claims: Map<string, symbol>): TickRunner => ({
     runInstrument: async (signal, ctx) => {
       try {
         return await deps.runner.runInstrument(signal, ctx);
       } finally {
-        running.delete(signal.asset);
+        const token = claims.get(signal.asset);
+        if (token !== undefined) {
+          release(signal.asset, token);
+        }
       }
     },
-  };
+  });
 
   const runOnce = async (): Promise<void> => {
     try {
       const plan = deps.scheduler.nextTick(deps.clock);
-      const ready = plan.instruments.filter((instrument) => !running.has(instrument.asset));
 
-      if (ready.length < plan.instruments.length) {
-        const busy = plan.instruments
-          .filter((instrument) => running.has(instrument.asset))
-          .map((instrument) => instrument.asset);
+      // Claim inside ONE loop — check and claim per asset, not filter-then-add.
+      // A `filter` followed by a separate `add` loop is not atomic per asset:
+      // if `nextTick` ever returned the same asset twice, both entries would
+      // pass the filter before either was claimed and both would run
+      // concurrently, silently violating the one-pass-per-instrument invariant
+      // this guard exists to hold. Claiming as we go makes the duplicate lose
+      // to itself.
+      const claims = new Map<string, symbol>();
+      const ready: typeof plan.instruments = [];
+      const busy: string[] = [];
+      for (const instrument of plan.instruments) {
+        if (running.has(instrument.asset) || claims.has(instrument.asset)) {
+          busy.push(instrument.asset);
+          continue;
+        }
+
+        const token = Symbol(instrument.asset);
+        running.set(instrument.asset, token);
+        claims.set(instrument.asset, token);
+        ready.push(instrument);
+      }
+
+      if (busy.length > 0) {
         deps.logger.log({
           trace_id: 'tick-loop',
           stage: 'tick-loop',
-          level: 'warn',
+          // INFO, not warn. A partially-busy tick is the steady state, not an
+          // anomaly: this PR's own reasoning is that slow crypto debates
+          // routinely outlast the interval, so at `warn` this line fires every
+          // interval for the whole life of every slow debate and buries the
+          // case the message exists to surface — the equity leg falling behind
+          // inside its two-hour window. A level that is always on carries no
+          // information; `skipped` is still named so that case stays greppable.
+          level: 'info',
           // Named, not counted. The whole point of #669 is that WHICH
           // instrument is late decides whether this is benign; a bare count
           // cannot distinguish "crypto is slow again" from "the equity leg has
@@ -1178,22 +1255,30 @@ export function startTickLoop(deps: {
 
       if (ready.length === 0) return;
 
-      for (const instrument of ready) running.add(instrument.asset);
-
-      const pass = runTickPlan({ ...plan, instruments: ready }, guardedRunner, deps.clock, {
-        max_concurrent_instruments: deps.maxConcurrentInstruments,
-        logger: deps.logger,
-        auditLog: deps.persistence.auditLog,
-        currentTickStore: deps.persistence.currentTickStore,
-      })
+      const pass = runTickPlan(
+        { ...plan, instruments: ready },
+        buildGuardedRunner(claims),
+        deps.clock,
+        {
+          max_concurrent_instruments: deps.maxConcurrentInstruments,
+          logger: deps.logger,
+          auditLog: deps.persistence.auditLog,
+          currentTickStore: deps.persistence.currentTickStore,
+        },
+      )
         .then(() => undefined)
         .finally(() => {
-          // Backstop only — `guardedRunner` clears each instrument as its own
-          // pipeline settles. This catches an instrument the plan claimed but
-          // `runTickPlan` never dispatched (a throw between claim and call),
-          // which would otherwise leave it marked running forever and silently
-          // stop trading it for the rest of the process.
-          for (const instrument of ready) running.delete(instrument.asset);
+          // Backstop only — `buildGuardedRunner` clears each instrument as its
+          // own pipeline settles. This catches an instrument the plan claimed
+          // but `runTickPlan` never dispatched (a throw between claim and
+          // call), which would otherwise leave it marked running forever and
+          // silently stop trading it for the rest of the process.
+          //
+          // Ownership-aware: it releases only claims THIS pass still owns. A
+          // blanket delete would unlock an instrument a newer pass had already
+          // re-claimed, which is how a backstop turns into the reentrancy it
+          // was guarding against.
+          for (const [asset, token] of claims) release(asset, token);
         });
 
       passes.add(pass);
@@ -1251,6 +1336,40 @@ export function startTickLoop(deps: {
 }
 
 /**
+ * The equity venue's calendar, chosen by MODE rather than hardcoded (#668).
+ *
+ * `LseRegularHoursCalendar` landed with #668 and had no production caller —
+ * this repo's dominant defect shape, and the one that matters most here: every
+ * flatten decision on the live leg would have resolved through the US 16:00 ET
+ * boundary, which is 20:00 or 21:00 London, **hours after the 16:30 LSE
+ * close**. The overnight carry #668 exists to prevent, arriving through the
+ * composition root rather than through the rule.
+ *
+ * The venues genuinely differ per ADR-0015: live equity is the Trading 212 ISA
+ * restricted to GBP LSE-listed ETFs/ETCs (#659), while paper runs Alpaca US
+ * equities. #656 measured the two sessions overlapping by only two hours, so
+ * one calendar cannot serve both — which is exactly why #668 made the flatten
+ * an offset resolved through the instrument's own calendar rather than a shared
+ * wall-clock constant.
+ *
+ * A FUNCTION rather than a literal at each site, because there are two sites —
+ * the component root and the scheduler — and they were already two independent
+ * `?? new UsEquityRegularHoursCalendar()` defaults. That was harmless while both
+ * defaults were the same class; the moment the default depends on mode, two
+ * copies means the scheduler gating market hours on New York while the flatten
+ * resolves against London. `config.tradingCalendar` still overrides both.
+ */
+export function equityCalendarFor(config: ProductionConfig): TradingCalendar {
+  if (config.tradingCalendar !== undefined) {
+    return config.tradingCalendar;
+  }
+
+  return config.mode === 'live'
+    ? new LseRegularHoursCalendar()
+    : new UsEquityRegularHoursCalendar();
+}
+
+/**
  * The full composition root: every stage bound, every store constructed, and
  * a `start`/`stop` pair for the entrypoint. Startup order is
  * orphan-scan-then-loop (ADR-0004 §3, ticket #236): the scan reports `go`
@@ -1266,7 +1385,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   const tickRunner = new SequentialTickRunner(components.steps);
   const scheduler = new UniverseScheduler({
     universe: config.universe ?? SMOKE_TEST_UNIVERSE,
-    calendar: config.tradingCalendar ?? new UsEquityRegularHoursCalendar(),
+    calendar: equityCalendarFor(config),
   });
   const heartbeat = new Heartbeat(
     config.heartbeatChannel ?? new LoggingHeartbeatChannel(logger),

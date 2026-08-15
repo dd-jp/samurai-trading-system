@@ -667,6 +667,20 @@ describe('decide — determinism & idempotency', () => {
 
     expect(next?.idempotency_key).not.toBe(first?.idempotency_key);
   });
+
+  it('keys on the debate bar grid, not on atr_timeframe', async () => {
+    // The decision bar is the DEBATE's bar by definition — it is what makes the
+    // idempotency key and `debate_id` the same coordinate. `atr_timeframe` is a
+    // separate, independently tunable knob (the window the ATR is measured
+    // over), and tying the order-dedup coordinate to a risk-tuning setting
+    // would be #616 inverted: a finer grid collapses several decision bars onto
+    // one key, and the suppressed orders look exactly like skips.
+    const fine = await decide(traderInput({ config: configWith({ atr_timeframe: '15m' }) }));
+    const coarse = await decide(traderInput());
+
+    expect(fine?.decision_timestamp).toEqual(DECISION_BAR);
+    expect(fine?.decision_timestamp).toEqual(coarse?.decision_timestamp);
+  });
 });
 
 /**
@@ -833,6 +847,51 @@ describe('decide — flat by close (#668)', () => {
     );
 
     expect(outcome.intent?.intent_type).toBe('exit');
+  });
+
+  /**
+   * KNOWN GAP, characterised rather than fixed here — see the issue linked from
+   * `idempotency-key.ts`.
+   *
+   * `computeIdempotencyKey` is keyed on `(instrument, bar)` with no discriminator
+   * for what KIND of intent it is. Since #616 the bar is stable across every tick
+   * inside it, and bars are 1h while `flatten_before_close_ms` is 5 minutes — so
+   * an entry taken earlier in the session's LAST bar and the mandatory
+   * flat-by-close exit in that same bar produce the SAME key.
+   *
+   * Downstream that key is what `findByKey`, the `open_positions` primary key and
+   * the broker `client_order_id` all dedupe on, so the flatten is the one that
+   * loses: a suppressed mandatory exit leaves the book carrying a position
+   * overnight, which is precisely what ADR-0014 forbids and what #668 exists to
+   * prevent.
+   *
+   * Neither change causes this alone — #616 made keys stable within a bar, #668
+   * put a second intent in the bar — which is why it appears only now.
+   *
+   * Pinned so the collision cannot be widened or "fixed" silently. Changing the
+   * key payload is a `cross-spec-contracts.md` §7 amendment plus a migration for
+   * in-flight records, so it is not a review fix.
+   */
+  it('KNOWN GAP — a same-bar entry and the mandatory flatten collide on one key', async () => {
+    // 19:50 and 19:56 UTC both floor to the 19:00 bar; only 19:56 is inside the
+    // 5-minute flatten window, so the entry is legal and so is the flatten.
+    const entry = await decide(
+      traderInput({
+        clock: new ManualClock(OUTSIDE_WINDOW),
+        positionState: async () => [],
+      }),
+    );
+    const flatten = await decide(
+      traderInput({
+        clock: new ManualClock(INSIDE_WINDOW),
+        debate: debateResult({ direction: 'neutral' }),
+        positionState: async () => [holding()],
+      }),
+    );
+
+    expect(entry?.intent_type).toBe('entry');
+    expect(flatten?.intent_type).toBe('exit');
+    expect(flatten?.idempotency_key).toBe(entry?.idempotency_key);
   });
 });
 
