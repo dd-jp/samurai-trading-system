@@ -71,6 +71,17 @@ class FixtureMarketData implements MarketDataService {
    */
   requestedWindow: BarWindow | undefined;
 
+  /**
+   * What `getMark` reports as `observed_at`.
+   *
+   * Defaults to `DECISION_BAR` — a value already ON the bar grid, which is
+   * exactly the shape the BACKTEST source produces and exactly why #616 stayed
+   * invisible here. In paper and live this is the venue's latest-quote wire
+   * timestamp at millisecond resolution and moves every tick, so a fixture
+   * that can only sit on the grid cannot express the production case.
+   */
+  markObservedAt: Date = DECISION_BAR;
+
   constructor(
     private readonly fixtureBars: Bar[],
     private readonly assetClass: AssetClass = 'stocks',
@@ -85,7 +96,7 @@ class FixtureMarketData implements MarketDataService {
   async getMark(_instrument: string, _asOf: Date): Promise<Mark> {
     return {
       price: this.price,
-      observed_at: DECISION_BAR,
+      observed_at: this.markObservedAt,
       source: 'fixture',
       asset_class: this.assetClass,
     };
@@ -587,6 +598,76 @@ describe('decide — determinism & idempotency', () => {
     const tsla = await decide(traderInput({ instrument: 'TSLA' }));
 
     expect(aapl?.idempotency_key).not.toBe(tsla?.idempotency_key);
+  });
+
+  /**
+   * #616 — the LIVE/PAPER case, which no test exercised before.
+   *
+   * The suite above passes because `FixtureMarketData` reports `observed_at`
+   * already on the bar grid, which is what the BACKTEST source really does. In
+   * paper and live it is the venue's latest-quote wire timestamp at millisecond
+   * resolution and moves on every tick, and the mark cache cannot bridge ticks
+   * (`markTtlMs` 5s against a 15-minute tick). The key therefore changed every
+   * pass, and `findByKey`, the `open_positions` PK and the broker
+   * `client_order_id` were all inert in exactly the two modes that place real
+   * orders.
+   *
+   * This test fails against the pre-#616 `decisionBar = mark.observed_at`.
+   */
+  it('keys identically across two live ticks in one bar, despite moving quote timestamps', async () => {
+    const tickOne = new FixtureMarketData(bars(15, 2));
+    tickOne.markObservedAt = new Date('2026-07-15T10:00:03.187Z');
+
+    const tickTwo = new FixtureMarketData(bars(15, 2));
+    tickTwo.markObservedAt = new Date('2026-07-15T10:45:11.902Z');
+
+    const first = await decide(
+      traderInput({
+        marketData: tickOne,
+        clock: new ManualClock(new Date('2026-07-15T10:00:03.187Z')),
+      }),
+    );
+    const sameBarLater = await decide(
+      traderInput({
+        marketData: tickTwo,
+        clock: new ManualClock(new Date('2026-07-15T10:45:11.902Z')),
+      }),
+    );
+
+    expect(first?.idempotency_key).toBeDefined();
+    expect(sameBarLater?.idempotency_key).toBe(first?.idempotency_key);
+    // And the coordinate is the bar itself, which is what makes it the same
+    // value `debate_id` hashes.
+    expect(sameBarLater?.decision_timestamp).toEqual(DECISION_BAR);
+  });
+
+  it('still separates two different bars', async () => {
+    const nextBar = new FixtureMarketData(bars(15, 2));
+    nextBar.markObservedAt = new Date('2026-07-15T11:03:00Z');
+
+    const first = await decide(traderInput());
+    const next = await decide(
+      traderInput({
+        marketData: nextBar,
+        clock: new ManualClock(new Date('2026-07-15T11:03:00Z')),
+      }),
+    );
+
+    expect(next?.idempotency_key).not.toBe(first?.idempotency_key);
+  });
+
+  it('keys on the debate bar grid, not on atr_timeframe', async () => {
+    // The decision bar is the DEBATE's bar by definition — it is what makes the
+    // idempotency key and `debate_id` the same coordinate. `atr_timeframe` is a
+    // separate, independently tunable knob (the window the ATR is measured
+    // over), and tying the order-dedup coordinate to a risk-tuning setting
+    // would be #616 inverted: a finer grid collapses several decision bars onto
+    // one key, and the suppressed orders look exactly like skips.
+    const fine = await decide(traderInput({ config: configWith({ atr_timeframe: '15m' }) }));
+    const coarse = await decide(traderInput());
+
+    expect(fine?.decision_timestamp).toEqual(DECISION_BAR);
+    expect(fine?.decision_timestamp).toEqual(coarse?.decision_timestamp);
   });
 });
 
