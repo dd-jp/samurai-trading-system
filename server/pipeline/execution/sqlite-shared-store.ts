@@ -27,7 +27,11 @@ import type {
   OpenPosition,
   OrderState,
 } from '../../shared/index.js';
-import { type SharedStore as Db, isUniqueConstraintError } from '../../shared/store/index.js';
+import {
+  type SharedStore as Db,
+  isUniqueConstraintError,
+  TERMINAL_ORDER_STATES,
+} from '../../shared/store/index.js';
 import type {
   FlattenAttribution,
   FlattenSubmissionWriteAhead,
@@ -37,8 +41,13 @@ import type {
   UnresolvedFlattenSubmission,
 } from './types.js';
 
-/** Terminal `order_state`s — excluded from `getOpenPositions()` (execution-spec.md). */
-const TERMINAL_STATES: readonly OrderState[] = ['closed', 'cancelled', 'rejected', 'expired'];
+/**
+ * Terminal `order_state`s — excluded from `getOpenPositions()`
+ * (execution-spec.md). Defined in `shared/store/key-scheme-guard.ts`, which the
+ * #686 rollout guard reads too; aliased here so the SQL below keeps its
+ * original name.
+ */
+const TERMINAL_STATES: readonly OrderState[] = TERMINAL_ORDER_STATES;
 
 /**
  * The only two leg predicates `fillSizesByLeg` will put in its SQL, chosen by

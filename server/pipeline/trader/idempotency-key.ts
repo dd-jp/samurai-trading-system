@@ -15,6 +15,33 @@
 import { createHash } from 'node:crypto';
 
 /**
+ * Which SIDE of a position the intent is on — the discriminator, deliberately
+ * coarser than `intent_type`.
+ *
+ * `entry` and `scale_in` collapse to one value on purpose. Hashing the full
+ * `intent_type` would be more precise and **less safe**: within a single bar the
+ * first tick can produce an `entry` and a later tick a `scale_in` (the position
+ * now exists), and under a three-way key those are two different keys, so a
+ * crash-replay of that bar would place BOTH rather than dedupe to one. Grouping
+ * the opening intents keeps exactly the within-bar collapse #616 and #617 were
+ * protecting, and separates only the closing side — which is the one that must
+ * never be suppressed.
+ */
+export type IntentSide = 'open' | 'close';
+
+/**
+ * The opening/closing side of an intent type.
+ *
+ * The parameter union is spelled out rather than imported: `intent_type` is
+ * declared inline in both `shared/types/records.ts` and
+ * `shared/decision-records.ts` and has no shared named type, so importing one
+ * would mean minting a contract type as a side effect of this fix.
+ */
+export function intentSideFor(intentType: 'entry' | 'scale_in' | 'exit'): IntentSide {
+  return intentType === 'exit' ? 'close' : 'open';
+}
+
+/**
  * `bar` must be the decision bar's coordinate — a value on the BAR GRID, which
  * every tick sharing that bar computes identically. Never a raw wall-clock or
  * wire timestamp: both differ on a crash-restart re-run of the same bar, which
@@ -44,33 +71,6 @@ import { createHash } from 'node:crypto';
  * On a 3x leveraged ETP (ADR-0016's universe) that is the worst outcome the
  * intraday horizon has.
  */
-/**
- * Which SIDE of a position the intent is on — the discriminator, deliberately
- * coarser than `intent_type`.
- *
- * `entry` and `scale_in` collapse to one value on purpose. Hashing the full
- * `intent_type` would be more precise and **less safe**: within a single bar the
- * first tick can produce an `entry` and a later tick a `scale_in` (the position
- * now exists), and under a three-way key those are two different keys, so a
- * crash-replay of that bar would place BOTH rather than dedupe to one. Grouping
- * the opening intents keeps exactly the within-bar collapse #616 and #617 were
- * protecting, and separates only the closing side — which is the one that must
- * never be suppressed.
- */
-export type IntentSide = 'open' | 'close';
-
-/**
- * The opening/closing side of an intent type.
- *
- * The parameter union is spelled out rather than imported: `intent_type` is
- * declared inline in both `shared/types/records.ts` and
- * `shared/decision-records.ts` and has no shared named type, so importing one
- * would mean minting a contract type as a side effect of this fix.
- */
-export function intentSideFor(intentType: 'entry' | 'scale_in' | 'exit'): IntentSide {
-  return intentType === 'exit' ? 'close' : 'open';
-}
-
 export function computeIdempotencyKey(instrument: string, bar: Date, side: IntentSide): string {
   const payload = JSON.stringify({
     instrument,
