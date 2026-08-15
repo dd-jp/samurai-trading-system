@@ -8,20 +8,45 @@ No selection signal: this is the unconditional baseline the thresholds are fitte
 to. A real system adds an entry signal on top, which shifts P_win but not the
 shape of the distribution.
 """
-import json, math, os, sys
+import json, math, os, re, sys
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
-TMP = "/Users/ddjp/.claude/jobs/21207c2c/tmp"
+_TF_PATTERN = re.compile(r"^(\d*)\s*(min|minute|hour)s?$", re.I)
+# Input directory, overridable so the ADR-0018 evidence reproduces off this machine.
+# Expects <TMP>/bars/<SYMBOL>_<TF>.jsonl and <TMP>/news_<SYMBOL>.jsonl, which is what
+# 18-fetch-bars.py and 18-fetch-earnings.py write when pointed at the same directory.
+TMP = os.environ.get("SAMURAI_BARS_DIR", os.getcwd())
 OPTIMISTIC = os.environ.get("SAME_BAR") == "tp"
 HITS = defaultdict(int)
 
 
-def load_sessions(symbol, tf=os.environ.get("TF","5Min")):
-    """Regular-hours 5-minute bars grouped by ET trading date, in order."""
+SESSION_MINUTES = 6 * 60 + 30  # 09:30-16:00 ET
+
+
+def timeframe_minutes(tf):
+    """Bar length in minutes for an Alpaca timeframe string ("5Min", "1Hour")."""
+    m = _TF_PATTERN.match(tf.strip())
+    if not m:
+        raise ValueError("unrecognised timeframe %r" % tf)
+    n = int(m.group(1) or 1)
+    unit = m.group(2).lower()
+    return n * (60 if unit.startswith("hour") else 1)
+
+
+def load_sessions(symbol, tf=os.environ.get("TF", "5Min")):
+    """Regular-hours bars grouped by ET trading date, in order.
+
+    Sessions shorter than half a full day are dropped. The bar count that
+    represents "half a day" is derived from the timeframe, so 1Min and 5Min runs
+    are filtered on the same effective criterion — a fixed 60-bar floor is not
+    comparable across timeframes (it is a whole session at 5Min but an hour at
+    1Min, which silently kept half-days in one run and dropped them in another).
+    """
     path = os.path.join(TMP, "bars", "%s_%s.jsonl" % (symbol, tf))
+    min_bars = max(1, int(SESSION_MINUTES / timeframe_minutes(tf) * 0.5))
     sessions = defaultdict(list)
     for line in open(path):
         b = json.loads(line)
@@ -32,7 +57,7 @@ def load_sessions(symbol, tf=os.environ.get("TF","5Min")):
         sessions[t.date()].append((mins, b["o"], b["h"], b["l"], b["c"]))
     for d in sessions:
         sessions[d].sort()
-    return {d: v for d, v in sessions.items() if len(v) >= 60}
+    return {d: v for d, v in sessions.items() if len(v) >= min_bars}
 
 
 def earnings_dates(symbol):
@@ -40,14 +65,13 @@ def earnings_dates(symbol):
     path = os.path.join(TMP, "news_%s.jsonl" % symbol)
     if not os.path.exists(path):
         return set()
-    import re as _re
-    name = {"TSLA": "tesla", "AAPL": "apple"}[symbol]
+    name = {"TSLA": "tesla", "AAPL": "apple"}.get(symbol, symbol.lower())
     # Benzinga's release headline changed format in 2023:
     #   <=2022  "Tesla Reports Q4 Adj. EPS $(0.87), Deliveries ~17.478K"
     #   >=2023  "Tesla Q4 Adj. EPS $0.50 Beats $0.45 Estimate, Sales $24.901B Beats ..."
     # Both start with the company name and carry a quarter token plus EPS.
-    quarter = _re.compile(r"\bq[1-4]\b")
-    eps = _re.compile(r"\beps\b")
+    quarter = re.compile(r"\bq[1-4]\b")
+    eps = re.compile(r"\beps\b")
     out = set()
     for line in open(path):
         n = json.loads(line)
@@ -158,6 +182,9 @@ def main():
                 if s:
                     s["hits"] = dict(HITS)
                     rows.append((tp, sl, s))
+        if not rows:
+            print("   [%s] no sessions in this split - skipped" % label)
+            return None
         rows.sort(key=lambda r: -r[2]["exp"])
         print("   [%s] n=%d" % (label, rows[0][2]["n"]))
         for tp, sl, s in rows:
@@ -181,6 +208,10 @@ def main():
     print()
     b_ev = best(ev_is, "earnings-reaction days only") if len(ev_is) >= 8 else None
 
+    if b_pool is None:
+        print("\nno in-sample sessions - nothing to freeze, stopping")
+        return
+
     print("\n-- OUT-OF-SAMPLE (>=2023), levels frozen from the fits above")
     res = {}
     s = stats(simulate(sessions, oos, lev, b_pool[0], b_pool[1], cost))
@@ -188,7 +219,7 @@ def main():
     print("   GRID (one level pair, every day): TP %+.1f/SL -%.1f -> exp %+.4f%%  n=%d  win %.1f%%  Sharpe %.2f"
           % (b_pool[0], b_pool[1], s["exp"], s["n"], s["winrate"] * 100, s["sharpe"]))
 
-    if b_ev:
+    if b_ev and b_ord:
         s2 = stats(simulate(sessions, ev_oos, lev, b_ev[0], b_ev[1], cost))
         res["event_only"] = s2
         if s2:

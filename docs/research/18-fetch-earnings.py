@@ -1,6 +1,10 @@
-import json, re, sys, time, urllib.parse, urllib.request
+import json, os, re, sys, time, urllib.parse, urllib.request
 
-ENV = "/Users/ddjp/Documents/projects/samurai-trading-system/.env.local"
+# Overridable so the ADR-0018 evidence reproduces off this machine: SAMURAI_ENV_FILE
+# for the credentials, SAMURAI_BARS_DIR for the output.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ENV = os.environ.get("SAMURAI_ENV_FILE", os.path.join(REPO_ROOT, ".env.local"))
+OUT = os.environ.get("SAMURAI_BARS_DIR", os.getcwd())
 env = {}
 for line in open(ENV):
     line = line.strip()
@@ -14,7 +18,7 @@ HDR = {
 }
 
 PAT = re.compile(
-    r"(reports?\s+q[1-4])|(q[1-4]\s+(fy\s*)?\d{2,4}?\s*(earnings|results|eps))"
+    r"(reports?\s+q[1-4])|(q[1-4]\s+(fy\s*)?\d{2,4}\s*(earnings|results|eps))"
     r"|(earnings\s+(call|results|report)\b)|(\bbeats?\b.*\bestimate)|(\bmisses?\b.*\bestimate)",
     re.I,
 )
@@ -54,7 +58,8 @@ if __name__ == "__main__":
     sym = sys.argv[1]
     rows = news(sym, sys.argv[2], sys.argv[3])
     hits = [(t, h) for t, h in rows if PAT.search(h)]
-    with open("/Users/ddjp/.claude/jobs/21207c2c/tmp/news_%s.jsonl" % sym, "w") as fh:
+    os.makedirs(OUT, exist_ok=True)
+    with open(os.path.join(OUT, "news_%s.jsonl" % sym), "w") as fh:
         for t, h in rows:
             fh.write(json.dumps({"t": t, "h": h}) + "\n")
     print(sym, "total", len(rows), "earnings-like", len(hits))

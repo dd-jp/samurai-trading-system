@@ -48,7 +48,7 @@ At £750 a side, one round trip is £1,500 ≈ **$1,905** of Coinbase volume. So
 
 **This reverses the correction previously filed against #660.** #660 assumed **0.15/0.25** — that is tier 3, and it is **right** on a 365-day crypto calendar. The earlier claim that #660 was wrong was itself wrong, and came from the 130/yr figure.
 
-**Tier 3 is reached by only 16%, on a *trailing 30-day* measure.** One quiet fortnight repricing the leg from 0.15/0.25 to 0.25/0.40 is entirely ordinary, and the direction is not controllable. On the Coinbase branch the crypto leg's cost is a function of realised trade count that nothing in the system guarantees.
+**The 365-day calendar clears the tier-3 threshold by only 16% — $57.9K against a $50K line — and the measure is a *trailing 30-day* one.** One quiet fortnight repricing the leg from 0.15/0.25 to 0.25/0.40 is entirely ordinary, and the direction is not controllable. On the Coinbase branch the crypto leg's cost is a function of realised trade count that nothing in the system guarantees.
 
 **CRO staking removes that variable outright.** At a flat 0.0725% both sides the fee is volume-independent, so neither #667 nor a quiet month can move it. That is its most valuable property here — not the headline rate.
 
@@ -132,14 +132,6 @@ Net per trade × £750, at the two crypto calendars [#667](https://github.com/dd
 
 Coinbase's two columns are **different fee schedules**, not one schedule at two volumes — hence the two £/trade figures.
 
-## Verdict
-
-**Crypto.com Exchange with 5,000 CRO staked, if #673 confirms it.** At +0.605%/trade it is the configuration that makes the crypto leg meaningfully profitable, and the only one whose economics depend on **neither** a volume tier **nor** execution style. Both of those are uncontrolled variables on every other branch.
-
-**Coinbase is a real fallback, but a conditional one.** It ranges from **negative-expectancy** (tier 2, taker-only) to +0.45%/trade (tier 3, maker-only) — a spread driven by realised trade count and fill type rather than by anything the strategy decides. Choosing it makes resting limit orders a hard requirement, not a preference. Against that, its UK position is materially stronger (FCA MiFID-equivalent licence, July 2026), which is precisely the risk #673 carries for Crypto.com.
-
-**Decision rule:** if #673 confirms UK access **and** the flat 0.0725%, stay with Crypto.com. If either fails — including the "10% discount" reading, which drops the leg to +0.075%/trade — **switch to Coinbase with maker-only execution**. A certain +0.25–0.45%/trade beats an uncertain +0.605%.
-
 ## Finding 6 — the Exchange is a **Cayman Islands** entity, and the FCA registration does not reach it
 
 Added 2026-08-10, prompted by David: *"the exchange is developed by Foris DAX Limited… crypto.com app is developed by crypto.com"*. He is right, and the entity split is the substance of Finding 1, not a labelling quirk.
@@ -171,6 +163,14 @@ The Exchange Terms and Conditions (last updated 22 December 2025) are **"Publish
 | capital at risk beyond the book | **£178 in CRO, locked 180 days** | none |
 
 At £750 the counterparty exposure is bounded by the leg itself, so this is a judgement about tail risk on a small book, not a disqualifier. **It should be David's call, made explicitly.** Recorded on [#673](https://github.com/dd-jp/samurai-trading-system/issues/673).
+
+## Verdict
+
+**Crypto.com Exchange with 5,000 CRO staked, if #673 confirms it.** At +0.605%/trade it is the configuration that makes the crypto leg meaningfully profitable, and the only one whose economics depend on **neither** a volume tier **nor** execution style. Both of those are uncontrolled variables on every other branch.
+
+**Coinbase is a real fallback, but a conditional one.** It ranges from **negative-expectancy** (tier 2, taker-only) to +0.45%/trade (tier 3, maker-only) — a spread driven by realised trade count and fill type rather than by anything the strategy decides. Choosing it makes resting limit orders a hard requirement, not a preference. Against that, its UK position is materially stronger (FCA MiFID-equivalent licence, July 2026), which is precisely the risk #673 carries for Crypto.com.
+
+**Decision rule:** if #673 confirms UK access **and** the flat 0.0725%, stay with Crypto.com. If either fails — including the "10% discount" reading, which drops the leg to +0.075%/trade — **switch to Coinbase with maker-only execution**. A certain +0.25–0.45%/trade beats an uncertain +0.605%.
 
 ## Open — needs David's account, cannot be verified by research
 
