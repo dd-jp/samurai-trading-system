@@ -6,7 +6,7 @@
 
 ## Problem Statement
 
-> **Read this before the rest of the document.** [ADR-0007](../adr/0007-fully-automatic-execution.md) (2026-08-06) set `automation_level` to `auto` for both asset classes **in paper and live**, so **no trade is ever routed to a human**. The human-in-the-loop material throughout this spec — the dial, the flag sources, `human_timeout`, the whole Telegram approval chain — is **retained and inert**. Where this document says Verdict "routes to a human", read it as "would route, if the dial could be moved off `auto`" — and **it cannot**: `assertAutomationLevelSupported` (`server/pipeline/verdict/index.ts`) **throws on every production boot** if either asset class is set to `manual` or `semi_auto`, because the gate is not merely unused but unsound (gates 1 and 2 run before the approval `await` and are never re-checked, so an approval returning after a 15-minute `human_timeout` submits at a price older than `max_signal_age.crypto` allows). Re-enabling is therefore a **code change gated on async approval (#434)**, not a config edit. See "Staged-Deployment Alignment" below.
+> **Read this before the rest of the document.** [ADR-0007](../adr/0007-fully-automatic-execution.md) (2026-08-06) set `automation_level` to `auto` for both asset classes **in paper and live**, so **no trade is ever routed to a human**. The human-in-the-loop material throughout this spec — the dial, the flag sources, `human_timeout`, the whole Telegram approval chain — is **retained and inert**. Where this document says Verdict "routes to a human", read it as "would route, if the dial could be moved off `auto`" — and **it cannot**: `assertAutomationLevelSupported` (`server/pipeline/verdict/index.ts`) **throws on every production boot** if either asset class is set to `manual` or `semi_auto`, because the gate is not merely unused but unsound (the freshness gates (staleness, feed staleness, drift) run before the approval `await` and are never re-checked, so an approval returning after a 15-minute `human_timeout` submits at a price older than `max_signal_age.crypto` allows). Re-enabling is therefore a **code change gated on async approval (#434)**, not a config edit. See "Staged-Deployment Alignment" below.
 
 Risk has approved an order intent — but approval happened a moment ago, against a snapshot that may already be stale. Firing every Risk-approved order blindly ignores that signals decay between decision and execution. There needs to be one final, deliberate gate between "the system wants to trade" and "money moves."
 
@@ -95,7 +95,7 @@ interface VerdictInput {
 interface VerdictDecision {
   status: 'go' | 'no_go';
   order: OrderIntent | null;             // present iff go
-  no_go_reason: string | null;           // 'staleness'|'drift'|'timeout'|'dedup'
+  no_go_reason: string | null;           // 'staleness'|'stale_feed'|'drift'|'timeout'|'dedup'
                                          // |'market_closed'|'breaker'|'human_rejected'
   approval_path: 'automated' | 'human' | 'human_timeout';
   would_require_approval: boolean;       // recorded even when bypassed in backtest
@@ -105,7 +105,8 @@ interface VerdictDecision {
 
 interface VerdictConfig {
   automation_level: Record<'crypto' | 'stocks', 'manual' | 'semi_auto' | 'auto'>;
-  max_signal_age: Record<'crypto' | 'stocks', number>;   // staleness bound
+  max_signal_age: Record<'crypto' | 'stocks', number>;   // SIGNAL-age bound (decision_timestamp)
+  max_mark_age: Record<'crypto' | 'stocks', number>;     // FEED-age bound (Mark.observed_at) — #641
   drift_tolerance_pct: Record<'crypto' | 'stocks', number>; // max price drift from entry,
                                                           // as a FRACTION of entry (#381)
   human_timeout: number;                                  // → no-go on expiry
@@ -120,12 +121,17 @@ interface VerdictConfig {
 
 Ordered; first failure short-circuits to `no_go`:
 1. **Staleness** — signal age = `clock.now() − order.decision_timestamp`; if > `max_signal_age[asset_class]` → no-go (`staleness`). (`decision_timestamp` is a required field on `OrderIntent` — see cross-spec note below.)
-2. **Drift** — |current price − entry| > `entry * drift_tolerance_pct[asset_class]` → no-go (`drift`). **Fractional, not an absolute price distance** ([#381](https://github.com/dd-jp/samurai-trading-system/issues/381)): an absolute bound cannot be set correctly for more than one instrument at once, and its failure is asymmetric — a value sized for a six-figure BTC-USD is a multiple of a $200 equity, so the gate can never fire and an arbitrarily stale bracket executes. Per-asset-class *absolute* values were rejected for the same reason one level down: SPY and a $20 name cannot share a dollar bound either. A non-positive `entry` fails closed (`drift`) rather than computing a zero or inverted tolerance.
-3. **Idempotency dedup** — existing order/fill for this key in the store → no-go (`dedup`).
-4. **Market-open** (stocks) — closed + no extended-hours → no-go (`market_closed`).
-5. **Fire-time kill-switch / breaker re-check** — tripped → no-go (`breaker`).
-6. **HITL gate** (if engaged by automation level + flags) — human rejects → no-go (`human_rejected`); timeout → no-go (`timeout`); approves → go.
-7. Otherwise → **go**.
+2. **Feed staleness** — `clock.now() − mark.observed_at` > `max_mark_age[asset_class]`, **or `observed_at` ahead of `clock.now()`** → no-go (`stale_feed`). Resolved by [#641](https://github.com/dd-jp/samurai-trading-system/issues/641) (implement, not delete), which closes cross-verify finding CV-6: `market-data-service-spec.md` and the contracts registry §3 described this gate as live across three verification passes while `verdict-spec.md` had no mention of it and the code had no check.
+   - **Not the same gate as 1**, which is why both exist. Gate 1 bounds how long ago **we decided** (`decision_timestamp`); this bounds how long ago **the market last spoke** (`observed_at`). A signal decided four seconds ago against a mark last observed at yesterday's close passes gate 1 cleanly — that trade is what this stops. Neither gate implies the other.
+   - **Ordered before drift, on the same fetched `mark`.** A stale mark does not weaken the drift comparison, it breaks it both ways: a price frozen at the bracket's entry passes a gate meant to measure live movement, and one frozen far from it fires `drift` naming the wrong cause. This ordering means a recorded `drift` always refers to real movement.
+   - **A future `observed_at` fails too**, rather than reading as maximally fresh. It means this process's clock and the venue's disagree, and every other time comparison in the pass — signal age, the flatten window, the bar coordinate — is computed against the clock just caught being wrong.
+   - **Per asset class** because the classes genuinely differ: crypto prints continuously and minutes of silence are anomalous, while ADR-0016's LSE leveraged ETPs are thin enough to go minutes between prints inside a normal session. A single bound would either fire constantly on equities or never fire on crypto. Both values are UNSOURCED at time of writing — no measurement bounds inter-print gaps on the live universe, and the soak is what produces that distribution.
+3. **Drift** — |current price − entry| > `entry * drift_tolerance_pct[asset_class]` → no-go (`drift`). **Fractional, not an absolute price distance** ([#381](https://github.com/dd-jp/samurai-trading-system/issues/381)): an absolute bound cannot be set correctly for more than one instrument at once, and its failure is asymmetric — a value sized for a six-figure BTC-USD is a multiple of a $200 equity, so the gate can never fire and an arbitrarily stale bracket executes. Per-asset-class *absolute* values were rejected for the same reason one level down: SPY and a $20 name cannot share a dollar bound either. A non-positive `entry` fails closed (`drift`) rather than computing a zero or inverted tolerance.
+4. **Idempotency dedup** — existing order/fill for this key in the store → no-go (`dedup`).
+5. **Market-open** (stocks) — closed + no extended-hours → no-go (`market_closed`).
+6. **Fire-time kill-switch / breaker re-check** — tripped → no-go (`breaker`).
+7. **HITL gate** (if engaged by automation level + flags) — human rejects → no-go (`human_rejected`); timeout → no-go (`timeout`); approves → go.
+8. Otherwise → **go**.
 
 ### Module: Human-in-the-Loop
 
@@ -215,7 +221,7 @@ Per CONTEXT.md:
 >
 > **Turning it back is no longer a config edit — the code refuses.** An earlier revision of this paragraph said it was, and that was wrong: a comment guards nothing, and the dial is a config value flipped by someone who has not read the comment. `assertAutomationLevelSupported` (`server/pipeline/verdict/index.ts`) now **throws at production boot** whenever either asset class is `manual` or `semi_auto`, naming the reason and the blocking ticket. Both engaging levels are covered, not just `semi_auto` — `manual` reaches the same `await` through the same two already-evaluated gates. Unlike an in-branch re-check this is not a guard on an unreachable path (#430): it runs on every boot.
 >
-> The reason it refuses: gates 1 (staleness) and 2 (drift) run *before* gate 6 and are never re-evaluated after it, so an approval returning after `human_timeout` (15 min) submits at a price last checked longer ago than `max_signal_age.crypto` (5 min) permits — a gate that reads as a freshness guarantee is not one. ADR-0007 records async approval (Verdict returns `pending`; a poller resumes it) as the only version worth building, which also removes the human from the instrument pass — the actual reason the gate was dropped. **Land [#434](https://github.com/dd-jp/samurai-trading-system/issues/434) before re-enabling anything here.**
+> The reason it refuses: the three freshness gates (staleness, feed staleness, drift) run *before* the HITL gate and are never re-evaluated after it, so an approval returning after `human_timeout` (15 min) submits at a price last checked longer ago than `max_signal_age.crypto` (5 min) permits — a gate that reads as a freshness guarantee is not one. ADR-0007 records async approval (Verdict returns `pending`; a poller resumes it) as the only version worth building, which also removes the human from the instrument pass — the actual reason the gate was dropped. **Land [#434](https://github.com/dd-jp/samurai-trading-system/issues/434) before re-enabling anything here.**
 >
 > **What replaces the gate:** nothing. The circuit breakers are now the only stop, which makes #384, #375 and #333 the live-go gate — see ADR-0007 "Consequences".
 

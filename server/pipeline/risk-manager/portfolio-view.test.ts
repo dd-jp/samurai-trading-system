@@ -68,6 +68,9 @@ function makeInput(overrides: Partial<PortfolioAccountingInput> = {}): Portfolio
       portfolio: { known: true, open_equity: 100_000, realized_pnl: 0 },
     },
     consecutive_losses: 0,
+    // Wide enough that the existing cases, whose fixture marks are observed at
+    // `asOf` exactly, never trip it. The #640 cases below set their own.
+    max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
     ...overrides,
   };
 }
@@ -301,5 +304,133 @@ describe('computePortfolioView — pass-through fields', () => {
     expect(view.daily_pnl.crypto.known).toBe(false);
     expect(view.daily_pnl.portfolio.known).toBe(false);
     expect(view.daily_pnl.stocks).toEqual({ known: true, pct: 0 });
+  });
+});
+
+describe('computePortfolioView — feed staleness (#640)', () => {
+  /**
+   * A market-data double whose marks carry an explicit observation time, which
+   * `makeMarketData` above cannot express (it stamps every mark at `asOf`).
+   */
+  function makeMarketDataObservedAt(
+    marks: Record<string, { price: number; observed_at: Date; asset_class?: 'crypto' | 'stocks' }>,
+  ): MarketDataService {
+    return {
+      ...makeMarketData({}),
+      getMark: vi.fn(async (instrument: string): Promise<Mark> => {
+        const entry = marks[instrument];
+        if (!entry) throw new Error(`no fixture mark for ${instrument}`);
+        return {
+          price: entry.price,
+          observed_at: entry.observed_at,
+          source: 'test',
+          asset_class: entry.asset_class ?? 'stocks',
+        };
+      }),
+    };
+  }
+
+  it('refuses to value the book when a held instrument’s mark is stale', async () => {
+    const input = makeInput({
+      positions: [makePosition()],
+      marketData: makeMarketDataObservedAt({
+        AAPL: { price: 100, observed_at: new Date(asOf.getTime() - 20 * 60_000) },
+      }),
+    });
+
+    // Rejects rather than valuing at the last known price. Exposure, drawdown
+    // and daily PnL all derive from this number, so a frozen mark freezes
+    // every limit that reads it — including the drawdown breaker, during
+    // exactly the conditions that trip it.
+    await expect(computePortfolioView(input)).rejects.toThrow(/exceeds the 900000ms bound/);
+  });
+
+  it('names the instrument and the observed age', async () => {
+    const input = makeInput({
+      positions: [makePosition()],
+      marketData: makeMarketDataObservedAt({
+        AAPL: { price: 100, observed_at: new Date(asOf.getTime() - 20 * 60_000) },
+      }),
+    });
+
+    await expect(computePortfolioView(input)).rejects.toThrow(/'AAPL'/);
+    await expect(computePortfolioView(input)).rejects.toThrow(/1200000ms before/);
+  });
+
+  it('says so explicitly when the mark is AHEAD of our clock', async () => {
+    const input = makeInput({
+      positions: [makePosition()],
+      marketData: makeMarketDataObservedAt({
+        AAPL: { price: 100, observed_at: new Date(asOf.getTime() + 60_000) },
+      }),
+    });
+
+    // A future observation is a clock disagreement, not a fresh mark, and the
+    // operator reading the log needs to be pointed at the clock rather than at
+    // the feed.
+    await expect(computePortfolioView(input)).rejects.toThrow(/AHEAD of our clock/);
+  });
+
+  it('applies the bound for each position’s OWN asset class', async () => {
+    // One mark age, 5 minutes, held under both classes: past the 2-minute
+    // crypto bound, inside the 15-minute stocks one.
+    const observed_at = new Date(asOf.getTime() - 5 * 60_000);
+
+    const asStocks = makeInput({
+      positions: [makePosition({ instrument: 'AAPL', asset_class: 'stocks' })],
+      marketData: makeMarketDataObservedAt({ AAPL: { price: 100, observed_at } }),
+    });
+    const asCrypto = makeInput({
+      positions: [
+        makePosition({
+          instrument: 'BTC-USD',
+          asset_class: 'crypto',
+          idempotency_key: 'BTC-USD-2026-07-15T09:30:00Z',
+        }),
+      ],
+      marketData: makeMarketDataObservedAt({
+        'BTC-USD': { price: 100, observed_at, asset_class: 'crypto' },
+      }),
+    });
+
+    await expect(computePortfolioView(asStocks)).resolves.toBeDefined();
+    await expect(computePortfolioView(asCrypto)).rejects.toThrow(/exceeds the 120000ms bound/);
+  });
+
+  it('takes the class from the POSITION, not from the mark the source returned', async () => {
+    // A stocks lot whose mark comes back labelled `crypto` — an instrument-key
+    // or routing mismatch. The bound applied must be the stocks one (15 min,
+    // which this 5-minute mark passes); reading the class off the source's own
+    // answer would let a mis-labelled mark pick the tighter bound and reject a
+    // perfectly good valuation, or in the mirror case pick the looser one and
+    // wave a stale mark through.
+    const input = makeInput({
+      positions: [makePosition({ instrument: 'AAPL', asset_class: 'stocks' })],
+      marketData: makeMarketDataObservedAt({
+        AAPL: {
+          price: 100,
+          observed_at: new Date(asOf.getTime() - 5 * 60_000),
+          asset_class: 'crypto',
+        },
+      }),
+    });
+
+    await expect(computePortfolioView(input)).resolves.toBeDefined();
+  });
+
+  it('values the book normally when every mark is inside its bound', async () => {
+    // Non-vacuity for the whole describe: the same shape with a fresh mark
+    // produces a real view, so the rejections above are the gate firing rather
+    // than the fixture being broken.
+    const input = makeInput({
+      positions: [makePosition()],
+      marketData: makeMarketDataObservedAt({
+        AAPL: { price: 110, observed_at: new Date(asOf.getTime() - 60_000) },
+      }),
+    });
+
+    const view = await computePortfolioView(input);
+
+    expect(view.exposure_by_instrument.AAPL).toBe(11_000);
   });
 });

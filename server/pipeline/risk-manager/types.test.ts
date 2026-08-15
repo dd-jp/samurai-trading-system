@@ -109,6 +109,7 @@ describe('RiskConfig', () => {
       concentration: { cap: 30_000, threshold: 0.7 },
       min_viable_size: 500,
       cii_threshold: 70,
+      max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
     };
 
     expectTypeOf(config).toMatchTypeOf<RiskConfig>();

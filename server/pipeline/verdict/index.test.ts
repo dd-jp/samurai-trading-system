@@ -80,6 +80,7 @@ function makeConfig(overrides: Partial<VerdictConfig> = {}): VerdictConfig {
   return {
     automation_level: { crypto: 'manual', stocks: 'manual' },
     max_signal_age: { crypto: 5 * 60_000, stocks: 30 * 60_000 },
+    max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
     drift_tolerance_pct: { crypto: 0.01, stocks: 0.01 },
     human_timeout: 5 * 60_000,
     allow_extended_hours: false,
@@ -173,6 +174,109 @@ describe('VerdictImpl.decide — staleness gate', () => {
     expect(decision.status).toBe('no_go');
     expect(decision.no_go_reason).toBe('staleness');
     expect(decision.order).toBeNull();
+  });
+});
+
+describe('VerdictImpl.decide — stale_feed gate (#641)', () => {
+  it('no-go with stale_feed when the mark was observed past max_mark_age', async () => {
+    const verdict = new VerdictImpl();
+    const input = makeInput({
+      // Signal decided seconds ago (the default intent), priced off a mark
+      // observed 20 minutes ago against a 15-minute stocks bound.
+      marketData: makeMarketData(makeMark({ observed_at: new Date(NOW.getTime() - 20 * 60_000) })),
+    });
+
+    const decision = await verdict.decide(input);
+
+    expect(decision.status).toBe('no_go');
+    expect(decision.no_go_reason).toBe('stale_feed');
+    expect(decision.order).toBeNull();
+  });
+
+  it('is a DIFFERENT gate from staleness — a fresh decision on a dead feed', async () => {
+    // The whole reason this gate exists. `max_signal_age.stocks` is 30 minutes
+    // here and the decision is seconds old, so gate 1 passes cleanly; only the
+    // FEED is stale. Before #641 this trade was placed.
+    const verdict = new VerdictImpl();
+    const decision = await verdict.decide(
+      makeInput({
+        config: makeConfig({ max_signal_age: { crypto: 60 * 60_000, stocks: 60 * 60_000 } }),
+        marketData: makeMarketData(
+          makeMark({ observed_at: new Date(NOW.getTime() - 20 * 60_000) }),
+        ),
+      }),
+    );
+
+    expect(decision.no_go_reason).toBe('stale_feed');
+  });
+
+  it('reads the bound for the intent’s own asset class', async () => {
+    // 5 minutes old: past the 2-minute crypto bound, inside the 15-minute
+    // stocks one. Same mark, same config, opposite verdicts — which is what
+    // makes the per-class shape load-bearing rather than decorative.
+    const verdict = new VerdictImpl();
+    const staleMark = makeMark({ observed_at: new Date(NOW.getTime() - 5 * 60_000) });
+
+    const asStocks = await verdict.decide(makeInput({ marketData: makeMarketData(staleMark) }));
+    const asCrypto = await verdict.decide(
+      makeInput({
+        risk_decision: makeRiskDecision({ order_intent: makeIntent({ asset_class: 'crypto' }) }),
+        marketData: makeMarketData(staleMark),
+      }),
+    );
+
+    expect(asStocks.no_go_reason).not.toBe('stale_feed');
+    expect(asCrypto.no_go_reason).toBe('stale_feed');
+  });
+
+  it('runs BEFORE the drift gate, so a dead feed is not misreported as drift', async () => {
+    // Both conditions hold at once: the mark is 20 minutes old AND 5% away
+    // from the entry. Ordering decides which cause the operator is told, and
+    // `drift` would send them looking at a market that moved rather than at a
+    // feed that stopped.
+    const verdict = new VerdictImpl();
+    const decision = await verdict.decide(
+      makeInput({
+        marketData: makeMarketData(
+          makeMark({ price: 105, observed_at: new Date(NOW.getTime() - 20 * 60_000) }),
+        ),
+      }),
+    );
+
+    expect(decision.no_go_reason).toBe('stale_feed');
+  });
+
+  it('no-go with stale_feed when the mark is observed AHEAD of our clock', async () => {
+    // Not "extremely fresh". A future observation means our clock and the
+    // venue's disagree, and every other time comparison in this pass — signal
+    // age, the flatten window — is computed against the clock we just caught
+    // being wrong.
+    const verdict = new VerdictImpl();
+    const decision = await verdict.decide(
+      makeInput({
+        marketData: makeMarketData(
+          makeMark({ observed_at: new Date(NOW.getTime() + 10 * 60_000) }),
+        ),
+      }),
+    );
+
+    expect(decision.no_go_reason).toBe('stale_feed');
+  });
+
+  it('passes a fresh mark through to the later gates', async () => {
+    // Non-vacuity: the same harness with an in-bound mark reaches the end of
+    // the chain, so the cases above fail for the reason they name rather than
+    // because this input never produced a `go` at all.
+    const verdict = new VerdictImpl();
+    const decision = await verdict.decide(
+      makeInput({
+        config: makeConfig({ automation_level: { crypto: 'auto', stocks: 'auto' } }),
+        marketData: makeMarketData(makeMark({ observed_at: new Date(NOW.getTime() - 60_000) })),
+      }),
+    );
+
+    expect(decision.status).toBe('go');
+    expect(decision.no_go_reason).toBeNull();
   });
 });
 

@@ -675,6 +675,11 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   const breakerStateDeps = {
     marketData,
     circuitBreakers,
+    // #640: the valuation-freshness bound, read from the RISK config rather
+    // than the verdict one. The two bounds are deliberately separate fields
+    // (see `RiskConfig.max_mark_age`): declining one trade on a stale tick and
+    // refusing to value the entire book are different-weight actions.
+    maxMarkAge: config.riskConfig.max_mark_age,
     breakerState: breakerStateStore,
     // One portfolio observation per tick, shared by the trader/risk binds (B4).
     portfolioSnapshots: new Map<string, PortfolioSnapshot>(),

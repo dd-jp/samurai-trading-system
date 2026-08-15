@@ -286,6 +286,14 @@ interface BreakerStateDeps {
   getOpenPositions: () => Promise<OpenPosition[]>;
   mode: 'live' | 'paper' | 'backtest';
   /**
+   * #640: how old a valuation mark may be before `computePortfolioView`
+   * refuses to value the book. Lives here rather than on `RiskStepDeps`
+   * because the portfolio snapshot is computed once per tick and shared by
+   * the trader and risk binds — putting the bound on one of them would leave
+   * the other valuing the same book under no bound at all.
+   */
+  maxMarkAge: Record<AssetClass, number>;
+  /**
    * Per-tick memo (review 2026-08-06 B4): the Trader computes the portfolio
    * snapshot, Risk reuses it, so both stages size and gate against ONE
    * observation of account state instead of two that can disagree mid-tick.
@@ -341,6 +349,7 @@ async function computeCurrentPortfolioAndBreakers(deps: BreakerStateDeps, clock:
     peak_equity: account.peak_equity,
     daily_basis: account.daily_basis,
     consecutive_losses: account.consecutive_losses,
+    max_mark_age: deps.maxMarkAge,
   });
   const breakerInput: BreakerEvalInput = { portfolio, volatility, mode: deps.mode, clock };
   const breakers = deps.circuitBreakers.evaluate(breakerInput);

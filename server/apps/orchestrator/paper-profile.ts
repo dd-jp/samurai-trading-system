@@ -162,10 +162,14 @@ export const PAPER_PROFILE_PROVENANCE = {
   'riskConfig.concentration.threshold': 'UNSOURCED',
   'riskConfig.min_viable_size': 'DERIVED',
   'riskConfig.cii_threshold': 'UNSOURCED',
+  'riskConfig.max_mark_age.crypto': 'UNSOURCED',
+  'riskConfig.max_mark_age.stocks': 'UNSOURCED',
   'verdictConfig.automation_level.crypto': 'SPEC',
   'verdictConfig.automation_level.stocks': 'SPEC',
   'verdictConfig.max_signal_age.crypto': 'UNSOURCED',
   'verdictConfig.max_signal_age.stocks': 'UNSOURCED',
+  'verdictConfig.max_mark_age.crypto': 'UNSOURCED',
+  'verdictConfig.max_mark_age.stocks': 'UNSOURCED',
   'verdictConfig.drift_tolerance_pct.crypto': 'UNSOURCED',
   'verdictConfig.drift_tolerance_pct.stocks': 'UNSOURCED',
   'verdictConfig.human_timeout': 'UNSOURCED',
@@ -936,6 +940,26 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
      * never change a decision (spec "CII Soft Signal").
      */
     cii_threshold: 70,
+    /**
+     * UNSOURCED (milliseconds) — the bound past which `computePortfolioView`
+     * refuses to value a held position at all (#640).
+     *
+     * **Set to the same two numbers as `verdictConfig.max_mark_age`, in a
+     * separate field on purpose.** They answer different questions and will
+     * diverge the moment either has real data behind it: Verdict's bound
+     * decides whether to place ONE order, this one decides whether the system
+     * can compute its own exposure. The second failure is strictly worse — a
+     * stale valuation freezes the drawdown and daily-loss breakers at their
+     * last reading, so the mechanism meant to stop a bad run stops updating
+     * during exactly the conditions that produce one.
+     *
+     * A shared constant was rejected for that reason: it would make the two
+     * bounds look interchangeable and invite someone loosening the trading
+     * gate to loosen the valuation gate with it. Same starting values, two
+     * dials, and the soak's observed mark-age distribution is what separates
+     * them.
+     */
+    max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
   };
 
   const verdictConfig: VerdictConfig = {
@@ -1033,6 +1057,37 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
      * fetched during a closed session at all.
      */
     max_signal_age: { crypto: 5 * 60_000, stocks: 15 * 60_000 },
+    /**
+     * UNSOURCED (milliseconds) — the FEED-staleness bound (#641), i.e. how
+     * long ago the market last printed, as distinct from `max_signal_age`
+     * above, which bounds how long ago we decided.
+     *
+     * **Crypto: 2 minutes.** Crypto prints continuously on a venue that never
+     * closes, so silence is anomalous rather than structural. Set below the
+     * 5-minute signal bound on purpose: a crypto decision may legitimately be
+     * up to 5 minutes old, but the price it is judged against should not be —
+     * and the pass's own mark is re-fetched at gate time, so a fresh fetch
+     * that comes back 2 minutes stale means the source itself is behind.
+     *
+     * **Stocks: 15 minutes**, matching the signal bound rather than sitting
+     * under it, and that asymmetry is deliberate. ADR-0016's LSE leveraged
+     * ETPs are thin: a genuine multi-minute gap between prints inside a live
+     * session is normal for them, not a fault. A tight equity bound would
+     * therefore no-go on ordinary illiquidity and read, in a soak log, as a
+     * broken feed — the failure mode that makes an operator stop trusting the
+     * gate. Set wide enough that firing means something is actually wrong,
+     * because the case this must catch is not "thin" but "stopped": a halted
+     * or delisted name whose last trade keeps being served indefinitely.
+     *
+     * Both numbers are first-soak starting points and both are UNSOURCED in
+     * the strict sense — no measurement in this repo bounds inter-print gaps
+     * on the live universe. The soak produces exactly that data: the honest
+     * way to set these is to log observed mark ages for a fortnight and read
+     * the tail off the distribution. Until then they are set to fire on
+     * "stopped", not on "thin", which is the conservative direction for a
+     * gate whose false positives halt trading.
+     */
+    max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
     /**
      * UNSOURCED, and formerly "the value most likely to be wrong" — the
      * absolute `drift_tolerance: 500`, sized for a six-figure BTC-USD and

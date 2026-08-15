@@ -515,6 +515,10 @@ describe('money-math precision (ADR-0005)', () => {
         portfolio: { known: true, open_equity: 2_000_000, realized_pnl: 0 },
       },
       consecutive_losses: 0,
+      // This test is about float drift in the valuation arithmetic, not about
+      // freshness; the stub observes every mark at `NOW`, so any positive
+      // bound passes.
+      max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
     });
 
     const exactEquity = positions.reduce(
