@@ -541,9 +541,11 @@ export function spendCappedDebateResult(debate_id: string, reason: string): Deba
  * debate's latency belongs to the tick that ran it, and `llm_spend` already
  * records it there (#326).
  *
- * Caller must have checked `isReplayable`, which is why the `??` fallbacks here
- * are unreachable rather than load-bearing. They are kept only to satisfy the
- * optional types.
+ * Takes a `ReplayableDebateLog`, so the six replay fields are required by the
+ * TYPE rather than defaulted at the point of use. There are no `??` fallbacks
+ * here for that reason: a row missing any of them cannot reach this function,
+ * because `isReplayable` is what narrows it. The previous shape defaulted them
+ * and so could silently emit `synthesis: ''` on a partial row.
  *
  * `debate_id` is read off the row rather than taken as a parameter: the row was
  * looked up BY that id, so a second copy could only ever be the same value or a
