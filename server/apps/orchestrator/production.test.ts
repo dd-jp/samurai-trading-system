@@ -25,10 +25,10 @@ import type {
   ApprovalRequest,
   VerdictDecision,
 } from '../../pipeline/verdict/index.js';
-import { AlwaysOpenCalendar } from '../../providers/market-data-service/index.js';
 import type { AlpacaBar, AlpacaQuote, Bar } from '../../providers/market-data-service/index.js';
 import {
   AlpacaDataSource,
+  AlwaysOpenCalendar,
   AssetClassRoutingDataSource,
   FixtureDataSource,
   MarketDataServiceImpl,

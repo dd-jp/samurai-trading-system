@@ -675,9 +675,7 @@ describe('decide — determinism & idempotency', () => {
     // over), and tying the order-dedup coordinate to a risk-tuning setting
     // would be #616 inverted: a finer grid collapses several decision bars onto
     // one key, and the suppressed orders look exactly like skips.
-    const fine = await decide(
-      traderInput({ config: configWith({ atr_timeframe: '15m' }) }),
-    );
+    const fine = await decide(traderInput({ config: configWith({ atr_timeframe: '15m' }) }));
     const coarse = await decide(traderInput());
 
     expect(fine?.decision_timestamp).toEqual(DECISION_BAR);

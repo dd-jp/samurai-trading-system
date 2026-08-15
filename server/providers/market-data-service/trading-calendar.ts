@@ -549,11 +549,7 @@ export class LseRegularHoursCalendar implements TradingCalendar {
     let civilDate = toCivilDate(instant, LONDON_ZONE);
 
     for (let day = 0; day <= MAX_SESSION_LOOKBACK_DAYS; day++) {
-      const close = wallClockToInstant(
-        civilDate,
-        this.#closeMinutesFor(civilDate),
-        LONDON_ZONE,
-      );
+      const close = wallClockToInstant(civilDate, this.#closeMinutesFor(civilDate), LONDON_ZONE);
       if (close.getTime() <= instant.getTime() && this.isTradingDay(close)) {
         return close;
       }
@@ -570,11 +566,7 @@ export class LseRegularHoursCalendar implements TradingCalendar {
     let civilDate = toCivilDate(instant, LONDON_ZONE);
 
     for (let day = 0; day <= MAX_SESSION_LOOKBACK_DAYS; day++) {
-      const close = wallClockToInstant(
-        civilDate,
-        this.#closeMinutesFor(civilDate),
-        LONDON_ZONE,
-      );
+      const close = wallClockToInstant(civilDate, this.#closeMinutesFor(civilDate), LONDON_ZONE);
       if (close.getTime() > instant.getTime() && this.isTradingDay(close)) {
         return close;
       }
