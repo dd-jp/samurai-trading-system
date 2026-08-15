@@ -6,13 +6,17 @@
 
 > **PARTIALLY SUPERSEDED — the recorded Stage 0 thesis changed horizon on 2026-08-09 ([#632](https://github.com/dd-jp/samurai-trading-system/issues/632), map [#631](https://github.com/dd-jp/samurai-trading-system/issues/631)).** `CONTEXT.md`'s debate-as-edge thesis is now recorded at an **intraday, flat-by-close** horizon. Read the following as pending re-derivation:
 >
-> - **The ~20-25% hard drawdown breaker (`:170`)** was set alongside `docs/research/10-edge-hypothesis.md`'s −23% pre-accepted drawdown, which belongs to the **superseded weeks-to-months** horizon. There is currently **no drawdown commitment derived for the intraday book**. Treat the figure as inherited, not re-validated. Derivation is [#653](https://github.com/dd-jp/samurai-trading-system/issues/653); the breaker level itself is [#634](https://github.com/dd-jp/samurai-trading-system/issues/634), whose original premise (the −23% collision) is gone even though the ticket survives.
-> - **The binary volatility halt (`:170`)** is separately contested on shape rather than level — doc 12 called it "the most extreme form of 'abandon under stress' available". An intraday book required to place at least one trade per day is *more* exposed to a binary halt, not less. Also [#634](https://github.com/dd-jp/samurai-trading-system/issues/634).
+> - **The hard drawdown breaker — RESOLVED 2026-08-15 by [#634](https://github.com/dd-jp/samurai-trading-system/issues/634)**, see the next banner. The inherited ~20-25% figure came from `docs/research/10-edge-hypothesis.md`'s −23% pre-accepted drawdown on the **superseded weeks-to-months** horizon; it is replaced by a 30%/20% band sited against ADR-0018's *measured* intraday envelope. A full intraday drawdown *commitment* (what the book promises, as opposed to where it halts) is still [#653](https://github.com/dd-jp/samurai-trading-system/issues/653).
+> - **The binary volatility halt (`:170`) stays binary for now — #634, 2026-08-15.** The contest is real (doc 12: "the most extreme form of 'abandon under stress' available"; an intraday book required to trade daily is *more* exposed to a binary halt, not less), and the answer is a continuous de-lever. But that answer is blocked, not merely unbuilt: [ADR-0018](../adr/0018-intraday-thresholds-sizing-and-the-signal-bar.md) ships a fixed fraction chosen **once** per subclass from measured volatility, and names volatility-*targeted* per-trade sizing as target state with "The Risk Manager has no such rule today." Until that rule exists ([#654](https://github.com/dd-jp/samurai-trading-system/issues/654)'s ladder needs it), the halt is the **only** volatility-responsive mechanism in the system, and softening it would remove the response rather than smooth it. Revisit when #654 lands.
 > - **A forced end-of-session flatten** is now required and is not specified here. See [#657](https://github.com/dd-jp/samurai-trading-system/issues/657).
 >
 > **Not superseded:** breakers halt entries and never exits (`:15`) — that invariant is horizon-independent and still holds.
 
-> **[ADR-0013](../adr/0013-no-human-gate-anywhere.md) (2026-08-09) removed every remaining human gate.** The hard drawdown breaker and the kill-switch **auto-re-arm in all modes** — the `manual re-arm` language throughout this spec is superseded. Breakers still halt entries and never exits; what changed is that clearing a halt no longer waits on a person. The mechanical re-arm condition is specified with the threshold work in [#634](https://github.com/dd-jp/samurai-trading-system/issues/634). Because nothing is cleared by hand any more, the numeric thresholds are the only stop left, which makes GAP-6's clamp (config values hard-limited in code) a precondition rather than a tidiness item.
+> **[ADR-0013](../adr/0013-no-human-gate-anywhere.md) (2026-08-09) removed every remaining human gate, and [#634](https://github.com/dd-jp/samurai-trading-system/issues/634) (2026-08-15) supplied the condition and landed the code.** The hard drawdown breaker **auto-re-arms in every mode**, on one mechanical condition: **drawdown recovering back below `auto_rearm.recovery_drawdown_pct`**. The body below has been drained of the superseded `manual re-arm` language; only the two mode-independent facts survive — breakers halt entries and never exits, and clearing a halt no longer waits on a person.
+>
+> **The thresholds are a hysteresis band, not a line.** Trip at `max_drawdown_pct` (**0.30**), clear below `recovery_drawdown_pct` (**0.20**), hold in between. The trip sits **above** [ADR-0018](../adr/0018-intraday-thresholds-sizing-and-the-signal-bar.md)'s measured drawdown envelope (23.1% index ETPs / 26.2% single-stock at today's sizing) so the breaker cannot fire on the strategy working as designed; the re-arm edge sits at the top of that envelope, so the book resumes only once it is back inside the drawdown it was sized for. `CircuitBreakers` refuses a config where the band has zero or negative width — that discharges GAP-6's clamp for these two values specifically, since with nothing cleared by hand the numbers are the only stop left. **`auto_rearm.max_days_tripped` remains backtest-only**: elapsed time is not recovery.
+>
+> **Still open:** ADR-0013 also calls for the **kill-switch** to auto-re-arm. #634 did not specify that half, because nothing in the runtime engages the kill-switch — it has no producer, so it cannot currently trip, and an auto-release condition for an unknown trigger would be invented rather than derived. Tracked separately; the kill-switch's `releaseKillSwitch()` is still the only way out of an engagement.
 
 ## Problem Statement
 
@@ -28,7 +32,7 @@ Key architectural decisions:
 - **Modify-and-reject, monotonic risk-reducing** — trim to fit soft caps, hard-reject on breakers/limits; never add risk.
 - **Fully mechanical, deterministic, no LLM** — reproducible and backtestable.
 - **Ordered check pipeline** — breakers first, then trims narrowest→broadest, then concentration, then a min-viable-size reject.
-- **Circuit breakers halt entries, never exits; tiered; hard breaker needs manual re-arm.**
+- **Circuit breakers halt entries, never exits; tiered; the hard breaker clears on a mechanical recovery condition, in every mode (#634).**
 - **Reads a portfolio-accounting view over the shared store** — synchronous, off the Feedback Loop's async path.
 - **Rejects terminate at Risk; only approved intents reach Verdict.**
 - **CII soft signal is advisory only** — WorldMonitor's Country Instability Index (ADR-0002) rides as a `warnings` field on `RiskDecision`, never trimming, rejecting, or otherwise affecting the pipeline's outcome.
@@ -58,7 +62,7 @@ Key architectural decisions:
 13. As the Risk Manager, I want breakers to halt new entries and scale-ins but never block exits, so that I never trap the account in a losing position.
 14. As the Risk Manager, I want tiered breakers (per-asset-class and portfolio-level), so that a problem in one market doesn't necessarily halt everything.
 15. As the Risk Manager, I want soft breakers (daily loss, consecutive losses) to auto-reset (next session / after cool-off), so that transient bad runs pause rather than permanently stop trading.
-16. As the Risk Manager, I want the hard max-drawdown breaker to require manual re-arm, so that resuming after a major loss is a deliberate human decision.
+16. As the Risk Manager, I want the hard max-drawdown breaker to stay tripped until the drawdown itself recovers below a lower threshold, so that resuming after a major loss requires evidence of recovery rather than the mere passage of time — and so that it resumes at all, since ADR-0013 leaves nobody to re-arm it by hand.
 
 ### State & Data
 
@@ -177,10 +181,10 @@ Monotonic: each step only reduces risk. `binding_constraint` records the step th
 
 ### Module: Circuit Breakers
 
-- **Metrics** (from `PortfolioView` + market data): daily-loss % (soft, per-session; portfolio + per-asset-class), peak-to-trough drawdown % (hard; ~20–25% target per CONTEXT.md), max consecutive losses (soft, cool-off), and a **volatility halt** (soft, per-asset-class) — pause new entries when realized/implied volatility spikes abnormally above a baseline (research docs list "volatility halts" as a circuit breaker; complements the Trader's vol-floor *sizing* with a hard *entry halt* in extreme regimes). A **latency/error halt** (operational) is folded into the kill-switch path — repeated execution errors or stale data trip the same halt-new-entries state.
+- **Metrics** (from `PortfolioView` + market data): daily-loss % (soft, per-session; portfolio + per-asset-class), peak-to-trough drawdown % (hard; trips at 30%, re-arms below 20% — #634, sited against ADR-0018's envelope. CONTEXT.md's "~20-25%" is that envelope's design target, which is why it is the RE-ARM edge and not the halt line), max consecutive losses (soft, cool-off), and a **volatility halt** (soft, per-asset-class) — pause new entries when realized/implied volatility spikes abnormally above a baseline (research docs list "volatility halts" as a circuit breaker; complements the Trader's vol-floor *sizing* with a hard *entry halt* in extreme regimes). A **latency/error halt** (operational) is folded into the kill-switch path — repeated execution errors or stale data trip the same halt-new-entries state.
 - **Effect:** halt new entries + scale-ins; **never block exits**.
 - **Scope:** tiered — a per-asset-class breaker halts new entries for that class; a portfolio breaker halts all new entries.
-- **Reset:** soft breakers auto-reset (next session / after cool-off); the hard drawdown breaker requires manual re-arm in `live` mode, or a configurable auto-re-arm policy in `backtest` mode.
+- **Reset:** soft breakers auto-reset (next session / after cool-off); the hard drawdown breaker re-arms on the configured recovery threshold **in every mode** (#634, ADR-0013). `mode` no longer selects manual vs auto — it selects only whether `auto_rearm.max_days_tripped`, the elapsed-time arm, is honoured, and that is `backtest` only. An explicit `reArm()` remains as an operator override for a drawdown stuck inside the band (a bad `peak_equity` snapshot, say); it overrides the band's lower edge only, since the trip test runs first in every `evaluate()`.
 - **Session boundary:** UTC day for crypto, market-day for stocks.
 - **Two-tier daily loss (#333, decision 4 of [#329](https://github.com/dd-jp/samurai-trading-system/issues/329)):** `BreakerConfig.daily_loss_pct_by_class: { crypto, stocks }` sits beside the portfolio-level `daily_loss_pct`. A per-class breach sets `asset_class_tripped[class]` and halts that class only — joining `volatility_halt:<class>`, which is already this pattern — while a portfolio-level breach still sets `portfolio_tripped` and halts everything. Surgical halting is **added, not swapped in**: the account-wide floor survives. All three figures share one denominator (portfolio equity), so both thresholds sit on one scale and neither needs re-tuning against the other; the figures do *not* sum, because each is measured over its own session boundary. Both tiers are non-sticky, recomputed per `evaluate()`.
 - **Unknown daily figure blocks (#333, decision 5):** `DailyPnl` is a `{ known: true, pct } | { known: false, reason }` union precisely so an absent figure cannot coerce to `0` and read as a flat day. A `known: false` figure **halts new entries** at its tier and arms `daily_pnl_unknown:<tier> (<reason>)`. This is safe to halt on because the tier is non-sticky: it clears at the next session boundary the process is up for. The mode gate decision 5 describes lives in `AccountStateProvider.midSessionBase`, not in the breaker: on the cold-start path `paper`/`backtest` report against a mid-session base and warn, and only `live` reports unknown. But that is not the only route to `known: false` — `nonPositiveBase` returns unknown in **every** mode, because a percentage against a zero or negative session-open equity has no meaning to gate on. A `paper` run can therefore present an unknown, and the breaker treats unknown uniformly rather than re-testing `mode` and handing that case a silent pass.
@@ -249,8 +253,8 @@ Resolved 2026-08-15 by [#640](https://github.com/dd-jp/samurai-trading-system/is
 ### Module: Determinism & Kill-Switch
 
 - Same code path live vs replay; all state read point-in-time via the injected clock.
-- `mode` flag selects hard-breaker re-arm behavior (manual live / auto-policy backtest).
-- **Kill-switch** (manual or dead-man's): global halt on new entries + scale-ins (like a portfolio hard breaker), manual re-arm. **Forced liquidation is out of scope** — Risk stops new risk; a separate emergency module or Execution flattens positions if desired.
+- `mode` flag selects only whether the hard breaker's elapsed-time re-arm applies (`backtest`); the recovery condition applies in all three (#634).
+- **Kill-switch** (manual or dead-man's): global halt on new entries + scale-ins (like a portfolio hard breaker), released by `releaseKillSwitch()`. ADR-0013 asks for this half to auto-re-arm too and #634 did not supply the condition — see the banner. **Nothing engages it today**, so it cannot currently trip. **Forced liquidation is out of scope** — Risk stops new risk; a separate emergency module or Execution flattens positions if desired.
 
 ## Testing Decisions
 
@@ -266,7 +270,7 @@ Resolved 2026-08-15 by [#640](https://github.com/dd-jp/samurai-trading-system/is
 
 **Check Pipeline** — each cap trims correctly; ordering is deterministic; `binding_constraint` names the right step; trimming below min-size → reject; exits bypass gates.
 
-**Circuit Breakers** — each metric trips at threshold; halts entries not exits; tiered scope; soft auto-reset; hard manual re-arm (live) vs auto-re-arm (backtest).
+**Circuit Breakers** — each metric trips at threshold; halts entries not exits; tiered scope; soft auto-reset; the hard breaker's hysteresis band (trips at `max_drawdown_pct`, holds inside the band, clears below `recovery_drawdown_pct`) in every mode, and the elapsed-time arm in `backtest` only (#634).
 
 **State & Determinism** — same input → same decision; point-in-time reads never see future fills.
 
@@ -328,9 +332,9 @@ Wayfinder decisions for this stage live in [docs/wayfinder/risk-manager-map.md](
 - **Output & authority** — modify-and-reject, monotonic risk-reducing; rejects terminate at Risk, only approved reach Verdict; `RiskDecision` shape.
 - **Architecture** — fully mechanical, deterministic, no LLM.
 - **Check pipeline & precedence** — ordered breakers→per-trade→per-asset→per-asset-class→portfolio→concentration→risk critic→min-size; concentration uses the dynamic correlation matrix (#50, implemented; corrected from an earlier "static v1 buckets" description).
-- **Circuit breakers** — halt entries not exits; tiered; three metrics (daily-loss, peak-to-trough drawdown, consecutive losses); soft auto-reset / hard manual re-arm; UTC-day vs market-day sessions.
+- **Circuit breakers** — halt entries not exits; tiered; three metrics (daily-loss, peak-to-trough drawdown, consecutive losses); soft auto-reset / hard recovery-threshold re-arm in every mode (#634); UTC-day vs market-day sessions.
 - **State & data** — portfolio-accounting view over the shared store, read synchronously off the Feedback Loop path.
-- **Backtest determinism** — same code path; point-in-time via injected clock; mode-flagged auto-re-arm.
+- **Backtest determinism** — same code path; point-in-time via injected clock; the only mode-flagged breaker behaviour left is the elapsed-time re-arm arm (#634).
 - **Exit & kill-switch** — exits pass verbatim; kill halts new entries; forced liquidation out of scope.
 - **CII soft signal** (resolved 2026-07-23, see [ADR-0002](../adr/0002-worldmonitor-mi-source.md) and [#174](https://github.com/dd-jp/samurai-trading-system/issues/174)) — WorldMonitor's Country Instability Index enters as an advisory `warnings` field on `RiskDecision`, warning-only in v1 (no sizing), Samurai-owned static instrument→country mapping, fires on absolute level not delta, unpinned threshold, never overrides breakers or the pipeline outcome.
 - **Correlation warm-up visibility** (resolved 2026-08-05, see [#303](https://github.com/dd-jp/samurai-trading-system/issues/303)) — option (b): under-`min_bars` pairs are named in `CorrelationEstimate.insufficient_history` and surfaced as `correlation_warmup:<instrument>` advisory warnings, read by `SequentialTickRunner` as a `warn` log line. No limit or sizing behaviour changes; the warm-up fallback itself is unchanged. See "Module: Correlation Warm-up Visibility".

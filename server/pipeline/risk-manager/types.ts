@@ -248,7 +248,13 @@ export interface RiskInput {
   cii: Record<string, number>;
   /** Red-team critic verdict (#204), pre-fetched by critic.ts. Absent = pass; mechanical steps are the safety net. */
   critic?: RiskCriticVerdict;
-  /** Selects manual vs auto re-arm for the hard breaker (consumed by #77, not this pipeline). */
+  /**
+   * Consumed by #77 (`CircuitBreakers.evaluate`), not by this pipeline. It no
+   * longer selects manual vs auto re-arm for the hard breaker — since #634 the
+   * re-arm policy runs in every mode (ADR-0013) — it now selects only whether
+   * `auto_rearm.max_days_tripped`, the elapsed-time arm, is honoured, which is
+   * backtest-only.
+   */
   mode: 'live' | 'paper' | 'backtest';
 }
 

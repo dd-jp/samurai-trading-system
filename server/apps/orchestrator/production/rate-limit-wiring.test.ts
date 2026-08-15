@@ -853,7 +853,17 @@ function stubConfig(db: SharedStore, overrides: Partial<ProductionConfig>): Stub
     } as ProductionConfig['verdictConfig'],
     executionConfig: {} as ProductionConfig['executionConfig'],
     correlationConfig: {} as ProductionConfig['correlationConfig'],
-    breakerConfig: {} as ProductionConfig['breakerConfig'],
+    // Not an empty cast since #634: `CircuitBreakers` validates its
+    // hysteresis band (`recovery_drawdown_pct < max_drawdown_pct`) at
+    // construction, so `{}` no longer builds.
+    breakerConfig: {
+      daily_loss_pct: 0.05,
+      daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+      max_drawdown_pct: 0.3,
+      max_consecutive_losses: 5,
+      volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+      auto_rearm: { recovery_drawdown_pct: 0.2, max_days_tripped: 5 },
+    } as ProductionConfig['breakerConfig'],
     costConfig: {} as ProductionConfig['costConfig'],
     ciiConsumerConfig: {} as ProductionConfig['ciiConsumerConfig'],
     ...overrides,

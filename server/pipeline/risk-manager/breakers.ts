@@ -24,11 +24,31 @@ export interface VolatilityBreakerConfig {
   multiplier: number;
 }
 
-/** Backtest-only policy for re-arming the hard drawdown breaker without a manual call. */
+/**
+ * Mechanical policy for re-arming the hard drawdown breaker. Consulted in
+ * EVERY mode as of #634 — [ADR-0013](../../../docs/adr/0013-no-human-gate-anywhere.md)
+ * removed the human who used to call `reArm()` in live and paper, so a
+ * recovery condition is the only thing that can clear a trip there.
+ */
 export interface AutoReArmPolicy {
-  /** Re-arm once drawdown_pct recovers back below this threshold. */
+  /**
+   * Re-arm once drawdown_pct recovers back below this threshold. Must be
+   * strictly below `BreakerConfig.max_drawdown_pct` — the constructor
+   * refuses otherwise, because a band of zero width trips and clears within
+   * one `evaluate()` call, which is a breaker that halts nothing.
+   */
   recovery_drawdown_pct: number;
-  /** Or after this many days have elapsed since trip, whichever comes first. */
+  /**
+   * BACKTEST ONLY: re-arm after this many days tripped even without
+   * recovery, whichever comes first.
+   *
+   * Deliberately not honoured in live or paper. #634's ruling is "auto
+   * re-arm on recovery", and a time-based arm is the opposite of that — with
+   * 5 days configured, a 14-day soak that draws down 30% would resume new
+   * entries on day 5 while STILL 30% down, having recovered nothing. What it
+   * is for is stopping a multi-year replay from dead-ending on its first
+   * hit; that motive has no live analogue.
+   */
   max_days_tripped: number;
 }
 
@@ -67,7 +87,12 @@ export interface BreakerConfig {
   /** Soft, portfolio-level: N losing trades in a row halts new entries. */
   max_consecutive_losses: number;
   volatility: VolatilityBreakerConfig;
-  /** Consulted only in 'backtest' mode; live and paper always require a manual reArm() call. */
+  /**
+   * Consulted in every mode (#634). Its `recovery_drawdown_pct` is the LOWER
+   * edge of this breaker's hysteresis band: `max_drawdown_pct` trips it,
+   * recovery back under `recovery_drawdown_pct` clears it, and between the
+   * two nothing changes. `max_days_tripped` remains backtest-only.
+   */
   auto_rearm: AutoReArmPolicy;
 }
 
@@ -92,8 +117,8 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
  * kill-switch path) are stateless — derived fresh from the current
  * `PortfolioView`/reading each call, so they auto-reset the moment the
  * underlying metric recovers. The hard drawdown breaker and the kill-switch
- * are sticky: once tripped/engaged they stay that way across calls until
- * `reArm()` (live) / the configured auto-re-arm policy (backtest) /
+ * are sticky: once tripped/engaged they stay that way across calls until the
+ * configured auto-re-arm policy (every mode, #634) / `reArm()` /
  * `releaseKillSwitch()` clears them.
  *
  * Crash-restart safety (#203): the sticky fields above are the only state
@@ -117,6 +142,23 @@ export class CircuitBreakers {
     private readonly config: BreakerConfig,
     initial?: readonly PersistedBreakerState[],
   ) {
+    // The hysteresis band must have width. Since #634 the re-arm policy runs
+    // in every mode, so `recovery >= max` would clear the trip in the same
+    // `evaluate()` call that set it: `armed_breakers` would never carry
+    // `portfolio_drawdown_hard`, and a breaker that halts nothing would look
+    // exactly like a breaker that was never breached. The spec's ADR-0013
+    // banner makes this a precondition rather than a tidiness item — with
+    // nothing cleared by hand any more, these numbers are the only stop left.
+    if (!(config.auto_rearm.recovery_drawdown_pct < config.max_drawdown_pct)) {
+      throw new Error(
+        `BreakerConfig: auto_rearm.recovery_drawdown_pct ` +
+          `(${config.auto_rearm.recovery_drawdown_pct}) must be strictly below ` +
+          `max_drawdown_pct (${config.max_drawdown_pct}). The two are the edges of one ` +
+          'hysteresis band — trip at the upper, re-arm below the lower — so a band of ' +
+          'zero or negative width re-arms the hard drawdown breaker in the same evaluate() ' +
+          'call that tripped it, silently halting nothing.',
+      );
+    }
     for (const row of initial ?? []) {
       if (row.tier === 'portfolio_drawdown') {
         this.hardTripped = row.tripped;
@@ -150,7 +192,18 @@ export class CircuitBreakers {
     ];
   }
 
-  /** Manual re-arm of the hard peak-to-trough drawdown breaker (live/paper mode). */
+  /**
+   * Clears the hard peak-to-trough drawdown breaker without waiting for
+   * `auto_rearm.recovery_drawdown_pct`. No longer the live/paper re-arm path
+   * — since #634 that is `auto_rearm`, running in every mode — so this is an
+   * operator override for a drawdown stuck INSIDE the hysteresis band (a bad
+   * equity snapshot pinning `peak_equity` too high, say).
+   *
+   * It overrides the band's lower edge only. The trip test runs first in
+   * every `evaluate()`, so calling this while `drawdown_pct` is still at or
+   * above `max_drawdown_pct` buys exactly one call before the breaker trips
+   * again. Nothing in the runtime calls it.
+   */
   reArm(): void {
     this.hardTripped = false;
     this.hardTrippedAt = null;
@@ -176,8 +229,15 @@ export class CircuitBreakers {
       this.hardTripped = true;
       this.hardTrippedAt = clock.now();
     }
-    if (this.hardTripped && mode === 'backtest') {
-      this.maybeAutoReArm(portfolio, clock);
+    // Every mode, not just backtest (#634). ADR-0013 removed the operator who
+    // used to call `reArm()`, so gating this on `mode === 'backtest'` left the
+    // hard breaker PERMANENTLY tripped in paper and live — and the trip is
+    // persisted (`breaker_state`, loaded back into this constructor at boot),
+    // so it survived restart too. A soak that dipped past the threshold once
+    // halted new entries for the remainder of the run with nobody able to
+    // clear it.
+    if (this.hardTripped) {
+      this.maybeAutoReArm(portfolio, clock, mode);
     }
     if (this.hardTripped) {
       armed.push('portfolio_drawdown_hard');
@@ -268,12 +328,18 @@ export class CircuitBreakers {
     };
   }
 
-  private maybeAutoReArm(portfolio: PortfolioView, clock: Clock): void {
+  private maybeAutoReArm(
+    portfolio: PortfolioView,
+    clock: Clock,
+    mode: BreakerEvalInput['mode'],
+  ): void {
     const recovered = portfolio.drawdown_pct < this.config.auto_rearm.recovery_drawdown_pct;
     const daysTripped = this.hardTrippedAt
       ? (clock.now().getTime() - this.hardTrippedAt.getTime()) / MS_PER_DAY
       : 0;
-    const timedOut = daysTripped >= this.config.auto_rearm.max_days_tripped;
+    // Elapsed time alone re-arms in backtest only — see `max_days_tripped`.
+    // Money is on the line in the other two modes and time is not recovery.
+    const timedOut = mode === 'backtest' && daysTripped >= this.config.auto_rearm.max_days_tripped;
     if (recovered || timedOut) {
       this.hardTripped = false;
       this.hardTrippedAt = null;
