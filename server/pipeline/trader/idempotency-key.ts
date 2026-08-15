@@ -32,6 +32,17 @@ import { createHash } from 'node:crypto';
  *
  * `decisionBarFor` in `decide.ts` is the one supported way to produce this
  * value; it floors `clock.now()` onto the same grid `debate_id` uses.
+ *
+ * **KNOWN GAP (#686) — the payload has no intent-kind discriminator.** Since the
+ * key became stable within a bar, and since #668 put a mandatory flat-by-close
+ * exit in the same bar an entry can be taken in (bars are 1h, the flatten window
+ * is 5 minutes, and entries are blocked only inside that window), an entry at
+ * 19:50 and the flatten at 19:56 hash to the SAME key. The flatten is second, so
+ * it is the one `findByKey` / the `open_positions` PK / `client_order_id`
+ * suppress — leaving a position carried overnight, which is what ADR-0014
+ * forbids. Confirmed by a passing characterisation test in `decide.test.ts`, not
+ * argued. Not fixed here because this payload is a `cross-spec-contracts.md` §7
+ * contract and changing it requires a migration for in-flight records.
  */
 export function computeIdempotencyKey(instrument: string, bar: Date): string {
   const payload = JSON.stringify({
