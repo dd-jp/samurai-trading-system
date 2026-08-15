@@ -168,6 +168,7 @@ function transactedObservations(): SmokeObservations {
     flattenSubmissions: [
       { idempotency_key: 'idem-exit-1', instrument: 'BTC-USD', status: 'submitted' },
     ],
+    gdeltRowsArchived: 1,
     // #430 — one per wired mechanism. A healthy run has all of them.
     cosineSetups: [{ debate_id: 'debate-1', instrument: 'BTC-USD' }],
     riskThresholds: [{ name: 'max_position_size', value: 5_000 }],
@@ -516,6 +517,8 @@ describe('formatSmokeReport', () => {
       fills: [],
       closedTrades: [],
       flattenSubmissions: [],
+      gdeltRowsArchived: 1,
+
       cosineSetups: [],
       riskThresholds: [],
       analystWeights: [],
@@ -813,6 +816,8 @@ describe('runSmoke (end-to-end, real composition root)', () => {
       fills: [],
       closedTrades: [],
       flattenSubmissions: [],
+      gdeltRowsArchived: 1,
+
       cosineSetups: [],
       riskThresholds: [],
       analystWeights: [],

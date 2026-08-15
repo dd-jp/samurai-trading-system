@@ -55,6 +55,17 @@ export const DEFAULT_TICK_INTERVAL_MS = 60_000;
 export const DEFAULT_HEARTBEAT_INTERVAL_MS = 15 * 60_000;
 export const DEFAULT_FILL_POLL_INTERVAL_MS = 15_000;
 /**
+ * GDELT publishes one GKG batch every 15 minutes, so polling faster buys
+ * nothing but bandwidth — `GdeltIngestAgent`'s cursor would skip the repeat
+ * anyway, having already paid for `lastupdate.txt`.
+ *
+ * Five minutes rather than fifteen so the poll and the publication cadence do
+ * not have to stay in phase: at exactly 15 minutes a poller that drifts to just
+ * before each publication lags a full batch forever. Three chances per batch
+ * makes the phase irrelevant, and two of the three cost one 200-byte request.
+ */
+export const DEFAULT_GDELT_POLL_INTERVAL_MS = 5 * 60_000;
+/**
  * ATR(14): the conventional realized-volatility read, and the same shape
  * `SimulatedAdapterConfig.volatility_indicator` carries for
  * `MarketState.volatility`. `'atr'` is one of the four indicators

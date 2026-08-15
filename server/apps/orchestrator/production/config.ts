@@ -40,6 +40,7 @@ import type {
 import type {
   CiiConsumerConfig,
   CiiScoreProvider,
+  GdeltGkgClient,
   MiArchiveStore,
 } from '../../../providers/market-intelligence/index.js';
 import type { Clock, ClosedTradeStore, VenuePacingConfig } from '../../../shared/index.js';
@@ -349,6 +350,29 @@ export interface ProductionConfig extends AlertChannelSlots {
    * usefully go.
    */
   fillPollIntervalMs?: number;
+  /**
+   * Gap between GDELT GKG polls. Default 5 minutes
+   * (`DEFAULT_GDELT_POLL_INTERVAL_MS`, #556).
+   *
+   * Its own cadence rather than the tick's on purpose: one batch is the whole
+   * world's macro news, not per-instrument, and a ~3.4MB download does not
+   * belong on the path the analysts wait behind.
+   */
+  gdeltPollIntervalMs?: number;
+  /**
+   * The GDELT fetcher, injectable — and this seam is load-bearing for the test
+   * suite, not a convenience.
+   *
+   * Every other vendor client here is gated by credentials: `AlpacaNewsClient`
+   * throws in its constructor without keys, so a test that forgot to stub it
+   * fails loudly and never reaches the network. **GDELT is open data and has no
+   * such gate.** When this poller first landed, `startup.test.ts` silently
+   * downloaded a live 3.4MB batch and archived 200 real rows — a unit suite
+   * that fails on a plane, takes vendor latency on every run, and writes real
+   * vendor data into a test fixture. Tests inject a stub here; production
+   * leaves it undefined and gets the real client.
+   */
+  gdeltClient?: GdeltGkgClient;
   /**
    * Bounds concurrent instrument passes within one tick. Default 1.
    *

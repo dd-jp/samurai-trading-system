@@ -118,6 +118,7 @@
  * instant for both collapses that gap to zero.
  */
 import { pathToFileURL } from 'node:url';
+import { deflateRawSync } from 'node:zlib';
 import type {
   AssetClass,
   LlmClient,
@@ -159,7 +160,11 @@ import {
   MarketDataServiceImpl,
   SqliteMarketDataStore,
 } from '../../providers/market-data-service/index.js';
-import { MiArchiveStore } from '../../providers/market-intelligence/index.js';
+import {
+  GdeltGkgClient,
+  MiArchiveStore,
+  SOURCE_GDELT,
+} from '../../providers/market-intelligence/index.js';
 import { delay } from '../../shared/http/delay.js';
 import type { OrderIntent } from '../../shared/index.js';
 import { SimulatedClock, TokenBucket } from '../../shared/index.js';
@@ -185,6 +190,53 @@ import type { AccountStateProvider } from './production/direct-bind.js';
 import { buildExecutionSurface } from './production/direct-bind.js';
 import { SMOKE_TEST_UNIVERSE } from './production.js';
 import type { Logger } from './types.js';
+
+/**
+ * A GDELT client serving one canned batch, over a real deflate zip.
+ *
+ * Built rather than mocked so the gate exercises the WHOLE decode path — zip
+ * header, inflate, TSV split, theme filter, tone parse — offline. A hand-rolled
+ * fake returning parsed records would leave exactly the parsing this module is
+ * mostly made of untested in the one gate that runs the real composition root.
+ *
+ * Two rows: one carrying a watched theme, one not, so the run's archived count
+ * is 1 and a filter that has stopped filtering shows up as 2.
+ */
+function smokeGdeltClient(): GdeltGkgClient {
+  const stamp = '20260101120000';
+  const url = `http://data.gdeltproject.org/gdeltv2/${stamp}.gkg.csv.zip`;
+  const row = (id: string, themes: string, tone: string): string => {
+    const columns = new Array<string>(27).fill('');
+    columns[0] = id;
+    columns[1] = stamp;
+    columns[3] = 'smoke.test';
+    columns[4] = 'https://smoke.test/a';
+    columns[7] = themes;
+    columns[15] = tone;
+    return columns.join('\t');
+  };
+  const csv = [
+    row(`${stamp}-1`, 'ECON_STOCKMARKET;EPU_ECONOMY', '1.5,2.0,0.5,2.5,20,0.1,400'),
+    row(`${stamp}-2`, 'SOC_GENERALCRIME', '-3.0,0.5,3.5,4.0,18,0.2,250'),
+  ].join('\n');
+
+  const name = Buffer.from(`${stamp}.gkg.csv`);
+  const deflated = deflateRawSync(Buffer.from(csv));
+  const header = Buffer.alloc(30);
+  header.writeUInt32LE(0x04034b50, 0);
+  header.writeUInt16LE(20, 4);
+  header.writeUInt16LE(8, 8);
+  header.writeUInt16LE(name.length, 26);
+  header.writeUInt16LE(0, 28);
+  const archive = Buffer.concat([header, name, deflated]);
+
+  return new GdeltGkgClient({
+    fetchImpl: (async (input: string | URL) =>
+      String(input).endsWith('lastupdate.txt')
+        ? new Response(`123 abc ${url}`)
+        : new Response(archive)) as unknown as typeof fetch,
+  });
+}
 
 /**
  * The instant the whole run is frozen at — clock, bars, mark and quote alike.
@@ -1487,6 +1539,16 @@ export interface SmokeObservations {
    */
   flattenSubmissions: { idempotency_key: string; instrument: string; status: string }[];
   /**
+   * Rows the GDELT macro layer archived (#556). Read from the MI archive, not
+   * `db` — MI lives in its own file (#554) — so it is passed in rather than
+   * queried here.
+   *
+   * Observed for the reason `debates` is: an ingestion path with no caller is
+   * invisible to every other check in this file. Nothing else in a smoke run
+   * changes whether or not this poller ever fired.
+   */
+  gdeltRowsArchived: number;
+  /**
    * From `cosine_setups` — the row `Trader.decide` writes at decision time
    * (#432). Observed here for `debates`' reason and from the same defect: the
    * retrieval mechanism (#75) and the store (#198) both existed and `decide()`
@@ -1531,7 +1593,10 @@ export interface SmokeObservations {
 }
 
 /** Reads everything the gate and the report need, in one pass over the store. */
-export function readSmokeObservations(db: SqliteHandle): SmokeObservations {
+export function readSmokeObservations(
+  db: SqliteHandle,
+  miArchive?: MiArchiveStore,
+): SmokeObservations {
   const auditRows = db
     .prepare('SELECT trace_id, stage, decision FROM audit_log ORDER BY rowid')
     .all() as { trace_id: string; stage: string; decision: string }[];
@@ -1566,6 +1631,7 @@ export function readSmokeObservations(db: SqliteHandle): SmokeObservations {
     flattenSubmissions: db
       .prepare('SELECT idempotency_key, instrument, status FROM flatten_submissions ORDER BY rowid')
       .all() as SmokeObservations['flattenSubmissions'],
+    gdeltRowsArchived: miArchive?.rawRows(SOURCE_GDELT).length ?? 0,
     // #430. Each of these is a mechanism that was, at some point, fully built,
     // fully unit-tested and called by nothing in production. The table row is
     // the only evidence that a caller exists.
@@ -2257,6 +2323,10 @@ export function formatSmokeReport(
     lines.push(`  ${row.instrument} status=${row.status} [${row.idempotency_key}]`);
   }
 
+  // One canned batch of two rows, one of which carries a watched theme — so 1
+  // is correct and 2 would mean the theme filter has stopped filtering.
+  lines.push('', `GDELT macro rows archived: ${observations.gdeltRowsArchived}`);
+
   lines.push('');
   if (gate.passed) {
     lines.push('GATE: PASS — the pipeline transacted end to end in a real process.');
@@ -2390,6 +2460,10 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     const tickLoopResidualAlerts = new RecordingResidualExposureAlertChannel(
       new LoggingResidualExposureAlertChannel(logger),
     );
+    // Hoisted out of the config below for `llmRateLimiter`'s reason: the gate
+    // has to READ it afterwards to report how many macro rows the run actually
+    // archived. In-memory, as the config comment below explains.
+    const smokeMiArchive = new MiArchiveStore();
 
     const orchestrator = await startFromEnvironment({
       // The same checked-in tuning values `yarn orchestrator` runs on, at the
@@ -2415,7 +2489,14 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // composition root opens `data/samurai-mi-paper.sqlite` — the live
       // soak's own MI archive — and a gate run would both create it on a
       // fresh clone and write fixture items into the file a real soak reads.
-      miArchive: new MiArchiveStore(),
+      miArchive: smokeMiArchive,
+      // GDELT would otherwise reach the live network from `start()`, breaking
+      // this run's "no credentials, no network" claim in the banner above. A
+      // canned batch keeps the claim true AND keeps the archive write path
+      // exercised end to end — an offline stub that throws would leave the
+      // whole macro layer unproven in the one gate that runs the real
+      // composition root.
+      gdeltClient: smokeGdeltClient(),
       clock,
       logger,
       universe: SMOKE_TEST_UNIVERSE,
@@ -2510,7 +2591,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     // contends with nothing above.
     const cryptoEmulation = await runCryptoEmulationScenario(db);
 
-    const observations = readSmokeObservations(db);
+    const observations = readSmokeObservations(db, smokeMiArchive);
     const gate = evaluateSmokeGate(observations, {
       minTicks: targetTicks,
       alpacaWireClientReached: alpacaBrokerClient.reached,
