@@ -12,6 +12,7 @@
 import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { MiArchiveStore } from '../../providers/market-intelligence/index.js';
 import { openSharedStore, sharedStorePath } from '../../shared/store/index.js';
 import {
   assertStorePathMatchesMode,
@@ -141,6 +142,7 @@ describe('startFromEnvironment — real construction path', () => {
     const orchestrator = await startFromEnvironment({
       ...STAGE_CONFIGS,
       db: openSharedStore(':memory:'),
+      miArchive: new MiArchiveStore(),
     });
 
     try {
@@ -160,6 +162,7 @@ describe('startFromEnvironment — real construction path', () => {
     const error = await startFromEnvironment({
       ...STAGE_CONFIGS,
       db: openSharedStore(':memory:'),
+      miArchive: new MiArchiveStore(),
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     // Names the variable and how to supply it. The seams guard used to catch
@@ -184,6 +187,7 @@ describe('startFromEnvironment — real construction path', () => {
     const error = startFromEnvironment({
       ...STAGE_CONFIGS,
       db: openSharedStore(':memory:'),
+      miArchive: new MiArchiveStore(),
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     return error.then((e) => {
@@ -226,6 +230,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
     const orchestrator = await startFromEnvironment({
       ...paperStartingProfile('paper'),
       db: openSharedStore(':memory:'),
+      miArchive: new MiArchiveStore(),
       logger,
     });
 
@@ -327,6 +332,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
     return startFromEnvironment({
       ...paperStartingProfile('paper'),
       db: openSharedStore(':memory:'),
+      miArchive: new MiArchiveStore(),
       logger,
     }).then(async (orchestrator) => {
       try {
@@ -347,6 +353,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
     const error = await startFromEnvironment({
       ...paperStartingProfile('paper'),
       db: openSharedStore(':memory:'),
+      miArchive: new MiArchiveStore(),
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     expect(error.message).toContain('SAMURAI_ALERTS');
@@ -363,6 +370,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
     const error = await startFromEnvironment({
       ...paperStartingProfile('paper'),
       db: openSharedStore(':memory:'),
+      miArchive: new MiArchiveStore(),
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     expect(error.message).toContain('TELEGRAM_CHAT_ID');
@@ -396,6 +404,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
     const orchestrator = await startFromEnvironment({
       ...paperStartingProfile('paper'),
       db: openSharedStore(':memory:'),
+      miArchive: new MiArchiveStore(),
       logger,
     });
 
@@ -493,6 +502,7 @@ describe('startFromEnvironment — the live profile (#511)', () => {
     const orchestrator = await startFromEnvironment({
       ...startingProfileForMode('live', logger),
       db: openSharedStore(':memory:'),
+      miArchive: new MiArchiveStore(),
       logger,
     });
 
@@ -554,6 +564,7 @@ describe('startFromEnvironment — the live profile (#511)', () => {
     const error = await startFromEnvironment({
       ...startingProfileForMode('live'),
       db: openSharedStore(':memory:'),
+      miArchive: new MiArchiveStore(),
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     // The paper pair is still set, so a fallback would have started a live

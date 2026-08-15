@@ -111,7 +111,7 @@
  * `submitted` at all.
  */
 import { AnalystOrchestrator } from '../../pipeline/analysts/index.js';
-import type { SpendCap } from '../../pipeline/debate-engine/index.js';
+import type { LlmClient, SpendCap } from '../../pipeline/debate-engine/index.js';
 import {
   RateLimiter,
   SqliteDebateLogStore,
@@ -158,9 +158,12 @@ import {
   UsEquityRegularHoursCalendar,
 } from '../../providers/market-data-service/index.js';
 import {
+  AlpacaNewsClient,
   CiiConsumer,
   GrokAgent,
   MarketIntelligenceStore,
+  type MiArchiveStore,
+  MiIngestAgent,
   NousSentimentClient,
 } from '../../providers/market-intelligence/index.js';
 import type { AssetClass, Clock, TuningStore } from '../../shared/index.js';
@@ -276,6 +279,7 @@ import {
   DEFAULT_LLM_RATE_LIMIT_CONFIG,
   DEFAULT_TICK_INTERVAL_MS,
   DEFAULT_VOLATILITY_INDICATOR,
+  universeAssetClasses,
 } from './production/defaults.js';
 
 /** The composed, still-stoppable process. Returned by `buildProductionOrchestrator`. */
@@ -802,6 +806,14 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // model still throws from in there — that is a hole in the spend cap, not a
   // configuration gap.
   const sentimentCredentials = sentimentEnabled ? tryNousCredentials('sentiment') : undefined;
+  /**
+   * ONE `LlmClient` for the whole root. The debate stage and #552's MI scoring
+   * pass both bill through it, so there is one spend meter and one config
+   * rather than two clients disagreeing about either.
+   */
+  const llmClient =
+    config.llmClient ?? buildDefaultLlmClient(logger, new SqliteLlmSpendStore(config.db, logger));
+
   const grokAgent =
     sentimentCredentials === undefined
       ? undefined
@@ -813,6 +825,34 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
           clock,
           logger,
         });
+
+  /**
+   * The deterministic news path (map #552) — the writer that actually fills
+   * `MarketIntelligenceStore`.
+   *
+   * PREFERRED OVER `grokAgent` when it can be built, and the reason is not
+   * preference. `NousSentimentClient` hard-codes `retrievalEvidence: false` and
+   * `GrokAgent.refresh` discards every item without evidence, so that path
+   * ingests `[]` on every refresh BY CONSTRUCTION — its own spec section says
+   * "the expected steady state of this stage is an empty item list". #625 then
+   * measured the cost: with `sentiment` and `fundamental` both pinned at
+   * confidence 0.05, the stocks conviction ceiling was 0.5478 against a 0.55
+   * floor, so a stock could never trade at any RSI.
+   *
+   * This agent needs the same Nous credentials (for SCORING, not retrieval) and
+   * Alpaca keys it already holds for bars, so it is available exactly when the
+   * old path was — and when it is not, the fallback is the old agent rather
+   * than nothing.
+   */
+  const miIngestAgent = buildMiIngestAgent({
+    archive: config.miArchive,
+    hasScoringCredentials: sentimentCredentials !== undefined,
+    store: marketIntelligence,
+    llmClient,
+    clock,
+    logger,
+    assetClasses: universeAssetClasses(universe),
+  });
 
   if (grokAgent === undefined) {
     logger.log({
@@ -839,7 +879,16 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // reporting NO_DATA_MARKER (#463), which is the honest default rather
       // than a silent no-op. The agent's own 4h bucket makes calling it on
       // every pass cheap: it returns immediately unless the bucket rolled.
-      ...(grokAgent === undefined ? {} : { marketIntelligence: grokAgent }),
+      // #552: the deterministic path when it is available, the retrieval-era
+      // agent only as a fallback. Not a preference — `GrokAgent` ingests `[]`
+      // by construction (`retrievalEvidence: false` is hard-coded), which is
+      // what pinned both news-fed analysts at confidence 0.05 and produced
+      // #625's 0.5478 conviction ceiling.
+      ...(miIngestAgent !== undefined
+        ? { marketIntelligence: miIngestAgent }
+        : grokAgent === undefined
+          ? {}
+          : { marketIntelligence: grokAgent }),
     }),
     // Two independent stores hang off this one step, both over `config.db`:
     // #367's `SqliteLlmSpendStore` meters what the debate COSTS (the
@@ -849,7 +898,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // tick path, so `attribution.ts` had nothing to attribute over the whole
     // soak.
     debate: buildDebateStep(
-      config.llmClient ?? buildDefaultLlmClient(logger, new SqliteLlmSpendStore(config.db, logger)),
+      llmClient,
       new SqliteDebateLogStore(config.db),
       llmRateLimiter,
       spendCap,
@@ -953,6 +1002,71 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
  */
 export function buildProductionTickRunner(config: ProductionConfig): SequentialTickRunner {
   return new SequentialTickRunner(buildProductionComponents(config).steps);
+}
+
+/**
+ * The deterministic MI ingest agent, or `undefined` when this run cannot build
+ * one (#552).
+ *
+ * Split out and made total because there are THREE independent ways it can be
+ * unavailable, and none of them may take down the boot: no archive, no scoring
+ * credentials, or no Alpaca data keys. The last is the subtle one —
+ * `AlpacaNewsClient` validates its keys in the constructor (deliberately, so a
+ * refresh loop does not discover the gap mid-tick and report it as "no news
+ * today"), which means constructing it inline would turn a missing optional
+ * credential into a failed startup for the whole orchestrator.
+ *
+ * Degrading is safe here in a way it is not elsewhere: the caller falls back to
+ * the retrieval-era agent, and the analysts already handle an empty store via
+ * `NO_DATA_MARKER`. It is NOT free, though, and the log line says so — without
+ * this agent the store ingests `[]` on every refresh, both news-fed analysts
+ * report NO DATA, and #625's conviction ceiling stays in force.
+ */
+function buildMiIngestAgent(deps: {
+  archive: MiArchiveStore | undefined;
+  hasScoringCredentials: boolean;
+  store: MarketIntelligenceStore;
+  llmClient: LlmClient;
+  clock: Clock;
+  logger: Logger;
+  assetClasses: AssetClass[];
+}): MiIngestAgent | undefined {
+  if (deps.archive === undefined || !deps.hasScoringCredentials) return undefined;
+
+  let newsClient: AlpacaNewsClient;
+  try {
+    newsClient = new AlpacaNewsClient({});
+  } catch (error) {
+    deps.logger.log({
+      trace_id: 'startup',
+      stage: 'market_intelligence',
+      level: 'warn',
+      message:
+        'market intelligence: the deterministic news path is NOT running because Alpaca data ' +
+        'credentials are missing. `sentiment` and `fundamental` will report NO DATA on every ' +
+        'tick, which is what pinned the stocks conviction ceiling below its floor in #625. ' +
+        'Set ALPACA_API_KEY/ALPACA_API_SECRET for a run whose results are meant to mean ' +
+        'something.',
+      payload: { error: error instanceof Error ? error.message : String(error) },
+    });
+    return undefined;
+  }
+
+  const agent = new MiIngestAgent({
+    archive: deps.archive,
+    store: deps.store,
+    newsClient,
+    llmClient: deps.llmClient,
+    clock: deps.clock,
+    logger: deps.logger,
+    assetClasses: deps.assetClasses,
+  });
+  // Startup hydration (#554): the store is in-memory, so without this a restart
+  // loses every item ingested before it and the run silently measures less than
+  // it appears to.
+  agent.hydrate();
+
+  return agent;
 }
 
 /**

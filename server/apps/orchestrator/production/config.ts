@@ -40,6 +40,7 @@ import type {
 import type {
   CiiConsumerConfig,
   CiiScoreProvider,
+  MiArchiveStore,
 } from '../../../providers/market-intelligence/index.js';
 import type { Clock, ClosedTradeStore, VenuePacingConfig } from '../../../shared/index.js';
 import type { SharedStore as SqliteHandle } from '../../../shared/store/index.js';
@@ -424,6 +425,22 @@ export interface ProductionConfig extends AlertChannelSlots {
    * programmatic callers can decide without touching the process environment.
    */
   sentimentEnabled?: boolean;
+  /**
+   * The Market Intelligence archive (#554, map #552) — its own database, NOT
+   * `db`.
+   *
+   * Separate because SQLite has a single writer and a news pull must not hold
+   * the lock while Execution journals a flatten; see the migration header for
+   * the full argument. Supplied by the entrypoint rather than opened here so
+   * one process holds one handle, and so a test can pass an in-memory archive.
+   *
+   * **Absent means the deterministic news path does not run**, and the run
+   * falls back to the retrieval-era `GrokAgent` — which ingests `[]` by
+   * construction, so `sentiment` and `fundamental` keep reporting NO DATA and
+   * the #625 conviction ceiling stays in force. Set it for any run whose
+   * results are meant to mean something.
+   */
+  miArchive?: MiArchiveStore;
   /**
    * Overrides the `RateLimiter` this module would otherwise build from
    * `rateLimiterConfig` — same rationale as `broker`/`llmClient`.

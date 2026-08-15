@@ -2,7 +2,7 @@
   "name": "samurai-trading-system",
   "version": "0.0.1",
   "private": true,
-  "description": "Samurai — live-money multi-agent trading system (crypto + stocks). See CLAUDE.md and docs/specs/.",
+  "description": "Samurai \u2014 live-money multi-agent trading system (crypto + stocks). See CLAUDE.md and docs/specs/.",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -11,7 +11,7 @@
     "dev:web": "vite dev --config client/vite.config.ts",
     "dev:api": "tsx watch --env-file=.env.local server/apps/service-api/index.ts",
     "build": "tsc -p tsconfig.build.json && yarn build:migrations && yarn build:web",
-    "build:migrations": "node --eval \"require('node:fs').cpSync('server/shared/store/migrations','dist/server/shared/store/migrations',{recursive:true})\"",
+    "build:migrations": "node --eval \"const fs=require('node:fs');fs.cpSync('server/shared/store/migrations','dist/server/shared/store/migrations',{recursive:true});fs.cpSync('server/providers/market-intelligence/archive/migrations','dist/server/providers/market-intelligence/archive/migrations',{recursive:true});\"",
     "build:web": "tsc -p client/tsconfig.json && vite build --config client/vite.config.ts",
     "start": "yarn build && node --env-file=.env.local dist/server/apps/supervisor/index.js",
     "orchestrator": "yarn build && node --env-file=.env.local dist/server/apps/orchestrator/index.js",
