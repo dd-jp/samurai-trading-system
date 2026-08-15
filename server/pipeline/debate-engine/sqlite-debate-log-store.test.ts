@@ -48,8 +48,69 @@ describe('SqliteDebateLogStore.writeLog', () => {
         // #426. NULL when the caller supplied no trace — a pre-#426 row and a
         // programmatic writer both land here.
         trace_id: null,
+        // #617 (migration 0026). NULL for the same reason: this caller supplies
+        // none. A row like this is NOT replayable, and `buildDebateStep` treats
+        // a null `confidence` as "re-run the debate" rather than trading on a
+        // reconstructed blank.
+        confidence: null,
+        synthesis: null,
+        position: null,
+        disagreement_summary: null,
+        open_items_json: null,
+        converged: null,
       },
     ]);
+  });
+
+  /** #617 — the row has to be able to stand in for the debate, not just describe it. */
+  it('round-trips the replay fields, including converged as a boolean', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+
+    store.writeLog(
+      makeLog({
+        confidence: 0.72,
+        synthesis: 'Momentum holds.',
+        position: 'bullish: momentum holds',
+        disagreement_summary: 'Bear conceded on volume.',
+        open_items: ['liquidity thin into the close'],
+        converged: true,
+      }),
+    );
+
+    const read = store.getByDebateId('debate-1');
+
+    expect(read?.confidence).toBe(0.72);
+    expect(read?.synthesis).toBe('Momentum holds.');
+    expect(read?.position).toBe('bullish: momentum holds');
+    expect(read?.disagreement_summary).toBe('Bear conceded on volume.');
+    expect(read?.open_items).toEqual(['liquidity thin into the close']);
+    // SQLite stores 1/0; the domain object must get a boolean back.
+    expect(read?.converged).toBe(true);
+  });
+
+  it('reads a pre-0026 row as having no replay fields at all, not as zeroes', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+
+    store.writeLog(makeLog());
+
+    const read = store.getByDebateId('debate-1');
+
+    // Absent, not 0/''/false. `confidence: 0` would be a legitimate score and
+    // would send a non-replayable row down the replay path.
+    expect(read).not.toHaveProperty('confidence');
+    expect(read).not.toHaveProperty('converged');
+    expect(read).not.toHaveProperty('open_items');
+  });
+
+  it('preserves converged: false rather than dropping it as falsy', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+
+    store.writeLog(makeLog({ confidence: 0.6, converged: false }));
+
+    expect(store.getByDebateId('debate-1')?.converged).toBe(false);
   });
 
   /** #426 — the column the Pipeline drawer joins on. */
@@ -118,5 +179,31 @@ describe('SqliteDebateLogStore.getByDebateId', () => {
 
     expect(store.getByDebateId('debate-1')).toEqual(first);
     expect(store.getByDebateId('debate-2')).toEqual(second);
+  });
+
+  it.each([
+    ['not json at all', 'not json at all'],
+    ['an object', '{"a":1}'],
+    ['a bare string', '"open item"'],
+    ['an array of non-strings', '[1,2,3]'],
+  ])('reads a row whose open_items_json is %s as having no open items', (_label, raw) => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    store.writeLog(makeLog({ debate_id: 'debate-bad-json' }));
+    db.prepare('UPDATE debate_log SET open_items_json = ? WHERE debate_id = ?').run(
+      raw,
+      'debate-bad-json',
+    );
+
+    // Degrading rather than throwing is the point. Since #617 this read runs
+    // BEFORE the debate on every tick, so an unparseable row would fail the
+    // debate stage for every remaining tick of that bar instead of falling
+    // through to a re-run. The `as string[]` was unchecked too: a column
+    // holding an object or a bare string would have reached a caller expecting
+    // an array.
+    const row = store.getByDebateId('debate-bad-json');
+
+    expect(row).toBeDefined();
+    expect(row?.open_items).toBeUndefined();
   });
 });

@@ -33,6 +33,16 @@ export function buildDebateLog(
     // #426. Omitted rather than `undefined` so the row shape matches the
     // optional field exactly; a caller with no trace writes NULL.
     ...(trace_id === undefined ? {} : { trace_id }),
+    // #617. What the Trader actually reads, so a later same-bar tick can
+    // replay this row instead of re-running an identical debate. `confidence`
+    // is the load-bearing one — it is what position sizing is a function of,
+    // and until migration 0026 the table had no column for it.
+    confidence: result.confidence,
+    synthesis: result.synthesis,
+    position: result.position,
+    disagreement_summary: result.disagreement_summary,
+    open_items: result.open_items,
+    converged: result.converged,
   };
 }
 
@@ -72,13 +82,34 @@ export function buildDebateLog(
  * every historical row would then refer to a grid nothing else shares.
  *
  * Consequence worth stating: at a 15-minute cadence, four consecutive ticks
- * share one bar. They do NOT thereby share a `debate_id` — the bar is only one
- * of three hash inputs, and the third is the analyst views, whose `key_points`
- * are raw model prose. Two ticks fifteen minutes apart collide only if the
- * analysts produced byte-identical output over the interval, which is the
- * retry case the write-once primary key is for, not a second debate. Flooring
- * therefore makes the log's duplicate guard REACHABLE where an unfloored
- * instant left it dead code; first-write-wins is the intended resolution.
+ * share one bar, and they DO thereby share a `debate_id`.
+ *
+ * **CORRECTED 2026-08-14 (#617).** This paragraph previously argued the
+ * collision away: "the bar is only one of three hash inputs, and the third is
+ * the analyst views, whose `key_points` are raw model prose. Two ticks fifteen
+ * minutes apart collide only if the analysts produced byte-identical output
+ * over the interval, which is the retry case the write-once primary key is
+ * for, not a second debate."
+ *
+ * That premise is false, and it is worth being precise about why, because it
+ * is what let the defect run unnoticed through a soak. **There is no LLM
+ * client anywhere in `server/pipeline/analysts/`.** Both analysts are
+ * deterministic functions of closed bars: the technical analyst's `key_points`
+ * are templated numeric strings, the sentiment analyst emits a constant
+ * `NO_DATA_MARKER` string on every production tick, and bar reads are pinned
+ * to the grid by `barIndex(timeframe, asOf)`. Within one 1h bar the analyst
+ * views are byte-identical, so all three hash inputs are — every non-first
+ * tick collides, by construction rather than by coincidence.
+ *
+ * Measured: 29 of 40 debates in the soak's first five hours warned on the
+ * duplicate write, and the fresh-debate count equals bars-elapsed ×
+ * instruments, not ticks × instruments.
+ *
+ * First-write-wins remains the intended resolution, but it is NOT sufficient
+ * on its own: the duplicate run's LLM calls were already paid for, and its
+ * (discarded) synthesis was still what the Trader acted on, so `debate_log`
+ * held tick 1 while the Trader sized on tick N. `buildDebateStep` now checks
+ * for the existing row BEFORE the debate runs and returns it — see #617.
  */
 export const DEBATE_BAR_TIMEFRAME_MS = 60 * 60 * 1_000;
 
