@@ -146,25 +146,32 @@ function atrFor(
  * because the market is closed — does not exist on a 24/7 venue with a live
  * bracket leg.
  *
- * **`remaining` is checked for a lower bound as well as an upper one (#691).**
- * This used to argue the lower bound away: `sessionEnd` is strictly future, so
- * `remaining` is positive by construction. That is true of both calendars in
- * this tree — each compares `close.getTime() > instant.getTime()` before
- * returning — but it is a property of the current IMPLEMENTERS, not of the
- * seam. `sessionCalendars` is injected, and `ProductionConfig.tradingCalendar`
- * overrides both production calendars by design.
+ * **A past close is stated explicitly, and it changes nothing (#691).** The
+ * `remaining < 0` branch below is documentation-as-code, NOT a behaviour
+ * change: `remaining <= flatten_before_close_ms` was already true for every
+ * negative `remaining`, so a past close has always meant "flatten". The branch
+ * exists because that was reached by accident of a comparison rather than by
+ * decision, and reviewers twice reasoned about it wrongly — including the first
+ * cut of this very change.
  *
- * The asymmetry is what makes the guard worth its line. `remaining <= window`
- * is also true for every NEGATIVE remaining, so a calendar returning a past
- * close does not merely mis-time one flatten — it pins the trader inside the
- * flatten window permanently, for that asset class, for the life of the
- * process. Under ADR-0014 that is a system that can only ever exit.
+ * Flattening IS the right answer, which is why the branch only restates it.
+ * `sessionEnd <= now` says the session has already ended, and the response to
+ * "the market is shut and we are holding" is the same whether the calendar is
+ * broken or merely surprising: be flat. On the entry path the same `true` means
+ * "inside the window", so nothing new opens. A permanently-wrong calendar
+ * therefore parks the book flat and stops trading — a halt, but a safe one.
  *
- * It THROWS rather than returning false, because both answers are wrong and
- * only one of them is audible. A past close means the calendar is broken, and
- * silently declining to flatten on a broken calendar is the overnight carry
- * #668 exists to prevent, arriving quietly. The tick loop catches and logs, so
- * this costs the tick rather than the run.
+ * The two alternatives are both worse, and both were tried. Returning FALSE
+ * would decline to flatten while the market is shut, which is the overnight
+ * carry #668 exists to prevent. THROWING was this change's first cut, and
+ * review killed it: this check is the FIRST branch of the held-position path,
+ * so a throw takes the whole decision down on every tick — including the
+ * direction-flip exit two branches below — stranding exposure the system could
+ * then neither flatten nor exit.
+ *
+ * What is genuinely missing is audibility, not behaviour: a calendar this
+ * broken should raise an alert, and `TraderInput` carries no logger to raise
+ * one from. That is #698.
  */
 function withinFlattenWindow(input: TraderInput, assetClass: AssetClass): boolean {
   // Checked here rather than at construction because `TraderConfig` is a plain
@@ -192,13 +199,10 @@ function withinFlattenWindow(input: TraderInput, assetClass: AssetClass): boolea
 
   const remaining = sessionEnd.getTime() - now.getTime();
 
-  if (remaining < 0) {
-    throw new Error(
-      `${assetClass} calendar returned a session close before now ` +
-        `(close ${sessionEnd.toISOString()}, now ${now.toISOString()}); ` +
-        `sessionEnd is contractually strictly future`,
-    );
-  }
+  // The session has already ended. Be flat — see the docblock for why this is
+  // answered here rather than by throwing, which would take the direction-flip
+  // exit down with it and strand the exposure.
+  if (remaining < 0) return true;
 
   return remaining <= input.config.flatten_before_close_ms;
 }

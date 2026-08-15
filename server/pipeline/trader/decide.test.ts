@@ -899,23 +899,33 @@ describe('decide — flat by close (#668)', () => {
   });
 
   /**
-   * #691 — the two invariants `withinFlattenWindow` depended on and did not
-   * check. Both are asserted through `decide` rather than against the helper,
-   * because the helper is private and because the point is what the MONEY PATH
-   * does, not what an internal predicate returns.
+   * #691 — the flatten window's two edge inputs, asserted through `decide`
+   * rather than against the helper, because the helper is private and because
+   * the point is what the MONEY PATH does.
    *
-   * Neither is reachable through the two calendars in this tree — both compare
-   * `close > instant` before returning, and the shipped config is 5 minutes.
-   * That was the old argument for leaving them unchecked, and it is an argument
-   * about the current implementers rather than about the seam: both the
-   * calendar map and the config are injected, and `ProductionConfig
-   * .tradingCalendar` overrides the production calendars by design.
+   * The two are NOT equivalent, and the difference is worth stating up front so
+   * nobody reads more into the first pair than they should:
+   *
+   * - A past close (below) already flattened before this change. Those two
+   *   tests pass against the old code and are characterisation, not regression
+   *   guards.
+   * - A non-positive `flatten_before_close_ms` genuinely did nothing and now
+   *   throws. That one is a real behaviour change, and it fails against the
+   *   old code.
+   *
+   * Neither is reachable through the two calendars in this tree or the shipped
+   * config — both calendars compare `close > instant`, and the default window
+   * is 5 minutes. That was the old argument for leaving them unchecked, and it
+   * is an argument about the current implementers rather than about the seam:
+   * both the calendar map and the config are injected.
    */
-  it('throws rather than flattening forever when the calendar returns a past close', async () => {
-    // The failure this guards is not a mis-timed flatten. `remaining <= window`
-    // is also true for every NEGATIVE remaining, so a past close pins the
-    // trader inside the window permanently — under ADR-0014, a system that can
-    // only ever exit, with each tick's skip looking ordinary in `trader_log`.
+  it('flattens rather than holding when the calendar reports a close already past', async () => {
+    // CHARACTERISATION, not a regression guard — and deliberately kept as one.
+    // This passes against the pre-#691 code too, because `remaining <= window`
+    // was already true for every negative `remaining`. What it pins is that
+    // flattening is the INTENDED answer here rather than an accident of the
+    // comparison, so a later "tidy-up" that makes a past close return false —
+    // or throw, which was this change's first cut — fails a test that says why.
     const pastClose = new Date('2026-07-15T19:00:00Z');
     const stuckCalendar = {
       isOpen: () => true,
@@ -924,16 +934,39 @@ describe('decide — flat by close (#668)', () => {
       sessionEnd: () => pastClose,
     } as unknown as TradingCalendar;
 
-    await expect(
-      decide(
-        traderInput({
-          clock: new ManualClock(new Date('2026-07-15T19:56:00Z')),
-          debate: debateResult({ direction: 'neutral' }),
-          positionState: async () => [holding()],
-          sessionCalendars: { crypto: new AlwaysOpenCalendar(), stocks: stuckCalendar },
-        }),
-      ),
-    ).rejects.toThrow(/session close before now/);
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(new Date('2026-07-15T19:56:00Z')),
+        debate: debateResult({ direction: 'neutral' }),
+        positionState: async () => [holding()],
+        sessionCalendars: { crypto: new AlwaysOpenCalendar(), stocks: stuckCalendar },
+      }),
+    );
+
+    expect(outcome.intent?.intent_type).toBe('exit');
+  });
+
+  it('opens nothing new while the calendar reports a close already past', async () => {
+    // The same answer read on the entry path: "inside the window" means open
+    // nothing. Together with the flatten above this is what makes a
+    // permanently-wrong calendar park the book flat and stop, rather than loop.
+    const pastClose = new Date('2026-07-15T19:00:00Z');
+    const stuckCalendar = {
+      isOpen: () => true,
+      isTradingDay: () => true,
+      sessionStart: () => pastClose,
+      sessionEnd: () => pastClose,
+    } as unknown as TradingCalendar;
+
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(new Date('2026-07-15T19:56:00Z')),
+        positionState: async () => [],
+        sessionCalendars: { crypto: new AlwaysOpenCalendar(), stocks: stuckCalendar },
+      }),
+    );
+
+    expect(outcome.intent).toBeNull();
   });
 
   it('throws on a non-positive flatten window rather than silently disabling flat-by-close', async () => {
