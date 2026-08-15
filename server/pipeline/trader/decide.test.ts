@@ -653,6 +653,54 @@ describe('decide — determinism & idempotency', () => {
     expect(sameBarLater?.decision_timestamp).toEqual(DECISION_BAR);
   });
 
+  /**
+   * The same live case on the EXIT path. Every test above enters, and #616 was
+   * itself a live path no test exercised — so leaving the exit uncovered here
+   * would repeat the defect's own shape.
+   *
+   * A suppressed exit is the worse half of the two. A suppressed ENTRY is a
+   * trade not taken; a suppressed EXIT leaves filled exposure on the venue with
+   * the flatten silently swallowed by `findByKey`, the `open_positions` PK or
+   * the broker `client_order_id`, and `trader_log` records it as a skip.
+   *
+   * Note what this test PINS rather than blesses: within one bar the exit key is
+   * stable, which is the #616 fix. That the entry and the exit for one
+   * instrument in one bar share that key is the SEPARATE defect #686 — this
+   * asserts tick-to-tick stability, not that the key space is adequate.
+   */
+  it('keys an exit identically across two live ticks in one bar', async () => {
+    const position = openPosition({ side: 'buy', filled_size: 10 });
+    const debate = debateResult({ direction: 'bearish', confidence: 0.9, converged: true });
+
+    const tickOne = new FixtureMarketData(bars(15, 2));
+    tickOne.markObservedAt = new Date('2026-07-15T10:00:03.187Z');
+    const tickTwo = new FixtureMarketData(bars(15, 2));
+    tickTwo.markObservedAt = new Date('2026-07-15T10:45:11.902Z');
+
+    const first = await decide(
+      traderInput({
+        debate,
+        positionState: async () => [position],
+        marketData: tickOne,
+        clock: new ManualClock(new Date('2026-07-15T10:00:03.187Z')),
+      }),
+    );
+    const sameBarLater = await decide(
+      traderInput({
+        debate,
+        positionState: async () => [position],
+        marketData: tickTwo,
+        clock: new ManualClock(new Date('2026-07-15T10:45:11.902Z')),
+      }),
+    );
+
+    expect(first?.intent_type).toBe('exit');
+    expect(sameBarLater?.intent_type).toBe('exit');
+    expect(first?.idempotency_key).toBeDefined();
+    expect(sameBarLater?.idempotency_key).toBe(first?.idempotency_key);
+    expect(sameBarLater?.decision_timestamp).toEqual(DECISION_BAR);
+  });
+
   it('still separates two different bars', async () => {
     const nextBar = new FixtureMarketData(bars(15, 2));
     nextBar.markObservedAt = new Date('2026-07-15T11:03:00Z');
