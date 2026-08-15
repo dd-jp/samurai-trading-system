@@ -71,6 +71,7 @@ import type {
 } from '../../../providers/market-data-service/index.js';
 import type { CiiConsumer } from '../../../providers/market-intelligence/index.js';
 import type {
+  AssetClass,
   Clock,
   Logger,
   OpenPosition,
@@ -142,6 +143,16 @@ export interface TraderStepDeps extends BreakerStateDeps {
    * independently-constructed stores.
    */
   setupStore: SetupStore;
+  /**
+   * #668: when each asset class's venue closes, so the Trader can enforce
+   * ADR-0014's flat-by-close through the instrument's own calendar.
+   *
+   * Required, matching `TraderInput.sessionCalendars`. An optional calendar
+   * would let this root drop it and leave the flatten unarmed — which in a soak
+   * log is indistinguishable from a market that simply never gave a setup, and
+   * is this repo's dominant defect shape.
+   */
+  sessionCalendars: Record<AssetClass, TradingCalendar>;
   /**
    * #328: the decision record. Optional so a test or backtest can stay silent,
    * supplied on the production path — without it, the two stages that decide
@@ -218,6 +229,11 @@ export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
       // and the exit `executeExit` validates are computed off ONE fill record.
       exitFillSizes: deps.getExitFillSizes,
       setupStore: deps.setupStore,
+      // #668: the same pair every other session-boundary consumer reads (the
+      // daily-PnL boundary #331/#332, the volatility reading #386), threaded
+      // through rather than rebuilt — two literals would be two calendars and
+      // two places for an override to be applied to only one.
+      sessionCalendars: deps.sessionCalendars,
     });
 
     // Written for a null intent too (#328). `TickOutcome.final_stage` records

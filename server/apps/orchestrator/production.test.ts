@@ -28,6 +28,7 @@ import type {
 import type { AlpacaBar, AlpacaQuote, Bar } from '../../providers/market-data-service/index.js';
 import {
   AlpacaDataSource,
+  AlwaysOpenCalendar,
   AssetClassRoutingDataSource,
   FixtureDataSource,
   MarketDataServiceImpl,
@@ -52,6 +53,7 @@ import {
   type DailyMetricsConfig,
   DEFAULT_HEARTBEAT_INTERVAL_MS,
   DEFAULT_LLM_CLIENT_CONFIG,
+  equityCalendarFor,
   type FeedbackCycleConfig,
   type ProductionConfig,
   SMOKE_TEST_UNIVERSE,
@@ -383,6 +385,46 @@ describe('SMOKE_TEST_UNIVERSE', () => {
   it('is a narrow, crypto-only universe (ADR-0004 §4)', () => {
     expect(SMOKE_TEST_UNIVERSE).toHaveLength(1);
     expect(SMOKE_TEST_UNIVERSE[0]).toEqual({ asset: 'BTC-USD', asset_class: 'crypto' });
+  });
+});
+
+describe('equityCalendarFor', () => {
+  /**
+   * #668 landed `LseRegularHoursCalendar` with NO production caller — this
+   * repo's dominant defect shape, and the worst possible instance of it: every
+   * flatten on the live leg would have resolved through the US 16:00 ET
+   * boundary, which is 20:00/21:00 London, hours after the 16:30 LSE close.
+   * The overnight carry #668 exists to prevent, arriving through the
+   * composition root rather than through the rule.
+   */
+  it('gives the live equity leg the LSE calendar (ADR-0015: T212 ISA, LSE ETPs)', () => {
+    const calendar = equityCalendarFor({ mode: 'live' } as unknown as ProductionConfig);
+
+    // 2026-07-15 is a Wednesday. 16:25 London (BST) = 15:25 UTC — inside the
+    // LSE session, and already an hour past it under the US calendar's clock.
+    expect(calendar.isOpen(new Date('2026-07-15T15:25:00Z'))).toBe(true);
+    // 17:00 London = 16:00 UTC, after the 16:30 LSE close but well inside the
+    // US session. This is the assertion that fails if the US calendar is used.
+    expect(calendar.isOpen(new Date('2026-07-15T16:00:00Z'))).toBe(false);
+    expect(calendar.sessionEnd(new Date('2026-07-15T10:00:00Z'))?.toISOString()).toBe(
+      '2026-07-15T15:30:00.000Z',
+    );
+  });
+
+  it('leaves paper on the US calendar, which is the venue paper actually trades', () => {
+    const calendar = equityCalendarFor({ mode: 'paper' } as unknown as ProductionConfig);
+
+    expect(calendar.sessionEnd(new Date('2026-07-15T10:00:00Z'))?.toISOString()).toBe(
+      '2026-07-15T20:00:00.000Z',
+    );
+  });
+
+  it('honours an explicit override in either mode', () => {
+    const injected = new AlwaysOpenCalendar();
+
+    expect(
+      equityCalendarFor({ mode: 'live', tradingCalendar: injected } as unknown as ProductionConfig),
+    ).toBe(injected);
   });
 });
 

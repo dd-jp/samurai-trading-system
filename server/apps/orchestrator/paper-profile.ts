@@ -136,6 +136,10 @@ export const PAPER_PROFILE_PROVENANCE = {
   tickIntervalMs: 'DERIVED',
   universe: 'SPEC',
   'traderConfig.conviction_floor': 'SPEC',
+  // #668. SPEC rather than DERIVED: close − 5 minutes is not calculated from
+  // anything here, it is the value #657 resolved on 2026-08-09 and ADR-0014's
+  // flat-by-close horizon is what makes it binding.
+  'traderConfig.flatten_before_close_ms': 'SPEC',
   'traderConfig.max_risk_per_trade': 'SPEC',
   'traderConfig.asset_class_risk_multiplier.crypto': 'SPEC',
   'traderConfig.asset_class_risk_multiplier.stocks': 'SPEC',

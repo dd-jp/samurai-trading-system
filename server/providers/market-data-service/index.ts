@@ -61,7 +61,12 @@ export {
 export { SqliteMarketDataStore } from './sqlite-market-data-store.js';
 export { closeTimeOf, isDailyTimeframe, timeframeToMs } from './timeframe.js';
 export type { TradingCalendar } from './trading-calendar.js';
-export { AlwaysOpenCalendar, UsEquityRegularHoursCalendar } from './trading-calendar.js';
+export {
+  AlwaysOpenCalendar,
+  // #668 — the live equity leg's venue (#659: T212 ISA, GBP LSE-listed ETFs).
+  LseRegularHoursCalendar,
+  UsEquityRegularHoursCalendar,
+} from './trading-calendar.js';
 export type {
   Bar,
   BarWindow,

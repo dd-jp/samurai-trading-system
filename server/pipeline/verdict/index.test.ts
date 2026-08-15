@@ -115,6 +115,8 @@ function makeTradingCalendar(isOpen = true): TradingCalendar {
     isOpen: () => isOpen,
     isTradingDay: () => true,
     sessionStart: (instant) => SESSION_BOUNDARY.sessionStart(instant),
+    // #668 — this double predates `sessionEnd`; no test here asks about it.
+    sessionEnd: () => null,
   };
 }
 

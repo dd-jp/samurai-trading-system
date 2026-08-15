@@ -24,7 +24,10 @@ import {
   type OrderIntent,
   totalHeldQuantity,
 } from '../../shared/index.js';
-import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../debate-engine/index.js';
+// Imported from the defining module rather than the debate-engine barrel: the
+// barrel pulls the whole engine's module graph into the Trader path and would
+// make a future debate-engine -> trader import a cycle.
+import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../debate-engine/debate-log-store.js';
 import { NO_PRECEDENT_MULTIPLIER, retrieveCosinePrecedent } from './cosine-precedent.js';
 import { computeIdempotencyKey } from './idempotency-key.js';
 import { buildSetupVector } from './setup-vector.js';
@@ -127,6 +130,39 @@ function atrFor(
 }
 
 /**
+ * Is `now` inside the flat-by-close window for this asset class (#668)?
+ *
+ * The window is `[sessionEnd − flatten_before_close_ms, sessionEnd)`, resolved
+ * through the INSTRUMENT'S OWN calendar rather than a wall-clock constant —
+ * 16:00 ET for the Alpaca paper venue, 16:30 London for the live LSE leg, and
+ * 12:30 on an LSE half-day. #656 measured only a two-hour overlap between those
+ * two sessions, so a single shared constant would be wrong for one of them.
+ *
+ * **A `null` session end means "no close", and returns false.** That is crypto,
+ * and it is not an oversight: what flat-by-close should mean for a leg whose
+ * venue never shuts is an open thesis amendment (#667) that is David's to make.
+ * #668 is explicit that a crypto flatten must not be implemented ahead of it.
+ * The honest reading is that the risk the rule guards — a stop that cannot fill
+ * because the market is closed — does not exist on a 24/7 venue with a live
+ * bracket leg.
+ *
+ * No upper guard is needed beyond `sessionEnd` being strictly future: the
+ * calendar only ever returns a close after `now`, so `remaining` is positive by
+ * construction and the window cannot wrap onto the previous session.
+ */
+function withinFlattenWindow(input: TraderInput, assetClass: AssetClass): boolean {
+  const calendar = input.sessionCalendars[assetClass];
+  const now = input.clock.now();
+  const sessionEnd = calendar.sessionEnd(now);
+
+  if (sessionEnd === null) return false;
+
+  const remaining = sessionEnd.getTime() - now.getTime();
+
+  return remaining <= input.config.flatten_before_close_ms;
+}
+
+/**
  * The decision's BAR COORDINATE — the input `computeIdempotencyKey` needs to
  * be stable across every tick that shares a bar (#616).
  *
@@ -147,10 +183,13 @@ function atrFor(
  *
  * Flooring `asOf` rather than the mark's timestamp is deliberate: `asOf` is
  * `clock.now()`, the same value `buildDebateStep` floors for `debate_id`, so
- * the Trader's bar and the debate's bar are provably the same coordinate
- * rather than two clocks that agree most of the time. A mark observed a
- * fraction after an hour boundary would otherwise floor to the next bar and
- * silently split the pair.
+ * the two land on the same coordinate **whenever both clock reads fall in the
+ * same bar** — which is the guarantee, and it is weaker than "provably the same
+ * coordinate". A bar boundary falling between the Debate stage's read and this
+ * one, or a crash-restart resuming in the next bar, still splits the key from
+ * its `debate_id`. What it does remove is the mark-timestamp split: a mark
+ * observed a fraction after an hour boundary would otherwise floor to the next
+ * bar on every tick rather than occasionally.
  *
  * **The grid is stated, not inherited.** `floorToBar`'s timeframe argument is
  * passed explicitly as `DEBATE_BAR_TIMEFRAME_MS` rather than left to its
@@ -237,6 +276,24 @@ async function buildBracket(
       asOf,
     ),
   ]);
+
+  // FLAT BY CLOSE, the opening half (#668). The router's holding branch closes
+  // what is open inside the window; this stops the same window from opening
+  // something new for the next tick to immediately close again.
+  //
+  // Not a nicety: on the live leg the round trip is the whole edge. ADR-0018
+  // measures a 3x index ETP at 0.18% against a 2.00% take-profit, so a position
+  // opened minutes before the close pays that cost for an exposure with no time
+  // left to earn it, and the neutral bracket it was sized under assumes a full
+  // session to resolve in.
+  //
+  // Checked AFTER the mark rather than alongside the position branch because
+  // the asset class is the MARK's to report — and it is the asset class that
+  // picks the calendar, since the crypto and equity legs run different venues
+  // inside one process.
+  if (withinFlattenWindow(input, mark.asset_class)) {
+    return skip('session_closing');
+  }
 
   // Bars are still fetched here rather than read through
   // `marketData.getIndicator`, and #315 changed WHY.
@@ -480,6 +537,11 @@ async function buildExitIntent(
 export type TraderSkipReason =
   | 'neutral_direction_while_flat'
   | 'below_conviction_floor'
+  // #668: inside the flat-by-close window, so no new exposure is opened. A
+  // distinct reason rather than a silent skip because "nothing traded after
+  // 16:25" and "nothing traded because the market was quiet" are the same row
+  // otherwise, and only one of them is the system working as designed.
+  | 'session_closing'
   | 'below_min_notional'
   | 'holding_neutral_or_non_converged'
   | 'scale_in_conviction_delta_not_met'
@@ -580,6 +642,25 @@ export async function decideWithReason(input: TraderInput): Promise<TraderOutcom
   // a fresh entry) — no defensive mixed-side reconciliation.
   const existingSide = positions[0]?.side;
   if (existingSide === undefined) return skip('no_position_side');
+
+  // FLAT BY CLOSE (#668, ADR-0014) — ahead of EVERY other holding branch, and
+  // the ordering is the load-bearing part.
+  //
+  // Below this point the router can decline to act for reasons that are all
+  // perfectly good reasons to hold a position through a quiet afternoon and
+  // are none of them a reason to hold one overnight: a neutral debate, a
+  // non-converged one, a scale-in delta not met. Put the close check after any
+  // of them and the commonest branch in the whole system — `debate.direction
+  // === 'neutral'`, 92 of 94 debates in the soak — silently suppresses the
+  // flatten and carries the book overnight. That is the exact failure the rule
+  // exists to prevent, so it is decided first.
+  //
+  // ADR-0007/ADR-0013 removed the human from the trade path, so this must fire
+  // unattended INCLUDING on the days it closes into a loss.
+  const positionAssetClass = positions[0]?.asset_class;
+  if (positionAssetClass !== undefined && withinFlattenWindow(input, positionAssetClass)) {
+    return buildExitIntent(input, positions);
+  }
 
   if (debate.direction === 'neutral' || !debate.converged) {
     return skip('holding_neutral_or_non_converged');
