@@ -15,6 +15,33 @@
 import { createHash } from 'node:crypto';
 
 /**
+ * Which SIDE of a position the intent is on — the discriminator, deliberately
+ * coarser than `intent_type`.
+ *
+ * `entry` and `scale_in` collapse to one value on purpose. Hashing the full
+ * `intent_type` would be more precise and **less safe**: within a single bar the
+ * first tick can produce an `entry` and a later tick a `scale_in` (the position
+ * now exists), and under a three-way key those are two different keys, so a
+ * crash-replay of that bar would place BOTH rather than dedupe to one. Grouping
+ * the opening intents keeps exactly the within-bar collapse #616 and #617 were
+ * protecting, and separates only the closing side — which is the one that must
+ * never be suppressed.
+ */
+export type IntentSide = 'open' | 'close';
+
+/**
+ * The opening/closing side of an intent type.
+ *
+ * The parameter union is spelled out rather than imported: `intent_type` is
+ * declared inline in both `shared/types/records.ts` and
+ * `shared/decision-records.ts` and has no shared named type, so importing one
+ * would mean minting a contract type as a side effect of this fix.
+ */
+export function intentSideFor(intentType: 'entry' | 'scale_in' | 'exit'): IntentSide {
+  return intentType === 'exit' ? 'close' : 'open';
+}
+
+/**
  * `bar` must be the decision bar's coordinate — a value on the BAR GRID, which
  * every tick sharing that bar computes identically. Never a raw wall-clock or
  * wire timestamp: both differ on a crash-restart re-run of the same bar, which
@@ -33,21 +60,22 @@ import { createHash } from 'node:crypto';
  * `decisionBarFor` in `decide.ts` is the one supported way to produce this
  * value; it floors `clock.now()` onto the same grid `debate_id` uses.
  *
- * **KNOWN GAP (#686) — the payload has no intent-kind discriminator.** Since the
- * key became stable within a bar, and since #668 put a mandatory flat-by-close
- * exit in the same bar an entry can be taken in (bars are 1h, the flatten window
- * is 5 minutes, and entries are blocked only inside that window), an entry at
- * 19:50 and the flatten at 19:56 hash to the SAME key. The flatten is second, so
- * it is the one `findByKey` / the `open_positions` PK / `client_order_id`
- * suppress — leaving a position carried overnight, which is what ADR-0014
- * forbids. Confirmed by a passing characterisation test in `decide.test.ts`, not
- * argued. Not fixed here because this payload is a `cross-spec-contracts.md` §7
- * contract and changing it requires a migration for in-flight records.
+ * **FIXED (#686) — the payload now carries `side`, an open/close discriminator.**
+ * Before it did not, and once the key became stable within a bar (#616) while
+ * #668 put a mandatory flat-by-close exit into a bar an entry can also be taken
+ * in (bars are 1h, the flatten window is 5 minutes, and entries are blocked only
+ * *inside* that window), an entry at 19:50 and the flatten at 19:56 hashed to the
+ * SAME key. The flatten was second, so it was the one `findByKey` / the
+ * `open_positions` PK / `client_order_id` suppressed — leaving a position carried
+ * overnight, which ADR-0014 forbids outright and which #668 exists to prevent.
+ * On a 3x leveraged ETP (ADR-0016's universe) that is the worst outcome the
+ * intraday horizon has.
  */
-export function computeIdempotencyKey(instrument: string, bar: Date): string {
+export function computeIdempotencyKey(instrument: string, bar: Date, side: IntentSide): string {
   const payload = JSON.stringify({
     instrument,
     bar: bar.toISOString(),
+    side,
   });
 
   return createHash('sha256').update(payload).digest('hex');

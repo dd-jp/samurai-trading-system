@@ -139,6 +139,7 @@ describe('openSharedStore', () => {
       { version: 24 },
       { version: 25 },
       { version: 26 },
+      { version: 27 },
     ]);
     expect(runMigrations(db)).toEqual([]);
     expect(db.prepare('SELECT version FROM schema_migrations').all()).toEqual([
@@ -168,6 +169,7 @@ describe('openSharedStore', () => {
       { version: 24 },
       { version: 25 },
       { version: 26 },
+      { version: 27 },
     ]);
   });
 
@@ -232,6 +234,30 @@ describe('openSharedStore', () => {
       residual_unprotected_since: '2026-08-07T16:00:00.000Z',
       residual_rearm_alerted_at: '2026-08-07T16:01:00.000Z',
     });
+  });
+
+  // Same reasoning as the 0024 assertion above.
+  it('migration 0027 adds key_scheme defaulting to 2, with existing rows at 1 (#686)', () => {
+    const db = openSharedStore(':memory:');
+
+    const column = (
+      db.prepare('PRAGMA table_info(open_positions)').all() as {
+        name: string;
+        type: string;
+        notnull: number;
+        dflt_value: unknown;
+      }[]
+    ).find((c) => c.name === 'key_scheme');
+
+    expect(column, 'open_positions is missing column key_scheme').toBeDefined();
+    expect(column?.type).toBe('INTEGER');
+    // NOT NULL with DEFAULT 2 is the whole mechanism: every row this build
+    // writes is post-#686 without any code naming the column, and the
+    // migration's own UPDATE is what marks the pre-cutover rows as 1. A
+    // nullable column, or a DEFAULT of 1, would make the guard fire on lots it
+    // should pass — or, worse, pass lots it should block.
+    expect(column?.notnull).toBe(1);
+    expect(column?.dflt_value).toBe('2');
   });
 
   // Same reasoning as the 0024 assertion above: a recorded version alone would

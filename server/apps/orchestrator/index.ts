@@ -51,7 +51,11 @@ import { pathToFileURL } from 'node:url';
 import { ALPACA_CREDENTIAL_ENV_VARS } from '../../pipeline/execution/index.js';
 import { MiArchiveStore, miArchivePath } from '../../providers/market-intelligence/index.js';
 import { SystemClock } from '../../shared/index.js';
-import { openSharedStore, sharedStorePath } from '../../shared/store/index.js';
+import {
+  assertNoStaleKeyScheme,
+  openSharedStore,
+  sharedStorePath,
+} from '../../shared/store/index.js';
 import {
   type AlertsMode,
   buildAlertChannels,
@@ -582,6 +586,14 @@ export async function startFromEnvironment(
     assertStorePathMatchesMode({ dbPath, mode });
     db = openSharedStore(dbPath);
   }
+
+  // #686 rollout guard. Runs against BOTH the handle we opened and one the
+  // caller injected — the hazard is a property of the rows, not of who opened
+  // them — and before `orchestrator.start()` arms the tick loop, because once a
+  // pass is in flight a replay can already have placed the duplicate order.
+  // Throws with a drain instruction; see `key-scheme-guard.ts` for why refusing
+  // beats recomputing the old keys.
+  assertNoStaleKeyScheme(db);
 
   // #552: the MI archive, in its OWN database file. Opened here rather than
   // inside the composition root so one process holds one handle, and skipped

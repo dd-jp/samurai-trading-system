@@ -155,6 +155,38 @@ describe('startFromEnvironment — real construction path', () => {
     }
   });
 
+  it('refuses to start on a book holding pre-#686 idempotency keys', async () => {
+    process.env.ALPACA_API_KEY = 'test-key';
+    process.env.ALPACA_API_SECRET = 'test-secret';
+    process.env.NOUS_API_KEY = 'test-fake-nous-key';
+    process.env.NOUS_BASE_URL = 'https://nous.test/v1';
+    process.env.SAMURAI_SENTIMENT = 'off';
+
+    const db = openSharedStore(':memory:');
+    db.prepare(
+      `INSERT INTO open_positions (
+         idempotency_key, debate_id, instrument, asset_class, side, intent_type,
+         requested_size, filled_size, avg_entry_price, stop, target, order_state,
+         broker_order_ids, opened_at, decision_timestamp, key_scheme
+       ) VALUES ('pre-686', 'd', '3USL', 'stocks', 'buy', 'entry',
+         1, 1, 100, 95, 110, 'filled', '[]', '2026-08-14T09:00:00.000Z',
+         '2026-08-14T09:00:00.000Z', 1)`,
+    ).run();
+
+    // The guard's own tests cover the query; this one covers the WIRING —
+    // credentials that would otherwise start cleanly, and a store the caller
+    // injected, which is the path a soak restart actually takes. A guard
+    // nothing calls is this repo's dominant defect class.
+    const error = await startFromEnvironment({
+      ...STAGE_CONFIGS,
+      db,
+      miArchive: new MiArchiveStore(),
+    }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
+
+    expect(error.message).toContain('Refusing to start');
+    expect(error.message).toContain('pre-686');
+  });
+
   it('fails with an actionable message when Alpaca credentials are absent', async () => {
     delete process.env.ALPACA_API_KEY;
     delete process.env.ALPACA_API_SECRET;
