@@ -17,6 +17,7 @@ import {
   type RateLimiterConfig,
   UNCAPPED_SPEND,
 } from '../../../pipeline/debate-engine/index.js';
+import { DEFAULT_TRADER_CONFIG } from '../../../pipeline/trader/index.js';
 import type { AssetClass, Clock, LogEntry, Logger } from '../../../shared/index.js';
 import { DEFAULT_VENUE_PACING, SimulatedClock } from '../../../shared/index.js';
 import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
@@ -844,7 +845,9 @@ function stubConfig(db: SharedStore, overrides: Partial<ProductionConfig>): Stub
         consecutive_losses: 0,
       })),
     } as unknown as ProductionConfig['accountState'],
-    traderConfig: {} as ProductionConfig['traderConfig'],
+    // Not an empty cast (#691): the composition root refuses a trader config
+    // whose `flatten_before_close_ms` would silently disable flat-by-close.
+    traderConfig: DEFAULT_TRADER_CONFIG,
     riskConfig: {} as ProductionConfig['riskConfig'],
     // Carries the automation dial, which `buildProductionComponents` reads to
     // refuse a HITL-engaging config (#434). `auto` is ADR-0007's setting.

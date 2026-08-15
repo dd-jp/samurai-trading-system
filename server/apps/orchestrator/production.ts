@@ -146,7 +146,7 @@ import {
   riskThresholdsFrom,
   SqliteBreakerStateStore,
 } from '../../pipeline/risk-manager/index.js';
-import { SqliteSetupStore } from '../../pipeline/trader/index.js';
+import { assertTraderConfigSound, SqliteSetupStore } from '../../pipeline/trader/index.js';
 import { assertAutomationLevelSupported } from '../../pipeline/verdict/index.js';
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import {
@@ -388,6 +388,14 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // does not guard a config value someone flips without reading it, and this
   // runs on every production boot rather than on a branch nothing reaches.
   assertAutomationLevelSupported(config.verdictConfig);
+
+  // Same placement, same reason (#691). A non-positive `flatten_before_close_ms`
+  // disables flat-by-close entirely and silently — the window never opens, so
+  // nothing flattens and `trader_log` reads exactly like a session with nothing
+  // to flatten. The Trader carries the same check as a backstop; this is the
+  // one that makes it a boot failure rather than something a soak discovers
+  // hours in, holding overnight.
+  assertTraderConfigSound(config.traderConfig);
 
   // `capitalCeilingUsd` is optional on `ProductionConfig` (paper/backtest
   // boots and the hundreds of tests that never touch live money need not set
@@ -1135,6 +1143,21 @@ function buildMiIngestAgent(deps: {
  * (orphan scan, heartbeat) should settle before the first pipeline pass, and
  * a tick at t=0 would race the scan's read of `audit_log` against the
  * runner's first write to it.
+ *
+ * ## `maxConcurrentInstruments` is a per-pass bound (#692)
+ *
+ * It read as a global ceiling before #669 re-armed the interval ahead of the
+ * pass. Now several passes can legitimately be in flight at once across
+ * disjoint instruments, and each is handed this full value — so the real bound
+ * on concurrent pipelines is `maxConcurrentInstruments x passes in flight`.
+ *
+ * Left per-pass deliberately rather than made global. The per-instrument guard
+ * means overlapping passes never share an instrument, so the overlap is breadth
+ * across the universe rather than reentrancy on one name; and the resource this
+ * was really protecting — LLM concurrency and spend — is bounded independently
+ * by `RateLimiter` and `SpendCap`, which ARE process-wide. What was wrong was
+ * the silence, not the value: an operator sizing the knob had no way to know it
+ * had stopped meaning what its name says.
  */
 export function startTickLoop(deps: {
   scheduler: Scheduler;
@@ -1143,22 +1166,7 @@ export function startTickLoop(deps: {
   logger: Logger;
   persistence: PersistenceInstances;
   tickIntervalMs: number;
-  /**
-   * Concurrent instruments **per pass**, not process-wide (#692).
-   *
-   * It read as a global ceiling before #669 re-armed the interval ahead of the
-   * pass. Now several passes can legitimately be in flight at once across
-   * disjoint instruments, and each one is handed this full value — so the real
-   * bound on concurrent pipelines is `this x passes in flight`, not this.
-   *
-   * Left per-pass deliberately rather than made global. The per-instrument
-   * guard means overlapping passes never share an instrument, so the overlap
-   * is breadth across the universe rather than reentrancy on one name; and the
-   * resource this was really protecting — LLM concurrency and spend — is bounded
-   * independently by `RateLimiter` and `SpendCap`, which ARE process-wide. What
-   * was wrong was the silence, not the value: an operator sizing this knob had
-   * no way to know it stopped meaning what its name says.
-   */
+  /** Per PASS, not process-wide: the real ceiling is this x passes in flight (#692). */
   maxConcurrentInstruments: number;
 }): { stop: () => Promise<void> } {
   let stopped = false;
@@ -1243,11 +1251,21 @@ export function startTickLoop(deps: {
       // scheduler and should never be reported as "still running from a previous
       // pass". Collapsing them hid the second exactly when the guard caught it.
       const duplicated: string[] = [];
+      // Duplicate detection reads THIS set, not `claims`. Keying off `claims`
+      // detected a duplicate only when the first occurrence was claimable: if
+      // that first occurrence was already running from a prior pass it never
+      // entered `claims`, so the second occurrence fell through to the
+      // `running` check and was reported as an ordinary slow pass — the
+      // malformed plan hidden again, in exactly the case where a duplicate is
+      // most likely to matter. Seen-in-plan has to be tracked independently of
+      // whether the instrument was claimable.
+      const seenInPlan = new Set<string>();
       for (const instrument of plan.instruments) {
-        if (claims.has(instrument.asset)) {
+        if (seenInPlan.has(instrument.asset)) {
           duplicated.push(instrument.asset);
           continue;
         }
+        seenInPlan.add(instrument.asset);
 
         if (running.has(instrument.asset)) {
           busy.push(instrument.asset);

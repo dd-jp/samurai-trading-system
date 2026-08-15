@@ -131,6 +131,38 @@ export const DEFAULT_TRADER_CONFIG: TraderConfig = {
   flatten_before_close_ms: 5 * 60 * 1_000,
 };
 
+/**
+ * Refuse a `TraderConfig` that would silently disable a safety rule (#691).
+ *
+ * Called from the composition root, alongside `assertAutomationLevelSupported`
+ * and for the same reason: a bad config should be refused while nothing is
+ * half-constructed, on every boot, rather than on a branch something has to
+ * reach first.
+ *
+ * `withinFlattenWindow` carries the same check, and keeping both is the point.
+ * The runtime one alone was the whole objection to this fix on review: a
+ * `flatten_before_close_ms` of 0 DEPLOYS CLEANLY, and first surfaces on a tick
+ * that has already reached the Trader — which on a soak means hours of a
+ * process that looks healthy and cannot honour ADR-0014. This one turns that
+ * into a boot failure. The runtime one stays as the backstop for a config that
+ * never passed through this seam (tests, the backtest harness, a future caller
+ * constructing `TraderInput` directly).
+ *
+ * Deliberately narrow: only the fields whose bad values are SILENT. A wrong
+ * `conviction_floor` produces visibly wrong trading; a zero
+ * `flatten_before_close_ms` produces a rule that is simply never enforced, and
+ * nothing in `trader_log` distinguishes that from a session with no positions
+ * to flatten.
+ */
+export function assertTraderConfigSound(config: TraderConfig): void {
+  if (!(config.flatten_before_close_ms > 0)) {
+    throw new Error(
+      `traderConfig.flatten_before_close_ms must be > 0 (got ${config.flatten_before_close_ms}); ` +
+        `a non-positive window disables flat-by-close, which ADR-0014 requires`,
+    );
+  }
+}
+
 /** Fully deterministic given its inputs + the clock-scoped market data. */
 export interface TraderInput {
   /** Cross-cutting correlation ID, threaded from the Orchestrator's tick — not business data. */

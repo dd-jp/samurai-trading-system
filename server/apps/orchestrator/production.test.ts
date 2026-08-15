@@ -19,7 +19,7 @@ import { SimulatedBrokerAdapter, SqliteExecutionStore } from '../../pipeline/exe
 import type { DailyMetricsSample, FeedbackConfig } from '../../pipeline/feedback-loop/index.js';
 import { SqliteTuningStore } from '../../pipeline/feedback-loop/index.js';
 import type { VolatilityReading } from '../../pipeline/risk-manager/index.js';
-import { SqliteSetupStore } from '../../pipeline/trader/index.js';
+import { DEFAULT_TRADER_CONFIG, SqliteSetupStore } from '../../pipeline/trader/index.js';
 import type {
   ApprovalOutcome,
   ApprovalRequest,
@@ -208,7 +208,13 @@ function stubConfig(db: SqliteHandle, overrides: Partial<ProductionConfig> = {})
         async (): Promise<VolatilityReading> => ({ crypto: 0.02, stocks: 0.01 }),
       ),
     },
-    traderConfig: {} as ProductionConfig['traderConfig'],
+    // Not `{}` either, and for the same reason as `verdictConfig` below:
+    // `buildProductionComponents` now refuses a config whose
+    // `flatten_before_close_ms` would silently disable flat-by-close (#691), so
+    // an empty cast here is a lie the assertion is the first code to notice.
+    // The real defaults rather than a hand-picked value — every one of these
+    // tests wants "a sound trader config", not a particular window.
+    traderConfig: DEFAULT_TRADER_CONFIG,
     riskConfig: {} as ProductionConfig['riskConfig'],
     // Not `{}` like its neighbours: `buildProductionComponents` reads the
     // automation dial to refuse a HITL-engaging config (#434), so an empty cast
@@ -447,6 +453,28 @@ describe('buildProductionComponents', () => {
 
   afterEach(() => {
     db.close();
+  });
+
+  /**
+   * #691 — the boot refuses a config that would silently disable flat-by-close.
+   *
+   * The Trader carries the same check, and on review that runtime one was the
+   * whole objection: `flatten_before_close_ms: 0` DEPLOYS CLEANLY and first
+   * surfaces on a tick that already reached the Trader. On a soak that is hours
+   * of a process that looks healthy while holding overnight against ADR-0014.
+   * Asserted here, at the composition root, for the same reason
+   * `assertAutomationLevelSupported` is — refuse a bad config while nothing is
+   * half-constructed.
+   */
+  it('refuses to build with a non-positive flatten window (#691)', () => {
+    const config = stubConfig(db);
+
+    expect(() =>
+      buildProductionComponents({
+        ...config,
+        traderConfig: { ...config.traderConfig, flatten_before_close_ms: 0 },
+      }),
+    ).toThrow(/flatten_before_close_ms must be > 0/);
   });
 
   it('binds all six TickSteps as callables', () => {
@@ -1420,6 +1448,61 @@ describe('startTickLoop', () => {
     expect(
       logger.entries.some((entry) => entry.message.includes('still running from a previous pass')),
     ).toBe(false);
+  });
+
+  /**
+   * The case the first cut of the duplicate warn missed, caught on review.
+   *
+   * Keying duplicate detection off `claims` only worked when the FIRST
+   * occurrence was claimable. If it was already running from a prior pass it
+   * never entered `claims`, so the second occurrence fell through to the
+   * `running` check and was reported as an ordinary slow pass — the malformed
+   * plan hidden again, in the case where a duplicate is most likely to matter,
+   * since a plan that repeats an asset while that asset is mid-pipeline is the
+   * one that would breach the one-pass-per-instrument invariant if the guard
+   * ever slipped.
+   */
+  it('still reports a duplicate whose first occurrence is already running (#692)', async () => {
+    const logger = recordingLogger();
+    let release!: () => void;
+    const runInstrument = vi.fn(async (): Promise<TickOutcome> => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { trace_id: 't', final_stage: 'execution' };
+    });
+
+    const btc = { asset: 'BTC-USD', asset_class: 'crypto' as const };
+    let plans = 0;
+    const scheduler = {
+      nextTick: () => {
+        plans += 1;
+        // First tick claims BTC and blocks. Second tick returns it TWICE while
+        // the first pass still holds it: one occurrence is legitimately busy,
+        // the other is the scheduler fault.
+        return { instruments: plans === 1 ? [btc] : [btc, btc], tick_time: START };
+      },
+    };
+
+    const loop = startTickLoop({
+      scheduler: scheduler as never,
+      runner: { runInstrument } as TickRunner,
+      clock: new SimulatedClock(START),
+      logger,
+      persistence: persistence() as never,
+      tickIntervalMs: 1_000,
+      maxConcurrentInstruments: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(logger.entries.some((entry) => entry.message.includes('duplicate instrument'))).toBe(
+      true,
+    );
+
+    release();
+    await loop.stop();
   });
 
   it('stops scheduling further ticks after stop()', async () => {
