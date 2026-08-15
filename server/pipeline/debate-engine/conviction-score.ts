@@ -19,8 +19,15 @@ import { NO_DATA_MARKER } from '../analysts/types.js';
 import type { AnalystRoundStance } from './analyst-contribution.js';
 import type { AnalystView, Direction } from './types.js';
 
-/** Weight given to the disagreement metric in the hybrid combination. */
-const DISAGREEMENT_WEIGHT = 0.6;
+/**
+ * Weight given to the directional-consensus metric in the hybrid combination.
+ *
+ * Named `DISAGREEMENT_WEIGHT` before #625, when the first term measured spread
+ * between extremes. It now scales `computeDirectionalConsensus`, which measures
+ * a lean rather than a disagreement, so the old name inverted the sense of the
+ * thing it multiplied.
+ */
+const CONSENSUS_WEIGHT = 0.6;
 /** Weight given to the evidence-strength metric in the hybrid combination. */
 const EVIDENCE_WEIGHT = 0.4;
 
@@ -44,14 +51,18 @@ const KEY_POINTS_SATURATION = 3;
  * `AnalystView.direction` when determining final position.
  *
  * `debateVerdict` is the mediator's final stance, counted as one more
- * participant. Optional so the pre-#625 callers and the pure unit tests keep
- * compiling; the production adapter always supplies it. See
+ * participant. It is **required but nullable**, deliberately: a caller that
+ * simply omits it gets a materially different, mediator-free score on a path
+ * that gates trades, so the omission has to fail at compile time rather than
+ * degrade silently. Passing `undefined` is the explicit way to ask for the
+ * mediator-free score (the pure unit tests, and any caller with no mediator);
+ * the production adapter always supplies a real stance. See
  * `computeDirectionalConsensus` for why bull/bear stances are NOT included.
  */
 export function computeConvictionScore(
   views: AnalystView[],
   roundStances: AnalystRoundStance[],
-  debateVerdict?: Direction,
+  debateVerdict: Direction | undefined,
 ): number {
   if (views.length === 0) {
     return NO_DATA_SCORE;
@@ -60,7 +71,7 @@ export function computeConvictionScore(
   const directional = computeDirectionalConsensus(views, roundStances, debateVerdict);
   const evidence = computeEvidenceStrength(views);
 
-  const score = DISAGREEMENT_WEIGHT * directional + EVIDENCE_WEIGHT * evidence;
+  const score = CONSENSUS_WEIGHT * directional + EVIDENCE_WEIGHT * evidence;
 
   return clamp(score);
 }
@@ -71,6 +82,22 @@ const DIRECTION_VALUE: Record<Direction, number> = {
   neutral: 0,
   bullish: 1,
 };
+
+/**
+ * `DIRECTION_VALUE` lookup that survives an off-union value at runtime.
+ *
+ * The mediator's stance is LLM output that has crossed a parse boundary, so the
+ * `Direction` type is a claim about it rather than a guarantee. A bare index
+ * would yield `undefined`, propagate to `NaN` through the mean, and hand the
+ * Trader a `NaN` conviction — which compares false against every floor and so
+ * fails silently as "no trade" rather than as an error. Unknown stances are
+ * counted as neutral, matching how an analyst with no direction is treated.
+ */
+function directionValue(direction: Direction): number {
+  const value = (DIRECTION_VALUE as Partial<Record<Direction, number>>)[direction];
+
+  return value ?? 0;
+}
 
 /**
  * Directional consensus: how strongly the participants lean ONE WAY,
@@ -104,15 +131,25 @@ const DIRECTION_VALUE: Record<Direction, number> = {
  * floor the Trader ships. A debate in which nobody takes a side can therefore
  * never open a position, arithmetically rather than by a threshold that could
  * be retuned.
+ *
+ * **KNOWN HOLE — the mediator can still create a lean out of nothing.** With
+ * every analyst neutral, the mediator's single vote supplies a lean of
+ * `1/(n+1)`, whose size depends on how many analysts sit on the desk. At
+ * maximum evidence that scores **exactly 0.55** on a three-analyst desk and
+ * **0.60** on a two-analyst desk, and the Trader gates on
+ * `confidence < conviction_floor` (`decide.ts`), so the tie *authorises* the
+ * trade. That is the pre-#625 branch this module set out to close, surviving at
+ * the boundary. Closing it changes what the system will trade, so it is a
+ * product decision rather than a cleanup — tracked as #683, NOT fixed here.
  */
 function computeDirectionalConsensus(
   views: AnalystView[],
   roundStances: AnalystRoundStance[],
   debateVerdict?: Direction,
 ): number {
-  const values = views.map((view) => DIRECTION_VALUE[finalPositionFor(view, roundStances)]);
+  const values = views.map((view) => directionValue(finalPositionFor(view, roundStances)));
   if (debateVerdict !== undefined) {
-    values.push(DIRECTION_VALUE[debateVerdict]);
+    values.push(directionValue(debateVerdict));
   }
 
   const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
@@ -135,9 +172,15 @@ function finalPositionFor(view: AnalystView, roundStances: AnalystRoundStance[])
  * by the sentiment and fundamental analysts when the Market Intelligence store
  * returns nothing, and its own doc comment is explicit that this is "an
  * ABSENCE OF INPUT, not a neutral read of the market... It never looked."
+ *
+ * Matched as a PREFIX, not a substring. Both stampers emit `${NO_DATA_MARKER}:
+ * ...` at the head of the key point, so the prefix is what they actually
+ * produce; a substring match would additionally fire on any LLM-authored key
+ * point that happened to quote the marker text mid-sentence, silently dropping
+ * a real contributor out of the evidence average.
  */
 function isAbsenceOfInput(view: AnalystView): boolean {
-  return view.key_points.some((point) => point.includes(NO_DATA_MARKER));
+  return view.key_points.some((point) => point.startsWith(NO_DATA_MARKER));
 }
 
 /**

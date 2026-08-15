@@ -59,6 +59,7 @@ import {
   universeAssetClasses,
 } from './production.js';
 import { DEFAULT_UNIVERSE } from './scheduler.js';
+import { buildTrendingCloses } from './smoke-run.js';
 import { SqliteDailyEquityStore } from './sqlite-daily-equity-store.js';
 import { SequentialTickRunner } from './tick-runner.js';
 import type { Logger, Scheduler, TickOutcome, TickPlan, TickRunner } from './types.js';
@@ -343,11 +344,22 @@ const REAL_CONFIGS = {
   | 'costConfig'
 >;
 
-/** An hourly bar series long enough for the ATR/ADV lookbacks the chain reads. */
+/**
+ * An hourly bar series long enough for the ATR/ADV lookbacks the chain reads.
+ *
+ * Rises **with pullbacks** (`buildTrendingCloses`), not monotonically. A
+ * monotonic ramp has no down bars, so its RSI is exactly 100 and the technical
+ * analyst reads `neutral` — "overbought" — on the strongest possible uptrend.
+ * That left the mediator as the chain's only directional participant, so the
+ * `go` these tests assert came through the mediator-override branch #625 exists
+ * to close rather than through a desk that agreed on a direction.
+ */
 function fixtureBars(instrument: string, timeframe: string, count: number, stepMs: number): Bar[] {
+  const closes = buildTrendingCloses(count, 99 + count);
+
   return Array.from({ length: count }, (_, index) => {
     const close_time = new Date(START.getTime() - (count - index) * stepMs);
-    const price = 100 + index;
+    const price = closes[index] ?? 100;
     return {
       instrument,
       timeframe,

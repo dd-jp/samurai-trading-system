@@ -1,6 +1,9 @@
 import json, os, sys, time, urllib.parse, urllib.request
 
-ENV = "/Users/ddjp/Documents/projects/samurai-trading-system/.env.local"
+# Both paths are overridable so the ADR-0018 evidence can be reproduced on any
+# machine: SAMURAI_ENV_FILE for the credentials, SAMURAI_BARS_DIR for the output.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ENV = os.environ.get("SAMURAI_ENV_FILE", os.path.join(REPO_ROOT, ".env.local"))
 env = {}
 for line in open(ENV):
     line = line.strip()
@@ -12,7 +15,7 @@ HDR = {
     "APCA-API-KEY-ID": env["ALPACA_API_KEY"],
     "APCA-API-SECRET-KEY": env["ALPACA_API_SECRET"],
 }
-OUT = "/Users/ddjp/.claude/jobs/21207c2c/tmp/bars"
+OUT = os.environ.get("SAMURAI_BARS_DIR", os.path.join(os.getcwd(), "bars"))
 os.makedirs(OUT, exist_ok=True)
 
 
