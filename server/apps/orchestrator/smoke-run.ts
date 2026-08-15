@@ -250,13 +250,23 @@ const SMOKE_CLOSE_CYCLE: readonly number[] = [-2, -2, -3, 3, 3, 3, 3];
  * backwards so the final bar is always the cycle's last up bar.
  */
 export function buildTrendingCloses(count: number, lastClose: number): number[] {
-  const closes = [lastClose];
+  const length = SMOKE_CLOSE_CYCLE.length;
+  const closes = new Array<number>(count);
+  closes[count - 1] = lastClose;
+
   for (let step = 1; step < count; step += 1) {
-    const length = SMOKE_CLOSE_CYCLE.length;
     // `((x % n) + n) % n` — a bare `%` goes negative once `step` passes the
     // cycle length, which silently reads past the end of the array.
     const delta = SMOKE_CLOSE_CYCLE[(((length - step) % length) + length) % length];
-    closes.unshift((closes[0] ?? lastClose) - (delta ?? 0));
+    const next = closes[count - step];
+    if (delta === undefined || next === undefined) {
+      // Unreachable after the guarded modulo, and thrown rather than defaulted:
+      // substituting a price here would quietly produce a fixture whose exact
+      // closes the calendar/RSI assertions are pinned to, turning an indexing
+      // bug into a wrong-but-plausible series.
+      throw new Error(`buildTrendingCloses: no close or delta at step ${step} of ${count}`);
+    }
+    closes[count - 1 - step] = next - delta;
   }
 
   return closes;
@@ -290,7 +300,10 @@ export function buildSmokeFixtureBars(instrument: string = SMOKE_INSTRUMENT): Ba
 
     return Array.from({ length: count }, (_, index) => {
       const close_time = new Date(SMOKE_RUN_INSTANT.getTime() - (count - index) * stepMs);
-      const close = closes[index] ?? SMOKE_MARK_PRICE - 1;
+      const close = closes[index];
+      if (close === undefined) {
+        throw new Error(`buildSmokeFixtureBars: no close at index ${index} of ${count}`);
+      }
       return {
         instrument,
         timeframe,

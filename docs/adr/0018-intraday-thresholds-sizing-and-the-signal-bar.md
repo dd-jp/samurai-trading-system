@@ -71,7 +71,7 @@ Measured on a **drift-removed** series, so this is the pure volatility envelope 
 
 `CONTEXT.md`'s recorded tolerance is **max ~20–25%**. Full deployment of the equity leg sits **2.2× to 3.5× outside it before any edge exists**, so the constraint binds regardless of how good the signal turns out to be.
 
-**Now:** deploy a fixed fraction sized per subclass by measured volatility — **~35% of the leg (~£260) for index ETPs, ~25% (~£190) for single-stock ETPs**, holding max drawdown at **23.1%** and **26.2%** respectively (doc 18 Result 5's sizing table).
+**Now:** deploy a fixed fraction sized per subclass by measured volatility — **~35% of the leg (~£260) for index ETPs, ~25% (~£190) for single-stock ETPs**, holding max drawdown at **23.1%** and **26.2%** respectively (doc 18 Result 4's **"The volatility envelope, and why it fixes position size"** table).
 
 **The single-stock fraction deliberately overshoots the tolerance.** 26.2% is **~1.2 pp above the top of `CONTEXT.md`'s ~20–25% band**; the index fraction sits inside it. The overshoot is accepted rather than sized away because the single-stock subclass is the one whose bracket the cost argument depends on, and because the envelope is measured **drift-removed with zero edge assumed** — a deliberately pessimistic reading. It is recorded here rather than rounded off so that whatever consumes this number for sizing consumes the overshoot with it. If the tolerance is to bind strictly on this subclass, the fraction has to fall to roughly **~24%**, which no measured row in doc 18's table covers — re-measure before adopting it.
 
