@@ -29,7 +29,7 @@ import {
 // make a future debate-engine -> trader import a cycle.
 import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../debate-engine/debate-log-store.js';
 import { NO_PRECEDENT_MULTIPLIER, retrieveCosinePrecedent } from './cosine-precedent.js';
-import { computeIdempotencyKey } from './idempotency-key.js';
+import { computeIdempotencyKey, intentSideFor } from './idempotency-key.js';
 import { buildSetupVector } from './setup-vector.js';
 import type { AssetClass, TraderConfig, TraderInput } from './types.js';
 
@@ -384,7 +384,7 @@ async function buildBracket(
 
   return emit(
     {
-      idempotency_key: computeIdempotencyKey(instrument, decisionBar),
+      idempotency_key: computeIdempotencyKey(instrument, decisionBar, intentSideFor(intentType)),
       instrument,
       asset_class: mark.asset_class,
       side,
@@ -471,7 +471,7 @@ async function buildExitIntent(
 
   return emit(
     {
-      idempotency_key: computeIdempotencyKey(instrument, decisionBar),
+      idempotency_key: computeIdempotencyKey(instrument, decisionBar, 'close'),
       instrument,
       asset_class: mark.asset_class,
       side: closingSide,

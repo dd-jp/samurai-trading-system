@@ -850,29 +850,27 @@ describe('decide — flat by close (#668)', () => {
   });
 
   /**
-   * KNOWN GAP, characterised rather than fixed here — see the issue linked from
-   * `idempotency-key.ts`.
+   * #686 — the regression this file previously pinned as a KNOWN GAP.
    *
-   * `computeIdempotencyKey` is keyed on `(instrument, bar)` with no discriminator
-   * for what KIND of intent it is. Since #616 the bar is stable across every tick
-   * inside it, and bars are 1h while `flatten_before_close_ms` is 5 minutes — so
-   * an entry taken earlier in the session's LAST bar and the mandatory
-   * flat-by-close exit in that same bar produce the SAME key.
+   * `computeIdempotencyKey` was keyed on `(instrument, bar)` alone. Since #616
+   * the bar is stable across every tick inside it, and bars are 1h while
+   * `flatten_before_close_ms` is 5 minutes — so an entry taken earlier in the
+   * session's LAST bar and the mandatory flat-by-close exit in that same bar
+   * produced the SAME key.
    *
-   * Downstream that key is what `findByKey`, the `open_positions` primary key and
-   * the broker `client_order_id` all dedupe on, so the flatten is the one that
-   * loses: a suppressed mandatory exit leaves the book carrying a position
-   * overnight, which is precisely what ADR-0014 forbids and what #668 exists to
-   * prevent.
+   * That key is what `findByKey`, the `open_positions` primary key and the broker
+   * `client_order_id` all dedupe on, so the flatten was the one that lost: a
+   * suppressed mandatory exit leaves the book carrying a position overnight,
+   * which ADR-0014 forbids and which #668 exists to prevent.
    *
-   * Neither change causes this alone — #616 made keys stable within a bar, #668
-   * put a second intent in the bar — which is why it appears only now.
+   * Neither change caused it alone — #616 made keys stable within a bar, #668 put
+   * a second intent in the bar — which is why it appeared only once both landed.
    *
-   * Pinned so the collision cannot be widened or "fixed" silently. Changing the
-   * key payload is a `cross-spec-contracts.md` §7 amendment plus a migration for
-   * in-flight records, so it is not a review fix.
+   * The assertion is now `not.toBe`. Both halves are kept: the intents must still
+   * be the entry and the exit (otherwise the test could pass by the flatten
+   * simply not firing, which is the failure it exists to catch).
    */
-  it('KNOWN GAP — a same-bar entry and the mandatory flatten collide on one key', async () => {
+  it('keys a same-bar entry and the mandatory flatten separately (#686)', async () => {
     // 19:50 and 19:56 UTC both floor to the 19:00 bar; only 19:56 is inside the
     // 5-minute flatten window, so the entry is legal and so is the flatten.
     const entry = await decide(
@@ -891,7 +889,7 @@ describe('decide — flat by close (#668)', () => {
 
     expect(entry?.intent_type).toBe('entry');
     expect(flatten?.intent_type).toBe('exit');
-    expect(flatten?.idempotency_key).toBe(entry?.idempotency_key);
+    expect(flatten?.idempotency_key).not.toBe(entry?.idempotency_key);
   });
 });
 
