@@ -34,6 +34,7 @@ Rules:
 | **The critique** | [`12-edge-hypothesis-critique.md`](12-edge-hypothesis-critique.md) | **Gate 2 resolved (#632) — "neither".** D1/D2/D4/D6 and the no-implementation finding transfer; the doc-10-vs-long-gamma dispute is moot |
 | **Stage 2 proxy** | [`13-stage2-proxy-verdict.md`](13-stage2-proxy-verdict.md) | KILL, terminal — and it is about a proxy, not the hypothesis |
 | **Crypto / LLM** | [`15-crypto-premia-and-llm-layer.md`](15-crypto-premia-and-llm-layer.md) | Carry rejected (FCA), momentum rejected (N=2), LLM shadow-mode only |
+| **Crypto venue fees** | [`19-crypto-venue-fees.md`](19-crypto-venue-fees.md) | RESEARCHED (#671), corrected 2026-08-10 — Crypto.com **Exchange** + 5,000 CRO is the best branch (**+0.605%/trade** vs £0 at base) and the only one independent of volume tier and maker/taker fill. The **App is a different product** and negative-expectancy. Coinbase is a real fallback (+0.25–0.45%/trade). Recorded in ADR-0015; venue gated on #673, fee tier on #667 |
 | **Intraday instrument physics** | [`18-intraday-instrument-physics.md`](18-intraday-instrument-physics.md) | MEASURED (#635) — a broad tracker reaches +1% on 9.8% of days; universe is **movers**, LSE leveraged ETPs. Rests on one 3USL spread quote (#666) |
 | **Tick latency economics** | [`41-tick-latency-economics.md`](41-tick-latency-economics.md) | MEASURED (#657/#670) — τ\* = 21.8 min; drift mean-reverts, tail diffuses. ADR-0008's $3.0/day was 3.4x high |
 | **Market intelligence** | [`20-mi-decisions.md`](20-mi-decisions.md) | DECIDED — Alpaca News + GDELT + calendar spine; Massive and Guardian killed |
@@ -44,7 +45,7 @@ Rules:
 
 **Foundations** — [`00-summary.md`](00-summary.md), [`01-full-report-with-sources.md`](01-full-report-with-sources.md), [`02-staged-deployment-plan.md`](02-staged-deployment-plan.md). Strategy-evaluation research and the stage-gated deployment plan. Doc 02 is the source of the kill line every Stage 2 verdict cites.
 
-**Strategy / edge** — `10` hypothesis, `11` measurement (+ `11-trend-signal-measurement.py`), `12` critique, `13` Stage 2 proxy verdict, [`14-backtest-pitfalls.md`](14-backtest-pitfalls.md), `15` crypto/LLM, [`16-risk-debate-finding.md`](16-risk-debate-finding.md) (open finding, not a decision), [`17-universe-manipulation-guardrails.md`](17-universe-manipulation-guardrails.md), [`18-intraday-instrument-physics.md`](18-intraday-instrument-physics.md).
+**Strategy / edge** — `10` hypothesis, `11` measurement (+ `11-trend-signal-measurement.py`), `12` critique, `13` Stage 2 proxy verdict, [`14-backtest-pitfalls.md`](14-backtest-pitfalls.md), `15` crypto/LLM, [`16-risk-debate-finding.md`](16-risk-debate-finding.md) (open finding, not a decision), [`17-universe-manipulation-guardrails.md`](17-universe-manipulation-guardrails.md), [`18-intraday-instrument-physics.md`](18-intraday-instrument-physics.md), [`19-crypto-venue-fees.md`](19-crypto-venue-fees.md).
 
 **Market intelligence** — `20` decisions, [`21-mi-ingestion-architecture.md`](21-mi-ingestion-architecture.md), [`22-mi-source-licensing.md`](22-mi-source-licensing.md), [`23-polymarket-source.md`](23-polymarket-source.md).
 

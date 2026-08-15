@@ -30,6 +30,8 @@ Verified tradeable inside the T212 ISA behind an FCA complex-products appropriat
 
 **Leverage does not improve the odds** — this is the part that is easy to get wrong. Break-even win rate stays at ~47% because leverage scales gains and losses alike. What it does is **enlarge each win against a fixed-percentage cost**, which is decisive when trade count is capped near one per day: 3USL's observed 0.18% round trip against 3× the base range lifts equity-leg expectancy from **+0.063% to +0.195%/trade** (16.3%/yr to 50.7%/yr).
 
+> **Corrected 2026-08-10 — the paragraph above is wrong in sign.** See the amendment at the foot of this ADR. The cost is **not** fixed across the leverage step: SPY's round trip is 0.003% against 3USL's 0.18%, so leverage multiplies the gross move by 3 and the cost by 60. Measured over 10.6 years the 3× figure is **−0.135%/trade**, not +0.195%. **The universe decision stands; the profitability claim does not.**
+
 **Daily-reset decay does not apply.** It punishes *holding* leveraged ETPs across sessions; a flat-by-close strategy never holds one overnight ([ADR-0014](0014-intraday-flat-by-close-horizon.md)).
 
 ## Decision 2 — the debate is **not catalyst-gated**
@@ -52,11 +54,13 @@ Gating is an **expectancy** question, not a cost question. It pays only if catal
 
 **Catalyst days must deliver ≥ 0.312%/trade against the 0.195% all-day average — a 60% expectancy uplift.** Held by [#655](https://github.com/dd-jp/samurai-trading-system/issues/655). If the event study clears it, gate and reopen #658; if not, the universe trades every day the selector finds a setup.
 
+> **Restated 2026-08-10.** The 0.312% bar and the £369 term in it both derive from the 0.195%/trade figure the amendment below voids, so **the arithmetic in this block no longer computes** — it is kept for provenance, not for use. **The decision it supports is unchanged and now rests on direct measurement instead**: earnings-reaction sessions are 0.92%/trade *worse* than ordinary ones (t = −2.66) and are 1.73% of sessions. The bar #655 must clear is now stated relative to whatever the entry signal delivers, not to a fixed all-day constant.
+
 ## Consequences
 
 **Ranked levers on the book's economics, by measured value:**
 
-1. **The crypto fee tier** — £0 → £590/yr ([#671](https://github.com/dd-jp/samurai-trading-system/issues/671))
+1. **The crypto fee schedule** — £0 → **£1,140–1,660/yr** ([#671](https://github.com/dd-jp/samurai-trading-system/issues/671), measured; the range is the crypto calendar, [#667](https://github.com/dd-jp/samurai-trading-system/issues/667)). The earlier £590 figure used 130 trades/yr, below ADR-0014's recorded floor of one crypto trade per day. **The ordering is unchanged and the gap widens.**
 2. **#617** — £252 → £89/yr
 3. **Catalyst-gating** — ~£5/yr, and likely net negative
 
@@ -69,3 +73,40 @@ Anything proposing to improve the economics should be checked against this order
 **The entire leveraged-ETP case rests on one observed 0.18% spread quote for 3USL.** [#666](https://github.com/dd-jp/samurai-trading-system/issues/666) must measure it on the T212 demo API and is explicitly permitted to overturn this ADR. If the real spread is materially wider, the expectancy uplift that justifies leverage disappears.
 
 **No free LSE intraday history exists** ([#656](https://github.com/dd-jp/samurai-trading-system/issues/656)), so the measurements above use US instruments as proxies for the underlying. They characterise the *underlying's* physics, not the LSE ETP's own tape.
+
+## Amendment, 2026-08-10 — the leverage economics, measured ([#653](https://github.com/dd-jp/samurai-trading-system/issues/653))
+
+Decision 1's reach rates were measured; its **expectancy** was inferred from them rather than simulated. Simulating the exit rule inverts the sign. Working and method in [`docs/research/18-intraday-instrument-physics.md`](../research/18-intraday-instrument-physics.md) Result 4, script `18-threshold-study.py`.
+
+**Reach rates reproduce over 10.6 years.** SPY at +1%/−0.5%: take-profit first 11.6%, stop first 37.6%, closed out 50.9%, against the 9.8%/45.5% measured here over 2 years.
+
+**Expectancy does not.**
+
+| | this ADR claimed | measured, 2016-01-04 → 2026-07-31 |
+| --- | --- | --- |
+| SPY 1×, +1/−0.5, cost 0.003% | +0.063%/trade | **+0.0119%** |
+| 3× index ETP, +3/−1.5, cost 0.18% | **+0.195%/trade** | **−0.135%** |
+| 3× single-stock ETP (TSLA), best of 6, cost 0.41% | — | **−0.463%** |
+
+**Every threshold pair tested is negative** — six configurations, two instruments, in-sample and out. No take-profit/stop pair rescues an unconditionally-entered position.
+
+### What survives, and what does not
+
+**Survives — Decision 1's universe choice.** A broad tracker still cannot reach an intraday take-profit; leveraged ETPs still can. The universe is unchanged.
+
+**Survives — Decision 2, and it is now better supported.** Event-conditioned levels were tested directly: earnings-reaction sessions are **−0.92%/trade worse** than ordinary sessions (t = −2.66), and they are **1.73% of sessions**, so conditioning on them cannot move the blended result regardless of sign. Catalyst gating remains rejected, now on measurement rather than cost arithmetic. The 0.312%/trade bar held by [#655](https://github.com/dd-jp/samurai-trading-system/issues/655) stands, and this evidence makes it harder to clear, not easier.
+
+**Does not survive — "the equity leg returns 50.7%/yr".** Any figure downstream of +0.195%/trade is void. That includes the £/yr equity numbers this ADR and [#658](https://github.com/dd-jp/samurai-trading-system/issues/658) used to rank levers. The **ordering** of the levers is unaffected — the crypto fee schedule was and remains the largest — but the equity leg's contribution is not a positive constant.
+
+### The consequence that matters
+
+The measurement replaces a profit claim with **a bar the entry signal must clear**:
+
+| instrument class | round trip | signal must add over a random open-entry |
+| --- | --- | --- |
+| 3× index ETP | 0.18% | **≥ +0.135%/trade** |
+| 3× single-stock ETP | 0.41% | **≥ +0.463%/trade** |
+
+This is the first falsifiable statement of what the debate layer has to be worth. It is also why [#625](https://github.com/dd-jp/samurai-trading-system/issues/625) is now the critical path: a system that has produced zero trades has never been measured against it.
+
+**Not overturned by this amendment:** the universe, the no-gating decision, and the ISA/venue constraints of [ADR-0015](0015-live-venue-account-and-book-split.md). **Still open:** [#666](https://github.com/dd-jp/samurai-trading-system/issues/666) must measure real LSE ETP spreads per subclass — the 0.18% and 0.41% figures are each a single quote, and both bars move directly with them.
