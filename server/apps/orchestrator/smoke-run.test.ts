@@ -15,6 +15,7 @@
  * real timers and drain it. It is the only test in the suite that does, which
  * is the whole point of the ticket.
  */
+import { computeIndicator } from '../../providers/market-data-service/index.js';
 import {
   buildSmokeFixtureBars,
   ConstantResponseLlmClient,
@@ -573,6 +574,29 @@ describe('buildSmokeFixtureBars', () => {
     // A non-degenerate true range, so the Trader's ATR stop is a real distance
     // rather than a volatility-floor artefact.
     expect(last.high - last.low).toBeGreaterThan(0);
+
+    // "Trends upward" was the whole assertion here, and it was too weak to
+    // catch what it was for: the previous monotonic ramp trended upward AND
+    // made the technical analyst read `neutral`, because a series with no down
+    // bars has RSI exactly 100 and `directionFrom` treats >= 70 as overbought.
+    // The desk therefore never agreed, and the run's only directional
+    // participant was the mediator. Assert the analyst's own rule instead.
+    const sma = computeIndicator(hourly, {
+      indicator: 'sma',
+      params: { period: 14 },
+      timeframe: '1h',
+      lookback: 14,
+    });
+    const rsi = computeIndicator(hourly, {
+      indicator: 'rsi',
+      params: { period: 14 },
+      timeframe: '1h',
+      lookback: 15,
+    });
+
+    expect(last.close).toBeGreaterThan(sma);
+    expect(rsi).toBeLessThan(70);
+    expect(rsi).toBeGreaterThan(50);
   });
 });
 

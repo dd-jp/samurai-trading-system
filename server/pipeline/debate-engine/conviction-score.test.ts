@@ -1,4 +1,5 @@
 import { NO_DATA_MARKER } from '../analysts/types.js';
+import { DEFAULT_TRADER_CONFIG } from '../trader/types.js';
 import type { AnalystRoundStance } from './analyst-contribution.js';
 import { computeConvictionScore } from './conviction-score.js';
 import type { AnalystView } from './types.js';
@@ -29,7 +30,7 @@ describe('computeConvictionScore', () => {
       { analyst_id: 'a3', round: 1, stance: 'bullish' },
     ];
 
-    expect(computeConvictionScore(views, roundStances)).toBe(1);
+    expect(computeConvictionScore(views, roundStances, undefined)).toBe(1);
   });
 
   it('scores 0.0 on full disagreement with weak evidence', () => {
@@ -44,7 +45,7 @@ describe('computeConvictionScore', () => {
       { analyst_id: 'a3', round: 1, stance: 'neutral' },
     ];
 
-    expect(computeConvictionScore(views, roundStances)).toBe(0);
+    expect(computeConvictionScore(views, roundStances, undefined)).toBe(0);
   });
 
   it('scores 0.5 on mixed signals with moderate evidence', () => {
@@ -70,11 +71,11 @@ describe('computeConvictionScore', () => {
     // Disagreement metric: spread 1 on a [-1,1] axis -> 1 - 1/2 = 0.5.
     // Evidence strength: avg key points 1.5/3 = 0.5, avg confidence 0.5 -> 0.5.
     // score = 0.6 * 0.5 + 0.4 * 0.5 = 0.5
-    expect(computeConvictionScore(views, roundStances)).toBe(0.5);
+    expect(computeConvictionScore(views, roundStances, undefined)).toBe(0.5);
   });
 
   it('returns a defined default score when there are no analyst views', () => {
-    expect(computeConvictionScore([], [])).toBe(0.5);
+    expect(computeConvictionScore([], [], undefined)).toBe(0.5);
   });
 
   it('returns a defined score when there are no round stances (no rounds run)', () => {
@@ -83,7 +84,7 @@ describe('computeConvictionScore', () => {
       makeView({ analyst_id: 'a2', direction: 'bullish' }),
     ];
 
-    const score = computeConvictionScore(views, []);
+    const score = computeConvictionScore(views, [], undefined);
 
     expect(score).toBeGreaterThanOrEqual(0);
     expect(score).toBeLessThanOrEqual(1);
@@ -96,7 +97,7 @@ describe('computeConvictionScore', () => {
       makeView({ analyst_id: 'a2', direction: 'bearish' }),
     ];
 
-    const score = computeConvictionScore(views, []);
+    const score = computeConvictionScore(views, [], undefined);
 
     expect(score).toBeLessThan(1);
   });
@@ -111,7 +112,7 @@ describe('computeConvictionScore', () => {
       { analyst_id: 'a2', round: 1, stance: 'bullish' },
     ];
 
-    const score = computeConvictionScore(views, roundStances);
+    const score = computeConvictionScore(views, roundStances, undefined);
 
     expect(score).toBeGreaterThanOrEqual(0);
     expect(score).toBeLessThanOrEqual(1);
@@ -136,7 +137,7 @@ describe('computeConvictionScore', () => {
     // Was 0.7 before #625, under `1 - spread/2`. The difference IS the fix:
     // spread is blind to counts, so it scored two-of-three-bullish exactly the
     // same as one-of-three-bullish. A mean does not.
-    expect(computeConvictionScore(views, roundStances)).toBeCloseTo(0.8, 5);
+    expect(computeConvictionScore(views, roundStances, undefined)).toBeCloseTo(0.8, 5);
   });
 
   describe('#625 — the three defects that made the system unable to trade', () => {
@@ -172,7 +173,9 @@ describe('computeConvictionScore', () => {
       ];
     }
 
-    const CONVICTION_FLOOR = 0.55; // DEFAULT_TRADER_CONFIG.conviction_floor
+    // The real shipped floor, not a copy — a config change must break these
+    // gating tests rather than let them keep passing against a stale number.
+    const CONVICTION_FLOOR = DEFAULT_TRADER_CONFIG.conviction_floor;
 
     it('defect 1 — a stock with a directional signal the mediator agrees with clears the floor', () => {
       // Pre-#625 this branch had a CEILING of 0.5478 against a 0.55 floor, so
@@ -212,6 +215,39 @@ describe('computeConvictionScore', () => {
       const score = computeConvictionScore(stockDesk('neutral'), [], 'bearish');
 
       expect(score).toBeLessThan(CONVICTION_FLOOR);
+    });
+
+    it('KNOWN HOLE — the guarantee above is desk-shaped, and fails at maximum evidence', () => {
+      // Characterisation, not an endorsement. The test above passes on the
+      // production desk's OBSERVED evidence (0.54), but the guarantee is an
+      // accident of desk shape rather than a property: the mediator's lone vote
+      // supplies a lean of 1/(n+1) out of nothing, so at MAXIMUM evidence a
+      // three-analyst desk scores exactly the floor and a two-analyst desk
+      // clears it — a trade no analyst agreed with, which is the pre-#625
+      // branch this module set out to close.
+      //
+      // The Trader gates on `confidence < conviction_floor` (decide.ts), so the
+      // exact tie AUTHORISES the trade rather than blocking it.
+      //
+      // Pinned here so the hole cannot be closed silently or widen unnoticed.
+      // Closing it changes what the system trades and is tracked as #683.
+      const maxEvidence = (id: string): AnalystView =>
+        makeView({
+          analyst_id: id,
+          analyst_type: 'technical',
+          direction: 'neutral',
+          confidence: 1,
+          key_points: Array(3).fill('point'),
+        });
+
+      const threeAnalystDesk = [maxEvidence('a1'), maxEvidence('a2'), maxEvidence('a3')];
+      const twoAnalystDesk = [maxEvidence('a1'), maxEvidence('a2')];
+
+      expect(computeConvictionScore(threeAnalystDesk, [], 'bearish')).toBeCloseTo(0.55, 10);
+      expect(computeConvictionScore(twoAnalystDesk, [], 'bearish')).toBeCloseTo(0.6, 10);
+      expect(computeConvictionScore(threeAnalystDesk, [], 'bearish')).toBeGreaterThanOrEqual(
+        CONVICTION_FLOOR,
+      );
     });
 
     it('with no directional lean the score cannot reach any shipped floor', () => {
