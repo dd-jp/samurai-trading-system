@@ -1173,6 +1173,123 @@ describe('startTickLoop', () => {
     await loop.stop();
   });
 
+  it('a slow pass settling does not release an instrument a newer pass re-claimed', async () => {
+    // The fast-reclaim-then-slow-settle ordering, which the guard's own
+    // backstop used to break.
+    //
+    // Pass 1 claims FAST and SLOW. FAST settles almost immediately and is
+    // released, so tick 2 legitimately re-claims FAST into pass 2 — which then
+    // blocks. SLOW finally settles, pass 1 completes, and its `finally`
+    // backstop ran `delete` over EVERY asset pass 1 had claimed, FAST included
+    // — clearing a guard pass 2 owned. The next tick then started a second
+    // concurrent pass on FAST: the exact reentrancy #669 exists to prevent,
+    // reintroduced by the backstop meant to protect it.
+    //
+    // Ownership tokens make the stale release a no-op.
+    const gates: Record<string, (() => void) | undefined> = {};
+    let fastCallCount = 0;
+    const twoInstrumentPlan: TickPlan = {
+      instruments: [
+        { asset: 'FAST', asset_class: 'crypto' },
+        { asset: 'SLOW', asset_class: 'crypto' },
+      ],
+      tick_time: START,
+    };
+    const runInstrument = vi.fn(async (signal): Promise<TickOutcome> => {
+      if (signal.asset === 'SLOW') {
+        await new Promise<void>((resolve) => {
+          gates.SLOW = resolve;
+        });
+        return { trace_id: 't', final_stage: 'execution' };
+      }
+
+      fastCallCount += 1;
+      // The FIRST FAST pass settles at once (so it can be re-claimed); every
+      // later one blocks, so a second concurrent FAST pass would be visible as
+      // a call count that keeps climbing while one is still gated.
+      if (fastCallCount === 1) {
+        return { trace_id: 't', final_stage: 'execution' };
+      }
+      await new Promise<void>((resolve) => {
+        gates.FAST = resolve;
+      });
+      return { trace_id: 't', final_stage: 'execution' };
+    });
+
+    const loop = startTickLoop({
+      scheduler: { nextTick: (): TickPlan => twoInstrumentPlan },
+      runner: { runInstrument } as TickRunner,
+      clock: new SimulatedClock(START),
+      logger: recordingLogger(),
+      persistence: persistence() as never,
+      tickIntervalMs: 1_000,
+      maxConcurrentInstruments: 2,
+    });
+
+    // Tick 1: FAST settles immediately, SLOW blocks.
+    await vi.advanceTimersByTimeAsync(1_000);
+    // Tick 2: FAST is free, so it is re-claimed into a new pass — and blocks.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fastCallCount).toBe(2);
+
+    // SLOW settles, completing pass 1 and firing its backstop over FAST too.
+    gates.SLOW?.();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Several more ticks. FAST's pass 2 is still gated, so the guard must hold.
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(fastCallCount).toBe(2);
+
+    gates.FAST?.();
+    await vi.advanceTimersByTimeAsync(0);
+    gates.SLOW?.();
+    await vi.advanceTimersByTimeAsync(0);
+    gates.FAST?.();
+    gates.SLOW?.();
+    await loop.stop();
+  });
+
+  it('claims atomically, so a duplicated asset in one plan cannot run twice', async () => {
+    // Check-and-claim used to be `filter` then a separate `add` loop, which is
+    // not atomic per asset: both copies passed the filter before either was
+    // claimed. `nextTick` returning a duplicate is not expected — but "not
+    // expected" is what the guard is for, and the failure is silent.
+    const duplicatePlan: TickPlan = {
+      instruments: [
+        { asset: 'BTC-USD', asset_class: 'crypto' },
+        { asset: 'BTC-USD', asset_class: 'crypto' },
+      ],
+      tick_time: START,
+    };
+    let release!: () => void;
+    const runInstrument = vi.fn(async (): Promise<TickOutcome> => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { trace_id: 't', final_stage: 'execution' };
+    });
+
+    const loop = startTickLoop({
+      scheduler: { nextTick: (): TickPlan => duplicatePlan },
+      runner: { runInstrument } as TickRunner,
+      clock: new SimulatedClock(START),
+      logger: recordingLogger(),
+      persistence: persistence() as never,
+      tickIntervalMs: 1_000,
+      maxConcurrentInstruments: 2,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(runInstrument).toHaveBeenCalledTimes(1);
+
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    release();
+    await loop.stop();
+  });
+
   it('stop() waits for an in-flight tick instead of abandoning it mid-pipeline', async () => {
     let release!: () => void;
     let finished = false;
