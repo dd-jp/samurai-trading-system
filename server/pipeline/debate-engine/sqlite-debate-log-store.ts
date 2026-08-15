@@ -117,14 +117,48 @@ export class SqliteDebateLogStore implements DebateLogStore {
       ...nullableField('synthesis', row.synthesis),
       ...nullableField('position', row.position),
       ...nullableField('disagreement_summary', row.disagreement_summary),
-      ...(row.open_items_json === null || row.open_items_json === undefined
-        ? {}
-        : { open_items: JSON.parse(row.open_items_json) as string[] }),
+      ...parseOpenItems(row.open_items_json),
       ...(row.converged === null || row.converged === undefined
         ? {}
         : { converged: row.converged === 1 }),
     };
   }
+}
+
+/**
+ * `open_items`, or absent when the column is null OR unreadable.
+ *
+ * Degrading rather than throwing is the point. Since #617 `getByDebateId` runs
+ * **before** the debate on every tick, so an unparseable row would throw out of
+ * the read and fail the debate stage for every remaining tick of that bar. The
+ * whole reason the replay path exists is that a same-bar tick should reuse the
+ * stored debate or re-run it — never that it should take the tick down. Absent
+ * is exactly the "no replay fields, run the debate" case the caller already
+ * handles.
+ *
+ * The `as string[]` was also unchecked: `JSON.parse` returns whatever the column
+ * holds, so a row containing `{}` or `"x"` would have been handed to a caller
+ * expecting an array.
+ */
+function parseOpenItems(
+  raw: string | null | undefined,
+): { open_items: string[] } | Record<string, never> {
+  if (raw === null || raw === undefined) {
+    return {};
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return {};
+  }
+
+  if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === 'string')) {
+    return {};
+  }
+
+  return { open_items: parsed };
 }
 
 /** `{ key: value }` when the column has a value, `{}` when it is null/absent. */
