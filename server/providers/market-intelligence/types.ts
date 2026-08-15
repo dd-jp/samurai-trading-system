@@ -20,7 +20,11 @@ export type Duration = number;
  * epic #52) — this type exists so `ingest` has a well-formed shape to accept.
  */
 export interface AgentIntelligence {
-  agent_id: 'deepresearch' | 'grok';
+  /**
+   * `alpaca-news` added by the MI rework (#553, map #552) — the first
+   * deterministic fetcher, alongside the two retrieval-era agent ids.
+   */
+  agent_id: 'deepresearch' | 'grok' | 'alpaca-news';
   timestamp: Date;
   asset_class: AssetClass;
   items: IntelligenceItem[];

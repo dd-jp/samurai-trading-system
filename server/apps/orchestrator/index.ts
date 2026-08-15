@@ -49,6 +49,7 @@
 import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ALPACA_CREDENTIAL_ENV_VARS } from '../../pipeline/execution/index.js';
+import { MiArchiveStore, miArchivePath } from '../../providers/market-intelligence/index.js';
 import { SystemClock } from '../../shared/index.js';
 import { openSharedStore, sharedStorePath } from '../../shared/store/index.js';
 import {
@@ -582,6 +583,16 @@ export async function startFromEnvironment(
     db = openSharedStore(dbPath);
   }
 
+  // #552: the MI archive, in its OWN database file. Opened here rather than
+  // inside the composition root so one process holds one handle, and skipped
+  // when the caller injected its own (a test may pass an in-memory archive).
+  //
+  // Its absence is not neutral — without it the run falls back to the
+  // retrieval-era agent, which ingests `[]` by construction, so `sentiment`
+  // and `fundamental` report NO DATA on every tick and #625's conviction
+  // ceiling stays in force. That is why the default is to open it, not to omit.
+  const miArchive = injected.miArchive ?? new MiArchiveStore(miArchivePath(mode));
+
   // #322. Built after the store is open (the Telegram client audit-logs
   // inbound allowlist rejections through it) and spread BEFORE `injected`, so
   // a channel the caller passed explicitly always wins over the one this
@@ -595,6 +606,7 @@ export async function startFromEnvironment(
     ...(injected as ProductionConfig),
     logger,
     db,
+    miArchive,
     clock: injected.clock ?? new SystemClock(),
     mode,
   });
