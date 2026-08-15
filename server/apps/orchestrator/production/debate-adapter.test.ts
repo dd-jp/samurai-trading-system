@@ -15,7 +15,15 @@ import {
   UNCAPPED_SPEND,
 } from '../../../pipeline/debate-engine/index.js';
 import { accumulateCredit } from '../../../pipeline/feedback-loop/index.js';
-import type { AssetClass, Clock, ClosedTrade, LogEntry, Logger } from '../../../shared/index.js';
+import type {
+  AssetClass,
+  Clock,
+  ClosedTrade,
+  DebateLog,
+  DebateLogStore,
+  LogEntry,
+  Logger,
+} from '../../../shared/index.js';
 import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
 import { buildDebateStep } from './debate-adapter.js';
 
@@ -373,6 +381,107 @@ describe('buildDebateStep', () => {
     // The live debate ran and produced a real conviction, rather than the 0 a
     // blank reconstruction would have handed the Trader.
     expect(result.confidence).toBeGreaterThan(0);
+  });
+
+  it('re-runs the debate when the persisted row carries only SOME replay fields', async () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    const step = buildDebateStep(fakeLlmClient(), store, unlimited(), UNCAPPED_SPEND);
+    const views = [makeView()];
+    const debate_id = computeDebateId('AAPL', NOW, views);
+
+    // Confidence present, the other five replay fields absent. The six are
+    // independently optional and `writeLog` persists whatever subset it is
+    // given, so "has a confidence" does not imply "is replayable". Checking
+    // confidence alone replayed this as synthesis '', position '',
+    // converged false — a fabricated debate handed to the Trader as a real one.
+    db.prepare(
+      `INSERT INTO debate_log (debate_id, instrument, bar_timestamp, contributions_json,
+         direction, rounds, created_at, confidence)
+       VALUES (?, 'AAPL', ?, '[]', 'bullish', 1, ?, 0.9)`,
+    ).run(debate_id, NOW.toISOString(), NOW.toISOString());
+
+    const result = await step({
+      trace_id: 'trace-1',
+      instrument: 'AAPL',
+      views,
+      asset_class: ASSET_CLASS,
+      clock: CLOCK,
+    });
+
+    expect(result.debate_id).toBe(debate_id);
+    expect(result.confidence).not.toBe(0.9);
+    expect(result.synthesis).not.toBe('');
+  });
+
+  it('returns the winner’s row when it loses the duplicate-write race', async () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    const { logger, entries } = recordingLogger();
+    const views = [makeView()];
+    const debate_id = computeDebateId('AAPL', NOW, views);
+
+    // The winner's row, as written by "another process". Its values are ones
+    // the fake LLM never produces, so passing here cannot be an artefact of
+    // both sides running the same deterministic fake.
+    const winner: DebateLog = {
+      debate_id,
+      instrument: 'AAPL',
+      bar_timestamp: NOW,
+      contributions: [],
+      direction: 'bullish',
+      rounds: 1,
+      created_at: NOW,
+      confidence: 0.4242,
+      synthesis: 'the winner synthesis',
+      position: 'the winner position',
+      disagreement_summary: 'none',
+      open_items: [],
+      converged: true,
+    };
+    store.writeLog(winner);
+
+    // Visible only AFTER the pre-debate replay check has run — the concurrent
+    // writer the backstop exists for. Read 1 (replay check) reports nothing, so
+    // the debate runs; read 2 (the write guard) finds the winner already there.
+    let reads = 0;
+    const racing: DebateLogStore = {
+      writeLog: (log) => {
+        store.writeLog(log);
+      },
+      getByDebateId: (id) => {
+        reads += 1;
+        if (reads === 1) {
+          return undefined;
+        }
+        return store.getByDebateId(id);
+      },
+    };
+
+    const loser = await buildDebateStep(
+      fakeLlmClient(),
+      racing,
+      unlimited(),
+      UNCAPPED_SPEND,
+      logger,
+    )({
+      trace_id: 'loser',
+      instrument: 'AAPL',
+      views,
+      asset_class: ASSET_CLASS,
+      clock: CLOCK,
+    });
+
+    expect(loser.debate_id).toBe(debate_id);
+    // The Trader must size on the bytes the Feedback Loop will attribute the
+    // trade to. Skipping the duplicate write but returning the loser's own
+    // discarded sample reproduces #617's mismatch inside the backstop.
+    expect(loser.confidence).toBe(0.4242);
+    expect(loser.synthesis).toBe('the winner synthesis');
+    expect(entries.some((entry) => entry.message.includes('already has a debate_log'))).toBe(true);
+
+    const count = db.prepare('SELECT COUNT(*) AS n FROM debate_log').get() as { n: number };
+    expect(count.n).toBe(1);
   });
 
   it("produces rows the Feedback Loop's attribution reader can consume end to end", async () => {

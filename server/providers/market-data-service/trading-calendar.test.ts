@@ -78,6 +78,34 @@ describe('UsEquityRegularHoursCalendar', () => {
     expect(calendar.isOpen(new Date('2026-07-15T21:00:00Z'))).toBe(false);
   });
 
+  /**
+   * 2026-12-24 is a Christmas Eve early close: 13:00 ET, not 16:00. December =
+   * EST (UTC-5), so 13:00 ET = 18:00 UTC.
+   *
+   * This matters because since #668 this calendar decides when the paper equity
+   * book must be flat. An unmodelled early close leaves the flatten computed for
+   * 15:55 on a market that shut at 13:00, and the position sits unflattened —
+   * the overnight carry ADR-0014 forbids. An unmodelled ordinary holiday fails
+   * the other way and is harmless: the flatten fires on a day with no position.
+   */
+  it('closes early at 13:00 ET on a Christmas Eve half-day', () => {
+    expect(calendar.isOpen(new Date('2026-12-24T17:59:00Z'))).toBe(true);
+    expect(calendar.isOpen(new Date('2026-12-24T18:00:00Z'))).toBe(false);
+  });
+
+  it('reports the early close as the session end the flatten offsets from', () => {
+    const end = calendar.sessionEnd(new Date('2026-12-24T15:00:00Z'));
+
+    expect(end?.toISOString()).toBe('2026-12-24T18:00:00.000Z');
+  });
+
+  it('still reports 16:00 ET on an ordinary December session', () => {
+    // 2026-12-23, a Wednesday and not an early close.
+    const end = calendar.sessionEnd(new Date('2026-12-23T15:00:00Z'));
+
+    expect(end?.toISOString()).toBe('2026-12-23T21:00:00.000Z');
+  });
+
   it('is closed at the weekend', () => {
     // Saturday 2026-07-18, mid-session-hours if it were a weekday.
     expect(calendar.isOpen(new Date('2026-07-18T17:00:00Z'))).toBe(false);

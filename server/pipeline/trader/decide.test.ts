@@ -667,6 +667,20 @@ describe('decide — determinism & idempotency', () => {
 
     expect(next?.idempotency_key).not.toBe(first?.idempotency_key);
   });
+
+  it('keys on the debate bar grid, not on atr_timeframe', async () => {
+    // The decision bar is the DEBATE's bar by definition — it is what makes the
+    // idempotency key and `debate_id` the same coordinate. `atr_timeframe` is a
+    // separate, independently tunable knob (the window the ATR is measured
+    // over), and tying the order-dedup coordinate to a risk-tuning setting
+    // would be #616 inverted: a finer grid collapses several decision bars onto
+    // one key, and the suppressed orders look exactly like skips.
+    const fine = await decide(traderInput({ config: configWith({ atr_timeframe: '15m' }) }));
+    const coarse = await decide(traderInput());
+
+    expect(fine?.decision_timestamp).toEqual(DECISION_BAR);
+    expect(fine?.decision_timestamp).toEqual(coarse?.decision_timestamp);
+  });
 });
 
 /**
