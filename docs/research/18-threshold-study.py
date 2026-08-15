@@ -15,10 +15,10 @@ from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
 _TF_PATTERN = re.compile(r"^(\d*)\s*(min|minute|hour)s?$", re.I)
-# Input directory, overridable so the ADR-0018 evidence reproduces off this machine.
+# Input ROOT, overridable so the ADR-0018 evidence reproduces off this machine.
 # Expects <TMP>/bars/<SYMBOL>_<TF>.jsonl and <TMP>/news_<SYMBOL>.jsonl, which is what
 # 18-fetch-bars.py and 18-fetch-earnings.py write when pointed at the same directory.
-TMP = os.environ.get("SAMURAI_BARS_DIR", os.getcwd())
+TMP = os.environ.get("SAMURAI_DATA_DIR", os.getcwd())
 OPTIMISTIC = os.environ.get("SAME_BAR") == "tp"
 HITS = defaultdict(int)
 
@@ -162,6 +162,9 @@ def main():
     cost = float(sys.argv[3])
     sessions = load_sessions(symbol)
     days = sorted(sessions)
+    if not days:
+        print("== %s  no sessions loaded from %s - nothing to study" % (symbol, TMP))
+        return
     react = reaction_dates(symbol, set(days))
     split = [d for d in days if d.year <= 2022]
     oos = [d for d in days if d.year >= 2023]
@@ -215,6 +218,9 @@ def main():
     print("\n-- OUT-OF-SAMPLE (>=2023), levels frozen from the fits above")
     res = {}
     s = stats(simulate(sessions, oos, lev, b_pool[0], b_pool[1], cost))
+    if s is None:
+        print("   no out-of-sample sessions - the frozen levels cannot be scored")
+        return
     res["grid_pooled"] = s
     print("   GRID (one level pair, every day): TP %+.1f/SL -%.1f -> exp %+.4f%%  n=%d  win %.1f%%  Sharpe %.2f"
           % (b_pool[0], b_pool[1], s["exp"], s["n"], s["winrate"] * 100, s["sharpe"]))
@@ -229,8 +235,9 @@ def main():
                  + simulate(sessions, ev_oos, lev, b_ev[0], b_ev[1], cost))
         s3 = stats(combo)
         res["combination"] = s3
-        print("   COMBINATION (ordinary levels + earnings levels): exp %+.4f%%  n=%d  win %.1f%%  Sharpe %.2f"
-              % (s3["exp"], s3["n"], s3["winrate"] * 100, s3["sharpe"]))
+        if s3 is not None:
+            print("   COMBINATION (ordinary levels + earnings levels): exp %+.4f%%  n=%d  win %.1f%%  Sharpe %.2f"
+                  % (s3["exp"], s3["n"], s3["winrate"] * 100, s3["sharpe"]))
 
     print("\n-- ANNUALISED on GBP 750, at the out-of-sample trade rate")
     for k, s in res.items():
