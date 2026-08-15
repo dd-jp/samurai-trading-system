@@ -4,6 +4,12 @@
  * constructor injection and own their own tables.
  */
 export { type ClosedTradeRow, fromClosedTradeRow } from './closed-trade-row.js';
+export {
+  assertNoStaleKeyScheme,
+  findStaleKeySchemeLots,
+  type StaleKeySchemeLot,
+  TERMINAL_ORDER_STATES,
+} from './key-scheme-guard.js';
 export { MIGRATIONS_DIR, runMigrations } from './migrate.js';
 export {
   legacyStorePath,
