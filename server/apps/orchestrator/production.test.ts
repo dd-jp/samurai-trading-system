@@ -361,7 +361,11 @@ function fixtureBars(instrument: string, timeframe: string, count: number, stepM
 
   return Array.from({ length: count }, (_, index) => {
     const close_time = new Date(START.getTime() - (count - index) * stepMs);
-    const price = closes[index] ?? 100;
+    // Indexed directly, no `?? 100` fallback: `buildTrendingCloses` returns
+    // exactly `count` entries, and silently substituting a flat price would
+    // corrupt the RSI/SMA these fixtures exist to produce.
+    const price = closes[index];
+    if (price === undefined) throw new Error(`fixtureBars: no close at index ${index}`);
     return {
       instrument,
       timeframe,

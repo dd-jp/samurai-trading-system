@@ -71,7 +71,7 @@ Measured on a **drift-removed** series, so this is the pure volatility envelope 
 
 `CONTEXT.md`'s recorded tolerance is **max ~20–25%**. Full deployment of the equity leg sits **2.2× to 3.5× outside it before any edge exists**, so the constraint binds regardless of how good the signal turns out to be.
 
-**Now:** deploy a fixed fraction sized per subclass by measured volatility — **~35% of the leg (~£260) for index ETPs, ~25% (~£190) for single-stock ETPs**, holding max drawdown at **23.1%** and **26.2%** respectively (doc 18 Result 5's sizing table).
+**Now:** deploy a fixed fraction sized per subclass by measured volatility — **~35% of the leg (~£260) for index ETPs, ~25% (~£190) for single-stock ETPs**, holding max drawdown at **23.1%** and **26.2%** respectively (doc 18 Result 4's **"The volatility envelope, and why it fixes position size"** table).
 
 **The single-stock fraction deliberately overshoots the tolerance.** 26.2% is **~1.2 pp above the top of `CONTEXT.md`'s ~20–25% band**; the index fraction sits inside it. The overshoot is accepted rather than sized away because the single-stock subclass is the one whose bracket the cost argument depends on, and because the envelope is measured **drift-removed with zero edge assumed** — a deliberately pessimistic reading. It is recorded here rather than rounded off so that whatever consumes this number for sizing consumes the overshoot with it. If the tolerance is to bind strictly on this subclass, the fraction has to fall to roughly **~24%**, which no measured row in doc 18's table covers — re-measure before adopting it.
 
@@ -94,3 +94,7 @@ Measured on a **drift-removed** series, so this is the pure volatility envelope 
 **Underlying tape, not ETP tape.** No tracking error, no ETP spread beyond the assumed round trip, and **no GBP/USD leg** — the GBP lines sit on USD underlyings and hedging is unconfirmed. [#666](https://github.com/dd-jp/samurai-trading-system/issues/666) owns the real spreads per subclass; **both brackets and both bars move directly with them**, since each cost figure is currently a single quote.
 
 **Two instruments, not the universe.** SPY and TSLA stand in for their subclasses.
+
+**The earnings-day labelling is loose, and in one case looks ahead.** `18-fetch-earnings.py` classifies a release as reacting on the *same* session whenever it lands before 16:00 ET — including releases *during* the session. The study enters at the open, so for an 11:00 release the entry precedes the event it is labelling. Same-date pre-market and post-close headlines also add both a "same" and a "next" marker, counting one event as two reaction days. Raised in review of [#676](https://github.com/dd-jp/samurai-trading-system/issues/676); tracked as [#685](https://github.com/dd-jp/samurai-trading-system/issues/685).
+
+**This does not move Decision 2, and the reason is worth stating rather than assuming.** The event-conditioning result is carried by the STRUCTURAL argument — events are 46 of 2,657 sessions, 1.73%, so event-conditioned levels cannot move the blended expectancy whatever their sign. That argument is indifferent to which 46 sessions they are. What the mislabelling can move is the *magnitude* of the −1.3267%/trade event-day figure and its t-statistic, so treat those two numbers as indicative rather than measured until #685 re-runs it.
