@@ -68,7 +68,9 @@ describe('computeConvictionScore', () => {
       { analyst_id: 'a2', round: 1, stance: 'neutral' },
     ];
 
-    // Disagreement metric: spread 1 on a [-1,1] axis -> 1 - 1/2 = 0.5.
+    // Directional consensus: mean(1, 0) = 0.5 on a [-1,1] axis. (The pre-#625
+    // spread metric produced 0.5 here too, by coincidence rather than by
+    // agreement — this comment described that formula until #676.)
     // Evidence strength: avg key points 1.5/3 = 0.5, avg confidence 0.5 -> 0.5.
     // score = 0.6 * 0.5 + 0.4 * 0.5 = 0.5
     expect(computeConvictionScore(views, roundStances, undefined)).toBe(0.5);
