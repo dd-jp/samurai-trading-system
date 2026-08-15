@@ -151,6 +151,7 @@ import { assertAutomationLevelSupported } from '../../pipeline/verdict/index.js'
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import {
   AlwaysOpenCalendar,
+  LseRegularHoursCalendar,
   MarketDataServiceImpl,
   SqliteMarketDataStore,
   type TradingCalendar,
@@ -452,7 +453,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     config.llmRateLimiter ??
     new RateLimiter(clock, config.rateLimiterConfig ?? DEFAULT_LLM_RATE_LIMIT_CONFIG);
 
-  const tradingCalendar = config.tradingCalendar ?? new UsEquityRegularHoursCalendar();
+  const tradingCalendar = equityCalendarFor(config);
   /**
    * ONE calendar pair, shared by every consumer that needs to know when a
    * venue is open — the daily-PnL boundary (#331/#332) and the volatility
@@ -1042,6 +1043,38 @@ export function startTickLoop(deps: {
 }
 
 /**
+ * The equity venue's calendar, chosen by MODE rather than hardcoded (#668).
+ *
+ * `LseRegularHoursCalendar` landed with #668 and had no production caller —
+ * this repo's dominant defect shape, and the one that matters most here: every
+ * flatten decision on the live leg would have resolved through the US 16:00 ET
+ * boundary, which is 20:00 or 21:00 London, **hours after the 16:30 LSE
+ * close**. The overnight carry #668 exists to prevent, arriving through the
+ * composition root rather than through the rule.
+ *
+ * The venues genuinely differ per ADR-0015: live equity is the Trading 212 ISA
+ * restricted to GBP LSE-listed ETFs/ETCs (#659), while paper runs Alpaca US
+ * equities. #656 measured the two sessions overlapping by only two hours, so
+ * one calendar cannot serve both — which is exactly why #668 made the flatten
+ * an offset resolved through the instrument's own calendar rather than a shared
+ * wall-clock constant.
+ *
+ * A FUNCTION rather than a literal at each site, because there are two sites —
+ * the component root and the scheduler — and they were already two independent
+ * `?? new UsEquityRegularHoursCalendar()` defaults. That was harmless while both
+ * defaults were the same class; the moment the default depends on mode, two
+ * copies means the scheduler gating market hours on New York while the flatten
+ * resolves against London. `config.tradingCalendar` still overrides both.
+ */
+export function equityCalendarFor(config: ProductionConfig): TradingCalendar {
+  if (config.tradingCalendar !== undefined) {
+    return config.tradingCalendar;
+  }
+
+  return config.mode === 'live' ? new LseRegularHoursCalendar() : new UsEquityRegularHoursCalendar();
+}
+
+/**
  * The full composition root: every stage bound, every store constructed, and
  * a `start`/`stop` pair for the entrypoint. Startup order is
  * orphan-scan-then-loop (ADR-0004 §3, ticket #236): the scan reports `go`
@@ -1057,7 +1090,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   const tickRunner = new SequentialTickRunner(components.steps);
   const scheduler = new UniverseScheduler({
     universe: config.universe ?? SMOKE_TEST_UNIVERSE,
-    calendar: config.tradingCalendar ?? new UsEquityRegularHoursCalendar(),
+    calendar: equityCalendarFor(config),
   });
   const heartbeat = new Heartbeat(
     config.heartbeatChannel ?? new LoggingHeartbeatChannel(logger),

@@ -198,26 +198,26 @@ function civilParts(zone: string): Intl.DateTimeFormat {
 }
 
 /** A calendar date in some venue's zone. `month` is 1-based, as rendered. */
-interface EtCivilDate {
+interface ZonedCivilDate {
   year: number;
   month: number;
   day: number;
 }
 
-interface EtCivilFields extends EtCivilDate {
+interface ZonedCivilFields extends ZonedCivilDate {
   hour: number;
   minute: number;
   second: number;
 }
 
 /**
- * Every Eastern civil field of `instant`, as numbers.
+ * Every civil field of `instant` in `zone`, as numbers.
  *
  * Throws rather than defaulting a missing part: a silently-zeroed year would
  * put the session boundary in year 0 and be read as a plausible timestamp
  * downstream.
  */
-function etCivilFields(instant: Date, zone: string): EtCivilFields {
+function zonedCivilFields(instant: Date, zone: string): ZonedCivilFields {
   const rendered: Record<string, number> = {};
   for (const part of civilParts(zone).formatToParts(instant)) {
     if (part.type !== 'literal') {
@@ -225,7 +225,7 @@ function etCivilFields(instant: Date, zone: string): EtCivilFields {
     }
   }
 
-  const field = (name: keyof EtCivilFields): number => {
+  const field = (name: keyof ZonedCivilFields): number => {
     const value = rendered[name];
     if (value === undefined || !Number.isFinite(value)) {
       throw new Error(`Intl rendered no ${zone} '${name}' for ${instant.toISOString()}`);
@@ -245,20 +245,20 @@ function etCivilFields(instant: Date, zone: string): EtCivilFields {
 }
 
 /** `instant`'s zone wall-clock read back as if it were UTC — the DST-aware pivot. */
-function easternWallClockAsUtc(instant: Date, zone: string): number {
-  const { year, month, day, hour, minute, second } = etCivilFields(instant, zone);
+function wallClockAsUtc(instant: Date, zone: string): number {
+  const { year, month, day, hour, minute, second } = zonedCivilFields(instant, zone);
 
   return Date.UTC(year, month - 1, day, hour, minute, second);
 }
 
-function toEasternCivilDate(instant: Date, zone: string): EtCivilDate {
-  const { year, month, day } = etCivilFields(instant, zone);
+function toCivilDate(instant: Date, zone: string): ZonedCivilDate {
+  const { year, month, day } = zonedCivilFields(instant, zone);
 
   return { year, month, day };
 }
 
 /** Civil-date arithmetic only — anchored in UTC, so DST never shortens the step. */
-function previousCivilDay({ year, month, day }: EtCivilDate): EtCivilDate {
+function previousCivilDay({ year, month, day }: ZonedCivilDate): ZonedCivilDate {
   const previous = new Date(Date.UTC(year, month - 1, day) - MS_PER_DAY);
 
   return {
@@ -269,7 +269,7 @@ function previousCivilDay({ year, month, day }: EtCivilDate): EtCivilDate {
 }
 
 /** The mirror of `previousCivilDay`, for the forward walk `sessionEnd` needs. */
-function nextCivilDay({ year, month, day }: EtCivilDate): EtCivilDate {
+function nextCivilDay({ year, month, day }: ZonedCivilDate): ZonedCivilDate {
   const next = new Date(Date.UTC(year, month - 1, day) + MS_PER_DAY);
 
   return {
@@ -280,19 +280,26 @@ function nextCivilDay({ year, month, day }: EtCivilDate): EtCivilDate {
 }
 
 /** `2026-12-25` — the key both holiday tables below are written in. */
-function civilDateKey({ year, month, day }: EtCivilDate): string {
+function civilDateKey({ year, month, day }: ZonedCivilDate): string {
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
 /**
- * The instant at which a given Eastern wall-clock time on `date` occurs.
+ * The instant at which a given wall-clock time on `date` occurs in `zone`.
+ *
+ * Zone-neutral: it serves New York and London alike, which is why neither the
+ * name nor the types mention Eastern any more (#668 gave these a `zone`
+ * parameter but left the Eastern names behind).
  *
  * The offset is resolved from `Intl` by fixpoint rather than hard-coded: a
  * literal -4h/-5h is right for half the year and silently wrong for the other
- * half. The loop converges because 16:00 ET exists exactly once on every day.
+ * half. The loop converges because every session close this calendar asks
+ * about — 16:00 and 13:00 in New York, 16:30 and 12:30 in London — sits well
+ * clear of either zone's DST transition hour, so it exists exactly once on
+ * every day.
  */
-function easternWallClockToInstant(
-  date: EtCivilDate,
+function wallClockToInstant(
+  date: ZonedCivilDate,
   minutesSinceMidnight: number,
   zone: string,
 ): Date {
@@ -301,7 +308,7 @@ function easternWallClockToInstant(
   let instant = new Date(target);
 
   for (let pass = 0; pass < MAX_OFFSET_PASSES; pass++) {
-    const drift = easternWallClockAsUtc(instant, zone) - target;
+    const drift = wallClockAsUtc(instant, zone) - target;
     if (drift === 0) {
       return instant;
     }
@@ -314,13 +321,51 @@ function easternWallClockToInstant(
 }
 
 /**
- * US equity regular trading hours: Mon-Fri, 09:30-16:00 ET.
+ * Early closes: the session ends at 13:00 ET rather than 16:00.
+ *
+ * Modelled even though ordinary holidays are not, because the two fail in
+ * OPPOSITE directions once this calendar drives the flatten (#668). An
+ * unmodelled holiday is the safe error: the flatten window still computes and
+ * fires on a day with no session, closing a position that does not exist. An
+ * unmodelled EARLY CLOSE is the dangerous one: a real trading day whose close
+ * moves three hours earlier, so the flatten is computed for 15:55 on a market
+ * that shut at 13:00 and the position sits unflattened — the overnight carry
+ * ADR-0014 forbids. Same argument as `LSE_HALF_DAYS`.
+ *
+ * COVERAGE IS PARTIAL AND HAND-ENTERED. Only dates that are unambiguous from
+ * the NYSE rule (the Friday after Thanksgiving; Christmas Eve when it falls on
+ * a weekday) are listed. The day before Independence Day is deliberately
+ * ABSENT for both years: 4 July 2026 is a Saturday, so 3 July is a full
+ * holiday rather than an early close, and 4 July 2027 is a Sunday observed on
+ * Monday 5 July, which carries no Friday early close.
+ *
+ * This table should not stay hand-maintained — Alpaca publishes the
+ * authoritative session table on `GET /v2/calendar`, and sourcing it from
+ * there removes the whole class of error. Tracked as #684; until then, a
+ * missing entry is the dangerous direction, so extend it before 2028.
+ */
+const US_EARLY_CLOSE_MINUTES = 13 * 60; // 13:00 ET
+const US_EARLY_CLOSE_DAYS = new Set([
+  '2026-11-27', // Friday after Thanksgiving (Thanksgiving is 26 Nov 2026)
+  '2026-12-24', // Christmas Eve, a Thursday
+  '2027-11-26', // Friday after Thanksgiving (Thanksgiving is 25 Nov 2027)
+  '2027-12-24', // Christmas Eve, a Friday
+]);
+
+/**
+ * US equity regular trading hours: Mon-Fri, 09:30-16:00 ET, with 13:00 early
+ * closes on the dates in `US_EARLY_CLOSE_DAYS`.
  *
  * Holidays are NOT modelled — that needs the holiday/session table this port
  * exists to defer to (see file header). This implementation is therefore
  * permissive on holidays and must not be treated as the authoritative
  * calendar; it is the regular-session default that keeps stock ingestion
  * inside session boundaries until the real source is injected.
+ *
+ * Early closes ARE modelled, despite that posture, because since #668 this
+ * calendar decides when the PAPER equity book must be flat. Being permissive
+ * about a day with no session is tolerable; being wrong about the hour a real
+ * session ends is not.
  */
 export class UsEquityRegularHoursCalendar implements TradingCalendar {
   isOpen(instant: Date): boolean {
@@ -330,8 +375,20 @@ export class UsEquityRegularHoursCalendar implements TradingCalendar {
     }
 
     return (
-      minutesSinceMidnight >= SESSION_OPEN_MINUTES && minutesSinceMidnight < SESSION_CLOSE_MINUTES
+      minutesSinceMidnight >= SESSION_OPEN_MINUTES &&
+      minutesSinceMidnight < this.#closeMinutesFor(toCivilDate(instant, ET_ZONE))
     );
+  }
+
+  /**
+   * Keyed on the CIVIL DATE rather than the instant, so the early-close lookup
+   * cannot depend on the time of day being asked about — 24 December closes at
+   * 13:00 whether the question is asked at 09:35 or at 15:59.
+   */
+  #closeMinutesFor(civilDate: ZonedCivilDate): number {
+    return US_EARLY_CLOSE_DAYS.has(civilDateKey(civilDate))
+      ? US_EARLY_CLOSE_MINUTES
+      : SESSION_CLOSE_MINUTES;
   }
 
   isTradingDay(instant: Date): boolean {
@@ -347,10 +404,10 @@ export class UsEquityRegularHoursCalendar implements TradingCalendar {
    * than leaving the two to disagree.
    */
   sessionEnd(instant: Date): Date | null {
-    let civilDate = toEasternCivilDate(instant, ET_ZONE);
+    let civilDate = toCivilDate(instant, ET_ZONE);
 
     for (let day = 0; day <= MAX_SESSION_LOOKBACK_DAYS; day++) {
-      const close = easternWallClockToInstant(civilDate, SESSION_CLOSE_MINUTES, ET_ZONE);
+      const close = wallClockToInstant(civilDate, this.#closeMinutesFor(civilDate), ET_ZONE);
       if (close.getTime() > instant.getTime() && this.isTradingDay(close)) {
         return close;
       }
@@ -372,10 +429,10 @@ export class UsEquityRegularHoursCalendar implements TradingCalendar {
    * leaving the two to disagree.
    */
   sessionStart(instant: Date): Date {
-    let civilDate = toEasternCivilDate(instant, ET_ZONE);
+    let civilDate = toCivilDate(instant, ET_ZONE);
 
     for (let day = 0; day <= MAX_SESSION_LOOKBACK_DAYS; day++) {
-      const close = easternWallClockToInstant(civilDate, SESSION_CLOSE_MINUTES, ET_ZONE);
+      const close = wallClockToInstant(civilDate, this.#closeMinutesFor(civilDate), ET_ZONE);
       if (close.getTime() <= instant.getTime() && this.isTradingDay(close)) {
         return close;
       }
@@ -474,12 +531,12 @@ export class LseRegularHoursCalendar implements TradingCalendar {
 
     return (
       minutesSinceMidnight >= LSE_OPEN_MINUTES &&
-      minutesSinceMidnight < this.#closeMinutesFor(toEasternCivilDate(instant, LONDON_ZONE))
+      minutesSinceMidnight < this.#closeMinutesFor(toCivilDate(instant, LONDON_ZONE))
     );
   }
 
   isTradingDay(instant: Date): boolean {
-    const civilDate = toEasternCivilDate(instant, LONDON_ZONE);
+    const civilDate = toCivilDate(instant, LONDON_ZONE);
     if (LSE_HOLIDAYS.has(civilDateKey(civilDate))) {
       return false;
     }
@@ -489,10 +546,10 @@ export class LseRegularHoursCalendar implements TradingCalendar {
 
   /** The most recent close at or before `instant` — the accounting boundary. */
   sessionStart(instant: Date): Date {
-    let civilDate = toEasternCivilDate(instant, LONDON_ZONE);
+    let civilDate = toCivilDate(instant, LONDON_ZONE);
 
     for (let day = 0; day <= MAX_SESSION_LOOKBACK_DAYS; day++) {
-      const close = easternWallClockToInstant(
+      const close = wallClockToInstant(
         civilDate,
         this.#closeMinutesFor(civilDate),
         LONDON_ZONE,
@@ -510,10 +567,10 @@ export class LseRegularHoursCalendar implements TradingCalendar {
 
   /** The next close strictly after `instant` — what the flatten offsets from. */
   sessionEnd(instant: Date): Date | null {
-    let civilDate = toEasternCivilDate(instant, LONDON_ZONE);
+    let civilDate = toCivilDate(instant, LONDON_ZONE);
 
     for (let day = 0; day <= MAX_SESSION_LOOKBACK_DAYS; day++) {
-      const close = easternWallClockToInstant(
+      const close = wallClockToInstant(
         civilDate,
         this.#closeMinutesFor(civilDate),
         LONDON_ZONE,
@@ -534,7 +591,7 @@ export class LseRegularHoursCalendar implements TradingCalendar {
    * cannot depend on the time of day being asked about — the close of
    * 24 December is 12:30 whether the question is asked at 09:00 or at 16:00.
    */
-  #closeMinutesFor(civilDate: EtCivilDate): number {
+  #closeMinutesFor(civilDate: ZonedCivilDate): number {
     return LSE_HALF_DAYS.has(civilDateKey(civilDate))
       ? LSE_HALF_DAY_CLOSE_MINUTES
       : LSE_CLOSE_MINUTES;
