@@ -184,6 +184,20 @@ function withinFlattenWindow(input: TraderInput, assetClass: AssetClass): boolea
   // overnight against ADR-0014 with nothing in `trader_log` marking it. A
   // safety rule that can be switched off by a plausible-looking config value
   // has to say so.
+  //
+  // This throw DOES take the direction-flip exit down with it — the same
+  // stranding the docblock argues against for a past close. The asymmetry is
+  // deliberate, and it turns on whether the condition is recoverable. A past
+  // close is a live input that may be right, wrong, or transient, and there is
+  // a safe answer available (be flat), so the Trader takes it and keeps
+  // running. A non-positive window is a static misconfiguration that cannot
+  // become valid at the next tick, and every answer it could produce is a lie
+  // about whether ADR-0014 is being enforced — so halting the instrument IS the
+  // correct outcome, not a side effect tolerated to keep the check cheap.
+  //
+  // In practice nothing should ever reach this: `assertTraderConfigSound` at
+  // the composition root refuses the boot. This is the backstop for callers
+  // that never pass through that seam, and there the halt is what you want.
   if (!(input.config.flatten_before_close_ms > 0)) {
     throw new Error(
       `flatten_before_close_ms must be > 0 (got ${input.config.flatten_before_close_ms}); ` +
