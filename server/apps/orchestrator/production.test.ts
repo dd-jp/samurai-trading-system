@@ -25,6 +25,7 @@ import type {
   ApprovalRequest,
   VerdictDecision,
 } from '../../pipeline/verdict/index.js';
+import { AlwaysOpenCalendar } from '../../providers/market-data-service/index.js';
 import type { AlpacaBar, AlpacaQuote, Bar } from '../../providers/market-data-service/index.js';
 import {
   AlpacaDataSource,
@@ -52,6 +53,7 @@ import {
   type DailyMetricsConfig,
   DEFAULT_HEARTBEAT_INTERVAL_MS,
   DEFAULT_LLM_CLIENT_CONFIG,
+  equityCalendarFor,
   type FeedbackCycleConfig,
   type ProductionConfig,
   SMOKE_TEST_UNIVERSE,
@@ -59,6 +61,7 @@ import {
   universeAssetClasses,
 } from './production.js';
 import { DEFAULT_UNIVERSE } from './scheduler.js';
+import { buildTrendingCloses } from './smoke-run.js';
 import { SqliteDailyEquityStore } from './sqlite-daily-equity-store.js';
 import { SequentialTickRunner } from './tick-runner.js';
 import type { Logger, Scheduler, TickOutcome, TickPlan, TickRunner } from './types.js';
@@ -343,11 +346,22 @@ const REAL_CONFIGS = {
   | 'costConfig'
 >;
 
-/** An hourly bar series long enough for the ATR/ADV lookbacks the chain reads. */
+/**
+ * An hourly bar series long enough for the ATR/ADV lookbacks the chain reads.
+ *
+ * Rises **with pullbacks** (`buildTrendingCloses`), not monotonically. A
+ * monotonic ramp has no down bars, so its RSI is exactly 100 and the technical
+ * analyst reads `neutral` — "overbought" — on the strongest possible uptrend.
+ * That left the mediator as the chain's only directional participant, so the
+ * `go` these tests assert came through the mediator-override branch #625 exists
+ * to close rather than through a desk that agreed on a direction.
+ */
 function fixtureBars(instrument: string, timeframe: string, count: number, stepMs: number): Bar[] {
+  const closes = buildTrendingCloses(count, 99 + count);
+
   return Array.from({ length: count }, (_, index) => {
     const close_time = new Date(START.getTime() - (count - index) * stepMs);
-    const price = 100 + index;
+    const price = closes[index] ?? 100;
     return {
       instrument,
       timeframe,
@@ -367,6 +381,46 @@ describe('SMOKE_TEST_UNIVERSE', () => {
   it('is a narrow, crypto-only universe (ADR-0004 §4)', () => {
     expect(SMOKE_TEST_UNIVERSE).toHaveLength(1);
     expect(SMOKE_TEST_UNIVERSE[0]).toEqual({ asset: 'BTC-USD', asset_class: 'crypto' });
+  });
+});
+
+describe('equityCalendarFor', () => {
+  /**
+   * #668 landed `LseRegularHoursCalendar` with NO production caller — this
+   * repo's dominant defect shape, and the worst possible instance of it: every
+   * flatten on the live leg would have resolved through the US 16:00 ET
+   * boundary, which is 20:00/21:00 London, hours after the 16:30 LSE close.
+   * The overnight carry #668 exists to prevent, arriving through the
+   * composition root rather than through the rule.
+   */
+  it('gives the live equity leg the LSE calendar (ADR-0015: T212 ISA, LSE ETPs)', () => {
+    const calendar = equityCalendarFor({ mode: 'live' } as unknown as ProductionConfig);
+
+    // 2026-07-15 is a Wednesday. 16:25 London (BST) = 15:25 UTC — inside the
+    // LSE session, and already an hour past it under the US calendar's clock.
+    expect(calendar.isOpen(new Date('2026-07-15T15:25:00Z'))).toBe(true);
+    // 17:00 London = 16:00 UTC, after the 16:30 LSE close but well inside the
+    // US session. This is the assertion that fails if the US calendar is used.
+    expect(calendar.isOpen(new Date('2026-07-15T16:00:00Z'))).toBe(false);
+    expect(calendar.sessionEnd(new Date('2026-07-15T10:00:00Z'))?.toISOString()).toBe(
+      '2026-07-15T15:30:00.000Z',
+    );
+  });
+
+  it('leaves paper on the US calendar, which is the venue paper actually trades', () => {
+    const calendar = equityCalendarFor({ mode: 'paper' } as unknown as ProductionConfig);
+
+    expect(calendar.sessionEnd(new Date('2026-07-15T10:00:00Z'))?.toISOString()).toBe(
+      '2026-07-15T20:00:00.000Z',
+    );
+  });
+
+  it('honours an explicit override in either mode', () => {
+    const injected = new AlwaysOpenCalendar();
+
+    expect(
+      equityCalendarFor({ mode: 'live', tradingCalendar: injected } as unknown as ProductionConfig),
+    ).toBe(injected);
   });
 });
 

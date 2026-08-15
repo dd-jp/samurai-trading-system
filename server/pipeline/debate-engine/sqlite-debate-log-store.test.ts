@@ -180,4 +180,30 @@ describe('SqliteDebateLogStore.getByDebateId', () => {
     expect(store.getByDebateId('debate-1')).toEqual(first);
     expect(store.getByDebateId('debate-2')).toEqual(second);
   });
+
+  it.each([
+    ['not json at all', 'not json at all'],
+    ['an object', '{"a":1}'],
+    ['a bare string', '"open item"'],
+    ['an array of non-strings', '[1,2,3]'],
+  ])('reads a row whose open_items_json is %s as having no open items', (_label, raw) => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    store.writeLog(makeLog({ debate_id: 'debate-bad-json' }));
+    db.prepare('UPDATE debate_log SET open_items_json = ? WHERE debate_id = ?').run(
+      raw,
+      'debate-bad-json',
+    );
+
+    // Degrading rather than throwing is the point. Since #617 this read runs
+    // BEFORE the debate on every tick, so an unparseable row would fail the
+    // debate stage for every remaining tick of that bar instead of falling
+    // through to a re-run. The `as string[]` was unchecked too: a column
+    // holding an object or a bare string would have reached a caller expecting
+    // an array.
+    const row = store.getByDebateId('debate-bad-json');
+
+    expect(row).toBeDefined();
+    expect(row?.open_items).toBeUndefined();
+  });
 });
