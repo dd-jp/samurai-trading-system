@@ -25,4 +25,4 @@ export {
   type SqliteSetupStoreOptions,
 } from './sqlite-setup-store.js';
 export type { AssetClass, Trader, TraderConfig, TraderInput } from './types.js';
-export { DEFAULT_TRADER_CONFIG } from './types.js';
+export { assertTraderConfigSound, DEFAULT_TRADER_CONFIG } from './types.js';

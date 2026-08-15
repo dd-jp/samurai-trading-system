@@ -19,7 +19,7 @@ import { SimulatedBrokerAdapter, SqliteExecutionStore } from '../../pipeline/exe
 import type { DailyMetricsSample, FeedbackConfig } from '../../pipeline/feedback-loop/index.js';
 import { SqliteTuningStore } from '../../pipeline/feedback-loop/index.js';
 import type { VolatilityReading } from '../../pipeline/risk-manager/index.js';
-import { SqliteSetupStore } from '../../pipeline/trader/index.js';
+import { DEFAULT_TRADER_CONFIG, SqliteSetupStore } from '../../pipeline/trader/index.js';
 import type {
   ApprovalOutcome,
   ApprovalRequest,
@@ -208,7 +208,13 @@ function stubConfig(db: SqliteHandle, overrides: Partial<ProductionConfig> = {})
         async (): Promise<VolatilityReading> => ({ crypto: 0.02, stocks: 0.01 }),
       ),
     },
-    traderConfig: {} as ProductionConfig['traderConfig'],
+    // Not `{}` either, and for the same reason as `verdictConfig` below:
+    // `buildProductionComponents` now refuses a config whose
+    // `flatten_before_close_ms` would silently disable flat-by-close (#691), so
+    // an empty cast here is a lie the assertion is the first code to notice.
+    // The real defaults rather than a hand-picked value — every one of these
+    // tests wants "a sound trader config", not a particular window.
+    traderConfig: DEFAULT_TRADER_CONFIG,
     riskConfig: {} as ProductionConfig['riskConfig'],
     // Not `{}` like its neighbours: `buildProductionComponents` reads the
     // automation dial to refuse a HITL-engaging config (#434), so an empty cast
@@ -279,10 +285,20 @@ function goVerdict(): VerdictDecision {
   };
 }
 
-/** Real per-stage config values (same shapes direct-bind.test.ts pins). */
+/**
+ * Real per-stage config values (same shapes direct-bind.test.ts pins).
+ *
+ * This is cast to its stage types at the use site, so a field going missing
+ * here does not fail the typecheck — it fails as behaviour, or it does not fail
+ * at all. `flatten_before_close_ms` was absent until #691's guard made it
+ * throw: without the guard these three integration tests ran the composed
+ * chain with flat-by-close silently inert, which is the same hole the guard
+ * exists to close, one layer up in the test fixture.
+ */
 const REAL_CONFIGS = {
   traderConfig: {
     conviction_floor: 0.5,
+    flatten_before_close_ms: 5 * 60 * 1_000,
     max_risk_per_trade: 0.01,
     asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
     atr_timeframe: '1h',
@@ -456,6 +472,28 @@ describe('buildProductionComponents', () => {
 
   afterEach(() => {
     db.close();
+  });
+
+  /**
+   * #691 — the boot refuses a config that would silently disable flat-by-close.
+   *
+   * The Trader carries the same check, and on review that runtime one was the
+   * whole objection: `flatten_before_close_ms: 0` DEPLOYS CLEANLY and first
+   * surfaces on a tick that already reached the Trader. On a soak that is hours
+   * of a process that looks healthy while holding overnight against ADR-0014.
+   * Asserted here, at the composition root, for the same reason
+   * `assertAutomationLevelSupported` is — refuse a bad config while nothing is
+   * half-constructed.
+   */
+  it('refuses to build with a non-positive flatten window (#691)', () => {
+    const config = stubConfig(db);
+
+    expect(() =>
+      buildProductionComponents({
+        ...config,
+        traderConfig: { ...config.traderConfig, flatten_before_close_ms: 0 },
+      }),
+    ).toThrow(/flatten_before_close_ms must be > 0/);
   });
 
   it('binds all six TickSteps as callables', () => {
@@ -1343,6 +1381,147 @@ describe('startTickLoop', () => {
     release();
     await stopping;
     expect(finished).toBe(true);
+  });
+
+  /**
+   * #692 — `stop()` must resolve even when a pass fails while it is awaiting.
+   *
+   * Be precise about what this does and does not prove. It PINS the outcome; it
+   * does not demonstrate the shield, because `runTickPlan` cannot currently
+   * reject at all — #507's per-worker try/catch means an instrument throw never
+   * reaches its `Promise.all`. So today `stop()` is safe for a reason that
+   * lives in tick-loop.ts, not here.
+   *
+   * That is exactly why the shield is worth its line. The comment above
+   * `Promise.all` used to claim the safety came from `runOnce` swallowing its
+   * own errors, which is false — `runOnce`'s catch covers its own `await` and
+   * marks nothing handled for a second consumer of the same promise. Anyone
+   * adding an await outside the worker's try/catch would have made `stop()`
+   * reject and abandon every other in-flight pass, with the comment here
+   * asserting that could not happen.
+   */
+  it('stop() resolves rather than rejecting when the in-flight pass fails (#692)', async () => {
+    let release!: () => void;
+    const runInstrument = vi.fn(async (): Promise<TickOutcome> => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      throw new Error('pipeline blew up during shutdown');
+    });
+
+    const loop = startTickLoop({
+      scheduler: planScheduler(plan),
+      runner: { runInstrument } as TickRunner,
+      clock: new SimulatedClock(START),
+      logger: recordingLogger(),
+      persistence: persistence() as never,
+      tickIntervalMs: 1_000,
+      maxConcurrentInstruments: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    // stop() snapshots `passes` here, BEFORE the pass fails — the ordering the
+    // finding turns on. A raw chain in that set would reject `Promise.all`.
+    const stopping = loop.stop();
+    release();
+
+    await expect(stopping).resolves.toBeUndefined();
+  });
+
+  it('reports a duplicated instrument as a scheduler fault, not as a slow previous pass (#692)', async () => {
+    // The two skips share a code path and mean opposite things: a still-running
+    // instrument is the steady state #669 exists to tolerate, while the same
+    // asset twice in one plan is a malformed plan. Reporting the second as
+    // "still running from a previous pass" hid it precisely when caught.
+    const logger = recordingLogger();
+    const duplicatePlan = {
+      instruments: [
+        { asset: 'BTC-USD', asset_class: 'crypto' as const },
+        { asset: 'BTC-USD', asset_class: 'crypto' as const },
+      ],
+      tick_time: START,
+    };
+    const runInstrument = vi.fn(
+      async (): Promise<TickOutcome> => ({ trace_id: 't', final_stage: 'analysts' }),
+    );
+
+    const loop = startTickLoop({
+      scheduler: planScheduler(duplicatePlan),
+      runner: { runInstrument } as TickRunner,
+      clock: new SimulatedClock(START),
+      logger,
+      persistence: persistence() as never,
+      tickIntervalMs: 1_000,
+      maxConcurrentInstruments: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await loop.stop();
+
+    // The guard still holds: the duplicate lost to itself, one run only.
+    expect(runInstrument).toHaveBeenCalledTimes(1);
+    expect(logger.entries.some((entry) => entry.message.includes('duplicate instrument'))).toBe(
+      true,
+    );
+    expect(
+      logger.entries.some((entry) => entry.message.includes('still running from a previous pass')),
+    ).toBe(false);
+  });
+
+  /**
+   * The case the first cut of the duplicate warn missed, caught on review.
+   *
+   * Keying duplicate detection off `claims` only worked when the FIRST
+   * occurrence was claimable. If it was already running from a prior pass it
+   * never entered `claims`, so the second occurrence fell through to the
+   * `running` check and was reported as an ordinary slow pass — the malformed
+   * plan hidden again, in the case where a duplicate is most likely to matter,
+   * since a plan that repeats an asset while that asset is mid-pipeline is the
+   * one that would breach the one-pass-per-instrument invariant if the guard
+   * ever slipped.
+   */
+  it('still reports a duplicate whose first occurrence is already running (#692)', async () => {
+    const logger = recordingLogger();
+    let release!: () => void;
+    const runInstrument = vi.fn(async (): Promise<TickOutcome> => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { trace_id: 't', final_stage: 'execution' };
+    });
+
+    const btc = { asset: 'BTC-USD', asset_class: 'crypto' as const };
+    let plans = 0;
+    const scheduler = {
+      nextTick: () => {
+        plans += 1;
+        // First tick claims BTC and blocks. Second tick returns it TWICE while
+        // the first pass still holds it: one occurrence is legitimately busy,
+        // the other is the scheduler fault.
+        return { instruments: plans === 1 ? [btc] : [btc, btc], tick_time: START };
+      },
+    };
+
+    const loop = startTickLoop({
+      scheduler: scheduler as never,
+      runner: { runInstrument } as TickRunner,
+      clock: new SimulatedClock(START),
+      logger,
+      persistence: persistence() as never,
+      tickIntervalMs: 1_000,
+      maxConcurrentInstruments: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(logger.entries.some((entry) => entry.message.includes('duplicate instrument'))).toBe(
+      true,
+    );
+
+    release();
+    await loop.stop();
   });
 
   it('stops scheduling further ticks after stop()', async () => {

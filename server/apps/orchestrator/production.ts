@@ -146,7 +146,7 @@ import {
   riskThresholdsFrom,
   SqliteBreakerStateStore,
 } from '../../pipeline/risk-manager/index.js';
-import { SqliteSetupStore } from '../../pipeline/trader/index.js';
+import { assertTraderConfigSound, SqliteSetupStore } from '../../pipeline/trader/index.js';
 import { assertAutomationLevelSupported } from '../../pipeline/verdict/index.js';
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import {
@@ -388,6 +388,14 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // does not guard a config value someone flips without reading it, and this
   // runs on every production boot rather than on a branch nothing reaches.
   assertAutomationLevelSupported(config.verdictConfig);
+
+  // Same placement, same reason (#691). A non-positive `flatten_before_close_ms`
+  // disables flat-by-close entirely and silently — the window never opens, so
+  // nothing flattens and `trader_log` reads exactly like a session with nothing
+  // to flatten. The Trader carries the same check as a backstop; this is the
+  // one that makes it a boot failure rather than something a soak discovers
+  // hours in, holding overnight.
+  assertTraderConfigSound(config.traderConfig);
 
   // `capitalCeilingUsd` is optional on `ProductionConfig` (paper/backtest
   // boots and the hundreds of tests that never touch live money need not set
@@ -1140,6 +1148,21 @@ function buildMiIngestAgent(deps: {
  * (orphan scan, heartbeat) should settle before the first pipeline pass, and
  * a tick at t=0 would race the scan's read of `audit_log` against the
  * runner's first write to it.
+ *
+ * ## `maxConcurrentInstruments` is a per-pass bound (#692)
+ *
+ * It read as a global ceiling before #669 re-armed the interval ahead of the
+ * pass. Now several passes can legitimately be in flight at once across
+ * disjoint instruments, and each is handed this full value — so the real bound
+ * on concurrent pipelines is `maxConcurrentInstruments x passes in flight`.
+ *
+ * Left per-pass deliberately rather than made global. The per-instrument guard
+ * means overlapping passes never share an instrument, so the overlap is breadth
+ * across the universe rather than reentrancy on one name; and the resource this
+ * was really protecting — LLM concurrency and spend — is bounded independently
+ * by `RateLimiter` and `SpendCap`, which ARE process-wide. What was wrong was
+ * the silence, not the value: an operator sizing the knob had no way to know it
+ * had stopped meaning what its name says.
  */
 export function startTickLoop(deps: {
   scheduler: Scheduler;
@@ -1148,6 +1171,7 @@ export function startTickLoop(deps: {
   logger: Logger;
   persistence: PersistenceInstances;
   tickIntervalMs: number;
+  /** Per PASS, not process-wide: the real ceiling is this x passes in flight (#692). */
   maxConcurrentInstruments: number;
 }): { stop: () => Promise<void> } {
   let stopped = false;
@@ -1225,8 +1249,30 @@ export function startTickLoop(deps: {
       const claims = new Map<string, symbol>();
       const ready: typeof plan.instruments = [];
       const busy: string[] = [];
+      // Separated from `busy` (#692): a within-plan duplicate and a still-running
+      // instrument are skipped by the same check but mean opposite things. One
+      // is a slow pass — the steady state this guard exists to tolerate. The
+      // other is `nextTick` handing back a malformed plan, which is a bug in the
+      // scheduler and should never be reported as "still running from a previous
+      // pass". Collapsing them hid the second exactly when the guard caught it.
+      const duplicated: string[] = [];
+      // Duplicate detection reads THIS set, not `claims`. Keying off `claims`
+      // detected a duplicate only when the first occurrence was claimable: if
+      // that first occurrence was already running from a prior pass it never
+      // entered `claims`, so the second occurrence fell through to the
+      // `running` check and was reported as an ordinary slow pass — the
+      // malformed plan hidden again, in exactly the case where a duplicate is
+      // most likely to matter. Seen-in-plan has to be tracked independently of
+      // whether the instrument was claimable.
+      const seenInPlan = new Set<string>();
       for (const instrument of plan.instruments) {
-        if (running.has(instrument.asset) || claims.has(instrument.asset)) {
+        if (seenInPlan.has(instrument.asset)) {
+          duplicated.push(instrument.asset);
+          continue;
+        }
+        seenInPlan.add(instrument.asset);
+
+        if (running.has(instrument.asset)) {
           busy.push(instrument.asset);
           continue;
         }
@@ -1258,6 +1304,21 @@ export function startTickLoop(deps: {
         });
       }
 
+      if (duplicated.length > 0) {
+        // WARN, unlike `busy` above. This one is not a steady state: the
+        // scheduler returned the same asset twice in one plan, which no
+        // correct `nextTick` does. The guard already made the duplicate lose
+        // to itself, so the tick is safe — but the plan that produced it is
+        // not, and nothing else in the process would report it.
+        deps.logger.log({
+          trace_id: 'tick-loop',
+          stage: 'tick-loop',
+          level: 'warn',
+          message: `tick: scheduler returned ${duplicated.length} duplicate instrument(s) in one plan, extras dropped`,
+          payload: { duplicated },
+        });
+      }
+
       if (ready.length === 0) return;
 
       const pass = runTickPlan(
@@ -1286,11 +1347,23 @@ export function startTickLoop(deps: {
           for (const [asset, token] of claims) release(asset, token);
         });
 
-      passes.add(pass);
+      // What `stop()` awaits is a SHIELDED view of the pass, not the pass
+      // itself (#692). `runOnce`'s own catch below handles its own `await`; it
+      // does not mark the promise handled for anyone else, and `Promise.all` in
+      // `stop()` attaches a second, independent handler to the same object. So
+      // a pass failing after `stop()` snapshotted the set used to reject
+      // `Promise.all`, throw out of `stop()`, and abandon every OTHER
+      // outstanding pass mid-pipeline — the precise thing `passes` exists to
+      // prevent, in the one place it matters most.
+      //
+      // The failure is not swallowed: `runOnce` still awaits the raw `pass` and
+      // logs it below. Only the shutdown path's view of it is shielded.
+      const settled = pass.catch(() => undefined);
+      passes.add(settled);
       try {
         await pass;
       } finally {
-        passes.delete(pass);
+        passes.delete(settled);
       }
     } catch (error) {
       // A thrown tick must not kill the process: the heartbeat's silence is
@@ -1333,8 +1406,13 @@ export function startTickLoop(deps: {
       }
       // Every outstanding pass, not just the newest: with the interval re-armed
       // ahead of the pass, more than one can legitimately be in flight across
-      // different instruments. `runOnce` swallows its own errors, so this only
-      // ever waits.
+      // different instruments.
+      //
+      // This only ever waits because `passes` holds SHIELDED promises (#692),
+      // not because `runOnce` catches. That distinction was previously stated
+      // the wrong way round: `runOnce`'s catch covers its own `await` and
+      // nothing else, so with the raw chain in this set a pass failing here
+      // would reject `Promise.all` and drop the remaining passes on the floor.
       await Promise.all([...passes]);
     },
   };

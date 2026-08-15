@@ -146,11 +146,65 @@ function atrFor(
  * because the market is closed — does not exist on a 24/7 venue with a live
  * bracket leg.
  *
- * No upper guard is needed beyond `sessionEnd` being strictly future: the
- * calendar only ever returns a close after `now`, so `remaining` is positive by
- * construction and the window cannot wrap onto the previous session.
+ * **A past close is stated explicitly, and it changes nothing (#691).** The
+ * `remaining < 0` branch below is documentation-as-code, NOT a behaviour
+ * change: `remaining <= flatten_before_close_ms` was already true for every
+ * negative `remaining`, so a past close has always meant "flatten". The branch
+ * exists because that was reached by accident of a comparison rather than by
+ * decision, and reviewers twice reasoned about it wrongly — including the first
+ * cut of this very change.
+ *
+ * Flattening IS the right answer, which is why the branch only restates it.
+ * `sessionEnd <= now` says the session has already ended, and the response to
+ * "the market is shut and we are holding" is the same whether the calendar is
+ * broken or merely surprising: be flat. On the entry path the same `true` means
+ * "inside the window", so nothing new opens. A permanently-wrong calendar
+ * therefore parks the book flat and stops trading — a halt, but a safe one.
+ *
+ * The two alternatives are both worse, and both were tried. Returning FALSE
+ * would decline to flatten while the market is shut, which is the overnight
+ * carry #668 exists to prevent. THROWING was this change's first cut, and
+ * review killed it: this check is the FIRST branch of the held-position path,
+ * so a throw takes the whole decision down on every tick — including the
+ * direction-flip exit two branches below — stranding exposure the system could
+ * then neither flatten nor exit.
+ *
+ * What is genuinely missing is audibility, not behaviour: a calendar this
+ * broken should raise an alert, and `TraderInput` carries no logger to raise
+ * one from. That is #698.
  */
 function withinFlattenWindow(input: TraderInput, assetClass: AssetClass): boolean {
+  // Checked here rather than at construction because `TraderConfig` is a plain
+  // interface with no validation seam — nothing between the config literal and
+  // this comparison inspects the value. Written as `!(x > 0)` so `NaN` fails
+  // too; `x <= 0` would let it through and make the window silently never open.
+  //
+  // Zero or negative disables flat-by-close ENTIRELY and quietly: the window
+  // never opens, the Trader never flattens, and every position carries
+  // overnight against ADR-0014 with nothing in `trader_log` marking it. A
+  // safety rule that can be switched off by a plausible-looking config value
+  // has to say so.
+  //
+  // This throw DOES take the direction-flip exit down with it — the same
+  // stranding the docblock argues against for a past close. The asymmetry is
+  // deliberate, and it turns on whether the condition is recoverable. A past
+  // close is a live input that may be right, wrong, or transient, and there is
+  // a safe answer available (be flat), so the Trader takes it and keeps
+  // running. A non-positive window is a static misconfiguration that cannot
+  // become valid at the next tick, and every answer it could produce is a lie
+  // about whether ADR-0014 is being enforced — so halting the instrument IS the
+  // correct outcome, not a side effect tolerated to keep the check cheap.
+  //
+  // In practice nothing should ever reach this: `assertTraderConfigSound` at
+  // the composition root refuses the boot. This is the backstop for callers
+  // that never pass through that seam, and there the halt is what you want.
+  if (!(input.config.flatten_before_close_ms > 0)) {
+    throw new Error(
+      `flatten_before_close_ms must be > 0 (got ${input.config.flatten_before_close_ms}); ` +
+        `a non-positive window disables flat-by-close, which ADR-0014 requires`,
+    );
+  }
+
   const calendar = input.sessionCalendars[assetClass];
   const now = input.clock.now();
   const sessionEnd = calendar.sessionEnd(now);
@@ -158,6 +212,11 @@ function withinFlattenWindow(input: TraderInput, assetClass: AssetClass): boolea
   if (sessionEnd === null) return false;
 
   const remaining = sessionEnd.getTime() - now.getTime();
+
+  // The session has already ended. Be flat — see the docblock for why this is
+  // answered here rather than by throwing, which would take the direction-flip
+  // exit down with it and strand the exposure.
+  if (remaining < 0) return true;
 
   return remaining <= input.config.flatten_before_close_ms;
 }

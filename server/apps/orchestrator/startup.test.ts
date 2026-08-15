@@ -12,6 +12,7 @@
 import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DEFAULT_TRADER_CONFIG } from '../../pipeline/trader/index.js';
 import { MiArchiveStore } from '../../providers/market-intelligence/index.js';
 import { openSharedStore, sharedStorePath } from '../../shared/store/index.js';
 import {
@@ -117,7 +118,11 @@ afterEach(() => {
  * whether it trades well, and no tick runs before `stop()`.
  */
 const STAGE_CONFIGS = {
-  traderConfig: {} as never,
+  // See #691: the composition root now refuses a trader config whose
+  // `flatten_before_close_ms` would silently disable flat-by-close, so this one
+  // cannot stay an empty cast either. The real defaults, which is also what
+  // `paperStartingProfile` spreads.
+  traderConfig: DEFAULT_TRADER_CONFIG as never,
   riskConfig: {} as never,
   // See #434: the composition root reads the automation dial to refuse a
   // HITL-engaging config, so this one cannot stay an empty cast.
