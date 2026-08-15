@@ -191,13 +191,13 @@ function withinFlattenWindow(input: TraderInput, assetClass: AssetClass): boolea
  * observed a fraction after an hour boundary would otherwise floor to the next
  * bar on every tick rather than occasionally.
  *
- * That residual split is **#687**, and it is not merely cosmetic: the intent
- * keys into bar N+1 while `debate_id` still says bar N, so bar N+1's own
- * genuine decision computes the same key and is suppressed as a duplicate.
- * Closing it needs the bar carried FORWARD from the Debate step rather than
- * re-derived here, and `DebateResult` deliberately carries no bar coordinate
- * (`buildDebateLog` takes `instrument`/`bar_timestamp` from the caller), so the
- * fix is a contract change across the debate/trader seam.
+ * That residual split is **#687**, and it is not cosmetic: bar N+1's own
+ * genuine decision then computes the key the straddling intent already took,
+ * and is suppressed as a duplicate. Closing it needs the bar carried FORWARD
+ * from the Debate step rather than re-derived here, and `DebateResult`
+ * deliberately carries no bar coordinate (`buildDebateLog` takes
+ * `instrument`/`bar_timestamp` from the caller), so the fix is a contract
+ * change across the debate/trader seam.
  *
  * **The grid is stated, not inherited.** `floorToBar`'s timeframe argument is
  * passed explicitly as `DEBATE_BAR_TIMEFRAME_MS` rather than left to its
