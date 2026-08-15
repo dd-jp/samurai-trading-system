@@ -300,13 +300,26 @@ describe('paperStartingProfile', () => {
     expect(() => paperStartingProfile('live')).toThrow('SAMURAI_LIVE_MAX_CAPITAL_USD');
   });
 
-  it('bounds the hard drawdown breaker at the documented target, as a fraction', () => {
-    // CONTEXT.md "Drawdown": max ~20-25%. `PortfolioView.drawdown_pct` is
-    // computed as `(peak - equity) / peak` (portfolio-view.ts) — a FRACTION,
-    // despite the `_pct` name. A `20` here would mean 2000% and never trip.
+  it('bounds the hard drawdown breaker above the designed envelope, as a fraction', () => {
+    // `PortfolioView.drawdown_pct` is computed as `(peak - equity) / peak`
+    // (portfolio-view.ts) — a FRACTION, despite the `_pct` name. A `30` here
+    // would mean 3000% and never trip.
+    //
+    // 0.30 is the owner ruling on #634, sited above ADR-0018's measured
+    // drawdown envelope (23.1% index ETPs / 26.2% single-stock at today's
+    // sizing). CONTEXT.md's "~20-25%" is that envelope's design target, not
+    // the halt line — it binds on the RE-ARM edge below instead.
     const { breakerConfig } = paperStartingProfile('paper');
 
-    expect(breakerConfig.max_drawdown_pct).toBe(0.2);
+    expect(breakerConfig.max_drawdown_pct).toBe(0.3);
+    expect(breakerConfig.max_drawdown_pct).toBeGreaterThan(0.262);
+
+    // The hysteresis band (#634): re-arm strictly inside the trip level, and
+    // back within the design envelope rather than merely off its worst point.
+    expect(breakerConfig.auto_rearm.recovery_drawdown_pct).toBe(0.2);
+    expect(breakerConfig.auto_rearm.recovery_drawdown_pct).toBeLessThan(
+      breakerConfig.max_drawdown_pct,
+    );
     expect(breakerConfig.daily_loss_pct).toBeGreaterThan(0);
     expect(breakerConfig.daily_loss_pct).toBeLessThan(breakerConfig.max_drawdown_pct);
 

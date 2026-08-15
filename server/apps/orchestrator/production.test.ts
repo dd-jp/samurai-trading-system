@@ -219,7 +219,20 @@ function stubConfig(db: SqliteHandle, overrides: Partial<ProductionConfig> = {})
     } as ProductionConfig['verdictConfig'],
     executionConfig: {} as ProductionConfig['executionConfig'],
     correlationConfig: {} as ProductionConfig['correlationConfig'],
-    breakerConfig: {} as ProductionConfig['breakerConfig'],
+    // Not `{}` like its neighbours either, for the same reason as
+    // `verdictConfig` above: since #634 `CircuitBreakers` validates its
+    // hysteresis band at construction, so an empty cast here is a config that
+    // cannot be built at all. These are `REAL_CONFIGS.breakerConfig`'s values
+    // — which also makes the volatility-reading comment above true, since the
+    // baselines it names (0.05 crypto, 0.02 stocks) now actually exist.
+    breakerConfig: {
+      daily_loss_pct: 0.05,
+      daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+      max_drawdown_pct: 0.2,
+      max_consecutive_losses: 5,
+      volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+      auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+    } as ProductionConfig['breakerConfig'],
     costConfig: {} as ProductionConfig['costConfig'],
     ciiConsumerConfig: { pollIntervalMs: 600_000 },
     ...overrides,

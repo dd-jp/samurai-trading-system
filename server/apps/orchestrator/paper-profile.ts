@@ -45,8 +45,11 @@
  *   `SimulatedBrokerAdapter` only ("Consumed by the Simulated adapter only —
  *   real adapters never call it", execution/types.ts). Paper runs against
  *   `AlpacaBrokerAdapter`.
- * - `breakerConfig.auto_rearm` — "Consulted only in 'backtest' mode; live and
- *   paper always require a manual reArm() call" (risk-manager/breakers.ts).
+ * - `breakerConfig.auto_rearm.max_days_tripped` — backtest-only by
+ *   construction (risk-manager/breakers.ts). Its sibling
+ *   `recovery_drawdown_pct` is NOT inert and was moved off this list by #634:
+ *   ADR-0013 removed the operator who used to clear the hard drawdown
+ *   breaker, so recovery is now the live and paper re-arm path too.
  * - `ciiConsumerConfig` is live, but the provider behind it is not: the
  *   composition root defaults `ciiScoreProvider` to `ParkedCiiScoreProvider`
  *   (always `null`, ADR-0002 — live WorldMonitor wiring is parked for cost
@@ -183,7 +186,7 @@ export const PAPER_PROFILE_PROVENANCE = {
   'breakerConfig.daily_loss_pct': 'UNSOURCED',
   'breakerConfig.daily_loss_pct_by_class.crypto': 'UNSOURCED',
   'breakerConfig.daily_loss_pct_by_class.stocks': 'UNSOURCED',
-  'breakerConfig.max_drawdown_pct': 'SPEC',
+  'breakerConfig.max_drawdown_pct': 'DERIVED',
   'breakerConfig.max_consecutive_losses': 'UNSOURCED',
   'breakerConfig.volatility.baseline.crypto': 'UNSOURCED',
   'breakerConfig.volatility.baseline.stocks': 'UNSOURCED',
@@ -1226,17 +1229,28 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
      */
     daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
     /**
-     * SPEC — CONTEXT.md "Drawdown": "Live system target: max ~20-25%";
-     * risk-manager-spec.md "Module: Circuit Breakers" ("~20-25% target per
-     * CONTEXT.md"); docs/research/02-staged-deployment-plan.md's proceed
-     * criteria ("drawdown < ~20-25%"). The conservative end of the stated
-     * range. Again a fraction — `drawdown_pct` is `(peak - equity) / peak`
+     * DERIVED — owner ruling on #634, sited against ADR-0018's measured
+     * drawdown envelope. At today's fixed-fraction sizing (~35% of the leg for
+     * index ETPs, ~25% for single-stock ETPs) ADR-0018 holds max drawdown at
+     * **23.1%** and **26.2%** respectively. A breaker inside that band would
+     * fire on the strategy working as designed, so the trip sits ABOVE the
+     * envelope at 30% — it means "reality has exceeded what we sized for",
+     * not "we are having a bad week".
+     *
+     * This replaces the earlier 0.2, which read CONTEXT.md's "~20-25% target"
+     * as a breaker level. That range is a *design target for the envelope* —
+     * ADR-0018 §"Target state" says so explicitly ("what the 20-25% number
+     * means operationally") — and the two ends of a designed envelope cannot
+     * also be the halt line without halting on the design. The 20-25% figure
+     * still binds: it is now the RE-ARM edge (see `auto_rearm` below).
+     *
+     * A fraction — `drawdown_pct` is `(peak - equity) / peak`
      * (risk-manager/portfolio-view.ts).
      *
-     * Hard and sticky: re-arming requires a deliberate `reArm()` call in
-     * paper and live alike (spec story 16).
+     * Hard and sticky, but no longer human-cleared: ADR-0013 removed the
+     * operator, so `auto_rearm` clears it on recovery in every mode (#634).
      */
-    max_drawdown_pct: 0.2,
+    max_drawdown_pct: 0.3,
     /**
      * UNSOURCED — spec story 15 names the breaker, not the count. 5 is a
      * streak unlikely enough at any plausible win rate to be signal rather
@@ -1261,13 +1275,24 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
       multiplier: 3,
     },
     /**
-     * Inert in paper — "Consulted only in 'backtest' mode; live and paper
-     * always require a manual reArm() call" (risk-manager/breakers.ts).
-     * DERIVED for the backtest path: re-arm once drawdown has halved back
-     * from the 20% hard limit, or after 5 days, whichever comes first (spec
-     * story 21 — so a backtest does not halt forever on its first hit).
+     * DERIVED — LIVE IN PAPER as of #634, where it used to be inert. ADR-0013
+     * removed the operator who would have called `reArm()`, so this is the
+     * only thing that can clear a trip outside backtest.
+     *
+     * `recovery_drawdown_pct: 0.2` is the owner ruling on #634 and the lower
+     * edge of the band whose upper edge is `max_drawdown_pct: 0.3` above. It
+     * is deliberately the top of CONTEXT.md's "~20-25%" design envelope: the
+     * book resumes taking entries once it is back inside the drawdown it was
+     * sized for, not merely once it has stopped falling. The 10-point band is
+     * wide enough that a single mark cannot flip the breaker back and forth
+     * across it.
+     *
+     * `max_days_tripped: 5` is backtest-only by construction — see the field's
+     * docblock. Its job is stopping a multi-year replay from dead-ending on
+     * its first hit (spec story 21); in paper or live it would resume entries
+     * on elapsed time alone, having recovered nothing.
      */
-    auto_rearm: { recovery_drawdown_pct: 0.1, max_days_tripped: 5 },
+    auto_rearm: { recovery_drawdown_pct: 0.2, max_days_tripped: 5 },
   };
 
   const costConfig: CostConfig = {

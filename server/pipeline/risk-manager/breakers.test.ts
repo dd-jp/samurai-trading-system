@@ -296,9 +296,23 @@ describe('CircuitBreakers', () => {
     expect(atThreshold.armed_breakers).toContain('consecutive_loss_cooldown');
   });
 
-  it('trips the hard peak-to-trough drawdown breaker and it stays tripped even if drawdown recovers', () => {
-    const breakers = new CircuitBreakers(makeConfig({ max_drawdown_pct: 20 }));
+  /**
+   * The band, not the line (#634). `max_drawdown_pct` is the upper edge and
+   * `auto_rearm.recovery_drawdown_pct` the lower; between them the breaker
+   * holds whatever state it is already in. This is the test that stops a
+   * later change collapsing the two numbers into one — which would give a
+   * breaker that clears in the same `evaluate()` call that tripped it.
+   */
+  it('holds the hard drawdown trip anywhere inside the hysteresis band, and clears below it', () => {
+    const breakers = new CircuitBreakers(
+      makeConfig({
+        max_drawdown_pct: 20,
+        auto_rearm: { recovery_drawdown_pct: 10, max_days_tripped: 999 },
+      }),
+    );
 
+    // Inside the band but never tripped: state is untripped and stays so, so
+    // the band itself is not what arms the breaker.
     const belowThreshold = breakers.evaluate(
       makeInput({ portfolio: makePortfolio({ drawdown_pct: 15 }) }),
     );
@@ -310,67 +324,122 @@ describe('CircuitBreakers', () => {
     expect(tripped.portfolio_tripped).toBe(true);
     expect(tripped.armed_breakers).toContain('portfolio_drawdown_hard');
 
-    const recoveredButStillTripped = breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ drawdown_pct: 2 }) }),
+    // Same 15% reading as the first call, opposite verdict — that asymmetry
+    // IS the hysteresis. A partial recovery does not resume trading.
+    const insideBand = breakers.evaluate(
+      makeInput({ portfolio: makePortfolio({ drawdown_pct: 15 }) }),
     );
-    expect(recoveredButStillTripped.portfolio_tripped).toBe(true);
-    expect(recoveredButStillTripped.armed_breakers).toContain('portfolio_drawdown_hard');
+    expect(insideBand.portfolio_tripped).toBe(true);
+    expect(insideBand.armed_breakers).toContain('portfolio_drawdown_hard');
+
+    const belowBand = breakers.evaluate(
+      makeInput({ portfolio: makePortfolio({ drawdown_pct: 5 }) }),
+    );
+    expect(belowBand.portfolio_tripped).toBe(false);
+    expect(belowBand.armed_breakers).not.toContain('portfolio_drawdown_hard');
   });
 
-  it('requires a manual reArm() to clear the hard drawdown breaker in live mode', () => {
-    const breakers = new CircuitBreakers(makeConfig({ max_drawdown_pct: 20 }));
-    breakers.evaluate(makeInput({ portfolio: makePortfolio({ drawdown_pct: 25 }) }));
-
-    const stillTripped = breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ drawdown_pct: 0 }), mode: 'live' }),
+  /**
+   * ADR-0013 removed every human gate, which removed the operator who used to
+   * call `reArm()`. Before #634 the recovery policy was gated on
+   * `mode === 'backtest'`, so in paper and live the hard breaker trip was
+   * PERMANENT — and persisted (`breaker_state`, reloaded into the constructor
+   * at boot), so it outlived a restart too. These two are the regression pins.
+   */
+  it.each([
+    'live',
+    'paper',
+  ] as const)('auto-re-arms the hard drawdown breaker on recovery in %s mode — ADR-0013 left no operator to call reArm()', (mode) => {
+    const breakers = new CircuitBreakers(
+      makeConfig({
+        max_drawdown_pct: 20,
+        auto_rearm: { recovery_drawdown_pct: 10, max_days_tripped: 999 },
+      }),
     );
-    expect(stillTripped.portfolio_tripped).toBe(true);
+    breakers.evaluate(makeInput({ portfolio: makePortfolio({ drawdown_pct: 25 }), mode }));
 
-    breakers.reArm();
-    const cleared = breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ drawdown_pct: 0 }), mode: 'live' }),
+    const insideBand = breakers.evaluate(
+      makeInput({ portfolio: makePortfolio({ drawdown_pct: 15 }), mode }),
     );
-    expect(cleared.portfolio_tripped).toBe(false);
+    expect(insideBand.portfolio_tripped).toBe(true);
+
+    const recovered = breakers.evaluate(
+      makeInput({ portfolio: makePortfolio({ drawdown_pct: 5 }), mode }),
+    );
+    expect(recovered.portfolio_tripped).toBe(false);
   });
 
-  it('requires a manual reArm() to clear the hard drawdown breaker in paper mode', () => {
-    const breakers = new CircuitBreakers(makeConfig({ max_drawdown_pct: 20 }));
-    breakers.evaluate(makeInput({ portfolio: makePortfolio({ drawdown_pct: 25 }), mode: 'paper' }));
-
-    const stillTripped = breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ drawdown_pct: 0 }), mode: 'paper' }),
+  /**
+   * `max_days_tripped` is the one half of the policy that stays backtest-only.
+   * Elapsed time is not recovery: with 1 day configured, a 14-day soak that
+   * drew down past the threshold would otherwise resume entries on day 2 while
+   * still fully down, which is the opposite of #634's "re-arm on recovery".
+   */
+  it.each([
+    'live',
+    'paper',
+  ] as const)('does NOT re-arm on elapsed time alone in %s mode while the drawdown persists', (mode) => {
+    const breakers = new CircuitBreakers(
+      makeConfig({
+        max_drawdown_pct: 20,
+        auto_rearm: { recovery_drawdown_pct: 10, max_days_tripped: 1 },
+      }),
     );
-    expect(stillTripped.portfolio_tripped).toBe(true);
-
-    breakers.reArm();
-    const cleared = breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ drawdown_pct: 0 }), mode: 'paper' }),
-    );
-    expect(cleared.portfolio_tripped).toBe(false);
-  });
-
-  it('does not auto-re-arm the hard breaker in paper mode even if the recovery condition is met', () => {
-    const config = makeConfig({
-      max_drawdown_pct: 20,
-      auto_rearm: { recovery_drawdown_pct: 10, max_days_tripped: 1 },
-    });
-    const breakers = new CircuitBreakers(config);
     breakers.evaluate(
       makeInput({
         portfolio: makePortfolio({ drawdown_pct: 25 }),
-        mode: 'paper',
+        mode,
         clock: makeClock('2026-07-01T00:00:00Z'),
       }),
     );
 
+    // A month later, and still 25% down: the timeout arm would have cleared
+    // this many times over in backtest.
     const stillTripped = breakers.evaluate(
       makeInput({
-        portfolio: makePortfolio({ drawdown_pct: 0 }),
-        mode: 'paper',
+        portfolio: makePortfolio({ drawdown_pct: 25 }),
+        mode,
         clock: makeClock('2026-08-01T00:00:00Z'),
       }),
     );
     expect(stillTripped.portfolio_tripped).toBe(true);
+    expect(stillTripped.armed_breakers).toContain('portfolio_drawdown_hard');
+  });
+
+  it('clears the hard drawdown breaker on an explicit reArm() without waiting for the recovery threshold', () => {
+    // The operator override that survives #634. What it buys over auto-re-arm
+    // is skipping the LOWER edge: 15% is inside the band, so the recovery
+    // condition would hold the trip indefinitely, and reArm() releases anyway.
+    const breakers = new CircuitBreakers(
+      makeConfig({
+        max_drawdown_pct: 20,
+        auto_rearm: { recovery_drawdown_pct: 10, max_days_tripped: 999 },
+      }),
+    );
+    breakers.evaluate(makeInput({ portfolio: makePortfolio({ drawdown_pct: 25 }) }));
+
+    breakers.reArm();
+
+    const cleared = breakers.evaluate(
+      makeInput({ portfolio: makePortfolio({ drawdown_pct: 15 }) }),
+    );
+    expect(cleared.portfolio_tripped).toBe(false);
+  });
+
+  it('re-trips immediately after reArm() if the drawdown is still at the trip level', () => {
+    // reArm() is not an override of the UPPER edge — the trip test runs first
+    // in every `evaluate()`, so releasing at a still-breaching drawdown buys
+    // exactly one call. Pinned because the docblock says so.
+    const breakers = new CircuitBreakers(makeConfig({ max_drawdown_pct: 20 }));
+    breakers.evaluate(makeInput({ portfolio: makePortfolio({ drawdown_pct: 25 }) }));
+
+    breakers.reArm();
+
+    const reTripped = breakers.evaluate(
+      makeInput({ portfolio: makePortfolio({ drawdown_pct: 25 }) }),
+    );
+    expect(reTripped.portfolio_tripped).toBe(true);
+    expect(reTripped.armed_breakers).toContain('portfolio_drawdown_hard');
   });
 
   it('auto-re-arms the hard drawdown breaker under the backtest mode flag once recovered', () => {
@@ -427,30 +496,6 @@ describe('CircuitBreakers', () => {
     expect(afterTimeout.portfolio_tripped).toBe(false);
   });
 
-  it('does not auto-re-arm the hard breaker in live mode even if the recovery condition is met', () => {
-    const config = makeConfig({
-      max_drawdown_pct: 20,
-      auto_rearm: { recovery_drawdown_pct: 10, max_days_tripped: 1 },
-    });
-    const breakers = new CircuitBreakers(config);
-    breakers.evaluate(
-      makeInput({
-        portfolio: makePortfolio({ drawdown_pct: 25 }),
-        mode: 'live',
-        clock: makeClock('2026-07-01T00:00:00Z'),
-      }),
-    );
-
-    const stillTripped = breakers.evaluate(
-      makeInput({
-        portfolio: makePortfolio({ drawdown_pct: 0 }),
-        mode: 'live',
-        clock: makeClock('2026-08-01T00:00:00Z'),
-      }),
-    );
-    expect(stillTripped.portfolio_tripped).toBe(true);
-  });
-
   it('trips the per-asset-class volatility halt independently for crypto vs stocks', () => {
     const breakers = new CircuitBreakers(makeConfig());
 
@@ -484,6 +529,55 @@ describe('CircuitBreakers', () => {
     const released = breakers.evaluate(makeInput());
     expect(released.portfolio_tripped).toBe(false);
     expect(released.armed_breakers).not.toContain('kill_switch:dead-mans-switch');
+  });
+});
+
+describe('CircuitBreakers — hysteresis band validation (#634)', () => {
+  /**
+   * Since the recovery policy runs in every mode, these two numbers are the
+   * whole stop: nothing clears the hard breaker by hand any more. A band of
+   * zero or negative width is therefore not a tuning mistake that shows up as
+   * a slightly-wrong halt — it is a breaker that trips and clears within one
+   * `evaluate()`, so `armed_breakers` never names it and the halt is
+   * indistinguishable from never having been breached.
+   */
+  it.each([
+    { recovery: 20, label: 'equal to the trip level (zero-width band)' },
+    { recovery: 25, label: 'above the trip level (inverted band)' },
+  ])('refuses a config whose recovery threshold is $label', ({ recovery }) => {
+    expect(
+      () =>
+        new CircuitBreakers(
+          makeConfig({
+            max_drawdown_pct: 20,
+            auto_rearm: { recovery_drawdown_pct: recovery, max_days_tripped: 5 },
+          }),
+        ),
+    ).toThrow(/must be strictly below/);
+  });
+
+  it('names both offending values so the fix does not need a debugger', () => {
+    expect(
+      () =>
+        new CircuitBreakers(
+          makeConfig({
+            max_drawdown_pct: 0.3,
+            auto_rearm: { recovery_drawdown_pct: 0.3, max_days_tripped: 5 },
+          }),
+        ),
+    ).toThrow(/\(0\.3\).*\(0\.3\)/s);
+  });
+
+  it('accepts the shipped paper values — the guard bounds the band, it does not forbid one', () => {
+    expect(
+      () =>
+        new CircuitBreakers(
+          makeConfig({
+            max_drawdown_pct: 0.3,
+            auto_rearm: { recovery_drawdown_pct: 0.2, max_days_tripped: 5 },
+          }),
+        ),
+    ).not.toThrow();
   });
 });
 
@@ -527,9 +621,14 @@ describe('CircuitBreakers — crash-restart persistence (#203)', () => {
     ]);
 
     // Simulates a process restart: a brand-new instance, seeded only from the persisted rows.
+    //
+    // Re-evaluated at 15% — inside the hysteresis band (#634), so the reading
+    // is one that would NOT trip a fresh breaker but must not clear a restored
+    // one either. That is what distinguishes "the trip survived the restart"
+    // from "the trip was re-derived from the current drawdown".
     const after = new CircuitBreakers(config, persisted);
     const stillTripped = after.evaluate(
-      makeInput({ portfolio: makePortfolio({ drawdown_pct: 0 }), mode: 'live' }),
+      makeInput({ portfolio: makePortfolio({ drawdown_pct: 15 }), mode: 'live' }),
     );
 
     expect(stillTripped.portfolio_tripped).toBe(true);
