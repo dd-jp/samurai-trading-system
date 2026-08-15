@@ -45,6 +45,19 @@ const GUARDED_STORE_PATHS = [
   'data/samurai-paper.sqlite',
   'data/samurai-live.sqlite',
   'data/samurai-backtest.sqlite',
+  // #552/#554 gave Market Intelligence its OWN database file, and it is a real
+  // store path by the same argument as the three above: the soak's archive of
+  // every article it has ever ingested, and the only record of what the
+  // analysts could see at each tick. Re-creating it loses the `ingested_at`
+  // history that makes a replay honest, and there is no second copy anywhere.
+  //
+  // Added after this guard caught `startFromEnvironment` opening the paper
+  // archive by default from `smoke-run.ts` and ten `startup.test.ts` sites —
+  // it fired on `data` alone, but only on a checkout where `data/` did not
+  // already exist, so a developer whose soak had ever run saw green.
+  'data/samurai-mi-paper.sqlite',
+  'data/samurai-mi-live.sqlite',
+  'data/samurai-mi-backtest.sqlite',
 ] as const;
 
 /** The inode of the file or directory, or `null` when it does not exist. */

@@ -159,6 +159,7 @@ import {
   MarketDataServiceImpl,
   SqliteMarketDataStore,
 } from '../../providers/market-data-service/index.js';
+import { MiArchiveStore } from '../../providers/market-intelligence/index.js';
 import { delay } from '../../shared/http/delay.js';
 import type { OrderIntent } from '../../shared/index.js';
 import { SimulatedClock, TokenBucket } from '../../shared/index.js';
@@ -2352,6 +2353,12 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // mode `ConsoleApprovalChannel` used to hide here.
       ...profile,
       db,
+      // In-memory for the same reason `db` is (line 2288): the smoke run must
+      // not touch a real store path in this checkout. Left to default, the
+      // composition root opens `data/samurai-mi-paper.sqlite` — the live
+      // soak's own MI archive — and a gate run would both create it on a
+      // fresh clone and write fixture items into the file a real soak reads.
+      miArchive: new MiArchiveStore(),
       clock,
       logger,
       universe: SMOKE_TEST_UNIVERSE,
