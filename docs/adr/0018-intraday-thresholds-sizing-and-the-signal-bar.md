@@ -140,7 +140,7 @@ Crypto left this system's scope on 2026-08-16 ([ADR-0014](0014-intraday-flat-by-
 
 Two independent grounds, neither touching neutrality or truncation:
 
-- **Width.** Over the candidate tranches a −0.5% stop needs **≥8.00 pp** (3× index) and **≥18.2 pp** (3× single-stock, i.e. 68.2% directional accuracy). Both are floors, by the bijection argument.
+- **Width, restated 2026-08-16 where the formula is valid.** The earlier figures — ≥8.00 pp (3× index) and ≥18.2 pp (3× single-stock) — were **computed over the candidate tranches**, i.e. by running a ladder width through `cost / (TP + |stop|)`. That is the same misuse this ADR's amendment above withdrew 4.60 pp over, so **those two figures are withdrawn too**. The argument survives intact when made against the **single neutral bracket**, where the formula is exact: the bijection is monotone (+1.0 ↔ −1.03, +2.0 ↔ −2.16, +3.0 ↔ −3.35), so a −0.5% stop's neutral take-profit partner is strictly below +1.0% and the width strictly below 1.5%. The bar therefore floors at **>12 pp** (3× index) and **>27 pp** (3× single-stock) — stronger than the withdrawn figures, and derived rather than assumed.
 - **Stop fidelity.** [`docs/research/41-tick-latency-economics.md`](../research/41-tick-latency-economics.md) Result 2 measures the conditional tail as `g(D) = 0.525%·√D` on a 3× equity ETP. **A −0.5% stop is smaller than its own execution error** at any cadence we can run — at τ=15 it delivers ≈−2.4%.
 
 ## Known weaknesses

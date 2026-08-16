@@ -12,7 +12,7 @@ The Analysts layer (Stage 1) is where each lens produces its own independent vie
 
 ## Solution
 
-For each trading signal, the Analysts layer runs a set of role-specific analyst personas (technical, fundamental, sentiment) in parallel, filtered by what applies to the asset class. Each analyst pulls its primary data plus a fixed context frame from the data services, reasons over it with an LLM tiered to its latency budget, and emits a fixed-shape `AnalystView` (direction + confidence + free-text key points). The layer enforces a role-dependent quorum, handles individual analyst failures without stalling the pipeline, and produces exactly the `AnalystView[]` the Debate Engine's upstream contract expects.
+For each trading signal, the Analysts layer runs a set of role-specific analyst personas (technical, fundamental, sentiment) in parallel, filtered by what applies to the asset class. Each analyst pulls its primary data plus a fixed context frame from the data services, **reasons over it deterministically** — *amended 2026-08-16 from "with an LLM tiered to its latency budget"; see "Where the LLM belongs" below* — and emits a fixed-shape `AnalystView` (direction + confidence + free-text key points). The layer enforces a role-dependent quorum, handles individual analyst failures without stalling the pipeline, and produces exactly the `AnalystView[]` the Debate Engine's upstream contract expects.
 
 Key architectural decisions:
 - **Stateless analysts** — each analyst is a pure function of its inputs (data + weight); it holds no memory across ticks, so crash-restart is trivial and backtest replay reuses the live code path unchanged.
@@ -315,15 +315,21 @@ Per CONTEXT.md:
 
 ### Asset-Class Analyst Counts
 
-The variable analyst count (2 for crypto, 3 for stocks) is not incidental — it drives the Debate Engine's quorum threshold. Crypto's ≥50% quorum of 2 means both analysts effectively matter; stocks' ≥50% of 3 tolerates one optional (Sentiment) dropout. This is why Fundamental is mandatory on the stocks path but simply absent (not "failed") on the crypto path.
+~~The variable analyst count (2 for crypto, 3 for stocks) is not incidental — it drives the Debate Engine's quorum threshold. Crypto's ≥50% quorum of 2 means both analysts effectively matter; stocks' ≥50% of 3 tolerates one optional (Sentiment) dropout. This is why Fundamental is mandatory on the stocks path but simply absent (not "failed") on the crypto path.~~
 
-### Latency Tiering Rationale
+> **Superseded 2026-08-16.** Crypto is out of Samurai's scope, so there is one path and the count is **3**, with Sentiment the one optional dropout. **The quorum reasoning itself survives and matters more than it did**: with only one path, ≥50% of 3 is the sole quorum rule, and [`market-intelligence-spec.md`](market-intelligence-spec.md)'s exclude-mute-analysts behaviour means an MI coverage hole narrows the desk to 2 rather than dragging the evidence average — the fix for [#625](https://github.com/dd-jp/samurai-trading-system/issues/625)'s 0.5478 conviction ceiling. A desk narrowed to a single live analyst is below quorum and must not trade; that is the case worth a test.
 
-LLM tiering is driven by the latency budget, not just task complexity. Technical and Sentiment run on the crypto path's tight ~2s/analyst budget, so both use cheap/fast models. Fundamental runs only on the stocks path (looser ~5s/analyst budget), so it can afford a stronger reasoning model for nuanced earnings analysis.
+### ~~Latency Tiering Rationale~~ — withdrawn 2026-08-16
 
-### Backtest Cost Model
+~~LLM tiering is driven by the latency budget, not just task complexity. Technical and Sentiment run on the crypto path's tight ~2s/analyst budget, so both use cheap/fast models. Fundamental runs only on the stocks path (looser ~5s/analyst budget), so it can afford a stronger reasoning model for nuanced earnings analysis.~~
 
-A long replay window makes thousands of analyst invocations. Without mitigation that is thousands of LLM calls. The input-hash response cache makes re-runs (param sweeps, debugging) near-free, and the cheap model tier keeps first-pass bulk iteration affordable; premium models are reserved for the final validation run. Temperature-0 replay makes all of this reproducible.
+> **Withdrawn with the tiering itself.** Analysts make no LLM call, so there is no tier to choose and no per-analyst latency budget to choose it against. What replaces it is not a smaller version of the same thing: the analyst layer's latency is now **compute-bounded and deterministic**, which is what lets it run on the cheap tick path at τ=2min. The two premises this section rested on are both gone — the crypto path, and the per-analyst model call.
+
+### Backtest Cost Model — **relocated, not deleted**
+
+~~A long replay window makes thousands of analyst invocations. Without mitigation that is thousands of LLM calls. The input-hash response cache makes re-runs (param sweeps, debugging) near-free, and the cheap model tier keeps first-pass bulk iteration affordable; premium models are reserved for the final validation run. Temperature-0 replay makes all of this reproducible.~~
+
+> **Amended 2026-08-16.** A replay no longer makes *any* LLM call at this layer, so the cost this section prices is zero here. **The three mechanisms are still needed — one stage later.** The input-hash response cache, the cheap/premium split for bulk-vs-validation runs, and temperature-0 replay all belong to the **Debate Engine**, which is where the model calls now are and where a long replay's cost is now concentrated. Do not read this withdrawal as "backtest replay became free": it became free *at the analyst layer*, and the same arithmetic reappears against debate rounds. See [`debate-engine-spec.md`](debate-engine-spec.md).
 
 ### Future Extensions
 
