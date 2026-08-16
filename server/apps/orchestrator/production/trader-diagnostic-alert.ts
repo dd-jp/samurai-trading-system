@@ -14,6 +14,13 @@
  * implementation would emit each condition twice. An absent channel here means
  * "no second, audible copy" — never "silent".
  *
+ * That claim was FALSE as shipped and is now true (#710). The `error` log lived
+ * inside the function the throttle gates, so on a condition present every tick
+ * it wrote on tick 1, again on tick 9, and nothing in between — seven ticks in
+ * eight silent, in exactly the deployment this paragraph promises is safe. The
+ * log is now emitted for every entry `observe` returns and only the `alert` ones
+ * reach the channel; see `ObservedTraderDiagnostic`.
+ *
  * ## Why an alert and not just a `trader_log` row
  *
  * `trader_log` already records every skip reason durably, and #475 made those
@@ -38,9 +45,22 @@ export interface TraderDiagnosticAlert {
   diagnostic: TraderDiagnostic;
   /**
    * How many consecutive ticks this instrument has reported this KIND,
-   * including this one. The count is the operator's signal: `session_end_in_past`
-   * once is an ordinary tick just after the bell, and the same condition on the
-   * fortieth consecutive tick is a calendar that has stopped working.
+   * including this one.
+   *
+   * The count is a severity signal, NOT a filter — see
+   * `ALERT_AFTER_CONSECUTIVE_DIAGNOSTICS`, which is 1. It separates a one-off
+   * from an entrenched fault: `session_end_in_past` once means the calendar
+   * answered with a close that had already passed at the instant it was asked
+   * about, and the same condition on the fortieth consecutive tick means it has
+   * been doing that for ten hours.
+   *
+   * Neither is routine. A previous version of this comment called a single
+   * `session_end_in_past` "an ordinary tick just after the bell", and that is
+   * wrong: `decide.ts` resolves `sessionEnd` from `clock.now()` on every call,
+   * and both shipped calendars return a close strictly after the instant they
+   * are given, so a conforming calendar cannot produce it at all. The claim was
+   * load-bearing enough to send a reviewer looking for a grace threshold this
+   * channel must not have (#710).
    */
   consecutive_ticks: number;
   reported_at: Date;
@@ -48,6 +68,26 @@ export interface TraderDiagnosticAlert {
 
 export interface TraderDiagnosticAlertChannel {
   postTraderDiagnosticAlert(alert: TraderDiagnosticAlert): Promise<void>;
+}
+
+/**
+ * One distinct diagnostic kind observed on one tick, with its run length and
+ * whether it is ALSO due to escalate.
+ *
+ * The `alert` flag exists so the two halves can be throttled differently, which
+ * is the correction #710's review forced. `observe` used to return only the due
+ * entries, and the caller's `error` log lived downstream of that filter — so a
+ * condition present on every tick was logged on tick 1, then on tick 9, and
+ * NOWHERE in between, while two docblocks in this file promised the log was
+ * unconditional. ADR-0008 §1's mute-the-channel argument is about a shared
+ * Telegram chat and has no bearing on a log file, so throttling the durable
+ * half was never justified in the first place.
+ */
+export interface ObservedTraderDiagnostic {
+  diagnostic: TraderDiagnostic;
+  consecutive_ticks: number;
+  /** True at the threshold and on each bounded repeat — see `shouldAlertAtDiagnosticCount`. */
+  alert: boolean;
 }
 
 /**
@@ -112,29 +152,54 @@ export class TraderDiagnosticThrottle {
   readonly #consecutive = new Map<string, number>();
 
   /**
-   * Records this tick's diagnostics for one instrument and returns those that
-   * should alert now.
+   * Records this tick's diagnostics for one instrument and returns EVERY
+   * distinct kind observed, each carrying its run length and whether it is due
+   * to alert.
+   *
+   * Returning the non-alerting ones too is deliberate: the caller logs all of
+   * them at `error` and posts only the due ones, so the durable record stays
+   * per-tick while the shared Telegram chat stays throttled (#710).
    *
    * `present` is the COMPLETE set for this tick, because clearing matters as
    * much as counting: a kind that did not recur has recovered, and its run must
    * reset so an intermittent fault cannot accumulate its way to an alert over a
    * week of otherwise healthy ticks.
+   *
+   * **A kind repeated within one tick counts ONCE (#710 review).** The unit is
+   * the tick, not the observation: `routeDecision` evaluates
+   * `withinFlattenWindow` for the held position and then passes the same
+   * `diagnostics` array into `buildBracket`, which evaluates it again for the
+   * scale-in — so one tick can hand the same kind in twice. Counting entries
+   * would make `consecutive_ticks` inflate 2x, which both lies to the operator
+   * in the alert text and fires the bounded repeat at twice its intended
+   * cadence.
+   *
+   * Deduped HERE rather than by threading the first verdict through the call
+   * chain, because that fix only holds until a third call site appears; this
+   * one is a property of the counter and survives the caller changing shape.
    */
-  observe(
-    instrument: string,
-    present: readonly TraderDiagnostic[],
-  ): { diagnostic: TraderDiagnostic; consecutive_ticks: number }[] {
+  observe(instrument: string, present: readonly TraderDiagnostic[]): ObservedTraderDiagnostic[] {
     const seen = new Set<string>();
-    const due: { diagnostic: TraderDiagnostic; consecutive_ticks: number }[] = [];
+    const observed: ObservedTraderDiagnostic[] = [];
 
+    // First occurrence of each kind wins. Two entries of one kind in a tick
+    // describe the same condition, so their `detail` strings differ only by
+    // where they were noticed, and the earlier one is the position-level view.
+    const distinct = new Map<string, TraderDiagnostic>();
     for (const diagnostic of present) {
+      if (!distinct.has(diagnostic.kind)) distinct.set(diagnostic.kind, diagnostic);
+    }
+
+    for (const diagnostic of distinct.values()) {
       const key = `${instrument}\0${diagnostic.kind}`;
       seen.add(key);
       const count = (this.#consecutive.get(key) ?? 0) + 1;
       this.#consecutive.set(key, count);
-      if (shouldAlertAtDiagnosticCount(count)) {
-        due.push({ diagnostic, consecutive_ticks: count });
-      }
+      observed.push({
+        diagnostic,
+        consecutive_ticks: count,
+        alert: shouldAlertAtDiagnosticCount(count),
+      });
     }
 
     // Clear the runs for kinds this instrument did NOT report this tick. Scoped
@@ -145,6 +210,6 @@ export class TraderDiagnosticThrottle {
       if (key.startsWith(prefix) && !seen.has(key)) this.#consecutive.delete(key);
     }
 
-    return due;
+    return observed;
   }
 }

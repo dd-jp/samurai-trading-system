@@ -10,9 +10,10 @@ import type {
 } from '../../../pipeline/verdict/index.js';
 import {
   AlwaysOpenCalendar,
+  type TradingCalendar,
   UsEquityRegularHoursCalendar,
 } from '../../../providers/market-data-service/index.js';
-import type { Clock, OpenPosition, OrderIntent } from '../../../shared/index.js';
+import type { Clock, LogEntry, Logger, OpenPosition, OrderIntent } from '../../../shared/index.js';
 import { openSharedStore } from '../../../shared/store/index.js';
 import { OrphanVerdictScanner } from '../orphan-verdict-scan.js';
 import { SqliteAuditLog } from '../sqlite-audit-log.js';
@@ -25,6 +26,7 @@ import {
   buildVerdictStep,
   sizingEquity,
 } from './direct-bind.js';
+import type { TraderDiagnosticAlertChannel } from './trader-diagnostic-alert.js';
 
 const NOW = new Date('2026-07-28T14:00:00Z');
 const CLOCK: Clock = { now: () => NOW };
@@ -441,6 +443,177 @@ describe('buildTraderStep capital ceiling (#511)', () => {
     // ceiling declared" stays unclamped — this is the DEFINED-but-unusable
     // case, deliberately not the same input.
     await expect(sizeFor(Number.NaN)).rejects.toThrow(/finite/);
+  });
+});
+
+/**
+ * The diagnostic escalation wired into the step (#698), as corrected by #710's
+ * review.
+ *
+ * `trader-diagnostic-alert.test.ts` pins the throttle's counting rules on their
+ * own. These are the properties that only exist at the COMPOSITION: that the
+ * step does not wait for the transport, that the durable log is not throttled
+ * with the alert, and that the line carries the tick's own trace. Every one of
+ * them was wrong or untested when the throttle's unit tests were fully green.
+ */
+describe('buildTraderStep diagnostic escalation (#698, #710)', () => {
+  /**
+   * A calendar that answers with a close already in the past — the fault
+   * `session_end_in_past` exists to report, which a conforming implementation
+   * cannot produce (both shipped ones return a close strictly after the
+   * instant).
+   */
+  const BROKEN_STOCKS_CALENDAR: TradingCalendar = {
+    isTradingDay: () => true,
+    sessionStart: (instant: Date) => instant,
+    sessionEnd: () => new Date(NOW.getTime() - 60 * 60 * 1_000),
+  };
+
+  const CONFIG: TraderConfig = {
+    conviction_floor: 0.5,
+    max_risk_per_trade: 0.01,
+    asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
+    atr_timeframe: '1h',
+    atr_lookback: 14,
+    atr_k: 2,
+    vol_floor_fraction: 0.002,
+    non_converged_haircut: 0.5,
+    reward_risk_multiple: 2,
+    min_viable_notional: 10,
+    scale_in_conviction_delta: 0.1,
+    time_in_force: { crypto: 'gtc', stocks: 'day' },
+    flatten_before_close_ms: 5 * 60 * 1_000,
+  };
+
+  function buildStep(options: {
+    logger?: Logger;
+    traderDiagnosticAlerts?: TraderDiagnosticAlertChannel;
+  }) {
+    return buildTraderStep({
+      marketData: FAKE_MARKET_DATA,
+      circuitBreakers: new CircuitBreakers({
+        daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+        max_drawdown_pct: 0.2,
+        max_consecutive_losses: 5,
+        volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+        auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+      }),
+      accountState: FAKE_ACCOUNT_STATE,
+      volatility: FAKE_VOLATILITY,
+      getOpenPositions: async () => NO_POSITIONS,
+      maxMarkAge: TEST_MAX_MARK_AGE,
+      mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
+      config: CONFIG,
+      setupStore: new FixtureSetupStore(),
+      getExitFillSizes: async () => new Map<string, number>(),
+      sessionCalendars: {
+        crypto: new AlwaysOpenCalendar(),
+        stocks: BROKEN_STOCKS_CALENDAR,
+      },
+      ...options,
+    });
+  }
+
+  function collectingLogger(): { logger: Logger; entries: LogEntry[] } {
+    const entries: LogEntry[] = [];
+    return { logger: { log: (entry) => entries.push(entry) }, entries };
+  }
+
+  function diagnosticLines(entries: readonly LogEntry[]): LogEntry[] {
+    return entries.filter(
+      (entry) =>
+        entry.stage === 'trader' &&
+        entry.level === 'error' &&
+        entry.message.includes('session_end_in_past'),
+    );
+  }
+
+  it('does not wait for the alert transport before returning the intent', async () => {
+    // The defect this pins is a SLOW transport, not a failing one — the failing
+    // case was always caught. `buildTraderStep`'s return value is what Risk and
+    // Execution act on, and the Telegram client retries 3x against a 10s
+    // per-request timeout, so an awaited send could hold a flat-by-close exit
+    // for ~31s of a 15-minute tick while the bell approaches. A channel that
+    // never settles is that outage taken to its limit: the step must still
+    // answer, and this test hangs rather than fails if it ever awaits again.
+    let posted = 0;
+    const step = buildStep({
+      traderDiagnosticAlerts: {
+        postTraderDiagnosticAlert: () => {
+          posted += 1;
+          return new Promise<void>(() => {});
+        },
+      },
+    });
+
+    await step({ trace_id: TRACE_ID, instrument: 'AAPL', debate: makeDebate(), clock: CLOCK });
+
+    // Reaching here at all is the assertion. The count proves the send was
+    // still ISSUED rather than dropped — fire-and-forget, not fire-and-skip.
+    expect(posted).toBe(1);
+  });
+
+  it('logs the condition on every tick while alerting on a bounded interval', async () => {
+    // #710. The `error` log used to live inside the function the throttle
+    // gates, so a condition present on every tick was logged on tick 1, again
+    // on tick 9, and nowhere in between — while this module's docblock promised
+    // an absent channel meant "no second copy", never "silent". Seven ticks in
+    // eight had no durable record of a broken calendar.
+    const { logger, entries } = collectingLogger();
+    let posted = 0;
+    const step = buildStep({
+      logger,
+      traderDiagnosticAlerts: {
+        postTraderDiagnosticAlert: async () => {
+          posted += 1;
+        },
+      },
+    });
+
+    for (let tick = 0; tick < 3; tick += 1) {
+      await step({ trace_id: TRACE_ID, instrument: 'AAPL', debate: makeDebate(), clock: CLOCK });
+    }
+
+    expect(diagnosticLines(entries)).toHaveLength(3);
+    // ...and the run length in the line is what tells the operator it is not
+    // clearing, which is the whole signal.
+    expect(diagnosticLines(entries)[2]?.message).toContain('3 consecutive tick(s)');
+    // The chat, sharing a channel with kill-threshold breaches, hears it once.
+    expect(posted).toBe(1);
+  });
+
+  it('logs under the TICK trace, not a synthetic constant', async () => {
+    // #710. `trace_id: 'trader-diagnostic'` was hardcoded, which severed the
+    // line from the debate, the `trader_log` row and the verdict for the same
+    // instrument on the same tick — the joins a soak post-mortem needs to
+    // reconstruct what the Trader was looking at when it complained.
+    const { logger, entries } = collectingLogger();
+
+    await buildStep({ logger })({
+      trace_id: TRACE_ID,
+      instrument: 'AAPL',
+      debate: makeDebate(),
+      clock: CLOCK,
+    });
+
+    expect(diagnosticLines(entries)).toHaveLength(1);
+    expect(diagnosticLines(entries)[0]?.trace_id).toBe(TRACE_ID);
+  });
+
+  it('still logs with no channel wired, since the log is the record and the alert is a copy', async () => {
+    const { logger, entries } = collectingLogger();
+
+    await buildStep({ logger })({
+      trace_id: TRACE_ID,
+      instrument: 'AAPL',
+      debate: makeDebate(),
+      clock: CLOCK,
+    });
+
+    expect(diagnosticLines(entries)).toHaveLength(1);
   });
 });
 

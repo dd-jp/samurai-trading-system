@@ -251,11 +251,17 @@ function withinFlattenWindow(input: TraderInput, assetClass: AssetClass): Flatte
   // answered here rather than by throwing, which would take the direction-flip
   // exit down with it and strand the exposure.
   //
-  // The answer is unchanged and correct; the DIAGNOSTIC is the new part. A
-  // close that is minutes in the past is an ordinary tick just after the bell,
-  // so the condition alone is not alarming — what is alarming is it never
-  // clearing, and the adapter's repeat throttle is what turns "again" into a
-  // signal rather than this branch trying to judge staleness on its own.
+  // The answer is unchanged and correct; the DIAGNOSTIC is the new part, and it
+  // is alarming on the FIRST occurrence. `sessionEnd` is resolved from
+  // `now` immediately above, and a calendar's contract is to answer with the
+  // close of the session containing or following that instant — both shipped
+  // implementations enforce `close > instant` — so a conforming calendar cannot
+  // reach this branch. Reaching it means the calendar is broken, overridden, or
+  // has been handed a clock that runs ahead of it. Not "an ordinary tick just
+  // after the bell", which an earlier version of this comment claimed and which
+  // sent a reviewer looking for a grace threshold the alert must not have
+  // (#710). The adapter's repeat throttle bounds the NOISE of a condition that
+  // persists; it is not a confidence filter on the first one.
   if (remaining < 0) {
     return {
       within: true,
