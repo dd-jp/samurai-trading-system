@@ -139,6 +139,20 @@ Verified by removing the fix: `ticks equities at 16:26, inside the flatten windo
 14:35 yes, 15:45 no, `sessionEnd` still 16:30 — all pass with the flatten unreachable, which is why
 none of them caught it.
 
+**Which calendar the tail resolves through.** `sessionEnd` is per venue — `equityCalendarFor` returns
+LSE in `live` and US in `paper` — and the Trader flattens against `sessionCalendars.stocks`, built by
+that same function on that same config at `production.ts:469`. They are separate *instances*: the
+component root builds one, the orchestrator root another. What makes them agree is that the function
+is pure and the calendars hold no mutable state, so both halves are load-bearing and neither is
+visible from a test that pins the calendar. Pinned by a third assertion at 15:56 ET — past the LSE
+close, inside the US session, five minutes from the US close — which is the only one of the three
+that fails when the tail is given a hard-coded `LseRegularHoursCalendar`.
+
+One limit stays open and is **not** introduced here: `sessionCalendars` is keyed on `AssetClass`, so
+a single universe carrying both LSE and US equities gets one `stocks` calendar for both. The tail
+inherits that exactly, no better and no worse. Splitting it needs a per-instrument calendar
+dimension, which belongs with A1's `subclass` work rather than this fix.
+
 ## Prior reports not re-litigated
 
 - `triage-2026-08-06.md` and the two 2026-08-05 audits — no indicator finding among them.

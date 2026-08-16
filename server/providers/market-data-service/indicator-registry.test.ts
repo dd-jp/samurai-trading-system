@@ -82,9 +82,11 @@ describe('one registry, not two switches', () => {
   });
 
   it('names the fixture rather than crashing on an unknown kind', () => {
-    // Specs also arrive from config, where `IndicatorKind` is a claim rather
-    // than a check. An unchecked `INDICATORS[kind]` would fail at
-    // `.compute is not a function`.
+    // Reachable only through a cast, which is the honest scope of the guard:
+    // there is no unvalidated runtime path into `IndicatorSpec.indicator`
+    // today. The cast below is exactly what would silence the compiler at a
+    // real call site, and unchecked `INDICATORS[kind]` fails at
+    // `.compute is not a function`, naming neither the spec nor the kind.
     const bogus = { ...specFor('rsi', 20), indicator: 'macd' as IndicatorKind };
 
     expect(() => computeIndicator(BARS.slice(0, 20), bogus)).toThrow(/Unsupported indicator: macd/);

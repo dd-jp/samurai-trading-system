@@ -251,11 +251,18 @@ const INDICATORS: Record<IndicatorKind, IndicatorDefinition> = {
 /**
  * Looked up rather than indexed, and it still throws.
  *
- * `IndicatorSpec.indicator` is typed `IndicatorKind`, so a well-typed caller
- * cannot miss — but specs also arrive from JSON-ish config
- * (`ProductionConfig.volatilityIndicator`) where the type is a claim rather
- * than a check. An unchecked index would hand back `undefined` and fail at
- * `.compute is not a function`, naming neither the spec nor the kind.
+ * `IndicatorSpec.indicator` is typed `IndicatorKind`, so this is unreachable
+ * for a well-typed caller — and there is no unvalidated path today either:
+ * the orchestrator contains no `JSON.parse` at all, so
+ * `ProductionConfig.volatilityIndicator` is written in TypeScript rather than
+ * loaded, and the golden fixture — the one place an unknown kind can arrive —
+ * is checked at its own parse boundary.
+ *
+ * So this is a BACKSTOP with no current caller, and is stated as one rather
+ * than justified by a config file that does not exist. It stays because a
+ * cast (`as IndicatorKind`) silences the compiler at any call site, and
+ * unchecked the failure reads `.compute is not a function` — naming neither
+ * the spec nor the kind.
  */
 function definitionFor(indicator: IndicatorKind): IndicatorDefinition {
   const definition = INDICATORS[indicator];

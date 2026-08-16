@@ -1594,21 +1594,23 @@ describe('buildProductionOrchestrator', () => {
     const WEDNESDAY_16_26 = new Date('2026-08-19T16:26:00+01:00');
     const WEDNESDAY_16_00 = new Date('2026-08-19T16:00:00+01:00');
 
-    const windowedConfig = (now: Date) =>
+    const windowedConfig = (now: Date, pinLse: boolean) =>
       stubConfig(db, {
         clock: new SimulatedClock(now),
-        // Pinned rather than left to `mode: 'paper'`, which would resolve the
-        // US calendar and put the close at 16:00 ET — five hours from these
-        // London instants and untestable against the LSE window.
-        tradingCalendar: new LseRegularHoursCalendar(),
+        // Pinned for the London cases rather than left to `mode: 'paper'`,
+        // which resolves the US calendar and puts the close at 16:00 ET — five
+        // hours from these London instants and untestable against the LSE
+        // window. Left unpinned for the venue case below, which is about
+        // exactly that resolution.
+        ...(pinLse ? { tradingCalendar: new LseRegularHoursCalendar() } : {}),
         stocksTradingWindow: londonEntryWindow(),
         universe: [{ asset: '3USL', asset_class: 'stocks', subclass: 'index_etp_3x' }],
         tickIntervalMs: 1_000,
         heartbeatIntervalMs: 1_000,
       });
 
-    const ranAt = async (now: Date): Promise<boolean> => {
-      const config = windowedConfig(now);
+    const ranAt = async (now: Date, pinLse = true): Promise<boolean> => {
+      const config = windowedConfig(now, pinLse);
       // The tail is `flatten_before_close_ms` wide, so 16:26 is only inside it
       // while that is 5 minutes. Asserted, not assumed — a stub drifting to a
       // narrower window would make the positive case below silently vacuous.
@@ -1640,6 +1642,23 @@ describe('buildProductionOrchestrator', () => {
       // widening the entry window instead of unioning a separate span, this is
       // the test that would catch it.
       expect(await ranAt(WEDNESDAY_16_00)).toBe(false);
+    });
+
+    it('resolves the tail through the mode-selected calendar, not a pinned venue', async () => {
+      // The tail derives from `sessionEnd`, and `sessionEnd` is per venue:
+      // `equityCalendarFor` returns LSE in `live` and US in `paper`, and the
+      // Trader flattens against `sessionCalendars.stocks`, which is that same
+      // function on that same config. The two are separate INSTANCES — the
+      // component root builds one and this root builds another — so what makes
+      // them agree is that the function is pure and the calendars hold no
+      // state. Both halves are load-bearing, and neither is visible from the
+      // London cases above, which pin the calendar and so would pass against a
+      // hard-coded LSE tail.
+      //
+      // 15:56 ET is 20:56 London: past the LSE close, inside the US session,
+      // and five minutes from the US close. It ticks only if the tail resolved
+      // through the calendar `mode: 'paper'` selects.
+      expect(await ranAt(new Date('2026-08-19T15:56:00-04:00'), false)).toBe(true);
     });
   });
 
