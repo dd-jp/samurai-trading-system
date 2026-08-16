@@ -160,6 +160,8 @@ import {
 import {
   AlpacaNewsClient,
   CiiConsumer,
+  GdeltGkgClient,
+  GdeltIngestAgent,
   GrokAgent,
   MarketIntelligenceStore,
   type MiArchiveStore,
@@ -275,6 +277,7 @@ import {
   buildDefaultLlmClient,
   DEFAULT_FEEDBACK_INTERVAL_MS,
   DEFAULT_FILL_POLL_INTERVAL_MS,
+  DEFAULT_GDELT_POLL_INTERVAL_MS,
   DEFAULT_HEARTBEAT_INTERVAL_MS,
   DEFAULT_LLM_RATE_LIMIT_CONFIG,
   DEFAULT_TICK_INTERVAL_MS,
@@ -363,6 +366,17 @@ export interface ProductionComponents {
    * `buildProductionComponents` directly (rate-limit-wiring.test.ts).
    */
   llmRateLimiter: RateLimiter;
+  /**
+   * The GDELT macro archiver (#556), or undefined when this run has no MI
+   * archive to write into.
+   *
+   * Exposed for the same reason `llmRateLimiter` is: it is polled from
+   * `buildProductionOrchestrator`'s own timer rather than from a tick step, so
+   * without this field the composition root would have to build a SECOND
+   * instance — two agents polling one archive on two timers, doubling the
+   * download for one set of rows.
+   */
+  gdeltIngestAgent: GdeltIngestAgent | undefined;
 }
 
 /**
@@ -867,6 +881,27 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     assetClasses: universeAssetClasses(universe),
   });
 
+  /**
+   * The GDELT macro layer (#556). Runs whenever an archive exists — no
+   * credentials to check, because GDELT is open data, and no LLM either: this
+   * half only writes bytes.
+   *
+   * Independent of `miIngestAgent` on purpose. That path is the ticker layer
+   * and its own header records the measured hole it cannot fill — the Benzinga
+   * wire returns **zero** items for 3USL/3LDE/SGLN, the LSE ETPs ADR-0016
+   * actually trades. Whether Alpaca credentials are present has no bearing on
+   * whether the macro layer should run.
+   */
+  const gdeltIngestAgent =
+    config.miArchive === undefined
+      ? undefined
+      : new GdeltIngestAgent({
+          archive: config.miArchive,
+          client: config.gdeltClient ?? new GdeltGkgClient({}),
+          clock,
+          logger,
+        });
+
   if (grokAgent === undefined) {
     logger.log({
       trace_id: 'startup',
@@ -1002,6 +1037,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     executionStore,
     executionDeps,
     llmRateLimiter,
+    gdeltIngestAgent,
   };
 }
 
@@ -1479,6 +1515,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   let fillSync: { stop: () => Promise<void> } | undefined;
   let heartbeatHandle: NodeJS.Timeout | undefined;
   let feedbackHandle: NodeJS.Timeout | undefined;
+  let gdeltHandle: NodeJS.Timeout | undefined;
 
   // Execution's two polled surfaces, bound once. Built from the same
   // `ExecutionStepDeps` the tick step uses, so the two paths cannot drift.
@@ -1762,6 +1799,33 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         void heartbeat.emit(clock);
       }, config.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS);
 
+      const gdeltIngestAgent = components.gdeltIngestAgent;
+      if (gdeltIngestAgent !== undefined) {
+        /**
+         * GDELT polls on its OWN timer, deliberately not from the analysts step
+         * where `MiIngestAgent` runs (#556).
+         *
+         * Two reasons. It is not per-instrument — one batch is the whole
+         * world's macro news, so hanging it off a per-instrument refresh would
+         * poll it once per universe member for one shared result. And a batch
+         * is a ~3.4MB download that inflates to ~10.5MB; doing that on the
+         * tick's critical path would add seconds BEFORE the analysts run, which
+         * is the same starvation shape #669 had to unpick.
+         *
+         * Fire-and-forget is safe here specifically because `refresh` never
+         * throws and returns `false` on any vendor failure — the contract its
+         * own tests pin.
+         */
+        // Immediately, then on the interval: waiting a full period before the
+        // first poll would throw away the oldest 15 minutes of every restart,
+        // and the baseline this archive exists to accumulate is measured in
+        // hours.
+        void gdeltIngestAgent.refresh('startup');
+        gdeltHandle = setInterval(() => {
+          void gdeltIngestAgent.refresh('gdelt-poll');
+        }, config.gdeltPollIntervalMs ?? DEFAULT_GDELT_POLL_INTERVAL_MS);
+      }
+
       fillSync = startFillSync({
         execution: fillSyncExecution,
         clock,
@@ -1961,11 +2025,20 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         clearInterval(feedbackHandle);
         feedbackHandle = undefined;
       }
+      if (gdeltHandle !== undefined) {
+        clearInterval(gdeltHandle);
+        gdeltHandle = undefined;
+      }
       // Both drains started before either is awaited: they are independent,
       // and awaiting them in series would make shutdown take the sum of a
       // tick and a fill poll rather than the longer of the two.
       const stopping = loop?.stop();
       const stoppingFillSync = fillSync?.stop();
+      // Clearing the timer stops the NEXT GDELT poll, not the one already
+      // downloading — and that one ends in an archive write, which without this
+      // drain can land after the store is closed. The write is guarded, so this
+      // makes shutdown ordering deterministic rather than fixing a crash.
+      const drainingGdelt = components.gdeltIngestAgent?.whenIdle();
       loop = undefined;
       fillSync = undefined;
       // `allSettled`, not two sequential awaits: `buildShutdownHandler`'s doc
@@ -1974,7 +2047,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       // series would leave the second drain's promise unawaited on that path
       // — an unhandled rejection, and the fill poll's drain silently
       // discarded during shutdown. This still drains both concurrently.
-      await Promise.allSettled([stopping, stoppingFillSync]);
+      await Promise.allSettled([stopping, stoppingFillSync, drainingGdelt]);
     },
   };
 }

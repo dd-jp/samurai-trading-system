@@ -13,7 +13,8 @@ import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULT_TRADER_CONFIG } from '../../pipeline/trader/index.js';
-import { MiArchiveStore } from '../../providers/market-intelligence/index.js';
+import { GdeltGkgClient, MiArchiveStore } from '../../providers/market-intelligence/index.js';
+import { TokenBucket } from '../../shared/index.js';
 import { openSharedStore, sharedStorePath } from '../../shared/store/index.js';
 import {
   assertStorePathMatchesMode,
@@ -23,6 +24,82 @@ import {
   startingProfileForMode,
 } from './index.js';
 import type { Logger } from './types.js';
+
+/**
+ * A GDELT client that reaches no network.
+ *
+ * `start()` fires the first GDELT poll immediately, and unlike every other
+ * vendor client here GDELT needs no credentials — so without this the suite
+ * really did download a live 3.4MB batch and archive 200 real rows on every
+ * run. Every `startFromEnvironment` call below passes it.
+ *
+ * The pacing override is not a detail. One client instance is shared by every
+ * boot in this file, and the shipped pacing is `capacity: 2,
+ * refillPerSecond: 0.2` — two tokens, then one per five seconds. That is the
+ * right pace for a real vendor and pure coupling for a stub that throws before
+ * it reaches a socket: from the third boot onward each poll parked ~4.6s in
+ * `rateLimiter.acquire()`, and once shutdown began draining the in-flight poll
+ * (#556) that wait became test wall-clock. The file went from 433ms to 20.5s
+ * and the seventh test failed on CI at 4998ms against a 5000ms budget — a test
+ * that asserts nothing about GDELT, failing because of how many boots preceded
+ * it. Pacing a stub buys nothing; the fence below is what keeps the suite
+ * offline.
+ */
+const offlineGdeltClient = new GdeltGkgClient({
+  rateLimiter: new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 }),
+  fetchImpl: (async () => {
+    throw new Error('offline: the test suite must not reach GDELT');
+  }) as unknown as typeof fetch,
+});
+
+/**
+ * The backstop for the line above, and it has already earned its keep.
+ *
+ * Injecting the stub per call site is a rule a new test can forget — and one
+ * did: #695 added a twelfth `startFromEnvironment` call while this branch was
+ * in flight, and the rebase produced a test that downloads a live batch with
+ * every gate still green. Nothing in the type system catches it, because
+ * `gdeltClient` is optional by design. So the host itself is refused here: any
+ * call site that forgets the stub fails loudly instead of reaching the network.
+ */
+const realFetch = globalThis.fetch;
+let reachedGdelt: string | undefined;
+
+beforeAll(() => {
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    // Each shape read explicitly: `String(new Request(url))` is the useless
+    // '[object Request]', which contains no host and would walk straight past
+    // this fence. A backstop that a caller can route around by passing a
+    // different-but-equivalent argument type is not a backstop.
+    const url =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input instanceof Request
+            ? input.url
+            : String(input);
+    if (url.includes('gdeltproject.org')) {
+      // Recorded, not thrown. Throwing here proves nothing: the poll is fired
+      // as `void refresh(...)` and `refresh` never throws by contract, so the
+      // rejection is swallowed into a warn log and every test still passes —
+      // which is exactly how the original defect stayed invisible.
+      reachedGdelt = url;
+      throw new Error('offline: the test suite must not reach GDELT');
+    }
+    return realFetch(input, init);
+  }) as typeof fetch;
+});
+
+afterAll(() => {
+  globalThis.fetch = realFetch;
+  if (reachedGdelt !== undefined) {
+    throw new Error(
+      `startup.test.ts reached ${reachedGdelt} — a startFromEnvironment call is missing ` +
+        '`gdeltClient: offlineGdeltClient`.',
+    );
+  }
+});
 
 /**
  * The resolve arm of the `.then(…, …)` pairs below, which exist so that
@@ -159,6 +236,7 @@ describe('startFromEnvironment — real construction path', () => {
       ...STAGE_CONFIGS,
       db: openSharedStore(':memory:'),
       miArchive: new MiArchiveStore(),
+      gdeltClient: offlineGdeltClient,
     });
 
     try {
@@ -197,6 +275,7 @@ describe('startFromEnvironment — real construction path', () => {
       ...STAGE_CONFIGS,
       db,
       miArchive: new MiArchiveStore(),
+      gdeltClient: offlineGdeltClient,
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     expect(error.message).toContain('Refusing to start');
@@ -211,6 +290,7 @@ describe('startFromEnvironment — real construction path', () => {
       ...STAGE_CONFIGS,
       db: openSharedStore(':memory:'),
       miArchive: new MiArchiveStore(),
+      gdeltClient: offlineGdeltClient,
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     // Names the variable and how to supply it. The seams guard used to catch
@@ -236,6 +316,7 @@ describe('startFromEnvironment — real construction path', () => {
       ...STAGE_CONFIGS,
       db: openSharedStore(':memory:'),
       miArchive: new MiArchiveStore(),
+      gdeltClient: offlineGdeltClient,
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     return error.then((e) => {
@@ -279,6 +360,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       ...paperStartingProfile('paper'),
       db: openSharedStore(':memory:'),
       miArchive: new MiArchiveStore(),
+      gdeltClient: offlineGdeltClient,
       logger,
     });
 
@@ -354,6 +436,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       orchestrator = await startFromEnvironment({
         ...paperStartingProfile('paper'),
         logger,
+        gdeltClient: offlineGdeltClient,
       });
 
       expect(existsSync(join(sandbox, 'data/samurai-paper.sqlite'))).toBe(true);
@@ -381,6 +464,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       ...paperStartingProfile('paper'),
       db: openSharedStore(':memory:'),
       miArchive: new MiArchiveStore(),
+      gdeltClient: offlineGdeltClient,
       logger,
     }).then(async (orchestrator) => {
       try {
@@ -402,6 +486,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       ...paperStartingProfile('paper'),
       db: openSharedStore(':memory:'),
       miArchive: new MiArchiveStore(),
+      gdeltClient: offlineGdeltClient,
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     expect(error.message).toContain('SAMURAI_ALERTS');
@@ -419,6 +504,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       ...paperStartingProfile('paper'),
       db: openSharedStore(':memory:'),
       miArchive: new MiArchiveStore(),
+      gdeltClient: offlineGdeltClient,
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     expect(error.message).toContain('TELEGRAM_CHAT_ID');
@@ -453,6 +539,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       ...paperStartingProfile('paper'),
       db: openSharedStore(':memory:'),
       miArchive: new MiArchiveStore(),
+      gdeltClient: offlineGdeltClient,
       logger,
     });
 
@@ -551,6 +638,7 @@ describe('startFromEnvironment — the live profile (#511)', () => {
       ...startingProfileForMode('live', logger),
       db: openSharedStore(':memory:'),
       miArchive: new MiArchiveStore(),
+      gdeltClient: offlineGdeltClient,
       logger,
     });
 
@@ -613,6 +701,7 @@ describe('startFromEnvironment — the live profile (#511)', () => {
       ...startingProfileForMode('live'),
       db: openSharedStore(':memory:'),
       miArchive: new MiArchiveStore(),
+      gdeltClient: offlineGdeltClient,
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     // The paper pair is still set, so a fallback would have started a live
