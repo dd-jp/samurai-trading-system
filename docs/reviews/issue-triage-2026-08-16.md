@@ -125,3 +125,11 @@ Three findings worth more than the table row:
 ## What this addendum leaves open
 
 Nothing was closed, so the frontier grew rather than shrank. Three items now gate implementation and none of them is mine to resolve: **#721 and #724 together** (the sizing unit), and **#722** (the RSI convention, before B1's goldens freeze).
+
+**Those three are attached to map [#703](https://github.com/dd-jp/samurai-trading-system/issues/703) and labelled `wayfinder:grilling`, not left in this document.** Standing Pipeline Rule 1 makes the map the gating mechanism, so a blocker declared only in a review report is a blocker nobody can see: a reader checking #703's frontier would find five children, conclude it was clear, and run `/to-tickets` straight past all three.
+
+## What "complete" means here, and what it excludes
+
+Checked rather than assumed, because two other background sessions were writing to this repo the same evening. `gh issue list --state open --search "created:>=2026-08-16"` returns nothing filed after #727 (20:56Z), so no issue arrived while these verdicts were being written.
+
+Seven same-day issues are deliberately **not** covered and are not oversights: #707 and #708 are #703's own research children and are being worked as part of the map; #713 and #702 are GDELT work landing on its own track; #701 and #709 are test hygiene; #714 is a logger-robustness decision. All seven fall in the first pass's "left untouched" bucket for the reason stated there — the spec amendments do not bear on them, and inventing re-scopes would be noise. The three wayfinder maps (#718–#720) are recorded above rather than left silent only because a reader could reasonably expect the intraday pass to have judged them.
