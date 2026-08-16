@@ -12,10 +12,46 @@
 import { renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { fakeFetch, HANGS, makeSnapshot } from '../test-fixtures.ts';
-import { useSnapshot } from './useSnapshot.ts';
+import { STALE_AFTER_MISSED_POLLS, useSnapshot } from './useSnapshot.ts';
 
 /** Short enough to keep the suite fast; the ratios are what the code reads. */
 const INTERVAL_MS = 20;
+
+/**
+ * A clock that advances with POLLS rather than with wall-clock time (#709).
+ *
+ * The staleness watchdog compares `now() - lastSuccessMs` against
+ * `intervalMs * STALE_AFTER_MISSED_POLLS`, which at this interval is a 40ms
+ * horizon. Against the real clock that is not a test, it is a race with the
+ * machine: `waitFor` polls every 50ms by default, so under full-suite load the
+ * assertion can only ever observe the state AFTER the horizon has passed, and
+ * `stale` reads true for reasons that have nothing to do with the behaviour
+ * under test. That is the flake in #709 — `expected true to be false`.
+ *
+ * Injecting the clock makes elapsed time a function of how many requests the
+ * hook actually made. `fakeFetch` holds its last payload once the queue drains,
+ * so every poll after the recovery succeeds and re-stamps `lastSuccessMs` to
+ * the current reading — leaving `stale` false no matter how loaded the box is,
+ * while a hang still advances time past the horizon and marks it true for real.
+ *
+ * The step is one full horizon plus an interval: enough that a single
+ * unanswered poll genuinely trips the watchdog rather than approaching it.
+ */
+function pollDrivenClock(payloads: Parameters<typeof fakeFetch>[0]): {
+  fetchImpl: typeof fetch;
+  now: () => number;
+} {
+  const STEP_MS = INTERVAL_MS * 3;
+  const inner = fakeFetch(payloads);
+  let clockMs = 0;
+
+  const fetchImpl = ((...args: Parameters<typeof fetch>) => {
+    clockMs += STEP_MS;
+    return inner(...args);
+  }) as typeof fetch;
+
+  return { fetchImpl, now: () => clockMs };
+}
 
 describe('useSnapshot polling', () => {
   it('abandons a poll that never answers, and the next tick still fires', async () => {
@@ -25,16 +61,25 @@ describe('useSnapshot polling', () => {
     // later `poll()` returned at the guard, no retry was ever issued, and only
     // a manual reload recovered. The second payload landing is the proof that
     // a retry happened.
-    const { result } = renderHook(() =>
-      useSnapshot({ fetchImpl: fakeFetch([HANGS, makeSnapshot()]), intervalMs: INTERVAL_MS }),
-    );
+    const { fetchImpl, now } = pollDrivenClock([HANGS, makeSnapshot()]);
+    const { result } = renderHook(() => useSnapshot({ fetchImpl, now, intervalMs: INTERVAL_MS }));
 
     await waitFor(() => expect(result.current.snapshot).not.toBeNull(), { timeout: 2_000 });
     expect(result.current.snapshot?.as_of).toBe('2026-08-07T12:00:00.000Z');
     // The recovered poll clears the hang's error rather than leaving the page
     // reporting a failure it has since recovered from.
     expect(result.current.error).toBeNull();
+    // Not stale BECAUSE a poll succeeded, not because the clock happened not to
+    // have moved: the hang pushed the injected clock a full horizon past the
+    // last success, so the watchdog had genuinely marked it stale before the
+    // recovery landed and cleared it (#709).
     expect(result.current.stale).toBe(false);
+    // Keeps the line above honest. If the injected clock ever stopped being
+    // read — a renamed option, a default reinstated — `stale` would sit false
+    // for want of elapsed time and the assertion would pass while testing
+    // nothing. This fails in that case, because time only moves here when a
+    // poll is issued.
+    expect(now()).toBeGreaterThan(INTERVAL_MS * STALE_AFTER_MISSED_POLLS);
   });
 
   it('applies a poll that lands after earlier polls timed out', async () => {
