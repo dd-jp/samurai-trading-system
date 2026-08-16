@@ -52,6 +52,17 @@ export interface GdeltIngestAgentDeps {
 }
 
 export class GdeltIngestAgent {
+  /**
+   * Set while a poll is in flight.
+   *
+   * `production.ts` fires this on an interval as `void refresh(...)`, so a poll
+   * that outlasts its interval — a stalled 3.4MB download — would otherwise have
+   * a second poll start beside it, pass the same cursor check (the first has not
+   * written yet) and re-download the same batch. `INSERT OR IGNORE` makes that
+   * harmless but not free.
+   */
+  private inFlight = false;
+
   constructor(private readonly deps: GdeltIngestAgentDeps) {}
 
   /**
@@ -61,9 +72,24 @@ export class GdeltIngestAgent {
    * as `MiIngestAgent.refresh`, for the same reason: a GDELT batch is a ~3.4MB
    * download over a residential link, so timeouts are routine, and a failed
    * fetch must degrade to "no new intelligence" rather than take down a tick
-   * that would otherwise have traded on the technical analyst alone.
+   * that would otherwise have traded on the technical analyst alone. The
+   * contract covers the archive write too, not just the fetch — see the write
+   * site for why that distinction is not academic.
+   *
+   * Concurrent calls do not stack: a call made while a poll is in flight returns
+   * `false` immediately rather than starting a second download.
    */
   async refresh(trace_id = 'gdelt-ingest'): Promise<boolean> {
+    if (this.inFlight) return false;
+    this.inFlight = true;
+    try {
+      return await this.poll(trace_id);
+    } finally {
+      this.inFlight = false;
+    }
+  }
+
+  private async poll(trace_id: string): Promise<boolean> {
     const now = this.deps.clock.now();
 
     let batch: GdeltGkgBatch;
@@ -122,7 +148,32 @@ export class GdeltIngestAgent {
     }));
 
     // Raw rows only, no items — see this module's header.
-    this.deps.archive.write(raws, []);
+    //
+    // Inside the try for the same reason the fetch is: `production.ts` calls
+    // this as `void refresh(...)`, so anything that escapes here is an unhandled
+    // rejection in a process that is meant to run unattended for fourteen days.
+    // A SQLite write can fail on SQLITE_BUSY or a full disk, and neither is a
+    // reason to lose the tick — the cursor is unmoved, so the next poll retries
+    // this same batch.
+    try {
+      this.deps.archive.write(raws, []);
+    } catch (error) {
+      this.deps.logger?.log({
+        trace_id,
+        stage: 'market_intelligence',
+        level: 'warn',
+        message:
+          'market intelligence: GDELT archive write failed; batch not stored. ' +
+          'The cursor is unmoved, so the next poll retries this batch.',
+        payload: {
+          source: SOURCE_GDELT,
+          batch: batch.file_url,
+          rows: raws.length,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+      return false;
+    }
 
     this.deps.logger?.log({
       trace_id,

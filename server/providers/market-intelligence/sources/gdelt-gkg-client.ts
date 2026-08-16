@@ -46,7 +46,26 @@ import { inflateRawSync } from 'node:zlib';
 import { TokenBucket } from '../../../shared/index.js';
 import { allWatchedThemes } from './gdelt-themes.js';
 
-const DEFAULT_BASE_URL = 'http://data.gdeltproject.org/gdeltv2';
+/**
+ * HTTPS, not the plain HTTP that `lastupdate.txt` itself advertises.
+ *
+ * GDELT is open data with no credentials to leak, so the usual argument for TLS
+ * does not apply — but this feed reaches an analyst and therefore an order. Over
+ * plain HTTP an on-path attacker rewrites `lastupdate.txt` and chooses both the
+ * bytes we score and the host we fetch them from. GDELT serves the identical
+ * files over TLS, so the mitigation costs nothing.
+ */
+const DEFAULT_BASE_URL = 'https://data.gdeltproject.org/gdeltv2';
+
+/**
+ * How long any single GDELT request may stall before it is abandoned.
+ *
+ * A 3.4MB download over a residential link is slow but not this slow. Without a
+ * timeout a half-open connection sits until the OS TCP timeout — minutes to
+ * tens of minutes — holding a poll open across many 15-minute ticks. Failing at
+ * 90s and retrying on the next tick loses one batch; hanging loses the day's.
+ */
+const REQUEST_TIMEOUT_MS = 90_000;
 
 /**
  * GDELT publishes one batch per 15 minutes and asks politely for no hammering.
@@ -163,8 +182,25 @@ function parseGdeltStamp(stamp: string): Date | undefined {
   const match = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(stamp);
   if (match === null) return undefined;
   const [, y, mo, d, h, mi, s] = match;
-  const ms = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s));
-  return Number.isNaN(ms) ? undefined : new Date(ms);
+  const [year, month, day, hour, minute, second] = [y, mo, d, h, mi, s].map(Number) as [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+  // Range-checked BEFORE `Date.UTC`, because `Date.UTC` normalises rather than
+  // rejecting: month 99 rolls forward into a later year and returns a perfectly
+  // valid number, so a NaN guard alone never fires and a corrupt stamp becomes a
+  // silently shifted `batch_time` — which is a cursor that skips real batches.
+  if (month < 1 || month > 12 || day < 1 || day > 31) return undefined;
+  if (hour > 23 || minute > 59 || second > 59) return undefined;
+  const ms = Date.UTC(year, month - 1, day, hour, minute, second);
+  const date = new Date(ms);
+  // Catches day 31 in a 30-day month, which the coarse range check above lets
+  // through and `Date.UTC` rolls into the 1st of the next month.
+  return date.getUTCMonth() === month - 1 && date.getUTCDate() === day ? date : undefined;
 }
 
 /**
@@ -179,14 +215,18 @@ export function batchTimeFromUrl(fileUrl: string): Date | undefined {
 }
 
 /**
- * The single entry of a one-entry zip.
+ * The FIRST entry of the zip, which for a GKG batch is the only entry.
  *
- * Deliberately narrow: this rejects a multi-entry archive rather than silently
- * reading the first member, because a GDELT file that suddenly carried two
- * entries would mean the format changed and the parser's column assumptions are
- * no longer safe either.
+ * It reads the local file header and stops; it does not read the end-of-central-
+ * directory record, so it cannot and does not verify the archive holds exactly
+ * one member — a two-entry archive would inflate member one and ignore the rest.
+ * That is a deliberate limit, not an oversight: a GDELT batch that grew a second
+ * member would mean the format changed, and the column-count guard in
+ * `parseBatch` (`MIN_COLUMNS`) is what actually catches a changed schema. Naming
+ * it `unzipFirstEntry` keeps the code honest about which of those two things is
+ * true; an earlier docblock here claimed a rejection this function never made.
  */
-function unzipSingleEntry(buffer: Buffer): string {
+function unzipFirstEntry(buffer: Buffer): string {
   if (buffer.length < 30 || buffer.readUInt32LE(0) !== 0x04034b50) {
     throw new Error('GdeltGkgClient: response is not a zip archive (bad local file header).');
   }
@@ -229,7 +269,9 @@ export class GdeltGkgClient {
    */
   async latestBatchUrl(): Promise<string> {
     await this.rateLimiter.acquire();
-    const response = await this.fetchImpl(`${this.baseUrl}/lastupdate.txt`);
+    const response = await this.fetchImpl(`${this.baseUrl}/lastupdate.txt`, {
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
     if (!response.ok) {
       throw new Error(
         `GdeltGkgClient: lastupdate.txt returned HTTP ${response.status} ${response.statusText}.`,
@@ -242,22 +284,55 @@ export class GdeltGkgClient {
     // schema against GKG column indices.
     for (const line of text.split('\n')) {
       const url = line.trim().split(/\s+/).at(2);
-      if (url !== undefined && url.endsWith('.gkg.csv.zip')) return url;
+      if (url?.endsWith('.gkg.csv.zip') === true) return this.pinToBaseUrl(url);
     }
     throw new Error(
       `GdeltGkgClient: lastupdate.txt carried no .gkg.csv.zip entry. Got: ${text.slice(0, 200)}`,
     );
   }
 
+  /**
+   * Confines a URL named by `lastupdate.txt` to the host we configured.
+   *
+   * The manifest names an absolute URL, so whoever serves the manifest chooses
+   * the download host — and over plain HTTP that is anyone on the path. The host
+   * must match `baseUrl`'s, and the returned URL is rebuilt on `baseUrl`'s
+   * origin so a manifest that still advertises `http://` (GDELT's does) is
+   * fetched over TLS anyway. Only the origin is replaced; the path, and with it
+   * the batch stamp the cursor reads, is the vendor's.
+   */
+  private pinToBaseUrl(fileUrl: string): string {
+    const base = new URL(this.baseUrl);
+    let named: URL;
+    try {
+      named = new URL(fileUrl);
+    } catch {
+      throw new Error(`GdeltGkgClient: lastupdate.txt named an unparseable URL: ${fileUrl}`);
+    }
+    if (named.host !== base.host) {
+      throw new Error(
+        `GdeltGkgClient: lastupdate.txt named host ${named.host}, expected ${base.host} — ` +
+          'refusing to download a batch from a host we did not configure.',
+      );
+    }
+    return `${base.protocol}//${base.host}${named.pathname}${named.search}`;
+  }
+
   /** Downloads, inflates, parses and theme-filters one batch file. */
   async fetchBatch(fileUrl: string): Promise<GdeltGkgBatch> {
-    const batchTime = batchTimeFromUrl(fileUrl);
+    // Pinned here as well as in `latestBatchUrl`, because this method is public
+    // and a caller that assembled a URL some other way must not reach a host we
+    // never configured. Re-pinning an already-pinned URL is a no-op.
+    const url = this.pinToBaseUrl(fileUrl);
+    const batchTime = batchTimeFromUrl(url);
     if (batchTime === undefined) {
       throw new Error(`GdeltGkgClient: cannot read a batch timestamp from ${fileUrl}.`);
     }
 
     await this.rateLimiter.acquire();
-    const response = await this.fetchImpl(fileUrl);
+    const response = await this.fetchImpl(url, {
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
     if (!response.ok) {
       throw new Error(
         `GdeltGkgClient: ${fileUrl} returned HTTP ${response.status} ${response.statusText}.`,
@@ -271,8 +346,10 @@ export class GdeltGkgClient {
       );
     }
 
-    const csv = unzipSingleEntry(buffer);
-    return this.parseBatch(csv, batchTime, fileUrl);
+    const csv = unzipFirstEntry(buffer);
+    // `url`, not `fileUrl`: the batch's recorded provenance must be the URL we
+    // actually downloaded, not the one a manifest suggested.
+    return this.parseBatch(csv, batchTime, url);
   }
 
   /** Convenience: whatever GDELT published most recently. */

@@ -203,6 +203,59 @@ describe('GdeltIngestAgent', () => {
     archive.close();
   });
 
+  it('warns instead of rejecting when the archive write fails', async () => {
+    const archive = new MiArchiveStore();
+    const logger = collectingLogger();
+    const write = vi.spyOn(archive, 'write').mockImplementationOnce(() => {
+      throw new Error('SQLITE_BUSY: database is locked');
+    });
+    const agent = new GdeltIngestAgent({ archive, client: stubClient({}), clock, logger });
+
+    // `production.ts` fires this as `void refresh(...)`, so a rejection here is
+    // an unhandled rejection in a process meant to run unattended for fourteen
+    // days — the write has to degrade exactly like a failed fetch does.
+    await expect(agent.refresh()).resolves.toBe(false);
+    expect(logger.entries).toContainEqual(expect.objectContaining({ level: 'warn' }));
+
+    // The cursor never moved, so the batch is retried rather than lost.
+    expect(archive.latestUpdatedAt(SOURCE_GDELT)).toBeUndefined();
+    const retry = new GdeltIngestAgent({ archive, client: stubClient({}), clock });
+    await expect(retry.refresh()).resolves.toBe(true);
+    expect(archive.rawRows(SOURCE_GDELT)).toHaveLength(1);
+    write.mockRestore();
+    archive.close();
+  });
+
+  it('does not start a second poll while one is in flight', async () => {
+    const archive = new MiArchiveStore();
+    const client = stubClient({});
+    let release = (): void => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slow = client.fetchBatch.getMockImplementation();
+    client.fetchBatch.mockImplementation(async () => {
+      await gate;
+      return (await slow?.()) ?? batch([record()]);
+    });
+    const agent = new GdeltIngestAgent({ archive, client, clock });
+
+    // A stalled 3.4MB download outlasting the 5-minute interval would otherwise
+    // have the next tick start a second poll beside it, pass the same cursor
+    // check (the first has not written yet) and re-download the same batch.
+    const first = agent.refresh();
+    await expect(agent.refresh()).resolves.toBe(false);
+    expect(client.fetchBatch).toHaveBeenCalledTimes(1);
+
+    release();
+    await expect(first).resolves.toBe(true);
+    // And the guard clears: a later poll is not locked out forever. It returns
+    // false on the cursor now, having actually asked GDELT what the latest is.
+    await expect(agent.refresh()).resolves.toBe(false);
+    expect(client.latestBatchUrl).toHaveBeenCalledTimes(2);
+    archive.close();
+  });
+
   it('is idempotent on a re-run of the same batch', async () => {
     const archive = new MiArchiveStore();
     const rows = [record(), record({ native_id: 'b-2' })];

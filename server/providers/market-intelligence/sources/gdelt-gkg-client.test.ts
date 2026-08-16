@@ -45,7 +45,8 @@ const NOISE_ROW = gkgRow({
   tone: '2.1978021978022,3.2,1.0,4.2,22,0.1,455',
 });
 
-const BATCH_URL = 'http://data.gdeltproject.org/gdeltv2/20260815153000.gkg.csv.zip';
+/** What the client returns: HTTPS, whatever scheme the manifest advertised. */
+const BATCH_URL = 'https://data.gdeltproject.org/gdeltv2/20260815153000.gkg.csv.zip';
 const BATCH_TIME = new Date('2026-08-15T15:30:00Z');
 
 /** A one-entry deflate zip with non-zero name and extra lengths, as GDELT ships. */
@@ -84,7 +85,8 @@ function stubFetch(handlers: {
 const LASTUPDATE = [
   '44212 c2b1cae80b87a07106acb37a837c014d http://data.gdeltproject.org/gdeltv2/20260815153000.export.CSV.zip',
   '61450 e86d6493d86819b56d5cc413828825df http://data.gdeltproject.org/gdeltv2/20260815153000.mentions.CSV.zip',
-  `3370784 f7c5359b15d09d7e931f8338cd6a7e60 ${BATCH_URL}`,
+  // GDELT's own manifest names http:// URLs — the client upgrades them.
+  '3370784 f7c5359b15d09d7e931f8338cd6a7e60 http://data.gdeltproject.org/gdeltv2/20260815153000.gkg.csv.zip',
 ].join('\n');
 
 describe('GdeltGkgClient — lastupdate.txt', () => {
@@ -110,6 +112,35 @@ describe('GdeltGkgClient — lastupdate.txt', () => {
     const client = new GdeltGkgClient({ fetchImpl: stubFetch({ status: 503 }) });
 
     await expect(client.latestBatchUrl()).rejects.toThrow(/HTTP 503/);
+  });
+
+  it('upgrades the manifest URL to the configured scheme rather than following http', async () => {
+    const client = new GdeltGkgClient({ fetchImpl: stubFetch({ lastupdate: LASTUPDATE }) });
+
+    // The manifest line says http://. This feed reaches an analyst and so an
+    // order, and over plain HTTP an on-path attacker picks the bytes we score.
+    await expect(client.latestBatchUrl()).resolves.toBe(BATCH_URL);
+    expect(BATCH_URL.startsWith('https://')).toBe(true);
+  });
+
+  it('refuses a manifest that points the download at another host', async () => {
+    const hijacked = [
+      '44212 c2b1cae80b87a07106acb37a837c014d http://data.gdeltproject.org/gdeltv2/x.export.CSV.zip',
+      '3370784 f7c5359 https://evil.test/gdeltv2/20260815153000.gkg.csv.zip',
+    ].join('\n');
+    const client = new GdeltGkgClient({ fetchImpl: stubFetch({ lastupdate: hijacked }) });
+
+    // The manifest names an ABSOLUTE URL, so whoever serves it chooses the
+    // download host. Matching the suffix is not enough — the host is pinned.
+    await expect(client.latestBatchUrl()).rejects.toThrow(/named host evil\.test/);
+  });
+
+  it('refuses a batch URL on a foreign host even when handed one directly', async () => {
+    const client = new GdeltGkgClient({ fetchImpl: stubFetch({ lastupdate: LASTUPDATE }) });
+
+    await expect(
+      client.fetchBatch('https://evil.test/gdeltv2/20260815153000.gkg.csv.zip'),
+    ).rejects.toThrow(/named host evil\.test/);
   });
 });
 
@@ -197,7 +228,7 @@ describe('GdeltGkgClient — batch decoding', () => {
     // prefix reconstructs the exact file URL, and GDELT keeps every batch
     // permanently retrievable there, so the dropped columns are re-fetchable.
     const stamp = record?.native_id.split('-')[0] ?? '';
-    expect(`http://data.gdeltproject.org/gdeltv2/${stamp}.gkg.csv.zip`).toBe(BATCH_URL);
+    expect(`https://data.gdeltproject.org/gdeltv2/${stamp}.gkg.csv.zip`).toBe(BATCH_URL);
   });
 
   it('refuses an unsupported compression method rather than emitting garbage', async () => {
@@ -274,5 +305,21 @@ describe('batchTimeFromUrl', () => {
 
   it('returns undefined for a URL carrying no stamp', () => {
     expect(batchTimeFromUrl('http://data.gdeltproject.org/gdeltv2/lastupdate.txt')).toBeUndefined();
+  });
+
+  it('rejects an out-of-range stamp instead of rolling it into a valid date', () => {
+    const base = 'https://data.gdeltproject.org/gdeltv2/';
+    // `Date.UTC` NORMALISES: month 99 rolls forward into a later year and
+    // returns a real number, so a NaN check alone never fires and a corrupt
+    // stamp becomes a plausible batch_time — a cursor that skips live batches.
+    expect(batchTimeFromUrl(`${base}20269915153000.gkg.csv.zip`)).toBeUndefined();
+    expect(batchTimeFromUrl(`${base}20260899153000.gkg.csv.zip`)).toBeUndefined();
+    expect(batchTimeFromUrl(`${base}20260815993000.gkg.csv.zip`)).toBeUndefined();
+    // Day 31 of a 30-day month passes a coarse 1-31 check and rolls to Oct 1st.
+    expect(batchTimeFromUrl(`${base}20260931153000.gkg.csv.zip`)).toBeUndefined();
+    // Still accepts a real leap day, so the check is not merely rejecting.
+    expect(batchTimeFromUrl(`${base}20240229153000.gkg.csv.zip`)?.toISOString()).toBe(
+      '2024-02-29T15:30:00.000Z',
+    );
   });
 });
