@@ -196,8 +196,14 @@ Three consequences the implementation ticket must carry:
 ~~S&P 100 for v1.~~ The pool is a **mapping**, compiled by hand from the three LSE leveraged-ETP issuers (Leverage Shares, WisdomTree Boost, GraniteShares) cross-referenced against Trading 212 instrument metadata:
 
 ```
-{ lse_ticker, screening_instrument, underlying, leverage, direction, subclass, currency, t212_isa }
+{ lse_ticker, screening_instrument, underlying, leverage, direction, subclass, currency, t212_isa, fallback_default }
 ```
+
+**`fallback_default` is a required boolean, and it is what makes the story-12 fallback a real artifact rather than a name.** Invariant 3 above says a stale, empty or unreadable watchlist falls back to "the checked-in pool's declared default subset" — that subset is exactly the rows with `fallback_default: true`. Three constraints, because with story 26 withdrawn this fallback is the **only** thing standing between a bad screener run and a fully dark session:
+
+- **The loader rejects a pool where no row carries it.** A pool that cannot answer "what do we trade when the screener fails" is a pool that fails silently on the one day it matters, and the failure presents as a healthy no-trade session.
+- **Not the full pool.** Falling back to every row would deploy into 40–80 names at once, which the subclass envelope refuses anyway — so the fallback would produce a refusal storm instead of trading. The subset is sized to the watchlist range (5–10 names), liquid and `t212_isa: true`.
+- **It is a hand-declared field, not a derived one.** Deriving it from last known ranking reintroduces the dependency on the artifact whose unreadability triggered the fallback in the first place.
 
 **`screening_instrument` is a new required field and it exists to keep the routing invariant below honest.** Screening runs on the **US underlying's** bars, because [#656](https://github.com/dd-jp/samurai-trading-system/issues/656) established there is no free LSE intraday history — so the instrument that is ranked and the instrument that is traded are genuinely different objects. Two ways to express that, and only one is safe:
 
