@@ -969,6 +969,149 @@ describe('decide — flat by close (#668)', () => {
     expect(outcome.intent).toBeNull();
   });
 
+  /**
+   * #698. The behaviour above is unchanged and these do not re-test it — what
+   * they pin is that the conditions are now AUDIBLE, which is the whole ticket.
+   * Each of these was previously indistinguishable from a healthy quiet tick.
+   */
+  it('reports a stale session close as a diagnostic, on the same pass that exits (#698)', async () => {
+    // The load-bearing case for the diagnostic's placement: this path returns an
+    // INTENT, not a skip. A diagnostic modelled as a variant of `skip_reason`
+    // could not have reported it, which is why `TraderOutcome.diagnostics` is
+    // orthogonal to the intent/skip pair rather than a third alternative.
+    const pastClose = new Date('2026-07-15T19:00:00Z');
+    const stuckCalendar = {
+      isOpen: () => true,
+      isTradingDay: () => true,
+      sessionStart: () => pastClose,
+      sessionEnd: () => pastClose,
+    } as unknown as TradingCalendar;
+
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(new Date('2026-07-15T19:56:00Z')),
+        debate: debateResult({ direction: 'neutral' }),
+        positionState: async () => [holding()],
+        sessionCalendars: { crypto: new AlwaysOpenCalendar(), stocks: stuckCalendar },
+      }),
+    );
+
+    expect(outcome.intent?.intent_type).toBe('exit');
+    expect(outcome.diagnostics.map((diagnostic) => diagnostic.kind)).toEqual([
+      'session_end_in_past',
+    ]);
+    expect(outcome.diagnostics[0]?.asset_class).toBe('stocks');
+  });
+
+  it('reports a non-crypto calendar that cannot resolve a session end at all (#698)', async () => {
+    // The silent case the ticket names: `null` is the DOCUMENTED answer for
+    // crypto and a broken calendar for anything else, and both returned the
+    // identical `false` with nothing marking the difference — so an equity leg
+    // whose calendar had stopped resolving sessions never flattened and carried
+    // overnight against ADR-0014.
+    const muteCalendar = {
+      isOpen: () => true,
+      isTradingDay: () => true,
+      sessionStart: () => null,
+      sessionEnd: () => null,
+    } as unknown as TradingCalendar;
+
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({ direction: 'neutral' }),
+        positionState: async () => [holding()],
+        sessionCalendars: { crypto: new AlwaysOpenCalendar(), stocks: muteCalendar },
+      }),
+    );
+
+    // Unchanged behaviour: no session end means not inside the window, so the
+    // holding path falls through to its ordinary neutral skip.
+    expect(outcome.intent).toBeNull();
+    expect(outcome.diagnostics.map((diagnostic) => diagnostic.kind)).toEqual([
+      'session_end_absent_on_non_crypto',
+    ]);
+  });
+
+  it('stays silent when CRYPTO has no session end, which is the intended answer (#698)', async () => {
+    // `AlwaysOpenCalendar` returns null by design — a venue that never closes.
+    // Alerting on it would fire on every crypto tick forever, which is how an
+    // operator learns to mute a channel that also carries breach alerts
+    // (ADR-0008 §1). The diagnostic is keyed to the ASSET CLASS for this reason.
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({ direction: 'neutral' }),
+        positionState: async () => [holding({ asset_class: 'crypto' })],
+      }),
+    );
+
+    expect(outcome.diagnostics).toEqual([]);
+  });
+
+  it('leaves diagnostics empty on an ordinary healthy decision (#698)', async () => {
+    // The case that must stay quiet, and the one that would make the channel
+    // useless if it did not: the overwhelmingly common tick.
+    const outcome = await decideWithReason(traderInput());
+
+    expect(outcome.intent).not.toBeNull();
+    expect(outcome.diagnostics).toEqual([]);
+  });
+
+  it('reports corrupt bar data that yields a non-finite ATR (#698)', async () => {
+    // The third kind, and the one whose REACHABILITY had to be established
+    // rather than assumed. `computeIndicator` throws on a short window and on a
+    // misordered one, so the natural reading is that it throws here too and the
+    // `Number.isFinite` else-branch is dead code — a mechanism nothing can call,
+    // which is this repo's dominant defect class. It is not: `assertAscending`
+    // checks `close_time` only, and `atr()` is plain arithmetic over the price
+    // legs, so a non-finite price PROPAGATES to the return value instead of
+    // raising. This test is what keeps that true.
+    const corrupt = bars(15, 2).map((bar, index) =>
+      index === 7 ? { ...bar, high: Number.NaN } : bar,
+    );
+
+    const outcome = await decideWithReason(
+      traderInput({ marketData: new FixtureMarketData(corrupt) }),
+    );
+
+    // Unchanged behaviour: a stop cannot be priced off an ATR that does not
+    // exist, so the tick still skips — it is now merely audible while doing it.
+    expect(outcome.intent).toBeNull();
+    expect(outcome.skip_reason).toBe('atr_not_finite');
+    expect(outcome.diagnostics.map((diagnostic) => diagnostic.kind)).toEqual(['atr_not_finite']);
+  });
+
+  it('does NOT see a broken calendar while the book is flat — the known limitation (#698)', async () => {
+    // Pinned as a test rather than left as prose in the PR, because it is the
+    // DOMINANT state and not an edge: #625 recorded 96 debates and 0 trades, so
+    // the book is flat and the debate neutral on almost every tick, and
+    // `routeDecision` answers `neutral_direction_while_flat` before any calendar
+    // is consulted. A calendar that has stopped resolving sessions is therefore
+    // invisible until a position exists — which is exactly the tick where it
+    // starts to cost something.
+    //
+    // Left as-is deliberately: the asset class is not on `TraderInput` and is
+    // reached through `getMark`, so covering this path means adding a vendor
+    // fetch to the most frequent branch in the system. That is a behaviour
+    // change, and #698 asked for audibility without one. Tracked in the PR.
+    const muteCalendar = {
+      isOpen: () => true,
+      isTradingDay: () => true,
+      sessionStart: () => null,
+      sessionEnd: () => null,
+    } as unknown as TradingCalendar;
+
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({ direction: 'neutral' }),
+        positionState: async () => [],
+        sessionCalendars: { crypto: new AlwaysOpenCalendar(), stocks: muteCalendar },
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('neutral_direction_while_flat');
+    expect(outcome.diagnostics).toEqual([]);
+  });
+
   it('throws on a non-positive flatten window rather than silently disabling flat-by-close', async () => {
     // Zero is the dangerous value, not negative: it reads like "no offset" and
     // is what someone reaches for to "turn the window off", when what it

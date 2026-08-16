@@ -114,6 +114,7 @@ import { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
 import type { AlertChannelSlots, ProductionConfig } from './production.js';
 import { TradeChannelResidualExposureAlert } from './residual-exposure-alert-channel.js';
 import { SqliteAuditLog } from './sqlite-audit-log.js';
+import { TradeChannelTraderDiagnosticAlert } from './trader-diagnostic-alert-channel.js';
 import type { Logger } from './types.js';
 import { TradeChannelUnpricedFillAlert } from './unpriced-fill-channel.js';
 
@@ -187,6 +188,14 @@ export const ALERT_CHANNEL_FIELDS = [
   // downstream happened to alert. Filtered at the decorator so wiring it does
   // not buy ~300 messages a day.
   'verdictAlerts',
+  // #698 — the eleventh, and the first whose channel type and transport landed
+  // in the SAME change rather than the type existing first and waiting for a
+  // human to notice the hole. The condition it reports (the Trader running on
+  // a calendar that cannot answer, or on corrupt bar data) is invisible from
+  // outside by construction: the Trader keeps returning defensible answers and
+  // the heartbeat keeps beating, so the only symptom is a book that quietly
+  // stops trading.
+  'traderDiagnosticAlerts',
 ] as const satisfies readonly (keyof AlertChannelSlots)[];
 
 /**
@@ -405,6 +414,13 @@ export function buildAlertChannels(deps: {
     // the chat #342 expects the operator to mute.
     ...(deps.injected.analystSkipAlerts === undefined
       ? { analystSkipAlerts: new TradeChannelAnalystSkipAlert(telegram, chatId) }
+      : {}),
+    // #698. The escalation chat, for the same reason `analystSkipAlerts` uses
+    // it: a Trader that cannot trust its calendar produces no trades while
+    // looking completely healthy from outside, and that must not sit in the
+    // chat #342 expects the operator to mute.
+    ...(deps.injected.traderDiagnosticAlerts === undefined
+      ? { traderDiagnosticAlerts: new TradeChannelTraderDiagnosticAlert(telegram, chatId) }
       : {}),
   };
 }

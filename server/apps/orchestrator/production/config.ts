@@ -52,6 +52,7 @@ import type { Logger, UniverseInstrument } from '../types.js';
 import type { AnalystSkipAlertChannel } from './analysts-adapter.js';
 import { DEFAULT_STAGE2_MAX_AGE_DAYS } from './daily-equity-metrics-source.js';
 import type { AccountStateProvider, VolatilityReadingProvider } from './direct-bind.js';
+import type { TraderDiagnosticAlertChannel } from './trader-diagnostic-alert.js';
 
 /**
  * The nine outbound operator-escalation transports — the fields
@@ -183,6 +184,25 @@ export interface AlertChannelSlots {
    * where it was.
    */
   loosenApprovals?: LoosenApprovalChannel;
+  /**
+   * Where a degraded-but-continuing Trader condition is escalated (#698) — a
+   * calendar reporting a close already in the past, a non-crypto calendar that
+   * cannot resolve a session at all, or a non-finite ATR on a full window.
+   * Absent = log-only, and there is deliberately NO `Logging…Channel` standing
+   * in behind it, unlike `analystSkipAlerts`. `buildTraderStep` writes every
+   * diagnostic to its own logger at `error` BEFORE it reaches this channel, so a
+   * logging implementation would emit each condition twice; absent here means
+   * "no second, audible copy", not "silent". `TradeChannelTraderDiagnosticAlert`
+   * (trader-diagnostic-alert-channel.ts) is what an unattended soak (#238)
+   * needs, and `SAMURAI_ALERTS=telegram` supplies it — the eleventh
+   * `ALERT_CHANNEL_FIELDS` member.
+   *
+   * The failure it reports is the one that is hardest to see from outside: the
+   * Trader keeps returning defensible answers, the heartbeat keeps beating, and
+   * the book is quietly parked flat. #625 produced exactly that shape (96
+   * debates, 0 trades) and it took a human reading the tables to find it.
+   */
+  traderDiagnosticAlerts?: TraderDiagnosticAlertChannel;
   /**
    * #465: where NOTABLE verdicts go. Absent = no verdict alerting, which is
    * what `log-only` mode and every test get.

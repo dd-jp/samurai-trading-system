@@ -79,6 +79,7 @@ import type {
   SetupStore,
   TraderLogStore,
 } from '../../../shared/index.js';
+import { sanitizeLogText } from '../../../shared/index.js';
 // Aliased: this module already imports a DIFFERENT `SharedStore` above (an
 // unrelated `execution/index.js` interface, `ExecutionStepDeps.store`'s
 // type) — the alias names which one `VerdictStepDeps.store` actually is,
@@ -92,6 +93,11 @@ import { OrphanVerdictScanner } from '../orphan-verdict-scan.js';
 import { SqliteAuditLog } from '../sqlite-audit-log.js';
 import { SqliteCurrentTickStore } from '../sqlite-current-tick-store.js';
 import type { TickSteps } from '../types.js';
+import {
+  type TraderDiagnosticAlert,
+  type TraderDiagnosticAlertChannel,
+  TraderDiagnosticThrottle,
+} from './trader-diagnostic-alert.js';
 
 /**
  * Account-level accounting scalars `computePortfolioView` needs but has no
@@ -165,6 +171,26 @@ export interface TraderStepDeps extends BreakerStateDeps {
    * ceiling declared", never "a ceiling of zero". See `sizingEquity`.
    */
   capitalCeilingUsd?: number;
+  /**
+   * #698: where a degraded-but-continuing Trader condition is escalated.
+   *
+   * Optional, matching every other alert channel on this boundary: absent means
+   * log-only, which is what tests and the backtest get. `production.ts` supplies
+   * the logging default and `SAMURAI_ALERTS=telegram` replaces it with the
+   * reachable-from-a-phone implementation.
+   *
+   * Optional here and NOT for the reason `sessionCalendars` is required: a
+   * missing calendar changes what the system DOES, a missing alert channel only
+   * changes who hears about it. The diagnostics still reach `trader_log` either
+   * way.
+   */
+  traderDiagnosticAlerts?: TraderDiagnosticAlertChannel;
+  /**
+   * Where an undeliverable diagnostic alert is recorded, and the fallback sink
+   * when no channel is wired. Optional for the same reason it is on the analysts
+   * step: a test that supplies neither is silent by choice.
+   */
+  logger?: Logger;
 }
 
 /**
@@ -208,13 +234,19 @@ export function sizingEquity(equity: number, capitalCeilingUsd: number | undefin
 }
 
 export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
+  // #698. Per-step rather than per-tick: the counter's entire job is to relate
+  // THIS tick to the ones before it, so it has to outlive the closure body. Held
+  // here for the same reason `buildAnalystsStep` holds `consecutiveSkips` — one
+  // running orchestrator, in memory, restart-clean.
+  const diagnosticThrottle = new TraderDiagnosticThrottle();
+
   return async ({ trace_id, instrument, debate, clock }) => {
     // TraderInput.equity is current portfolio equity (cash + mark-to-market
     // exposure) — the same OBSERVATION Risk gates against this tick, not
     // merely the same derivation: the snapshot is memoized per trace so the
     // two stages cannot see two different portfolios (B4).
     const { portfolio } = await snapshotForTick(deps, clock, trace_id);
-    const { intent, skip_reason, atr } = await decideWithReason({
+    const { intent, skip_reason, atr, diagnostics } = await decideWithReason({
       trace_id,
       instrument,
       debate,
@@ -265,8 +297,117 @@ export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
       created_at: clock.now(),
     });
 
+    // #698: escalate anything the decision noticed but did not treat as fatal.
+    //
+    // AFTER the `trader_log` write on purpose — the durable record is the thing
+    // that must not be lost, and it lands whether or not a transport is
+    // reachable. The alert is the audible copy, not the record.
+    //
+    // Every diagnostic is fed to the throttle, not only the ones that alert:
+    // `observe` is what CLEARS a run, so skipping the call on a healthy tick
+    // would leave a recovered condition counting from where it left off.
+    //
+    // The two halves are throttled differently (#710). The LOG is written for
+    // every observation, because it is the durable record and a condition
+    // present on every tick must appear on every tick; the ALERT is throttled,
+    // because it lands in the chat that also carries kill-threshold breaches
+    // (ADR-0008 §1). These were one call until the #710 review, which meant the
+    // log inherited the alert's throttle and went quiet for seven ticks in
+    // eight while this file's own docblock promised it never did.
+    for (const observed of diagnosticThrottle.observe(instrument, diagnostics)) {
+      const { diagnostic, consecutive_ticks } = observed;
+      deps.logger?.log({
+        trace_id,
+        stage: 'trader',
+        level: 'error',
+        message:
+          `trader: ${instrument} reported ${diagnostic.kind} on ` +
+          `${consecutive_ticks} consecutive tick(s) — ${diagnostic.detail}`,
+        payload: {
+          instrument,
+          kind: diagnostic.kind,
+          asset_class: diagnostic.asset_class,
+          consecutive_ticks,
+        },
+      });
+
+      if (!observed.alert) continue;
+
+      // NOT awaited (#710). `postSkipAlert` on the analysts step can await
+      // because it runs before any order exists; this step's return value is
+      // what Risk and Execution act on, so awaiting a Telegram send here puts
+      // the transport in front of the order — including the flat-by-close exit,
+      // whose whole point is landing before the bell. The Telegram client's
+      // defaults are `maxAttempts: 3` against a 10s per-request timeout with
+      // 0.5s/1s backoff, so a black-holed send holds the intent for ~31s of a
+      // 15-minute tick before the broker has seen it — and that client's own
+      // comment ("a send is not on the tick's critical path") is only true
+      // because of this line.
+      //
+      // This is #669's defect shape, in a different place: a slow call inside a
+      // per-instrument step delaying work that is not its own.
+      void postTraderDiagnosticAlert(deps, trace_id, {
+        instrument,
+        diagnostic,
+        consecutive_ticks,
+        reported_at: clock.now(),
+      }).catch(() => {
+        // Unreachable via the transport, which is already caught inside. The
+        // only way through here is `logger.log` itself throwing, and a floating
+        // rejection would take the orchestrator down on an unattended soak —
+        // the exact degraded-to-stopped inversion #698 exists to prevent. There
+        // is nowhere to report it: the thing that would report it is what broke.
+      });
+    }
+
     return intent;
   };
+}
+
+/**
+ * Posts one diagnostic alert, and never lets the transport take the tick down
+ * with it (#698).
+ *
+ * Stronger than the posture `postSkipAlert` takes on the analysts step, and the
+ * difference is WHERE in the tick each one sits. `postSkipAlert` runs before any
+ * order exists, so awaiting it delays nothing that has money on it. This runs
+ * inside the step whose return value Risk and Execution act on, so the caller
+ * does not await it at all — catching the transport's errors is necessary but no
+ * longer sufficient once a *slow* transport can delay a flatten exit (#710).
+ *
+ * The caller logs every diagnostic at `error` before deciding whether to call
+ * this, so the condition is never silent even in a log-only deployment, and
+ * never silent on the ticks between two throttled alerts either.
+ *
+ * `traceId` is the TICK's, not a synthetic constant. It is what joins this line
+ * to the debate, the `trader_log` row and the verdict for the same instrument on
+ * the same tick, which is the only way a soak post-mortem reconstructs what the
+ * Trader was looking at when it complained.
+ */
+async function postTraderDiagnosticAlert(
+  deps: TraderStepDeps,
+  traceId: string,
+  alert: TraderDiagnosticAlert,
+): Promise<void> {
+  const { diagnostic } = alert;
+  if (deps.traderDiagnosticAlerts === undefined) return;
+  try {
+    await deps.traderDiagnosticAlerts.postTraderDiagnosticAlert(alert);
+  } catch (error) {
+    deps.logger?.log({
+      trace_id: traceId,
+      stage: 'trader',
+      level: 'error',
+      message:
+        'trader diagnostic alert could not be delivered — the condition is still present and ' +
+        'nobody has been told',
+      payload: {
+        instrument: alert.instrument,
+        kind: diagnostic.kind,
+        error: sanitizeLogText(error instanceof Error ? error.message : String(error)),
+      },
+    });
+  }
 }
 
 /** Shared by risk and verdict: both need the portfolio-derived breaker state, fetched fresh at their own call time. */
