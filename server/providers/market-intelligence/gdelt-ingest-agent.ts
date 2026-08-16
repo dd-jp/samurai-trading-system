@@ -33,7 +33,8 @@
  * no pre-scoring dedup to do here, because nothing in this half costs tokens.
  */
 
-import type { Clock, Logger } from '../../shared/index.js';
+import type { Clock, LogEntry, Logger } from '../../shared/index.js';
+import { logCaughtFailure, safeLog } from '../../shared/safe-log.js';
 import type { MiArchiveStore, RawArchiveRow } from './archive/mi-archive-store.js';
 import {
   batchTimeFromUrl,
@@ -79,6 +80,34 @@ export class GdeltIngestAgent {
 
   constructor(private readonly deps: GdeltIngestAgentDeps) {}
 
+  /**
+   * Logs, absorbing a throw from the logger itself.
+   *
+   * Not paranoia about a hypothetical: `JsonLogger`'s `process.stdout.write` is
+   * deliberately unguarded (`shared/safe-log.ts` sets out why), so an EPIPE on a
+   * broken pipe throws out of `log`. Everywhere else in the pipeline that would
+   * surface as a rejected promise some caller awaits. Here it would not —
+   * `production.ts` is the only site in the repo that calls an agent as
+   * `void refresh(...)`, and no `process.on('unhandledRejection')` handler is
+   * installed, so on Node 22 an escaped rejection terminates a process that is
+   * meant to run unattended for fourteen days. The "never throws" contract
+   * `refresh` advertises has to cover its own logging or it is not a contract.
+   */
+  private log(entry: LogEntry): void {
+    const logger = this.deps.logger;
+    if (logger !== undefined) safeLog(logger, entry);
+  }
+
+  /** `log`, for the two catch blocks whose thrown value IS the diagnostic. */
+  private logFailure(
+    template: Omit<LogEntry, 'payload'>,
+    error: unknown,
+    payload: Record<string, unknown>,
+  ): void {
+    const logger = this.deps.logger;
+    if (logger !== undefined) logCaughtFailure(logger, template, error, payload);
+  }
+
   /** The later of the persisted write cursor and this process's seen-batch mark. */
   private effectiveCursor(): Date | undefined {
     const written = this.deps.archive.latestUpdatedAt(SOURCE_GDELT);
@@ -100,7 +129,9 @@ export class GdeltIngestAgent {
    * fetch must degrade to "no new intelligence" rather than take down a tick
    * that would otherwise have traded on the technical analyst alone. The
    * contract covers the archive write too, not just the fetch — see the write
-   * site for why that distinction is not academic.
+   * site for why that distinction is not academic — and the logging, which is
+   * routed through `this.log`/`this.logFailure` rather than `logger.log` for
+   * the reason set out there.
    *
    * Concurrent calls do not stack: a call made while a poll is in flight returns
    * `false` immediately rather than starting a second download.
@@ -137,39 +168,44 @@ export class GdeltIngestAgent {
       const url = await this.deps.client.latestBatchUrl();
       const candidate = batchTimeFromUrl(url);
       if (candidate === undefined) {
-        // The cursor check below cannot run, so this poll — and every poll after
-        // it — downloads the full batch. Silent degradation looks identical to a
-        // steady stream of fresh batches, so it is logged rather than inferred.
-        this.deps.logger?.log({
+        // Abandoned here rather than fallen through to the download, because
+        // `fetchBatch` re-derives this same stamp and throws when it is absent
+        // — it needs it for `batch_time`. Falling through would reach that
+        // throw, log a second and contradictory "fetch failed" warn for the
+        // same cause, and pay a rate-limiter slot on the way. Silent
+        // degradation looks identical to a steady stream of fresh batches, so
+        // it is logged rather than inferred.
+        this.log({
           trace_id,
           stage: 'market_intelligence',
           level: 'warn',
           message:
-            'market intelligence: GDELT batch URL carries no readable timestamp; the skip-if-held ' +
-            'cursor is disabled and every poll will download the full batch. Vendor URL drift?',
+            'market intelligence: GDELT batch URL carries no readable timestamp; the batch cannot ' +
+            'be stamped or cursor-checked, so this poll is abandoned. Vendor URL drift?',
           payload: { source: SOURCE_GDELT, batch: url },
         });
+        return false;
       }
       // Checked BEFORE the download, not after: at a 15-minute tick against a
       // 15-minute publication cadence, a restart or a fast tick will often see
       // the batch it already holds, and re-downloading 3.4MB to discard it is
       // the whole saving the cursor exists for.
       const cursor = this.effectiveCursor();
-      if (cursor !== undefined && candidate !== undefined && candidate <= cursor) return false;
+      if (cursor !== undefined && candidate <= cursor) return false;
       batch = await this.deps.client.fetchBatch(url);
     } catch (error) {
-      this.deps.logger?.log({
-        trace_id,
-        stage: 'market_intelligence',
-        level: 'warn',
-        message:
-          'market intelligence: GDELT batch fetch failed; no macro rows archived this poll. ' +
-          'Not fatal — the tick continues on whatever the archive already holds.',
-        payload: {
-          source: SOURCE_GDELT,
-          error: error instanceof Error ? error.message : String(error),
+      this.logFailure(
+        {
+          trace_id,
+          stage: 'market_intelligence',
+          level: 'warn',
+          message:
+            'market intelligence: GDELT batch fetch failed; no macro rows archived this poll. ' +
+            'Not fatal — the tick continues on whatever the archive already holds.',
         },
-      });
+        error,
+        { source: SOURCE_GDELT },
+      );
       return false;
     }
 
@@ -178,7 +214,7 @@ export class GdeltIngestAgent {
       // Logged with the scan count because a filter that has started matching
       // nothing at all looks identical to a quiet news window from the outside,
       // and only the ratio tells them apart.
-      this.deps.logger?.log({
+      this.log({
         trace_id,
         stage: 'market_intelligence',
         level: 'info',
@@ -218,24 +254,22 @@ export class GdeltIngestAgent {
     try {
       this.deps.archive.write(raws, []);
     } catch (error) {
-      this.deps.logger?.log({
-        trace_id,
-        stage: 'market_intelligence',
-        level: 'warn',
-        message:
-          'market intelligence: GDELT archive write failed; batch not stored. ' +
-          'The cursor is unmoved, so the next poll retries this batch.',
-        payload: {
-          source: SOURCE_GDELT,
-          batch: batch.file_url,
-          rows: raws.length,
-          error: error instanceof Error ? error.message : String(error),
+      this.logFailure(
+        {
+          trace_id,
+          stage: 'market_intelligence',
+          level: 'warn',
+          message:
+            'market intelligence: GDELT archive write failed; batch not stored. ' +
+            'The cursor is unmoved, so the next poll retries this batch.',
         },
-      });
+        error,
+        { source: SOURCE_GDELT, batch: batch.file_url, rows: raws.length },
+      );
       return false;
     }
 
-    this.deps.logger?.log({
+    this.log({
       trace_id,
       stage: 'market_intelligence',
       level: 'info',

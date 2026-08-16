@@ -1,5 +1,5 @@
 import { deflateRawSync } from 'node:zlib';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { batchTimeFromUrl, GdeltGkgClient } from './gdelt-gkg-client.js';
 
 /**
@@ -135,6 +135,27 @@ describe('GdeltGkgClient — lastupdate.txt', () => {
     await expect(client.latestBatchUrl()).rejects.toThrow(/named host evil\.test/);
   });
 
+  it('refuses to follow redirects, without which the host pin is decorative', async () => {
+    // The pin checks the host of a URL the server is then free to rewrite: with
+    // fetch's default `redirect: 'follow'`, one 3xx from data.gdeltproject.org
+    // re-targets the download anywhere and `pinToBaseUrl` never sees it. Asserted
+    // on the init rather than by serving a redirect, because following one is the
+    // platform's behaviour to suppress, not this module's to reimplement.
+    const inits: (RequestInit | undefined)[] = [];
+    const fetchImpl = (async (input: string | URL, init?: RequestInit) => {
+      inits.push(init);
+      return String(input).endsWith('lastupdate.txt')
+        ? new Response(LASTUPDATE)
+        : new Response(zipOf(STOCK_ROW));
+    }) as unknown as typeof fetch;
+    const client = new GdeltGkgClient({ fetchImpl });
+
+    await client.fetchBatch(await client.latestBatchUrl());
+
+    expect(inits).toHaveLength(2);
+    for (const init of inits) expect(init?.redirect).toBe('error');
+  });
+
   it('refuses a batch URL on a foreign host even when handed one directly', async () => {
     const client = new GdeltGkgClient({ fetchImpl: stubFetch({ lastupdate: LASTUPDATE }) });
 
@@ -241,6 +262,23 @@ describe('GdeltGkgClient — batch decoding', () => {
     await expect(client.fetchLatestBatch()).rejects.toThrow(
       /unsupported zip compression method 12/,
     );
+  });
+
+  it('refuses an oversized batch on content-length, before reading the body', async () => {
+    const response = new Response(zipOf(STOCK_ROW), {
+      headers: { 'content-length': String(65 * 1024 * 1024) },
+    });
+    const readBody = vi.spyOn(response, 'arrayBuffer');
+    const fetchImpl = (async (input: string | URL) =>
+      String(input).endsWith('lastupdate.txt')
+        ? new Response(LASTUPDATE)
+        : response) as unknown as typeof fetch;
+    const client = new GdeltGkgClient({ fetchImpl });
+
+    await expect(client.fetchBatch(BATCH_URL)).rejects.toThrow(/declares 68157440 bytes/);
+    // The point of checking the header at all: the post-allocation ceiling
+    // already existed, and by the time it fires the body is in memory.
+    expect(readBody).not.toHaveBeenCalled();
   });
 
   it('refuses a response that is not a zip at all', async () => {

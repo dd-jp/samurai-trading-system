@@ -68,6 +68,28 @@ const DEFAULT_BASE_URL = 'https://data.gdeltproject.org/gdeltv2';
 const REQUEST_TIMEOUT_MS = 90_000;
 
 /**
+ * The request options every GDELT fetch shares: a timeout, and a refusal to
+ * follow redirects.
+ *
+ * `redirect: 'error'` is what keeps `pinToBaseUrl` meaningful. That method is
+ * this module's cited byte-integrity control — it refuses a manifest naming a
+ * host we did not configure — but `fetch` follows 3xx by default, so a single
+ * redirect from the pinned host re-targets the download anywhere and the pin
+ * never sees it. Checking the host of a URL we then let the server rewrite is
+ * a control that reads as present and is not. GDELT serves these files
+ * directly, so a redirect is a change of behaviour worth failing on rather
+ * than absorbing.
+ *
+ * Built per call, never hoisted to a module constant: `AbortSignal.timeout`
+ * starts counting when it is CREATED, so one shared signal would begin at
+ * import and every request after the first 90 seconds of process life would
+ * abort instantly.
+ */
+function requestInit(): RequestInit {
+  return { redirect: 'error', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) };
+}
+
+/**
  * GDELT publishes one batch per 15 minutes and asks politely for no hammering.
  * Our tick is 15 minutes too, so this only ever has to pass one download.
  */
@@ -78,11 +100,14 @@ const DEFAULT_PACING = { capacity: 2, refillPerSecond: 0.2 } as const;
  *
  * A sampled batch is 3.4MB compressed / 10.5MB raw. 64MB is ~19x the observed
  * compressed size, so anything above it is a mis-routed response rather than a
- * batch. Note what this does NOT do: the check runs after `arrayBuffer()` has
- * already materialised the body, so it bounds what gets *inflated and parsed*,
- * not what gets allocated. Bounding the allocation would need a streaming read
- * with a running byte count; `MAX_INFLATED_BYTES` is the guard that actually
- * refuses before allocating, because `inflateRawSync` enforces it internally.
+ * batch. Enforced twice: against `content-length` before `arrayBuffer()`, which
+ * bounds the allocation whenever the server declares a length, and against the
+ * materialised buffer after, which catches a missing or understated header.
+ * Note what even that does NOT do — a server streaming an undeclared body still
+ * allocates it in full before the second check fires. Closing that would need a
+ * streaming read with a running byte count; `MAX_INFLATED_BYTES` is the guard
+ * that refuses before allocating, because `inflateRawSync` enforces it
+ * internally.
  */
 const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 
@@ -282,9 +307,7 @@ export class GdeltGkgClient {
    */
   async latestBatchUrl(): Promise<string> {
     await this.rateLimiter.acquire();
-    const response = await this.fetchImpl(`${this.baseUrl}/lastupdate.txt`, {
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
+    const response = await this.fetchImpl(`${this.baseUrl}/lastupdate.txt`, requestInit());
     if (!response.ok) {
       throw new Error(
         `GdeltGkgClient: lastupdate.txt returned HTTP ${response.status} ${response.statusText}.`,
@@ -343,12 +366,22 @@ export class GdeltGkgClient {
     }
 
     await this.rateLimiter.acquire();
-    const response = await this.fetchImpl(url, {
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
+    const response = await this.fetchImpl(url, requestInit());
     if (!response.ok) {
       throw new Error(
         `GdeltGkgClient: ${fileUrl} returned HTTP ${response.status} ${response.statusText}.`,
+      );
+    }
+    // Refused BEFORE `arrayBuffer()` where the server declares a length, so the
+    // oversized body is never materialised. A missing or lying `content-length`
+    // falls through to the post-allocation check below — this bounds the honest
+    // case, which is the one that actually threatens us (GDELT publishing a
+    // batch an order of magnitude larger), not a hostile server.
+    const declared = Number(response.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > MAX_ARCHIVE_BYTES) {
+      throw new Error(
+        `GdeltGkgClient: ${fileUrl} declares ${declared} bytes, above the ${MAX_ARCHIVE_BYTES} ` +
+          'ceiling — refusing to download it inside a tick.',
       );
     }
     const buffer = Buffer.from(await response.arrayBuffer());

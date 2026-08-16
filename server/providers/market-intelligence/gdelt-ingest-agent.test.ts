@@ -9,6 +9,8 @@ const clock: Clock = { now: () => NOW };
 
 const BATCH_URL = 'http://data.gdeltproject.org/gdeltv2/20260815153000.gkg.csv.zip';
 const BATCH_TIME = new Date('2026-08-15T15:30:00Z');
+/** The next 15-minute batch file — a newer cursor stamp, same records. */
+const LATER_BATCH_URL = 'http://data.gdeltproject.org/gdeltv2/20260815154500.gkg.csv.zip';
 
 function record(overrides: Partial<GdeltGkgRecord> = {}): GdeltGkgRecord {
   return {
@@ -327,7 +329,7 @@ describe('GdeltIngestAgent', () => {
     archive.close();
   });
 
-  it('is idempotent on a re-run of the same batch', async () => {
+  it('is idempotent when a later batch re-offers rows already held', async () => {
     const archive = new MiArchiveStore();
     const rows = [record(), record({ native_id: 'b-2' })];
     const agent = new GdeltIngestAgent({
@@ -337,16 +339,64 @@ describe('GdeltIngestAgent', () => {
     });
 
     await agent.refresh();
-    // Bypasses the cursor to exercise the archive's own INSERT OR IGNORE — the
-    // backstop for a clock skew or a cursor reset re-offering held rows.
-    const bypass = new GdeltIngestAgent({
-      archive,
-      client: stubClient({ batch: batch(rows) }),
-      clock,
-    });
-    await bypass.refresh();
 
+    // A LATER batch file carrying the same records — the shape a vendor
+    // re-publication or a rewound cursor actually takes. The URL stamp is what
+    // the cursor compares, so a newer one gets past the skip-if-held check and
+    // the rows reach `write`, where the archive's own INSERT OR IGNORE is the
+    // thing under test. A second agent over the same archive does NOT do this:
+    // it reads the same persisted cursor, skips the download, and the write is
+    // never reached — the assertion then passes on the first refresh's rows
+    // alone, testing nothing.
+    const laterClient = stubClient({
+      url: LATER_BATCH_URL,
+      batch: batch(rows, LATER_BATCH_URL),
+    });
+    const later = new GdeltIngestAgent({ archive, client: laterClient, clock });
+
+    await expect(later.refresh()).resolves.toBe(true);
+    // The download must actually have happened, or this is the vacuous test again.
+    expect(laterClient.fetchBatch).toHaveBeenCalledOnce();
     expect(archive.rawRows(SOURCE_GDELT)).toHaveLength(2);
+    archive.close();
+  });
+
+  it('abandons a poll whose batch URL carries no timestamp, without fetching', async () => {
+    const archive = new MiArchiveStore();
+    const logger = collectingLogger();
+    const client = stubClient({ url: 'http://data.gdeltproject.org/gdeltv2/latest.gkg.csv.zip' });
+    const agent = new GdeltIngestAgent({ archive, client, clock, logger });
+
+    await expect(agent.refresh()).resolves.toBe(false);
+
+    // Not fetched: `fetchBatch` needs the same stamp for `batch_time` and would
+    // throw, producing a second warn blaming the network for a URL-format fault.
+    expect(client.fetchBatch).not.toHaveBeenCalled();
+    const warns = logger.entries.filter((entry) => entry.level === 'warn');
+    expect(warns).toHaveLength(1);
+    expect(warns[0]?.message).toContain('no readable timestamp');
+    archive.close();
+  });
+
+  it('survives a logger that throws, because production calls this as void refresh()', async () => {
+    const archive = new MiArchiveStore();
+    const throwing: Logger = {
+      log: () => {
+        // What an EPIPE out of JsonLogger's unguarded stdout write looks like.
+        throw new Error('EPIPE');
+      },
+    } as unknown as Logger;
+    const agent = new GdeltIngestAgent({
+      archive,
+      client: stubClient({ batch: batch([record()]) }),
+      clock,
+      logger: throwing,
+    });
+
+    // Rejecting here would surface as an unhandled rejection in the orchestrator
+    // and take down a fourteen-day unattended run.
+    await expect(agent.refresh()).resolves.toBe(true);
+    expect(archive.rawRows(SOURCE_GDELT)).toHaveLength(1);
     archive.close();
   });
 });
