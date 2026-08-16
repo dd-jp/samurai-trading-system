@@ -26,8 +26,13 @@ describe('assertFlattenWindowCoversTickInterval', () => {
     // 5-minute flatten window against a 15-minute tick. The window is not a
     // duration during which the book flattens, it is a set of instants at which
     // flattening is POSSIBLE — so a 15-minute stride lands inside a 5-minute
-    // window only when its phase happens to fall there, roughly one session in
-    // three, and the other two carry overnight with nothing logged.
+    // window only when its phase happens to fall there.
+    //
+    // That phase is fixed at boot, not re-rolled per session: ticks land at
+    // `bootTime + k * tickIntervalMs`, and a close recurs every 24h, which is an
+    // exact multiple of 15 minutes. So this is not an intermittent miss — the
+    // run either flattens every session or never flattens once, decided by when
+    // the process started, with nothing logged either way.
     expect(() =>
       assertFlattenWindowCoversTickInterval(configWithWindow(5 * MINUTE), 15 * MINUTE),
     ).toThrow(/flatten_before_close_ms/);
@@ -57,9 +62,9 @@ describe('assertFlattenWindowCoversTickInterval', () => {
     // A half-open window of length W contains at least one tick when
     // W >= tickIntervalMs, so one interval is the arithmetic minimum — and it is
     // not enough. That single tick is not guaranteed to EXECUTE: #669 drops a
-    // whole tick when the previous is still running, and a pass is ~13s against
-    // a 30s crypto latency budget. The margin is the difference between a
-    // flatten that survives losing a tick and one that does not.
+    // whole tick when the previous is still running, and the timer drifts. Two
+    // buys tolerance for one arbitrary lost tick — not a general safety factor,
+    // since #669's drops are correlated (see the constant's docblock).
     const tick = 5 * MINUTE;
     expect(() => assertFlattenWindowCoversTickInterval(configWithWindow(tick), tick)).toThrow(
       /only 1\.00 tick\(s\) fit/,

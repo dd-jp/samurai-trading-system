@@ -18,10 +18,22 @@
  * flat-by-close rule exists to prevent, arrived at silently.
  *
  * This was live, not hypothetical: the paper profile shipped `tickIntervalMs`
- * at 15 minutes against a `flatten_before_close_ms` of 5, so the flatten fired
- * only when a tick happened to land in the session's final five minutes —
- * roughly one session in three, decided by nothing but where the interval's
- * phase fell relative to the close.
+ * at 15 minutes against a `flatten_before_close_ms` of 5.
+ *
+ * **And the failure does not vary from session to session — it is decided once,
+ * at boot, for the whole run.** Ticks land at `bootTime + k * tickIntervalMs`,
+ * so the phase is a property of the process, not of the day. A session close
+ * recurs every 24 hours, and 24 hours is an exact multiple of both 15 minutes
+ * (96) and 2 minutes (720), so the offset between the tick grid and the close
+ * is IDENTICAL every session. Either a tick lands in the window every day or it
+ * lands in it on no day at all, determined by nothing but when the process
+ * happened to start.
+ *
+ * That is worse than an intermittent fault and it is why this is a boot
+ * assertion. An intermittent flatten would at least show up in the positions
+ * table as an inconsistency somebody might chase; a run that started on the
+ * wrong phase never flattens once in fourteen days, and looks from the inside
+ * exactly like a run with nothing to flatten.
  *
  * ## Why an assertion rather than a comment
  *
@@ -49,10 +61,17 @@ import type { TraderConfig } from '../../../pipeline/trader/index.js';
  *
  * **Two is what makes it survive a real run.** The single tick the minimum
  * guarantees is not guaranteed to EXECUTE: `production.ts` drops a whole tick
- * when the previous one is still running (#669), a debate pass is ~13s against a
- * 30s crypto latency budget, and the interval timer drifts. Requiring two ticks
- * inside the window means the flatten survives losing one of them, which is a
- * thing that demonstrably happens rather than a thing that might.
+ * when the previous one is still running (#669), and the interval timer drifts.
+ * Requiring two ticks buys tolerance for ONE arbitrary lost tick.
+ *
+ * It is deliberately not claimed to be a general safety factor. #669's drops are
+ * not independent events — a pass slow enough to eat one tick is the same pass
+ * that may still be running at the next, so consecutive drops are correlated and
+ * two ticks do not make the flatten twice as likely to land. Two is the smallest
+ * margin above the arithmetic minimum, chosen because the minimum has no margin
+ * at all, and NOT because a run of drops has been shown to be impossible.
+ * Raising it is a cost decision (a wider window flattens earlier and gives up
+ * end-of-day exposure), so it stays at the smallest defensible value.
  */
 export const MIN_TICKS_INSIDE_FLATTEN_WINDOW = 2;
 
