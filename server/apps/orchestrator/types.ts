@@ -17,14 +17,53 @@ import type { AnalystView, DebateResult } from '../../pipeline/debate-engine/ind
 import type { ExecutionResult } from '../../pipeline/execution/index.js';
 import type { RiskDecision } from '../../pipeline/risk-manager/index.js';
 import type { VerdictDecision } from '../../pipeline/verdict/index.js';
-import type { AssetClass, Clock, OrderIntent } from '../../shared/index.js';
+import type {
+  AssetClass,
+  Clock,
+  InstrumentSubclass,
+  OrderIntent,
+} from '../../shared/index.js';
 
-export type { AssetClass };
+export type { AssetClass, InstrumentSubclass };
 
 /** One entry in the configured universe (orchestrator-spec.md story 3). */
 export interface UniverseInstrument {
   asset: string;
   asset_class: AssetClass;
+  /**
+   * ADR-0018's pricing dimension, sourced from the LSE-ETP pool file.
+   *
+   * Optional because the universe predates it: the smoke universe, the
+   * backtest fixtures and every existing profile name instruments without
+   * one, and a required field would break them all to express something they
+   * do not use. Anything that actually *prices* on it must go through
+   * `requireSubclass` rather than reading the field, so a missing value
+   * refuses instead of silently taking a default.
+   */
+  subclass?: InstrumentSubclass;
+}
+
+/**
+ * Read the subclass a bracket or a position size is about to be computed
+ * from, refusing when it is absent.
+ *
+ * ADR-0018 D5 sizes the equity leg *down* — ~35% for index ETPs, ~25% for
+ * single-stock — because the measured volatility envelope at full deployment
+ * runs 2.2x to 3.5x outside `CONTEXT.md`'s tolerance before any edge exists.
+ * A missing subclass falling back to a default would therefore fall back to
+ * the one setting the ADR exists to forbid, and it would do it silently, on
+ * the money path. Fail loud instead.
+ */
+export function requireSubclass(
+  instrument: UniverseInstrument,
+): InstrumentSubclass {
+  if (instrument.subclass === undefined) {
+    throw new Error(
+      `${instrument.asset} has no subclass; ADR-0018 brackets and sizing cannot be resolved without one. ` +
+        `Add it to the pool file rather than defaulting - a default here is full deployment.`,
+    );
+  }
+  return instrument.subclass;
 }
 
 /** What fires this tick, decided by the Scheduler against the injected clock. */

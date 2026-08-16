@@ -19,6 +19,12 @@
  */
 export type { AssetClass } from '../../../contracts/primitives.js';
 
+/**
+ * The finer dimension ADR-0018 keys its brackets and sizing on. Same
+ * re-export rule as `AssetClass` above, and same reason.
+ */
+export type { InstrumentSubclass } from '../../../contracts/primitives.js';
+
 /** One structured log line; `trace_id` threads every line (#95). */
 export interface LogEntry {
   trace_id: string;

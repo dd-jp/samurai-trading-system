@@ -35,6 +35,7 @@ export {
 export {
   type AssetClass,
   type Direction,
+  type InstrumentSubclass,
   type OrderState,
   STORE_MODES,
   type StoreMode,

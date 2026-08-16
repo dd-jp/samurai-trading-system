@@ -12,7 +12,12 @@ export type {
   TuningStore,
   VerdictLogStore,
 } from './types/ports.js';
-export type { AssetClass, LogEntry, Logger } from './types/primitives.js';
+export type {
+  AssetClass,
+  InstrumentSubclass,
+  LogEntry,
+  Logger,
+} from './types/primitives.js';
 export type {
   ClosedTrade,
   DebateLog,

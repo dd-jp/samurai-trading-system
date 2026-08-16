@@ -18,6 +18,28 @@
 /** Which market an instrument trades in. Drives session/calendar handling. */
 export type AssetClass = 'crypto' | 'stocks';
 
+/**
+ * The dimension ADR-0018 prices against, one level finer than `AssetClass`.
+ *
+ * ADR-0018 D2 pools thresholds "per asset-class subclass", and D3/D5 then give
+ * three of them different numbers: the 3x index ETP takes a +2.00/-2.16
+ * bracket at ~35% of the leg, the 3x single-stock ETP a +6.00/-6.25 bracket at
+ * ~25%, and crypto's brackets are explicitly not set by that ADR. `AssetClass`
+ * cannot express the split - both ETP subclasses are `'stocks'` - so neither
+ * the brackets nor the sizing can be keyed on it.
+ *
+ * Deliberately NOT a leverage number plus a shape. The measured figures are
+ * per-subclass constants, not a function of leverage: ADR-0018 D3's corollary
+ * is that "it is not leverage that improves the economics - it is bracket
+ * width relative to a fixed cost", and the single-stock bracket is wider than
+ * the index one despite identical 3x leverage, because its round trip is 2.3x
+ * larger. A `leverage: 3` field would invite deriving what was measured.
+ */
+export type InstrumentSubclass =
+  | 'index_etp_3x'
+  | 'single_stock_etp_3x'
+  | 'crypto';
+
 /** A directional stance — an analyst's, or a debate's conclusion. */
 export type Direction = 'bullish' | 'bearish' | 'neutral';
 
