@@ -129,6 +129,13 @@ The candidate vector — 50%@+1.0% / 25%@+2.0% / 25%@+3.0% over a shared −2.16
 
 **If the rider prices the ladder worse than the single bracket under truncation,** the truncation argument is falsified and the single bracket stands. Recorded up front so that outcome is a result rather than a reversal.
 
+### Consequence of the same-day crypto ruling
+
+Crypto left this system's scope on 2026-08-16 ([ADR-0014](0014-intraday-flat-by-close-horizon.md)'s companion amendment). Two follow-ons here:
+
+- **Decision 4's selection budget drops from three configurations to two.** *"One pooled pair per subclass (index ETP, single-stock ETP, crypto)"* — the crypto pair is never selected, so the budget spent by this system is two. This tightens the trial accounting rather than loosening it, and is recorded so a later reader does not find a third pair unaccounted for.
+- **The Consequences note on crypto brackets is now out of scope, not blocked.** #660's 4%/2% levels being unmeasured, and the measurement being blocked on #667's session definition, both move to the future crypto system's record.
+
 ### The −0.5% stop is dead, and that does not depend on any of the above
 
 Two independent grounds, neither touching neutrality or truncation:

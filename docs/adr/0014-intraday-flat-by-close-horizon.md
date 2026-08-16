@@ -43,45 +43,48 @@ Neither half of that machinery exists today. Every `flatten` in `server/` is a t
 
 **Ten years of daily-bar evidence stops applying**, and the replacement does not exist: [#656](https://github.com/dd-jp/samurai-trading-system/issues/656) found `REPLAY_TIMEFRAME = '1d'` hard-coded, so the backtest harness cannot replay intraday at all.
 
-## Amendment — 2026-08-16: the crypto trade per day is suspended, not withdrawn
+## Amendment — 2026-08-16: crypto leaves Samurai's scope entirely
 
 - **Amends:** the Context clause at line 13 — *"at least one equity and one crypto trade per day"*
 - **Earned by:** [#705](https://github.com/dd-jp/samurai-trading-system/issues/705), grilled and resolved 2026-08-16 under map [#703](https://github.com/dd-jp/samurai-trading-system/issues/703)
-- **Decided by:** David — *"start with all equity first, and then we'll implement crypto, make crypto a placeholder for future"*
+- **Decided by:** David — first *"start with all equity first… make crypto a placeholder for future"*, then, revising it the same day: ***"actually drop crypto. we'll create a new system one later for handling crypto trades."***
 - **Companion amendment:** [ADR-0017](0017-validation-gates-paper-operational-thesis-expectancy.md)
 
-**Crypto is removed from the tick loop in both production and paper.** The equity leg is built, soaked and taken live first.
+**Samurai is an equities system. Crypto is out of scope — not parked, not staged, not pending an unpark gate. It moves to a separate system, to be designed later.**
+
+An earlier version of this amendment, written the same day, recorded crypto as *"suspended, not withdrawn"* with an unpark gate on the exit rule. **That framing is superseded by this one** and is preserved only in git history. The distinction matters: a suspension implies this system will one day carry crypto again, and every design decision downstream would have had to keep that door open. It will not.
 
 ### Why this needs an amendment at all
 
-The one-crypto-trade-per-day clause is not a passing remark in this ADR — **it is the requirement that broke the three-thesis deadlock.** Thesis (a) was adopted over docs 10/11/12 because it was the only intraday-shaped thesis, and the intraday shape was defined with a crypto trade in it. Removing crypto silently would leave the running code contradicting the record that selected the thesis.
+The one-crypto-trade-per-day clause is not a passing remark in this ADR — **it is the requirement that broke the three-thesis deadlock.** Thesis (a) was adopted over docs 10/11/12 because it was the only intraday-shaped thesis, and the intraday shape was defined with a crypto trade in it. Dropping crypto silently would leave the running system contradicting the record that selected its own thesis.
 
-**The requirement is suspended, not withdrawn, and thesis (a)'s adoption rationale is unaffected.** (a) was selected for being intraday-shaped; the equity leg is still intraday-shaped. Suspension narrows the requirement's scope. It does not reopen the selection between theses, and this amendment must not be read as doing so.
+**The requirement is withdrawn from this system's scope, and thesis (a)'s adoption rationale survives intact.** (a) was selected for being **intraday-shaped**, and the equity leg is still intraday-shaped: single session, flat by close, no overnight carry. The crypto clause established *that the product was intraday*; it was never load-bearing for *which* thesis won. Narrowing the scope to equities does not reopen the selection between theses, and this amendment must not be read as doing so.
 
-### This goes further than ADR-0017 sequenced, deliberately
+### What this changes about the system's shape
 
-ADR-0017's ramp already puts equity live first — it says *"Crypto stays in paper until the full £750 can deploy at once."* What it does **not** do is stop crypto ticking in paper. This amendment does, and the excess is recorded rather than left to read as compliance. Three reasons, the first binding:
+Where the earlier parking framing left crypto machinery dormant-but-live, an out-of-scope ruling makes several things **simplifications rather than suspensions**:
 
-1. **Spend.** Post-[#617](https://github.com/dd-jp/samurai-trading-system/issues/617) the intraday shape is 48 crypto runs/day against 8 equity runs — **crypto is ~86% of the LLM bill.** Parking it in paper frees that budget for the equity soak, which is the leg actually being built.
-2. **A crypto arm would contaminate the soak's primary output.** Gate 1's headline result is a **nonzero equity trade count**, still unproven. A soak in which 86% of debates are crypto reports a healthy-looking aggregate while the number that matters stays unmeasured.
-3. **Crypto currently has no exit rule.** [#667](https://github.com/dd-jp/samurai-trading-system/issues/667) resolved that crypto has no time flatten — the rule cannot apply to a 24/7 venue, and the reason flat-by-close exists (a closed market cannot fill a stop) does not hold there. Crypto's exit is held instead by the venue-side stop and the profit ladder, and the ladder does not exist yet. Soaking crypto now would soak an incomplete strategy.
+- **There is one venue class.** Every instrument Samurai trades has a session, an open, and a close — so flat-by-close is now an invariant with **no exception case**, rather than an invariant plus a 24/7 carve-out.
+- **[#667](https://github.com/dd-jp/samurai-trading-system/issues/667)'s ruling stops being live doctrine for this system.** It resolved that crypto has no time flatten and is held by the venue-side stop instead. That reasoning now belongs to the future crypto system and should be carried across as an input to its design, not retained here as a live rule.
+- **The `asset_class` dimension loses its second member in practice.** Whether the *type* collapses is a separate engineering decision with real blast radius, deliberately not taken in this ADR — see "What happens to the code" below.
 
 ### The price, recorded rather than argued away
 
-- **[ADR-0016](0016-universe-leveraged-etps-ungated.md)'s #1 measured lever is deliberately unpulled**: the crypto fee schedule, **£0 → £1,140–1,660/yr** — the largest item on the book's economics, ahead of #617 (£252 → £89/yr) and catalyst-gating (~£5/yr, likely net negative).
-- [ADR-0015](0015-live-venue-account-and-book-split.md)'s **£750 crypto allocation is idle** for the duration.
-- [#671](https://github.com/dd-jp/samurai-trading-system/issues/671)'s exchange/fee verdict and [#673](https://github.com/dd-jp/samurai-trading-system/issues/673)'s stake decision sit unexercised; #667's fee-tier day count does not accrue.
-- **No crypto paper history accumulates while parked.** The day crypto unparks, that leg starts its soak from zero rather than resuming one. This was the strongest argument available against the decision and is recorded as its cost.
+This is the part that belongs in the record rather than a chat log, and dropping is a larger price than parking was:
 
-### The unpark gate
+- **[ADR-0016](0016-universe-leveraged-etps-ungated.md)'s #1 measured lever leaves the book**: the crypto fee schedule, **£0 → £1,140–1,660/yr** — the largest single item in the book's measured economics, ahead of #617 (£252 → £89/yr) and catalyst-gating (~£5/yr, likely net negative). Samurai's economics are now materially smaller than ADR-0016 modelled, and any figure in that ADR carrying a crypto component must be read as no longer describing this system.
+- **[ADR-0015](0015-live-venue-account-and-book-split.md)'s £750/£750 split collapses to a single equity book.** ADR-0015's reasoning for the split — that crypto is barred from a S&S ISA and therefore needs a separate `ccxt` account — is unaffected as *reasoning*, but the split it produced no longer describes Samurai's capital. Whether the equity leg now takes the full £1,500 is a **capital decision that is not taken here** and needs its own record.
+- **[#671](https://github.com/dd-jp/samurai-trading-system/issues/671)** (Crypto.com Exchange, 5,000 CRO staked, +0.605%/trade) and **[#673](https://github.com/dd-jp/samurai-trading-system/issues/673)** (£178 / 180-day stake) are decided work that Samurai will never exercise. They are **not wasted** — they are inputs the future crypto system inherits — but they should be re-labelled as such rather than left reading as pending Samurai work.
+- **The crypto brackets are never measured by this system.** ADR-0018's Consequences note that #660's 4%/2% crypto levels are unmeasured and blocked on #667. That measurement leaves this system's scope with the asset.
 
-**Crypto must not be unparked until a working exit rule exists** — per #667, the venue-side stop plus the profit ladder. Unparked earlier, the crypto leg would run with the time flatten deliberately disabled and nothing put in its place.
+### What happens to the code — deliberately not decided here
 
-The gate is satisfied by **a working exit rule, not specifically by the tranche form**: the neutral single bracket plus a venue-side stop meets #667's requirement. Stated explicitly so the gate is not misread as blocking on the ladder-vector measurement in [#708](https://github.com/dd-jp/samurai-trading-system/issues/708).
+`AssetClass`, `AlwaysOpenCalendar`, `sessionCalendars`, the crypto config keys and `SMOKE_TEST_UNIVERSE`'s BTC-USD entry are all still in the codebase. **Removing them is a separate, reversible engineering decision and is not taken by this ADR**, for two reasons:
 
-### What stays in the codebase, inert
+1. **`AlwaysOpenCalendar`'s `sessionEnd → null` is #667's ruling enforced by the type system.** Deleting it discards a resolved decision that the future crypto system will need. It should be *migrated* to that system's record, not dropped on the floor.
+2. **Collapsing `AssetClass` touches the wire contracts, the store schema and every stage.** That is a large mechanical change whose only benefit is tidiness, and this repo's dominant defect class is mechanisms nothing calls — a change of that size, made for tidiness, during a spec phase, is how that class gets fed.
 
-`AssetClass`, `AlwaysOpenCalendar`, `sessionCalendars` and the crypto config keys **stay**. They cost nothing inert, and `AlwaysOpenCalendar`'s `sessionEnd → null` **is #667's ruling enforced by the type system** — deleting it would discard a resolved decision and invite a later session to re-derive it wrongly. `yarn smoke` keeps BTC-USD explicitly, so the smoke gate still exercises the crypto path and still distinguishes a closed session from a no-trade run.
+**The operative rule until that decision is taken:** crypto is out of scope, so no spec, no gate, no measurement and no ticket may assume a crypto path exists. Inert code that no longer has a product behind it is technical debt to be retired deliberately, not a feature in waiting.
 
 ## Stated open risk
 
