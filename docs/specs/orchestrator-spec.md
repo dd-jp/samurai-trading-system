@@ -16,7 +16,7 @@ The **Orchestrator** is that missing piece: the single-process, single-host prog
 
 The Orchestrator is a **single TypeScript process** (ADR-0001: TS core, no LangGraph dependency) running one **scheduler** and one **tick loop**, with no LLM logic of its own — it is pure wiring, scheduling, and cross-cutting infrastructure.
 
-- **Scheduler** fires ticks on a fixed interval, gated per instrument by a market-hours/trading-calendar check **and by a policy window** (below). Crypto is parked (ADR-0014/ADR-0017 amendments, 2026-08-16) and does not tick in production or paper.
+- **Scheduler** fires ticks on a fixed interval, gated per instrument by a market-hours/trading-calendar check **and by a policy window** (below). Crypto is **out of Samurai's scope** — not parked, not staged, not pending an unpark gate ([ADR-0014](../adr/0014-intraday-flat-by-close-horizon.md)/[ADR-0017](../adr/0017-validation-gates-paper-operational-thesis-expectancy.md) amendments, 2026-08-16). Per CV-25, no spec, gate, measurement or ticket may assume a crypto path exists. **Crypto instruments nonetheless still tick today**, and that is deliberate: [#705](https://github.com/dd-jp/samurai-trading-system/issues/705) explicitly defers code removal, so `DEFAULT_UNIVERSE` (BTC-USD, ETH-USD) and `SMOKE_TEST_UNIVERSE` (BTC-USD) still carry crypto and the scheduler still fires on them. Do not read this paragraph as licence to delete those instruments — `AlwaysOpenCalendar`'s `sessionEnd → null` is [#667](https://github.com/dd-jp/samurai-trading-system/issues/667)'s ruling enforced by the type system, and it migrates to the future crypto system's record rather than being discarded.
 - **Tick ≠ decision.** A tick fires on the **tick interval** (`τ`, default 2 minutes) and runs only the cheap, position-facing work. A **decision** fires once per **debate bar** and runs the full stage chain. See "Module: Tick Runner" for the split and why it exists.
 
 ```
@@ -89,7 +89,7 @@ Key architectural decisions:
 - Fire ticks on a fixed interval `τ`, gated by a market-hours/trading-calendar source (open/closed, holidays) **and** by an optional policy window.
 - Own per-tick instrument iteration over the active list.
 
-**`τ` — the tick interval.** Default **2 minutes** (`DEFAULT_TICK_INTERVAL_MS`). This is the *exit* cadence, and after the tick/decision split (below) it no longer sets LLM spend — spend is keyed to the debate bar. It is not the heartbeat interval, which is a separate mechanism at a separate cadence (see Module: Heartbeat).
+**`τ` — the tick interval.** **2 minutes on the paper profile** (`paperStartingProfile.tickIntervalMs`, per [ADR-0008](../adr/0008-llm-spend-cap.md) §2 as amended 2026-08-16). *Not* the library default: `DEFAULT_TICK_INTERVAL_MS` is **60s** and is what any run not using the paper profile still gets. This is the *exit* cadence, and after the tick/decision split (below) it no longer sets LLM spend — spend is keyed to the debate bar. It is not the heartbeat interval, which is a separate mechanism at a separate cadence (see Module: Heartbeat).
 
 **Key Interfaces**
 

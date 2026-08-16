@@ -39,10 +39,10 @@ Key architectural decisions:
 ### Execution & Applicability
 
 7. As the Analysts layer, I want to run all applicable analysts for a signal in parallel, so that total latency is bounded by the slowest analyst, not their sum.
-8. As the Analysts layer, I want to run Technical + Sentiment for crypto signals and skip Fundamental, so that I do not invoke an analyst for which no data (earnings/SEC filings) exists.
+8. ~~As the Analysts layer, I want to run Technical + Sentiment for crypto signals and skip Fundamental, so that I do not invoke an analyst for which no data (earnings/SEC filings) exists.~~ **Withdrawn 2026-08-16** — crypto is out of Samurai's scope per [ADR-0014](../adr/0014-intraday-flat-by-close-horizon.md)'s amendment. The `applies_to` mechanism it motivated stays (see "Parallel-with-applicability-filtering execution" above), but no analyst declines a name on the path Samurai runs.
 9. As the Analysts layer, I want to run Technical + Fundamental + Sentiment for stock signals, so that stocks get the full analytical panel.
 10. As the Analysts layer, I want analysts to be independent with no sequencing or dependency between them, so that each is a clean independent lens on the same signal.
-11. As the Analysts layer, I want to report the actual analyst count per signal (2 for crypto, 3 for stocks) so that the Debate Engine's quorum math accounts for the variable count.
+11. As the Analysts layer, I want to report the actual analyst count per signal so that the Debate Engine's quorum math accounts for a reduced desk. *(Amended 2026-08-16 — this read "(2 for crypto, 3 for stocks)". The full desk is now always 3; the count varies by dropout and MI coverage, not by asset class.)*
 
 ### Reasoning & Output
 
@@ -136,7 +136,7 @@ interface AnalystRunResult {
   weights: Record<string, number>; // analyst_id -> weight, read from the shared
                                     // store at tick start, passed through for the
                                     // Debate Engine to apply (analysts never see it)
-  analyst_count: number;       // 2 for crypto, 3 for stocks (before failures)
+  analyst_count: number;       // 3 on the equities path (before failures/mutes)
   skipped: boolean;            // true if a mandatory analyst failed the tick
   failures: AnalystFailure[];  // logged failures this tick (reason-tagged)
 }
@@ -181,10 +181,10 @@ Fundamental and Sentiment analysts consume free text sourced from Market Intelli
 
 ### Module: Execution & Applicability
 
-- **Crypto**: Technical + Sentiment run in parallel; Fundamental is skipped (no earnings/SEC data exists for crypto). Analyst count = 2.
-- **Stocks**: Technical + Fundamental + Sentiment run in parallel. Analyst count = 3.
+- ~~**Crypto**: Technical + Sentiment run in parallel; Fundamental is skipped (no earnings/SEC data exists for crypto). Analyst count = 2.~~ **Withdrawn 2026-08-16** — crypto is out of Samurai's scope per [ADR-0014](../adr/0014-intraday-flat-by-close-horizon.md)'s amendment, so there is no second path to count.
+- **Equities — the only path**: Technical + Fundamental + Sentiment run in parallel. Analyst count = **3**.
 - Analysts are independent — no sequencing or dependency between them within a signal.
-- The orchestrator reports `analyst_count` so the Debate Engine's ≥50% quorum math accounts for the variable count (2 crypto / 3 stocks).
+- The orchestrator reports `analyst_count` so the Debate Engine's ≥50% quorum math accounts for a **reduced** count — the desk narrowing to 2 when optional Sentiment drops, or when an MI coverage hole mutes an analyst. It is no longer a per-asset-class constant.
 
 ### Module: Failure Handling
 
@@ -199,7 +199,7 @@ Fundamental and Sentiment analysts consume free text sourced from Market Intelli
 
 **Rationale** — a stale mandatory view risks a confidently-wrong technical/fundamental read, a worse failure than missing one cycle; this matches the project's safety-over-uptime posture for live money.
 
-**Relationship to the Debate Engine's ≥50% quorum.** The role-dependent skip is the *operative* gate and it lives in the Analysts layer: if a mandatory analyst fails, the tick is skipped and the Debate Engine is never invoked. Stage 1 does **not** build a separate ≥50% quorum enforcer — that gate stays in the Debate Engine (ticket #25, under epic #40) as an independent downstream safety check. In practice any tick Stage 1 passes through already satisfies ≥50% (crypto: 1-of-2 if optional Sentiment drops = 50%; stocks: 2-of-3 if Sentiment drops = 67%), so the two gates are complementary, not duplicated. The orchestrator reports `analyst_count` (2 crypto / 3 stocks) precisely so the Debate Engine's ≥50% math accounts for the variable count.
+**Relationship to the Debate Engine's ≥50% quorum.** The role-dependent skip is the *operative* gate and it lives in the Analysts layer: if a mandatory analyst fails, the tick is skipped and the Debate Engine is never invoked. Stage 1 does **not** build a separate ≥50% quorum enforcer — that gate stays in the Debate Engine (ticket #25, under epic #40) as an independent downstream safety check. In practice any tick Stage 1 passes through already satisfies ≥50% (2-of-3 if optional Sentiment drops = 67%), so the two gates are complementary, not duplicated. The orchestrator reports `analyst_count` precisely so the Debate Engine's ≥50% math accounts for a reduced desk. *(Amended 2026-08-16 — this previously read "(2 crypto / 3 stocks)" and cited "crypto: 1-of-2 … = 50%". Crypto is out of scope per [ADR-0014](../adr/0014-intraday-flat-by-close-horizon.md)'s amendment; ≥50% of 3 is now the sole quorum rule, and a desk narrowed to a single live analyst is below quorum and must not trade.)*
 
 ### Module: State Management
 
@@ -234,7 +234,7 @@ Fundamental and Sentiment analysts consume free text sourced from Market Intelli
 ### Modules to Test
 
 **Analyst Orchestrator**
-- Applicability filtering (crypto → Technical + Sentiment; stocks → all three; `analyst_count` correct).
+- Applicability filtering (equities → all three; `analyst_count` correct). *(Amended 2026-08-16 — the crypto → Technical + Sentiment case is withdrawn with story 8.)*
 - Parallel execution (total latency bounded by slowest analyst, not the sum).
 - Single-retry policy (fails once, retries once, then gives up).
 - Role-dependent quorum (mandatory failure skips tick; optional failure proceeds).

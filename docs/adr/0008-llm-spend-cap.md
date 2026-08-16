@@ -105,7 +105,19 @@ announces the opening total at startup (`LLM spend cap armed: $X of $50 already
 recorded … $Y remaining`) rather than letting an operator assume zero. **Start
 the soak from a fresh store if it is meant to have the full budget.**
 
-### 2. Cadence: 15 minutes for the paper soak
+### 2. Cadence: ~~15 minutes~~ **2 minutes** for the paper soak
+
+> **Amended 2026-08-16 by [#670](https://github.com/dd-jp/samurai-trading-system/issues/670) — the cadence is now τ = 2 minutes.** The paragraph immediately below ends "It does not go lower until #617 lands, after which spend stops depending on τ and the optimum jumps to ~1 minute. Sequencing in #670." **#617 has landed**, so that condition is met and this section's headline number is superseded. `paperStartingProfile` now carries `tickIntervalMs: 2 * 60_000`.
+>
+> **The τ ≥ 3.69 min "independent hard floor" does not survive #617.** It was derived as `0.878 × 15 × 14 / 50` — i.e. from spend scaling with 1/τ, which is precisely the assumption #617 removed. Post-#617 spend is keyed to the debate bar, so a faster tick produces no additional debates and `llmBudgetUsd: 50` is untouched by this change. Cost of the step is ≈0, and that is the point. For the same reason τ\* = 21.8 min no longer describes the optimum: that figure minimised `T(τ) = C/τ + B·√τ` with an LLM cost per tick in `C`, and post-#617 that term is gone.
+>
+> **What the step buys is exit resolution, not more decisions.** Entries remain gated by `DEBATE_BAR_TIMEFRAME_MS` (1h). The bracket, however, is evaluated every tick, and doc 41 Result 2 measures the conditional tail as `g(D) = 0.525%·√D` on a 3x equity ETP: at τ = 15 a stop overshoots by ≈−1.97% in the worst 5% of exits; at τ = 2 that falls to ≈−0.72%. Against a −2.16% stop, that is the difference between a stop that means what it says and one that does not. (Both figures are at D = τ, the *worst* delay, not the mean — a stop is breached at some instant and noticed at the next tick, so the delay is uniform on (0, τ). Doc 41's own "Solving" section uses D = τ/2 because it is costing an average day rather than bounding a single exit.)
+>
+> **Why 2 and not the unconstrained optimum of 1.** 2 min leaves ~9x headroom over the measured ~13s pass (120/13) where τ = 1 would leave ~4.6x (60/13) — and the pass duration is a measurement of the system as it was, while section B widens the analyst's indicator set.
+>
+> **Still not [#400](https://github.com/dd-jp/samurai-trading-system/issues/400)'s decision.** David chose crypto 2 min / stocks 5 min there; those are per-asset-class cadences needing #397's Phase 1, which is not built. There is one base interval for every instrument. And as when the cadence went *slower*, no dial needs retuning: #400 established that `max_signal_age` and `drift_tolerance_pct` both measure within-pass intervals, so the tick interval never enters either gate's arithmetic.
+>
+> Full derivation is carried in the `tickIntervalMs` docblock at `server/apps/orchestrator/paper-profile.ts`. **Everything below this box is the superseded 15-minute reasoning, preserved as the record of how the number was chosen.**
 
 > **Amended by [#657](https://github.com/dd-jp/samurai-trading-system/issues/657)
 > and [#670](https://github.com/dd-jp/samurai-trading-system/issues/670)
@@ -142,7 +154,9 @@ the soak from a fresh store if it is meant to have the full budget.**
 > explicitly accepting the higher bill.
 
 `paperStartingProfile` now carries `tickIntervalMs: 15 * 60_000`, up from the
-60s `DEFAULT_TICK_INTERVAL_MS`, and `llmBudgetUsd: 50`.
+60s `DEFAULT_TICK_INTERVAL_MS`, and `llmBudgetUsd: 50`. *(Superseded 2026-08-16
+— it now carries `2 * 60_000`; see the amendment box above. `DEFAULT_TICK_INTERVAL_MS`
+itself is unchanged at 60s.)*
 
 Taking #400's instrument-pass arithmetic (2 × 1,440 crypto + 4 × 390 stocks =
 4,440 passes/day at 60s):
