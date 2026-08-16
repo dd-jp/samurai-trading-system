@@ -234,34 +234,81 @@ describe('paperStartingProfile', () => {
      * point is to check the shipped constants against the reasoning, and a
      * derivation that imports its own conclusion checks nothing.
      */
-    const PASSES_PER_DAY_AT_60S = 2 * 1_440 + 4 * 390;
-    const USD_PER_PASS = 45 / PASSES_PER_DAY_AT_60S;
     const SOAK_DAYS = 14;
 
-    it('carries the budget and the cadence ADR-0008 fixed', () => {
+    /**
+     * **The cost model these tests used has been invalidated, and that is the
+     * finding, not a nuisance.**
+     *
+     * They previously derived spend from instrument-*passes* — `passesPerDay ×
+     * USD_PER_PASS` — because while #617 was open the debate re-ran on every
+     * tick within a bar, so cost really was proportional to 1/τ. #617 is
+     * closed (`7d68fa0`): `debate-adapter.ts`'s same-bar short-circuit returns
+     * the persisted debate ahead of the spend cap, the rate limiter and every
+     * LLM call, so **spend is keyed to the debate bar and a faster tick is
+     * free**.
+     *
+     * Keeping the old arithmetic would not merely fail — it would fail in the
+     * direction that forbids the correct value, which is how a stale test
+     * becomes a veto on a decision it never made.
+     *
+     * Measured units, doc 41 / #657: **$0.0060 and ~13s per debate run**.
+     */
+    const USD_PER_DEBATE = 0.006;
+    const PASS_DURATION_MS = 13_000;
+    /**
+     * 1h bars: 24/day for the 24/7 crypto leg, ~7 for a full US equity session.
+     *
+     * The equity term is deliberately the PRE-window figure. `stocksTradingWindow`
+     * (#706) narrows entries to 14:30-15:45 London, which cuts the real count to
+     * ~2 per name per session — so 7 now overstates it ~3.5x. Kept anyway,
+     * because this is a budget headroom assertion and the honest failure
+     * direction is to over-estimate spend: re-keying it to 2 would let a later
+     * widening of the window silently consume headroom this test claims to
+     * guard. Update it only alongside a change that makes 7 an UNDER-estimate.
+     */
+    const DEBATES_PER_DAY = 2 * 24 + 4 * 7;
+
+    it('carries the budget, and the cadence #670 stepped to once #617 closed', () => {
       const profile = paperStartingProfile('paper');
 
       expect(profile.llmBudgetUsd).toBe(50);
-      expect(profile.tickIntervalMs).toBe(900_000);
+      expect(profile.tickIntervalMs).toBe(120_000);
     });
 
-    it('runs slowly enough that a full 14 days of passes fits inside the budget', () => {
-      // The assertion that carries the meaning: not "the literal is 900,000"
-      // but "whatever the literal is, the soak it implies is affordable". This
-      // fails at ~$420 projected spend on the 90-second cadence a `60_00` slip
-      // would produce.
+    it('fits a full 14 days inside the budget on the bar-keyed cost model', () => {
+      // Still "whatever the literal is, the soak it implies is affordable" —
+      // but the literal that governs spend is now the debate bar, not the tick
+      // interval. ~$6.4 against a $50 cap.
       const profile = paperStartingProfile('paper');
-      const passesPerDay = PASSES_PER_DAY_AT_60S * (60_000 / profile.tickIntervalMs);
 
-      expect(passesPerDay * SOAK_DAYS * USD_PER_PASS).toBeLessThan(profile.llmBudgetUsd);
+      expect(DEBATES_PER_DAY * SOAK_DAYS * USD_PER_DEBATE).toBeLessThan(profile.llmBudgetUsd);
     });
 
-    it('does not buy that affordability by ticking too slowly to trade', () => {
-      // The opposite slip. A cadence of hours is trivially inside budget and
-      // useless: the soak's deliverable is plumbing evidence, which needs
-      // passes. Bounds the other side so the test above cannot be satisfied by
-      // making the run inert.
-      expect(paperStartingProfile('paper').tickIntervalMs).toBeLessThanOrEqual(60 * 60_000);
+    it('leaves a pass room to finish, so a digit slip cannot outrun the tick', () => {
+      // The floor that replaces the old budget guard. A `2 * 60_00` slip is
+      // 12s — under the measured 13s pass — and would have every tick land on
+      // a pass still running. Four passes of headroom.
+      expect(paperStartingProfile('paper').tickIntervalMs).toBeGreaterThanOrEqual(
+        4 * PASS_DURATION_MS,
+      );
+    });
+
+    it('ticks fast enough that the stop means what it says', () => {
+      // The ceiling that replaces "too slowly to trade", and it is a stronger
+      // claim than plumbing-liveness. Entries are bar-gated, so cadence buys
+      // EXIT resolution: doc 41 Result 2 measures the conditional tail as
+      // g(D) = 0.525%·√D on a 3x equity ETP, at a mean delay of τ/2.
+      //
+      // Against ADR-0018 D3's -2.16% neutral stop, τ = 15 min overshoots by
+      // ~1.44% — two thirds of the stop distance, i.e. a stop that does not
+      // mean what it says. τ = 2 min gives ~0.53%, under a quarter.
+      const profile = paperStartingProfile('paper');
+      const meanDelayMinutes = profile.tickIntervalMs / 60_000 / 2;
+      const overshootPct = 0.525 * Math.sqrt(meanDelayMinutes);
+      const NEUTRAL_STOP_PCT = 2.16;
+
+      expect(overshootPct).toBeLessThan(NEUTRAL_STOP_PCT / 3);
     });
   });
 

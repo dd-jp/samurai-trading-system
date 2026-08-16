@@ -89,3 +89,29 @@ Two facts could not be established from public sources and need David's account:
 Coinbase's UK regulatory position is materially the stronger of the two (FCA MiFID-equivalent investment-services licence, July 2026, on top of crypto registration from February 2025), which is precisely the risk #673 carries for Crypto.com.
 
 **Unchanged by this amendment:** the £750/£750 split, the ISA restriction, and the equity leg. **#660's Coinbase assumption of 0.15/0.25 was correct** at tier 3 — an earlier correction filed against it has been withdrawn.
+
+## Amendment — 2026-08-16: crypto leaves Samurai's scope, and the split with it
+
+- **Earned by:** [#705](https://github.com/dd-jp/samurai-trading-system/issues/705), resolved 2026-08-16 under map [#703](https://github.com/dd-jp/samurai-trading-system/issues/703)
+- **Decided by:** David — *"actually drop crypto. we'll create a new system one later for handling crypto trades."*
+- **Companion amendments:** [ADR-0014](0014-intraday-flat-by-close-horizon.md) (the scope ruling and the full price), [ADR-0017](0017-validation-gates-paper-operational-thesis-expectancy.md) (both gates equities-only), [ADR-0018](0018-intraday-thresholds-sizing-and-the-signal-bar.md) (selection budget drops to two)
+
+**Samurai is an equities system. The £750/£750 split no longer describes its book.**
+
+### What this amendment does NOT undo
+
+**The reasoning that produced the split is untouched and remains correct.** Crypto is barred from a S&S ISA, so a crypto leg genuinely required a separate `ccxt` exchange account — that is a fact about UK tax wrappers, not a preference, and it will bind the future crypto system exactly as it bound this one. Likewise the venue analysis: the Crypto.com-versus-Coinbase comparison, the CRO staking arithmetic, the maker-only constraint at Coinbase tier 2, and the £656 cliff's dependence on 365 crypto trades/yr are all **preserved as inputs the future crypto system inherits**, not withdrawn as errors.
+
+What changes is only *whose* decisions they are. [#671](https://github.com/dd-jp/samurai-trading-system/issues/671) and [#673](https://github.com/dd-jp/samurai-trading-system/issues/673) should be re-labelled as belonging to that future system rather than left reading as pending Samurai work — they are decided or near-decided, and re-deriving them later would be waste.
+
+### The capital question this opens, and deliberately does not close
+
+With no crypto leg, the £750 crypto allocation has no consumer. **Whether Samurai's equity leg now takes the full £1,500 is not decided here**, and it must not be settled by inference, because it is not a bookkeeping change:
+
+[ADR-0018](0018-intraday-thresholds-sizing-and-the-signal-bar.md) D5 sizes positions as a fixed fraction *of the equity leg* — ~35% (~£260) for 3x index ETPs and ~25% (~£190) for 3x single-stock ETPs, chosen to hold measured max drawdown at 23.1% and 26.2% against `CONTEXT.md`'s ~20-25% tolerance. **Those fractions are calibrated to a £750 leg.** Doubling the leg to £1,500 doubles the cash at risk per position while the *percentage* drawdown envelope stays put — so the tolerance still holds in percentage terms, but the absolute loss at the envelope doubles, and the single-stock subclass is already recorded as overshooting the band by ~1.2 pp.
+
+It also interacts with [ADR-0017](0017-validation-gates-paper-operational-thesis-expectancy.md)'s live ramp, which starts at **£100-200** deliberately — "tuition money" sized to surface the three unconfirmables at the smallest size producing real fills. A larger total book does not change what that ramp is for.
+
+**So the open question is:** does the equity leg become £1,500, stay at £750 with £750 held back for the future crypto system, or something else? It needs its own record before the live ramp, and it should be decided against the drawdown envelope rather than against the fact that the money is idle.
+
+**Unchanged by this amendment:** the ISA restriction, the GBP LSE-listed ETF/ETC constraint on the equity leg, and the equity venue itself (Trading 212 ISA).

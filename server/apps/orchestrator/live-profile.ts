@@ -32,9 +32,25 @@
  * - **`breakerConfig.daily_loss_pct` / `max_consecutive_losses`** — `UNSOURCED`.
  * - **`riskConfig.cii_threshold`** — inert regardless (ADR-0002 parks the
  *   WorldMonitor provider), so the geopolitical signal is absent, not quiet.
- * - **`tickIntervalMs` (15 min) and `llmBudgetUsd` ($50)** — sized for a
- *   14-day $50 paper soak under ADR-0008, not for a run trying to make money.
- *   They are not unsafe, but they are not a live budget either.
+ * - **`tickIntervalMs` (2 min) and `llmBudgetUsd` ($50)** — `llmBudgetUsd` is
+ *   sized for a 14-day $50 paper soak under ADR-0008, not for a run trying to
+ *   make money. Not unsafe, but not a live budget either.
+ *
+ *   **`tickIntervalMs` needs its own reading, and this line previously gave the
+ *   wrong one — it said 15 min.** It is 2 min, and live did not choose that:
+ *   #670 scoped the cadence step to paper, and live inherited it through
+ *   `buildStartingProfileConfigs`, which is the same shared builder. The change
+ *   is intended (ADR-0014's tick/decision split needs a 2-minute tick so an
+ *   exit is never up to 15 minutes stale), but it reached live as a
+ *   consequence rather than a decision, and this docblock is the one artifact
+ *   an operator reads to know what live does. At 2 min the $50 budget also
+ *   buys ~7.5x fewer days than it did at 15 min if spend scaled with ticks —
+ *   it does not, because the decision path runs once per debate bar, not once
+ *   per tick, which is exactly what the split exists to guarantee.
+ * - **`stocksTradingWindow`** — new, and it now gates every live stocks tick.
+ *   Arrived by the same inheritance as the cadence above. An operator reading
+ *   this profile for "when does live trade" must read that field, not the
+ *   market calendar alone.
  * - **`verdictConfig.automation_level: auto`** — ADR-0007, in paper AND live.
  *   There is no human gate. The caps and breakers are the whole stop.
  *

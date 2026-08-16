@@ -79,7 +79,11 @@ export interface AnalystFailure {
 export interface AnalystRunResult {
   /** One per successful applicable analyst; empty if the tick was skipped. */
   views: AnalystView[];
-  /** 2 for crypto, 3 for stocks — the applicable count before failures. */
+  /**
+   * The applicable count before failures — 3 on the equities path Samurai
+   * runs. It varies by dropout and MI mute, not by asset class: crypto is out
+   * of scope per ADR-0014's 2026-08-16 amendment.
+   */
   analyst_count: number;
   /** True if a mandatory analyst failed, blocking the handoff downstream. */
   skipped: boolean;

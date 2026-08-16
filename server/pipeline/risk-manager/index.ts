@@ -68,6 +68,7 @@ export type {
   RiskManager,
   SessionBasis,
   SessionBasisByClass,
+  SubclassDeploymentCap,
 } from './types.js';
 
 /**
@@ -348,11 +349,111 @@ const concentrationCorrelationCap: EntryCapGate = (config, intent, portfolio, co
   };
 };
 
-/** Spec steps 2–6, in binding order. The array IS the pipeline. */
+/**
+ * ADR-0018 D5's deployment envelope (#703, step A6) — max notional across
+ * every instrument of the intent's subclass.
+ *
+ * **Netted across the subclass, not per position.** The tempting form is
+ * `allowedAdditional: cap`, matching `perTradeSizeCap`, and it is wrong twice
+ * over: `buildBracket` sizes a `scale_in` exactly like an entry precisely
+ * because "Risk enforces the exposure cap downstream" (trader/decide.ts), so a
+ * non-netted cap admits entry-at-35% then scale-in-at-35%; and two different
+ * 3x index ETPs held at once would each get the full envelope. Either voids
+ * the 23.1% drawdown figure the fraction was measured to hold. D5's envelope
+ * is "35% of the leg deployed to 3x index ETPs", so the sum is what binds.
+ *
+ * Instruments absent from `subclass_of` are skipped by the netting filter
+ * (`undefined !== subclass`) rather than throwing — a legacy or manually-held
+ * position should not be able to break sizing for an unrelated name. Only the
+ * INTENT's own instrument must be classified, and that one throws.
+ *
+ * **What the throw can and cannot reach, since it fires on the live decision
+ * path.** `evaluate()` returns at `intent.intent_type === 'exit'` BEFORE the
+ * `ENTRY_CAP_GATES` loop is entered, so no throw in any gate — this one
+ * included — can block an exit. Flat-by-close therefore cannot be stopped by a
+ * stale pool file, which matters because a flatten that silently stops running
+ * is the defect class #670/#706 were filed for. The blast radius is exactly:
+ * one unclassified instrument's ENTRIES refuse, every tick, until the pool file
+ * is corrected. That refusal is the intended reading of a half-populated pool
+ * file, and it is strictly safer than the alternative of entering unbounded.
+ *
+ * **That "one instrument" bound is a claim about a caller, so here is the
+ * caller.** `SequentialTickRunner.runInstrument` deliberately has no try/catch;
+ * the containment is one level up, in `tick-loop.ts`'s `worker()`, which wraps
+ * each `runInstrument` call in its own try/catch (#507) precisely so one
+ * instrument throwing cannot reject the worker's `Promise.all` entry and settle
+ * the whole tick while sibling instruments are still mid-pipeline. The throw
+ * becomes a logged `TickOutcome.error` and a durable `audit_log` row for that
+ * instrument alone. Without #507's catch this throw WOULD take down the tick
+ * for every instrument, so if that catch is ever removed, this gate must be
+ * revisited with it — the two are coupled, and only this comment says so.
+ *
+ * **What the throw costs, stated because it is not free.** This is the only
+ * entry gate that throws rather than returning a decision, and `riskLog.write`
+ * in `production/direct-bind.ts` runs only AFTER `evaluate()` returns — so a
+ * refused instrument writes **no `risk_log` row**. The failure is still
+ * durable (#507's catch writes an `audit_log` row and logs it) and still
+ * loud, but it is absent from the table an operator queries to ask "what did
+ * Risk do with that intent", and `smoke-run.ts` has a check for exactly the
+ * shape it leaves behind — an intent in `trader_log` with no `risk_log` row.
+ *
+ * Returning a rejected decision instead WOULD close that gap, and it is
+ * rejected deliberately: a rejection is quiet, and a half-populated pool file
+ * that merely declines entries can run for days looking like a market with no
+ * setups. The throw is chosen for being impossible to ignore. If the audit gap
+ * ever matters more than the loudness, the fix is to write the `risk_log` row
+ * from the catch — not to soften the gate.
+ */
+const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
+  const declared = config.per_subclass_deployment_cap;
+  if (declared === undefined) return null;
+
+  const subclass = declared.subclass_of[intent.instrument];
+  if (subclass === undefined) {
+    throw new Error(
+      `per_subclass_deployment_cap is declared but ${intent.instrument} has no subclass ` +
+        `(known: ${Object.keys(declared.subclass_of).join(', ') || 'none'}). ADR-0018 D5's ` +
+        `deployment envelope cannot be resolved without one, and the alternative to this throw ` +
+        `is sizing the position with no envelope at all. Add the instrument to the pool file.`,
+    );
+  }
+
+  // `cap` is total over `InstrumentSubclass` at COMPILE time only. `subclass_of`
+  // is built from the pool file at the composition root, so a subclass string
+  // that reaches here without a row in `cap` is a runtime possibility the type
+  // cannot exclude — and `undefined` is the one value that must not fall
+  // through. `undefined - deployedToSubclass` is `NaN`, `trimToAllowed` does
+  // `Math.max(NaN, 0) === NaN`, `notional <= NaN` is false so it "trims" to
+  // `NaN`, and `NaN < config.min_viable_size` is false too — so the intent
+  // clears both this gate and the min-viable floor with no envelope at all.
+  // That is the exact failure D5 exists to prevent, arriving silently.
+  const cap: number | null | undefined = declared.cap[subclass];
+  if (cap === undefined) {
+    throw new Error(
+      `per_subclass_deployment_cap declares ${intent.instrument} as '${subclass}' but carries no ` +
+        `cap for that subclass (known: ${Object.keys(declared.cap).join(', ') || 'none'}). ADR-0018 ` +
+        `D5's envelope cannot be resolved without one, and the alternative to this throw is sizing ` +
+        `the position with no envelope at all. Add the subclass to the cap record.`,
+    );
+  }
+  if (cap === null) return null;
+
+  const deployedToSubclass = Object.entries(portfolio.exposure_by_instrument)
+    .filter(([instrument]) => declared.subclass_of[instrument] === subclass)
+    .reduce((sum, [, exposure]) => sum + exposure, 0);
+
+  return {
+    name: 'per_subclass_deployment_cap',
+    allowedAdditional: cap - deployedToSubclass,
+  };
+};
+
+/** Spec steps 2–6 plus ADR-0018 D5, in binding order. The array IS the pipeline. */
 const ENTRY_CAP_GATES: readonly EntryCapGate[] = [
   perTradeSizeCap,
   perAssetExposureCap,
   perAssetClassExposureCap,
+  perSubclassDeploymentCap,
   portfolioGrossExposureCap,
   concentrationCorrelationCap,
 ];

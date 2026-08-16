@@ -4,7 +4,7 @@ import { FixtureDataSource } from './fixture-data-source.js';
 import { computeIndicator, InsufficientBarsError, minimumBarsFor } from './indicators.js';
 import { MarketDataServiceImpl } from './service.js';
 import { SqliteMarketDataStore } from './sqlite-market-data-store.js';
-import type { Bar, BarWindow, DataSource, Mark } from './types.js';
+import type { Bar, BarWindow, DataSource, IndicatorSpec, Mark } from './types.js';
 
 function newStore() {
   return new SqliteMarketDataStore(openSharedStore(':memory:'));
@@ -88,7 +88,12 @@ describe('MarketDataServiceImpl.getIndicator', () => {
 
   it('is byte-identical across repeated calls with identical inputs', async () => {
     const { service } = buildService(bars, asOf);
-    const spec = { indicator: 'sma', params: { period: 10 }, timeframe: '1h', lookback: 20 };
+    const spec: IndicatorSpec = {
+      indicator: 'sma',
+      params: { period: 10 },
+      timeframe: '1h',
+      lookback: 20,
+    };
 
     const first = await service.getIndicator(INSTRUMENT, spec, asOf);
     const second = await service.getIndicator(INSTRUMENT, spec, asOf);
@@ -170,7 +175,7 @@ describe('MarketDataServiceImpl.getIndicator', () => {
       low: source.close + 999 + i,
     }));
     const { service } = buildService([...bars, ...fourHour], asOf);
-    const spec = { indicator: 'sma', params: {}, timeframe: '1h', lookback: 5 };
+    const spec: IndicatorSpec = { indicator: 'sma', params: {}, timeframe: '1h', lookback: 5 };
 
     const first = await service.getIndicator(INSTRUMENT, { ...spec, timeframe: '1h' }, asOf);
     const second = await service.getIndicator(INSTRUMENT, { ...spec, timeframe: '4h' }, asOf);
@@ -198,7 +203,12 @@ describe('MarketDataServiceImpl.getIndicator', () => {
 
   it('serves repeat reads within a tick from the Tier-1 cache without re-fetching', async () => {
     const { service, counting } = buildService(bars, asOf);
-    const spec = { indicator: 'ema', params: { period: 10 }, timeframe: '1h', lookback: 20 };
+    const spec: IndicatorSpec = {
+      indicator: 'ema',
+      params: { period: 10 },
+      timeframe: '1h',
+      lookback: 20,
+    };
 
     await service.getIndicator(INSTRUMENT, spec, asOf);
     await service.getIndicator(INSTRUMENT, spec, asOf);
@@ -292,7 +302,12 @@ describe('computeIndicator — a period-N indicator is never computed over fewer
     // The old value is asserted here so the regression is legible: the guard
     // is not rejecting a NaN, it is rejecting a plausible-looking number.
     const threeBars = buildBars(3, start);
-    const spec = { indicator: 'atr', params: { period: 14 }, timeframe: '1h', lookback: 15 };
+    const spec: IndicatorSpec = {
+      indicator: 'atr',
+      params: { period: 14 },
+      timeframe: '1h',
+      lookback: 15,
+    };
 
     const twoRangeMean = computeIndicator(threeBars, {
       indicator: 'atr',
@@ -306,7 +321,12 @@ describe('computeIndicator — a period-N indicator is never computed over fewer
   });
 
   it('carries the arity in the error, so a caller can degrade without parsing text', () => {
-    const spec = { indicator: 'rsi', params: { period: 14 }, timeframe: '1h', lookback: 15 };
+    const spec: IndicatorSpec = {
+      indicator: 'rsi',
+      params: { period: 14 },
+      timeframe: '1h',
+      lookback: 15,
+    };
 
     try {
       computeIndicator(buildBars(9, start), spec);
@@ -326,7 +346,12 @@ describe('computeIndicator — a period-N indicator is never computed over fewer
     // A 50-bar lookback carrying `period: 10` needs 10 bars, not 50 — the
     // lookback is the warm-up window, the period is what the value claims to
     // describe. Guarding on the lookback would refuse legitimate reads.
-    const spec = { indicator: 'sma', params: { period: 10 }, timeframe: '1h', lookback: 50 };
+    const spec: IndicatorSpec = {
+      indicator: 'sma',
+      params: { period: 10 },
+      timeframe: '1h',
+      lookback: 50,
+    };
 
     expect(minimumBarsFor(spec)).toBe(10);
     expect(Number.isFinite(computeIndicator(buildBars(10, start), spec))).toBe(true);
@@ -337,7 +362,7 @@ describe('computeIndicator — a period-N indicator is never computed over fewer
     // `params.period ?? spec.lookback` — the technical analyst's SMA_SPEC
     // shape. The guard has to follow the same fallback or it would measure
     // against a period the computation never used.
-    const spec = { indicator: 'sma', params: {}, timeframe: '1h', lookback: 20 };
+    const spec: IndicatorSpec = { indicator: 'sma', params: {}, timeframe: '1h', lookback: 20 };
 
     expect(minimumBarsFor(spec)).toBe(20);
     expect(() => computeIndicator(buildBars(19, start), spec)).toThrow(InsufficientBarsError);

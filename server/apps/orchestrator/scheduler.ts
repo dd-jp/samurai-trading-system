@@ -33,6 +33,40 @@ export interface SchedulerConfig {
   universe: readonly UniverseInstrument[];
   /** Gates stock instruments only; crypto never consults it. */
   calendar: TradingCalendar;
+  /**
+   * An OPTIONAL narrowing of when equities are TICKED, on top of — never
+   * instead of — the calendar (#706).
+   *
+   * **Read that as ticked, not entered, and do not pass a bare entry window.**
+   * The name and the policy below are about entries, but this predicate gates
+   * `TickPlan.instruments`, and `runOnce` runs the whole pipeline pass only for
+   * the instruments in that plan. An instrument this excludes gets no Analysts,
+   * no Debate, and no **Trader** — and the Trader is the only thing that
+   * flattens, since `withinFlattenWindow` is evaluated on a tick and there is
+   * no session-end job. So an entry window ending before the flatten window
+   * begins silently switches flat-by-close off. It was landed that way and
+   * caught before the soak; `production/stocks-tick-window.ts` is what the
+   * composition root now installs instead, and carries the full argument.
+   *
+   * **Window is policy; calendar is venue, and they must not be merged.**
+   * `LseRegularHoursCalendar`'s 08:00-16:30 is venue truth, and the same
+   * object resolves `sessionEnd` for the flatten rule (#657: close minus 5
+   * minutes, an offset rather than a wall clock, so it is right on both the
+   * Alpaca US paper path and the LSE live path). Narrowing the calendar to
+   * express a trading preference would silently move the flatten with it.
+   *
+   * The policy this exists to carry: #656 measured the LSE 08:00-16:30 and US
+   * 14:30-21:00 sessions as overlapping for two hours, and every measurement
+   * the intraday product rests on — ADR-0016's reach rates, ADR-0018's
+   * brackets, doc 41's diffusion constant — is computed on US tape, because
+   * there is no free LSE intraday history. Trading an LSE ETP outside the
+   * overlap means trading it at hours no evidence covers, against a market
+   * maker quoting into a stale reference.
+   *
+   * Undefined means "no narrowing", which is what every existing profile and
+   * the backtest harness want.
+   */
+  stocksTradingWindow?: (instant: Date) => boolean;
 }
 
 export class UniverseScheduler implements Scheduler {
@@ -43,7 +77,12 @@ export class UniverseScheduler implements Scheduler {
     // Read once per tick, not per instrument: every stock in the plan must be
     // gated on the same instant, or a session boundary crossed mid-iteration
     // would produce a plan that was never true at any single point in time.
-    const stocksOpen = this.config.calendar.isOpen(tickTime);
+    //
+    // The window is read once for the same reason, and evaluated only when the
+    // calendar already says open — it narrows a session, it cannot open one.
+    const stocksOpen =
+      this.config.calendar.isOpen(tickTime) &&
+      (this.config.stocksTradingWindow?.(tickTime) ?? true);
 
     return {
       instruments: this.config.universe.filter(

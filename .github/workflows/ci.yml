@@ -33,6 +33,15 @@ jobs:
       - name: Enable Corepack
         run: corepack enable
 
+      # The fixture-provenance step below shells out to python3. It currently
+      # works only because the ubuntu-latest image happens to ship one, which
+      # is a property of the runner image rather than of this workflow — and a
+      # provenance check that silently stops running is worth less than no
+      # check, because the green tick still reads as "verified".
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
       - name: Install dependencies
         id: install
         run: yarn install --immutable
@@ -63,6 +72,38 @@ jobs:
       - name: Test
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: yarn test
+
+      # The indicator golden fixture is the independent reference the whole
+      # characterisation rests on (#703 step B1), and its authority comes from
+      # being generated rather than hand-written. Without this step that is an
+      # honour-system claim: a hand-edited `indicator-golden.json` would make
+      # every golden case agree with whatever it was edited to say, and the
+      # suite would go green confirming the bug.
+      #
+      # Deliberately unconditional on the other steps: it is a provenance check,
+      # not a consequence of the tests. The generator is stdlib-only and
+      # deterministic by construction (an LCG written out in the script, no
+      # `random`, no network), so a diff here means exactly one of two things —
+      # an intended fixture change that was not regenerated, or an edit to the
+      # fixture that was never in the generator at all.
+      - name: Indicator golden fixture is generated, not hand-edited
+        if: ${{ !cancelled() }}
+        run: |
+          FIXTURE=server/providers/market-data-service/__fixtures__/indicator-golden.json
+          python3 server/providers/market-data-service/__fixtures__/generate-indicator-golden.py
+          # `git diff` alone would NOT catch the worst case. It only sees tracked
+          # modifications, so if the fixture were ever dropped from a commit the
+          # generator would recreate it UNTRACKED and a diff check would pass on
+          # a repo that does not contain the file at all. `git status --porcelain`
+          # reports untracked (`??`) and modified alike, so any non-empty output
+          # is a failure.
+          STATUS="$(git status --porcelain -- "$FIXTURE")"
+          if [ -n "$STATUS" ]; then
+            echo "::error::$FIXTURE is not what the generator produces:"
+            echo "$STATUS"
+            git diff -- "$FIXTURE" | head -50
+            exit 1
+          fi
 
   # The dashboard's browser suite (#544). Its own job because it needs a
   # browser download and several minutes of wall clock, and because a UI

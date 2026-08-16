@@ -211,6 +211,7 @@ import {
   type PortfolioSnapshot,
 } from './production/direct-bind.js';
 import { withOnTradeClose } from './production/on-trade-close-hookup.js';
+import { withFlattenTail } from './production/stocks-tick-window.js';
 import { MarketDataVolatilityReadingProvider } from './production/volatility-reading-provider.js';
 import { UniverseScheduler } from './scheduler.js';
 import { SqliteAccountStateStore } from './sqlite-account-state-store.js';
@@ -1502,9 +1503,34 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
 
   const persistence = buildPersistence(config.db);
   const tickRunner = new SequentialTickRunner(components.steps);
+  // ONE calendar object, shared by the scheduler's gate and the flatten tail
+  // below — the two-copies hazard `equityCalendarFor`'s docblock exists to
+  // prevent applies with more force now that the tick window is derived from
+  // `sessionEnd` rather than merely gated beside it.
+  const equityCalendar = equityCalendarFor(config);
   const scheduler = new UniverseScheduler({
     universe: config.universe ?? SMOKE_TEST_UNIVERSE,
-    calendar: equityCalendarFor(config),
+    calendar: equityCalendar,
+    // Passed through rather than defaulted here (#706). The composition root
+    // is where a run's policy is chosen; a default in this line would apply
+    // the window to the backtest harness and to every programmatic caller,
+    // neither of which asked for it.
+    //
+    // Widened to the flatten tail before it reaches the scheduler. The window
+    // reads as an entry narrowing but gates the whole pipeline pass, and the
+    // Trader is the only thing that flattens — so the entry window alone
+    // removes every tick that could satisfy flat-by-close. See
+    // `withFlattenTail` for why the union cannot open a position and why the
+    // composition root is the only place that can compose it.
+    ...(config.stocksTradingWindow === undefined
+      ? {}
+      : {
+          stocksTradingWindow: withFlattenTail(
+            config.stocksTradingWindow,
+            equityCalendar,
+            config.traderConfig.flatten_before_close_ms,
+          ),
+        }),
   });
   const heartbeat = new Heartbeat(
     config.heartbeatChannel ?? new LoggingHeartbeatChannel(logger),

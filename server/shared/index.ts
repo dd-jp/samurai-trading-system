@@ -73,6 +73,7 @@ export type {
   DebateLog,
   DebateLogStore,
   Fill,
+  InstrumentSubclass,
   LogEntry,
   Logger,
   OpenPosition,

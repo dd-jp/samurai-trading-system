@@ -92,10 +92,13 @@ import type {
   BreakerConfig,
   CorrelationConfig,
   RiskConfig,
+  SubclassDeploymentCap,
 } from '../../pipeline/risk-manager/index.js';
 import { DEFAULT_TRADER_CONFIG, type TraderConfig } from '../../pipeline/trader/index.js';
 import type { VerdictConfig } from '../../pipeline/verdict/index.js';
+import { londonEntryWindow } from '../../providers/market-data-service/index.js';
 import type { CiiConsumerConfig } from '../../providers/market-intelligence/index.js';
+import type { InstrumentSubclass } from '../../shared/index.js';
 import type { CostConfig } from '../../tools/backtest/index.js';
 import { LIVE_MONEY_GATE_SUMMARY } from './live-money-gates.js';
 import { SqliteDailyEquityMetricsSource } from './production/daily-equity-metrics-source.js';
@@ -107,6 +110,7 @@ import {
 } from './production.js';
 import { DEFAULT_UNIVERSE } from './scheduler.js';
 import { SqliteDailyEquityStore } from './sqlite-daily-equity-store.js';
+import type { UniverseInstrument } from './types.js';
 
 /** The header's three-value provenance taxonomy, as data. */
 export type ValueProvenance = 'SPEC' | 'DERIVED' | 'UNSOURCED';
@@ -323,6 +327,95 @@ export function riskCapsFor(equityAnchorUsd: number): RiskCaps {
 export const PAPER_RISK_CAPS: RiskCaps = riskCapsFor(PAPER_ACCOUNT_EQUITY_ANCHOR);
 
 /**
+ * The share of total capital that is the EQUITY leg (ADR-0015): £1,500 live,
+ * split £750 equity / £750 crypto (#660). ADR-0018 D5's deployment fractions
+ * are fractions of that leg, not of the account, so the leg has to be nameable
+ * before D5 can be expressed at all.
+ *
+ * Deliberately NOT derived from `RISK_CAP_EQUITY_FRACTIONS.per_asset_class_cap_stocks`,
+ * which is the other plausible base and is wrong twice: it is UNSOURCED where
+ * this is an ADR, and — decisively — it is a Feedback Loop dial
+ * (`RISK_THRESHOLD_KEYS`, risk-thresholds.ts), so basing D5 on it would let
+ * the loop widen the drawdown envelope at runtime. D5's envelope is measured
+ * drift-removed with zero edge assumed; nothing the loop learns may move it.
+ */
+export const EQUITY_LEG_FRACTION_OF_CAPITAL = 0.5;
+
+/**
+ * ADR-0018 D5 — max deployment per subclass, as a fraction of the EQUITY LEG.
+ *
+ * At ADR-0015's £750 leg these are the ADR's own figures: 0.35 x 750 = £262.50
+ * ("~£260") and 0.25 x 750 = £187.50 ("~£190"), holding measured max drawdown
+ * at 23.1% and 26.2%. That reproduction is the check that the base is right —
+ * any other base produces numbers no document contains.
+ *
+ * `single_stock_etp_3x` at 0.25 carries D5's stated ~1.2 pp overshoot of
+ * CONTEXT.md's 20-25% drawdown band. It is a named constant with this citation
+ * rather than a bare `0.25` in a config literal precisely so the overshoot
+ * cannot be inherited silently. Do NOT tighten it to ~0.24 to make the band
+ * fit: no measured row in docs/research/18-intraday-instrument-physics.md
+ * covers that fraction, and D5 requires a re-measurement before adopting one.
+ *
+ * `crypto` is `null` — "D5 measured no envelope here" — not a number waiting
+ * to be guessed. See `SubclassDeploymentCap.cap`.
+ */
+export const D5_DEPLOYMENT_FRACTION_OF_EQUITY_LEG: Readonly<
+  Record<InstrumentSubclass, number | null>
+> = {
+  index_etp_3x: 0.35,
+  single_stock_etp_3x: 0.25,
+  crypto: null,
+};
+
+/**
+ * ADR-0018 D5's envelope for one equity anchor, in account currency.
+ *
+ * Same shape as `riskCapsFor`: the fractions are the decision, the currency
+ * amounts are arithmetic, so re-scaling to a differently-funded account is one
+ * edit at the anchor rather than one per subclass.
+ */
+export function subclassDeploymentCapsFor(
+  equityAnchorUsd: number,
+): Record<InstrumentSubclass, number | null> {
+  const equityLeg = equityAnchorUsd * EQUITY_LEG_FRACTION_OF_CAPITAL;
+  return Object.fromEntries(
+    Object.entries(D5_DEPLOYMENT_FRACTION_OF_EQUITY_LEG).map(([subclass, fraction]) => [
+      subclass,
+      fraction === null ? null : fraction * equityLeg,
+    ]),
+  ) as Record<InstrumentSubclass, number | null>;
+}
+
+/**
+ * D5's config for a universe, or `undefined` when the universe declares no
+ * subclasses at all.
+ *
+ * **The gate arms itself off the universe, and that is the whole design.** The
+ * subclass dimension is sourced from C1's LSE-ETP pool file (#703); until one
+ * exists, `DEFAULT_UNIVERSE` carries no subclasses, this returns `undefined`,
+ * and the gate is inert — which is correct, because ADR-0018 prices leveraged
+ * ETPs and the default universe holds none of them. Declaring the field with
+ * an empty `subclass_of` would instead make every entry throw.
+ *
+ * A universe that is PARTLY classified still arms it, and the unclassified
+ * names then throw at sizing time. That is intended: a half-populated pool
+ * file is a mistake to surface, not one to size around.
+ */
+export function d5EnvelopeFor(
+  universe: readonly UniverseInstrument[],
+  equityAnchorUsd: number,
+): SubclassDeploymentCap | undefined {
+  const subclass_of = Object.fromEntries(
+    universe.flatMap((instrument) =>
+      instrument.subclass === undefined ? [] : [[instrument.asset, instrument.subclass] as const],
+    ),
+  );
+  if (Object.keys(subclass_of).length === 0) return undefined;
+
+  return { subclass_of, cap: subclassDeploymentCapsFor(equityAnchorUsd) };
+}
+
+/**
  * `breakerConfig.volatility.baseline` is an **absolute ATR reading in price
  * units**, not a ratio: `MarketDataVolatilityReadingProvider` aggregates
  * `marketData.getIndicator(instrument, atr(14), now)` per asset class, and ATR
@@ -446,12 +539,17 @@ const PAPER_ANALYST_WEIGHT_TRAVERSE_CYCLES = 20;
  *   David resolved #377 on 2026-08-06 the other way — the Debate Engine
  *   SHOULD read `analyst_weights` — and debate-engine-spec.md now carries a
  *   "Module: Weighted Debates" section saying so. The reader is #435, still
- *   open, deliberately: at ADR-0008's 15-minute cadence attribution runs over
- *   near-empty samples, so weights barely leave their seeds across a whole
- *   soak, and a mechanism fed noise is indistinguishable from one that works
- *   (#430). So this is a KNOWN GAP awaiting a cadence that produces trades,
- *   not a decision that weights are unread by design. See the `weights` dial
- *   below for what does move them.
+ *   open, deliberately: attribution runs over near-empty samples, so weights
+ *   barely leave their seeds across a whole soak, and a mechanism fed noise is
+ *   indistinguishable from one that works (#430). So this is a KNOWN GAP
+ *   awaiting a cadence that produces trades, not a decision that weights are
+ *   unread by design. See the `weights` dial below for what does move them.
+ *
+ *   Note the tick cadence is NOT the lever here, and reading it as one was the
+ *   error #617 exposed. Debates are keyed to 1h bars, so the sample size that
+ *   starves attribution is set by the bar and the trade count, not by τ —
+ *   stepping 15 min -> 2 min (#670) produces exactly as many debates as before.
+ *   What starves it is #625's ceiling: 96 debates, 0 trades.
  * - **Strategy params / risk thresholds** — moved only by `proposals`, and the
  *   profile supplies none, because nothing in the repo produces one. See the
  *   two empty records below for why they are empty rather than pre-declared.
@@ -851,8 +949,28 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
   // `llmBudgetUsd` and `tickIntervalMs` joined `rateLimiterConfig` here under
   // ADR-0008: a soak that inherited the 60s default interval, or no ceiling at
   // all, would silently cost ~13x its budget.
-  Required<Pick<ProductionConfig, 'rateLimiterConfig' | 'llmBudgetUsd' | 'tickIntervalMs'>> {
+  //
+  // `stocksTradingWindow` joined them under #706 for the same reason and one
+  // more: the fallback when it is absent is `?? true` (`scheduler.ts:74`) —
+  // i.e. the whole LSE session, which is the OPPOSITE of the constraint. A
+  // profile that dropped it would tick 08:00-16:30 and look healthy doing it.
+  Required<
+    Pick<
+      ProductionConfig,
+      'rateLimiterConfig' | 'llmBudgetUsd' | 'tickIntervalMs' | 'stocksTradingWindow'
+    >
+  > {
   const caps = riskCapsFor(equityAnchorUsd);
+  // ADR-0018 D5. The gate's classification and the list the run actually ticks
+  // MUST be the same universe: a cap keyed to one list while another is traded
+  // sizes unclassified names with no envelope, or throws on every entry.
+  //
+  // Naming `DEFAULT_UNIVERSE` twice — once here and once at the `universe` field
+  // below — made that a convention held by matching identifiers. One local, read
+  // by both, makes it hold by construction, so if this ever takes the universe
+  // as a parameter the gate follows it without anyone remembering to look.
+  const universe = DEFAULT_UNIVERSE;
+  const subclassCap = d5EnvelopeFor(universe, equityAnchorUsd);
 
   const traderConfig: TraderConfig = {
     // SPEC — `DEFAULT_TRADER_CONFIG` (server/pipeline/trader/types.ts) is the one set of
@@ -963,6 +1081,24 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
      * them.
      */
     max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
+    /**
+     * SPEC (ADR-0018 D5) — the deployment envelope, armed off the universe.
+     *
+     * Conditionally spread rather than set to `undefined`, under
+     * `exactOptionalPropertyTypes` and matching the `capitalCeilingUsd` idiom
+     * at production.ts. On `DEFAULT_UNIVERSE` this is OMITTED: no instrument
+     * carries a subclass yet, because ADR-0018 prices leveraged ETPs and the
+     * default universe is SPY/QQQ/AAPL/TSLA/BTC/ETH. It arms itself the moment
+     * C1's pool file supplies one.
+     *
+     * **Consequence, stated rather than discovered in a soak:** on the paper
+     * profile this gate does not bind, and would not bind even if it were
+     * armed — `max_position_size` is 5% of a $100k anchor ($5,000) against a
+     * D5 index-ETP envelope of 35% of a $50k leg ($17,500), so
+     * `per_trade_size_cap` trims first every time. D5 is a live-capital
+     * protection; the paper soak is not a test of it.
+     */
+    ...(subclassCap === undefined ? {} : { per_subclass_deployment_cap: subclassCap }),
   };
 
   const verdictConfig: VerdictConfig = {
@@ -1424,36 +1560,116 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
      */
     llmBudgetUsd: 50,
     /**
-     * DERIVED from the budget above — 15 minutes, up from the 60s
-     * `DEFAULT_TICK_INTERVAL_MS`.
+     * DERIVED — **2 minutes, down from 15** (#670, whose trigger has fired).
      *
-     * The arithmetic, from #400's resolution comment (which counted
-     * instrument-passes/day at 60s as 2 × 1,440 crypto + 4 × 390 stocks =
-     * 4,440, against the ~$45/day estimate in this file):
+     * ### Why 15 was right, and why it stopped being right
      *
-     *   60s   -> 4,440 passes/day -> ~$45/day  -> ~$630 / 14d
-     *   15min ->   296 passes/day -> ~$3.0/day -> ~$42  / 14d
+     * The old value was derived against spend that scaled with tick rate.
+     * While #617 was open the debate re-ran on every tick *within* a bar, so
+     * cost was strictly proportional to 1/τ, and
+     * `docs/research/41-tick-latency-economics.md` solved the trade-off:
      *
-     * 15 min rather than the ~12.6 min the budget divides to exactly: the
-     * saving is an upper bound (see `llmBudgetUsd`), so the margin is
-     * deliberate, and a round number is easier to reason about in a soak log.
+     *     T(τ) = C/τ + B·√τ        τ* = (2C/B)^(2/3) = 21.8 min
      *
-     * **This is NOT #400's decision, and does not overturn it.** David chose
-     * crypto 2 min / stocks 5 min there, for a run whose budget is a live
-     * budget. Those are per-asset-class cadences and the gating that makes
-     * them expressible is #397's Phase 1, which is not built — today there is
-     * one base interval for every instrument. So this single value is what a
-     * $50 paper soak reduces to on the machinery that exists. A live run
-     * supplies its own `tickIntervalMs` (and, once #397 lands, its own
-     * per-class cadences) from a composition root with a live budget.
+     * — with τ = 15 already on the expensive side of optimal. #670 recorded
+     * the ruling as "hold at 15m, step to 2m with #617".
      *
-     * No dial needs retuning to go slower: #400 established that
-     * `max_signal_age` and `drift_tolerance_pct` both measure WITHIN-pass
-     * intervals (`decision_timestamp` is the pass's own `mark.observed_at`,
-     * and `getMark` re-fetches unconditionally with no TTL cache), so the tick
+     * **#617 is closed (`7d68fa0`).** One run per bar now, so `C` collapses to
+     * ~0, the LLM term vanishes from the objective, and `T(τ) = B·√τ` is
+     * monotonically increasing — the optimum jumps to the smallest τ the pass
+     * duration allows (doc 41's conclusion, line 106).
+     *
+     * ### Why 2 and not 1
+     *
+     * Doc 41 computes the unconstrained optimum as τ = 1 min against a ~13s
+     * pass and `production.ts`'s dropped-tick guard. 2 min is #670's recorded
+     * step and leaves ~9x headroom over the measured ~13s pass (120/13) where
+     * τ = 1 would leave ~4.6x (60/13), which matters because the pass duration
+     * is a measurement of the system as it was, and section B widens the
+     * analyst's indicator set.
+     *
+     * ### What this buys, given entries are still bar-gated
+     *
+     * Entries are gated by `DEBATE_BAR_TIMEFRAME_MS` (1h), not by τ — a faster
+     * tick does not produce more debates. What it buys is **exit resolution**:
+     * the bracket is evaluated every tick, and doc 41 Result 2 measures the
+     * conditional tail as `g(D) = 0.525%·√D` on a 3x equity ETP. At τ = 15 a
+     * stop overshoots by ≈-1.97% in the worst 5% of exits; at τ = 2 that falls
+     * to ≈-0.72%. On a -2.16% stop that is the difference between a stop that
+     * means what it says and one that does not.
+     *
+     * **Both figures are at D = τ — the WORST delay, not the mean.** A stop is
+     * breached at some instant and noticed at the next tick, so the delay is
+     * uniform on (0, τ) and the worst case is a full interval. Doc 41's own
+     * "Solving" section instead uses the mean, D = τ/2, because it is costing
+     * an average day rather than bounding a single exit; `paper-profile.test.ts`
+     * quotes ~0.53% at τ = 2 on that convention (`g(1)`). Same measured result,
+     * two questions — stated here because the two numbers look contradictory
+     * side by side, and a reader reconciling them by "correcting" one would
+     * lose whichever question it was answering.
+     *
+     * ### Cost
+     *
+     * ~0, and that is the whole point: post-#617 spend is keyed to the debate
+     * bar, so `llmBudgetUsd: 50` above is untouched by this change. Doc 41's
+     * "independent hard floor" of τ ≥ 3.69 min does **not** survive #617 — it
+     * was derived as `0.878 × 15 × 14 / 50`, i.e. from spend scaling with 1/τ,
+     * which is exactly the assumption #617 removed.
+     *
+     * ### Unchanged
+     *
+     * **This is still NOT #400's decision.** David chose crypto 2 min / stocks
+     * 5 min there; those are per-asset-class cadences needing #397's Phase 1,
+     * which is not built — there is one base interval for every instrument.
+     *
+     * No dial needs retuning to go faster, for the same reason it needed none
+     * to go slower: #400 established that `max_signal_age` and
+     * `drift_tolerance_pct` both measure WITHIN-pass intervals, so the tick
      * interval never enters either gate's arithmetic.
      */
-    tickIntervalMs: 15 * 60_000,
+    tickIntervalMs: 2 * 60_000,
+    /**
+     * `SPEC` — equities are entered only inside the LSE/US overlap (#706).
+     *
+     * Set HERE rather than defaulted in `buildProductionOrchestrator`, because
+     * the composition root is where a run's policy belongs — and set at all,
+     * rather than left as an available seam, because a mechanism nothing calls
+     * is this repo's dominant defect class.
+     *
+     * 14:30-15:45 London. For ~49 weeks of the year that is 09:30-10:45 ET,
+     * i.e. the first 75 minutes of the US cash session — which is deliberately
+     * the same span R2's entry-offset grid measures (t0 in {0..120} minutes
+     * past the US open), so the soak and the study describe the same hours.
+     *
+     * **For the other ~3 weeks it is 10:30-11:45 ET, and that is a real gap,
+     * not a rounding note.** The UK and US DST transitions disagree twice a
+     * year — the US springs forward on the 2nd Sunday of March and falls back
+     * on the 1st Sunday of November, the UK on the last Sundays of March and
+     * October — so for roughly two weeks in March and one in late Oct/early
+     * Nov the London/New York offset is 4 hours rather than 5. The window is
+     * anchored to LONDON wall-clock (the venue and the book are GBP, ADR-0015),
+     * so in those weeks it slides an hour later against the US tape: entries
+     * open 60 minutes past the US cash open and close 135 minutes past it,
+     * with the last 15 minutes falling OUTSIDE R2's t0 in {0..120} grid.
+     *
+     * Recorded rather than corrected, because both available corrections are
+     * product decisions and not this step's to take: re-anchoring to the US
+     * open would make an LSE-venue rule depend on a foreign calendar, and
+     * narrowing to the intersection would cost 15 minutes of entry time for 49
+     * weeks to buy exactness in 3. `trading-window.test.ts` pins the divergence
+     * so it is a characterised property rather than a surprise in the soak
+     * record. Worth an ADR line if a March or November soak is ever read as
+     * evidence about entry timing.
+     *
+     * **What this costs, stated rather than discovered:** it cuts the equity
+     * tick window from 6.5 hours to 75 minutes. It does NOT cut debates by the
+     * same factor — debates are keyed to 1h bars, so this goes from ~7 entry
+     * decisions per name per session to 2 (the 14:00 bar entered from 14:30,
+     * and the 15:00 bar). Fewer, better-evidenced entries is the design, not a
+     * side effect. Exits are unaffected: the bracket is evaluated every tick,
+     * and a position opened in the window is still flattened at close minus 5.
+     */
+    stocksTradingWindow: londonEntryWindow(),
     /**
      * `SPEC` — the universe a paper run trades (#381). ADR-0001 names this
      * exact set ("default universe SPY/QQQ/AAPL/TSLA/BTC-USD/ETH-USD",
@@ -1483,14 +1699,20 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
      *
      * > **STALE SINCE ADR-0008 (2026-08-06), and kept because ADR-0008 cites
      * > it as its own source.** Everything below is computed at the 60s
-     * > `DEFAULT_TICK_INTERVAL_MS`. This profile now sets
-     * > `tickIntervalMs: 15 * 60_000`, so the ~$45/day figure is the BEFORE
-     * > number, not what a soak on this profile costs — that is ~$3/day, ~$42
-     * > over 14 days, and it is capped at $50 by `llmBudgetUsd` regardless.
-     * > The *reasoning* below is what survived the change and is why the cap
-     * > exists: the cycle is `pass duration + interval`, so spend does not
-     * > scale linearly with cadence and no arithmetic here can promise a
-     * > dollar figure.
+     * > `DEFAULT_TICK_INTERVAL_MS`, so the ~$45/day figure is a BEFORE number.
+     * >
+     * > **Doubly stale since #617 closed (`7d68fa0`), and this is the more
+     * > important correction.** Every figure below — including ADR-0008's own
+     * > 15-minute derivation — assumes spend scales with the tick rate. It no
+     * > longer does: `debate-adapter.ts` short-circuits the same bar ahead of
+     * > the spend cap and every LLM call, so **spend is keyed to the 1h debate
+     * > bar and is independent of τ**. That is what let #670 step the cadence
+     * > to 2 min for free, and it is why the measured soak figure was $0.878/day
+     * > against ADR-0008's $3.00/day estimate (doc 41 — a 3.4x overestimate).
+     * >
+     * > The *reasoning* below is what survived both changes, and it is why the
+     * > cap exists rather than a promise: no arithmetic here can promise a
+     * > dollar figure, which is precisely why `llmBudgetUsd` fails closed.
      *
      * The naive reading is that six instruments is six times the debate spend
      * of one. It is closer to **1.6x**, and the reason is worth writing down
@@ -1525,6 +1747,13 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
      * debate cost roughly 8x this. ADR-0009 therefore reopens cadence as a
      * lever — it does not pull it. Changing the interval is its own decision
      * with its own evidence, not a side effect of a provider swap.
+     *
+     * **That decision has since been taken, on its own evidence, and it
+     * removed the lever rather than pulling it.** #617 keyed spend to the 1h
+     * debate bar instead of the tick, so cadence stopped being a cost lever at
+     * all; doc 41 then measured what a minute of delay actually costs and #670
+     * stepped the interval to 2 min. Per-run units are $0.0060 measured, not
+     * the $0.008-$0.036 estimated above.
      *
      * Two things that make the range wide rather than the estimate precise,
      * both stated rather than smoothed over: debates that complete FASTER than
@@ -1589,15 +1818,20 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
      * **`maxDebates` — DERIVED from #385's measured cadence**, at roughly 3x
      * headroom over it, per asset class.
      *
-     * > **The cadence these were derived from is 15x faster than the one this
-     * > profile now runs (ADR-0008: `tickIntervalMs` 60s -> 15 min).** Left
-     * > unchanged deliberately: this budget is a RUNAWAY guard, and an
-     * > oversized ceiling is permissive rather than wrong — it refuses only
-     * > pathological rates, which is exactly its job. Retuning it down to the
-     * > new cadence would make it a second, redundant cost control and put it
-     * > in conflict with `llmBudgetUsd`, which is the actual budget. Read the
+     * > **The cadence these were derived from is 2x faster than the one this
+     * > profile now runs** (`tickIntervalMs` 60s -> 15 min under ADR-0008, then
+     * > back to 2 min under #670 once #617 made cadence free). Left unchanged
+     * > through both moves, deliberately: this budget is a RUNAWAY guard, and
+     * > an oversized ceiling is permissive rather than wrong — it refuses only
+     * > pathological rates, which is exactly its job. Retuning it to track the
+     * > cadence would make it a second, redundant cost control and put it in
+     * > conflict with `llmBudgetUsd`, which is the actual budget. Read the
      * > arithmetic below as "the rate at which something has gone wrong", not
      * > as a description of the soak's cadence.
+     * >
+     * > Note the step back to 2 min moved the *ticks*, not the debates: #617's
+     * > same-bar short-circuit means a faster tick issues no extra LLM calls,
+     * > so the headroom this guard leaves is unchanged in the units it counts.
      *
      * - crypto (BTC-USD, ETH-USD; trades 24/7) peaks OUTSIDE the equity
      *   session, where a pass is 2x15s and a cycle ~90s — 2 debates per 90s =
@@ -1697,7 +1931,12 @@ export function paperStartingProfile(
     | 'ciiConsumerConfig'
     | 'feedback'
   > &
-  Required<Pick<ProductionConfig, 'rateLimiterConfig' | 'llmBudgetUsd' | 'tickIntervalMs'>> {
+  Required<
+    Pick<
+      ProductionConfig,
+      'rateLimiterConfig' | 'llmBudgetUsd' | 'tickIntervalMs' | 'stocksTradingWindow'
+    >
+  > {
   if (mode === 'live') {
     throw new Error(
       'Orchestrator cannot start: SAMURAI_MODE=live was requested against the PAPER STARTING ' +

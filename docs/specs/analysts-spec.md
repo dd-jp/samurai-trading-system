@@ -12,15 +12,16 @@ The Analysts layer (Stage 1) is where each lens produces its own independent vie
 
 ## Solution
 
-For each trading signal, the Analysts layer runs a set of role-specific analyst personas (technical, fundamental, sentiment) in parallel, filtered by what applies to the asset class. Each analyst pulls its primary data plus a fixed context frame from the data services, reasons over it with an LLM tiered to its latency budget, and emits a fixed-shape `AnalystView` (direction + confidence + free-text key points). The layer enforces a role-dependent quorum, handles individual analyst failures without stalling the pipeline, and produces exactly the `AnalystView[]` the Debate Engine's upstream contract expects.
+For each trading signal, the Analysts layer runs a set of role-specific analyst personas (technical, fundamental, sentiment) in parallel, filtered by what applies to the asset class. Each analyst pulls its primary data plus a fixed context frame from the data services, **reasons over it deterministically** — *amended 2026-08-16 from "with an LLM tiered to its latency budget"; see "Where the LLM belongs" below* — and emits a fixed-shape `AnalystView` (direction + confidence + free-text key points). The layer enforces a role-dependent quorum, handles individual analyst failures without stalling the pipeline, and produces exactly the `AnalystView[]` the Debate Engine's upstream contract expects.
 
 Key architectural decisions:
 - **Stateless analysts** — each analyst is a pure function of its inputs (data + weight); it holds no memory across ticks, so crash-restart is trivial and backtest replay reuses the live code path unchanged.
 - **Primary + context input model** — every analyst has a primary data scope plus a fixed context frame (all roles always see contemporaneous price/volume), to prevent blind spots while keeping clear primary ownership.
 - **Fixed `AnalystView` output** — no per-role typed fields; role-specific detail lives in free-text `key_points`, keeping the Debate Engine role-agnostic.
-- **Parallel-with-applicability-filtering execution** — crypto runs Technical + Sentiment (no Fundamental — no earnings/SEC data exists for crypto); stocks run all three. Analysts are independent lenses with no sequencing between them.
+- **Parallel-with-applicability-filtering execution** — ~~crypto runs Technical + Sentiment (no Fundamental — no earnings/SEC data exists for crypto); stocks run all three.~~ *(Amended 2026-08-16 — crypto is out of Samurai's scope per [ADR-0014](../adr/0014-intraday-flat-by-close-horizon.md)'s amendment, so there is one path and it runs all three. See "Asset-Class Analyst Counts" below, which this bullet contradicted.)* **The applicability MECHANISM stays** — `applies_to(asset_class)` is still how an analyst declines a name — but **no analyst declines anything on the path Samurai runs today, and nothing here anticipates one that will.** The interface is retained because a mandatory/optional quorum needs some way to express "not applicable", not as a seam held open for crypto: per CV-25 no spec, gate, measurement or ticket may assume a crypto path exists, and this bullet does not. Analysts are independent lenses with no sequencing between them.
 - **Role-dependent quorum** — Technical and Fundamental are mandatory; Sentiment is optional. A mandatory analyst failing (after one retry) skips the whole tick; an optional analyst failing just shrinks the set.
-- **Tiered LLM usage** — cheap/fast models for Technical and Sentiment (tight crypto latency), a stronger/slower reasoning model for Fundamental (stocks-only, looser budget).
+- ~~**Tiered LLM usage** — cheap/fast models for Technical and Sentiment (tight crypto latency), a stronger/slower reasoning model for Fundamental (stocks-only, looser budget).~~
+  > **Superseded 2026-08-16 — the LLM commitment moves from the analyst layer to the debate layer.** See "Where the LLM belongs" below. Note that this decision costs nothing to reverse in code: the tiering was **never built** (`server/pipeline/analysts/` is deterministic rule-based logic today), so this amendment ratifies what the code already does rather than asking for a rewrite.
 - **Injected clock for replay** — no-lookahead is enforced at the data-service layer via an injected clock; the analyst is clock-blind and behaves identically live vs. replay.
 - **Weight-blind views** — analysts emit raw views; analyst weights live in a shared SQLite store owned by the Feedback Loop and are applied downstream in the Debate Engine, not inside the analyst.
 
@@ -38,16 +39,16 @@ Key architectural decisions:
 ### Execution & Applicability
 
 7. As the Analysts layer, I want to run all applicable analysts for a signal in parallel, so that total latency is bounded by the slowest analyst, not their sum.
-8. As the Analysts layer, I want to run Technical + Sentiment for crypto signals and skip Fundamental, so that I do not invoke an analyst for which no data (earnings/SEC filings) exists.
+8. ~~As the Analysts layer, I want to run Technical + Sentiment for crypto signals and skip Fundamental, so that I do not invoke an analyst for which no data (earnings/SEC filings) exists.~~ **Withdrawn 2026-08-16** — crypto is out of Samurai's scope per [ADR-0014](../adr/0014-intraday-flat-by-close-horizon.md)'s amendment. The `applies_to` mechanism it motivated stays (see "Parallel-with-applicability-filtering execution" above), but no analyst declines a name on the path Samurai runs.
 9. As the Analysts layer, I want to run Technical + Fundamental + Sentiment for stock signals, so that stocks get the full analytical panel.
 10. As the Analysts layer, I want analysts to be independent with no sequencing or dependency between them, so that each is a clean independent lens on the same signal.
-11. As the Analysts layer, I want to report the actual analyst count per signal (2 for crypto, 3 for stocks) so that the Debate Engine's quorum math accounts for the variable count.
+11. As the Analysts layer, I want to report the actual analyst count per signal so that the Debate Engine's quorum math accounts for a reduced desk. *(Amended 2026-08-16 — this read "(2 for crypto, 3 for stocks)". The full desk is now always 3; the count varies by dropout and MI coverage, not by asset class.)*
 
 ### Reasoning & Output
 
-12. As an Analyst, I want to reason over my inputs with an LLM tiered to my latency budget, so that fast paths stay fast and nuanced paths get deeper reasoning.
-13. As a Technical or Sentiment analyst, I want to use a cheap/fast model, so that I fit the crypto path's tight per-analyst latency budget (~2s).
-14. As a Fundamental analyst, I want to use a stronger/slower reasoning model, so that I can do deeper earnings analysis within the stocks path's looser budget (~5s per analyst).
+12. ~~As an Analyst, I want to reason over my inputs with an LLM tiered to my latency budget, so that fast paths stay fast and nuanced paths get deeper reasoning.~~ **Replaced 2026-08-16:** as an Analyst, I want to reason over my inputs **deterministically**, so that the same inputs always produce the same view and the debate is the only place judgment enters. See "Where the LLM belongs".
+13. ~~As a Technical or Sentiment analyst, I want to use a cheap/fast model, so that I fit the crypto path's tight per-analyst latency budget (~2s).~~ **Withdrawn 2026-08-16 with story 12** — analysts reason deterministically and make no LLM call, so there is no tier to pick. Doubly moot: the budget it cites is the crypto path's, and crypto is out of scope per [ADR-0014](../adr/0014-intraday-flat-by-close-horizon.md)'s amendment.
+14. ~~As a Fundamental analyst, I want to use a stronger/slower reasoning model, so that I can do deeper earnings analysis within the stocks path's looser budget (~5s per analyst).~~ **Withdrawn 2026-08-16 with story 12**, same reason. These two survived the first pass of the amendment unstruck, which left the spec requiring per-analyst model tiers three lines after withdrawing them.
 15. As an Analyst, I want to emit the fixed `AnalystView` shape (direction, confidence, key_points, timestamp), so that the Debate Engine stays role-agnostic.
 16. As an Analyst, I want to put role-specific detail in free-text `key_points`, so that I convey evidence without forcing typed per-role fields onto downstream consumers.
 17. As an Analyst, I want to emit a raw, weight-blind view, so that weighting stays a downstream (Debate Engine) concern and the Feedback Loop can retune weights without touching me.
@@ -135,7 +136,7 @@ interface AnalystRunResult {
   weights: Record<string, number>; // analyst_id -> weight, read from the shared
                                     // store at tick start, passed through for the
                                     // Debate Engine to apply (analysts never see it)
-  analyst_count: number;       // 2 for crypto, 3 for stocks (before failures)
+  analyst_count: number;       // 3 on the equities path (before failures/mutes)
   skipped: boolean;            // true if a mandatory analyst failed the tick
   failures: AnalystFailure[];  // logged failures this tick (reason-tagged)
 }
@@ -145,11 +146,30 @@ interface AnalystRunResult {
 
 **Primary + context per role** (from #23). Each analyst owns a primary data scope and always receives a fixed context frame:
 
-- **Technical** — primary: price/indicators (from Market Data Service); context: last-N-candles + volume (always). Mandatory. Cheap/fast LLM tier.
-- **Fundamental** — primary: earnings/SEC filings/news (from Market Intelligence); context: contemporaneous price reaction (always). Mandatory. Stronger/slower LLM tier. Stocks-only.
-- **Sentiment** — primary: social signals (from Market Intelligence); context: contemporaneous price/volume, to normalize (always). Optional. Cheap/fast LLM tier.
+- **Technical** — primary: price/indicators (from Market Data Service); context: last-N-candles + volume (always). Mandatory. ~~Cheap/fast LLM tier.~~ **Deterministic (2026-08-16).**
+- **Fundamental** — primary: earnings/SEC filings/news (from Market Intelligence); context: contemporaneous price reaction (always). Mandatory. ~~Stronger/slower LLM tier.~~ **Deterministic (2026-08-16).** Stocks-only.
+- **Sentiment** — primary: social signals (from Market Intelligence); context: contemporaneous price/volume, to normalize (always). Optional. ~~Cheap/fast LLM tier.~~ **Deterministic (2026-08-16).**
 
-> **Status against code, and what ADR-0009 constrains.** The LLM tiering above is **unbuilt** — `server/pipeline/analysts/` is pure rule-based logic today and makes no LLM call (see "Prompt Injection Mitigation" below). When it is built, it does not get to pick a provider: [ADR-0009](../adr/0009-single-provider-nous.md) routes **all** LLM traffic through Nous, so a tier here becomes a new entry in `NOUS_ROLES` and `DEFAULT_NOUS_MODELS` (`server/shared/llm/nous-config.ts`), resolved via `NOUS_<ROLE>_MODEL` → `NOUS_MODEL`, with the model priced in `MODEL_RATES` — an unpriced model is refused at startup because its calls record a null cost and [ADR-0008](../adr/0008-llm-spend-cap.md)'s cap sums nulls as zero. `NOUS_ROLES` is `['debate', 'sentiment']` today; neither is an analyst role. Note also that the cheap-tier assumption is not free: the ADR-0009 bake-off found the cheap tiers are cheap partly because they are queued, and tail latency, not median, is what a per-analyst budget has to survive.
+### Where the LLM belongs — the debate layer, not the analyst layer *(2026-08-16)*
+
+**Decided by David: indicators feed the debate; the debate decides.** Analysts compute and present evidence deterministically; the LLM's judgment is spent at the Debate Engine, weighing conflicting evidence.
+
+**The argument is about what an LLM is good for, not about cost.** Deciding whether RSI 72 is overbought is arithmetic against a threshold. Putting a nondeterministic, per-call-billed, unauditable model in front of that arithmetic buys nothing and costs three things this system cannot spare:
+
+1. **Reproducibility**, which is the one property a strategy under selection-bias scrutiny cannot give up. `docs/research/13-stage2-proxy-verdict.md` and the PBO/DSR accounting only mean something if the same inputs produce the same views. The old spec tried to buy this back with temperature-0 replay and an input-hash response cache — machinery that exists *only* because the analyst was nondeterministic, and which disappears with the analyst LLM.
+2. **Auditability.** "Why was this position opened" has to be answerable from a log. A threshold comparison answers it; a model's prose about a threshold comparison does not.
+3. **Failure surface.** Each analyst LLM call is a latency tail, a spend line, and a quorum risk on a mandatory analyst.
+
+**What is *not* claimed:** that LLMs add nothing. The recorded thesis is that they add value **as the generator, weighing conflicting evidence under uncertainty** — which is the debate's job and remains untouched. This amendment moves the model to where it earns its cost, and it does not weaken the thesis; if anything it sharpens the falsifier, because the control arm ([#636](https://github.com/dd-jp/samurai-trading-system/issues/636)'s falsifier arm 2 — same names, same ladder, same stop, entry by indicator alone, no LLM) becomes **the analyst layer's own output thresholded**, with no separate implementation to write and no risk of the control differing from the live arm by accident.
+
+**Consequences to carry, not discover:**
+
+- **The response cache, the cheap/premium backtest tiers, and temperature-0 replay lose their purpose at this layer.** Deterministic analysts are free to replay and reproduce by construction. Those decisions still apply to the **debate** stage, where the LLM now exclusively lives; they should be read as debate-engine concerns and not re-created here.
+- **The prompt-injection requirement gets *stronger*, not weaker.** Analysts still consume free text from Market Intelligence, and they still render it into `key_points` that reach the debate's prompt. `debate-engine/personas.ts` wraps analyst views in an untrusted block — which means **any interpretation legend must be computed inside the analyst**, not written into the prompt: a decoder legend in the prompt would be trusted while the numbers it decodes are not.
+- **`NOUS_ROLES` needs no new analyst entries.** ADR-0009 routes all LLM traffic through Nous, and the tiering above would have required new roles and priced models. With the tiers withdrawn, `['debate', 'sentiment']` remains adequate.
+- **Untouched:** `:267-269`'s allowance that an analyst's reasoning internals are out of scope. How each analyst turns indicators into a direction and a confidence is still its own business; this amendment fixes only that it does so deterministically.
+
+> **Status against code, and what ADR-0009 constrains.** The LLM tiering above is **withdrawn, not merely unbuilt** *(corrected 2026-08-16 — this note still framed the tiering as future work in the same document that withdrew it, which is the opposite of what the amendment decided)*. `server/pipeline/analysts/` is pure rule-based logic today, makes no LLM call (see "Prompt Injection Mitigation" below), and under this amendment that is the specified end state rather than a waypoint. The paragraph below is retained because it constrains **any** future LLM entering this layer — a re-opened tiering, or something new — not because a tier is expected: it does not get to pick a provider, since [ADR-0009](../adr/0009-single-provider-nous.md) routes **all** LLM traffic through Nous, so a tier here becomes a new entry in `NOUS_ROLES` and `DEFAULT_NOUS_MODELS` (`server/shared/llm/nous-config.ts`), resolved via `NOUS_<ROLE>_MODEL` → `NOUS_MODEL`, with the model priced in `MODEL_RATES` — an unpriced model is refused at startup because its calls record a null cost and [ADR-0008](../adr/0008-llm-spend-cap.md)'s cap sums nulls as zero. `NOUS_ROLES` is `['debate', 'sentiment']` today; neither is an analyst role. Note also that the cheap-tier assumption is not free: the ADR-0009 bake-off found the cheap tiers are cheap partly because they are queued, and tail latency, not median, is what a per-analyst budget has to survive.
 
 The context frames deliberately overlap (all three see price/volume). Overlap is allowed and expected — no de-duplication in Stage 1. Conflicting-but-overlapping conclusions are exactly what the Debate Engine's semantic disagreement detection exists to mediate.
 
@@ -161,10 +181,10 @@ Fundamental and Sentiment analysts consume free text sourced from Market Intelli
 
 ### Module: Execution & Applicability
 
-- **Crypto**: Technical + Sentiment run in parallel; Fundamental is skipped (no earnings/SEC data exists for crypto). Analyst count = 2.
-- **Stocks**: Technical + Fundamental + Sentiment run in parallel. Analyst count = 3.
+- ~~**Crypto**: Technical + Sentiment run in parallel; Fundamental is skipped (no earnings/SEC data exists for crypto). Analyst count = 2.~~ **Withdrawn 2026-08-16** — crypto is out of Samurai's scope per [ADR-0014](../adr/0014-intraday-flat-by-close-horizon.md)'s amendment, so there is no second path to count.
+- **Equities — the only path**: Technical + Fundamental + Sentiment run in parallel. Analyst count = **3**.
 - Analysts are independent — no sequencing or dependency between them within a signal.
-- The orchestrator reports `analyst_count` so the Debate Engine's ≥50% quorum math accounts for the variable count (2 crypto / 3 stocks).
+- The orchestrator reports `analyst_count` so the Debate Engine's ≥50% quorum math accounts for a **reduced** count — the desk narrowing to 2 when optional Sentiment drops, or when an MI coverage hole mutes an analyst. It is no longer a per-asset-class constant.
 
 ### Module: Failure Handling
 
@@ -179,7 +199,7 @@ Fundamental and Sentiment analysts consume free text sourced from Market Intelli
 
 **Rationale** — a stale mandatory view risks a confidently-wrong technical/fundamental read, a worse failure than missing one cycle; this matches the project's safety-over-uptime posture for live money.
 
-**Relationship to the Debate Engine's ≥50% quorum.** The role-dependent skip is the *operative* gate and it lives in the Analysts layer: if a mandatory analyst fails, the tick is skipped and the Debate Engine is never invoked. Stage 1 does **not** build a separate ≥50% quorum enforcer — that gate stays in the Debate Engine (ticket #25, under epic #40) as an independent downstream safety check. In practice any tick Stage 1 passes through already satisfies ≥50% (crypto: 1-of-2 if optional Sentiment drops = 50%; stocks: 2-of-3 if Sentiment drops = 67%), so the two gates are complementary, not duplicated. The orchestrator reports `analyst_count` (2 crypto / 3 stocks) precisely so the Debate Engine's ≥50% math accounts for the variable count.
+**Relationship to the Debate Engine's ≥50% quorum.** The role-dependent skip is the *operative* gate and it lives in the Analysts layer: if a mandatory analyst fails, the tick is skipped and the Debate Engine is never invoked. Stage 1 does **not** build a separate ≥50% quorum enforcer — that gate stays in the Debate Engine (ticket #25, under epic #40) as an independent downstream safety check. In practice any tick Stage 1 passes through already satisfies ≥50% (2-of-3 if optional Sentiment drops = 67%), so the two gates are complementary, not duplicated. The orchestrator reports `analyst_count` precisely so the Debate Engine's ≥50% math accounts for a reduced desk. *(Amended 2026-08-16 — this previously read "(2 crypto / 3 stocks)" and cited "crypto: 1-of-2 … = 50%". Crypto is out of scope per [ADR-0014](../adr/0014-intraday-flat-by-close-horizon.md)'s amendment; ≥50% of 3 is now the sole quorum rule, and a desk narrowed to a single live analyst is below quorum and must not trade.)*
 
 ### Module: State Management
 
@@ -214,7 +234,7 @@ Fundamental and Sentiment analysts consume free text sourced from Market Intelli
 ### Modules to Test
 
 **Analyst Orchestrator**
-- Applicability filtering (crypto → Technical + Sentiment; stocks → all three; `analyst_count` correct).
+- Applicability filtering (equities → all three; `analyst_count` correct). *(Amended 2026-08-16 — the crypto → Technical + Sentiment case is withdrawn with story 8.)*
 - Parallel execution (total latency bounded by slowest analyst, not the sum).
 - Single-retry policy (fails once, retries once, then gives up).
 - Role-dependent quorum (mandatory failure skips tick; optional failure proceeds).
@@ -295,15 +315,21 @@ Per CONTEXT.md:
 
 ### Asset-Class Analyst Counts
 
-The variable analyst count (2 for crypto, 3 for stocks) is not incidental — it drives the Debate Engine's quorum threshold. Crypto's ≥50% quorum of 2 means both analysts effectively matter; stocks' ≥50% of 3 tolerates one optional (Sentiment) dropout. This is why Fundamental is mandatory on the stocks path but simply absent (not "failed") on the crypto path.
+~~The variable analyst count (2 for crypto, 3 for stocks) is not incidental — it drives the Debate Engine's quorum threshold. Crypto's ≥50% quorum of 2 means both analysts effectively matter; stocks' ≥50% of 3 tolerates one optional (Sentiment) dropout. This is why Fundamental is mandatory on the stocks path but simply absent (not "failed") on the crypto path.~~
 
-### Latency Tiering Rationale
+> **Superseded 2026-08-16.** Crypto is out of Samurai's scope, so there is one path and the count is **3**, with Sentiment the one optional dropout. **The quorum reasoning itself survives and matters more than it did**: with only one path, ≥50% of 3 is the sole quorum rule, and [`market-intelligence-spec.md`](market-intelligence-spec.md)'s exclude-mute-analysts behaviour means an MI coverage hole narrows the desk to 2 rather than dragging the evidence average — the fix for [#625](https://github.com/dd-jp/samurai-trading-system/issues/625)'s 0.5478 conviction ceiling. A desk narrowed to a single live analyst is below quorum and must not trade; that is the case worth a test.
 
-LLM tiering is driven by the latency budget, not just task complexity. Technical and Sentiment run on the crypto path's tight ~2s/analyst budget, so both use cheap/fast models. Fundamental runs only on the stocks path (looser ~5s/analyst budget), so it can afford a stronger reasoning model for nuanced earnings analysis.
+### ~~Latency Tiering Rationale~~ — withdrawn 2026-08-16
 
-### Backtest Cost Model
+~~LLM tiering is driven by the latency budget, not just task complexity. Technical and Sentiment run on the crypto path's tight ~2s/analyst budget, so both use cheap/fast models. Fundamental runs only on the stocks path (looser ~5s/analyst budget), so it can afford a stronger reasoning model for nuanced earnings analysis.~~
 
-A long replay window makes thousands of analyst invocations. Without mitigation that is thousands of LLM calls. The input-hash response cache makes re-runs (param sweeps, debugging) near-free, and the cheap model tier keeps first-pass bulk iteration affordable; premium models are reserved for the final validation run. Temperature-0 replay makes all of this reproducible.
+> **Withdrawn with the tiering itself.** Analysts make no LLM call, so there is no tier to choose and no per-analyst latency budget to choose it against. What replaces it is not a smaller version of the same thing: the analyst layer's latency is now **compute-bounded and deterministic**, which is what lets it run on the cheap tick path at τ=2min. The two premises this section rested on are both gone — the crypto path, and the per-analyst model call.
+
+### Backtest Cost Model — **relocated, not deleted**
+
+~~A long replay window makes thousands of analyst invocations. Without mitigation that is thousands of LLM calls. The input-hash response cache makes re-runs (param sweeps, debugging) near-free, and the cheap model tier keeps first-pass bulk iteration affordable; premium models are reserved for the final validation run. Temperature-0 replay makes all of this reproducible.~~
+
+> **Amended 2026-08-16.** A replay no longer makes *any* LLM call at this layer, so the cost this section prices is zero here. **The three mechanisms are still needed — one stage later.** The input-hash response cache, the cheap/premium split for bulk-vs-validation runs, and temperature-0 replay all belong to the **Debate Engine**, which is where the model calls now are and where a long replay's cost is now concentrated. Do not read this withdrawal as "backtest replay became free": it became free *at the analyst layer*, and the same arithmetic reappears against debate rounds. See [`debate-engine-spec.md`](debate-engine-spec.md).
 
 ### Future Extensions
 

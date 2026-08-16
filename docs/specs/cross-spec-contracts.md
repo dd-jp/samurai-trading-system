@@ -179,7 +179,7 @@ The three dated `cross-verify-*.md` passes previously held findings with no livi
 | ID | Sev | Finding | Issue |
 |---|---|---|---|
 | CV-20 | **AMENDED (resolved)** | The idempotency key hashed `(instrument, bar)` only. Once #616 made it stable within a bar and #668 put a mandatory flat-by-close exit into a bar an entry can also be taken in, the entry and the exit hashed identically and the exit — being second — was suppressed by all three dedup layers at once, carrying a position overnight against ADR-0014. The payload now carries `side: 'open' \| 'close'`. **The three layers are not independent:** `open_positions`'s primary key IS `idempotency_key`, so `findByKey`, the PK backstop and the broker `client_order_id` share one input and no single layer can be made smarter | [#686](https://github.com/dd-jp/samurai-trading-system/issues/686) |
-| CV-21 | HIGH (live path) | The Trader re-derives the decision bar from its own `clock.now()` rather than inheriting the debate's, so a debate straddling an hour boundary keys the intent into bar N+1 while `debate_id` says N — and bar N+1's real decision then collides with it and is suppressed. Needs a contract change: `DebateResult` carries no bar | [#687](https://github.com/dd-jp/samurai-trading-system/issues/687) |
+| CV-21 | **HIGH (live path) — STILL OPEN.** Design **SPECIFIED 2026-08-16** (see the pass below): the bar is to be inherited from `TickContext.decision_bar` and carried on `DebateResult`, with the Trader prohibited from deriving one from `clock.now()` | The Trader re-derives the decision bar from its own `clock.now()` rather than inheriting the debate's, so a debate straddling an hour boundary keys the intent into bar N+1 while `debate_id` says N — and bar N+1's real decision then collides with it and is suppressed. **Needs a contract change: `DebateResult` carries no bar — and as of this pass that change has NOT landed.** An earlier revision of this row claimed it had; it had not, and the severity above is live until #687 ships | [#687](https://github.com/dd-jp/samurai-trading-system/issues/687) |
 | CV-15 | **BLOCKING (live path)** | With ADR-0013 removing every human gate, the numeric thresholds are the only remaining control — and both `risk-manager-spec.md` and `cost-model-backtest-spec.md` still expose them as unclamped config. A config edit is now the whole distance to an arbitrary risk limit | [#638](https://github.com/dd-jp/samurai-trading-system/issues/638) |
 | CV-14 | HIGH | `feedback-loop-spec.md:91`'s `approvals: ApprovalChannel` does two jobs — gated loosening *and* breach alerts. Removing the gate must not remove the alert, the only way an operator learns the edge died | [#639](https://github.com/dd-jp/samurai-trading-system/issues/639) |
 | CV-2 | ~~HIGH~~ **RESOLVED 2026-08-15** | `risk-manager-spec.md` states no behaviour on upstream read failure, in the stage billed "must be trusted absolutely under stress". **Premise partly wrong and worth recording:** `evaluate()` is synchronous and pure and performs no upstream reads at all — it receives `portfolio`/`breakers`/`correlation`/`cii` pre-computed — so the failure mode was never inside it. A read that FAILS already failed closed (the rejection aborts the instrument pass and places no order); the real gap was a read that SUCCEEDS with a stale value, which nothing checked. Now `computePortfolioView` throws `StaleMarkError` past `RiskConfig.max_mark_age` | [#640](https://github.com/dd-jp/samurai-trading-system/issues/640) |
@@ -192,3 +192,66 @@ The three dated `cross-verify-*.md` passes previously held findings with no livi
 | CV-12, CV-17 | LOW | `risk-manager-spec.md` stale "v1 static concentration buckets"; `TELEGRAM_ALLOWED_USER_IDS` validated at boot for a gate that cannot fire | [#644](https://github.com/dd-jp/samurai-trading-system/issues/644) |
 
 **Closed in the same pass, not filed:** CV-16 (two specs still routing decisions to a human — fixed directly, since an accepted ADR makes them factually wrong). **Moot:** the 2026-07-26 `ApprovalChannel` authn finding — nothing authorises a decision any more, though CV-14 keeps the channel alive for alerting. **Re-affirmed clean:** `execution-spec.md:316`'s broker-cutover manual sign-off, which is an infrequent operator action outside the tick loop and survives ADR-0007 and ADR-0013 on its own stated reasoning.
+
+---
+
+## Cross-spec verification, 2026-08-16 — the intraday re-specification pass
+
+Run per Standing Pipeline Rule 7 after map [#703](https://github.com/dd-jp/samurai-trading-system/issues/703) closed and six specs were amended: `orchestrator`, `universe-selector` (re-specified modules), `trader`, `risk-manager`, `analysts`, `market-intelligence` (amended). `market-data-service-spec.md` needed no change — `:204` and `:208` already reserve indicator selection and timeframes as config.
+
+**Two entries were required to be resolved by this pass rather than carried forward.** Both are resolved below — "resolved" meaning **the design question is settled**. CV-21's resolution is a specification that #687 must still implement; the calendar entry below is settled in code. The distinction is stated because conflating the two is what an earlier revision of this document did.
+
+### CV-21 / [#687](https://github.com/dd-jp/samurai-trading-system/issues/687) — SPECIFIED, NOT BUILT: the decision bar must be inherited, never re-derived
+
+> **Status, stated plainly because the heading previously read "RESOLVED" and that was read as shipped.** What this pass resolved is the *design question* — the four numbered points below are settled and are what #687 must implement. **None of it is in the code yet.** At the time of writing `DebateResult` carries no bar field (`server/pipeline/debate-engine/types.ts`), there is no `TickContext.decision_bar`, and `server/pipeline/trader/decide.ts` still re-derives with `floorToBar(asOf, DEBATE_BAR_TIMEFRAME_MS)`. **[#687](https://github.com/dd-jp/samurai-trading-system/issues/687) is OPEN and the HIGH live-path defect it names is live.**
+
+**Was:** HIGH (live path). The Trader re-derives the decision bar from its own `clock.now()` rather than inheriting the debate's, so a debate straddling an hour boundary keys the intent into bar N+1 while `debate_id` says N — and bar N+1's real decision then collides with it and is suppressed.
+
+**Why this pass had to resolve it rather than record it.** The tick/decision split makes this **structural instead of incidental**. Previously the two derivations agreed except on a straddle; now the Orchestrator gates the whole expensive path on "is this a new debate bar", so there are two independent notions of the bar in the live path by construction — one deciding whether to run, one deciding how to key the result. **The failure mode is a suppressed entry, which presents as a healthy no-trade tick** — this system's signature failure ([#625](https://github.com/dd-jp/samurai-trading-system/issues/625), [#691](https://github.com/dd-jp/samurai-trading-system/issues/691)) and the reason this cannot ship as a known issue.
+
+**Resolution — one source, passed down, never recomputed:**
+
+1. **The Orchestrator's decision gate is the sole authority on the bar.** `orchestrator-spec.md` now carries `TickContext.decision_bar { id, open_time, timeframe_ms }` and states it is *the* single source.
+2. **`DebateResult` must carry the bar it was decided on** — the contract change CV-21 named. Registry §1 already makes `debate_id` load-bearing for three consumers; the bar travels with it rather than beside it.
+3. **The Trader consumes the inherited bar and must not call `clock.now()` to derive one.** Its clock stays injected for timestamps; deriving a *bar* from it is what is prohibited.
+4. **The dedup key must be the same key [#617](https://github.com/dd-jp/samurai-trading-system/issues/617)'s fix uses.** A second notion of "new bar" introduced by the gate would reintroduce duplicate debates — the defect #617 already paid for.
+
+**Verification is by mutation, not by inspection:** force the decision gate permanently open and assert the debate count per bar stays at one; force it permanently closed and assert the flatten still fires. An assertion that merely reads the field proves nothing about which value was used.
+
+### Trading-calendar / session source — RESOLVED, and upgraded from LOW on the way
+
+**Was:** listed under LOW as *"trading-calendar/session source unspecced."* **That severity was wrong the moment flat-by-close became an invariant**, and this pass records the upgrade rather than quietly fixing it — the calendar now resolves `sessionEnd`, which is what the mandatory flatten fires against. An unspecced source for a load-bearing invariant is not LOW.
+
+**Resolution, now in `orchestrator-spec.md` as "The window is policy; the calendar is venue":**
+
+- **`LseRegularHoursCalendar`'s 08:00–16:30 is venue truth and must not be narrowed** to the entry window. The same object resolves `sessionEnd` for [#657](https://github.com/dd-jp/samurai-trading-system/issues/657)'s flatten, so narrowing it to 14:30–15:45 would move the close to 15:45 and **delete every tick that could flatten** — the exact class of defect `2f22033` already fixed once.
+- **The entry window is a separate policy predicate**, composed as `calendar.isOpen(t) && window(t)`, and the tick window must be the entry window **∪ the flatten tail**, asserted **unpinned** (a test pinning the tail to 16:25 passes while the composition is wrong).
+- **`equityCalendarFor(config)` is pure and calendars are stateless**, which is why the component root's and the orchestrator root's separate instances agree. That property is now stated rather than relied on silently.
+
+### New findings from this pass
+
+| ID | Severity | Finding | Disposition |
+| --- | --- | --- | --- |
+| CV-22 | **HIGH** | **OPEN-GAP-D's settled wording is now false.** It records the Orchestrator as emitting *"`Signal` per instrument per tick"*, and the tick/decision split makes that per instrument **per decision bar**. Left as-is, a reader implementing to OPEN-GAP-D rebuilds the 30×-redundant analyst path the split exists to remove | Fixed in place — see the amendment appended to OPEN-GAP-D below |
+| CV-23 | **HIGH** | **`screening_instrument` crosses a boundary the routing invariant was built to police.** `universe-selector-spec.md` now carries two instrument identities per pool row; `AssetClassRoutingDataSource#routeFor` deliberately throws on unknown instruments. The invariant holds **only** if `screening_instrument` never reaches the routing map — which is an assertion, not an accident | Asserted in `universe-selector-spec.md` test seam 3: a `screening_instrument` symbol must not appear in a watchlist |
+| CV-24 | **MEDIUM** | **`subclass` is a new shared dimension with no owner in this registry.** `trader-spec.md` keys `risk_fraction` on it, `risk-manager-spec.md` keys tiering on it, `universe-selector-spec.md` sources it from the pool file. Nothing states where it is defined or that an unknown value must fail loud | Owner: `contracts/` alongside `AssetClass`. Unknown subclass **fails loud**, never defaults — a default means full deployment |
+| CV-25 | **MEDIUM** | **Crypto removal leaves live code with no product behind it.** `AssetClass`, `AlwaysOpenCalendar`, `sessionCalendars`, crypto config keys and `SMOKE_TEST_UNIVERSE`'s BTC-USD entry all remain. ADR-0014's amendment deliberately does **not** decide their removal | Operative rule, enforced at review: **no spec, gate, measurement or ticket may assume a crypto path exists.** The code question stays open and is not a blocker |
+| CV-26 | **MEDIUM** | **`binding_constraint` gains `below_minimum_size`**, and it must be distinguishable in `risk_log` from a conviction rejection. Otherwise a full deployment envelope is indistinguishable from a healthy no-trade tick | Specified in `risk-manager-spec.md`, "The deployment envelope is the concurrency rule" |
+| CV-27 | **HIGH** | **The mandatory flatten crosses Trader → Risk → Execution as an ordinary exit, and three separate mechanisms could block it**: a tripped breaker, an exposure cap, and the min-viable-size reject. Each is individually reasonable and each would hold a position overnight against ADR-0014's invariant | Resolved in `risk-manager-spec.md`: exits skip all entry gates (`:15`, reaffirmed), and min-viable-size is explicitly an **entry-path** gate |
+| CV-28 | **MEDIUM** | **`current_tick`'s stage enum gains `'position_check'`**, which needs a table-rebuild migration exactly as `'invalidation'` did. A tick that ends at `position_check` is a **normal** outcome (~29 of 30 passes), so any alerting keyed on "tick did not reach verdict" would fire constantly | Specified in `orchestrator-spec.md`; flagged here because the migration and the alerting rule live in different specs |
+| CV-29 | LOW | **The analyst LLM withdrawal orphans three decisions in `analysts-spec.md`** — the input-hash response cache, cheap/premium backtest tiers, and temperature-0 replay. They are not wrong; they now belong to the **debate** stage | Recorded in `analysts-spec.md`; no debate-engine-spec change made, since those decisions already exist there |
+
+### Re-affirmed clean under the amended specs
+
+- **`debate_id`'s three consumers** (registry §1) are unaffected by the tick/decision split — fewer debates, same contract per debate.
+- **Execution as sole writer of `ClosedTrade`/`Fill`** (§4) is untouched; the flatten and the early exit both produce ordinary exits through the existing path rather than writing directly.
+- **CV-20's `side: 'open' | 'close'` idempotency fix holds** and is *more* load-bearing now: the tick path can emit an exit in the same bar an entry was taken.
+- **ADR-0018 D4's trial discipline survives the screener rewrite** — one axis is a sort with no free parameter, so the selector contributes **zero trials**.
+
+### Still open, deliberately
+
+- **CV-15 / [#638](https://github.com/dd-jp/samurai-trading-system/issues/638)** (unclamped thresholds) remains **BLOCKING for live** and this pass does not clear it. The new per-subclass `risk_fraction` values are *more* config surface on the same unclamped path.
+- **CV-4/CV-5 / [#642](https://github.com/dd-jp/samurai-trading-system/issues/642)** (risk-manager "no LLM" vs its own binding LLM critic) is untouched — it predates the horizon change and is not resolved by it.
+- **GAP-G's premise has changed** and should be re-read at triage: an Alpaca `DataSource` was needed for SPY/QQQ/AAPL/TSLA/BTC-USD/ETH-USD, none of which is now a live instrument. Alpaca remains the **screening and paper** source, so the gap survives with a different justification rather than closing.
+
+**Amendment to OPEN-GAP-D (2026-08-16), per CV-22:** the Orchestrator emits `Signal` per instrument **per decision bar**, not per tick. Ticks between decision bars run the cheap path — mark, bracket, early-exit check, flatten — and emit no `Signal`. The ownership settlement is otherwise unchanged: scanning belongs to the Universe Selector, scheduling and `Signal` emission to the Orchestrator.

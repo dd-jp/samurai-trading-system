@@ -330,6 +330,37 @@ export interface ProductionConfig extends AlertChannelSlots {
    * authoritative for when stock sessions begin, not merely for when to tick.
    */
   tradingCalendar?: TradingCalendar;
+  /**
+   * OPTIONAL narrowing of when equities may be ENTERED, inside a session
+   * `tradingCalendar` has already opened (#706).
+   *
+   * **This field is an ENTRY window; `SchedulerConfig.stocksTradingWindow` —
+   * same name, one layer down — is a TICK gate. Do not read the two as one
+   * field.** What you pass here is a policy about entries;
+   * `buildProductionOrchestrator` wraps it in `withFlattenTail` (production.ts,
+   * see `production/stocks-tick-window.ts`) and hands the UNION to the
+   * Scheduler, which applies it to `TickPlan.instruments` and therefore gates
+   * the whole pipeline pass, Trader included.
+   *
+   * That composition is load-bearing and not a convenience. The Trader is the
+   * only thing that flattens, so a bare entry predicate reaching the Scheduler
+   * un-composed deletes every tick that could land in the flatten tail and
+   * switches flat-by-close off — shipped once on this branch and fixed by the
+   * union. If you construct a Scheduler directly rather than through
+   * `buildProductionOrchestrator`, that wrapping is yours to do.
+   *
+   * Deliberately a separate field rather than a narrower calendar. The
+   * calendar above is authoritative for when stock sessions *begin and end* —
+   * the Verdict gate reads it, the daily-PnL boundary resets on its
+   * `sessionStart` (#331/#332), and the flatten offsets from its `sessionEnd`
+   * (#657). A trading preference expressed by narrowing it would move all
+   * three, and the flatten is a money-path rule.
+   *
+   * Undefined means no narrowing, which is what the harness and every existing
+   * programmatic caller want. `londonEntryWindow()` supplies the overlap-only
+   * default.
+   */
+  stocksTradingWindow?: (instant: Date) => boolean;
   /** Sticky breaker rows recovered from a prior process, if any. */
   initialBreakerState?: readonly PersistedBreakerState[];
   /** Wall-clock gap between tick starts. Default 60s. */

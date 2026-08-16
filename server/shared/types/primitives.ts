@@ -17,7 +17,11 @@
  * component `types.ts` files re-export rather than redeclaring the union, so
  * adding an asset class is one edit — only the single edit's location moved.
  */
-export type { AssetClass } from '../../../contracts/primitives.js';
+/**
+ * The finer dimension ADR-0018 keys its brackets and sizing on. Same
+ * re-export rule as `AssetClass` above, and same reason.
+ */
+export type { AssetClass, InstrumentSubclass } from '../../../contracts/primitives.js';
 
 /** One structured log line; `trace_id` threads every line (#95). */
 export interface LogEntry {

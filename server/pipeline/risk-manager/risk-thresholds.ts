@@ -56,6 +56,15 @@ import type { RiskConfig } from './types.js';
  * dial that tightens `max_position_size` look like it tightens a decision. Chosen so the mapping is legible without this table
  * in front of you — an operator reading `per_asset_class_cap_crypto` in the
  * `risk_thresholds` table can find the field it drives without a lookup.
+ *
+ * **`per_subclass_deployment_cap` is deliberately NOT here** (#703, step A6),
+ * and its absence is load-bearing rather than an oversight. ADR-0018 D5's
+ * deployment envelope is measured drift-removed with zero edge assumed — it
+ * binds regardless of how good the signal turns out to be. A dial on it would
+ * let the Feedback Loop widen the record's only drawdown protection in exactly
+ * the run where the loop had learned to be confident, which is the run where
+ * the envelope matters most. `per-subclass-deployment-cap.test.ts` asserts the
+ * absence so an unrelated widening of this list cannot quietly grant one.
  */
 export const RISK_THRESHOLD_KEYS = [
   'max_position_size',

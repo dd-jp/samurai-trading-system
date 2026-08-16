@@ -11,7 +11,12 @@
 export type { FixtureLiveMark } from './fixture-data-source.js';
 export { FixtureDataSource } from './fixture-data-source.js';
 export { buildIndicatorCacheKey, IndicatorCache } from './indicator-cache.js';
-export { computeIndicator, InsufficientBarsError, minimumBarsFor } from './indicators.js';
+export {
+  computeIndicator,
+  InsufficientBarsError,
+  minimumBarsFor,
+  recommendedWarmupFor,
+} from './indicators.js';
 export type { NormalizeContext, RawCandle } from './ingestion.js';
 export { completedBars, deriveBacktestMark, normalizeBars } from './ingestion.js';
 export { isMarkStale, markAgeMs } from './mark-freshness.js';
@@ -66,12 +71,18 @@ export {
   AlwaysOpenCalendar,
   // #668 — the live equity leg's venue (#659: T212 ISA, GBP LSE-listed ETFs).
   LseRegularHoursCalendar,
+  // #706 — policy, not venue: narrows WHEN equities may be entered inside a
+  // session the calendar has already opened.
+  londonEntryWindow,
+  OVERLAP_WINDOW_LAST_ENTRY_MINUTES,
+  OVERLAP_WINDOW_OPEN_MINUTES,
   UsEquityRegularHoursCalendar,
 } from './trading-calendar.js';
 export type {
   Bar,
   BarWindow,
   DataSource,
+  IndicatorKind,
   IndicatorSpec,
   IndicatorValue,
   Mark,
@@ -79,3 +90,4 @@ export type {
   MarketDataStore,
   Quote,
 } from './types.js';
+export { INDICATOR_KINDS } from './types.js';
