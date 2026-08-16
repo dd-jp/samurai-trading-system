@@ -376,6 +376,17 @@ const concentrationCorrelationCap: EntryCapGate = (config, intent, portfolio, co
  * one unclassified instrument's ENTRIES refuse, every tick, until the pool file
  * is corrected. That refusal is the intended reading of a half-populated pool
  * file, and it is strictly safer than the alternative of entering unbounded.
+ *
+ * **That "one instrument" bound is a claim about a caller, so here is the
+ * caller.** `SequentialTickRunner.runInstrument` deliberately has no try/catch;
+ * the containment is one level up, in `tick-loop.ts`'s `worker()`, which wraps
+ * each `runInstrument` call in its own try/catch (#507) precisely so one
+ * instrument throwing cannot reject the worker's `Promise.all` entry and settle
+ * the whole tick while sibling instruments are still mid-pipeline. The throw
+ * becomes a logged `TickOutcome.error` and a durable `audit_log` row for that
+ * instrument alone. Without #507's catch this throw WOULD take down the tick
+ * for every instrument, so if that catch is ever removed, this gate must be
+ * revisited with it — the two are coupled, and only this comment says so.
  */
 const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
   const declared = config.per_subclass_deployment_cap;

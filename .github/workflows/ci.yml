@@ -33,6 +33,15 @@ jobs:
       - name: Enable Corepack
         run: corepack enable
 
+      # The fixture-provenance step below shells out to python3. It currently
+      # works only because the ubuntu-latest image happens to ship one, which
+      # is a property of the runner image rather than of this workflow — and a
+      # provenance check that silently stops running is worth less than no
+      # check, because the green tick still reads as "verified".
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
       - name: Install dependencies
         id: install
         run: yarn install --immutable
