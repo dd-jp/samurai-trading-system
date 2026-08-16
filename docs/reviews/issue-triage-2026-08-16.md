@@ -226,3 +226,10 @@ Asked directly whether any open wayfinder issue is now closable on the new specs
 ### Coverage of this run
 
 All 48 open issues now carry an individual verdict across the three passes. Two caveats, stated rather than buried: verdicts rest on ticket bodies plus targeted code checks, not a full re-read of every cited file; and #736 was filed *by* this run, so it has never been triaged by anything but itself.
+
+### Wayfinder sweep — resolved 2026-08-17 (David's ruling)
+
+Both recommendations above were taken.
+
+- **[#718](https://github.com/dd-jp/samurai-trading-system/issues/718) closed as not planned.** The four grounds are recorded on the issue and, more durably, in the body of `docs/specs/skeptic-self-review-spec.md`, whose status is now **Declined** with the reasoning above the retained proposal — so a later reader meets a decision rather than an unbuilt spec that reads as pending. The failure-mode enumeration survives the closure as a **checklist for research write-ups**, which is where those failures actually occur.
+- **[#636](https://github.com/dd-jp/samurai-trading-system/issues/636) re-scoped**, body replaced rather than banner-ed, and retitled to its open half: *"Which spec owns computing the falsifier control arm and the risk-adjusted outside benchmarks?"* The settled half is recorded in the body — falsifier arm 2 is the primary matched control, doc 10's always-long basket is withdrawn with the horizon, and CLAUDE.md's `vs buy-and-hold` line has already been corrected. The open half keeps its measurement: `benchmark` still appears **0 times** in the two specs that own the metrics suite, so the record asserts a control no spec produces.
