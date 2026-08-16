@@ -145,6 +145,25 @@ every time.
 Every candidate above is one environment variable away (`NOUS_DEBATE_MODEL`) if
 a later measurement disagrees.
 
+**This table is one day's weather, and the record should not be read as more
+than that** *(noted 2026-08-17)*. It is 8 samples per model taken on
+2026-08-06, on a portal whose latency the same section shows drifting by 2×
+between rounds. The decision it supports is load-bearing — it is the only
+evidence the 15s crypto budget is met — so the conditions under which it stops
+being evidence are stated explicitly rather than left to be rediscovered:
+
+- **The headroom is thinner than 11.8s vs 15s suggests.** The budget covers
+  four *sequential* calls, so the margin absorbs one slow call, not a shifted
+  distribution. A sustained portal load spike moves the tail, not the median,
+  and the tail is the whole basis of the choice.
+- **Re-measure, do not extrapolate, on any of:** a change to the debate prompt
+  length or to the number of calls per debate; the introduction of tool use in
+  the debate path; a provider-side model version bump behind the same id; or
+  any observed debate cancellation attributed to timeout.
+- **A cancelled debate is the signal.** Debate-cancellation-on-timeout is the
+  operational tell that this measurement has expired; it should be treated as a
+  re-measurement trigger rather than as an isolated transient.
+
 ## What this amends in ADR-0008
 
 ADR-0008 states, as fact #1 under its Context:

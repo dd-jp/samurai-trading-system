@@ -159,6 +159,20 @@ interface DataSource {
 - **Alpaca (MVP, ADR-0001):** a third `DataSource` implementation — Alpaca's market-data API supplies both historical bars (backfill) and streaming quotes/marks for the MVP execution universe (SPY/QQQ/AAPL/TSLA equities + the BTC-USD/ETH-USD pairs Alpaca supports). Alpaca is the first end-to-end path (ADR-0001): MVP paper trading runs Execution's Alpaca `BrokerAdapter` against this `DataSource`, before the longer-term ccxt/IBKR sources are needed. Normalizes into the same `Bar` / `latest_mark` representation as ccxt/IBKR — consumers never learn which source is live.
 - All three normalize into the same `Bar` / `latest_mark` representation. The read API is identical across classes; the class difference surfaces only as `observed_at` freshness (a stock mark is legitimately old when the market is closed).
 
+> **The instruments Samurai actually trades have no mark source in this spec at all** *(added 2026-08-17)*. This is stated as its own gap rather than as a caveat on the Alpaca bullet, because it is a hole and not a degradation.
+>
+> The three `DataSource` implementations above serve ccxt/Kraken, IBKR and Alpaca. **None of them serves the LSE.** Under [ADR-0016](../adr/0016-universe-leveraged-etps-ungated.md) the live equity universe is GBP LSE-listed leveraged ETPs on the Trading 212 ISA, and `universe-selector-spec.md` makes the split explicit: a pool row carries both a `screening_instrument` (the **US underlying**, whose bars Alpaca does serve — screening runs there because [#656](https://github.com/dd-jp/samurai-trading-system/issues/656) established there is no free LSE intraday history) and an `lse_ticker` (what Samurai holds and routes). The routing map binds over `lse_ticker` only; `screening_instrument` never reaches the routing layer. So the instrument that is ranked and the instrument that is **marked** are different objects, and this spec sources bars for the first and nothing for the second.
+>
+> That is worse than a missing fallback, and the failure is not intermittent:
+>
+> - `latest_mark.observed_at` feeds Verdict's `stale_feed` no-go ([#641](https://github.com/dd-jp/samurai-trading-system/issues/641)) and bounds Risk's valuation marks ([#640](https://github.com/dd-jp/samurai-trading-system/issues/640)). With no producer writing an `lse_ticker` row, those gates do not fire intermittently on a degraded feed — **they never pass**, and unrealized PnL on the live leg has nothing to compute against either.
+> - Marking an LSE ETP off its US underlying's price is **not** a substitute and must not be introduced as one. The ETP is leveraged, GBP-denominated, and trades on a different session; the proxy relationship is good enough to *rank* candidates the evening before and nowhere near good enough to value a position or trigger a bracket.
+> - **Alpaca's free Basic tier also withholds the most recent ~15 minutes of SIP data.** Harmless for the screener (completed bars, out of hours, which is exactly how it is used) and disqualifying for any live tick path built on it — so the proxy could not carry the mark even if the instrument identity problem did not exist.
+>
+> Resolving this is a source decision, not an implementation detail, and it is a precondition of the live equity leg rather than a hardening task: something must supply LSE intraday marks for the traded ticker (the T212 API itself is the obvious candidate, alongside the `Trading212Adapter` that [#659](https://github.com/dd-jp/samurai-trading-system/issues/659) records as not existing), and whatever supplies them inherits the single-vendor question this spec has never answered for equities — crypto has multiple ccxt venues, equities have none yet. Flagged on [#562](https://github.com/dd-jp/samurai-trading-system/issues/562), which owns live-path source failover for bars.
+>
+> The Alpaca bullet above is accurate about backfill, about screening bars, and about the Alpaca paper path. It is **not** a statement about what marks live equities.
+
 ### Module: Persistence
 
 - **`bars`** (instrument, timeframe, open_time, close_time, OHLCV, source) — append-only; the survivorship-free history AND the bulk tier.

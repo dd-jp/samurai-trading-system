@@ -29,6 +29,7 @@ code, specs and `docs/coding-standards.md` cite individual findings by ID.
 | [`codebase-review-2026-08-06.md`](codebase-review-2026-08-06.md) | Full-codebase hostile review: architecture, data/API cost flow, complexity | Its Polygon premise correction is cited by `server/shared/http/venue-pacing.ts` |
 | [`spec-conformance-2026-08-05.md`](spec-conformance-2026-08-05.md) | Implementation vs specs | Survivors tracked in `triage-2026-08-06.md`; read that first |
 | [`code-quality-2026-08-05.md`](code-quality-2026-08-05.md) | Duplication, performance, efficiency | Survivors tracked in `triage-2026-08-06.md`. Its comments-carry-reasons ruling is cited by `docs/coding-standards.md:91` |
+| [`spec-adr-kimi-k3-review-2026-08-16.md`](spec-adr-kimi-k3-review-2026-08-16.md) | Kimi K3-style hostile review of all specs and ADRs | **OPEN, dispositioned 2026-08-17** — all 20 findings triaged in the report's own §Disposition pass: 6 fixed in-spec, 5 already addressed at the time of writing, 7 tracked (#625/#552/#685/#667/#638/#642/#645/#687), 2 deferred. **Its recommended action 1 is refused there and should not be re-attempted** — the four cross-spec rows it asks to close are recorded as not cleared. Finding 16 escalated on inspection: the live equity leg has **no** specced mark source, not a single one — see `market-data-service-spec.md` and [#562](https://github.com/dd-jp/samurai-trading-system/issues/562) |
 
 ## Archived
 
