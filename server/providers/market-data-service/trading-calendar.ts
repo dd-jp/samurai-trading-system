@@ -46,6 +46,10 @@ export interface TradingCalendar {
    * The real holiday/session table this port defers to fixes that here, which
    * is why the boundary lives on the calendar rather than being duplicated in
    * each consumer.
+   *
+   * THROWS on the same terms as `sessionEnd` — see its "cannot answer" note.
+   * There is no `null` here to confuse it with, since every venue has a session
+   * start, so exhausting the search means the calendar is broken outright.
    */
   sessionStart(instant: Date): Date;
   /**
@@ -70,6 +74,31 @@ export interface TradingCalendar {
    * usable "when must I be flat by" question at every instant, and makes it the
    * mirror of `sessionStart`'s at-or-before convention rather than an
    * inconsistent twin.
+   *
+   * ## THROWS — `null` and "cannot answer" are different answers (#691)
+   *
+   * An implementation that searches a calendar MAY THROW when it cannot find a
+   * close at all, and both equity calendars here do, after
+   * `MAX_SESSION_SEARCH_DAYS`. Callers must be throw-safe as well as
+   * null-safe; the two mean opposite things and must not be collapsed:
+   *
+   * - `null` — "this venue has no close." A settled, correct answer. Do nothing.
+   * - throw — "this venue HAS a close and I could not find it." The calendar is
+   *   broken or its holiday table is wrong.
+   *
+   * The port previously documented only `Date | null` while the implementations
+   * threw, so a caller written against the contract handled `null` and was
+   * ambushed by the throw. Documenting the throw is the deliberate resolution;
+   * the alternative — returning `null` on exhaustion — was rejected because it
+   * makes a broken calendar indistinguishable from crypto, and the trader's
+   * response to `null` is to SKIP FLATTENING. That converts a loud data fault
+   * into an overnight carry against ADR-0014 with nothing logged, which is the
+   * same silent-non-flatten failure #670 exists to prevent.
+   *
+   * A throw is currently caught by the tick loop, which logs `tick failed` and
+   * drops the tick. That is a skipped decision rather than a crash, and it is
+   * only acceptable because it is LOGGED. Any new caller on the money path must
+   * preserve that property.
    */
   sessionEnd(instant: Date): Date | null;
 }
@@ -168,8 +197,19 @@ const WEEKEND = new Set(['Sat', 'Sun']);
 
 const MS_PER_MINUTE = 60_000;
 const MS_PER_DAY = 86_400_000;
-/** Widest weekday-only gap is a weekend (2 days); the margin is for the holiday table to come. */
-const MAX_SESSION_LOOKBACK_DAYS = 10;
+/**
+ * How far the session walks search before giving up, in civil days.
+ *
+ * Widest weekday-only gap is a weekend (2 days); the margin is for the holiday
+ * table to come. Comfortably clear of the LSE's 4-day Christmas and Easter
+ * stretches — that headroom is the reason 10 rather than 3.
+ *
+ * Named for the SEARCH rather than a direction because it bounds both: the
+ * backward walk in `sessionStart` and the forward walk in `sessionEnd` (#691).
+ * It was `MAX_SESSION_SEARCH_DAYS`, which described half its uses and made
+ * `sessionEnd`'s error read "lookback days after".
+ */
+const MAX_SESSION_SEARCH_DAYS = 10;
 /** One pass computes the UTC offset, the second confirms it. 16:00 ET is never in a DST gap. */
 const MAX_OFFSET_PASSES = 3;
 
@@ -396,7 +436,11 @@ export class UsEquityRegularHoursCalendar implements TradingCalendar {
   }
 
   /**
-   * The next 16:00 ET close strictly after `instant` (#668).
+   * The next regular or early close strictly after `instant` (#668).
+   *
+   * Not "the next 16:00 ET close", which is what this said before #691: on a
+   * half-day it returns 13:00, and the flatten offset must ride the early close
+   * rather than a constant.
    *
    * Walks FORWARD a civil day at a time, asking `isTradingDay` for the same
    * reason `sessionStart` walks backward asking it: the holiday table that
@@ -406,7 +450,7 @@ export class UsEquityRegularHoursCalendar implements TradingCalendar {
   sessionEnd(instant: Date): Date | null {
     let civilDate = toCivilDate(instant, ET_ZONE);
 
-    for (let day = 0; day <= MAX_SESSION_LOOKBACK_DAYS; day++) {
+    for (let day = 0; day <= MAX_SESSION_SEARCH_DAYS; day++) {
       const close = wallClockToInstant(civilDate, this.#closeMinutesFor(civilDate), ET_ZONE);
       if (close.getTime() > instant.getTime() && this.isTradingDay(close)) {
         return close;
@@ -415,13 +459,15 @@ export class UsEquityRegularHoursCalendar implements TradingCalendar {
     }
 
     throw new Error(
-      `No US equity session close found within ${MAX_SESSION_LOOKBACK_DAYS} days after ${instant.toISOString()}`,
+      `No US equity session close found within ${MAX_SESSION_SEARCH_DAYS} days after ${instant.toISOString()}`,
     );
   }
 
   /**
-   * The most recent 16:00 ET close at or before `instant` (see the port doc for
-   * the half-open convention and the holiday limitation).
+   * The most recent regular or early close at or before `instant` (see the port
+   * doc for the half-open convention and the holiday limitation). Early closes
+   * for the same reason `sessionEnd` names them: the boundary is whatever
+   * `#closeMinutesFor` says, not a constant 16:00.
    *
    * Walks back a civil day at a time, asking `isTradingDay` — not a private
    * weekend check — whether each candidate close happened, so the holiday table
@@ -431,7 +477,7 @@ export class UsEquityRegularHoursCalendar implements TradingCalendar {
   sessionStart(instant: Date): Date {
     let civilDate = toCivilDate(instant, ET_ZONE);
 
-    for (let day = 0; day <= MAX_SESSION_LOOKBACK_DAYS; day++) {
+    for (let day = 0; day <= MAX_SESSION_SEARCH_DAYS; day++) {
       const close = wallClockToInstant(civilDate, this.#closeMinutesFor(civilDate), ET_ZONE);
       if (close.getTime() <= instant.getTime() && this.isTradingDay(close)) {
         return close;
@@ -440,7 +486,7 @@ export class UsEquityRegularHoursCalendar implements TradingCalendar {
     }
 
     throw new Error(
-      `No US equity session close found within ${MAX_SESSION_LOOKBACK_DAYS} days before ${instant.toISOString()}`,
+      `No US equity session close found within ${MAX_SESSION_SEARCH_DAYS} days before ${instant.toISOString()}`,
     );
   }
 }
@@ -548,7 +594,7 @@ export class LseRegularHoursCalendar implements TradingCalendar {
   sessionStart(instant: Date): Date {
     let civilDate = toCivilDate(instant, LONDON_ZONE);
 
-    for (let day = 0; day <= MAX_SESSION_LOOKBACK_DAYS; day++) {
+    for (let day = 0; day <= MAX_SESSION_SEARCH_DAYS; day++) {
       const close = wallClockToInstant(civilDate, this.#closeMinutesFor(civilDate), LONDON_ZONE);
       if (close.getTime() <= instant.getTime() && this.isTradingDay(close)) {
         return close;
@@ -557,7 +603,7 @@ export class LseRegularHoursCalendar implements TradingCalendar {
     }
 
     throw new Error(
-      `No LSE session close found within ${MAX_SESSION_LOOKBACK_DAYS} days before ${instant.toISOString()}`,
+      `No LSE session close found within ${MAX_SESSION_SEARCH_DAYS} days before ${instant.toISOString()}`,
     );
   }
 
@@ -565,7 +611,7 @@ export class LseRegularHoursCalendar implements TradingCalendar {
   sessionEnd(instant: Date): Date | null {
     let civilDate = toCivilDate(instant, LONDON_ZONE);
 
-    for (let day = 0; day <= MAX_SESSION_LOOKBACK_DAYS; day++) {
+    for (let day = 0; day <= MAX_SESSION_SEARCH_DAYS; day++) {
       const close = wallClockToInstant(civilDate, this.#closeMinutesFor(civilDate), LONDON_ZONE);
       if (close.getTime() > instant.getTime() && this.isTradingDay(close)) {
         return close;
@@ -574,7 +620,7 @@ export class LseRegularHoursCalendar implements TradingCalendar {
     }
 
     throw new Error(
-      `No LSE session close found within ${MAX_SESSION_LOOKBACK_DAYS} days after ${instant.toISOString()}`,
+      `No LSE session close found within ${MAX_SESSION_SEARCH_DAYS} days after ${instant.toISOString()}`,
     );
   }
 

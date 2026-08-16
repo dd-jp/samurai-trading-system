@@ -254,3 +254,41 @@ describe('UsEquityRegularHoursCalendar', () => {
     });
   });
 });
+
+/**
+ * #691 finding 2 — the port documents `Date | null` and the implementations
+ * also THROW. The throw is now documented rather than removed, so it is
+ * behaviour and gets pinned like any other.
+ *
+ * Pinned specifically so the "return null on exhaustion instead" change cannot
+ * be made silently: `null` means "this venue has no close" and the trader's
+ * response to it is to skip flattening, so collapsing the two would turn a
+ * broken calendar into an unlogged overnight carry against ADR-0014.
+ */
+describe('the exhausted-search contract (#691)', () => {
+  /** A calendar whose holiday table has swallowed every day — the broken case. */
+  class NeverTradingCalendar extends UsEquityRegularHoursCalendar {
+    override isTradingDay(_instant: Date): boolean {
+      return false;
+    }
+  }
+
+  const calendar = new NeverTradingCalendar();
+  const instant = new Date('2026-07-15T18:00:00Z');
+
+  it('throws rather than returning null when no close can be found', () => {
+    // NOT `toBeNull()`. That is the distinction the port doc now turns on.
+    expect(() => calendar.sessionEnd(instant)).toThrow(/No US equity session close found/);
+  });
+
+  it('names the search bound and the instant, so the fault is diagnosable', () => {
+    expect(() => calendar.sessionEnd(instant)).toThrow(/within 10 days after/);
+    expect(() => calendar.sessionStart(instant)).toThrow(/within 10 days before/);
+  });
+
+  it('still returns null for a venue that genuinely has no close', () => {
+    // The other half of the contract: `AlwaysOpenCalendar` is not broken, it is
+    // crypto. Same method, opposite meaning, and the port keeps them apart.
+    expect(new AlwaysOpenCalendar().sessionEnd(instant)).toBeNull();
+  });
+});
