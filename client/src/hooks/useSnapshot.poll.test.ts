@@ -41,7 +41,13 @@ function pollDrivenClock(payloads: Parameters<typeof fakeFetch>[0]): {
   fetchImpl: typeof fetch;
   now: () => number;
 } {
-  const STEP_MS = INTERVAL_MS * 3;
+  // Derived, never `* 3`. The step has to exceed the watchdog's own horizon of
+  // `INTERVAL_MS * STALE_AFTER_MISSED_POLLS`, and hardcoding the product only
+  // held while that constant was 2. Raise it to 3 and a literal step would sit
+  // exactly ON the horizon rather than past it, so a single hang would stop
+  // tripping the watchdog and this test would quietly stop covering the
+  // stale-then-recovered path — with the `now()` guard below still passing.
+  const STEP_MS = INTERVAL_MS * (STALE_AFTER_MISSED_POLLS + 1);
   const inner = fakeFetch(payloads);
   let clockMs = 0;
 
