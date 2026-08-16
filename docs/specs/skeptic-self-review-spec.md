@@ -1,15 +1,30 @@
-# Devil's Advocate — Skeptic Self-Review Enhancement Specification
+# Devil's Advocate — Skeptic Self-Review Enhancement Specification — **DECLINED**
 
-**Status:** Draft  
+**Status:** **Declined 2026-08-17** — not built, and not pending  
 **Owner:** David (Deepak)  
-**Date:** 2026-08-16  
-**Wayfinder map:** [Wayfinder: Devil's Advocate — thesis invalidation layer placement](https://github.com/dd-jp/samurai-trading-system/issues/291) (closed 2026-08-05) — this spec amends it, not replaces it  
-**Supersedes:** Nothing — adds to `devils-advocate-spec.md`  
+**Date:** 2026-08-16, declined 2026-08-17  
+**Wayfinder map:** [#718](https://github.com/dd-jp/samurai-trading-system/issues/718), **closed as not planned** on David's ruling  
+**Supersedes:** Nothing  
 **Research basis:** `docs/research/README.md` doc 16 (open finding), Quant Vault "play the skeptic" prompt, AI Vault "Silent AI Agent Failure Checklist" pattern
+
+## Why this was declined
+
+Stated here in the body rather than as a banner, so a later reader does not find an unbuilt spec and assume it is pending work. **Everything below this section is the declined proposal, preserved as the record of what was considered — it is not a plan.**
+
+Four grounds, three of them decisions taken after this spec was written:
+
+1. **It adds a third LLM-driven stage, against the direction the record now takes.** The 2026-08-16 intraday re-specification pass moved the LLM commitment off the per-analyst layer and confined it to the debate: a nondeterministic, unauditable, per-call-billed model should not compute what a rule computes. [#642](https://github.com/dd-jp/samurai-trading-system/issues/642) and [#513](https://github.com/dd-jp/samurai-trading-system/issues/513) apply the same reasoning to the Risk Manager's LLM critic, with the recorded direction being that the *"no LLM"* claims are the true ones.
+2. **It widens the surface [#683](https://github.com/dd-jp/samurai-trading-system/issues/683) exists to bound.** With the model off the analyst layer, the mediator is the only place a nondeterministic judgment enters the pipeline. A second one means the mandated falsifier control (arm 2 — same names, ladder and stop, entry by indicator alone, no LLM) bypasses two model-driven stages rather than one, making any lift the live arm shows harder to attribute. That control is now the primary benchmark per CLAUDE.md, [ADR-0014](../adr/0014-intraday-flat-by-close-horizon.md) amendment 2 and [ADR-0017](../adr/0017-validation-gates-paper-operational-thesis-expectancy.md).
+3. **Its target failure modes are already measured, quantitatively and reproducibly.** Overfitting, data snooping and trial inflation are what PBO/DSR and MinBTL compute. `docs/research/13-stage2-proxy-verdict.md` is the standing demonstration — a terminal KILL, with 12/24 configurations surviving on Sharpe and **not** surviving selection accounting. An advisory model flag reading "this looks overfit" adds nothing to a computed PBO of 0.85, and risks being taken as a second opinion when it is a weaker one.
+4. **Advisory-only flags on an unbuilt stage are this repo's dominant defect shape.** `invalidation` is specced and not built — the runtime chain is six stages, Trader → Risk. Flags nothing acts on, emitted by a stage nothing calls, is a mechanism that looks like a methodology guard and guards nothing.
+
+**What survives, and where it went.** The enumeration below — overfitting, look-ahead bias, data snooping, regime shift, crowding, structural break, cost illusion — is a fair account of how a strategy this size dies, and it is kept. It belongs as a **checklist applied when writing a `docs/research/NN-*.md`**, not as a runtime stage: it costs nothing, it is auditable, and it lands where these failures actually occur — in study design, not in a live tick. The existing research convention (pass bar declared before the result, declared trial count, declared OOS split) is the same instinct; this list extends it.
+
+**What would reopen this.** Not "the invalidation stage got built." The prior question is **what does a flag change?** Advisory-only means nothing acts on it, and a flag nobody acts on is documentation with a per-call bill. If the answer is that it should *block*, that is a different proposal that collides head-on with ground 1 — it would have to overturn the determinism ruling, not sidestep it.
 
 ---
 
-## Problem Statement (continued from `devils-advocate-spec.md`)
+## Problem Statement (continued from `devils-advocate-spec.md`) — *declined proposal, retained as record*
 
 The existing Devil's Advocate stage asks **"what would falsify this thesis?"** and emits machine-checkable conditions against live data. That layer is sound and the spec is complete.
 
