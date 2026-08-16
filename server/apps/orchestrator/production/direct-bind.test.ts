@@ -464,6 +464,7 @@ describe('buildTraderStep diagnostic escalation (#698, #710)', () => {
    * instant).
    */
   const BROKEN_STOCKS_CALENDAR: TradingCalendar = {
+    isOpen: () => true,
     isTradingDay: () => true,
     sessionStart: (instant: Date) => instant,
     sessionEnd: () => new Date(NOW.getTime() - 60 * 60 * 1_000),
