@@ -21,7 +21,13 @@ That is a suite comparing the implementation against itself.
 **This was measured, not asserted.** Mutating `ema`'s seed to the EWM-from-first-value convention
 that most JavaScript TA libraries use passes **all 32** pre-existing indicator and technical-analyst
 tests. Mutating `atr`'s Wilder recursion to an off-by-one passes the entire Trader suite —
-**219 tests green** while every stop distance in the system moves.
+**138 tests across 7 files, all green** — while every stop distance in the system moves.
+
+> The commit message for this change (`703fd04`) puts that second number at 219. That was the
+> combined indicator + technical-analyst + Trader count from a single `vitest` invocation, and it is
+> misleading as phrased: a reader takes 219 for the Trader suite's own size. Re-run isolated, the
+> Trader suite is 138. The finding is unchanged — the mutation is invisible to every one of them —
+> and the message is not rewritten because it is already pushed. This paragraph is the correction.
 
 ## Method
 

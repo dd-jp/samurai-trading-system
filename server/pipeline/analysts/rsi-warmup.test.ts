@@ -161,18 +161,42 @@ describe('the live RSI spec sits on the fabrication floor', () => {
     }
   });
 
-  it('and diverges from the plain mean as soon as the warm-up is widened', () => {
+  it('and diverges from that seed as soon as one more bar is given', () => {
     // The mirror of atr-equivalence's point 2: the equality above is a
     // property of the WIDTH, not of the algorithm. One extra bar switches
-    // Wilder's smoothing on.
-    const wider = rsiAt(200, RSI_SPEC.lookback + 1);
-    const plain = plainMeanRsi(closesEnding(200, RSI_SPEC.lookback + 1), PERIOD);
+    // Wilder's smoothing on for exactly one step.
+    //
+    // The comparison has to be against the seed `rsi` ACTUALLY takes, which is
+    // the LEADING `period + 1` closes of the wider window — not `plainMeanRsi`
+    // over the whole window, whose trailing-`period` slice is a different set
+    // of changes and would differ even between two identical algorithms.
+    for (const end of [120, 200, 340]) {
+      const window = closesEnding(end, RSI_SPEC.lookback + 1);
+      const seed = plainMeanRsi(window.slice(0, PERIOD + 1), PERIOD);
 
-    expect(Math.abs(wider - plain)).toBeGreaterThan(0.01);
+      // That seed is by construction the value the live spec returns one bar
+      // earlier, which is what makes the divergence below a smoothing step
+      // rather than a window shift.
+      expect(seed).toBeCloseTo(rsiAt(end - 1, RSI_SPEC.lookback), 8);
+      expect(Math.abs(rsiAt(end, RSI_SPEC.lookback + 1) - seed)).toBeGreaterThan(0.01);
+    }
   });
 
   it('leaves SMA_SPEC alone, because sma reads the trailing period and nothing else', () => {
-    expect(SMA_SPEC.lookback).toBe(minimumBarsFor(SMA_SPEC));
+    // `SMA_SPEC.lookback === minimumBarsFor(SMA_SPEC)` would be true for ANY
+    // lookback here and proves nothing: `params` is empty, so `periodOf` falls
+    // back to `spec.lookback` and `minimumBarsFor` returns it unchanged. The
+    // fact worth pinning is the one that makes that fallback safe — the period
+    // IS the lookback for `sma`, so there is no `+ 1` to get wrong and no
+    // seed-then-smooth split for a warm-up to change.
+    expect(SMA_SPEC.params.period).toBeUndefined();
+    expect(minimumBarsFor(SMA_SPEC)).toBe(SMA_SPEC.lookback);
+    // Same trailing 14 bars, two wildly different history lengths, identical
+    // answer — the property RSI does NOT have.
+    expect(computeIndicator(BARS.slice(386, 400), SMA_SPEC)).toBeCloseTo(
+      computeIndicator(BARS.slice(0, 400), { ...SMA_SPEC, lookback: 400, params: { period: 14 } }),
+      8,
+    );
   });
 });
 

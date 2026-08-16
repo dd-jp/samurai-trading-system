@@ -203,6 +203,16 @@ describe('ADR-0018 D5 deployment envelope', () => {
 
     expect(decision.status).toBe('rejected');
     expect(decision.binding_constraint).toBe('min_viable_size');
+
+    // This is the one assertion here whose expected outcome is a REJECTION, so
+    // it is the one that could go green for a reason other than D5 — a stale
+    // mark under `CLOCK`, an unknown daily P&L, a breaker. The control: the
+    // same intent under a wider envelope must be APPROVED and sized by the
+    // subclass gate. If anything upstream were rejecting, this would reject too.
+    const withRoom = decide(scaleIn, { '3USL': INDEX_CAP - 100 });
+    expect(withRoom.status).toBe('approved');
+    expect(withRoom.binding_constraint).toBe('per_subclass_deployment_cap');
+    expect(finalSizeOf(withRoom)).toBeCloseTo(100, 6);
   });
 
   it('leaves exposure in OTHER subclasses out of the netting', () => {
