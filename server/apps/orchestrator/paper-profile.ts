@@ -961,17 +961,16 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
     >
   > {
   const caps = riskCapsFor(equityAnchorUsd);
-  // ADR-0018 D5. Built from `DEFAULT_UNIVERSE`, which is also what this profile
-  // returns as `universe` below — so today the classification the gate resolves
-  // against and the instruments the run ticks are the same list.
+  // ADR-0018 D5. The gate's classification and the list the run actually ticks
+  // MUST be the same universe: a cap keyed to one list while another is traded
+  // sizes unclassified names with no envelope, or throws on every entry.
   //
-  // That is a shared reference, not an enforced invariant: a caller that
-  // overrides `universe` downstream of this profile would leave the gate keyed
-  // to the old one, and the failure would be quiet in the safe direction only
-  // by luck. Deriving both from one local rather than naming the constant twice
-  // is the reason it holds at all; if `universe` ever becomes a parameter here,
-  // it has to feed this call too.
-  const subclassCap = d5EnvelopeFor(DEFAULT_UNIVERSE, equityAnchorUsd);
+  // Naming `DEFAULT_UNIVERSE` twice — once here and once at the `universe` field
+  // below — made that a convention held by matching identifiers. One local, read
+  // by both, makes it hold by construction, so if this ever takes the universe
+  // as a parameter the gate follows it without anyone remembering to look.
+  const universe = DEFAULT_UNIVERSE;
+  const subclassCap = d5EnvelopeFor(universe, equityAnchorUsd);
 
   const traderConfig: TraderConfig = {
     // SPEC — `DEFAULT_TRADER_CONFIG` (server/pipeline/trader/types.ts) is the one set of

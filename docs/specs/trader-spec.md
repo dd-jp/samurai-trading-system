@@ -2,7 +2,7 @@
 
 **Status:** Draft (resolved wayfinder decisions synthesized)  
 **Owner:** David (Deepak)  
-**Date:** 2026-07-13
+**Date:** 2026-07-13, last amended 2026-08-16
 
 **2026-08-16 — the four items this spec listed as "pending re-specification" are now decided, and the banner announcing them is deleted rather than extended.** A banner that says the body below is wrong leaves the body wrong; each item is resolved here in the body, at the section it affects.
 

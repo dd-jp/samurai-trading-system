@@ -228,6 +228,8 @@ Pool size is a config value so widening is a later dial. Nothing above the pool 
 
 **Check the pool count in the first commit, because it may make the ranking machinery pointless.** Index ETPs and commodity ETCs alone is roughly **12–15 underlyings**, at which "shortlist 5–10 from the pool" is close to a rename and the sort is nearly the identity. Adding 3× single-stock ETPs — which ADR-0018 D3 already prices as a subclass — takes it to roughly **40–80**, where ranking earns its keep. **If the pool lands under ~25 rows, ship without the ranking and trade the whole pool**, and record that as the reason rather than building a selector that selects nothing.
 
+**"Trade the whole pool" does not lift the active-list cap.** The 5–10 watchlist size is not a property of the ranking — it is the **tick budget**, set by τ = 2 min against the instrument-pass cost, and it binds whatever produced the list. A 20-row pool shipped "unranked" is 20 instrument-passes every two minutes, which is the spend the cap exists to bound. So the fallback is precisely: *skip the ranking step, take the first N of the pool in its checked-in order, N = the same configured cap.* That is a deterministic, documented arbitrary choice rather than a hidden budget breach — and if it feels unsatisfying, that is the correct signal that the pool was large enough to rank after all.
+
 **`InstrumentRegistry` is not reused.** The port at `server/tools/backtest/universe.ts` answers a different question — `membershipDuring(window)` is *point-in-time* membership for survivorship-free backtesting, paired with `SurvivorshipViolationError`. The live pool is a present-tense list with no window and no survivorship assertion. Reusing the port would force a fake window argument and inherit a guard that means nothing here.
 
 ### The active list and rotation (#399)
@@ -242,7 +244,7 @@ Pool size is a config value so widening is a later dial. Nothing above the pool 
 
 #### Cadence — stated explicitly, because the spec left it implicit *(2026-08-16)*
 
-The screener runs **once per trading day, out of session, at 22:15 London, on completed US daily and intraday bars.** The US close is 21:00 London, so by 22:15 every bar the screener reads is final — which is what makes the completed-bars-only idempotence requirement above achievable rather than aspirational. The list it produces is consumed by the **next** session, whose entry window opens at 14:30 — about sixteen hours later.
+The screener runs **once per trading day, out of session, at 22:15 London, on completed US intraday bars.** The US close is 21:00 London, so by 22:15 every bar the screener reads is final — which is what makes the completed-bars-only idempotence requirement above achievable rather than aspirational. The list it produces is consumed by the **next** session, whose entry window opens at 14:30 — about sixteen hours later.
 
 Three consequences the implementation ticket must carry rather than discover:
 

@@ -287,6 +287,31 @@ describe('ADR-0018 D5 deployment envelope', () => {
     expect(decision.binding_constraint).toBe('min_viable_size');
   });
 
+  it('lets the forced flatten out of a subclass the cap record does not carry', () => {
+    // The sharpest edge on the throw above. ADR-0014's flat-by-close reaches
+    // this stage as an `exit`, and risk-manager-spec's invariant is that no
+    // gate may block it — a suppressed flatten holds a position overnight.
+    //
+    // The throw is on the ENTRY-gate path, which `evaluate` returns before
+    // reaching for an exit. That ordering is the whole safety argument, and it
+    // is one refactor away from being wrong: hoisting the cap lookup above the
+    // exit branch would turn a config hole into an un-exitable position, and
+    // every other test here would still pass. This is the one that would fail.
+    const holed = {
+      subclass_of: SUBCLASS_OF,
+      cap: { single_stock_etp_3x: SINGLE_STOCK_CAP, crypto: null },
+    } as unknown as SubclassDeploymentCap;
+    const flatten = { ...intentFor('3USL', 10_000), intent_type: 'exit' as const };
+
+    const decision = decide(flatten, { '3USL': INDEX_CAP }, holed);
+
+    expect(decision.status).toBe('approved');
+    expect(decision.binding_constraint).toBeNull();
+    // Sized at the full residual: an exit trimmed to an envelope is a partial
+    // flatten, which leaves the overnight position the invariant forbids.
+    expect(finalSizeOf(decision)).toBe(10_000);
+  });
+
   it('is not a Feedback Loop dial', () => {
     // D5 binds regardless of signal quality. A dial would let the loop widen
     // the envelope in exactly the run where it had learned to be confident.

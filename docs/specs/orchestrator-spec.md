@@ -22,8 +22,11 @@ The Orchestrator is a **single TypeScript process** (ADR-0001: TS core, no LangG
 ```
 every tick (τ = 2 min):   mark → bracket → early-exit check → flatten check
 every new debate bar:     Signal → Analysts.run → DebateEngine.run → Trader.decide
-                          → Risk.evaluate → Verdict.decide → (on go) Execution.execute
+                          → [Invalidation] → Risk.evaluate → Verdict.decide
+                          → (on go) Execution.execute
 ```
+
+*(`[Invalidation]` is bracketed: **specced and not built**. See "The tick/decision split" below, which carries the full status note — this diagram and that one are the same chain and must not drift apart.)*
 - A **trace ID**, generated at Signal emission, threads through every stage call in that pass and appears on every structured log line.
 - The Orchestrator injects the **`Clock`** every stage reads (wall-clock live; the cost-model/backtest harness's simulated clock in replay — same tick-loop code, different injected clock/adapters, mirroring Execution's live/paper/backtest discipline).
 - It writes to a new `audit_log` table in the shared SQLite store (one row per stage-decision per trace_id) and emits a dead-man's-switch heartbeat over the trade channel Verdict already provisions.
@@ -207,6 +210,15 @@ interface TickOutcome {
   // tau=2min against a 60-minute bar. It must be distinguishable in the logs
   // from a decision pass that declined to trade, or a healthy exit-only tick
   // reads as a no-trade decision and the trade count looks wrong.
+  //
+  // No `'invalidation'` member, deliberately, even though the decision-path
+  // diagram above carries `[Invalidation]`. The diagram states the pipeline's
+  // shape; this enum is the set of stages a pass can actually terminate in, and
+  // an unbuilt stage can terminate nothing. Adding the member now would put a
+  // value in the type that no code can ever emit and that every exhaustive
+  // switch would have to handle with a dead branch — the no-caller shape this
+  // codebase keeps shipping. It is added in the same change that wires the
+  // stage, not before.
   final_stage: 'position_check' | 'analysts' | 'debate' | 'trader' | 'risk' | 'verdict' | 'execution';
   verdict_status?: 'go' | 'no_go';
   execution_result?: ExecutionResult;   // from execution-spec, only if go

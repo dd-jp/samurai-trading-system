@@ -80,8 +80,21 @@ jobs:
       - name: Indicator golden fixture is generated, not hand-edited
         if: ${{ !cancelled() }}
         run: |
+          FIXTURE=server/providers/market-data-service/__fixtures__/indicator-golden.json
           python3 server/providers/market-data-service/__fixtures__/generate-indicator-golden.py
-          git diff --exit-code -- server/providers/market-data-service/__fixtures__/indicator-golden.json
+          # `git diff` alone would NOT catch the worst case. It only sees tracked
+          # modifications, so if the fixture were ever dropped from a commit the
+          # generator would recreate it UNTRACKED and a diff check would pass on
+          # a repo that does not contain the file at all. `git status --porcelain`
+          # reports untracked (`??`) and modified alike, so any non-empty output
+          # is a failure.
+          STATUS="$(git status --porcelain -- "$FIXTURE")"
+          if [ -n "$STATUS" ]; then
+            echo "::error::$FIXTURE is not what the generator produces:"
+            echo "$STATUS"
+            git diff -- "$FIXTURE" | head -50
+            exit 1
+          fi
 
   # The dashboard's browser suite (#544). Its own job because it needs a
   # browser download and several minutes of wall clock, and because a UI
