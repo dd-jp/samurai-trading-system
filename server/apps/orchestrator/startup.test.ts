@@ -64,9 +64,44 @@ const offlineGdeltClient = new GdeltGkgClient({
  */
 const realFetch = globalThis.fetch;
 let reachedGdelt: string | undefined;
+/** Hosts this file tried to reach that nothing here accounts for (#701). */
+const escapedToNetwork = new Set<string>();
+
+/**
+ * Alpaca's canned refusal, served without leaving the process (#701).
+ *
+ * The status is the one the venue returns for an unauthenticated request, so
+ * reconcile takes the same path it takes in production with a wrong key. That
+ * matters because a real 401 is indistinguishable from a fence: if a VALID key
+ * ever reached CI, these tests would stop being refused and start reading a
+ * live account, and nothing in the suite would look different.
+ *
+ * A real `Response` rather than a cast literal, so touching `headers`,
+ * `clone()` or `arrayBuffer()` behaves instead of throwing an opaque TypeError
+ * far from the cause.
+ */
+function alpacaUnauthorized(): Response {
+  return new Response('{"message":"unauthorized"}', {
+    status: 401,
+    statusText: 'Unauthorized',
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
+/** Host of `url`, or `''` when it will not parse — never the full URL (#701). */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return '';
+  }
+}
 
 beforeAll(() => {
-  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+  // `init` is deliberately absent: there is no longer any path that forwards a
+  // request onward, so nothing here has anything to forward it WITH. The unused
+  // parameter was the last trace of the pass-through this fence replaced.
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
     // Each shape read explicitly: `String(new Request(url))` is the useless
     // '[object Request]', which contains no host and would walk straight past
     // this fence. A backstop that a caller can route around by passing a
@@ -87,7 +122,34 @@ beforeAll(() => {
       reachedGdelt = url;
       throw new Error('offline: the test suite must not reach GDELT');
     }
-    return realFetch(input, init);
+    // Alpaca is ANSWERED rather than recorded as an escape. Unlike the GDELT
+    // case this is not a forgotten stub: startup's reconcile is supposed to ask
+    // the broker, and the assertions below depend on it having asked. What must
+    // not happen is the asking leaving the machine.
+    //
+    // Matched on the HOST, never `url.includes('alpaca.markets')`. A substring
+    // test also matches the string appearing in some other host's path or query
+    // — which would hand that host a canned 401 and record no escape, the exact
+    // false-green accounting this fence exists to prevent. The GDELT branch
+    // above keeps its substring test on purpose: it RECORDS and throws, so its
+    // false positive is loud, where this branch's would be silent.
+    const host = hostOf(url);
+    if (host === 'alpaca.markets' || host.endsWith('.alpaca.markets')) {
+      return alpacaUnauthorized();
+    }
+
+    // Default DENY, which is the change #701 is really asking for. This used to
+    // be `return realFetch(input, init)` — an allow-list of two hosts with the
+    // whole internet behind it, so a new vendor client added to startup would
+    // silently begin making live calls from a unit suite and every gate would
+    // stay green. Recorded rather than only thrown, for the reason the GDELT
+    // branch is: a caller that swallows rejections would otherwise hide it.
+    //
+    // Host only, in the record AND in the message. Market-data vendors commonly
+    // put the API key in the query string, and this error goes to CI logs.
+    const escaped = host === '' ? '<unparseable URL>' : host;
+    escapedToNetwork.add(escaped);
+    throw new Error(`offline: the test suite must not reach ${escaped}`);
   }) as typeof fetch;
 });
 
@@ -97,6 +159,13 @@ afterAll(() => {
     throw new Error(
       `startup.test.ts reached ${reachedGdelt} — a startFromEnvironment call is missing ` +
         '`gdeltClient: offlineGdeltClient`.',
+    );
+  }
+  if (escapedToNetwork.size > 0) {
+    throw new Error(
+      `startup.test.ts tried to reach ${[...escapedToNetwork].join(', ')} — a unit suite must ` +
+        'not depend on a third party being reachable. Stub the client, or answer the host in ' +
+        'the fence above the way Alpaca is answered (#701).',
     );
   }
 });
