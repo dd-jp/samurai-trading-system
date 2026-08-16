@@ -168,3 +168,61 @@ Seven same-day issues are deliberately **not** covered and are not oversights: #
 ### What this addendum still does not claim
 
 The 22 issues re-affirmed as a class were judged on subject, not read line by line. That is the right depth for test flakes and shim removals and the wrong depth if one of them turns out to encode a spec assumption — the failure this repo has already paid for under *"ticket bodies go stale."* The specific residual risk: **#513** (Risk Critic has no producer) and **#642** (the spec claims "no LLM" while specifying a binding LLM critic) are the same contradiction seen from two ends, and #642 already has a resolution direction from the first pass while #513 does not. They should be resolved together, and whichever is worked first should close the other rather than both being answered independently.
+
+---
+
+## Third addendum — 2026-08-17: the 22 read individually, and a wayfinder sweep
+
+The second addendum re-affirmed 22 issues **as a class**, on subject rather than line by line, and named that as its residual risk. This run reads them. It also answers a separate question — which open wayfinder issues the amended specs and ADRs can now close.
+
+**The residual risk was real.** Reading the bucket produced the largest finding of any triage run so far, and it was invisible from every ticket title in it.
+
+### The finding: an accepted ADR's decision was never implemented, and its precondition ticket was hiding it
+
+[#639](https://github.com/dd-jp/samurai-trading-system/issues/639) was filed as *"split breach alerting from the approval channel **before ADR-0013 removes the loosen gate**."* Verified in code:
+
+- **The split shipped.** `feedback-loop/types.ts` exports `BreachAlertChannel` and `LoosenApprovalChannel` as distinct ports with distinct adapters. #639's own work is **done** — closed as delivered.
+- **The removal never happened.** `daily-cycle.ts` still computes `const gate = isThreshold && mode !== 'backtest'`, so paper and live still queue every proposed risk-threshold loosening for approval. Nothing polls Telegram for replies (`getUpdates` is single-consumer per bot token; `alert-transport.ts` never calls `client.start()`), so `requestLoosenApproval` is a one-way push returning `void`. `loosen-approval-channel.ts` documents it plainly: *"a loosening nobody answers is never applied… Paper and live are gated."*
+
+[ADR-0013](../adr/0013-no-human-gate-anywhere.md) is **Accepted** and rejected precisely this state, in these words: *"a queue that nobody drains is not a control — it is a permanently-stuck dial that reads as governed."* That sentence describes the running system.
+
+**Consequence for the soak:** every loosening the Feedback Loop proposes is silently declined for the whole run, so thresholds ratchet one way only. A soak reporting "the Feedback Loop ran" would be measuring a different mechanism — the same class of problem already recorded for three other learning layers.
+
+Filed as **[#736](https://github.com/dd-jp/samurai-trading-system/issues/736)**, with the dependency stated: [#638](https://github.com/dd-jp/samurai-trading-system/issues/638)'s in-code clamps must land first or with it, since ADR-0013 line 73 calls them *"a precondition of this ADR being safe, not a tidiness item."* Removing the gate while the bounds are unclamped config removes control and backstop in one change.
+
+**The generalisable lesson, which is why this went unseen:** a ticket framed *"do X before Y"* leaves Y with no ticket at all. When X ships, X's ticket closes and Y becomes invisible — there was never a row for it. **File Y at the same time as X, or the precondition ticket becomes the only evidence Y was ever wanted.**
+
+### The recurring shape
+
+Three unrelated findings this week are the same defect wearing different clothes, and it is worth naming as a class rather than fixing three times:
+
+| # | Looks like | Actually |
+| --- | --- | --- |
+| [#736](https://github.com/dd-jp/samurai-trading-system/issues/736) | a governed risk dial | a queue nobody can drain |
+| [#513](https://github.com/dd-jp/samurai-trading-system/issues/513) | an 8-step check pipeline | step 7 has no producer |
+| [#567](https://github.com/dd-jp/samurai-trading-system/issues/567) | a passing review gate | reports `pass` having produced no review |
+
+All three read as enforced and enforce nothing. #567 is the one with retroactive cost: a batch of PRs merged on a green check that cannot distinguish *reviewed and clean* from *never reviewed*, with no way to identify which after the fact.
+
+### Verdicts on the rest of the bucket
+
+- **[#289](https://github.com/dd-jp/samurai-trading-system/issues/289) — split it.** Its two items moved opposite ways. H10 (`CcxtDataSource` fetch widening) is **dead** — ccxt serves crypto, now out of scope. H8 (`computePortfolioView` fetches marks per instrument) is **promoted and no longer about performance**: `exposure_by_instrument` is `filled_size × mark`, which feeds `perSubclassDeploymentCap`, which per #721 binds on notional against a fraction of current equity — so a stale or partially-failed mark read **mis-sizes a cap on a live-money path**, at τ=2min across 5–10 names. Read with #734 and #562: all three are the same surface.
+- **[#637](https://github.com/dd-jp/samurai-trading-system/issues/637) — promoted; it gates #720.** A candidate-strategy feed spends trials, and the cap it would spend against is computed from a hardcoded `E[SR] = 1.0` where the measured value is 0.71 — **807 trials versus 48**. Resolve before #720 declares a trial count. Noted also that 0.71 is doc 10's figure and doc 10 is superseded on horizon, so neither candidate is this system's Sharpe; whichever is chosen should be recorded as a stand-in rather than a measurement.
+- **[#522](https://github.com/dd-jp/samurai-trading-system/issues/522) — promoted in principle, but its target instrument is wrong.** Nobody tweets about 3USL. #552 measured the analogous hole on the news side (0 items for 3USL/3LDE/SGLN). Retrieval must key on the **US underlying**, not the `lse_ticker` — the third appearance of the same decoupling (screening, volume indicators, now sentiment), which argues for recording it once as a general rule. Sequencing: measure GDELT's delivered coverage first, since X needs an ADR-0009 exception and a paid key while GDELT is landing and free.
+- **[#567](https://github.com/dd-jp/samurai-trading-system/issues/567) — promoted** from CI hygiene to merge-gate integrity, per the table above. Minimum fix is one bit: a review the model did not produce must report `fail` or `neutral`, never `pass`.
+- **[#644](https://github.com/dd-jp/samurai-trading-system/issues/644) — valid, but the work starts with a re-derivation.** Its six findings were measured against spec text that two rewrites have since replaced. A batch ticket naming six items reads as exhaustive, so closing it closes the category — including drift the rewrites themselves introduced.
+- **[#513](https://github.com/dd-jp/samurai-trading-system/issues/513) — cross-linked to #642, resolve together.** Same contradiction from two ends; resolved independently, one builds the producer while the other deletes the spec lines describing it, and both look right in isolation.
+- **[#589](https://github.com/dd-jp/samurai-trading-system/issues/589) — its deciding question is largely answered.** With ADR-0013 removing every human gate, the dashboard is observability and not control, so no action waits on it being reachable; and alerting already reaches a phone independently. The co-located route is very likely the answer, with auth still required regardless of topology.
+- **Re-affirmed without change (12):** #559, #609, #610, #624, #630, #685, #688, #689, #702, #713, #714, and #718's spec sibling work. These are flakes, silent-catch follow-ups, fixture reproducibility, a shim removal, and research-script corrections. Each was read; none has a spec surface the amendments touch. **#609 is the one to watch** — discarding journal-write and broker failures on a fill sweep is silent failure on the money path, and it sits in the same class as the table above.
+
+### Wayfinder sweep: what the amended record can and cannot close
+
+Asked directly whether any open wayfinder issue is now closable on the new specs and ADRs. **One is half-closed, one should probably close, and the rest are not.**
+
+- **[#636](https://github.com/dd-jp/samurai-trading-system/issues/636) — question 1 settled, question 2 wide open. Re-scoped, not closed.** *What must the system beat* is answered and one candidate is withdrawn: doc 10's always-long-basket benchmark is superseded on horizon, and CLAUDE.md, ADR-0014 amendment 2 and ADR-0017 now consistently name **falsifier arm 2** (same names, ladder, stop; entry by indicator alone, no LLM) as the primary matched control, with outside benchmarks reported return-and-drawdown-together. The CLAUDE.md *"vs buy-and-hold"* line this ticket flagged has been corrected. **But *who computes it* is untouched:** re-measured today, `benchmark` appears **0 times** in `cost-model-backtest-spec.md` and `feedback-loop-spec.md`. The record now asserts a control that no spec produces — worse than when the ticket was filed. `analysts-spec.md:163` makes the producer nearly free (the control arm is the analyst layer's own output thresholded), so the open work is ownership and emission, not computation.
+- **[#718](https://github.com/dd-jp/samurai-trading-system/issues/718) — recommend close or re-grill.** It proposes an LLM call at `invalidation` — a third model-driven stage — which is the direction the amendments just reversed for analysts and are reversing for the Risk Critic. It also widens the surface #683 exists to bound, and its target failure modes (overfitting, data snooping, trial inflation) are already measured quantitatively by PBO/DSR and MinBTL, where #637 is the real open defect. The enumeration is good and belongs as a **checklist against research write-ups**, not as a runtime stage. Not closed unilaterally — Rule 1 makes a map David's call.
+- **Not closable, and why:** #513 and #522 need decisions the record does not contain; #665 and #666 are external inputs; #683, #684, #722 and #729 are open defects or unmet measurements; #707 and #708 are method-locked with execution pending; #719/#720 are active with the trial-budget cost now recorded; #655's recommendation to close was already filed for David's call in the first pass.
+
+### Coverage of this run
+
+All 48 open issues now carry an individual verdict across the three passes. Two caveats, stated rather than buried: verdicts rest on ticket bodies plus targeted code checks, not a full re-read of every cited file; and #736 was filed *by* this run, so it has never been triaged by anything but itself.
