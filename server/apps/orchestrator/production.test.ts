@@ -44,6 +44,7 @@ import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/
 import { paperStartingProfile } from './paper-profile.js';
 import { MIN_RETURN_OBSERVATIONS } from './production/daily-equity-metrics-source.js';
 import { buildPersistence } from './production/direct-bind.js';
+import { MIN_TICKS_INSIDE_FLATTEN_WINDOW } from './production/flatten-tick-coupling.js';
 import {
   buildAlpacaDataSource,
   buildDefaultLlmClient,
@@ -1669,6 +1670,14 @@ describe('buildProductionOrchestrator', () => {
       tickIntervalMs: 48 * 60 * 60 * 1_000,
       heartbeatIntervalMs: 48 * 60 * 60 * 1_000,
       fillPollIntervalMs: NO_FILL_POLL_MS,
+      // Parked alongside the tick, for the reason QUIET_FLATTEN_WINDOW below
+      // gives (#670): a 48-hour tick can never land inside a 5-minute flatten
+      // window, and the boot assertion says so rather than letting the config
+      // claim a flat-by-close rule it cannot enforce.
+      traderConfig: {
+        ...DEFAULT_TRADER_CONFIG,
+        flatten_before_close_ms: MIN_TICKS_INSIDE_FLATTEN_WINDOW * 48 * 60 * 60 * 1_000,
+      },
     });
     const orchestrator = buildProductionOrchestrator(config);
 
@@ -1751,6 +1760,21 @@ describe('buildProductionOrchestrator', () => {
     const QUIET = 48 * 60 * 60 * 1_000;
 
     /**
+     * The flatten window has to be parked alongside the tick (#670), or
+     * `assertFlattenWindowCoversTickInterval` refuses the boot before any of
+     * these cases run.
+     *
+     * That refusal is CORRECT and not something to route around: flat-by-close
+     * is evaluated on a tick, so a 48-hour tick against the profile's 5-minute
+     * window is a config in which nothing would ever flatten. These cases park
+     * the tick because they are about feedback-cycle wiring and want the timers
+     * out of the way — so the honest expression of that intent is to park the
+     * window too, rather than to leave a config asserting something about
+     * flattening that the tick rate cannot deliver.
+     */
+    const QUIET_FLATTEN_WINDOW = MIN_TICKS_INSIDE_FLATTEN_WINDOW * QUIET;
+
+    /**
      * Returns the logger alongside the config rather than making each caller
      * dig it back out of `config.logger` behind a cast — the recording type is
      * the thing every case here asserts on.
@@ -1774,6 +1798,10 @@ describe('buildProductionOrchestrator', () => {
         logger,
         tickIntervalMs: QUIET,
         heartbeatIntervalMs: QUIET,
+        traderConfig: {
+          ...paperStartingProfile('paper').traderConfig,
+          flatten_before_close_ms: QUIET_FLATTEN_WINDOW,
+        },
         // #528: none of these cases exercise fill-sync — see NO_FILL_POLL_MS.
         fillPollIntervalMs: NO_FILL_POLL_MS,
         ...overrides,
