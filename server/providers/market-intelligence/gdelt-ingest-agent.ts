@@ -161,8 +161,6 @@ export class GdeltIngestAgent {
   }
 
   private async poll(trace_id: string): Promise<boolean> {
-    const now = this.deps.clock.now();
-
     let batch: GdeltGkgBatch;
     try {
       const url = await this.deps.client.latestBatchUrl();
@@ -230,6 +228,13 @@ export class GdeltIngestAgent {
       return false;
     }
 
+    // Read AFTER the download, not at the top of the poll. `ingested_at` is the
+    // visibility gate replay filters on (`0001_mi_archive.sql`), so it has to be
+    // when we actually held the bytes. A stamp taken before a fetch that this
+    // module's own docs say can stall for up to 90 seconds would assert we knew
+    // the news that much earlier than we did — small, but it is lookahead, and
+    // it points the one direction that flatters a backtest.
+    const now = this.deps.clock.now();
     const raws: RawArchiveRow[] = batch.records.map((record) => ({
       source: SOURCE_GDELT,
       native_id: record.native_id,

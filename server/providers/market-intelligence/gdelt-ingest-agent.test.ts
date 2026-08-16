@@ -361,6 +361,35 @@ describe('GdeltIngestAgent', () => {
     archive.close();
   });
 
+  it('stamps ingested_at after the download, not before it', async () => {
+    // `ingested_at` is the visibility gate replay filters on. Stamping it at the
+    // top of the poll would claim we held the bytes before the (up to 90-second)
+    // download finished — lookahead, in the direction that flatters a backtest.
+    const archive = new MiArchiveStore();
+    let ticks = 0;
+    const advancing: Clock = {
+      now: () => {
+        ticks += 1;
+        return new Date(NOW.getTime() + ticks * 60_000);
+      },
+    };
+    const client = stubClient({});
+    client.fetchBatch.mockImplementation(async () => {
+      // A slow download: the clock moves while it runs.
+      advancing.now();
+      return batch([record()]);
+    });
+    const agent = new GdeltIngestAgent({ archive, client, clock: advancing });
+
+    await agent.refresh();
+
+    const row = archive.rawRows(SOURCE_GDELT)[0];
+    // Strictly after the reading taken during the download, so it cannot have
+    // been captured before the fetch began.
+    expect(row?.ingested_at.getTime()).toBeGreaterThan(NOW.getTime() + 60_000);
+    archive.close();
+  });
+
   it('abandons a poll whose batch URL carries no timestamp, without fetching', async () => {
     const archive = new MiArchiveStore();
     const logger = collectingLogger();

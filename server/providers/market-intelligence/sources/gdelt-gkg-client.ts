@@ -277,6 +277,16 @@ function unzipFirstEntry(buffer: Buffer): string {
         'GdeltGkgClient: stored zip entry declares no compressed size (streamed data descriptor).',
       );
     }
+    // `subarray` CLAMPS rather than throwing, so a truncated download would
+    // yield a short CSV that `parseBatch` reads as a complete batch with rows
+    // silently missing — the one failure mode worse than an error here, because
+    // a batch is allowed to be small and nothing downstream could tell.
+    if (compressedSize > body.length) {
+      throw new Error(
+        `GdeltGkgClient: stored zip entry declares ${compressedSize} bytes but only ` +
+          `${body.length} remain — the archive is truncated.`,
+      );
+    }
     inflated = body.subarray(0, compressedSize);
   } else {
     throw new Error(
@@ -351,7 +361,12 @@ export class GdeltGkgClient {
           'refusing to download a batch from a host we did not configure.',
       );
     }
-    return `${base.protocol}//${base.host}${named.pathname}${named.search}`;
+    // The query string is dropped, not carried. `batchTimeFromUrl` anchors its
+    // stamp on `.gkg.csv.zip$`, so preserving a `?` would produce a URL this
+    // module pins happily and then cannot stamp — the two methods have to agree
+    // on what a batch URL looks like. GDELT's batch URLs carry no query, so
+    // there is nothing real to lose.
+    return `${base.protocol}//${base.host}${named.pathname}`;
   }
 
   /** Downloads, inflates, parses and theme-filters one batch file. */

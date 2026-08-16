@@ -202,6 +202,15 @@ import type { Logger } from './types.js';
  * Two rows: one carrying a watched theme, one not, so the run's archived count
  * is 1 and a filter that has stopped filtering shows up as 2.
  */
+/**
+ * How many of `smokeGdeltClient`'s canned rows the theme filter should keep.
+ *
+ * Named because the gate below and the fixture above are the same fact stated
+ * twice: edit the fixture to carry three rows and a hardcoded `1` in the gate
+ * turns a correct run red, or worse, keeps passing for the wrong reason.
+ */
+const SMOKE_GDELT_EXPECTED_ROWS = 1;
+
 function smokeGdeltClient(): GdeltGkgClient {
   const stamp = '20260101120000';
   const url = `http://data.gdeltproject.org/gdeltv2/${stamp}.gkg.csv.zip`;
@@ -2252,9 +2261,10 @@ export function evaluateSmokeGate(
   // means the poller never fired from the composition root (the no-caller
   // defect this repo keeps producing), and 2 means the theme filter stopped
   // filtering and the archive is taking the whole world's news.
-  if (observations.gdeltRowsArchived !== 1) {
+  if (observations.gdeltRowsArchived !== SMOKE_GDELT_EXPECTED_ROWS) {
     failures.push(
-      `GDELT archived ${observations.gdeltRowsArchived} macro rows, expected exactly 1 — ` +
+      `GDELT archived ${observations.gdeltRowsArchived} macro rows, expected exactly ` +
+        `${SMOKE_GDELT_EXPECTED_ROWS} — ` +
         '0 means the poller never ran from the composition root, 2 means the theme filter ' +
         'matched both canned rows and is no longer filtering (#556)',
     );

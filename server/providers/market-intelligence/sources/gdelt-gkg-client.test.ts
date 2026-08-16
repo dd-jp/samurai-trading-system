@@ -156,6 +156,23 @@ describe('GdeltGkgClient — lastupdate.txt', () => {
     for (const init of inits) expect(init?.redirect).toBe('error');
   });
 
+  it('drops a query string, so the pin and the stamp parser agree on a batch URL', async () => {
+    // Only reachable through `fetchBatch` directly — `latestBatchUrl` selects on
+    // a `.gkg.csv.zip` suffix, so a query URL never survives that path. But the
+    // method is public and documents that it re-pins for exactly this reason,
+    // and `batchTimeFromUrl` anchors its stamp on `.gkg.csv.zip$`: carrying the
+    // query through would give a URL the pin accepts and the stamp parser then
+    // rejects, which the ingest agent reads as vendor URL drift and abandons.
+    const client = new GdeltGkgClient({
+      fetchImpl: stubFetch({ lastupdate: LASTUPDATE, archive: zipOf(STOCK_ROW) }),
+    });
+
+    const result = await client.fetchBatch(`${BATCH_URL}?utm=1`);
+
+    expect(result.file_url).toBe(BATCH_URL);
+    expect(result.batch_time.toISOString()).toBe('2026-08-15T15:30:00.000Z');
+  });
+
   it('refuses a batch URL on a foreign host even when handed one directly', async () => {
     const client = new GdeltGkgClient({ fetchImpl: stubFetch({ lastupdate: LASTUPDATE }) });
 
@@ -279,6 +296,29 @@ describe('GdeltGkgClient — batch decoding', () => {
     // The point of checking the header at all: the post-allocation ceiling
     // already existed, and by the time it fires the body is in memory.
     expect(readBody).not.toHaveBeenCalled();
+  });
+
+  it('refuses a truncated stored entry rather than clamping it to a short batch', async () => {
+    // `subarray` clamps silently, so a truncated download would parse as a
+    // complete batch with rows missing — and a small batch is legal, so nothing
+    // downstream could tell the difference.
+    const body = deflateRawSync(Buffer.from(STOCK_ROW));
+    const name = Buffer.from('20260815153000.gkg.csv');
+    const header = Buffer.alloc(30);
+    header.writeUInt32LE(0x04034b50, 0);
+    header.writeUInt16LE(20, 4);
+    header.writeUInt16LE(0, 8); // stored
+    header.writeUInt32LE(body.length + 5_000, 18); // declares more than is present
+    header.writeUInt16LE(name.length, 26);
+    header.writeUInt16LE(0, 28);
+    const client = new GdeltGkgClient({
+      fetchImpl: stubFetch({
+        lastupdate: LASTUPDATE,
+        archive: Buffer.concat([header, name, body]),
+      }),
+    });
+
+    await expect(client.fetchBatch(BATCH_URL)).rejects.toThrow(/truncated/);
   });
 
   it('refuses a response that is not a zip at all', async () => {

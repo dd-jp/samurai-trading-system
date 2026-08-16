@@ -67,7 +67,18 @@ let reachedGdelt: string | undefined;
 
 beforeAll(() => {
   globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-    const url = String(input);
+    // Each shape read explicitly: `String(new Request(url))` is the useless
+    // '[object Request]', which contains no host and would walk straight past
+    // this fence. A backstop that a caller can route around by passing a
+    // different-but-equivalent argument type is not a backstop.
+    const url =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input instanceof Request
+            ? input.url
+            : String(input);
     if (url.includes('gdeltproject.org')) {
       // Recorded, not thrown. Throwing here proves nothing: the poll is fired
       // as `void refresh(...)` and `refresh` never throws by contract, so the
