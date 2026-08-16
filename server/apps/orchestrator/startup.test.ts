@@ -70,29 +70,31 @@ const escapedToNetwork = new Set<string>();
 /**
  * Alpaca's canned refusal, served without leaving the process (#701).
  *
- * Startup runs the execution reconcile and reconcile calls the real broker, so
- * every `startFromEnvironment` here was making a genuine round trip to
- * `paper-api.alpaca.markets` — DNS, TLS, HTTP — and getting a 401 back. Twelve
- * call sites, twelve round trips, on every run of this file.
+ * The status is the one the venue returns for an unauthenticated request, so
+ * reconcile takes the same path it takes in production with a wrong key. That
+ * matters because a real 401 is indistinguishable from a fence: if a VALID key
+ * ever reached CI, these tests would stop being refused and start reading a
+ * live account, and nothing in the suite would look different.
  *
- * Speed is the least of it. The real hazard is that a 401 is indistinguishable
- * from a fence: if a VALID Alpaca key ever reaches CI, these tests stop being
- * refused and start reading a live account's positions, and nothing in the
- * suite would look any different. Serving the 401 locally means the assertions
- * see exactly what they saw before while the credential can no longer matter.
- *
- * The status is the one the venue actually returns for an unauthenticated
- * request, so the reconcile path under test is the same one production takes
- * when its key is wrong.
+ * A real `Response` rather than a cast literal, so touching `headers`,
+ * `clone()` or `arrayBuffer()` behaves instead of throwing an opaque TypeError
+ * far from the cause.
  */
 function alpacaUnauthorized(): Response {
-  return {
-    ok: false,
+  return new Response('{"message":"unauthorized"}', {
     status: 401,
     statusText: 'Unauthorized',
-    json: async () => ({ message: 'unauthorized' }),
-    text: async () => '{"message":"unauthorized"}',
-  } as Response;
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
+/** Host of `url`, or `''` when it will not parse — never the full URL (#701). */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return '';
+  }
 }
 
 beforeAll(() => {
@@ -124,7 +126,17 @@ beforeAll(() => {
     // case this is not a forgotten stub: startup's reconcile is supposed to ask
     // the broker, and the assertions below depend on it having asked. What must
     // not happen is the asking leaving the machine.
-    if (url.includes('alpaca.markets')) return alpacaUnauthorized();
+    //
+    // Matched on the HOST, never `url.includes('alpaca.markets')`. A substring
+    // test also matches the string appearing in some other host's path or query
+    // — which would hand that host a canned 401 and record no escape, the exact
+    // false-green accounting this fence exists to prevent. The GDELT branch
+    // above keeps its substring test on purpose: it RECORDS and throws, so its
+    // false positive is loud, where this branch's would be silent.
+    const host = hostOf(url);
+    if (host === 'alpaca.markets' || host.endsWith('.alpaca.markets')) {
+      return alpacaUnauthorized();
+    }
 
     // Default DENY, which is the change #701 is really asking for. This used to
     // be `return realFetch(input, init)` — an allow-list of two hosts with the
@@ -132,8 +144,12 @@ beforeAll(() => {
     // silently begin making live calls from a unit suite and every gate would
     // stay green. Recorded rather than only thrown, for the reason the GDELT
     // branch is: a caller that swallows rejections would otherwise hide it.
-    escapedToNetwork.add(new URL(url).host);
-    throw new Error(`offline: the test suite must not reach ${url}`);
+    //
+    // Host only, in the record AND in the message. Market-data vendors commonly
+    // put the API key in the query string, and this error goes to CI logs.
+    const escaped = host === '' ? '<unparseable URL>' : host;
+    escapedToNetwork.add(escaped);
+    throw new Error(`offline: the test suite must not reach ${escaped}`);
   }) as typeof fetch;
 });
 
