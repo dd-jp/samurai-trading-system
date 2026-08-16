@@ -272,9 +272,7 @@ describe('paperStartingProfile', () => {
       // interval. ~$6.4 against a $50 cap.
       const profile = paperStartingProfile('paper');
 
-      expect(DEBATES_PER_DAY * SOAK_DAYS * USD_PER_DEBATE).toBeLessThan(
-        profile.llmBudgetUsd,
-      );
+      expect(DEBATES_PER_DAY * SOAK_DAYS * USD_PER_DEBATE).toBeLessThan(profile.llmBudgetUsd);
     });
 
     it('leaves a pass room to finish, so a digit slip cannot outrun the tick', () => {

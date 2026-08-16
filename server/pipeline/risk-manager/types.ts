@@ -5,7 +5,7 @@
  * #76 — the pipeline only. `PortfolioView` computation is #78; breaker-trip
  * computation is #77 — both are consumed here as pre-built inputs.
  */
-import type { Clock, OrderIntent } from '../../shared/index.js';
+import type { Clock, InstrumentSubclass, OrderIntent } from '../../shared/index.js';
 
 /**
  * Pre-computed breaker trip state, tiered per risk-manager-spec.md
@@ -195,6 +195,62 @@ export interface RiskConfig {
    * actually happen, which is `computePortfolioView`.
    */
   max_mark_age: Record<'crypto' | 'stocks', number>;
+  /**
+   * ADR-0018 D5's volatility-aware deployment envelope — the record's only
+   * drawdown protection on the intraday product, and until this field existed,
+   * unbuilt.
+   *
+   * Optional, and the optionality is the design. Absent means the gate does
+   * not apply at all (`perSubclassDeploymentCap` returns `null`, exactly as
+   * `concentrationCorrelationCap` does on an uncorrelated book), which is the
+   * correct reading for the backtest harness and every test that predates
+   * subclasses. Present means it is ARMED, and an instrument missing from
+   * `subclass_of` then throws rather than sizing unbounded — off by default,
+   * fails loud once declared.
+   */
+  per_subclass_deployment_cap?: SubclassDeploymentCap;
+}
+
+/**
+ * ADR-0018 D5, as config.
+ *
+ * D5 deploys a fixed fraction of the EQUITY LEG per subclass — ~35% to a 3x
+ * index ETP, ~25% to a 3x single-stock ETP — holding measured max drawdown at
+ * 23.1% and 26.2% respectively. Two properties of that envelope have to
+ * survive into the code, because both are easy to round off:
+ *
+ * 1. **It is measured drift-removed with zero edge assumed.** The envelope
+ *    therefore binds REGARDLESS of how good the signal turns out to be. It is
+ *    not contingent on the indicator work or the threshold studies passing,
+ *    and it must never become a dial the Feedback Loop can widen — see the
+ *    deliberate absence from `RISK_THRESHOLD_NAMES` (risk-thresholds.ts).
+ * 2. **The single-stock fraction knowingly overshoots.** 26.2% sits ~1.2 pp
+ *    above CONTEXT.md's 20-25% band; D5 accepts the overshoot explicitly and
+ *    warns that whatever consumes the fraction consumes the overshoot with
+ *    it. Tightening to ~24% is NOT available: no measured row in
+ *    docs/research/18-intraday-instrument-physics.md covers it, and D5 says
+ *    re-measure before adopting one.
+ */
+export interface SubclassDeploymentCap {
+  /**
+   * Instrument -> the subclass ADR-0018 prices it under, sourced from the
+   * universe at the composition root (the same place `assetClassOf` is built,
+   * production/defaults.ts) rather than derived from the ticker string. There
+   * is nothing in "3LAP" that says single-stock; only the pool file knows.
+   */
+  subclass_of: Readonly<Record<string, InstrumentSubclass>>;
+  /**
+   * Subclass -> max notional deployed to that subclass, in account currency.
+   *
+   * Total over `InstrumentSubclass` so a new subclass is a compile error here
+   * rather than a silent absence, which on this gate would read as "no cap".
+   * `null` is the explicit "D5 measured no envelope for this one" — it is not
+   * a placeholder to be filled with a plausible number later. Today only
+   * `crypto` is `null`: doc 18's study covers the two leveraged-ETP subclasses
+   * and nothing else, and the crypto leg is parked out of the tick loop
+   * (#705). `per_asset_class_cap.crypto` still bounds it.
+   */
+  cap: Readonly<Record<InstrumentSubclass, number | null>>;
 }
 
 /** The red-team critic's verdict on one gated `OrderIntent` (ADR-0003, #204). Produced *outside* `evaluate()` by critic.ts and consumed here as pre-built data.

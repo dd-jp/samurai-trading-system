@@ -49,9 +49,9 @@ describe('requireSubclass', () => {
   });
 
   it('names full deployment in the refusal, so the reason survives the stack trace', () => {
-    expect(() =>
-      requireSubclass({ asset: 'QQQ', asset_class: 'stocks' }),
-    ).toThrow(/default here is full deployment/);
+    expect(() => requireSubclass({ asset: 'QQQ', asset_class: 'stocks' })).toThrow(
+      /default here is full deployment/,
+    );
   });
 
   it('leaves instruments that never priced against ADR-0018 constructible', () => {

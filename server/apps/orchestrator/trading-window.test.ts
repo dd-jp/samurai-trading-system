@@ -11,8 +11,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  londonEntryWindow,
   LseRegularHoursCalendar,
+  londonEntryWindow,
 } from '../../providers/market-data-service/index.js';
 import { paperStartingProfile } from './paper-profile.js';
 import { UniverseScheduler } from './scheduler.js';

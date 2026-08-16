@@ -35,10 +35,7 @@ export type AssetClass = 'crypto' | 'stocks';
  * the index one despite identical 3x leverage, because its round trip is 2.3x
  * larger. A `leverage: 3` field would invite deriving what was measured.
  */
-export type InstrumentSubclass =
-  | 'index_etp_3x'
-  | 'single_stock_etp_3x'
-  | 'crypto';
+export type InstrumentSubclass = 'index_etp_3x' | 'single_stock_etp_3x' | 'crypto';
 
 /** A directional stance — an analyst's, or a debate's conclusion. */
 export type Direction = 'bullish' | 'bearish' | 'neutral';

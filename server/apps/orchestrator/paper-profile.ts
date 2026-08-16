@@ -92,11 +92,13 @@ import type {
   BreakerConfig,
   CorrelationConfig,
   RiskConfig,
+  SubclassDeploymentCap,
 } from '../../pipeline/risk-manager/index.js';
 import { DEFAULT_TRADER_CONFIG, type TraderConfig } from '../../pipeline/trader/index.js';
 import type { VerdictConfig } from '../../pipeline/verdict/index.js';
 import { londonEntryWindow } from '../../providers/market-data-service/index.js';
 import type { CiiConsumerConfig } from '../../providers/market-intelligence/index.js';
+import type { InstrumentSubclass } from '../../shared/index.js';
 import type { CostConfig } from '../../tools/backtest/index.js';
 import { LIVE_MONEY_GATE_SUMMARY } from './live-money-gates.js';
 import { SqliteDailyEquityMetricsSource } from './production/daily-equity-metrics-source.js';
@@ -108,6 +110,7 @@ import {
 } from './production.js';
 import { DEFAULT_UNIVERSE } from './scheduler.js';
 import { SqliteDailyEquityStore } from './sqlite-daily-equity-store.js';
+import type { UniverseInstrument } from './types.js';
 
 /** The header's three-value provenance taxonomy, as data. */
 export type ValueProvenance = 'SPEC' | 'DERIVED' | 'UNSOURCED';
@@ -322,6 +325,95 @@ export function riskCapsFor(equityAnchorUsd: number): RiskCaps {
 }
 
 export const PAPER_RISK_CAPS: RiskCaps = riskCapsFor(PAPER_ACCOUNT_EQUITY_ANCHOR);
+
+/**
+ * The share of total capital that is the EQUITY leg (ADR-0015): £1,500 live,
+ * split £750 equity / £750 crypto (#660). ADR-0018 D5's deployment fractions
+ * are fractions of that leg, not of the account, so the leg has to be nameable
+ * before D5 can be expressed at all.
+ *
+ * Deliberately NOT derived from `RISK_CAP_EQUITY_FRACTIONS.per_asset_class_cap_stocks`,
+ * which is the other plausible base and is wrong twice: it is UNSOURCED where
+ * this is an ADR, and — decisively — it is a Feedback Loop dial
+ * (`RISK_THRESHOLD_NAMES`, risk-thresholds.ts), so basing D5 on it would let
+ * the loop widen the drawdown envelope at runtime. D5's envelope is measured
+ * drift-removed with zero edge assumed; nothing the loop learns may move it.
+ */
+export const EQUITY_LEG_FRACTION_OF_CAPITAL = 0.5;
+
+/**
+ * ADR-0018 D5 — max deployment per subclass, as a fraction of the EQUITY LEG.
+ *
+ * At ADR-0015's £750 leg these are the ADR's own figures: 0.35 x 750 = £262.50
+ * ("~£260") and 0.25 x 750 = £187.50 ("~£190"), holding measured max drawdown
+ * at 23.1% and 26.2%. That reproduction is the check that the base is right —
+ * any other base produces numbers no document contains.
+ *
+ * `single_stock_etp_3x` at 0.25 carries D5's stated ~1.2 pp overshoot of
+ * CONTEXT.md's 20-25% drawdown band. It is a named constant with this citation
+ * rather than a bare `0.25` in a config literal precisely so the overshoot
+ * cannot be inherited silently. Do NOT tighten it to ~0.24 to make the band
+ * fit: no measured row in docs/research/18-intraday-instrument-physics.md
+ * covers that fraction, and D5 requires a re-measurement before adopting one.
+ *
+ * `crypto` is `null` — "D5 measured no envelope here" — not a number waiting
+ * to be guessed. See `SubclassDeploymentCap.cap`.
+ */
+export const D5_DEPLOYMENT_FRACTION_OF_EQUITY_LEG: Readonly<
+  Record<InstrumentSubclass, number | null>
+> = {
+  index_etp_3x: 0.35,
+  single_stock_etp_3x: 0.25,
+  crypto: null,
+};
+
+/**
+ * ADR-0018 D5's envelope for one equity anchor, in account currency.
+ *
+ * Same shape as `riskCapsFor`: the fractions are the decision, the currency
+ * amounts are arithmetic, so re-scaling to a differently-funded account is one
+ * edit at the anchor rather than one per subclass.
+ */
+export function subclassDeploymentCapsFor(
+  equityAnchorUsd: number,
+): Record<InstrumentSubclass, number | null> {
+  const equityLeg = equityAnchorUsd * EQUITY_LEG_FRACTION_OF_CAPITAL;
+  return Object.fromEntries(
+    Object.entries(D5_DEPLOYMENT_FRACTION_OF_EQUITY_LEG).map(([subclass, fraction]) => [
+      subclass,
+      fraction === null ? null : fraction * equityLeg,
+    ]),
+  ) as Record<InstrumentSubclass, number | null>;
+}
+
+/**
+ * D5's config for a universe, or `undefined` when the universe declares no
+ * subclasses at all.
+ *
+ * **The gate arms itself off the universe, and that is the whole design.** The
+ * subclass dimension is sourced from C1's LSE-ETP pool file (#703); until one
+ * exists, `DEFAULT_UNIVERSE` carries no subclasses, this returns `undefined`,
+ * and the gate is inert — which is correct, because ADR-0018 prices leveraged
+ * ETPs and the default universe holds none of them. Declaring the field with
+ * an empty `subclass_of` would instead make every entry throw.
+ *
+ * A universe that is PARTLY classified still arms it, and the unclassified
+ * names then throw at sizing time. That is intended: a half-populated pool
+ * file is a mistake to surface, not one to size around.
+ */
+export function subclassDeploymentCapFor(
+  universe: readonly UniverseInstrument[],
+  equityAnchorUsd: number,
+): SubclassDeploymentCap | undefined {
+  const subclass_of = Object.fromEntries(
+    universe.flatMap((instrument) =>
+      instrument.subclass === undefined ? [] : [[instrument.asset, instrument.subclass] as const],
+    ),
+  );
+  if (Object.keys(subclass_of).length === 0) return undefined;
+
+  return { subclass_of, cap: subclassDeploymentCapsFor(equityAnchorUsd) };
+}
 
 /**
  * `breakerConfig.volatility.baseline` is an **absolute ATR reading in price
@@ -859,6 +951,10 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
   // all, would silently cost ~13x its budget.
   Required<Pick<ProductionConfig, 'rateLimiterConfig' | 'llmBudgetUsd' | 'tickIntervalMs'>> {
   const caps = riskCapsFor(equityAnchorUsd);
+  // ADR-0018 D5. Built from the same universe this profile returns below, so
+  // the classification the gate resolves against and the instruments the run
+  // actually ticks cannot be two different lists.
+  const subclassCap = subclassDeploymentCapFor(DEFAULT_UNIVERSE, equityAnchorUsd);
 
   const traderConfig: TraderConfig = {
     // SPEC — `DEFAULT_TRADER_CONFIG` (server/pipeline/trader/types.ts) is the one set of
@@ -969,6 +1065,24 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
      * them.
      */
     max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
+    /**
+     * SPEC (ADR-0018 D5) — the deployment envelope, armed off the universe.
+     *
+     * Conditionally spread rather than set to `undefined`, under
+     * `exactOptionalPropertyTypes` and matching the `capitalCeilingUsd` idiom
+     * at production.ts. On `DEFAULT_UNIVERSE` this is OMITTED: no instrument
+     * carries a subclass yet, because ADR-0018 prices leveraged ETPs and the
+     * default universe is SPY/QQQ/AAPL/TSLA/BTC/ETH. It arms itself the moment
+     * C1's pool file supplies one.
+     *
+     * **Consequence, stated rather than discovered in a soak:** on the paper
+     * profile this gate does not bind, and would not bind even if it were
+     * armed — `max_position_size` is 5% of a $100k anchor ($5,000) against a
+     * D5 index-ETP envelope of 35% of a $50k leg ($17,500), so
+     * `per_trade_size_cap` trims first every time. D5 is a live-capital
+     * protection; the paper soak is not a test of it.
+     */
+    ...(subclassCap === undefined ? {} : { per_subclass_deployment_cap: subclassCap }),
   };
 
   const verdictConfig: VerdictConfig = {

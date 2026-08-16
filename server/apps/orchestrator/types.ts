@@ -17,12 +17,7 @@ import type { AnalystView, DebateResult } from '../../pipeline/debate-engine/ind
 import type { ExecutionResult } from '../../pipeline/execution/index.js';
 import type { RiskDecision } from '../../pipeline/risk-manager/index.js';
 import type { VerdictDecision } from '../../pipeline/verdict/index.js';
-import type {
-  AssetClass,
-  Clock,
-  InstrumentSubclass,
-  OrderIntent,
-} from '../../shared/index.js';
+import type { AssetClass, Clock, InstrumentSubclass, OrderIntent } from '../../shared/index.js';
 
 export type { AssetClass, InstrumentSubclass };
 
@@ -54,9 +49,7 @@ export interface UniverseInstrument {
  * the one setting the ADR exists to forbid, and it would do it silently, on
  * the money path. Fail loud instead.
  */
-export function requireSubclass(
-  instrument: UniverseInstrument,
-): InstrumentSubclass {
+export function requireSubclass(instrument: UniverseInstrument): InstrumentSubclass {
   if (instrument.subclass === undefined) {
     throw new Error(
       `${instrument.asset} has no subclass; ADR-0018 brackets and sizing cannot be resolved without one. ` +

@@ -68,6 +68,7 @@ export type {
   RiskManager,
   SessionBasis,
   SessionBasisByClass,
+  SubclassDeploymentCap,
 } from './types.js';
 
 /**
@@ -348,11 +349,57 @@ const concentrationCorrelationCap: EntryCapGate = (config, intent, portfolio, co
   };
 };
 
-/** Spec steps 2–6, in binding order. The array IS the pipeline. */
+/**
+ * ADR-0018 D5's deployment envelope (#703, step A6) — max notional across
+ * every instrument of the intent's subclass.
+ *
+ * **Netted across the subclass, not per position.** The tempting form is
+ * `allowedAdditional: cap`, matching `perTradeSizeCap`, and it is wrong twice
+ * over: `buildBracket` sizes a `scale_in` exactly like an entry precisely
+ * because "Risk enforces the exposure cap downstream" (trader/decide.ts), so a
+ * non-netted cap admits entry-at-35% then scale-in-at-35%; and two different
+ * 3x index ETPs held at once would each get the full envelope. Either voids
+ * the 23.1% drawdown figure the fraction was measured to hold. D5's envelope
+ * is "35% of the leg deployed to 3x index ETPs", so the sum is what binds.
+ *
+ * Instruments absent from `subclass_of` are skipped by the netting filter
+ * (`undefined !== subclass`) rather than throwing — a legacy or manually-held
+ * position should not be able to break sizing for an unrelated name. Only the
+ * INTENT's own instrument must be classified, and that one throws.
+ */
+const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
+  const declared = config.per_subclass_deployment_cap;
+  if (declared === undefined) return null;
+
+  const subclass = declared.subclass_of[intent.instrument];
+  if (subclass === undefined) {
+    throw new Error(
+      `per_subclass_deployment_cap is declared but ${intent.instrument} has no subclass ` +
+        `(known: ${Object.keys(declared.subclass_of).join(', ') || 'none'}). ADR-0018 D5's ` +
+        `deployment envelope cannot be resolved without one, and the alternative to this throw ` +
+        `is sizing the position with no envelope at all. Add the instrument to the pool file.`,
+    );
+  }
+
+  const cap = declared.cap[subclass];
+  if (cap === null) return null;
+
+  const deployedToSubclass = Object.entries(portfolio.exposure_by_instrument)
+    .filter(([instrument]) => declared.subclass_of[instrument] === subclass)
+    .reduce((sum, [, exposure]) => sum + exposure, 0);
+
+  return {
+    name: 'per_subclass_deployment_cap',
+    allowedAdditional: cap - deployedToSubclass,
+  };
+};
+
+/** Spec steps 2–6 plus ADR-0018 D5, in binding order. The array IS the pipeline. */
 const ENTRY_CAP_GATES: readonly EntryCapGate[] = [
   perTradeSizeCap,
   perAssetExposureCap,
   perAssetClassExposureCap,
+  perSubclassDeploymentCap,
   portfolioGrossExposureCap,
   concentrationCorrelationCap,
 ];
