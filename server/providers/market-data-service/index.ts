@@ -64,8 +64,13 @@ export { closeTimeOf, isDailyTimeframe, timeframeToMs } from './timeframe.js';
 export type { TradingCalendar } from './trading-calendar.js';
 export {
   AlwaysOpenCalendar,
+  // #706 — policy, not venue: narrows WHEN equities may be entered inside a
+  // session the calendar has already opened.
+  londonEntryWindow,
   // #668 — the live equity leg's venue (#659: T212 ISA, GBP LSE-listed ETFs).
   LseRegularHoursCalendar,
+  OVERLAP_WINDOW_LAST_ENTRY_MINUTES,
+  OVERLAP_WINDOW_OPEN_MINUTES,
   UsEquityRegularHoursCalendar,
 } from './trading-calendar.js';
 export type {

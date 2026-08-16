@@ -589,3 +589,45 @@ export class LseRegularHoursCalendar implements TradingCalendar {
       : LSE_CLOSE_MINUTES;
   }
 }
+
+/** 14:30 London — the US cash open, and the start of the overlap (#706). */
+export const OVERLAP_WINDOW_OPEN_MINUTES = 14 * 60 + 30;
+/** 15:45 London — last entry, leaving 40 minutes to the 16:25 flatten (#706). */
+export const OVERLAP_WINDOW_LAST_ENTRY_MINUTES = 15 * 60 + 45;
+
+/**
+ * A London wall-clock predicate for `SchedulerConfig.stocksTradingWindow`.
+ *
+ * **This narrows a session; it does not define one.** It answers "may an
+ * equity be entered at this instant", and the Scheduler only consults it once
+ * the calendar has already said the venue is open — so holidays, half-days,
+ * weekends and DST stay the calendar's business, resolved through the same
+ * `Intl` machinery every other boundary in this file uses.
+ *
+ * Kept here rather than in the orchestrator precisely so it CANNOT drift from
+ * that machinery: a window that did its own timezone arithmetic would be right
+ * for eight months of the year.
+ *
+ * Defaults are the overlap-only window (#706): entries armed 14:30-15:45
+ * London. #656 measured LSE 08:00-16:30 against US 14:30-21:00 — a two-hour
+ * overlap — and every measurement the intraday product rests on is computed on
+ * US tape, because no free LSE intraday history exists.
+ *
+ * Half-open at the top (`< end`), matching `isOpen`: 15:45:00 exactly is past
+ * the last entry, so the two boundaries compose without an off-by-one minute.
+ */
+export function londonEntryWindow(
+  startMinutes: number = OVERLAP_WINDOW_OPEN_MINUTES,
+  endMinutes: number = OVERLAP_WINDOW_LAST_ENTRY_MINUTES,
+): (instant: Date) => boolean {
+  if (!(startMinutes < endMinutes)) {
+    throw new Error(
+      `londonEntryWindow needs startMinutes < endMinutes, got ${startMinutes} and ${endMinutes}`,
+    );
+  }
+
+  return (instant: Date): boolean => {
+    const { minutesSinceMidnight } = toZonedTime(instant, LONDON_ZONE);
+    return minutesSinceMidnight >= startMinutes && minutesSinceMidnight < endMinutes;
+  };
+}

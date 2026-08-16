@@ -1469,6 +1469,13 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   const scheduler = new UniverseScheduler({
     universe: config.universe ?? SMOKE_TEST_UNIVERSE,
     calendar: equityCalendarFor(config),
+    // Passed through rather than defaulted here (#706). The composition root
+    // is where a run's policy is chosen; a default in this line would apply
+    // the window to the backtest harness and to every programmatic caller,
+    // neither of which asked for it.
+    ...(config.stocksTradingWindow === undefined
+      ? {}
+      : { stocksTradingWindow: config.stocksTradingWindow }),
   });
   const heartbeat = new Heartbeat(
     config.heartbeatChannel ?? new LoggingHeartbeatChannel(logger),

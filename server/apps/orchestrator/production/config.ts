@@ -329,6 +329,22 @@ export interface ProductionConfig extends AlertChannelSlots {
    * authoritative for when stock sessions begin, not merely for when to tick.
    */
   tradingCalendar?: TradingCalendar;
+  /**
+   * OPTIONAL narrowing of when equities may be ENTERED, inside a session
+   * `tradingCalendar` has already opened (#706).
+   *
+   * Deliberately a separate field rather than a narrower calendar. The
+   * calendar above is authoritative for when stock sessions *begin and end* —
+   * the Verdict gate reads it, the daily-PnL boundary resets on its
+   * `sessionStart` (#331/#332), and the flatten offsets from its `sessionEnd`
+   * (#657). A trading preference expressed by narrowing it would move all
+   * three, and the flatten is a money-path rule.
+   *
+   * Undefined means no narrowing, which is what the harness and every existing
+   * programmatic caller want. `londonEntryWindow()` supplies the overlap-only
+   * default.
+   */
+  stocksTradingWindow?: (instant: Date) => boolean;
   /** Sticky breaker rows recovered from a prior process, if any. */
   initialBreakerState?: readonly PersistedBreakerState[];
   /** Wall-clock gap between tick starts. Default 60s. */

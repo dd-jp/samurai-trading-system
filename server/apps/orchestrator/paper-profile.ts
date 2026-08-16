@@ -95,6 +95,7 @@ import type {
 } from '../../pipeline/risk-manager/index.js';
 import { DEFAULT_TRADER_CONFIG, type TraderConfig } from '../../pipeline/trader/index.js';
 import type { VerdictConfig } from '../../pipeline/verdict/index.js';
+import { londonEntryWindow } from '../../providers/market-data-service/index.js';
 import type { CiiConsumerConfig } from '../../providers/market-intelligence/index.js';
 import type { CostConfig } from '../../tools/backtest/index.js';
 import { LIVE_MONEY_GATE_SUMMARY } from './live-money-gates.js';
@@ -1486,6 +1487,28 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
      * interval never enters either gate's arithmetic.
      */
     tickIntervalMs: 2 * 60_000,
+    /**
+     * `SPEC` — equities are entered only inside the LSE/US overlap (#706).
+     *
+     * Set HERE rather than defaulted in `buildProductionOrchestrator`, because
+     * the composition root is where a run's policy belongs — and set at all,
+     * rather than left as an available seam, because a mechanism nothing calls
+     * is this repo's dominant defect class.
+     *
+     * 14:30-15:45 London. On the paper venue that is 09:30-10:45 ET, i.e. the
+     * first 75 minutes of the US cash session — which is deliberately the same
+     * span R2's entry-offset grid measures (t0 in {0..120} minutes past the US
+     * open), so the soak and the study describe the same hours.
+     *
+     * **What this costs, stated rather than discovered:** it cuts the equity
+     * tick window from 6.5 hours to 75 minutes. It does NOT cut debates by the
+     * same factor — debates are keyed to 1h bars, so this goes from ~7 entry
+     * decisions per name per session to 2 (the 14:00 bar entered from 14:30,
+     * and the 15:00 bar). Fewer, better-evidenced entries is the design, not a
+     * side effect. Exits are unaffected: the bracket is evaluated every tick,
+     * and a position opened in the window is still flattened at close minus 5.
+     */
+    stocksTradingWindow: londonEntryWindow(),
     /**
      * `SPEC` — the universe a paper run trades (#381). ADR-0001 names this
      * exact set ("default universe SPY/QQQ/AAPL/TSLA/BTC-USD/ETH-USD",
