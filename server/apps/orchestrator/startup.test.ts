@@ -64,9 +64,42 @@ const offlineGdeltClient = new GdeltGkgClient({
  */
 const realFetch = globalThis.fetch;
 let reachedGdelt: string | undefined;
+/** Hosts this file tried to reach that nothing here accounts for (#701). */
+const escapedToNetwork = new Set<string>();
+
+/**
+ * Alpaca's canned refusal, served without leaving the process (#701).
+ *
+ * Startup runs the execution reconcile and reconcile calls the real broker, so
+ * every `startFromEnvironment` here was making a genuine round trip to
+ * `paper-api.alpaca.markets` — DNS, TLS, HTTP — and getting a 401 back. Twelve
+ * call sites, twelve round trips, on every run of this file.
+ *
+ * Speed is the least of it. The real hazard is that a 401 is indistinguishable
+ * from a fence: if a VALID Alpaca key ever reaches CI, these tests stop being
+ * refused and start reading a live account's positions, and nothing in the
+ * suite would look any different. Serving the 401 locally means the assertions
+ * see exactly what they saw before while the credential can no longer matter.
+ *
+ * The status is the one the venue actually returns for an unauthenticated
+ * request, so the reconcile path under test is the same one production takes
+ * when its key is wrong.
+ */
+function alpacaUnauthorized(): Response {
+  return {
+    ok: false,
+    status: 401,
+    statusText: 'Unauthorized',
+    json: async () => ({ message: 'unauthorized' }),
+    text: async () => '{"message":"unauthorized"}',
+  } as Response;
+}
 
 beforeAll(() => {
-  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+  // `init` is deliberately absent: there is no longer any path that forwards a
+  // request onward, so nothing here has anything to forward it WITH. The unused
+  // parameter was the last trace of the pass-through this fence replaced.
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
     // Each shape read explicitly: `String(new Request(url))` is the useless
     // '[object Request]', which contains no host and would walk straight past
     // this fence. A backstop that a caller can route around by passing a
@@ -87,7 +120,20 @@ beforeAll(() => {
       reachedGdelt = url;
       throw new Error('offline: the test suite must not reach GDELT');
     }
-    return realFetch(input, init);
+    // Alpaca is ANSWERED rather than recorded as an escape. Unlike the GDELT
+    // case this is not a forgotten stub: startup's reconcile is supposed to ask
+    // the broker, and the assertions below depend on it having asked. What must
+    // not happen is the asking leaving the machine.
+    if (url.includes('alpaca.markets')) return alpacaUnauthorized();
+
+    // Default DENY, which is the change #701 is really asking for. This used to
+    // be `return realFetch(input, init)` — an allow-list of two hosts with the
+    // whole internet behind it, so a new vendor client added to startup would
+    // silently begin making live calls from a unit suite and every gate would
+    // stay green. Recorded rather than only thrown, for the reason the GDELT
+    // branch is: a caller that swallows rejections would otherwise hide it.
+    escapedToNetwork.add(new URL(url).host);
+    throw new Error(`offline: the test suite must not reach ${url}`);
   }) as typeof fetch;
 });
 
@@ -97,6 +143,13 @@ afterAll(() => {
     throw new Error(
       `startup.test.ts reached ${reachedGdelt} — a startFromEnvironment call is missing ` +
         '`gdeltClient: offlineGdeltClient`.',
+    );
+  }
+  if (escapedToNetwork.size > 0) {
+    throw new Error(
+      `startup.test.ts tried to reach ${[...escapedToNetwork].join(', ')} — a unit suite must ` +
+        'not depend on a third party being reachable. Stub the client, or answer the host in ' +
+        'the fence above the way Alpaca is answered (#701).',
     );
   }
 });
