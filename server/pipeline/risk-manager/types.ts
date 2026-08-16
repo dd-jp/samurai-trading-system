@@ -223,7 +223,8 @@ export interface RiskConfig {
  *    therefore binds REGARDLESS of how good the signal turns out to be. It is
  *    not contingent on the indicator work or the threshold studies passing,
  *    and it must never become a dial the Feedback Loop can widen — see the
- *    deliberate absence from `RISK_THRESHOLD_NAMES` (risk-thresholds.ts).
+ *    deliberate absence from `RISK_THRESHOLD_KEYS` (risk-thresholds.ts), the
+ *    allow-list backing the `risk_thresholds` table.
  * 2. **The single-stock fraction knowingly overshoots.** 26.2% sits ~1.2 pp
  *    above CONTEXT.md's 20-25% band; D5 accepts the overshoot explicitly and
  *    warns that whatever consumes the fraction consumes the overshoot with

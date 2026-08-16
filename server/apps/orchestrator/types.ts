@@ -31,9 +31,15 @@ export interface UniverseInstrument {
    * Optional because the universe predates it: the smoke universe, the
    * backtest fixtures and every existing profile name instruments without
    * one, and a required field would break them all to express something they
-   * do not use. Anything that actually *prices* on it must go through
-   * `requireSubclass` rather than reading the field, so a missing value
-   * refuses instead of silently taking a default.
+   * do not use.
+   *
+   * The one thing that reads this field today is `subclassDeploymentCapFor`
+   * (paper-profile.ts), which SKIPS unclassified rows when building
+   * `SubclassDeploymentCap.subclass_of` — deliberately, so a partly-populated
+   * pool file still arms the gate. The refusal then happens where the money
+   * actually moves: `perSubclassDeploymentCap` throws for an intent whose own
+   * instrument has no subclass, rather than sizing it with no envelope. Read
+   * the gate, not this field, for what a missing subclass costs.
    */
   subclass?: InstrumentSubclass;
 }
@@ -48,6 +54,20 @@ export interface UniverseInstrument {
  * A missing subclass falling back to a default would therefore fall back to
  * the one setting the ADR exists to forbid, and it would do it silently, on
  * the money path. Fail loud instead.
+ *
+ * **No production caller yet, and that is stated rather than left to be
+ * discovered** (three review passes raised it, correctly, against this repo's
+ * named no-caller defect class). The consumer is ADR-0018 D3's per-subclass
+ * bracket — +2.00/-2.16 for a 3x index ETP against +6.00/-6.25 for a 3x
+ * single-stock — which is step A2 of map #703 and is NOT on this branch.
+ *
+ * It is not a second copy of the risk gate's throw, which is the other reading
+ * worth ruling out. They take different inputs and answer different questions:
+ * `perSubclassDeploymentCap` resolves a subclass from the CONFIG map
+ * (`SubclassDeploymentCap.subclass_of`) to size a netted envelope, while this
+ * resolves it from the UNIVERSE ROW a bracket is about to be computed for.
+ * A2 has a `UniverseInstrument` in hand and no risk config; if it turns out to
+ * have neither, delete this rather than leaving it uncalled.
  */
 export function requireSubclass(instrument: UniverseInstrument): InstrumentSubclass {
   if (instrument.subclass === undefined) {

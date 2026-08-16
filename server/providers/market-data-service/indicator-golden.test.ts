@@ -52,7 +52,8 @@ import { type Bar, INDICATOR_KINDS, type IndicatorKind, type IndicatorSpec } fro
 interface GoldenCase {
   name: string;
   /**
-   * Narrowed at the boundary by `assertKind` rather than declared and trusted.
+   * Narrowed at the boundary by the `INDICATOR_KINDS` membership loop below
+   * rather than declared and trusted.
    * The fixture is JSON produced by a Python script, so this field is the one
    * place a kind can arrive that the registry has never heard of — and the
    * failure to catch it would be a golden case that silently stops running.

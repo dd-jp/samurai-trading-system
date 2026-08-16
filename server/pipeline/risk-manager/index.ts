@@ -366,6 +366,16 @@ const concentrationCorrelationCap: EntryCapGate = (config, intent, portfolio, co
  * (`undefined !== subclass`) rather than throwing — a legacy or manually-held
  * position should not be able to break sizing for an unrelated name. Only the
  * INTENT's own instrument must be classified, and that one throws.
+ *
+ * **What the throw can and cannot reach, since it fires on the live decision
+ * path.** `evaluate()` returns at `intent.intent_type === 'exit'` BEFORE the
+ * `ENTRY_CAP_GATES` loop is entered, so no throw in any gate — this one
+ * included — can block an exit. Flat-by-close therefore cannot be stopped by a
+ * stale pool file, which matters because a flatten that silently stops running
+ * is the defect class #670/#706 were filed for. The blast radius is exactly:
+ * one unclassified instrument's ENTRIES refuse, every tick, until the pool file
+ * is corrected. That refusal is the intended reading of a half-populated pool
+ * file, and it is strictly safer than the alternative of entering unbounded.
  */
 const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
   const declared = config.per_subclass_deployment_cap;
@@ -381,7 +391,24 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
     );
   }
 
-  const cap = declared.cap[subclass];
+  // `cap` is total over `InstrumentSubclass` at COMPILE time only. `subclass_of`
+  // is built from the pool file at the composition root, so a subclass string
+  // that reaches here without a row in `cap` is a runtime possibility the type
+  // cannot exclude — and `undefined` is the one value that must not fall
+  // through. `undefined - deployedToSubclass` is `NaN`, `trimToAllowed` does
+  // `Math.max(NaN, 0) === NaN`, `notional <= NaN` is false so it "trims" to
+  // `NaN`, and `NaN < config.min_viable_size` is false too — so the intent
+  // clears both this gate and the min-viable floor with no envelope at all.
+  // That is the exact failure D5 exists to prevent, arriving silently.
+  const cap: number | null | undefined = declared.cap[subclass];
+  if (cap === undefined) {
+    throw new Error(
+      `per_subclass_deployment_cap declares ${intent.instrument} as '${subclass}' but carries no ` +
+        `cap for that subclass (known: ${Object.keys(declared.cap).join(', ') || 'none'}). ADR-0018 ` +
+        `D5's envelope cannot be resolved without one, and the alternative to this throw is sizing ` +
+        `the position with no envelope at all. Add the subclass to the cap record.`,
+    );
+  }
   if (cap === null) return null;
 
   const deployedToSubclass = Object.entries(portfolio.exposure_by_instrument)

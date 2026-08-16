@@ -81,7 +81,7 @@ describe('one registry, not two switches', () => {
     }
   });
 
-  it('names the fixture rather than crashing on an unknown kind', () => {
+  it('names the unknown kind and the known ones rather than crashing', () => {
     // Reachable only through a cast, which is the honest scope of the guard:
     // there is no unvalidated runtime path into `IndicatorSpec.indicator`
     // today. The cast below is exactly what would silence the compiler at a

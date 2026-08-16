@@ -246,6 +246,47 @@ describe('ADR-0018 D5 deployment envelope', () => {
     expect(() => decide(intentFor('SPY', 10_000))).toThrow(/ADR-0018 D5/);
   });
 
+  it('throws on a subclass missing from the cap record rather than sizing on NaN', () => {
+    // `cap` is total over `InstrumentSubclass` at COMPILE time only, and
+    // `subclass_of` is assembled from the pool file at runtime — so this pair
+    // is constructible and the type cannot forbid it. The cast is exactly what
+    // an assembled-at-runtime config would produce.
+    //
+    // What made this worth a throw rather than a `?? 0`: `undefined` did not
+    // fail loudly, it failed INVISIBLY. `undefined - deployed` is `NaN`,
+    // `Math.max(NaN, 0)` is `NaN`, `notional <= NaN` is false so `trimToAllowed`
+    // "trims" to `NaN` — and then `NaN < min_viable_size` is false too, so the
+    // intent cleared BOTH this gate and the min-viable floor carrying no
+    // envelope at all. A silent full deployment is the one outcome D5 exists
+    // to prevent, so the test asserts the throw AND the NaN it replaced.
+    const holed = {
+      subclass_of: SUBCLASS_OF,
+      cap: { single_stock_etp_3x: SINGLE_STOCK_CAP, crypto: null },
+    } as unknown as SubclassDeploymentCap;
+
+    expect(() => decide(intentFor('3USL', 10_000), {}, holed)).toThrow(
+      /carries no cap for that subclass/,
+    );
+    expect(() => decide(intentFor('3USL', 10_000), {}, holed)).toThrow(/index_etp_3x/);
+
+    // The subclasses that ARE in the record still price normally — one hole
+    // refuses one subclass, it does not disarm the gate.
+    expect(finalSizeOf(decide(intentFor('3LAP', 10_000), {}, holed))).toBeCloseTo(
+      SINGLE_STOCK_CAP,
+      6,
+    );
+  });
+
+  it('rejects rather than scaling in when the subclass is already at its envelope', () => {
+    // `allowedAdditional` goes NEGATIVE here (0 - 262.5). `trimToAllowed`
+    // floors it at 0, and a 0 notional then falls below `min_viable_size` —
+    // so the outcome is a rejection, not a zero-size order sent to a broker.
+    const decision = decide(intentFor('3USL', 10_000), { '3USL': INDEX_CAP });
+
+    expect(decision.status).toBe('rejected');
+    expect(decision.binding_constraint).toBe('min_viable_size');
+  });
+
   it('is not a Feedback Loop dial', () => {
     // D5 binds regardless of signal quality. A dial would let the loop widen
     // the envelope in exactly the run where it had learned to be confident.

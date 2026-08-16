@@ -141,4 +141,47 @@ describe('londonEntryWindow', () => {
   it('refuses an inverted window rather than silently matching nothing', () => {
     expect(() => londonEntryWindow(16 * 60, 14 * 60)).toThrow(/startMinutes < endMinutes/);
   });
+
+  it('refuses a minute-of-day outside [0, 1440] rather than never closing', () => {
+    // The failure this guards is not a crash, it is a window that silently
+    // never ends: `minutesSinceMidnight` is always < 1440, so an `endMinutes`
+    // of 1545 — clock-style 15:45, the single most likely miscall — makes the
+    // upper bound unreachable and arms entries for the entire session,
+    // including the flatten tail. Ordering alone accepts it.
+    expect(() => londonEntryWindow(14 * 60 + 30, 1545)).toThrow(/whole minute-of-day/);
+    expect(() => londonEntryWindow(14 * 60 + 30, 1545)).toThrow(/15:45 is 945/);
+
+    // The other direction is the mirror: a negative start is always true, so
+    // the window opens before the venue does.
+    expect(() => londonEntryWindow(-60, 15 * 60)).toThrow(/whole minute-of-day/);
+    expect(() => londonEntryWindow(14.5 * 60 + 0.5, 15 * 60)).toThrow(/whole minute-of-day/);
+
+    // 1440 itself is a legal END — "up to midnight" — and must not be caught
+    // by the bound it sits on.
+    expect(() => londonEntryWindow(14 * 60, 24 * 60)).not.toThrow();
+  });
+
+  it('slides an hour against the US tape in the UK/US DST gap weeks', () => {
+    // Characterisation, not an endorsement — see `stocksTradingWindow`'s
+    // docblock in paper-profile.ts. The window is anchored to LONDON
+    // wall-clock, and the two countries do not change clocks on the same day:
+    // the US springs forward on the 2nd Sunday of March, the UK on the last.
+    // Between those dates the offset is 4 hours, not 5.
+    const window = londonEntryWindow();
+
+    // 2026-03-19 sits in the gap (US on EDT since Mar 8, UK still on GMT).
+    // 14:30 London = 14:30Z = 10:30 ET, an hour after the US cash open — so
+    // the window's first admitted instant is 60 minutes into the US session,
+    // not 0. The pre-open hour is NOT admitted.
+    expect(window(new Date('2026-03-19T14:30:00Z'))).toBe(true);
+    expect(window(new Date('2026-03-19T13:35:00Z'))).toBe(false);
+
+    // ...and it closes at 15:45 London = 11:45 ET, i.e. 135 minutes past the
+    // US open, past the t0 <= 120 edge of R2's measured entry-offset grid.
+    expect(window(new Date('2026-03-19T15:44:00Z'))).toBe(true);
+
+    // Outside the gap the same wall-clock window is 09:30-10:45 ET: on
+    // 2026-04-16 both are on summer time, so 14:30 London = 13:30Z = 09:30 ET.
+    expect(window(new Date('2026-04-16T13:30:00Z'))).toBe(true);
+  });
 });

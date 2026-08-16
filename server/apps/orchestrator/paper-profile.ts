@@ -335,7 +335,7 @@ export const PAPER_RISK_CAPS: RiskCaps = riskCapsFor(PAPER_ACCOUNT_EQUITY_ANCHOR
  * Deliberately NOT derived from `RISK_CAP_EQUITY_FRACTIONS.per_asset_class_cap_stocks`,
  * which is the other plausible base and is wrong twice: it is UNSOURCED where
  * this is an ADR, and — decisively — it is a Feedback Loop dial
- * (`RISK_THRESHOLD_NAMES`, risk-thresholds.ts), so basing D5 on it would let
+ * (`RISK_THRESHOLD_KEYS`, risk-thresholds.ts), so basing D5 on it would let
  * the loop widen the drawdown envelope at runtime. D5's envelope is measured
  * drift-removed with zero edge assumed; nothing the loop learns may move it.
  */
@@ -1577,9 +1577,10 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
      *
      * Doc 41 computes the unconstrained optimum as τ = 1 min against a ~13s
      * pass and `production.ts`'s dropped-tick guard. 2 min is #670's recorded
-     * step and leaves ~6x headroom over the measured pass rather than ~4.6x,
-     * which matters because the pass duration is a measurement of the system
-     * as it was, and section B widens the analyst's indicator set.
+     * step and leaves ~9x headroom over the measured ~13s pass (120/13) where
+     * τ = 1 would leave ~4.6x (60/13), which matters because the pass duration
+     * is a measurement of the system as it was, and section B widens the
+     * analyst's indicator set.
      *
      * ### What this buys, given entries are still bar-gated
      *
@@ -1590,6 +1591,16 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
      * stop overshoots by ≈-1.97% in the worst 5% of exits; at τ = 2 that falls
      * to ≈-0.72%. On a -2.16% stop that is the difference between a stop that
      * means what it says and one that does not.
+     *
+     * **Both figures are at D = τ — the WORST delay, not the mean.** A stop is
+     * breached at some instant and noticed at the next tick, so the delay is
+     * uniform on (0, τ) and the worst case is a full interval. Doc 41's own
+     * "Solving" section instead uses the mean, D = τ/2, because it is costing
+     * an average day rather than bounding a single exit; `paper-profile.test.ts`
+     * quotes ~0.53% at τ = 2 on that convention (`g(1)`). Same measured result,
+     * two questions — stated here because the two numbers look contradictory
+     * side by side, and a reader reconciling them by "correcting" one would
+     * lose whichever question it was answering.
      *
      * ### Cost
      *
@@ -1619,10 +1630,30 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
      * rather than left as an available seam, because a mechanism nothing calls
      * is this repo's dominant defect class.
      *
-     * 14:30-15:45 London. On the paper venue that is 09:30-10:45 ET, i.e. the
-     * first 75 minutes of the US cash session — which is deliberately the same
-     * span R2's entry-offset grid measures (t0 in {0..120} minutes past the US
-     * open), so the soak and the study describe the same hours.
+     * 14:30-15:45 London. For ~49 weeks of the year that is 09:30-10:45 ET,
+     * i.e. the first 75 minutes of the US cash session — which is deliberately
+     * the same span R2's entry-offset grid measures (t0 in {0..120} minutes
+     * past the US open), so the soak and the study describe the same hours.
+     *
+     * **For the other ~3 weeks it is 10:30-11:45 ET, and that is a real gap,
+     * not a rounding note.** The UK and US DST transitions disagree twice a
+     * year — the US springs forward on the 2nd Sunday of March and falls back
+     * on the 1st Sunday of November, the UK on the last Sundays of March and
+     * October — so for roughly two weeks in March and one in late Oct/early
+     * Nov the London/New York offset is 4 hours rather than 5. The window is
+     * anchored to LONDON wall-clock (the venue and the book are GBP, ADR-0015),
+     * so in those weeks it slides an hour later against the US tape: entries
+     * open 60 minutes past the US cash open and close 135 minutes past it,
+     * with the last 15 minutes falling OUTSIDE R2's t0 in {0..120} grid.
+     *
+     * Recorded rather than corrected, because both available corrections are
+     * product decisions and not this step's to take: re-anchoring to the US
+     * open would make an LSE-venue rule depend on a foreign calendar, and
+     * narrowing to the intersection would cost 15 minutes of entry time for 49
+     * weeks to buy exactness in 3. `trading-window.test.ts` pins the divergence
+     * so it is a characterised property rather than a surprise in the soak
+     * record. Worth an ADR line if a March or November soak is ever read as
+     * evidence about entry timing.
      *
      * **What this costs, stated rather than discovered:** it cuts the equity
      * tick window from 6.5 hours to 75 minutes. It does NOT cut debates by the
