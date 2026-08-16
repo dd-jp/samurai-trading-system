@@ -969,6 +969,93 @@ describe('decide — flat by close (#668)', () => {
     expect(outcome.intent).toBeNull();
   });
 
+  /**
+   * #698. The behaviour above is unchanged and these do not re-test it — what
+   * they pin is that the conditions are now AUDIBLE, which is the whole ticket.
+   * Each of these was previously indistinguishable from a healthy quiet tick.
+   */
+  it('reports a stale session close as a diagnostic, on the same pass that exits (#698)', async () => {
+    // The load-bearing case for the diagnostic's placement: this path returns an
+    // INTENT, not a skip. A diagnostic modelled as a variant of `skip_reason`
+    // could not have reported it, which is why `TraderOutcome.diagnostics` is
+    // orthogonal to the intent/skip pair rather than a third alternative.
+    const pastClose = new Date('2026-07-15T19:00:00Z');
+    const stuckCalendar = {
+      isOpen: () => true,
+      isTradingDay: () => true,
+      sessionStart: () => pastClose,
+      sessionEnd: () => pastClose,
+    } as unknown as TradingCalendar;
+
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(new Date('2026-07-15T19:56:00Z')),
+        debate: debateResult({ direction: 'neutral' }),
+        positionState: async () => [holding()],
+        sessionCalendars: { crypto: new AlwaysOpenCalendar(), stocks: stuckCalendar },
+      }),
+    );
+
+    expect(outcome.intent?.intent_type).toBe('exit');
+    expect(outcome.diagnostics.map((diagnostic) => diagnostic.kind)).toEqual([
+      'session_end_in_past',
+    ]);
+    expect(outcome.diagnostics[0]?.asset_class).toBe('stocks');
+  });
+
+  it('reports a non-crypto calendar that cannot resolve a session end at all (#698)', async () => {
+    // The silent case the ticket names: `null` is the DOCUMENTED answer for
+    // crypto and a broken calendar for anything else, and both returned the
+    // identical `false` with nothing marking the difference — so an equity leg
+    // whose calendar had stopped resolving sessions never flattened and carried
+    // overnight against ADR-0014.
+    const muteCalendar = {
+      isOpen: () => true,
+      isTradingDay: () => true,
+      sessionStart: () => null,
+      sessionEnd: () => null,
+    } as unknown as TradingCalendar;
+
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({ direction: 'neutral' }),
+        positionState: async () => [holding()],
+        sessionCalendars: { crypto: new AlwaysOpenCalendar(), stocks: muteCalendar },
+      }),
+    );
+
+    // Unchanged behaviour: no session end means not inside the window, so the
+    // holding path falls through to its ordinary neutral skip.
+    expect(outcome.intent).toBeNull();
+    expect(outcome.diagnostics.map((diagnostic) => diagnostic.kind)).toEqual([
+      'session_end_absent_on_non_crypto',
+    ]);
+  });
+
+  it('stays silent when CRYPTO has no session end, which is the intended answer (#698)', async () => {
+    // `AlwaysOpenCalendar` returns null by design — a venue that never closes.
+    // Alerting on it would fire on every crypto tick forever, which is how an
+    // operator learns to mute a channel that also carries breach alerts
+    // (ADR-0008 §1). The diagnostic is keyed to the ASSET CLASS for this reason.
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({ direction: 'neutral' }),
+        positionState: async () => [holding({ asset_class: 'crypto' })],
+      }),
+    );
+
+    expect(outcome.diagnostics).toEqual([]);
+  });
+
+  it('leaves diagnostics empty on an ordinary healthy decision (#698)', async () => {
+    // The case that must stay quiet, and the one that would make the channel
+    // useless if it did not: the overwhelmingly common tick.
+    const outcome = await decideWithReason(traderInput());
+
+    expect(outcome.intent).not.toBeNull();
+    expect(outcome.diagnostics).toEqual([]);
+  });
+
   it('throws on a non-positive flatten window rather than silently disabling flat-by-close', async () => {
     // Zero is the dangerous value, not negative: it reads like "no offset" and
     // is what someone reaches for to "turn the window off", when what it

@@ -79,6 +79,7 @@ import type {
   SetupStore,
   TraderLogStore,
 } from '../../../shared/index.js';
+import { sanitizeLogText } from '../../../shared/index.js';
 // Aliased: this module already imports a DIFFERENT `SharedStore` above (an
 // unrelated `execution/index.js` interface, `ExecutionStepDeps.store`'s
 // type) — the alias names which one `VerdictStepDeps.store` actually is,
@@ -92,6 +93,11 @@ import { OrphanVerdictScanner } from '../orphan-verdict-scan.js';
 import { SqliteAuditLog } from '../sqlite-audit-log.js';
 import { SqliteCurrentTickStore } from '../sqlite-current-tick-store.js';
 import type { TickSteps } from '../types.js';
+import {
+  type TraderDiagnosticAlert,
+  type TraderDiagnosticAlertChannel,
+  TraderDiagnosticThrottle,
+} from './trader-diagnostic-alert.js';
 
 /**
  * Account-level accounting scalars `computePortfolioView` needs but has no
@@ -165,6 +171,26 @@ export interface TraderStepDeps extends BreakerStateDeps {
    * ceiling declared", never "a ceiling of zero". See `sizingEquity`.
    */
   capitalCeilingUsd?: number;
+  /**
+   * #698: where a degraded-but-continuing Trader condition is escalated.
+   *
+   * Optional, matching every other alert channel on this boundary: absent means
+   * log-only, which is what tests and the backtest get. `production.ts` supplies
+   * the logging default and `SAMURAI_ALERTS=telegram` replaces it with the
+   * reachable-from-a-phone implementation.
+   *
+   * Optional here and NOT for the reason `sessionCalendars` is required: a
+   * missing calendar changes what the system DOES, a missing alert channel only
+   * changes who hears about it. The diagnostics still reach `trader_log` either
+   * way.
+   */
+  traderDiagnosticAlerts?: TraderDiagnosticAlertChannel;
+  /**
+   * Where an undeliverable diagnostic alert is recorded, and the fallback sink
+   * when no channel is wired. Optional for the same reason it is on the analysts
+   * step: a test that supplies neither is silent by choice.
+   */
+  logger?: Logger;
 }
 
 /**
@@ -208,13 +234,19 @@ export function sizingEquity(equity: number, capitalCeilingUsd: number | undefin
 }
 
 export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
+  // #698. Per-step rather than per-tick: the counter's entire job is to relate
+  // THIS tick to the ones before it, so it has to outlive the closure body. Held
+  // here for the same reason `buildAnalystsStep` holds `consecutiveSkips` — one
+  // running orchestrator, in memory, restart-clean.
+  const diagnosticThrottle = new TraderDiagnosticThrottle();
+
   return async ({ trace_id, instrument, debate, clock }) => {
     // TraderInput.equity is current portfolio equity (cash + mark-to-market
     // exposure) — the same OBSERVATION Risk gates against this tick, not
     // merely the same derivation: the snapshot is memoized per trace so the
     // two stages cannot see two different portfolios (B4).
     const { portfolio } = await snapshotForTick(deps, clock, trace_id);
-    const { intent, skip_reason, atr } = await decideWithReason({
+    const { intent, skip_reason, atr, diagnostics } = await decideWithReason({
       trace_id,
       instrument,
       debate,
@@ -265,8 +297,79 @@ export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
       created_at: clock.now(),
     });
 
+    // #698: escalate anything the decision noticed but did not treat as fatal.
+    //
+    // AFTER the `trader_log` write on purpose — the durable record is the thing
+    // that must not be lost, and it lands whether or not a transport is
+    // reachable. The alert is the audible copy, not the record.
+    //
+    // Every diagnostic is fed to the throttle, not only the ones that alert:
+    // `observe` is what CLEARS a run, so skipping the call on a healthy tick
+    // would leave a recovered condition counting from where it left off.
+    for (const due of diagnosticThrottle.observe(instrument, diagnostics)) {
+      await postTraderDiagnosticAlert(deps, {
+        instrument,
+        diagnostic: due.diagnostic,
+        consecutive_ticks: due.consecutive_ticks,
+        reported_at: clock.now(),
+      });
+    }
+
     return intent;
   };
+}
+
+/**
+ * Posts one diagnostic alert, and never lets the transport take the tick down
+ * with it (#698).
+ *
+ * The same posture `postSkipAlert` takes on the analysts step, for the same
+ * reason: by this point the Trader has already produced its answer and the
+ * caller is about to act on it, so a Telegram outage must not turn "the calendar
+ * looks wrong" into "the orchestrator threw" — which would convert a degraded
+ * run into a stopped one, the exact inversion this ticket exists to prevent.
+ *
+ * With no channel wired the diagnostic still reaches the log at `error`, so the
+ * condition is never silent even in a log-only deployment.
+ */
+async function postTraderDiagnosticAlert(
+  deps: TraderStepDeps,
+  alert: TraderDiagnosticAlert,
+): Promise<void> {
+  const { diagnostic } = alert;
+  deps.logger?.log({
+    trace_id: 'trader-diagnostic',
+    stage: 'trader',
+    level: 'error',
+    message:
+      `trader: ${alert.instrument} reported ${diagnostic.kind} on ` +
+      `${alert.consecutive_ticks} consecutive tick(s) — ${diagnostic.detail}`,
+    payload: {
+      instrument: alert.instrument,
+      kind: diagnostic.kind,
+      asset_class: diagnostic.asset_class,
+      consecutive_ticks: alert.consecutive_ticks,
+    },
+  });
+
+  if (deps.traderDiagnosticAlerts === undefined) return;
+  try {
+    await deps.traderDiagnosticAlerts.postTraderDiagnosticAlert(alert);
+  } catch (error) {
+    deps.logger?.log({
+      trace_id: 'trader-diagnostic',
+      stage: 'trader',
+      level: 'error',
+      message:
+        'trader diagnostic alert could not be delivered — the condition is still present and ' +
+        'nobody has been told',
+      payload: {
+        instrument: alert.instrument,
+        kind: diagnostic.kind,
+        error: sanitizeLogText(error instanceof Error ? error.message : String(error)),
+      },
+    });
+  }
 }
 
 /** Shared by risk and verdict: both need the portfolio-derived breaker state, fetched fresh at their own call time. */

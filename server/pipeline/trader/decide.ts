@@ -130,6 +130,19 @@ function atrFor(
 }
 
 /**
+ * `withinFlattenWindow`'s answer, plus anything it noticed getting there (#698).
+ *
+ * A pair rather than a bare boolean because the two callers need the boolean and
+ * the DIAGNOSTIC needs to survive both of them: the entry path turns `within`
+ * into a skip and the holding path turns it into an exit intent, so a diagnostic
+ * carried on the skip alone would be dropped on exactly the flatten it describes.
+ */
+interface FlattenWindowVerdict {
+  within: boolean;
+  diagnostic: TraderDiagnostic | null;
+}
+
+/**
  * Is `now` inside the flat-by-close window for this asset class (#668)?
  *
  * The window is `[sessionEnd − flatten_before_close_ms, sessionEnd)`, resolved
@@ -169,11 +182,13 @@ function atrFor(
  * direction-flip exit two branches below — stranding exposure the system could
  * then neither flatten nor exit.
  *
- * What is genuinely missing is audibility, not behaviour: a calendar this
- * broken should raise an alert, and `TraderInput` carries no logger to raise
- * one from. That is #698.
+ * **Audibility is what #698 added, and it did not change any answer above.**
+ * A calendar this broken should raise an alert, and `TraderInput` still carries
+ * no logger to raise one from — so this reports the condition as DATA on the
+ * returned verdict, and the adapter that already writes `trader_log` turns it
+ * into an alert. Every `within` value below is exactly what it was before.
  */
-function withinFlattenWindow(input: TraderInput, assetClass: AssetClass): boolean {
+function withinFlattenWindow(input: TraderInput, assetClass: AssetClass): FlattenWindowVerdict {
   // Checked here rather than at construction because `TraderConfig` is a plain
   // interface with no validation seam — nothing between the config literal and
   // this comparison inspects the value. Written as `!(x > 0)` so `NaN` fails
@@ -209,16 +224,53 @@ function withinFlattenWindow(input: TraderInput, assetClass: AssetClass): boolea
   const now = input.clock.now();
   const sessionEnd = calendar.sessionEnd(now);
 
-  if (sessionEnd === null) return false;
+  if (sessionEnd === null) {
+    // Null is the DOCUMENTED answer for crypto — a venue that never closes —
+    // and a silent one for anything else, which is the whole #698 complaint:
+    // an equity calendar that has quietly stopped resolving sessions returns
+    // the identical `false` and never flattens, carrying overnight against
+    // ADR-0014 with nothing marking it.
+    return {
+      within: false,
+      diagnostic:
+        assetClass === 'crypto'
+          ? null
+          : {
+              kind: 'session_end_absent_on_non_crypto',
+              asset_class: assetClass,
+              detail:
+                `${assetClass} calendar returned no session end at ${now.toISOString()}; ` +
+                'flat-by-close cannot be enforced for this leg while that persists',
+            },
+    };
+  }
 
   const remaining = sessionEnd.getTime() - now.getTime();
 
   // The session has already ended. Be flat — see the docblock for why this is
   // answered here rather than by throwing, which would take the direction-flip
   // exit down with it and strand the exposure.
-  if (remaining < 0) return true;
+  //
+  // The answer is unchanged and correct; the DIAGNOSTIC is the new part. A
+  // close that is minutes in the past is an ordinary tick just after the bell,
+  // so the condition alone is not alarming — what is alarming is it never
+  // clearing, and the adapter's repeat throttle is what turns "again" into a
+  // signal rather than this branch trying to judge staleness on its own.
+  if (remaining < 0) {
+    return {
+      within: true,
+      diagnostic: {
+        kind: 'session_end_in_past',
+        asset_class: assetClass,
+        detail:
+          `${assetClass} calendar resolved a session end of ${sessionEnd.toISOString()}, ` +
+          `which is ${Math.round(-remaining / 1_000)}s before now (${now.toISOString()}); ` +
+          'the book is being parked flat as a result',
+      },
+    };
+  }
 
-  return remaining <= input.config.flatten_before_close_ms;
+  return { within: remaining <= input.config.flatten_before_close_ms, diagnostic: null };
 }
 
 /**
@@ -309,6 +361,7 @@ function maxRiskFor(assetClass: AssetClass, config: TraderConfig): number {
 async function buildBracket(
   input: TraderInput,
   intentType: 'entry' | 'scale_in',
+  diagnostics: TraderDiagnostic[],
 ): Promise<TraderOutcome> {
   const { clock, config, debate, equity, instrument, marketData, setupStore } = input;
 
@@ -358,7 +411,9 @@ async function buildBracket(
   // the asset class is the MARK's to report — and it is the asset class that
   // picks the calendar, since the crypto and equity legs run different venues
   // inside one process.
-  if (withinFlattenWindow(input, mark.asset_class)) {
+  const flattenWindow = withinFlattenWindow(input, mark.asset_class);
+  if (flattenWindow.diagnostic !== null) diagnostics.push(flattenWindow.diagnostic);
+  if (flattenWindow.within) {
     return skip('session_closing');
   }
 
@@ -385,7 +440,23 @@ async function buildBracket(
   // behaviour decision about the Trader rather than a mechanical swap, so it
   // is the remaining step of #315 rather than a line in this one.
   const atrResult = atrFor(bars, config.atr_lookback, config.atr_timeframe);
-  if (atrResult.atr === null) return skip(atrResult.reason);
+  if (atrResult.atr === null) {
+    // Only the non-finite half is a diagnostic (#698). `atr_insufficient_bars`
+    // is a warm-up or a data gap — expected early in a soak, per `atrFor`'s own
+    // comment — and alerting it would fire on day 1 for every instrument, which
+    // is how an operator learns to mute the channel (ADR-0008 §1's lesson).
+    // A non-finite ATR on a FULL window is corrupt bar data and never expected.
+    if (atrResult.reason === 'atr_not_finite') {
+      diagnostics.push({
+        kind: 'atr_not_finite',
+        asset_class: mark.asset_class,
+        detail:
+          `ATR over ${config.atr_lookback} ${config.atr_timeframe} bars for ${instrument} ` +
+          'was not finite on a full window — the bar data is corrupt, not merely short',
+      });
+    }
+    return skip(atrResult.reason);
+  }
   const atr = atrResult.atr;
 
   // The same NaN argument `atrFor` documents, applied to the OTHER priced
@@ -629,6 +700,64 @@ export type TraderSkipReason =
   | 'size_not_finite';
 
 /**
+ * A condition the Trader DETECTED but did not treat as fatal (#698).
+ *
+ * Distinct from `TraderSkipReason` on purpose, and the distinction is the whole
+ * point of this type. A skip reason says why THIS tick produced no order, and
+ * every value it can take is a decision the Trader made correctly. A diagnostic
+ * says the Trader is running in a DEGRADED state that it papered over — it kept
+ * going, it returned a defensible answer, and something is nonetheless wrong
+ * upstream of it.
+ *
+ * That difference is why these do not simply become new skip reasons. Two of the
+ * three below occur on paths that still produce an intent (a flatten exit is an
+ * emit, not a skip), so there is no skip row to hang them on; and the third
+ * (`atr_not_finite`) already HAS a skip reason and is listed here anyway,
+ * because a durable `trader_log` row is not an alert and nobody is reading the
+ * table at 3am during an unattended soak (#238).
+ *
+ * Returned as data rather than logged from inside `decide`, deliberately.
+ * trader-spec.md's contract is "fully deterministic given its inputs + the
+ * clock-scoped market data", and admitting a logger to `TraderInput` would make
+ * the decision path side-effecting to buy a diagnostic. #698 itself weighs both
+ * options and calls this one "probably right"; the adapter that already writes
+ * `trader_log` is the natural place for the effect.
+ */
+export type TraderDiagnosticKind =
+  /**
+   * The calendar reports a session close at or before `now`. Flattening is the
+   * correct response and `withinFlattenWindow` gives it (see its docblock), but
+   * a calendar stuck in this state parks the book flat FOREVER and stops
+   * trading — and at a 15-minute cadence that is indistinguishable from a quiet
+   * market, which is the failure #625 actually produced (96 debates, 0 trades).
+   */
+  | 'session_end_in_past'
+  /**
+   * `sessionEnd` returned null for a class that is not crypto. Null means "this
+   * venue never closes", which is the documented and intended answer for crypto
+   * and a broken calendar for anything else — and the two are the same `false`
+   * today, so an equity leg whose calendar has quietly stopped resolving
+   * sessions never flattens and carries overnight against ADR-0014.
+   */
+  | 'session_end_absent_on_non_crypto'
+  /**
+   * ATR came back non-finite on a FULL window — corrupt bar data, which
+   * `atrFor` calls "never expected". Its sibling `atr_insufficient_bars` is
+   * deliberately NOT here: that one is a warm-up or a data gap, is expected
+   * early in a soak, and alerting it would fire on day 1 for every instrument.
+   */
+  | 'atr_not_finite';
+
+/** One detected degradation, with enough context for an operator to act. */
+export interface TraderDiagnostic {
+  kind: TraderDiagnosticKind;
+  /** Which leg — the calendar and the venue both follow the instrument's class. */
+  asset_class: AssetClass;
+  /** Human-readable specifics (the resolved close, how stale it is). Never raw vendor payloads. */
+  detail: string;
+}
+
+/**
  * What `decideWithReason` returns: an intent, or the reason there isn't one.
  *
  * Exactly one side is populated. Not modelled as a discriminated union on a
@@ -655,19 +784,35 @@ export interface TraderOutcome {
    * term of the order — nothing downstream of the Trader sizes from it.
    */
   atr: number | null;
+  /**
+   * Degraded-but-continuing conditions detected while deciding (#698). Empty on
+   * a healthy decision, which is the overwhelmingly common case.
+   *
+   * Orthogonal to `intent`/`skip_reason` rather than a third alternative: a
+   * diagnostic can accompany EITHER side. The flatten path is exactly why —
+   * a stale `sessionEnd` produces a diagnostic and an exit intent on the same
+   * pass, so a field that only rode along with skips would miss the case that
+   * motivated the ticket.
+   */
+  diagnostics: readonly TraderDiagnostic[];
 }
 
 /**
  * A declined decision. Narrow helper so the twelve skip sites stay one line
  * each — and so adding a fourteenth cannot forget a field.
+ *
+ * Diagnostics are deliberately NOT a parameter here (#698): they are collected
+ * in `decideWithReason`'s accumulator and merged onto whatever this returns, so
+ * that the one-line-per-skip-site property this helper exists to protect
+ * survives a second cross-cutting field.
  */
 function skip(reason: TraderSkipReason): TraderOutcome {
-  return { intent: null, skip_reason: reason, atr: null };
+  return { intent: null, skip_reason: reason, atr: null, diagnostics: [] };
 }
 
 /** A decision that produced an order. */
 function emit(intent: OrderIntent, atr: number | null): TraderOutcome {
-  return { intent, skip_reason: null, atr };
+  return { intent, skip_reason: null, atr, diagnostics: [] };
 }
 
 export async function decide(input: TraderInput): Promise<OrderIntent | null> {
@@ -695,13 +840,32 @@ export async function decide(input: TraderInput): Promise<OrderIntent | null> {
  * projection of it.
  */
 export async function decideWithReason(input: TraderInput): Promise<TraderOutcome> {
+  // #698's collector. A LOCAL array threaded into the routing below, not an
+  // injected sink: nothing escapes this call, so `decide` stays deterministic
+  // in the sense trader-spec.md means it (same inputs, same output) while still
+  // reporting what it noticed. An injected logger would have bought the same
+  // diagnostic at the cost of making the decision path side-effecting, which is
+  // the trade #698 itself argues against.
+  const diagnostics: TraderDiagnostic[] = [];
+  const outcome = await routeDecision(input, diagnostics);
+
+  // Merged here rather than at each producing site so the skip helper stays a
+  // one-liner and no future skip site can forget the field.
+  return diagnostics.length === 0 ? outcome : { ...outcome, diagnostics };
+}
+
+/** `decideWithReason`'s routing, with #698's diagnostic accumulator threaded through. */
+async function routeDecision(
+  input: TraderInput,
+  diagnostics: TraderDiagnostic[],
+): Promise<TraderOutcome> {
   const { config, debate, instrument, positionState } = input;
 
   const positions = (await positionState()).filter((lot) => lot.instrument === instrument);
 
   if (positions.length === 0) {
     if (debate.direction === 'neutral') return skip('neutral_direction_while_flat');
-    return buildBracket(input, 'entry');
+    return buildBracket(input, 'entry', diagnostics);
   }
 
   // All lots for one instrument are the same side by construction (v1
@@ -725,8 +889,14 @@ export async function decideWithReason(input: TraderInput): Promise<TraderOutcom
   // ADR-0007/ADR-0013 removed the human from the trade path, so this must fire
   // unattended INCLUDING on the days it closes into a loss.
   const positionAssetClass = positions[0]?.asset_class;
-  if (positionAssetClass !== undefined && withinFlattenWindow(input, positionAssetClass)) {
-    return buildExitIntent(input, positions);
+  if (positionAssetClass !== undefined) {
+    const flattenWindow = withinFlattenWindow(input, positionAssetClass);
+    // Pushed BEFORE the branch, so the diagnostic survives whichever way it
+    // goes: a stale close produces an exit intent, and an equity calendar that
+    // has stopped resolving sessions produces `false` and no exit at all — the
+    // second being precisely the silent case #698 was filed for.
+    if (flattenWindow.diagnostic !== null) diagnostics.push(flattenWindow.diagnostic);
+    if (flattenWindow.within) return buildExitIntent(input, positions);
   }
 
   if (debate.direction === 'neutral' || !debate.converged) {
@@ -745,5 +915,5 @@ export async function decideWithReason(input: TraderInput): Promise<TraderOutcom
     return skip('scale_in_conviction_delta_not_met');
   }
 
-  return buildBracket(input, 'scale_in');
+  return buildBracket(input, 'scale_in', diagnostics);
 }

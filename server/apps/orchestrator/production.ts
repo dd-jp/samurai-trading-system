@@ -953,6 +953,23 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       ...(config.capitalCeilingUsd === undefined
         ? {}
         : { capitalCeilingUsd: config.capitalCeilingUsd }),
+      // #698: the diagnostic escalation, wired HERE and not only declared.
+      // `TraderDiagnosticAlertChannel` would otherwise be the next instance of
+      // this repo's dominant defect shape — a tested mechanism nothing calls
+      // (#364's store, #388's rate limiter) — and the failure it reports is one
+      // whose only other symptom is a book that quietly stops trading.
+      //
+      // Same conditional-spread idiom as `capitalCeilingUsd` above, required by
+      // `exactOptionalPropertyTypes`: omitted rather than passed as `undefined`
+      // under `log-only`, where the step's own logger is the whole reporting
+      // path.
+      ...(config.traderDiagnosticAlerts === undefined
+        ? {}
+        : { traderDiagnosticAlerts: config.traderDiagnosticAlerts }),
+      // The sink for the diagnostics themselves, and for an alert the transport
+      // could not deliver. Without it a log-only run would have nowhere to put
+      // them at all.
+      logger,
     }),
     risk: buildRiskStep({
       ...breakerStateDeps,
