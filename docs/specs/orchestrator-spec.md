@@ -4,6 +4,8 @@
 **Owner:** David (Deepak)
 **Date:** 2026-07-14 (Production Composition Root section added 2026-07-28, wayfinder map [#224](../../issues/224), [ADR-0004](../adr/0004-production-composition-root.md))
 
+**2026-08-16 — the tick model is re-specified, not annotated.** Map [#703](https://github.com/dd-jp/samurai-trading-system/issues/703) closed with the intraday horizon's selection and entry-timing decisions, and two of them change this spec's own definitions rather than its parameters: **a tick is no longer one pass through the full pipeline** (Scheduler and Tick Runner modules below), and **crypto is out of Samurai's scope entirely** ([ADR-0014](../adr/0014-intraday-flat-by-close-horizon.md) amendment), which withdraws story 1 and the always-included rule. Superseded text is struck in place with its replacement adjacent — deliberately, so a reader cannot follow a stale rule that merely has a banner over it.
+
 ## Problem Statement
 
 Ten specs now exist — six pipeline stages plus Market Intelligence, Market Data Service, Execution, and the cost-model/backtest harness — and every one of them was written assuming something else fires the first event, holds the clock, and ties a trace together. Nothing produces the `Signal` the Analysts consume. Nothing schedules a tick, decides that a stock instrument shouldn't fire outside market hours, or bounds how many instruments run concurrently against a shared LLM rate limit. The cost-model/backtest harness explicitly depends on replaying "the exact live pipeline... via an injected clock" — but the live pipeline's tick loop, the thing the harness's simulated clock gets injected into, doesn't exist as a spec. And nobody owns trace IDs, structured log formatting, or the audit trail's storage technology, even though the vision's Definition of Done requires both.
@@ -14,8 +16,14 @@ The **Orchestrator** is that missing piece: the single-process, single-host prog
 
 The Orchestrator is a **single TypeScript process** (ADR-0001: TS core, no LangGraph dependency) running one **scheduler** and one **tick loop**, with no LLM logic of its own — it is pure wiring, scheduling, and cross-cutting infrastructure.
 
-- **Scheduler** fires ticks: crypto instruments on a fixed interval, 24/7; stock instruments gated by a market-hours/trading-calendar check.
-- **Tick** = one pass through the full pipeline, per instrument in the configured universe (default: SPY, QQQ, AAPL, TSLA, BTC-USD, ETH-USD — ADR-0001). Each instrument's pass: emit `Signal{asset, asset_class}` → `Analysts.run` → `DebateEngine.run` → `Trader.decide` → `Risk.evaluate` → `Verdict.decide` → (on `go`) `Execution.execute`.
+- **Scheduler** fires ticks on a fixed interval, gated per instrument by a market-hours/trading-calendar check **and by a policy window** (below). Crypto is parked (ADR-0014/ADR-0017 amendments, 2026-08-16) and does not tick in production or paper.
+- **Tick ≠ decision.** A tick fires on the **tick interval** (`τ`, default 2 minutes) and runs only the cheap, position-facing work. A **decision** fires once per **debate bar** and runs the full stage chain. See "Module: Tick Runner" for the split and why it exists.
+
+```
+every tick (τ = 2 min):   mark → bracket → early-exit check → flatten check
+every new debate bar:     Signal → Analysts.run → DebateEngine.run → Trader.decide
+                          → Risk.evaluate → Verdict.decide → (on go) Execution.execute
+```
 - A **trace ID**, generated at Signal emission, threads through every stage call in that pass and appears on every structured log line.
 - The Orchestrator injects the **`Clock`** every stage reads (wall-clock live; the cost-model/backtest harness's simulated clock in replay — same tick-loop code, different injected clock/adapters, mirroring Execution's live/paper/backtest discipline).
 - It writes to a new `audit_log` table in the shared SQLite store (one row per stage-decision per trace_id) and emits a dead-man's-switch heartbeat over the trade channel Verdict already provisions.
@@ -32,10 +40,12 @@ Key architectural decisions:
 
 ### Scheduling & Universe
 
-1. As the Orchestrator, I want to fire a tick for crypto instruments on a fixed interval 24/7, so that crypto's always-open market is continuously covered.
-2. As the Orchestrator, I want to gate stock-instrument ticks on a market-hours/trading-calendar check, so that a tick never fires into a closed market.
-3. As the Orchestrator, I want to iterate a configurable instrument universe (default SPY/QQQ/AAPL/TSLA/BTC-USD/ETH-USD) each tick, so that the covered universe matches ADR-0001 without a code change.
-4. As the Orchestrator, I want to emit one `Signal{asset, asset_class}` per instrument per tick, so that the Analysts stage has a producer for the input it was already specced to consume (closes GAP-I).
+1. ~~As the Orchestrator, I want to fire a tick for crypto instruments on a fixed interval 24/7, so that crypto's always-open market is continuously covered.~~ **WITHDRAWN 2026-08-16** — crypto left Samurai's scope entirely ([ADR-0014](../adr/0014-intraday-flat-by-close-horizon.md) amendment). Every instrument this system trades has a session, an open and a close, so there is no always-open case to cover.
+2. As the Orchestrator, I want to gate instrument ticks on a market-hours/trading-calendar check, so that a tick never fires into a closed market.
+2b. As the Orchestrator, I want to gate ticks additionally on an injected **policy window**, so that entries are armed only inside the recorded 14:30–15:45 London window ([#706](https://github.com/dd-jp/samurai-trading-system/issues/706)) without narrowing the venue calendar, which is separately load-bearing for `sessionEnd`.
+3. As the Orchestrator, I want to iterate the active instrument list each tick, so that the covered universe changes at session boundaries without a code change.
+4. As the Orchestrator, I want to emit one `Signal{asset, asset_class}` per instrument **per decision**, so that the Analysts stage has a producer for the input it was already specced to consume (closes GAP-I).
+4b. As the Orchestrator, I want most ticks to run **only** the position-facing work — mark, bracket, early-exit check, flatten check — so that a 2-minute exit cadence does not force a 2-minute cost for the analyst and debate stages, whose inputs change once per debate bar.
 5. As the Orchestrator, I want to run instruments within a tick concurrently up to a configured cap, so that one instrument's slow debate doesn't stall the rest, while the LLM-facing stages stay within their rate limit.
 
 ### Wiring the Pipeline
@@ -73,9 +83,10 @@ Key architectural decisions:
 ### Module: Scheduler
 
 **Responsibilities**
-- Fire crypto ticks on a fixed interval (24/7).
-- Fire stock ticks gated by a market-hours/trading-calendar source (open/closed, holidays).
-- Own the configured universe list and per-tick instrument iteration.
+- Fire ticks on a fixed interval `τ`, gated by a market-hours/trading-calendar source (open/closed, holidays) **and** by an optional policy window.
+- Own per-tick instrument iteration over the active list.
+
+**`τ` — the tick interval.** Default **2 minutes** (`DEFAULT_TICK_INTERVAL_MS`). This is the *exit* cadence, and after the tick/decision split (below) it no longer sets LLM spend — spend is keyed to the debate bar. It is not the heartbeat interval, which is a separate mechanism at a separate cadence (see Module: Heartbeat).
 
 **Key Interfaces**
 
@@ -89,17 +100,59 @@ interface TickPlan {
   instruments: { asset: string; asset_class: 'crypto' | 'stocks' }[];
   tick_time: Date;   // = clock.now()
 }
+
+interface SchedulerConfig {
+  // ... existing fields
+  /** Policy window. Venue truth stays in the calendar; this is strategy. */
+  stocksTradingWindow?: (instant: Date) => boolean;
+}
 ```
 
-- Crypto instruments always included. Stock instruments included only if the trading-calendar source reports the market open at `tick_time`.
-- Trading-calendar source is a small injected dependency (holiday/session table), not designed in depth here — flagged as a light dependency, not a new component (OPEN-GAP: trading-calendar, LOW severity, noted in cross-spec-contracts.md).
+- An instrument is included only if the trading-calendar source reports its market open at `tick_time` **and** the policy window admits `tick_time`. Both are read **once per tick**, for the same reason `isOpen` already is.
+- ~~Crypto instruments always included.~~ **WITHDRAWN 2026-08-16** — crypto is out of scope ([ADR-0014](../adr/0014-intraday-flat-by-close-horizon.md) amendment). `asset_class` retains its `'crypto'` member for now because collapsing the type touches the wire contracts and every stage; **no scheduler behaviour may depend on that member.**
+- Trading-calendar source is a small injected dependency (holiday/session table), not designed in depth here — flagged as a light dependency, not a new component (OPEN-GAP: trading-calendar, LOW severity, noted in cross-spec-contracts.md). **This gap is no longer LOW.** With a policy window layered on top and a daily out-of-session screener keyed to the *next trading day*, a wrong calendar now produces a wrong watchlist as well as a wrong tick — and [#696](https://github.com/dd-jp/samurai-trading-system/issues/696) reports the US equity calendar as weekend-only, trading through Thanksgiving. **One calendar, injected, never re-derived by a second consumer.**
+
+#### The window is policy; the calendar is venue
+
+These go in different places and the distinction is load-bearing, not stylistic.
+
+`LseRegularHoursCalendar`'s 08:00–16:30 span is **venue truth**, and the *same object* resolves `sessionEnd` for the flatten rule ([#657](https://github.com/dd-jp/samurai-trading-system/issues/657): close − 5 minutes, resolved through the instrument's `TradingCalendar`). Narrowing the calendar to express a strategy window therefore moves the flatten instant as a side effect.
+
+**The failure this prevents has already been shipped once.** The predicate gates `TickPlan.instruments`, and the tick runner runs a pass only for instruments in the plan — so an excluded instrument gets no Trader, and `withinFlattenWindow` is evaluated on a tick and nowhere else. There is no session-end job. A window closing at 15:45 therefore deleted every tick that could ever land in `[sessionEnd − flatten_before_close_ms, sessionEnd)`, and on the paper venue that put the last tick **5h10m** before the flatten needed one. Every position would have carried overnight against ADR-0014, with the log reading exactly like a session with nothing to flatten.
+
+**Required composition:** the tick window is the entry window **∪ the flatten tail**. The union cannot open a position — the entry path consults the same window and returns `skip('session_closing')` — and the gap between the two spans needs no tick, because equity brackets rest at the venue, marks are fetched per call, and fills ingest independently.
+
+**Resolve the tail through the mode-selected calendar, not a pinned venue.** `sessionEnd` differs by venue (LSE live, US paper), and the composition root and the Trader build their calendars from the same pure factory over the same config — which is *why* they agree. A test that pins one venue cannot see a hard-coded tail; the assertion must run unpinned.
 
 ### Module: Tick Runner (pipeline wiring)
 
 **Responsibilities**
-- For each instrument in a `TickPlan`, generate a trace ID, emit a `Signal`, and drive the sequential stage pipeline.
+- For each instrument in a `TickPlan`, run the **tick path**; on a new debate bar, additionally run the **decision path**.
+- Generate a trace ID and emit a `Signal` per decision.
 - Bound concurrency across instruments.
 - Only call Execution on a Verdict `go`.
+
+#### The tick/decision split (2026-08-16)
+
+**This replaces the previous definition of a tick as one pass through the full pipeline.** That definition was written when one tick *was* one decision. Under an intraday horizon they are different cadences, and collapsing them forces a choice between an expensive entry loop and a slow exit — where the exit is the side holding open risk.
+
+```
+every tick (τ = 2 min):   mark → bracket → early-exit check → flatten check
+every new debate bar:     Signal → Analysts → Debate → Trader → Risk → Verdict → Execution
+```
+
+**The waste this removes is structural, not incidental.** The runner previously called the analyst step unconditionally, before any branch. At τ = 2 minutes against a 60-minute debate bar that is **30 analyst runs per debate**, each rebuilding the same read from bars that have not changed. Most of those ticks exist only for the exit, and an exit needs a mark, an ATR and a bracket — not a full structural read.
+
+**Four constraints, each a defect this system has already shipped once:**
+
+1. **Flat-by-close runs on the TICK path, never behind the decision gate.** `withinFlattenWindow` is evaluated on a tick and nowhere else; there is no session-end job. A flatten check behind a debate-bar gate stops running on most ticks, which is the failure described under Scheduler above. **The cheap path is the one that must be able to flatten.**
+2. **One notion of "the bar", passed down — not re-derived.** [CV-21 / #687](https://github.com/dd-jp/samurai-trading-system/issues/687) records that the Trader re-derives its decision bar from its own `clock.now()` rather than inheriting the debate's, so a debate straddling a boundary keys its intent into bar N+1 while `debate_id` says N, and bar N+1's real decision is then suppressed. The gate makes that seam **structural rather than incidental**, and its failure mode is a *suppressed entry* — which presents as a healthy no-trade tick. **The gate is the single source of the bar and passes it down;** #687 is a direct dependency, not a footnote.
+3. **Do not reintroduce duplicate debates.** [#617](https://github.com/dd-jp/samurai-trading-system/issues/617) measured 4 runs per bar with 3 discarded. The gate must dedupe on the **same key that fix uses**, not a second notion of "new bar".
+4. **Exits must not read analyst output.** If any exit branch consults views or debate results, the split is unsafe until that dependency is cut. Verify at the call site; do not assume.
+
+**Verification is by mutation, both directions:** force the gate permanently closed and assert the flatten still fires; force it permanently open and assert the debate count per bar stays at one.
+
+**Spend consequence.** LLM spend is keyed to the decision path, so `τ` no longer prices it. Shortening the debate bar does — and that is the dial to reach for if more decisions per session are wanted, subject to constraint 2 above, since more boundaries make the straddle worse.
 
 **2026-08-05 — the pipeline is SEVEN stages.** [Wayfinder: Devil's Advocate](https://github.com/dd-jp/samurai-trading-system/issues/291) added `invalidation` between `trader` and `risk` (devils-advocate-spec.md):
 
@@ -113,6 +166,8 @@ interface TickPlan {
 
 ```typescript
 // Primary seam. One call per instrument per tick.
+// Runs the tick path always; runs the decision path only when ctx.decision_bar
+// is set — i.e. when the gate has determined a new debate bar has opened.
 interface TickRunner {
   runInstrument(signal: Signal, ctx: TickContext): Promise<TickOutcome>;
 }
@@ -122,6 +177,11 @@ interface TickContext {
   trace_id: string;          // generated at Signal emission
   logger: Logger;            // shared structured-logging interface
   auditLog: AuditLog;        // shared_store.audit_log writer
+  // Set only when this tick opens a new debate bar. THE single source of the
+  // bar for this pass: the decision path and every stage under it use this
+  // value rather than re-deriving one from clock.now() (CV-21 / #687).
+  // Absent => tick path only.
+  decision_bar?: { id: string; open_time: Date; timeframe_ms: number };
   // stage dependencies (marketData, store, broker, costModel, etc.)
   // are each stage's own concern per its spec; the Orchestrator wires
   // the concrete instances into each stage call, it does not redefine them.
@@ -129,9 +189,18 @@ interface TickContext {
 
 interface TickOutcome {
   trace_id: string;
-  final_stage: 'analysts' | 'debate' | 'trader' | 'risk' | 'verdict' | 'execution';
+  // 'position_check' is the terminal stage of a tick-path-only pass: the
+  // mark/bracket/early-exit/flatten work ran and no decision was due. It is a
+  // NORMAL outcome and the most common one — roughly 29 of every 30 passes at
+  // tau=2min against a 60-minute bar. It must be distinguishable in the logs
+  // from a decision pass that declined to trade, or a healthy exit-only tick
+  // reads as a no-trade decision and the trade count looks wrong.
+  final_stage: 'position_check' | 'analysts' | 'debate' | 'trader' | 'risk' | 'verdict' | 'execution';
   verdict_status?: 'go' | 'no_go';
   execution_result?: ExecutionResult;   // from execution-spec, only if go
+  // Tick-path outcomes, present on every pass including decision passes.
+  flatten_fired?: boolean;
+  early_exit_fired?: boolean;
 }
 
 interface Logger {
@@ -143,15 +212,18 @@ interface AuditLog {
 }
 ```
 
-- `runInstrument` is a straight-line sequential call chain through the already-specced stage interfaces (`Analysts.run`, `DebateEngine.run`, `Trader.decide`, `Risk.evaluate`, `Verdict.decide`, `Execution.execute`) — the Orchestrator does not reimplement any stage's decision logic.
+- `runInstrument` runs the **tick path** unconditionally, then — only when `ctx.decision_bar` is present — a straight-line sequential call chain through the already-specced stage interfaces (`Analysts.run`, `DebateEngine.run`, `Trader.decide`, `Risk.evaluate`, `Verdict.decide`, `Execution.execute`). The Orchestrator does not reimplement any stage's decision logic on either path.
+- **The tick path calls the Trader too, but on its exit-only entry point.** Mark, bracket evaluation, early exit and the time flatten are all Trader concerns, not Orchestrator ones — the split is about *which* Trader entry point runs on which cadence, not about relocating exit logic into the runner. The exit path must be reachable without an `AnalystView[]`, which is constraint 4 above stated as an interface requirement.
 - Concurrency across instruments is bounded by a configured cap (`max_concurrent_instruments`), primarily to respect the LLM rate limit on Analysts/Debate (CLAUDE.md HARD STOP governs LLM usage, not broker calls).
 - Every stage call passes `trace_id` through its input envelope; every stage's structured log line carries it (propagation note below).
-- **`current_tick` row — the one piece of persisted-but-transient state (cross-spec fix, resolves the CLI's tick-status dependency).** Before calling each stage, `runInstrument` upserts a single-row-per-instrument `current_tick` record (`instrument`, `asset_class`, `stage`, `trace_id`, `updated_at`) into the shared store; on tick completion (any terminal outcome — `execution` done, or an earlier no-go) the row is deleted. This does NOT contradict the "no unrecoverable in-memory state" decision below: `current_tick` is disposable, best-effort, coarse-grained status — losing it on crash loses nothing but a stale progress indicator (the row is simply re-upserted next tick), unlike `OpenPosition`/`Fill`/`audit_log` which are the actual system-of-record. It exists solely so a separate process (the CLI) can observe "tick in progress for {instrument}" without reading another process's memory.
+- **`current_tick` row — the one piece of persisted-but-transient state (cross-spec fix, resolves the CLI's tick-status dependency).** Before calling each stage, `runInstrument` upserts a single-row-per-instrument `current_tick` record (`instrument`, `asset_class`, `stage`, `trace_id`, `updated_at`) into the shared store; on tick completion (any terminal outcome — `execution` done, or an earlier no-go) the row is deleted.
+
+  **Amended 2026-08-16 for the tick/decision split.** This lifecycle was written assuming every tick calls every stage, which is no longer true — on a tick-path-only pass no stage in the `stage` enum runs at all. The rule becomes: **upsert on entry to the tick path with `stage: 'position_check'`, upsert per stage on the decision path, delete on any terminal outcome of either path.** `stage` gains `'position_check'`, which means the existing hard SQL `CHECK` constraint needs a **table-rebuild migration**, exactly as adding `'invalidation'` did. Without this, a 2-minute exit cadence either leaves no progress row at all (the dashboard shows a dead system that is working) or leaves a stale one from the last decision (it shows a stage that finished an hour ago). This does NOT contradict the "no unrecoverable in-memory state" decision below: `current_tick` is disposable, best-effort, coarse-grained status — losing it on crash loses nothing but a stale progress indicator (the row is simply re-upserted next tick), unlike `OpenPosition`/`Fill`/`audit_log` which are the actual system-of-record. It exists solely so a separate process (the CLI) can observe "tick in progress for {instrument}" without reading another process's memory.
   ```typescript
   interface CurrentTick {
     instrument: string;
     asset_class: 'crypto' | 'stocks';
-    stage: 'analysts' | 'debate' | 'trader' | 'risk' | 'verdict' | 'execution';
+    stage: 'position_check' | 'analysts' | 'debate' | 'trader' | 'risk' | 'verdict' | 'execution';
     trace_id: string;
     updated_at: Date;
   }
@@ -230,13 +302,23 @@ function buildProductionTickRunner(config: ProductionConfig): {
 - **Not part of `TickSteps`:** Feedback Loop's `onTradeClose` (hooks off an `ExecutionResult` fill, called from the same composition point as a side-effect of a completed tick, not a `TickSteps` step) and `runDailyCycle` (its own daily-interval schedule, independent of the per-instrument tick chain).
 - **Universe is a config value, not a code path.** `UniverseScheduler`'s `SchedulerConfig.universe` already accepts an arbitrary instrument list; the first paper run passed a narrow smoke-test universe (1-2 instruments) rather than `DEFAULT_UNIVERSE`, widened only after a clean first tick. **That widening has happened ([#381](https://github.com/dd-jp/samurai-trading-system/issues/381)):** `paperStartingProfile` now supplies `DEFAULT_UNIVERSE`, and `yarn smoke` keeps `SMOKE_TEST_UNIVERSE` by passing it explicitly — so the narrow set remains the pre-soak gate rather than the soak. `ProductionConfig.universe` still defaults to `SMOKE_TEST_UNIVERSE`, so no programmatic caller inherits six live instruments by omission.
 
+  **Amended 2026-08-16 — the default stays, and an assertion is added above it.** The default guards a real failure (a caller inheriting live instruments by omission) but leaves a second one open: `SMOKE_TEST_UNIVERSE` was BTC-USD alone *because* crypto bypassed the calendar gate, and with crypto out of scope an equities-only fallback on a closed session yields an **empty tick plan indistinguishable from a healthy no-trade run** — the same signature #691 and #625 both presented with. These two failures do not trade off against each other, so both are guarded: **the library default is unchanged, and the production composition root asserts an explicitly-configured universe and refuses to start without one.** `yarn smoke` passes its universe explicitly and is unaffected.
+
   **Amended 2026-08-07 ([universe-selector-spec.md](universe-selector-spec.md), map [#397](../../issues/397)) — the statement above now applies to the *candidate pool*, not to what the tick loop iterates.** The two are separate: the **pool** stays a config value, is what `AssetClassRoutingDataSource` builds its map over, and changes only on restart; the **active list** is supplied per session by an `ActiveUniverseProvider` (watchlist + pinned open positions + crypto) and swaps at session boundaries. `SchedulerConfig.universe` accepting an arbitrary list is what makes the provider possible rather than something the provider replaces — but the universe must be resolved **once and shared** between the routing map and the scheduler, which today are two independent `config.universe ?? SMOKE_TEST_UNIVERSE` resolutions, or the two can disagree about what the universe is.
 - **No new persistence or safety code here.** `SqliteAuditLog`/`SqliteCurrentTickStore` (#201), the HITL approval channel (#207), prompt-injection mitigations (#208), and `OrphanVerdictScanner` (#209) are already-closed implementations this module constructs and wires — it does not implement any of them.
 
 ## Testing Decisions
 
 - **Primary seam:** `TickRunner.runInstrument(signal, ctx)` — given a signal and a context (real or fake stage dependencies), assert the correct sequential call order, correct short-circuiting on a Risk reject or Verdict no-go (Execution never called), and correct trace_id propagation through every log/audit entry produced.
-- **Scheduler seam:** `Scheduler.nextTick(clock)` — given a clock and a trading-calendar fake, assert crypto always included and stocks included/excluded correctly around market open/close boundaries and holidays.
+- **Tick/decision split — assert by mutation, in both directions.** These are the tests that would have caught the defects listed under Tick Runner, and each has a stated discriminator:
+  - **Gate forced permanently closed** → the flatten still fires inside the flatten window, and `final_stage` is `'position_check'`. Discriminator: a flatten check placed behind the decision gate fails this and passes everything else.
+  - **Gate forced permanently open** → debates per bar stays at **one**. Discriminator: a gate keyed on a second notion of "new bar" reintroduces #617's duplicates and fails only here.
+  - **Analyst call count** → at `τ` = 2 min over one 60-minute bar, `Analysts.run` is called **once**, not 30 times. This is the whole point of the split and should fail loudly if the unconditional call returns.
+  - **Bar identity** → the bar the Trader acts on is the one in `ctx.decision_bar`, asserted with a clock positioned so a re-derived bar would differ (CV-21 / #687). A test that does not straddle a boundary cannot see this.
+  - **Exit independence** → the tick path completes with the analyst step stubbed to throw. If it does not, an exit is reading analyst output and the split is unsafe.
+- **Scheduler seam:** `Scheduler.nextTick(clock)` — given a clock and a trading-calendar fake, assert instruments included/excluded correctly around market open/close boundaries and holidays, **and** around the policy window's edges.
+  - **The window's flatten tail needs its own assertion, unpinned.** Assert a tick fires inside `[sessionEnd − flatten_before_close_ms, sessionEnd)` even though it is outside the entry window. **Run it with the calendar unpinned** so it resolves through the mode-selected venue: a test that pins one venue passes against a hard-coded tail and proves nothing. Discriminator: replacing the composed tail with a literal single-venue calendar fails this assertion and leaves the entry-window assertions green.
+  - ~~assert crypto always included~~ — withdrawn with crypto's scope removal; assert instead that **no instrument ticks into a closed market**, with no always-open exception.
 - Good tests here assert *wiring and sequencing*, not stage decision logic — each stage's own spec/tests own its decision correctness. Prior art: the same seam-testing discipline as every other stage spec (one high-level function, fakes for dependencies, assert on outputs/side-effects not internals).
 - Determinism test: same seed + injected simulated clock + fixed universe → byte-identical `TickOutcome` sequence and `audit_log` rows across two runs (mirrors cost-model-backtest-spec's determinism story).
 - **Composition root seam:** `buildProductionTickRunner(config)` — given fake/stub adapters for each closed-over dependency (broker, market data, approval channel, etc.), assert the returned `TickSteps` callables produce the same call shape the existing `SequentialTickRunner` unit tests already fake (i.e. the adapter shims for `analysts`/`debate` are covered directly, not just through an end-to-end run). A single real, non-mocked run against Alpaca paper (+ the narrow smoke universe) is the manual/CI-gated E2E check, not a unit test — it's the "wiring validated" done-bar (ADR-0004), run once per environment, not on every commit.
