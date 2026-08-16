@@ -4,7 +4,7 @@
 **Scope:** `server/providers/market-data-service/indicators.ts` and the three live `IndicatorSpec`s
 that consume it. Step **B1** of the intraday build sequence, under wayfinder map
 [#703](https://github.com/dd-jp/samurai-trading-system/issues/703).
-**Status:** OPEN — F1 and F2 are pinned by tests and are not yet acted on; F2 is owned by step B2.
+**Status:** OPEN — F1 and F2 are pinned by tests and are not yet acted on; F2 is owned by step B2 and tracked as [#722](https://github.com/dd-jp/samurai-trading-system/issues/722). *(Issue filed 2026-08-16: "owned by step B2" pointed at no ticket, which made a measured defect in a live signal a silent deferral rather than a tracked one. F3 is noted there and still has no issue of its own.)*
 
 ## Why this review happened before anything else was built
 

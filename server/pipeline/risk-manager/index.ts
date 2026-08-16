@@ -387,6 +387,22 @@ const concentrationCorrelationCap: EntryCapGate = (config, intent, portfolio, co
  * instrument alone. Without #507's catch this throw WOULD take down the tick
  * for every instrument, so if that catch is ever removed, this gate must be
  * revisited with it — the two are coupled, and only this comment says so.
+ *
+ * **What the throw costs, stated because it is not free.** This is the only
+ * entry gate that throws rather than returning a decision, and `riskLog.write`
+ * in `production/direct-bind.ts` runs only AFTER `evaluate()` returns — so a
+ * refused instrument writes **no `risk_log` row**. The failure is still
+ * durable (#507's catch writes an `audit_log` row and logs it) and still
+ * loud, but it is absent from the table an operator queries to ask "what did
+ * Risk do with that intent", and `smoke-run.ts` has a check for exactly the
+ * shape it leaves behind — an intent in `trader_log` with no `risk_log` row.
+ *
+ * Returning a rejected decision instead WOULD close that gap, and it is
+ * rejected deliberately: a rejection is quiet, and a half-populated pool file
+ * that merely declines entries can run for days looking like a market with no
+ * setups. The throw is chosen for being impossible to ignore. If the audit gap
+ * ever matters more than the loudness, the fix is to write the `risk_log` row
+ * from the catch — not to soften the gate.
  */
 const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
   const declared = config.per_subclass_deployment_cap;
