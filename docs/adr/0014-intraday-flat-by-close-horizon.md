@@ -43,6 +43,46 @@ Neither half of that machinery exists today. Every `flatten` in `server/` is a t
 
 **Ten years of daily-bar evidence stops applying**, and the replacement does not exist: [#656](https://github.com/dd-jp/samurai-trading-system/issues/656) found `REPLAY_TIMEFRAME = '1d'` hard-coded, so the backtest harness cannot replay intraday at all.
 
+## Amendment — 2026-08-16: the crypto trade per day is suspended, not withdrawn
+
+- **Amends:** the Context clause at line 13 — *"at least one equity and one crypto trade per day"*
+- **Earned by:** [#705](https://github.com/dd-jp/samurai-trading-system/issues/705), grilled and resolved 2026-08-16 under map [#703](https://github.com/dd-jp/samurai-trading-system/issues/703)
+- **Decided by:** David — *"start with all equity first, and then we'll implement crypto, make crypto a placeholder for future"*
+- **Companion amendment:** [ADR-0017](0017-validation-gates-paper-operational-thesis-expectancy.md)
+
+**Crypto is removed from the tick loop in both production and paper.** The equity leg is built, soaked and taken live first.
+
+### Why this needs an amendment at all
+
+The one-crypto-trade-per-day clause is not a passing remark in this ADR — **it is the requirement that broke the three-thesis deadlock.** Thesis (a) was adopted over docs 10/11/12 because it was the only intraday-shaped thesis, and the intraday shape was defined with a crypto trade in it. Removing crypto silently would leave the running code contradicting the record that selected the thesis.
+
+**The requirement is suspended, not withdrawn, and thesis (a)'s adoption rationale is unaffected.** (a) was selected for being intraday-shaped; the equity leg is still intraday-shaped. Suspension narrows the requirement's scope. It does not reopen the selection between theses, and this amendment must not be read as doing so.
+
+### This goes further than ADR-0017 sequenced, deliberately
+
+ADR-0017's ramp already puts equity live first — it says *"Crypto stays in paper until the full £750 can deploy at once."* What it does **not** do is stop crypto ticking in paper. This amendment does, and the excess is recorded rather than left to read as compliance. Three reasons, the first binding:
+
+1. **Spend.** Post-[#617](https://github.com/dd-jp/samurai-trading-system/issues/617) the intraday shape is 48 crypto runs/day against 8 equity runs — **crypto is ~86% of the LLM bill.** Parking it in paper frees that budget for the equity soak, which is the leg actually being built.
+2. **A crypto arm would contaminate the soak's primary output.** Gate 1's headline result is a **nonzero equity trade count**, still unproven. A soak in which 86% of debates are crypto reports a healthy-looking aggregate while the number that matters stays unmeasured.
+3. **Crypto currently has no exit rule.** [#667](https://github.com/dd-jp/samurai-trading-system/issues/667) resolved that crypto has no time flatten — the rule cannot apply to a 24/7 venue, and the reason flat-by-close exists (a closed market cannot fill a stop) does not hold there. Crypto's exit is held instead by the venue-side stop and the profit ladder, and the ladder does not exist yet. Soaking crypto now would soak an incomplete strategy.
+
+### The price, recorded rather than argued away
+
+- **[ADR-0016](0016-universe-leveraged-etps-ungated.md)'s #1 measured lever is deliberately unpulled**: the crypto fee schedule, **£0 → £1,140–1,660/yr** — the largest item on the book's economics, ahead of #617 (£252 → £89/yr) and catalyst-gating (~£5/yr, likely net negative).
+- [ADR-0015](0015-live-venue-account-and-book-split.md)'s **£750 crypto allocation is idle** for the duration.
+- [#671](https://github.com/dd-jp/samurai-trading-system/issues/671)'s exchange/fee verdict and [#673](https://github.com/dd-jp/samurai-trading-system/issues/673)'s stake decision sit unexercised; #667's fee-tier day count does not accrue.
+- **No crypto paper history accumulates while parked.** The day crypto unparks, that leg starts its soak from zero rather than resuming one. This was the strongest argument available against the decision and is recorded as its cost.
+
+### The unpark gate
+
+**Crypto must not be unparked until a working exit rule exists** — per #667, the venue-side stop plus the profit ladder. Unparked earlier, the crypto leg would run with the time flatten deliberately disabled and nothing put in its place.
+
+The gate is satisfied by **a working exit rule, not specifically by the tranche form**: the neutral single bracket plus a venue-side stop meets #667's requirement. Stated explicitly so the gate is not misread as blocking on the ladder-vector measurement in [#708](https://github.com/dd-jp/samurai-trading-system/issues/708).
+
+### What stays in the codebase, inert
+
+`AssetClass`, `AlwaysOpenCalendar`, `sessionCalendars` and the crypto config keys **stay**. They cost nothing inert, and `AlwaysOpenCalendar`'s `sessionEnd → null` **is #667's ruling enforced by the type system** — deleting it would discard a resolved decision and invite a later session to re-derive it wrongly. `yarn smoke` keeps BTC-USD explicitly, so the smoke gate still exercises the crypto path and still distinguishes a closed session from a no-trade run.
+
 ## Stated open risk
 
 The recorded thesis rests on a selector with **no observed win rate**. [#625](https://github.com/dd-jp/samurai-trading-system/issues/625) measured 96 debates and 0 trades — the stocks conviction ceiling was 0.5478 against a 0.55 floor, and debate rounds moved conviction by zero. Adopting (a) does not make that evidence exist; it makes producing it the next blocking task.

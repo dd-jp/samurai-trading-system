@@ -87,6 +87,55 @@ Measured on a **drift-removed** series, so this is the pure volatility envelope 
 
 **The crypto brackets are not set by this ADR.** #660's 4%/2% levels are unmeasured. The same engine applies — crypto 1-minute is free from 2021-01-04 per doc 33 — but "session" is undefined for crypto until [#667](https://github.com/dd-jp/samurai-trading-system/issues/667) fixes the flatten rule, so the measurement is blocked, not skipped.
 
+## Amendment — 2026-08-16: the exit is a tranche ladder, and the reason is truncation
+
+- **Amends:** Decision 3 (the neutral bracket as the exit *rule*) and Decision 4 (re-selection versus re-calibration)
+- **Earned by:** [#704](https://github.com/dd-jp/samurai-trading-system/issues/704), grilled and resolved 2026-08-16 under map [#703](https://github.com/dd-jp/samurai-trading-system/issues/703)
+- **Parameters pending:** [#708](https://github.com/dd-jp/samurai-trading-system/issues/708)
+
+**The declared exit rule changes from a single neutral bracket to a tranche ladder over one shared wide stop.** Decision 4 requires that a rule change be recorded as one rather than arriving as new percentages, and this is that record.
+
+### The justification, and the one that was rejected
+
+**Rejected: the width-formula argument.** The ladder was originally motivated by `required edge = cost / (take-profit + |stop|)` evaluated at a blended width — `0.18 / (1.75 + 2.16) = 4.60 pp`. **That figure is withdrawn.** The formula does not merely lose exactness away from neutrality; it does not model a ladder at all. It treats the ladder as one position that either wins a blended 1.75% or loses 2.16% on full size, and a ladder produces neither outcome: reach +1.0%, then reverse into the stop, and the result is +1.0% on half and −2.16% on half — a path the expression has no term for. Numerator and denominator are both wrong, so 4.60 pp is not a bound in either direction. An amendment resting on it would be precisely the silent re-selection Decision 4 forbids.
+
+**Recorded instead: truncation under flat-by-close.**
+
+> ADR-0014 forces a close at session end. **A truncated bracket is a different instrument from the one Decision 3 measured.**
+>
+> Decision 3's reach rates ask *"is the take-profit hit before the stop?"* over an untruncated path. Under a hard flatten — and inside the 14:30–15:45 entry window recorded on [#706](https://github.com/dd-jp/samurai-trading-system/issues/706), which leaves a last entry roughly 40 minutes — "has not reached the target yet" stops being a non-event and becomes a **realised outcome**: the position closes at market at whatever the tape offers, having paid the full round trip.
+>
+> So the single bracket's dominant failure mode at this horizon is not *stopped out*. It is **flattened at an arbitrary price** — an outcome absent from the derivation the bracket comes from. The ladder converts *"never reached +2%, closed at market"* into *"captured +1% on half the size"*.
+
+The claim is **not** that a ladder improves expectancy at the bracket. Doc 11 found that a ladder neither creates nor destroys edge *inside a fixed bracket*, and that finding is not disputed — it tested trimming inside fixed geometry, not exit under truncation. The claim is that **under truncation, realising part of the move beats holding the whole position to an arbitrary close.**
+
+Two properties make this admissible under Decision 4 where the formula argument was not. It is **falsifiable** — #708's rider measures truncated ladder outcomes against truncated single-bracket outcomes over the same tape. And it names a mechanism the original derivation **did not model**, which is re-derivation under a changed premise rather than re-selection of percentages under an unchanged one.
+
+### What is amended, and what is not
+
+**Amended:** the declared exit rule is now *a tranche ladder over one shared stop, flat by close*, in place of *the single neutral bracket*.
+
+**Not amended — Decision 3's arithmetic stands:** the neutral-bracket levels, the 4.33 pp and 3.35 pp bars, and the bijection from take-profit to neutral stop (+1.0↔−1.03, +2.0↔−2.16, +3.0↔−3.35). That bijection is what makes the ladder's cost explicit: **one shared stop can be neutral for at most one tranche.** Against −2.16% the +2.0% tranche is neutral; +1.0% sits over a stop wider than its partner and +3.0% over one tighter, each carrying an `E_gross` term of opposite sign. This is stated rather than hidden, because it is exactly why the vector needs measuring.
+
+**Not amended — Decision 4's discipline:** this is one rule change, recorded once, with its justification named. It does not license revisiting the percentages later without a further amendment.
+
+### The tranche vector is NOT set here
+
+The candidate vector — 50%@+1.0% / 25%@+2.0% / 25%@+3.0% over a shared −2.16% stop — and **the bar the signal must clear** are both **pending #708's ladder rider**, which measures `E_gross` per tranche and computes `Δ = (cost − E_gross)/width` directly rather than assuming neutrality. They are deliberately absent from this amendment; #704 resolved the *rule* precisely because the map was grilled before the measurement ran.
+
+**Until the rider reports, the only exact bar is +4.33 pp on the neutral single bracket** (index; +3.35 pp single-stock). That is the figure the screening axis, #708's own adopt condition, and the falsifier-arm comparison cite. **Not 4.60.**
+
+**Consequence for implementation:** the build ships the neutral single bracket +2.00 / −2.16 first — its bar is exact and needs no amendment — and gains tranches once they are priced.
+
+**If the rider prices the ladder worse than the single bracket under truncation,** the truncation argument is falsified and the single bracket stands. Recorded up front so that outcome is a result rather than a reversal.
+
+### The −0.5% stop is dead, and that does not depend on any of the above
+
+Two independent grounds, neither touching neutrality or truncation:
+
+- **Width.** Over the candidate tranches a −0.5% stop needs **≥8.00 pp** (3× index) and **≥18.2 pp** (3× single-stock, i.e. 68.2% directional accuracy). Both are floors, by the bijection argument.
+- **Stop fidelity.** [`docs/research/41-tick-latency-economics.md`](../research/41-tick-latency-economics.md) Result 2 measures the conditional tail as `g(D) = 0.525%·√D` on a 3× equity ETP. **A −0.5% stop is smaller than its own execution error** at any cadence we can run — at τ=15 it delivers ≈−2.4%.
+
 ## Known weaknesses
 
 **The baseline is an unconditional long at the open.** That is deliberately naive — it is the bar, not a prediction that the strategy loses money. It is also **long-only**; the short ETP lines are unmeasured.
