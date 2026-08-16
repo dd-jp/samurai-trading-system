@@ -13,14 +13,16 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import type { InstrumentSubclass, OrderIntent } from '../../shared/index.js';
+import type { Clock, InstrumentSubclass, OrderIntent } from '../../shared/index.js';
 import { RiskManagerImpl } from './index.js';
 import { RISK_THRESHOLD_KEYS } from './risk-thresholds.js';
 import type {
   BreakerState,
   CorrelationEstimate,
+  PersistedBreakerState,
   PortfolioView,
   RiskConfig,
+  RiskDecision,
   SubclassDeploymentCap,
 } from './types.js';
 
@@ -75,14 +77,29 @@ const NO_CORRELATION: CorrelationEstimate = {
 
 const portfolioWith = (exposure: Record<string, number>): PortfolioView => ({
   equity: 100_000,
-  gross_exposure: Object.values(exposure).reduce((sum, e) => sum + e, 0),
+  peak_equity: 100_000,
+  drawdown_pct: 0,
   exposure_by_instrument: exposure,
   exposure_by_class: { crypto: 0, stocks: 0 },
-  drawdown_pct: 0,
-  daily_pnl_pct: 0,
-  daily_pnl_pct_by_class: { crypto: 0, stocks: 0 },
-  open_position_count: Object.keys(exposure).length,
+  gross_exposure: Object.values(exposure).reduce((sum, e) => sum + e, 0),
+  // `known: true` throughout: an unknown daily P&L is its own rejection
+  // (`daily_pnl_unknown:portfolio`), and every assertion here is about which
+  // CAP bound the size, so nothing upstream of the caps may reject first.
+  daily_pnl: {
+    crypto: { known: true, pct: 0 },
+    stocks: { known: true, pct: 0 },
+    portfolio: { known: true, pct: 0 },
+  },
+  consecutive_losses: 0,
 });
+
+const CLOCK: Clock = { now: () => new Date('2026-08-19T14:35:00Z') };
+
+/** Nothing tripped, so no breaker can pre-empt the cap under test. */
+const NO_PERSISTED_BREAKERS: PersistedBreakerState[] = [
+  { tier: 'portfolio_drawdown', tripped: false, tripped_at: null, reset_at: null, reason: null },
+  { tier: 'kill_switch', tripped: false, tripped_at: null, reset_at: null, reason: null },
+];
 
 /** One entry at $1/share, so `size` reads directly as notional. */
 const intentFor = (instrument: string, notional: number): OrderIntent => ({
@@ -120,18 +137,39 @@ const decide = (
   cap: SubclassDeploymentCap | null = DEPLOYMENT_CAP,
 ) =>
   new RiskManagerImpl(configWith(cap ?? undefined)).evaluate({
+    trace_id: 'trace-d5',
     intent,
+    clock: CLOCK,
     portfolio: portfolioWith(exposure),
     breakers: NO_BREAKERS,
+    next_breaker_state: NO_PERSISTED_BREAKERS,
     correlation: NO_CORRELATION,
+    cii: {},
+    mode: 'paper',
   });
+
+/**
+ * `modifications` is null on a REJECTED decision, so an unguarded
+ * `decision.modifications.final_size` would fail with a null property access
+ * rather than by naming the decision that actually arrived. Every assertion
+ * below is about a size, so a rejection is always the more interesting news.
+ */
+const finalSizeOf = (decision: RiskDecision): number => {
+  const { modifications } = decision;
+  if (modifications === null) {
+    throw new Error(
+      `expected a sized decision, got ${decision.status} bound by ${decision.binding_constraint}`,
+    );
+  }
+  return modifications.final_size;
+};
 
 describe('ADR-0018 D5 deployment envelope', () => {
   it('sizes a 3x index ETP to 35% of the equity leg', () => {
     const decision = decide(intentFor('3USL', 10_000));
 
     expect(decision.status).toBe('approved');
-    expect(decision.modifications.final_size).toBeCloseTo(INDEX_CAP, 6);
+    expect(finalSizeOf(decision)).toBeCloseTo(INDEX_CAP, 6);
     expect(decision.binding_constraint).toBe('per_subclass_deployment_cap');
   });
 
@@ -141,7 +179,7 @@ describe('ADR-0018 D5 deployment envelope', () => {
     // and D5 would be unimplemented while looking implemented.
     const decision = decide(intentFor('3LAP', 10_000));
 
-    expect(decision.modifications.final_size).toBeCloseTo(SINGLE_STOCK_CAP, 6);
+    expect(finalSizeOf(decision)).toBeCloseTo(SINGLE_STOCK_CAP, 6);
     expect(SINGLE_STOCK_CAP).toBeLessThan(INDEX_CAP);
   });
 
@@ -152,7 +190,7 @@ describe('ADR-0018 D5 deployment envelope', () => {
     // 23.1% drawdown at 35%. Two different tickers, one envelope.
     const decision = decide(intentFor('3UKL', 10_000), { '3USL': 200 });
 
-    expect(decision.modifications.final_size).toBeCloseTo(INDEX_CAP - 200, 6);
+    expect(finalSizeOf(decision)).toBeCloseTo(INDEX_CAP - 200, 6);
   });
 
   it('nets a scale_in against the position it adds to', () => {
@@ -171,7 +209,7 @@ describe('ADR-0018 D5 deployment envelope', () => {
     // A single-stock holding must not consume the index envelope.
     const decision = decide(intentFor('3USL', 10_000), { '3LAP': 180, 'BTC-USD': 500 });
 
-    expect(decision.modifications.final_size).toBeCloseTo(INDEX_CAP, 6);
+    expect(finalSizeOf(decision)).toBeCloseTo(INDEX_CAP, 6);
   });
 
   it('does not bind on a subclass D5 measured no envelope for', () => {
@@ -180,7 +218,7 @@ describe('ADR-0018 D5 deployment envelope', () => {
     // still bounds it.
     const decision = decide(intentFor('BTC-USD', 10_000));
 
-    expect(decision.modifications.final_size).toBe(10_000);
+    expect(finalSizeOf(decision)).toBe(10_000);
     expect(decision.binding_constraint).toBeNull();
   });
 
@@ -188,7 +226,7 @@ describe('ADR-0018 D5 deployment envelope', () => {
     // The backtest harness and every test predating subclasses.
     const decision = decide(intentFor('3USL', 10_000), {}, null);
 
-    expect(decision.modifications.final_size).toBe(10_000);
+    expect(finalSizeOf(decision)).toBe(10_000);
   });
 
   it('throws on an unclassified instrument rather than sizing unbounded', () => {

@@ -31,7 +31,7 @@ const MI_CONTEXT_WINDOW_MS = 24 * 60 * 60 * 1000;
  * `sma` reads the closes directly, so an SMA(14) is exactly 14 bars: the
  * `params.period ?? lookback` fallback resolves to 14 and needs no `+ 1`.
  */
-const SMA_SPEC: IndicatorSpec = {
+export const SMA_SPEC: IndicatorSpec = {
   indicator: 'sma',
   params: {},
   timeframe: INDICATOR_TIMEFRAME,
@@ -47,8 +47,15 @@ const SMA_SPEC: IndicatorSpec = {
  * `key_points` as "RSI(14)". Issue #319 made that throw instead of lying, so
  * the width is now correct rather than merely unenforced. Leaving `params`
  * empty and bumping only `lookback` would have silently made this an RSI(15).
+ *
+ * Exported for the same reason `atrIndicatorSpec` is (#304): so
+ * `indicator-golden.test.ts` can pin THIS spec rather than a hand-rebuilt copy
+ * that would keep passing if the real one drifted. It pins one fact in
+ * particular — `lookback` is exactly `minimumBarsFor`, so `rsi`'s Wilder
+ * smoothing loop runs ZERO times here and the value the debate reads is the
+ * simple-mean seed. See that file's "what the live path actually asks for".
  */
-const RSI_SPEC: IndicatorSpec = {
+export const RSI_SPEC: IndicatorSpec = {
   indicator: 'rsi',
   params: { period: INDICATOR_LOOKBACK },
   timeframe: INDICATOR_TIMEFRAME,

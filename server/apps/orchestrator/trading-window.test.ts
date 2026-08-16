@@ -87,7 +87,13 @@ describe('the equity entry window (#706)', () => {
     const calendar = new LseRegularHoursCalendar();
     const end = calendar.sessionEnd(at('14:35'));
 
-    expect(end.toISOString()).toBe(new Date('2026-08-19T16:30:00+01:00').toISOString());
+    // `sessionEnd` returns null for a venue with no close (`AlwaysOpenCalendar`,
+    // #667). Asserted rather than `!`-ed away: a null here would mean the LSE
+    // calendar had stopped bounding the session, which is the failure this
+    // test exists to catch, and `.toISOString()` on null throws an unreadable
+    // TypeError instead of naming it.
+    expect(end).not.toBeNull();
+    expect((end as Date).toISOString()).toBe(new Date('2026-08-19T16:30:00+01:00').toISOString());
   });
 });
 

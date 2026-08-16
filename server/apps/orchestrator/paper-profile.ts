@@ -949,7 +949,17 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
   // `llmBudgetUsd` and `tickIntervalMs` joined `rateLimiterConfig` here under
   // ADR-0008: a soak that inherited the 60s default interval, or no ceiling at
   // all, would silently cost ~13x its budget.
-  Required<Pick<ProductionConfig, 'rateLimiterConfig' | 'llmBudgetUsd' | 'tickIntervalMs'>> {
+  //
+  // `stocksTradingWindow` joined them under #706 for the same reason and one
+  // more: the fallback when it is absent is `?? true` (`scheduler.ts:74`) —
+  // i.e. the whole LSE session, which is the OPPOSITE of the constraint. A
+  // profile that dropped it would tick 08:00-16:30 and look healthy doing it.
+  Required<
+    Pick<
+      ProductionConfig,
+      'rateLimiterConfig' | 'llmBudgetUsd' | 'tickIntervalMs' | 'stocksTradingWindow'
+    >
+  > {
   const caps = riskCapsFor(equityAnchorUsd);
   // ADR-0018 D5. Built from the same universe this profile returns below, so
   // the classification the gate resolves against and the instruments the run
@@ -1884,7 +1894,12 @@ export function paperStartingProfile(
     | 'ciiConsumerConfig'
     | 'feedback'
   > &
-  Required<Pick<ProductionConfig, 'rateLimiterConfig' | 'llmBudgetUsd' | 'tickIntervalMs'>> {
+  Required<
+    Pick<
+      ProductionConfig,
+      'rateLimiterConfig' | 'llmBudgetUsd' | 'tickIntervalMs' | 'stocksTradingWindow'
+    >
+  > {
   if (mode === 'live') {
     throw new Error(
       'Orchestrator cannot start: SAMURAI_MODE=live was requested against the PAPER STARTING ' +
