@@ -1056,6 +1056,62 @@ describe('decide — flat by close (#668)', () => {
     expect(outcome.diagnostics).toEqual([]);
   });
 
+  it('reports corrupt bar data that yields a non-finite ATR (#698)', async () => {
+    // The third kind, and the one whose REACHABILITY had to be established
+    // rather than assumed. `computeIndicator` throws on a short window and on a
+    // misordered one, so the natural reading is that it throws here too and the
+    // `Number.isFinite` else-branch is dead code — a mechanism nothing can call,
+    // which is this repo's dominant defect class. It is not: `assertAscending`
+    // checks `close_time` only, and `atr()` is plain arithmetic over the price
+    // legs, so a non-finite price PROPAGATES to the return value instead of
+    // raising. This test is what keeps that true.
+    const corrupt = bars(15, 2).map((bar, index) =>
+      index === 7 ? { ...bar, high: Number.NaN } : bar,
+    );
+
+    const outcome = await decideWithReason(
+      traderInput({ marketData: new FixtureMarketData(corrupt) }),
+    );
+
+    // Unchanged behaviour: a stop cannot be priced off an ATR that does not
+    // exist, so the tick still skips — it is now merely audible while doing it.
+    expect(outcome.intent).toBeNull();
+    expect(outcome.skip_reason).toBe('atr_not_finite');
+    expect(outcome.diagnostics.map((diagnostic) => diagnostic.kind)).toEqual(['atr_not_finite']);
+  });
+
+  it('does NOT see a broken calendar while the book is flat — the known limitation (#698)', async () => {
+    // Pinned as a test rather than left as prose in the PR, because it is the
+    // DOMINANT state and not an edge: #625 recorded 96 debates and 0 trades, so
+    // the book is flat and the debate neutral on almost every tick, and
+    // `routeDecision` answers `neutral_direction_while_flat` before any calendar
+    // is consulted. A calendar that has stopped resolving sessions is therefore
+    // invisible until a position exists — which is exactly the tick where it
+    // starts to cost something.
+    //
+    // Left as-is deliberately: the asset class is not on `TraderInput` and is
+    // reached through `getMark`, so covering this path means adding a vendor
+    // fetch to the most frequent branch in the system. That is a behaviour
+    // change, and #698 asked for audibility without one. Tracked in the PR.
+    const muteCalendar = {
+      isOpen: () => true,
+      isTradingDay: () => true,
+      sessionStart: () => null,
+      sessionEnd: () => null,
+    } as unknown as TradingCalendar;
+
+    const outcome = await decideWithReason(
+      traderInput({
+        debate: debateResult({ direction: 'neutral' }),
+        positionState: async () => [],
+        sessionCalendars: { crypto: new AlwaysOpenCalendar(), stocks: muteCalendar },
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('neutral_direction_while_flat');
+    expect(outcome.diagnostics).toEqual([]);
+  });
+
   it('throws on a non-positive flatten window rather than silently disabling flat-by-close', async () => {
     // Zero is the dangerous value, not negative: it reads like "no offset" and
     // is what someone reaches for to "turn the window off", when what it
