@@ -4,7 +4,7 @@
  * "a vetted TA computation with fixed rounding; no floating nondeterminism."
  * Computed here — never inside analysts — so analysts stay stateless.
  */
-import type { Bar, IndicatorSpec } from './types.js';
+import { type Bar, INDICATOR_KINDS, type IndicatorKind, type IndicatorSpec } from './types.js';
 
 /** Fixed rounding so repeated computations are byte-identical. */
 const ROUNDING_PRECISION = 8;
@@ -198,6 +198,75 @@ export class InsufficientBarsError extends Error {
  * arrive, and this check would turn a mispriced tick into a dead one; revisit
  * it then rather than assuming it stays free.
  */
+/**
+ * One definition per kind, replacing the two parallel `switch` statements that
+ * `minimumBarsFor` and `computeIndicator` used to carry (#703 step B2).
+ *
+ * They were parallel in the literal sense: adding a kind meant editing both,
+ * and adding it to only the second is a silent, specific bug rather than a
+ * missing case. `minimumBarsFor`'s `default` threw `Unsupported indicator`,
+ * so a kind present only in `computeIndicator` would have thrown from the
+ * ARITY check with a message saying the indicator does not exist — while the
+ * arithmetic for it sat right there. Worse in the other direction: a kind whose
+ * arity was declared `period` when it consumes a predecessor computes over
+ * `period - 1` deltas and divides by `period`, which is a fabrication that
+ * returns a plausible number. This repo has paid for that exact mistake twice
+ * (the ATR off-by-one at `decide.ts:47-53`, the RSI(13)-labelled-14 at
+ * `technical-analyst.ts:40-49`).
+ *
+ * `Record<IndicatorKind, IndicatorDefinition>` makes both a compile error: the
+ * union has no member without a row, and no row can omit its arity.
+ */
+interface IndicatorDefinition {
+  /**
+   * Bars consumed purely to seed a predecessor, on top of `period`.
+   *
+   * `1` for `rsi` (the prior close, to form the first change) and `atr` (the
+   * previous close, for the true range's two gap legs). `0` for `sma`/`ema`,
+   * which read the closes directly. This IS the "N bars yield N-1 deltas" rule,
+   * stated once as data instead of twice as control flow.
+   */
+  readonly seedBars: 0 | 1;
+  /**
+   * Does the value depend on history BEYOND its window — i.e. does a longer
+   * warm-up change the answer for the same final bar?
+   *
+   * Drives `recommendedWarmupFor` and nothing else. `sma` is false: its value
+   * is `slice(-period)` and is warm-up-blind. `ema`, `rsi` and `atr` are true:
+   * each seeds over the first `period` and folds the remainder, so the seed's
+   * influence decays but never vanishes.
+   */
+  readonly recursive: boolean;
+  /** Takes the full window; each kind slices what it needs. Rounding is the caller's. */
+  readonly compute: (bars: Bar[], period: number) => number;
+}
+
+const INDICATORS: Record<IndicatorKind, IndicatorDefinition> = {
+  sma: { seedBars: 0, recursive: false, compute: (bars, period) => sma(closes(bars), period) },
+  ema: { seedBars: 0, recursive: true, compute: (bars, period) => ema(closes(bars), period) },
+  rsi: { seedBars: 1, recursive: true, compute: (bars, period) => rsi(closes(bars), period) },
+  atr: { seedBars: 1, recursive: true, compute: (bars, period) => atr(bars, period) },
+};
+
+/**
+ * Looked up rather than indexed, and it still throws.
+ *
+ * `IndicatorSpec.indicator` is typed `IndicatorKind`, so a well-typed caller
+ * cannot miss — but specs also arrive from JSON-ish config
+ * (`ProductionConfig.volatilityIndicator`) where the type is a claim rather
+ * than a check. An unchecked index would hand back `undefined` and fail at
+ * `.compute is not a function`, naming neither the spec nor the kind.
+ */
+function definitionFor(indicator: IndicatorKind): IndicatorDefinition {
+  const definition = INDICATORS[indicator];
+  if (definition === undefined) {
+    throw new Error(
+      `Unsupported indicator: ${indicator}. Known kinds: ${INDICATOR_KINDS.join(', ')}.`,
+    );
+  }
+  return definition;
+}
+
 function periodOf(spec: IndicatorSpec): number {
   const period = spec.params.period ?? spec.lookback;
   if (!Number.isInteger(period) || period < 1) {
@@ -226,18 +295,51 @@ function periodOf(spec: IndicatorSpec): number {
  * directly, so they need exactly `period`.
  */
 export function minimumBarsFor(spec: IndicatorSpec): number {
+  const definition = definitionFor(spec.indicator);
+  return periodOf(spec) + definition.seedBars;
+}
+
+/**
+ * A warm-up long enough that one more bar no longer moves the value — the
+ * WIDTH question, kept strictly separate from `minimumBarsFor`'s ARITY one.
+ *
+ * B1 measured what the difference costs. All three live specs (`RSI_SPEC`,
+ * `atrIndicatorSpec(14)`, `DEFAULT_VOLATILITY_INDICATOR`) sit at exactly
+ * `minimumBarsFor`, so `changes.slice(period)` is empty and the smoothing loop
+ * runs ZERO times: what the debate reads as "RSI(14)" is the simple-mean seed,
+ * Cutler's RSI rather than Wilder's. Against a converged warm-up on the same
+ * bar that is a median 4.6 RSI points, p90 12.0, and it flips the 70/30
+ * overbought/oversold classification on 18% of bars —
+ * `docs/reviews/indicator-characterisation-2026-08-16.md` F1/F2.
+ *
+ * **`minimumBarsFor` is deliberately NOT raised to this.** It is the
+ * fabrication floor: below it every kind here answers with a window it did not
+ * have, which is why #319 made it throw. `trader/decide.ts:126` pre-checks
+ * against it precisely to decide whether a genuine value is obtainable at all.
+ * Raising it would turn "this number would be better with more history" into
+ * "this instrument cannot trade", forfeiting cold-start ticks over a warm-up
+ * preference. The two questions have different answers and different
+ * consequences, so they get different functions.
+ *
+ * `4 x period + 1` is ~98% convergence for a Wilder smoother (each step retains
+ * `(period - 1) / period`, so `0.929^56 ~ 0.016` of the seed survives at
+ * period 14) and is the conventional figure rather than a fitted one — nothing
+ * here is permitted to search it, since ADR-0018 D4 caps the selection budget
+ * and a warm-up chosen by outcome is a fitted parameter.
+ *
+ * Windowed kinds get `minimumBarsFor` back unchanged. That is not a shortcut:
+ * `sma` reads `slice(-period)` and its value is warm-up-BLIND, pinned by
+ * `rsi-warmup.test.ts` at 14 bars of history against 400.
+ *
+ * Adopting this for a live spec is a separate, deliberate decision — it
+ * reprices every technical opinion in the system at once — and belongs to the
+ * wayfinder map, not to this function existing.
+ */
+export function recommendedWarmupFor(spec: IndicatorSpec): number {
+  const definition = definitionFor(spec.indicator);
   const period = periodOf(spec);
 
-  switch (spec.indicator) {
-    case 'sma':
-    case 'ema':
-      return period;
-    case 'rsi':
-    case 'atr':
-      return period + 1;
-    default:
-      throw new Error(`Unsupported indicator: ${spec.indicator}`);
-  }
+  return definition.recursive ? 4 * period + 1 : period + definition.seedBars;
 }
 
 /**
@@ -296,16 +398,5 @@ export function computeIndicator(bars: Bar[], spec: IndicatorSpec): number {
     });
   }
 
-  switch (spec.indicator) {
-    case 'sma':
-      return round(sma(closes(bars), period));
-    case 'ema':
-      return round(ema(closes(bars), period));
-    case 'rsi':
-      return round(rsi(closes(bars), period));
-    case 'atr':
-      return round(atr(bars, period));
-    default:
-      throw new Error(`Unsupported indicator: ${spec.indicator}`);
-  }
+  return round(definitionFor(spec.indicator).compute(bars, period));
 }

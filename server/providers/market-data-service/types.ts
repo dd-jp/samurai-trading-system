@@ -67,6 +67,19 @@ export interface Mark {
 }
 
 /**
+ * The indicator kinds `computeIndicator` can serve (#703 step B2).
+ *
+ * A `const` array rather than a bare union so the set can be ITERATED as well
+ * as type-checked — `indicator-golden.test.ts` walks it to assert every kind
+ * has a baseline, which is what stops a new kind arriving unmeasured. Every
+ * member has a row in `indicators.ts`'s `INDICATORS` registry, and TypeScript
+ * enforces that: the registry is a `Record` over this union.
+ */
+export const INDICATOR_KINDS = ['sma', 'ema', 'rsi', 'atr'] as const;
+
+export type IndicatorKind = (typeof INDICATOR_KINDS)[number];
+
+/**
  * A request for a service-computed technical indicator. The `lookback` is
  * the PINNED warm-up length: how many bars a recursive indicator (EMA, RSI,
  * ATR) is seeded over before producing `asOf`'s value. It is part of the
@@ -74,8 +87,16 @@ export interface Mark {
  * from a different history length is a different value under one key.
  */
 export interface IndicatorSpec {
-  /** 'sma' | 'ema' | 'rsi' | 'atr' ... */
-  indicator: string;
+  /**
+   * The union rather than `string` (#703 step B2). Verified absent from
+   * `contracts/` before narrowing, so this costs nothing on the wire — it is
+   * not a persisted or transmitted shape, only an in-process request.
+   *
+   * As `string` this accepted `'RSI'`, `'rsi14'` or a typo, and every one of
+   * them reached `computeIndicator`'s `default` and threw at TICK time, on a
+   * value the composition root could have rejected at boot.
+   */
+  indicator: IndicatorKind;
   params: Record<string, number>;
   lookback: number;
   /**

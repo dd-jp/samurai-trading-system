@@ -77,11 +77,20 @@ converged 200-bar warm-up on the same bar:
 
 `directionFrom` gates on 70/30 and `confidenceFrom` is `|rsi − 50| / 50`, so this is not an
 abstraction: nearly one bar in five, the analyst's `direction` and the weight the debate gives it
-both depend on a history length nobody chose. Step B2's `recommendedWarmupFor` (`4 × period + 1`)
-is where this gets a deliberate answer.
+both depend on a history length nobody chose.
 
-Deliberately **not** fixed here. Widening the warm-up reprices every technical opinion in the
-system, and a characterisation step establishes the baseline and changes nothing.
+**Status after B2:** the dial now exists — `recommendedWarmupFor(spec)` returns `4 × period + 1`
+for the recursive kinds and `minimumBarsFor` for `sma`, which is warm-up-blind. It is a **new
+export with no production caller**, and `minimumBarsFor` was deliberately not raised: it is the
+fabrication floor, `decide.ts:126` pre-checks against it, and raising it would turn "this number
+would be better with more history" into "this instrument cannot trade".
+
+So F2 stays **open**. Re-pointing `RSI_SPEC` at the recommendation reprices every technical
+opinion in the system at once, which is a decision for the wayfinder map rather than a side effect
+of adding the function. `indicator-registry.test.ts` pins both halves: that the recommendation
+converges (within 0.5 RSI points of a 200-bar warm-up, where the floor is strictly further away),
+and that all three live specs still sit on the floor — so adopting it will be a visible change to
+that assertion rather than a quiet one.
 
 ### F3 — A dead-flat window reads as maximum-confidence overbought. *(open, low frequency)*
 

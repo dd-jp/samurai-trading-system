@@ -47,11 +47,17 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { computeIndicator, InsufficientBarsError, minimumBarsFor } from './indicators.js';
-import type { Bar, IndicatorSpec } from './types.js';
+import { type Bar, INDICATOR_KINDS, type IndicatorKind, type IndicatorSpec } from './types.js';
 
 interface GoldenCase {
   name: string;
-  indicator: string;
+  /**
+   * Narrowed at the boundary by `assertKind` rather than declared and trusted.
+   * The fixture is JSON produced by a Python script, so this field is the one
+   * place a kind can arrive that the registry has never heard of — and the
+   * failure to catch it would be a golden case that silently stops running.
+   */
+  indicator: IndicatorKind;
   period: number;
   from: number;
   to: number;
@@ -81,6 +87,23 @@ const golden = JSON.parse(
 ) as GoldenFixture;
 
 /**
+ * The `as GoldenFixture` above is a claim about a file, and `indicator` is the
+ * one field where a wrong claim is silent: an unknown kind would make
+ * `definitionFor` throw with a message about the registry, from inside a case
+ * whose name says it is testing something else. Checked once, here, so the
+ * error names the fixture.
+ */
+for (const testCase of golden.cases) {
+  if (!(INDICATOR_KINDS as readonly string[]).includes(testCase.indicator)) {
+    throw new Error(
+      `indicator-golden.json case "${testCase.name}" names an unknown kind ` +
+        `"${testCase.indicator}". Known: ${INDICATOR_KINDS.join(', ')}. ` +
+        'Regenerate with generate-indicator-golden.py rather than editing by hand.',
+    );
+  }
+}
+
+/**
  * `instrument`/`timeframe`/`source` are audit fields no indicator reads, so
  * the fixture does not carry 400 copies of them.
  */
@@ -102,7 +125,7 @@ const BARS: Bar[] = golden.bars.map((raw) => ({
  * spec: `params.period` selects the indicator's own window inside the pinned
  * warm-up.
  */
-const specFor = (kind: string, period: number, windowLength: number): IndicatorSpec => ({
+const specFor = (kind: IndicatorKind, period: number, windowLength: number): IndicatorSpec => ({
   indicator: kind,
   params: { period },
   lookback: windowLength,
@@ -139,7 +162,11 @@ describe('computeIndicator against an independent reference', () => {
     // before adding any new kind. If B4/B5 add a kind and this list is not
     // extended with it, this fails.
     const covered = new Set(golden.cases.map((entry) => entry.indicator));
-    expect([...covered].sort()).toEqual(['atr', 'ema', 'rsi', 'sma']);
+    // Compared against the REGISTRY, not a literal (#703 B2). As a literal this
+    // guard had the defect it exists to prevent: adding a kind to `INDICATORS`
+    // left it passing, because it only ever asserted the four names written
+    // here. Now a kind without a golden case fails this line by name.
+    expect([...covered].sort()).toEqual([...INDICATOR_KINDS].sort());
   });
 });
 
@@ -147,7 +174,11 @@ describe('the boundary the goldens sit on', () => {
   // The comfortable window is where every seeding convention agrees. The
   // boundary is where they diverge, and it is the assertion a self-referential
   // test can never make.
-  for (const kind of ['sma', 'ema', 'rsi', 'atr']) {
+  // Driven off the registry rather than a hand-written list (#703 B2), so a
+  // new kind fails HERE — at `caseNamed`, with "no golden case named
+  // boundary_<kind>_14" — instead of shipping with no boundary baseline. A
+  // literal list would have quietly kept passing for the four it names.
+  for (const kind of INDICATOR_KINDS) {
     const testCase = caseNamed(`boundary_${kind}_14`);
 
     it(`${kind}: the golden window is exactly minimumBarsFor, not one bar more`, () => {
