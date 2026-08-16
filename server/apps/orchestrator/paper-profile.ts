@@ -446,12 +446,17 @@ const PAPER_ANALYST_WEIGHT_TRAVERSE_CYCLES = 20;
  *   David resolved #377 on 2026-08-06 the other way — the Debate Engine
  *   SHOULD read `analyst_weights` — and debate-engine-spec.md now carries a
  *   "Module: Weighted Debates" section saying so. The reader is #435, still
- *   open, deliberately: at ADR-0008's 15-minute cadence attribution runs over
- *   near-empty samples, so weights barely leave their seeds across a whole
- *   soak, and a mechanism fed noise is indistinguishable from one that works
- *   (#430). So this is a KNOWN GAP awaiting a cadence that produces trades,
- *   not a decision that weights are unread by design. See the `weights` dial
- *   below for what does move them.
+ *   open, deliberately: attribution runs over near-empty samples, so weights
+ *   barely leave their seeds across a whole soak, and a mechanism fed noise is
+ *   indistinguishable from one that works (#430). So this is a KNOWN GAP
+ *   awaiting a cadence that produces trades, not a decision that weights are
+ *   unread by design. See the `weights` dial below for what does move them.
+ *
+ *   Note the tick cadence is NOT the lever here, and reading it as one was the
+ *   error #617 exposed. Debates are keyed to 1h bars, so the sample size that
+ *   starves attribution is set by the bar and the trade count, not by τ —
+ *   stepping 15 min -> 2 min (#670) produces exactly as many debates as before.
+ *   What starves it is #625's ceiling: 96 debates, 0 trades.
  * - **Strategy params / risk thresholds** — moved only by `proposals`, and the
  *   profile supplies none, because nothing in the repo produces one. See the
  *   two empty records below for why they are empty rather than pre-declared.
@@ -1424,36 +1429,63 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
      */
     llmBudgetUsd: 50,
     /**
-     * DERIVED from the budget above — 15 minutes, up from the 60s
-     * `DEFAULT_TICK_INTERVAL_MS`.
+     * DERIVED — **2 minutes, down from 15** (#670, whose trigger has fired).
      *
-     * The arithmetic, from #400's resolution comment (which counted
-     * instrument-passes/day at 60s as 2 × 1,440 crypto + 4 × 390 stocks =
-     * 4,440, against the ~$45/day estimate in this file):
+     * ### Why 15 was right, and why it stopped being right
      *
-     *   60s   -> 4,440 passes/day -> ~$45/day  -> ~$630 / 14d
-     *   15min ->   296 passes/day -> ~$3.0/day -> ~$42  / 14d
+     * The old value was derived against spend that scaled with tick rate.
+     * While #617 was open the debate re-ran on every tick *within* a bar, so
+     * cost was strictly proportional to 1/τ, and
+     * `docs/research/41-tick-latency-economics.md` solved the trade-off:
      *
-     * 15 min rather than the ~12.6 min the budget divides to exactly: the
-     * saving is an upper bound (see `llmBudgetUsd`), so the margin is
-     * deliberate, and a round number is easier to reason about in a soak log.
+     *     T(τ) = C/τ + B·√τ        τ* = (2C/B)^(2/3) = 21.8 min
      *
-     * **This is NOT #400's decision, and does not overturn it.** David chose
-     * crypto 2 min / stocks 5 min there, for a run whose budget is a live
-     * budget. Those are per-asset-class cadences and the gating that makes
-     * them expressible is #397's Phase 1, which is not built — today there is
-     * one base interval for every instrument. So this single value is what a
-     * $50 paper soak reduces to on the machinery that exists. A live run
-     * supplies its own `tickIntervalMs` (and, once #397 lands, its own
-     * per-class cadences) from a composition root with a live budget.
+     * — with τ = 15 already on the expensive side of optimal. #670 recorded
+     * the ruling as "hold at 15m, step to 2m with #617".
      *
-     * No dial needs retuning to go slower: #400 established that
-     * `max_signal_age` and `drift_tolerance_pct` both measure WITHIN-pass
-     * intervals (`decision_timestamp` is the pass's own `mark.observed_at`,
-     * and `getMark` re-fetches unconditionally with no TTL cache), so the tick
+     * **#617 is closed (`7d68fa0`).** One run per bar now, so `C` collapses to
+     * ~0, the LLM term vanishes from the objective, and `T(τ) = B·√τ` is
+     * monotonically increasing — the optimum jumps to the smallest τ the pass
+     * duration allows (doc 41's conclusion, line 106).
+     *
+     * ### Why 2 and not 1
+     *
+     * Doc 41 computes the unconstrained optimum as τ = 1 min against a ~13s
+     * pass and `production.ts`'s dropped-tick guard. 2 min is #670's recorded
+     * step and leaves ~6x headroom over the measured pass rather than ~4.6x,
+     * which matters because the pass duration is a measurement of the system
+     * as it was, and section B widens the analyst's indicator set.
+     *
+     * ### What this buys, given entries are still bar-gated
+     *
+     * Entries are gated by `DEBATE_BAR_TIMEFRAME_MS` (1h), not by τ — a faster
+     * tick does not produce more debates. What it buys is **exit resolution**:
+     * the bracket is evaluated every tick, and doc 41 Result 2 measures the
+     * conditional tail as `g(D) = 0.525%·√D` on a 3x equity ETP. At τ = 15 a
+     * stop overshoots by ≈-1.97% in the worst 5% of exits; at τ = 2 that falls
+     * to ≈-0.72%. On a -2.16% stop that is the difference between a stop that
+     * means what it says and one that does not.
+     *
+     * ### Cost
+     *
+     * ~0, and that is the whole point: post-#617 spend is keyed to the debate
+     * bar, so `llmBudgetUsd: 50` above is untouched by this change. Doc 41's
+     * "independent hard floor" of τ ≥ 3.69 min does **not** survive #617 — it
+     * was derived as `0.878 × 15 × 14 / 50`, i.e. from spend scaling with 1/τ,
+     * which is exactly the assumption #617 removed.
+     *
+     * ### Unchanged
+     *
+     * **This is still NOT #400's decision.** David chose crypto 2 min / stocks
+     * 5 min there; those are per-asset-class cadences needing #397's Phase 1,
+     * which is not built — there is one base interval for every instrument.
+     *
+     * No dial needs retuning to go faster, for the same reason it needed none
+     * to go slower: #400 established that `max_signal_age` and
+     * `drift_tolerance_pct` both measure WITHIN-pass intervals, so the tick
      * interval never enters either gate's arithmetic.
      */
-    tickIntervalMs: 15 * 60_000,
+    tickIntervalMs: 2 * 60_000,
     /**
      * `SPEC` — the universe a paper run trades (#381). ADR-0001 names this
      * exact set ("default universe SPY/QQQ/AAPL/TSLA/BTC-USD/ETH-USD",
@@ -1483,14 +1515,20 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
      *
      * > **STALE SINCE ADR-0008 (2026-08-06), and kept because ADR-0008 cites
      * > it as its own source.** Everything below is computed at the 60s
-     * > `DEFAULT_TICK_INTERVAL_MS`. This profile now sets
-     * > `tickIntervalMs: 15 * 60_000`, so the ~$45/day figure is the BEFORE
-     * > number, not what a soak on this profile costs — that is ~$3/day, ~$42
-     * > over 14 days, and it is capped at $50 by `llmBudgetUsd` regardless.
-     * > The *reasoning* below is what survived the change and is why the cap
-     * > exists: the cycle is `pass duration + interval`, so spend does not
-     * > scale linearly with cadence and no arithmetic here can promise a
-     * > dollar figure.
+     * > `DEFAULT_TICK_INTERVAL_MS`, so the ~$45/day figure is a BEFORE number.
+     * >
+     * > **Doubly stale since #617 closed (`7d68fa0`), and this is the more
+     * > important correction.** Every figure below — including ADR-0008's own
+     * > 15-minute derivation — assumes spend scales with the tick rate. It no
+     * > longer does: `debate-adapter.ts` short-circuits the same bar ahead of
+     * > the spend cap and every LLM call, so **spend is keyed to the 1h debate
+     * > bar and is independent of τ**. That is what let #670 step the cadence
+     * > to 2 min for free, and it is why the measured soak figure was $0.878/day
+     * > against ADR-0008's $3.00/day estimate (doc 41 — a 3.4x overestimate).
+     * >
+     * > The *reasoning* below is what survived both changes, and it is why the
+     * > cap exists rather than a promise: no arithmetic here can promise a
+     * > dollar figure, which is precisely why `llmBudgetUsd` fails closed.
      *
      * The naive reading is that six instruments is six times the debate spend
      * of one. It is closer to **1.6x**, and the reason is worth writing down
@@ -1525,6 +1563,13 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
      * debate cost roughly 8x this. ADR-0009 therefore reopens cadence as a
      * lever — it does not pull it. Changing the interval is its own decision
      * with its own evidence, not a side effect of a provider swap.
+     *
+     * **That decision has since been taken, on its own evidence, and it
+     * removed the lever rather than pulling it.** #617 keyed spend to the 1h
+     * debate bar instead of the tick, so cadence stopped being a cost lever at
+     * all; doc 41 then measured what a minute of delay actually costs and #670
+     * stepped the interval to 2 min. Per-run units are $0.0060 measured, not
+     * the $0.008-$0.036 estimated above.
      *
      * Two things that make the range wide rather than the estimate precise,
      * both stated rather than smoothed over: debates that complete FASTER than
@@ -1589,15 +1634,20 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
      * **`maxDebates` — DERIVED from #385's measured cadence**, at roughly 3x
      * headroom over it, per asset class.
      *
-     * > **The cadence these were derived from is 15x faster than the one this
-     * > profile now runs (ADR-0008: `tickIntervalMs` 60s -> 15 min).** Left
-     * > unchanged deliberately: this budget is a RUNAWAY guard, and an
-     * > oversized ceiling is permissive rather than wrong — it refuses only
-     * > pathological rates, which is exactly its job. Retuning it down to the
-     * > new cadence would make it a second, redundant cost control and put it
-     * > in conflict with `llmBudgetUsd`, which is the actual budget. Read the
+     * > **The cadence these were derived from is 2x faster than the one this
+     * > profile now runs** (`tickIntervalMs` 60s -> 15 min under ADR-0008, then
+     * > back to 2 min under #670 once #617 made cadence free). Left unchanged
+     * > through both moves, deliberately: this budget is a RUNAWAY guard, and
+     * > an oversized ceiling is permissive rather than wrong — it refuses only
+     * > pathological rates, which is exactly its job. Retuning it to track the
+     * > cadence would make it a second, redundant cost control and put it in
+     * > conflict with `llmBudgetUsd`, which is the actual budget. Read the
      * > arithmetic below as "the rate at which something has gone wrong", not
      * > as a description of the soak's cadence.
+     * >
+     * > Note the step back to 2 min moved the *ticks*, not the debates: #617's
+     * > same-bar short-circuit means a faster tick issues no extra LLM calls,
+     * > so the headroom this guard leaves is unchanged in the units it counts.
      *
      * - crypto (BTC-USD, ETH-USD; trades 24/7) peaks OUTSIDE the equity
      *   session, where a pass is 2x15s and a cycle ~90s — 2 debates per 90s =

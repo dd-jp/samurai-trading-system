@@ -696,12 +696,20 @@ describe('the LLM spend cap is in the production path (ADR-0008)', () => {
 
   it('is what the checked-in paper profile actually carries', () => {
     // The value the soak runs on, pinned where the arithmetic behind it lives.
-    // $50 over 14 days is David's figure (2026-08-06); 15 min is what that
-    // budget reduces to on a single base tick interval.
+    // $50 over 14 days is David's figure (2026-08-06).
+    //
+    // The cadence was 15 min, derived when spend scaled with 1/τ. #617 closed
+    // (`7d68fa0`): `debate-adapter.ts` short-circuits the same bar ahead of
+    // the spend cap and every LLM call, so spend is keyed to the debate bar
+    // and the tick no longer prices it. #670 stepped it to 2 min accordingly.
+    //
+    // The budget assertion is the one that still belongs *here* — this file is
+    // about the cap being wired. The cadence's own justification, and the
+    // stop-fidelity ceiling that now bounds it, live in `paper-profile.test.ts`.
     const profile = paperStartingProfile('paper');
 
     expect(profile.llmBudgetUsd).toBe(50);
-    expect(profile.tickIntervalMs).toBe(15 * 60_000);
+    expect(profile.tickIntervalMs).toBe(2 * 60_000);
   });
 });
 
