@@ -210,6 +210,7 @@ import {
   type PersistenceInstances,
   type PortfolioSnapshot,
 } from './production/direct-bind.js';
+import { assertFlattenWindowCoversTickInterval } from './production/flatten-tick-coupling.js';
 import { withOnTradeClose } from './production/on-trade-close-hookup.js';
 import { withFlattenTail } from './production/stocks-tick-window.js';
 import { MarketDataVolatilityReadingProvider } from './production/volatility-reading-provider.js';
@@ -411,6 +412,19 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // one that makes it a boot failure rather than something a soak discovers
   // hours in, holding overnight.
   assertTraderConfigSound(config.traderConfig);
+
+  // Third of the same family, and the one that spans two configs (#670). The
+  // check above rejects a window of zero; this one rejects a window that is
+  // positive but narrower than the tick rate can land inside, which fails in
+  // exactly the same way — nothing flattens, nothing is logged, the book carries
+  // overnight. The effective interval is resolved here rather than read raw,
+  // because an unset `tickIntervalMs` still RUNS at
+  // `DEFAULT_TICK_INTERVAL_MS` and exempting it would exempt precisely the
+  // callers who never considered the interaction.
+  assertFlattenWindowCoversTickInterval(
+    config.traderConfig,
+    config.tickIntervalMs ?? DEFAULT_TICK_INTERVAL_MS,
+  );
 
   // `capitalCeilingUsd` is optional on `ProductionConfig` (paper/backtest
   // boots and the hundreds of tests that never touch live money need not set
