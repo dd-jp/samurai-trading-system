@@ -21,7 +21,7 @@ code, specs and `docs/coding-standards.md` cite individual findings by ID.
 
 | Report | Subject | Status |
 |---|---|---|
-| [`issue-triage-2026-08-16.md`](issue-triage-2026-08-16.md) | Every open issue judged against the specs **as amended** by the intraday re-specification pass | **OPEN** — 11 closed, 12 re-scoped. Two findings need a decision: #655 has no consumer under ADR-0016 D2 plus the single-axis screener, and #683's mediator lean is invisible to the #636 control |
+| [`issue-triage-2026-08-16.md`](issue-triage-2026-08-16.md) | Every open issue judged against the specs **as amended** by the intraday re-specification pass | **OPEN** — 10 closed, 12 re-scoped. Two findings need a decision: #655 has no consumer under ADR-0016 D2 plus the single-axis screener, and #683's mediator lean is invisible to the #636 control |
 | [`indicator-characterisation-2026-08-16.md`](indicator-characterisation-2026-08-16.md) | What `computeIndicator` actually computes, against an independent reference | **OPEN** — F1/F2: the live RSI(14) is the unsmoothed seed, and the missing warm-up flips the analyst's classification on ~18% of bars. F2 owned by #703 step B2 |
 | [`spec-research-alignment-2026-08-09.md`](spec-research-alignment-2026-08-09.md) | All 21 `docs/specs/` files + `CONTEXT.md` against the Stage 0 research layer (docs 10–15) | **OPEN** — F1 is cited by `CONTEXT.md:47`; decisions run through #631/#632 |
 | [`orchestrator-dashboard-architecture-2026-08-07.md`](orchestrator-dashboard-architecture-2026-08-07.md) | Is the architecture good enough for the orchestrator + dashboard | Verdict: good bones, targeted refactors. No re-architecture |

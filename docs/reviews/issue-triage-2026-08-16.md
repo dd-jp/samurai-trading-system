@@ -21,7 +21,7 @@ Applied mechanically, in this order:
 
 That last row overrode the others twice, and is why nothing that produced a number was closed.
 
-## Closed — 11
+## Closed — 10
 
 | # | Reason |
 | --- | --- |
