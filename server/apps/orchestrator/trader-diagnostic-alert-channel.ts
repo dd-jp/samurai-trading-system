@@ -8,10 +8,13 @@
  * being able to trust its calendar is a decision waiting on the operator, not a
  * beat.
  *
- * What it replaces on that path is `LoggingTraderDiagnosticAlertChannel`
- * (console-channels.ts), which writes the same facts to the log at `error` —
- * fine for a supervised run, and not an alert at all at 3am on day 9 of a
- * fourteen-day soak.
+ * Unlike the other ten channels this one has NO `Logging…Channel` counterpart,
+ * and must not grow one: `postTraderDiagnosticAlert` (direct-bind.ts) writes
+ * every diagnostic to the log at `error` BEFORE it consults this port at all,
+ * so a log-only implementation would emit each condition twice. The port's own
+ * docblock (production/trader-diagnostic-alert.ts) is where that decision is
+ * recorded. What an absent channel costs is the audible copy — the thing that
+ * reaches somebody at 3am on day 9 of a fourteen-day soak — never the record.
  *
  * A failed post rejects rather than being swallowed; `buildTraderStep` catches
  * and logs it, so the tick still returns its decision and the undelivered alert
