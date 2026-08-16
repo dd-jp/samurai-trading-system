@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULT_TRADER_CONFIG } from '../../pipeline/trader/index.js';
 import { GdeltGkgClient, MiArchiveStore } from '../../providers/market-intelligence/index.js';
+import { TokenBucket } from '../../shared/index.js';
 import { openSharedStore, sharedStorePath } from '../../shared/store/index.js';
 import {
   assertStorePathMatchesMode,
@@ -31,8 +32,21 @@ import type { Logger } from './types.js';
  * vendor client here GDELT needs no credentials — so without this the suite
  * really did download a live 3.4MB batch and archive 200 real rows on every
  * run. Every `startFromEnvironment` call below passes it.
+ *
+ * The pacing override is not a detail. One client instance is shared by every
+ * boot in this file, and the shipped pacing is `capacity: 2,
+ * refillPerSecond: 0.2` — two tokens, then one per five seconds. That is the
+ * right pace for a real vendor and pure coupling for a stub that throws before
+ * it reaches a socket: from the third boot onward each poll parked ~4.6s in
+ * `rateLimiter.acquire()`, and once shutdown began draining the in-flight poll
+ * (#556) that wait became test wall-clock. The file went from 433ms to 20.5s
+ * and the seventh test failed on CI at 4998ms against a 5000ms budget — a test
+ * that asserts nothing about GDELT, failing because of how many boots preceded
+ * it. Pacing a stub buys nothing; the fence below is what keeps the suite
+ * offline.
  */
 const offlineGdeltClient = new GdeltGkgClient({
+  rateLimiter: new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 }),
   fetchImpl: (async () => {
     throw new Error('offline: the test suite must not reach GDELT');
   }) as unknown as typeof fetch,
