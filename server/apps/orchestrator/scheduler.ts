@@ -34,8 +34,19 @@ export interface SchedulerConfig {
   /** Gates stock instruments only; crypto never consults it. */
   calendar: TradingCalendar;
   /**
-   * An OPTIONAL narrowing of when equities may be entered, on top of — never
+   * An OPTIONAL narrowing of when equities are TICKED, on top of — never
    * instead of — the calendar (#706).
+   *
+   * **Read that as ticked, not entered, and do not pass a bare entry window.**
+   * The name and the policy below are about entries, but this predicate gates
+   * `TickPlan.instruments`, and `runOnce` runs the whole pipeline pass only for
+   * the instruments in that plan. An instrument this excludes gets no Analysts,
+   * no Debate, and no **Trader** — and the Trader is the only thing that
+   * flattens, since `withinFlattenWindow` is evaluated on a tick and there is
+   * no session-end job. So an entry window ending before the flatten window
+   * begins silently switches flat-by-close off. It was landed that way and
+   * caught before the soak; `production/stocks-tick-window.ts` is what the
+   * composition root now installs instead, and carries the full argument.
    *
    * **Window is policy; calendar is venue, and they must not be merged.**
    * `LseRegularHoursCalendar`'s 08:00-16:30 is venue truth, and the same

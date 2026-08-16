@@ -58,6 +58,13 @@ describe('the equity entry window (#706)', () => {
     // Half-open at the top, matching `isOpen`: 15:45:00 is already past.
     expect(stocksFiringAt(at('15:45'))).toBe(false);
     expect(stocksFiringAt(at('16:00'))).toBe(false);
+
+    // What this file tests is the BARE entry window, which is not what the
+    // composition root installs. On its own it also removes every tick in the
+    // flatten span, which switched flat-by-close off — see
+    // `production/stocks-tick-window.test.ts`. Asserted here so the two files
+    // cannot drift into disagreeing about what this predicate does.
+    expect(stocksFiringAt(at('16:26'))).toBe(false);
   });
 
   it('narrows rather than opens — a closed venue stays closed', () => {

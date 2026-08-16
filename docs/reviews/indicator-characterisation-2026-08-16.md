@@ -98,6 +98,38 @@ the SMA exactly), so this inflates certainty rather than inventing a side. Pinne
 the same reason. Recorded so the guard is understood to be load-bearing: remove it and the two
 kinds diverge silently.
 
+## F5 — The A3 entry window switched flat-by-close off. *(closed in this branch)*
+
+Not an indicator finding, and recorded here because this is the branch's live review file and the
+claim it corrects is in a pushed commit message.
+
+`bad50af` (#706) added `stocksTradingWindow` and described it as an entry narrowing, ending with
+**"Exits are unaffected: the bracket is evaluated every tick."** That is true of the *price* bracket
+and false of the *time* flatten, and the second half is the one that matters.
+
+The predicate gates `TickPlan.instruments`, and `runOnce` runs the entire pipeline pass only for the
+instruments in the plan — so an excluded instrument gets no Trader. `withinFlattenWindow`
+(`trader/decide.ts:176`) is evaluated on a tick and nowhere else: there is no session-end job, and
+`ingestFills()` runs on its own cadence. A window closing at 15:45 therefore deleted every tick that
+could ever land in `[sessionEnd − flatten_before_close_ms, sessionEnd)`.
+
+On the paper venue the entry window is 09:30–10:45 ET and `UsEquityRegularHoursCalendar` closes at
+16:00 ET, so the last tick of the day fell **5h10m** before the flatten needed one. Every equity
+position would have carried overnight against ADR-0014, with `trader_log` reading exactly like a
+session with nothing to flatten — the same signature #691 found on a non-positive window.
+
+Fixed by `production/stocks-tick-window.ts`: the composition root composes the tick window as the
+entry window **∪** the flatten tail. The union cannot open a position — the entry path consults the
+same window and returns `skip('session_closing')` at `decide.ts:361`, verified at the call site — and
+the gap between the two spans needs no tick, because equity brackets rest at the venue as
+`order_class: 'bracket'`, marks are fetched per call rather than accumulated per tick, and fills
+ingest independently.
+
+Verified by removing the fix: `ticks equities at 16:26, inside the flatten window` fails
+`expected false to be true`. The four assertions the original change shipped with — 09:00 no,
+14:35 yes, 15:45 no, `sessionEnd` still 16:30 — all pass with the flatten unreachable, which is why
+none of them caught it.
+
 ## Prior reports not re-litigated
 
 - `triage-2026-08-06.md` and the two 2026-08-05 audits — no indicator finding among them.

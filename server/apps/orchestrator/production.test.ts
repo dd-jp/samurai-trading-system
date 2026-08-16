@@ -31,6 +31,8 @@ import {
   AlwaysOpenCalendar,
   AssetClassRoutingDataSource,
   FixtureDataSource,
+  LseRegularHoursCalendar,
+  londonEntryWindow,
   MarketDataServiceImpl,
   SqliteMarketDataStore,
   UsEquityRegularHoursCalendar,
@@ -1578,6 +1580,67 @@ describe('buildProductionOrchestrator', () => {
     expect(runSpy).toHaveBeenCalled();
 
     await orchestrator.stop();
+  });
+
+  /**
+   * The composition root is the only place that can compose the flatten tail —
+   * it holds both `traderConfig.flatten_before_close_ms` and the equity
+   * calendar, and the scheduler holds neither. So it is also the only place
+   * this can be verified end to end, and `stocks-tick-window.test.ts` alone
+   * would be a tested mechanism nothing calls: exactly the shape that let
+   * `LseRegularHoursCalendar` ship with no production caller (#668).
+   */
+  describe('the equity tick window reaches the flatten (#706)', () => {
+    const WEDNESDAY_16_26 = new Date('2026-08-19T16:26:00+01:00');
+    const WEDNESDAY_16_00 = new Date('2026-08-19T16:00:00+01:00');
+
+    const windowedConfig = (now: Date) =>
+      stubConfig(db, {
+        clock: new SimulatedClock(now),
+        // Pinned rather than left to `mode: 'paper'`, which would resolve the
+        // US calendar and put the close at 16:00 ET — five hours from these
+        // London instants and untestable against the LSE window.
+        tradingCalendar: new LseRegularHoursCalendar(),
+        stocksTradingWindow: londonEntryWindow(),
+        universe: [{ asset: '3USL', asset_class: 'stocks', subclass: 'index_etp_3x' }],
+        tickIntervalMs: 1_000,
+        heartbeatIntervalMs: 1_000,
+      });
+
+    const ranAt = async (now: Date): Promise<boolean> => {
+      const config = windowedConfig(now);
+      // The tail is `flatten_before_close_ms` wide, so 16:26 is only inside it
+      // while that is 5 minutes. Asserted, not assumed — a stub drifting to a
+      // narrower window would make the positive case below silently vacuous.
+      expect(config.traderConfig.flatten_before_close_ms).toBe(5 * 60_000);
+
+      const orchestrator = buildProductionOrchestrator(config);
+      const runSpy = vi
+        .spyOn(orchestrator.tickRunner, 'runInstrument')
+        .mockResolvedValue({ trace_id: 't', final_stage: 'analysts' });
+
+      await orchestrator.start();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await orchestrator.stop();
+
+      return runSpy.mock.calls.length > 0;
+    };
+
+    it('ticks equities at 16:26, inside the flatten window', async () => {
+      // The assertion the original #706 change needed and did not have. The
+      // Trader is the only thing that flattens and it runs on a tick, so with
+      // the bare entry window this is `false` and flat-by-close silently stops
+      // running — `trader_log` reading exactly like a session with nothing to
+      // flatten, the same signature #691 found on a non-positive window.
+      expect(await ranAt(WEDNESDAY_16_26)).toBe(true);
+    });
+
+    it('still does not tick equities at 16:00, outside both spans', async () => {
+      // The narrowing must survive the fix. If the tail had been implemented by
+      // widening the entry window instead of unioning a separate span, this is
+      // the test that would catch it.
+      expect(await ranAt(WEDNESDAY_16_00)).toBe(false);
+    });
   });
 
   it('fires the heartbeat on its own interval, independent of the tick cadence', async () => {
