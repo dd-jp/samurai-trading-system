@@ -95,10 +95,18 @@ export interface TradingCalendar {
    * into an overnight carry against ADR-0014 with nothing logged, which is the
    * same silent-non-flatten failure #670 exists to prevent.
    *
-   * A throw is currently caught by the tick loop, which logs `tick failed` and
-   * drops the tick. That is a skipped decision rather than a crash, and it is
-   * only acceptable because it is LOGGED. Any new caller on the money path must
-   * preserve that property.
+   * A throw is currently caught by the tick loop's `catch` in
+   * `server/apps/orchestrator/production.ts` (the `trace_id: 'tick-loop'`
+   * handler that logs `tick failed` at `level: 'error'`), which drops that tick
+   * and continues. That is a skipped decision rather than a crash, and it is
+   * only acceptable because it is LOGGED at error level where the heartbeat and
+   * the operator can see it.
+   *
+   * That is a CROSS-MODULE claim and this port cannot enforce it. It is named
+   * here rather than left implicit so the next reader can check it in one grep;
+   * if that handler ever stops catching, or drops to `warn`, this paragraph
+   * becomes wrong and the flatten path becomes a silent skip. Any new caller on
+   * the money path must preserve the property.
    */
   sessionEnd(instant: Date): Date | null;
 }
@@ -206,7 +214,7 @@ const MS_PER_DAY = 86_400_000;
  *
  * Named for the SEARCH rather than a direction because it bounds both: the
  * backward walk in `sessionStart` and the forward walk in `sessionEnd` (#691).
- * It was `MAX_SESSION_SEARCH_DAYS`, which described half its uses and made
+ * It was `MAX_SESSION_LOOKBACK_DAYS`, which described half its uses and made
  * `sessionEnd`'s error read "lookback days after".
  */
 const MAX_SESSION_SEARCH_DAYS = 10;
