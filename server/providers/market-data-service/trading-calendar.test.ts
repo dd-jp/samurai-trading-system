@@ -106,6 +106,74 @@ describe('UsEquityRegularHoursCalendar', () => {
     expect(end?.toISOString()).toBe('2026-12-23T21:00:00.000Z');
   });
 
+  // #696. Before this the calendar was weekday-only, so it reported every NYSE
+  // full closure as an ordinary trading day — the orchestrator would tick a
+  // dead market, spend on debate against a feed that is not moving, and fire a
+  // flatten into a venue that cannot fill it.
+  describe('NYSE holidays', () => {
+    it('reports no session on Thanksgiving, and one on the day before', () => {
+      // Thu 2026-11-26 12:00 EST (17:00 UTC), mid-session-hours if it traded.
+      expect(calendar.isTradingDay(new Date('2026-11-26T17:00:00Z'))).toBe(false);
+      expect(calendar.isOpen(new Date('2026-11-26T17:00:00Z'))).toBe(false);
+      // Wed 2026-11-25, same clock time, is an ordinary full session.
+      expect(calendar.isOpen(new Date('2026-11-25T17:00:00Z'))).toBe(true);
+    });
+
+    it('closes fully on an observed holiday that moved off a weekend', () => {
+      // 4 July 2026 is a Saturday, so NYSE observes it on Friday 3 July.
+      // 12:00 EDT = 16:00 UTC.
+      expect(calendar.isTradingDay(new Date('2026-07-03T16:00:00Z'))).toBe(false);
+      // Thu 2 July trades normally — the observance moves the closure, it does
+      // not extend it backwards.
+      expect(calendar.isOpen(new Date('2026-07-02T16:00:00Z'))).toBe(true);
+    });
+
+    it('treats 2027-12-24 as a full closure, not a 13:00 early close', () => {
+      // The regression this guards. Christmas 2027 falls on a Saturday, so the
+      // observed holiday is Friday 24 December — but the date was originally
+      // listed in US_EARLY_CLOSE_DAYS as "Christmas Eve, a Friday", which had
+      // the calendar reporting a live 09:30-13:00 session on a day the exchange
+      // is shut. 12:00 EST = 17:00 UTC, inside that phantom window.
+      expect(calendar.isTradingDay(new Date('2027-12-24T17:00:00Z'))).toBe(false);
+      expect(calendar.isOpen(new Date('2027-12-24T17:00:00Z'))).toBe(false);
+      // Thu 23 December 2027 is a normal 16:00 close, so the closure is the
+      // holiday and not a stray early-close entry bleeding across days.
+      expect(calendar.isOpen(new Date('2027-12-23T20:00:00Z'))).toBe(true);
+    });
+
+    it('agrees with itself: isOpen never reports a session isTradingDay denies', () => {
+      // These two disagreed before #696 — isTradingDay checked only the weekend
+      // and isOpen repeated that check privately, so neither saw a holiday.
+      // Sampled across 2026 at 12:00 ET, inside session hours on any real day.
+      for (let day = 0; day < 365; day++) {
+        const instant = new Date(Date.UTC(2026, 0, 1, 17, 0) + day * 86_400_000);
+
+        if (calendar.isOpen(instant)) {
+          expect(calendar.isTradingDay(instant)).toBe(true);
+        }
+      }
+    });
+
+    it('steps sessionEnd over a holiday to the next real close', () => {
+      // Thu 2026-12-24 14:00 EST (19:00 UTC) — after that day's 13:00 early
+      // close. Christmas Day is the Friday, then the weekend, so the next close
+      // is Mon 28 December at 16:00 EST (21:00 UTC). Weekday-only arithmetic
+      // would have returned the 25th's phantom close.
+      expect(calendar.sessionEnd(new Date('2026-12-24T19:00:00Z'))?.toISOString()).toBe(
+        '2026-12-28T21:00:00.000Z',
+      );
+    });
+
+    it('resolves sessionStart on a holiday to the prior trading close', () => {
+      // Christmas Day 2026 at 10:00 EST (15:00 UTC). The accounting boundary is
+      // the 24th's EARLY close at 13:00 EST (18:00 UTC), so a holiday does not
+      // open a fresh PnL window on a day with no trading.
+      expect(calendar.sessionStart(new Date('2026-12-25T15:00:00Z'))).toEqual(
+        new Date('2026-12-24T18:00:00Z'),
+      );
+    });
+  });
+
   it('is closed at the weekend', () => {
     // Saturday 2026-07-18, mid-session-hours if it were a weekday.
     expect(calendar.isOpen(new Date('2026-07-18T17:00:00Z'))).toBe(false);
@@ -247,10 +315,53 @@ describe('UsEquityRegularHoursCalendar', () => {
         const start = calendar.sessionStart(instant);
 
         expect(start.getTime()).toBeLessThanOrEqual(instant.getTime());
-        // Never more than four days back: a weekend is the widest weekday-only gap.
+        // Never more than four days back. A weekend alone is a two-day gap; the
+        // widest in 2026 is Christmas, where a Friday holiday follows a 13:00
+        // early close and runs into the weekend — Thu 24 Dec 18:00 UTC to Mon
+        // 28 Dec, 3d13h30m. Holidays widened this bound (#696), so the margin is
+        // now under eleven hours rather than the two days it was: a new
+        // multi-day closure would fail here, which is the point of asserting it.
         expect(instant.getTime() - start.getTime()).toBeLessThan(4 * 86_400_000);
         expect(calendar.isTradingDay(start)).toBe(true);
       }
     });
+  });
+});
+
+/**
+ * #691 finding 2 — the port documents `Date | null` and the implementations
+ * also THROW. The throw is now documented rather than removed, so it is
+ * behaviour and gets pinned like any other.
+ *
+ * Pinned specifically so the "return null on exhaustion instead" change cannot
+ * be made silently: `null` means "this venue has no close" and the trader's
+ * response to it is to skip flattening, so collapsing the two would turn a
+ * broken calendar into an unlogged overnight carry against ADR-0014.
+ */
+describe('the exhausted-search contract (#691)', () => {
+  /** A calendar whose holiday table has swallowed every day — the broken case. */
+  class NeverTradingCalendar extends UsEquityRegularHoursCalendar {
+    override isTradingDay(_instant: Date): boolean {
+      return false;
+    }
+  }
+
+  const calendar = new NeverTradingCalendar();
+  const instant = new Date('2026-07-15T18:00:00Z');
+
+  it('throws rather than returning null when no close can be found', () => {
+    // NOT `toBeNull()`. That is the distinction the port doc now turns on.
+    expect(() => calendar.sessionEnd(instant)).toThrow(/No US equity session close found/);
+  });
+
+  it('names the search bound and the instant, so the fault is diagnosable', () => {
+    expect(() => calendar.sessionEnd(instant)).toThrow(/within 10 days after/);
+    expect(() => calendar.sessionStart(instant)).toThrow(/within 10 days before/);
+  });
+
+  it('still returns null for a venue that genuinely has no close', () => {
+    // The other half of the contract: `AlwaysOpenCalendar` is not broken, it is
+    // crypto. Same method, opposite meaning, and the port keeps them apart.
+    expect(new AlwaysOpenCalendar().sessionEnd(instant)).toBeNull();
   });
 });

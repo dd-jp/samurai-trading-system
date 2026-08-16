@@ -39,13 +39,20 @@ export interface TradingCalendar {
    * the start of the new window, not the previous day's. The result is always
    * at or before `instant`, and `sessionStart(sessionStart(t))` is idempotent.
    *
-   * LIMITATION — holidays are not modelled. `UsEquityRegularHoursCalendar` is
-   * weekday-only by design (see the class doc and the LOW-severity
-   * trading-calendar OPEN-GAP in docs/specs/cross-spec-contracts.md), so a
-   * holiday Monday reports a session start for a session that never traded.
-   * The real holiday/session table this port defers to fixes that here, which
-   * is why the boundary lives on the calendar rather than being duplicated in
-   * each consumer.
+   * Holidays ARE modelled by both shipped implementations, so a holiday Monday
+   * no longer reports a session start for a session that never traded. That
+   * was true of `UsEquityRegularHoursCalendar` until #696; it was always the
+   * reason the boundary lives on the calendar rather than being duplicated in
+   * each consumer, and it is why fixing the table fixed every consumer at once.
+   *
+   * The tables are HAND-ENTERED and their coverage ENDS — see each
+   * implementation. Past the end of a table the calendar reports an ordinary
+   * trading day, which is the safe direction (#684 replaces both with the
+   * exchange's own session table).
+   *
+   * THROWS on the same terms as `sessionEnd` — see its "cannot answer" note.
+   * There is no `null` here to confuse it with, since every venue has a session
+   * start, so exhausting the search means the calendar is broken outright.
    */
   sessionStart(instant: Date): Date;
   /**
@@ -70,6 +77,39 @@ export interface TradingCalendar {
    * usable "when must I be flat by" question at every instant, and makes it the
    * mirror of `sessionStart`'s at-or-before convention rather than an
    * inconsistent twin.
+   *
+   * ## THROWS — `null` and "cannot answer" are different answers (#691)
+   *
+   * An implementation that searches a calendar MAY THROW when it cannot find a
+   * close at all, and both equity calendars here do, after
+   * `MAX_SESSION_SEARCH_DAYS`. Callers must be throw-safe as well as
+   * null-safe; the two mean opposite things and must not be collapsed:
+   *
+   * - `null` — "this venue has no close." A settled, correct answer. Do nothing.
+   * - throw — "this venue HAS a close and I could not find it." The calendar is
+   *   broken or its holiday table is wrong.
+   *
+   * The port previously documented only `Date | null` while the implementations
+   * threw, so a caller written against the contract handled `null` and was
+   * ambushed by the throw. Documenting the throw is the deliberate resolution;
+   * the alternative — returning `null` on exhaustion — was rejected because it
+   * makes a broken calendar indistinguishable from crypto, and the trader's
+   * response to `null` is to SKIP FLATTENING. That converts a loud data fault
+   * into an overnight carry against ADR-0014 with nothing logged, which is the
+   * same silent-non-flatten failure #670 exists to prevent.
+   *
+   * A throw is currently caught by the tick loop's `catch` in
+   * `server/apps/orchestrator/production.ts` (the `trace_id: 'tick-loop'`
+   * handler that logs `tick failed` at `level: 'error'`), which drops that tick
+   * and continues. That is a skipped decision rather than a crash, and it is
+   * only acceptable because it is LOGGED at error level where the heartbeat and
+   * the operator can see it.
+   *
+   * That is a CROSS-MODULE claim and this port cannot enforce it. It is named
+   * here rather than left implicit so the next reader can check it in one grep;
+   * if that handler ever stops catching, or drops to `warn`, this paragraph
+   * becomes wrong and the flatten path becomes a silent skip. Any new caller on
+   * the money path must preserve the property.
    */
   sessionEnd(instant: Date): Date | null;
 }
@@ -168,8 +208,19 @@ const WEEKEND = new Set(['Sat', 'Sun']);
 
 const MS_PER_MINUTE = 60_000;
 const MS_PER_DAY = 86_400_000;
-/** Widest weekday-only gap is a weekend (2 days); the margin is for the holiday table to come. */
-const MAX_SESSION_LOOKBACK_DAYS = 10;
+/**
+ * How far the session walks search before giving up, in civil days.
+ *
+ * Widest weekday-only gap is a weekend (2 days); the margin is for the holiday
+ * table to come. Comfortably clear of the LSE's 4-day Christmas and Easter
+ * stretches — that headroom is the reason 10 rather than 3.
+ *
+ * Named for the SEARCH rather than a direction because it bounds both: the
+ * backward walk in `sessionStart` and the forward walk in `sessionEnd` (#691).
+ * It was `MAX_SESSION_LOOKBACK_DAYS`, which described half its uses and made
+ * `sessionEnd`'s error read "lookback days after".
+ */
+const MAX_SESSION_SEARCH_DAYS = 10;
 /** One pass computes the UTC offset, the second confirms it. 16:00 ET is never in a DST gap. */
 const MAX_OFFSET_PASSES = 3;
 
@@ -321,58 +372,120 @@ function wallClockToInstant(
 }
 
 /**
+ * NYSE full-closure holidays (#696).
+ *
+ * Until #696 this calendar was weekday-only, so it reported Thanksgiving,
+ * Christmas and every other full closure as an ordinary trading day. That was
+ * documented as a deliberate, safe simplification — and the safety argument
+ * was sound only while the calendar merely gated INGESTION. Since #668 it also
+ * decides when the paper equity book must be flat, and once a calendar drives
+ * the flatten a missing holiday stops being free: the orchestrator ticks a
+ * dead market all day, the debate spends against a feed that is not updating,
+ * and the flatten fires into a venue that cannot fill it.
+ *
+ * A TABLE, not a rule, for the same reason as `LSE_HOLIDAYS`: Good Friday is
+ * lunar, and the observed-date rule shifts a weekend holiday to the adjacent
+ * weekday (Saturday to the Friday before, Sunday to the Monday after), which
+ * is derivable but easy to get wrong silently. Written out so a wrong date is
+ * a visible diff. Every date below was checked against the NYSE published
+ * calendar, not derived.
+ *
+ * COVERAGE ENDS 2027-12-24. Past that this reports a normal trading day, which
+ * is the SAFE direction: the flatten still computes and fires on a shut day,
+ * closing a position that does not exist. The DANGEROUS error is the opposite
+ * — a wrongly-listed holiday, which makes a real trading day invisible, skips
+ * the flatten and carries the position overnight, exactly what ADR-0014
+ * forbids. So an entry added here must be right; an entry missing is merely
+ * wasteful. Extend before 2028. Tracked for replacement by Alpaca's
+ * `GET /v2/calendar` in #684, which removes this whole class of error.
+ *
+ * NOT modelled: ad-hoc closures — national days of mourning, weather. Those
+ * are announced, not scheduled, and no hand-entered table can carry them.
+ */
+const US_HOLIDAYS = new Set([
+  // 2026
+  '2026-01-01', // New Year's Day (Thursday)
+  '2026-01-19', // Martin Luther King, Jr. Day
+  '2026-02-16', // Washington's Birthday
+  '2026-04-03', // Good Friday
+  '2026-05-25', // Memorial Day
+  '2026-06-19', // Juneteenth (Friday)
+  '2026-07-03', // Independence Day observed — 4 July 2026 is a Saturday
+  '2026-09-07', // Labor Day
+  '2026-11-26', // Thanksgiving
+  '2026-12-25', // Christmas Day (Friday)
+  // 2027
+  '2027-01-01', // New Year's Day (Friday)
+  '2027-01-18', // Martin Luther King, Jr. Day
+  '2027-02-15', // Washington's Birthday
+  '2027-03-26', // Good Friday
+  '2027-05-31', // Memorial Day
+  '2027-06-18', // Juneteenth observed — 19 June 2027 is a Saturday
+  '2027-07-05', // Independence Day observed — 4 July 2027 is a Sunday
+  '2027-09-06', // Labor Day
+  '2027-11-25', // Thanksgiving
+  '2027-12-24', // Christmas Day observed — 25 December 2027 is a Saturday
+]);
+
+/**
  * Early closes: the session ends at 13:00 ET rather than 16:00.
  *
- * Modelled even though ordinary holidays are not, because the two fail in
- * OPPOSITE directions once this calendar drives the flatten (#668). An
- * unmodelled holiday is the safe error: the flatten window still computes and
- * fires on a day with no session, closing a position that does not exist. An
- * unmodelled EARLY CLOSE is the dangerous one: a real trading day whose close
- * moves three hours earlier, so the flatten is computed for 15:55 on a market
- * that shut at 13:00 and the position sits unflattened — the overnight carry
- * ADR-0014 forbids. Same argument as `LSE_HALF_DAYS`.
+ * These are the more dangerous of the two tables, and were modelled first for
+ * that reason. A holiday is a day with no session and nothing to flatten; an
+ * unmodelled EARLY CLOSE is a REAL trading day whose close moves three hours
+ * earlier, so the flatten is computed for 15:55 on a market that shut at 13:00
+ * and the position sits unflattened — the overnight carry ADR-0014 forbids.
+ * Same argument as `LSE_HALF_DAYS`.
  *
- * COVERAGE IS PARTIAL AND HAND-ENTERED. Only dates that are unambiguous from
- * the NYSE rule (the Friday after Thanksgiving; Christmas Eve when it falls on
- * a weekday) are listed. The day before Independence Day is deliberately
- * ABSENT for both years: 4 July 2026 is a Saturday, so 3 July is a full
- * holiday rather than an early close, and 4 July 2027 is a Sunday observed on
- * Monday 5 July, which carries no Friday early close.
+ * The two tables are DISJOINT and must stay so: a date here is a shortened
+ * session, a date in `US_HOLIDAYS` has no session at all. `2027-12-24` used to
+ * be listed here as "Christmas Eve, a Friday", which was wrong — Christmas
+ * 2027 falls on a Saturday, so NYSE observes it with a FULL closure that
+ * Friday and there is no 2027 Christmas Eve early close. It has moved to
+ * `US_HOLIDAYS`. The mistake was invisible while holidays went unmodelled,
+ * because both tables were read only for the close MINUTE and a full closure
+ * had nowhere to be expressed.
  *
- * This table should not stay hand-maintained — Alpaca publishes the
- * authoritative session table on `GET /v2/calendar`, and sourcing it from
- * there removes the whole class of error. Tracked as #684; until then, a
- * missing entry is the dangerous direction, so extend it before 2028.
+ * The day before Independence Day is absent for both years, and now has a
+ * destination: 3 July 2026 is a full holiday in `US_HOLIDAYS`, and 4 July 2027
+ * is a Sunday observed on Monday 5 July, which carries no Friday early close.
+ *
+ * Coverage and the #684 replacement are as described on `US_HOLIDAYS`.
  */
 const US_EARLY_CLOSE_MINUTES = 13 * 60; // 13:00 ET
 const US_EARLY_CLOSE_DAYS = new Set([
   '2026-11-27', // Friday after Thanksgiving (Thanksgiving is 26 Nov 2026)
   '2026-12-24', // Christmas Eve, a Thursday
   '2027-11-26', // Friday after Thanksgiving (Thanksgiving is 25 Nov 2027)
-  '2027-12-24', // Christmas Eve, a Friday
 ]);
 
 /**
- * US equity regular trading hours: Mon-Fri, 09:30-16:00 ET, with 13:00 early
- * closes on the dates in `US_EARLY_CLOSE_DAYS`.
+ * US equity regular trading hours: Mon-Fri, 09:30-16:00 ET, with NYSE holidays
+ * from `US_HOLIDAYS` and 13:00 early closes from `US_EARLY_CLOSE_DAYS`.
  *
- * Holidays are NOT modelled — that needs the holiday/session table this port
- * exists to defer to (see file header). This implementation is therefore
- * permissive on holidays and must not be treated as the authoritative
- * calendar; it is the regular-session default that keeps stock ingestion
- * inside session boundaries until the real source is injected.
+ * Holidays and early closes are both modelled as of #696. Before that this
+ * class was weekday-only and documented itself as permissive-on-holidays,
+ * which was defensible while it only kept stock ingestion inside session
+ * boundaries. It stopped being defensible at #668, when the same calendar
+ * began deciding when the PAPER equity book must be flat — a money-path
+ * question, where reporting a session on a day the exchange was shut means
+ * ticking, debating and spending against a market that is not there.
  *
- * Early closes ARE modelled, despite that posture, because since #668 this
- * calendar decides when the PAPER equity book must be flat. Being permissive
- * about a day with no session is tolerable; being wrong about the hour a real
- * session ends is not.
+ * Still not the authoritative calendar: both tables are hand-entered and end
+ * after 2027. #684 replaces them with Alpaca's `GET /v2/calendar`.
  */
 export class UsEquityRegularHoursCalendar implements TradingCalendar {
   isOpen(instant: Date): boolean {
-    const { weekday, minutesSinceMidnight } = toZonedTime(instant, ET_ZONE);
-    if (WEEKEND.has(weekday)) {
+    // Delegates rather than repeating the weekend check, so the holiday table
+    // reaches this predicate too. The two used to disagree: `isTradingDay`
+    // said Thanksgiving had no session while `isOpen` reported 09:30-16:00 on
+    // it — the same split-brain the `sessionStart`/`sessionEnd` walks avoid by
+    // asking `isTradingDay` rather than testing the weekend themselves.
+    if (!this.isTradingDay(instant)) {
       return false;
     }
+
+    const { minutesSinceMidnight } = toZonedTime(instant, ET_ZONE);
 
     return (
       minutesSinceMidnight >= SESSION_OPEN_MINUTES &&
@@ -392,21 +505,34 @@ export class UsEquityRegularHoursCalendar implements TradingCalendar {
   }
 
   isTradingDay(instant: Date): boolean {
+    const civilDate = toCivilDate(instant, ET_ZONE);
+    if (US_HOLIDAYS.has(civilDateKey(civilDate))) {
+      return false;
+    }
+
     return !WEEKEND.has(toZonedTime(instant, ET_ZONE).weekday);
   }
 
   /**
-   * The next 16:00 ET close strictly after `instant` (#668).
+   * The next regular or early close strictly after `instant` (#668).
+   *
+   * Not "the next 16:00 ET close", which is what this said before #691: on a
+   * half-day it returns 13:00, and the flatten offset must ride the early close
+   * rather than a constant.
    *
    * Walks FORWARD a civil day at a time, asking `isTradingDay` for the same
-   * reason `sessionStart` walks backward asking it: the holiday table that
-   * eventually backs that predicate must move this boundary with it rather
-   * than leaving the two to disagree.
+   * reason `sessionStart` walks backward asking it: the holiday table backing
+   * that predicate must move this boundary with it rather than leaving the two
+   * to disagree. Since #696 that table is populated, so the walk now steps
+   * OVER holidays as well as weekends — a flatten scheduled on Christmas Eve
+   * 2026 resolves to the 28 December close, not the 25th's phantom one. That
+   * propagation is why #696 was a table plus a predicate and needed no change
+   * to either boundary walk.
    */
   sessionEnd(instant: Date): Date | null {
     let civilDate = toCivilDate(instant, ET_ZONE);
 
-    for (let day = 0; day <= MAX_SESSION_LOOKBACK_DAYS; day++) {
+    for (let day = 0; day <= MAX_SESSION_SEARCH_DAYS; day++) {
       const close = wallClockToInstant(civilDate, this.#closeMinutesFor(civilDate), ET_ZONE);
       if (close.getTime() > instant.getTime() && this.isTradingDay(close)) {
         return close;
@@ -415,23 +541,28 @@ export class UsEquityRegularHoursCalendar implements TradingCalendar {
     }
 
     throw new Error(
-      `No US equity session close found within ${MAX_SESSION_LOOKBACK_DAYS} days after ${instant.toISOString()}`,
+      `No US equity session close found within ${MAX_SESSION_SEARCH_DAYS} days after ${instant.toISOString()}`,
     );
   }
 
   /**
-   * The most recent 16:00 ET close at or before `instant` (see the port doc for
-   * the half-open convention and the holiday limitation).
+   * The most recent regular or early close at or before `instant` (see the port
+   * doc for the half-open convention). Early closes for the same reason
+   * `sessionEnd` names them: the boundary is whatever `#closeMinutesFor` says,
+   * not a constant 16:00.
    *
    * Walks back a civil day at a time, asking `isTradingDay` — not a private
    * weekend check — whether each candidate close happened, so the holiday table
-   * that eventually backs `isTradingDay` moves this boundary with it instead of
-   * leaving the two to disagree.
+   * behind `isTradingDay` moves this boundary with it instead of leaving the
+   * two to disagree. Since #696 that matters in practice rather than in
+   * principle: session PnL and the kill-line metrics reset on this boundary,
+   * and before the table existed a holiday opened a fresh accounting window on
+   * a day with no trading.
    */
   sessionStart(instant: Date): Date {
     let civilDate = toCivilDate(instant, ET_ZONE);
 
-    for (let day = 0; day <= MAX_SESSION_LOOKBACK_DAYS; day++) {
+    for (let day = 0; day <= MAX_SESSION_SEARCH_DAYS; day++) {
       const close = wallClockToInstant(civilDate, this.#closeMinutesFor(civilDate), ET_ZONE);
       if (close.getTime() <= instant.getTime() && this.isTradingDay(close)) {
         return close;
@@ -440,7 +571,7 @@ export class UsEquityRegularHoursCalendar implements TradingCalendar {
     }
 
     throw new Error(
-      `No US equity session close found within ${MAX_SESSION_LOOKBACK_DAYS} days before ${instant.toISOString()}`,
+      `No US equity session close found within ${MAX_SESSION_SEARCH_DAYS} days before ${instant.toISOString()}`,
     );
   }
 }
@@ -516,10 +647,12 @@ const LSE_HALF_DAYS = new Set([
  * why the flatten rule had to be an offset resolved through the instrument's
  * own calendar rather than a shared wall-clock constant.
  *
- * Unlike `UsEquityRegularHoursCalendar`, holidays ARE modelled here. That
- * class's permissive posture is acceptable for keeping ingestion inside
- * session boundaries; it is not acceptable for deciding when the book must be
- * flat, which is a money-path question.
+ * Holidays are modelled here and, since #696, in
+ * `UsEquityRegularHoursCalendar` too. This class had them from the start
+ * because it shipped with #668 already driving the flatten; the US one was
+ * written earlier, for ingestion, and kept a permissive posture that #668
+ * silently invalidated. Both are hand-entered tables ending after 2027, and
+ * both are replaced by their exchange's own session table under #684.
  */
 export class LseRegularHoursCalendar implements TradingCalendar {
   isOpen(instant: Date): boolean {
@@ -548,7 +681,7 @@ export class LseRegularHoursCalendar implements TradingCalendar {
   sessionStart(instant: Date): Date {
     let civilDate = toCivilDate(instant, LONDON_ZONE);
 
-    for (let day = 0; day <= MAX_SESSION_LOOKBACK_DAYS; day++) {
+    for (let day = 0; day <= MAX_SESSION_SEARCH_DAYS; day++) {
       const close = wallClockToInstant(civilDate, this.#closeMinutesFor(civilDate), LONDON_ZONE);
       if (close.getTime() <= instant.getTime() && this.isTradingDay(close)) {
         return close;
@@ -557,7 +690,7 @@ export class LseRegularHoursCalendar implements TradingCalendar {
     }
 
     throw new Error(
-      `No LSE session close found within ${MAX_SESSION_LOOKBACK_DAYS} days before ${instant.toISOString()}`,
+      `No LSE session close found within ${MAX_SESSION_SEARCH_DAYS} days before ${instant.toISOString()}`,
     );
   }
 
@@ -565,7 +698,7 @@ export class LseRegularHoursCalendar implements TradingCalendar {
   sessionEnd(instant: Date): Date | null {
     let civilDate = toCivilDate(instant, LONDON_ZONE);
 
-    for (let day = 0; day <= MAX_SESSION_LOOKBACK_DAYS; day++) {
+    for (let day = 0; day <= MAX_SESSION_SEARCH_DAYS; day++) {
       const close = wallClockToInstant(civilDate, this.#closeMinutesFor(civilDate), LONDON_ZONE);
       if (close.getTime() > instant.getTime() && this.isTradingDay(close)) {
         return close;
@@ -574,7 +707,7 @@ export class LseRegularHoursCalendar implements TradingCalendar {
     }
 
     throw new Error(
-      `No LSE session close found within ${MAX_SESSION_LOOKBACK_DAYS} days after ${instant.toISOString()}`,
+      `No LSE session close found within ${MAX_SESSION_SEARCH_DAYS} days after ${instant.toISOString()}`,
     );
   }
 

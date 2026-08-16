@@ -738,11 +738,13 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
         // narrowed to `UsEquityRegularHoursCalendar`. #331 put `sessionStart` on
         // the port precisely so the accounting boundary and the session gating
         // move together: "the boundary lives on the calendar rather than being
-        // duplicated in each consumer" (trading-calendar.ts). The default is
-        // weekday-only and reports a session start for holiday Mondays that
-        // never traded; when the real holiday/session table lands it is injected
-        // HERE, through this same field, and the daily-PnL boundary must follow
-        // it. Narrowing the type would pin this consumer to the placeholder
+        // duplicated in each consumer" (trading-calendar.ts). The default models
+        // NYSE holidays as of #696, so it no longer reports a session start for
+        // a holiday Monday that never traded — and that fix reached the daily-PnL
+        // boundary without touching this file, which is the whole point of the
+        // arrangement. The authoritative session table (#684, Alpaca's
+        // `GET /v2/calendar`) is injected HERE, through this same field, when it
+        // lands. Narrowing the type would pin this consumer to the built-in
         // implementation and guarantee the two silently disagree on every
         // holiday — the divergence the port exists to prevent.
         //
@@ -989,6 +991,23 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       ...(config.capitalCeilingUsd === undefined
         ? {}
         : { capitalCeilingUsd: config.capitalCeilingUsd }),
+      // #698: the diagnostic escalation, wired HERE and not only declared.
+      // `TraderDiagnosticAlertChannel` would otherwise be the next instance of
+      // this repo's dominant defect shape — a tested mechanism nothing calls
+      // (#364's store, #388's rate limiter) — and the failure it reports is one
+      // whose only other symptom is a book that quietly stops trading.
+      //
+      // Same conditional-spread idiom as `capitalCeilingUsd` above, required by
+      // `exactOptionalPropertyTypes`: omitted rather than passed as `undefined`
+      // under `log-only`, where the step's own logger is the whole reporting
+      // path.
+      ...(config.traderDiagnosticAlerts === undefined
+        ? {}
+        : { traderDiagnosticAlerts: config.traderDiagnosticAlerts }),
+      // The sink for the diagnostics themselves, and for an alert the transport
+      // could not deliver. Without it a log-only run would have nowhere to put
+      // them at all.
+      logger,
     }),
     risk: buildRiskStep({
       ...breakerStateDeps,

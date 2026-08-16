@@ -13,6 +13,8 @@ export {
 export {
   decide,
   decideWithReason,
+  type TraderDiagnostic,
+  type TraderDiagnosticKind,
   type TraderOutcome,
   type TraderSkipReason,
 } from './decide.js';

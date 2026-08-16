@@ -71,7 +71,7 @@ Measured on a **drift-removed** series, so this is the pure volatility envelope 
 
 `CONTEXT.md`'s recorded tolerance is **max ~20–25%**. Full deployment of the equity leg sits **2.2× to 3.5× outside it before any edge exists**, so the constraint binds regardless of how good the signal turns out to be.
 
-**Now:** deploy a fixed fraction sized per subclass by measured volatility — **~35% of the leg (~£260) for index ETPs, ~25% (~£190) for single-stock ETPs**, holding max drawdown at **23.1%** and **26.2%** respectively (doc 18 Result 4's **"The volatility envelope, and why it fixes position size"** table).
+**Now:** deploy a fixed fraction sized per subclass by measured volatility — **35% of the leg for index ETPs, 25% for single-stock ETPs**, holding max drawdown at **23.1%** and **26.2%** respectively. **The fraction is the rule; the cash figures (~£260 / ~£190) are illustrative at the £750 inception equity only** — see the sizing amendment below, which settles the basis as current equity rather than frozen cash (doc 18 Result 4's **"The volatility envelope, and why it fixes position size"** table).
 
 **The single-stock fraction deliberately overshoots the tolerance.** 26.2% is **~1.2 pp above the top of `CONTEXT.md`'s ~20–25% band**; the index fraction sits inside it. The overshoot is accepted rather than sized away because the single-stock subclass is the one whose bracket the cost argument depends on, and because the envelope is measured **drift-removed with zero edge assumed** — a deliberately pessimistic reading. It is recorded here rather than rounded off so that whatever consumes this number for sizing consumes the overshoot with it. If the tolerance is to bind strictly on this subclass, the fraction has to fall to roughly **~24%**, which no measured row in doc 18's table covers — re-measure before adopting it.
 
@@ -144,6 +144,30 @@ Two independent grounds, neither touching neutrality or truncation:
 - **Stop fidelity.** [`docs/research/41-tick-latency-economics.md`](../research/41-tick-latency-economics.md) Result 2 measures the conditional tail as `g(D) = 0.525%·√D` on a 3× equity ETP. **A −0.5% stop is smaller than its own execution error** at any cadence we can run — at τ=15 it delivers ≈−2.4%.
 
   *Where −2.4% comes from, since three review passes read it as a bare application of `g`.* It is the **delivered** stop, not the overshoot alone: the intended −0.5% **plus** the conditional overshoot at that cadence. Doc 41's measured row at D=15 is −1.97% (the `0.525%·√D` fit gives −2.03%, within its stated 3.5%), so −0.5% + −1.97% ≈ **−2.4%** — doc 41 Result 2's own wording, *"a −0.5% stop actually delivers about −2.4%, roughly five times its intended size."* Read as the overshoot term alone the figure would indeed be −2.0%, and the conclusion holds either way; the delivered figure is the one that makes "smaller than its own execution error" a comparison rather than an assertion.
+
+## Amendment — 2026-08-16: the sizing unit, the cap basis, and the frozen stop
+
+- **Amends:** Decision 5 (the sizing constraint's *form*, not its figures)
+- **Source:** [#721](https://github.com/dd-jp/samurai-trading-system/issues/721) and [#724](https://github.com/dd-jp/samurai-trading-system/issues/724), grilled under map [#703](https://github.com/dd-jp/samurai-trading-system/issues/703)
+
+Decision 5 stated the envelope but left three things underdetermined, each of which decides a live-money number.
+
+**1. The cap binds on notional, and this is arithmetic rather than preference.** [`docs/research/18-intraday-instrument-physics.md`](../research/18-intraday-instrument-physics.md) scales the underlying US tape **by the ETP leverage factor**, so the per-trade sd in D5's table — 1.55% index, 4.01% single-stock — is the **ETP's own move, with the 3× already inside it**. Every figure in D5 is therefore denominated in ETP notional. Leverage-adjusting the cap a second time would count the 3× twice and size every position to roughly a third of what was measured.
+
+**2. The cap is a fraction of *current* equity, not a frozen cash amount.** A fixed £262 is 34.9% of a £750 book, 43.7% of £600 and 58.2% of £450 — exposure rises as a fraction of equity exactly as equity falls, so a drawdown bound stops bounding at the first loss. The fractional form is self-correcting, and it makes the recorded envelope **conservative**: since exposure shrinks after a loss, cumulative loss under fixed-fractional sizing is strictly smaller than under the fixed-cash deployment doc 18's ladder rows describe. **23.1% and 26.2% are upper bounds for the implemented rule**, not estimates of it. Config carries the fraction; the composition root resolves it against the live equity read.
+
+**3. The stop is frozen per subclass, and the conversion to `risk_fraction` is per subclass with it.** Sizing runs through the existing `size = (equity × risk_fraction) / stop_distance`, so under a frozen percentage stop `risk_fraction = deployment × stop_pct`. Decision 3's bracket table has **two rows**, so `stop_pct` differs by subclass:
+
+| subclass | deployment (D5) | frozen `stop_pct` (D3) | `risk_fraction` |
+| --- | --- | --- | --- |
+| 3× index ETP | 35% | 2.16% | **0.00756** |
+| 3× single-stock ETP | 25% | 6.25% | **0.015625** |
+
+**Two distinct ways to get this wrong, both recorded because both are silent.** Storing the deployment fraction directly — `0.35` — sizes to **16.2× equity** and passes any test that checks the config against this ADR. Applying the *index* stop to the single-stock row gives `0.25 × 0.0216 = 0.00540`, which deploys 8.6% instead of 25%: it errs small, trips no gate, breaches no cap, and would survive a full soak, visible only as the single-stock leg hitting the minimum-viable-notional floor more often than intended. **The test must assert the resulting deployment — `size × entry ≈ 0.35 × equity` — never the config value**, since only that assertion fails on either error.
+
+**What this does not change:** D5's figures, its drift-removed measurement, the single-stock overshoot recorded above, or the target state. Freezing the stop keeps each bar exact at its own neutral bracket (4.33 pp index, 3.35 pp single-stock) at the price of the response to volatility becoming **discrete** — the binary halt, re-keyed from `AssetClass` to `subclass`, is the only volatility-responsive mechanism until the stop floats.
+
+**Open against this amendment:** [#729](https://github.com/dd-jp/samurai-trading-system/issues/729) — D5's envelope has no generator checked into the repo and its rows cannot be re-derived by hand. The conservatism argument in point 2 is what lets sizing be built against the fraction-of-equity form meanwhile; what stays unproven is that `CONTEXT.md`'s 20–25% tolerance is *met*.
 
 ## Known weaknesses
 

@@ -2570,6 +2570,25 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // injection incomplete and the smoke run demands the variable. A
       // log-only notifier keeps the offline run self-contained.
       verdictAlerts: { notify: async () => {} },
+      // #698 — the eleventh `ALERT_CHANNEL_FIELDS` member. Injected for the
+      // reason the comment above gives: the exemption is all-or-nothing, so
+      // adding a field to that list without adding it here is what makes this
+      // run start demanding `SAMURAI_ALERTS`.
+      //
+      // A bare no-op rather than a log-only stand-in, which is where this one
+      // differs from `orphanAlerts` and the rest. It is the only channel with
+      // no `Logging…Channel` counterpart, deliberately:
+      // `postTraderDiagnosticAlert` (direct-bind.ts) writes every diagnostic to
+      // the log at `error` BEFORE it consults the port, so a logging instance
+      // here would emit each condition twice.
+      //
+      // Swallowing nothing, and that was measured rather than assumed — a
+      // counting stub in this slot records zero diagnostics across a full smoke
+      // run. It matters because `ALERT_AFTER_CONSECUTIVE_DIAGNOSTICS` is 1, so
+      // a first diagnostic alerts immediately and a silent no-op would eat it;
+      // re-measure rather than trust this line if the offline calendar or the
+      // fixture bars ever change.
+      traderDiagnosticAlerts: { postTraderDiagnosticAlert: async () => {} },
       tickIntervalMs,
       fillPollIntervalMs,
       // Fast enough to fire several times inside a ~1s run. The heartbeat is a
