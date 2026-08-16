@@ -13,11 +13,11 @@ import { describe, expect, it } from 'vitest';
 import { RISK_THRESHOLD_KEYS } from '../../pipeline/risk-manager/index.js';
 import {
   D5_DEPLOYMENT_FRACTION_OF_EQUITY_LEG,
+  d5EnvelopeFor,
   EQUITY_LEG_FRACTION_OF_CAPITAL,
   PAPER_ACCOUNT_EQUITY_ANCHOR,
   paperStartingProfile,
   RISK_CAP_EQUITY_FRACTIONS,
-  d5EnvelopeFor,
   subclassDeploymentCapsFor,
 } from './paper-profile.js';
 import { DEFAULT_UNIVERSE } from './scheduler.js';

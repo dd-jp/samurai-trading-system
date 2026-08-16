@@ -103,14 +103,24 @@ interface TickPlan {
 
 interface SchedulerConfig {
   // ... existing fields
-  /** Policy window. Venue truth stays in the calendar; this is strategy. */
+  /**
+   * Policy window. Venue truth stays in the calendar; this is strategy.
+   *
+   * At THIS layer the predicate gates the whole tick — an excluded instrument
+   * gets no pass, so no Trader, so no flatten. What the composition root
+   * injects here is therefore the entry window UNION the flatten tail, never a
+   * bare entry window; `ProductionConfig.stocksTradingWindow` takes the entry
+   * policy and `withFlattenTail` composes it before it reaches this field.
+   * Same name, two layers, and reading them as one field is what switched
+   * flat-by-close off once already.
+   */
   stocksTradingWindow?: (instant: Date) => boolean;
 }
 ```
 
 - An instrument is included only if the trading-calendar source reports its market open at `tick_time` **and** the policy window admits `tick_time`. Both are read **once per tick**, for the same reason `isOpen` already is.
 - ~~Crypto instruments always included.~~ **WITHDRAWN 2026-08-16** — crypto is out of scope ([ADR-0014](../adr/0014-intraday-flat-by-close-horizon.md) amendment). `asset_class` retains its `'crypto'` member for now because collapsing the type touches the wire contracts and every stage; **no scheduler behaviour may depend on that member.**
-- Trading-calendar source is a small injected dependency (holiday/session table), not designed in depth here — flagged as a light dependency, not a new component (OPEN-GAP: trading-calendar, LOW severity, noted in cross-spec-contracts.md). **This gap is no longer LOW.** With a policy window layered on top and a daily out-of-session screener keyed to the *next trading day*, a wrong calendar now produces a wrong watchlist as well as a wrong tick — and [#696](https://github.com/dd-jp/samurai-trading-system/issues/696) reports the US equity calendar as weekend-only, trading through Thanksgiving. **One calendar, injected, never re-derived by a second consumer.**
+- Trading-calendar source is a small injected dependency (holiday/session table), not designed in depth here — flagged as a light dependency, not a new component (OPEN-GAP: trading-calendar — ~~LOW severity~~, noted in cross-spec-contracts.md). **This gap is no longer LOW.** *(The strike is the point: cross-spec-contracts.md still carries the original LOW listing in its historical register and records the upgrade separately, so citing it without striking the severity pointed a reader at a grade that document itself has withdrawn.)* With a policy window layered on top and a daily out-of-session screener keyed to the *next trading day*, a wrong calendar now produces a wrong watchlist as well as a wrong tick — and [#696](https://github.com/dd-jp/samurai-trading-system/issues/696) reports the US equity calendar as weekend-only, trading through Thanksgiving. **One calendar, injected, never re-derived by a second consumer.**
 
 #### The window is policy; the calendar is venue
 
@@ -138,8 +148,10 @@ These go in different places and the distinction is load-bearing, not stylistic.
 
 ```
 every tick (τ = 2 min):   mark → bracket → early-exit check → flatten check
-every new debate bar:     Signal → Analysts → Debate → Trader → Risk → Verdict → Execution
+every new debate bar:     Signal → Analysts → Debate → Trader → [Invalidation] → Risk → Verdict → Execution
 ```
+
+*(`[Invalidation]` is bracketed because it is **specced and not built** — the 2026-08-05 amendment below adds it between Trader and Risk, `devils-advocate-spec.md` owns it, and the runtime chain is six stages going Trader → Risk today. It appears here because omitting it entirely, as this line first did, reads as a competing decision about the pipeline's shape rather than a statement about what is wired. Nothing about the tick/decision split changes its position or its status: it is a decision-path stage, so it runs at most once per debate bar, and an `exit` intent skips it — the system can never block its own way out of a position.)*
 
 **The waste this removes is structural, not incidental.** The runner previously called the analyst step unconditionally, before any branch. At τ = 2 minutes against a 60-minute debate bar that is **30 analyst runs per debate**, each rebuilding the same read from bars that have not changed. Most of those ticks exist only for the exit, and an exit needs a mark, an ATR and a bracket — not a full structural read.
 
@@ -304,7 +316,7 @@ function buildProductionTickRunner(config: ProductionConfig): {
 
   **Amended 2026-08-16 — the default stays, and an assertion is added above it.** The default guards a real failure (a caller inheriting live instruments by omission) but leaves a second one open: `SMOKE_TEST_UNIVERSE` was BTC-USD alone *because* crypto bypassed the calendar gate, and with crypto out of scope an equities-only fallback on a closed session yields an **empty tick plan indistinguishable from a healthy no-trade run** — the same signature #691 and #625 both presented with. These two failures do not trade off against each other, so both are guarded: **the library default is unchanged, and the production composition root asserts an explicitly-configured universe and refuses to start without one.** `yarn smoke` passes its universe explicitly and is unaffected.
 
-  **Amended 2026-08-07 ([universe-selector-spec.md](universe-selector-spec.md), map [#397](../../issues/397)) — the statement above now applies to the *candidate pool*, not to what the tick loop iterates.** The two are separate: the **pool** stays a config value, is what `AssetClassRoutingDataSource` builds its map over, and changes only on restart; the **active list** is supplied per session by an `ActiveUniverseProvider` (watchlist + pinned open positions + crypto) and swaps at session boundaries. `SchedulerConfig.universe` accepting an arbitrary list is what makes the provider possible rather than something the provider replaces — but the universe must be resolved **once and shared** between the routing map and the scheduler, which today are two independent `config.universe ?? SMOKE_TEST_UNIVERSE` resolutions, or the two can disagree about what the universe is.
+  **Amended 2026-08-07 ([universe-selector-spec.md](universe-selector-spec.md), map [#397](../../issues/397)) — the statement above now applies to the *candidate pool*, not to what the tick loop iterates.** The two are separate: the **pool** stays a config value, is what `AssetClassRoutingDataSource` builds its map over, and changes only on restart; the **active list** is supplied per session by an `ActiveUniverseProvider` (watchlist + pinned open positions ~~+ crypto~~ — *the crypto term is withdrawn 2026-08-16 with the rest of the asset class; the provider composes two sources, not three*) and swaps at session boundaries. `SchedulerConfig.universe` accepting an arbitrary list is what makes the provider possible rather than something the provider replaces — but the universe must be resolved **once and shared** between the routing map and the scheduler, which today are two independent `config.universe ?? SMOKE_TEST_UNIVERSE` resolutions, or the two can disagree about what the universe is.
 - **No new persistence or safety code here.** `SqliteAuditLog`/`SqliteCurrentTickStore` (#201), the HITL approval channel (#207), prompt-injection mitigations (#208), and `OrphanVerdictScanner` (#209) are already-closed implementations this module constructs and wires — it does not implement any of them.
 
 ## Testing Decisions
