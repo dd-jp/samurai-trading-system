@@ -2246,6 +2246,20 @@ export function evaluateSmokeGate(
     );
   }
 
+  // The canned batch carries exactly two rows, one on a watched theme. Asserted
+  // rather than merely printed, because the two ways this can be wrong are the
+  // two this observation exists to catch and neither shows up anywhere else: 0
+  // means the poller never fired from the composition root (the no-caller
+  // defect this repo keeps producing), and 2 means the theme filter stopped
+  // filtering and the archive is taking the whole world's news.
+  if (observations.gdeltRowsArchived !== 1) {
+    failures.push(
+      `GDELT archived ${observations.gdeltRowsArchived} macro rows, expected exactly 1 — ` +
+        '0 means the poller never ran from the composition root, 2 means the theme filter ' +
+        'matched both canned rows and is no longer filtering (#556)',
+    );
+  }
+
   return { passed: failures.length === 0, failures };
 }
 

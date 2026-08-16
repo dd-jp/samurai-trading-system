@@ -53,17 +53,43 @@ export interface GdeltIngestAgentDeps {
 
 export class GdeltIngestAgent {
   /**
-   * Set while a poll is in flight.
+   * The in-flight poll, if there is one.
    *
    * `production.ts` fires this on an interval as `void refresh(...)`, so a poll
    * that outlasts its interval — a stalled 3.4MB download — would otherwise have
    * a second poll start beside it, pass the same cursor check (the first has not
    * written yet) and re-download the same batch. `INSERT OR IGNORE` makes that
    * harmless but not free.
+   *
+   * Held as the promise rather than a boolean so `whenIdle` can let shutdown
+   * drain it, instead of leaving a download racing a closing store.
    */
-  private inFlight = false;
+  private current: Promise<boolean> | undefined;
+
+  /**
+   * The most recent batch this process has *decoded*, held or not.
+   *
+   * The archive cursor only knows about batches that produced rows, so a batch
+   * matching no watched theme leaves it unmoved. In memory rather than
+   * persisted, deliberately: it costs one redundant download per restart, and
+   * the alternative — a marker row in `mi_archive_raw` — would put rows that are
+   * not vendor data into the table whose whole contract is that they are.
+   */
+  private seenBatch: Date | undefined;
 
   constructor(private readonly deps: GdeltIngestAgentDeps) {}
+
+  /** The later of the persisted write cursor and this process's seen-batch mark. */
+  private effectiveCursor(): Date | undefined {
+    const written = this.deps.archive.latestUpdatedAt(SOURCE_GDELT);
+    if (written === undefined) return this.seenBatch;
+    if (this.seenBatch === undefined) return written;
+    return this.seenBatch > written ? this.seenBatch : written;
+  }
+
+  private noteSeen(batchTime: Date): void {
+    if (this.seenBatch === undefined || batchTime > this.seenBatch) this.seenBatch = batchTime;
+  }
 
   /**
    * One poll: fetch the latest batch, archive its watched rows.
@@ -80,13 +106,27 @@ export class GdeltIngestAgent {
    * `false` immediately rather than starting a second download.
    */
   async refresh(trace_id = 'gdelt-ingest'): Promise<boolean> {
-    if (this.inFlight) return false;
-    this.inFlight = true;
+    if (this.current !== undefined) return false;
+    const run = this.poll(trace_id);
+    this.current = run;
     try {
-      return await this.poll(trace_id);
+      return await run;
     } finally {
-      this.inFlight = false;
+      this.current = undefined;
     }
+  }
+
+  /**
+   * Resolves when no poll is in flight. Never rejects.
+   *
+   * Shutdown clears the timer, which stops the NEXT poll but not the one already
+   * downloading — and that one ends in an archive write, potentially against a
+   * store the shutdown has since closed. The write is guarded, so this is a
+   * cleaner shutdown rather than a correctness fix, but "degrades to a warn" is
+   * a worse contract than "does not happen".
+   */
+  async whenIdle(): Promise<void> {
+    await this.current?.catch(() => undefined);
   }
 
   private async poll(trace_id: string): Promise<boolean> {
@@ -96,11 +136,25 @@ export class GdeltIngestAgent {
     try {
       const url = await this.deps.client.latestBatchUrl();
       const candidate = batchTimeFromUrl(url);
-      const cursor = this.deps.archive.latestUpdatedAt(SOURCE_GDELT);
+      if (candidate === undefined) {
+        // The cursor check below cannot run, so this poll — and every poll after
+        // it — downloads the full batch. Silent degradation looks identical to a
+        // steady stream of fresh batches, so it is logged rather than inferred.
+        this.deps.logger?.log({
+          trace_id,
+          stage: 'market_intelligence',
+          level: 'warn',
+          message:
+            'market intelligence: GDELT batch URL carries no readable timestamp; the skip-if-held ' +
+            'cursor is disabled and every poll will download the full batch. Vendor URL drift?',
+          payload: { source: SOURCE_GDELT, batch: url },
+        });
+      }
       // Checked BEFORE the download, not after: at a 15-minute tick against a
       // 15-minute publication cadence, a restart or a fast tick will often see
       // the batch it already holds, and re-downloading 3.4MB to discard it is
       // the whole saving the cursor exists for.
+      const cursor = this.effectiveCursor();
       if (cursor !== undefined && candidate !== undefined && candidate <= cursor) return false;
       batch = await this.deps.client.fetchBatch(url);
     } catch (error) {
@@ -131,6 +185,12 @@ export class GdeltIngestAgent {
         message: 'market intelligence: GDELT batch matched no watched themes',
         payload: { source: SOURCE_GDELT, scanned: batch.scanned, batch: batch.file_url },
       });
+      // Recorded even though nothing was written. The archive cursor is derived
+      // from written rows, so a batch that matched nothing would leave it where
+      // it was and every poll for the next 15 minutes would re-download the same
+      // ~3.4MB file and re-log this line — the opposite of what the cursor is
+      // for. `seenBatch` closes that gap.
+      this.noteSeen(batch.batch_time);
       return false;
     }
 

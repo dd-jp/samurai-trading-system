@@ -2034,6 +2034,11 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       // tick and a fill poll rather than the longer of the two.
       const stopping = loop?.stop();
       const stoppingFillSync = fillSync?.stop();
+      // Clearing the timer stops the NEXT GDELT poll, not the one already
+      // downloading — and that one ends in an archive write, which without this
+      // drain can land after the store is closed. The write is guarded, so this
+      // makes shutdown ordering deterministic rather than fixing a crash.
+      const drainingGdelt = components.gdeltIngestAgent?.whenIdle();
       loop = undefined;
       fillSync = undefined;
       // `allSettled`, not two sequential awaits: `buildShutdownHandler`'s doc
@@ -2042,7 +2047,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       // series would leave the second drain's promise unawaited on that path
       // — an unhandled rejection, and the fill poll's drain silently
       // discarded during shutdown. This still drains both concurrently.
-      await Promise.allSettled([stopping, stoppingFillSync]);
+      await Promise.allSettled([stopping, stoppingFillSync, drainingGdelt]);
     },
   };
 }

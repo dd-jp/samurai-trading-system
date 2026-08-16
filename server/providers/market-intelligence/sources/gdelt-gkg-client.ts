@@ -237,9 +237,22 @@ function unzipFirstEntry(buffer: Buffer): string {
 
   let inflated: Buffer;
   if (method === 8) {
+    // Deflate is self-terminating, so running the subarray past this member's
+    // end is harmless — the inflater stops at the stream's end marker.
     inflated = inflateRawSync(body, { maxOutputLength: MAX_INFLATED_BYTES });
   } else if (method === 0) {
-    inflated = body;
+    // Stored data is NOT self-terminating: `body` runs to the end of the whole
+    // buffer, so returning it verbatim appends the central directory and EOCD to
+    // the CSV as binary garbage. The local header's compressed size bounds it.
+    // Zero there means the size lives in a trailing data descriptor, which this
+    // decoder does not read — refuse rather than guess.
+    const compressedSize = buffer.readUInt32LE(18);
+    if (compressedSize === 0) {
+      throw new Error(
+        'GdeltGkgClient: stored zip entry declares no compressed size (streamed data descriptor).',
+      );
+    }
+    inflated = body.subarray(0, compressedSize);
   } else {
     throw new Error(
       `GdeltGkgClient: unsupported zip compression method ${method} (expected 8 deflate or 0 stored).`,
@@ -365,8 +378,10 @@ export class GdeltGkgClient {
    * article means a broken vendor contract on a small, fully-structured page.
    * Here a batch is ~800 rows of scraped worldwide text where a stray tab or an
    * unparseable tone is routine, and failing the batch would discard 799 good
-   * rows over one. The count of skipped rows is returned so the caller can log
-   * a filter that has silently started rejecting everything.
+   * rows over one. What comes back is `scanned` — rows SEEN, not rows skipped
+   * (skipped is `scanned - records.length`) — so a caller wiring the
+   * silently-rejecting-filter alarm compares the two rather than logging one as
+   * if it were the other.
    */
   parseBatch(csv: string, batchTime: Date, fileUrl: string): GdeltGkgBatch {
     const records: GdeltGkgRecord[] = [];

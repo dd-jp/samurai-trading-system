@@ -289,6 +289,32 @@ describe('evaluateSmokeGate', () => {
     expect(gate.failures.join(' ')).not.toContain('trader_log');
   });
 
+  it('fails when the GDELT poller archived nothing — the no-caller shape (#556)', () => {
+    // 0 is the defect this repo keeps producing: a fully-built, fully-tested
+    // component that the composition root never calls. Printing the count in
+    // the report catches nothing on its own; the gate has to fail on it.
+    const observations = transactedObservations();
+    observations.gdeltRowsArchived = 0;
+
+    const gate = evaluateSmokeGate(observations, healthyGateOptions());
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.join(' ')).toContain('GDELT archived 0 macro rows');
+  });
+
+  it('fails when the GDELT theme filter stopped filtering (#556)', () => {
+    // The canned batch is two rows, one watched. 2 means the filter matched
+    // both — the archive would then be taking the whole world's news at 14.9KB
+    // a row, which is the other half of what this observation exists to catch.
+    const observations = transactedObservations();
+    observations.gdeltRowsArchived = 2;
+
+    const gate = evaluateSmokeGate(observations, healthyGateOptions());
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.join(' ')).toContain('GDELT archived 2 macro rows');
+  });
+
   it('fails when the loop ran fewer ticks than asked for', () => {
     const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions({ minTicks: 5 }));
 

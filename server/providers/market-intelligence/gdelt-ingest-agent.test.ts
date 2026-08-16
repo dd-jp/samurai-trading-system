@@ -256,6 +256,77 @@ describe('GdeltIngestAgent', () => {
     archive.close();
   });
 
+  it('does not re-download a batch that matched nothing', async () => {
+    const archive = new MiArchiveStore();
+    const client = stubClient({ batch: batch([], BATCH_URL, 812) });
+    const agent = new GdeltIngestAgent({ archive, client, clock });
+
+    await expect(agent.refresh()).resolves.toBe(false);
+    await expect(agent.refresh()).resolves.toBe(false);
+
+    // The archive cursor is derived from WRITTEN rows, so a zero-match batch
+    // leaves it unmoved — without a separate seen-batch mark, every poll for
+    // the next 15 minutes re-downloads and re-parses the same ~3.4MB file.
+    expect(client.fetchBatch).toHaveBeenCalledTimes(1);
+    archive.close();
+  });
+
+  it('warns when the batch URL carries no readable timestamp', async () => {
+    const archive = new MiArchiveStore();
+    const logger = collectingLogger();
+    const stampless = 'http://data.gdeltproject.org/gdeltv2/latest.gkg.csv.zip';
+    const agent = new GdeltIngestAgent({
+      archive,
+      client: stubClient({ url: stampless, batch: batch([record()], stampless) }),
+      clock,
+      logger,
+    });
+
+    await agent.refresh();
+
+    // With no stamp the skip-if-held check cannot run and every poll downloads
+    // the full batch. That degradation is indistinguishable from a healthy
+    // stream of fresh batches unless it says so.
+    expect(
+      logger.entries.some(
+        (entry) => entry.level === 'warn' && /no readable timestamp/.test(entry.message),
+      ),
+    ).toBe(true);
+    archive.close();
+  });
+
+  it('lets a shutdown drain an in-flight poll', async () => {
+    const archive = new MiArchiveStore();
+    const client = stubClient({});
+    let release = (): void => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    client.fetchBatch.mockImplementation(async () => {
+      await gate;
+      return batch([record()]);
+    });
+    const agent = new GdeltIngestAgent({ archive, client, clock });
+
+    const polling = agent.refresh();
+    let drained = false;
+    const draining = agent.whenIdle().then(() => {
+      drained = true;
+    });
+
+    // Clearing the interval stops the NEXT poll, not this one — whose archive
+    // write would otherwise land after the store is closed.
+    expect(drained).toBe(false);
+    release();
+    await Promise.all([polling, draining]);
+    expect(drained).toBe(true);
+    expect(archive.rawRows(SOURCE_GDELT)).toHaveLength(1);
+
+    // Idle when nothing is running, rather than hanging.
+    await expect(agent.whenIdle()).resolves.toBeUndefined();
+    archive.close();
+  });
+
   it('is idempotent on a re-run of the same batch', async () => {
     const archive = new MiArchiveStore();
     const rows = [record(), record({ native_id: 'b-2' })];

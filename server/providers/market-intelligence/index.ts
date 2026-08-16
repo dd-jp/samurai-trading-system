@@ -267,5 +267,9 @@ export {
   GdeltGkgClient,
   type GdeltGkgClientOptions,
   type GdeltGkgRecord,
+  // Exported here, not just from the module: a stored `payload` is a projection,
+  // and anything re-parsing one has to read its shape from this constant rather
+  // than assume GKG column order.
+  PROJECTED_COLUMNS,
 } from './sources/gdelt-gkg-client.js';
 export { allWatchedThemes, themesFor } from './sources/gdelt-themes.js';
