@@ -48,6 +48,34 @@
  * Failing at BOOT is the point. The alternative is a soak that starts cleanly,
  * looks healthy for fourteen days, and is discovered to have carried overnight
  * against its own horizon only when someone reads the positions table.
+ *
+ * ## What this deliberately does NOT guard
+ *
+ * Only the window's LOWER bound. A `flatten_before_close_ms` at or above the
+ * session length makes `[sessionEnd − W, sessionEnd)` true at every instant of
+ * the session, so the book flattens on every tick and can never hold a
+ * position — and this function would accept it (raised in #711 review).
+ *
+ * Left unguarded for two reasons, neither of them "it cannot happen".
+ *
+ * First, the composition root does not know the session length. It has two
+ * numbers; the session boundary lives behind `TradingCalendar` and differs per
+ * venue and per half-day. A hardcoded 24h ceiling here would be a number
+ * invented at the wrong layer, and it would still accept a 7h window against a
+ * 6.5h LSE session — the case that actually bites.
+ *
+ * Second, the two failure modes are not symmetric in how they are discovered.
+ * A window too NARROW is silent: nothing flattens, nothing logs, and the
+ * positions table is the only witness. A window too WIDE is loud in outcome:
+ * the strategy holds nothing, the trade count is zero, and it is visible on the
+ * first day rather than the fourteenth. This assertion exists for the silent
+ * one.
+ *
+ * The honest consequence is that the test fixtures below park the window at
+ * hours-wide values to keep timers quiet, and a value like that copied into a
+ * real profile would be an always-flatten config that boots happily. Bounding
+ * it properly needs the calendar, which is #712's `withFlattenTail` territory,
+ * not this file's.
  */
 import type { TraderConfig } from '../../../pipeline/trader/index.js';
 
@@ -88,6 +116,20 @@ export function assertFlattenWindowCoversTickInterval(
   traderConfig: TraderConfig,
   tickIntervalMs: number,
 ): void {
+  // Guarded FIRST, because a bad interval makes the real check pass vacuously
+  // rather than fail. `config.tickIntervalMs ?? DEFAULT_TICK_INTERVAL_MS`
+  // substitutes only for null/undefined, so a configured `0` survives the
+  // nullish coalesce, `required` becomes 0, and every window on earth clears
+  // it — including one that disables flat-by-close outright. An assertion whose
+  // failure mode is silent approval is worse than no assertion.
+  if (!Number.isFinite(tickIntervalMs) || tickIntervalMs <= 0) {
+    throw new Error(
+      `tickIntervalMs must be a positive, finite number of milliseconds, got ${tickIntervalMs}. ` +
+        'Flat-by-close is evaluated on a tick, so a non-positive interval means there is no ' +
+        'tick rate for the flatten window to be checked against (#670).',
+    );
+  }
+
   const window = traderConfig.flatten_before_close_ms;
   const required = MIN_TICKS_INSIDE_FLATTEN_WINDOW * tickIntervalMs;
   if (window >= required) return;

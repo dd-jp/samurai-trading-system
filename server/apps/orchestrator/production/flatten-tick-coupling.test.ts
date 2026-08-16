@@ -71,6 +71,31 @@ describe('assertFlattenWindowCoversTickInterval', () => {
     );
   });
 
+  it('rejects a zero tick interval instead of passing it vacuously (#711 review)', () => {
+    // `config.tickIntervalMs ?? DEFAULT` substitutes only for null/undefined, so
+    // a configured 0 reaches here intact. Without the guard `required` is 0 and
+    // EVERY window clears it — the assertion would approve a config that
+    // disables flat-by-close, which is worse than not asserting at all.
+    expect(() => assertFlattenWindowCoversTickInterval(configWithWindow(5 * MINUTE), 0)).toThrow(
+      /must be a positive, finite number/,
+    );
+  });
+
+  it('rejects a non-finite tick interval', () => {
+    expect(() =>
+      assertFlattenWindowCoversTickInterval(configWithWindow(5 * MINUTE), Number.NaN),
+    ).toThrow(/must be a positive, finite number/);
+    expect(() =>
+      assertFlattenWindowCoversTickInterval(configWithWindow(5 * MINUTE), Number.POSITIVE_INFINITY),
+    ).toThrow(/must be a positive, finite number/);
+  });
+
+  it('rejects a negative tick interval', () => {
+    expect(() => assertFlattenWindowCoversTickInterval(configWithWindow(5 * MINUTE), -1)).toThrow(
+      /must be a positive, finite number/,
+    );
+  });
+
   it('accepts the default 60s tick against the default 5-minute window', () => {
     // `DEFAULT_TICK_INTERVAL_MS` is 60s, so every caller that never set an
     // interval was already safe — the defect was confined to the profile that
