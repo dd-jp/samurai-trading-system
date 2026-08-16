@@ -107,7 +107,7 @@ the SMA exactly), so this inflates certainty rather than inventing a side. Pinne
 the same reason. Recorded so the guard is understood to be load-bearing: remove it and the two
 kinds diverge silently.
 
-## F5 — The A3 entry window switched flat-by-close off. *(closed in this branch)*
+### F5 — The A3 entry window switched flat-by-close off. *(closed in this branch)*
 
 Not an indicator finding, and recorded here because this is the branch's live review file and the
 claim it corrects is in a pushed commit message.
@@ -161,6 +161,18 @@ dimension, which belongs with A1's `subclass` work rather than this fix.
 
 ## What changed in this pass
 
-Tests and a fixture only. No production arithmetic was touched. `RSI_SPEC` and `SMA_SPEC` gained an
-`export` so the goldens can pin the real spec rather than a hand-rebuilt copy — the same reason
-`atrIndicatorSpec` is exported (#304).
+**No production ARITHMETIC was touched** — every indicator returns exactly what it returned before
+this pass, which is what makes F1–F3 a characterisation rather than a change. Three review passes
+read the earlier wording ("tests and a fixture only") as claiming the branch carries no production
+code at all, which is not true and was never the claim, so it is stated precisely here:
+
+| Changed | What | Why it is not an arithmetic change |
+| --- | --- | --- |
+| Tests + fixture | `indicator-golden.test.ts`, `indicator-registry.test.ts`, `rsi-warmup.test.ts`, `__fixtures__/` | The measurement itself. |
+| `technical-analyst.ts` | `RSI_SPEC` / `SMA_SPEC` / `confidenceFrom` / the 70-30 gates gained an `export` | Visibility only. The goldens pin the real spec and the real gates rather than a hand-rebuilt copy — the same reason `atrIndicatorSpec` is exported (#304). A copy would make this document's 18% a claim about the copy. |
+| `indicators.ts` | The two parallel `switch`es became one `Record<IndicatorKind, IndicatorDefinition>`; `recommendedWarmupFor` added | B2. The registry's `seedBars` reproduce the old switch arity exactly and delegate to the same helpers; `recommendedWarmupFor` gives F2 a number and has no production caller by design. |
+| `production/stocks-tick-window.ts` | The entry window ∪ flatten tail composition | **F5, and this one IS production.** It is a defect fix, not a characterisation — it restores flat-by-close, which the A3 entry window had switched off. Listed here rather than buried because "no production change" would be false without it. |
+
+`minimumBarsFor` is deliberately NOT raised, so the live specs still sit on the fabrication floor and
+the debate still reads Cutler's RSI. F2 stays open; adopting `recommendedWarmupFor` is B2's call and
+a visible change to `indicator-registry.test.ts`'s pinning assertion.

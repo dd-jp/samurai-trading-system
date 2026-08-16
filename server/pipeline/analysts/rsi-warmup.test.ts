@@ -43,7 +43,13 @@ import {
   type IndicatorSpec,
   minimumBarsFor,
 } from '../../providers/market-data-service/index.js';
-import { RSI_SPEC, SMA_SPEC } from './technical-analyst.js';
+import {
+  confidenceFrom,
+  RSI_OVERBOUGHT,
+  RSI_OVERSOLD,
+  RSI_SPEC,
+  SMA_SPEC,
+} from './technical-analyst.js';
 
 const PERIOD = 14;
 
@@ -117,13 +123,20 @@ function rsiAt(endIndex: number, lookback: number): number {
 const closesEnding = (endIndex: number, lookback: number): number[] =>
   BARS.slice(Math.max(0, endIndex - lookback), endIndex).map((bar) => bar.close);
 
-/** `technical-analyst.ts`'s `confidenceFrom`, which is module-local there. */
-const confidenceFrom = (rsi: number): number =>
-  Math.min(0.95, Math.max(0.05, Math.abs(rsi - 50) / 50));
-
-/** `directionFrom`'s gates, also module-local there. */
-const OVERBOUGHT = 70;
-const OVERSOLD = 30;
+/**
+ * `confidenceFrom` and `directionFrom`'s gates, IMPORTED from
+ * `technical-analyst.ts` rather than restated here.
+ *
+ * They were hand-copied in the first draft of this file, which quietly voids
+ * what it measures: this test's whole claim is "the live analyst classifies
+ * 18% of bars differently on the warm window", and a local copy makes that a
+ * claim about the copy the moment the real gate moves. The measurement has to
+ * ride the same constants production reads. Exporting three symbols is the
+ * cheaper side of that trade — the same reasoning that made `RSI_SPEC` an
+ * export rather than a rebuilt literal.
+ */
+const OVERBOUGHT = RSI_OVERBOUGHT;
+const OVERSOLD = RSI_OVERSOLD;
 
 /**
  * A warmed window for comparison. 200 bars is ~14 x period — comfortably past

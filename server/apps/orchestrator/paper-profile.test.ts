@@ -256,7 +256,17 @@ describe('paperStartingProfile', () => {
      */
     const USD_PER_DEBATE = 0.006;
     const PASS_DURATION_MS = 13_000;
-    /** 1h bars: 24/day for the 24/7 crypto leg, ~7 for a US equity session. */
+    /**
+     * 1h bars: 24/day for the 24/7 crypto leg, ~7 for a full US equity session.
+     *
+     * The equity term is deliberately the PRE-window figure. `stocksTradingWindow`
+     * (#706) narrows entries to 14:30-15:45 London, which cuts the real count to
+     * ~2 per name per session — so 7 now overstates it ~3.5x. Kept anyway,
+     * because this is a budget headroom assertion and the honest failure
+     * direction is to over-estimate spend: re-keying it to 2 would let a later
+     * widening of the window silently consume headroom this test claims to
+     * guard. Update it only alongside a change that makes 7 an UNDER-estimate.
+     */
     const DEBATES_PER_DAY = 2 * 24 + 4 * 7;
 
     it('carries the budget, and the cadence #670 stepped to once #617 closed', () => {

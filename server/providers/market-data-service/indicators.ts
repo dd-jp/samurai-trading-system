@@ -178,27 +178,6 @@ export class InsufficientBarsError extends Error {
 }
 
 /**
- * `params.period` selects the indicator's own window inside the pinned
- * lookback; absent, the full lookback IS the period.
- *
- * A non-positive or non-integer period is rejected rather than tolerated:
- * `sma`'s `slice(-period)` at `period = 0` returns the WHOLE array (`-0 === 0`)
- * and would answer a full-window mean labelled a 0-period one; a `NaN` period
- * makes every length comparison below false; and a FRACTIONAL period seeds
- * over `slice`'s truncated count while `rsi`/`atr` divide by the untruncated
- * one. All three are the same silent fabrication this module now refuses.
- *
- * This throws on a path `atrFor` does NOT guard (it calls `minimumBarsFor`
- * outside any catch), so it is only safe because no period in this repo is
- * computed: `TraderConfig.atr_lookback` is the literal 14 in
- * `DEFAULT_TRADER_CONFIG`, spread unchanged by `paper-profile.ts`, and the
- * Feedback Loop's `strategy_params` dials are written to the tuning store
- * only — nothing feeds a tuned value back into an `IndicatorSpec`. If that
- * ever changes, a stepped dial is exactly how a fractional period would
- * arrive, and this check would turn a mispriced tick into a dead one; revisit
- * it then rather than assuming it stays free.
- */
-/**
  * One definition per kind, replacing the two parallel `switch` statements that
  * `minimumBarsFor` and `computeIndicator` used to carry (#703 step B2).
  *
@@ -274,6 +253,27 @@ function definitionFor(indicator: IndicatorKind): IndicatorDefinition {
   return definition;
 }
 
+/**
+ * `params.period` selects the indicator's own window inside the pinned
+ * lookback; absent, the full lookback IS the period.
+ *
+ * A non-positive or non-integer period is rejected rather than tolerated:
+ * `sma`'s `slice(-period)` at `period = 0` returns the WHOLE array (`-0 === 0`)
+ * and would answer a full-window mean labelled a 0-period one; a `NaN` period
+ * makes every length comparison below false; and a FRACTIONAL period seeds
+ * over `slice`'s truncated count while `rsi`/`atr` divide by the untruncated
+ * one. All three are the same silent fabrication this module now refuses.
+ *
+ * This throws on a path `atrFor` does NOT guard (it calls `minimumBarsFor`
+ * outside any catch), so it is only safe because no period in this repo is
+ * computed: `TraderConfig.atr_lookback` is the literal 14 in
+ * `DEFAULT_TRADER_CONFIG`, spread unchanged by `paper-profile.ts`, and the
+ * Feedback Loop's `strategy_params` dials are written to the tuning store
+ * only — nothing feeds a tuned value back into an `IndicatorSpec`. If that
+ * ever changes, a stepped dial is exactly how a fractional period would
+ * arrive, and this check would turn a mispriced tick into a dead one; revisit
+ * it then rather than assuming it stays free.
+ */
 function periodOf(spec: IndicatorSpec): number {
   const period = spec.params.period ?? spec.lookback;
   if (!Number.isInteger(period) || period < 1) {

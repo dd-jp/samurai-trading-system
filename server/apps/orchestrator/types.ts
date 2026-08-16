@@ -33,7 +33,7 @@ export interface UniverseInstrument {
    * one, and a required field would break them all to express something they
    * do not use.
    *
-   * The one thing that reads this field today is `subclassDeploymentCapFor`
+   * The one thing that reads this field today is `d5EnvelopeFor`
    * (paper-profile.ts), which SKIPS unclassified rows when building
    * `SubclassDeploymentCap.subclass_of` — deliberately, so a partly-populated
    * pool file still arms the gate. The refusal then happens where the money

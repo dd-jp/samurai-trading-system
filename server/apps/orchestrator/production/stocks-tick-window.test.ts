@@ -79,10 +79,18 @@ describe('the flatten tail is reachable', () => {
 
   it('still cannot open a session the calendar has closed', () => {
     // A Saturday at 16:26 is inside the tail by wall clock and shut by venue.
-    // `nextTick` evaluates `isOpen` first, and the predicate must not be what
-    // is holding that line — so both are asserted.
+    // `nextTick` evaluates `isOpen` first, so the scheduler holds this line
+    // regardless of what the predicate says.
     const saturday = new Date('2026-08-22T16:26:00+01:00');
     expect(stocksFiringAt(saturday, composed)).toBe(false);
+
+    // ...and the predicate is asserted SEPARATELY, because "the calendar holds
+    // it" is only true while the calendar is consulted first. If `sessionEnd`
+    // ever answered on a closed day, a predicate that admitted this instant on
+    // its own authority would put a shut venue back in the tick plan the moment
+    // that ordering changed. Two assertions, because one of them is about the
+    // composition and the other is about the piece.
+    expect(composed(saturday)).toBe(false);
   });
 
   it('is inert past the close rather than answering a past close itself', () => {

@@ -401,7 +401,7 @@ export function subclassDeploymentCapsFor(
  * names then throw at sizing time. That is intended: a half-populated pool
  * file is a mistake to surface, not one to size around.
  */
-export function subclassDeploymentCapFor(
+export function d5EnvelopeFor(
   universe: readonly UniverseInstrument[],
   equityAnchorUsd: number,
 ): SubclassDeploymentCap | undefined {
@@ -961,10 +961,17 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
     >
   > {
   const caps = riskCapsFor(equityAnchorUsd);
-  // ADR-0018 D5. Built from the same universe this profile returns below, so
-  // the classification the gate resolves against and the instruments the run
-  // actually ticks cannot be two different lists.
-  const subclassCap = subclassDeploymentCapFor(DEFAULT_UNIVERSE, equityAnchorUsd);
+  // ADR-0018 D5. Built from `DEFAULT_UNIVERSE`, which is also what this profile
+  // returns as `universe` below — so today the classification the gate resolves
+  // against and the instruments the run ticks are the same list.
+  //
+  // That is a shared reference, not an enforced invariant: a caller that
+  // overrides `universe` downstream of this profile would leave the gate keyed
+  // to the old one, and the failure would be quiet in the safe direction only
+  // by luck. Deriving both from one local rather than naming the constant twice
+  // is the reason it holds at all; if `universe` ever becomes a parameter here,
+  // it has to feed this call too.
+  const subclassCap = d5EnvelopeFor(DEFAULT_UNIVERSE, equityAnchorUsd);
 
   const traderConfig: TraderConfig = {
     // SPEC — `DEFAULT_TRADER_CONFIG` (server/pipeline/trader/types.ts) is the one set of

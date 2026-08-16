@@ -64,6 +64,25 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: yarn test
 
+      # The indicator golden fixture is the independent reference the whole
+      # characterisation rests on (#703 step B1), and its authority comes from
+      # being generated rather than hand-written. Without this step that is an
+      # honour-system claim: a hand-edited `indicator-golden.json` would make
+      # every golden case agree with whatever it was edited to say, and the
+      # suite would go green confirming the bug.
+      #
+      # Deliberately unconditional on the other steps: it is a provenance check,
+      # not a consequence of the tests. The generator is stdlib-only and
+      # deterministic by construction (an LCG written out in the script, no
+      # `random`, no network), so a diff here means exactly one of two things —
+      # an intended fixture change that was not regenerated, or an edit to the
+      # fixture that was never in the generator at all.
+      - name: Indicator golden fixture is generated, not hand-edited
+        if: ${{ !cancelled() }}
+        run: |
+          python3 server/providers/market-data-service/__fixtures__/generate-indicator-golden.py
+          git diff --exit-code -- server/providers/market-data-service/__fixtures__/indicator-golden.json
+
   # The dashboard's browser suite (#544). Its own job because it needs a
   # browser download and several minutes of wall clock, and because a UI
   # regression must not be able to hide behind — or delay — the checks that

@@ -63,9 +63,9 @@ export const RSI_SPEC: IndicatorSpec = {
 };
 
 /** RSI above this alongside a rising close is treated as overbought, not confirming bullish. */
-const RSI_OVERBOUGHT = 70;
+export const RSI_OVERBOUGHT = 70;
 /** RSI below this alongside a falling close is treated as oversold, not confirming bearish. */
-const RSI_OVERSOLD = 30;
+export const RSI_OVERSOLD = 30;
 
 function directionFrom(lastClose: number, sma: number, rsi: number): Direction {
   if (lastClose > sma && rsi < RSI_OVERBOUGHT) {
@@ -78,7 +78,7 @@ function directionFrom(lastClose: number, sma: number, rsi: number): Direction {
 }
 
 /** Distance of RSI from its 50 midpoint, normalized to confidence in [0.05, 0.95]. */
-function confidenceFrom(rsi: number): number {
+export function confidenceFrom(rsi: number): number {
   const distance = Math.abs(rsi - 50) / 50;
   return Math.min(0.95, Math.max(0.05, distance));
 }

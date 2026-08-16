@@ -17,7 +17,7 @@ import {
   PAPER_ACCOUNT_EQUITY_ANCHOR,
   paperStartingProfile,
   RISK_CAP_EQUITY_FRACTIONS,
-  subclassDeploymentCapFor,
+  d5EnvelopeFor,
   subclassDeploymentCapsFor,
 } from './paper-profile.js';
 import { DEFAULT_UNIVERSE } from './scheduler.js';
@@ -65,7 +65,7 @@ describe('the envelope arms itself off the universe', () => {
     // ADR-0018 prices leveraged ETPs; the default universe is
     // SPY/QQQ/AAPL/TSLA/BTC/ETH. Declaring the field with an empty
     // `subclass_of` would make every entry throw instead.
-    expect(subclassDeploymentCapFor(DEFAULT_UNIVERSE, PAPER_ACCOUNT_EQUITY_ANCHOR)).toBeUndefined();
+    expect(d5EnvelopeFor(DEFAULT_UNIVERSE, PAPER_ACCOUNT_EQUITY_ANCHOR)).toBeUndefined();
     expect(paperStartingProfile('paper').riskConfig.per_subclass_deployment_cap).toBeUndefined();
   });
 
@@ -75,7 +75,7 @@ describe('the envelope arms itself off the universe', () => {
       { asset: 'BTC-USD', asset_class: 'crypto' },
     ];
 
-    const declared = subclassDeploymentCapFor(universe, LIVE_CAPITAL);
+    const declared = d5EnvelopeFor(universe, LIVE_CAPITAL);
 
     expect(declared?.subclass_of).toEqual({ '3USL': 'index_etp_3x' });
     expect(declared?.cap.index_etp_3x).toBeCloseTo(262.5, 6);

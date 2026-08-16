@@ -62,6 +62,14 @@ series comes from an LCG written out below rather than from `random`, so the
 output does not depend on the Python version, and re-running must produce a
 byte-identical file. A diff on that file in a PR means an intended change to
 the fixture or an unintended change to this script; there is no third case.
+
+**That guarantee is enforced, not merely asserted.** CI re-runs this script and
+fails on `git diff --exit-code` against the checked-in JSON (`.github/workflows/
+ci.yml`, "Indicator golden fixture is generated, not hand-edited"). It has to
+be: the fixture is the INDEPENDENT reference the golden tests check
+`indicators.ts` against, so a hand-edited JSON would make every case agree with
+whatever it was edited to say and turn the suite green on the bug it exists to
+catch. Stdlib only (`json`, `os`) precisely so that check stays free to run.
 """
 
 import json
