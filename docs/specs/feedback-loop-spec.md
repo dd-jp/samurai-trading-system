@@ -43,7 +43,7 @@ Key architectural decisions:
 
 ### Parameter & Threshold Tuning (guardrailed)
 
-6. As the Feedback Loop, I want to tune strategy parameters and risk thresholds within human-set hard floors/ceilings, so that the system adapts without escaping its guardrails.
+6. As the Feedback Loop, I want to tune ~~strategy parameters and~~ risk thresholds within human-set hard floors/ceilings, so that the system adapts without escaping its guardrails. *(Amended 2026-08-17 — the `strategy_params` half of this story is **not live and is not scheduled**: it is dead at both ends by decision, no proposer writes one and the Trader reads a frozen `deps.config`. See "Phasing of the three dials" below. The story is kept rather than deleted so the asymmetry with weights and risk thresholds stays visible, but it must not be read as describing a mechanism that exists.)*
 7. As the Feedback Loop, I want to auto-tighten risk thresholds freely but require human approval to loosen any of them, so that the loop can never relax its own safety limits unsupervised.
 8. As the operator, I want every adjustment logged and reversible, so that I can audit and roll back a bad tuning cycle.
 
