@@ -48,8 +48,39 @@ export interface OrderIntent {
  * (cross-spec-contracts.md registry #1). `debate_id` is the Debate Engine's
  * deterministic hash(instrument + bar + AnalystView set).
  */
+/**
+ * WHY an exit intent exists — #748's "three named reasons, not one".
+ *
+ * Before this the system had exactly one in-process exit reason: an
+ * `intent_type: 'exit'` and nothing else, which collapsed a mandatory
+ * flat-by-close flatten, a debate reversing direction, and (once #748 added it)
+ * an indicator-driven early release into a single indistinguishable row. A
+ * closed union rather than free text, for the same reason `TraderSkipReason`
+ * is one: the set is greppable, countable across a soak, and impossible to typo
+ * into a new category that looks like a new phenomenon.
+ *
+ * The FOURTH way a position ends — a bracket hit — is deliberately not a member.
+ * A stop or target rests at the venue and produces no `OrderIntent` at all, so
+ * it is distinguishable by the absence of this field, and it is named
+ * separately in `ClosedTrade.close_reason` as `'stop'` / `'target'`.
+ */
+export type ExitReason =
+  /** #668/ADR-0014: the flat-by-close window opened. Time, not price or signal. */
+  | 'flatten'
+  /** #748: the momentum axis no longer supports the held side. Signal, not price or time. */
+  | 'signal_decay'
+  /** The debate resolved opposite to the held side. Decision path only. */
+  | 'direction_flip';
+
 export interface OrderIntentMetadata {
   debate_id: string;
+  /**
+   * Set on every `intent_type: 'exit'` intent and absent on every other
+   * (#748). Optional in the TYPE because an entry or scale-in genuinely has
+   * none — not because an exit may omit it: `buildFlattenExit` requires the
+   * argument, so no exit can be constructed without one.
+   */
+  exit_reason?: ExitReason;
   conviction: number;
   converged: boolean;
   sizing: {

@@ -20,6 +20,13 @@ export {
   type TraderOutcome,
   type TraderSkipReason,
 } from './decide.js';
+export {
+  DEFAULT_EARLY_EXIT_CONFIG,
+  type EarlyExitConfig,
+  readSignalDecay,
+  type SignalDecayRead,
+  type SignalDecayVerdict,
+} from './early-exit.js';
 export { FixtureSetupStore } from './fixture-setup-store.js';
 export { computeIdempotencyKey } from './idempotency-key.js';
 export { buildSetupVector, type SetupMarketContext } from './setup-vector.js';

@@ -8,7 +8,10 @@ import {
   AlwaysOpenCalendar,
   type Bar,
   type BarWindow,
+  type IndicatorKind,
+  type IndicatorSpec,
   type IndicatorValue,
+  InsufficientBarsError,
   LseRegularHoursCalendar,
   type Mark,
   type MarketDataService,
@@ -16,6 +19,9 @@ import {
   UsEquityRegularHoursCalendar,
 } from '../../providers/market-data-service/index.js';
 import type { Clock, OpenPosition } from '../../shared/index.js';
+// #748: the early exit reads the analyst's own momentum specs, so the tests pin
+// THOSE rather than hand-rebuilt copies that would keep passing on drift.
+import { MACD_SPEC, RSI_SPEC } from '../analysts/technical-analyst.js';
 import type { DebateResult } from '../debate-engine/index.js';
 import { checkExitsWithReason, decide, decideWithReason, type ExitCheckInput } from './decide.js';
 import { FixtureSetupStore } from './fixture-setup-store.js';
@@ -126,8 +132,31 @@ class FixtureMarketData implements MarketDataService {
    * would let that regression back in quietly; one that throws fails the
    * suite the moment `decide` starts using it.
    */
-  async getIndicator(): Promise<IndicatorValue> {
-    throw new Error('FixtureMarketData.getIndicator: decide must compute ATR from getBars');
+  /**
+   * #748: the tick path's early exit DOES read `getIndicator` — the momentum
+   * axis — so this can no longer throw unconditionally. It still throws for
+   * `atr`, which is the regression the original guard exists to catch, and it
+   * throws for any kind no case configured, so a new indicator read cannot
+   * arrive silently on a plausible stub value.
+   */
+  indicatorReads = new Map<IndicatorKind, number | Error>();
+
+  async getIndicator(
+    _instrument: string,
+    spec: IndicatorSpec,
+    _asOf: Date,
+  ): Promise<IndicatorValue> {
+    if (spec.indicator === 'atr') {
+      throw new Error('FixtureMarketData.getIndicator: decide must compute ATR from getBars');
+    }
+    const configured = this.indicatorReads.get(spec.indicator);
+    if (configured === undefined) {
+      throw new Error(
+        `FixtureMarketData.getIndicator: no fixture value configured for '${spec.indicator}'`,
+      );
+    }
+    if (configured instanceof Error) throw configured;
+    return { indicator: spec.indicator, value: configured, as_of_bar_close: DECISION_BAR };
   }
 
   async getSpreadEstimate(): Promise<number | null> {
@@ -1781,6 +1810,19 @@ describe('checkExitsWithReason — the tick-path exit entry point (#743)', () =>
   // assertion below fails if the implementation re-floors.
   const TICK_BAR = new Date('2026-07-15T18:00:00Z');
 
+  /**
+   * BULLISH momentum (#748): RSI above 50 and a positive MACD histogram, so
+   * `momentumVote` is `+1` and the default long lot below is still supported.
+   * Every case in THIS suite therefore reaches the same branch it did before
+   * the early exit existed. The decay branch is `#748`'s own suite.
+   */
+  function marketDataWithLiveSignal(): FixtureMarketData {
+    const marketData = new FixtureMarketData(bars(15, 2));
+    marketData.indicatorReads.set('rsi', 60);
+    marketData.indicatorReads.set('macd_histogram', 0.5);
+    return marketData;
+  }
+
   function exitInput(overrides: Partial<ExitCheckInput> = {}): ExitCheckInput {
     const base = traderInput();
     return {
@@ -1788,7 +1830,7 @@ describe('checkExitsWithReason — the tick-path exit entry point (#743)', () =>
       instrument: base.instrument,
       clock: new ManualClock(INSIDE_WINDOW),
       config: base.config,
-      marketData: base.marketData,
+      marketData: marketDataWithLiveSignal(),
       sessionCalendars: base.sessionCalendars,
       positionState: async () => [openPosition({ side: 'buy', filled_size: 10 })],
       exitFillSizes: base.exitFillSizes,
@@ -1804,13 +1846,13 @@ describe('checkExitsWithReason — the tick-path exit entry point (#743)', () =>
     expect(outcome.skip_reason).toBe('no_open_position');
   });
 
-  it('skips with flatten_not_due when holding outside the window — "flat" and "waiting" stay distinguishable', async () => {
+  it('skips with signal_still_supports_position when holding outside the window on a live signal — "flat" and "waiting" stay distinguishable', async () => {
     const outcome = await checkExitsWithReason(
       exitInput({ clock: new ManualClock(OUTSIDE_WINDOW) }),
     );
 
     expect(outcome.intent).toBeNull();
-    expect(outcome.skip_reason).toBe('flatten_not_due');
+    expect(outcome.skip_reason).toBe('signal_still_supports_position');
   });
 
   it('emits the flatten inside the window, attributed to the debate that OPENED the lot', async () => {
@@ -1868,5 +1910,284 @@ describe('checkExitsWithReason — the tick-path exit entry point (#743)', () =>
     );
 
     expect(outcome.skip_reason).toBe('no_open_position');
+  });
+});
+
+/**
+ * The indicator-based early exit (#748) — `trader-spec.md`'s third clause of
+ * the exit model, restored.
+ *
+ * Every case here is a real tick-path pass: no `debate`, no `AnalystView`, no
+ * `equity`, no `setupStore` — `ExitCheckInput` has no field any of those could
+ * arrive through, which is orchestrator-spec.md constraint 4 stated as a type.
+ */
+describe('checkExitsWithReason — the indicator-based early exit (#748)', () => {
+  const INSIDE_WINDOW = new Date('2026-07-15T19:56:00Z');
+  const OUTSIDE_WINDOW = new Date('2026-07-15T15:00:00Z');
+  const TICK_BAR = new Date('2026-07-15T18:00:00Z');
+
+  const MOMENTUM_BULLISH = { rsi: 60, macd: 0.5 };
+  const MOMENTUM_BEARISH = { rsi: 40, macd: -0.5 };
+  const MOMENTUM_FLAT = { rsi: 50, macd: 0 };
+
+  function marketDataWithMomentum(momentum: {
+    rsi: number | Error;
+    macd: number | Error;
+  }): FixtureMarketData {
+    const marketData = new FixtureMarketData(bars(15, 2));
+    marketData.indicatorReads.set('rsi', momentum.rsi);
+    marketData.indicatorReads.set('macd_histogram', momentum.macd);
+    return marketData;
+  }
+
+  /**
+   * A long lot with its brackets deliberately WIDE of the mark: stop 90,
+   * target 110, mark 100. Every case below therefore runs on a bar where
+   * neither bracket has been touched — which is the whole point of an early
+   * exit and the first acceptance criterion.
+   */
+  const BRACKETS_UNTOUCHED = { stop: 90, target: 110 };
+
+  function exitInput(overrides: Partial<ExitCheckInput> = {}): ExitCheckInput {
+    const base = traderInput();
+    return {
+      trace_id: base.trace_id,
+      instrument: base.instrument,
+      clock: new ManualClock(OUTSIDE_WINDOW),
+      config: base.config,
+      marketData: marketDataWithMomentum(MOMENTUM_BEARISH),
+      sessionCalendars: base.sessionCalendars,
+      positionState: async () => [
+        openPosition({ side: 'buy', filled_size: 10, ...BRACKETS_UNTOUCHED }),
+      ],
+      exitFillSizes: base.exitFillSizes,
+      bar: TICK_BAR,
+      ...overrides,
+    };
+  }
+
+  it('releases a decayed LONG before either bracket is touched', async () => {
+    const outcome = await checkExitsWithReason(exitInput());
+
+    expect(outcome.intent?.intent_type).toBe('exit');
+    expect(outcome.intent?.metadata.exit_reason).toBe('signal_decay');
+    // The mark is strictly inside the bracket on this bar: the stop has not
+    // been hit, the target has not been reached, and the position is released
+    // anyway. A price-only exit would still be holding it.
+    expect(outcome.intent?.entry).toBeGreaterThan(BRACKETS_UNTOUCHED.stop);
+    expect(outcome.intent?.entry).toBeLessThan(BRACKETS_UNTOUCHED.target);
+  });
+
+  it('releases a decayed SHORT — decay is read against the HELD side, not the market', async () => {
+    // Bullish momentum supports a long and contradicts a short. The same read
+    // must therefore hold one and release the other.
+    const bullish = marketDataWithMomentum(MOMENTUM_BULLISH);
+
+    const shortOutcome = await checkExitsWithReason(
+      exitInput({
+        marketData: bullish,
+        positionState: async () => [
+          openPosition({ side: 'sell', filled_size: 10, ...BRACKETS_UNTOUCHED }),
+        ],
+      }),
+    );
+    const longOutcome = await checkExitsWithReason(exitInput({ marketData: bullish }));
+
+    expect(shortOutcome.intent?.metadata.exit_reason).toBe('signal_decay');
+    expect(shortOutcome.intent?.side).toBe('buy');
+    expect(longOutcome.intent).toBeNull();
+    expect(longOutcome.skip_reason).toBe('signal_still_supports_position');
+  });
+
+  it('can only REDUCE OR CLOSE — the release is the held quantity, on the closing side, as an exit', async () => {
+    const outcome = await checkExitsWithReason(
+      exitInput({
+        positionState: async () => [
+          openPosition({ side: 'buy', filled_size: 10, ...BRACKETS_UNTOUCHED }),
+          openPosition({
+            idempotency_key: 'second-lot',
+            side: 'buy',
+            filled_size: 4,
+            ...BRACKETS_UNTOUCHED,
+          }),
+        ],
+      }),
+    );
+
+    expect(outcome.intent?.intent_type).toBe('exit');
+    // Opposite the held side — an intent that could OPEN or INCREASE would be
+    // on the held side, and `buildFlattenExit` cannot produce one.
+    expect(outcome.intent?.side).toBe('sell');
+    // Exactly the held quantity, never more: 10 + 4.
+    expect(outcome.intent?.size).toBe(14);
+    // Degenerate legs: an exit carries no new risk and opens no bracket.
+    expect(outcome.intent?.stop).toBe(outcome.intent?.entry);
+    expect(outcome.intent?.target).toBe(outcome.intent?.entry);
+  });
+
+  it('cannot OPEN a position — a fully decayed signal on a flat book emits nothing', async () => {
+    const outcome = await checkExitsWithReason(exitInput({ positionState: async () => [] }));
+
+    expect(outcome.intent).toBeNull();
+    expect(outcome.skip_reason).toBe('no_open_position');
+  });
+
+  it('takes its decay threshold from INJECTED config, not a constant', async () => {
+    const flat = marketDataWithMomentum(MOMENTUM_FLAT);
+
+    const atDefault = await checkExitsWithReason(exitInput({ marketData: flat }));
+    const atZero = await checkExitsWithReason(
+      exitInput({
+        marketData: flat,
+        config: configWith({ early_exit: { momentum_release_at: 0 } }),
+      }),
+    );
+
+    // Same tape, same position, two configs, opposite answers — which is only
+    // possible if the threshold is read from config.
+    expect(DEFAULT_TRADER_CONFIG.early_exit.momentum_release_at).toBe(-1);
+    expect(atDefault.intent).toBeNull();
+    expect(atDefault.skip_reason).toBe('signal_still_supports_position');
+    expect(atZero.intent?.metadata.exit_reason).toBe('signal_decay');
+  });
+
+  it('consults ONLY the momentum indicators — two reads, no analyst view, no model call', async () => {
+    const marketData = marketDataWithMomentum(MOMENTUM_BEARISH);
+    const requested: string[] = [];
+    const originalGetIndicator = marketData.getIndicator.bind(marketData);
+    marketData.getIndicator = async (instrument: string, spec: IndicatorSpec, asOf: Date) => {
+      requested.push(spec.indicator);
+      return originalGetIndicator(instrument, spec, asOf);
+    };
+
+    await checkExitsWithReason(exitInput({ marketData }));
+
+    // The named, priced subset — and the whole of it. A third read here is a
+    // per-tick cost this change did not price.
+    //
+    // The ORDER is asserted, not incidental. `cachedBars` rejects a hit on
+    // `rows.length < window.lookback` before it consults the per-interval fetch
+    // record, so the widest window has to go first or the second call misses on
+    // depth and issues a second upstream fetch. MACD's warm-up is 112 bars and
+    // RSI's is 57; reversing these two lines doubles the network cost this
+    // change priced at one fetch per bar interval.
+    expect(MACD_SPEC.lookback).toBeGreaterThan(RSI_SPEC.lookback);
+    expect(requested).toEqual([MACD_SPEC.indicator, RSI_SPEC.indicator]);
+  });
+
+  it('names all THREE in-process exit reasons apart — flatten, signal_decay, direction_flip', async () => {
+    const flatten = await checkExitsWithReason(
+      exitInput({ clock: new ManualClock(INSIDE_WINDOW) }),
+    );
+    const decay = await checkExitsWithReason(exitInput());
+    const flip = await decideWithReason(
+      traderInput({
+        debate: debateResult({ direction: 'bearish' }),
+        positionState: async () => [openPosition({ side: 'buy', filled_size: 10 })],
+      }),
+    );
+
+    expect(flatten.intent?.metadata.exit_reason).toBe('flatten');
+    expect(decay.intent?.metadata.exit_reason).toBe('signal_decay');
+    expect(flip.intent?.metadata.exit_reason).toBe('direction_flip');
+    // Distinct values, not one reason wearing three names.
+    expect(
+      new Set([
+        flatten.intent?.metadata.exit_reason,
+        decay.intent?.metadata.exit_reason,
+        flip.intent?.metadata.exit_reason,
+      ]).size,
+    ).toBe(3);
+  });
+
+  it('keys an early exit APART from a same-bar flatten, so the flatten is never deduped away', async () => {
+    const decay = await checkExitsWithReason(exitInput());
+    const flatten = await checkExitsWithReason(
+      exitInput({ clock: new ManualClock(INSIDE_WINDOW) }),
+    );
+
+    // Same instrument, same bar, two different keys — otherwise Execution's
+    // `findByKey` suppresses whichever came second, which is the flatten (#686).
+    expect(decay.intent?.idempotency_key).toBe(
+      computeIdempotencyKey(INSTRUMENT, TICK_BAR, 'early_close'),
+    );
+    expect(flatten.intent?.idempotency_key).toBe(
+      computeIdempotencyKey(INSTRUMENT, TICK_BAR, 'close'),
+    );
+    expect(decay.intent?.idempotency_key).not.toBe(flatten.intent?.idempotency_key);
+  });
+
+  it('skips with early_exit_signal_unavailable on an instrument too cold to read', async () => {
+    const cold = marketDataWithMomentum({
+      rsi: MOMENTUM_BEARISH.rsi,
+      macd: new InsufficientBarsError({
+        indicator: 'macd_histogram',
+        period: 9,
+        required: 34,
+        received: 12,
+      }),
+    });
+
+    const outcome = await checkExitsWithReason(exitInput({ marketData: cold }));
+
+    // NOT released on a read nobody could take, and NOT folded into the
+    // healthy-hold reason.
+    expect(outcome.intent).toBeNull();
+    expect(outcome.skip_reason).toBe('early_exit_signal_unavailable');
+  });
+
+  it('FAILS LOUD on a non-InsufficientBarsError — a store outage must not silently disable the exit', async () => {
+    const broken = marketDataWithMomentum({
+      rsi: new Error('market data store unavailable'),
+      macd: MOMENTUM_BEARISH.macd,
+    });
+
+    await expect(checkExitsWithReason(exitInput({ marketData: broken }))).rejects.toThrow(
+      'market data store unavailable',
+    );
+  });
+
+  // ── Flat-by-close is unaffected. The three cases below are the ticket's
+  // highest-stakes line: the flatten is evaluated on a tick and nowhere else.
+  it('flattens inside the window even when the decay read THROWS — the flatten is decided first', async () => {
+    const broken = marketDataWithMomentum({
+      rsi: new Error('market data store unavailable'),
+      macd: new Error('market data store unavailable'),
+    });
+
+    const outcome = await checkExitsWithReason(
+      exitInput({ clock: new ManualClock(INSIDE_WINDOW), marketData: broken }),
+    );
+
+    expect(outcome.intent?.metadata.exit_reason).toBe('flatten');
+    expect(outcome.intent?.size).toBe(10);
+  });
+
+  it('flattens inside the window when the signal STILL SUPPORTS the position (early exit would never fire)', async () => {
+    const outcome = await checkExitsWithReason(
+      exitInput({
+        clock: new ManualClock(INSIDE_WINDOW),
+        marketData: marketDataWithMomentum(MOMENTUM_BULLISH),
+      }),
+    );
+
+    expect(outcome.intent?.metadata.exit_reason).toBe('flatten');
+  });
+
+  it('does not read an indicator at all when the flatten is due — the flatten costs nothing extra', async () => {
+    const marketData = marketDataWithMomentum(MOMENTUM_BEARISH);
+    let reads = 0;
+    const originalGetIndicator = marketData.getIndicator.bind(marketData);
+    marketData.getIndicator = async (instrument: string, spec: IndicatorSpec, asOf: Date) => {
+      reads += 1;
+      return originalGetIndicator(instrument, spec, asOf);
+    };
+
+    const outcome = await checkExitsWithReason(
+      exitInput({ clock: new ManualClock(INSIDE_WINDOW), marketData }),
+    );
+
+    expect(outcome.intent?.metadata.exit_reason).toBe('flatten');
+    expect(reads).toBe(0);
   });
 });

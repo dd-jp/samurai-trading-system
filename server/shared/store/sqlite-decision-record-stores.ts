@@ -25,12 +25,12 @@ export class SqliteTraderLogStore implements TraderLogStore {
     this.db
       .prepare(
         `INSERT INTO trader_log (
-           trace_id, instrument, debate_id, intent_type, skip_reason,
+           trace_id, instrument, debate_id, intent_type, exit_reason, skip_reason,
            base_risk_fraction, conviction_multiplier, vol_floor_factor,
            non_converged_haircut, cosine_multiplier,
            neighbor_count, weighted_mean_r, no_precedent,
            atr, entry, stop, size, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(trace_id, instrument) DO NOTHING`,
       )
       .run(
@@ -38,6 +38,7 @@ export class SqliteTraderLogStore implements TraderLogStore {
         record.instrument,
         record.debate_id,
         record.intent_type,
+        record.exit_reason,
         record.skip_reason,
         record.sizing?.base_risk_fraction ?? null,
         record.sizing?.conviction_multiplier ?? null,

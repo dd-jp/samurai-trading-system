@@ -295,6 +295,11 @@ export function buildTraderSteps(deps: TraderStepDeps): {
       instrument,
       debate_id: debate.debate_id,
       intent_type: intent?.intent_type ?? null,
+      // #748. Null on an entry, a scale-in and every skip — the field is set
+      // exactly when there is an exit, and on THIS path it is the flatten or
+      // the direction flip rather than a decay (the decay runs on the tick
+      // path, which is the other writer below).
+      exit_reason: intent?.metadata.exit_reason ?? null,
       // The actual reason, since #475. This used to be the constant
       // `'decide() returned no intent'` for all thirteen distinct skip paths,
       // which made every quiet tick look identical: "the conviction floor is
@@ -359,6 +364,7 @@ export function buildTraderSteps(deps: TraderStepDeps): {
         instrument,
         debate_id: intent.metadata.debate_id,
         intent_type: intent.intent_type,
+        exit_reason: intent.metadata.exit_reason ?? null,
         skip_reason: null,
         sizing: intent.metadata.sizing,
         cosine_precedent: intent.metadata.cosine_precedent,

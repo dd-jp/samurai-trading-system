@@ -210,6 +210,20 @@ export interface TickOutcome {
    */
   flatten_fired?: boolean;
   /**
+   * `true` when a TICK-PATH pass's exit check produced an INDICATOR-BASED
+   * EARLY EXIT (#748) — the momentum axis no longer supports the held side, at
+   * a price that touched neither bracket.
+   *
+   * Its own flag rather than a widened `flatten_fired`, and mutually exclusive
+   * with it: the two are different events with different causes (time versus
+   * signal), and a soak that cannot tell them apart cannot tell a session
+   * ending from a thesis dying. Present for exactly the reason `flatten_fired`
+   * is — a release whose Verdict said `no_go` must stay visible as a release
+   * that FIRED (`early_exit_fired: true, final_stage: 'verdict'`) rather than
+   * reading as a healthy no-trade tick.
+   */
+  early_exit_fired?: boolean;
+  /**
    * Set only when the instrument's pipeline pass threw instead of returning
    * normally (#507: a failed tick declaring itself finished while sibling
    * workers kept running). Caught in tick-loop.ts's worker — never here in

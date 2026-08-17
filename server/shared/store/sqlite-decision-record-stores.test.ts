@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import type { TraderDecisionRecord } from '../decision-records.js';
 import { openSharedStore } from './open-shared-store.js';
-import { SqliteRiskLogStore } from './sqlite-decision-record-stores.js';
+import { SqliteRiskLogStore, SqliteTraderLogStore } from './sqlite-decision-record-stores.js';
 
 // #726: `risk_log.status` gained `'error'` in migration 0028 (widening a CHECK
 // constraint requires a full table rebuild in SQLite — see that migration's
@@ -111,5 +112,68 @@ describe('SqliteRiskLogStore (#726)', () => {
         )
         .run(),
     ).toThrow(/CHECK constraint failed/);
+  });
+});
+
+// #748: `trader_log` gained `exit_reason` in migration 0030, and the INSERT in
+// `SqliteTraderLogStore` gained a column plus a bind. That pair is exactly the
+// shape #549 warned about — a version row in `schema_migrations` stays green
+// through a column-name typo, and every OTHER test that writes a trader record
+// in this repo uses a fake `TraderLogStore`, so nothing proves the real SQL
+// still binds 19 values to 19 columns in the right ORDER. A silent
+// off-by-one here would land `skip_reason`'s value in `exit_reason` and shift
+// every sizing scalar one place, which no type checks.
+describe('SqliteTraderLogStore exit_reason (#748)', () => {
+  function makeRecord(overrides: Partial<TraderDecisionRecord> = {}): TraderDecisionRecord {
+    return {
+      trace_id: 't1',
+      instrument: '3USL',
+      debate_id: 'd1',
+      intent_type: 'exit',
+      exit_reason: 'signal_decay',
+      skip_reason: null,
+      sizing: null,
+      cosine_precedent: null,
+      atr: null,
+      entry: null,
+      stop: null,
+      size: null,
+      created_at: new Date('2026-08-16T12:00:00.000Z'),
+      ...overrides,
+    };
+  }
+
+  it('round-trips all three exit reasons, each landing in its own column', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteTraderLogStore(db);
+
+    for (const exit_reason of ['flatten', 'signal_decay', 'direction_flip'] as const) {
+      store.write(makeRecord({ exit_reason, trace_id: `t-${exit_reason}` }));
+    }
+
+    for (const exit_reason of ['flatten', 'signal_decay', 'direction_flip'] as const) {
+      const row = db
+        .prepare('SELECT intent_type, exit_reason, skip_reason FROM trader_log WHERE trace_id = ?')
+        .get(`t-${exit_reason}`) as
+        | { intent_type: string; exit_reason: string | null; skip_reason: string | null }
+        | undefined;
+      expect(row?.exit_reason).toBe(exit_reason);
+      // Pinned so a bind shifted by one place cannot pass: an off-by-one would
+      // put the reason in `skip_reason` and `intent_type` in `exit_reason`.
+      expect(row?.intent_type).toBe('exit');
+      expect(row?.skip_reason).toBeNull();
+    }
+  });
+
+  it('writes NULL on a non-exit row rather than inventing a reason', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteTraderLogStore(db);
+
+    store.write(makeRecord({ trace_id: 't-entry', intent_type: 'entry', exit_reason: null }));
+
+    const row = db
+      .prepare("SELECT exit_reason FROM trader_log WHERE trace_id = 't-entry'")
+      .get() as { exit_reason: string | null };
+    expect(row.exit_reason).toBeNull();
   });
 });
