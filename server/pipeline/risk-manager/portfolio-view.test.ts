@@ -581,7 +581,7 @@ describe('computePortfolioView — batch mark read (#289 H8)', () => {
     await expect(computePortfolioView(input)).rejects.toThrow(StaleMarkError);
   });
 
-  it('asks for each instrument once when two lots hold the same name', async () => {
+  it('values two lots of the same name off one asked-for instrument', async () => {
     const marketData = makeBatchMarketData({ AAPL: { price: 100 } });
     const input = makeInput({
       positions: [
@@ -595,5 +595,48 @@ describe('computePortfolioView — batch mark read (#289 H8)', () => {
 
     expect(marketData.getMarks).toHaveBeenCalledWith(['AAPL'], asOf);
     expect(view.exposure_by_instrument.AAPL).toBe(20_000);
+  });
+
+  it('refuses when the batch answers but omits an instrument it was asked for', async () => {
+    // A service that returns a Map missing a requested key. Guarded rather than
+    // left to crash on `undefined.ok`, so the report names the dark position.
+    const marketData: MarketDataService = {
+      ...makeMarketData({}),
+      getMarks: vi.fn(async (): Promise<Map<string, MarkRead>> => new Map()),
+    };
+    const input = makeInput({ positions: [makePosition({ instrument: 'AAPL' })], marketData });
+
+    await expect(computePortfolioView(input)).rejects.toThrow(/no entry for held instrument 'AAPL'/);
+  });
+
+  it('carries the source reason in the thrown message, not only in cause', async () => {
+    // `describeThrown` prints `error.message` alone — never `cause`, never
+    // `AggregateError.errors` — so a reason absent from the message text is one
+    // the operator never sees.
+    const input = makeInput({
+      positions: [makePosition({ instrument: 'AAPL' })],
+      marketData: makeBatchMarketData({ AAPL: { error: '429 rate limited' } }),
+    });
+
+    await expect(computePortfolioView(input)).rejects.toThrow(/429 rate limited/);
+  });
+
+  it('carries every source reason when more than one instrument is unreadable', async () => {
+    const input = makeInput({
+      positions: [
+        makePosition({ instrument: 'AAPL', idempotency_key: 'AAPL-1' }),
+        makePosition({ instrument: 'MSFT', idempotency_key: 'MSFT-1' }),
+      ],
+      marketData: makeBatchMarketData({
+        AAPL: { error: '429 rate limited' },
+        MSFT: { error: 'unknown symbol' },
+      }),
+    });
+
+    const thrown = await computePortfolioView(input).catch((error: unknown) => error);
+
+    expect(thrown).toBeInstanceOf(AggregateError);
+    expect((thrown as AggregateError).message).toMatch(/429 rate limited/);
+    expect((thrown as AggregateError).message).toMatch(/unknown symbol/);
   });
 });

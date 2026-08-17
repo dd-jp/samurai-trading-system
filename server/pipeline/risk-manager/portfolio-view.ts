@@ -14,7 +14,7 @@
  * for the same instruments at the same instant.
  */
 import { isMarkStale, type MarketDataService } from '../../providers/market-data-service/index.js';
-import type { AssetClass, OpenPosition } from '../../shared/index.js';
+import { type AssetClass, describeThrown, type OpenPosition } from '../../shared/index.js';
 import type { DailyPnl, PortfolioView, SessionBasis, SessionBasisByClass } from './types.js';
 
 export interface PortfolioAccountingInput {
@@ -145,45 +145,32 @@ function dailyPnlFor(basis: SessionBasis, unrealized: number): DailyPnl {
 /**
  * Every held instrument's mark, in ONE batch read, or nothing (#289 H8).
  *
- * ## Why the whole view fails on a partial mark read
+ * All-or-nothing is NOT new here — the `Promise.all` over N `getMark` calls
+ * this replaces already rejected the whole view on any failed OR stale read.
+ * What is new is the batch shape and the failure REPORT: `Promise.all` kept
+ * whichever lookup lost the race and discarded the rest, so a feed outage
+ * across three names showed the operator one. `getMarks` returns every
+ * instrument's outcome, and this folds the unreadable and the STALE ones
+ * (#640, judged here because the per-class bound lives here and not in MDS)
+ * into a single report naming all of them.
  *
- * The alternative the ticket names — produce a view carrying a known-missing
- * mark and let the cap arithmetic see the hole — was rejected on what the
- * consumers actually do with `exposure_by_instrument`. Every one of them reads
- * an ABSENT key as ZERO exposure, and every one of them is thereby more
- * permissive for it:
- *
- * - `perAssetExposureCap` (index.ts): `per_asset_cap - (exposure[i] ?? 0)` —
- *   an unvalued lot reads as a fully unused per-asset envelope.
- * - `perSubclassDeploymentCap` (index.ts, ADR-0018 D5 / #721): sums the
- *   subclass's instruments, so a missing one understates `deployedToSubclass`
- *   and widens `cap - deployed` — a notional cap against a fraction of current
- *   equity, on the live-money path, at a 2-minute tick.
- * - `portfolioGrossExposureCap` (index.ts): same understatement, portfolio-wide.
- * - the concentration/correlation gate (production/direct-bind.ts) and
- *   `insufficient_history` (tick-runner.ts) both enumerate `Object.keys()`, so
- *   an unvalued holding is not merely mis-sized — it is invisible.
- *
- * Making the hole visible instead of fatal therefore means changing
- * `PortfolioView`'s type AND adding a refusal at all five sites, arriving at
- * the same end state (no order is placed) by five paths instead of one, with
- * every future consumer free to forget the sixth. A pass that cannot value the
- * book does not place an order, which is what refusing here already achieves.
- *
- * ## What the batch buys beyond one call
- *
- * The failure REPORT. The previous `Promise.all` over N `getMark` calls
- * rejected with whichever lookup lost the race and discarded the others, so a
- * feed outage across three names showed the operator one. `getMarks` returns
- * every instrument's outcome, and this function folds the unreadable ones and
- * the STALE ones (#640, judged here because the class bound lives here and not
- * in MDS — see `MarketDataService.getMarks`) into a single report naming all
- * of them.
+ * Keep the refusal total. A partial view is not a conservative one: every
+ * consumer of `exposure_by_instrument` reads an absent key as ZERO exposure
+ * and is more permissive for it — enumerated on `SubclassDeploymentCap` in
+ * types.ts, not re-derived here. That makes no order more likely to be placed
+ * on the ENTRY path, which is where this refusal was reasoned about. It is NOT
+ * true of the EXIT path, where refusing to value the book suppresses a flatten
+ * and one dark name blocks the flatten of the whole book — #841.
  *
  * A single failure is thrown ON ITS OWN rather than inside an `AggregateError`
  * of one, so `StaleMarkError`'s "the feed is alive and lying" signal still
  * reaches a caller matching on the type rather than on message text — the
  * reason that class exists.
+ *
+ * Every thrown message must be SELF-SUFFICIENT. The only place these are ever
+ * observed is `describeThrown` (safe-log.ts), which prints `error.message` and
+ * nothing else — never `cause`, never `AggregateError.errors`. A source reason
+ * not folded into the message text is a reason the operator never sees.
  */
 async function readMarks(
   marketData: MarketDataService,
@@ -216,11 +203,13 @@ async function readMarks(
       // data-source error need not name the instrument it was for ('request
       // timed out' is a real message), and a single-failure report that cannot
       // say WHICH held position is unvalued sends the operator looking through
-      // the whole book. The original travels as `cause`, unread.
+      // the whole book. The source reason is folded into the MESSAGE, not left
+      // to `cause`: `describeThrown` prints the message alone, so a reason that
+      // travels only as `cause` is a reason the operator never reads.
       failures.push(
         new Error(
           `computePortfolioView: the mark read for held instrument '${instrument}' failed, so ` +
-            'the book cannot be valued.',
+            `the book cannot be valued: ${describeThrown(read.error)}`,
           { cause: read.error },
         ),
       );
@@ -258,13 +247,18 @@ async function readMarks(
       .filter((instrument) => !marks.has(instrument))
       .map((instrument) => `'${instrument}'`)
       .join(', ');
+    // Each failure's own text is folded in for the same reason as the
+    // single-failure wrap above: `AggregateError.errors` is printed nowhere, so
+    // a report naming the instruments but not the reasons tells the operator
+    // which positions are dark and nothing about why.
+    const reasons = failures.map((failure) => failure.message).join('; ');
     throw new AggregateError(
       failures,
       `computePortfolioView: ${failures.length} held instrument(s) could not be valued at ` +
         `${asOf.toISOString()} — ${named}. Refusing to produce a partial view: every consumer of ` +
         'exposure_by_instrument reads an absent instrument as zero exposure, so a book valued ' +
         'without these would widen the per-asset, per-subclass and gross caps that size real ' +
-        'orders.',
+        `orders. Reasons: ${reasons}`,
       { cause: failures[0] },
     );
   }
