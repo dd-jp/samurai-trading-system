@@ -15,6 +15,7 @@ import {
   AlwaysOpenCalendar,
   LseRegularHoursCalendar,
   londonEntryWindow,
+  type TradingCalendar,
 } from '../../../providers/market-data-service/index.js';
 import { UniverseScheduler } from '../scheduler.js';
 import type { UniverseInstrument } from '../types.js';
@@ -118,5 +119,40 @@ describe('the flatten tail is reachable', () => {
 
     expect(wide(at('16:05'))).toBe(true);
     expect(composed(at('16:05'))).toBe(false);
+  });
+
+  it('propagates a calendar that cannot resolve a close rather than swallowing it (#691)', () => {
+    // The `TradingCalendar` port documents that `sessionEnd` MAY THROW when its
+    // search is exhausted, and that a throw means "this venue HAS a close and I
+    // could not find it" — a broken calendar, not crypto. This is the second of
+    // the port's two money-path callers, and the one OUTSIDE `runTickPlan`'s
+    // per-instrument catch: it runs in `UniverseScheduler.nextTick`, so the
+    // throw is caught by `runOnce` in production.ts and logged as `tick failed`
+    // at error level.
+    //
+    // The tempting "hardening" is a try/catch here returning false. That is the
+    // silent-disable this whole ticket is about: false means the flatten tail
+    // vanishes, stocks drop out of the plan for the rest of the session, the
+    // Trader never gets a tick to flatten on, and the book carries overnight
+    // against ADR-0014 with nothing at error level to find it by. The loud
+    // failure is the correct one, so it is pinned.
+    const brokenCalendar = {
+      isOpen: () => true,
+      isTradingDay: () => true,
+      sessionStart: () => at('08:00'),
+      sessionEnd: () => {
+        throw new Error('No LSE session close found within 10 days after ...');
+      },
+      // Cast to the PORT, not to `LseRegularHoursCalendar`: `withFlattenTail`
+      // takes the interface, and the fault being modelled is any implementer's
+      // — the port's three implementations are all in one file today, but the
+      // seam is injected (`ProductionConfig.tradingCalendar`).
+    } as unknown as TradingCalendar;
+
+    // 16:26 is inside the flatten tail and outside the entry window, so the
+    // predicate must actually consult the calendar to answer.
+    const brittle = withFlattenTail(londonEntryWindow(), brokenCalendar, FLATTEN_MS);
+
+    expect(() => brittle(at('16:26'))).toThrow(/No LSE session close found/);
   });
 });
