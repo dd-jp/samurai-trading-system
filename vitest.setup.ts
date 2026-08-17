@@ -56,6 +56,15 @@
  */
 import { afterAll } from 'vitest';
 
+/**
+ * SCOPE, so a green suite is not misread as proof of zero network: this fences
+ * `globalThis.fetch` ONLY. `node:http` / `node:https`, `undici.request` and
+ * WebSocket clients go straight past it. That is precisely why the incident
+ * above was measured at the resolver (`dns.lookup`, `net.Socket.connect`)
+ * rather than here — a fetch-level fence cannot measure itself, and cannot see
+ * a transport that does not go through it.
+ */
+
 /** Hosts a test may talk to: this machine, and nothing else. */
 const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', '::1', '0.0.0.0']);
 

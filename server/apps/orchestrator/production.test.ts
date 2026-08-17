@@ -2149,6 +2149,48 @@ describe('buildProductionOrchestrator', () => {
     expect(runSpy.mock.calls.length).toBe(ticks);
   });
 
+  it('polls Polymarket again on the configured interval, not just at startup (#504)', async () => {
+    // Nothing else covers the repeating poll. `stubConfig` parks the interval
+    // at NO_POLYMARKET_POLL_MS for every other case in this file, and the
+    // smoke gate cannot reach it either — its 15-minute default against a run
+    // that finishes in seconds means only the startup refresh is observed
+    // there. Deleting the `setInterval` in `production.ts` would otherwise
+    // leave the whole suite green, which is this repo's signature defect.
+    let fetches = 0;
+    const countingClient = new PolymarketClient({
+      rateLimiter: new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 }),
+      fetchImpl: (async () => {
+        fetches += 1;
+        throw new Error('offline: the test suite must not reach Polymarket');
+      }) as unknown as typeof fetch,
+    });
+
+    const orchestrator = buildProductionOrchestrator(
+      stubConfig(db, {
+        tickIntervalMs: 1_000,
+        polymarketClient: countingClient,
+        polymarketPollIntervalMs: 60_000,
+      }),
+    );
+    vi.spyOn(orchestrator.tickRunner, 'runInstrument').mockResolvedValue({
+      trace_id: 't',
+      final_stage: 'analysts',
+    });
+
+    await orchestrator.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const afterStartup = fetches;
+    expect(afterStartup).toBeGreaterThan(0);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetches).toBeGreaterThan(afterStartup);
+
+    await orchestrator.stop();
+    const afterStop = fetches;
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(fetches).toBe(afterStop);
+  });
+
   it('stop() is idempotent', async () => {
     const orchestrator = buildProductionOrchestrator(
       stubConfig(db, { tickIntervalMs: 1_000, heartbeatIntervalMs: 1_000 }),
