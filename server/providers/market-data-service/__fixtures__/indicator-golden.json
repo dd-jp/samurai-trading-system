@@ -3846,8 +3846,17 @@
       "period": 14,
       "from": 240,
       "to": 260,
-      "note": "high == low == open == close: RSI reads 100 on a market that has not moved",
-      "expected": 100.0
+      "note": "high == low == open == close: avgGain == avgLoss == 0, RSI reads the neutral midpoint 50 rather than the 100 a strictly rising window gets (#725)",
+      "expected": 50.0
+    },
+    {
+      "name": "flat_dojis_rsi_5",
+      "indicator": "rsi",
+      "period": 5,
+      "from": 240,
+      "to": 260,
+      "note": "same dead-flat segment, a different period: RSI 50 on a halted/auction tape does not depend on which period asked for it (#725)",
+      "expected": 50.0
     },
     {
       "name": "flat_dojis_atr_14",

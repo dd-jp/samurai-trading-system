@@ -227,6 +227,25 @@ describe('MarketDataServiceImpl.getIndicator', () => {
     expect(result.as_of_bar_close.toISOString()).toBe(asOf.toISOString());
   });
 
+  it('reports RSI 50, not 100, on a strictly flat window (#725)', async () => {
+    // A halted or auction-flat instrument: every close identical, so every
+    // change is zero and `avgGain === 0 && avgLoss === 0`. Before #725 that
+    // hit the same `avgLoss === 0` branch a strictly rising window does and
+    // answered 100 — maximum overbought strength on a tape that did not
+    // move. This is the case F3 (`docs/reviews/indicator-characterisation-
+    // 2026-08-16.md`) pinned and deliberately did not fix.
+    const flatBars = buildBars(20, start).map((flatBar) => ({ ...flatBar, close: 100 }));
+    const { service } = buildService(flatBars, flatBars[19]?.close_time as Date);
+
+    const result = await service.getIndicator(
+      INSTRUMENT,
+      { indicator: 'rsi', params: { period: 14 }, timeframe: '1h', lookback: 20 },
+      flatBars[19]?.close_time as Date,
+    );
+
+    expect(result.value).toBe(50);
+  });
+
   it('rejects rather than serving an indicator the stored window is too short for (#319)', async () => {
     // The service-level half of #319, and the reason the client-level fix
     // (#292's `AlpacaDataUnderfetchError`) does not close the class:

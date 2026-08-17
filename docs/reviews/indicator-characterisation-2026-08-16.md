@@ -4,7 +4,7 @@
 **Scope:** `server/providers/market-data-service/indicators.ts` and the three live `IndicatorSpec`s
 that consume it. Step **B1** of the intraday build sequence, under wayfinder map
 [#703](https://github.com/dd-jp/samurai-trading-system/issues/703).
-**Status:** OPEN — **F2 is CLOSED** ([#722](https://github.com/dd-jp/samurai-trading-system/issues/722), 2026-08-17): `RSI_SPEC` now asks for the converged warm-up, and the after-figures are recorded beside the before-figures in F2 below. F1 remains open for the two ATR specs, which still sit on the floor. F3 is tracked as [#725](https://github.com/dd-jp/samurai-trading-system/issues/725) and is untouched here. *(Issue filed 2026-08-16: "owned by step B2" pointed at no ticket, which made a measured defect in a live signal a silent deferral rather than a tracked one.)*
+**Status:** OPEN — **F2 is CLOSED** ([#722](https://github.com/dd-jp/samurai-trading-system/issues/722), 2026-08-17): `RSI_SPEC` now asks for the converged warm-up, and the after-figures are recorded beside the before-figures in F2 below. **F3 is CLOSED** ([#725](https://github.com/dd-jp/samurai-trading-system/issues/725), 2026-08-17): `rsi` now special-cases the `avgGain === 0 && avgLoss === 0` window, and the resolution is recorded beside the finding in F3 below. F1 remains open for the two ATR specs, which still sit on the floor. *(Issue filed 2026-08-16: "owned by step B2" pointed at no ticket, which made a measured defect in a live signal a silent deferral rather than a tracked one.)*
 
 ## Why this review happened before anything else was built
 
@@ -125,12 +125,55 @@ What moved with it:
 `DEFAULT_VOLATILITY_INDICATOR` carry the identical gap (F1); moving them reprices every stop in the
 system rather than every opinion, and `trader/atr-equivalence.test.ts` still owns it.
 
-### F3 — A dead-flat window reads as maximum-confidence overbought. *(open, low frequency)*
+### F3 — A dead-flat window reads as maximum-confidence overbought. *(CLOSED by #725)*
 
 `avgLoss === 0` returns 100 without checking whether `avgGain` is also 0. On a strictly rising
 window that is the standard answer; on a halted or auction-flat instrument the analyst reports
 `confidence: 0.95` on a tape that did not move. `direction` is safely `neutral` (last close equals
-the SMA exactly), so this inflates certainty rather than inventing a side. Pinned, not changed.
+the SMA exactly), so this inflates certainty rather than inventing a side. Pinned, not changed —
+at the time this review was written.
+
+**Resolution (#725, 2026-08-17): return 50, not throw.** `rsi` now checks
+`avgGain === 0 && avgLoss === 0` before the pre-existing `avgLoss === 0` branch and answers the
+neutral midpoint 50 rather than falling into the same 100 a strictly rising window gets. A strictly
+rising window (`avgGain > 0 && avgLoss === 0`) is unaffected and still answers 100.
+
+Two options were on the table — return 50, or refuse (throw) — and 50 was taken. Refusing would
+forfeit the instrument for the tick: the technical analyst is `mandatory`
+(`technical-analyst.ts`), so a throw from `computeIndicator` escalates to a per-instrument
+`quorum_skip` (traced in `computeIndicator`'s own doc comment in `indicators.ts`), the same
+posture #319 gives a genuinely too-short window. A flat tape during an auction or a halt is not
+that — it is a real, expected market state on the live LSE leveraged-ETP universe (ADR-0016), not
+a data error, so treating it as an exception the instrument cannot trade through was judged the
+wrong posture. 50 is also not an arbitrary placeholder: it is the exact value `confidenceFrom`
+(`|rsi − 50| / 50`, clamped to `[0.05, 0.95]`) already treats as "no information", so the fix reads
+as "tell the truth about not knowing" rather than "invent a number".
+
+Measured before/after on a strictly flat window (`FLAT` fixture, `technical-analyst.test.ts`):
+
+| Quantity | Before | After |
+|---|---|---|
+| `rsi.value` | 100 | 50 |
+| `confidenceFrom(rsi.value)` | 0.95 | 0.05 |
+| `direction` | `neutral` | `neutral` (unchanged) |
+
+`direction` does not move — `directionFrom` gates on `lastClose` vs `sma` and the 70/30 RSI bands,
+and a flat window already lands in neither the bullish nor bearish arm regardless of which RSI
+branch fires — so the fix is confidence-only, which is exactly the half of F3 that mattered: the
+debate was never told to buy a halted instrument, but it was told to listen to it at near-maximum
+volume.
+
+**Other `0/0` sites checked and not found.** `sma` and `ema` divide by a bar/window count that
+`minimumBarsFor` already guarantees is `>= 1`; `atr`'s seed divides by `seedRanges.length`, the
+same guaranteed-nonzero count (F4 already records this asymmetry as unreachable for a different
+reason). `rsi`'s `avgGain / avgLoss` is the only division in this module where BOTH sides can
+independently be zero — every other division here is a mean over a non-empty count, not a ratio of
+two independently-zeroable accumulators. No sibling issue is filed; there is no sibling defect.
+
+Fixture: `flat_dojis_rsi_14` (pre-existing, now asserts 50 rather than 100) and the new
+`flat_dojis_rsi_5` (same dead-flat segment, a different period, confirming the 50 does not depend
+on width) in `__fixtures__/indicator-golden.json`, regenerated from
+`generate-indicator-golden.py`.
 
 ### F4 — `atr`'s seed divisor asymmetry is unreachable, not a bug. *(closed by inspection)*
 
@@ -238,3 +281,19 @@ threshold downstream of the RSI was re-checked rather than carried forward silen
   smaller, and re-deriving it needs a soak against the converged series, not a unit test.
 - **ATR-derived stops, the volatility breaker, `min_bars`, `adv_window`, the correlation window** —
   none read the RSI. Unaffected.
+
+## What changed in the #725 pass (2026-08-17)
+
+| Changed | What | Why |
+| --- | --- | --- |
+| `indicators.ts` | `rsi` gained an `avgGain === 0 && avgLoss === 0` branch, checked before the pre-existing `avgLoss === 0` one, returning 50 instead of falling through to 100 | The fix itself. **This one IS production and it moves a live number** — the RSI value AND the `confidence` derived from it, on any flat window. |
+| `generate-indicator-golden.py` | `_rsi_from` gained the same branch; `flat_dojis_rsi_14`'s note and expected value updated (100 → 50); new `flat_dojis_rsi_5` case added | The reference must special-case the same shape or it would disagree with a correct `indicators.ts` rather than agree with a buggy one. |
+| `indicator-golden.json` | Regenerated — `flat_dojis_rsi_14.expected` 100 → 50, `flat_dojis_rsi_5` added | Generated, not hand-edited; `git diff --exit-code` after regenerating is CI's guard. |
+| `indicator-golden.test.ts` | `flat_dojis_rsi_14`'s assertion moved out of "conventions that read as bugs and are not" into a new "the flat-tape fix (#725)" block asserting 50; `flat_dojis_rsi_5` pinned alongside it | The old framing ("this reads like a bug and isn't") stopped being true for the flat case — it now IS the fix, not a documented quirk. `rising_run_rsi_14` (avgGain > 0) stays in the original block; it is unaffected. |
+| `indicator.test.ts` | New case: `getIndicator` over a strictly flat 20-bar window returns `rsi.value === 50` | Service-level coverage of the same shape, independent of the golden fixture. |
+| `technical-analyst.test.ts` | New case: the analyst run over a flat 60-bar window reports `RSI(14)=50` and `confidence === confidenceFrom(50) ≈ 0.05`, `direction === 'neutral'` | The issue's actual complaint was `confidence`, not the RSI number alone — this is the assertion that closes it. |
+
+**Other `0/0` sites checked, none found.** See F3's resolution above for the full reasoning; `sma`,
+`ema`, and `atr`'s seed all divide by a bar count `minimumBarsFor` already guarantees is non-zero,
+never by a ratio of two independently-zeroable accumulators the way `rsi`'s `avgGain / avgLoss` is.
+No follow-up issue filed.
