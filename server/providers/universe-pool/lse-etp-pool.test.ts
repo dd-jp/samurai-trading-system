@@ -3,6 +3,7 @@ import {
   assertKnownSubclass,
   assertValidPool,
   buildRoutingMap,
+  countRankableUnderlyings,
   KNOWN_SUBCLASSES,
   LSE_ETP_POOL,
   type LseEtpPoolRow,
@@ -52,7 +53,7 @@ describe('LSE_ETP_POOL — the checked-in pool', () => {
     }
   });
 
-  it('is at least the 11 rows verified for this pass, seeding a universe known to exceed 25', () => {
+  it('is at least the 11 tradeable ETP lines verified for this pass, seeding a line-count universe known to exceed 25', () => {
     // A first pass of this file stopped at 6 rows and asserted
     // `toBeLessThan(25)` as a pool-count finding. That assertion encoded a
     // research-coverage artifact (currency-line doubt applied inconsistently
@@ -61,10 +62,13 @@ describe('LSE_ETP_POOL — the checked-in pool', () => {
     // dropped candidates immediately produced five more verified rows, and a
     // plain search of GraniteShares' own catalogue surfaced an 18-ticker 3x
     // single-stock line before Leverage Shares' or WisdomTree's ranges were
-    // even considered. The verified-tradeable universe across the three named
-    // issuers is materially above 25 — see the module doc's provenance
-    // section. This file ships 11 fully-verified rows as a seed, not a claim
-    // of completeness, so the test asserts a floor rather than a ceiling.
+    // even considered. The verified-tradeable ETP-LINE count across the three
+    // named issuers is materially above 25 — see the module doc's provenance
+    // section. That is a line count, NOT the distinct-underlying count #707's
+    // 25-name threshold is measured against (7 today — see the
+    // `countRankableUnderlyings` describe block below). This file ships 11
+    // fully-verified rows as a seed, not a claim of completeness, so the test
+    // asserts a floor rather than a ceiling.
     expect(LSE_ETP_POOL.length).toBeGreaterThanOrEqual(11);
   });
 
@@ -139,5 +143,32 @@ describe('t212_isa is populated for every row', () => {
     for (const row of LSE_ETP_POOL) {
       expect(row.t212_isa === true || row.t212_isa === false).toBe(true);
     }
+  });
+});
+
+describe('countRankableUnderlyings — the count #707 consumes, not #751', () => {
+  it('returns 7 for the checked-in pool: SPY, QQQ, PLTR, and NVDA each carry two ETP lines', () => {
+    expect(countRankableUnderlyings(LSE_ETP_POOL)).toBe(7);
+  });
+
+  it('is strictly less than the row count, since some underlyings have more than one issuer line', () => {
+    expect(countRankableUnderlyings(LSE_ETP_POOL)).toBeLessThan(LSE_ETP_POOL.length);
+  });
+
+  it('the pool has exactly 11 tradeable ETP lines — the count #751 consumes', () => {
+    expect(LSE_ETP_POOL.length).toBe(11);
+  });
+
+  it('defaults to the checked-in pool when called with no argument', () => {
+    expect(countRankableUnderlyings()).toBe(7);
+  });
+
+  it('counts distinct screening_instrument values, not rows, on an arbitrary pool', () => {
+    const pool = [
+      makeRow({ lse_ticker: 'A1', screening_instrument: 'SPY' }),
+      makeRow({ lse_ticker: 'A2', screening_instrument: 'SPY' }),
+      makeRow({ lse_ticker: 'A3', screening_instrument: 'QQQ' }),
+    ];
+    expect(countRankableUnderlyings(pool)).toBe(2);
   });
 });

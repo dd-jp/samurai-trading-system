@@ -55,9 +55,15 @@
  * `t212_source_url` in `RowProvenance` is a page actually fetched or returned
  * by a web search during this compile — see each row for its citation.
  *
- * **This pool is 11 rows, not the 40-80 ADR-0016 estimates for the full
- * three-issuer catalogue — and 11 is a floor on real availability, not a
- * measurement of it.** An early pass of this file stopped at 6 rows and
+ * **This pool is 11 rows (tradeable ETP lines, distinct `lse_ticker`
+ * values) but only 7 distinct `screening_instrument` values (rankable
+ * underlyings) — not the 40-80 ADR-0016 estimates for the full
+ * three-issuer catalogue, and neither number is a ceiling on real
+ * availability, only a floor.** SPY, QQQ, PLTR, and NVDA each carry two ETP
+ * lines from different issuers, which is why 11 rows resolve to 7 distinct
+ * underlyings — see `countRankableUnderlyings()` below, and the pool-count
+ * finding further down for which of these two counts each downstream ticket
+ * actually consumes. An early pass of this file stopped at 6 rows and
  * reported "under 25" as a finding. That was wrong, and the mistake is worth
  * naming: the first pass dropped a candidate the moment its currency line was
  * unconfirmed (Palantir, a second NVIDIA line), while simultaneously keeping
@@ -70,24 +76,48 @@
  * (`etfstream.com`, "GraniteShares lists 18 leveraged and inverse US stock
  * ETPs") before Leverage Shares' or WisdomTree's ranges are even considered —
  * Leverage Shares alone advertises 150+ products. **The verified-tradeable
- * count for this three-issuer universe is materially above 25** — the
- * original under-25 conclusion was an artifact of stopping the search early,
- * not a property of the universe. Bulk-importing the rest of that 18-ticker
- * (and larger) catalogue row-by-row was out of scope for this pass — each
- * addition needs the same ISIN + currency-line + T212-page verification this
- * file's eleven rows got, which is more per-row research than one ticket can
- * absorb — so this file ships 11 fully-verified rows as a seed, not a claim
- * of completeness.
+ * count of ETP LINES for this three-issuer universe is materially above
+ * 25** — that is a line count, not the distinct-underlying count #707's
+ * 25-name threshold is measured against (7 today; see the pool-count finding
+ * below for why those two 25s are not the same 25) — the original under-25
+ * conclusion was an artifact of stopping the search early, not a property of
+ * the universe. Bulk-importing the rest of that 18-ticker (and larger)
+ * catalogue row-by-row was out of scope for this pass — each addition needs
+ * the same ISIN + currency-line + T212-page verification this file's eleven
+ * rows got, which is more per-row research than one ticket can absorb — so
+ * this file ships 11 fully-verified rows (7 distinct underlyings) as a seed,
+ * not a claim of completeness.
  *
- * **The pool-count finding this ticket asks for, corrected:** the universe is
- * NOT under the ~25-row threshold `docs/specs/universe-selector-spec.md`
- * ("Candidate pool") names as the point where a ranking/shortlist step earns
- * its keep. Ranking machinery IS worth building — the opposite of this file's
- * first-pass conclusion. #707 and #751, which were to be sized against the
- * count reported here, should size against "pool exceeds 25 and a shortlist
- * step is needed", not against "6, trade the whole pool". The `toBeLessThan`
- * test that encoded the old conclusion has been removed from this file's
- * test suite for that reason — see `lse-etp-pool.test.ts`.
+ * **The pool-count finding this ticket asks for, corrected — and split by
+ * what each consumer actually counts.** This pool has 11 tradeable ETP lines
+ * (distinct `lse_ticker` rows) but only 7 distinct rankable underlyings
+ * (unique `screening_instrument` values, see `countRankableUnderlyings()`),
+ * because SPY, QQQ, PLTR, and NVDA each carry two ETP lines from different
+ * issuers. These are not interchangeable counts, and each downstream ticket
+ * consumes only one of them:
+ *
+ * - **#707** (the screener's ranking/shortlist step) ranks
+ *   `screening_instrument` — underlyings, not ETP lines. At 7 distinct
+ *   underlyings, #707 is BLOCKED, not cleared: it needs the distinct-
+ *   `screening_instrument` count to reach at least 25, the
+ *   `docs/specs/universe-selector-spec.md` ("Candidate pool") threshold for
+ *   where ranking machinery earns its keep, and row count is not the measure
+ *   of that gate — 11 rows says nothing about whether #707 can run. A
+ *   monthly quintile over 7 names is in fact MORE degenerate (1-2
+ *   instruments per bucket) than the 12-15-row case already recorded on
+ *   #707 as requiring the bucketing scheme to be restated before its first
+ *   run, so this correction tightens #707's precondition, it does not
+ *   relax it.
+ * - **#751** (ActiveUniverseProvider, tradeable-lines wiring) consumes the
+ *   11-row tradeable-ETP-line count instead — the population it wires for
+ *   order routing legitimately spans issuer-duplicate lines, since 3USL and
+ *   3SPY are two genuinely different holdable instruments even though both
+ *   screen off SPY.
+ *
+ * The `toBeLessThan` test that encoded the old under-25 (row-count)
+ * conclusion has been removed from this file's test suite; both current
+ * counts (11 rows, 7 distinct underlyings) are pinned by
+ * `lse-etp-pool.test.ts` instead.
  *
  * ## Residual risks (issue #749, "record ... rather than leaving them to be
  * discovered")
@@ -167,14 +197,18 @@ export interface LseEtpPoolRow {
   /** ISO 4217-ish currency code of the LSE-listed line this row actually names (may be GBP, GBX, or USD). */
   readonly currency: string;
   /**
-   * Best-effort determination that this ticker is listed and tradeable
-   * inside the Trading 212 Stocks ISA, from T212's own public instrument
-   * pages (see `provenance.t212_source_url`). This is NOT a spread or
-   * liquidity measurement — #666 (still open) is what measures real T212
-   * spreads. Until #666 lands, treat every `true` here as "T212 lists the
-   * instrument", not "the spread is tradeable" — the acceptance criterion
-   * calling this "the liquidity gate until #666 measures real spreads"
-   * names that gap explicitly rather than leaving it implied.
+   * Best-effort determination that Trading 212 LISTS this ticker, from
+   * T212's own public instrument pages (see `provenance.t212_source_url`) —
+   * NOT that it is confirmed listed-and-tradeable inside the Trading 212
+   * Stocks ISA. Listing is verified; ISA eligibility and this account's
+   * permission to actually trade it are unverified pending #665 (the
+   * complex-products questionnaire, still open), which can shrink this pool.
+   * This is also NOT a spread or liquidity measurement — #666 (still open)
+   * is what measures real T212 spreads. Until #665 and #666 land, treat
+   * every `true` here as "T212 lists the instrument", not "this account can
+   * hold it" or "the spread is tradeable" — the acceptance criterion calling
+   * this "the liquidity gate until #666 measures real spreads" names the
+   * spread gap explicitly rather than leaving it implied.
    */
   readonly t212_isa: boolean;
   readonly provenance: RowProvenance;
@@ -223,11 +257,16 @@ export function assertKnownSubclass(row: LseEtpPoolRow): void {
 }
 
 /**
- * The checked-in pool. Eleven rows: four `index_etp_3x`, seven
- * `single_stock_etp_3x` — see the module doc's provenance section for why
- * this is a verified seed of the full three-issuer catalogue (which exceeds
- * 25) rather than an exhaustive scrape, and for the corrected pool-count
- * finding this implies.
+ * The checked-in pool. Eleven rows (tradeable ETP lines): four
+ * `index_etp_3x`, seven `single_stock_etp_3x`. That resolves to only 7
+ * distinct `screening_instrument` values (rankable underlyings; see
+ * `countRankableUnderlyings()`) — 2 among the index rows (SPY, QQQ, each
+ * doubled) and 5 among the single-stock rows (TSLA, AAPL, MSTR, plus NVDA
+ * and PLTR each doubled) — since SPY, QQQ, PLTR, and NVDA each carry two
+ * lines from different issuers. See the module doc's provenance section for
+ * why this is a verified seed of the full three-issuer catalogue rather than
+ * an exhaustive scrape, and for the corrected pool-count finding — which of
+ * these two counts each downstream ticket (#707, #751) consumes.
  */
 export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
   {
@@ -482,6 +521,19 @@ export function buildRoutingMap(
     map.set(row.lse_ticker, 'stocks');
   }
   return map;
+}
+
+/**
+ * The count #707 (screener ranking/shortlist) actually consumes: the number
+ * of DISTINCT `screening_instrument` values in a pool — rankable
+ * underlyings, not tradeable ETP lines. Strictly less than `pool.length`
+ * whenever an underlying carries more than one issuer's ETP line, which this
+ * pool's SPY/QQQ/PLTR/NVDA rows do (11 rows, 7 distinct underlyings). See
+ * the module doc's pool-count finding for why row count is NOT the measure
+ * #707's 25-name threshold is against.
+ */
+export function countRankableUnderlyings(pool: readonly LseEtpPoolRow[] = LSE_ETP_POOL): number {
+  return new Set(pool.map((row) => row.screening_instrument)).size;
 }
 
 /**
