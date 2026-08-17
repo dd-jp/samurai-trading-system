@@ -314,7 +314,7 @@ interface MetricsSuite {                  // reported together — never one num
 
 **Data ingestion / sourcing** — the Market Data Service + Market Intelligence own the historical stores; this component consumes them and asserts their point-in-time / survivorship-free contract.
 
-**Exact values** — spread/impact coefficients, fee schedules, latency assumptions, the MinBTL constant, the PBO threshold value, and capacity-ceiling parameters are config, with pessimistic defaults.
+**Exact values** — spread/impact coefficients, fee schedules, latency assumptions, the MinBTL constant, and capacity-ceiling parameters are config, with pessimistic defaults. **The PBO threshold is the exception, and is not free config:** `CONTEXT.md` states 0.05 as a bright line ("Kill if PBO > 0.05") and this spec's own body says "Reject if PBO > 0.05" as a fixed rule. It remains a config *value*, but bounded by an in-code table that **refuses** anything above 0.05 at load and on every write rather than silently coercing it (#638). The bound and the reasoning are recorded once in [cross-spec-contracts.md §9](cross-spec-contracts.md), not restated per spec.
 
 ## Further Notes
 

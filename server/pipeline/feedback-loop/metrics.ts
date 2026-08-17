@@ -11,8 +11,15 @@
  * threshold. Kill/rework is a human decision this module never takes — there
  * is no kill primitive here by design.
  */
+import { assertThresholdsWithinBounds } from '../../shared/index.js';
 import { applyGuardrail } from './guardrails.js';
-import type { Adjustment, BreachAlert, MetricsInput, MetricsReport } from './types.js';
+import type {
+  Adjustment,
+  BreachAlert,
+  KillThresholds,
+  MetricsInput,
+  MetricsReport,
+} from './types.js';
 
 export const PBO_OVER_MAX = 'pbo_over_max';
 export const OOS_SHARPE_UNDER_MIN = 'oos_sharpe_under_min';
@@ -52,9 +59,46 @@ function liveBacktestDivergence(liveSharpe: number, backtestReferenceSharpe: num
   return Math.max(0, (backtestReferenceSharpe - liveSharpe) / backtestReferenceSharpe);
 }
 
+/**
+ * #638: the kill lines, refused rather than softened.
+ *
+ * PBO 0.05 is the one hard kill criterion in the whole record (CONTEXT.md,
+ * feedback-loop-spec.md story 13, `PBO_REJECT_THRESHOLD`), and FL holds the
+ * only MUTABLE copy of it — so this config is where "reject if PBO > 0.05"
+ * could quietly become "reject if PBO > 0.5". The two Sharpe lines are the
+ * same criterion pointing downward: lowering either one softens the kill.
+ *
+ * Called from the composition root at boot AND on every metrics cycle, because
+ * the two answer different questions — the boot check refuses to start, and
+ * the per-cycle check refuses to REPORT a kill-line verdict computed against a
+ * line that is not the recorded one.
+ *
+ * An ABSENT `kill_thresholds` block is not this guard's business and returns
+ * quietly: `FeedbackConfig` requires the field, so absence only reaches here
+ * through a cast, and it is a missing-config failure owned by the config's own
+ * required-field checks. Reporting it as a bound crossing would put the wrong
+ * name on it. What this refuses is a PRESENT value that crosses a line.
+ */
+export function assertKillThresholdsWithinBounds(
+  kill: KillThresholds | undefined,
+  where: string,
+): void {
+  if (kill === undefined) return;
+
+  assertThresholdsWithinBounds(
+    {
+      max_pbo: kill.max_pbo,
+      min_oos_sharpe: kill.min_oos_sharpe,
+      min_deflated_sharpe: kill.min_deflated_sharpe,
+    },
+    where,
+  );
+}
+
 function detectBreaches(input: MetricsInput): string[] {
   const breaches: string[] = [];
   const { daily, revalidation, backtest_reference_sharpe, config } = input;
+  assertKillThresholdsWithinBounds(config.kill_thresholds, 'computeMetrics');
 
   if (revalidation !== undefined) {
     if (revalidation.pbo > config.kill_thresholds.max_pbo) {

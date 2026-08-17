@@ -155,7 +155,16 @@ import {
   SqliteBrokerStateStore,
   SqliteExecutionStore,
 } from '../../pipeline/execution/index.js';
-import type { SessionBasisByClass } from '../../pipeline/risk-manager/index.js';
+import {
+  assertKillThresholdsWithinBounds,
+  SqliteTuningStore,
+} from '../../pipeline/feedback-loop/index.js';
+import type {
+  BreakerConfig,
+  RiskConfig,
+  SessionBasisByClass,
+} from '../../pipeline/risk-manager/index.js';
+import { CircuitBreakers, resolveRiskConfig } from '../../pipeline/risk-manager/index.js';
 import type { VerdictDecision } from '../../pipeline/verdict/index.js';
 import type { Bar } from '../../providers/market-data-service/index.js';
 import {
@@ -170,7 +179,13 @@ import {
 } from '../../providers/market-intelligence/index.js';
 import { delay } from '../../shared/http/delay.js';
 import type { OrderIntent } from '../../shared/index.js';
-import { SimulatedClock, TokenBucket } from '../../shared/index.js';
+import {
+  boundFor,
+  GUARDED_THRESHOLD_NAMES,
+  SimulatedClock,
+  ThresholdBoundViolationError,
+  TokenBucket,
+} from '../../shared/index.js';
 import { openSharedStore, type SharedStore as SqliteHandle } from '../../shared/store/index.js';
 import type { CostConfig } from '../../tools/backtest/index.js';
 import { CostModelImpl } from '../../tools/backtest/index.js';
@@ -1886,6 +1901,126 @@ export interface SmokeGateResult {
  * conjunction for the same reason requirements 1-7 above are: each names a
  * different one of the six.
  */
+/**
+ * What the threshold-clamp probe (#638) observed. Every field records a
+ * REFUSAL that actually happened at a real seam, not that a validator exists.
+ */
+export interface ThresholdClampEvidence {
+  /**
+   * The guarded names this probe drove. Compared against
+   * `GUARDED_THRESHOLD_NAMES` by the gate, so deleting a row from the bounds
+   * table turns the gate red instead of quietly shrinking what is covered.
+   */
+  probedNames: readonly string[];
+  /** Guarded names the LIVE `risk_thresholds` read accepted out of bounds. */
+  liveReadAccepted: readonly string[];
+  /** Guarded names the Feedback Loop's write door accepted out of bounds. */
+  writeDoorAccepted: readonly string[];
+  /** The breaker constructor refused an out-of-bound drawdown pair. */
+  breakerConstructionRefused: boolean;
+  /** The kill-line boot check refused a softened PBO line. */
+  killLineCheckRefused: boolean;
+  /** The SHIPPED paper values still boot — the clamp bounds a dial, not forbids one. */
+  shippedConfigAccepted: boolean;
+}
+
+/** A value one whole unit outside whichever edge the bound states. */
+function outOfBoundValueFor(name: string): number {
+  const bound = boundFor(name);
+  if (bound === undefined) {
+    throw new Error(`smoke threshold-clamp probe: '${name}' has no bound — the table changed`);
+  }
+  if (bound.max !== undefined) return bound.max + 1;
+  if (bound.min !== undefined) return bound.min - 1;
+  throw new Error(`smoke threshold-clamp probe: '${name}' states neither edge`);
+}
+
+function refuses(probe: () => void): boolean {
+  try {
+    probe();
+    return false;
+  } catch (error) {
+    // Only a BOUNDS refusal counts. Any other throw — a TypeError from a
+    // changed shape, say — would otherwise read as the clamp working while the
+    // probe never reached it, which is the shape of defect this gate exists
+    // to catch. The aggregate form (several crossings at once) is a plain
+    // `Error` carrying the same sentence, so it is matched on the message.
+    if (error instanceof ThresholdBoundViolationError) return true;
+    return error instanceof Error && error.message.includes('in-code clamp');
+  }
+}
+
+/**
+ * The threshold-clamp scenario (#638) — negative probes through the REAL seams.
+ *
+ * ADR-0013 makes the numeric thresholds the only stop left: nothing re-arms by
+ * hand and nothing gates a loosening, so a config edit — or, once #736 lands,
+ * the Feedback Loop on its own — is the entire distance between the running
+ * system and an arbitrary risk limit. Wiring a mechanism means adding its
+ * enforcement assertion here (#430), and the enforcement being asserted is a
+ * REFUSAL: for every guarded name, an out-of-bound value is pushed at each seam
+ * that can put a number into force, and the seam must reject it.
+ *
+ * The live read is the one that matters. `RiskManagerImpl.evaluate()`
+ * re-resolves its config from the `risk_thresholds` table on every call, so a
+ * boot-only clamp would constrain nothing the loop does between two ticks.
+ */
+function runThresholdClampScenario(
+  breakerConfig: BreakerConfig,
+  riskConfig: RiskConfig,
+): ThresholdClampEvidence {
+  const db = openSharedStore(':memory:');
+  try {
+    const store = new SqliteTuningStore(db, new SimulatedClock(SMOKE_RUN_INSTANT));
+    const liveReadAccepted: string[] = [];
+    const writeDoorAccepted: string[] = [];
+
+    for (const name of GUARDED_THRESHOLD_NAMES) {
+      const bad = outOfBoundValueFor(name);
+      if (!refuses(() => resolveRiskConfig(riskConfig, { [name]: bad }))) {
+        liveReadAccepted.push(name);
+      }
+      if (!refuses(() => store.setRiskThreshold(name, bad))) {
+        writeDoorAccepted.push(name);
+      }
+    }
+
+    return {
+      probedNames: [...GUARDED_THRESHOLD_NAMES],
+      liveReadAccepted,
+      writeDoorAccepted,
+      breakerConstructionRefused: refuses(
+        () =>
+          new CircuitBreakers({
+            ...breakerConfig,
+            // The pair the pre-existing relative width check happily accepts:
+            // 0.90 is strictly below 0.95, so ordering passes and the drawdown
+            // breaker never fires.
+            max_drawdown_pct: 0.95,
+            auto_rearm: { ...breakerConfig.auto_rearm, recovery_drawdown_pct: 0.9 },
+          }),
+      ),
+      killLineCheckRefused: refuses(() =>
+        assertKillThresholdsWithinBounds(
+          {
+            max_pbo: 0.5,
+            min_oos_sharpe: 0.5,
+            min_deflated_sharpe: 0.95,
+            max_live_backtest_divergence: 0.5,
+          },
+          'smoke threshold-clamp probe',
+        ),
+      ),
+      // The other half, and the reason this is not a one-sided check: a clamp
+      // that refused the shipped configuration would be a broken clamp, and
+      // every negative probe above would still pass.
+      shippedConfigAccepted: !refuses(() => new CircuitBreakers(breakerConfig)),
+    };
+  } finally {
+    db.close();
+  }
+}
+
 export function evaluateSmokeGate(
   observations: SmokeObservations,
   options: {
@@ -1944,6 +2079,15 @@ export function evaluateSmokeGate(
      * entrypoint's stdout `'error'` subscription or its fault net.
      */
     loggerResilience: LoggerResilienceEvidence;
+    /**
+     * The threshold-clamp probe's evidence (#638) — required, not optional,
+     * for the same "compile error, not a silent no-op" reason the four above
+     * are. What it gates is the only stop ADR-0013 leaves standing: with no
+     * human gate anywhere, a config edit (or, after #736, the Feedback Loop by
+     * itself) is the entire distance between the running system and an
+     * arbitrary risk limit.
+     */
+    thresholdClamp: ThresholdClampEvidence;
   },
 ): SmokeGateResult {
   const failures: string[] = [];
@@ -2095,6 +2239,55 @@ export function evaluateSmokeGate(
         `${logging.fatalExitCode ?? 'no code'} rather than 1 — the fault net must record where ` +
         'a soak can find it and STOP. A live-money process that keeps running in an unknown ' +
         'state with open positions is worse than one that dies (#714)',
+    );
+  }
+
+  // #638 — the in-code clamp on the last stop ADR-0013 leaves standing.
+  const clamp = options.thresholdClamp;
+  const missingFromProbe = GUARDED_THRESHOLD_NAMES.filter(
+    (name) => !clamp.probedNames.includes(name),
+  );
+  if (missingFromProbe.length > 0 || clamp.probedNames.length !== GUARDED_THRESHOLD_NAMES.length) {
+    failures.push(
+      `the threshold-clamp probe covered ${clamp.probedNames.length} of ` +
+        `${GUARDED_THRESHOLD_NAMES.length} guarded thresholds (missing: ` +
+        `${missingFromProbe.join(', ') || 'none'}) — a bounds-table entry that nothing probes ` +
+        'is a limit nobody has seen enforced (#638)',
+    );
+  }
+  if (clamp.liveReadAccepted.length > 0) {
+    failures.push(
+      `the LIVE risk_thresholds read accepted out-of-bound values for ` +
+        `${clamp.liveReadAccepted.join(', ')} — RiskManagerImpl.evaluate() re-resolves its ` +
+        'config from that table on every call, so this is the path the Feedback Loop moves a ' +
+        'dial on between two ticks, with no boot in between (#638/ADR-0013)',
+    );
+  }
+  if (clamp.writeDoorAccepted.length > 0) {
+    failures.push(
+      `the Feedback Loop write door accepted out-of-bound values for ` +
+        `${clamp.writeDoorAccepted.join(', ')} — ADR-0013 requires every dial change to be ` +
+        'rejected in code if it would cross a hard bound, and after #736 there is nobody in ' +
+        'the path at all (#638)',
+    );
+  }
+  if (!clamp.breakerConstructionRefused) {
+    failures.push(
+      'the breaker constructor accepted a 0.95/0.90 drawdown pair — the pre-existing check is ' +
+        'a relative ordering test only, so this boots a system whose hard drawdown breaker ' +
+        'can never fire (#638)',
+    );
+  }
+  if (!clamp.killLineCheckRefused) {
+    failures.push(
+      'the kill-line boot check accepted a PBO threshold of 0.5 — CONTEXT.md states 0.05 as a ' +
+        'bright line and the Feedback Loop holds the only mutable copy of it (#638)',
+    );
+  }
+  if (!clamp.shippedConfigAccepted) {
+    failures.push(
+      'the shipped paper breaker configuration is itself refused by the clamp — the bound is ' +
+        'wrong, not the config, and every negative probe above would still pass (#638)',
     );
   }
 
@@ -2864,6 +3057,11 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     // beside the three scenarios above rather than inside any of them.
     const loggerResilience = runLoggerResilienceScenario();
 
+    // #638: negative probes through every seam that can put a risk threshold
+    // into force, against the SHIPPED paper values. Its own in-memory store, so
+    // it writes nothing the observations below read back.
+    const thresholdClamp = runThresholdClampScenario(profile.breakerConfig, profile.riskConfig);
+
     const observations = readSmokeObservations(db, smokeMiArchive);
     const gate = evaluateSmokeGate(observations, {
       minTicks: targetTicks,
@@ -2871,6 +3069,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       llmRateLimiterSnapshot: llmRateLimiter.snapshot(),
       cryptoEmulation,
       loggerResilience,
+      thresholdClamp,
       exitPath: {
         ...exitPathHarnessResult,
         // Alerts from BOTH the six-stage tick loop and the exit-path harness —

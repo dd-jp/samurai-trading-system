@@ -91,6 +91,86 @@ Added 2026-08-05 from [Wayfinder: Devil's Advocate](https://github.com/dd-jp/sam
 
 ---
 
+## 9. Threshold clamps — the research bright lines are enforced in code (#638)
+
+Recorded here **once** so it stops being re-litigated per spec. Both
+`risk-manager-spec.md` and `cost-model-backtest-spec.md` previously exposed
+research-mandated bright lines as ordinary tunable config; this section is the
+settled answer for every spec.
+
+**The rule.** A threshold that a research document states as a bright line stays
+**config**, but the config is bounded by a table in code (`server/shared/threshold-bounds.ts`),
+and a value outside its bound is **REFUSED, never coerced**. Refusing to boot is
+the correct behaviour: a silently clamped value reads as accepted, and the
+operator then believes a limit is in force that is not.
+
+**Why in code and not in a spec sentence.** [ADR-0007](../adr/0007-fully-automatic-execution.md)
+removed the human from the trade path — "the breakers are now the only stop".
+[ADR-0013](../adr/0013-no-human-gate-anywhere.md) went further: nothing re-arms
+by hand and nothing gates a loosening, so **the numeric thresholds are the only
+stop**, and a config edit was the entire distance between the running system and
+an arbitrary risk limit. ADR-0013 calls the clamp "a precondition of this ADR
+being safe, not a tidiness item". The threat model is not a fat-fingered file —
+it is the **Feedback Loop walking a dial by itself**, with nobody in the path at
+all once [#736](https://github.com/dd-jp/samurai-trading-system/issues/736)
+removes the loosen gate.
+
+**Guarded values, and where each bound comes from:**
+
+| Threshold | Bound | Source |
+|---|---|---|
+| `max_pbo` | ≤ 0.05 | `CONTEXT.md` — "Kill if PBO > 0.05"; `feedback-loop-spec.md` story 13; `PBO_REJECT_THRESHOLD` |
+| `min_oos_sharpe` | ≥ 0.5 | `feedback-loop-spec.md` story 13 — lowering it softens the kill |
+| `min_deflated_sharpe` | ≥ 0.95 | `CONTEXT.md` falsification test, DSR-significant at the conventional 5% level |
+| `max_drawdown_pct` | ≤ 0.35 | **engineering choice**, stated as one: `CONTEXT.md`'s ~20-25% drawdown tolerance, one tuning step past the shipped 0.30 |
+| `recovery_drawdown_pct` | ≤ 0.262 | [ADR-0018](../adr/0018-intraday-thresholds-sizing-and-the-signal-bar.md) D5's measured envelope — the book resumes only inside the drawdown it was sized for |
+| `daily_loss_pct` (+ both per-class tiers) | ≤ 0.10 | **engineering choice**, derived from `max_drawdown_pct` so the daily tier can fire several sessions before the drawdown trip |
+
+Bounds carry a `source` string in the table, and an uncited bound is an invented
+safety limit — the two engineering choices above say so in as many words rather
+than borrowing authority from a document that does not state them.
+
+**Where the clamp binds.** Four seams, because a boot-time-only check would
+constrain nothing the Feedback Loop does:
+
+1. `CircuitBreakers`' constructor — boot. Complements, and does not replace, the
+   pre-existing hysteresis-width check, which is a *relative* ordering test:
+   `max_drawdown_pct: 0.95` with `recovery_drawdown_pct: 0.90` passes it and
+   leaves a drawdown breaker that can never fire.
+2. `resolveRiskConfig` — **the live path, and the one that matters.**
+   `RiskManagerImpl.evaluate()` re-resolves its config from the `risk_thresholds`
+   table on *every* call, so a row written between two ticks binds on the second
+   one without passing through startup again. It checks the **whole stored
+   record**, not only the six keys it applies, so the guard travels with the
+   allow-list rather than with today's contents.
+3. `TuningStore.setRiskThreshold` / `seedRiskThreshold` (both implementations) —
+   the Feedback Loop's write door.
+4. `buildProductionComponents` and `computeMetrics` — the kill lines, at boot and
+   per cycle.
+
+`yarn smoke` drives a negative probe through each seam for every guarded name and
+fails the gate if any accepts an out-of-bound value, or if the probe stops
+covering the whole table.
+
+**Deliberately NOT guarded, and why:**
+
+- **A FLOOR on `max_drawdown_pct`.** A trip set too *low* halts new entries early
+  and never blocks an exit, so it cannot increase loss — that is an availability
+  failure, owned by [#634](https://github.com/dd-jp/samurai-trading-system/issues/634)
+  and ADR-0013, not by this clamp. Siting the trip above ADR-0018's measured
+  envelope remains a spec-level obligation (`risk-manager-spec.md`).
+- **The six tunable notional caps** (`max_position_size`, `per_asset_cap`, the two
+  per-class caps, `portfolio_gross_cap`, `concentration_cap`). No document states
+  a line for any of them, and bounding them would both invent a safety limit and
+  freeze the Feedback Loop's only working dials.
+- **`max_live_backtest_divergence`.** Same reason: no research document states a
+  value for it.
+- **`per_subclass_deployment_cap`.** Not exposed as a dial at all — see
+  `risk-thresholds.ts` and `per-subclass-deployment-cap.test.ts`. Absence from the
+  allow-list is a stronger guarantee than a bound would be.
+
+---
+
 ## OPEN GAPS (found in this pass — resolve before / during `/to-tickets`)
 
 - **RESOLVED: OPEN-GAP-A — `MarketState.spread` and `.adv` have no clean source.** Resolved hybrid: MDS exposes a best-effort spread estimate (bid/ask where available, e.g. crypto ccxt; null otherwise) + an ADV helper (bars-volume aggregation); cost model fallback-models spread from volatility + per-asset-class model when MDS returns null, guaranteeing a non-zero spread term always. See market-data-service-spec.md Out of Scope + cost-model-backtest-spec.md §Spread sourcing.
@@ -109,7 +189,7 @@ Added 2026-08-05 from [Wayfinder: Devil's Advocate](https://github.com/dd-jp/sam
 
 **MEDIUM:**
 - Funding/borrow accrual unowned in the LIVE path (cost-model only applies it in backtest mark-to-market; Risk's live `PortfolioView.equity` has no accrual term).
-- PBO 0.05 kill-line exposed as tunable config in cost-model spec, when research/CONTEXT treat it as a fixed bright line — risks the one hard kill criterion being softened.
+- **RESOLVED 2026-08-17 (#638).** PBO 0.05 kill-line exposed as tunable config in cost-model spec, when research/CONTEXT treat it as a fixed bright line — risked the one hard kill criterion being softened. Now config bounded by an in-code table that refuses a crossing at load and on every write; see §9.
 - DoD reverse-gap: Market Data Service, Market Intelligence, and the entire cost-model/PBO/DSR apparatus (the research core — "expectancy > 0 before live money") have no DoD line item.
 
 **LOW:** FL revalidation omits MinBTL (computes it in cost-model but doesn't surface it in `MetricsReport.revalidation`); no spec enforces the "paper across ≥1 volatility regime" graduation gate; trading-calendar/session source unspecced.
@@ -180,7 +260,7 @@ The three dated `cross-verify-*.md` passes previously held findings with no livi
 |---|---|---|---|
 | CV-20 | **AMENDED (resolved)** | The idempotency key hashed `(instrument, bar)` only. Once #616 made it stable within a bar and #668 put a mandatory flat-by-close exit into a bar an entry can also be taken in, the entry and the exit hashed identically and the exit — being second — was suppressed by all three dedup layers at once, carrying a position overnight against ADR-0014. The payload now carries `side: 'open' \| 'close'`. **The three layers are not independent:** `open_positions`'s primary key IS `idempotency_key`, so `findByKey`, the PK backstop and the broker `client_order_id` share one input and no single layer can be made smarter | [#686](https://github.com/dd-jp/samurai-trading-system/issues/686) |
 | CV-21 | **HIGH (live path) — STILL OPEN.** Design **SPECIFIED 2026-08-16** (see the pass below): the bar is to be inherited from `TickContext.decision_bar` and carried on `DebateResult`, with the Trader prohibited from deriving one from `clock.now()` | The Trader re-derives the decision bar from its own `clock.now()` rather than inheriting the debate's, so a debate straddling an hour boundary keys the intent into bar N+1 while `debate_id` says N — and bar N+1's real decision then collides with it and is suppressed. **Needs a contract change: `DebateResult` carries no bar — and as of this pass that change has NOT landed.** An earlier revision of this row claimed it had; it had not, and the severity above is live until #687 ships | [#687](https://github.com/dd-jp/samurai-trading-system/issues/687) |
-| CV-15 | **BLOCKING (live path)** | With ADR-0013 removing every human gate, the numeric thresholds are the only remaining control — and both `risk-manager-spec.md` and `cost-model-backtest-spec.md` still expose them as unclamped config. A config edit is now the whole distance to an arbitrary risk limit | [#638](https://github.com/dd-jp/samurai-trading-system/issues/638) |
+| CV-15 | ~~**BLOCKING (live path)**~~ **RESOLVED 2026-08-17** | With ADR-0013 removing every human gate, the numeric thresholds are the only remaining control — and both specs exposed them as unclamped config, so a config edit was the whole distance to an arbitrary risk limit. Now bounded in code and **refused, never coerced**, at all four seams that can put a number into force — including the live `risk_thresholds` read, which is the path the Feedback Loop moves a dial on between two ticks. Decision recorded once in §9 | [#638](https://github.com/dd-jp/samurai-trading-system/issues/638) |
 | CV-14 | HIGH | `feedback-loop-spec.md:91`'s `approvals: ApprovalChannel` does two jobs — gated loosening *and* breach alerts. Removing the gate must not remove the alert, the only way an operator learns the edge died | [#639](https://github.com/dd-jp/samurai-trading-system/issues/639) |
 | CV-2 | ~~HIGH~~ **RESOLVED 2026-08-15** | `risk-manager-spec.md` states no behaviour on upstream read failure, in the stage billed "must be trusted absolutely under stress". **Premise partly wrong and worth recording:** `evaluate()` is synchronous and pure and performs no upstream reads at all — it receives `portfolio`/`breakers`/`correlation`/`cii` pre-computed — so the failure mode was never inside it. A read that FAILS already failed closed (the rejection aborts the instrument pass and places no order); the real gap was a read that SUCCEEDS with a stale value, which nothing checked. Now `computePortfolioView` throws `StaleMarkError` past `RiskConfig.max_mark_age` | [#640](https://github.com/dd-jp/samurai-trading-system/issues/640) |
 | CV-6 | ~~MEDIUM~~ **RESOLVED 2026-08-15** | `stale_feed` gate described as live by `market-data-service-spec.md` and this registry §3; absent from `verdict-spec.md`. Ruled **implement, not delete** — `Mark.observed_at` exists to power it, and feed age is a failure the signal-age gate structurally cannot catch. Now `verdict-spec.md` gate 2 | [#641](https://github.com/dd-jp/samurai-trading-system/issues/641) |
@@ -250,7 +330,7 @@ Run per Standing Pipeline Rule 7 after map [#703](https://github.com/dd-jp/samur
 
 ### Still open, deliberately
 
-- **CV-15 / [#638](https://github.com/dd-jp/samurai-trading-system/issues/638)** (unclamped thresholds) remains **BLOCKING for live** and this pass does not clear it. The new per-subclass `risk_fraction` values are *more* config surface on the same unclamped path.
+- ~~**CV-15 / [#638](https://github.com/dd-jp/samurai-trading-system/issues/638)** (unclamped thresholds) remains **BLOCKING for live** and this pass does not clear it.~~ **Cleared 2026-08-17 by #638** — see §9. The per-subclass `risk_fraction` values noted here as "more config surface on the same unclamped path" are *not* on that path: `per_subclass_deployment_cap` is deliberately absent from the tunable allow-list entirely, which §9 records as the stronger guarantee.
 - **CV-4/CV-5 / [#642](https://github.com/dd-jp/samurai-trading-system/issues/642)** (risk-manager "no LLM" vs its own binding LLM critic) is untouched — it predates the horizon change and is not resolved by it.
 - **GAP-G's premise has changed** and should be re-read at triage: an Alpaca `DataSource` was needed for SPY/QQQ/AAPL/TSLA/BTC-USD/ETH-USD, none of which is now a live instrument. Alpaca remains the **screening and paper** source, so the gap survives with a different justification rather than closing.
 
