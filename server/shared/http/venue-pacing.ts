@@ -45,9 +45,14 @@ import type { TokenBucketConfig } from './token-bucket.js';
  * which is the right fail-fast posture for `production.ts`, the LIVE
  * composition root, but means `production.ts` would now also validate
  * `SAMURAI_PACING_POLYGON_*` and build a bucket for a venue no live path
- * ever calls. A typo in a Stage-2-only env var would fail orchestrator boot
- * during the unattended soak (#238) — nobody watching, dead before the
- * first tick. See `resolvePolygonPacing` below: same underlying
+ * ever called AT THE TIME. A typo in a Stage-2-only env var would fail
+ * orchestrator boot during the unattended soak (#238) — nobody watching,
+ * dead before the first tick. #562 gave the live path a Polygon FALLBACK,
+ * so a live path does now call `resolvePolygonPacing` — and the exclusion
+ * below matters more rather than less for it: `data-failover.ts` calls that
+ * separate entry point inside a try/catch and WARNS-AND-DEFAULTS on a
+ * malformed override instead of refusing to boot, precisely so this
+ * paragraph's failure mode stays impossible. See `resolvePolygonPacing` below: same underlying
  * parsing/validation (`resolveBucketPacing`), a separate entry point that
  * only ever reads `SAMURAI_PACING_POLYGON_*`, so neither direction of the
  * coupling exists — this module's own `resolveVenuePacing()` never touches
@@ -234,10 +239,14 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
  * deliberate 75%, and honestly labelled as such rather than glossed over.
  * It is accepted rather than tightened here because the workload this
  * paces is nothing like Alpaca's: a continuous live trading loop cannot
- * absorb a margin slip, where Polygon is invoked only by hand-run Stage 2
+ * absorb a margin slip, where Polygon is invoked by hand-run Stage 2
  * scripts (`run-stage2.ts` and friends) fetching a handful of symbols per
- * run, so there is no sustained load anywhere near steady-state that
- * would actually test how thin the margin is. Re-deriving a wider margin
+ * run, and — since #562 — by the live orchestrator's equities FALLBACK,
+ * which is touched only while Alpaca is already failing. Neither is a
+ * sustained load anywhere near steady-state that would actually test how
+ * thin the margin is; if a live stall ever runs long enough to make the
+ * fallback the steady-state source, this margin is the first thing to
+ * re-derive. Widening it up front
  * is a legitimate follow-up, not this ticket's scope — #510 is about
  * making the existing rate governable (env override, ceiling check),
  * not re-tuning it. Polygon is still a FALLBACK source per ADR-0001 with
@@ -479,10 +488,18 @@ export function resolveVenuePacing(env: NodeJS.ProcessEnv = process.env): VenueP
  * `SAMURAI_PACING_POLYGON_*`, via the same `resolveBucketPacing` every
  * `VenueKey` uses, so a malformed override for Alpaca/ccxt/IBKR can never
  * affect a Polygon-only construction, and a malformed
- * `SAMURAI_PACING_POLYGON_*` can never affect `resolveVenuePacing()` (and
- * therefore the live orchestrator, which never calls this function at all).
+ * `SAMURAI_PACING_POLYGON_*` can never affect `resolveVenuePacing()`.
  * See the `VenueKey` doc above for why this is a separate entry point
  * rather than one more key in `VENUE_KEYS`.
+ *
+ * **This function DOES have a live caller as of #562** — the previous
+ * sentence claiming the live orchestrator never calls it is no longer true.
+ * `orchestrator/production/data-failover.ts` calls it at boot for the
+ * equities OHLCV fallback's bucket, and calls it inside a try/catch: a
+ * malformed `SAMURAI_PACING_POLYGON_*` is logged at `warn` and
+ * `DEFAULT_POLYGON_PACING` is used instead, so the boot-time refusal this
+ * throw would otherwise cause cannot take a live run down over a variable
+ * that paces a degradation mitigation.
  */
 export function resolvePolygonPacing(env: NodeJS.ProcessEnv = process.env): TokenBucketConfig {
   return resolveBucketPacing(

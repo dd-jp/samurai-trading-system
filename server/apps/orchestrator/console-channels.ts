@@ -50,6 +50,7 @@ import type { CiiScoreProvider } from '../../providers/market-intelligence/index
 import type { HeartbeatChannel } from './heartbeat.js';
 import type { OrphanAlertChannel, OrphanGoVerdict } from './orphan-verdict-scan.js';
 import type { AnalystSkipAlert, AnalystSkipAlertChannel } from './production/analysts-adapter.js';
+import type { DataFailoverAlert, DataFailoverAlertChannel } from './production/data-failover.js';
 import {
   MI_NO_DATA_BY_NAME_COUNTER,
   MI_NO_DATA_BY_SUBCLASS_COUNTER,
@@ -425,6 +426,47 @@ export class LoggingMiCoverageAlertChannel implements MiCoverageAlertChannel {
         instrument: alert.instrument,
         asset_class: alert.asset_class,
         subclass: alert.subclass,
+        reported_at: alert.reported_at.toISOString(),
+      },
+    });
+  }
+}
+
+/**
+ * A live OHLCV failover (#562), written to the log at `warn`.
+ *
+ * `warn`, not `error`: by the time this is called the fallback vendor has
+ * already been asked, and the bars either arrived (degraded, and stamped with
+ * the serving vendor in `bars.source`) or the combined
+ * primary-and-fallback-both-failed error is on its way up the stack to be
+ * logged there. What this line records is that the run has left its primary
+ * data vendor — a fact an operator needs, not a stage failure.
+ *
+ * Same caveat as every other log-only stand-in, and #562's third criterion is
+ * explicit about it: this cannot page anyone.
+ * `TradeChannelDataFailoverAlert` (data-failover-alert-channel.ts) is the
+ * reachable-from-a-phone implementation `SAMURAI_ALERTS=telegram` (#322)
+ * selects.
+ */
+export class LoggingDataFailoverAlertChannel implements DataFailoverAlertChannel {
+  constructor(private readonly logger: Logger) {}
+
+  async postDataFailoverAlert(alert: DataFailoverAlert): Promise<void> {
+    this.logger.log({
+      trace_id: 'data-failover',
+      stage: 'orchestrator',
+      level: 'warn',
+      message:
+        `OHLCV failover on the ${alert.leg} leg: ${alert.primaryName} failed for ` +
+        `${alert.symbol} ${alert.timeframe} (${alert.primaryError}), so ${alert.fallbackName} ` +
+        'is serving those bars. SAMURAI_ALERTS=log-only cannot page anyone about this; use ' +
+        'SAMURAI_ALERTS=telegram for an unattended run.',
+      payload: {
+        leg: alert.leg,
+        instrument: alert.symbol,
+        timeframe: alert.timeframe,
+        primary: alert.primaryName,
+        fallback: alert.fallbackName,
         reported_at: alert.reported_at.toISOString(),
       },
     });

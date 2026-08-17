@@ -90,12 +90,18 @@
  * additionally logs a `FAILOVER:` line via the alerter passed to
  * `withOhlcvFailover` in `runFromEnvironment` below.
  *
- * **Residual gap, stated rather than implied away:** this failover covers
- * ONLY this script's fetch path. The LIVE orchestrator
- * (`server/apps/orchestrator/production.ts` -> `buildAlpacaDataSource`,
- * `./production/defaults.ts`) sources BOTH legs from Alpaca alone — crypto
- * included, not Coinbase/ccxt — and has no fallback at all. An Alpaca stall
- * during a live tick is not mitigated by this change.
+ * **The residual gap this doc used to record is CLOSED for equities
+ * (#562).** It read: this failover covers only this script's fetch path,
+ * and the live orchestrator sources both legs from Alpaca alone with no
+ * fallback. The live equities leg now fails over Alpaca -> Polygon through
+ * `FailoverDataSource`, built by
+ * `server/apps/orchestrator/production/data-failover.ts` and injected at
+ * `production.ts`'s `config.dataSource` seam, alerting on the live
+ * `SAMURAI_ALERTS` transport rather than on this script's stdout. What
+ * remains true: the live path fails over BARS only (never marks or quotes),
+ * and the live CRYPTO leg has no fallback — crypto left Samurai's scope on
+ * 2026-08-16 (ADR-0015's amendment), so the Coinbase -> Bitstamp pairing
+ * stays this script's alone.
  *
  * ## Resumable and idempotent
  *

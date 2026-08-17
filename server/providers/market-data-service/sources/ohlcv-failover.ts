@@ -4,10 +4,16 @@
  * wrapper composes both legs — Alpaca -> Polygon (equities) and Coinbase ->
  * Bitstamp (crypto) — see `backfill-market-data.ts`'s `runFromEnvironment`
  * for the real wiring, which is the composition root for this fetch path.
- * `production.ts`, the LIVE orchestrator, never imports this module — its
- * own equities/crypto legs both go through Alpaca only
- * (`buildAlpacaDataSource`) and have no failover; see
- * `backfill-market-data.ts`'s module doc for that residual gap.
+ * **The LIVE orchestrator reaches this module too, as of #562** — not
+ * directly, but through `FailoverDataSource`
+ * (`./failover-data-source.ts`), which adapts this same wrapper to the
+ * `DataSource` port and is constructed in `production.ts` by
+ * `buildFailoverDataSource` (`orchestrator/production/data-failover.ts`).
+ * Until then the live path had no failover at all, which is the residual
+ * gap `backfill-market-data.ts`'s module doc used to record. Live scope is
+ * the EQUITIES leg only (Alpaca -> Polygon): crypto left Samurai's scope on
+ * 2026-08-16 (ADR-0015's amendment), so the Coinbase -> Bitstamp pairing
+ * below stays backfill-only.
  *
  * **"Failure" here means a THROW from `primary`, not a short-but-successful
  * read.** `CoinbaseCandlesClient` and `AlpacaHttpDataClient` each already

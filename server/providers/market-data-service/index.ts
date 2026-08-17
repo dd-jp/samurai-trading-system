@@ -56,6 +56,16 @@ export type {
   CcxtTicker,
 } from './sources/ccxt-source.js';
 export { CcxtDataSource } from './sources/ccxt-source.js';
+// #562 — the live orchestrator's OHLCV failover. `withOhlcvFailover` itself
+// stays off the barrel (the backfill script imports it directly, as it always
+// has); what the composition root needs is the `DataSource`-shaped wrapper
+// built on it, its per-leg config types, and the Polygon client that serves
+// the equities fallback.
+export type {
+  DataSourceFallbackLeg,
+  FailoverDataSourceConfig,
+} from './sources/failover-data-source.js';
+export { FailoverDataSource } from './sources/failover-data-source.js';
 export type {
   IbkrClient,
   IbkrHistoricalBar,
@@ -69,6 +79,9 @@ export {
   NormalizingDataSource,
   RawFetchLimitExceededError,
 } from './sources/normalizing-data-source.js';
+export type { BarFetcher, FailoverAlerter, FailoverEvent } from './sources/ohlcv-failover.js';
+export type { PolygonBarsClientOptions } from './sources/polygon-bars-client.js';
+export { PolygonBarsClient } from './sources/polygon-bars-client.js';
 export { SqliteMarketDataStore } from './sqlite-market-data-store.js';
 export { closeTimeOf, isDailyTimeframe, timeframeToMs } from './timeframe.js';
 export type { TradingCalendar } from './trading-calendar.js';

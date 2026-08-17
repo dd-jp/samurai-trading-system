@@ -211,6 +211,7 @@ import type { AlertChannels } from './alert-transport.js';
 import {
   LoggingAnalystSkipAlertChannel,
   LoggingBreachAlertChannel,
+  LoggingDataFailoverAlertChannel,
   LoggingFlattenReconcileAlertChannel,
   LoggingHeartbeatChannel,
   LoggingLoosenNotificationChannel,
@@ -3293,6 +3294,13 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // `runThresholdClampScenario`/`probeExitBypassesLiveClamp` for the
       // actual enforcement probe, which drives the real classes directly.
       thresholdClampAlerts: { postThresholdClampAlert: () => {} },
+      // #562 — the fourteenth `ALERT_CHANNEL_FIELDS` member. Log-only like
+      // the rest of this attended, offline run. Nothing here fails over: the
+      // smoke run's data source is a fixture, so the failover wrapper the
+      // composition root builds is never reached with a throwing primary —
+      // see production.test.ts's composition-root case for the exercise that
+      // does reach it.
+      dataFailoverAlerts: new LoggingDataFailoverAlertChannel(logger),
     } satisfies Required<AlertChannels>;
 
     const orchestrator = await startFromEnvironment({

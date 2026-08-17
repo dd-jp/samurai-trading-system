@@ -12,6 +12,7 @@ import {
   TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR,
 } from './alert-transport.js';
 import { TradeChannelBreachAlert } from './breach-alert-channel.js';
+import { TradeChannelDataFailoverAlert } from './data-failover-alert-channel.js';
 import { Heartbeat } from './heartbeat.js';
 import { TradeChannelHeartbeat } from './heartbeat-channel.js';
 import { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
@@ -280,6 +281,9 @@ describe('buildAlertChannels — telegram', () => {
     expect(channels.residualExposureAlerts).toBeInstanceOf(TradeChannelResidualExposureAlert);
     expect(channels.breachAlerts).toBeInstanceOf(TradeChannelBreachAlert);
     expect(channels.thresholdClampAlerts).toBeInstanceOf(TradeChannelThresholdClampAlert);
+    // #562 — the fourteenth field. The criterion it exists for is that a live
+    // OHLCV failover reaches the phone, not the script output #560 settled for.
+    expect(channels.dataFailoverAlerts).toBeInstanceOf(TradeChannelDataFailoverAlert);
   });
 
   /**

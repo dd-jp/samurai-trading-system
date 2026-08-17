@@ -52,6 +52,7 @@ import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/
 import { DebateBarDecisionGate } from './decision-bar-gate.js';
 import { paperStartingProfile } from './paper-profile.js';
 import { MIN_RETURN_OBSERVATIONS } from './production/daily-equity-metrics-source.js';
+import type { DataFailoverAlert } from './production/data-failover.js';
 import { buildPersistence } from './production/direct-bind.js';
 import { MIN_TICKS_INSIDE_FLATTEN_WINDOW } from './production/flatten-tick-coupling.js';
 import {
@@ -3479,6 +3480,128 @@ describe('buildProductionOrchestrator', () => {
           calendar,
         ),
       ).not.toThrow();
+    });
+  });
+
+  /**
+   * #562 — the LIVE orchestrator's OHLCV failover, asserted THROUGH
+   * `buildProductionOrchestrator` rather than against `FailoverDataSource` in
+   * isolation (which `failover-data-source.test.ts` covers).
+   *
+   * That distinction is the whole point of the issue: #560 landed a working
+   * `withOhlcvFailover` and wired it into the backfill script only, so the
+   * live path kept a single vendor with no catch, no second source and no
+   * alert. A unit test of the wrapper would have stayed green throughout.
+   * These cases fail if the composition root stops constructing one.
+   *
+   * Driven through `orchestrator.marketData`, the real `MarketDataServiceImpl`
+   * the root built, against a COLD `:memory:` store — a warm store would
+   * satisfy `getBars` from the Tier-2 cache and never reach the source at all,
+   * which would pass for the wrong reason.
+   */
+  describe('live OHLCV failover (#562) — from the composition root', () => {
+    const EQUITIES_UNIVERSE = [{ asset: 'SPY', asset_class: 'stocks' as const }];
+    const WINDOW = { timeframe: '1h', lookback: 2 } as const;
+
+    const FALLBACK_BAR: Bar = {
+      instrument: 'SPY',
+      timeframe: '1h',
+      open_time: new Date('2026-07-29T10:00:00.000Z'),
+      close_time: new Date('2026-07-29T11:00:00.000Z'),
+      open: 100,
+      high: 101,
+      low: 99,
+      close: 100.5,
+      volume: 1_000,
+      source: 'polygon',
+    };
+
+    /** An Alpaca market-data client that cannot answer — the stall being survived. */
+    function stallingAlpacaClient(): NonNullable<ProductionConfig['alpacaDataClient']> {
+      return {
+        getBars: vi.fn(async (): Promise<AlpacaBar[]> => {
+          throw new Error('alpaca 503');
+        }),
+        getLatestQuote: vi.fn(
+          async (): Promise<AlpacaQuote> => ({ t: START.toISOString(), ap: 100, bp: 99 }),
+        ),
+      };
+    }
+
+    it('serves equities bars from the fallback vendor when the primary throws', async () => {
+      const fallback = vi.fn(async () => [FALLBACK_BAR]);
+      const orchestrator = buildProductionOrchestrator(
+        stubConfig(db, {
+          universe: EQUITIES_UNIVERSE,
+          alpacaDataClient: stallingAlpacaClient(),
+          equitiesFallbackBarFetcher: fallback,
+          dataFailoverAlerts: { postDataFailoverAlert: vi.fn(async () => undefined) },
+        }),
+      );
+
+      const bars = await orchestrator.marketData.getBars('SPY', WINDOW, START);
+
+      // Read back through the store the service writes to, so this asserts
+      // what a stage would actually see on that tick.
+      expect(bars.map((bar) => bar.source)).toEqual(['polygon']);
+      expect(fallback).toHaveBeenCalledTimes(1);
+    });
+
+    it('raises the failover on the injected alert channel, not only the log', async () => {
+      const posted: DataFailoverAlert[] = [];
+      const orchestrator = buildProductionOrchestrator(
+        stubConfig(db, {
+          universe: EQUITIES_UNIVERSE,
+          alpacaDataClient: stallingAlpacaClient(),
+          equitiesFallbackBarFetcher: vi.fn(async () => [FALLBACK_BAR]),
+          dataFailoverAlerts: {
+            postDataFailoverAlert: async (alert) => {
+              posted.push(alert);
+            },
+          },
+        }),
+      );
+
+      await orchestrator.marketData.getBars('SPY', WINDOW, START);
+
+      // The channel, not stderr — `SAMURAI_ALERTS=telegram` binds
+      // `TradeChannelDataFailoverAlert` into this exact slot
+      // (alert-transport.ts), so reaching the port is what makes the alert
+      // reachable from a phone during an unattended soak.
+      expect(posted).toHaveLength(1);
+      expect(posted[0]).toMatchObject({
+        leg: 'equities',
+        symbol: 'SPY',
+        timeframe: '1h',
+        primaryName: 'alpaca',
+        fallbackName: 'polygon',
+        primaryError: 'alpaca 503',
+      });
+    });
+
+    it('leaves an injected config.dataSource unwrapped', async () => {
+      // The seam's own contract: a caller that brought its own source has
+      // already decided where bars come from, and the root must not silently
+      // put a second vendor behind it.
+      const fallback = vi.fn(async () => [FALLBACK_BAR]);
+      const injected = {
+        fetchBars: vi.fn(async (): Promise<Bar[]> => [FALLBACK_BAR]),
+        fetchMark: vi.fn(async () => {
+          throw new Error('unreachable — this case never marks');
+        }),
+      };
+      const orchestrator = buildProductionOrchestrator(
+        stubConfig(db, {
+          universe: EQUITIES_UNIVERSE,
+          dataSource: injected,
+          equitiesFallbackBarFetcher: fallback,
+        }),
+      );
+
+      await orchestrator.marketData.getBars('SPY', WINDOW, START);
+
+      expect(injected.fetchBars).toHaveBeenCalledTimes(1);
+      expect(fallback).not.toHaveBeenCalled();
     });
   });
 

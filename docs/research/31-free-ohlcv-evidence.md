@@ -36,6 +36,13 @@ Decisions drawn from this evidence are in [`30-data-vendor-decisions.md`](30-dat
 
 > **Hard dependency.** Polygon-free is 2 years deep at 5 calls/min, so it is only valid in an **increment-only** role. That requires the persistent-`dbPath` and skip-covered-window behaviour, which **does not exist yet** — `run-stage2.ts` passes no `dbPath`, leaving the store `:memory:`. Until that lands, equities failover produces wrong results rather than degraded ones.
 
+### Two probes #562 added (2026-08-17, live endpoints, SPY)
+
+Both were named as unverified by #560/#562 and both are now answered. Run against the live Alpaca and Polygon APIs while wiring the live orchestrator's failover.
+
+- **EST (winter) daily stamping AGREES.** 2026-01-05 → 2026-01-09, `1Day`, `adjustment=raw` / `adjusted=false`: Alpaca and Polygon both stamp every bar at **05:00Z** — 00:00 ET, i.e. both anchor a daily bar to ET midnight and both follow the DST shift (the earlier EDT sample was 04:00Z on both). So the `(instrument, timeframe, open_time)` primary key cannot take the same trading day as two rows across the vendor boundary in either season, and `getADV()` cannot double-count. Volume matched **exactly** on four of the five days and differed by 0.24% on the fifth (Alpaca lower on that day) — well inside the ~8% worst case recorded above.
+- **Polygon free tier DOES serve hourly aggregates.** `range/1/hour`, 2026-08-10 → 2026-08-14: 80 bars, HTTP 200, no tier error. This mattered because the live tick path runs on `1h` bars — an equities fallback that could not serve them would be inert for the timeframe that matters. ⚠️ **Caveat, unresolved:** Polygon's hourly series runs 08:00Z–23:00Z, i.e. it **includes extended-hours bars**, where Alpaca's `1h` bars on the configured feed do not. So a fallback-served `1h` window can carry pre/post-market bars an Alpaca-served window would not. Detectable after the fact (`bars.source`) and not corrected anywhere today.
+
 **Rejected as fallbacks:** CoinGecko — fails three ways (365-day window, 4-day granularity beyond it, and no volume column at all); Gemini — 1 year; TradingView — not a data source; **Yahoo — split-adjusted**, which breaks append-only caching. The Yahoo defect was found twice independently, on TSLA's 3:1 and AAPL's 4:1.
 
 ## What the exercise actually changed
