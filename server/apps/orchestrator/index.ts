@@ -86,6 +86,10 @@ export {
 } from './alert-transport.js';
 export { TradeChannelAnalystSkipAlert } from './analyst-skip-alert-channel.js';
 export { TradeChannelBreachAlert } from './breach-alert-channel.js';
+export {
+  DebateBarDecisionGate,
+  type DecisionGate,
+} from './decision-bar-gate.js';
 export { digest } from './digest.js';
 export { Heartbeat, type HeartbeatChannel } from './heartbeat.js';
 export { TradeChannelHeartbeat } from './heartbeat-channel.js';

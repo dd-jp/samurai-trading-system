@@ -71,6 +71,12 @@ export const PIPELINE_MAX_LANES = 24;
  * not-yet-built stage instead would have left a lie that type-checks.
  */
 const RUNTIME_STAGES: Record<TickStage, true> = {
+  // #743's tick-path stage. Present so this record keeps compiling against the
+  // orchestrator's `TickStage` union (the property this object exists for);
+  // never looked up here, because the lane view iterates `PIPELINE_STAGES`,
+  // which deliberately does not include the tick path — see
+  // `getPipelineActivity`'s live-row filter for where that exclusion lives.
+  position_check: true,
   analysts: true,
   debate: true,
   trader: true,

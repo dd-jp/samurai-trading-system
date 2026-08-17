@@ -1,19 +1,52 @@
 /**
- * Tick Runner (ticket #94, audit/log wiring #95) — see
- * docs/specs/orchestrator-spec.md (Module: Tick Runner, Module: Structured
- * Logging & Audit Spine).
+ * Tick Runner (ticket #94, audit/log wiring #95, tick/decision split #743) —
+ * see docs/specs/orchestrator-spec.md (Module: Tick Runner, Module:
+ * Structured Logging & Audit Spine).
  *
- * Drives one instrument's pass: Analysts -> Debate -> Trader -> Risk ->
- * Verdict -> (on `go`) Execution. A straight-line sequential chain over the
- * already-specced stage contracts — no stage decision logic lives here.
+ * Drives one instrument's pass, on one of two cadences:
  *
- * Four short-circuit exits, each returning the stage that ended the pass:
+ *   tick pass (every tick, τ = 2 min): the position-facing exit check — the
+ *     Trader's exit-only entry point (positions, mark, flatten window), then
+ *     Risk -> Verdict -> Execution if it produced an exit intent. No
+ *     analysts, no debate: the exit path is reachable without either, by
+ *     construction (`TickSteps.exitCheck`'s input carries neither).
+ *
+ *   decision pass (ctx.decision_bar set — once per debate bar): Analysts ->
+ *     Debate -> Trader -> Risk -> Verdict -> (on `go`) Execution. A
+ *     straight-line sequential chain over the already-specced stage
+ *     contracts — no stage decision logic lives here.
+ *
+ * Exactly ONE Trader entry point runs per pass. A decision pass does not also
+ * run the tick path's exit check, because the Trader's own routing evaluates
+ * the flatten window FIRST on its holding branch (`decide.ts`, #668) — so the
+ * flatten is evaluated on every pass through whichever entry point the pass
+ * runs, and running both would emit the same-keyed exit twice and write two
+ * audit rows per tail stage in one trace. The one pass this can cost a
+ * flatten on is a decision pass that short-circuits before Trader (a quorum
+ * skip); the next tick, two minutes later, is a tick pass and fires it.
+ * Before the split, a quorum skip lost the flatten for a full tick interval
+ * in exactly the same way — this is not a new exposure, and it is now bounded
+ * by τ rather than by the old everything-is-a-decision cadence.
+ *
+ * Short-circuit exits, each returning the stage that ended the pass:
+ *   position_check — null exit intent (the common case: ~29 of 30 passes)
  *   analysts — empty view set (quorum skip, analysts-spec.md story 21)
  *   trader   — null intent (no-trade; `Trader.decide` is `OrderIntent | null`)
  *   risk     — `rejected`
  *   verdict  — `no_go`
- * Execution is unreachable from all four, which is the gate-vs-actor
+ * Execution is unreachable from all of these, which is the gate-vs-actor
  * separation (orchestrator-spec.md story 7) this ticket must guarantee.
+ *
+ * The bar coordinate (#687/#743): on a decision pass, `ctx.decision_bar` is
+ * the single source — the Debate step keys `debate_id` on it and the Trader
+ * inherits it via `DebateResult.bar_timestamp`. The runner ASSERTS the
+ * inheritance: a `DebateResult` whose `bar_timestamp` disagrees with the
+ * gate's bar logs a loud `decision bar divergence` warning, because the
+ * failure mode of that disagreement is a suppressed entry — an intent keyed
+ * to a bar another intent already took — which otherwise presents as a
+ * healthy no-trade tick. On a tick pass the runner floors the clock once and
+ * hands the result to the exit check; no stage below derives a bar of its
+ * own.
  *
  * Every stage actually reached emits exactly one `logger.log` line and one
  * `auditLog.record` row, both carrying `trace_id` — a short-circuited stage
@@ -33,6 +66,8 @@
  * crash is invisible.
  */
 import type { Signal } from '../../pipeline/analysts/index.js';
+import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../../pipeline/debate-engine/index.js';
+import type { OrderIntent } from '../../shared/index.js';
 import { digest } from './digest.js';
 import type { TickContext, TickOutcome, TickRunner, TickStage, TickSteps } from './types.js';
 
@@ -89,6 +124,76 @@ export class SequentialTickRunner implements TickRunner {
       });
     };
 
+    /**
+     * The shared Risk -> Verdict -> Execution tail. Both paths converge here
+     * once a Trader entry point produced an intent, so the gate-vs-actor
+     * separation (Execution only on a Verdict `go`) is enforced in exactly
+     * one place. `extras` lets the tick path stamp `flatten_fired` onto
+     * whichever terminal outcome the tail reaches.
+     */
+    const runIntentTail = async (
+      intent: OrderIntent,
+      extras: Pick<TickOutcome, 'flatten_fired'>,
+    ): Promise<TickOutcome> => {
+      markStage('risk');
+      const riskInput = { trace_id, intent, clock };
+      const riskDecision = await this.steps.risk(riskInput);
+      record('risk', riskDecision.status, riskInput, riskDecision);
+      this.reportAdvisoryWarnings(instrument, riskDecision.warnings, ctx);
+      if (riskDecision.status === 'rejected') {
+        currentTickStore.delete(instrument);
+        return { trace_id, final_stage: 'risk', ...extras };
+      }
+
+      markStage('verdict');
+      const verdictInput = { trace_id, risk_decision: riskDecision, clock };
+      const verdict = await this.steps.verdict(verdictInput);
+      record('verdict', verdict.status, verdictInput, verdict);
+      if (verdict.status !== 'go') {
+        currentTickStore.delete(instrument);
+        return { trace_id, final_stage: 'verdict', verdict_status: 'no_go', ...extras };
+      }
+
+      markStage('execution');
+      const executionResult = await this.steps.execution(verdict);
+      record('execution', executionResult.status, verdict, executionResult);
+
+      currentTickStore.delete(instrument);
+      return {
+        trace_id,
+        final_stage: 'execution',
+        verdict_status: 'go',
+        execution_result: executionResult,
+        ...extras,
+      };
+    };
+
+    const decisionBar = ctx.decision_bar;
+    if (decisionBar === undefined) {
+      // ── TICK PASS (#743): the cheap, position-facing path. ────────────────
+      // No analysts, no debate — the exit check's input carries neither, so an
+      // exit CANNOT read analyst output (constraint 4 of the split). The bar
+      // is floored HERE, once, onto the same grid the decision gate uses; the
+      // exit intent's idempotency key dedupes on it, so every tick-pass
+      // flatten inside one bar re-keys to the same order.
+      markStage('position_check');
+      const bar = floorToBar(clock.now(), DEBATE_BAR_TIMEFRAME_MS);
+      const exitInput = { trace_id, instrument, bar, clock };
+      const exitIntent = await this.steps.exitCheck(exitInput);
+      record(
+        'position_check',
+        exitIntent === null ? 'no_exit_due' : 'flatten',
+        exitInput,
+        exitIntent,
+      );
+      if (exitIntent === null) {
+        currentTickStore.delete(instrument);
+        return { trace_id, final_stage: 'position_check' };
+      }
+      return runIntentTail(exitIntent, { flatten_fired: true });
+    }
+
+    // ── DECISION PASS: the full chain, once per debate bar. ─────────────────
     markStage('analysts');
     const analystsInput = { trace_id, signal, clock };
     const views = await this.steps.analysts(analystsInput);
@@ -102,9 +207,44 @@ export class SequentialTickRunner implements TickRunner {
     // `asset_class` comes straight off the `Signal` the scheduler produced
     // (#388): the Debate Engine's rate-limit budget and latency budget are
     // both keyed on it, and this is the only layer that holds it as fact.
-    const debateInput = { trace_id, instrument, asset_class: signal.asset_class, views, clock };
+    // `bar` is the gate's — the single derivation for this pass (#687/#743).
+    const debateInput = {
+      trace_id,
+      instrument,
+      asset_class: signal.asset_class,
+      views,
+      clock,
+      bar: decisionBar.open_time,
+    };
     const debate = await this.steps.debate(debateInput);
     record('debate', debate.direction, debateInput, debate);
+
+    // BAR-IDENTITY ASSERTION (#743, acceptance: a suppressed entry must be
+    // observable). The Trader keys its intent on `debate.bar_timestamp`; if
+    // that ever disagrees with the gate's bar, the intent lands on a bar
+    // coordinate another intent may already hold and is suppressed downstream
+    // as a duplicate — which, without this line, reads exactly like a healthy
+    // no-trade tick. The pass still proceeds: Verdict's staleness gate is the
+    // fail-safe refusal, this is the audible record that it happened.
+    if (debate.bar_timestamp.getTime() !== decisionBar.open_time.getTime()) {
+      logger.log({
+        trace_id,
+        stage: 'debate',
+        level: 'warn',
+        message:
+          `debate: ${instrument} — decision bar divergence: the gate opened bar ` +
+          `${decisionBar.open_time.toISOString()} but the debate result claims ` +
+          `${debate.bar_timestamp.toISOString()}. Any intent this pass produces will key to ` +
+          "the debate's bar, not the gate's, and may be suppressed as a duplicate — a " +
+          'suppressed entry is otherwise indistinguishable from a no-trade tick (#687/#743).',
+        payload: {
+          instrument,
+          gate_bar: decisionBar.open_time.toISOString(),
+          debate_bar: debate.bar_timestamp.toISOString(),
+          debate_id: debate.debate_id,
+        },
+      });
+    }
 
     markStage('trader');
     const traderInput = { trace_id, instrument, debate, clock };
@@ -115,36 +255,7 @@ export class SequentialTickRunner implements TickRunner {
       return { trace_id, final_stage: 'trader' };
     }
 
-    markStage('risk');
-    const riskInput = { trace_id, intent, clock };
-    const riskDecision = await this.steps.risk(riskInput);
-    record('risk', riskDecision.status, riskInput, riskDecision);
-    this.reportAdvisoryWarnings(instrument, riskDecision.warnings, ctx);
-    if (riskDecision.status === 'rejected') {
-      currentTickStore.delete(instrument);
-      return { trace_id, final_stage: 'risk' };
-    }
-
-    markStage('verdict');
-    const verdictInput = { trace_id, risk_decision: riskDecision, clock };
-    const verdict = await this.steps.verdict(verdictInput);
-    record('verdict', verdict.status, verdictInput, verdict);
-    if (verdict.status !== 'go') {
-      currentTickStore.delete(instrument);
-      return { trace_id, final_stage: 'verdict', verdict_status: 'no_go' };
-    }
-
-    markStage('execution');
-    const executionResult = await this.steps.execution(verdict);
-    record('execution', executionResult.status, verdict, executionResult);
-
-    currentTickStore.delete(instrument);
-    return {
-      trace_id,
-      final_stage: 'execution',
-      verdict_status: 'go',
-      execution_result: executionResult,
-    };
+    return runIntentTail(intent, {});
   }
 
   /**

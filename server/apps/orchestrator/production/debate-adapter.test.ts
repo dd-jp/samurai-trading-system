@@ -115,6 +115,7 @@ describe('buildDebateStep', () => {
       views,
       asset_class: ASSET_CLASS,
       clock: CLOCK,
+      bar: NOW,
     });
 
     expect(result.converged).toBe(true);
@@ -127,14 +128,16 @@ describe('buildDebateStep', () => {
     expect(result.position.length).toBeGreaterThan(0);
   });
 
-  it('floors a mid-bar tick to its bar in BOTH debate_id and bar_timestamp (#393)', async () => {
-    // Every other test in this file runs `CLOCK` at 14:00:00Z — already a bar
-    // boundary, so flooring is a no-op there and asserting against `NOW`
-    // passes whether or not `buildDebateStep` floors at all. This test uses a
-    // clock deliberately OFF the boundary, so deleting the `floorToBar` call
-    // in the adapter fails here rather than only in `floorToBar`'s own unit
-    // test. That gap is what the reviewers on #448 caught.
-    const midBar = new Date('2026-07-28T14:32:07Z');
+  it('keys the debate to the PASSED bar, not a clock re-floor, even across a bar boundary (#743, was #393)', async () => {
+    // Since #743 the adapter no longer floors `clock.now()` — the decision
+    // gate claims the bar and passes it down, and this test is the one that
+    // fails if anyone reintroduces a clock re-floor. The clock is deliberately
+    // in the NEXT bar (the gate claimed at 14:5x, the pass straddled 15:00):
+    // a re-floor computes 15:00:00 and diverges from the passed 14:00:00 in
+    // both `debate_id` and `bar_timestamp`. (#393's original concern — the
+    // row holding the raw tick time — is covered a fortiori: the clock reads
+    // 15:05:09 and the row must still say 14:00:00.)
+    const straddled = new Date('2026-07-28T15:05:09Z');
     const bar = new Date('2026-07-28T14:00:00Z');
 
     const db = openSharedStore(':memory:');
@@ -147,25 +150,25 @@ describe('buildDebateStep', () => {
       instrument: 'AAPL',
       views,
       asset_class: ASSET_CLASS,
-      clock: { now: () => midBar },
+      clock: { now: () => straddled },
+      bar,
     });
 
-    // The id is hashed over the FLOORED bar, not the tick time. This is the
+    // The id is hashed over the gate's bar, not the tick time. This is the
     // half that makes replay-from-log (ADR-0003 §2) reachable: a replay
     // stepping bar closes computes 14:00:00 and must land on the row a live
-    // tick at 14:32:07 wrote.
+    // pass that finished at 15:05:09 wrote.
     expect(result.debate_id).toBe(computeDebateId('AAPL', bar, views));
 
     const row = store.getByDebateId(result.debate_id);
     expect(row?.bar_timestamp.toISOString()).toBe(bar.toISOString());
-    // ...and `created_at` still records the tick, which is the distinction
-    // #393 was about: before the fix both columns held 14:32:07.
-    expect(row?.created_at.toISOString()).toBe(midBar.toISOString());
+    // ...and `created_at` still records the wall-clock write instant, which is
+    // the distinction #393 was about: the two columns mean different things.
+    expect(row?.created_at.toISOString()).toBe(straddled.toISOString());
     expect(row?.trace_id).toBe('trace-mid-bar');
-    // #687: and the SAME floored bar is carried forward to the Trader on the
-    // result, so the intent's idempotency key lands on the coordinate
-    // `debate_id` was hashed over even if the Trader runs after 15:00. This is
-    // the one place in the system that floors a clock read for the bar grid.
+    // #687: and the SAME bar is carried forward to the Trader on the result,
+    // so the intent's idempotency key lands on the coordinate `debate_id` was
+    // hashed over even though the Trader runs after 15:00.
     expect(result.bar_timestamp.toISOString()).toBe(bar.toISOString());
   });
 
@@ -187,6 +190,7 @@ describe('buildDebateStep', () => {
       views,
       asset_class: ASSET_CLASS,
       clock: { now: () => new Date('2026-07-28T14:02:00Z') },
+      bar,
     });
 
     const replayed = await step({
@@ -195,6 +199,7 @@ describe('buildDebateStep', () => {
       views,
       asset_class: ASSET_CLASS,
       clock: { now: () => new Date('2026-07-28T14:57:31Z') },
+      bar,
     });
 
     expect(replayed.debate_id).toBe(first.debate_id);
@@ -224,6 +229,7 @@ describe('buildDebateStep', () => {
         views,
         asset_class: ASSET_CLASS,
         clock: CLOCK,
+        bar: NOW,
       });
 
     const seededStore = new InMemoryDebateLogStore();
@@ -259,6 +265,7 @@ describe('buildDebateStep', () => {
       views: [makeView()],
       asset_class: ASSET_CLASS,
       clock: CLOCK,
+      bar: NOW,
     });
 
     const count = db
@@ -293,6 +300,7 @@ describe('buildDebateStep', () => {
       views: [makeView()],
       asset_class: ASSET_CLASS,
       clock: CLOCK,
+      bar: NOW,
     });
 
     expect(result.converged).toBe(false);
@@ -321,6 +329,7 @@ describe('buildDebateStep', () => {
         views,
         asset_class: ASSET_CLASS,
         clock: CLOCK,
+        bar: NOW,
       }),
     ).rejects.toThrow('llm transport blew up mid-debate');
 
@@ -355,6 +364,7 @@ describe('buildDebateStep', () => {
       views: [makeView()],
       asset_class: ASSET_CLASS,
       clock: CLOCK,
+      bar: NOW,
     };
 
     const first = await step(input);
@@ -391,6 +401,79 @@ describe('buildDebateStep', () => {
     expect(entries.some((entry) => entry.message.includes('already has a debate_log'))).toBe(false);
   });
 
+  it('replays the bar even when re-entered with DRIFTED views — the bar axis #617 misses (#781)', async () => {
+    // The #617 short-circuit above is CONTENT-addressed: it only holds while
+    // re-computed views are byte-identical within a bar, a premise #742 broke
+    // by moving the technical read to 5m bars. This is the test the old
+    // identical-views guard could not be: the second entry into the SAME bar
+    // carries different views — a different content hash — and must STILL not
+    // run a second debate. Its two callers are a forced-open decision gate
+    // (mutation) and a rescinded claim retried after a crash whose first
+    // attempt had already persisted its row.
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    const { logger, entries } = recordingLogger();
+
+    let llmCalls = 0;
+    const counting = fakeLlmClient();
+    const countingClient: LlmClient = {
+      complete(request) {
+        llmCalls++;
+        return counting.complete(request);
+      },
+    };
+
+    const step = buildDebateStep(countingClient, store, unlimited(), UNCAPPED_SPEND, logger);
+
+    const first = await step({
+      trace_id: 'trace-1',
+      instrument: 'AAPL',
+      views: [makeView({ key_points: ['RSI 61.2 on the 5m read'] })],
+      asset_class: ASSET_CLASS,
+      clock: CLOCK,
+      bar: NOW,
+    });
+    const callsAfterFirst = llmCalls;
+    expect(callsAfterFirst).toBeGreaterThan(0);
+
+    // Same instrument, same bar — but the 5m technical read moved on, so the
+    // views (and their content hash) differ. Pre-#743 this ran a full second
+    // debate and handed the Trader a second confidence sample for the bar.
+    const second = await step({
+      trace_id: 'trace-1-reentry',
+      instrument: 'AAPL',
+      views: [makeView({ key_points: ['RSI 63.8 on the 5m read'] })],
+      asset_class: ASSET_CLASS,
+      clock: CLOCK,
+      bar: NOW,
+    });
+
+    expect(llmCalls).toBe(callsAfterFirst);
+    // The bar resolved to the FIRST debate's identity and content — the memo
+    // dedupes on the debate_id key through the same getByDebateId replay path
+    // as #617, never on a second bar-keyed store lookup.
+    expect(second.debate_id).toBe(first.debate_id);
+    expect(second.confidence).toBe(first.confidence);
+    const count = db.prepare('SELECT COUNT(*) AS n FROM debate_log').get() as { n: number };
+    expect(count.n).toBe(1);
+    expect(entries.some((entry) => entry.message.includes('already resolved to a debate'))).toBe(
+      true,
+    );
+
+    // A NEW bar is a genuinely new decision: the memo must not leak across.
+    const nextBar = new Date(NOW.getTime() + 3_600_000);
+    const third = await step({
+      trace_id: 'trace-2',
+      instrument: 'AAPL',
+      views: [makeView({ key_points: ['RSI 55.0 on the 5m read'] })],
+      asset_class: ASSET_CLASS,
+      clock: { now: () => nextBar },
+      bar: nextBar,
+    });
+    expect(llmCalls).toBeGreaterThan(callsAfterFirst);
+    expect(third.debate_id).not.toBe(first.debate_id);
+  });
+
   it('re-runs the debate when the persisted row predates the replay fields', async () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteDebateLogStore(db);
@@ -413,6 +496,7 @@ describe('buildDebateStep', () => {
       views,
       asset_class: ASSET_CLASS,
       clock: CLOCK,
+      bar: NOW,
     });
 
     expect(result.debate_id).toBe(debate_id);
@@ -445,6 +529,7 @@ describe('buildDebateStep', () => {
       views,
       asset_class: ASSET_CLASS,
       clock: CLOCK,
+      bar: NOW,
     });
 
     expect(result.debate_id).toBe(debate_id);
@@ -508,6 +593,7 @@ describe('buildDebateStep', () => {
       views,
       asset_class: ASSET_CLASS,
       clock: CLOCK,
+      bar: NOW,
     });
 
     expect(loser.debate_id).toBe(debate_id);
@@ -533,6 +619,7 @@ describe('buildDebateStep', () => {
       views: [makeView()],
       asset_class: ASSET_CLASS,
       clock: CLOCK,
+      bar: NOW,
     });
 
     const trade: ClosedTrade = {
@@ -624,6 +711,7 @@ describe('buildDebateStep latency budget (#374)', () => {
       views: [makeView()],
       asset_class: 'stocks',
       clock: CLOCK,
+      bar: NOW,
     });
 
     // Nothing completed a round, so this is the low-confidence fallback —
@@ -655,6 +743,7 @@ describe('buildDebateStep latency budget (#374)', () => {
       views,
       asset_class: 'stocks',
       clock: CLOCK,
+      bar: NOW,
     });
 
     await vi.advanceTimersByTimeAsync(60_000);
@@ -692,6 +781,7 @@ describe('buildDebateStep latency budget (#374)', () => {
       views: [makeView()],
       asset_class: 'crypto',
       clock: CLOCK,
+      bar: NOW,
     });
 
     // 30s, not 60s — the per-asset-class lookup #374 called out as the
@@ -719,6 +809,7 @@ describe('buildDebateStep latency budget (#374)', () => {
       views: [makeView()],
       asset_class: 'stocks',
       clock: CLOCK,
+      bar: NOW,
     });
 
     await vi.advanceTimersByTimeAsync(60_000);
@@ -814,6 +905,7 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
       views,
       asset_class: ASSET_CLASS,
       clock: CLOCK,
+      bar: NOW,
     });
 
     const rows = spendRows(db);
@@ -834,6 +926,7 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
       views,
       asset_class: ASSET_CLASS,
       clock: CLOCK,
+      bar: NOW,
     });
 
     // The acceptance criterion, expressed as the SQL an operator would write:
@@ -871,6 +964,7 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
       views,
       asset_class: ASSET_CLASS,
       clock: CLOCK,
+      bar: NOW,
     });
 
     expect(result.direction).toBe('bullish');
@@ -900,6 +994,7 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
       views: [makeView(), makeView({ analyst_id: 'sentiment-1', direction: 'bearish' })],
       asset_class: ASSET_CLASS,
       clock: CLOCK,
+      bar: NOW,
     });
 
     expect(result.converged).toBe(true);
@@ -943,6 +1038,7 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
         views,
         asset_class: ASSET_CLASS,
         clock: CLOCK,
+        bar: NOW,
       }),
     ).rejects.toThrow('llm transport blew up mid-debate');
 
