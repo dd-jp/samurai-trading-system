@@ -206,6 +206,27 @@ describe('MiCoverageMonitor', () => {
     expect(monitor.degraded).toBe(true);
     expect(monitor.missingInstruments).toEqual(['3USL']);
   });
+
+  /**
+   * `degraded` is a live read and clears on recovery (by design, matching the
+   * fail-open posture). `everDegraded` answers the different question an
+   * end-of-run report needs: a coverage hole that opened and fully recovered
+   * before anything inspected the monitor must still be visible in a
+   * post-run summary, or a soak with hours of degraded coverage reports
+   * "never degraded" the moment the gap happens to have closed by teardown.
+   */
+  it('everDegraded latches true on the first miss and never clears, unlike the live degraded flag', () => {
+    const monitor = new MiCoverageMonitor();
+    expect(monitor.everDegraded).toBe(false);
+
+    monitor.observe('3USL', false);
+    expect(monitor.everDegraded).toBe(true);
+    expect(monitor.degraded).toBe(true);
+
+    monitor.observe('3USL', true);
+    expect(monitor.degraded).toBe(false);
+    expect(monitor.everDegraded).toBe(true);
+  });
 });
 
 function buildDeps(overrides: {

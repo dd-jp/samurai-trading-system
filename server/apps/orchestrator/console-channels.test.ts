@@ -2,6 +2,8 @@ import {
   ConsoleApprovalChannel,
   LoggingFlattenOverfillAlertChannel,
   LoggingHeartbeatChannel,
+  LoggingMiCoverageAlertChannel,
+  LoggingMiCoverageTelemetry,
   LoggingOrphanAlertChannel,
   LoggingUnpricedFillAlertChannel,
   ParkedCiiScoreProvider,
@@ -42,6 +44,50 @@ describe('LoggingOrphanAlertChannel', () => {
     // An orphaned `go` is the one state that can hide a real position.
     expect(logger.entries[0]?.level).toBe('error');
     expect(logger.entries[0]?.trace_id).toBe('trace-1');
+  });
+});
+
+describe('LoggingMiCoverageTelemetry (#752)', () => {
+  it('records the per-name and per-subclass NO_DATA counters in the log payload', () => {
+    const logger = makeLogger();
+
+    new LoggingMiCoverageTelemetry(logger).noDataObserved({
+      trace_id: 'trace-1',
+      instrument: '3USL',
+      asset_class: 'stocks',
+      subclass: 'index_etp_3x',
+      reported_at: new Date('2026-08-17T09:00:00Z'),
+    });
+
+    expect(logger.entries[0]).toMatchObject({
+      level: 'warn',
+      payload: {
+        counter_by_name: 'mi_no_data_by_name',
+        counter_by_subclass: 'mi_no_data_by_subclass',
+        instrument: '3USL',
+        subclass: 'index_etp_3x',
+      },
+    });
+  });
+});
+
+describe('LoggingMiCoverageAlertChannel (#752)', () => {
+  // AC6 requires log-only alerting to be OBSERVABLY non-satisfying, not
+  // silently accepted as if it had reached someone. This pins the exact
+  // sentence a reviewer or an operator reading stdout depends on.
+  it('states in its own message that log-only cannot page anyone', async () => {
+    const logger = makeLogger();
+
+    await new LoggingMiCoverageAlertChannel(logger).postCoverageAlert({
+      instrument: 'BTC-USD',
+      asset_class: 'crypto',
+      subclass: 'unclassified',
+      reported_at: new Date('2026-08-17T09:00:00Z'),
+    });
+
+    expect(logger.entries[0]?.level).toBe('warn');
+    expect(logger.entries[0]?.message).toContain('SAMURAI_ALERTS=log-only cannot page anyone');
+    expect(logger.entries[0]?.message).toContain('BTC-USD');
   });
 });
 

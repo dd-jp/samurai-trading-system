@@ -157,14 +157,29 @@ function shouldAlertAt(consecutive: number): boolean {
  * state, not a latch: a run that recovers coverage is not "degraded"
  * forever, matching the fail-open posture — the flag exists to be SEEN, not
  * to gate anything.
+ *
+ * `everDegraded` answers a different question, and end-of-run reporting
+ * needs both: a soak whose coverage hole opened and closed hours before
+ * teardown reads `degraded === false` at the moment anything inspects it —
+ * correctly, "nothing is wrong right now" — but a report built only from the
+ * live flag would say the run was never degraded, which is false and is
+ * exactly the gap AC2 exists to close. `everDegraded` latches true on the
+ * first miss and never clears; it is the "did this run ever have a hole"
+ * answer, `degraded` is the "does it have one right now" answer.
  */
 export class MiCoverageMonitor {
   readonly #consecutive = new Map<string, number>();
   readonly #currentlyMissing = new Set<string>();
+  #everDegraded = false;
 
   /** True while at least one observed instrument currently has no coverage. */
   get degraded(): boolean {
     return this.#currentlyMissing.size > 0;
+  }
+
+  /** True if ANY instrument this monitor has observed EVER missed coverage, even if fully recovered since. Never clears. */
+  get everDegraded(): boolean {
+    return this.#everDegraded;
   }
 
   /** The instruments currently missing coverage, for a diagnostic read (not used to gate anything). */
@@ -188,6 +203,7 @@ export class MiCoverageMonitor {
     const consecutive = (this.#consecutive.get(instrument) ?? 0) + 1;
     this.#consecutive.set(instrument, consecutive);
     this.#currentlyMissing.add(instrument);
+    this.#everDegraded = true;
     return { alert: shouldAlertAt(consecutive), consecutive };
   }
 }
