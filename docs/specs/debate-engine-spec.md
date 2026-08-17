@@ -128,7 +128,7 @@ interface DebateLog {
   instrument: string;
   bar_timestamp: Date;
   contributions: AnalystContribution[];   // influence_score, stance, per analyst
-  direction: 'bullish' | 'bearish' | 'neutral';
+  direction: Direction;
   rounds: number;
   created_at: Date;
 }

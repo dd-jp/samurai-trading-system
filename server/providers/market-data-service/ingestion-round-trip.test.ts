@@ -9,7 +9,11 @@ import { formingCandleClient } from './forming-candle-client.js';
 import { InsufficientBarsError } from './indicators.js';
 import { MarketDataServiceImpl } from './service.js';
 import { createDataSource, type DataSourceConfig } from './source-factory.js';
-import { type AlpacaBar, type AlpacaClient, AlpacaDataSource } from './sources/alpaca-source.js';
+import {
+  type AlpacaBar,
+  AlpacaDataSource,
+  type AlpacaMarketDataClient,
+} from './sources/alpaca-source.js';
 import type { CcxtClient, CcxtOhlcv } from './sources/ccxt-source.js';
 import type { IbkrClient, IbkrHistoricalBar } from './sources/ibkr-source.js';
 import { SqliteMarketDataStore } from './sqlite-market-data-store.js';
@@ -44,7 +48,7 @@ const krakenClient: CcxtClient = {
   fetchTicker: async () => ({ last: 61_050, timestamp: Date.parse('2026-07-15T17:59:45Z') }),
 };
 
-const alpacaClient: AlpacaClient = {
+const alpacaClient: AlpacaMarketDataClient = {
   getBars: async () => ALPACA_ROWS,
   getLatestQuote: async () => ({ t: '2026-07-15T17:59:45Z', ap: 192.6, bp: 192.4 }),
 };
@@ -229,7 +233,7 @@ describe('cold start: first tick with an empty store (#362)', () => {
     // for — a genuinely sparse instrument, not a forming-candle artifact.
     // The #319 guard must still throw here: the fetch-width fix must not
     // paper over a real shortfall.
-    const sparseClient: AlpacaClient = {
+    const sparseClient: AlpacaMarketDataClient = {
       getBars: async (): Promise<AlpacaBar[]> =>
         Array.from({ length: 5 }, (_, i) => ({
           t: new Date(COLD_ASOF.getTime() - (5 - i) * 3_600_000).toISOString(),

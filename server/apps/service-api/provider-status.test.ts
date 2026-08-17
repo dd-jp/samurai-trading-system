@@ -15,12 +15,12 @@
  */
 import type {
   AlpacaAccount,
-  AlpacaClient,
+  AlpacaBrokerClient,
 } from '../../pipeline/execution/adapters/alpaca-client.js';
 import { NULL_PROVIDER_STATUS, ProviderStatusPoller } from './provider-status.js';
 
 /** Only `getAccount` is exercised; the order methods throw if the poller ever reaches for them. */
-function alpacaStub(getAccount: () => Promise<AlpacaAccount>): AlpacaClient {
+function alpacaStub(getAccount: () => Promise<AlpacaAccount>): AlpacaBrokerClient {
   const unreachable = () => {
     throw new Error('the status poller must never place or read orders');
   };
@@ -29,7 +29,7 @@ function alpacaStub(getAccount: () => Promise<AlpacaAccount>): AlpacaClient {
     submitOrder: unreachable,
     getOrder: unreachable,
     getOrderByClientOrderId: unreachable,
-  } as unknown as AlpacaClient;
+  } as unknown as AlpacaBrokerClient;
 }
 
 function stubFetch(impl: (url: string) => Promise<Response> | Response): void {
@@ -131,7 +131,7 @@ describe('ProviderStatusPoller — Alpaca', () => {
   });
 
   it('bounds a hung account call instead of stalling the poller forever (PR #367 review)', async () => {
-    // The `AlpacaClient` interface promises nothing about timeouts. Without a
+    // The `AlpacaBrokerClient` interface promises nothing about timeouts. Without a
     // bound here, one hung `getAccount()` leaves `pollOnce` pending forever —
     // and since both probes share a `Promise.all`, it takes the Polygon tile
     // down with it and freezes the whole panel silently.

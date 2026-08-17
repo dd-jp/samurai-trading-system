@@ -346,7 +346,7 @@ CREATE TABLE debate_log (
   instrument          TEXT NOT NULL,
   bar_timestamp       TEXT NOT NULL,
   contributions_json  TEXT NOT NULL,   -- JSON AnalystContribution[] (influence_score, stance, per analyst)
-  direction           TEXT NOT NULL CHECK(direction IN ('bullish', 'bearish', 'neutral')),
+  direction           TEXT NOT NULL CHECK(direction IN ('bullish', 'bearish', 'neutral')),  -- tracks the registry's `Direction` (cross-spec-contracts.md); the CHECK's literal set must move in lockstep with that type
   rounds              INTEGER NOT NULL,
   created_at          TEXT NOT NULL
 );

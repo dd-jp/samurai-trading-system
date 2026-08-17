@@ -14,8 +14,8 @@
  * (spec Dependencies).
  */
 import {
-  type AlpacaClient,
   AlpacaDataSource,
+  type AlpacaMarketDataClient,
   type AlpacaSourceOptions,
 } from './sources/alpaca-source.js';
 import { type CcxtClient, CcxtDataSource, type CcxtSourceOptions } from './sources/ccxt-source.js';
@@ -24,7 +24,7 @@ import type { DataSource } from './types.js';
 
 export type DataSourceConfig =
   | ({ kind: 'ccxt'; client: CcxtClient } & CcxtSourceOptions)
-  | ({ kind: 'alpaca'; client: AlpacaClient } & AlpacaSourceOptions)
+  | ({ kind: 'alpaca'; client: AlpacaMarketDataClient } & AlpacaSourceOptions)
   | ({ kind: 'ibkr'; client: IbkrClient } & IbkrSourceOptions);
 
 export function createDataSource(config: DataSourceConfig): DataSource {

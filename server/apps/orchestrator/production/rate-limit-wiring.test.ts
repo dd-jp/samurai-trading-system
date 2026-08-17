@@ -173,7 +173,7 @@ describe('the LLM rate limiter is in the production path (#388)', () => {
     });
 
     expect(() => buildProductionComponents(config)).toThrow();
-    // `submitOrder`, not `listOrders`: the latter is not on `AlpacaClient` at
+    // `submitOrder`, not `listOrders`: the latter is not on `AlpacaBrokerClient` at
     // all, so the old assertion read an `undefined` off the stub and asserted
     // that it had not been called — vacuously true whatever the wiring did.
     expect(config.alpacaBrokerClient.submitOrder).not.toHaveBeenCalled();

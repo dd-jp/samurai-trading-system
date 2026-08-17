@@ -9,7 +9,7 @@
  * guarantee by hand, journalled in `broker_brackets`, invisible above the
  * `BrokerAdapter` seam.
  *
- * The Alpaca trading client is injected (`AlpacaClient`), mirroring the
+ * The Alpaca trading client is injected (`AlpacaBrokerClient`), mirroring the
  * injected-client pattern already used for market data
  * (server/providers/market-data-service/sources/alpaca-source.ts): connection/auth is an
  * ops concern (trade-only key, withdrawals disabled, IP-whitelisted per
@@ -56,7 +56,7 @@ import type {
   NormalizedPosition,
 } from '../types.js';
 import type { UnpricedFillAlertChannel } from '../unpriced-fill-alert.js';
-import type { AlpacaClient, AlpacaOrder, AlpacaOrderLeg } from './alpaca-client.js';
+import type { AlpacaBrokerClient, AlpacaOrder, AlpacaOrderLeg } from './alpaca-client.js';
 import { AlpacaCryptoLegEmulation } from './alpaca-crypto-emulation.js';
 // The shared normalization layer (PR #600 review): both this adapter and the
 // crypto emulation consume it, and neither imports the other's runtime code
@@ -100,7 +100,7 @@ export const DEFAULT_UNPRICED_FILL_AGE_OUT_MS = 15 * 60_000;
 const ALPACA_FILL_SWEEP_TRACE_ID = 'alpaca-fetch-new-fills';
 
 export interface AlpacaBrokerAdapterInput {
-  client: AlpacaClient;
+  client: AlpacaBrokerClient;
   /**
    * Optional so existing wiring (server/apps/orchestrator/production.ts) keeps
    * working; when absent the adapter still paces itself rather than running

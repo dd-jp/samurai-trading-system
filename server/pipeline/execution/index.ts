@@ -18,7 +18,7 @@ export {
 export type {
   AlpacaAccount,
   AlpacaBracketOrderRequest,
-  AlpacaClient,
+  AlpacaBrokerClient,
   AlpacaLimitOrderRequest,
   AlpacaOcoOrderRequest,
   AlpacaOrder,

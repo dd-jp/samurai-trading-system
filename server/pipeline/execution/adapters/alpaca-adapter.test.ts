@@ -12,7 +12,7 @@ import { openTestExecutionStore } from '../sqlite-store-harness.js';
 import type { ExecutionConfig, ExecutionInput, NativeBracketRequest } from '../types.js';
 import type { UnpricedFillAlert, UnpricedFillAlertChannel } from '../unpriced-fill-alert.js';
 import { AlpacaBrokerAdapter, DEFAULT_UNPRICED_FILL_AGE_OUT_MS } from './alpaca-adapter.js';
-import type { AlpacaClient, AlpacaOrder } from './alpaca-client.js';
+import type { AlpacaBrokerClient, AlpacaOrder } from './alpaca-client.js';
 
 /**
  * These tests are about bracket submission and fill normalization, not
@@ -73,7 +73,7 @@ function acceptedOrder(overrides: Partial<AlpacaOrder> = {}): AlpacaOrder {
   };
 }
 
-function makeClient(overrides: Partial<AlpacaClient> = {}): AlpacaClient {
+function makeClient(overrides: Partial<AlpacaBrokerClient> = {}): AlpacaBrokerClient {
   return {
     submitOrder: vi.fn().mockResolvedValue(acceptedOrder()),
     getOrder: vi.fn().mockResolvedValue(acceptedOrder()),
@@ -899,7 +899,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
   async function submitAndSweep(options: {
     clock: FixedClock;
     alerts: UnpricedFillAlertChannel;
-    client: AlpacaClient;
+    client: AlpacaBrokerClient;
     state?: InMemoryBrokerStateStore;
     ageOutMs?: number;
   }): Promise<AlpacaBrokerAdapter> {
@@ -1406,7 +1406,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
  * three of which could not fire.
  */
 describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
-  function adapterWith(client: AlpacaClient): AlpacaBrokerAdapter {
+  function adapterWith(client: AlpacaBrokerClient): AlpacaBrokerAdapter {
     return new AlpacaBrokerAdapter({
       client,
       rateLimiter: permissiveLimiter(),

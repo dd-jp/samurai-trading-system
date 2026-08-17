@@ -131,7 +131,7 @@ import type {
 } from '../../pipeline/debate-engine/index.js';
 import { MAX_ROUNDS_BY_ASSET_CLASS, RateLimiter } from '../../pipeline/debate-engine/index.js';
 import type {
-  AlpacaClient,
+  AlpacaBrokerClient,
   AlpacaLimitOrderRequest,
   AlpacaOrder,
   AlpacaStopLimitOrderRequest,
@@ -518,7 +518,7 @@ export class FixedAccountStateProvider implements AccountStateProvider {
  * exercising a fabricated Alpaca. `smoke-run.test.ts` asserts it was never
  * touched.
  */
-export class UnreachableAlpacaClient implements AlpacaClient {
+export class UnreachableAlpacaClient implements AlpacaBrokerClient {
   /** Set if anything ever reached this client — asserted against in tests. */
   reached = false;
 
@@ -1317,7 +1317,7 @@ async function runExitPathScenarios(input: {
  * live API does, so a regression back to `order_class: 'bracket'` fails
  * this run the same way it would fail the soak.
  */
-class CryptoEmulationScenarioClient implements AlpacaClient {
+class CryptoEmulationScenarioClient implements AlpacaBrokerClient {
   private readonly orders = new Map<string, AlpacaOrder>();
   private readonly idsByClientOrderId = new Map<string, string>();
   /** Every venue order id a cancel reached — the sibling-cancel evidence. */

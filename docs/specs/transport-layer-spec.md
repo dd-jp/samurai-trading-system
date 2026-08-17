@@ -6,7 +6,7 @@
 
 ## Problem Statement
 
-`server/apps/orchestrator/index.ts`'s doc comment and ADR-0004 both name the same gap: every stage, adapter, and interface the pipeline needs is built and tested, but nothing in `server/` implements the live wire clients those interfaces are injected against. Concretely: `AlpacaClient` (both the broker-order shape in `server/pipeline/execution/adapters/alpaca-client.ts` and the market-data shape in `server/providers/market-data-service/sources/alpaca-source.ts`) has no real HTTP implementation; `AnthropicMessagesClient` has no promoted production module (only a test helper); `TelegramClient` has no implementation at all, and its existing interface (`sendApprovalRequest`) doesn't match the transport `production.ts` actually wires (`SignedApprovalChannel`); `PolygonClient` (Stage 2) has no real implementation; and `AccountStateProvider`/`VolatilityReadingProvider` — required constructor dependencies for the Trader/Risk/Verdict direct-bind wiring — have zero in-repo data source, per `direct-bind.ts`'s own doc comment.
+`server/apps/orchestrator/index.ts`'s doc comment and ADR-0004 both name the same gap: every stage, adapter, and interface the pipeline needs is built and tested, but nothing in `server/` implements the live wire clients those interfaces are injected against. Concretely: `AlpacaBrokerClient` (the broker-order shape in `server/pipeline/execution/adapters/alpaca-client.ts`) and `AlpacaMarketDataClient` (the market-data shape in `server/providers/market-data-service/sources/alpaca-source.ts`) — renamed 2026-08-17 (#644) from a shared `AlpacaClient` name both interfaces used to carry — have no real HTTP implementation; `AnthropicMessagesClient` has no promoted production module (only a test helper); `TelegramClient` has no implementation at all, and its existing interface (`sendApprovalRequest`) doesn't match the transport `production.ts` actually wires (`SignedApprovalChannel`); `PolygonClient` (Stage 2) has no real implementation; and `AccountStateProvider`/`VolatilityReadingProvider` — required constructor dependencies for the Trader/Risk/Verdict direct-bind wiring — have zero in-repo data source, per `direct-bind.ts`'s own doc comment.
 
 Without these five things, `startFromEnvironment` cannot start a real (non-mock) tick, and Stage 2 (#245) cannot run a real historical verdict. This is the last design gap between "all 12 components wired" (ADR-0004) and an actual paper-trading run.
 
@@ -14,7 +14,7 @@ Without these five things, `startFromEnvironment` cannot start a real (non-mock)
 
 Five independent decisions, each closing one seam already named by an existing interface — no interface in the codebase changes shape except `TelegramClient`, which is narrowed (see Module: TelegramClient below):
 
-1. **`AlpacaClient` (broker + data)** — both existing interfaces map directly onto Alpaca's real Trading API v2 / Market Data API v2. No code changes to the interfaces; only real HTTP implementations.
+1. **`AlpacaBrokerClient` / `AlpacaMarketDataClient`** — both existing interfaces map directly onto Alpaca's real Trading API v2 / Market Data API v2. No code changes to the interfaces; only real HTTP implementations.
 2. **`AnthropicMessagesClient`** — already implemented and proven (via the debate-engine integration test); this decision only promotes it from test helper to a small production module, reading its API key/model from env.
 3. **`TelegramClient`** — long-polling (`getUpdates`), authenticated via Telegram's own `callback_query.from.id` against a user-id allowlist, retiring the interface's current `sendApprovalRequest` method in favor of a shape that composes with the already-decided `SignedApprovalChannel` (#207).
 4. **`PolygonClient`** — a real HTTP implementation of the existing Stage 2 interface against Polygon/Massive's aggregates endpoint.
@@ -24,14 +24,14 @@ Cutting across all five: a shared error taxonomy, a shared (but per-client-confi
 
 ## User Stories
 
-### AlpacaClient (broker)
+### AlpacaBrokerClient
 
-1. As the Execution stage, I want `AlpacaClient.submitOrder` to place a real bracket order against Alpaca's Trading API, so that a verdict's `go` decision becomes a real order.
+1. As the Execution stage, I want `AlpacaBrokerClient.submitOrder` to place a real bracket order against Alpaca's Trading API, so that a verdict's `go` decision becomes a real order.
 2. As the Execution stage, I want `getOrder`/`getOrderByClientOrderId` to reflect the broker's current view of an order, so that reconciliation (#86) works against real state.
 3. As the crash-restart reconciliation path, I want a 404 from `GET /v2/orders:by_client_order_id` mapped to the interface's documented `null` (not a thrown error), so that "no such order yet" and "transport failure" stay distinguishable.
 4. As the system, I want bracket-order child legs (take-profit/stop-loss) recovered from each leg's own `id` + `type`, not from a `client_order_id` suffix, so that leg identity survives Alpaca's server-generated child ids.
 
-### AlpacaClient (market data)
+### AlpacaMarketDataClient
 
 5. As the Market Data Service's `AlpacaDataSource`, I want `getBars`/`getLatestQuote` to hit Alpaca's real Market Data API v2, so that the MVP universe's bars/marks are real, not simulated.
 6. As the data source, I want crypto vs. equity requests routed by path-root (`/v1beta3/crypto/us/...` vs `/v2/stocks/...`), not by a query parameter, so that the client matches Alpaca's actual routing. **The two roots sit on different API versions** — corrected 2026-08-05 against the live API ([#358](https://github.com/dd-jp/samurai-trading-system/issues/358)); `/v2/crypto/us/...` 404s.
@@ -92,7 +92,7 @@ Cutting across all five: a shared error taxonomy, a shared (but per-client-confi
 - `NOUS_BASE_URL`, `NOUS_API_KEY`, and the optional per-role `NOUS_DEBATE_API_KEY`/`NOUS_DEBATE_MODEL` (ADR-0009; was `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL`)
 - `POLYGON_API_KEY` (already provisioned)
 - `ALPACA_API_KEY`, `ALPACA_API_SECRET`
-- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_IDS` (comma-separated Telegram user ids — an allowlist of *who may approve*, not a destination; deliberately not a single chat id, since the trade channel is a group/channel and `chat.id` is shared by every member)
+- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_IDS` (comma-separated Telegram user ids — an allowlist of *who may approve*, not a destination; deliberately not a single chat id, since the trade channel is a group/channel and `chat.id` is shared by every member. **As of ADR-0007/ADR-0013 there is no live approval to gate** — see `verdict-spec.md`'s "Boot-time validation" bullet, corrected 2026-08-17 (#644), for why this env var is still required at boot regardless)
 - `TELEGRAM_HEARTBEAT_CHAT_ID` (added by #342) — the destination for the dead-man's-switch heartbeat, and only that. Required under `SAMURAI_ALERTS=telegram` and refused at startup when it equals `TELEGRAM_CHAT_ID`: the heartbeat repeats forever, and sharing the escalation chat is what makes an operator mute it. A muted heartbeat chat costs nothing; a muted escalation chat costs the escalations.
 - `TELEGRAM_CHAT_ID` (added by #322) — the *destination* the outbound operator **escalations** are posted to: the restart-time orphaned `go` verdict, the aged-out unpriced fill, and the kill-threshold breach. (It carried the heartbeat too until #342 moved it out.) Orthogonal to the allowlist above and never a substitute for it: this says where a message goes, the allowlist says whose button press may resolve an approval. Required only under `SAMURAI_ALERTS=telegram` (see below).
 - `SAMURAI_ALERTS` (added by #322) — `telegram` or `log-only`, **required, no default**. Selects whether the four outbound operator alerts — heartbeat, orphaned `go` verdict, stuck unpriced fill, and (added by #327) kill-threshold breach — reach a phone or only the log stream. There is no default in either direction: falling back to log-only by omission is what made an "unattended" soak (#238) not unattended, and defaulting to `telegram` would fail every developer run for want of a bot token. `telegram` additionally requires all four `TELEGRAM_*` variables above — bot token, allowlist, escalation chat, heartbeat chat — and startup fails naming whichever are absent. (A caller that injects its own `heartbeatChannel` is not asked for `TELEGRAM_HEARTBEAT_CHAT_ID`, which is why the startup pre-flight splits that one out; for the shipped entrypoint it is always four.) Selection lives at the entrypoint (`server/apps/orchestrator/alert-transport.ts`), not in the composition root, so a programmatic caller injecting its own channels never consults the environment.
@@ -103,9 +103,9 @@ Cutting across all five: a shared error taxonomy, a shared (but per-client-confi
 
 Both land in `server/shared/http/`.
 
-### Module: AlpacaClient (broker)
+### Module: AlpacaBrokerClient
 
-**No interface change.** `server/pipeline/execution/adapters/alpaca-client.ts`'s `AlpacaClient` (`submitOrder`/`getOrder`/`getOrderByClientOrderId`) already matches Alpaca's Trading API v2 (`POST /v2/orders`, `GET /v2/orders/{id}`, `GET /v2/orders:by_client_order_id`) directly.
+**No interface change.** `server/pipeline/execution/adapters/alpaca-client.ts`'s `AlpacaBrokerClient` (`submitOrder`/`getOrder`/`getOrderByClientOrderId`) already matches Alpaca's Trading API v2 (`POST /v2/orders`, `GET /v2/orders/{id}`, `GET /v2/orders:by_client_order_id`) directly. **Layering (#644):** this is the wire client, one layer below `execution-spec.md`'s `BrokerAdapter` interface — `AlpacaBrokerAdapter` is injected with an `AlpacaBrokerClient` and translates between `BrokerAdapter`'s domain-shaped calls (`NativeBracketRequest` in, `NormalizedFill`/`NormalizedOrder`/`NormalizedPosition` out) and this client's Alpaca-shaped ones; nothing above `AlpacaBrokerAdapter` ever sees this module's types directly.
 
 - **404 → `null` mapping is load-bearing.** `getOrderByClientOrderId` must catch a 404 from Alpaca and resolve `null`, never throw — #86's crash-restart reconciliation depends on the documented `null` contract holding for real.
 - **Rate limit:** ~200 req/min per key — the tightest of the four transport clients' known limits, sized into this client's `RetryConfig` per the shared-conventions module above.
@@ -113,9 +113,9 @@ Both land in `server/shared/http/`.
 - **Pagination on `getOrder`-adjacent list endpoints:** not needed by this interface's three single-order methods; explicitly out of scope here.
 - **Paper/live is an explicit constructor option, never an inferred default (#293).** The client takes `environment: 'paper' | 'live'`, defaulting to `'paper'`, and derives its base URL from it. A `baseUrl` naming one Alpaca trading host while `environment` names the other throws at construction, before any order can be placed; so does an empty or unparseable `baseUrl`. Reaching `https://api.alpaca.markets` requires typing `environment: 'live'` — it is not reachable by omission, by a defaulted constant, or by a mis-set env var, per CLAUDE.md's money-graduation ladder. Alpaca exposes no cheap "is this key paper or live" probe, so this is a consistency check between two operator-supplied facts, not a verification that the credentials belong to the named environment. The orchestrator's composition root derives `environment` from `SAMURAI_MODE` (`live` → live, `paper`/`backtest` → paper) and classifies any `ALPACA_BASE_URL` override with the same shared host classifier. Non-Alpaca hosts (mock/staging) are permitted in either environment. **The market-data client carries no such option deliberately:** `data.alpaca.markets` serves paper and live accounts alike, so it has no environment to get wrong.
 
-### Module: AlpacaClient (market data)
+### Module: AlpacaMarketDataClient
 
-**No interface change.** `server/providers/market-data-service/sources/alpaca-source.ts`'s `AlpacaClient` (`getBars`/`getLatestQuote`) maps onto Alpaca's Market Data API v2.
+**No interface change.** `server/providers/market-data-service/sources/alpaca-source.ts`'s `AlpacaMarketDataClient` (`getBars`/`getLatestQuote`) maps onto Alpaca's Market Data API v2.
 
 - **Crypto/equity is a path-root split, not a query parameter:** `/v2/stocks/...` vs. `/v1beta3/crypto/us/...`, selected by `AlpacaSourceOptions.asset_class`, which the data source already threads through to the client. **Verified live 2026-08-05 ([#358](https://github.com/dd-jp/samurai-trading-system/issues/358)):** `GET /v1beta3/crypto/us/bars` and `GET /v1beta3/crypto/us/latest/quotes` return `200`; the same two paths under `/v2` return `404`. `GET /v2/stocks/{symbol}/bars` and `GET /v2/stocks/{symbol}/quotes/latest` return `200` — the equity root was already right. Crypto responses are keyed by the slash symbol exactly as sent (`BTC/USD`), and any other separator is a `400`, not a differently-keyed body. The original "#260 confirmed the root split, not the full path" verification note was left unresolved through implementation and shipped as `/v2/crypto/us/...`, which silently disabled the entire default (crypto-only) paper pipeline; the version segment is now pinned by test in `alpaca-http-client.test.ts`.
 - **`getBars` pagination:** Alpaca's bars endpoint can page for a long lookback; deferred to implementation-time verification (check whether the MVP universe's actual windows ever hit a page boundary before building pagination-following logic) — an implementation-time check, not a design decision, per #260's research.
@@ -193,9 +193,9 @@ Closes `direct-bind.ts`'s existing `VolatilityReadingProvider` interface (`getVo
 - Test each client against its **external HTTP contract**, not implementation details: mock the HTTP layer (fetch) at the boundary and assert on request shape (URL, headers, body) and response mapping — never assert on internal call sequencing.
 - **Error-taxonomy test (shared, per client):** each of the four clients' status-code-to-error-class mapping (429→RateLimit, 408/504→Timeout, else→ProviderError) is tested with the same table-driven fixture shape already used for `AnthropicLlmClient`'s `classifyProviderError`.
 - **Retry test (shared):** the generalized `withRetry` is tested once, generically, against an injected `isRetryable`; individual clients only need one test confirming their own `isRetryable` closes over the shared taxonomy correctly — not a full retry-loop re-test per client.
-- **404 → null test (AlpacaClient broker):** `getOrderByClientOrderId` on a 404 response resolves `null`, never throws — the reconciliation-critical contract from #260/#86.
+- **404 → null test (AlpacaBrokerClient):** `getOrderByClientOrderId` on a 404 response resolves `null`, never throws — the reconciliation-critical contract from #260/#86.
 - **Envelope-unwrap test (PolygonClient):** a fixture response with `{results, next_url}` plus extra `vw`/`n` fields maps correctly onto `PolygonAggregate[]`, dropping the extras.
-- **Crypto-ticker-translation test (PolygonClient, AlpacaClient market data):** `BTC-USD` → `X:BTCUSD` / Alpaca's crypto path root, both directions covered.
+- **Crypto-ticker-translation test (PolygonClient, AlpacaMarketDataClient):** `BTC-USD` → `X:BTCUSD` / Alpaca's crypto path root, both directions covered.
 - **Telegram allowlist test:** a `callback_query` from a `from.id` not on the allowlist is silently discarded and never reaches `SignedApprovalChannel.handleCallback`; one from an allowlisted id does.
 - **Telegram correlation-token expiry test:** a token past its `timeout_ms` is treated as unmatched, matching `SignedApprovalChannel`'s own timeout fail-safe.
 - **AccountStateProvider field-split test:** `peak_equity` only increases across ticks (never decreases when equity dips), and `consecutive_losses` correctly stops counting at the first win walking backwards through a fixture `ClosedTrade` sequence.
@@ -205,20 +205,20 @@ Closes `direct-bind.ts`'s existing `VolatilityReadingProvider` interface (`getVo
 
 **Shared Transport Conventions** — `server/shared/http/retry.ts` (generic retry loop), `server/shared/http/fetch-with-timeout.ts`; each client's own error-classification function.
 
-**AlpacaClient (broker + data)** — `server/pipeline/execution/adapters/` real implementation; `server/providers/market-data-service/sources/alpaca-source.ts`'s injected client.
+**AlpacaBrokerClient / AlpacaMarketDataClient** — `server/pipeline/execution/adapters/` real implementation; `server/providers/market-data-service/sources/alpaca-source.ts`'s injected client.
 
 **AnthropicMessagesClient** — now `server/pipeline/debate-engine/llm/nous-messages-client.ts` (ADR-0009); `disagreement-detector.integration.test.ts` resolves its model through `nousCredentials('debate')` rather than hardcoding one, and doubles as the model bake-off seam.
 
 **TelegramClient** — the new implementation under `server/pipeline/verdict/notifications/` (or a new `server/pipeline/verdict/notifications/telegram/` module); the allowlist check and correlation-token map in isolation from the long-poll loop itself (which needs an integration/manual test against the real Bot API, not a unit test).
 
-**PolygonClient** — the new implementation under `server/tools/backtest/` (or a new adapters location matching `AlpacaClient`'s pattern).
+**PolygonClient** — the new implementation under `server/tools/backtest/` (or a new adapters location matching `AlpacaBrokerClient`'s pattern).
 
 **AccountStateProvider / VolatilityReadingProvider** — new modules under `server/apps/orchestrator/production/` (or wherever `direct-bind.ts`'s consumers expect them), each tested against a fixture `ClosedTrade` store / fixture `MarketDataService`.
 
 ### Prior Art
 
 - `AnthropicLlmClient`/`retry.ts`/`errors.ts` (`server/pipeline/debate-engine/llm/`) is the direct precedent for the shared error taxonomy and retry mechanism — already shipped, already tested, being generalized rather than redesigned.
-- `AlpacaDataSource` (`server/providers/market-data-service/sources/alpaca-source.ts`) is the precedent for "injected client, connection provisioning is an ops task" — the same pattern the broker-side `AlpacaClient`, `PolygonClient`, and `TelegramClient` all already follow structurally.
+- `AlpacaDataSource` (`server/providers/market-data-service/sources/alpaca-source.ts`) is the precedent for "injected client, connection provisioning is an ops task" — the same pattern the broker-side `AlpacaBrokerClient`, `PolygonClient`, and `TelegramClient` all already follow structurally.
 - `simulated-adapter.ts`'s `buildMarketState` is the direct precedent for `VolatilityReadingProvider`'s `getIndicator` usage.
 
 ## Out of Scope
@@ -239,7 +239,7 @@ Closes `direct-bind.ts`'s existing `VolatilityReadingProvider` interface (`getVo
 ### Stale doc comments to update at implementation time
 
 - `server/apps/orchestrator/production/direct-bind.ts`'s doc comment ("no in-repo data source today" for `AccountStateProvider`/`VolatilityReadingProvider`) becomes stale once these are implemented.
-- `server/apps/orchestrator/production.ts`'s doc comment (no real implementation of `AlpacaClient`, `AnthropicMessagesClient`, `TelegramClient`, or `CiiScoreProvider` anywhere in `server/`) becomes partially stale — `CiiScoreProvider` stays out of scope (parked), the other three do not.
+- `server/apps/orchestrator/production.ts`'s doc comment (no real implementation of `AlpacaBrokerClient`/`AlpacaMarketDataClient`, `AnthropicMessagesClient`, `TelegramClient`, or `CiiScoreProvider` anywhere in `server/`) becomes partially stale — `CiiScoreProvider` stays out of scope (parked), the other three do not.
 - `disagreement-detector.integration.test.ts` no longer hardcodes a model at all (ADR-0009) — it reads the debate role's resolved one, so it cannot drift from what production runs.
 
 ### Domain Glossary Alignment
