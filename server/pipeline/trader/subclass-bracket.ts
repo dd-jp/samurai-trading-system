@@ -87,9 +87,15 @@ export interface SubclassBracket {
 }
 
 /**
- * ADR-0018 D5's index-ETP deployment. Sits INSIDE CONTEXT.md's ~20-25% max
- * drawdown tolerance as originally published (23.1%); see the single-stock
- * constant below for what the #729 verification note does to both rows.
+ * ADR-0018 D5's index-ETP deployment.
+ *
+ * D5 published this row at 23.1% measured drawdown, i.e. inside CONTEXT.md's
+ * ~20-25% tolerance. **It is not inside it any more.** D5's #729 verification
+ * note (2026-08-17) re-measures the row at the neutral bracket D3 actually
+ * declares and this module implements: **26.2%** at 35% deployment, above the
+ * top of the band. The overshoot is small next to the single-stock row's, but
+ * it exists, and the constant below carries the full derivation and the reason
+ * neither row is re-sized here.
  */
 export const D5_INDEX_ETP_DEPLOYMENT_FRACTION = 0.35;
 
