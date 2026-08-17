@@ -20,7 +20,7 @@ The Orchestrator is a **single TypeScript process** (ADR-0001: TS core, no LangG
 - **Tick ≠ decision.** A tick fires on the **tick interval** (`τ`, default 2 minutes) and runs only the cheap, position-facing work. A **decision** fires once per **debate bar** and runs the full stage chain. See "Module: Tick Runner" for the split and why it exists.
 
 ```
-every tick (τ = 2 min):   mark → bracket → early-exit check → flatten check
+every tick (τ = 2 min):   flatten check (the Trader's exit-only entry: positions, mark, window)
 every new debate bar:     Signal → Analysts.run → DebateEngine.run → Trader.decide
                           → [Invalidation] → Risk.evaluate → Verdict.decide
                           → (on go) Execution.execute
@@ -48,7 +48,7 @@ Key architectural decisions:
 2b. As the Orchestrator, I want to gate ticks additionally on an injected **policy window**, so that entries are armed only inside the recorded 14:30–15:45 London window ([#706](https://github.com/dd-jp/samurai-trading-system/issues/706)) without narrowing the venue calendar, which is separately load-bearing for `sessionEnd`.
 3. As the Orchestrator, I want to iterate the active instrument list each tick, so that the covered universe changes at session boundaries without a code change.
 4. As the Orchestrator, I want to emit one `Signal{asset, asset_class}` per instrument **per decision**, so that the Analysts stage has a producer for the input it was already specced to consume (closes GAP-I).
-4b. As the Orchestrator, I want most ticks to run **only** the position-facing work — mark, bracket, early-exit check, flatten check — so that a 2-minute exit cadence does not force a 2-minute cost for the analyst and debate stages, whose inputs change once per debate bar.
+4b. As the Orchestrator, I want most ticks to run **only** the position-facing work — the Trader's exit-only entry point (positions, mark, flatten window; bracket exits rest at the venue) — so that a 2-minute exit cadence does not force a 2-minute cost for the analyst and debate stages, whose inputs change once per debate bar.
 5. As the Orchestrator, I want to run instruments within a tick concurrently up to a configured cap, so that one instrument's slow debate doesn't stall the rest, while the LLM-facing stages stay within their rate limit.
 
 ### Wiring the Pipeline
@@ -140,7 +140,7 @@ These go in different places and the distinction is load-bearing, not stylistic.
 ### Module: Tick Runner (pipeline wiring)
 
 **Responsibilities**
-- For each instrument in a `TickPlan`, run the **tick path**; on a new debate bar, additionally run the **decision path**.
+- For each instrument in a `TickPlan`, run the **tick path** — except on a new debate bar, where the **decision path** runs instead (its Trader routing evaluates the flatten first, so the flatten is still checked on every pass; see "One Trader entry point per pass" below).
 - Generate a trace ID and emit a `Signal` per decision.
 - Bound concurrency across instruments.
 - Only call Execution on a Verdict `go`.
@@ -150,7 +150,7 @@ These go in different places and the distinction is load-bearing, not stylistic.
 **This replaces the previous definition of a tick as one pass through the full pipeline.** That definition was written when one tick *was* one decision. Under an intraday horizon they are different cadences, and collapsing them forces a choice between an expensive entry loop and a slow exit — where the exit is the side holding open risk.
 
 ```
-every tick (τ = 2 min):   mark → bracket → early-exit check → flatten check
+every tick (τ = 2 min):   flatten check (the Trader's exit-only entry: positions, mark, window)
 every new debate bar:     Signal → Analysts → Debate → Trader → [Invalidation] → Risk → Verdict → Execution
 ```
 
@@ -181,8 +181,9 @@ every new debate bar:     Signal → Analysts → Debate → Trader → [Invalid
 
 ```typescript
 // Primary seam. One call per instrument per tick.
-// Runs the tick path always; runs the decision path only when ctx.decision_bar
-// is set — i.e. when the gate has determined a new debate bar has opened.
+// Runs the decision path when ctx.decision_bar is set — i.e. when the gate has
+// determined a new debate bar has opened — and the tick path otherwise. One
+// path, and one Trader entry point, per pass.
 interface TickRunner {
   runInstrument(signal: Signal, ctx: TickContext): Promise<TickOutcome>;
 }
@@ -205,7 +206,7 @@ interface TickContext {
 interface TickOutcome {
   trace_id: string;
   // 'position_check' is the terminal stage of a tick-path-only pass: the
-  // mark/bracket/early-exit/flatten work ran and no decision was due. It is a
+  // exit check ran, no exit was due, and no decision was due. It is a
   // NORMAL outcome and the most common one — roughly 29 of every 30 passes at
   // tau=2min against a 60-minute bar. It must be distinguishable in the logs
   // from a decision pass that declined to trade, or a healthy exit-only tick
@@ -222,9 +223,15 @@ interface TickOutcome {
   final_stage: 'position_check' | 'analysts' | 'debate' | 'trader' | 'risk' | 'verdict' | 'execution';
   verdict_status?: 'go' | 'no_go';
   execution_result?: ExecutionResult;   // from execution-spec, only if go
-  // Tick-path outcomes, present on every pass including decision passes.
+  // true when a TICK-PATH pass's exit check produced an exit intent. Never set
+  // on a decision pass — there the Trader's own routing carries the flatten
+  // and the intent's `intent_type: 'exit'` is the record. Present so a flatten
+  // whose Verdict said no_go is still visible as a flatten that FIRED
+  // (`flatten_fired: true, final_stage: 'verdict'`), rather than a
+  // healthy-looking no-trade tick. There is no separate early-exit flag:
+  // bracket exits rest at the venue, so the flatten is the only in-process
+  // exit the tick path can fire.
   flatten_fired?: boolean;
-  early_exit_fired?: boolean;
 }
 
 interface Logger {
@@ -236,7 +243,8 @@ interface AuditLog {
 }
 ```
 
-- `runInstrument` runs the **tick path** unconditionally, then — only when `ctx.decision_bar` is present — a straight-line sequential call chain through the already-specced stage interfaces (`Analysts.run`, `DebateEngine.run`, `Trader.decide`, `Risk.evaluate`, `Verdict.decide`, `Execution.execute`). The Orchestrator does not reimplement any stage's decision logic on either path.
+- `runInstrument` runs exactly one of the two paths per pass, selected by `ctx.decision_bar`: absent — the **tick path** (the exit-only Trader entry point, then Risk → Verdict → Execution if it produced an intent); present — the **decision path**, a straight-line sequential call chain through the already-specced stage interfaces (`Analysts.run`, `DebateEngine.run`, `Trader.decide`, `Risk.evaluate`, `Verdict.decide`, `Execution.execute`). The Orchestrator does not reimplement any stage's decision logic on either path.
+- **One Trader entry point per pass, and the flatten is still evaluated on every pass.** A decision pass does not also run the tick path's exit check, because `Trader.decide`'s own routing evaluates the flatten window FIRST on its holding branch (#668) — running both would emit the same-keyed exit twice and write two audit rows per tail stage under one trace. The one pass this can cost a flatten on is a decision pass that short-circuits before the Trader (a quorum skip), and the next tick — one tick interval later, a tick pass — fires it; a quorum skip lost the flatten for exactly one tick interval before the split too, so this is not a new exposure.
 - **The tick path calls the Trader too, but on its exit-only entry point.** Mark, bracket evaluation, early exit and the time flatten are all Trader concerns, not Orchestrator ones — the split is about *which* Trader entry point runs on which cadence, not about relocating exit logic into the runner. The exit path must be reachable without an `AnalystView[]`, which is constraint 4 above stated as an interface requirement.
 - Concurrency across instruments is bounded by a configured cap (`max_concurrent_instruments`), primarily to respect the LLM rate limit on Analysts/Debate (CLAUDE.md HARD STOP governs LLM usage, not broker calls).
 - Every stage call passes `trace_id` through its input envelope; every stage's structured log line carries it (propagation note below).
@@ -322,7 +330,7 @@ function buildProductionTickRunner(config: ProductionConfig): {
 };
 ```
 
-- **Six `TickSteps` bindings.** `trader` (`decide`), `risk` (`RiskManagerImpl.evaluate`), `verdict` (`VerdictImpl.decide`), and `execution` (`ExecutionImpl.execute`) bind directly — each already matches its `TickSteps` method once its own config/dependencies are closed over at construction time. `analysts` and `debate` need a thin adapter: `AnalystOrchestrator.runAnalysts(trace_id, signal, clock)` returns `AnalystRunResult` (`{ views, analyst_count, skipped }`), narrowed to the bare `AnalystView[]` `TickSteps.analysts` expects; `runDebate(input: DebateInput, personas: DebatePersonas)` takes two arguments, closed over the bull/bear/mediator persona set (each backed by the LLM client) to present `TickSteps.debate`'s one-argument shape.
+- **Seven `TickSteps` bindings.** `trader` (`decideWithReason`) and `exitCheck` (`checkExitsWithReason`, the Trader's exit-only entry point — bound from the SAME construction so the two share one diagnostic throttle, or the #698/#710 consecutive-tick counting under-counts), `risk` (`RiskManagerImpl.evaluate`), `verdict` (`VerdictImpl.decide`), and `execution` (`ExecutionImpl.execute`) bind directly — each already matches its `TickSteps` method once its own config/dependencies are closed over at construction time. `analysts` and `debate` need a thin adapter: `AnalystOrchestrator.runAnalysts(trace_id, signal, clock)` returns `AnalystRunResult` (`{ views, analyst_count, skipped }`), narrowed to the bare `AnalystView[]` `TickSteps.analysts` expects; `runDebate(input: DebateInput, personas: DebatePersonas)` takes two arguments, closed over the bull/bear/mediator persona set (each backed by the LLM client) to present `TickSteps.debate`'s one-argument shape — a shape that carries the gate's `bar`, which the adapter keys `debate_id` on rather than flooring a clock read of its own.
 - **Not part of `TickSteps`:** Feedback Loop's `onTradeClose` (hooks off an `ExecutionResult` fill, called from the same composition point as a side-effect of a completed tick, not a `TickSteps` step) and `runDailyCycle` (its own daily-interval schedule, independent of the per-instrument tick chain).
 - **Universe is a config value, not a code path.** `UniverseScheduler`'s `SchedulerConfig.universe` already accepts an arbitrary instrument list; the first paper run passed a narrow smoke-test universe (1-2 instruments) rather than `DEFAULT_UNIVERSE`, widened only after a clean first tick. **That widening has happened ([#381](https://github.com/dd-jp/samurai-trading-system/issues/381)):** `paperStartingProfile` now supplies `DEFAULT_UNIVERSE`, and `yarn smoke` keeps `SMOKE_TEST_UNIVERSE` by passing it explicitly — so the narrow set remains the pre-soak gate rather than the soak. `ProductionConfig.universe` still defaults to `SMOKE_TEST_UNIVERSE`, so no programmatic caller inherits six live instruments by omission.
 

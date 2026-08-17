@@ -11,8 +11,10 @@ export {
   retrieveCosinePrecedent,
 } from './cosine-precedent.js';
 export {
+  checkExitsWithReason,
   decide,
   decideWithReason,
+  type ExitCheckInput,
   type TraderDiagnostic,
   type TraderDiagnosticKind,
   type TraderOutcome,

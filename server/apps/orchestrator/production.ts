@@ -188,6 +188,7 @@ import {
   ParkedCiiScoreProvider,
   UnwiredApprovalChannel,
 } from './console-channels.js';
+import { DebateBarDecisionGate, type DecisionGate } from './decision-bar-gate.js';
 import {
   FILL_SYNC_TRACE_ID,
   RECONCILE_TRACE_ID,
@@ -205,7 +206,7 @@ import {
   buildExecutionSurface,
   buildPersistence,
   buildRiskStep,
-  buildTraderStep,
+  buildTraderSteps,
   buildVerdictStep,
   type ExecutionStepDeps,
   type PersistenceInstances,
@@ -958,7 +959,58 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     });
   }
 
+  // The Trader's two entry points, built together so the tick path's exit
+  // check and the decision path's full decision share one dependency set and
+  // one diagnostic throttle (#743) — see `buildTraderSteps`.
+  const traderSteps = buildTraderSteps({
+    ...breakerStateDeps,
+    config: config.traderConfig,
+    // #668: THE pair built above, not a fresh one. ADR-0014's flat-by-close
+    // resolves through the instrument's own venue, so the Trader has to read
+    // the same calendars the daily-PnL boundary and the volatility reading
+    // do — a second literal here would be a second place for an override to
+    // land on only some consumers.
+    sessionCalendars,
+    // #568: literally the `executionStore` above — the same instance
+    // `getOpenPositions` reads and `ingestFills()` writes fills through — so
+    // the Trader sizes an exit off the same fill record `executeExit`
+    // re-derives it from. Two stores here would mean two answers to "what
+    // does this lot still hold", which is the divergence #568 was.
+    getExitFillSizes: (idempotency_keys) => executionStore.getExitFillSizes(idempotency_keys),
+    setupStore,
+    traderLog: new SqliteTraderLogStore(config.db),
+    // #511: the declared capital ceiling, spread through rather than read
+    // from the environment here — this is the ONE hop that carries it from
+    // `liveStartingProfile` to the arithmetic that turns equity into a size.
+    // Omitted (not passed as `undefined`) on every paper/backtest run under
+    // `exactOptionalPropertyTypes`, which is the pre-#511 behaviour and the
+    // same conditional-spread idiom `verdictAlerts` below uses.
+    ...(config.capitalCeilingUsd === undefined
+      ? {}
+      : { capitalCeilingUsd: config.capitalCeilingUsd }),
+    // #698: the diagnostic escalation, wired HERE and not only declared.
+    // `TraderDiagnosticAlertChannel` would otherwise be the next instance of
+    // this repo's dominant defect shape — a tested mechanism nothing calls
+    // (#364's store, #388's rate limiter) — and the failure it reports is one
+    // whose only other symptom is a book that quietly stops trading.
+    //
+    // Same conditional-spread idiom as `capitalCeilingUsd` above, required by
+    // `exactOptionalPropertyTypes`: omitted rather than passed as `undefined`
+    // under `log-only`, where the step's own logger is the whole reporting
+    // path.
+    ...(config.traderDiagnosticAlerts === undefined
+      ? {}
+      : { traderDiagnosticAlerts: config.traderDiagnosticAlerts }),
+    // The sink for the diagnostics themselves, and for an alert the transport
+    // could not deliver. Without it a log-only run would have nowhere to put
+    // them at all.
+    logger,
+  });
+
   const steps: TickSteps = {
+    // #743: the tick path's position-facing exit check — the Trader's
+    // exit-only entry point, runnable without analysts or a debate.
+    exitCheck: traderSteps.exitCheck,
     // `logger` here is what makes an analyst failure visible at all — see the
     // adapter's doc comment (issue #358 item 4).
     analysts: buildAnalystsStep(analysts, logger, {
@@ -1002,51 +1054,8 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // only record is an `audit_log` digest — enough to prove the stage ran,
     // never enough to say why a size came out at N or why a tick stopped at
     // `risk`. Both write on a skip/rejection too, which is the case with no
-    // downstream record at all.
-    trader: buildTraderStep({
-      ...breakerStateDeps,
-      config: config.traderConfig,
-      // #668: THE pair built above, not a fresh one. ADR-0014's flat-by-close
-      // resolves through the instrument's own venue, so the Trader has to read
-      // the same calendars the daily-PnL boundary and the volatility reading
-      // do — a second literal here would be a second place for an override to
-      // land on only some consumers.
-      sessionCalendars,
-      // #568: literally the `executionStore` above — the same instance
-      // `getOpenPositions` reads and `ingestFills()` writes fills through — so
-      // the Trader sizes an exit off the same fill record `executeExit`
-      // re-derives it from. Two stores here would mean two answers to "what
-      // does this lot still hold", which is the divergence #568 was.
-      getExitFillSizes: (idempotency_keys) => executionStore.getExitFillSizes(idempotency_keys),
-      setupStore,
-      traderLog: new SqliteTraderLogStore(config.db),
-      // #511: the declared capital ceiling, spread through rather than read
-      // from the environment here — this is the ONE hop that carries it from
-      // `liveStartingProfile` to the arithmetic that turns equity into a size.
-      // Omitted (not passed as `undefined`) on every paper/backtest run under
-      // `exactOptionalPropertyTypes`, which is the pre-#511 behaviour and the
-      // same conditional-spread idiom `verdictAlerts` below uses.
-      ...(config.capitalCeilingUsd === undefined
-        ? {}
-        : { capitalCeilingUsd: config.capitalCeilingUsd }),
-      // #698: the diagnostic escalation, wired HERE and not only declared.
-      // `TraderDiagnosticAlertChannel` would otherwise be the next instance of
-      // this repo's dominant defect shape — a tested mechanism nothing calls
-      // (#364's store, #388's rate limiter) — and the failure it reports is one
-      // whose only other symptom is a book that quietly stops trading.
-      //
-      // Same conditional-spread idiom as `capitalCeilingUsd` above, required by
-      // `exactOptionalPropertyTypes`: omitted rather than passed as `undefined`
-      // under `log-only`, where the step's own logger is the whole reporting
-      // path.
-      ...(config.traderDiagnosticAlerts === undefined
-        ? {}
-        : { traderDiagnosticAlerts: config.traderDiagnosticAlerts }),
-      // The sink for the diagnostics themselves, and for an alert the transport
-      // could not deliver. Without it a log-only run would have nowhere to put
-      // them at all.
-      logger,
-    }),
+    // downstream record at all. Bound above via `buildTraderSteps` (#743).
+    trader: traderSteps.trader,
     risk: buildRiskStep({
       ...breakerStateDeps,
       config: config.riskConfig,
@@ -1272,6 +1281,8 @@ export function startTickLoop(deps: {
   tickIntervalMs: number;
   /** Per PASS, not process-wide: the real ceiling is this x passes in flight (#692). */
   maxConcurrentInstruments: number;
+  /** The tick/decision split's gate (#743) — see `TickLoopConfig.decisionGate`. */
+  decisionGate: DecisionGate;
 }): { stop: () => Promise<void> } {
   let stopped = false;
   /**
@@ -1429,6 +1440,7 @@ export function startTickLoop(deps: {
           logger: deps.logger,
           auditLog: deps.persistence.auditLog,
           currentTickStore: deps.persistence.currentTickStore,
+          decisionGate: deps.decisionGate,
         },
       )
         .then(() => undefined)
@@ -1931,6 +1943,9 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         persistence,
         tickIntervalMs: config.tickIntervalMs ?? DEFAULT_TICK_INTERVAL_MS,
         maxConcurrentInstruments: config.maxConcurrentInstruments ?? 1,
+        // #743: one gate per orchestrator, held across ticks — its per-bar
+        // claims are what turn the 2-minute tick into a once-per-bar decision.
+        decisionGate: new DebateBarDecisionGate(),
       });
 
       // #327: both of these degraded modes were previously reached by pure

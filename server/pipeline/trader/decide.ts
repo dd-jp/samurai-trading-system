@@ -193,7 +193,10 @@ interface FlattenWindowVerdict {
  * returned verdict, and the adapter that already writes `trader_log` turns it
  * into an alert. Every `within` value below is exactly what it was before.
  */
-function withinFlattenWindow(input: TraderInput, assetClass: AssetClass): FlattenWindowVerdict {
+function withinFlattenWindow(
+  input: Pick<TraderInput, 'clock' | 'config' | 'sessionCalendars'>,
+  assetClass: AssetClass,
+): FlattenWindowVerdict {
   // Checked here rather than at construction because `TraderConfig` is a plain
   // interface with no validation seam — nothing between the config literal and
   // this comparison inspects the value. Written as `!(x > 0)` so `NaN` fails
@@ -582,11 +585,48 @@ async function buildExitIntent(
   input: TraderInput,
   positions: OpenPosition[],
 ): Promise<TraderOutcome> {
-  const { clock, config, debate, exitFillSizes, instrument, marketData } = input;
+  const { debate } = input;
+  return buildFlattenExit(input, positions, decisionBarFor(debate), {
+    debate_id: debate.debate_id,
+    conviction: debate.confidence,
+    converged: debate.converged,
+  });
+}
+
+/**
+ * What an exit intent's metadata attributes the flatten TO.
+ *
+ * On the decision path this is the current bar's debate — unchanged behaviour.
+ * On the tick path (#743) there is no debate by construction, so the exit
+ * check attributes to the debate that OPENED the most recent lot, read off
+ * `OpenPosition` — which is the more literal answer to "which decision is this
+ * exit a consequence of", and requires consulting nothing the analysts or the
+ * Debate Engine produced this bar.
+ */
+interface ExitAttribution {
+  debate_id: string;
+  conviction: number;
+  converged: boolean;
+}
+
+/**
+ * The debate-free core of the flatten (#743): everything an exit needs is a
+ * mark, the held quantities and a bar coordinate for the idempotency key.
+ * `attribution` is metadata only — nothing here branches on it, which is what
+ * keeps the exit path safe to run without a debate (orchestrator-spec.md,
+ * "The tick/decision split", constraint 4).
+ */
+async function buildFlattenExit(
+  input: Pick<TraderInput, 'clock' | 'config' | 'exitFillSizes' | 'instrument' | 'marketData'>,
+  positions: OpenPosition[],
+  decisionBar: Date,
+  attribution: ExitAttribution,
+): Promise<TraderOutcome> {
+  const { clock, config, exitFillSizes, instrument, marketData } = input;
 
   const existingSide = positions[0]?.side;
   if (existingSide === undefined) {
-    throw new Error('buildExitIntent: positions must be non-empty');
+    throw new Error('buildFlattenExit: positions must be non-empty');
   }
   const closingSide = existingSide === 'buy' ? 'sell' : 'buy';
   // Only filled exposure needs flattening — a lot still `pending`/
@@ -617,7 +657,6 @@ async function buildExitIntent(
 
   const asOf = clock.now();
   const mark = await marketData.getMark(instrument, asOf);
-  const decisionBar = decisionBarFor(debate);
 
   return emit(
     {
@@ -633,9 +672,9 @@ async function buildExitIntent(
       time_in_force: config.time_in_force[mark.asset_class],
       decision_timestamp: decisionBar,
       metadata: {
-        debate_id: debate.debate_id,
-        conviction: debate.confidence,
-        converged: debate.converged,
+        debate_id: attribution.debate_id,
+        conviction: attribution.conviction,
+        converged: attribution.converged,
         sizing: {
           base_risk_fraction: 0,
           conviction_multiplier: 0,
@@ -704,6 +743,15 @@ export type TraderSkipReason =
   // is the thing to look at, and an instrument is stuck un-exitable until it
   // is.
   | 'exit_held_quantity_diverged'
+  // #743, tick path only: no lot is open for this instrument, so the exit
+  // check has nothing to evaluate. By far the commonest tick-path outcome and
+  // entirely healthy — it is the exit-cadence sibling of a quiet decision.
+  | 'no_open_position'
+  // #743, tick path only: a lot is held and the flat-by-close window has not
+  // opened yet. Also healthy — holding through the session is what a position
+  // is for. Distinct from `no_open_position` so a soak can tell "flat" from
+  // "holding, exit not yet due" without joining `open_positions`.
+  | 'flatten_not_due'
   | 'no_position_side'
   | 'atr_insufficient_bars'
   | 'atr_not_finite'
@@ -928,4 +976,87 @@ async function routeDecision(
   }
 
   return buildBracket(input, 'scale_in', diagnostics);
+}
+
+/**
+ * The Trader's EXIT-ONLY entry point (#743) — what the tick path runs.
+ *
+ * A `Pick` of `TraderInput`, not a new bag of dependencies: everything here is
+ * the same seam the decision path already injects, minus `debate` (there is
+ * none on a tick pass, by construction — that absence is the "exits must not
+ * read analyst output" constraint stated in the type), minus the sizing
+ * inputs (`equity`, `setupStore`) an exit never uses, plus the `bar` the
+ * runner floored once for this pass — the coordinate the exit's idempotency
+ * key dedupes on, inherited rather than re-derived here for the same reason
+ * `decisionBarFor` inherits the debate's (#616/#687).
+ */
+export type ExitCheckInput = Pick<
+  TraderInput,
+  | 'trace_id'
+  | 'instrument'
+  | 'clock'
+  | 'config'
+  | 'marketData'
+  | 'sessionCalendars'
+  | 'positionState'
+  | 'exitFillSizes'
+> & {
+  /** The pass's debate-bar coordinate, floored once by the tick runner. */
+  bar: Date;
+};
+
+/**
+ * Evaluates ONLY the position-facing exits for one instrument: is a lot held,
+ * and is the flat-by-close window (#668, ADR-0014) open for its venue? If so,
+ * the same flatten intent the decision path would build — held quantities,
+ * degenerate stop/target, `'close'`-side idempotency key on `input.bar`.
+ *
+ * What it deliberately does NOT evaluate: entries, scale-ins, and the
+ * direction-flip exit — all of those are answers to "what does the debate
+ * say", which is a decision-path question and runs once per debate bar. This
+ * function consults no `AnalystView` and no `DebateResult`; its exit
+ * attribution comes off the most recent open lot.
+ *
+ * Mirrors `decideWithReason`'s shape (an outcome plus collected diagnostics)
+ * so the adapter that writes `trader_log` and escalates diagnostics treats
+ * both entry points identically.
+ */
+export async function checkExitsWithReason(input: ExitCheckInput): Promise<TraderOutcome> {
+  const diagnostics: TraderDiagnostic[] = [];
+  const outcome = await routeExitCheck(input, diagnostics);
+  return diagnostics.length === 0 ? outcome : { ...outcome, diagnostics };
+}
+
+/** `checkExitsWithReason`'s routing, with the #698 diagnostic accumulator threaded through. */
+async function routeExitCheck(
+  input: ExitCheckInput,
+  diagnostics: TraderDiagnostic[],
+): Promise<TraderOutcome> {
+  const { instrument, positionState } = input;
+
+  const positions = (await positionState()).filter((lot) => lot.instrument === instrument);
+  if (positions.length === 0) return skip('no_open_position');
+
+  const existingSide = positions[0]?.side;
+  if (existingSide === undefined) return skip('no_position_side');
+
+  const positionAssetClass = positions[0]?.asset_class;
+  if (positionAssetClass === undefined) return skip('no_position_side');
+
+  const flattenWindow = withinFlattenWindow(input, positionAssetClass);
+  // Pushed BEFORE the branch, exactly as `routeDecision` does: the diagnostic
+  // must survive both a flatten (an emit) and a calendar that has quietly
+  // stopped resolving sessions (a skip) — the second is #698's silent case,
+  // and at a 2-minute tick THIS is now the path that reports it most often.
+  if (flattenWindow.diagnostic !== null) diagnostics.push(flattenWindow.diagnostic);
+  if (!flattenWindow.within) return skip('flatten_not_due');
+
+  const mostRecentLot = positions.reduce((latest, lot) =>
+    lot.opened_at > latest.opened_at ? lot : latest,
+  );
+  return buildFlattenExit(input, positions, input.bar, {
+    debate_id: mostRecentLot.debate_id,
+    conviction: mostRecentLot.conviction,
+    converged: mostRecentLot.converged,
+  });
 }

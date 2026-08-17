@@ -29,6 +29,7 @@ import type { Clock } from '../../shared/index.js';
 // worked out first (#507) — see that file's doc for the full reasoning,
 // unchanged by the move.
 import { describeThrown, safeLog } from '../../shared/index.js';
+import type { DecisionGate } from './decision-bar-gate.js';
 import { digest } from './digest.js';
 import type {
   AuditLog,
@@ -55,6 +56,20 @@ export interface TickLoopConfig {
   auditLog: AuditLog;
   /** shared_store.current_tick writer, forwarded into every instrument's TickContext (#96). */
   currentTickStore: CurrentTickStore;
+  /**
+   * The tick/decision split's gate (#743). Consulted per instrument, per tick:
+   * a granted claim rides into `TickContext.decision_bar` and the runner runs
+   * the full decision chain; no claim means the tick path only.
+   *
+   * REQUIRED, not optional, for this repo's standing reason (#364, #388): an
+   * optional gate would let a composition root omit it, and the failure mode
+   * of omission — every tick a decision — is a silent 30x LLM-spend
+   * multiplier that reads as a healthy busy system. A caller that genuinely
+   * wants every tick to decide (the backtest harness stepping 1h bars says
+   * exactly this) constructs a `DebateBarDecisionGate` and lets every bar
+   * claim, which is the same thing stated honestly.
+   */
+  decisionGate: DecisionGate;
 }
 
 /**
@@ -92,6 +107,13 @@ export async function runTickPlan(
       };
       const trace_id = newTraceId();
 
+      // The decision gate is consulted on the PLAN's tick time, not a fresh
+      // clock read (#743): every instrument in one plan must be gated on the
+      // same instant — the same argument `UniverseScheduler.nextTick` makes
+      // for reading the calendar once — and in replay the plan time is the
+      // deterministic coordinate.
+      const decisionBar = config.decisionGate.claim(instrument.asset, plan.tick_time);
+
       // See the file header (#507) for why this is caught here rather than
       // left to reject `Promise.all`.
       try {
@@ -101,8 +123,19 @@ export async function runTickPlan(
           logger: config.logger,
           auditLog: config.auditLog,
           currentTickStore: config.currentTickStore,
+          // Conditional spread under `exactOptionalPropertyTypes`: absent
+          // means "tick path only", never an explicit `undefined`.
+          ...(decisionBar === undefined ? {} : { decision_bar: decisionBar }),
         });
       } catch (error) {
+        // A claimed decision whose pass THREW is handed back to the gate, so
+        // the next tick in the same bar retries the decision instead of the
+        // bar being silently forfeited to a transient failure (#743). The
+        // debate adapter's same-bar memo and the #617 short-circuit make the
+        // retry cheap when the failed pass had already persisted its row.
+        if (decisionBar !== undefined) {
+          config.decisionGate.rescind(instrument.asset, decisionBar);
+        }
         // Not swallowed: still reaches the logger, still gets a durable
         // `audit_log` row (below — the runner itself never writes one for a
         // stage that threw mid-call, since `record()` in tick-runner.ts only
