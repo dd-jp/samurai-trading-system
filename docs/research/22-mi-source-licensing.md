@@ -156,6 +156,65 @@ This is flagged, deliberately not resolved: it sits outside the MI map's destina
 Alpaca+Coinbase+Bitstamp stack already proven at £0 in `free-ohlcv-*`) is David's. It is recorded here
 so it does not evaporate with this session.
 
+### Collateral finding RESOLVED — [#612](https://github.com/dd-jp/samurai-trading-system/issues/612), 2026-08-17
+
+The ticket allowed for a no-op close *"if Massive is genuinely not in the backfill path any more"*.
+**It is not that clean.** Massive is off the live feed entirely, but it is still the **default**
+source of Stage 2's strategy verdicts.
+
+**Clause re-verified against the primary source**, not from the quote above. `polygon.io/terms` now
+resolves to `massive.com/terms`, which splits into three documents. Two of them matter and they do
+**not** say the same thing:
+
+| Document | Last updated (read 2026-08-17) | Derivative-works object | Bites? |
+| --- | --- | --- | --- |
+| Businesses ToS §6.1(j) | 2025-09-02 | **"the Information"** — everything the Services serve, aggregates included; enumeration names *"investment strategy"* | **Yes**, on plain wording |
+| Individuals ToS | 2025-07-18 | *"the **Services** or the technology underlying the Services"* — the software, **not** the data | **No** — but the grant is *"solely for your own personal, non-commercial, and non-business purposes"* |
+
+§6.1(j) is unchanged from the §3 quote above and the licence grant that precedes it is narrower than
+recorded: *"solely for Customer's internal purposes"* (§2.1), where the earlier reading had the
+websites/applications wording. **The Individuals ToS is the materially easier document, and it is
+plausibly the one that binds us** — the key is a free personal registration, not a business account,
+and "investment strategy" appears there only inside a no-advice disclaimer, never as a prohibition.
+That reading is not free: it depends on £1,500 of own-account trading counting as *personal,
+non-commercial and non-business*, which is arguable and unlitigated here. Not legal advice.
+
+**Where Massive bars actually reach, in code.** Four call sites, **all under `server/tools/`**:
+
+| Call site | What it feeds | Live-money path? |
+| --- | --- | --- |
+| `server/tools/stage2-source.ts:71` | `STAGE2_SOURCE` **defaults to `'polygon'`** — every Stage 2 verdict to date was computed on Massive bars unless `free-stack` was set | Research/eval. But a Stage 2 verdict *is* an investment strategy derived from the Information — the single closest fit to §6.1(j)'s enumeration in the whole repo |
+| `server/tools/backfill-market-data.ts:362` | equity leg of `withOhlcvFailover`: Alpaca primary → `PolygonBarsClient` fallback, persisting rows stamped `source: 'polygon'` into the shared store the runtime reads | **The one path that could put Massive bars under a trading decision** |
+| `server/tools/run-spread-calibration.ts:258` | cost-model calibration | Research |
+| `server/tools/run-stage2-cost-decomposition.ts:393` | cost decomposition | Research |
+
+**The runtime composition root does not touch Massive.** `production.ts:547-548` builds its
+`DataSource` from `buildAlpacaDataSource` and `MarketDataServiceImpl` gets nothing else; there is no
+Polygon branch on the tick path in paper or live. Empirically confirmed against the paper store:
+`select source, count(*) from bars` returns **`alpaca|209` and nothing else** — the failover leg has
+never fired, so no Massive-derived bar has ever priced a decision.
+
+**Assessment.** Exposure on the live-money path is **near-zero today but not structurally closed** —
+it is one Alpaca outage away from being real, because that is exactly when the fallback fires.
+Exposure on the *research* path is live right now and is the larger surface: the Stage 2 KILL, the
+PBO/DSR numbers and the cost decomposition were all computed off Massive aggregates.
+
+**Recommendations for David — the call remains his.**
+
+1. **Backfill (do this one).** Drop `PolygonBarsClient` from the equity failover chain, or leave it
+   unconstructable by keeping `POLYGON_API_KEY` out of the runtime environment. It has never served a
+   bar, so removing it costs nothing measured, and it is the only route from §6.1(j) to a live order.
+   Note the trade-off honestly: equities then have **no** OHLCV fallback, since Coinbase/Bitstamp
+   cover crypto only.
+2. **Stage 2 default — do not flip it.** `stage2-source.ts`'s module doc keeps `'polygon'` default so
+   prior verdicts stay reproducible with no environment change, and that reason still holds. If the
+   strict Businesses reading is adopted, the right move is to **re-run the standing verdicts under
+   `STAGE2_SOURCE=free-stack`** (ten years vs two, £0, keys already held) and cite those, rather than
+   silently changing what every existing invocation measures.
+3. **Do not seek written clarification from Massive.** Asking a vendor whether its boilerplate bars a
+   retail account invites a written "yes" that forecloses the Individuals reading, on a dependency
+   the project can replace at £0.
+
 ---
 
 ## 4. RSS fleet — posture confirmed as **gray, and less gray than hoped**
