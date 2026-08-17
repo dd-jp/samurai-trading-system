@@ -2,7 +2,7 @@
  * `buildPipelineView` — the pure projection behind the dashboard's Pipeline
  * view (wayfinder map #411; ticker lanes decided in #412). Takes the raw
  * `PipelineActivity` a `DashboardQueryStore` read produces and turns it into
- * the frozen `PipelineView` wire model in `pipeline-types.ts`.
+ * the frozen `PipelineView` wire model in `contracts/pipeline.ts`.
  *
  * Pure by design, the same seam `buildSnapshot` uses: every cell-state rule
  * below is exercised from an event list in `pipeline-query.test.ts` without a
@@ -26,7 +26,6 @@
  *    old trace as the current state of the instrument.
  */
 
-import type { TickStage } from '../orchestrator/index.js';
 import {
   PIPELINE_STAGES,
   type PipelineCell,
@@ -35,7 +34,8 @@ import {
   type PipelineOutcome,
   type PipelineStage,
   type PipelineView,
-} from './pipeline-types.js';
+} from '../../../contracts/pipeline.js';
+import type { TickStage } from '../orchestrator/index.js';
 import type { PipelineActivity, PipelineLiveTick, PipelineStageEvent } from './types.js';
 
 /**

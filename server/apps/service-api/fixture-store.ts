@@ -15,11 +15,11 @@
  * server or snapshot seam.
  */
 
+import type { PipelineStage } from '../../../contracts/pipeline.js';
 import type { AnalystContribution } from '../../pipeline/debate-engine/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
 import type { DebateLog, OpenPosition } from '../../shared/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
-import type { PipelineStage } from './pipeline-types.js';
 import type {
   AttributionSummary,
   DashboardQueryStore,
