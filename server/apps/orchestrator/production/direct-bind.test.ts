@@ -951,16 +951,20 @@ describe('buildRiskStep', () => {
   });
 
   it('#740: persists a below-viable-size refusal to risk_log with a binding_constraint distinct from a circuit-breaker refusal', async () => {
-    // Verified against the actual persisted `risk_log` ROW `riskLog.write`
+    // Verified against the actual persisted `risk_log` ROWS `riskLog.write`
     // receives (below), not the in-memory `RiskDecision.reasons` array — a
-    // post-mortem reads the store, never the process's own memory.
+    // post-mortem reads the store, never the process's own memory. Two
+    // DIFFERENT rejection causes are driven through the SAME riskLog sink so
+    // the assertion can fail if they ever collapse onto one tag — a single
+    // `toBe('min_viable_size')` plus a tautological `not.toBe` on an
+    // unrelated literal would not catch that.
     const writes: unknown[] = [];
     const riskLog = { write: (record: unknown) => writes.push(record) };
 
     // Trimmed to £5 notional by the £5 per-asset-class cap, which is below
     // the £100 `min_viable_size` floor — a dust residual that must refuse
     // rather than forward.
-    const step = buildRiskStep({
+    const sizeStep = buildRiskStep({
       config: {
         ...RISK_CONFIG,
         per_asset_class_cap: { crypto: 100_000, stocks: 5 },
@@ -987,24 +991,74 @@ describe('buildRiskStep', () => {
       riskLog,
     });
 
-    const decision = await step({
+    const sizeDecision = await sizeStep({
       trace_id: TRACE_ID,
       intent: makeIntent({ size: 10, entry: 100 }),
       clock: CLOCK,
     });
 
-    expect(decision.status).toBe('rejected');
-    expect(decision.binding_constraint).toBe('min_viable_size');
-    expect(decision.order_intent).toBeNull();
+    expect(sizeDecision.status).toBe('rejected');
+    expect(sizeDecision.binding_constraint).toBe('min_viable_size');
+    expect(sizeDecision.order_intent).toBeNull();
 
-    expect(writes).toHaveLength(1);
-    const row = writes[0] as { status: string; binding_constraint: string | null };
-    expect(row.status).toBe('rejected');
-    expect(row.binding_constraint).toBe('min_viable_size');
-    // Distinct from the OTHER rejection cause covered above (a tripped
-    // breaker) at the persisted-row level — the property the ticket asks
-    // to be verified, not merely inspected.
-    expect(row.binding_constraint).not.toBe('circuit_breaker:portfolio');
+    // Same riskLog sink, a genuinely different rejection cause: the sticky
+    // tripped-breaker scenario from the test immediately above.
+    const breakerStep = buildRiskStep({
+      config: RISK_CONFIG,
+      correlationConfig: { window: { timeframe: '1d', lookback: 30 }, min_bars: 5 },
+      ciiConsumer: { getScores: vi.fn(() => ({})) },
+      marketData: FAKE_MARKET_DATA,
+      circuitBreakers: new CircuitBreakers({
+        daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+        max_drawdown_pct: 0.2,
+        max_consecutive_losses: 5,
+        volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+        auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+      }),
+      accountState: {
+        getAccountState: vi.fn(async () => ({
+          cash: 0,
+          peak_equity: 1_000_000,
+          daily_basis: {
+            crypto: { known: true, open_equity: 1_000_000, realized_pnl: 0 },
+            stocks: { known: true, open_equity: 1_000_000, realized_pnl: 0 },
+            portfolio: { known: true, open_equity: 1_000_000, realized_pnl: 0 },
+          } as const,
+          consecutive_losses: 0,
+        })),
+      },
+      volatility: FAKE_VOLATILITY,
+      getOpenPositions: async () => NO_POSITIONS,
+      maxMarkAge: TEST_MAX_MARK_AGE,
+      mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
+      riskLog,
+    });
+
+    const breakerDecision = await breakerStep({
+      trace_id: TRACE_ID,
+      intent: makeIntent(),
+      clock: CLOCK,
+    });
+
+    expect(breakerDecision.status).toBe('rejected');
+    expect(breakerDecision.binding_constraint).toBe('circuit_breaker:portfolio');
+
+    expect(writes).toHaveLength(2);
+    const [sizeRow, breakerRow] = writes as Array<{
+      status: string;
+      binding_constraint: string | null;
+    }>;
+    expect(sizeRow.status).toBe('rejected');
+    expect(breakerRow.status).toBe('rejected');
+    expect(sizeRow.binding_constraint).toBe('min_viable_size');
+    expect(breakerRow.binding_constraint).toBe('circuit_breaker:portfolio');
+    // The property the ticket asks to be verified, not merely inspected:
+    // two distinct rejection causes must not collapse onto the same
+    // persisted binding_constraint tag.
+    expect(sizeRow.binding_constraint).not.toBe(breakerRow.binding_constraint);
   });
 
   describe('#726: risk_log on the per-subclass cap gate throw', () => {
