@@ -28,6 +28,7 @@
  * equity-curve table is the honest fix, not attempted here.
  */
 
+import { PIPELINE_STAGES, type PipelineStage } from '../../../contracts/pipeline.js';
 import type { AnalystContribution, Direction } from '../../pipeline/debate-engine/index.js';
 import { creditForContribution, realizedR } from '../../pipeline/feedback-loop/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
@@ -39,7 +40,6 @@ import {
 } from '../../shared/store/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
 import type { AssetClass, TickStage } from '../orchestrator/index.js';
-import { PIPELINE_STAGES, type PipelineStage } from './pipeline-types.js';
 import type {
   AttributionSummary,
   DashboardQueryStore,
