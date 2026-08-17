@@ -40,8 +40,10 @@
  *   diverge; these cases are what would catch it.
  * - That `lookback` is a real input to the recursive kinds and is not one to
  *   `sma` — the fact that makes `lookback` part of the cache key.
- * - Two conventions that read as bugs and are not: a dead-flat window returns
- *   RSI **100**, and `atr` over one returns exactly **0**.
+ * - Two conventions that read as bugs and are not: a strictly rising window
+ *   returns RSI **100** (a dead-flat window instead returns the neutral
+ *   midpoint **50**, #725 — see "the flat-tape fix" below), and `atr` over a
+ *   flat window returns exactly **0**.
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -59,7 +61,16 @@ interface GoldenCase {
    * failure to catch it would be a golden case that silently stops running.
    */
   indicator: IndicatorKind;
-  period: number;
+  /** Scalar-period cases (the original four kinds). Mutually exclusive with `params`. */
+  period?: number;
+  /**
+   * Named-parameter cases (#744's additions, and #744's own single-period
+   * new kinds too) — see `generate-indicator-golden.py`'s `case_params`.
+   * Additive on the fixture schema: existing cases keep `period`, new ones
+   * carry `params` instead, so a diff on the fixture shows only what #744
+   * added.
+   */
+  params?: Record<string, number>;
   from: number;
   to: number;
   note: string;
@@ -133,13 +144,42 @@ const specFor = (kind: IndicatorKind, period: number, windowLength: number): Ind
   timeframe: '1h',
 });
 
+/** The `params`-shaped analogue of `specFor`, for #744's named-parameter cases. */
+const specForParams = (
+  kind: IndicatorKind,
+  params: Record<string, number>,
+  windowLength: number,
+): IndicatorSpec => ({
+  indicator: kind,
+  params,
+  lookback: windowLength,
+  timeframe: '1h',
+});
+
+/**
+ * Canonical params per kind (#744) — must match `generate-indicator-golden
+ * .py`'s own canonical sets exactly, since these drive the `boundary_*` and
+ * `full_window_*` case name lookups below.
+ */
+const CANONICAL_PARAMS: Partial<Record<IndicatorKind, Record<string, number>>> = {
+  macd_histogram: { fast: 12, slow: 26, signal: 9 },
+  bb_kc_squeeze: { bb_period: 20, bb_mult: 2, kc_period: 20, kc_mult: 1.5 },
+};
+
 const windowFor = (testCase: GoldenCase): Bar[] => BARS.slice(testCase.from, testCase.to);
 
+/**
+ * Builds the spec a golden case implies, dispatching on which of
+ * `period`/`params` the case carries — the same additive schema
+ * `generate-indicator-golden.py`'s `main()` dispatches on.
+ */
+const specForCase = (testCase: GoldenCase, windowLength: number): IndicatorSpec =>
+  testCase.params !== undefined
+    ? specForParams(testCase.indicator, testCase.params, windowLength)
+    : specFor(testCase.indicator, testCase.period as number, windowLength);
+
 const valueFor = (testCase: GoldenCase): number =>
-  computeIndicator(
-    windowFor(testCase),
-    specFor(testCase.indicator, testCase.period, testCase.to - testCase.from),
-  );
+  computeIndicator(windowFor(testCase), specForCase(testCase, testCase.to - testCase.from));
 
 const caseNamed = (name: string): GoldenCase => {
   const found = golden.cases.find((entry) => entry.name === name);
@@ -158,10 +198,12 @@ describe('computeIndicator against an independent reference', () => {
     });
   }
 
-  it('covers all four shipped kinds, so a new kind cannot arrive unbaselined', () => {
+  it('covers every shipped kind, so a new kind cannot arrive unbaselined', () => {
     // The plan's ordering rule made executable: assert the existing four
-    // before adding any new kind. If B4/B5 add a kind and this list is not
-    // extended with it, this fails.
+    // before adding any new kind. If a future step adds a kind and this list
+    // is not extended with it, this fails. #744 grew this from four kinds to
+    // nine (`atr_pct`, `macd_histogram`, `adx`, `donchian_pos`,
+    // `bb_kc_squeeze`).
     const covered = new Set(golden.cases.map((entry) => entry.indicator));
     // Compared against the REGISTRY, not a literal (#703 B2). As a literal this
     // guard had the defect it exists to prevent: adding a kind to `INDICATORS`
@@ -170,6 +212,20 @@ describe('computeIndicator against an independent reference', () => {
     expect([...covered].sort()).toEqual([...INDICATOR_KINDS].sort());
   });
 });
+
+/**
+ * `boundary_<kind>_14` for the seven single-period kinds; the two
+ * multi-parameter kinds carry their canonical parameter set in the name
+ * instead (matching `generate-indicator-golden.py`'s `case_params` calls),
+ * since "14" cannot name a `fast`/`slow`/`signal` or
+ * `bb_period`/`kc_period` combination.
+ */
+const boundaryCaseName = (kind: IndicatorKind): string =>
+  kind === 'macd_histogram'
+    ? 'boundary_macd_histogram_12_26_9'
+    : kind === 'bb_kc_squeeze'
+      ? 'boundary_bb_kc_squeeze_20_20'
+      : `boundary_${kind}_14`;
 
 describe('the boundary the goldens sit on', () => {
   // The comfortable window is where every seeding convention agrees. The
@@ -180,18 +236,19 @@ describe('the boundary the goldens sit on', () => {
   // boundary_<kind>_14" — instead of shipping with no boundary baseline. A
   // literal list would have quietly kept passing for the four it names.
   for (const kind of INDICATOR_KINDS) {
-    const testCase = caseNamed(`boundary_${kind}_14`);
+    const testCase = caseNamed(boundaryCaseName(kind));
+    const params = CANONICAL_PARAMS[kind] ?? { period: 14 };
 
     it(`${kind}: the golden window is exactly minimumBarsFor, not one bar more`, () => {
       const length = testCase.to - testCase.from;
-      expect(length).toBe(minimumBarsFor(specFor(kind, 14, length)));
+      expect(length).toBe(minimumBarsFor(specForParams(kind, params, length)));
     });
 
     it(`${kind}: one bar fewer throws rather than answering`, () => {
       const length = testCase.to - testCase.from - 1;
       const short = BARS.slice(testCase.from + 1, testCase.to);
 
-      expect(() => computeIndicator(short, specFor(kind, 14, length))).toThrow(
+      expect(() => computeIndicator(short, specForParams(kind, params, length))).toThrow(
         InsufficientBarsError,
       );
     });
@@ -232,9 +289,12 @@ describe('what the warm-up buys, and where it buys nothing', () => {
     // `|rsi - 50| / 50`, so on this fixture's final bar a 15-bar warm-up
     // yields ~0.24 confidence and a 400-bar warm-up ~0.05 — a five-fold swing
     // in how loudly the technical analyst speaks into the debate, from the
-    // lookback alone, with the same period on the same bar. Anyone changing
-    // `INDICATOR_TIMEFRAME` or a spec's `lookback` (step B3 moves both) is
-    // changing this, and it should be a number they had to look at.
+    // lookback alone, with the same period on the same bar. #722 is the
+    // decision this swing forced: `RSI_SPEC` left the 15-bar floor for the
+    // converged 57. The two cases stay at 15 and 400 because what they price
+    // is the SENSITIVITY, not the live spec — anyone changing
+    // `INDICATOR_TIMEFRAME` or a spec's `lookback` is changing this, and it
+    // should be a number they had to look at.
     const short = caseNamed('warmup_sensitivity_rsi_14_15').expected;
     const long = caseNamed('warmup_sensitivity_rsi_14_400').expected;
 
@@ -244,14 +304,9 @@ describe('what the warm-up buys, and where it buys nothing', () => {
 });
 
 describe('conventions that read as bugs and are not', () => {
-  it('answers RSI 100 on a dead-flat window, where nothing has moved at all', () => {
-    // `avgLoss === 0` returns 100 (`indicators.ts:67-69`) without checking
-    // whether `avgGain` is also 0. On a strictly rising window that is the
-    // standard answer; on a halted or auction-flat instrument it means the
-    // technical analyst reports maximum-confidence overbought on a tape that
-    // did not move. Pinned here so the behaviour is a decision on the record
-    // rather than something a soak discovers.
-    expect(valueFor(caseNamed('flat_dojis_rsi_14'))).toBe(100);
+  it('answers RSI 100 on a strictly rising window', () => {
+    // `avgGain > 0 && avgLoss === 0` — the standard Wilder reading for a
+    // window with only up-moves.
     expect(valueFor(caseNamed('rising_run_rsi_14'))).toBe(100);
   });
 
@@ -281,6 +336,25 @@ describe('conventions that read as bugs and are not', () => {
       (gapping.to - gapping.from);
 
     expect(valueFor(gapping)).toBeGreaterThan(perBarRange);
+  });
+});
+
+describe('the flat-tape fix (#725)', () => {
+  // `avgLoss === 0` used to return 100 without checking whether `avgGain`
+  // was also 0. A dead-flat window — every close identical, every change
+  // zero — hit that same branch and answered 100, the same value a
+  // strictly rising window gets. On a halted or auction-flat instrument
+  // (the live LSE leveraged-ETP universe, ADR-0016) that meant the
+  // technical analyst reported `confidence: 0.95` — near-maximum strength
+  // — on a tape that had not moved at all.
+  // `docs/reviews/indicator-characterisation-2026-08-16.md` F3 pinned this
+  // and deliberately did not fix it; these cases pin the fix instead.
+  it('answers the neutral midpoint 50 on a dead-flat window, not 100', () => {
+    expect(valueFor(caseNamed('flat_dojis_rsi_14'))).toBe(50);
+  });
+
+  it('answers 50 regardless of which period asked — the 0/0 shape does not depend on width', () => {
+    expect(valueFor(caseNamed('flat_dojis_rsi_5'))).toBe(50);
   });
 });
 

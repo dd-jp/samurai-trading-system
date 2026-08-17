@@ -10,6 +10,8 @@
  * own suite owns that) and a live broker round-trip (ADR-0004's "wiring
  * validated" bar is a manual E2E run, not a unit test).
  */
+
+import { INDICATOR_UNAVAILABLE_COUNTER } from '../../pipeline/analysts/index.js';
 import {
   AnthropicLlmClient,
   MockLlmClient,
@@ -43,9 +45,11 @@ import { DEFAULT_NOUS_MODELS } from '../../shared/llm/index.js';
 import { openSharedStore, type SharedStore as SqliteHandle } from '../../shared/store/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
 import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
+import { DebateBarDecisionGate } from './decision-bar-gate.js';
 import { paperStartingProfile } from './paper-profile.js';
 import { MIN_RETURN_OBSERVATIONS } from './production/daily-equity-metrics-source.js';
 import { buildPersistence } from './production/direct-bind.js';
+import { MIN_TICKS_INSIDE_FLATTEN_WINDOW } from './production/flatten-tick-coupling.js';
 import {
   buildAlpacaDataSource,
   buildDefaultLlmClient,
@@ -560,6 +564,70 @@ describe('buildProductionComponents', () => {
     },
   );
 
+  it(
+    "wires the run's own Logger into AlpacaBrokerAdapterInput.logger (#609) — a real " +
+      'fill-sweep failure through the composition-root-built broker gets a local trace ' +
+      'through the SAME logger, not a dropped seam',
+    async () => {
+      // #609's whole point, mirrored off the #573 test just above: a unit
+      // test on `AlpacaBrokerAdapter` alone constructs its input by hand, so
+      // it cannot tell whether `buildProductionComponents` actually threads
+      // the real `Logger` through to it rather than the field silently going
+      // unwired. This asserts the composition root, not just the adapter.
+      const logger = recordingLogger();
+      const config = stubConfig(db, { logger });
+      const components = buildProductionComponents(config);
+
+      // A stocks order, unlike `goVerdict()`'s crypto one, submits through
+      // the NATIVE bracket path (`submitOrder`) rather than the emulated one
+      // — the loop `fetchNewFills`'s #609 fix logs from directly. Built from
+      // scratch rather than spreading `goVerdict().order` (`OrderIntent |
+      // null` on `VerdictDecision` — a spread of a nullable type loses the
+      // required-ness TS would otherwise check).
+      const baseGo = goVerdict();
+      const stocksOrder: OrderIntent = {
+        ...(baseGo.order as OrderIntent),
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        idempotency_key: 'idem-exec-stocks',
+      };
+      const stocksVerdict: VerdictDecision = {
+        ...baseGo,
+        order: stocksOrder,
+        idempotency_key: 'idem-exec-stocks',
+      };
+      await components.steps.execution(stocksVerdict);
+
+      // A genuine per-source failure on the just-submitted bracket — an
+      // unparseable `filled_qty`, not the modelled/expected
+      // `UnpricedFillError` — read through the SAME `alpacaBrokerClient` the
+      // composition root gave the broker. Cast the same way `stubConfig`
+      // casts its own `alpacaBrokerClient` fixture (line ~165): this double
+      // only needs the fields `fetchNewFills`'s bracket loop actually reads.
+      config.alpacaBrokerClient.getOrder = vi.fn(async () => ({
+        id: 'alpaca-order-1',
+        client_order_id: 'idem-exec-stocks',
+        status: 'filled',
+        filled_qty: 'N/A',
+        filled_avg_price: '100.02',
+        filled_at: START.toISOString(),
+        legs: [],
+      })) as unknown as typeof config.alpacaBrokerClient.getOrder;
+
+      // Single bracket, all-failed sweep: `fetchNewFills` throws (the
+      // pre-existing, unchanged behaviour) — the assertion below is about
+      // the log line #609 now emits BEFORE that throw, not about the throw
+      // itself.
+      await components.broker.fetchNewFills(new Date(0)).catch(() => undefined);
+
+      expect(
+        logger.entries.some(
+          (entry) => entry.message === 'Alpaca fetchNewFills: per-source failure',
+        ),
+      ).toBe(true);
+    },
+  );
+
   it('buildProductionTickRunner returns a SequentialTickRunner', () => {
     expect(buildProductionTickRunner(stubConfig(db))).toBeInstanceOf(SequentialTickRunner);
   });
@@ -768,6 +836,82 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
  * already ships (`FixtureDataSource`, `SimulatedBrokerAdapter`,
  * `MockLlmClient`), and the stores are the real `Sqlite*` ones.
  */
+/**
+ * #745 — the counter behind an unavailable analyst axis, asserted AT THE
+ * COMPOSITION ROOT.
+ *
+ * Deliberately not "the analyst calls the sink when given one" (that is
+ * `technical-axes.test.ts`'s job): a counter that only exists when a test
+ * hands it in is dead in production, and this repo's dominant defect class is
+ * exactly that — a tested mechanism nothing calls. This drives the REAL
+ * `buildProductionComponents` analysts step against a thin instrument and
+ * reads the log the wired sink writes to.
+ */
+describe('technical_indicator_unavailable is wired by the composition root (#745)', () => {
+  let db: SqliteHandle;
+
+  beforeEach(() => {
+    db = openSharedStore(':memory:');
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it('emits the counter for every enrichment axis a thin instrument cannot fill', async () => {
+    const clock = new SimulatedClock(START);
+    // 19 5m bars: enough for the core (SMA 14, RSI 15, ATR% 15), short of
+    // every enrichment kind. Before #745 this instrument produced no view at
+    // all — the technical analyst is `mandatory`, so it was a `quorum_skip`.
+    const bars = [
+      ...fixtureBars('BTC-USD', '5m', 19, 5 * 60_000),
+      ...fixtureBars('BTC-USD', '1h', 20, 60 * 60_000),
+    ];
+    const logger = recordingLogger();
+    const config = stubConfig(db, {
+      ...REAL_CONFIGS,
+      clock,
+      logger,
+      dataSource: new FixtureDataSource(
+        bars,
+        { price: 160, observed_at: START, source: 'fixture' },
+        'crypto',
+      ),
+      llmClient: new MockLlmClient(),
+    });
+
+    const { steps } = buildProductionComponents(config);
+    const views = await steps.analysts({
+      trace_id: 'trace-745-root',
+      signal: { asset: 'BTC-USD', asset_class: 'crypto' },
+      clock,
+    });
+
+    // The whole point of the split: a view, not a quorum skip.
+    expect(views.some((view) => view.analyst_type === 'technical')).toBe(true);
+
+    // `LogEntry.payload` is `{}`-typed at the port, so the counter fields are
+    // read through a narrow local view rather than by widening the port.
+    const counters = logger.entries
+      .map((entry) => ({
+        ...entry,
+        fields: entry.payload as { counter?: string; kind?: string } | undefined,
+      }))
+      .filter((entry) => entry.fields?.counter === INDICATOR_UNAVAILABLE_COUNTER);
+    expect(counters.map((entry) => entry.fields?.kind).sort()).toEqual([
+      'adx',
+      'bb_kc_squeeze',
+      'donchian_pos',
+      'macd_histogram',
+      'volume_participation',
+    ]);
+    // The counter's own name reaches the log line, so a scrape can find it
+    // without knowing the payload schema.
+    expect(counters[0]?.message).toContain(INDICATOR_UNAVAILABLE_COUNTER);
+    expect(counters[0]?.trace_id).toBe('trace-745-root');
+  });
+});
+
 describe('composed tick chain (integration)', () => {
   let db: SqliteHandle;
 
@@ -783,6 +927,7 @@ describe('composed tick chain (integration)', () => {
     const clock = new SimulatedClock(START);
     const hourMs = 60 * 60 * 1_000;
     const bars = [
+      ...fixtureBars('BTC-USD', '5m', 60, 5 * 60_000),
       ...fixtureBars('BTC-USD', '1h', 60, hourMs),
       ...fixtureBars('BTC-USD', '1m', 60, 60_000),
       ...fixtureBars('BTC-USD', '1d', 40, 24 * hourMs),
@@ -835,6 +980,12 @@ describe('composed tick chain (integration)', () => {
         logger,
         auditLog: persistence.auditLog,
         currentTickStore: persistence.currentTickStore,
+        // #743: this is the composed DECISION chain — the pass needs a claim.
+        decision_bar: {
+          id: `${START.toISOString()}@3600000`,
+          open_time: START,
+          timeframe_ms: 3_600_000,
+        },
       },
     );
 
@@ -894,6 +1045,7 @@ describe('composed tick chain (integration)', () => {
     const clock = new SimulatedClock(START);
     const hourMs = 60 * 60 * 1_000;
     const bars = [
+      ...fixtureBars('BTC-USD', '5m', 60, 5 * 60_000),
       ...fixtureBars('BTC-USD', '1h', 60, hourMs),
       ...fixtureBars('BTC-USD', '1m', 60, 60_000),
       ...fixtureBars('BTC-USD', '1d', 40, 24 * hourMs),
@@ -936,6 +1088,12 @@ describe('composed tick chain (integration)', () => {
         logger: recordingLogger(),
         auditLog: persistence.auditLog,
         currentTickStore: persistence.currentTickStore,
+        // #743: this is the composed DECISION chain — the pass needs a claim.
+        decision_bar: {
+          id: `${START.toISOString()}@3600000`,
+          open_time: START,
+          timeframe_ms: 3_600_000,
+        },
       },
     );
 
@@ -967,6 +1125,7 @@ describe('composed tick chain (integration)', () => {
     const hourMs = 60 * 60 * 1_000;
     const dataSource = new FixtureDataSource(
       [
+        ...fixtureBars('BTC-USD', '5m', 60, 5 * 60_000),
         ...fixtureBars('BTC-USD', '1h', 60, hourMs),
         ...fixtureBars('BTC-USD', '1m', 60, 60_000),
         ...fixtureBars('BTC-USD', '1d', 40, 24 * hourMs),
@@ -1038,6 +1197,9 @@ describe('composed tick chain (integration)', () => {
         latency_ms: 10,
         direction: 'bearish',
         debate_id: 'debate-568-wiring',
+        // #687: the Trader keys the exit on the DEBATE's bar. START is
+        // bar-aligned, so this is the bar the old clock-flooring produced.
+        bar_timestamp: START,
       },
       clock,
     });
@@ -1084,6 +1246,7 @@ describe('startTickLoop', () => {
       clock: new SimulatedClock(START),
       logger: recordingLogger(),
       persistence: persistence() as never,
+      decisionGate: new DebateBarDecisionGate(),
       tickIntervalMs: 1_000,
       maxConcurrentInstruments: 1,
     });
@@ -1112,6 +1275,7 @@ describe('startTickLoop', () => {
       clock: new SimulatedClock(START),
       logger: recordingLogger(),
       persistence: persistence() as never,
+      decisionGate: new DebateBarDecisionGate(),
       tickIntervalMs: 1_000,
       maxConcurrentInstruments: 1,
     });
@@ -1147,6 +1311,7 @@ describe('startTickLoop', () => {
       clock: new SimulatedClock(START),
       logger,
       persistence: persistence() as never,
+      decisionGate: new DebateBarDecisionGate(),
       tickIntervalMs: 1_000,
       maxConcurrentInstruments: 1,
     });
@@ -1209,6 +1374,7 @@ describe('startTickLoop', () => {
       clock: new SimulatedClock(START),
       logger: recordingLogger(),
       persistence: persistence() as never,
+      decisionGate: new DebateBarDecisionGate(),
       tickIntervalMs: 1_000,
       maxConcurrentInstruments: 2,
     });
@@ -1285,6 +1451,7 @@ describe('startTickLoop', () => {
       clock: new SimulatedClock(START),
       logger: recordingLogger(),
       persistence: persistence() as never,
+      decisionGate: new DebateBarDecisionGate(),
       tickIntervalMs: 1_000,
       maxConcurrentInstruments: 2,
     });
@@ -1339,6 +1506,7 @@ describe('startTickLoop', () => {
       clock: new SimulatedClock(START),
       logger: recordingLogger(),
       persistence: persistence() as never,
+      decisionGate: new DebateBarDecisionGate(),
       tickIntervalMs: 1_000,
       maxConcurrentInstruments: 2,
     });
@@ -1370,6 +1538,7 @@ describe('startTickLoop', () => {
       clock: new SimulatedClock(START),
       logger: recordingLogger(),
       persistence: persistence() as never,
+      decisionGate: new DebateBarDecisionGate(),
       tickIntervalMs: 1_000,
       maxConcurrentInstruments: 1,
     });
@@ -1417,6 +1586,7 @@ describe('startTickLoop', () => {
       clock: new SimulatedClock(START),
       logger: recordingLogger(),
       persistence: persistence() as never,
+      decisionGate: new DebateBarDecisionGate(),
       tickIntervalMs: 1_000,
       maxConcurrentInstruments: 1,
     });
@@ -1454,6 +1624,7 @@ describe('startTickLoop', () => {
       clock: new SimulatedClock(START),
       logger,
       persistence: persistence() as never,
+      decisionGate: new DebateBarDecisionGate(),
       tickIntervalMs: 1_000,
       maxConcurrentInstruments: 1,
     });
@@ -1511,6 +1682,7 @@ describe('startTickLoop', () => {
       clock: new SimulatedClock(START),
       logger,
       persistence: persistence() as never,
+      decisionGate: new DebateBarDecisionGate(),
       tickIntervalMs: 1_000,
       maxConcurrentInstruments: 1,
     });
@@ -1536,6 +1708,7 @@ describe('startTickLoop', () => {
       clock: new SimulatedClock(START),
       logger: recordingLogger(),
       persistence: persistence() as never,
+      decisionGate: new DebateBarDecisionGate(),
       tickIntervalMs: 1_000,
       maxConcurrentInstruments: 1,
     });
@@ -1751,6 +1924,14 @@ describe('buildProductionOrchestrator', () => {
       tickIntervalMs: 48 * 60 * 60 * 1_000,
       heartbeatIntervalMs: 48 * 60 * 60 * 1_000,
       fillPollIntervalMs: NO_FILL_POLL_MS,
+      // Parked alongside the tick, for the reason QUIET_FLATTEN_WINDOW below
+      // gives (#670): a 48-hour tick can never land inside a 5-minute flatten
+      // window, and the boot assertion says so rather than letting the config
+      // claim a flat-by-close rule it cannot enforce.
+      traderConfig: {
+        ...DEFAULT_TRADER_CONFIG,
+        flatten_before_close_ms: MIN_TICKS_INSIDE_FLATTEN_WINDOW * 48 * 60 * 60 * 1_000,
+      },
     });
     const orchestrator = buildProductionOrchestrator(config);
 
@@ -1772,6 +1953,33 @@ describe('buildProductionOrchestrator', () => {
     await orchestrator.stop();
   });
 
+  it('REFUSES TO BOOT when a kill line is configured past its in-code clamp (#638)', () => {
+    // ADR-0013 makes the numeric thresholds the only stop left, so a config
+    // edit was the entire distance between the running system and an arbitrary
+    // risk limit. Refusing the process is the correct answer — a silent clamp
+    // would read as accepted and leave the operator believing a limit is in
+    // force that is not.
+    const config = stubConfig(db, {
+      feedback: {
+        intervalMs: 1_000,
+        config: {
+          weights: { max_step: 0.05, floor: 0.5, ceiling: 1.5, tighten_is: 'decrease' },
+          kill_thresholds: {
+            // The one hard kill criterion in the whole record, softened tenfold.
+            max_pbo: 0.5,
+            min_oos_sharpe: 0.5,
+            min_deflated_sharpe: 0.95,
+            max_live_backtest_divergence: 0.5,
+          },
+        } as unknown as FeedbackConfig,
+        loosenNotices: { notifyLoosenApplied: vi.fn() } as never,
+      },
+    });
+
+    expect(() => buildProductionOrchestrator(config)).toThrow(/max_pbo/);
+    expect(() => buildProductionOrchestrator(config)).toThrow(/REFUSED, not clamped/);
+  });
+
   it('runs the daily feedback cycle on its own timer when configured', async () => {
     const logger = recordingLogger();
     const config = stubConfig(db, {
@@ -1789,7 +1997,7 @@ describe('buildProductionOrchestrator', () => {
         config: {
           weights: { max_step: 0.05, floor: 0.5, ceiling: 1.5, tighten_is: 'decrease' },
         } as unknown as FeedbackConfig,
-        approvals: { requestLoosenApproval: vi.fn() } as never,
+        loosenNotices: { notifyLoosenApplied: vi.fn() } as never,
       },
     });
     const orchestrator = buildProductionOrchestrator(config);
@@ -1833,6 +2041,21 @@ describe('buildProductionOrchestrator', () => {
     const QUIET = 48 * 60 * 60 * 1_000;
 
     /**
+     * The flatten window has to be parked alongside the tick (#670), or
+     * `assertFlattenWindowCoversTickInterval` refuses the boot before any of
+     * these cases run.
+     *
+     * That refusal is CORRECT and not something to route around: flat-by-close
+     * is evaluated on a tick, so a 48-hour tick against the profile's 5-minute
+     * window is a config in which nothing would ever flatten. These cases park
+     * the tick because they are about feedback-cycle wiring and want the timers
+     * out of the way — so the honest expression of that intent is to park the
+     * window too, rather than to leave a config asserting something about
+     * flattening that the tick rate cannot deliver.
+     */
+    const QUIET_FLATTEN_WINDOW = MIN_TICKS_INSIDE_FLATTEN_WINDOW * QUIET;
+
+    /**
      * Returns the logger alongside the config rather than making each caller
      * dig it back out of `config.logger` behind a cast — the recording type is
      * the thing every case here asserts on.
@@ -1856,6 +2079,10 @@ describe('buildProductionOrchestrator', () => {
         logger,
         tickIntervalMs: QUIET,
         heartbeatIntervalMs: QUIET,
+        traderConfig: {
+          ...paperStartingProfile('paper').traderConfig,
+          flatten_before_close_ms: QUIET_FLATTEN_WINDOW,
+        },
         // #528: none of these cases exercise fill-sync — see NO_FILL_POLL_MS.
         fillPollIntervalMs: NO_FILL_POLL_MS,
         ...overrides,
@@ -2021,11 +2248,18 @@ describe('buildProductionOrchestrator', () => {
     });
 
     /**
-     * The fail-closed property, asserted where it actually lives: the store.
+     * #736's property, asserted where it actually lives: the store.
+     *
+     * This describe used to assert the opposite — that a proposed loosening
+     * expired unapplied in paper and live. ADR-0013 Decision 2 rejected that
+     * state in as many words ("a queue that nobody drains is not a control —
+     * it is a permanently-stuck dial that reads as governed"), and these cases
+     * now prove the removal end to end, through the real composition root and
+     * the real SQLite tuning store rather than a fixture.
      *
      * The profile declares no `risk_thresholds` dial (nothing writes that
      * table yet), so this case adds one and seeds a value — otherwise the
-     * gated path is unreachable and the test would be vacuous.
+     * path is unreachable and the test would be vacuous.
      */
     function loosenConfig(overrides: Partial<ProductionConfig> = {}): {
       config: ProductionConfig;
@@ -2056,8 +2290,8 @@ describe('buildProductionOrchestrator', () => {
             },
           },
         },
-        // Raising a loss-bounding cap: the move the loop may never make on
-        // its own authority.
+        // Raising a loss-bounding cap — the move that used to be queued for a
+        // human and therefore never made at all.
         proposals: [{ kind: 'risk_threshold', name: 'max_position_size', target: 6_000 }],
       };
 
@@ -2066,84 +2300,88 @@ describe('buildProductionOrchestrator', () => {
       return { config, feedback, logger, tuning };
     }
 
-    it('refuses to loosen a risk threshold nobody approved — the dial does not move', async () => {
+    it('APPLIES the loosening in paper mode and records it as reversible', async () => {
       const { config, logger, tuning } = loosenConfig();
       const orchestrator = buildProductionOrchestrator(config);
 
       await orchestrator.start();
       await vi.advanceTimersByTimeAsync(1_500);
 
-      // THE assertion. No approval transport in this repo can deliver a "yes"
-      // back to the process, so a proposed loosening must expire unapplied
-      // rather than fall through to the value it asked for.
-      expect(tuning.getRiskThresholds().max_position_size).toBe(5_000);
-      // ...and it is not written to the audit log either: nothing happened,
-      // so nothing is recorded as having happened.
+      // THE assertion of #736, and the exact line this test used to assert the
+      // negation of. Bounded to one `max_step`, not the 6,000 proposed.
+      expect(tuning.getRiskThresholds().max_position_size).toBe(5_500);
+      // ...and it IS written to the audit log: ADR-0013 requires every applied
+      // change logged and reversible, and `from` is what reverses it.
       expect(
         db
-          .prepare('SELECT COUNT(*) AS n FROM dial_adjustments WHERE dial_name = ?')
+          .prepare(
+            'SELECT from_value AS f, to_value AS t, direction AS d, status AS s ' +
+              'FROM dial_adjustments WHERE dial_name = ?',
+          )
           .get('max_position_size'),
-      ).toEqual({ n: 0 });
+      ).toEqual({ f: 5_000, t: 5_500, d: 'loosen', s: 'applied' });
 
       const cycle = logger.entries.find(
         (entry) => entry.message === 'daily feedback cycle complete',
       );
       expect(cycle?.payload).toMatchObject({
-        loosen_pending_approval: ['max_position_size'],
-        applied: false,
+        param_updates: { max_position_size: { from: 5_000, to: 5_500, direction: 'loosen' } },
+        applied: true,
       });
+      // The field that named the queue is gone with it.
+      expect(cycle?.payload).not.toHaveProperty('loosen_pending_approval');
 
       await orchestrator.stop();
     });
 
-    it('falls back to the log-only channel and says the threshold stayed put', async () => {
+    it('falls back to the log-only channel and says the threshold MOVED', async () => {
       const { config, logger } = loosenConfig();
       const orchestrator = buildProductionOrchestrator(config);
 
       await orchestrator.start();
       await vi.advanceTimersByTimeAsync(1_500);
 
-      // Nothing supplied `loosenApprovals`, so the composition root's own
+      // Nothing supplied `loosenNotices`, so the composition root's own
       // stand-in is what the cycle reached — the same default shape
       // `breachAlerts` has.
-      const entry = logger.entries.find((e) => e.message.includes('LOOSENING proposed'));
+      const entry = logger.entries.find((e) => e.message.includes('LOOSENING applied'));
       expect(entry?.level).toBe('warn');
-      expect(entry?.payload).toMatchObject({ name: 'max_position_size', applied: false });
+      expect(entry?.payload).toMatchObject({ name: 'max_position_size', applied: true });
 
       await orchestrator.stop();
     });
 
     it('uses the transport SAMURAI_ALERTS selected when one is supplied', async () => {
-      const requestLoosenApproval = vi.fn();
-      const { config, tuning } = loosenConfig({ loosenApprovals: { requestLoosenApproval } });
+      const notifyLoosenApplied = vi.fn();
+      const { config, tuning } = loosenConfig({ loosenNotices: { notifyLoosenApplied } });
       const orchestrator = buildProductionOrchestrator(config);
 
       await orchestrator.start();
       await vi.advanceTimersByTimeAsync(1_500);
 
-      expect(requestLoosenApproval).toHaveBeenCalledTimes(1);
-      expect(requestLoosenApproval.mock.calls[0]?.[0]).toMatchObject({
+      expect(notifyLoosenApplied).toHaveBeenCalledTimes(1);
+      expect(notifyLoosenApplied.mock.calls[0]?.[0]).toMatchObject({
         name: 'max_position_size',
         from: 5_000,
-        // The BOUNDED value a human would be approving, not the raw target —
-        // one `max_step`, not the 6,000 the proposal asked for.
+        // The BOUNDED value actually written, not the raw target — one
+        // `max_step`, not the 6,000 the proposal asked for.
         to: 5_500,
       });
-      // Notifying is not applying, whichever channel carries it.
-      expect(tuning.getRiskThresholds().max_position_size).toBe(5_000);
+      // The notice reports the store, whichever channel carries it.
+      expect(tuning.getRiskThresholds().max_position_size).toBe(5_500);
 
       await orchestrator.stop();
     });
 
-    it('still lets an explicit per-cycle approvals override win', async () => {
+    it('still lets an explicit per-cycle loosenNotices override win', async () => {
       const perCycle = vi.fn();
       const topLevel = vi.fn();
       const { config, feedback } = loosenConfig({
-        loosenApprovals: { requestLoosenApproval: topLevel },
+        loosenNotices: { notifyLoosenApplied: topLevel },
       });
       const orchestrator = buildProductionOrchestrator({
         ...config,
-        feedback: { ...feedback, approvals: { requestLoosenApproval: perCycle } },
+        feedback: { ...feedback, loosenNotices: { notifyLoosenApplied: perCycle } },
       });
 
       await orchestrator.start();
@@ -2437,7 +2675,7 @@ describe('buildProductionOrchestrator', () => {
         feedback: {
           intervalMs: 1_000,
           config: feedbackConfig(),
-          approvals: { requestLoosenApproval: vi.fn() },
+          loosenNotices: { notifyLoosenApplied: vi.fn() },
           metrics: {
             source: {
               getDailyMetrics: () =>
@@ -2993,6 +3231,9 @@ describe('buildProductionOrchestrator', () => {
     // Drive the real SequentialTickRunner over stubbed steps so the audit /
     // current_tick side effects are the production SQLite ones, not fakes.
     const runner = new SequentialTickRunner({
+      exitCheck: async () => {
+        throw new Error('unreachable');
+      },
       analysts: async () => [],
       debate: async () => {
         throw new Error('unreachable');
@@ -3017,6 +3258,13 @@ describe('buildProductionOrchestrator', () => {
         logger: recordingLogger(),
         auditLog: orchestrator.persistence.auditLog,
         currentTickStore: orchestrator.persistence.currentTickStore,
+        // #743: a decision pass — this test exercises the quorum-skip audit
+        // row, which only the decision chain writes.
+        decision_bar: {
+          id: `${START.toISOString()}@3600000`,
+          open_time: START,
+          timeframe_ms: 3_600_000,
+        },
       },
     );
 

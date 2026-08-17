@@ -7,10 +7,11 @@
  *      cannot exist in the arithmetic and not in the arity. That property is
  *      enforced by the compiler (`Record<IndicatorKind, IndicatorDefinition>`),
  *      and what remains testable is that the table still says the right things.
- *   2. `recommendedWarmupFor` exists, is a DIFFERENT number from
- *      `minimumBarsFor` for every recursive kind, and — the point — is not
- *      wired into anything yet. Adopting it reprices every technical opinion in
- *      the system and is a decision for the map, not a side effect of B2.
+ *   2. `recommendedWarmupFor` is a DIFFERENT number from `minimumBarsFor` for
+ *      every recursive kind, it genuinely converges, and — since #722 — it is
+ *      what `RSI_SPEC` asks for. That adoption was B2's open finding F2 and is
+ *      the deliberate repricing of every technical opinion the debate reads;
+ *      ATR and SMA stay on the floor, so the two are pinned separately below.
  */
 import { describe, expect, it } from 'vitest';
 import { RSI_SPEC, SMA_SPEC } from '../../pipeline/analysts/technical-analyst.js';
@@ -25,9 +26,26 @@ import { type Bar, INDICATOR_KINDS, type IndicatorKind, type IndicatorSpec } fro
 
 const PERIOD = 14;
 
+/**
+ * Canonical params per kind (#744) — the single-period kinds all get
+ * `{ period: PERIOD }`; the two multi-parameter additions get a realistic
+ * named-parameter set instead, since `specFor`'s old single-`period` shape
+ * can no longer describe every row in `INDICATOR_KINDS`.
+ */
+const canonicalParams = (kind: IndicatorKind): Record<string, number> => {
+  switch (kind) {
+    case 'macd_histogram':
+      return { fast: 12, slow: 26, signal: 9 };
+    case 'bb_kc_squeeze':
+      return { bb_period: 20, bb_mult: 2, kc_period: 20, kc_mult: 1.5 };
+    default:
+      return { period: PERIOD };
+  }
+};
+
 const specFor = (kind: IndicatorKind, lookback: number): IndicatorSpec => ({
   indicator: kind,
-  params: { period: PERIOD },
+  params: canonicalParams(kind),
   lookback,
   timeframe: '1h',
 });
@@ -72,6 +90,36 @@ describe('one registry, not two switches', () => {
     expect(minimumBarsFor(specFor('atr', 20))).toBe(PERIOD + 1);
   });
 
+  it('declares the #744 arity for the five new kinds too', () => {
+    // Same intent as the block above, extended to the new kinds — this is
+    // the row-by-row boundary a `minimumBars` closure that lied would fail.
+    expect(minimumBarsFor(specFor('atr_pct', 20))).toBe(PERIOD + 1);
+    expect(minimumBarsFor(specFor('donchian_pos', 20))).toBe(PERIOD);
+    // 2 x period: the structural ADX floor, not a warm-up preference — see
+    // the `adx` row's comment in indicators.ts.
+    expect(minimumBarsFor(specFor('adx', 20))).toBe(2 * PERIOD);
+    // max(fast, slow) + signal - 1, with the canonical 12/26/9.
+    expect(minimumBarsFor(specFor('macd_histogram', 40))).toBe(26 + 9 - 1);
+    // max(bb_period, kc_period + 1), with the canonical 20/20.
+    expect(minimumBarsFor(specFor('bb_kc_squeeze', 40))).toBe(20 + 1);
+  });
+
+  for (const kind of INDICATOR_KINDS) {
+    it(`${kind}: exactly minimumBarsFor computes, one bar fewer throws by name`, () => {
+      // The registry-driven boundary: a `minimumBars` closure perturbed by
+      // one bar for any single kind fails exactly this test, by that kind's
+      // name, rather than a generic "some kind is off" failure.
+      const required = minimumBarsFor(specFor(kind, 60));
+
+      expect(() =>
+        computeIndicator(BARS.slice(0, required), specFor(kind, required)),
+      ).not.toThrow();
+      expect(() =>
+        computeIndicator(BARS.slice(0, required - 1), specFor(kind, required - 1)),
+      ).toThrow(InsufficientBarsError);
+    });
+  }
+
   it('still throws below the floor for every kind, by that same arity', () => {
     for (const kind of INDICATOR_KINDS) {
       const required = minimumBarsFor(specFor(kind, 20));
@@ -90,7 +138,9 @@ describe('one registry, not two switches', () => {
     const bogus = { ...specFor('rsi', 20), indicator: 'macd' as IndicatorKind };
 
     expect(() => computeIndicator(BARS.slice(0, 20), bogus)).toThrow(/Unsupported indicator: macd/);
-    expect(() => minimumBarsFor(bogus)).toThrow(/Known kinds: sma, ema, rsi, atr/);
+    expect(() => minimumBarsFor(bogus)).toThrow(
+      /Known kinds: sma, ema, rsi, atr, atr_pct, macd_histogram, adx, donchian_pos, bb_kc_squeeze/,
+    );
   });
 });
 
@@ -124,18 +174,33 @@ describe('recommendedWarmupFor — the width question, not the arity one', () =>
     expect(Math.abs(floor - converged)).toBeGreaterThan(Math.abs(recommended - converged));
   });
 
-  it('does NOT change what the live specs ask for', () => {
-    // B2 adds the dial. It does not turn it. Every live spec still sits on the
-    // fabrication floor, which is finding F2 — open, and owned by the wayfinder
-    // map rather than closed silently here, because widening the warm-up
-    // reprices every technical opinion the debate ever reads.
-    for (const spec of [RSI_SPEC, SMA_SPEC, atrIndicatorSpec(PERIOD, '1h')]) {
+  it('is what RSI_SPEC now asks for — the analyst reads a converged Wilder RSI (#722)', () => {
+    // B2 added the dial; #722 turned it, for RSI only. The assertion this
+    // replaces pinned `RSI_SPEC.lookback === minimumBarsFor(RSI_SPEC)` (15) and
+    // was designed to fail here, so that adopting the warm-up would be a
+    // visible change rather than a quiet one. This is that change.
+    //
+    // Derived, not literal: `RSI_SPEC` composes `recommendedWarmupFor`, so this
+    // asserts the two cannot drift apart, and the `57` pins the value the
+    // repricing was measured at.
+    expect(RSI_SPEC.lookback).toBe(recommendedWarmupFor(RSI_SPEC));
+    expect(RSI_SPEC.lookback).toBe(57);
+    expect(RSI_SPEC.lookback).toBeGreaterThan(minimumBarsFor(RSI_SPEC));
+    // The floor itself is untouched: 15 bars still produce a value, so a cold
+    // instrument degrades to a less-warm RSI rather than to no view at all.
+    expect(minimumBarsFor(RSI_SPEC)).toBe(15);
+  });
+
+  it('is NOT adopted by the other live specs, which stay on the floor', () => {
+    // #722's scope is F2 — the RSI the debate reads — and nothing else. ATR's
+    // equivalent gap is owned by `trader/atr-equivalence.test.ts`, and moving
+    // it here would reprice every stop in the system as a side effect.
+    // `SMA_SPEC` is warm-up BLIND (`rsi-warmup.test.ts` pins 14 bars against
+    // 400), so the floor is not a compromise for it at all.
+    for (const spec of [SMA_SPEC, atrIndicatorSpec(PERIOD, '1h')]) {
       expect(spec.lookback).toBe(minimumBarsFor(spec));
     }
-
-    // And the gap that leaves open, stated as a number so closing it is a
-    // visible change rather than a quiet one.
-    expect(recommendedWarmupFor(RSI_SPEC)).toBe(57);
-    expect(RSI_SPEC.lookback).toBe(15);
+    expect(recommendedWarmupFor(atrIndicatorSpec(PERIOD, '1h'))).toBe(57);
+    expect(atrIndicatorSpec(PERIOD, '1h').lookback).toBe(15);
   });
 });

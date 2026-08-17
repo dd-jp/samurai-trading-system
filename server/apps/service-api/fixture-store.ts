@@ -15,11 +15,18 @@
  * server or snapshot seam.
  */
 
+import type { PipelineStage } from '../../../contracts/pipeline.js';
+// Imported from the concrete module, not the `debate-engine` barrel: the
+// barrel re-exports `SqliteDebateLogStore`, the Anthropic/Nous LLM clients
+// etc., and a value import of the barrel would drag every one of those
+// runtime dependencies into a fixture module that has none today.
+// `computeInfluenceScore` itself has no imports beyond `./types.js`, so this
+// stays a type-only-equivalent, zero-side-effect import.
+import { computeInfluenceScore } from '../../pipeline/debate-engine/analyst-contribution.js';
 import type { AnalystContribution } from '../../pipeline/debate-engine/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
 import type { DebateLog, OpenPosition } from '../../shared/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
-import type { PipelineStage } from './pipeline-types.js';
 import type {
   AttributionSummary,
   DashboardQueryStore,
@@ -128,9 +135,9 @@ const RECENT_DEBATES: DebateLog[] = [
     rounds: 3,
     created_at: hoursAgo(1.5),
     contributions: [
-      contribution('technical', ['bearish', 'neutral', 'bullish'], 0.62),
-      contribution('fundamental', ['neutral', 'neutral', 'bullish'], 0.24),
-      contribution('sentiment', ['neutral', 'neutral', 'neutral'], 0.14),
+      contribution('technical', ['bearish', 'neutral', 'bullish']),
+      contribution('fundamental', ['neutral', 'neutral', 'bullish']),
+      contribution('sentiment', ['neutral', 'neutral', 'neutral']),
     ],
   },
   {
@@ -141,9 +148,9 @@ const RECENT_DEBATES: DebateLog[] = [
     rounds: 2,
     created_at: hoursAgo(3),
     contributions: [
-      contribution('technical', ['neutral', 'bearish'], 0.58),
-      contribution('fundamental', ['neutral', 'neutral'], 0.21),
-      unrecordedContribution('sentiment', 'bearish', 0.21),
+      contribution('technical', ['neutral', 'bearish']),
+      contribution('fundamental', ['neutral', 'neutral']),
+      unrecordedContribution('sentiment', 'bearish'),
     ],
   },
   {
@@ -154,9 +161,9 @@ const RECENT_DEBATES: DebateLog[] = [
     rounds: 3,
     created_at: hoursAgo(5),
     contributions: [
-      contribution('technical', ['neutral', 'bullish', 'bullish'], 0.41),
-      contribution('fundamental', ['bearish', 'bearish', 'bullish'], 0.39),
-      contribution('sentiment', ['neutral', 'neutral', 'neutral'], 0.2),
+      contribution('technical', ['neutral', 'bullish', 'bullish']),
+      contribution('fundamental', ['bearish', 'bearish', 'bullish']),
+      contribution('sentiment', ['neutral', 'neutral', 'neutral']),
     ],
   },
   {
@@ -167,9 +174,9 @@ const RECENT_DEBATES: DebateLog[] = [
     rounds: 3,
     created_at: hoursAgo(6),
     contributions: [
-      contribution('technical', ['bearish', 'bullish', 'neutral'], 0.4),
-      contribution('fundamental', ['neutral', 'bearish', 'bearish'], 0.33),
-      contribution('sentiment', ['neutral', 'neutral', 'bullish'], 0.27),
+      contribution('technical', ['bearish', 'bullish', 'neutral']),
+      contribution('fundamental', ['neutral', 'bearish', 'bearish']),
+      contribution('sentiment', ['neutral', 'neutral', 'bullish']),
     ],
   },
 ];
@@ -223,12 +230,19 @@ type RecordedStances = readonly [Stance, ...Stance[]];
  * up makes one that was talked around indistinguishable from one that never
  * moved, which is the fabrication #599 removed from the wire. A flat history
  * in these fixtures is flat because it was recorded flat.
+ *
+ * `influence_score` is likewise not hand-picked (#624): it is
+ * `computeInfluenceScore(stances)`, the same function
+ * `buildAnalystContributions` calls in production. That function is a strict
+ * transform of the stance array — fraction of consecutive-round transitions
+ * that changed — so the only way to change a fixture's score is to change its
+ * recorded stances, exactly like a real debate. There is no "sums to 1.0 per
+ * debate" shape to preserve: the client only ever renders `influence_score`
+ * as a bare 0–1 reading per analyst (`DebatesPanel.tsx`, `DetailDrawer.tsx`),
+ * never as a share of a per-debate total, so nothing needed a display-only
+ * normalisation layer.
  */
-function contribution(
-  type: string,
-  stances: RecordedStances,
-  influence: number,
-): AnalystContribution {
+function contribution(type: string, stances: RecordedStances): AnalystContribution {
   const [opening, ...laterRounds] = stances;
   return {
     analyst_id: `${type}-analyst`,
@@ -236,7 +250,7 @@ function contribution(
     stance_during_debate: [...stances],
     final_position: laterRounds.at(-1) ?? opening,
     rationale: `Round-by-round ${type} read on the instrument.`,
-    influence_score: influence,
+    influence_score: computeInfluenceScore([...stances]),
   };
 }
 
@@ -245,20 +259,18 @@ function contribution(
  * emits an empty `stance_during_debate` and falls back to the analyst's opening
  * view for `final_position`, so this is the recorded-none case, NOT a history
  * shorter than the debate's `rounds`. The strip renders it as its stated empty
- * state.
+ * state. `computeInfluenceScore([])` is 0 — no rounds recorded, no transition
+ * observable — so that is what this fixture reports too, rather than a
+ * hand-picked non-zero reading.
  */
-function unrecordedContribution(
-  type: string,
-  final: FinalPosition,
-  influence: number,
-): AnalystContribution {
+function unrecordedContribution(type: string, final: FinalPosition): AnalystContribution {
   return {
     analyst_id: `${type}-analyst`,
     analyst_type: type,
     stance_during_debate: [],
     final_position: final,
     rationale: `Opening ${type} read on the instrument; no round stances recorded.`,
-    influence_score: influence,
+    influence_score: computeInfluenceScore([]),
   };
 }
 

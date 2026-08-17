@@ -6,7 +6,7 @@ import type {
 } from '../../../pipeline/debate-engine/index.js';
 import { AnthropicLlmClient, NousMessagesClient } from '../../../pipeline/debate-engine/index.js';
 import type {
-  AlpacaClient as AlpacaBrokerClient,
+  AlpacaBrokerClient,
   AlpacaTradingEnvironment,
 } from '../../../pipeline/execution/index.js';
 import {
@@ -14,7 +14,7 @@ import {
   classifyAlpacaTradingHost,
 } from '../../../pipeline/execution/index.js';
 import type {
-  AlpacaClient as AlpacaDataClient,
+  AlpacaMarketDataClient,
   DataSource,
   IndicatorSpec,
 } from '../../../providers/market-data-service/index.js';
@@ -308,7 +308,7 @@ export function buildDefaultAlpacaDataClient(
    * per ACCOUNT — two buckets would be two budgets against one limit.
    */
   rateLimiter?: TokenBucket,
-): AlpacaDataClient {
+): AlpacaMarketDataClient {
   return new AlpacaHttpDataClient({ assetClass, rateLimiter });
 }
 

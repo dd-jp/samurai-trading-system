@@ -24,8 +24,77 @@
  * reasoning `alert-transport.ts` gives for building the Telegram client at the
  * entrypoint rather than in the composition root.
  *
- * A sink that fails is logged about, once, on stdout, and then ignored: a
- * logging call sits inside every tick, and a full disk must not end the run.
+ * ## What happens when a sink fails (#714)
+ *
+ * **One rule, symmetric in both directions: a failing sink is reported on the
+ * other sink and then abandoned; when there is no other sink left that can
+ * take that report, the failure propagates.**
+ *
+ * That is the whole decision, and the reasoning is:
+ *
+ * - *A soak must not die from a logging failure alone.* A logging call sits
+ *   inside every tick, so a full disk or a closed terminal cannot be allowed
+ *   to end a 14-day run (#238) that is otherwise healthy.
+ * - *…but the failure itself must not be lost.* A logger that swallows and
+ *   continues blind is indistinguishable from a quiet system: the operator
+ *   learns nothing, and the durable trace the soak exists to produce stops
+ *   without a mark. So a degradation is only ever swallowed once it has been
+ *   *recorded somewhere that survives the sink that failed* — the file when
+ *   stdout dies, stdout when the file dies.
+ * - *When it cannot be recorded anywhere, the process must not continue.*
+ *   Both sinks gone means this run can no longer produce evidence of what it
+ *   did with real money, so `log` writes a last-resort notice on stderr and
+ *   then throws.
+ *
+ * ### Where that throw actually lands, stated honestly (#714)
+ *
+ * It depends on which sink died first, and only one of the two orderings
+ * reaches the composition root's fault handler:
+ *
+ * - **File first, then stdout.** The `'error'` listener in `watchStdoutErrors`
+ *   finds nothing durable to record on and throws *from inside an event
+ *   listener*, which is a genuine `uncaughtException`:
+ *   `installFaultHandlers` records what it can and exits 1.
+ * - **Stdout first, then the file.** Every later `log` reaches no sink and
+ *   throws *from inside a tick*, where `tick-loop.ts` catches everything a
+ *   tick throws and `shared/safe-log.ts` swallows a throwing logger by
+ *   deliberate design (#573). The throw does **not** end the run.
+ *
+ * The second ordering is the likelier one for a soak (the terminal closes on
+ * day three; the disk fills on day nine), so the throw alone would leave the
+ * run trading with no trace anywhere — the outcome this whole decision exists
+ * to prevent. Hence the stderr write, which is attempted *before* the throw
+ * and is what actually holds the evidence: stderr is a genuinely separate
+ * destination under `yarn orchestrator > log.txt`, under `| tee`, and under a
+ * supervisor that splits the two streams.
+ *
+ * It is a last resort and not a third managed sink, and the run is **not**
+ * declared healthy because stderr accepted the line: stderr most often shares
+ * the very pipe or terminal that stdout just lost, so a write that "succeeded"
+ * there is weak evidence of anything. `log` therefore still throws. Whether
+ * that throw stops the process is the caller's decision — #573's swallow is
+ * intentional and is not overridden from inside a logger.
+ *
+ * Until #714 the primary `process.stdout.write` was unguarded. Chasing that
+ * back: #95 (PR #124) neither asked about nor recorded any reasoning for it —
+ * the original module doc justified only the *deferred file sink*. The
+ * "deliberate" framing came from #325/#349, whose point was that changing this
+ * must not ride an unrelated PR. It was measured, not undone by assumption:
+ * see `watchStdoutErrors` for what a real EPIPE actually does.
+ *
+ * ### Three "report once" flags, and which one fires
+ *
+ * 1. `RotatingFileSink.failed` — the real degrade on the shipped path when the
+ *    *file* fails. It reports through `onFailure` (`warnOnStdout`) and no-ops
+ *    thereafter, and exposes itself as `degraded` so this class can tell a
+ *    silent no-op from a durable write.
+ * 2. `JsonLogger.fileSinkFailed` — the same degrade for a *foreign*
+ *    `LogLineSink` someone injects, which has no `attempt` of its own. Never
+ *    flips on `buildEntrypointLogger`'s path, because `RotatingFileSink.write`
+ *    cannot throw.
+ * 3. `JsonLogger.stdoutDegraded` — set when *stdout* fails, and only once the
+ *    degradation has been durably recorded on the file sink. Stdout is then
+ *    skipped for the life of the process; the file carries the run.
  */
 import type { LogEntry } from '../../shared/index.js';
 import {
@@ -35,9 +104,43 @@ import {
 } from './rotating-file-sink.js';
 import type { Logger } from './types.js';
 
-/** The byte sink a `JsonLogger` writes formatted lines to. */
+/**
+ * The byte sink a `JsonLogger` writes formatted lines to.
+ *
+ * `degraded` is optional and load-bearing when present: `RotatingFileSink`
+ * swallows its own I/O failures, so a `write()` that returned normally is not
+ * by itself proof anything reached the disk. This class must not claim a
+ * degradation was durably recorded when it was written into a retired sink —
+ * see `recordDurably`.
+ */
 export interface LogLineSink {
   write(line: string): void;
+  /** True once this sink has retired and its `write` is a silent no-op. */
+  readonly degraded?: boolean;
+}
+
+/**
+ * The parts of `process.stdout` this module uses.
+ *
+ * Injectable for one reason that is not testing convenience: the `'error'`
+ * subscription in `watchStdoutErrors` is the mechanism, and a mechanism only
+ * reachable through the real `process.stdout` is one no test and no smoke gate
+ * can exercise.
+ */
+export interface StdoutStream {
+  write(line: string): unknown;
+  on(event: 'error', listener: (error: Error) => void): unknown;
+}
+
+/**
+ * The last-resort stream, used only when neither sink can take a line.
+ *
+ * Deliberately narrower than `StdoutStream`: no `'error'` subscription, because
+ * this is not a managed sink and nothing degrades on its behalf. Every write to
+ * it is wrapped — see `lastResort`.
+ */
+export interface ErrorStream {
+  write(line: string): unknown;
 }
 
 /**
@@ -56,77 +159,255 @@ export function formatLogLine(entry: LogEntry): string {
   })}\n`;
 }
 
-/** Reports a sink failure on the one stream known to still work. */
-function warnOnStdout(message: string): void {
-  process.stdout.write(
-    formatLogLine({
-      trace_id: 'startup',
-      stage: 'orchestrator',
-      level: 'warn',
-      message,
-      payload: { log_file_sink: 'degraded' },
-    }),
-  );
+/** A degradation notice in the same wire format as everything else. */
+function degradationLine(message: string, payload: Record<string, unknown>): string {
+  return formatLogLine({
+    trace_id: 'startup',
+    stage: 'orchestrator',
+    level: 'warn',
+    message,
+    payload,
+  });
+}
+
+/** Reports a file-sink failure on the one stream that may still work. */
+function warnOnStdout(message: string, stdout: StdoutStream = process.stdout): void {
+  stdout.write(degradationLine(message, { log_file_sink: 'degraded' }));
+}
+
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export class JsonLogger implements Logger {
-  private sinkFailureReported = false;
+  private fileSinkFailed = false;
+  private stdoutDegraded = false;
+  private noSinkReported = false;
 
-  constructor(private readonly fileSink?: LogLineSink) {}
+  constructor(
+    private readonly fileSink?: LogLineSink,
+    private readonly stdout: StdoutStream = process.stdout,
+    private readonly stderr: ErrorStream = process.stderr,
+  ) {}
 
+  /**
+   * Writes one line to every sink that still works.
+   *
+   * **The guarantee, stated exactly, because the comment this replaces was
+   * wrong to state it flatly (#714): a logging call cannot throw while at
+   * least one sink can still record — and deliberately DOES throw when none
+   * can.** So a tick is safe from a full disk and safe from a closed terminal,
+   * and is not protected from "no destination at all", because that is not a
+   * logging failure worth surviving. Callers inside a `catch` still route
+   * through `shared/safe-log.ts` — a `Logger` there is injected and may be
+   * anything.
+   *
+   * **And the throw is not assumed to be fatal.** On the stdout-first ordering
+   * it is raised inside a tick, where #573's `safeLog` swallows it on purpose;
+   * that is why the line and the notice go to stderr *first*. See the module
+   * doc's "where that throw actually lands".
+   */
   log(entry: LogEntry): void {
     const line = formatLogLine(entry);
-    process.stdout.write(line);
-    this.writeToFileSink(line);
+    const reachedStdout = this.writeToStdout(line);
+    const reachedFile = this.writeToFileSink(line);
+    if (reachedStdout || reachedFile) return;
+
+    // Nowhere left. Not swallowed — see the module doc: a run that cannot
+    // record what it did with real money must not carry on unremarked.
+    this.reportNoSink();
+    this.lastResort(line);
+    throw new Error(
+      'structured logging reached no sink: stdout and the log file are both unavailable, and ' +
+        'the failure could not be recorded anywhere. A trading process that cannot log must ' +
+        'not keep trading (#714).',
+    );
   }
 
   /**
-   * A defensive backstop for a *foreign* sink, with no caller on the shipped
-   * path — say so plainly, because there are otherwise two "report once"
-   * flags in this feature and a reader has to know which one runs.
+   * Writes to stdout, degrading rather than throwing **when the degradation
+   * can be recorded durably**.
    *
-   * `RotatingFileSink.write` cannot reach this catch: it wraps everything in
-   * `attempt`, which owns the real degrade (set `failed`, report once through
-   * `onFailure`, no-op thereafter). So on `buildEntrypointLogger`'s path
-   * `sinkFailureReported` never flips. It exists for a `LogLineSink` someone
-   * else injects, costs one try block per line, and keeps the guarantee a
-   * property of `JsonLogger` rather than of one particular sink — the
-   * requirement is that a logging call inside a tick never throws, whoever
-   * wrote the sink.
+   * This catch covers a *synchronous* stdio failure only — stdout attached to
+   * a file or a TTY, where `write` is synchronous (`EBADF`, `ENOSPC`). The
+   * realistic soak failure, a broken pipe, does NOT arrive here: measured on
+   * this deployment target (macOS, Node 24, `spawn(..., stdio: 'inherit')`
+   * through a pipe), 31 writes into a destroyed pipe produced 22 `'error'`
+   * events and **zero** synchronous throws. `watchStdoutErrors` is what covers
+   * that half; both halves apply the identical rule.
+   */
+  private writeToStdout(line: string): boolean {
+    if (this.stdoutDegraded) return false;
+    try {
+      this.stdout.write(line);
+      return true;
+    } catch (error) {
+      // Rethrow when nothing durable can hold the report: `log` would
+      // otherwise return having written nowhere and said nothing. Same
+      // last-resort trace as `log`'s own escalation, for the same reason — a
+      // caller that swallows this throw must still leave the operator
+      // something.
+      if (!this.degradeStdout(error)) {
+        this.reportNoSink();
+        this.lastResort(line);
+        throw error;
+      }
+      return false;
+    }
+  }
+
+  /**
+   * Retires stdout for the life of the process, recording *why* on the file
+   * sink first. Returns whether that record is durable — the caller decides
+   * what to do when it is not, because the two callers differ: the
+   * synchronous path rethrows, the `'error'`-event path escalates to the
+   * fault handler.
+   *
+   * Idempotent: one degradation record per process, not one per line. A dead
+   * pipe emits an `'error'` for every subsequent write (22 of them in the
+   * measurement above), which is exactly the shape that would otherwise fill
+   * the durable log with copies of its own failure.
+   */
+  degradeStdout(error: unknown): boolean {
+    if (this.stdoutDegraded) return true;
+    const recorded = this.recordDurably(
+      degradationLine(
+        `structured log stdout sink failed and is retired for the rest of this process: ${describe(error)}. ` +
+          'Logging continues to the log file only. A soak does not stop for this (#714), but ' +
+          'the console half of the trace ends here.',
+        { log_stdout_sink: 'degraded' },
+      ),
+    );
+    if (!recorded) return false;
+    this.stdoutDegraded = true;
+    return true;
+  }
+
+  /**
+   * Says once, on stderr, that structured logging has run out of sinks.
+   *
+   * Once per process and not once per line: the condition is permanent, and a
+   * per-line copy would bury the lines themselves — which are the point, and
+   * which follow it.
+   */
+  private reportNoSink(): void {
+    if (this.noSinkReported) return;
+    this.noSinkReported = true;
+    this.lastResort(
+      degradationLine(
+        'structured logging has no sink left: stdout is unavailable and the log file is not ' +
+          'recording. Subsequent log lines are written here, on stderr, and are the only trace ' +
+          'this run still produces (#714).',
+        { log_stdout_sink: 'degraded', log_file_sink: 'degraded' },
+      ),
+    );
+  }
+
+  /**
+   * Writes to stderr, ignoring any failure.
+   *
+   * The swallow is correct exactly here and nowhere else: this is already the
+   * both-sinks-gone path, the caller throws immediately afterwards regardless,
+   * and stderr on a host whose stdout just died is a coin toss. A last resort
+   * that can itself throw is not a last resort —
+   * `tools/backfill-market-data.ts` guards its `console.error` for the same
+   * reason.
+   */
+  private lastResort(line: string): void {
+    try {
+      this.stderr.write(line);
+    } catch {
+      // Nothing left to try, and nothing to report it on.
+    }
+  }
+
+  /** Whether stdout has been retired — the enforcement surface for #714. */
+  get stdoutRetired(): boolean {
+    return this.stdoutDegraded;
+  }
+
+  /**
+   * Writes one line to the file sink, reporting a failure once on stdout and
+   * then abandoning the sink. Returns whether the line is durably recorded.
    *
    * The warn goes straight to stdout — routing it through `this.log` would put
    * the failing sink back in the path of the message about it failing.
    */
-  private writeToFileSink(line: string): void {
-    if (this.fileSink === undefined) return;
+  private writeToFileSink(line: string): boolean {
+    return this.recordDurably(line, (message) => {
+      try {
+        warnOnStdout(message, this.stdout);
+      } catch {
+        // Reporting the file failure on stdout failed too — both destinations
+        // are broken. Nothing is silently continued on that account: `log`
+        // sees `false` from both writes and throws.
+      }
+    });
+  }
+
+  /**
+   * The single "did this actually land somewhere that survives" primitive.
+   *
+   * `degraded` is consulted after the write, not just the throw: on the
+   * shipped path `RotatingFileSink.write` never throws, so a sink that retired
+   * on an earlier line would otherwise report every subsequent write as a
+   * durable success — the exact "swallow and continue blind" this ticket
+   * forbids.
+   */
+  private recordDurably(line: string, onFailure?: (message: string) => void): boolean {
+    if (this.fileSink === undefined || this.fileSinkFailed) return false;
     try {
       this.fileSink.write(line);
     } catch (error) {
-      if (this.sinkFailureReported) return;
-      this.sinkFailureReported = true;
-      try {
-        warnOnStdout(
-          'structured log file sink threw and is being ignored for the rest of this process: ' +
-            `${error instanceof Error ? error.message : String(error)}. Logging continues on ` +
-            'stdout only.',
-        );
-      } catch {
-        // Reporting the sink failure failed too — `process.stdout.write` throws
-        // EPIPE once the far end of the pipe is gone. Raised in review on #349
-        // against `RotatingFileSink`; the same hole existed here. With both
-        // destinations broken there is nowhere left to escalate, and losing the
-        // message is strictly better than throwing into a tick.
-        //
-        // Note the deliberate asymmetry with `log`'s own unguarded
-        // `process.stdout.write` above: a *sink* failure must never propagate,
-        // which is this ticket's requirement, but stdout failing on the primary
-        // write is #95's behaviour and the posture the rest of the composition
-        // root already takes (`buildShutdownHandler` writes to stderr
-        // unguarded). Changing that is a separate decision, not a side effect
-        // of adding a file sink.
-      }
+      this.fileSinkFailed = true;
+      onFailure?.(
+        'structured log file sink threw and is being ignored for the rest of this process: ' +
+          `${describe(error)}. Logging continues on stdout only.`,
+      );
+      return false;
     }
+    return this.fileSink.degraded !== true;
   }
+}
+
+/**
+ * Subscribes to stdout's `'error'` event so an asynchronous write failure
+ * degrades the logger instead of killing the run.
+ *
+ * **This is the half that matters for the soak, and it is not a stylistic
+ * variant of the try/catch in `writeToStdout`.** `process.stdout` is
+ * synchronous only for files and TTYs; for a *pipe* it is asynchronous, so an
+ * EPIPE never reaches the write call at all. Measured on the deployment
+ * target before this was written (macOS, Node 24, parent destroys the read end
+ * of a `spawn`ed child's stdout — which is `yarn serve`'s own
+ * `stdio: 'inherit'` shape, and a detached tmux session's):
+ *
+ * - with no `'error'` listener: the first write after the pipe died raised
+ *   `uncaughtException: EPIPE` and the process was gone;
+ * - with a listener: 22 `'error'` events, zero throws, exit 0.
+ *
+ * So a `try/catch` alone would have satisfied nothing: EPIPE would still have
+ * reached `uncaughtException`, and the fault handler there exits by design.
+ * The listener is what converts the known, narrow, recoverable fault into the
+ * degrade path — *at the stream that produced it, identified by where it came
+ * from rather than by pattern-matching an error code*. That is deliberately
+ * where the line between "recoverable" and "unknown" is drawn; see
+ * `installFaultHandlers` for why it is not drawn inside the process handler.
+ */
+export function watchStdoutErrors(logger: JsonLogger, stdout: StdoutStream = process.stdout): void {
+  stdout.on('error', (error: Error) => {
+    // A `false` return means the degradation could not be recorded anywhere,
+    // so throwing is the only remaining way to say so: it reaches
+    // `uncaughtException`, whose handler writes to stderr and exits 1. That is
+    // the same escalation the synchronous path takes, and the only case in
+    // which a logging fault is allowed to end the run.
+    if (!logger.degradeStdout(error)) {
+      throw new Error(
+        `structured log stdout sink failed (${describe(error)}) and the failure could not be ` +
+          'recorded on any other sink (#714).',
+      );
+    }
+  });
 }
 
 /**
@@ -139,16 +420,28 @@ export class JsonLogger implements Logger {
  * Exported and given an injectable config rather than inlined into index.ts's
  * `import.meta.url` guard for the same reason `buildShutdownHandler` is: that
  * guard is unreachable from any unit test, so wiring left inside it is wiring
- * nothing verifies.
+ * nothing verifies. The stdout `'error'` subscription is attached **here**,
+ * and not by the constructor, for the same reason in the other direction: the
+ * dozen `new JsonLogger()` call sites must not each subscribe to the real
+ * process stream, and the deployment logger — the one whose file sink makes
+ * degrading survivable at all — must.
  *
  * Throws only on malformed configuration, and only when it reads it. An
  * unwritable path is not a configuration error — it degrades to stdout with a
  * warn, and the returned logger works.
  */
-export function buildEntrypointLogger(config?: FileSinkConfig): JsonLogger {
+export function buildEntrypointLogger(
+  config?: FileSinkConfig,
+  stdout: StdoutStream = process.stdout,
+  stderr: ErrorStream = process.stderr,
+): JsonLogger {
   const sink = new RotatingFileSink({
     ...(config ?? fileSinkConfigFromEnvironment()),
-    onFailure: warnOnStdout,
+    onFailure: (message) => {
+      warnOnStdout(message, stdout);
+    },
   });
-  return new JsonLogger(sink);
+  const logger = new JsonLogger(sink, stdout, stderr);
+  watchStdoutErrors(logger, stdout);
+  return logger;
 }

@@ -28,6 +28,7 @@
  * equity-curve table is the honest fix, not attempted here.
  */
 
+import { PIPELINE_STAGES, type PipelineStage } from '../../../contracts/pipeline.js';
 import type { AnalystContribution, Direction } from '../../pipeline/debate-engine/index.js';
 import { creditForContribution, realizedR } from '../../pipeline/feedback-loop/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
@@ -39,7 +40,6 @@ import {
 } from '../../shared/store/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
 import type { AssetClass, TickStage } from '../orchestrator/index.js';
-import { PIPELINE_STAGES, type PipelineStage } from './pipeline-types.js';
 import type {
   AttributionSummary,
   DashboardQueryStore,
@@ -489,6 +489,15 @@ export class SqliteQueryStore implements DashboardQueryStore {
         .all(from, until) as PipelineTickRow[]
     )
       .filter((row) => laneInstruments.has(row.instrument))
+      // #743: a tick-path pass upserts `stage: 'position_check'`, which is not
+      // a decision-chain stage and has no lane column — the lane view renders
+      // the decision chain, and after the split ~29 of 30 passes are tick-path.
+      // Excluded here rather than widened into `PIPELINE_STAGES`, so the lanes
+      // keep meaning "where is the decision", while `getTickStatus` (the
+      // telemetry strip's in-flight indicator) still reports the pass.
+      .filter((row): row is PipelineTickRow & { stage: PipelineStage } => {
+        return row.stage !== 'position_check';
+      })
       .map<PipelineLiveTick>((row) => ({
         instrument: row.instrument,
         asset_class: row.asset_class,

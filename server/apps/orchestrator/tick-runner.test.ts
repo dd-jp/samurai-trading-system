@@ -16,17 +16,33 @@ const TRACE_ID = 'trace-aapl-1400';
 const SIGNAL: Signal = { asset: 'AAPL', asset_class: 'stocks' };
 
 /**
+ * The decision bar a gate would grant at NOW (14:00 is bar-aligned on the 1h
+ * grid, so the bar's open IS the tick instant).
+ */
+const DECISION_BAR = {
+  id: `${NOW.toISOString()}@3600000`,
+  open_time: NOW,
+  timeframe_ms: 3_600_000,
+};
+
+/**
  * A fresh no-op logger + a SQLite audit log + SQLite current_tick store, each
  * over its own `:memory:` DB, so rows never leak across tests.
+ *
+ * Carries `decision_bar` by default (#743): the pre-split tests in this file
+ * all exercise the decision chain, which now only runs on a granted claim.
+ * Tick-path tests pass `{ decision_bar: undefined }` to strip it.
  */
-function makeCtx(): TickContext {
+function makeCtx(overrides: { decision_bar?: TickContext['decision_bar'] } = {}): TickContext {
   const db = openSharedStore(':memory:');
+  const decision_bar = 'decision_bar' in overrides ? overrides.decision_bar : DECISION_BAR;
   return {
     clock: CLOCK,
     trace_id: TRACE_ID,
     logger: { log: vi.fn() },
     auditLog: new SqliteAuditLog(db),
     currentTickStore: new SqliteCurrentTickStore(db),
+    ...(decision_bar === undefined ? {} : { decision_bar }),
   };
 }
 
@@ -56,6 +72,9 @@ function makeDebate(overrides: Partial<DebateResult> = {}): DebateResult {
     latency_ms: 1200,
     direction: 'bullish',
     debate_id: 'debate-1',
+    // #687: NOW is bar-aligned, so this is the bar the Trader now inherits
+    // instead of flooring a clock read of its own.
+    bar_timestamp: NOW,
     ...overrides,
   };
 }
@@ -159,6 +178,9 @@ function makeExecutionResult(): ExecutionResult {
 function makeSteps(overrides: Partial<TickSteps> = {}): TickSteps {
   const intent = makeIntent();
   return {
+    // Tick-path exits: null = no position to flatten. Decision-chain tests
+    // never reach this step (their ctx carries `decision_bar`).
+    exitCheck: vi.fn(async () => null),
     analysts: vi.fn(async () => [makeView()]),
     debate: vi.fn(async () => makeDebate()),
     trader: vi.fn(async () => intent),
@@ -769,5 +791,182 @@ describe('SequentialTickRunner.runInstrument — risk warnings surfacing (#303)'
     expect(warnEntries(ctx)).toEqual([]);
     // ...and the one-line-per-stage invariant is untouched on the quiet path.
     expect(ctx.logger.log).toHaveBeenCalledTimes(6);
+  });
+});
+
+/**
+ * The tick/decision split (#743): a ctx WITHOUT `decision_bar` is a tick pass
+ * — the exit check and, on an intent, the Risk → Verdict → Execution tail.
+ * Nothing else.
+ */
+describe('SequentialTickRunner tick pass (#743)', () => {
+  /** Steps whose decision chain is UNREACHABLE — analysts and debate throw. */
+  function tickOnlySteps(overrides: Partial<TickSteps> = {}): TickSteps {
+    return makeSteps({
+      analysts: vi.fn(async () => {
+        throw new Error('analysts must not run on a tick pass');
+      }),
+      debate: vi.fn(async () => {
+        throw new Error('debate must not run on a tick pass');
+      }),
+      trader: vi.fn(async () => {
+        throw new Error('the decision-entry Trader must not run on a tick pass');
+      }),
+      ...overrides,
+    });
+  }
+
+  it('runs ONLY the exit check when no exit is due, and never touches the decision chain', async () => {
+    const steps = tickOnlySteps();
+    const ctx = makeCtx({ decision_bar: undefined });
+
+    const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    expect(outcome.final_stage).toBe('position_check');
+    expect(outcome.flatten_fired).toBeUndefined();
+    expect(steps.exitCheck).toHaveBeenCalledTimes(1);
+    // The structural half of the assertion: the exit branch CANNOT read
+    // analyst views or debate output because those steps never ran — they
+    // throw if touched, and `TickSteps.exitCheck`'s input carries neither.
+    expect(steps.analysts).not.toHaveBeenCalled();
+    expect(steps.debate).not.toHaveBeenCalled();
+    expect(steps.trader).not.toHaveBeenCalled();
+    expect(steps.risk).not.toHaveBeenCalled();
+
+    const rows = (ctx.auditLog as SqliteAuditLog).getByTraceId(TRACE_ID);
+    expect(rows.map((row) => row.stage)).toEqual(['position_check']);
+    expect(rows[0]?.decision).toBe('no_exit_due');
+    // Terminal return: the progress row is cleared, not left stale.
+    expect(ctx.currentTickStore.get('AAPL')).toBeUndefined();
+  });
+
+  it('fires the flatten through Risk → Verdict → Execution and stamps flatten_fired', async () => {
+    const exit = makeIntent({ intent_type: 'exit', side: 'sell' });
+    const steps = tickOnlySteps({
+      exitCheck: vi.fn(async () => exit),
+      risk: vi.fn(async () => approvedRisk(exit)),
+      verdict: vi.fn(async () => goVerdict(exit)),
+    });
+    const ctx = makeCtx({ decision_bar: undefined });
+
+    const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    // HAZARD 1 of #743 (the 2f22033 defect shape): the flatten must reach the
+    // broker from the CHEAP path — no analysts, no debate, no decision claim.
+    expect(outcome.final_stage).toBe('execution');
+    expect(outcome.flatten_fired).toBe(true);
+    expect(outcome.execution_result?.status).toBe('submitted');
+    expect(steps.analysts).not.toHaveBeenCalled();
+    expect(steps.debate).not.toHaveBeenCalled();
+
+    const rows = (ctx.auditLog as SqliteAuditLog).getByTraceId(TRACE_ID);
+    expect(rows.map((row) => row.stage)).toEqual([
+      'position_check',
+      'risk',
+      'verdict',
+      'execution',
+    ]);
+    expect(rows[0]?.decision).toBe('flatten');
+  });
+
+  it('hands the exit check the tick bar on the debate grid', async () => {
+    // 14:41:07 floors to 14:00 on the 1h debate grid — the SAME grid the
+    // decision gate claims on, so a tick-pass flatten and a decision-pass
+    // flatten inside one bar key their idempotent exits to one coordinate.
+    const midBar = new Date('2026-07-15T14:41:07Z');
+    const steps = tickOnlySteps();
+    const ctx = { ...makeCtx({ decision_bar: undefined }), clock: { now: () => midBar } };
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    expect(steps.exitCheck).toHaveBeenCalledWith(
+      expect.objectContaining({ bar: new Date('2026-07-15T14:00:00Z') }),
+    );
+  });
+
+  it('keeps a rejected flatten observable: risk is the final stage, flatten_fired still set', async () => {
+    const exit = makeIntent({ intent_type: 'exit', side: 'sell' });
+    const steps = tickOnlySteps({
+      exitCheck: vi.fn(async () => exit),
+      risk: vi.fn(async () => rejectedRisk()),
+    });
+    const ctx = makeCtx({ decision_bar: undefined });
+
+    const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    expect(outcome.final_stage).toBe('risk');
+    expect(outcome.flatten_fired).toBe(true);
+  });
+});
+
+/**
+ * #743's bar-identity assertion: on a decision pass the gate's bar is the
+ * single source, and a `DebateResult` disagreeing with it must be LOUD —
+ * the downstream failure mode (an intent suppressed as a duplicate) is
+ * otherwise indistinguishable from a healthy no-trade tick.
+ */
+describe('SequentialTickRunner decision bar identity (#743)', () => {
+  function warnLines(ctx: TickContext): string[] {
+    return (ctx.logger.log as ReturnType<typeof vi.fn>).mock.calls
+      .map(([entry]) => entry as { level: string; message: string })
+      .filter((entry) => entry.level === 'warn')
+      .map((entry) => entry.message);
+  }
+
+  it('passes the GATE bar down to the debate step, not a clock re-floor', async () => {
+    // The gate claimed 13:00's bar; by the time this pass runs, the clock is
+    // in 14:00's. A runner that re-floors `clock.now()` hands the debate
+    // 14:00 and passes anyway when the two agree — this ctx is built so they
+    // do not (#687's straddle, at the runner seam).
+    const claimedOpen = new Date('2026-07-15T13:00:00Z');
+    const steps = makeSteps({
+      debate: vi.fn(async () => makeDebate({ bar_timestamp: claimedOpen })),
+    });
+    const ctx = makeCtx({
+      decision_bar: {
+        id: `${claimedOpen.toISOString()}@3600000`,
+        open_time: claimedOpen,
+        timeframe_ms: 3_600_000,
+      },
+    });
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    expect(steps.debate).toHaveBeenCalledWith(expect.objectContaining({ bar: claimedOpen }));
+  });
+
+  it('warns loudly when the debate result claims a different bar than the gate opened', async () => {
+    const divergedBar = new Date(NOW.getTime() + 3_600_000);
+    const steps = makeSteps({
+      debate: vi.fn(async () => makeDebate({ bar_timestamp: divergedBar })),
+    });
+    const ctx = makeCtx();
+
+    const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    const warns = warnLines(ctx).filter((message) => message.includes('decision bar divergence'));
+    expect(warns).toHaveLength(1);
+    expect(warns[0]).toContain(NOW.toISOString());
+    expect(warns[0]).toContain(divergedBar.toISOString());
+    // Observable, not fatal: the pass proceeds and downstream gates refuse.
+    expect(outcome.final_stage).toBe('execution');
+  });
+
+  it('stays silent when the debate result carries the gate bar', async () => {
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(makeSteps()).runInstrument(SIGNAL, ctx);
+
+    expect(warnLines(ctx).filter((m) => m.includes('decision bar divergence'))).toEqual([]);
+  });
+
+  it('never calls the exit check on a decision pass — one Trader entry point per pass', async () => {
+    const steps = makeSteps();
+    const ctx = makeCtx();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    expect(steps.exitCheck).not.toHaveBeenCalled();
+    expect(steps.trader).toHaveBeenCalledTimes(1);
   });
 });

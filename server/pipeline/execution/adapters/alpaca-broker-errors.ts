@@ -1,5 +1,5 @@
 /**
- * Typed error hierarchy for the real Alpaca broker `AlpacaClient` (ticket
+ * Typed error hierarchy for the real Alpaca broker `AlpacaBrokerClient` (ticket
  * #273) — mirrors `server/pipeline/debate-engine/llm/errors.ts`'s shape per
  * transport-layer-spec.md's "Shared Transport Conventions" module (issue
  * #271): a `{Client}TimeoutError`, `{Client}RateLimitError` (with an
@@ -7,8 +7,9 @@
  * catch-all (auth/bad-request/5xx/network — not classified further).
  *
  * Named `AlpacaBroker*` rather than plain `Alpaca*` because this codebase has
- * two structurally unrelated `AlpacaClient` interfaces (broker vs. market
- * data, see alpaca-client.ts's doc comment) — `alpaca-http-client.ts` in
+ * two structurally unrelated client interfaces, `AlpacaBrokerClient` (broker,
+ * this module) and `AlpacaMarketDataClient` (market data, see alpaca-client.ts's
+ * doc comment) — `alpaca-http-client.ts` in
  * `market-data-service/sources/` has its own parallel `AlpacaData*`
  * hierarchy rather than sharing this one, since the two clients hit
  * different Alpaca APIs (Trading v2 vs. Market Data v2) and classification

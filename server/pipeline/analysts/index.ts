@@ -19,7 +19,9 @@ export type {
   AnalystFailure,
   AnalystInput,
   AnalystRunResult,
+  AnalystTelemetry,
   AssetClass,
+  IndicatorUnavailableEvent,
   Signal,
 } from './types.js';
-export { NO_DATA_MARKER } from './types.js';
+export { INDICATOR_UNAVAILABLE_COUNTER, NO_DATA_MARKER } from './types.js';

@@ -15,7 +15,9 @@
  * real timers and drain it. It is the only test in the suite that does, which
  * is the whole point of the ticket.
  */
+import { RSI_SPEC, SMA_SPEC } from '../../pipeline/analysts/technical-analyst.js';
 import { computeIndicator } from '../../providers/market-data-service/index.js';
+import { GUARDED_THRESHOLD_NAMES } from '../../shared/index.js';
 import {
   buildSmokeFixtureBars,
   ConstantResponseLlmClient,
@@ -24,10 +26,12 @@ import {
   evaluateSmokeGate,
   FixedAccountStateProvider,
   formatSmokeReport,
+  type LoggerResilienceEvidence,
   runSmoke,
   SMOKE_LLM_RESPONSE,
   SMOKE_RUN_INSTANT,
   type SmokeObservations,
+  type ThresholdClampEvidence,
   UnreachableAlpacaClient,
 } from './smoke-run.js';
 
@@ -217,6 +221,8 @@ function healthyGateOptions(
     minTicks?: number;
     exitPath?: ExitPathEvidence;
     cryptoEmulation?: CryptoEmulationEvidence;
+    loggerResilience?: LoggerResilienceEvidence;
+    thresholdClamp?: ThresholdClampEvidence;
   } = {},
 ) {
   return {
@@ -224,6 +230,39 @@ function healthyGateOptions(
     llmRateLimiterSnapshot: meteredSnapshot(),
     exitPath: overrides.exitPath ?? healthyExitPath(),
     cryptoEmulation: overrides.cryptoEmulation ?? healthyCryptoEmulation(),
+    loggerResilience: overrides.loggerResilience ?? healthyLoggerResilience(),
+    thresholdClamp: overrides.thresholdClamp ?? healthyThresholdClamp(),
+  };
+}
+
+/** What `runThresholdClampScenario` reports when every #638 seam refuses. */
+function healthyThresholdClamp(
+  overrides: Partial<ThresholdClampEvidence> = {},
+): ThresholdClampEvidence {
+  return {
+    probedNames: [...GUARDED_THRESHOLD_NAMES],
+    liveReadAccepted: [],
+    writeDoorAccepted: [],
+    breakerConstructionRefused: true,
+    killLineCheckRefused: true,
+    shippedConfigAccepted: true,
+    ...overrides,
+  };
+}
+
+/** What `runLoggerResilienceScenario` reports when both #714 mechanisms hold. */
+function healthyLoggerResilience(
+  overrides: Partial<LoggerResilienceEvidence> = {},
+): LoggerResilienceEvidence {
+  return {
+    stdoutRetired: true,
+    degradationRecordedInFile: true,
+    linesAfterStdoutDeath: 1,
+    escalatedWhenNothingCouldRecord: true,
+    lastResortTraceOnStderr: true,
+    fatalRecordedInFile: true,
+    fatalExitCode: 1,
+    ...overrides,
   };
 }
 
@@ -428,6 +467,155 @@ describe('evaluateSmokeGate', () => {
     expect(gate.failures.some((failure) => failure.includes('#388 defect'))).toBe(false);
   });
 
+  // #638 — the in-code threshold clamp. Each of these fails the gate on its
+  // own: ADR-0013 leaves the numeric thresholds as the only stop, so any seam
+  // that accepts an out-of-bound value is the whole control gone.
+  it('fails when the LIVE risk_thresholds read accepted an out-of-bound value', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        thresholdClamp: healthyThresholdClamp({ liveReadAccepted: ['max_drawdown_pct'] }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('LIVE risk_thresholds read'))).toBe(
+      true,
+    );
+  });
+
+  it('fails when the Feedback Loop write door accepted an out-of-bound value', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        thresholdClamp: healthyThresholdClamp({ writeDoorAccepted: ['max_pbo'] }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('write door accepted'))).toBe(true);
+  });
+
+  it('fails when the breaker constructor accepted a drawdown pair that can never fire', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        thresholdClamp: healthyThresholdClamp({ breakerConstructionRefused: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('0.95/0.90'))).toBe(true);
+  });
+
+  it('fails when the kill-line boot check accepted a softened PBO threshold', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        thresholdClamp: healthyThresholdClamp({ killLineCheckRefused: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('PBO threshold of 0.5'))).toBe(true);
+  });
+
+  it('fails when a guarded threshold was never probed — an unseen limit is not enforced', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        thresholdClamp: healthyThresholdClamp({
+          probedNames: GUARDED_THRESHOLD_NAMES.filter((name) => name !== 'max_pbo'),
+        }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('guarded thresholds'))).toBe(true);
+  });
+
+  it('fails when the clamp refuses the SHIPPED configuration — the bound is wrong, not the config', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        thresholdClamp: healthyThresholdClamp({ shippedConfigAccepted: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('shipped paper breaker'))).toBe(true);
+  });
+
+  // #714 — the logging-fault mechanisms. Each of these fails the gate on its
+  // own, because each is a different way for an unattended soak to end or to
+  // go quietly blind.
+  it('fails when a dead stdout pipe stopped the run instead of degrading it', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        loggerResilience: healthyLoggerResilience({
+          stdoutRetired: false,
+          linesAfterStdoutDeath: 0,
+        }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('dead stdout pipe'))).toBe(true);
+  });
+
+  it('fails when the stdout failure was swallowed without a durable record', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        loggerResilience: healthyLoggerResilience({ degradationRecordedInFile: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('continue blind'))).toBe(true);
+  });
+
+  it('fails when a logger with nowhere left to record kept going anyway', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        loggerResilience: healthyLoggerResilience({ escalatedWhenNothingCouldRecord: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('swallowed its failure'))).toBe(true);
+  });
+
+  it('fails when the no-sink escalation left no trace on stderr', () => {
+    // The throw is swallowed inside a tick by design (#573), so stderr is the
+    // only thing standing between that ordering and a run trading blind.
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        loggerResilience: healthyLoggerResilience({ lastResortTraceOnStderr: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('wrote nothing to stderr'))).toBe(true);
+  });
+
+  it('fails when an unhandled fault was shrugged off rather than recorded and exited', () => {
+    // The constraint that matters most: a blanket swallow at the composition
+    // root would leave a live-money process trading in an unknown state.
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        loggerResilience: healthyLoggerResilience({ fatalExitCode: 0 }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('unknown state'))).toBe(true);
+  });
+
   it('fails when no GO verdict was recorded, naming the no-go reasons seen', () => {
     const gate = evaluateSmokeGate(
       {
@@ -578,6 +766,9 @@ describe('buildSmokeFixtureBars', () => {
    * instead.
    */
   it('supplies more bars than every lookback the paper profile reads', () => {
+    // #742: RSI_SPEC/SMA_SPEC read '5m' now; '1h' remains the Trader's ATR
+    // timeframe (unchanged) and the technical analyst's context read.
+    expect(countFor('5m')).toBeGreaterThanOrEqual(RSI_SPEC.lookback);
     expect(countFor('1h')).toBeGreaterThanOrEqual(15);
     expect(countFor('1m')).toBeGreaterThanOrEqual(15);
     expect(countFor('1d')).toBeGreaterThanOrEqual(30);
@@ -592,12 +783,18 @@ describe('buildSmokeFixtureBars', () => {
   });
 
   it('trends upward, so the analysts agree and conviction clears the floor', () => {
-    const hourly = bars
-      .filter((bar) => bar.timeframe === '1h')
+    // #742: the technical analyst's read moved from '1h' to '5m'; this test
+    // now filters the '5m' series, which is what `SMA_SPEC`/`RSI_SPEC`
+    // actually read in production. `buildTrendingCloses` depends only on
+    // `count`/`lastClose`, not `timeframe`, so the '5m' series carries the
+    // same close values the '1h' series always has — the RSI/margin figures
+    // quoted below (68.52, 1.48 points) are unchanged by the move.
+    const fiveMinute = bars
+      .filter((bar) => bar.timeframe === '5m')
       .sort((a, b) => a.close_time.getTime() - b.close_time.getTime());
-    const first = hourly[0];
-    const last = hourly[hourly.length - 1];
-    if (first === undefined || last === undefined) throw new Error('no hourly fixture bars');
+    const first = fiveMinute[0];
+    const last = fiveMinute[fiveMinute.length - 1];
+    if (first === undefined || last === undefined) throw new Error('no 5m fixture bars');
 
     expect(last.close).toBeGreaterThan(first.close);
     // A non-degenerate true range, so the Trader's ATR stop is a real distance
@@ -610,20 +807,19 @@ describe('buildSmokeFixtureBars', () => {
     // bars has RSI exactly 100 and `directionFrom` treats >= 70 as overbought.
     // The desk therefore never agreed, and the run's only directional
     // participant was the mediator. Assert the analyst's own rule instead.
-    const sma = computeIndicator(hourly, {
-      indicator: 'sma',
-      params: { period: 14 },
-      timeframe: '1h',
-      lookback: 14,
-    });
-    const rsi = computeIndicator(hourly, {
-      indicator: 'rsi',
-      params: { period: 14 },
-      timeframe: '1h',
-      lookback: 15,
-    });
+    //
+    // The REAL specs, not rebuilt literals (#722): this used to hand-build
+    // `lookback: 15` while feeding it all 60 hourly bars, so it agreed with the
+    // analyst only by accident and would have gone on passing had the fixture
+    // stopped clearing the spec's warm-up. Slicing by `RSI_SPEC.lookback` also
+    // makes the fixture-depth requirement an assertion rather than a comment.
+    expect(fiveMinute.length).toBeGreaterThanOrEqual(RSI_SPEC.lookback);
+    const sma = computeIndicator(fiveMinute.slice(-SMA_SPEC.lookback), SMA_SPEC);
+    const rsi = computeIndicator(fiveMinute.slice(-RSI_SPEC.lookback), RSI_SPEC);
 
     expect(last.close).toBeGreaterThan(sma);
+    // 68.52 under the converged warm-up, against 63.16 under the old floor —
+    // still bullish, with 1.48 points of headroom to the overbought gate.
     expect(rsi).toBeLessThan(70);
     expect(rsi).toBeGreaterThan(50);
   });

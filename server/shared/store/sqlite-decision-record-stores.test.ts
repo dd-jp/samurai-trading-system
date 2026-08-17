@@ -1,0 +1,115 @@
+import { describe, expect, it } from 'vitest';
+import { openSharedStore } from './open-shared-store.js';
+import { SqliteRiskLogStore } from './sqlite-decision-record-stores.js';
+
+// #726: `risk_log.status` gained `'error'` in migration 0028 (widening a CHECK
+// constraint requires a full table rebuild in SQLite — see that migration's
+// doc comment). Every test exercising the new status elsewhere in this repo
+// (per-subclass-deployment-cap.test.ts, direct-bind.test.ts) uses a fake
+// `RiskLogStore`, so nothing actually proves the rebuilt CHECK constraint
+// accepts the value, or that the column order in the migration's
+// `INSERT INTO risk_log_new SELECT * FROM risk_log` rebuild survives a real
+// write/read round-trip through `SqliteRiskLogStore`'s own SQL. #549's
+// precedent for this exact gap: "version 24 in schema_migrations alone would
+// stay green through a column-name typo in the migration file — every marker
+// query would then fail only at runtime."
+describe('SqliteRiskLogStore (#726)', () => {
+  function makeRecord(overrides: Partial<Parameters<SqliteRiskLogStore['write']>[0]> = {}) {
+    return {
+      trace_id: 't1',
+      instrument: '3USL',
+      status: 'error' as const,
+      binding_constraint: 'per_subclass_deployment_cap:no_cap_for_subclass:index_etp_3x',
+      reasons: ['index_etp_3x has no cap declared'],
+      original_size: null,
+      final_size: null,
+      stop_tightened: false,
+      breakers: {
+        portfolio_tripped: false,
+        crypto_tripped: false,
+        stocks_tripped: false,
+        armed_breakers: [],
+      },
+      portfolio: {
+        equity: 1_000,
+        drawdown_pct: 0,
+        gross_exposure: 0,
+        consecutive_losses: 0,
+        daily_pnl_portfolio_pct: null,
+        daily_pnl_crypto_pct: null,
+        daily_pnl_stocks_pct: null,
+        daily_pnl_unknown_reason: 'not_yet_known' as const,
+      },
+      created_at: new Date('2026-08-16T12:00:00.000Z'),
+      ...overrides,
+    };
+  }
+
+  it('accepts status "error" and round-trips the binding_constraint through the rebuilt CHECK constraint', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteRiskLogStore(db);
+
+    store.write(makeRecord());
+
+    const row = db
+      .prepare(
+        'SELECT trace_id, instrument, status, binding_constraint, reasons_json FROM risk_log ' +
+          "WHERE trace_id = 't1' AND instrument = '3USL'",
+      )
+      .get() as {
+      trace_id: string;
+      instrument: string;
+      status: string;
+      binding_constraint: string;
+      reasons_json: string;
+    };
+
+    expect(row).toBeDefined();
+    expect(row.status).toBe('error');
+    expect(row.binding_constraint).toBe(
+      'per_subclass_deployment_cap:no_cap_for_subclass:index_etp_3x',
+    );
+    expect(JSON.parse(row.reasons_json)).toEqual(['index_etp_3x has no cap declared']);
+  });
+
+  it('preserves "approved" and "rejected" alongside the new "error" through the same table rebuild', () => {
+    // The prior test only proves the rebuild ACCEPTS 'error'; it says nothing
+    // about whether the rebuild PRESERVED the two pre-existing values. A typo
+    // in 0028's CHECK(status IN ('approved', 'rejcted', 'error')) would stay
+    // green through every other test in this repo — nothing else writes a
+    // 'rejected' row through this store to a real (non-fake) database, and
+    // yarn smoke never produces a rejection either.
+    const db = openSharedStore(':memory:');
+    const store = new SqliteRiskLogStore(db);
+
+    for (const status of ['approved', 'rejected', 'error'] as const) {
+      store.write(makeRecord({ status, trace_id: `t-${status}` }));
+    }
+
+    for (const status of ['approved', 'rejected', 'error'] as const) {
+      const row = db.prepare('SELECT status FROM risk_log WHERE trace_id = ?').get(`t-${status}`) as
+        | { status: string }
+        | undefined;
+      expect(row?.status).toBe(status);
+    }
+  });
+
+  it('still rejects a status the CHECK constraint does not carry, so the widening did not degrade to unconstrained TEXT', () => {
+    const db = openSharedStore(':memory:');
+
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO risk_log (
+             trace_id, instrument, status, binding_constraint, reasons_json,
+             original_size, final_size, stop_tightened,
+             portfolio_tripped, crypto_tripped, stocks_tripped, armed_breakers_json,
+             equity, drawdown_pct, gross_exposure, consecutive_losses,
+             daily_pnl_portfolio_pct, daily_pnl_crypto_pct, daily_pnl_stocks_pct,
+             daily_pnl_unknown_reason, created_at
+           ) VALUES ('t2', 'AAPL', 'bogus_status', NULL, '[]', NULL, NULL, 0, 0, 0, 0, '[]', 1000, 0, 0, 0, NULL, NULL, NULL, NULL, '2026-08-16T12:00:00.000Z')`,
+        )
+        .run(),
+    ).toThrow(/CHECK constraint failed/);
+  });
+});

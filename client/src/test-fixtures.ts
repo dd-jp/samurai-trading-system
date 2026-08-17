@@ -99,17 +99,28 @@ export function makeDebate(overrides: Partial<DebateRow> = {}): DebateRow {
     created_at: '2026-08-07T11:44:00.000Z',
     contributions: [
       {
+        // influence_score matches what computeInfluenceScore
+        // (server/pipeline/debate-engine/analyst-contribution.ts) actually
+        // emits for this stance array — 1 of 2 round-to-round transitions
+        // changed (neutral→bullish, bullish→bullish) — rather than a
+        // hand-picked value (#624). The client cannot import the server
+        // function across the client/server boundary (CLAUDE.md: neither
+        // runtime imports the other), so this is derived by hand using the
+        // same "fraction of transitions that changed" rule instead of called.
         analyst_id: 'momentum',
         analyst_type: 'technical',
         final_position: 'bullish',
-        influence_score: 0.51,
+        influence_score: 0.5,
         stance_during_debate: ['neutral', 'bullish', 'bullish'],
       },
       {
+        // No stance_during_debate recorded, so computeInfluenceScore's own
+        // rule (fewer than two recorded rounds -> no transition observable)
+        // gives 0, not a hand-picked non-zero reading (#624).
         analyst_id: 'meanrev',
         analyst_type: 'technical',
         final_position: 'bearish',
-        influence_score: 0.18,
+        influence_score: 0,
       },
     ],
     ...overrides,

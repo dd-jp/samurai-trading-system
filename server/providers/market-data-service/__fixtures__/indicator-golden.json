@@ -3846,8 +3846,17 @@
       "period": 14,
       "from": 240,
       "to": 260,
-      "note": "high == low == open == close: RSI reads 100 on a market that has not moved",
-      "expected": 100.0
+      "note": "high == low == open == close: avgGain == avgLoss == 0, RSI reads the neutral midpoint 50 rather than the 100 a strictly rising window gets (#725)",
+      "expected": 50.0
+    },
+    {
+      "name": "flat_dojis_rsi_5",
+      "indicator": "rsi",
+      "period": 5,
+      "from": 240,
+      "to": 260,
+      "note": "same dead-flat segment, a different period: RSI 50 on a halted/auction tape does not depend on which period asked for it (#725)",
+      "expected": 50.0
     },
     {
       "name": "flat_dojis_atr_14",
@@ -3893,6 +3902,197 @@
       "to": 400,
       "note": "period 14 inside a 120-bar window \u2014 only the trailing 14 closes may matter",
       "expected": 72.56245
+    },
+    {
+      "name": "full_window_atr_pct_14",
+      "indicator": "atr_pct",
+      "params": {
+        "period": 14
+      },
+      "from": 0,
+      "to": 400,
+      "note": "the shipped period over a fully warmed window",
+      "expected": 1.80719309
+    },
+    {
+      "name": "full_window_donchian_pos_14",
+      "indicator": "donchian_pos",
+      "params": {
+        "period": 14
+      },
+      "from": 0,
+      "to": 400,
+      "note": "the shipped period over a fully warmed window",
+      "expected": 0.59479685
+    },
+    {
+      "name": "full_window_adx_14",
+      "indicator": "adx",
+      "params": {
+        "period": 14
+      },
+      "from": 0,
+      "to": 400,
+      "note": "the shipped period over a fully warmed window",
+      "expected": 18.18197594
+    },
+    {
+      "name": "full_window_macd_histogram_12_26_9",
+      "indicator": "macd_histogram",
+      "params": {
+        "fast": 12,
+        "slow": 26,
+        "signal": 9
+      },
+      "from": 0,
+      "to": 400,
+      "note": "the canonical 12/26/9 over a fully warmed window",
+      "expected": -0.06419601
+    },
+    {
+      "name": "full_window_bb_kc_squeeze_20_20",
+      "indicator": "bb_kc_squeeze",
+      "params": {
+        "bb_period": 20,
+        "bb_mult": 2,
+        "kc_period": 20,
+        "kc_mult": 1.5
+      },
+      "from": 0,
+      "to": 400,
+      "note": "the canonical 20/20 over a fully warmed window",
+      "expected": 2.00528019
+    },
+    {
+      "name": "boundary_atr_pct_14",
+      "indicator": "atr_pct",
+      "params": {
+        "period": 14
+      },
+      "from": 385,
+      "to": 400,
+      "note": "exactly minimumBarsFor(atr_pct, {'period': 14}) = 15 bars \u2014 one fewer must throw",
+      "expected": 1.76922859
+    },
+    {
+      "name": "boundary_donchian_pos_14",
+      "indicator": "donchian_pos",
+      "params": {
+        "period": 14
+      },
+      "from": 386,
+      "to": 400,
+      "note": "exactly minimumBarsFor(donchian_pos, {'period': 14}) = 14 bars \u2014 one fewer must throw",
+      "expected": 0.59479685
+    },
+    {
+      "name": "boundary_adx_14",
+      "indicator": "adx",
+      "params": {
+        "period": 14
+      },
+      "from": 372,
+      "to": 400,
+      "note": "exactly minimumBarsFor(adx, {'period': 14}) = 28 bars \u2014 one fewer must throw",
+      "expected": 15.20037645
+    },
+    {
+      "name": "boundary_macd_histogram_12_26_9",
+      "indicator": "macd_histogram",
+      "params": {
+        "fast": 12,
+        "slow": 26,
+        "signal": 9
+      },
+      "from": 366,
+      "to": 400,
+      "note": "exactly minimumBarsFor(macd_histogram, {'fast': 12, 'slow': 26, 'signal': 9}) = 34 bars \u2014 one fewer must throw",
+      "expected": -0.04552592
+    },
+    {
+      "name": "boundary_bb_kc_squeeze_20_20",
+      "indicator": "bb_kc_squeeze",
+      "params": {
+        "bb_period": 20,
+        "bb_mult": 2,
+        "kc_period": 20,
+        "kc_mult": 1.5
+      },
+      "from": 379,
+      "to": 400,
+      "note": "exactly minimumBarsFor(bb_kc_squeeze, {'bb_period': 20, 'bb_mult': 2, 'kc_period': 20, 'kc_mult': 1.5}) = 21 bars \u2014 one fewer must throw",
+      "expected": 1.96884996
+    },
+    {
+      "name": "flat_dojis_donchian_pos_14",
+      "indicator": "donchian_pos",
+      "params": {
+        "period": 14
+      },
+      "from": 240,
+      "to": 260,
+      "note": "high == low == open == close throughout: upper == lower, the degenerate denominator this ticket's acceptance criteria name \u2014 answers the neutral 0.5",
+      "expected": 0.5
+    },
+    {
+      "name": "flat_dojis_adx_5",
+      "indicator": "adx",
+      "params": {
+        "period": 5
+      },
+      "from": 240,
+      "to": 260,
+      "note": "zero true range throughout: DI+/DI-/DX/ADX all read 0 rather than NaN",
+      "expected": 0.0
+    },
+    {
+      "name": "flat_dojis_macd_histogram_3_6_3",
+      "indicator": "macd_histogram",
+      "params": {
+        "fast": 3,
+        "slow": 6,
+        "signal": 3
+      },
+      "from": 240,
+      "to": 260,
+      "note": "constant closes: every EMA equals the constant, histogram is exactly 0",
+      "expected": 0.0
+    },
+    {
+      "name": "flat_dojis_bb_kc_squeeze_6_6",
+      "indicator": "bb_kc_squeeze",
+      "params": {
+        "bb_period": 6,
+        "bb_mult": 2,
+        "kc_period": 6,
+        "kc_mult": 1.5
+      },
+      "from": 240,
+      "to": 260,
+      "note": "kcWidth == 0 (zero ATR): the degenerate denominator this ticket's acceptance criteria name \u2014 answers the neutral 1 rather than Infinity",
+      "expected": 1.0
+    },
+    {
+      "name": "gapping_adx_14",
+      "indicator": "adx",
+      "params": {
+        "period": 14
+      },
+      "from": 260,
+      "to": 400,
+      "note": "opens gap past the prior close, exercising the prev-close TR legs inside +DM/-DM/TR",
+      "expected": 18.17934394
+    },
+    {
+      "name": "gapping_atr_pct_14",
+      "indicator": "atr_pct",
+      "params": {
+        "period": 14
+      },
+      "from": 260,
+      "to": 400,
+      "note": "opens gap past the prior close, same TR legs as gapping_atr_14 scaled by close",
+      "expected": 1.80723921
     }
   ]
 }

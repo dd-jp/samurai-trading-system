@@ -21,6 +21,7 @@ import { DEFAULT_TRADER_CONFIG } from '../../../pipeline/trader/index.js';
 import type { AssetClass, Clock, LogEntry, Logger } from '../../../shared/index.js';
 import { DEFAULT_VENUE_PACING, SimulatedClock } from '../../../shared/index.js';
 import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
+import { DebateBarDecisionGate } from '../decision-bar-gate.js';
 import { paperStartingProfile } from '../paper-profile.js';
 import { buildProductionComponents, type ProductionConfig } from '../production.js';
 import { DEFAULT_UNIVERSE } from '../scheduler.js';
@@ -113,6 +114,7 @@ describe('the LLM rate limiter is in the production path (#388)', () => {
       asset_class: 'crypto',
       views: [makeView()],
       clock: CLOCK,
+      bar: NOW,
     });
 
     // The limiter reachable from `ProductionComponents` is the one the debate
@@ -135,6 +137,7 @@ describe('the LLM rate limiter is in the production path (#388)', () => {
       asset_class: 'stocks',
       views: [makeView()],
       clock: CLOCK,
+      bar: NOW,
     });
 
     const snapshot = components.llmRateLimiter.snapshot();
@@ -173,7 +176,7 @@ describe('the LLM rate limiter is in the production path (#388)', () => {
     });
 
     expect(() => buildProductionComponents(config)).toThrow();
-    // `submitOrder`, not `listOrders`: the latter is not on `AlpacaClient` at
+    // `submitOrder`, not `listOrders`: the latter is not on `AlpacaBrokerClient` at
     // all, so the old assertion read an `undefined` off the stub and asserted
     // that it had not been called — vacuously true whatever the wiring did.
     expect(config.alpacaBrokerClient.submitOrder).not.toHaveBeenCalled();
@@ -192,6 +195,7 @@ describe('the LLM rate limiter is in the production path (#388)', () => {
       asset_class: 'crypto',
       views: [makeView()],
       clock: CLOCK,
+      bar: NOW,
     });
 
     expect(components.llmRateLimiter.snapshot().crypto?.llmCallsUsed).toBeGreaterThan(0);
@@ -217,6 +221,7 @@ describe('raising maxConcurrentInstruments no longer removes the only throttle (
       logger: recordingLogger().logger,
       auditLog: noopAuditLog(),
       currentTickStore: noopCurrentTickStore(),
+      decisionGate: new DebateBarDecisionGate(),
     });
 
     // Exactly two of the six debates were admitted, whichever order the
@@ -259,6 +264,7 @@ describe('raising maxConcurrentInstruments no longer removes the only throttle (
         logger: recordingLogger().logger,
         auditLog: noopAuditLog(),
         currentTickStore: noopCurrentTickStore(),
+        decisionGate: new DebateBarDecisionGate(),
       },
     );
 
@@ -280,6 +286,7 @@ describe('raising maxConcurrentInstruments no longer removes the only throttle (
         logger: recordingLogger().logger,
         auditLog: noopAuditLog(),
         currentTickStore: noopCurrentTickStore(),
+        decisionGate: new DebateBarDecisionGate(),
       }),
     ).resolves.toHaveLength(6);
 
@@ -309,6 +316,7 @@ describe('what a refused debate does', () => {
       asset_class: 'crypto',
       views: [makeView()],
       clock: CLOCK,
+      bar: NOW,
     });
 
     expect(llmClient.calls).toBe(0);
@@ -346,6 +354,7 @@ describe('what a refused debate does', () => {
       asset_class: 'crypto',
       views: [makeView()],
       clock: CLOCK,
+      bar: NOW,
     });
 
     expect(llmClient.calls).toBe(0);
@@ -378,6 +387,7 @@ describe('the reserved worst case matches what a debate can actually spend', () 
       asset_class: 'stocks',
       views: [makeView(), makeView({ analyst_id: 'sentiment-1', direction: 'bearish' })],
       clock: CLOCK,
+      bar: NOW,
     });
 
     expect(result.rounds_completed).toBe(MAX_ROUNDS);
@@ -401,6 +411,7 @@ describe('the reserved worst case matches what a debate can actually spend', () 
       asset_class: 'crypto',
       views: [makeView(), makeView({ analyst_id: 'sentiment-1', direction: 'bearish' })],
       clock: CLOCK,
+      bar: NOW,
     });
 
     // One round (bull, bear, mediator) + the once-per-debate disagreement
@@ -634,6 +645,7 @@ describe('the LLM spend cap is in the production path (ADR-0008)', () => {
       asset_class: 'crypto',
       views: [makeView()],
       clock: CLOCK,
+      bar: NOW,
     });
 
     // Not merely "returned a refusal" — NO MONEY WAS SPENT. A cap that
@@ -658,6 +670,7 @@ describe('the LLM spend cap is in the production path (ADR-0008)', () => {
       asset_class: 'crypto',
       views: [makeView()],
       clock: CLOCK,
+      bar: NOW,
     });
 
     expect(components.llmRateLimiter.snapshot().crypto).toBeUndefined();
@@ -674,6 +687,7 @@ describe('the LLM spend cap is in the production path (ADR-0008)', () => {
       asset_class: 'crypto',
       views: [makeView()],
       clock: CLOCK,
+      bar: NOW,
     });
 
     expect(llmClient.calls).toBeGreaterThan(0);
@@ -755,6 +769,7 @@ function tickRunnerOver(llmClient: LlmClient, rateLimiter: RateLimiter) {
     UNCAPPED_SPEND,
   );
   const steps: TickSteps = {
+    exitCheck: async () => null,
     // TWO views, so the converging round also issues its `detectDisagreements`
     // call — one view takes the directional fallback and never reaches the LLM,
     // which would understate what a real debate costs.

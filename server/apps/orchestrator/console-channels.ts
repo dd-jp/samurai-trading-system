@@ -20,6 +20,9 @@
  * the one still reached by omission, because wiring an inbound HITL round trip
  * through Telegram is #275's remaining half, not #322's.
  */
+
+import type { AnalystTelemetry, IndicatorUnavailableEvent } from '../../pipeline/analysts/index.js';
+import { INDICATOR_UNAVAILABLE_COUNTER } from '../../pipeline/analysts/index.js';
 import type {
   FlattenOverfillAlertChannel,
   FlattenOverfillWarning,
@@ -35,8 +38,8 @@ import type {
 import type {
   BreachAlert,
   BreachAlertChannel,
-  LoosenApprovalChannel,
-  LoosenApprovalRequest,
+  LoosenAppliedNotice,
+  LoosenNotificationChannel,
 } from '../../pipeline/feedback-loop/index.js';
 import type {
   ApprovalChannel,
@@ -316,6 +319,50 @@ export class LoggingAnalystSkipAlertChannel implements AnalystSkipAlertChannel {
 }
 
 /**
+ * `technical_indicator_unavailable{kind}` (#745), written to the log stream.
+ *
+ * This is a COUNTER, not an alert, and the level says so: an enrichment axis
+ * short of bars is the designed degradation — the technical analyst is
+ * `mandatory`, and the whole point of the core/enrichment split is that a cold
+ * or thin instrument still produces a usable view instead of forfeiting the
+ * tick as a `quorum_skip`. So `warn`, not `error`: worth counting, never worth
+ * paging. A `debug` would be worse — the operational question this exists to
+ * answer is "how much of the axis panel has this instrument actually been
+ * voting on", and a level nobody ships cannot answer it.
+ *
+ * There is no metrics registry in this system; the log stream IS the metric
+ * store (`rotating-file-sink.ts`), so the counter name is emitted as a field
+ * rather than incremented in a gauge, and a scrape aggregates by
+ * `payload.counter` + `payload.kind`. Named from
+ * `INDICATOR_UNAVAILABLE_COUNTER` so the sink and any future scrape cannot
+ * drift apart on spelling.
+ */
+export class LoggingAnalystTelemetry implements AnalystTelemetry {
+  constructor(private readonly logger: Logger) {}
+
+  indicatorUnavailable(event: IndicatorUnavailableEvent): void {
+    this.logger.log({
+      trace_id: event.trace_id,
+      stage: 'analysts',
+      level: 'warn',
+      message:
+        `${INDICATOR_UNAVAILABLE_COUNTER}{kind="${event.kind}"}: ${event.instrument} ` +
+        `${event.axis} axis left the vote denominator — ${event.kind} needed ${event.required} ` +
+        `bars, had ${event.received}`,
+      payload: {
+        counter: INDICATOR_UNAVAILABLE_COUNTER,
+        analyst_type: event.analyst_type,
+        instrument: event.instrument,
+        axis: event.axis,
+        kind: event.kind,
+        required: event.required,
+        received: event.received,
+      },
+    });
+  }
+}
+
+/**
  * A kill-threshold breach (#93), written to the log at `error`.
  *
  * `error`, for `LoggingOrphanAlertChannel`'s reason and more so: a breach
@@ -353,7 +400,8 @@ export class LoggingBreachAlertChannel implements BreachAlertChannel {
 }
 
 /**
- * A gated risk-threshold LOOSENING, written to the log at `warn` (#366).
+ * An APPLIED risk-threshold loosening, written to the log at `warn` (#366,
+ * retargeted by #736).
  *
  * ## Why this one is a stand-in and not a fabricated consent
  *
@@ -364,37 +412,34 @@ export class LoggingBreachAlertChannel implements BreachAlertChannel {
  *   log-only implementation has to *answer*, and the only answers available to
  *   a machine with no human on the line are a fabricated `'approved'` or a
  *   `'rejected'` that impersonates a working gate.
- * - `LoosenApprovalChannel.requestLoosenApproval` returns `void`. It is
- *   outbound-only by construction (feedback-loop/types.ts: "Fire-and-forget by
- *   design ... a loosening is queued into `loosen_pending_approval` and never
- *   applied by the cycle that proposed it"). There is no answer to fabricate,
- *   so this channel cannot approve anything even if it wanted to.
+ * - `LoosenNotificationChannel.notifyLoosenApplied` returns `void` and is not
+ *   asked anything. Under ADR-0013 Decision 2 the Feedback Loop applies its
+ *   own bounded dial moves; this channel reports one that already happened.
+ *   There is no consent to fabricate because none is sought.
  *
- * **Which way it fails, explicitly: CLOSED.** A loosen request that reaches
- * nobody leaves the risk threshold exactly where it was. `runDailyCycle`
- * `continue`s past a gated move without writing the dial and without appending
- * to the `AdjustmentLog`, so the safety limit stands until a human changes it
- * out of band. The cost of no approver is a threshold that stays tight
- * forever, never one that quietly relaxes — and that is the correct direction
- * to fail in for the dial that bounds loss.
- *
- * The one path that *does* auto-apply a loosening is `mode: 'backtest'`
- * (`gate = isThreshold && mode !== 'backtest'`, daily-cycle.ts), which spends
- * no money and records the move as `proposal:backtest_auto_approved`. Paper
- * and live take the gated path — deliberately, per `DailyCycleInput.mode`.
+ * **What bounds the move is not this channel.** Until #736 a loosening was
+ * queued for an approval no transport could deliver, so it was never applied
+ * at all — fail-closed, and also a dial permanently stuck one way. Now the
+ * bounds do the work: one `max_step`, the dial's `[floor, ceiling]`, and the
+ * in-code clamp on the guarded thresholds (`server/shared/threshold-bounds.ts`,
+ * #638), which throws at the tuning store's write door and so runs BEFORE any
+ * notice is emitted. A move this channel reports is a move already written and
+ * already in `dial_adjustments`.
  *
  * Same caveat as the other log-only stand-ins: a log line nobody tails is not
- * a notification. `TradeChannelLoosenApproval` (loosen-approval-channel.ts) is
- * the reachable-from-a-phone implementation, selected by
+ * a notification. `TradeChannelLoosenNotice` (loosen-notification-channel.ts)
+ * is the reachable-from-a-phone implementation, selected by
  * `SAMURAI_ALERTS=telegram` (#322/#366) — which an unattended soak (#238) sets.
  *
- * `warn`, not `error`: nothing is broken and no position is at risk. The
- * system asked a question and will keep running safely without an answer.
+ * `warn`, not `error`: nothing is broken and no position is at risk — a dial
+ * moved inside limits a human set. Not `info` either: a safety limit widening
+ * with nobody asked is the thing an operator scanning a soak log must not
+ * scroll past.
  */
-export class LoggingLoosenApprovalChannel implements LoosenApprovalChannel {
+export class LoggingLoosenNotificationChannel implements LoosenNotificationChannel {
   constructor(private readonly logger: Logger) {}
 
-  requestLoosenApproval(request: LoosenApprovalRequest): void {
+  notifyLoosenApplied(notice: LoosenAppliedNotice): void {
     this.logger.log({
       // The daily batch belongs to no single tick, so it shares the synthetic
       // trace the feedback cycle already logs under.
@@ -402,15 +447,15 @@ export class LoggingLoosenApprovalChannel implements LoosenApprovalChannel {
       stage: 'feedback-loop',
       level: 'warn',
       message:
-        'risk-threshold LOOSENING proposed and NOT applied — it needs a human, and no approval ' +
-        'transport can deliver one back to this process. The threshold stays where it is until ' +
-        'somebody changes it out of band (fail-closed, #366).',
+        'risk-threshold LOOSENING applied — the Feedback Loop widened its own limit, capped at ' +
+        'one step and clamped to the hard bounds (ADR-0013, #736). Nobody was asked and no ' +
+        'reply is read; reverse it from the dial_adjustments row if it is wrong.',
       payload: {
-        name: request.name,
-        from: request.from,
-        to: request.to,
-        requested_at: request.requested_at.toISOString(),
-        applied: false,
+        name: notice.name,
+        from: notice.from,
+        to: notice.to,
+        applied_at: notice.applied_at.toISOString(),
+        applied: true,
       },
     });
   }

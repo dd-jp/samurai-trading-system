@@ -7,7 +7,7 @@
  * the rendered shapes belong here — a browser needs to know what a tile looks
  * like, never how it gets filled in.
  *
- * Note what is NOT here: `ProviderStatusPoller` and its `AlpacaClient`
+ * Note what is NOT here: `ProviderStatusPoller` and its `AlpacaBrokerClient`
  * dependency. That import chain reaches `server/pipeline/execution/`, and pulling it
  * across the boundary would put broker adapter types in the browser's
  * TypeScript program.

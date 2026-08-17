@@ -36,7 +36,7 @@
  * because it has already fetched the marks for its exposure math and #332
  * requires they not be fetched twice.
  */
-import type { AlpacaClient } from '../../../pipeline/execution/index.js';
+import type { AlpacaBrokerClient } from '../../../pipeline/execution/index.js';
 import type { SessionBasis, SessionBasisByClass } from '../../../pipeline/risk-manager/index.js';
 import type { TradingCalendar } from '../../../providers/market-data-service/index.js';
 import type { ClosedTrade } from '../../../shared/index.js';
@@ -52,7 +52,7 @@ export interface ClosedTradeReader {
 }
 
 export interface AlpacaAccountStateProviderInput {
-  client: AlpacaClient;
+  client: AlpacaBrokerClient;
   store: SqliteAccountStateStore;
   sessionEquity: SqliteSessionEquityStore;
   /**

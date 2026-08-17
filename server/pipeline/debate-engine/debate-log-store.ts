@@ -10,22 +10,25 @@ import type { DebateResult } from './types.js';
 
 /**
  * Constructs the persisted `DebateLog` row from a resolved `DebateResult`.
- * `instrument`/`bar_timestamp` aren't carried on `DebateResult` (its shape is
- * the Trader-facing contract, not the log record), so the caller — the
- * component that ran the debate and knows the tick's instrument/bar —
- * supplies them.
+ * `instrument` isn't carried on `DebateResult`, so the caller — the component
+ * that ran the debate and knows the tick's instrument — supplies it.
+ *
+ * `bar_timestamp` USED TO BE a caller-supplied parameter for the same reason,
+ * and it no longer is (#687): the result now carries the bar it was hashed
+ * over, so taking a second copy here would be one more place for the row's
+ * coordinate and the `debate_id` it is keyed by to disagree. Projected off the
+ * result, they cannot.
  */
 export function buildDebateLog(
   result: DebateResult,
   instrument: string,
-  bar_timestamp: Date,
   created_at: Date,
   trace_id?: string,
 ): DebateLog {
   return {
     debate_id: result.debate_id,
     instrument,
-    bar_timestamp,
+    bar_timestamp: result.bar_timestamp,
     contributions: result.contributions,
     direction: result.direction,
     rounds: result.rounds_completed,
@@ -76,13 +79,18 @@ export function buildDebateLog(
  * would introduce a second bar concept alongside the one every indicator
  * already uses.
  *
- * It is deliberately NOT the tick cadence (15 minutes, ADR-0008). Cadence is
- * how often the system looks; a bar is what it looks AT. Flooring to cadence
- * would make the coordinate change the day someone retunes the scheduler, and
- * every historical row would then refer to a grid nothing else shares.
+ * It is deliberately NOT the tick cadence (2 minutes on the paper profile
+ * since #670 — ADR-0008 §2 as amended; this comment said 15 minutes long
+ * after that retune). Cadence is how often the system looks; a bar is what it
+ * looks AT. Flooring to cadence would make the coordinate change the day
+ * someone retunes the scheduler, and every historical row would then refer to
+ * a grid nothing else shares — and the scheduler HAS been retuned once
+ * already without this grid moving, which is the argument working.
  *
- * Consequence worth stating: at a 15-minute cadence, four consecutive ticks
- * share one bar, and they DO thereby share a `debate_id`.
+ * Consequence worth stating: at a 2-minute cadence, thirty consecutive ticks
+ * share one bar, and they DO thereby share a `debate_id`. Since the
+ * tick/decision split (#743) only one of those thirty runs the debate stage
+ * at all; the sharing matters for crash-retries and restarts within a bar.
  *
  * **CORRECTED 2026-08-14 (#617).** This paragraph previously argued the
  * collision away: "the bar is only one of three hash inputs, and the third is
@@ -97,9 +105,19 @@ export function buildDebateLog(
  * deterministic functions of closed bars: the technical analyst's `key_points`
  * are templated numeric strings, the sentiment analyst emits a constant
  * `NO_DATA_MARKER` string on every production tick, and bar reads are pinned
- * to the grid by `barIndex(timeframe, asOf)`. Within one 1h bar the analyst
- * views are byte-identical, so all three hash inputs are — every non-first
- * tick collides, by construction rather than by coincidence.
+ * to the grid by `barIndex(timeframe, asOf)`. When every analyst read 1h
+ * bars, the views were byte-identical within one 1h bar, so all three hash
+ * inputs were — every non-first tick collided, by construction rather than by
+ * coincidence.
+ *
+ * **AMENDED 2026-08-17 (#742/#743/#781).** "Deterministic functions of closed
+ * bars" no longer implies "byte-identical within a 1h bar": #742 moved the
+ * technical read to 5m bars, so freshly-recomputed views drift within a
+ * debate bar and the content hash with them (#781 records the exposure). The
+ * property is restored STRUCTURALLY by the tick/decision split (#743): the
+ * analysts run once per debate bar, so the views — and the hash — are
+ * computed once per bar; and the debate adapter's per-bar memo replays the
+ * bar's resolved row even if the stage is re-entered.
  *
  * Measured: 29 of 40 debates in the soak's first five hours warned on the
  * duplicate write, and the fresh-debate count equals bars-elapsed ×

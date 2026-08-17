@@ -48,11 +48,18 @@ export interface TraderDecisionRecord {
   created_at: Date;
 }
 
-/** One Risk evaluation, approved or rejected. */
+/**
+ * One Risk evaluation: approved, rejected, or `error` (#726) — the gate
+ * pipeline threw before a decision could be reached at all (today, only
+ * `perSubclassDeploymentCap`'s unresolvable-envelope throw; see
+ * `risk-manager/index.ts`). An `error` row is written from the catch around
+ * `RiskManagerImpl.evaluate()` in `direct-bind.ts`'s `buildRiskStep`, not from
+ * `evaluate()` itself, which never returns on that path.
+ */
 export interface RiskDecisionRecord {
   trace_id: string;
   instrument: string;
-  status: 'approved' | 'rejected';
+  status: 'approved' | 'rejected' | 'error';
   binding_constraint: string | null;
   reasons: string[];
   original_size: number | null;

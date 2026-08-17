@@ -16,7 +16,7 @@ Reconciles the accumulated additions from all 10 specs + the 3 newly-charted com
 
 ## 2. `DebateResult` — additions the mechanical Trader requires
 
-- **`direction: 'bullish' | 'bearish' | 'neutral'`** — structural, so a no-LLM Trader maps to order `side` without parsing free-text.
+- **`direction: Direction`** (§10) — structural, so a no-LLM Trader maps to order `side` without parsing free-text.
 - **Deterministic `debate_id`** (see §1).
 - **Owner:** Debate Engine. **Impl ticket #24 (Domain Types & Contracts) must include both.**
 
@@ -86,15 +86,121 @@ Added 2026-08-05 from [Wayfinder: Devil's Advocate](https://github.com/dd-jp/sam
 - **Reuses `IndicatorSpec` verbatim** (§3) rather than inventing a parallel way to name an indicator. **No** model-assigned severity, weight, or confidence — conditions are predicates. **No** `thesis_holds`; consumers derive it.
 - **`thesis_source` is nullable by contract** — `{ debate_id }` when read from `DebateResult.synthesis`, null when inferred from telemetry. It therefore **cannot** be a primary key, which is why `invalidation_log` is keyed on content, not on `debate_id`.
 - **Transport into Risk:** `RiskInput.invalidation?: InvalidationResult`, pre-built outside `evaluate()` — the same seam ADR-0003 uses for `RiskInput.critic?`. Risk stays deterministic given its inputs. A non-empty breached list is a hard reject with `binding_constraint: 'thesis_invalidated:<condition_kind>'`.
-- **Narrowing rule — load-bearing:** the stage's outcome union has three statuses (`evaluated` / `no_conditions` / `unavailable`) and only `evaluated` carries an `InvalidationResult`. The other two both arrive at Risk as `undefined`. **Risk cannot and must not distinguish them**; that distinction survives in `invalidation_log` and the warn/alert path only. It is a prompt-safety property, not a convenience — see devils-advocate-spec.md.
+- **Narrowing rule — load-bearing:** the stage's outcome union has three statuses (`evaluated` / `no_conditions` / `unavailable`) and only `evaluated` carries an `InvalidationResult`. The other two both arrive at Risk as `undefined`. **Risk cannot and must not distinguish them**; that distinction survives in `invalidation_log` and the warn/alert path only. It is a prompt-safety property, not a convenience — see devils-advocate-spec.md. **Its cost is a monitoring blind spot, and the blind spot is stated here so the implementation ticket owns it** *(added 2026-08-17)*: because `no_conditions` and `unavailable` are indistinguishable at Risk, a stage that has silently stopped evaluating invalidation altogether presents to every downstream consumer exactly as a stage that evaluated and found nothing to reject. Nothing goes red. The warn/alert path is therefore not an operational nicety but the **sole** detector of that failure, which makes two things mandatory: the `invalidation_log` must record the status for every tick including the non-`evaluated` ones (so the ratio is queryable after the fact), and the alert on a sustained run of `unavailable` must be a first-class alert on the same footing as the fallback alerts elsewhere, not a log line. A silenced or unrouted alert here is the difference between a degraded system and an undetectably degraded one.
 - **`invalidation_log` retrieval is by `(instrument, bar_timestamp)`, NOT by any generated id**, because a replay mints fresh `trace_id`/`debate_id` values and cannot bridge to live rows. `bar_timestamp` must be **floored to the instrument's bar boundary**. Note this is a live defect on the `debate_log` write path too, which stores `clock.now()` unfloored.
+
+---
+
+## 9. Threshold clamps — the research bright lines are enforced in code (#638)
+
+Recorded here **once** so it stops being re-litigated per spec. Both
+`risk-manager-spec.md` and `cost-model-backtest-spec.md` previously exposed
+research-mandated bright lines as ordinary tunable config; this section is the
+settled answer for every spec.
+
+**The rule.** A threshold that a research document states as a bright line stays
+**config**, but the config is bounded by a table in code (`server/shared/threshold-bounds.ts`),
+and a value outside its bound is **REFUSED, never coerced**. Refusing to boot is
+the correct behaviour: a silently clamped value reads as accepted, and the
+operator then believes a limit is in force that is not.
+
+**Why in code and not in a spec sentence.** [ADR-0007](../adr/0007-fully-automatic-execution.md)
+removed the human from the trade path — "the breakers are now the only stop".
+[ADR-0013](../adr/0013-no-human-gate-anywhere.md) went further: nothing re-arms
+by hand and nothing gates a loosening, so **the numeric thresholds are the only
+stop**, and a config edit was the entire distance between the running system and
+an arbitrary risk limit. ADR-0013 calls the clamp "a precondition of this ADR
+being safe, not a tidiness item". The threat model is not a fat-fingered file —
+it is the **Feedback Loop walking a dial by itself**, with nobody in the path at
+all since [#736](https://github.com/dd-jp/samurai-trading-system/issues/736)
+removed the loosen gate. That is no longer a future condition: `runDailyCycle`
+applies every bounded loosening in every mode and only tells the operator
+afterwards, so this table is the sole remaining stop.
+
+**Guarded values, and where each bound comes from:**
+
+| Threshold | Bound | Source |
+|---|---|---|
+| `max_pbo` | ≤ 0.05 | `CONTEXT.md` — "Kill if PBO > 0.05"; `feedback-loop-spec.md` story 13; `PBO_REJECT_THRESHOLD` |
+| `min_oos_sharpe` | ≥ 0.5 | `feedback-loop-spec.md` story 13 — lowering it softens the kill |
+| `min_deflated_sharpe` | ≥ 0.95 | `CONTEXT.md` falsification test, DSR-significant at the conventional 5% level |
+| `max_drawdown_pct` | ≤ 0.35 | **engineering choice**, stated as one: `CONTEXT.md`'s ~20-25% drawdown tolerance, one tuning step past the shipped 0.30 |
+| `recovery_drawdown_pct` | ≤ 0.262 | [ADR-0018](../adr/0018-intraday-thresholds-sizing-and-the-signal-bar.md) D5's measured envelope — the book resumes only inside the drawdown it was sized for |
+| `daily_loss_pct` (+ both per-class tiers) | ≤ 0.10 | **engineering choice**, derived from `max_drawdown_pct` so the daily tier can fire several sessions before the drawdown trip |
+
+Bounds carry a `source` string in the table, and an uncited bound is an invented
+safety limit — the two engineering choices above say so in as many words rather
+than borrowing authority from a document that does not state them.
+
+**Where the clamp binds.** Four seams, because a boot-time-only check would
+constrain nothing the Feedback Loop does:
+
+1. `CircuitBreakers`' constructor — boot. Complements, and does not replace, the
+   pre-existing hysteresis-width check, which is a *relative* ordering test:
+   `max_drawdown_pct: 0.95` with `recovery_drawdown_pct: 0.90` passes it and
+   leaves a drawdown breaker that can never fire.
+2. `resolveRiskConfig` — **the live path, and the one that matters.**
+   `RiskManagerImpl.evaluate()` re-resolves its config from the `risk_thresholds`
+   table on *every* call, so a row written between two ticks binds on the second
+   one without passing through startup again. It checks the **whole stored
+   record**, not only the six keys it applies, so the guard travels with the
+   allow-list rather than with today's contents.
+3. `TuningStore.setRiskThreshold` / `seedRiskThreshold` (both implementations) —
+   the Feedback Loop's write door.
+4. `buildProductionComponents` and `computeMetrics` — the kill lines, at boot and
+   per cycle.
+
+`yarn smoke` drives a negative probe through each seam for every guarded name and
+fails the gate if any accepts an out-of-bound value, or if the probe stops
+covering the whole table.
+
+**Deliberately NOT guarded, and why:**
+
+- **A FLOOR on `max_drawdown_pct`.** A trip set too *low* halts new entries early
+  and never blocks an exit, so it cannot increase loss — that is an availability
+  failure, owned by [#634](https://github.com/dd-jp/samurai-trading-system/issues/634)
+  and ADR-0013, not by this clamp. Siting the trip above ADR-0018's measured
+  envelope remains a spec-level obligation (`risk-manager-spec.md`).
+- **The six tunable notional caps** (`max_position_size`, `per_asset_cap`, the two
+  per-class caps, `portfolio_gross_cap`, `concentration_cap`). No document states
+  a line for any of them, and bounding them would both invent a safety limit and
+  freeze the Feedback Loop's only working dials.
+- **`max_live_backtest_divergence`.** Same reason: no research document states a
+  value for it.
+- **`per_subclass_deployment_cap`.** Not exposed as a dial at all — see
+  `risk-thresholds.ts` and `per-subclass-deployment-cap.test.ts`. Absence from the
+  allow-list is a stronger guarantee than a bound would be.
+
+## 10. Shared primitive types — `Direction` / `DateRange`
+
+Added 2026-08-17 (#644) — both were used across ≥2 specs already, un-owned by
+this registry, and hand-rolled or re-described at each use site instead of
+named once.
+
+- **`Direction = 'bullish' | 'bearish' | 'neutral'`** — **Owner:** Debate Engine.
+  Canonical home is code, not this registry: `contracts/primitives.ts` (the
+  wire model both `client/` and `server/` import, per CLAUDE.md's repo-layout
+  note). **Consumers:** `analysts-spec.md` (`AnalystView.direction`),
+  `debate-engine-spec.md` (`DebateResult.direction`, `AnalystContribution.
+  stance_during_debate`/`final_position`, `DebateLog.direction`, §2 above), and
+  `shared-sqlite-store-spec.md`'s `debate_log.direction` CHECK constraint,
+  which hand-rolls the same three literals in SQL and must track this type if
+  it ever changes. Not the same concept as the Feedback Loop's tighten/loosen
+  `direction` column on `dial_adjustments` (`shared-sqlite-store-spec.md`) —
+  same field name, unrelated domain, do not conflate.
+- **`DateRange = { start: Date; end: Date }`** — **Owner:** cost-model/backtest,
+  matching where the code lives: `server/tools/backtest/universe.ts`.
+  **Consumers:** `cost-model-backtest-spec.md` (survivorship-free universe
+  membership window), `stage2-validation-execution-spec.md` (historical replay
+  window), `transport-layer-spec.md` (`PolygonClient.fetchAggregates(symbol,
+  window: DateRange)`).
 
 ---
 
 ## OPEN GAPS (found in this pass — resolve before / during `/to-tickets`)
 
 - **RESOLVED: OPEN-GAP-A — `MarketState.spread` and `.adv` have no clean source.** Resolved hybrid: MDS exposes a best-effort spread estimate (bid/ask where available, e.g. crypto ccxt; null otherwise) + an ADV helper (bars-volume aggregation); cost model fallback-models spread from volatility + per-asset-class model when MDS returns null, guaranteeing a non-zero spread term always. See market-data-service-spec.md Out of Scope + cost-model-backtest-spec.md §Spread sourcing.
-- **RESOLVED (reversed 2026-07-21): OPEN-GAP-B — DoD #7 (dashboard/CLI) has no spec.** Originally resolved 2026-07-14 as a minimal read-only CLI. Reversed 2026-07-21 after `src/dashboard/` (now `server/apps/service-api/`) was built ahead of process (no map/spec) and grilled to a decision: the **Dashboard supersedes the CLI**, not complements it — one operator surface, not two. Charted in [dashboard-map.md](../wayfinder/dashboard-map.md) / specced in [dashboard-spec.md](../specs/dashboard-spec.md) (formerly `cli-map.md`/`cli-spec.md`, renamed and rewritten in place) — the **12th and final component**. Pure presentation layer, zero new writes: reads `audit_log` (Orchestrator), `OpenPosition`/`ClosedTrade` (Execution), `DebateLog` (Debate Engine), weights/attribution + `MetricsSuite` (Feedback Loop), verdict audit trail (Verdict), `getMark` (Market Data Service, for unrealized PnL). Same one flagged scope reduction as before: "pending debates" shows completed `DebateLog` entries + a coarse Orchestrator tick-status line, not a live in-flight debate view (the Debate Engine's round state is deliberately not persisted, decision #10). `src/cli/` removed as part of this reversal.
+- **RESOLVED (reversed 2026-07-21): OPEN-GAP-B — DoD #7 (dashboard/CLI) has no spec.** Originally resolved 2026-07-14 as a minimal read-only CLI. Reversed 2026-07-21 after `src/dashboard/` (now `server/apps/service-api/`) was built ahead of process (no map/spec) and grilled to a decision: the **Dashboard supersedes the CLI**, not complements it — one operator surface, not two. Charted in [dashboard-map.md](../wayfinder/dashboard-map.md) / specced in [dashboard-spec.md](../specs/dashboard-spec.md) (formerly `cli-map.md`/`cli-spec.md`, renamed and rewritten in place) — the **12th and final component**. Pure presentation layer, zero new writes: reads `audit_log` (Orchestrator), `OpenPosition` (Execution), `DebateLog` (Debate Engine), weights/attribution + `MetricsSuite` (Feedback Loop), verdict audit trail (Verdict), `getMark` (Market Data Service, for unrealized PnL). **Correction (#644):** this previously also listed `ClosedTrade` as a dashboard read source. `DashboardQueryStore` reads `closed_trades` too, but only in aggregate — `getDailyMetrics`/`getAttribution` fold it into `MetricsSuite`/attribution numbers — never as a per-trade listing; `dashboard-spec.md` has no `getClosedTrades` and the client has no trade-row UI. If a PnL-review table is wanted later, that is new scope, not a gap in what's already specced. Same one flagged scope reduction as before: "pending debates" shows completed `DebateLog` entries + a coarse Orchestrator tick-status line, not a live in-flight debate view (the Debate Engine's round state is deliberately not persisted, decision #10). `src/cli/` removed as part of this reversal.
 - **RESOLVED: OPEN-GAP-C — DoD #8 (structured logs + trace IDs) + JSONB audit spine have no owner.** Resolved: the **Orchestrator** ([orchestrator-map.md](../wayfinder/orchestrator-map.md) / [orchestrator-spec.md](../specs/orchestrator-spec.md)) owns trace-ID generation/threading, the shared structured-`Logger` interface every stage logs through, and an `audit_log` table in the shared SQLite store (mining the JSONB *pattern*, not a separate JSONB/Supabase system).
 - **RESOLVED: OPEN-GAP-D — Orchestrator uncharted.** Charted 2026-07-14. Owns: tick-loop + injected `Clock` (the seam cost-model-backtest-spec's "same code path" guarantee depends on), Signal production/scanning (~~fixed universe iteration, v1~~ — closes GAP-I's producer question; **amended 2026-08-07:** the Orchestrator still emits `Signal` per instrument per tick, but *which* instruments is no longer a static config list — it comes from an `ActiveUniverseProvider` fed by the Universe Selector, see [universe-selector-spec.md](universe-selector-spec.md) and map [#397](https://github.com/dd-jp/samurai-trading-system/issues/397)), trace-IDs/structured-logs/audit-spine (closes OPEN-GAP-C), dead-man's-switch heartbeat over Verdict's existing trade channel. Built on ADR-0001's now-resolved open questions (TypeScript core; debate substrate reimplemented, not LangGraph-dependent).
 
@@ -109,7 +215,7 @@ Added 2026-08-05 from [Wayfinder: Devil's Advocate](https://github.com/dd-jp/sam
 
 **MEDIUM:**
 - Funding/borrow accrual unowned in the LIVE path (cost-model only applies it in backtest mark-to-market; Risk's live `PortfolioView.equity` has no accrual term).
-- PBO 0.05 kill-line exposed as tunable config in cost-model spec, when research/CONTEXT treat it as a fixed bright line — risks the one hard kill criterion being softened.
+- **RESOLVED 2026-08-17 (#638).** PBO 0.05 kill-line exposed as tunable config in cost-model spec, when research/CONTEXT treat it as a fixed bright line — risked the one hard kill criterion being softened. Now config bounded by an in-code table that refuses a crossing at load and on every write; see §9.
 - DoD reverse-gap: Market Data Service, Market Intelligence, and the entire cost-model/PBO/DSR apparatus (the research core — "expectancy > 0 before live money") have no DoD line item.
 
 **LOW:** FL revalidation omits MinBTL (computes it in cost-model but doesn't surface it in `MetricsReport.revalidation`); no spec enforces the "paper across ≥1 volatility regime" graduation gate; trading-calendar/session source unspecced.
@@ -179,17 +285,18 @@ The three dated `cross-verify-*.md` passes previously held findings with no livi
 | ID | Sev | Finding | Issue |
 |---|---|---|---|
 | CV-20 | **AMENDED (resolved)** | The idempotency key hashed `(instrument, bar)` only. Once #616 made it stable within a bar and #668 put a mandatory flat-by-close exit into a bar an entry can also be taken in, the entry and the exit hashed identically and the exit — being second — was suppressed by all three dedup layers at once, carrying a position overnight against ADR-0014. The payload now carries `side: 'open' \| 'close'`. **The three layers are not independent:** `open_positions`'s primary key IS `idempotency_key`, so `findByKey`, the PK backstop and the broker `client_order_id` share one input and no single layer can be made smarter | [#686](https://github.com/dd-jp/samurai-trading-system/issues/686) |
-| CV-21 | **HIGH (live path) — STILL OPEN.** Design **SPECIFIED 2026-08-16** (see the pass below): the bar is to be inherited from `TickContext.decision_bar` and carried on `DebateResult`, with the Trader prohibited from deriving one from `clock.now()` | The Trader re-derives the decision bar from its own `clock.now()` rather than inheriting the debate's, so a debate straddling an hour boundary keys the intent into bar N+1 while `debate_id` says N — and bar N+1's real decision then collides with it and is suppressed. **Needs a contract change: `DebateResult` carries no bar — and as of this pass that change has NOT landed.** An earlier revision of this row claimed it had; it had not, and the severity above is live until #687 ships | [#687](https://github.com/dd-jp/samurai-trading-system/issues/687) |
-| CV-15 | **BLOCKING (live path)** | With ADR-0013 removing every human gate, the numeric thresholds are the only remaining control — and both `risk-manager-spec.md` and `cost-model-backtest-spec.md` still expose them as unclamped config. A config edit is now the whole distance to an arbitrary risk limit | [#638](https://github.com/dd-jp/samurai-trading-system/issues/638) |
+| CV-21 | **MEDIUM — PARTLY BUILT 2026-08-17 by [#687](https://github.com/dd-jp/samurai-trading-system/issues/687)** (points 2/3/4 of the resolution; point 1 waits on the unbuilt decision gate — see the pass below). Design **SPECIFIED 2026-08-16** (see the pass below): the bar is to be inherited from `TickContext.decision_bar` and carried on `DebateResult`, with the Trader prohibited from deriving one from `clock.now()` | The Trader re-derives the decision bar from its own `clock.now()` rather than inheriting the debate's, so a debate straddling an hour boundary keys the intent into bar N+1 while `debate_id` says N — and bar N+1's real decision then collides with it and is suppressed. **The contract change landed 2026-08-17 (#687): `DebateResult.bar_timestamp` is required, and `decide.ts` inherits it instead of flooring a clock read.** What remains is point 1 — routing that one floored read from the Orchestrator's `TickContext.decision_bar` once the tick/decision split exists. (An earlier revision of this row claimed the change had landed when it had not; it has now, and the residue is named rather than the row closed) | [#687](https://github.com/dd-jp/samurai-trading-system/issues/687) |
+| CV-15 | ~~**BLOCKING (live path)**~~ **RESOLVED 2026-08-17** | With ADR-0013 removing every human gate, the numeric thresholds are the only remaining control — and both specs exposed them as unclamped config, so a config edit was the whole distance to an arbitrary risk limit. Now bounded in code and **refused, never coerced**, at all four seams that can put a number into force — including the live `risk_thresholds` read, which is the path the Feedback Loop moves a dial on between two ticks. Decision recorded once in §9 | [#638](https://github.com/dd-jp/samurai-trading-system/issues/638) |
 | CV-14 | HIGH | `feedback-loop-spec.md:91`'s `approvals: ApprovalChannel` does two jobs — gated loosening *and* breach alerts. Removing the gate must not remove the alert, the only way an operator learns the edge died | [#639](https://github.com/dd-jp/samurai-trading-system/issues/639) |
 | CV-2 | ~~HIGH~~ **RESOLVED 2026-08-15** | `risk-manager-spec.md` states no behaviour on upstream read failure, in the stage billed "must be trusted absolutely under stress". **Premise partly wrong and worth recording:** `evaluate()` is synchronous and pure and performs no upstream reads at all — it receives `portfolio`/`breakers`/`correlation`/`cii` pre-computed — so the failure mode was never inside it. A read that FAILS already failed closed (the rejection aborts the instrument pass and places no order); the real gap was a read that SUCCEEDS with a stale value, which nothing checked. Now `computePortfolioView` throws `StaleMarkError` past `RiskConfig.max_mark_age` | [#640](https://github.com/dd-jp/samurai-trading-system/issues/640) |
 | CV-6 | ~~MEDIUM~~ **RESOLVED 2026-08-15** | `stale_feed` gate described as live by `market-data-service-spec.md` and this registry §3; absent from `verdict-spec.md`. Ruled **implement, not delete** — `Mark.observed_at` exists to power it, and feed age is a failure the signal-age gate structurally cannot catch. Now `verdict-spec.md` gate 2 | [#641](https://github.com/dd-jp/samurai-trading-system/issues/641) |
-| CV-4, CV-5 | MEDIUM | `risk-manager-spec.md:11`/`:77` claim "fully mechanical, no LLM" / "fully deterministic" while the spec's own Risk Critic (ADR-0003) makes a binding LLM call | [#642](https://github.com/dd-jp/samurai-trading-system/issues/642) |
-| CV-9, CV-10, CV-11 | MEDIUM | Three stale/self-inconsistent passages in `trader-spec.md`: fields "must be reconciled" that already were; position-aware branching as MVP when [#224](https://github.com/dd-jp/samurai-trading-system/issues/224) deferred it; a `flip` routing case tested but absent from `intent_type` | [#643](https://github.com/dd-jp/samurai-trading-system/issues/643) |
-| CV-7, CV-8, CV-13 | LOW | Shared-type drift: `Direction` undefined at spec level (code has it); `ClosedTrade` promised as a dashboard read that does not exist; `AlpacaClient` name collision; `DateRange` consumed by three specs and defined by none; no transport↔`BrokerAdapter` cross-reference | [#644](https://github.com/dd-jp/samurai-trading-system/issues/644) |
-| CV-1 | LOW | `mode` unions omit `'paper'` in three specs while `execution-spec.md:103` includes it. Downgraded 2026-08-09 — ADR-0013 made breaker re-arm mode-independent, so this is type accuracy, not a safety fork | [#644](https://github.com/dd-jp/samurai-trading-system/issues/644) |
+| CV-4, CV-5 | ~~MEDIUM~~ **RESOLVED 2026-08-17** | `risk-manager-spec.md`'s "fully mechanical, no LLM" / "fully deterministic" claims looked contradicted by the spec's own Risk Critic (ADR-0003, step 7). **Resolved per David's ruling on the issue: the "no LLM" claims are the true ones and stand.** `evaluate()` is a pure function that never constructs a prompt or calls a model; a critic verdict can only ever enter as pre-built data on `RiskInput.critic`, the same seam `cii`/`correlation` already use — confirmed by grep: no LLM/Nous import anywhere in `server/pipeline/risk-manager/`. What was actually wrong was step 7's and "Module: Risk Critic"'s framing, which read as though the pipeline performs the LLM pass itself; both are re-specified to state the seam explicitly. **Also checked while fixing this: no producer for that verdict is wired at all** — no producer source file exists (only a stale compiled `dist/risk-manager/critic-store.js` with no `.ts` behind it), and `direct-bind.ts:568` already carries a comment saying the step has never run in any environment (see [#513](https://github.com/dd-jp/samurai-trading-system/issues/513), left open — its cost/cadence/fail-open questions only bind if a producer is ever built) | [#642](https://github.com/dd-jp/samurai-trading-system/issues/642) |
+| CV-9, CV-10, CV-11 | ~~MEDIUM~~ **RESOLVED 2026-08-17** | Three stale/self-inconsistent passages in `trader-spec.md`. CV-9: the `direction`/`debate_id` "must be reconciled" language dropped — both are defined in `debate-engine-spec.md` and settled in this registry's §1/§2. CV-10: **not the direction the finding assumed.** [#224](https://github.com/dd-jp/samurai-trading-system/issues/224) deferred #74 on 2026-07-28; #74 shipped and closed 2026-08-06. `trader-spec.md`'s un-phased position-aware routing describes what's built; `orchestrator-spec.md`'s 2026-07-28 addendum was the stale half and is corrected to record that #74 landed. CV-11: the `flip` case dropped from the routing-test list — `OrderIntent.intent_type` is `'entry' \| 'scale_in' \| 'exit'`, no `flip`; a reversal is exit-then-fresh-entry, tested as two cases | [#643](https://github.com/dd-jp/samurai-trading-system/issues/643) |
+| CV-7, CV-8, CV-13 | ~~LOW~~ **RESOLVED 2026-08-17** | Shared-type drift: `Direction` undefined at spec level (code has it) — now §10; `ClosedTrade` promised as a dashboard read that does not exist — registry's OPEN-GAP-B corrected, `dashboard-spec.md` was accurate all along; `AlpacaClient` name collision — code renamed to `AlpacaBrokerClient`/`AlpacaMarketDataClient`, no aliasing needed at either call site that imported both; `DateRange` consumed by three specs and defined by none — now §10; no transport↔`BrokerAdapter` cross-reference — one paragraph added to `transport-layer-spec.md`'s `AlpacaBrokerClient` module | [#644](https://github.com/dd-jp/samurai-trading-system/issues/644) |
+| CV-1 | ~~LOW~~ **RESOLVED 2026-08-17** | `mode` unions omit `'paper'` in three specs while `execution-spec.md:103` includes it. Downgraded 2026-08-09 — ADR-0013 made breaker re-arm mode-independent, so this is type accuracy, not a safety fork. **One of the three was already moot:** [#736](https://github.com/dd-jp/samurai-trading-system/issues/736) removed `DailyCycleInput.mode` entirely (the loosen gate was its only reader), so `feedback-loop-spec.md` needed no change — it already documents the removal. `risk-manager-spec.md`'s `RiskInput.mode` and `verdict-spec.md`'s `VerdictInput.mode` both widened to `'live' \| 'paper' \| 'backtest'`, matching code that already carried the third value | [#644](https://github.com/dd-jp/samurai-trading-system/issues/644) |
 | CV-19 | HIGH | [#627](https://github.com/dd-jp/samurai-trading-system/issues/627)'s client/server/contracts split left **~180 dead `src/…` path citations across 44 docs** — inline backticked paths no link checker validates, with line numbers drifted as well. ADR-0007's serialization argument cites two of them | [#645](https://github.com/dd-jp/samurai-trading-system/issues/645) |
-| CV-12, CV-17 | LOW | `risk-manager-spec.md` stale "v1 static concentration buckets"; `TELEGRAM_ALLOWED_USER_IDS` validated at boot for a gate that cannot fire | [#644](https://github.com/dd-jp/samurai-trading-system/issues/644) |
+| CV-12 | ~~LOW~~ **RESOLVED 2026-08-17** | `risk-manager-spec.md` stale "v1 static concentration buckets" in the CII module — corrected to name the dynamic pairwise-correlation matrix (Check Pipeline step 6) it was superseded by | [#644](https://github.com/dd-jp/samurai-trading-system/issues/644) |
+| CV-17 | ~~LOW~~ **RESOLVED-ON-RATIONALE 2026-08-17, one question named open** | `TELEGRAM_ALLOWED_USER_IDS` validated at boot for a gate that cannot fire. **The suggested fix ("required only if an approval transport is ever re-armed") does not hold under the current code and was not applied as-is**: re-arming needs two code changes (`assertAutomationLevelSupported` no longer refusing a non-`auto` dial, and the still-unbuilt approval poll loop, #275), not a config flip, so there is no live conditional state to gate the requirement on today. `verdict-spec.md`'s "Boot-time validation" bullet is corrected to say what the check actually protects today: a constructor invariant of the one `TelegramBotApiClient`, required whenever `SAMURAI_ALERTS=telegram` because the same client carries real heartbeat/escalation alerting (CV-14), independent of HITL. **Left open, not decided here:** whether the allowlist requirement *should* be decoupled from the alerting client (e.g. a dedicated approval-only transport with its own validation) is a design question this pass answered "not now" on evidence, not one this LOW-severity text pass had standing to close permanently — a future ticket re-arming approval should re-examine it rather than assume this rationale still holds | [#644](https://github.com/dd-jp/samurai-trading-system/issues/644) |
 
 **Closed in the same pass, not filed:** CV-16 (two specs still routing decisions to a human — fixed directly, since an accepted ADR makes them factually wrong). **Moot:** the 2026-07-26 `ApprovalChannel` authn finding — nothing authorises a decision any more, though CV-14 keeps the channel alive for alerting. **Re-affirmed clean:** `execution-spec.md:316`'s broker-cutover manual sign-off, which is an infrequent operator action outside the tick loop and survives ADR-0007 and ADR-0013 on its own stated reasoning.
 
@@ -201,9 +308,11 @@ Run per Standing Pipeline Rule 7 after map [#703](https://github.com/dd-jp/samur
 
 **Two entries were required to be resolved by this pass rather than carried forward.** Both are resolved below — "resolved" meaning **the design question is settled**. CV-21's resolution is a specification that #687 must still implement; the calendar entry below is settled in code. The distinction is stated because conflating the two is what an earlier revision of this document did.
 
-### CV-21 / [#687](https://github.com/dd-jp/samurai-trading-system/issues/687) — SPECIFIED, NOT BUILT: the decision bar must be inherited, never re-derived
+### CV-21 / [#687](https://github.com/dd-jp/samurai-trading-system/issues/687) — PARTLY BUILT (2026-08-17): the decision bar is inherited, never re-derived
 
-> **Status, stated plainly because the heading previously read "RESOLVED" and that was read as shipped.** What this pass resolved is the *design question* — the four numbered points below are settled and are what #687 must implement. **None of it is in the code yet.** At the time of writing `DebateResult` carries no bar field (`server/pipeline/debate-engine/types.ts`), there is no `TickContext.decision_bar`, and `server/pipeline/trader/decide.ts` still re-derives with `floorToBar(asOf, DEBATE_BAR_TIMEFRAME_MS)`. **[#687](https://github.com/dd-jp/samurai-trading-system/issues/687) is OPEN and the HIGH live-path defect it names is live.**
+> **Status, stated plainly because the heading previously read "RESOLVED", that was read as shipped, and it was not.** The design question was settled by this pass (the four numbered points below). **Points 2, 3 and 4 are now in the code**, shipped by #687: `DebateResult.bar_timestamp` is a required field, `buildDebateLog` projects it off the result rather than taking a second copy, `decide.ts` no longer imports `floorToBar`/`DEBATE_BAR_TIMEFRAME_MS` at all, and `decisionBarFor` returns `debate.bar_timestamp` — it takes no clock and computes nothing. There is exactly ONE place in the live path that floors a clock read onto the bar grid: `buildDebateStep`.
+>
+> **Point 1 is NOT built, because the thing it names does not exist yet.** There is still no `TickContext.decision_bar` and no tick/decision split in the code; until the Orchestrator's decision gate lands, the debate step's single floored read *is* the sole authority, and the gate's job when it lands is to replace that one `floorToBar(clock.now())` call with the inherited `ctx.decision_bar` — a one-line change at one call site, which is why #687 was implemented as one floor site rather than two agreeing ones. **This row stays open until that substitution is made**; what closed with #687 is the split between the debate's bar and the Trader's.
 
 **Was:** HIGH (live path). The Trader re-derives the decision bar from its own `clock.now()` rather than inheriting the debate's, so a debate straddling an hour boundary keys the intent into bar N+1 while `debate_id` says N — and bar N+1's real decision then collides with it and is suppressed.
 
@@ -250,7 +359,7 @@ Run per Standing Pipeline Rule 7 after map [#703](https://github.com/dd-jp/samur
 
 ### Still open, deliberately
 
-- **CV-15 / [#638](https://github.com/dd-jp/samurai-trading-system/issues/638)** (unclamped thresholds) remains **BLOCKING for live** and this pass does not clear it. The new per-subclass `risk_fraction` values are *more* config surface on the same unclamped path.
+- ~~**CV-15 / [#638](https://github.com/dd-jp/samurai-trading-system/issues/638)** (unclamped thresholds) remains **BLOCKING for live** and this pass does not clear it.~~ **Cleared 2026-08-17 by #638** — see §9. The per-subclass `risk_fraction` values noted here as "more config surface on the same unclamped path" are *not* on that path: `per_subclass_deployment_cap` is deliberately absent from the tunable allow-list entirely, which §9 records as the stronger guarantee.
 - **CV-4/CV-5 / [#642](https://github.com/dd-jp/samurai-trading-system/issues/642)** (risk-manager "no LLM" vs its own binding LLM critic) is untouched — it predates the horizon change and is not resolved by it.
 - **GAP-G's premise has changed** and should be re-read at triage: an Alpaca `DataSource` was needed for SPY/QQQ/AAPL/TSLA/BTC-USD/ETH-USD, none of which is now a live instrument. Alpaca remains the **screening and paper** source, so the gap survives with a different justification rather than closing.
 

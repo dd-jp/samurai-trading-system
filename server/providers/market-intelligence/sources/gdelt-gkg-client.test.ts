@@ -1,4 +1,4 @@
-import { deflateRawSync } from 'node:zlib';
+import { crc32, deflateRawSync } from 'node:zlib';
 import { describe, expect, it, vi } from 'vitest';
 import { batchTimeFromUrl, GdeltGkgClient } from './gdelt-gkg-client.js';
 
@@ -49,16 +49,25 @@ const NOISE_ROW = gkgRow({
 const BATCH_URL = 'https://data.gdeltproject.org/gdeltv2/20260815153000.gkg.csv.zip';
 const BATCH_TIME = new Date('2026-08-15T15:30:00Z');
 
-/** A one-entry deflate zip with non-zero name and extra lengths, as GDELT ships. */
+/**
+ * A one-entry deflate zip with non-zero name and extra lengths, as GDELT
+ * ships — including a real CRC-32 of the UNCOMPRESSED content at offset 14,
+ * matching the live batch sampled 2026-08-17 (general purpose flag `0x0000`,
+ * i.e. no trailing data descriptor). `unzipFirstEntry` verifies this field
+ * against what it inflates (#713 item 3), so a fixture with a stub/zero CRC
+ * would fail every test that reaches decoding.
+ */
 function zipOf(content: string): Buffer {
   const name = Buffer.from('20260815153000.gkg.csv');
   const extra = Buffer.alloc(28, 7);
-  const body = deflateRawSync(Buffer.from(content));
+  const uncompressed = Buffer.from(content);
+  const body = deflateRawSync(uncompressed);
   const header = Buffer.alloc(30);
   header.writeUInt32LE(0x04034b50, 0);
   header.writeUInt16LE(20, 4);
   header.writeUInt16LE(0, 6);
   header.writeUInt16LE(8, 8);
+  header.writeUInt32LE(crc32(uncompressed), 14);
   header.writeUInt16LE(name.length, 26);
   header.writeUInt16LE(extra.length, 28);
   return Buffer.concat([header, name, extra, body]);
@@ -112,6 +121,27 @@ describe('GdeltGkgClient — lastupdate.txt', () => {
     const client = new GdeltGkgClient({ fetchImpl: stubFetch({ status: 503 }) });
 
     await expect(client.latestBatchUrl()).rejects.toThrow(/HTTP 503/);
+  });
+
+  it('refuses an oversized manifest on content-length, before reading the body (#713 item 1)', async () => {
+    const response = new Response(LASTUPDATE, {
+      headers: { 'content-length': String(65 * 1024) },
+    });
+    const readBody = vi.spyOn(response, 'text');
+    const fetchImpl = (async () => response) as unknown as typeof fetch;
+    const client = new GdeltGkgClient({ fetchImpl });
+
+    await expect(client.latestBatchUrl()).rejects.toThrow(/declares 66560 bytes/);
+    // The point of checking the header at all: the post-read ceiling already
+    // existed below, and by the time it fires the body is materialised.
+    expect(readBody).not.toHaveBeenCalled();
+  });
+
+  it('refuses an oversized manifest with no declared length, after reading the body (#713 item 1)', async () => {
+    const oversized = 'x'.repeat(65 * 1024);
+    const client = new GdeltGkgClient({ fetchImpl: stubFetch({ lastupdate: oversized }) });
+
+    await expect(client.latestBatchUrl()).rejects.toThrow(/is 66560 bytes/);
   });
 
   it('upgrades the manifest URL to the configured scheme rather than following http', async () => {
@@ -171,6 +201,28 @@ describe('GdeltGkgClient — lastupdate.txt', () => {
 
     expect(result.file_url).toBe(BATCH_URL);
     expect(result.batch_time.toISOString()).toBe('2026-08-15T15:30:00.000Z');
+  });
+
+  it('cites the pinned URL actually fetched in an HTTP-failure diagnostic, not the pre-pin one (#713 item 2)', async () => {
+    const client = new GdeltGkgClient({
+      fetchImpl: stubFetch({ lastupdate: LASTUPDATE, status: 503 }),
+    });
+
+    // Handed a query-carrying, http:// URL — the pre-pin shape. The request
+    // that actually goes out is the pinned rewrite (https, no query), so the
+    // diagnostic must name that, not the argument.
+    const preRewrite = `http://data.gdeltproject.org/gdeltv2/20260815153000.gkg.csv.zip?utm=1`;
+    let caught: unknown;
+    try {
+      await client.fetchBatch(preRewrite);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    const message = (caught as Error).message;
+    expect(message).toContain(`${BATCH_URL} returned HTTP 503`);
+    expect(message).not.toContain('utm=1');
+    expect(message).not.toContain('http://data.gdeltproject.org');
   });
 
   it('refuses a batch URL on a foreign host even when handed one directly', async () => {
@@ -319,6 +371,31 @@ describe('GdeltGkgClient — batch decoding', () => {
     });
 
     await expect(client.fetchBatch(BATCH_URL)).rejects.toThrow(/truncated/);
+  });
+
+  it('refuses a batch whose inflated bytes do not match the header CRC-32 (#713 item 3)', async () => {
+    const zip = zipOf(STOCK_ROW);
+    // Corrupt one byte of the declared CRC-32 at offset 14, leaving the
+    // compressed body (and therefore the actual inflated content) untouched —
+    // the mutation this check exists to catch.
+    zip[14] = (zip[14] ?? 0) ^ 0xff;
+    const client = new GdeltGkgClient({
+      fetchImpl: stubFetch({ lastupdate: LASTUPDATE, archive: zip }),
+    });
+
+    await expect(client.fetchLatestBatch()).rejects.toThrow(/CRC-32/);
+  });
+
+  it('refuses a zip entry declaring a streaming data descriptor (#713 item 3)', async () => {
+    const zip = zipOf(STOCK_ROW);
+    // Set general-purpose bit 3: sizes/CRC live in a trailing descriptor this
+    // decoder does not read, so the header's CRC field cannot be trusted.
+    zip.writeUInt16LE(0x0008, 6);
+    const client = new GdeltGkgClient({
+      fetchImpl: stubFetch({ lastupdate: LASTUPDATE, archive: zip }),
+    });
+
+    await expect(client.fetchLatestBatch()).rejects.toThrow(/data descriptor/);
   });
 
   it('refuses a response that is not a zip at all', async () => {

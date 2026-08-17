@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Clock, Logger } from '../../shared/index.js';
+import { TokenBucket } from '../../shared/index.js';
 import { MiArchiveStore } from './archive/mi-archive-store.js';
 import { GdeltIngestAgent, SOURCE_GDELT } from './gdelt-ingest-agent.js';
-import type { GdeltGkgBatch, GdeltGkgClient, GdeltGkgRecord } from './sources/gdelt-gkg-client.js';
+import {
+  type GdeltGkgBatch,
+  GdeltGkgClient,
+  type GdeltGkgRecord,
+} from './sources/gdelt-gkg-client.js';
 
 const NOW = new Date('2026-08-15T15:32:00Z');
 const clock: Clock = { now: () => NOW };
@@ -129,13 +134,12 @@ describe('GdeltIngestAgent', () => {
     const agent = new GdeltIngestAgent({ archive, client: stubClient({}), clock });
     await agent.refresh();
 
-    const nextUrl = 'http://data.gdeltproject.org/gdeltv2/20260815154500.gkg.csv.zip';
     const nextTime = new Date('2026-08-15T15:45:00Z');
     const later = new GdeltIngestAgent({
       archive,
       client: stubClient({
-        url: nextUrl,
-        batch: batch([record({ native_id: 'n-1', batch_time: nextTime })], nextUrl),
+        url: LATER_BATCH_URL,
+        batch: batch([record({ native_id: 'n-1', batch_time: nextTime })], LATER_BATCH_URL),
       }),
       clock,
     });
@@ -170,6 +174,57 @@ describe('GdeltIngestAgent', () => {
     const retry = new GdeltIngestAgent({ archive, client: stubClient({}), clock });
     await expect(retry.refresh()).resolves.toBe(true);
     expect(archive.latestUpdatedAt(SOURCE_GDELT)?.getTime()).toBe(BATCH_TIME.getTime());
+    archive.close();
+  });
+
+  it(
+    'warns under its own cause, not "batch fetch failed", when the cursor read hits a closed ' +
+      'store (#713 item 5)',
+    async () => {
+      const archive = new MiArchiveStore();
+      archive.close(); // Simulates shutdown racing a stray poll: the store is
+      // already closed by the time `effectiveCursor()` reads it.
+      const logger = collectingLogger();
+      const client = stubClient({});
+      const agent = new GdeltIngestAgent({ archive, client, clock, logger });
+
+      // Behaviour is unchanged — still resolves false, still does not crash —
+      // but the earlier structure caught this in the fetch try/catch and
+      // logged the fetch's message, blaming a request that never happened.
+      await expect(agent.refresh()).resolves.toBe(false);
+      const warns = logger.entries.filter((entry) => entry.level === 'warn');
+      expect(warns).toHaveLength(1);
+      expect(warns[0]?.message).not.toMatch(/GDELT batch fetch failed/);
+      expect(warns[0]?.message).toMatch(/outside the fetch\/write paths/);
+      // The client must never have been reached: the cursor read happens
+      // before the network call, closed store or not.
+      expect(client.latestBatchUrl).not.toHaveBeenCalled();
+    },
+  );
+
+  it('resolves false and warns rather than crashing when the clock throws (#713 item 6)', async () => {
+    const archive = new MiArchiveStore();
+    const logger = collectingLogger();
+    const throwingClock: Clock = {
+      now: () => {
+        throw new Error('injected clock failure');
+      },
+    };
+    const agent = new GdeltIngestAgent({
+      archive,
+      client: stubClient({ batch: batch([record()]) }),
+      clock: throwingClock,
+      logger,
+    });
+
+    // `production.ts` calls this as `void refresh(...)` with no
+    // `unhandledRejection` handler for this call site — a throwing clock must
+    // degrade the same way a failed fetch does, not reject.
+    await expect(agent.refresh()).resolves.toBe(false);
+    expect(archive.rawRows(SOURCE_GDELT)).toEqual([]);
+    const warns = logger.entries.filter((entry) => entry.level === 'warn');
+    expect(warns).toHaveLength(1);
+    expect(warns[0]?.message).toMatch(/outside the fetch\/write paths/);
     archive.close();
   });
 
@@ -329,6 +384,54 @@ describe('GdeltIngestAgent', () => {
     archive.close();
   });
 
+  it(
+    'abandons a poll parked on the rate limiter instead of waiting it out, unlike a poll ' +
+      'already mid-download (#702)',
+    async () => {
+      const archive = new MiArchiveStore();
+      const logger = collectingLogger();
+      // Real GdeltGkgClient + real TokenBucket, not the stub the other tests
+      // use — a mock `latestBatchUrl` would happily "accept" a signal argument
+      // it never looks at, which would prove nothing about the actual wiring
+      // from GdeltIngestAgent through GdeltGkgClient into TokenBucket.acquire.
+      //
+      // The refill rate is nowhere near real: with capacity 1 and one token
+      // already spent, the next acquire needs a token that takes roughly
+      // 2,700 hours to mint. If `whenIdle` did not abort the wait, this test
+      // would hang until vitest's per-test timeout killed it — there is no
+      // fake-timer trick used here, the abort itself is what has to be fast.
+      const rateLimiter = new TokenBucket({ capacity: 1, refillPerSecond: 0.0001 });
+      await rateLimiter.acquire();
+      const client = new GdeltGkgClient({
+        rateLimiter,
+        fetchImpl: (() => {
+          throw new Error(
+            'must not reach the network — the poll should be abandoned at the rate limiter',
+          );
+        }) as unknown as typeof fetch,
+      });
+      const agent = new GdeltIngestAgent({ archive, client, clock, logger });
+
+      const polling = agent.refresh();
+      // No `await` between `refresh()` and `whenIdle()`: the poll has not had
+      // a chance to run past `rateLimiter.acquire()` yet, which is exactly the
+      // "parked on a token" state #702 is about.
+      await agent.whenIdle();
+
+      // Settles to `false` — the abort lands in `poll`'s own catch, same as
+      // any other fetch failure, not a hang and not a rejection out of
+      // `refresh()`.
+      await expect(polling).resolves.toBe(false);
+      expect(archive.rawRows(SOURCE_GDELT)).toEqual([]);
+      expect(
+        logger.entries.some(
+          (entry) => entry.level === 'warn' && /GDELT batch fetch failed/.test(entry.message),
+        ),
+      ).toBe(true);
+      archive.close();
+    },
+  );
+
   it('is idempotent when a later batch re-offers rows already held', async () => {
     const archive = new MiArchiveStore();
     const rows = [record(), record({ native_id: 'b-2' })];
@@ -411,7 +514,8 @@ describe('GdeltIngestAgent', () => {
     const archive = new MiArchiveStore();
     const throwing: Logger = {
       log: () => {
-        // What an EPIPE out of JsonLogger's unguarded stdout write looks like.
+        // What a `JsonLogger` with no sink left to record on looks like (#714),
+        // and what any injected `Logger` is free to do.
         throw new Error('EPIPE');
       },
     } as unknown as Logger;

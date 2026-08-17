@@ -278,6 +278,26 @@ export class RiskManagerImpl implements RiskManager {
   }
 }
 
+/**
+ * Thrown by `perSubclassDeploymentCap` (#726) when the gate cannot resolve an
+ * envelope for the intent's own instrument — no subclass recorded for it, or a
+ * subclass recorded with no cap declared for it. Carries `bindingConstraint`
+ * pre-formatted so the catch in `direct-bind.ts`'s `buildRiskStep` can write
+ * the `risk_log` row this throw would otherwise leave absent (see that gate's
+ * doc comment for why the throw itself is not softened) without re-parsing
+ * the message or re-deriving which subclass was the problem.
+ */
+export class PerSubclassCapUnresolvableError extends Error {
+  constructor(
+    message: string,
+    readonly instrument: string,
+    readonly bindingConstraint: string,
+  ) {
+    super(message);
+    this.name = 'PerSubclassCapUnresolvableError';
+  }
+}
+
 /** The circuit-breaker gate — halts new entries + scale-ins, fail fast. */
 function trippedBreakerTier(
   breakers: BreakerState,
@@ -388,21 +408,24 @@ const concentrationCorrelationCap: EntryCapGate = (config, intent, portfolio, co
  * for every instrument, so if that catch is ever removed, this gate must be
  * revisited with it — the two are coupled, and only this comment says so.
  *
- * **What the throw costs, stated because it is not free.** This is the only
- * entry gate that throws rather than returning a decision, and `riskLog.write`
- * in `production/direct-bind.ts` runs only AFTER `evaluate()` returns — so a
- * refused instrument writes **no `risk_log` row**. The failure is still
- * durable (#507's catch writes an `audit_log` row and logs it) and still
- * loud, but it is absent from the table an operator queries to ask "what did
- * Risk do with that intent", and `smoke-run.ts` has a check for exactly the
- * shape it leaves behind — an intent in `trader_log` with no `risk_log` row.
+ * **What the throw cost, and #726's fix.** This is the only entry gate that
+ * throws rather than returning a decision, and `riskLog.write` in
+ * `production/direct-bind.ts` runs only AFTER `evaluate()` returns normally —
+ * so on its own a refused instrument would write **no `risk_log` row**. #726
+ * closed that: `buildRiskStep` wraps the `evaluate()` call in a try/catch and,
+ * on a `PerSubclassCapUnresolvableError`, writes a `risk_log` row with
+ * `status: 'error'` and `binding_constraint` set from the error's own
+ * `bindingConstraint` (naming the unclassified instrument or subclass) BEFORE
+ * re-throwing — the throw itself is untouched and still propagates to #507's
+ * catch in `tick-loop.ts` for the `audit_log` row and the log line. The row is
+ * additive, not a substitute: #507's catch still runs unchanged.
  *
- * Returning a rejected decision instead WOULD close that gap, and it is
- * rejected deliberately: a rejection is quiet, and a half-populated pool file
- * that merely declines entries can run for days looking like a market with no
- * setups. The throw is chosen for being impossible to ignore. If the audit gap
- * ever matters more than the loudness, the fix is to write the `risk_log` row
- * from the catch — not to soften the gate.
+ * Returning a rejected decision instead WOULD have closed the original gap
+ * too, and that was rejected deliberately: a rejection is quiet, and a
+ * half-populated pool file that merely declines entries can run for days
+ * looking like a market with no setups. The throw is chosen for being
+ * impossible to ignore — #726 made the audit gap it left behind not free, not
+ * the throw itself.
  */
 const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
   const declared = config.per_subclass_deployment_cap;
@@ -410,11 +433,13 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
 
   const subclass = declared.subclass_of[intent.instrument];
   if (subclass === undefined) {
-    throw new Error(
+    throw new PerSubclassCapUnresolvableError(
       `per_subclass_deployment_cap is declared but ${intent.instrument} has no subclass ` +
         `(known: ${Object.keys(declared.subclass_of).join(', ') || 'none'}). ADR-0018 D5's ` +
         `deployment envelope cannot be resolved without one, and the alternative to this throw ` +
         `is sizing the position with no envelope at all. Add the instrument to the pool file.`,
+      intent.instrument,
+      `per_subclass_deployment_cap:unclassified_instrument:${intent.instrument}`,
     );
   }
 
@@ -429,11 +454,13 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
   // That is the exact failure D5 exists to prevent, arriving silently.
   const cap: number | null | undefined = declared.cap[subclass];
   if (cap === undefined) {
-    throw new Error(
+    throw new PerSubclassCapUnresolvableError(
       `per_subclass_deployment_cap declares ${intent.instrument} as '${subclass}' but carries no ` +
         `cap for that subclass (known: ${Object.keys(declared.cap).join(', ') || 'none'}). ADR-0018 ` +
         `D5's envelope cannot be resolved without one, and the alternative to this throw is sizing ` +
         `the position with no envelope at all. Add the subclass to the cap record.`,
+      intent.instrument,
+      `per_subclass_deployment_cap:no_cap_for_subclass:${subclass}`,
     );
   }
   if (cap === null) return null;

@@ -4,7 +4,7 @@ import type {
   RateLimiterConfig,
 } from '../../../pipeline/debate-engine/index.js';
 import type {
-  AlpacaClient as AlpacaBrokerClient,
+  AlpacaBrokerClient,
   BrokerAdapter,
   ExecutionConfig,
   FlattenReconcileAlertChannel,
@@ -16,7 +16,7 @@ import type {
   BreachAlertChannel,
   DailyMetricsSource,
   FeedbackConfig,
-  LoosenApprovalChannel,
+  LoosenNotificationChannel,
   TuningProposal,
 } from '../../../pipeline/feedback-loop/index.js';
 import type {
@@ -32,7 +32,7 @@ import type {
   VerdictConfig,
 } from '../../../pipeline/verdict/index.js';
 import type {
-  AlpacaClient as AlpacaDataClient,
+  AlpacaMarketDataClient,
   DataSource,
   IndicatorSpec,
   TradingCalendar,
@@ -166,24 +166,25 @@ export interface AlertChannelSlots {
    */
   breachAlerts?: BreachAlertChannel;
   /**
-   * Where a gated risk-threshold LOOSENING request goes (#91, wired #366).
-   * Defaults to `LoggingLoosenApprovalChannel`; `SAMURAI_ALERTS=telegram`
-   * replaces it with `TradeChannelLoosenApproval`, like the other outbound
-   * escalations (alert-transport.ts).
+   * Where the notice of an APPLIED risk-threshold LOOSENING goes (#91, wired
+   * #366, retargeted #736). Defaults to `LoggingLoosenNotificationChannel`;
+   * `SAMURAI_ALERTS=telegram` replaces it with `TradeChannelLoosenNotice`,
+   * like the other outbound escalations (alert-transport.ts).
    *
    * Top-level rather than a field of `feedback` for the reason every other
    * transport is: `paperStartingProfile` supplies tuning *values* and names no
    * transport, because where an operator's alerts go is a deployment decision
-   * and not something a checked-in file should hard-code. `FeedbackCycleConfig`
-   * keeps its own `approvals` override, which wins over this when both are
-   * given (see `runFeedbackCycle`).
+   * and not something a checked-in file should hard-code.
+   * `FeedbackCycleConfig` keeps its own `loosenNotices` override, which wins
+   * over this when both are given (see `runFeedbackCycle`).
    *
    * There is no live-mode refusal here, unlike `ConsoleApprovalChannel`: this
-   * port returns `void` and cannot approve anything, so neither implementation
-   * can fabricate consent. A request nobody reads leaves the threshold exactly
-   * where it was.
+   * port returns `void` and is asked nothing, so no implementation can
+   * fabricate consent. A notice nobody reads costs visibility of a move that
+   * has already been applied and logged — it does not gate the move, because
+   * since ADR-0013 Decision 2 nothing does.
    */
-  loosenApprovals?: LoosenApprovalChannel;
+  loosenNotices?: LoosenNotificationChannel;
   /**
    * Where a degraded-but-continuing Trader condition is escalated (#698) — a
    * calendar reporting a close already in the past, a non-crypto calendar that
@@ -241,7 +242,7 @@ export interface ProductionConfig extends AlertChannelSlots {
    * the same reason; defaults to `AlpacaHttpDataClient` on
    * `dataSourceAssetClass`.
    */
-  alpacaDataClient?: AlpacaDataClient;
+  alpacaDataClient?: AlpacaMarketDataClient;
   /**
    * HITL approval round-trip (Verdict gate 6). Same shape as
    * `heartbeatChannel`: pass `SignedApprovalChannel`
@@ -546,9 +547,9 @@ export interface ProductionConfig extends AlertChannelSlots {
    * **Both reasons this used to have no supplier are now closed (#366).**
    * `FeedbackConfig`'s values are tuned in paper trading, so they live where
    * the other eight sets of starting values live — `paperStartingProfile`
-   * (paper-profile.ts) — and `LoosenApprovalChannel` is resolved from
+   * (paper-profile.ts) — and `LoosenNotificationChannel` is resolved from
    * `SAMURAI_ALERTS` like every other outbound escalation, defaulting to
-   * `loosenApprovals` (`AlertChannelSlots`, above). A paper run started through the shipped
+   * `loosenNotices` (`AlertChannelSlots`, above). A paper run started through the shipped
    * entrypoint therefore supplies this.
    */
   feedback?: FeedbackCycleConfig;
@@ -558,13 +559,13 @@ export interface ProductionConfig extends AlertChannelSlots {
 export interface FeedbackCycleConfig {
   config: FeedbackConfig;
   /**
-   * Per-cycle override for `ProductionConfig.loosenApprovals`. Optional since
+   * Per-cycle override for `ProductionConfig.loosenNotices`. Optional since
    * #366: the channel is a transport, so it is resolved from `SAMURAI_ALERTS`
    * alongside the other outbound escalations and falls back to
-   * `LoggingLoosenApprovalChannel` — the same shape `breachAlerts` has. Supply
-   * it here only to override that for this cycle's config specifically.
+   * `LoggingLoosenNotificationChannel` — the same shape `breachAlerts` has.
+   * Supply it here only to override that for this cycle's config specifically.
    */
-  approvals?: LoosenApprovalChannel;
+  loosenNotices?: LoosenNotificationChannel;
   /**
    * Param/threshold moves to consider this cycle. Empty is a valid, meaningful
    * cycle: analyst weights are attributed from closed trades, not proposed.

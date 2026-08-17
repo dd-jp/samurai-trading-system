@@ -14,6 +14,7 @@
  * per-class baseline.
  */
 import type { Clock } from '../../shared/index.js';
+import { assertThresholdsWithinBounds } from '../../shared/index.js';
 import type { BreakerState, PersistedBreakerState, PortfolioView } from './types.js';
 
 /** Config for the per-asset-class volatility halt. */
@@ -142,6 +143,22 @@ export class CircuitBreakers {
     private readonly config: BreakerConfig,
     initial?: readonly PersistedBreakerState[],
   ) {
+    // #638: the absolute clamp, which the width check below deliberately does
+    // NOT provide — it is a relative ordering test, so `max_drawdown_pct: 0.95`
+    // with `recovery_drawdown_pct: 0.90` passes it and leaves a breaker that
+    // stops nothing recognisable. Every construction of this class runs it,
+    // including the composition root's, so an out-of-bound breaker config
+    // refuses to boot rather than trading behind a limit nobody meant.
+    assertThresholdsWithinBounds(
+      {
+        max_drawdown_pct: config.max_drawdown_pct,
+        recovery_drawdown_pct: config.auto_rearm.recovery_drawdown_pct,
+        daily_loss_pct: config.daily_loss_pct,
+        daily_loss_pct_crypto: config.daily_loss_pct_by_class.crypto,
+        daily_loss_pct_stocks: config.daily_loss_pct_by_class.stocks,
+      },
+      'CircuitBreakers',
+    );
     // The hysteresis band must have width. Since #634 the re-arm policy runs
     // in every mode, so `recovery >= max` would clear the trip in the same
     // `evaluate()` call that set it: `armed_breakers` would never carry

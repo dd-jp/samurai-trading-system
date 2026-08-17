@@ -58,7 +58,7 @@ import type { BrokerBracketRecord, BrokerStateStore } from '../broker-state-stor
 import { toRequestFields } from '../broker-state-store.js';
 import type { OcoDoubleFillAlertChannel } from '../oco-double-fill-alert.js';
 import type { BrokerAck, NativeBracketRequest, NormalizedFill } from '../types.js';
-import type { AlpacaClient, AlpacaOrder } from './alpaca-client.js';
+import type { AlpacaBrokerClient, AlpacaOrder } from './alpaca-client.js';
 // The shared normalization layer (alpaca-order-normalization.ts, split out on
 // PR #600 review): sharing the adapter's own fill normalization —
 // `collectFill`'s unpriced-fill refusal included — without importing the
@@ -115,7 +115,7 @@ interface EmulatedBracket {
 }
 
 export interface AlpacaCryptoLegEmulationDeps {
-  client: AlpacaClient;
+  client: AlpacaBrokerClient;
   state: BrokerStateStore;
   clock: Clock;
   /**

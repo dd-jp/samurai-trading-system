@@ -1,10 +1,10 @@
 /**
- * Real market-data `AlpacaClient` (ticket #273) — see
- * docs/specs/transport-layer-spec.md ("Module: AlpacaClient (market
+ * Real market-data `AlpacaMarketDataClient` (ticket #273) — see
+ * docs/specs/transport-layer-spec.md ("Module: AlpacaMarketDataClient (market
  * data)"), Wayfinder map "Live Transport Layer" #259 (closed), decision
  * #260, and docs/research/32-vendor-api-reference.md.
  *
- * Implements `alpaca-source.ts`'s `AlpacaClient` (`getBars`/
+ * Implements `alpaca-source.ts`'s `AlpacaMarketDataClient` (`getBars`/
  * `getLatestQuote`) against Alpaca's Market Data API v2. No interface
  * change — this module only supplies the real HTTP implementation
  * `AlpacaDataSource` is already injected against.
@@ -39,7 +39,7 @@
  * live status codes recorded there.
  *
  * The neither-broker-nor-data-source-currently-passes-`asset_class`-to-the-
- * client shape (`AlpacaClient.getBars`/`getLatestQuote` take no asset-class
+ * client shape (`AlpacaMarketDataClient.getBars`/`getLatestQuote` take no asset-class
  * argument — see alpaca-source.ts) means the routing choice has to be made
  * at construction time: one `AlpacaHttpDataClient` instance is scoped to one
  * asset class via `AlpacaHttpDataClientOptions.assetClass`, and
@@ -97,7 +97,7 @@ import {
   classifyAlpacaDataResponse,
   isRetryableAlpacaDataError,
 } from './alpaca-data-errors.js';
-import type { AlpacaBar, AlpacaClient, AlpacaQuote } from './alpaca-source.js';
+import type { AlpacaBar, AlpacaMarketDataClient, AlpacaQuote } from './alpaca-source.js';
 
 const DEFAULT_BASE_URL = 'https://data.alpaca.markets';
 /**
@@ -446,8 +446,8 @@ export interface AlpacaHttpDataClientOptions {
   rateLimiter?: TokenBucket | undefined;
 }
 
-/** Real HTTP market-data `AlpacaClient` against Alpaca's Market Data API v2. */
-export class AlpacaHttpDataClient implements AlpacaClient {
+/** Real HTTP market-data `AlpacaMarketDataClient` against Alpaca's Market Data API v2. */
+export class AlpacaHttpDataClient implements AlpacaMarketDataClient {
   private readonly assetClass: 'crypto' | 'stocks';
   /**
    * Resolved for a STOCKS client only, and `undefined` for crypto — see the

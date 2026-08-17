@@ -1,6 +1,6 @@
 /**
  * Injected Alpaca trading-API client (ticket #84) — mirrors the injected
- * `AlpacaClient` pattern in server/providers/market-data-service/sources/alpaca-source.ts:
+ * `AlpacaMarketDataClient` pattern in server/providers/market-data-service/sources/alpaca-source.ts:
  * connection/auth is an ops concern (execution-spec.md Dependencies — trade-
  * only key, withdrawals disabled, IP-whitelisted); this file only shapes the
  * wire contract the adapter needs.
@@ -168,7 +168,7 @@ export interface AlpacaPosition {
   avg_entry_price: string;
 }
 
-export interface AlpacaClient {
+export interface AlpacaBrokerClient {
   submitOrder(request: AlpacaBracketOrderRequest): Promise<AlpacaOrder>;
   /** The flatten (#429) — a plain market order, no bracket. */
   submitMarketOrder(request: AlpacaMarketOrderRequest): Promise<AlpacaOrder>;
@@ -209,7 +209,7 @@ export interface AlpacaClient {
    * of cash and equity, which `AccountStateProvider` reads rather than
    * reimplementing (transport-layer-spec.md story 23).
    *
-   * On the `AlpacaClient` (broker) interface rather than a separate account
+   * On the `AlpacaBrokerClient` (broker) interface rather than a separate account
    * client because it is the same Trading API, same host, same credentials:
    * a second client would duplicate the auth/retry/error plumbing to reach
    * one more path on the service this one already talks to.

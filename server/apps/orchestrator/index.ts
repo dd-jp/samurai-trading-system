@@ -50,7 +50,7 @@ import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ALPACA_CREDENTIAL_ENV_VARS } from '../../pipeline/execution/index.js';
 import { MiArchiveStore, miArchivePath } from '../../providers/market-intelligence/index.js';
-import { SystemClock } from '../../shared/index.js';
+import { logCaughtFailure, SystemClock } from '../../shared/index.js';
 import {
   assertNoStaleKeyScheme,
   openSharedStore,
@@ -86,6 +86,10 @@ export {
 } from './alert-transport.js';
 export { TradeChannelAnalystSkipAlert } from './analyst-skip-alert-channel.js';
 export { TradeChannelBreachAlert } from './breach-alert-channel.js';
+export {
+  DebateBarDecisionGate,
+  type DecisionGate,
+} from './decision-bar-gate.js';
 export { digest } from './digest.js';
 export { Heartbeat, type HeartbeatChannel } from './heartbeat.js';
 export { TradeChannelHeartbeat } from './heartbeat-channel.js';
@@ -101,8 +105,15 @@ export {
   minLiveCapitalCeilingUsd,
   resolveLiveCapitalCeilingUsd,
 } from './live-profile.js';
-export { buildEntrypointLogger, formatLogLine, JsonLogger, type LogLineSink } from './logger.js';
-export { TradeChannelLoosenApproval } from './loosen-approval-channel.js';
+export {
+  buildEntrypointLogger,
+  formatLogLine,
+  JsonLogger,
+  type LogLineSink,
+  type StdoutStream,
+  watchStdoutErrors,
+} from './logger.js';
+export { TradeChannelLoosenNotice } from './loosen-notification-channel.js';
 export { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
 export {
   type OrphanAlertChannel,
@@ -721,6 +732,97 @@ export function buildShutdownHandler(
   };
 }
 
+/**
+ * The last-resort fault net: record an unhandled fault durably, then exit
+ * non-zero (#714).
+ *
+ * **This is not a swallow, and the distinction is the whole point.** It
+ * catches nothing narrowly, allows nothing to continue, and classifies
+ * nothing: every fault that reaches it ends the process. What it adds is that
+ * the death is *recorded where a soak can find it* — through `logger`, whose
+ * rotating file survives a stdout that has already gone — and that the exit
+ * code is chosen rather than incidental. Node already exits 1 on an uncaught
+ * exception and (since v15) on an unhandled rejection, so this handler does
+ * not make the process more lethal; it makes the same death diagnosable, and
+ * replaces Node's raw stack dump with a message-only line, matching the
+ * startup `catch` below (the config it may reference holds API credentials).
+ *
+ * **Where the line between recoverable and unknown is drawn, and why there.**
+ * The one fault a soak must survive — a broken stdout pipe — is handled at the
+ * stream that produced it, by `watchStdoutErrors` (logger.ts), which knows it
+ * is a stdout failure because it is subscribed to stdout's own `'error'`
+ * event. Identity by *origin*, not by inspecting an error's `code` here. Two
+ * weaker lines were rejected:
+ *
+ * - *exempting `EPIPE` in this handler* — an `EPIPE` can come from a broker
+ *   socket or an alert transport just as easily as from the log stream, and
+ *   those are unknown-state faults. A code is not a provenance.
+ * - *exempting anything thrown from inside a logging call* — that swallows
+ *   serialization bugs and faults in an injected sink, which are unknown-state
+ *   faults wearing a logging costume.
+ *
+ * A logging EPIPE is narrow, known, and recoverable **because a second durable
+ * sink is still taking the trace**; when even that is gone, `JsonLogger` stops
+ * degrading and throws, and it lands here, where it belongs. An arbitrary
+ * uncaught exception is none of those things: this is a live-money process
+ * holding real positions, and one that keeps running in an unknown state is
+ * strictly worse than one that stops. Restart-time reconciliation
+ * (`OrphanVerdictScanner`, #209, and the flatten journal) is built precisely
+ * for a process that died mid-pass; nothing is built for one that traded on
+ * after an exception nobody saw.
+ *
+ * No drain is attempted. `buildShutdownHandler`'s drain awaits the in-flight
+ * tick, which is exactly the code whose state is in question here.
+ */
+export function installFaultHandlers(
+  logger: Logger,
+  effects: {
+    exit: (code: number) => void;
+    stderr: (message: string) => void;
+    on: (
+      event: 'uncaughtException' | 'unhandledRejection',
+      handler: (error: unknown) => void,
+    ) => void;
+  } = {
+    exit: (code) => process.exit(code),
+    stderr: (message) => {
+      process.stderr.write(message);
+    },
+    on: (event, handler) => {
+      process.on(event, handler);
+    },
+  },
+): void {
+  const fatal = (fault: 'uncaughtException' | 'unhandledRejection') => (error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    // `logCaughtFailure` and not `logger.log`: the logger is allowed to throw
+    // when it has no sink left, and a fault handler that throws is a fault
+    // handler that hides the fault it was called about.
+    logCaughtFailure(
+      logger,
+      {
+        trace_id: 'fatal',
+        stage: 'orchestrator',
+        level: 'error',
+        message:
+          `${fault} — the orchestrator is exiting rather than continuing in an unknown state ` +
+          'with open positions (#714)',
+      },
+      error,
+      { fault },
+    );
+    try {
+      effects.stderr(`orchestrator ${fault}: ${message}\n`);
+    } catch {
+      // stderr can be as dead as stdout; the exit below is the message then.
+    }
+    effects.exit(1);
+  };
+
+  effects.on('uncaughtException', fatal('uncaughtException'));
+  effects.on('unhandledRejection', fatal('unhandledRejection'));
+}
+
 // Entrypoint guard: `npm run orchestrator` runs this file directly, but it is
 // also the package's export surface — importing it must not start a trading
 // process.
@@ -740,7 +842,14 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
     // composition root opens a file as a side effect of constructing an
     // orchestrator. An unwritable path degrades to stdout with a warn rather
     // than stopping the process; see logger.ts / rotating-file-sink.ts.
+    //
+    // #714: `buildEntrypointLogger` also subscribes to stdout's `'error'`
+    // event, so a broken pipe — the soak's realistic logging failure, and
+    // asynchronous on a pipe rather than a throw — degrades to the file
+    // instead of reaching the handler installed next. That handler is the
+    // opposite posture on purpose: it ends the process. See both doc comments.
     const entrypointLogger = buildEntrypointLogger();
+    installFaultHandlers(entrypointLogger);
     const orchestrator = await startFromEnvironment({
       ...startingProfileForMode(parseMode(process.env.SAMURAI_MODE), entrypointLogger),
       logger: entrypointLogger,

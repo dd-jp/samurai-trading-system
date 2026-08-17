@@ -44,41 +44,6 @@ export interface UniverseInstrument {
   subclass?: InstrumentSubclass;
 }
 
-/**
- * Read the subclass a bracket or a position size is about to be computed
- * from, refusing when it is absent.
- *
- * ADR-0018 D5 sizes the equity leg *down* — ~35% for index ETPs, ~25% for
- * single-stock — because the measured volatility envelope at full deployment
- * runs 2.2x to 3.5x outside `CONTEXT.md`'s tolerance before any edge exists.
- * A missing subclass falling back to a default would therefore fall back to
- * the one setting the ADR exists to forbid, and it would do it silently, on
- * the money path. Fail loud instead.
- *
- * **No production caller yet, and that is stated rather than left to be
- * discovered** (three review passes raised it, correctly, against this repo's
- * named no-caller defect class). The consumer is ADR-0018 D3's per-subclass
- * bracket — +2.00/-2.16 for a 3x index ETP against +6.00/-6.25 for a 3x
- * single-stock — which is step A2 of map #703 and is NOT on this branch.
- *
- * It is not a second copy of the risk gate's throw, which is the other reading
- * worth ruling out. They take different inputs and answer different questions:
- * `perSubclassDeploymentCap` resolves a subclass from the CONFIG map
- * (`SubclassDeploymentCap.subclass_of`) to size a netted envelope, while this
- * resolves it from the UNIVERSE ROW a bracket is about to be computed for.
- * A2 has a `UniverseInstrument` in hand and no risk config; if it turns out to
- * have neither, delete this rather than leaving it uncalled.
- */
-export function requireSubclass(instrument: UniverseInstrument): InstrumentSubclass {
-  if (instrument.subclass === undefined) {
-    throw new Error(
-      `${instrument.asset} has no subclass; ADR-0018 brackets and sizing cannot be resolved without one. ` +
-        `Add it to the pool file rather than defaulting - a default here is full deployment.`,
-    );
-  }
-  return instrument.subclass;
-}
-
 /** What fires this tick, decided by the Scheduler against the injected clock. */
 export interface TickPlan {
   instruments: UniverseInstrument[];
@@ -125,8 +90,49 @@ export interface AuditLog {
   }): void;
 }
 
-/** The stage a tick reached before terminating (successfully or by short-circuit). */
-export type TickStage = 'analysts' | 'debate' | 'trader' | 'risk' | 'verdict' | 'execution';
+/**
+ * The stage a pass reached before terminating (successfully or by
+ * short-circuit).
+ *
+ * `'position_check'` (#743) is the tick path's own stage: the
+ * mark/bracket/flatten evaluation that runs on EVERY tick, ahead of — and on
+ * most ticks instead of — the decision chain. It is the terminal stage of the
+ * most common pass in the system (roughly 29 of every 30 at a 2-minute tick
+ * against a 60-minute debate bar), and it must be distinguishable from a
+ * decision pass that declined to trade, or a healthy exit-only tick reads as a
+ * no-trade decision and the trade count looks wrong
+ * (orchestrator-spec.md, "The tick/decision split").
+ */
+export type TickStage =
+  | 'position_check'
+  | 'analysts'
+  | 'debate'
+  | 'trader'
+  | 'risk'
+  | 'verdict'
+  | 'execution';
+
+/**
+ * The debate bar a decision pass runs for (#743) — THE single source of the
+ * bar coordinate for that pass.
+ *
+ * Produced by the decision gate (`decision-bar-gate.ts`) when a tick is the
+ * first to land in a new debate bar, and passed DOWN: the Debate step keys
+ * `debate_id` on `open_time` instead of flooring its own `clock.now()`, the
+ * resulting `DebateResult.bar_timestamp` carries the same value, and the
+ * Trader inherits it from there (#687). Nothing on the decision path derives
+ * the bar a second time, which is what makes a gate/Trader disagreement
+ * structural rather than a matter of two clock reads landing luckily in the
+ * same hour.
+ */
+export interface DecisionBar {
+  /** Stable identity for logs: `<open_time ISO>@<timeframe_ms>`. */
+  id: string;
+  /** The bar's opening boundary — `floorToBar(tick_time, timeframe_ms)`. */
+  open_time: Date;
+  /** The debate-bar grid this bar lives on (`DEBATE_BAR_TIMEFRAME_MS`). */
+  timeframe_ms: number;
+}
 
 /**
  * The disposable per-instrument progress row (#96, resolves
@@ -165,6 +171,17 @@ export interface TickContext {
   auditLog: AuditLog;
   /** shared_store.current_tick writer (#96); upserted before each stage, deleted on completion. */
   currentTickStore: CurrentTickStore;
+  /**
+   * Set only when this tick opens a new debate bar (#743). Present => the
+   * runner runs the DECISION path (Analysts → Debate → Trader → Risk →
+   * Verdict → Execution) for this bar. Absent => tick path only (the
+   * position-facing exit check).
+   *
+   * Claimed from the `DecisionGate` by the tick loop, per instrument, BEFORE
+   * `runInstrument` — so the gate's bookkeeping lives outside the runner and a
+   * crashed pass can be rescinded for the next tick to retry.
+   */
+  decision_bar?: DecisionBar;
 }
 
 export interface TickOutcome {
@@ -183,6 +200,15 @@ export interface TickOutcome {
   verdict_status?: 'go' | 'no_go';
   /** Only present on a Verdict `go` — Execution is not called otherwise. */
   execution_result?: ExecutionResult;
+  /**
+   * `true` when a TICK-PATH pass's exit check produced an exit intent — the
+   * flat-by-close flatten, including a close already past (#691/#743). Never set on a
+   * decision pass, where the Trader's own routing carries the flatten and the
+   * intent's `intent_type: 'exit'` is the record. Present so a flatten whose
+   * Verdict said `no_go` is still visible as a flatten that FIRED — the
+   * anomaly reads as `flatten_fired: true, final_stage: 'verdict'`.
+   */
+  flatten_fired?: boolean;
   /**
    * Set only when the instrument's pipeline pass threw instead of returning
    * normally (#507: a failed tick declaring itself finished while sibling
@@ -214,6 +240,28 @@ export interface TickOutcome {
  * (ticket #235, ADR-0004 §3).
  */
 export interface TickSteps {
+  /**
+   * The tick path's position-facing exit check (#743): the Trader's exit-only
+   * entry point, run on every tick that is NOT a decision pass. Reachable
+   * WITHOUT an `AnalystView[]` or a `DebateResult` by construction — its
+   * input carries neither — which is the "exits must not read analyst
+   * output" constraint stated as an interface requirement
+   * (orchestrator-spec.md, "The tick/decision split", constraint 4).
+   *
+   * `bar` is the tick's debate-bar coordinate (the runner floors it once per
+   * tick pass): the grid the exit intent's idempotency key dedupes on, so
+   * repeated flatten checks within one bar re-key to the same order.
+   *
+   * Returns the flatten exit intent when one is due, else null. A non-null
+   * intent flows through the same Risk → Verdict → Execution tail as a
+   * decision-path intent.
+   */
+  exitCheck(input: {
+    trace_id: string;
+    instrument: string;
+    bar: Date;
+    clock: Clock;
+  }): Promise<OrderIntent | null>;
   analysts(input: { trace_id: string; signal: Signal; clock: Clock }): Promise<AnalystView[]>;
   debate(input: {
     trace_id: string;
@@ -235,6 +283,16 @@ export interface TickSteps {
     asset_class: AssetClass;
     views: AnalystView[];
     clock: Clock;
+    /**
+     * The decision bar's opening boundary, passed down from
+     * `TickContext.decision_bar` (#743). The step keys `debate_id` and the
+     * row's `bar_timestamp` on THIS value rather than flooring its own
+     * `clock.now()` — a debate that straddles a bar boundary (LLM round
+     * trips, retries) stays keyed to the bar the gate opened, and the Trader
+     * inherits the same value via `DebateResult.bar_timestamp` (#687). One
+     * derivation per pass, at the gate; everything below receives it.
+     */
+    bar: Date;
   }): Promise<DebateResult>;
   /** null = skip / no-trade; short-circuits before Risk. */
   trader(input: {

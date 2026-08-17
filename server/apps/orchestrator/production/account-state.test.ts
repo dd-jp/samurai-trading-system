@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AlpacaAccount, AlpacaClient } from '../../../pipeline/execution/index.js';
+import type { AlpacaAccount, AlpacaBrokerClient } from '../../../pipeline/execution/index.js';
 import {
   AlwaysOpenCalendar,
   type TradingCalendar,
@@ -61,13 +61,13 @@ function makeAccount(overrides: Partial<AlpacaAccount> = {}): AlpacaAccount {
   return { cash: '50000', equity: '100000', ...overrides };
 }
 
-function makeClient(account: AlpacaAccount = makeAccount()): AlpacaClient {
+function makeClient(account: AlpacaAccount = makeAccount()): AlpacaBrokerClient {
   return {
     submitOrder: vi.fn(),
     getOrder: vi.fn(),
     getOrderByClientOrderId: vi.fn(),
     getAccount: vi.fn().mockResolvedValue(account),
-  } as unknown as AlpacaClient;
+  } as unknown as AlpacaBrokerClient;
 }
 
 function makeTrade(pnl: number, closedAt: string): ClosedTrade {

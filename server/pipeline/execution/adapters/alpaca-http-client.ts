@@ -1,10 +1,10 @@
 /**
- * Real broker `AlpacaClient` (ticket #273) — see
- * docs/specs/transport-layer-spec.md ("Module: AlpacaClient (broker)"),
+ * Real broker `AlpacaBrokerClient` (ticket #273) — see
+ * docs/specs/transport-layer-spec.md ("Module: AlpacaBrokerClient (broker)"),
  * Wayfinder map "Live Transport Layer" #259 (closed), decision #260, and
  * docs/research/32-vendor-api-reference.md.
  *
- * Implements `alpaca-client.ts`'s `AlpacaClient` (`submitOrder`/`getOrder`/
+ * Implements `alpaca-client.ts`'s `AlpacaBrokerClient` (`submitOrder`/`getOrder`/
  * `getOrderByClientOrderId`) against Alpaca's Trading API v2
  * (`POST /v2/orders`, `GET /v2/orders/{id}`,
  * `GET /v2/orders:by_client_order_id`). No interface change — this module
@@ -64,7 +64,7 @@ import {
 import type {
   AlpacaAccount,
   AlpacaBracketOrderRequest,
-  AlpacaClient,
+  AlpacaBrokerClient,
   AlpacaLimitOrderRequest,
   AlpacaMarketOrderRequest,
   AlpacaOcoOrderRequest,
@@ -447,8 +447,8 @@ export interface AlpacaHttpBrokerClientOptions {
   retry?: RetryConfig;
 }
 
-/** Real HTTP broker `AlpacaClient` against Alpaca's Trading API v2. */
-export class AlpacaHttpBrokerClient implements AlpacaClient {
+/** Real HTTP broker `AlpacaBrokerClient` against Alpaca's Trading API v2. */
+export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
   private readonly apiKey: string;
   private readonly apiSecret: string;
   /**

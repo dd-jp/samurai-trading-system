@@ -67,9 +67,9 @@
  * no in-repo source have the same two homes every comparable input already
  * had: the `FeedbackConfig` values are starting values, so they sit in
  * `paperStartingProfile` (paper-profile.ts) beside the other eight sets, and
- * the loosen-approval channel is a transport, so it is selected from
+ * the loosen-notice channel is a transport, so it is selected from
  * `SAMURAI_ALERTS` (alert-transport.ts) and defaults to
- * `LoggingLoosenApprovalChannel` here. Before that, the 14-day soak (#238)
+ * `LoggingLoosenNotificationChannel` here. Before that, the 14-day soak (#238)
  * would have run stage 6 of a 6-stage pipeline dead for the whole window.
  *
  * `computeMetrics` — the kill-line detector — runs in that same timer, after
@@ -134,6 +134,7 @@ import type {
   FeedbackConfig,
 } from '../../pipeline/feedback-loop/index.js';
 import {
+  assertKillThresholdsWithinBounds,
   computeMetrics,
   runDailyCycle,
   SqliteAdjustmentLog,
@@ -175,11 +176,12 @@ import { SqliteRiskLogStore, SqliteTraderLogStore } from '../../shared/store/ind
 import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
 import {
   LoggingAnalystSkipAlertChannel,
+  LoggingAnalystTelemetry,
   LoggingBreachAlertChannel,
   LoggingFlattenOverfillAlertChannel,
   LoggingFlattenReconcileAlertChannel,
   LoggingHeartbeatChannel,
-  LoggingLoosenApprovalChannel,
+  LoggingLoosenNotificationChannel,
   LoggingOcoDoubleFillAlertChannel,
   LoggingOrphanAlertChannel,
   LoggingResidualExposureAlertChannel,
@@ -187,6 +189,7 @@ import {
   ParkedCiiScoreProvider,
   UnwiredApprovalChannel,
 } from './console-channels.js';
+import { DebateBarDecisionGate, type DecisionGate } from './decision-bar-gate.js';
 import {
   FILL_SYNC_TRACE_ID,
   RECONCILE_TRACE_ID,
@@ -204,12 +207,13 @@ import {
   buildExecutionSurface,
   buildPersistence,
   buildRiskStep,
-  buildTraderStep,
+  buildTraderSteps,
   buildVerdictStep,
   type ExecutionStepDeps,
   type PersistenceInstances,
   type PortfolioSnapshot,
 } from './production/direct-bind.js';
+import { assertFlattenWindowCoversTickInterval } from './production/flatten-tick-coupling.js';
 import { withOnTradeClose } from './production/on-trade-close-hookup.js';
 import { withFlattenTail } from './production/stocks-tick-window.js';
 import { MarketDataVolatilityReadingProvider } from './production/volatility-reading-provider.js';
@@ -412,6 +416,36 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // hours in, holding overnight.
   assertTraderConfigSound(config.traderConfig);
 
+  // Third of the same family, and the one that spans two configs (#670). The
+  // check above rejects a window of zero; this one rejects a window that is
+  // positive but narrower than the tick rate can land inside, which fails in
+  // exactly the same way — nothing flattens, nothing is logged, the book carries
+  // overnight. The effective interval is resolved here rather than read raw,
+  // because an unset `tickIntervalMs` still RUNS at
+  // `DEFAULT_TICK_INTERVAL_MS` and exempting it would exempt precisely the
+  // callers who never considered the interaction.
+  assertFlattenWindowCoversTickInterval(
+    config.traderConfig,
+    config.tickIntervalMs ?? DEFAULT_TICK_INTERVAL_MS,
+  );
+
+  // Fourth of the same family, and the one ADR-0013 calls a precondition of
+  // its own safety rather than a tidiness item (#638). With no human gate left
+  // anywhere, the numeric thresholds ARE the stop, so a config edit is the
+  // whole distance between this process and an arbitrary risk limit.
+  //
+  // The breaker half of the clamp runs inside `CircuitBreakers`' constructor
+  // below — every construction, not just this one. The kill lines have no
+  // constructor to hang it on, so they are refused here, before a store handle
+  // is open. Refused, never coerced: a silently clamped kill line reads as
+  // accepted, and the operator then believes a limit is in force that is not.
+  if (config.feedback !== undefined) {
+    assertKillThresholdsWithinBounds(
+      config.feedback.config.kill_thresholds,
+      'buildProductionComponents',
+    );
+  }
+
   // `capitalCeilingUsd` is optional on `ProductionConfig` (paper/backtest
   // boots and the hundreds of tests that never touch live money need not set
   // it) and it is NOT in `REQUIRED_INJECTED_CONFIG` — so a programmatic
@@ -531,12 +565,26 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // (#432) that would otherwise recur.
   const marketIntelligence = new MarketIntelligenceStore(clock);
 
+  /**
+   * Hoisted above the analysts (#745), which now take a telemetry sink built on
+   * it. It depends on nothing but `config`, so the move is free — the same
+   * reasoning that hoisted `breachAlerts` below.
+   */
+  const logger = config.logger ?? new JsonLogger();
+
   const analysts = new AnalystOrchestrator({
     market_intelligence: marketIntelligence,
     market_data: marketData,
+    /**
+     * #745: `technical_indicator_unavailable{kind}`. Wired here, unconditionally
+     * and with no config switch — an unwired counter is indistinguishable from
+     * an instrument whose axes are all available, which is the exact reading an
+     * operator must not be given. `production.test.ts` asserts this line exists
+     * by driving a thin instrument through the composed step and reading the
+     * log, rather than by inspecting the field.
+     */
+    telemetry: new LoggingAnalystTelemetry(logger),
   });
-
-  const logger = config.logger ?? new JsonLogger();
 
   // One instance, both ends of `cosine_setups` (#432): the Trader's `decide`
   // WRITES the setup at decision time and `onTradeClose` LABELS it with the
@@ -670,6 +718,12 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // reason `unpricedFillAlerts` is.
       ocoDoubleFillAlerts:
         config.ocoDoubleFillAlerts ?? new LoggingOcoDoubleFillAlertChannel(logger),
+      // #609: `AlpacaBrokerAdapterInput.logger`, required for the same reason
+      // `ExecutionInput.logger` is (#573) — a dropped wiring here is now a
+      // `tsc` error at every composition root instead of a silent gap a soak
+      // would have to surface. This is the same `logger` already built above
+      // for the rest of this composition root, not a second instance.
+      logger,
       ...(config.unpricedFillAgeOutMs === undefined
         ? {}
         : { unpricedFillAgeOutMs: config.unpricedFillAgeOutMs }),
@@ -920,7 +974,58 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     });
   }
 
+  // The Trader's two entry points, built together so the tick path's exit
+  // check and the decision path's full decision share one dependency set and
+  // one diagnostic throttle (#743) — see `buildTraderSteps`.
+  const traderSteps = buildTraderSteps({
+    ...breakerStateDeps,
+    config: config.traderConfig,
+    // #668: THE pair built above, not a fresh one. ADR-0014's flat-by-close
+    // resolves through the instrument's own venue, so the Trader has to read
+    // the same calendars the daily-PnL boundary and the volatility reading
+    // do — a second literal here would be a second place for an override to
+    // land on only some consumers.
+    sessionCalendars,
+    // #568: literally the `executionStore` above — the same instance
+    // `getOpenPositions` reads and `ingestFills()` writes fills through — so
+    // the Trader sizes an exit off the same fill record `executeExit`
+    // re-derives it from. Two stores here would mean two answers to "what
+    // does this lot still hold", which is the divergence #568 was.
+    getExitFillSizes: (idempotency_keys) => executionStore.getExitFillSizes(idempotency_keys),
+    setupStore,
+    traderLog: new SqliteTraderLogStore(config.db),
+    // #511: the declared capital ceiling, spread through rather than read
+    // from the environment here — this is the ONE hop that carries it from
+    // `liveStartingProfile` to the arithmetic that turns equity into a size.
+    // Omitted (not passed as `undefined`) on every paper/backtest run under
+    // `exactOptionalPropertyTypes`, which is the pre-#511 behaviour and the
+    // same conditional-spread idiom `verdictAlerts` below uses.
+    ...(config.capitalCeilingUsd === undefined
+      ? {}
+      : { capitalCeilingUsd: config.capitalCeilingUsd }),
+    // #698: the diagnostic escalation, wired HERE and not only declared.
+    // `TraderDiagnosticAlertChannel` would otherwise be the next instance of
+    // this repo's dominant defect shape — a tested mechanism nothing calls
+    // (#364's store, #388's rate limiter) — and the failure it reports is one
+    // whose only other symptom is a book that quietly stops trading.
+    //
+    // Same conditional-spread idiom as `capitalCeilingUsd` above, required by
+    // `exactOptionalPropertyTypes`: omitted rather than passed as `undefined`
+    // under `log-only`, where the step's own logger is the whole reporting
+    // path.
+    ...(config.traderDiagnosticAlerts === undefined
+      ? {}
+      : { traderDiagnosticAlerts: config.traderDiagnosticAlerts }),
+    // The sink for the diagnostics themselves, and for an alert the transport
+    // could not deliver. Without it a log-only run would have nowhere to put
+    // them at all.
+    logger,
+  });
+
   const steps: TickSteps = {
+    // #743: the tick path's position-facing exit check — the Trader's
+    // exit-only entry point, runnable without analysts or a debate.
+    exitCheck: traderSteps.exitCheck,
     // `logger` here is what makes an analyst failure visible at all — see the
     // adapter's doc comment (issue #358 item 4).
     analysts: buildAnalystsStep(analysts, logger, {
@@ -964,51 +1069,8 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // only record is an `audit_log` digest — enough to prove the stage ran,
     // never enough to say why a size came out at N or why a tick stopped at
     // `risk`. Both write on a skip/rejection too, which is the case with no
-    // downstream record at all.
-    trader: buildTraderStep({
-      ...breakerStateDeps,
-      config: config.traderConfig,
-      // #668: THE pair built above, not a fresh one. ADR-0014's flat-by-close
-      // resolves through the instrument's own venue, so the Trader has to read
-      // the same calendars the daily-PnL boundary and the volatility reading
-      // do — a second literal here would be a second place for an override to
-      // land on only some consumers.
-      sessionCalendars,
-      // #568: literally the `executionStore` above — the same instance
-      // `getOpenPositions` reads and `ingestFills()` writes fills through — so
-      // the Trader sizes an exit off the same fill record `executeExit`
-      // re-derives it from. Two stores here would mean two answers to "what
-      // does this lot still hold", which is the divergence #568 was.
-      getExitFillSizes: (idempotency_keys) => executionStore.getExitFillSizes(idempotency_keys),
-      setupStore,
-      traderLog: new SqliteTraderLogStore(config.db),
-      // #511: the declared capital ceiling, spread through rather than read
-      // from the environment here — this is the ONE hop that carries it from
-      // `liveStartingProfile` to the arithmetic that turns equity into a size.
-      // Omitted (not passed as `undefined`) on every paper/backtest run under
-      // `exactOptionalPropertyTypes`, which is the pre-#511 behaviour and the
-      // same conditional-spread idiom `verdictAlerts` below uses.
-      ...(config.capitalCeilingUsd === undefined
-        ? {}
-        : { capitalCeilingUsd: config.capitalCeilingUsd }),
-      // #698: the diagnostic escalation, wired HERE and not only declared.
-      // `TraderDiagnosticAlertChannel` would otherwise be the next instance of
-      // this repo's dominant defect shape — a tested mechanism nothing calls
-      // (#364's store, #388's rate limiter) — and the failure it reports is one
-      // whose only other symptom is a book that quietly stops trading.
-      //
-      // Same conditional-spread idiom as `capitalCeilingUsd` above, required by
-      // `exactOptionalPropertyTypes`: omitted rather than passed as `undefined`
-      // under `log-only`, where the step's own logger is the whole reporting
-      // path.
-      ...(config.traderDiagnosticAlerts === undefined
-        ? {}
-        : { traderDiagnosticAlerts: config.traderDiagnosticAlerts }),
-      // The sink for the diagnostics themselves, and for an alert the transport
-      // could not deliver. Without it a log-only run would have nowhere to put
-      // them at all.
-      logger,
-    }),
+    // downstream record at all. Bound above via `buildTraderSteps` (#743).
+    trader: traderSteps.trader,
     risk: buildRiskStep({
       ...breakerStateDeps,
       config: config.riskConfig,
@@ -1019,6 +1081,11 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // construction and `autoTighten`'s response to a kill-line breach
       // changes no decision.
       thresholds: tuningStore,
+      // #726: sink for the catch's own guarded `riskLog.write` failure —
+      // without it, a store failure while reporting a gate throw has nowhere
+      // to go but silent loss (still fine; see that catch's doc comment) with
+      // no trace at all.
+      logger,
     }),
     verdict: buildVerdictStep({
       ...breakerStateDeps,
@@ -1229,6 +1296,8 @@ export function startTickLoop(deps: {
   tickIntervalMs: number;
   /** Per PASS, not process-wide: the real ceiling is this x passes in flight (#692). */
   maxConcurrentInstruments: number;
+  /** The tick/decision split's gate (#743) — see `TickLoopConfig.decisionGate`. */
+  decisionGate: DecisionGate;
 }): { stop: () => Promise<void> } {
   let stopped = false;
   /**
@@ -1386,6 +1455,7 @@ export function startTickLoop(deps: {
           logger: deps.logger,
           auditLog: deps.persistence.auditLog,
           currentTickStore: deps.persistence.currentTickStore,
+          decisionGate: deps.decisionGate,
         },
       )
         .then(() => undefined)
@@ -1583,20 +1653,21 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     adjustments: new SqliteAdjustmentLog(config.db),
   };
   /**
-   * #366. Resolved once, outside the timer callback, for `feedbackStores`'
-   * reason — and read in the same precedence order the alert channels use: an
-   * explicit per-cycle override first, then the transport `SAMURAI_ALERTS`
-   * selected, then the log-only stand-in.
+   * #366, retargeted by #736. Resolved once, outside the timer callback, for
+   * `feedbackStores`' reason — and read in the same precedence order the alert
+   * channels use: an explicit per-cycle override first, then the transport
+   * `SAMURAI_ALERTS` selected, then the log-only stand-in.
    *
-   * Whichever wins, none of them can approve: the port returns `void`, so an
-   * unanswered request leaves the risk threshold untouched. That is
-   * fail-closed, and it is a property of `runDailyCycle` gating the write —
-   * not of the channel being trustworthy.
+   * Whichever wins, none of them gates anything: the port returns `void` and
+   * is asked nothing. Since ADR-0013 Decision 2 the cycle applies its own
+   * bounded loosenings and this channel only reports them, so a channel that
+   * fails to deliver costs visibility of a move that already happened — the
+   * bounds are what keep it safe, not the notice.
    */
-  const loosenApprovals =
-    config.feedback?.approvals ??
-    config.loosenApprovals ??
-    new LoggingLoosenApprovalChannel(logger);
+  const loosenNotices =
+    config.feedback?.loosenNotices ??
+    config.loosenNotices ??
+    new LoggingLoosenNotificationChannel(logger);
 
   /**
    * The detector's source, built once at construction (#379) — never per cycle,
@@ -1707,9 +1778,10 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         clock,
         ...feedbackStores,
         config: feedback.config,
-        approvals: loosenApprovals,
+        loosen_notices: loosenNotices,
         proposals: feedback.proposals ?? [],
-        mode: config.mode,
+        // No `mode` here since #736: the cycle ran one path in backtest and a
+        // different, gated one in paper and live, and the gate is gone.
       });
       logger.log({
         trace_id: 'feedback-cycle',
@@ -1886,6 +1958,9 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         persistence,
         tickIntervalMs: config.tickIntervalMs ?? DEFAULT_TICK_INTERVAL_MS,
         maxConcurrentInstruments: config.maxConcurrentInstruments ?? 1,
+        // #743: one gate per orchestrator, held across ticks — its per-bar
+        // claims are what turn the 2-minute tick into a once-per-bar decision.
+        decisionGate: new DebateBarDecisionGate(),
       });
 
       // #327: both of these degraded modes were previously reached by pure

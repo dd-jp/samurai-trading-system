@@ -25,10 +25,27 @@
  * `DEFAULT_UNIVERSE` instrument on a live/paper first tick. As of this
  * writing that is:
  *
- *   - `1h`, lookback 20 — the deepest of the technical analyst's and
- *     sentiment analyst's context-candle windows (both 20), their SMA/RSI
- *     specs (14/15), the trader's ATR stop window (15), and the
- *     volatility-breaker's ATR reading (15). All five read `1h` bars.
+ *   - `5m`, lookback `WARMUP_5M` (260) — #742 moved the technical analyst's
+ *     `SMA_SPEC`/`RSI_SPEC` from `1h` to `5m` (RSI's own `recommendedWarmupFor`
+ *     window is 57 5m bars; `WARMUP_5M` is the shared, wider pre-warm those
+ *     specs collapse onto, imported directly rather than re-derived so this
+ *     list cannot drift from the constant that actually governs the fetch).
+ *     Leaving this timeframe out would not fabricate anything — a cold
+ *     `computeIndicator` call still throws `InsufficientBarsError` below its
+ *     15-bar floor rather than answering short — but it would make the warm
+ *     start inert for the path that matters most: a first live/paper tick
+ *     would fall through to a live `DataSource.fetchBars` call instead of
+ *     reading the pre-filled store, defeating this script's whole purpose for
+ *     the very analyst it was written to serve.
+ *   - `1h`, lookback 57 — retained for what #742 left on `1h`: the technical
+ *     analyst's own context-candle read (`CONTEXT_TIMEFRAME`, `key_points`
+ *     prose only, never direction/confidence), the trader's ATR stop window
+ *     (15) and the volatility-breaker's ATR reading (15) — #742 deliberately
+ *     did not move `TraderConfig.atr_timeframe` or
+ *     `DEFAULT_VOLATILITY_INDICATOR`, so both still read `1h`. 57 is now wider
+ *     than any remaining `1h` consumer needs (the context read only asks for
+ *     20); kept at 57 rather than trimmed, since over-covering a lookback is
+ *     free and under-covering silently degrades a real analyst input.
  *   - `1d`, lookback 30 — the Risk Manager's pairwise-correlation window,
  *     the only `1d` consumer that fires on a real (non-`SimulatedAdapter`)
  *     paper run. It dominates the simulated cost model's `adv_window`
@@ -37,9 +54,10 @@
  *
  * If any of those specs changes, `WARM_START_WINDOWS` needs re-deriving —
  * the full symbol-by-symbol derivation, with file:line citations, is in the
- * #512 PR body rather than pinned here as line numbers that would rot on
- * the next edit to any of those files (see `docs/coding-standards.md`
- * "Comments state invariants, not changelogs").
+ * #512 PR body (and, for the `5m` line, the #742 PR body) rather than pinned
+ * here as line numbers that would rot on the next edit to any of those files
+ * (see `docs/coding-standards.md` "Comments state invariants, not
+ * changelogs").
  *
  * ## Equities / crypto sources, and failover (#496)
  *
@@ -90,6 +108,7 @@
  * overlapping window can never double-write a bar.
  */
 import { DEFAULT_UNIVERSE, type UniverseInstrument } from '../apps/orchestrator/index.js';
+import { WARMUP_5M } from '../pipeline/analysts/technical-analyst.js';
 import {
   AlpacaHttpDataClient,
   type Bar,
@@ -114,7 +133,8 @@ import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
 
 /** See the module doc "The derived timeframe list" above for the citation trail. */
 export const WARM_START_WINDOWS: readonly BarWindow[] = [
-  { timeframe: '1h', lookback: 20 },
+  { timeframe: '5m', lookback: WARMUP_5M },
+  { timeframe: '1h', lookback: 57 },
   { timeframe: '1d', lookback: 30 },
 ];
 

@@ -27,6 +27,7 @@ function makeResult(overrides: Partial<DebateResult> = {}): DebateResult {
     latency_ms: 8000,
     direction: 'bullish',
     debate_id: 'debate-1',
+    bar_timestamp: new Date('2026-07-14T09:00:00Z'),
     ...overrides,
   };
 }
@@ -36,12 +37,10 @@ describe('getContributionsForAttribution', () => {
     const store = new InMemoryDebateLogStore();
     const result = makeResult();
     store.writeLog(
-      buildDebateLog(
-        result,
-        'BTC-USD',
-        new Date('2026-07-14T09:00:00Z'),
-        new Date('2026-07-14T09:00:08Z'),
-      ),
+      // #687: `buildDebateLog` no longer takes a bar — it projects
+      // `result.bar_timestamp`, so the row and the `debate_id` it is keyed by
+      // cannot name different bars.
+      buildDebateLog(result, 'BTC-USD', new Date('2026-07-14T09:00:08Z')),
     );
 
     expect(getContributionsForAttribution(store, 'debate-1')).toEqual(result.contributions);

@@ -98,16 +98,35 @@ export interface TradingCalendar {
    * into an overnight carry against ADR-0014 with nothing logged, which is the
    * same silent-non-flatten failure #670 exists to prevent.
    *
-   * A throw is currently caught by the tick loop's `catch` in
-   * `server/apps/orchestrator/production.ts` (the `trace_id: 'tick-loop'`
-   * handler that logs `tick failed` at `level: 'error'`), which drops that tick
-   * and continues. That is a skipped decision rather than a crash, and it is
-   * only acceptable because it is LOGGED at error level where the heartbeat and
-   * the operator can see it.
+   * There are TWO callers on the money path, they are caught in DIFFERENT
+   * places, and they leave different durable records. Both were verified from
+   * the code, not assumed:
+   *
+   * - `withinFlattenWindow` (`server/pipeline/trader/decide.ts`) runs inside a
+   *   pipeline pass, so a throw lands in `runTickPlan`'s PER-INSTRUMENT `catch`
+   *   (`server/apps/orchestrator/tick-loop.ts`). That logs `instrument failed`
+   *   at `level: 'error'` AND writes an `audit_log` row with
+   *   `stage: 'tick-loop'`, `decision: 'crashed'` (#507). Only that instrument
+   *   is lost, and the fault is durable — it survives the process.
+   * - `withFlattenTail` (`server/apps/orchestrator/production/stocks-tick-window.ts`)
+   *   runs inside `UniverseScheduler.nextTick`, which is called during plan
+   *   construction — BEFORE `runTickPlan` and therefore outside that catch. It
+   *   is caught one level out, by `runOnce`'s `catch` in
+   *   `server/apps/orchestrator/production.ts` (the `trace_id: 'tick-loop'`
+   *   handler that logs `tick failed` at `level: 'error'`). That drops the
+   *   WHOLE tick — crypto included — and writes NO `audit_log` row. The log
+   *   line is the only record.
+   *
+   * Neither is a crash, and both are LOGGED at error level where the heartbeat
+   * and the operator can see them, which is the whole reason the throw is
+   * acceptable. The second is the weaker of the two: wider blast radius, no
+   * durable row. It is tolerable only because `nextTick` consults `sessionEnd`
+   * exclusively when `isOpen(instant)` is already true, so an exhausted forward
+   * walk there needs a calendar that is inconsistent with itself.
    *
    * That is a CROSS-MODULE claim and this port cannot enforce it. It is named
    * here rather than left implicit so the next reader can check it in one grep;
-   * if that handler ever stops catching, or drops to `warn`, this paragraph
+   * if either handler ever stops catching, or drops to `warn`, this paragraph
    * becomes wrong and the flatten path becomes a silent skip. Any new caller on
    * the money path must preserve the property.
    */
@@ -694,7 +713,16 @@ export class LseRegularHoursCalendar implements TradingCalendar {
     );
   }
 
-  /** The next close strictly after `instant` — what the flatten offsets from. */
+  /**
+   * The next REGULAR OR EARLY close strictly after `instant` — what the flatten
+   * offsets from.
+   *
+   * Named the same way as the US calendar's, and for the same reason (#691):
+   * `#closeMinutesFor` returns 12:30 on an LSE half-day, so "the next close" on
+   * its own reads as a constant 16:30 and the flatten offset must ride the
+   * early close instead. #715 corrected the US docblock and left this one, and
+   * the LSE leg is the one that trades live (ADR-0015).
+   */
   sessionEnd(instant: Date): Date | null {
     let civilDate = toCivilDate(instant, LONDON_ZONE);
 

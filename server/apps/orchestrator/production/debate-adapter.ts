@@ -57,10 +57,11 @@
  * was constructed in `production.ts` and called by nothing, so a live paper run
  * of fully converged debates left the table at zero rows and
  * `feedback-loop/attribution.ts` with no input at all. The write belongs here
- * rather than in `tick-runner.ts` because this is the only place that holds
- * BOTH the resolved `DebateResult` and the exact `bar` that went into its
- * `debate_id` hash — the tick runner would have to call `clock.now()` a second
- * time and would stamp the row with a bar the id does not encode. See
+ * because this is where the row's inputs are: the resolved `DebateResult`, the
+ * instrument, the trace id and the clock. The bar is no longer among those
+ * reasons — since #687 it rides on `DebateResult.bar_timestamp`, so
+ * `buildDebateLog` projects it off the result and no caller can stamp a row
+ * with a bar the `debate_id` does not encode. See
  * `persistDebateLog` for what is written when a debate does not converge, and
  * what is deliberately not written when one fails partway.
  */
@@ -82,7 +83,6 @@ import {
   type DebaterPersona,
   detectDisagreements,
   enforceLatencyBudget,
-  floorToBar,
   JsonDebateLogger,
   MAX_ROUNDS,
   MAX_ROUNDS_BY_ASSET_CLASS,
@@ -381,12 +381,11 @@ function persistDebateLog(params: {
   store: DebateLogStore;
   result: DebateResult;
   instrument: string;
-  bar: Date;
   clock: Clock;
   trace_id: string;
   logger: Logger | undefined;
 }): DebateLog | undefined {
-  const { store, result, instrument, bar, clock, trace_id, logger } = params;
+  const { store, result, instrument, clock, trace_id, logger } = params;
 
   const winner = store.getByDebateId(result.debate_id);
   if (winner !== undefined) {
@@ -418,7 +417,7 @@ function persistDebateLog(params: {
   // within the same bar carries a FRESH trace against the same content-hashed
   // `debate_id` and must not overwrite the attribution of the debate it did
   // not run.
-  store.writeLog(buildDebateLog(result, instrument, bar, clock.now(), trace_id));
+  store.writeLog(buildDebateLog(result, instrument, clock.now(), trace_id));
 
   return undefined;
 }
@@ -487,7 +486,11 @@ export function worstCaseLlmCallsForAssetClass(assetClass: AssetClass): number {
  * `accumulateCredit` cannot distinguish from a real debate in which no analyst
  * took a stance.
  */
-export function rateLimitedDebateResult(debate_id: string, reason: string): DebateResult {
+export function rateLimitedDebateResult(
+  debate_id: string,
+  bar: Date,
+  reason: string,
+): DebateResult {
   return {
     synthesis: `Debate not started: ${reason}`,
     position: 'No position — the debate was not admitted under the LLM rate-limit budget.',
@@ -500,6 +503,11 @@ export function rateLimitedDebateResult(debate_id: string, reason: string): Deba
     latency_ms: 0,
     direction: 'neutral',
     debate_id,
+    // The bar this tick belongs to, even though no debate ran (#687). The
+    // Trader short-circuits on `confidence: 0` and never keys an order off it,
+    // but the field is required by the contract precisely so that no producer
+    // gets to leave the coordinate unstated for a later consumer to re-derive.
+    bar_timestamp: bar,
     rate_limited: { reason },
   };
 }
@@ -515,9 +523,13 @@ export function rateLimitedDebateResult(debate_id: string, reason: string): Deba
  * already understands as "the debate was not admitted"; the reason string is
  * what distinguishes them.
  */
-export function spendCappedDebateResult(debate_id: string, reason: string): DebateResult {
+export function spendCappedDebateResult(
+  debate_id: string,
+  bar: Date,
+  reason: string,
+): DebateResult {
   return {
-    ...rateLimitedDebateResult(debate_id, reason),
+    ...rateLimitedDebateResult(debate_id, bar, reason),
     position: 'No position — the debate was not admitted under the LLM spend cap.',
   };
 }
@@ -565,6 +577,12 @@ export function replayedDebateResult(persisted: ReplayableDebateLog): DebateResu
     latency_ms: 0,
     direction: persisted.direction,
     debate_id: persisted.debate_id,
+    // Read off the ROW, exactly like `debate_id` above and for the same reason
+    // (#687). This is the case a re-derivation gets wrong most cheaply: the row
+    // was written in bar N, this replay may be serving a tick minutes later —
+    // including a tick after a process restart — and the intent must be keyed
+    // to the bar the row records, not to whenever the replay happened to run.
+    bar_timestamp: persisted.bar_timestamp,
   };
 }
 
@@ -642,19 +660,52 @@ export function buildDebateStep(
    */
   analystWeights?: AnalystWeightSource,
 ): TickSteps['debate'] {
-  return async ({ trace_id, instrument, asset_class, views, clock }) => {
-    // Hoisted out of the `runDebate` call: the SAME `Date` must go into
-    // `debate_id`'s hash and into the row's `bar_timestamp`, or the row
-    // claims a bar coordinate its own primary key does not encode.
+  /**
+   * The debate each bar RESOLVED to, per instrument (#743, closing #781's
+   * within-process exposure): opening-boundary epoch ms → the `debate_id` a
+   * completed pass produced for that bar.
+   *
+   * The #617 short-circuit below is CONTENT-addressed — it hashes the analyst
+   * views — and its correctness premise ("views are byte-identical within one
+   * bar") held only while every analyst read 1h bars. #742 moved the technical
+   * read to 5m bars, so re-computed views drift WITHIN a debate bar and the
+   * content hash misses. The tick/decision split is the structural fix (views
+   * are computed once per bar, so the hash is stable per bar by construction);
+   * this memo is the belt under that suspender: even if the decision gate
+   * re-enters a bar — a forced-open gate in a mutation test, a rescinded claim
+   * retried after a crash that had already persisted its row — the bar's
+   * resolved `debate_id` is remembered and its PERSISTED row replayed, so the
+   * Trader can never receive a second confidence sample for the same bar from
+   * this step.
+   *
+   * It dedupes on the SAME key the #617 fix uses — the `debate_id`, resolved
+   * through the same `getByDebateId`/`isReplayable` pair — not on a second
+   * notion of "new bar": the memo only remembers WHICH id the bar produced,
+   * and the row itself remains the single source of the replayed content.
+   *
+   * In-memory and restart-clean, deliberately: `DebateLogStore` exposes no
+   * by-bar lookup (`ports.ts` — `writeLog`/`getByDebateId` only), so a
+   * restart mid-bar re-runs the analysts once and, if their views drifted
+   * across the restart, pays for one fresh debate. That residual window is
+   * recorded on #781; widening the store port to close it is not this
+   * change's call to make.
+   */
+  const resolvedBarByInstrument = new Map<string, { barMs: number; debate_id: string }>();
+
+  return async ({ trace_id, instrument, asset_class, views, clock, bar }) => {
+    // The SAME `Date` must go into `debate_id`'s hash and into the row's
+    // `bar_timestamp`, or the row claims a bar coordinate its own primary key
+    // does not encode.
     //
-    // FLOORED as of #393. It used to be `clock.now()` raw, so a tick at
-    // 14:32:07 wrote `bar_timestamp = 14:32:07` — the tick time, which is what
-    // `created_at` already means. A replay stepping bars advances the clock TO
-    // a bar close and would look up 14:30:00, missing every live row, so
-    // replay-from-log (ADR-0003 §2) could not find the output it is required
-    // to replay instead of re-calling the LLM. See `floorToBar` for why the
-    // timeframe is an hour and not the tick cadence.
-    const bar = floorToBar(clock.now());
+    // INHERITED as of #743, not floored here. This step used to floor its own
+    // `clock.now()` (#393), which was a SECOND derivation of the bar: the
+    // decision gate had already floored the tick time to decide this pass
+    // should debate at all, and two clock reads agree only while both land in
+    // the same bar (#687's defect shape, one seam up). The gate is now the
+    // single source — `TickContext.decision_bar.open_time`, threaded through
+    // `TickSteps.debate`'s `bar` — so a debate straddling a bar boundary
+    // stays keyed to the bar the gate opened. See `floorToBar` for why the
+    // grid is an hour and not the tick cadence.
     // Computed here, ahead of the debate, rather than read off the eventual
     // `DebateResult` (#326): the personas need it to attribute their spend
     // rows while the debate is still running, and a debate that THROWS partway
@@ -663,16 +714,48 @@ export function buildDebateStep(
     // from the id on the resulting row — asserted in debate-adapter.test.ts.
     const debate_id = computeDebateId(instrument, bar, views);
 
+    // SAME-BAR MEMO (#743) — see `resolvedBarByInstrument`. Checked before the
+    // content gate below because it is immune to the view drift #742
+    // introduced: if THIS bar already resolved to a debate, that debate's
+    // persisted row is the answer regardless of what freshly-computed views
+    // would hash to. Falls through when the remembered row is not replayable
+    // (pre-0026 rows), exactly as the content gate does.
+    const resolved = resolvedBarByInstrument.get(instrument);
+    if (resolved !== undefined && resolved.barMs === bar.getTime()) {
+      const remembered = debateLog.getByDebateId(resolved.debate_id);
+      if (isReplayable(remembered)) {
+        logger?.log({
+          trace_id,
+          stage: 'debate',
+          level: 'info',
+          message:
+            `debate: ${instrument} replayed from debate_log for debate_id ` +
+            `${resolved.debate_id} — this bar already resolved to a debate this process ran, ` +
+            'so a fresh run would hand the Trader a second confidence sample for the same bar ' +
+            '(#617/#781). No LLM call was made.',
+          payload: { instrument, asset_class, debate_id: resolved.debate_id, replayed: true },
+        });
+        return replayedDebateResult(remembered);
+      }
+    }
+
     // SAME-BAR SHORT-CIRCUIT (#617), before the spend cap, the rate limiter and
     // every LLM call.
     //
-    // The orchestrator ticks every 15 minutes; debates are keyed to 1h bars. All
-    // three `debate_id` inputs are bar-keyed — instrument, the floored bar, and
-    // the analyst views, which are DETERMINISTIC functions of closed bars (there
-    // is no LLM client in `pipeline/analysts/`; `key_points` are templated
-    // numeric strings and a constant NO_DATA line). So 3 of every 4 ticks used to
-    // recompute the same id, re-run a full debate, and discard it at the write:
-    // 29 of 40 debates in the soak's first five hours warned on the duplicate.
+    // The orchestrator ticks every 2 minutes (`paperStartingProfile
+    // .tickIntervalMs`, ADR-0008 §2 as amended — this comment said 15 minutes
+    // long after #670 retuned it); debates are keyed to 1h bars, and since the
+    // tick/decision split (#743) this step runs at most once per bar anyway,
+    // so this gate's remaining production work is the crash-retry and
+    // restart-within-a-bar cases. All three `debate_id` inputs are bar-keyed —
+    // instrument, the gate's floored bar, and the analyst views, which are
+    // DETERMINISTIC functions of closed bars (there is no LLM client in
+    // `pipeline/analysts/`; `key_points` are templated numeric strings and a
+    // constant NO_DATA line). Before the split, every non-first tick of a bar
+    // recomputed the same id, re-ran a full debate, and discarded it at the
+    // write: 29 of 40 debates in the soak's first five hours warned on the
+    // duplicate. NOTE #742 weakened the determinism premise WITHIN a bar (the
+    // technical read is 5m now), which is what the memo above exists for.
     //
     // Two things were wrong with that, and cost was the smaller one. `debate_log`
     // kept tick 1's row while the Trader sized on tick N's confidence, so the
@@ -698,6 +781,10 @@ export function buildDebateStep(
     // partial row would otherwise replay as a fabricated empty debate.
     const persisted = debateLog.getByDebateId(debate_id);
     if (isReplayable(persisted)) {
+      // The bar resolved to this id (a restart's first tick landing on a row a
+      // previous process wrote) — remember it, so subsequent same-bar entries
+      // stop depending on the views hashing identically (#743).
+      resolvedBarByInstrument.set(instrument, { barMs: bar.getTime(), debate_id });
       logger?.log({
         trace_id,
         stage: 'debate',
@@ -762,7 +849,7 @@ export function buildDebateStep(
           budget_usd: spend.budget_usd,
         },
       });
-      return spendCappedDebateResult(debate_id, spend.reason ?? 'spend cap reached');
+      return spendCappedDebateResult(debate_id, bar, spend.reason ?? 'spend cap reached');
     }
 
     const reservation = rateLimiter.reserve(
@@ -781,7 +868,7 @@ export function buildDebateStep(
           "universe's real debate rate, not that the market is quiet.",
         payload: { instrument, asset_class, debate_id },
       });
-      return rateLimitedDebateResult(debate_id, reservation.reason);
+      return rateLimitedDebateResult(debate_id, bar, reservation.reason);
     }
 
     // METERING, per call, for the debate just admitted. Wrapped here rather
@@ -828,6 +915,9 @@ export function buildDebateStep(
         assetClass: asset_class,
         trace_id,
         debate_id,
+        // The same floored read that produced `debate_id`, so a timed-out
+        // debate's fallback result names the bar it was taken in (#687).
+        bar,
         produceResult: (signal) =>
           runDebate({ views, instrument, bar }, personas, {
             signal,
@@ -868,11 +958,16 @@ export function buildDebateStep(
       store: debateLog,
       result: weighted,
       instrument,
-      bar,
       clock,
       trace_id,
       logger,
     });
+
+    // The bar has RESOLVED — to this run's row, or to the racer's row it lost
+    // to (same `debate_id` either way, since a race is by definition the same
+    // id). Recorded after the write so a debate that THREW never marks its bar
+    // resolved, leaving the crash-retry path open (#743).
+    resolvedBarByInstrument.set(instrument, { barMs: bar.getTime(), debate_id });
 
     // Lost the write race: another writer already owns this `debate_id`'s row.
     // Return THEIR row, so the Trader sizes on the same bytes the Feedback Loop

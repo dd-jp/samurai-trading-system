@@ -32,7 +32,7 @@ Wayfinder map [#224](../../issues/224) charted six related open tickets to recon
 ## Consequences
 
 - `docs/specs/orchestrator-spec.md` gains a "Module: Production Composition Root" section describing `production.ts`'s shape and a corresponding user-story block and testing decision.
-- #74 stays open and out of scope for the first paper run; tracked as its own fast-follow ticket.
+- #74 stayed open and out of scope for the first paper run at the time of this decision; it has since shipped and closed (2026-08-06) as its own fast-follow, and `trader-spec.md`/`orchestrator-spec.md` now describe the fuller position-aware routing as delivered, not deferred.
 - The stale doc comment in `server/apps/orchestrator/index.ts` (citing #83/#86/#71 as blockers) is corrected when `production.ts` is implemented, not by this ADR — this ADR is a docs-only decision record; the code change is a `/to-tickets` implementation ticket.
 - Unblocks `/to-tickets` for the `production.ts` implementation ticket and the 14-day-soak follow-on ticket.
 

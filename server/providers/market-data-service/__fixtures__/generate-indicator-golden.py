@@ -43,9 +43,12 @@ has to name its convention rather than trust a library.
 Three behaviours here are conventions, not mathematics, and the goldens exist
 to make a change to any of them a failing test rather than a silent reprice:
 
-  1. `avgLoss == 0` returns 100. On a strictly rising window that is the
-     standard answer. On a DEAD FLAT window it is also 100 — see the
-     `flat_*` cases, which are in the fixture on purpose.
+  1. `avgLoss == 0` returns 100, UNLESS `avgGain` is also 0, in which case it
+     returns 50 (#725). On a strictly rising window (`avgGain > 0`) 100 is
+     the standard answer. On a DEAD FLAT window — every change zero, both
+     averages 0 — `0/0` is not "maximum strength going up", it is "no
+     information", so it takes 50, the neutral midpoint — see the `flat_*`
+     cases, which are in the fixture on purpose.
   2. Recursive kinds (`ema`, `rsi`, `atr`) depend on the WHOLE window, not
      just the last `period` bars, so `lookback` is a real input: the same
      `period` over a longer warm-up is a different number. The
@@ -206,9 +209,14 @@ def ema_series(closes, period):
 
 
 def _rsi_from(avg_gain, avg_loss):
-    # The convention, stated where it happens: no down-moves in the smoothed
-    # average means RSI 100, INCLUDING the case where there were no up-moves
-    # either. A dead-flat window reads as maximally overbought.
+    # The convention, stated where it happens (#725, `indicators.ts`'s `rsi`).
+    # `avg_gain == 0 and avg_loss == 0` is checked FIRST and separately: a
+    # dead-flat window — every change zero — is "no information", not
+    # "maximally overbought", so it answers the neutral midpoint 50 rather
+    # than falling into the `avg_loss == 0` branch below. That branch still
+    # answers 100 for a strictly rising window, where `avg_gain > 0`.
+    if avg_gain == 0 and avg_loss == 0:
+        return 50.0
     if avg_loss == 0:
         return 100.0
     rs = avg_gain / avg_loss
@@ -276,6 +284,210 @@ def atr_series(bars, period):
     return out
 
 
+# --- #744 additions: atr_pct, macd_histogram, adx, donchian_pos, bb_kc_squeeze
+#
+# Same independence discipline as the four references above: each is a
+# full-series per-bar recurrence, written from the same published
+# definitions `indicators.ts` implements, not a transcription of it. These
+# reuse `atr_series` above (already independent) rather than re-deriving true
+# range a third time.
+
+
+def atr_pct_series(bars, period):
+    atr_vals = atr_series(bars, period)
+    out = [None] * len(bars)
+    for i, value in enumerate(atr_vals):
+        if value is None:
+            continue
+        close = bars[i]["close"]
+        out[i] = 0.0 if close == 0 else (value / close) * 100.0
+    return out
+
+
+def donchian_pos_series(bars, period):
+    out = [None] * len(bars)
+    for i in range(period - 1, len(bars)):
+        window = bars[i - period + 1 : i + 1]
+        highest_high = max(b["high"] for b in window)
+        lowest_low = min(b["low"] for b in window)
+        rng = highest_high - lowest_low
+        close = bars[i]["close"]
+        out[i] = 0.5 if rng == 0 else (close - lowest_low) / rng
+    return out
+
+
+def adx_series(bars, period):
+    """Wilder's ADX, accumulation-form smoothing (matches `adxValue` in
+    indicators.ts — see its doc comment for why the accumulation form and
+    the mean form agree on DI/DX/ADX)."""
+    n = len(bars)
+    plus_dm = [None]
+    minus_dm = [None]
+    trs = [None]
+    for i in range(1, n):
+        up = bars[i]["high"] - bars[i - 1]["high"]
+        down = bars[i - 1]["low"] - bars[i]["low"]
+        plus_dm.append(up if (up > down and up > 0) else 0.0)
+        minus_dm.append(down if (down > up and down > 0) else 0.0)
+        trs.append(
+            max(
+                bars[i]["high"] - bars[i]["low"],
+                abs(bars[i]["high"] - bars[i - 1]["close"]),
+                abs(bars[i]["low"] - bars[i - 1]["close"]),
+            )
+        )
+
+    out = [None] * n
+    if n < 2 * period:
+        return out
+
+    def window_sum(values, a, b):
+        return sum(values[k] for k in range(a, b))
+
+    smoothed_tr = window_sum(trs, 1, period + 1)
+    smoothed_plus = window_sum(plus_dm, 1, period + 1)
+    smoothed_minus = window_sum(minus_dm, 1, period + 1)
+
+    def di_plus():
+        return 0.0 if smoothed_tr == 0 else 100.0 * smoothed_plus / smoothed_tr
+
+    def di_minus():
+        return 0.0 if smoothed_tr == 0 else 100.0 * smoothed_minus / smoothed_tr
+
+    def dx_from(plus, minus):
+        return 0.0 if (plus + minus) == 0 else 100.0 * abs(plus - minus) / (plus + minus)
+
+    # dxs[0] is the DX at bar index `period` (the first fully-smoothed one).
+    dxs = [dx_from(di_plus(), di_minus())]
+    for i in range(period + 1, n):
+        smoothed_tr = smoothed_tr - smoothed_tr / period + trs[i]
+        smoothed_plus = smoothed_plus - smoothed_plus / period + plus_dm[i]
+        smoothed_minus = smoothed_minus - smoothed_minus / period + minus_dm[i]
+        dxs.append(dx_from(di_plus(), di_minus()))
+
+    # ADX seeds on the simple mean of the first `period` DX values, which
+    # land at bar index `2 * period - 1`; then folds the remainder.
+    seed = dxs[0:period]
+    adx_value = sum(seed) / period
+    out[2 * period - 1] = adx_value
+    bar_index = 2 * period
+    for dx in dxs[period:]:
+        adx_value = (adx_value * (period - 1) + dx) / period
+        out[bar_index] = adx_value
+        bar_index += 1
+    return out
+
+
+def macd_histogram_series(closes, fast, slow, signal):
+    n = len(closes)
+
+    def ema_series_full(values, period):
+        out = [None] * len(values)
+        if len(values) < period:
+            return out
+        alpha = 2.0 / (period + 1)
+        value = sum(values[0:period]) / period
+        out[period - 1] = value
+        for i in range(period, len(values)):
+            value = values[i] * alpha + value * (1.0 - alpha)
+            out[i] = value
+        return out
+
+    fast_series = ema_series_full(closes, fast)
+    slow_series = ema_series_full(closes, slow)
+    start = max(fast, slow) - 1
+
+    macd_line = [None] * n
+    for i in range(start, n):
+        if fast_series[i] is None or slow_series[i] is None:
+            continue
+        macd_line[i] = fast_series[i] - slow_series[i]
+
+    values = [macd_line[i] for i in range(start, n)]
+    out = [None] * n
+    if len(values) < signal:
+        return out
+
+    sig_alpha = 2.0 / (signal + 1)
+    sig_value = sum(values[0:signal]) / signal
+    out[start + signal - 1] = macd_line[start + signal - 1] - sig_value
+    for k in range(signal, len(values)):
+        point = values[k]
+        sig_value = point * sig_alpha + sig_value * (1.0 - sig_alpha)
+        idx = start + k
+        out[idx] = macd_line[idx] - sig_value
+    return out
+
+
+def bb_kc_squeeze_series(bars, bb_period, bb_mult, kc_period, kc_mult):
+    """BB width vs KC width. Only the ATR half of Keltner matters to a WIDTH
+    ratio — the midlines (SMA vs EMA) cancel out of `upper - lower` — so this
+    reuses `atr_series` and never computes a Keltner EMA at all, matching
+    `bbKcSqueezeValue` in indicators.ts."""
+    closes = [b["close"] for b in bars]
+    n = len(bars)
+    atr_vals = atr_series(bars, kc_period)
+    out = [None] * n
+
+    for i in range(bb_period - 1, n):
+        window = closes[i - bb_period + 1 : i + 1]
+        mean = sum(window) / bb_period
+        variance = sum((v - mean) ** 2 for v in window) / bb_period
+        bb_width = 2 * bb_mult * (variance**0.5)
+
+        atr_value = atr_vals[i]
+        if atr_value is None:
+            continue
+        kc_width = 2 * kc_mult * atr_value
+        out[i] = 1.0 if kc_width == 0 else bb_width / kc_width
+
+    return out
+
+
+def minimum_bars_for_params(indicator, params):
+    """Mirrors each #744 row's `minimumBars(spec)` in indicators.ts. Duplicated
+    deliberately, same reasoning as `minimum_bars_for` above."""
+    if indicator == "atr_pct":
+        return params["period"] + 1
+    if indicator == "donchian_pos":
+        return params["period"]
+    if indicator == "adx":
+        return 2 * params["period"]
+    if indicator == "macd_histogram":
+        return max(params["fast"], params["slow"]) + params["signal"] - 1
+    if indicator == "bb_kc_squeeze":
+        return max(params["bb_period"], params["kc_period"] + 1)
+    raise ValueError("unsupported params-indicator: %s" % indicator)
+
+
+def reference_params(bars, indicator, params):
+    """The value `computeIndicator(bars, spec)` must return for this window,
+    for the five #744 kinds — the multi-parameter analogue of `reference`."""
+    closes = [b["close"] for b in bars]
+    if indicator == "atr_pct":
+        series = atr_pct_series(bars, params["period"])
+    elif indicator == "donchian_pos":
+        series = donchian_pos_series(bars, params["period"])
+    elif indicator == "adx":
+        series = adx_series(bars, params["period"])
+    elif indicator == "macd_histogram":
+        series = macd_histogram_series(closes, params["fast"], params["slow"], params["signal"])
+    elif indicator == "bb_kc_squeeze":
+        series = bb_kc_squeeze_series(
+            bars, params["bb_period"], params["bb_mult"], params["kc_period"], params["kc_mult"]
+        )
+    else:
+        raise ValueError("unsupported params-indicator: %s" % indicator)
+
+    value = series[-1]
+    if value is None:
+        raise ValueError(
+            "window of %d bars is too short for %s(%r) — a case must not ask for "
+            "a value the reference itself declines to produce" % (len(bars), indicator, params)
+        )
+    return value
+
+
 def reference(bars, indicator, period):
     """The value `computeIndicator(bars, spec)` must return for this window:
     the last element of the series, i.e. the value at the newest bar."""
@@ -323,6 +535,22 @@ def build_cases():
                 "name": name,
                 "indicator": indicator,
                 "period": period,
+                "from": frm,
+                "to": to,
+                "note": note,
+            }
+        )
+
+    def case_params(name, indicator, params, frm, to, note):
+        # #744's multi-parameter kinds and their single-`period` siblings
+        # alike get a `"params"` dict rather than a scalar `"period"` key —
+        # additive on the schema (existing cases above are untouched) so a
+        # `git diff` on this fixture shows only what #744 actually added.
+        cases.append(
+            {
+                "name": name,
+                "indicator": indicator,
+                "params": params,
                 "from": frm,
                 "to": to,
                 "note": note,
@@ -404,7 +632,17 @@ def build_cases():
         14,
         240,
         260,
-        "high == low == open == close: RSI reads 100 on a market that has not moved",
+        "high == low == open == close: avgGain == avgLoss == 0, RSI reads the "
+        "neutral midpoint 50 rather than the 100 a strictly rising window gets (#725)",
+    )
+    case(
+        "flat_dojis_rsi_5",
+        "rsi",
+        5,
+        240,
+        260,
+        "same dead-flat segment, a different period: RSI 50 on a halted/auction "
+        "tape does not depend on which period asked for it (#725)",
     )
     case(
         "flat_dojis_atr_14",
@@ -450,6 +688,138 @@ def build_cases():
         "period 14 inside a 120-bar window — only the trailing 14 closes may matter",
     )
 
+    # --- #744 additions ------------------------------------------------------
+
+    # The ordinary case for each new kind, at a realistic parameter set, over
+    # a fully warmed 400-bar window — same shape as `full_window_%s_14` above.
+    case_params(
+        "full_window_atr_pct_14",
+        "atr_pct",
+        {"period": 14},
+        0,
+        BAR_COUNT,
+        "the shipped period over a fully warmed window",
+    )
+    case_params(
+        "full_window_donchian_pos_14",
+        "donchian_pos",
+        {"period": 14},
+        0,
+        BAR_COUNT,
+        "the shipped period over a fully warmed window",
+    )
+    case_params(
+        "full_window_adx_14",
+        "adx",
+        {"period": 14},
+        0,
+        BAR_COUNT,
+        "the shipped period over a fully warmed window",
+    )
+    case_params(
+        "full_window_macd_histogram_12_26_9",
+        "macd_histogram",
+        {"fast": 12, "slow": 26, "signal": 9},
+        0,
+        BAR_COUNT,
+        "the canonical 12/26/9 over a fully warmed window",
+    )
+    case_params(
+        "full_window_bb_kc_squeeze_20_20",
+        "bb_kc_squeeze",
+        {"bb_period": 20, "bb_mult": 2, "kc_period": 20, "kc_mult": 1.5},
+        0,
+        BAR_COUNT,
+        "the canonical 20/20 over a fully warmed window",
+    )
+
+    # Exactly `minimumBarsFor` for each new kind — the boundary a self-
+    # referential test could never assert, same reasoning as `boundary_%s_14`.
+    for name, indicator, params in (
+        ("boundary_atr_pct_14", "atr_pct", {"period": 14}),
+        ("boundary_donchian_pos_14", "donchian_pos", {"period": 14}),
+        ("boundary_adx_14", "adx", {"period": 14}),
+        (
+            "boundary_macd_histogram_12_26_9",
+            "macd_histogram",
+            {"fast": 12, "slow": 26, "signal": 9},
+        ),
+        (
+            "boundary_bb_kc_squeeze_20_20",
+            "bb_kc_squeeze",
+            {"bb_period": 20, "bb_mult": 2, "kc_period": 20, "kc_mult": 1.5},
+        ),
+    ):
+        need = minimum_bars_for_params(indicator, params)
+        case_params(
+            name,
+            indicator,
+            params,
+            BAR_COUNT - need,
+            BAR_COUNT,
+            "exactly minimumBarsFor(%s, %r) = %d bars — one fewer must throw"
+            % (indicator, params, need),
+        )
+
+    # Degenerate segments, small periods so they fit inside the 20-bar flat
+    # segment (240-259) — `adx`(14)/`macd_histogram`(12,26,9)/`bb_kc_squeeze`
+    # (20,20) all need far more than 20 bars, so these use smaller parameter
+    # sets purely to land inside the flat window; the shipped periods above
+    # already cover the ordinary case.
+    case_params(
+        "flat_dojis_donchian_pos_14",
+        "donchian_pos",
+        {"period": 14},
+        240,
+        260,
+        "high == low == open == close throughout: upper == lower, the degenerate "
+        "denominator this ticket's acceptance criteria name — answers the neutral 0.5",
+    )
+    case_params(
+        "flat_dojis_adx_5",
+        "adx",
+        {"period": 5},
+        240,
+        260,
+        "zero true range throughout: DI+/DI-/DX/ADX all read 0 rather than NaN",
+    )
+    case_params(
+        "flat_dojis_macd_histogram_3_6_3",
+        "macd_histogram",
+        {"fast": 3, "slow": 6, "signal": 3},
+        240,
+        260,
+        "constant closes: every EMA equals the constant, histogram is exactly 0",
+    )
+    case_params(
+        "flat_dojis_bb_kc_squeeze_6_6",
+        "bb_kc_squeeze",
+        {"bb_period": 6, "bb_mult": 2, "kc_period": 6, "kc_mult": 1.5},
+        240,
+        260,
+        "kcWidth == 0 (zero ATR): the degenerate denominator this ticket's acceptance "
+        "criteria name — answers the neutral 1 rather than Infinity",
+    )
+
+    # Gapping segment — exercises the prev-close TR legs for the two new
+    # kinds that consume true range (`adx` via +DM/-DM/TR, `atr_pct` via `atr`).
+    case_params(
+        "gapping_adx_14",
+        "adx",
+        {"period": 14},
+        260,
+        BAR_COUNT,
+        "opens gap past the prior close, exercising the prev-close TR legs inside +DM/-DM/TR",
+    )
+    case_params(
+        "gapping_atr_pct_14",
+        "atr_pct",
+        {"period": 14},
+        260,
+        BAR_COUNT,
+        "opens gap past the prior close, same TR legs as gapping_atr_14 scaled by close",
+    )
+
     return cases
 
 
@@ -459,18 +829,30 @@ def main():
 
     for case in cases:
         window = bars[case["from"] : case["to"]]
-        need = minimum_bars_for(case["indicator"], case["period"])
-        if len(window) < need:
-            raise ValueError(
-                "case %s asks for %s(%d) over %d bars but needs %d"
-                % (case["name"], case["indicator"], case["period"], len(window), need)
-            )
+        # `"params"` (#744's dict-shaped cases) vs the original scalar
+        # `"period"` — additive dispatch, see `case_params`'s comment.
+        if "params" in case:
+            need = minimum_bars_for_params(case["indicator"], case["params"])
+            if len(window) < need:
+                raise ValueError(
+                    "case %s asks for %s(%r) over %d bars but needs %d"
+                    % (case["name"], case["indicator"], case["params"], len(window), need)
+                )
+            value = reference_params(window, case["indicator"], case["params"])
+        else:
+            need = minimum_bars_for(case["indicator"], case["period"])
+            if len(window) < need:
+                raise ValueError(
+                    "case %s asks for %s(%d) over %d bars but needs %d"
+                    % (case["name"], case["indicator"], case["period"], len(window), need)
+                )
+            value = reference(window, case["indicator"], case["period"])
         # 8 decimal places, matching ROUNDING_PRECISION in indicators.ts. The
         # TypeScript side compares with a tolerance of half a unit in that last
         # place rather than for equality: the reference accumulates in a
         # different order by design, so a last-bit difference is expected and a
         # difference above the rounding precision is the finding.
-        case["expected"] = float("%.8f" % reference(window, case["indicator"], case["period"]))
+        case["expected"] = float("%.8f" % value)
 
     out = {
         "_comment": (

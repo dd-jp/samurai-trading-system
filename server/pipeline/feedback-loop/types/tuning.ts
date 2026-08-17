@@ -1,5 +1,5 @@
 /**
- * The tunable dials and the proposal/approval path that moves them (#308).
+ * The tunable dials and the proposal path that moves them (#308).
  *
  * Split out of the single `feedback-loop/types.ts` so that adding a dial does
  * not dirty the file the metrics and kill-line consumers import. `types.ts`
@@ -27,11 +27,12 @@ export interface TunableDial {
    * for `max_position_size` tightening means decreasing, for
    * `min_viable_size` it means increasing.
    *
-   * For a RISK THRESHOLD this is the gate — moving against it requires human
-   * approval (feedback-loop-spec.md story 7). For a STRATEGY PARAM it is
-   * descriptive only: it labels the emitted `param_updates[].direction`,
-   * which the spec's `DailyCycleResult` requires on every entry, but strategy
-   * params tune freely within bounds and are never gated.
+   * For a RISK THRESHOLD it classifies the move: a move against it is a
+   * LOOSENING, which is applied like any other (ADR-0013 Decision 2, #736 —
+   * it used to wait on human approval) but is the one kind of move announced
+   * on `LoosenNotificationChannel`. For a STRATEGY PARAM it is descriptive
+   * only: it labels the emitted `param_updates[].direction`, which the spec's
+   * `DailyCycleResult` requires on every entry.
    */
   tighten_is: 'increase' | 'decrease';
 }
@@ -55,7 +56,12 @@ export interface FeedbackConfig {
    */
   /** Per strategy-param bounds, keyed by param name. Tuned freely inside them. */
   strategy_params: Record<string, TunableDial>;
-  /** Per risk-threshold bounds, keyed by threshold name. Loosening is gated. */
+  /**
+   * Per risk-threshold bounds, keyed by threshold name. Tuned inside them in
+   * both directions — and a loosening is additionally refused by the in-code
+   * clamp (`server/shared/threshold-bounds.ts`) if the bounded value would
+   * cross a guarded threshold's research-mandated line.
+   */
   risk_thresholds: Record<string, TunableDial>;
   /** Kill-line config for `computeMetrics`'s breach detection (#93). */
   kill_thresholds: KillThresholds;
@@ -81,30 +87,45 @@ export interface TuningProposal {
 }
 
 /**
- * Approval seam for gated risk-threshold loosening.
+ * Notification seam for an APPLIED risk-threshold loosening.
+ *
+ * This was `LoosenApprovalChannel`, and the rename is the point of #736. Under
+ * [ADR-0013](../../../../docs/adr/0013-no-human-gate-anywhere.md) Decision 2
+ * the cycle applies a loosening itself, clamped to the hard bounds; nothing
+ * waits on a human and nothing in this repo could deliver a human's answer
+ * anyway (`alert-transport.ts` never calls `client.start()`, because
+ * Telegram's `getUpdates` is single-consumer per bot token). A port named
+ * "approval" whose `void` return could never carry consent was the exact
+ * defect ADR-0013 names: "a mechanism that looks enforced and enforces
+ * nothing."
+ *
+ * What it does NOT become is deleted. A dial that moves itself has to say so:
+ * this is now the operator's only notice that a safety limit was relaxed, and
+ * it is sent AFTER the write, describing what happened rather than asking
+ * whether it may.
  *
  * Deliberately NOT Verdict's `ApprovalChannel` (server/pipeline/verdict/types.ts): that
  * port's `ApprovalRequest` is order-shaped (`order_intent`, `risk_decision`)
- * and cannot describe a threshold move. Same trade channel, different
- * request shape.
+ * and cannot describe a threshold move. Same trade channel, different shape.
  *
- * Fire-and-forget by design: `runDailyCycle` is synchronous per the spec, so
- * a loosening is queued into `loosen_pending_approval` and never applied by
- * the cycle that proposed it. Acting on the human's answer is a later
- * cycle's job (or a later ticket's) — the loop can never relax its own
- * safety limits unsupervised.
+ * Fire-and-forget: `runDailyCycle` is synchronous per the spec, so the send is
+ * started and not awaited. A notice that fails to deliver does NOT roll the
+ * move back — the dial has already moved, and the honest failure mode is an
+ * applied change the operator was not told about, logged at `error` by the
+ * adapter. Tightenings are not announced; only relaxations are, because only
+ * a relaxation widens what the system may lose.
  */
-export interface LoosenApprovalChannel {
-  requestLoosenApproval(request: LoosenApprovalRequest): void;
+export interface LoosenNotificationChannel {
+  notifyLoosenApplied(notice: LoosenAppliedNotice): void;
 }
 
-export interface LoosenApprovalRequest {
+export interface LoosenAppliedNotice {
   /** Risk-threshold name, as keyed in `FeedbackConfig.risk_thresholds`. */
   name: string;
   from: number;
-  /** The bounded value that WOULD be written if a human approves — not the raw target. */
+  /** The bounded value actually written — not the raw target. */
   to: number;
-  requested_at: Date;
+  applied_at: Date;
 }
 
 /**
@@ -122,7 +143,7 @@ export interface Adjustment {
   direction: 'tighten' | 'loosen';
   /** `clock.now()` of the cycle that applied it. */
   applied_at: Date;
-  /** Machine-readable cause, e.g. 'attribution', 'proposal', 'proposal:backtest_auto_approved'. */
+  /** Machine-readable cause, e.g. 'attribution', 'proposal', 'breach_auto_tighten'. */
   reason: string;
 }
 
@@ -132,15 +153,20 @@ export interface AdjustmentLog {
 }
 
 /**
- * A gated risk-threshold loosening queued for human approval — the
- * `dial_adjustments` row `runDailyCycle` would write if `AdjustmentLog`
- * recorded `loosen_pending_approval` entries (it doesn't yet: see
- * `LoosenApprovalChannel`'s doc, "acting on the human's answer is a later
- * cycle's job"). `dial` excludes `'analyst_weight'` — weights are never
- * gated (spec: "Weights + strategy params tune freely within bounds").
- * Kept as a schema-shaped type for `SqliteAdjustmentLog`'s pending-approval
- * capability (#197) even though no current caller produces one, the same
- * documented-gap pattern as `SqliteConfigTrialLog`'s `config_json`.
+ * The shape of a `dial_adjustments` row with `status = 'pending_approval'` —
+ * the storage lifecycle `SqliteAdjustmentLog.recordPendingApproval` /
+ * `resolvePendingApproval` (#197) implement.
+ *
+ * **Nothing produces one, and after #736 nothing ever will.** The only caller
+ * this type was ever waiting on was the loosen gate, and ADR-0013 Decision 2
+ * removed it: every dial move the Feedback Loop makes is now applied
+ * immediately and written as a resolved `Adjustment`. This is kept — rather
+ * than deleted with the gate — for exactly one reason: it is the row shape of
+ * a status the `dial_adjustments` schema still defines (migration
+ * `0002_dial_adjustments_reason.sql`, `shared-sqlite-store-spec.md`), and
+ * changing a persisted schema is a separate change from removing a control.
+ * Read it as a store capability with no producer, NOT as an approval path
+ * that might still fire: there is no code path from a tuning cycle to here.
  */
 export interface PendingApprovalAdjustment {
   dial: 'strategy_param' | 'risk_threshold';

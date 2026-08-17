@@ -6,7 +6,7 @@
 
 > **[ADR-0013](../adr/0013-no-human-gate-anywhere.md) (2026-08-09) removed every remaining human gate.** Three changes to this spec, superseding the language below wherever it conflicts:
 >
-> 1. **Risk-threshold loosening applies without approval.** `loosen_pending_approval[]` is no longer a gate. Every dial change is applied, logged and reversible.
+> 1. **Risk-threshold loosening applies without approval.** `loosen_pending_approval[]` is no longer a gate. Every dial change is applied, logged and reversible. *Implemented by [#736](https://github.com/dd-jp/samurai-trading-system/issues/736) — the field is removed from `DailyCycleResult` entirely, `DailyCycleInput.mode` with it (the gate was its only reader), and the port renamed `LoosenApprovalChannel` → `LoosenNotificationChannel` (`notifyLoosenApplied`), which announces an applied loosening instead of requesting one.*
 > 2. **The hard bounds survive and are the control.** `human-set hard floors/ceilings` (story 6) and "hard bounds never crossed" stay, enforced in code — a loosening that would cross one is rejected, not queued. The surviving asymmetry is that loosening is bounded where tightening is free, not that one waits on a person.
 > 3. **The kill/rework call is no longer human.** Under full automation nobody owns it. A kill-threshold breach must produce a mechanical response — defensive auto-tighten, and a halt if it persists — rather than an alert that waits for a decision.
 >
@@ -43,7 +43,7 @@ Key architectural decisions:
 
 ### Parameter & Threshold Tuning (guardrailed)
 
-6. As the Feedback Loop, I want to tune strategy parameters and risk thresholds within human-set hard floors/ceilings, so that the system adapts without escaping its guardrails.
+6. As the Feedback Loop, I want to tune ~~strategy parameters and~~ risk thresholds within human-set hard floors/ceilings, so that the system adapts without escaping its guardrails. *(Amended 2026-08-17 — the `strategy_params` half of this story is **not live and is not scheduled**: it is dead at both ends by decision, no proposer writes one and the Trader reads a frozen `deps.config`. See "Phasing of the three dials" below. The story is kept rather than deleted so the asymmetry with weights and risk thresholds stays visible, but it must not be read as describing a mechanism that exists.)*
 7. As the Feedback Loop, I want to auto-tighten risk thresholds freely but require human approval to loosen any of them, so that the loop can never relax its own safety limits unsupervised.
 8. As the operator, I want every adjustment logged and reversible, so that I can audit and roll back a bad tuning cycle.
 
@@ -96,14 +96,20 @@ interface FeedbackInput {
                                 // operational debate state, which is no-persistence per #10)
   portfolio: PortfolioView;     // equity/drawdown/exposure (accounting view)
   config: FeedbackConfig;       // step caps, hard floors/ceilings, kill thresholds, cadences
-  approvals: ApprovalChannel;   // for gated risk-threshold loosening + breach alerts
-  mode: 'live' | 'backtest';
+  // Split by #639 into two ports, then retargeted by #736: `breachAlerts:
+  // BreachAlertChannel` (kill-line breach) and `loosen_notices:
+  // LoosenNotificationChannel` (an APPLIED risk-threshold loosening). Neither
+  // collects an answer.
+  breach_alerts: BreachAlertChannel;
+  loosen_notices: LoosenNotificationChannel;
+  // No `mode`: it existed only to gate loosening outside backtest (#736).
 }
 
 interface DailyCycleResult {
   weight_updates: Record<string, { from: number; to: number }>;   // per analyst_id, bounded
   param_updates: Record<string, { from: number; to: number; direction: 'tighten' | 'loosen' }>;
-  loosen_pending_approval: string[];   // risk-threshold loosenings awaiting human OK
+  // `loosen_pending_approval: string[]` removed by #736 — nothing is pending.
+  // An applied loosening appears in `param_updates` with direction 'loosen'.
   applied: boolean;
 }
 
@@ -160,7 +166,7 @@ Added 2026-08-05 ([#359](https://github.com/dd-jp/samurai-trading-system/issues/
 ### Module: Guardrailed Tuning
 
 - Tunes analyst weights, strategy params, and risk thresholds — all within human-set hard floors/ceilings.
-- **Asymmetric:** auto-tighten risk thresholds freely; auto-loosen requires human approval via the trade channel (queued in `loosen_pending_approval`). Weights + strategy params tune freely within bounds.
+- **Asymmetric, but not by approval (ADR-0013 Decision 2, #736):** auto-tighten risk thresholds freely; auto-loosen applies too, bounded — capped at one `max_step`, clamped to the dial's `[floor, ceiling]`, and **refused in code** if it would cross a guarded threshold's hard bound (`server/shared/threshold-bounds.ts`, #638). Weights + strategy params tune freely within bounds. An applied loosening is announced on `LoosenNotificationChannel`; nothing waits on a reply.
 - Every adjustment logged + reversible.
 - **Consumers must read live from the store (cross-spec):** FL's tuning only takes effect if the Trader reads its strategy params, and the Risk Manager reads its thresholds, **from the mutable shared store at decision/eval time** — not from static config baked in at startup. Both specs describe these as "config, tuned in paper"; the cross-spec pass must confirm they read the live (FL-written) values. (Analyst weights already follow this pattern — orchestrator reads at tick start, #42.)
 
@@ -187,7 +193,7 @@ Added 2026-08-05 ([#359](https://github.com/dd-jp/samurai-trading-system/issues/
 ### Module: Determinism & Backtest
 
 - Walk-forward: weights/params evolve daily from only outcomes known before each T (injected clock), producing a point-in-time trajectory the backtest replays. Never global-fit-and-apply-retroactively.
-- Same code path live vs replay; risk-threshold-loosening approvals auto-handled in backtest (like Verdict's HITL bypass), recorded.
+- Same code path live vs replay — literally so since #736: the cycle no longer takes a `mode` at all, because the only branch on it was the loosen gate that backtest bypassed.
 
 ## Testing Decisions
 
@@ -195,7 +201,7 @@ Added 2026-08-05 ([#359](https://github.com/dd-jp/samurai-trading-system/issues/
 
 - Test `runDailyCycle` / `onTradeClose` / `computeMetrics` at their seams with a mocked clock-scoped store.
 - Attribution: a winning trade raises its backers' weights, a loser lowers them, bounded and floored. (Shadow credit retired — #370.)
-- Guardrails: auto-tighten applies; auto-loosen queues for approval and does not apply without it; hard bounds never crossed.
+- Guardrails: auto-tighten applies; auto-loosen applies too and is logged, announced and reversible (#736); a loosening past a hard bound is refused, writes no dial and appends no log row.
 - Labelling: on close, the right setup gets the right R, joined correctly; no label before close (point-in-time).
 - Metrics: full suite computed; a breach triggers alert + auto-tighten but not an automatic kill.
 - Determinism: walk-forward weight trajectory is reproducible and uses no future data.
