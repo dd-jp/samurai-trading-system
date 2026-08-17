@@ -241,13 +241,22 @@ bracket stands unchanged, and no cell-conditional stop is adopted.**
 Against the pre-registered adopt-if — *required edge, in the cells we actually enter
 in, below 4.33 pp index / 3.35 pp single-stock*:
 
-- **Index: passes on the point estimate, by less than its own error.** Every in-window
-  pooled marginal is under the bar — 4.11, 3.61, 4.22, 4.19, 4.24 against 4.33 — but the
-  largest margin is 0.72 pp against an SE of 0.92, and the SE is a lower bound. There is
-  no offset at which the schedule is measurably better than the declared bracket.
+- **Index: a wash, once compared like for like.** Every in-window pooled marginal is
+  under the pre-registered 4.33 pp — 4.11, 3.61, 4.22, 4.19, 4.24 — but 4.33 is
+  ADR-0018's **untruncated, full-sample** figure, so that comparison moves truncation,
+  sample period and conditioning at once. The clean comparator is in the rider: the
+  **declared** single bracket, truncated at 16:25, over the same 897 sessions, needs
+  **4.19 pp**. Against that the cells are a wash, and the sharpest measurement in the
+  study falls out of it — the `t0 = 0` pooled cell **re-solves the stop to −2.31% and
+  buys 0.08 pp** (4.11 against 4.19), on an SE of roughly 0.7. Re-solving the bracket
+  under truncation does nothing measurable, and that conclusion does not depend on cell
+  size at all.
 - **Single-stock: fails.** Four of five in-window pooled marginals sit *above* 3.35
   (3.77, 4.32, 3.65, 3.70), with only `t0 = 60` below at 3.07 ± 0.83. Mid-session entry
   is if anything harder than open entry here.
+  Note the pre-registration named 4.33 pp, so that is the bar the adopt-if is formally
+  judged against; 4.19 pp is reported alongside it because it is the fairer test and it
+  is the harsher one. Neither produces an adopt.
 - **The conditioning axis is not estimable at all** at ~300 trades a cell, per the cell
   section above. Adopting a 21-cell schedule whose cells cannot be told apart would be
   fitting noise with a pre-registration wrapped round it.
