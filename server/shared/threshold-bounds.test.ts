@@ -14,6 +14,7 @@ import {
   boundFor,
   GUARDED_THRESHOLD_BOUNDS,
   GUARDED_THRESHOLD_NAMES,
+  isThresholdBoundViolation,
   type ThresholdBound,
   ThresholdBoundViolationError,
 } from './threshold-bounds.js';
@@ -131,5 +132,42 @@ describe('assertThresholdsWithinBounds', () => {
     expect(() => assertThresholdsWithinBounds({ max_pbo: 0.5 }, 'test')).toThrow(
       ThresholdBoundViolationError,
     );
+  });
+});
+
+describe('isThresholdBoundViolation (#766)', () => {
+  it('recognises a single crossing (the typed class)', () => {
+    let thrown: unknown;
+    try {
+      assertThresholdWithinBounds('max_pbo', 0.5, 'test');
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(isThresholdBoundViolation(thrown)).toBe(true);
+  });
+
+  it('recognises an AGGREGATE crossing — the plain Error two-or-more violations throw', () => {
+    // This is the case an `instanceof ThresholdBoundViolationError` check
+    // misses: `assertThresholdsWithinBounds` throws a bare `Error` when two
+    // or more rows cross at once, not the typed class. A detector that only
+    // matched the typed class would silence the MORE alarming case (multiple
+    // crossings) while paging correctly on a single one.
+    let thrown: unknown;
+    try {
+      assertThresholdsWithinBounds({ max_pbo: 0.5, min_oos_sharpe: 0.1 }, 'test');
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).not.toBeInstanceOf(ThresholdBoundViolationError);
+    expect(isThresholdBoundViolation(thrown)).toBe(true);
+  });
+
+  it('rejects an unrelated error', () => {
+    expect(isThresholdBoundViolation(new Error('SQLITE_BUSY: database is locked'))).toBe(false);
+    expect(isThresholdBoundViolation(new TypeError('boom'))).toBe(false);
+    expect(isThresholdBoundViolation('not even an Error')).toBe(false);
+    expect(isThresholdBoundViolation(undefined)).toBe(false);
   });
 });

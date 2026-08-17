@@ -1169,6 +1169,102 @@ describe('buildRiskStep', () => {
       ).rejects.toThrow(/AAPL has no subclass/);
     });
   });
+
+  describe('#766: threshold-clamp trip alert', () => {
+    function makeAlerts() {
+      const posted: unknown[] = [];
+      return {
+        channel: { postThresholdClampAlert: (alert: unknown) => posted.push(alert) },
+        posted,
+      };
+    }
+
+    function buildStep(overrides: {
+      thresholdClampAlerts?: ReturnType<typeof makeAlerts>['channel'];
+    }) {
+      return buildRiskStep({
+        config: RISK_CONFIG,
+        correlationConfig: { window: { timeframe: '1d', lookback: 30 }, min_bars: 5 },
+        ciiConsumer: { getScores: vi.fn(() => ({})) },
+        marketData: FAKE_MARKET_DATA,
+        circuitBreakers: new CircuitBreakers({
+          daily_loss_pct: 0.05,
+          daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+          max_drawdown_pct: 0.2,
+          max_consecutive_losses: 5,
+          volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+          auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+        }),
+        accountState: FAKE_ACCOUNT_STATE,
+        volatility: FAKE_VOLATILITY,
+        getOpenPositions: async () => NO_POSITIONS,
+        maxMarkAge: TEST_MAX_MARK_AGE,
+        mode: 'paper',
+        breakerState: NOOP_BREAKER_STATE,
+        portfolioSnapshots: new Map(),
+        // max_pbo's bound is 0.05 (threshold-bounds.ts) — 0.5 crosses it, so
+        // `resolveRiskConfig` throws on every `evaluate()` call.
+        thresholds: { getRiskThresholds: () => ({ max_pbo: 0.5 }) },
+        ...overrides,
+      });
+    }
+
+    it('posts a threshold-clamp alert and still re-throws the original refusal', async () => {
+      const { channel, posted } = makeAlerts();
+      const step = buildStep({ thresholdClampAlerts: channel });
+
+      await expect(
+        step({ trace_id: TRACE_ID, intent: makeIntent({ intent_type: 'entry' }), clock: CLOCK }),
+      ).rejects.toThrow(/in-code clamp/);
+
+      expect(posted).toHaveLength(1);
+      expect((posted[0] as { where: string }).where).toBe('live-read');
+      expect((posted[0] as { message: string }).message).toMatch(/max_pbo/);
+    });
+
+    it('proves by removal: with no channel injected, the step still refuses (fail-closed unaffected)', async () => {
+      const step = buildStep({});
+
+      await expect(
+        step({ trace_id: TRACE_ID, intent: makeIntent({ intent_type: 'entry' }), clock: CLOCK }),
+      ).rejects.toThrow(/in-code clamp/);
+    });
+
+    it('does not post — and does not throw — for an exit intent under the same bad table (#766)', async () => {
+      // The empirical finding #766 asks for: RiskManagerImpl now skips the
+      // live resolve entirely for an exit, so the flatten path never reaches
+      // the clamp at all and this channel is never consulted for it.
+      const { channel, posted } = makeAlerts();
+      const step = buildStep({ thresholdClampAlerts: channel });
+
+      const decision = await step({
+        trace_id: TRACE_ID,
+        intent: makeIntent({ intent_type: 'exit' }),
+        clock: CLOCK,
+      });
+
+      expect(decision.status).toBe('approved');
+      expect(posted).toHaveLength(0);
+    });
+
+    it('latches after the first trip — a second crashed instrument does not double-page', async () => {
+      const { channel, posted } = makeAlerts();
+      const step = buildStep({ thresholdClampAlerts: channel });
+
+      await expect(
+        step({ trace_id: TRACE_ID, intent: makeIntent({ intent_type: 'entry' }), clock: CLOCK }),
+      ).rejects.toThrow();
+      await expect(
+        step({
+          trace_id: 'trace-2',
+          intent: makeIntent({ instrument: 'MSFT', intent_type: 'entry' }),
+          clock: CLOCK,
+        }),
+      ).rejects.toThrow();
+
+      expect(posted).toHaveLength(1);
+    });
+  });
 });
 
 describe('buildVerdictStep', () => {

@@ -3006,6 +3006,52 @@ describe('buildProductionOrchestrator', () => {
 
       await orchestrator.stop();
     });
+
+    it('#766: posts a threshold-clamp alert when the kill-line check itself is out of bounds', async () => {
+      const { config, logger } = metricsConfig(db);
+      const postThresholdClampAlert = vi.fn();
+      const feedback = config.feedback as NonNullable<ProductionConfig['feedback']>;
+      config.thresholdClampAlerts = { postThresholdClampAlert };
+      const orchestrator = buildProductionOrchestrator(config);
+
+      // Started with the shipped-valid kill lines — `buildProductionComponents`
+      // boot-checks the SAME field (production.ts, ~line 458) and would refuse
+      // to construct at all if this were done before `start()`. Mutated in
+      // place AFTER boot, so what fails is specifically the PER-CYCLE check
+      // (metrics.ts's `assertKillThresholdsWithinBounds` inside
+      // `computeMetrics`), not the boot-time one #638 already covers.
+      await orchestrator.start();
+      feedback.config.kill_thresholds.max_pbo = 0.5; // bound: max 0.05
+
+      await vi.advanceTimersByTimeAsync(1_500);
+
+      expect(
+        logger.entries.filter((e) => e.message === 'daily feedback cycle failed').length,
+      ).toBeGreaterThanOrEqual(1);
+      expect(postThresholdClampAlert).toHaveBeenCalled();
+      expect(postThresholdClampAlert.mock.calls[0]?.[0]).toMatchObject({
+        where: 'daily-kill-line-check',
+      });
+
+      await orchestrator.stop();
+    });
+
+    it('#766: proves by removal — with no channel injected, the cycle still fails the same way', async () => {
+      const { config, logger } = metricsConfig(db);
+      const feedback = config.feedback as NonNullable<ProductionConfig['feedback']>;
+      const orchestrator = buildProductionOrchestrator(config);
+
+      await orchestrator.start();
+      feedback.config.kill_thresholds.max_pbo = 0.5;
+
+      await vi.advanceTimersByTimeAsync(1_500);
+
+      expect(
+        logger.entries.filter((e) => e.message === 'daily feedback cycle failed').length,
+      ).toBeGreaterThanOrEqual(1);
+
+      await orchestrator.stop();
+    });
   });
 
   /**

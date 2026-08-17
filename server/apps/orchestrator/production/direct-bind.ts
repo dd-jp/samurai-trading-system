@@ -81,7 +81,12 @@ import type {
   SetupStore,
   TraderLogStore,
 } from '../../../shared/index.js';
-import { describeThrown, safeLog, sanitizeLogText } from '../../../shared/index.js';
+import {
+  describeThrown,
+  isThresholdBoundViolation,
+  safeLog,
+  sanitizeLogText,
+} from '../../../shared/index.js';
 // Aliased: this module already imports a DIFFERENT `SharedStore` above (an
 // unrelated `execution/index.js` interface, `ExecutionStepDeps.store`'s
 // type) — the alias names which one `VerdictStepDeps.store` actually is,
@@ -95,6 +100,7 @@ import { OrphanVerdictScanner } from '../orphan-verdict-scan.js';
 import { SqliteAuditLog } from '../sqlite-audit-log.js';
 import { SqliteCurrentTickStore } from '../sqlite-current-tick-store.js';
 import type { TickSteps } from '../types.js';
+import type { ThresholdClampAlertChannel } from './threshold-clamp-alert.js';
 import {
   type TraderDiagnosticAlert,
   type TraderDiagnosticAlertChannel,
@@ -623,6 +629,13 @@ export interface RiskStepDeps extends BreakerStateDeps {
   /** #328: the decision record. Same optionality rationale as `traderLog`. */
   riskLog?: RiskLogStore;
   /**
+   * #766: where the catch below escalates a clamp trip — `resolveRiskConfig`
+   * throwing on an out-of-bound `risk_thresholds` row. Absent = log-only,
+   * same optionality rationale as `traderDiagnosticAlerts` below (no
+   * `Logging…Channel`: this catch already logs at `error`).
+   */
+  thresholdClampAlerts?: ThresholdClampAlertChannel;
+  /**
    * #726: where the catch around `evaluate()` reports a failed `riskLog.write`
    * itself (guarding that write must not let a store failure replace the
    * original gate error — see the catch's own doc comment). Same
@@ -634,6 +647,17 @@ export interface RiskStepDeps extends BreakerStateDeps {
 
 export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
   const riskManager = new RiskManagerImpl(deps.config, deps.thresholds);
+  // #766: sent once per process, not once per instrument crash. Every
+  // instrument's tick reaches this same `evaluate()` while a bad
+  // `risk_thresholds` row stands, so an un-latched alert would post once per
+  // instrument per tick for as long as the row persists — exactly the
+  // flooding `ALERT_REPEAT_EVERY_DIAGNOSTICS` exists to avoid for
+  // `traderDiagnosticAlerts`, and there is no useful SECOND page here: the
+  // fix is always "correct the one offending row", which does not change
+  // between instruments or ticks. Reset is a process restart, which is also
+  // when an operator who acted on the first page would expect the state to
+  // be re-announced.
+  let clampAlertSent = false;
 
   return async ({ trace_id, intent, clock }) => {
     // Reuses the Trader's snapshot for this trace (B4) and consumes it — Risk
@@ -720,6 +744,26 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
         error instanceof PerSubclassCapUnresolvableError
           ? error.bindingConstraint
           : `risk_evaluate_error:${intent.instrument}`;
+
+      // #766: the live-read half of #638's clamp tripping is otherwise
+      // audible only as this catch's log line one layer up and #507's crash
+      // record — see `ThresholdClampAlertChannel`'s doc for why that is not
+      // enough for an unattended run. Checked with `isThresholdBoundViolation`
+      // rather than `instanceof ThresholdBoundViolationError`: TWO OR MORE
+      // crossings in one `risk_thresholds` read throw a plain `Error`
+      // (threshold-bounds.ts), which an `instanceof` check would miss on
+      // exactly the more alarming case. Latched — see `clampAlertSent` above
+      // — and never blocks the re-throw below: a failed post costs the page,
+      // not the refusal.
+      if (!clampAlertSent && isThresholdBoundViolation(error)) {
+        clampAlertSent = true;
+        deps.thresholdClampAlerts?.postThresholdClampAlert({
+          where: 'live-read',
+          message: describeThrown(error),
+          reported_at: clock.now(),
+        });
+      }
+
       // Guarded the same way #507's own side effects are guarded
       // (tick-loop.ts): this write must not itself throw and replace the
       // original error before it reaches #507's catch one layer up — that

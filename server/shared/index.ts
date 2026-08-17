@@ -78,6 +78,7 @@ export {
   boundFor,
   GUARDED_THRESHOLD_BOUNDS,
   GUARDED_THRESHOLD_NAMES,
+  isThresholdBoundViolation,
   ThresholdBoundViolationError,
 } from './threshold-bounds.js';
 export type {

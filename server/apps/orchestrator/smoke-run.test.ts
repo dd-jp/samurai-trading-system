@@ -246,6 +246,7 @@ function healthyThresholdClamp(
     breakerConstructionRefused: true,
     killLineCheckRefused: true,
     shippedConfigAccepted: true,
+    exitBypassesLiveClamp: true,
     ...overrides,
   };
 }
@@ -544,6 +545,21 @@ describe('evaluateSmokeGate', () => {
 
     expect(gate.passed).toBe(false);
     expect(gate.failures.some((failure) => failure.includes('shipped paper breaker'))).toBe(true);
+  });
+
+  // #766.
+  it('fails when a tripped live-read clamp does not leave the exit path bypassing it', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        thresholdClamp: healthyThresholdClamp({ exitBypassesLiveClamp: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('exit intent did not reach'))).toBe(
+      true,
+    );
   });
 
   // #714 — the logging-fault mechanisms. Each of these fails the gate on its

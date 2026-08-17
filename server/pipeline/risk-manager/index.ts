@@ -171,9 +171,28 @@ export class RiskManagerImpl implements RiskManager {
     // Resolved per call, not per construction. That is the entire point of the
     // ticket: a threshold the Feedback Loop tightened between two ticks has to
     // bind on the second one, and a config frozen in the constructor cannot.
-    const { config } = this.thresholds
-      ? resolveRiskConfig(this.config, this.thresholds.getRiskThresholds())
-      : { config: this.config };
+    //
+    // SKIPPED for an exit intent (#766). `resolveRiskConfig` re-checks the
+    // WHOLE `risk_thresholds` row set against the in-code clamp
+    // (threshold-bounds.ts) on every call and THROWS on a crossing — that is
+    // the point of the clamp, but until this fix the throw was raised ahead
+    // of the `intent_type === 'exit'` branch below, so an out-of-bound row
+    // aborted an exit intent exactly like an entry one. An exit bypasses
+    // every entry gate and consults `config` nowhere in the branch below —
+    // `cii_threshold` is the one field the exit's `warnings` calculation
+    // reads, and it is deliberately excluded from `RISK_THRESHOLD_KEYS`
+    // (risk-thresholds.ts: "drives a WARNING, not a limit"), so
+    // `resolveRiskConfig` never changes it — `config.cii_threshold` is
+    // byte-identical whether or not the live table is consulted. Skipping the
+    // resolve therefore changes NOTHING about what an exit decides; it only
+    // removes exits' exposure to a corrupt threshold row they never needed.
+    // ADR-0014's flat-by-close flatten rides the exit path, and a bad
+    // threshold row stranding open positions through the close would be a
+    // materially worse defect than the audibility gap #766 was filed for.
+    const { config } =
+      intent.intent_type === 'exit' || !this.thresholds
+        ? { config: this.config }
+        : resolveRiskConfig(this.config, this.thresholds.getRiskThresholds());
 
     const warnings = [
       ...ciiWarnings(intent.instrument, cii, config.cii_threshold),

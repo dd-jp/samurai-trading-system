@@ -164,7 +164,11 @@ import type {
   RiskConfig,
   SessionBasisByClass,
 } from '../../pipeline/risk-manager/index.js';
-import { CircuitBreakers, resolveRiskConfig } from '../../pipeline/risk-manager/index.js';
+import {
+  CircuitBreakers,
+  RiskManagerImpl,
+  resolveRiskConfig,
+} from '../../pipeline/risk-manager/index.js';
 import type { VerdictDecision } from '../../pipeline/verdict/index.js';
 import type { Bar } from '../../providers/market-data-service/index.js';
 import {
@@ -183,8 +187,8 @@ import type { OrderIntent } from '../../shared/index.js';
 import {
   boundFor,
   GUARDED_THRESHOLD_NAMES,
+  isThresholdBoundViolation,
   SimulatedClock,
-  ThresholdBoundViolationError,
   TokenBucket,
 } from '../../shared/index.js';
 import { openSharedStore, type SharedStore as SqliteHandle } from '../../shared/store/index.js';
@@ -1954,6 +1958,101 @@ export interface SmokeGateResult {
  * What the threshold-clamp probe (#638) observed. Every field records a
  * REFUSAL that actually happened at a real seam, not that a validator exists.
  */
+/**
+ * A minimal `RiskInput` for the #766 exit-bypass probe below — same shape
+ * `risk-manager/index.test.ts`'s own fixtures use, trimmed to what
+ * `RiskManagerImpl.evaluate` actually reads on the branch this probe drives.
+ */
+function makeExitProbeInput(overrides: Partial<OrderIntent> = {}) {
+  const intent: OrderIntent = {
+    idempotency_key: 'smoke-threshold-clamp-exit-probe',
+    instrument: 'BTC-USD',
+    asset_class: 'crypto',
+    side: 'sell',
+    intent_type: 'exit',
+    size: 1,
+    entry: 100,
+    stop: 95,
+    target: 110,
+    time_in_force: 'day',
+    decision_timestamp: SMOKE_RUN_INSTANT,
+    metadata: {
+      debate_id: 'smoke-threshold-clamp-exit-probe',
+      conviction: 0.5,
+      converged: true,
+      sizing: {
+        base_risk_fraction: 0.01,
+        conviction_multiplier: 1,
+        vol_floor_factor: 1,
+        non_converged_haircut: 1,
+        cosine_multiplier: 1,
+      },
+      cosine_precedent: { neighbor_count: 0, weighted_mean_r: 0, no_precedent: true },
+    },
+    ...overrides,
+  };
+  return {
+    trace_id: 'smoke-threshold-clamp-exit-probe',
+    intent,
+    clock: { now: () => SMOKE_RUN_INSTANT },
+    portfolio: {
+      equity: 100_000,
+      peak_equity: 100_000,
+      drawdown_pct: 0,
+      exposure_by_instrument: {},
+      exposure_by_class: { crypto: 0, stocks: 0 },
+      gross_exposure: 0,
+      daily_pnl: {
+        crypto: { known: true as const, pct: 0 },
+        stocks: { known: true as const, pct: 0 },
+        portfolio: { known: true as const, pct: 0 },
+      },
+      consecutive_losses: 0,
+    },
+    breakers: {
+      portfolio_tripped: false,
+      asset_class_tripped: { crypto: false, stocks: false },
+      armed_breakers: [],
+    },
+    next_breaker_state: [],
+    correlation: { correlations: {}, insufficient_history: [] },
+    cii: {},
+    mode: 'paper' as const,
+  };
+}
+
+/**
+ * The exit/flatten side of #766: with a live `risk_thresholds` row out of
+ * bounds, does an EXIT intent still reach Execution, or does it abort the
+ * same as an entry would? Drives the REAL `RiskManagerImpl.evaluate()` —
+ * the same class `buildRiskStep` (direct-bind.ts) wraps — rather than a
+ * reimplementation, so a regression in the exit-bypass ordering
+ * (risk-manager/index.ts) fails this probe exactly the way it would fail in
+ * production.
+ *
+ * Also probes the ENTRY side, which MUST still throw: a probe that only
+ * checked "exit does not throw" could not tell a working clamp from one that
+ * silently stopped enforcing anything at all.
+ */
+function probeExitBypassesLiveClamp(riskConfig: RiskConfig): boolean {
+  const badThresholds = { getRiskThresholds: () => ({ max_pbo: 0.5 }) }; // bound: max 0.05
+  const manager = new RiskManagerImpl(riskConfig, badThresholds);
+
+  let exitApproved = false;
+  try {
+    const decision = manager.evaluate(makeExitProbeInput());
+    exitApproved = decision.status === 'approved';
+  } catch {
+    exitApproved = false;
+  }
+
+  const entryStillRefused = refuses(() => {
+    manager.evaluate(makeExitProbeInput({ intent_type: 'entry', idempotency_key: 'smoke-entry' }));
+  });
+
+  return exitApproved && entryStillRefused;
+}
+
 export interface ThresholdClampEvidence {
   /**
    * The guarded names this probe drove. Compared against
@@ -1971,6 +2070,14 @@ export interface ThresholdClampEvidence {
   killLineCheckRefused: boolean;
   /** The SHIPPED paper values still boot — the clamp bounds a dial, not forbids one. */
   shippedConfigAccepted: boolean;
+  /**
+   * #766: with a live `risk_thresholds` row out of bounds, an EXIT intent
+   * reached `RiskManagerImpl.evaluate()`'s `approved` bypass and an ENTRY
+   * intent was still refused — see `probeExitBypassesLiveClamp`. False means
+   * either the exit path is stranded behind the clamp (ADR-0014's flat-by-
+   * close invariant at risk) or the clamp stopped refusing entries at all.
+   */
+  exitBypassesLiveClamp: boolean;
 }
 
 /** A value one whole unit outside whichever edge the bound states. */
@@ -1992,10 +2099,11 @@ function refuses(probe: () => void): boolean {
     // Only a BOUNDS refusal counts. Any other throw — a TypeError from a
     // changed shape, say — would otherwise read as the clamp working while the
     // probe never reached it, which is the shape of defect this gate exists
-    // to catch. The aggregate form (several crossings at once) is a plain
-    // `Error` carrying the same sentence, so it is matched on the message.
-    if (error instanceof ThresholdBoundViolationError) return true;
-    return error instanceof Error && error.message.includes('in-code clamp');
+    // to catch. `isThresholdBoundViolation` (#766) is the same single-vs-
+    // aggregate-shaped match both alert seams gate on — sharing it here means
+    // this probe and the two catch sites can never drift apart on what counts
+    // as "the clamp".
+    return isThresholdBoundViolation(error);
   }
 }
 
@@ -2064,6 +2172,8 @@ function runThresholdClampScenario(
       // that refused the shipped configuration would be a broken clamp, and
       // every negative probe above would still pass.
       shippedConfigAccepted: !refuses(() => new CircuitBreakers(breakerConfig)),
+      // #766.
+      exitBypassesLiveClamp: probeExitBypassesLiveClamp(riskConfig),
     };
   } finally {
     db.close();
@@ -2337,6 +2447,15 @@ export function evaluateSmokeGate(
     failures.push(
       'the shipped paper breaker configuration is itself refused by the clamp — the bound is ' +
         'wrong, not the config, and every negative probe above would still pass (#638)',
+    );
+  }
+  if (!clamp.exitBypassesLiveClamp) {
+    failures.push(
+      'with a live risk_thresholds row out of bounds, an exit intent did not reach ' +
+        "RiskManagerImpl.evaluate()'s approved bypass while an entry intent was still refused — " +
+        "either the exit/flatten path is stranded behind #638's clamp (a materially worse " +
+        "defect than #766 was filed for: ADR-0014's flat-by-close invariant has no session-end " +
+        'job to catch a missed flatten) or the clamp stopped refusing entries at all (#766)',
     );
   }
 
@@ -3003,6 +3122,16 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       traderDiagnosticAlerts: { postTraderDiagnosticAlert: async () => {} },
       // #752 — the twelfth `ALERT_CHANNEL_FIELDS` member.
       miCoverageAlerts: new LoggingMiCoverageAlertChannel(logger),
+      // #766 — the thirteenth `ALERT_CHANNEL_FIELDS` member. A bare no-op,
+      // same reason as `traderDiagnosticAlerts` above: both catch sites this
+      // port serves already log at `error` before consulting it, so a
+      // logging instance here would emit each trip twice. Nothing in this
+      // run trips the live-read or daily-cycle clamp (the composition root's
+      // own `risk_thresholds` seed and kill lines are the shipped in-bound
+      // values), so this slot is never exercised here — see
+      // `runThresholdClampScenario`/`probeExitBypassesLiveClamp` for the
+      // actual enforcement probe, which drives the real classes directly.
+      thresholdClampAlerts: { postThresholdClampAlert: () => {} },
     } satisfies Required<AlertChannels>;
 
     const orchestrator = await startFromEnvironment({
