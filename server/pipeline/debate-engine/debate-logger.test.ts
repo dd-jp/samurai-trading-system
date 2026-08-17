@@ -27,6 +27,7 @@ function makeResult(overrides: Partial<DebateResult> = {}): DebateResult {
     latency_ms: 8000,
     direction: 'bullish',
     debate_id: 'debate-1',
+    bar_timestamp: new Date('2026-07-15T10:00:00Z'),
     ...overrides,
   };
 }

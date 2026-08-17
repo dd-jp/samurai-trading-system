@@ -10,22 +10,25 @@ import type { DebateResult } from './types.js';
 
 /**
  * Constructs the persisted `DebateLog` row from a resolved `DebateResult`.
- * `instrument`/`bar_timestamp` aren't carried on `DebateResult` (its shape is
- * the Trader-facing contract, not the log record), so the caller — the
- * component that ran the debate and knows the tick's instrument/bar —
- * supplies them.
+ * `instrument` isn't carried on `DebateResult`, so the caller — the component
+ * that ran the debate and knows the tick's instrument — supplies it.
+ *
+ * `bar_timestamp` USED TO BE a caller-supplied parameter for the same reason,
+ * and it no longer is (#687): the result now carries the bar it was hashed
+ * over, so taking a second copy here would be one more place for the row's
+ * coordinate and the `debate_id` it is keyed by to disagree. Projected off the
+ * result, they cannot.
  */
 export function buildDebateLog(
   result: DebateResult,
   instrument: string,
-  bar_timestamp: Date,
   created_at: Date,
   trace_id?: string,
 ): DebateLog {
   return {
     debate_id: result.debate_id,
     instrument,
-    bar_timestamp,
+    bar_timestamp: result.bar_timestamp,
     contributions: result.contributions,
     direction: result.direction,
     rounds: result.rounds_completed,

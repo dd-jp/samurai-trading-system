@@ -101,6 +101,11 @@ interface DebateResult {
                                 //   stable across the no-persistence re-run-from-scratch;
                                 //   provenance / setup-store join (cross-spec-contracts.md
                                 //   registry #1/#2, reconciled in impl ticket #62)
+  bar_timestamp: Date;         // the floored bar `debate_id` was hashed over, carried forward
+                                //   so the Trader keys its order on the debate's coordinate
+                                //   instead of flooring a second, later clock read of its own
+                                //   (#687 / cross-spec-contracts.md CV-21 point 2). Required:
+                                //   every producer must say which bar it speaks for.
 }
 
 interface AnalystContribution {

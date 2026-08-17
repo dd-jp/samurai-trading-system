@@ -101,6 +101,37 @@ export interface DebateResult {
    */
   debate_id: string;
   /**
+   * The BAR COORDINATE this debate belongs to — the same floored `Date` that
+   * went into `debate_id`'s hash, and the row's `bar_timestamp` in
+   * `debate_log`.
+   *
+   * ## Why it is on the Trader-facing contract (#687)
+   *
+   * It used not to be, on the reasoning that `DebateResult` is the Trader's
+   * input and not the log record — `buildDebateLog` took `instrument`/
+   * `bar_timestamp` from the caller instead. The consequence was that the
+   * Trader had to RE-DERIVE the coordinate, by flooring a SECOND, later
+   * `clock.now()` of its own (`decisionBarFor`, now deleted). Two clock reads
+   * agree only while both land in the same bar, and a debate that straddles an
+   * hour boundary — LLM round-trips, retries, a latency-budget timeout — is
+   * logged at bar N while its intent is keyed to bar N+1. Bar N+1's own
+   * genuine decision then computes the key the straddling intent already took
+   * and is suppressed as a duplicate.
+   *
+   * So the bar is carried FORWARD from the one place that floors a clock read
+   * (`buildDebateStep`) rather than re-derived downstream. There is now exactly
+   * one bar coordinate per debate, and `decide.ts` imports neither `floorToBar`
+   * nor `DEBATE_BAR_TIMEFRAME_MS` — re-deriving it would take a new import.
+   *
+   * REQUIRED, not optional. Every producer of a `DebateResult` — the round
+   * orchestrator, the latency budget's two timeout shapes, the rate-limit and
+   * spend-cap refusals, the replay-from-log shape — is a compile error until it
+   * says which bar it is speaking for. An optional field would let a producer
+   * omit it and hand the Trader an `undefined` to fall back from, which is the
+   * re-derivation this closes.
+   */
+  bar_timestamp: Date;
+  /**
    * Present only when the debate was force-terminated by the latency budget
    * (docs/specs/debate-engine-spec.md "Module: Latency Budget", ticket #33).
    * Absent on a normal (converged or round-cap) completion.

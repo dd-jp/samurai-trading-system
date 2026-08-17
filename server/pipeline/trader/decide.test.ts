@@ -19,6 +19,10 @@ import type { Clock, OpenPosition } from '../../shared/index.js';
 import type { DebateResult } from '../debate-engine/index.js';
 import { decide, decideWithReason } from './decide.js';
 import { FixtureSetupStore } from './fixture-setup-store.js';
+// Imported so the #687 cases can state WHICH bar the key must be on, rather
+// than only comparing two `decide()` calls against each other — two calls that
+// re-derive the same wrong bar agree with one another perfectly.
+import { computeIdempotencyKey } from './idempotency-key.js';
 import type { AssetClass, TraderConfig, TraderInput } from './types.js';
 import { DEFAULT_TRADER_CONFIG } from './types.js';
 
@@ -36,6 +40,8 @@ class ManualClock implements Clock {
 
 const INSTRUMENT = 'AAPL';
 const DECISION_BAR = new Date('2026-07-15T10:00:00Z');
+/** The next hour on the debate's grid — bar N+1 to `DECISION_BAR`'s N (#687). */
+const NEXT_BAR = new Date('2026-07-15T11:00:00Z');
 const ENTRY_PRICE = 100;
 const EQUITY = 100_000;
 
@@ -146,6 +152,11 @@ function debateResult(overrides: Partial<DebateResult> = {}): DebateResult {
     latency_ms: 9_000,
     direction: 'bullish',
     debate_id: 'debate-abc123',
+    // #687: the bar the Debate stage floored and hashed into `debate_id`. Equal
+    // to `DECISION_BAR` by default so every key expectation below is unchanged
+    // — but it now comes from the DEBATE, not from flooring the clock, which is
+    // what the straddle cases at the end of this suite turn on.
+    bar_timestamp: DECISION_BAR,
     ...overrides,
   };
 }
@@ -709,12 +720,136 @@ describe('decide — determinism & idempotency', () => {
     const first = await decide(traderInput());
     const next = await decide(
       traderInput({
+        // #687: the bar comes from the DEBATE now, so a genuinely new bar is a
+        // new DEBATE. Moving only the clock would no longer be a new bar — it
+        // would be the same debate re-decided late, which is precisely the
+        // straddle this ticket stopped mis-keying.
+        debate: debateResult({
+          debate_id: 'debate-next-bar',
+          bar_timestamp: NEXT_BAR,
+        }),
         marketData: nextBar,
         clock: new ManualClock(new Date('2026-07-15T11:03:00Z')),
       }),
     );
 
     expect(next?.idempotency_key).not.toBe(first?.idempotency_key);
+    expect(next?.decision_timestamp).toEqual(NEXT_BAR);
+  });
+
+  /**
+   * #687 — THE BOUNDARY STRADDLE, on the entry path.
+   *
+   * The debate is keyed to bar N (`bar_timestamp`), and the Trader runs after
+   * the hour boundary, in bar N+1. Before this ticket `decisionBarFor` floored
+   * its OWN `clock.now()`, so the intent was keyed to N+1 while its `debate_id`
+   * said N — and bar N+1's own genuine decision, when it arrived, computed the
+   * key the straddling intent had already taken and was suppressed as a
+   * duplicate by `findByKey` / the `open_positions` PK / the broker
+   * `client_order_id`.
+   *
+   * The expectation is written against `computeIdempotencyKey` directly rather
+   * than against another `decide()` call, so it is an independent statement of
+   * WHICH bar the key must be on. Reverting to a floored clock read makes this
+   * fail: the key would be bar N+1's.
+   */
+  it('#687: keys a straddling debate to the debate bar, not the bar the Trader ran in', async () => {
+    const lateTick = new FixtureMarketData(bars(15, 2));
+    lateTick.markObservedAt = new Date('2026-07-15T11:07:42.310Z');
+
+    const straddled = await decide(
+      traderInput({
+        // Bar N — the debate started here and is logged here.
+        debate: debateResult({ bar_timestamp: DECISION_BAR }),
+        marketData: lateTick,
+        // Bar N+1 — the LLM round-trips crossed the boundary.
+        clock: new ManualClock(new Date('2026-07-15T11:07:42.310Z')),
+      }),
+    );
+
+    expect(straddled?.idempotency_key).toBe(
+      computeIdempotencyKey(INSTRUMENT, DECISION_BAR, 'open'),
+    );
+    expect(straddled?.decision_timestamp).toEqual(DECISION_BAR);
+  });
+
+  /**
+   * The same straddle on the EXIT path, which hashes `'close'` rather than
+   * `'open'` and reaches `computeIdempotencyKey` through a second call site in
+   * `buildExitIntent`. A fix applied to one of the two would leave the flatten
+   * — the more expensive half — still splitting from its debate.
+   */
+  it('#687: keys a straddling exit to the debate bar too', async () => {
+    const lateTick = new FixtureMarketData(bars(15, 2));
+    lateTick.markObservedAt = new Date('2026-07-15T11:07:42.310Z');
+
+    const straddled = await decide(
+      traderInput({
+        debate: debateResult({
+          direction: 'bearish',
+          confidence: 0.9,
+          bar_timestamp: DECISION_BAR,
+        }),
+        positionState: async () => [openPosition({ side: 'buy', filled_size: 10 })],
+        marketData: lateTick,
+        clock: new ManualClock(new Date('2026-07-15T11:07:42.310Z')),
+      }),
+    );
+
+    expect(straddled?.intent_type).toBe('exit');
+    expect(straddled?.idempotency_key).toBe(
+      computeIdempotencyKey(INSTRUMENT, DECISION_BAR, 'close'),
+    );
+    expect(straddled?.decision_timestamp).toEqual(DECISION_BAR);
+  });
+
+  /**
+   * The other half of #687, and the reason the straddle mattered at all: bar
+   * N+1's own genuine decision must still get its own key. If the straddling
+   * intent above had taken N+1's key, this order would be the one suppressed —
+   * and a suppressed order looks like a skip.
+   */
+  it('#687: bar N+1s own genuine decision is still admitted after a straddle', async () => {
+    const straddled = await decide(
+      traderInput({
+        debate: debateResult({ bar_timestamp: DECISION_BAR }),
+        clock: new ManualClock(new Date('2026-07-15T11:07:42.310Z')),
+      }),
+    );
+    const genuineNextBar = await decide(
+      traderInput({
+        debate: debateResult({ debate_id: 'debate-next-bar', bar_timestamp: NEXT_BAR }),
+        clock: new ManualClock(new Date('2026-07-15T11:12:00Z')),
+      }),
+    );
+
+    expect(genuineNextBar?.idempotency_key).not.toBe(straddled?.idempotency_key);
+    expect(genuineNextBar?.idempotency_key).toBe(
+      computeIdempotencyKey(INSTRUMENT, NEXT_BAR, 'open'),
+    );
+  });
+
+  /**
+   * And the suppression the key space exists for is intact: a TRUE duplicate —
+   * the same bar's decision re-run at a later wall-clock moment, which is the
+   * crash-replay case — still collapses onto one key.
+   */
+  it('#687: a true duplicate of the same bar still computes one key', async () => {
+    const replayed = new FixtureMarketData(bars(15, 2));
+    replayed.markObservedAt = new Date('2026-07-15T10:58:03.941Z');
+
+    const first = await decide(traderInput());
+    const replay = await decide(
+      traderInput({
+        // Same debate, same bar — a re-decide, not a new decision.
+        debate: debateResult({ bar_timestamp: DECISION_BAR }),
+        marketData: replayed,
+        clock: new ManualClock(new Date('2026-07-15T10:58:03.941Z')),
+      }),
+    );
+
+    expect(replay?.idempotency_key).toBe(first?.idempotency_key);
+    expect(replay?.idempotency_key).toBe(computeIdempotencyKey(INSTRUMENT, DECISION_BAR, 'open'));
   });
 
   it('keys on the debate bar grid, not on atr_timeframe', async () => {
