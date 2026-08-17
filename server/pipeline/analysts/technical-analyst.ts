@@ -405,7 +405,6 @@ export interface AxisUnavailable {
 /** What `readAxes` produces — the structured points the prompt renders verbatim. */
 export interface AxisAssessment {
   readings: AxisReading[];
-  unavailable: AxisUnavailable[];
   /** Sum of `weight x vote` over the available voting axes. */
   net: number;
   /** Sum of the weights of the available voting axes — the denominator. */
@@ -555,8 +554,16 @@ async function readEnrichment(
   }
 }
 
+/**
+ * Names the KIND that could not be read, and the axis it feeds — not "this axis
+ * is gone", because for two of the five that would be false. An unreadable
+ * `macd_histogram` leaves momentum voting on RSI alone, and `adx`/
+ * `bb_kc_squeeze` feed a gate that never votes at all. Only participation and
+ * structure actually leave the denominator when their kind is unreadable, and
+ * the `Axis votes: ... over N available axes` line is what reports that.
+ */
 function unavailableLine(axis: string, kind: string, required: number, received: number): string {
-  return `${axis}: unavailable — ${kind} needed ${required} bars, had ${received}`;
+  return `Unavailable: ${kind} (${axis} axis) needed ${required} bars, had ${received}`;
 }
 
 /**
@@ -591,23 +598,8 @@ function recordUnavailable(
     kind,
     required,
     received,
-    line: unavailableLine(axisLabel(axis), kind, required, received),
+    line: unavailableLine(axis, kind, required, received),
   };
-}
-
-function axisLabel(axis: TechnicalAxis): string {
-  switch (axis) {
-    case 'trend':
-      return 'Trend';
-    case 'momentum':
-      return 'Momentum';
-    case 'volatility':
-      return 'Volatility gate';
-    case 'participation':
-      return 'Participation';
-    case 'structure':
-      return 'Structure';
-  }
 }
 
 /** The core reads every view is built on. A short window here still fails loud. */
@@ -639,12 +631,15 @@ interface EnrichmentReads {
  * second into the first silently dilutes every real vote. A cold instrument
  * with only trend and momentum readable and both bullish therefore reports
  * confidence 1.0 on 2 axes, not 0.5 on 4.
+ *
+ * The shrink has ONE mechanism and this function is all of it: an axis with no
+ * readable input never gets a `readings` entry, so it is absent from the
+ * numerator and the denominator alike. It deliberately takes no list of
+ * unavailable axes — a second input that the arithmetic did not consult would
+ * read as the thing enforcing the shrink while enforcing nothing. The caller
+ * owns the unavailability lines and the counters; this owns the arithmetic.
  */
-export function assessAxes(
-  core: CoreReads,
-  enrichment: EnrichmentReads,
-  unavailable: AxisUnavailable[],
-): AxisAssessment {
+export function assessAxes(core: CoreReads, enrichment: EnrichmentReads): AxisAssessment {
   const readings: AxisReading[] = [];
 
   const trend = trendVote(core.lastClose, core.sma);
@@ -739,7 +734,6 @@ export function assessAxes(
 
   return {
     readings,
-    unavailable,
     net,
     availableAxes,
     direction: directionOf(net),
@@ -865,7 +859,6 @@ export const technicalAnalyst: Analyst = {
     const assessment = assessAxes(
       { lastClose: lastCandle.close, sma: sma.value, rsi: rsi.value, atrPct: atrPct.value },
       { macd, adx, squeeze, donchian, participation },
-      unavailable,
     );
 
     // No fallback numeric here on purpose: an empty context read has no
@@ -893,7 +886,7 @@ export const technicalAnalyst: Analyst = {
       key_points: [
         ...assessment.readings.map((reading) => reading.line),
         gateLine(atrPct.value, adx, squeeze, assessment.capReasons),
-        ...assessment.unavailable.map((entry) => entry.line),
+        ...unavailable.map((entry) => entry.line),
         `Axis votes: ${voteSummary} — net ${assessment.net} over ${assessment.availableAxes} ` +
           `available axes, confidence ${assessment.confidence}`,
         contextLine,

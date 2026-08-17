@@ -41,6 +41,7 @@ const TIMEFRAME = '5m';
 const BAR_INTERVAL_MS = 5 * 60 * 1000;
 const SIGNAL: Signal = { asset: INSTRUMENT, asset_class: 'crypto' };
 const OPEN_TAG = '<untrusted_analyst_data>';
+const CLOSE_TAG = '</untrusted_analyst_data>';
 
 class ManualClock implements Clock {
   constructor(private readonly time: Date) {}
@@ -162,7 +163,14 @@ describe('interpretation bands are computed in the analyst, not the prompt (#745
   it('puts every band inside the untrusted block, and no decoder legend outside it', async () => {
     const view = await runTechnical();
     const prompt = await promptFor([view]);
-    const trusted = prompt.slice(0, prompt.indexOf(OPEN_TAG));
+    // BOTH trusted regions: the preamble before the wrapper, and everything
+    // after the closing tag. The mediator prompt already appends trusted text
+    // after a `wrapUntrusted` block ("Underlying analyst views:"), so the
+    // trailing region is a real shape in this codebase and is where a decoder
+    // legend would most naturally be appended.
+    const trusted =
+      prompt.slice(0, prompt.indexOf(OPEN_TAG)) +
+      prompt.slice(prompt.lastIndexOf(CLOSE_TAG) + CLOSE_TAG.length);
 
     // Every axis line reaches the model INSIDE the wrapper.
     for (const point of view.key_points) {

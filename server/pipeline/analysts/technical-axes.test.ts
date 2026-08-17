@@ -24,7 +24,6 @@ import { openSharedStore } from '../../shared/store/index.js';
 import {
   ADX_SPEC,
   AXIS_WEIGHTS,
-  type AxisUnavailable,
   assessAxes,
   DONCHIAN_SPEC,
   LOW_CONVICTION_CAP,
@@ -116,11 +115,13 @@ describe('one vote per axis (#745)', () => {
     // are strongly correlated. Counting each would let momentum alone outvote
     // trend and structure combined — the failure this design exists to
     // prevent, and the rule that justified cutting #744's batch to five kinds.
-    const withBoth = assessAxes(
-      BULL_CORE,
-      { macd: 0.5, adx: 30, squeeze: 2, donchian: 0.9, participation: 0.9 },
-      [],
-    );
+    const withBoth = assessAxes(BULL_CORE, {
+      macd: 0.5,
+      adx: 30,
+      squeeze: 2,
+      donchian: 0.9,
+      participation: 0.9,
+    });
 
     expect(withBoth.readings.filter((reading) => reading.axis === 'momentum')).toHaveLength(1);
     // 4 axes, all bullish, net 4 — NOT 5, which is what a per-indicator vote
@@ -131,16 +132,20 @@ describe('one vote per axis (#745)', () => {
   });
 
   it('so adding the second oscillator cannot move net when the first already voted', () => {
-    const rsiOnly = assessAxes(
-      BULL_CORE,
-      { macd: undefined, adx: 30, squeeze: 2, donchian: 0.9, participation: 0.9 },
-      [],
-    );
-    const both = assessAxes(
-      BULL_CORE,
-      { macd: 0.5, adx: 30, squeeze: 2, donchian: 0.9, participation: 0.9 },
-      [],
-    );
+    const rsiOnly = assessAxes(BULL_CORE, {
+      macd: undefined,
+      adx: 30,
+      squeeze: 2,
+      donchian: 0.9,
+      participation: 0.9,
+    });
+    const both = assessAxes(BULL_CORE, {
+      macd: 0.5,
+      adx: 30,
+      squeeze: 2,
+      donchian: 0.9,
+      participation: 0.9,
+    });
 
     expect(both.net).toBe(rsiOnly.net);
   });
@@ -149,11 +154,13 @@ describe('one vote per axis (#745)', () => {
     // Different from unavailable, deliberately: "the two momentum reads
     // disagree" is evidence of no momentum, and evidence belongs in the
     // denominator. Only an unreadable axis leaves it.
-    const split = assessAxes(
-      BULL_CORE,
-      { macd: -0.5, adx: 30, squeeze: 2, donchian: 0.9, participation: 0.9 },
-      [],
-    );
+    const split = assessAxes(BULL_CORE, {
+      macd: -0.5,
+      adx: 30,
+      squeeze: 2,
+      donchian: 0.9,
+      participation: 0.9,
+    });
 
     expect(momentumVote(60, -0.5)).toBe(0);
     expect(split.availableAxes).toBe(4);
@@ -162,11 +169,13 @@ describe('one vote per axis (#745)', () => {
   });
 
   it('never lets the volatility gate vote — availableAxes tops out at the four voting axes', () => {
-    const assessment = assessAxes(
-      BULL_CORE,
-      { macd: 0.5, adx: 30, squeeze: 2, donchian: 0.9, participation: 0.9 },
-      [],
-    );
+    const assessment = assessAxes(BULL_CORE, {
+      macd: 0.5,
+      adx: 30,
+      squeeze: 2,
+      donchian: 0.9,
+      participation: 0.9,
+    });
 
     expect(VOTING_AXES).not.toContain('volatility');
     expect(assessment.readings.some((reading) => reading.axis === 'volatility')).toBe(false);
@@ -175,30 +184,24 @@ describe('one vote per axis (#745)', () => {
 });
 
 describe('confidence = |net| / availableAxes (#745)', () => {
-  const unavailableStructure: AxisUnavailable[] = [
-    {
-      axis: 'structure',
-      kind: 'donchian_pos',
-      required: 20,
-      received: 12,
-      line: 'Structure: unavailable',
-    },
-  ];
-
   it('SHRINKS the denominator for an unavailable axis rather than counting a zero vote', () => {
     // The distinction the ticket calls out by name. Same three bullish votes
     // both times; the only difference is whether the fourth axis was READ and
     // said nothing, or could not be read at all.
-    const zeroVote = assessAxes(
-      BULL_CORE,
-      { macd: 0.5, adx: 30, squeeze: 2, donchian: 0.5, participation: 0.9 },
-      [],
-    );
-    const absent = assessAxes(
-      BULL_CORE,
-      { macd: 0.5, adx: 30, squeeze: 2, donchian: undefined, participation: 0.9 },
-      unavailableStructure,
-    );
+    const zeroVote = assessAxes(BULL_CORE, {
+      macd: 0.5,
+      adx: 30,
+      squeeze: 2,
+      donchian: 0.5,
+      participation: 0.9,
+    });
+    const absent = assessAxes(BULL_CORE, {
+      macd: 0.5,
+      adx: 30,
+      squeeze: 2,
+      donchian: undefined,
+      participation: 0.9,
+    });
 
     expect(zeroVote.net).toBe(3);
     expect(zeroVote.availableAxes).toBe(4);
@@ -211,17 +214,13 @@ describe('confidence = |net| / availableAxes (#745)', () => {
   });
 
   it('so a cold instrument reading only its core axes argues at full strength on what it has', () => {
-    const coreOnly = assessAxes(
-      BULL_CORE,
-      {
-        macd: undefined,
-        adx: undefined,
-        squeeze: undefined,
-        donchian: undefined,
-        participation: undefined,
-      },
-      [],
-    );
+    const coreOnly = assessAxes(BULL_CORE, {
+      macd: undefined,
+      adx: undefined,
+      squeeze: undefined,
+      donchian: undefined,
+      participation: undefined,
+    });
 
     expect(coreOnly.availableAxes).toBe(2);
     expect(coreOnly.net).toBe(2);
@@ -230,11 +229,13 @@ describe('confidence = |net| / availableAxes (#745)', () => {
   });
 
   it('caps confidence at 0.40 when ADX is below the trend floor', () => {
-    const capped = assessAxes(
-      BULL_CORE,
-      { macd: 0.5, adx: 12, squeeze: 2, donchian: 0.9, participation: 0.9 },
-      [],
-    );
+    const capped = assessAxes(BULL_CORE, {
+      macd: 0.5,
+      adx: 12,
+      squeeze: 2,
+      donchian: 0.9,
+      participation: 0.9,
+    });
 
     expect(capped.confidence).toBe(LOW_CONVICTION_CAP);
     expect(capped.capReasons.join(' ')).toContain('ADX');
@@ -244,22 +245,26 @@ describe('confidence = |net| / availableAxes (#745)', () => {
   });
 
   it('caps confidence at 0.40 when the squeeze is on', () => {
-    const capped = assessAxes(
-      BULL_CORE,
-      { macd: 0.5, adx: 30, squeeze: 0.8, donchian: 0.9, participation: 0.9 },
-      [],
-    );
+    const capped = assessAxes(BULL_CORE, {
+      macd: 0.5,
+      adx: 30,
+      squeeze: 0.8,
+      donchian: 0.9,
+      participation: 0.9,
+    });
 
     expect(capped.confidence).toBe(LOW_CONVICTION_CAP);
     expect(capped.capReasons.join(' ')).toContain('squeeze');
   });
 
   it('does not cap when the tape is trending and uncoiled', () => {
-    const uncapped = assessAxes(
-      BULL_CORE,
-      { macd: 0.5, adx: 30, squeeze: 2, donchian: 0.9, participation: 0.9 },
-      [],
-    );
+    const uncapped = assessAxes(BULL_CORE, {
+      macd: 0.5,
+      adx: 30,
+      squeeze: 2,
+      donchian: 0.9,
+      participation: 0.9,
+    });
 
     expect(uncapped.capReasons).toEqual([]);
     expect(uncapped.confidence).toBe(1);
@@ -270,7 +275,6 @@ describe('confidence = |net| / availableAxes (#745)', () => {
     const weakAndCapped = assessAxes(
       { ...BULL_CORE, rsi: 50 },
       { macd: 0, adx: 12, squeeze: 2, donchian: 0.5, participation: 0.5 },
-      [],
     );
 
     expect(weakAndCapped.net).toBe(1);
@@ -290,17 +294,37 @@ describe('axis weights are equal and unfitted (#745, ADR-0018 D4)', () => {
     // The identity `confidence = |net| / availableAxes` holds only while the
     // weights are equal; this is what makes the formula the ticket specified
     // and the arithmetic actually run the same statement.
-    const assessment = assessAxes(
-      BULL_CORE,
-      { macd: 0.5, adx: 30, squeeze: 2, donchian: 0.9, participation: 0.5 },
-      [],
-    );
-    const votingReadings = assessment.readings.filter((reading) =>
-      VOTING_AXES.includes(reading.axis),
-    );
+    //
+    // Checked on BOTH a 4-axis and a 3-axis shape on purpose: 3/4 terminates
+    // and 1/3 does not, so a single terminating fixture would pass while
+    // hiding whether the reported confidence is the formula at all. The
+    // comparison is taken to 4 decimals because the rendered confidence is
+    // rounded there — that rounding is part of the emitted number, and pinning
+    // it here is what stops a later widening from going unnoticed.
+    const shapes = [
+      // 4 axes, net 3 — 0.75, terminating.
+      {
+        core: BULL_CORE,
+        enrichment: { macd: 0.5, adx: 30, squeeze: 2, donchian: 0.9, participation: 0.5 },
+      },
+      // 3 axes, net 2 — 0.6667, which does not.
+      {
+        core: { ...BULL_CORE, rsi: 50 },
+        enrichment: { macd: 0, adx: 30, squeeze: 2, donchian: undefined, participation: 0.9 },
+      },
+    ];
 
-    expect(assessment.availableAxes).toBe(votingReadings.length);
-    expect(assessment.confidence).toBe(Math.abs(assessment.net) / votingReadings.length);
+    for (const { core, enrichment } of shapes) {
+      const assessment = assessAxes(core, enrichment);
+      const votingReadings = assessment.readings.filter((reading) =>
+        VOTING_AXES.includes(reading.axis),
+      );
+
+      expect(assessment.availableAxes).toBe(votingReadings.length);
+      expect(assessment.confidence).toBe(
+        Number((Math.abs(assessment.net) / votingReadings.length).toFixed(4)),
+      );
+    }
   });
 });
 
@@ -323,20 +347,27 @@ describe('core vs enrichment — the availability trade-off (#745)', () => {
     const telemetry = recordingTelemetry();
     const view = await technicalAnalyst.run(buildInput(uptrend(19), telemetry));
 
-    const unavailableLines = view.key_points.filter((line) => line.includes('unavailable —'));
-    expect(
-      unavailableLines.some((line) => line.includes('macd_histogram needed 34 bars, had 19')),
-    ).toBe(true);
-    expect(unavailableLines.some((line) => line.includes('adx needed 28 bars, had 19'))).toBe(true);
-    expect(
-      unavailableLines.some((line) => line.includes('bb_kc_squeeze needed 21 bars, had 19')),
-    ).toBe(true);
-    expect(
-      unavailableLines.some((line) => line.includes('donchian_pos needed 20 bars, had 19')),
-    ).toBe(true);
-    expect(
-      unavailableLines.some((line) => line.includes('volume_participation needed 20 bars, had 19')),
-    ).toBe(true);
+    // The line names the KIND and the axis it feeds — not "this axis is gone",
+    // which for macd_histogram (momentum keeps voting on RSI) and for the two
+    // gate kinds (the gate never votes) would be false.
+    expect(view.key_points.filter((line) => line.startsWith('Unavailable:')).sort()).toEqual([
+      'Unavailable: adx (volatility axis) needed 28 bars, had 19',
+      'Unavailable: bb_kc_squeeze (volatility axis) needed 21 bars, had 19',
+      'Unavailable: donchian_pos (structure axis) needed 20 bars, had 19',
+      'Unavailable: macd_histogram (momentum axis) needed 34 bars, had 19',
+      'Unavailable: volume_participation (participation axis) needed 20 bars, had 19',
+    ]);
+  });
+
+  it('but only participation and structure actually leave the denominator', async () => {
+    // The counterpart claim to the line format: five kinds unreadable, yet the
+    // denominator is 2 (trend + momentum), not 5-minus-something. momentum
+    // survives on RSI and the volatility gate was never in the denominator at
+    // all, so a reader must not take an `Unavailable:` line as a lost vote.
+    const view = await technicalAnalyst.run(buildInput(uptrend(19)));
+
+    expect(view.key_points.some((line) => line.startsWith('Momentum (5m):'))).toBe(true);
+    expect(view.key_points.some((line) => line.includes('over 2 available axes'))).toBe(true);
   });
 
   it('emits technical_indicator_unavailable{kind} behind every one of them', async () => {
@@ -446,7 +477,7 @@ describe('core vs enrichment — the availability trade-off (#745)', () => {
     const view = await technicalAnalyst.run(input);
 
     expect(telemetry.events.map((event) => event.kind)).toEqual(['adx']);
-    expect(view.key_points.some((line) => line.includes('adx needed 28 bars, had 27'))).toBe(true);
+    expect(view.key_points).toContain('Unavailable: adx (volatility axis) needed 28 bars, had 27');
   });
 
   it('pre-checks against the window it already fetched, so the ordinary cold case costs no throw', async () => {
@@ -487,14 +518,12 @@ describe('the analyst holds no LLM seam of its own (#745)', () => {
   it('takes no LLM client on AnalystInput', () => {
     const input = buildInput(uptrend(60));
 
-    expect(input).not.toHaveProperty('llm');
-    expect(input).not.toHaveProperty('llm_client');
-    expect(Object.keys(input).sort()).toEqual([
-      'clock',
-      'market_data',
-      'market_intelligence',
-      'signal',
-      'trace_id',
-    ]);
+    // Named absences rather than an exhaustive key list: an exhaustive list
+    // would fail on the next unrelated `AnalystInput` field while reporting an
+    // LLM-seam violation, which is a misleading red, and the property under
+    // test is "no model seam", not "these exact five keys".
+    for (const key of Object.keys(input)) {
+      expect(key).not.toMatch(/llm|model|prompt|anthropic|openai|nous/i);
+    }
   });
 });

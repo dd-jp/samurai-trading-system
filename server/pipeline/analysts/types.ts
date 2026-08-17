@@ -45,12 +45,18 @@ export interface Signal {
  */
 export const INDICATOR_UNAVAILABLE_COUNTER = 'technical_indicator_unavailable';
 
-/** One axis lost to a short window, with the arithmetic that lost it. */
+/** One indicator kind lost to a short window, with the arithmetic that lost it. */
 export interface IndicatorUnavailableEvent {
   trace_id: string;
   analyst_type: string;
   instrument: string;
-  /** The axis that left the vote denominator. */
+  /**
+   * The axis this kind FEEDS — not, on its own, an axis that left the vote
+   * denominator. Momentum reads two kinds and keeps voting on RSI when
+   * `macd_histogram` is unreadable; the volatility gate never votes at all. An
+   * axis leaves the denominator only when it has no readable input left, which
+   * the view's `Axis votes: ... over N available axes` line is what reports.
+   */
   axis: string;
   /** The counter's `kind` label — an `IndicatorKind`, or a derived feature name. */
   kind: string;
