@@ -15,6 +15,7 @@ import {
   AlwaysOpenCalendar,
   LseRegularHoursCalendar,
   londonEntryWindow,
+  type TradingCalendar,
 } from '../../../providers/market-data-service/index.js';
 import { UniverseScheduler } from '../scheduler.js';
 import type { UniverseInstrument } from '../types.js';
@@ -142,7 +143,11 @@ describe('the flatten tail is reachable', () => {
       sessionEnd: () => {
         throw new Error('No LSE session close found within 10 days after ...');
       },
-    } as unknown as LseRegularHoursCalendar;
+      // Cast to the PORT, not to `LseRegularHoursCalendar`: `withFlattenTail`
+      // takes the interface, and the fault being modelled is any implementer's
+      // — the port's three implementations are all in one file today, but the
+      // seam is injected (`ProductionConfig.tradingCalendar`).
+    } as unknown as TradingCalendar;
 
     // 16:26 is inside the flatten tail and outside the entry window, so the
     // predicate must actually consult the calendar to answer.
