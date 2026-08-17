@@ -515,6 +515,23 @@ class ReviewCoverage(NamedTuple):
     def is_complete(self) -> bool:
         return not self.content_was_lost and not self.coverage_unverified
 
+    @property
+    def no_usable_review(self) -> bool:
+        """True when the reviewer attempted at least one slice and NONE of
+        them came back usable — the shape #567 reports: the check goes green
+        having produced no review at all.
+
+        Deliberately narrower than `content_was_lost`: a PR where 9/10 slices
+        came back fine and one didn't is a partial-coverage disclosure, not a
+        "this reviewer never ran" failure — flagging that too would turn one
+        flaky slice on a large, legitimate PR into a red job, which is the
+        disruption the issue itself warns against. And `slices_total == 0`
+        (nothing was ever attempted — a no-op diff, or every byte skipped
+        before any model call) is excluded on purpose: nothing was attempted
+        there, which is a different failure mode than attempting and getting
+        nothing back."""
+        return self.slices_total > 0 and self.slices_reviewed == 0
+
     def disclosure(self) -> str:
         """Markdown banner naming exactly what went unread. Empty when the
         whole diff was reviewed and that could be verified."""
@@ -1266,4 +1283,11 @@ def build_review_payload(
         "comments": accepted,
         "event": event,
         "verdict": verdict,
+        # Read by the workflow to decide whether to (a) post a standalone PR
+        # comment naming the reviewer that produced nothing and (b) fail the
+        # job rather than let it report `pass` with no review behind it (#567).
+        # False, never absent, when there's no coverage info to check — a
+        # missing key would make a `payload.get("no_usable_review")` typo
+        # downstream silently mean "never fails" instead of erroring loudly.
+        "no_usable_review": coverage is not None and coverage.no_usable_review,
     }

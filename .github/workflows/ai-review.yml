@@ -247,3 +247,63 @@ jobs:
               );
               await github.rest.pulls.createReview({ ...base, body });
             }
+
+      # #567: a reviewer whose every attempted slice came back unusable
+      # (finish_reason=length with zero content, in the observed case) used
+      # to post that fact ONLY inside the review body — a place nobody reads
+      # once the check shows green — while the job itself exited 0. This
+      # step and the one below fix that: this one puts the fact where an
+      # operator scanning the PR conversation will actually see it, using
+      # `github.token` (not the minted app token from the step above) because
+      # the workflow's own `pull-requests: write` permission is already
+      # enough to comment and doesn't require granting the review app any
+      # additional Issues scope just for this.
+      - name: Flag it in the conversation if this reviewer produced nothing
+        if: always()
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          REVIEWER: ${{ matrix.reviewer }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require('fs');
+            if (!fs.existsSync('review_output.json')) return; // "Run review" step never produced output
+            const payload = JSON.parse(fs.readFileSync('review_output.json', 'utf8'));
+            if (!payload.no_usable_review) return;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              body:
+                `**${process.env.REVIEWER} produced no review.** Every diff slice it ` +
+                'attempted came back with no usable output (see that review\'s body for ' +
+                'the retry detail). This PR has NOT received a review from this reviewer ' +
+                '— re-run it via `workflow_dispatch` once the cause is addressed, or treat ' +
+                'the remaining reviewer(s) as the only coverage this PR has.',
+            });
+
+      # Last on purpose: both the review and the conversation comment above
+      # must post FIRST. Failing here after they've landed keeps both signals
+      # intact; failing earlier (e.g. in "Run review") would kill the job
+      # before either one existed, trading the one signal this check had for
+      # a red X and nothing else (see PR body for why a red X alone doesn't
+      # block a merge on this repo — there's no branch protection to enforce
+      # it against).
+      - name: Fail when this reviewer produced no usable review
+        run: |
+          python3 - <<'PY'
+          import json
+          import sys
+
+          with open("review_output.json") as f:
+              payload = json.load(f)
+
+          if payload.get("no_usable_review"):
+              print(
+                  "::error::this reviewer produced no usable review — every diff slice "
+                  "it attempted came back unusable. See the posted review body and PR "
+                  "comment for detail. Not a pass."
+              )
+              sys.exit(1)
+          PY
