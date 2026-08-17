@@ -201,6 +201,78 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
     expect(newsFor(store)).toHaveLength(0);
   });
 
+  it('escalates a permanently-refused row from info to warn after a day of passes', async () => {
+    // The silent-decay hazard: a row parked below the volume floor never
+    // contributes and never warns. Measured 2026-08-17, 5 of the 8 shipped rows
+    // sit there, so this is the common case.
+    const log = vi.fn();
+    let at = new Date('2026-08-17T00:00:00Z');
+    const store = new MarketIntelligenceStore({ now: () => at });
+    const agent = new PolymarketAgent({
+      client: {
+        fetchEventMarket: async () => market({ volume24hr: 5, updatedAt: at }),
+        fetchPriceHistory: async () => [],
+      },
+      store,
+      clock: { now: () => at },
+      table: [ENTRY],
+      logger: { log },
+    });
+
+    const levelsPerPass: string[] = [];
+    for (let pass = 0; pass < 24; pass += 1) {
+      at = new Date(at.getTime() + 60 * 60 * 1000);
+      log.mockClear();
+      await agent.refresh(`t${pass}`);
+      const refusal = log.mock.calls
+        .map(([entry]) => entry)
+        .find((entry) => String(entry.message).includes(ENTRY.id));
+      levelsPerPass.push(String(refusal?.level));
+    }
+
+    expect(levelsPerPass.slice(0, 23).every((level) => level === 'info')).toBe(true);
+    expect(levelsPerPass[23]).toBe('warn');
+  });
+
+  it('resets the refusal streak once the row answers again', async () => {
+    const log = vi.fn();
+    let at = new Date('2026-08-17T00:00:00Z');
+    let thin = true;
+    const store = new MarketIntelligenceStore({ now: () => at });
+    const agent = new PolymarketAgent({
+      client: {
+        fetchEventMarket: async () =>
+          thin ? market({ volume24hr: 5, updatedAt: at }) : market({ updatedAt: at }),
+        fetchPriceHistory: async () =>
+          history(0.67, 0.705).map((point) => ({
+            ...point,
+            at: new Date(point.at.getTime() + (at.getTime() - NOW.getTime())),
+          })),
+      },
+      store,
+      clock: { now: () => at },
+      table: [ENTRY],
+      logger: { log },
+    });
+
+    for (let pass = 0; pass < 23; pass += 1) {
+      at = new Date(at.getTime() + 60 * 60 * 1000);
+      await agent.refresh(`t${pass}`);
+    }
+    thin = false;
+    at = new Date(at.getTime() + 60 * 60 * 1000);
+    await agent.refresh('healthy');
+    thin = true;
+    at = new Date(at.getTime() + 60 * 60 * 1000);
+    log.mockClear();
+    await agent.refresh('again');
+
+    const refusal = log.mock.calls
+      .map(([entry]) => entry)
+      .find((entry) => String(entry.message).includes(ENTRY.id));
+    expect(refusal?.level).toBe('info');
+  });
+
   it('refuses when the price history does not span a full 24h', async () => {
     // Three hours of history: a large move over it would otherwise land as a
     // HIGH-confidence signal built on almost no data.

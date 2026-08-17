@@ -160,6 +160,13 @@ const DELTA_WINDOW_MS = 24 * 60 * 60 * 1000;
  */
 const BASELINE_TOLERANCE_MS = 2 * 60 * 60 * 1000;
 
+/**
+ * How many consecutive refusals a curated row may accumulate before its
+ * refusal log escalates from `info` to `warn`. 24 = a full day at the hourly
+ * refresh cadence.
+ */
+const REFUSAL_WARN_STREAK = 24;
+
 /** How stale the newest history point may be before the series is refused. */
 const MAX_LATEST_POINT_AGE_MS = 3 * 60 * 60 * 1000;
 
@@ -262,6 +269,8 @@ export class PolymarketAgent {
   /** The bucket already fetched. In-memory: a restart refetches, which is correct. */
   #bucket: number | undefined;
   #current: Promise<boolean> | undefined;
+  /** Consecutive book-quality refusals per curated row — see `#refuse`. */
+  readonly #refusals = new Map<string, number>();
   readonly #deps: PolymarketAgentDeps;
   readonly #refreshMs: number;
   readonly #table: readonly CuratedMacroMarket[];
@@ -542,19 +551,35 @@ export class PolymarketAgent {
       fidelity: 'live',
     };
 
+    // The row answered, so its refusal streak starts over: the escalation must
+    // fire on a row that is dead, not on one that was quiet last Tuesday.
+    this.#refusals.delete(entry.id);
     return { item, raw };
   }
 
   #refuse(trace_id: string, entry: CuratedMacroMarket, reason: string): undefined {
+    const streak = (this.#refusals.get(entry.id) ?? 0) + 1;
+    this.#refusals.set(entry.id, streak);
+    // A row parked below the book-quality floors forever is functionally a
+    // rotted row: it never contributes, and nobody greps `info`. One refusal is
+    // routine (a quiet hour on a market that trades around a print), so the
+    // first day stays `info`; past a full day of consecutive refusals the row
+    // is not quiet, it is dead, and that has to reach the same eyes slug rot
+    // does. Measured 2026-08-17: 5 of the 8 curated rows sit below the volume
+    // floor today, so this is the common path, not an edge (see the PR body).
+    const persistent = streak >= REFUSAL_WARN_STREAK;
     this.#log({
       trace_id,
       stage: 'market_intelligence',
-      level: 'info',
-      message:
-        `polymarket: refusing '${entry.id}' — ${reason}. Ingesting nothing rather than a ` +
-        'neutral item, so the analysts report NO DATA and "could not look" stays ' +
-        'distinguishable from "looked and saw nothing".',
-      payload: { source: SOURCE_POLYMARKET, curated_id: entry.id },
+      level: persistent ? 'warn' : 'info',
+      message: persistent
+        ? `polymarket: curated row '${entry.id}' has been refused ${streak} passes in a row — ` +
+          `latest reason: ${reason}. A permanently-refused row contributes nothing and needs ` +
+          'either re-pointing or removing in curated-markets.ts. Ingesting nothing for it.'
+        : `polymarket: refusing '${entry.id}' — ${reason}. Ingesting nothing rather than a ` +
+          'neutral item, so the analysts report NO DATA and "could not look" stays ' +
+          'distinguishable from "looked and saw nothing".',
+      payload: { source: SOURCE_POLYMARKET, curated_id: entry.id, consecutive_refusals: streak },
     });
     return undefined;
   }

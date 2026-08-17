@@ -34,6 +34,31 @@
  * mass (0.295 for September, on $533k of 24h volume) and are where the news
  * actually lands.
  *
+ * ## Only three of these eight clear the book-quality floors TODAY
+ *
+ * Measured live 2026-08-17 against `MIN_VOLUME_24H_USD = 100` and
+ * `MIN_LIQUIDITY_USD = 5_000` (`polymarket-agent.ts`):
+ *
+ * | row | 24h volume | liquidity | verdict |
+ * | --- | --- | --- | --- |
+ * | `fed-2026-09` | $541,447 | $572,848 | ingests |
+ * | `fed-2026-10` | $1,138 | $63,554 | ingests |
+ * | `fed-2026-12` | $40 | $65,341 | refused (volume) |
+ * | `fed-2027-01` | absent | $29,653 | refused (volume) |
+ * | `us-cpi-annual-hot-tail` | $12 | $1,886 | refused (volume + liquidity) |
+ * | `us-core-cpi-mom-hot-tail` | absent | $324 | refused (volume + liquidity) |
+ * | `us-recession-2026` | $35 | $40,769 | refused (volume) |
+ * | `us-recession-2027` | $278 | $12,704 | ingests |
+ *
+ * All eight slugs resolve — nothing here has rotted yet. The refusals are the
+ * fail-closed guard working, and the CPI rows in particular gain volume as the
+ * print approaches, so the set is expected to widen rather than being wrong.
+ * But the honest reading of this table on merge day is THREE live macro series,
+ * not eight, and a row that never recovers must not decay in silence — which is
+ * what the consecutive-refusal escalation in `polymarket-agent.ts#refuse` is
+ * for. Whether these floors are the right floors is David's call; they are set
+ * where a market's quoted probability is a price someone actually paid.
+ *
  * ## Slug rot is a known, unmitigated limitation
  *
  * Polymarket mints event slugs with volatile numeric suffixes —
