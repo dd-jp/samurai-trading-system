@@ -1491,3 +1491,64 @@ def test_a_429_is_still_treated_as_transient():
 
     assert client.completions.calls == review_lib.TRANSIENT_MAX_ATTEMPTS
     assert result["verdict"] is None
+
+
+# --- mechanism 5: a reviewer that produced nothing must not read as `pass` (#567) --
+
+
+def test_no_usable_review_is_true_when_every_attempted_slice_is_unusable():
+    diff = _file_diff("src/a.ts", lines_per_hunk=40) + _file_diff("src/b.ts", lines_per_hunk=40)
+
+    def fake_call(diff, changed_files, **kwargs):
+        # The exact shape `call_model` returns once its retries are exhausted.
+        return {"summary_markdown": "_skipped_", "inline_comments": [], "verdict": None}
+
+    payload = review_lib.review_diff(diff, ["src/a.ts", "src/b.ts"], call=fake_call, max_chars=1200)
+
+    assert payload["no_usable_review"] is True
+    assert payload["event"] == "COMMENT"
+
+
+def test_no_usable_review_is_false_when_even_one_slice_comes_back_usable():
+    """The #567 defect is 'never reviewed', not 'partial coverage' — those
+    already get a disclosure banner and a capped verdict, and must not also
+    trip the harder failure this ticket adds, or one flaky slice on an
+    otherwise-fine large PR turns red for no new reason."""
+    diff = _file_diff("src/a.ts", lines_per_hunk=40) + _file_diff("src/b.ts", lines_per_hunk=40)
+    results = [
+        {"summary_markdown": "fine", "inline_comments": [], "verdict": "APPROVE"},
+        {"summary_markdown": "_skipped_", "inline_comments": [], "verdict": None},
+    ]
+    calls = []
+
+    def fake_call(diff, changed_files, **kwargs):
+        calls.append(diff)
+        return results[len(calls) - 1]
+
+    payload = review_lib.review_diff(diff, ["src/a.ts"], call=fake_call, max_chars=1200)
+
+    assert payload["no_usable_review"] is False
+    assert "Partial review" in payload["summary_markdown"]  # still disclosed, just not fatal
+
+
+def test_no_usable_review_is_false_on_a_genuinely_empty_diff():
+    """Nothing was ever attempted on a no-op diff — that's not the 'attempted
+    and got nothing back' failure this flag exists to catch, and flagging it
+    would turn every no-op PR into a hard failure."""
+    payload = review_lib.review_diff("", [], call=lambda **_k: None)
+
+    assert payload["no_usable_review"] is False
+
+
+def test_no_usable_review_defaults_false_without_coverage():
+    payload = review_lib.build_review_payload(
+        DIFF, {"summary_markdown": "x", "inline_comments": [], "verdict": "APPROVE"}
+    )
+
+    assert payload["no_usable_review"] is False
+
+
+def test_review_coverage_no_usable_review_property():
+    assert review_lib.ReviewCoverage(slices_total=2, slices_reviewed=0).no_usable_review is True
+    assert review_lib.ReviewCoverage(slices_total=2, slices_reviewed=1).no_usable_review is False
+    assert review_lib.ReviewCoverage(slices_total=0, slices_reviewed=0).no_usable_review is False
