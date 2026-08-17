@@ -16,7 +16,7 @@
 
 import type { TradingCalendar } from '../trading-calendar.js';
 import { UsEquityRegularHoursCalendar } from '../trading-calendar.js';
-import { type AlpacaBar, type AlpacaClient, AlpacaDataSource } from './alpaca-source.js';
+import { type AlpacaBar, AlpacaDataSource, type AlpacaMarketDataClient } from './alpaca-source.js';
 import { InSessionUnderfetchError } from './normalizing-data-source.js';
 
 const HOUR_MS = 3_600_000;
@@ -50,11 +50,11 @@ function hourlyCandles(asOf: Date, limit: number): AlpacaBar[] {
  * all out of session.
  */
 function recordingClient(supply: (limit: number) => AlpacaBar[]): {
-  client: AlpacaClient;
+  client: AlpacaMarketDataClient;
   limits: number[];
 } {
   const limits: number[] = [];
-  const client: AlpacaClient = {
+  const client: AlpacaMarketDataClient = {
     getBars: async (_symbol, _timeframe, _asOf, limit) => {
       limits.push(limit);
       return supply(limit);

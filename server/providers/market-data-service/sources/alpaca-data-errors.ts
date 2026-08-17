@@ -1,11 +1,11 @@
 /**
- * Typed error hierarchy for the real Alpaca market-data `AlpacaClient`
+ * Typed error hierarchy for the real Alpaca market-data `AlpacaMarketDataClient`
  * (ticket #273) — mirrors `server/pipeline/debate-engine/llm/errors.ts`'s shape per
  * transport-layer-spec.md's "Shared Transport Conventions" module (issue
  * #271). Parallel to, but deliberately separate from,
  * `execution/adapters/alpaca-broker-errors.ts`'s hierarchy — see that
- * module's doc comment for why the two `AlpacaClient` interfaces (broker vs.
- * market data) don't share one error hierarchy. The `Retry-After`-parsing
+ * module's doc comment for why `AlpacaBrokerClient` and `AlpacaMarketDataClient`
+ * (broker vs. market data) don't share one error hierarchy. The `Retry-After`-parsing
  * and body-truncation helpers underneath carry no such domain coupling, so
  * those are shared (`shared/http/response-errors.js`) rather than duplicated.
  */

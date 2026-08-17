@@ -20,7 +20,7 @@ import { type Clock, TokenBucket } from '../../shared/index.js';
 import { recordingLogger } from '../../shared/recording-logger.js';
 import { type SharedStore as Db, openSharedStore } from '../../shared/store/index.js';
 import { AlpacaBrokerAdapter } from './adapters/alpaca-adapter.js';
-import type { AlpacaClient, AlpacaOrder } from './adapters/alpaca-client.js';
+import type { AlpacaBrokerClient, AlpacaOrder } from './adapters/alpaca-client.js';
 import type { OcoDoubleFillAlertChannel } from './oco-double-fill-alert.js';
 import { SqliteBrokerStateStore } from './sqlite-broker-state-store.js';
 import type { NativeBracketRequest } from './types.js';
@@ -145,7 +145,7 @@ describe('AlpacaBrokerAdapter across a restart', () => {
       submitOrder: vi.fn(async () => order),
       getOrder: vi.fn(async () => order),
       getOrderByClientOrderId: vi.fn(async () => order),
-    } as unknown as AlpacaClient;
+    } as unknown as AlpacaBrokerClient;
 
     const first = new AlpacaBrokerAdapter({
       client,
@@ -194,7 +194,7 @@ describe('AlpacaBrokerAdapter across a restart', () => {
       submitOrder: vi.fn(async () => order),
       getOrder: vi.fn(async () => order),
       getOrderByClientOrderId: vi.fn(async () => order),
-    } as unknown as AlpacaClient;
+    } as unknown as AlpacaBrokerClient;
 
     // The venue call lands; the journal write is what dies.
     const dyingState = new SqliteBrokerStateStore(db);
@@ -253,7 +253,7 @@ describe('AlpacaBrokerAdapter across a restart', () => {
       submitOrder: vi.fn(async () => unpriced),
       getOrder: vi.fn(async () => unpriced),
       getOrderByClientOrderId: vi.fn(async () => unpriced),
-    } as unknown as AlpacaClient;
+    } as unknown as AlpacaBrokerClient;
 
     const firstAlerts = recordingAlerts();
     const first = new AlpacaBrokerAdapter({

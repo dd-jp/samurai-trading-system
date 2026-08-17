@@ -5,7 +5,7 @@ import {
   UsEquityRegularHoursCalendar,
 } from '../trading-calendar.js';
 import type { BarWindow, DataSource } from '../types.js';
-import { type AlpacaBar, type AlpacaClient, AlpacaDataSource } from './alpaca-source.js';
+import { type AlpacaBar, AlpacaDataSource, type AlpacaMarketDataClient } from './alpaca-source.js';
 import {
   type CcxtClient,
   CcxtDataSource,
@@ -61,7 +61,7 @@ const ccxtClient: CcxtClient = {
   fetchTicker: async () => ({ last: 999, timestamp: Date.parse('2026-07-15T17:59:30Z') }),
 };
 
-const alpacaClient: AlpacaClient = {
+const alpacaClient: AlpacaMarketDataClient = {
   getBars: async () => ALPACA_BARS,
   getLatestQuote: async () => ({ t: '2026-07-15T17:59:30Z', ap: 1001, bp: 997 }),
 };
@@ -274,7 +274,7 @@ describe('point-in-time discipline holds at the source', () => {
 });
 
 describe("the window's short-read policy reaches the source client (#292)", () => {
-  it('forwards window.partial to AlpacaClient.getBars, and undefined when unset', async () => {
+  it('forwards window.partial to AlpacaMarketDataClient.getBars, and undefined when unset', async () => {
     const getBars = vi.fn(async (): Promise<AlpacaBar[]> => ALPACA_BARS);
     const source = new AlpacaDataSource(
       { getBars, getLatestQuote: async () => ({ t: ASOF.toISOString(), ap: 1, bp: 1 }) },

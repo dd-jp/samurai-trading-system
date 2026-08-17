@@ -117,7 +117,13 @@ interface RiskInput {
   portfolio: PortfolioView;      // accounting view over the shared store (equity, drawdown, exposure)
   breakers: BreakerState;        // armed/tripped state + peaks, per tier
   next_breaker_state: PersistedBreakerState[];  // lossless sticky-breaker rows (#203) — evaluate() only echoes this, see below
-  mode: 'live' | 'backtest';     // selects manual vs auto re-arm for the hard breaker
+  mode: 'live' | 'paper' | 'backtest';   // consumed by CircuitBreakers.evaluate, not this pipeline. No longer selects manual
+                                          // vs auto re-arm for the hard breaker — since #634 the re-arm policy runs in every
+                                          // mode (ADR-0013); it now selects only whether `auto_rearm.max_days_tripped`, the
+                                          // elapsed-time arm, is honoured, which is backtest-only. Widened to three-way
+                                          // 2026-08-17 (#644) to match `execution-spec.md:103` and the code (`RiskInput.mode`,
+                                          // `BreakerEvalInput.mode`) — the store provisions one DB file per environment, and
+                                          // a two-way union here lied about which environments the system runs in.
 }
 
 // Crash-restart-safe row shape for the two sticky breakers (hard drawdown, kill-switch),
@@ -244,8 +250,8 @@ Two things this makes newly load-bearing:
 
 Adopted per [ADR-0002](../adr/0002-worldmonitor-mi-source.md) (WorldMonitor as a Market Intelligence source). WorldMonitor's Country Instability Index (CII, 0–100 per country) enters the Risk Manager as an **advisory warning, never a gate or a sizing input**. v1 scope, resolved in [CII soft-signal policy grilling — #174](https://github.com/dd-jp/samurai-trading-system/issues/174):
 
-- **Warning-only, no position-size scaling in v1.** No CII-driven sizing formula is implemented yet — no historical CII series exists at any WorldMonitor tier to calibrate one against (see ADR-0002 §6). Deferred to v2 alongside the correlation-matrix concentration upgrade (backlog #50), once [#182](https://github.com/dd-jp/samurai-trading-system/issues/182)'s post-launch CII snapshot capture yields real history.
-- **Samurai owns a static instrument→country/region mapping** (e.g. Russian ADRs → RU, energy majors → Middle East), independent of and not trusting WorldMonitor's own tagging — lives alongside the v1 static concentration buckets (Check Pipeline step 6).
+- **Warning-only, no position-size scaling in v1.** No CII-driven sizing formula is implemented yet — no historical CII series exists at any WorldMonitor tier to calibrate one against (see ADR-0002 §6). Deferred to v2, once [#182](https://github.com/dd-jp/samurai-trading-system/issues/182)'s post-launch CII snapshot capture yields real history. *(The concentration check itself is no longer part of this deferral — backlog #50 already shipped the dynamic correlation matrix described in Check Pipeline step 6 above.)*
+- **Samurai owns a static instrument→country/region mapping** (e.g. Russian ADRs → RU, energy majors → Middle East), independent of and not trusting WorldMonitor's own tagging — this mapping is a fixed lookup table, unrelated to the concentration check, which is the dynamic pairwise-correlation matrix described in Check Pipeline step 6 above, not the "v1 static buckets" this section's earlier draft named.
 - **Surfaces as the advisory `warnings` field on `RiskDecision`** (e.g. `macro_risk_flag:RU`) — travels with the exact decision it's context for, no separate side-channel event or new plumbing.
 - **Fires on absolute CII level, not delta.** A sustained high-risk exposure warns every cycle it's evaluated, not just at the moment of a jump.
 - **Threshold ("CII > N") is an unpinned config value**, tuned in paper trading — same convention as every other Risk Manager threshold.

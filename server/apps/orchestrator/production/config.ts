@@ -4,7 +4,7 @@ import type {
   RateLimiterConfig,
 } from '../../../pipeline/debate-engine/index.js';
 import type {
-  AlpacaClient as AlpacaBrokerClient,
+  AlpacaBrokerClient,
   BrokerAdapter,
   ExecutionConfig,
   FlattenReconcileAlertChannel,
@@ -32,7 +32,7 @@ import type {
   VerdictConfig,
 } from '../../../pipeline/verdict/index.js';
 import type {
-  AlpacaClient as AlpacaDataClient,
+  AlpacaMarketDataClient,
   DataSource,
   IndicatorSpec,
   TradingCalendar,
@@ -242,7 +242,7 @@ export interface ProductionConfig extends AlertChannelSlots {
    * the same reason; defaults to `AlpacaHttpDataClient` on
    * `dataSourceAssetClass`.
    */
-  alpacaDataClient?: AlpacaDataClient;
+  alpacaDataClient?: AlpacaMarketDataClient;
   /**
    * HITL approval round-trip (Verdict gate 6). Same shape as
    * `heartbeatChannel`: pass `SignedApprovalChannel`

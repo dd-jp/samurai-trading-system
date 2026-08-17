@@ -24,7 +24,7 @@ import type { OcoDoubleFillAlert, OcoDoubleFillAlertChannel } from '../oco-doubl
 import type { NativeBracketRequest } from '../types.js';
 import { AlpacaBrokerAdapter } from './alpaca-adapter.js';
 import type {
-  AlpacaClient,
+  AlpacaBrokerClient,
   AlpacaLimitOrderRequest,
   AlpacaOrder,
   AlpacaStopLimitOrderRequest,
@@ -104,7 +104,7 @@ class FakeVenue {
     return { ...order };
   }
 
-  client(): AlpacaClient {
+  client(): AlpacaBrokerClient {
     return {
       submitOrder: async () => {
         throw new Error(
