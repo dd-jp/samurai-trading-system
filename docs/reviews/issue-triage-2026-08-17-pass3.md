@@ -6,7 +6,7 @@ A third pass on the same day, asked for as *"triage open issues for duplicates."
 
 **Coverage.** All 46 open issues listed; **all 46 bodies read**, each truncated at 1,400 characters. That is the whole body for 31 of them and the opening section for 15. A duplicate asserted only in the tail of a long body — #238, #514, #631, #636, #664, #683, #707, #750, #751, #773, #791, #793, #797, #813, #828 are the truncated ones — would not have been caught. Pairs were then verified against the tree, not against each other's prose.
 
-**Written as recommendations only, then verified (§11) and applied (§12).** Two issues closed, six bodies edited, one label removed, ten comments — all on 2026-08-17, all citing this report. Every decision reserved to David was left to him.
+**Written as recommendations only, then verified (§11) and applied (§12).** Two issues closed, six bodies edited, one label removed, fourteen comments — all on 2026-08-17, all citing this report. Every decision reserved to David was left to him.
 
 ---
 
@@ -301,7 +301,7 @@ Run after the report was first written, on the question *"do these claims surviv
 
 ## 12. Dispositions applied — 2026-08-17
 
-The eight surviving numbered recommendations plus three body-level ones were carried out on the issues after §11's verification. Two issues closed, six bodies edited, one label removed, ten comments. Every mutation cites this report.
+The eight surviving numbered recommendations plus three body-level ones were carried out on the issues after §11's verification. Two issues closed, six bodies edited, one label removed, fourteen comments. Every mutation cites this report.
 
 | # | Recommendation | Applied as |
 | --- | --- | --- |
