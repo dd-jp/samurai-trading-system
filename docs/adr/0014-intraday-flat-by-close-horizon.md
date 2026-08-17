@@ -22,6 +22,7 @@ Recorded with two amendments:
 
 1. **An explicit horizon** — single session, flat by market close, no overnight carry.
 2. **Falsifier arm 2 restated.** The old control was a dual-SMA daily-bar proxy, which belongs to the superseded horizon. The control is now: *the same name selection, the same profit ladder, the same stop, with entry by technical indicator alone and no LLM in the path.*
+   > **Read "the same profit ladder" as "the same exit rule as the live arm" (2026-08-17).** The clause's job is *sameness* — the control must not differ from the live arm in anything but the entry — and when it was written the declared exit was a tranche ladder. [#708](https://github.com/dd-jp/samurai-trading-system/issues/708) measured that ladder and rejected it, and [ADR-0018](0018-intraday-thresholds-sizing-and-the-signal-bar.md)'s amendment was withdrawn on 2026-08-17, so the exit both arms share is **D3's neutral single bracket, per subclass, flat by close**. A control built to the literal word here would differ from the live arm on the exit and stop measuring what it exists to measure.
 
 ### What this supersedes, and what it does not
 

@@ -160,7 +160,7 @@ interface AnalystRunResult {
 2. **Auditability.** "Why was this position opened" has to be answerable from a log. A threshold comparison answers it; a model's prose about a threshold comparison does not.
 3. **Failure surface.** Each analyst LLM call is a latency tail, a spend line, and a quorum risk on a mandatory analyst.
 
-**What is *not* claimed:** that LLMs add nothing. The recorded thesis is that they add value **as the generator, weighing conflicting evidence under uncertainty** — which is the debate's job and remains untouched. This amendment moves the model to where it earns its cost, and it does not weaken the thesis; if anything it sharpens the falsifier, because the control arm ([#636](https://github.com/dd-jp/samurai-trading-system/issues/636)'s falsifier arm 2 — same names, same ladder, same stop, entry by indicator alone, no LLM) becomes **the analyst layer's own output thresholded**, with no separate implementation to write and no risk of the control differing from the live arm by accident.
+**What is *not* claimed:** that LLMs add nothing. The recorded thesis is that they add value **as the generator, weighing conflicting evidence under uncertainty** — which is the debate's job and remains untouched. This amendment moves the model to where it earns its cost, and it does not weaken the thesis; if anything it sharpens the falsifier, because the control arm ([#636](https://github.com/dd-jp/samurai-trading-system/issues/636)'s falsifier arm 2 — same names, same exit rule, same stop, entry by indicator alone, no LLM) becomes **the analyst layer's own output thresholded**, with no separate implementation to write and no risk of the control differing from the live arm by accident.
 
 **Consequences to carry, not discover:**
 
