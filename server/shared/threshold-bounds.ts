@@ -28,10 +28,16 @@
  * (a control that reads as present while doing nothing). So every entry point
  * here THROWS. At boot that refuses the process. On the tuning-store write it
  * refuses the write and leaves the prior in-bound value standing. On the live
- * read it refuses to produce a risk decision at all, which the orchestrator's
- * fault net (`installFaultHandlers`) turns into a recorded, non-zero exit —
- * the correct outcome for a live-money process whose only remaining stop is
- * known to be mis-set.
+ * read it refuses to produce a risk decision at all: that throw is raised
+ * inside a tick, so `tick-loop.ts`'s per-instrument catch (#507) takes it —
+ * the instrument pass ABORTS, no order is placed, an `error` log line and an
+ * `audit_log` row with `decision: 'crashed'` are written, and the loop
+ * continues with the next instrument. It does NOT reach
+ * `installFaultHandlers` and it does NOT raise an alert. That is fail-closed
+ * on trading — no order can pass a Risk stage that threw — but it is not a
+ * halt, so the boot-time and write-door checks are what actually keep a
+ * mis-set line out of a running process. Alerting on a crashed instrument is
+ * a separate gap, adjacent to #639.
  *
  * ## Names
  *
