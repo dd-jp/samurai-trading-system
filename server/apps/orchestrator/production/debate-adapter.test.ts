@@ -1,3 +1,4 @@
+import { fundamentalAnalyst } from '../../../pipeline/analysts/index.js';
 import type {
   AnalystView,
   AnthropicMessageRequest,
@@ -15,6 +16,8 @@ import {
   UNCAPPED_SPEND,
 } from '../../../pipeline/debate-engine/index.js';
 import { accumulateCredit } from '../../../pipeline/feedback-loop/index.js';
+import { AlwaysOpenCalendar } from '../../../providers/market-data-service/index.js';
+import { MarketIntelligenceStore } from '../../../providers/market-intelligence/index.js';
 import type {
   AssetClass,
   Clock,
@@ -39,6 +42,17 @@ function unlimited(): RateLimiter {
   return new RateLimiter(CLOCK, {
     default: { windowMs: 60_000, maxLlmCalls: 10_000, maxDebates: 10_000 },
   });
+}
+
+/** A clock that can be advanced mid-test, for the same-bar cases (#782). */
+class MutableClock implements Clock {
+  constructor(private at: Date) {}
+  now(): Date {
+    return this.at;
+  }
+  advanceTo(at: Date): void {
+    this.at = at;
+  }
 }
 
 /** The asset class every fixture instrument in this file is treated as. */
@@ -472,6 +486,111 @@ describe('buildDebateStep', () => {
     });
     expect(llmCalls).toBeGreaterThan(callsAfterFirst);
     expect(third.debate_id).not.toBe(first.debate_id);
+  });
+
+  /**
+   * #782. The two guards above both live INSIDE one `buildDebateStep`
+   * closure: the per-bar memo is in-memory and restart-clean, so after a
+   * restart mid-bar the CONTENT hash is the only thing standing between the
+   * bar and a second paid debate — and a second confidence sample for the
+   * Trader, which `scale_in_conviction_delta` can turn into an extra lot.
+   *
+   * That content hash used to move on wall-clock time, not on the bar:
+   * `fundamental`/`sentiment`/`technical` all read
+   * `MarketIntelligenceStore.getContext`, whose window was rolling, so an item
+   * ageing out between two ticks of one bar changed the item count in
+   * `key_points` (and the analyst's own `confidence`) and missed the gate.
+   *
+   * Two step instances, ONE store: the second is the process that came back up
+   * inside the same 14:00 bar, with the MI item now 24h10m old on a 24h window.
+   */
+  it('pays for one debate when an MI item ages out mid-bar across a restart (#782)', async () => {
+    const bar = new Date('2026-07-28T14:00:00Z');
+    const clock = new MutableClock(new Date('2026-07-28T14:01:00Z'));
+    const intelligence = new MarketIntelligenceStore(clock);
+    intelligence.ingest({
+      agent_id: 'deepresearch',
+      timestamp: new Date('2026-07-27T14:30:00Z'),
+      asset_class: 'stocks',
+      items: [
+        {
+          id: 'news-1',
+          source: 'benzinga',
+          type: 'news',
+          timestamp: new Date('2026-07-27T14:30:00Z'),
+          entity: 'AAPL',
+          headline: 'Apple beats on revenue',
+          sentiment: 1,
+          confidence: 0.9,
+        },
+      ],
+    });
+
+    /** The one MarketDataService member `fundamental-analyst.ts` reaches for. */
+    const marketData = {
+      getMark: async () => ({
+        price: 100,
+        observed_at: bar,
+        asset_class: 'stocks' as const,
+        source: 'fixture',
+      }),
+    } as unknown as Parameters<typeof fundamentalAnalyst.run>[0]['market_data'];
+
+    /** The views as the analysts would recompute them at the current clock. */
+    const viewsNow = async (trace_id: string): Promise<AnalystView[]> => [
+      await fundamentalAnalyst.run({
+        trace_id,
+        signal: { asset: 'AAPL', asset_class: 'stocks' },
+        clock,
+        market_intelligence: intelligence,
+        market_data: marketData,
+        calendar: new AlwaysOpenCalendar(),
+      }),
+    ];
+
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    let llmCalls = 0;
+    const counting = fakeLlmClient();
+    const countingClient: LlmClient = {
+      complete(request) {
+        llmCalls++;
+        return counting.complete(request);
+      },
+    };
+
+    const beforeRestart = buildDebateStep(countingClient, store, unlimited(), UNCAPPED_SPEND);
+    const first = await beforeRestart({
+      trace_id: 'trace-1',
+      instrument: 'AAPL',
+      views: await viewsNow('trace-1'),
+      asset_class: ASSET_CLASS,
+      clock,
+      bar,
+    });
+    const callsAfterFirst = llmCalls;
+    expect(callsAfterFirst).toBeGreaterThan(0);
+
+    clock.advanceTo(new Date('2026-07-28T14:40:00Z'));
+
+    // Fresh closure = fresh (empty) per-bar memo, exactly what a restart
+    // inside the bar leaves behind. Same `bar`, because the decision gate
+    // floors the tick time and 14:40 is still the 14:00 bar.
+    const afterRestart = buildDebateStep(countingClient, store, unlimited(), UNCAPPED_SPEND);
+    const second = await afterRestart({
+      trace_id: 'trace-2',
+      instrument: 'AAPL',
+      views: await viewsNow('trace-2'),
+      asset_class: ASSET_CLASS,
+      clock,
+      bar,
+    });
+
+    expect(llmCalls).toBe(callsAfterFirst);
+    expect(second.debate_id).toBe(first.debate_id);
+    expect(second.confidence).toBe(first.confidence);
+    const count = db.prepare('SELECT COUNT(*) AS n FROM debate_log').get() as { n: number };
+    expect(count.n).toBe(1);
   });
 
   it('re-runs the debate when the persisted row predates the replay fields', async () => {

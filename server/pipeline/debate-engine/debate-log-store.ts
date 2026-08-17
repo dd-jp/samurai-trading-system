@@ -123,6 +123,18 @@ export function buildDebateLog(
  * duplicate write, and the fresh-debate count equals bars-elapsed ×
  * instruments, not ticks × instruments.
  *
+ * **AMENDED 2026-08-17 (#782).** "Deterministic functions of closed bars" was
+ * not even true of the MI half until now: every analyst's item counts came
+ * from `MarketIntelligenceStore.getContext`, whose window ended at the raw
+ * clock read, so an item ageing out mid-bar moved `key_points` and the
+ * `fundamental`/`sentiment` confidence with it. `getContext` now floors that
+ * window end with `floorToBar` below, so MI is sampled on this same grid.
+ * It does NOT restore byte-identity within a 1h bar — the 5m technical read
+ * above is unaffected — the structural per-bar guarantee still comes from
+ * #743. What it closes is the one input that answered to wall-clock time
+ * rather than to any bar, which is what defeated the content gate on the
+ * cross-restart path where the per-bar memo is empty.
+ *
  * First-write-wins remains the intended resolution, but it is NOT sufficient
  * on its own: the duplicate run's LLM calls were already paid for, and its
  * (discarded) synthesis was still what the Trader acted on, so `debate_log`

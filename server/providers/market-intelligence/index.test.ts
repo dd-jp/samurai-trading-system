@@ -1,3 +1,7 @@
+import {
+  DEBATE_BAR_TIMEFRAME_MS,
+  floorToBar,
+} from '../../pipeline/debate-engine/debate-log-store.js';
 import type { Clock } from '../../shared/index.js';
 import { SystemClock } from '../../shared/index.js';
 import { MarketIntelligenceStore } from './index.js';
@@ -135,19 +139,70 @@ describe('MarketIntelligenceStore.getContext', () => {
 
     const liveClock = new SystemClock();
     const liveStore = new MarketIntelligenceStore(liveClock);
-    // Re-anchor "future" relative to real now so the live run exercises the
-    // same before/after-asOf split as the replay run, via the same getContext code.
-    const now = liveClock.now();
+    // Re-anchor both items relative to the live clock's DEBATE BAR, not to raw
+    // now — since #782 the window ends at `floorToBar(asOf)`, so "after asOf"
+    // means after the bar's opening boundary. Anchoring to raw now would put
+    // BOTH items past the window end at any wall-clock moment inside a bar,
+    // and the test would assert the arithmetic of a rolling window this store
+    // deliberately no longer has.
+    const bar = floorToBar(liveClock.now(), DEBATE_BAR_TIMEFRAME_MS);
     liveStore.ingest(
       envelope([
-        newsItem({ id: 'in-range', timestamp: new Date(now.getTime() - 60_000) }),
-        newsItem({ id: 'future', timestamp: new Date(now.getTime() + 60_000) }),
+        newsItem({ id: 'in-range', timestamp: new Date(bar.getTime() - 60_000) }),
+        newsItem({ id: 'future', timestamp: new Date(bar.getTime() + 60_000) }),
       ]),
     );
     const liveContext = liveStore.getContext('stocks', 5 * 60_000, 'trace-1');
 
     expect(replayContext.news.map((item) => item.id)).toEqual(['in-range']);
     expect(liveContext.news.map((item) => item.id)).toEqual(['in-range']);
+  });
+
+  /**
+   * #782. The item counts are hashed into `debate_id` (via the technical
+   * analyst's `key_points`) and drive `fundamental`/`sentiment` confidence, so
+   * a count that moves between two ticks of ONE debate bar defeats the #617
+   * same-bar short-circuit and hands the Trader a second confidence sample.
+   *
+   * The fixture is the leak exactly: with a rolling window the item is 23h31m
+   * old at 14:01 (inside a 24h window) and 24h10m old at 14:40 (outside it).
+   * Floored to the 14:00 bar, both reads measure the same 24h.
+   */
+  it('holds the item counts steady across two ticks inside one debate bar', () => {
+    const clock = new MutableClock(new Date('2026-07-14T14:01:00Z'));
+    const store = new MarketIntelligenceStore(clock);
+    const window = 24 * 60 * 60 * 1000;
+    store.ingest(envelope([newsItem({ timestamp: new Date('2026-07-13T14:30:00Z') })]));
+
+    const firstTick = store.getContext('stocks', window, 'trace-1');
+
+    clock.advanceTo(new Date('2026-07-14T14:40:00Z'));
+    const secondTick = store.getContext('stocks', window, 'trace-2');
+
+    expect(firstTick.news).toHaveLength(1);
+    expect(secondTick.news.map((item) => item.id)).toEqual(firstTick.news.map((item) => item.id));
+  });
+
+  /**
+   * #782, the other half: an item ingested MID-bar must not appear until the
+   * next bar opens either. Same reason — the counts have to be a function of
+   * the bar, and an arrival is as much a change as an expiry.
+   */
+  it('does not surface an item ingested mid-bar until the next bar opens', () => {
+    const clock = new MutableClock(new Date('2026-07-14T14:01:00Z'));
+    const store = new MarketIntelligenceStore(clock);
+
+    clock.advanceTo(new Date('2026-07-14T14:30:00Z'));
+    store.ingest(
+      envelope([newsItem({ id: 'mid-bar', timestamp: new Date('2026-07-14T14:30:00Z') })]),
+    );
+
+    expect(store.getContext('stocks', 60 * 60_000, 'trace-1').news).toEqual([]);
+
+    clock.advanceTo(new Date('2026-07-14T15:00:00Z'));
+    expect(store.getContext('stocks', 60 * 60_000, 'trace-2').news.map((item) => item.id)).toEqual([
+      'mid-bar',
+    ]);
   });
 
   it('conflicts is always empty — conflict resolution is not ticketed under epic #52', () => {
