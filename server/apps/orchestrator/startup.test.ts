@@ -13,7 +13,11 @@ import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULT_TRADER_CONFIG } from '../../pipeline/trader/index.js';
-import { GdeltGkgClient, MiArchiveStore } from '../../providers/market-intelligence/index.js';
+import {
+  GdeltGkgClient,
+  MiArchiveStore,
+  PolymarketClient,
+} from '../../providers/market-intelligence/index.js';
 import { TokenBucket } from '../../shared/index.js';
 import { openSharedStore, sharedStorePath } from '../../shared/store/index.js';
 import {
@@ -50,6 +54,19 @@ const offlineGdeltClient = new GdeltGkgClient({
   rateLimiter: new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 }),
   fetchImpl: (async () => {
     throw new Error('offline: the test suite must not reach GDELT');
+  }) as unknown as typeof fetch,
+});
+
+/**
+ * The same treatment for Polymarket (#504), and for the same reason: its read
+ * APIs need no key, so nothing else gates a boot from reaching the live vendor.
+ * The composition root builds this agent unconditionally and fires it once from
+ * `start()`, so every `startFromEnvironment` call here must inject it.
+ */
+const offlinePolymarketClient = new PolymarketClient({
+  rateLimiter: new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 }),
+  fetchImpl: (async () => {
+    throw new Error('offline: the test suite must not reach Polymarket');
   }) as unknown as typeof fetch,
 });
 
@@ -311,6 +328,7 @@ describe('startFromEnvironment — real construction path', () => {
       db: openSharedStore(':memory:'),
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
+      polymarketClient: offlinePolymarketClient,
     });
 
     try {
@@ -350,6 +368,7 @@ describe('startFromEnvironment — real construction path', () => {
       db,
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
+      polymarketClient: offlinePolymarketClient,
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     expect(error.message).toContain('Refusing to start');
@@ -365,6 +384,7 @@ describe('startFromEnvironment — real construction path', () => {
       db: openSharedStore(':memory:'),
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
+      polymarketClient: offlinePolymarketClient,
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     // Names the variable and how to supply it. The seams guard used to catch
@@ -391,6 +411,7 @@ describe('startFromEnvironment — real construction path', () => {
       db: openSharedStore(':memory:'),
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
+      polymarketClient: offlinePolymarketClient,
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     return error.then((e) => {
@@ -435,6 +456,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       db: openSharedStore(':memory:'),
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
+      polymarketClient: offlinePolymarketClient,
       logger,
     });
 
@@ -516,6 +538,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
         ...paperStartingProfile('paper'),
         logger,
         gdeltClient: offlineGdeltClient,
+        polymarketClient: offlinePolymarketClient,
       });
 
       expect(existsSync(join(sandbox, 'data/samurai-paper.sqlite'))).toBe(true);
@@ -544,6 +567,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       db: openSharedStore(':memory:'),
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
+      polymarketClient: offlinePolymarketClient,
       logger,
     }).then(async (orchestrator) => {
       try {
@@ -566,6 +590,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       db: openSharedStore(':memory:'),
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
+      polymarketClient: offlinePolymarketClient,
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     expect(error.message).toContain('SAMURAI_ALERTS');
@@ -584,6 +609,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       db: openSharedStore(':memory:'),
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
+      polymarketClient: offlinePolymarketClient,
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     expect(error.message).toContain('TELEGRAM_CHAT_ID');
@@ -619,6 +645,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       db: openSharedStore(':memory:'),
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
+      polymarketClient: offlinePolymarketClient,
       logger,
     });
 
@@ -718,6 +745,7 @@ describe('startFromEnvironment — the live profile (#511)', () => {
       db: openSharedStore(':memory:'),
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
+      polymarketClient: offlinePolymarketClient,
       logger,
     });
 
@@ -781,6 +809,7 @@ describe('startFromEnvironment — the live profile (#511)', () => {
       db: openSharedStore(':memory:'),
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
+      polymarketClient: offlinePolymarketClient,
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     // The paper pair is still set, so a fallback would have started a live
