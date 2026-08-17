@@ -65,7 +65,7 @@ export function buildAnalystContributions(
  * detection (#32) is a separate, LLM-backed concern out of scope here (spec's
  * "LLM Selection & Prompt Engineering" exclusion).
  */
-function computeInfluenceScore(stanceDuringDebate: Direction[]): number {
+export function computeInfluenceScore(stanceDuringDebate: Direction[]): number {
   if (stanceDuringDebate.length < 2) {
     return 0;
   }
