@@ -77,9 +77,7 @@ describe('UniverseScheduler.nextTick', () => {
       { asset: 'BTC-USD', asset_class: 'crypto' },
     ];
 
-    const closedPlan = makeScheduler({ universe: cryptoUniverse }).nextTick(
-      clockAt(MARKET_CLOSED),
-    );
+    const closedPlan = makeScheduler({ universe: cryptoUniverse }).nextTick(clockAt(MARKET_CLOSED));
     const openPlan = makeScheduler({ universe: cryptoUniverse }).nextTick(clockAt(MARKET_OPEN));
 
     expect(closedPlan.instruments).toEqual([]);
@@ -187,8 +185,6 @@ describe('UniverseScheduler.nextTick', () => {
   });
 
   it('DEFAULT_UNIVERSE carries no crypto row (#738 — crypto out of the production schedule)', () => {
-    expect(DEFAULT_UNIVERSE.every((instrument) => instrument.asset_class !== 'crypto')).toBe(
-      true,
-    );
+    expect(DEFAULT_UNIVERSE.every((instrument) => instrument.asset_class !== 'crypto')).toBe(true);
   });
 });

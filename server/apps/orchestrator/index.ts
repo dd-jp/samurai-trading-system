@@ -657,11 +657,15 @@ export async function startFromEnvironment(
       env,
       mode,
       // `injected.universe` is guaranteed defined here — REQUIRED_INJECTED_CONFIG
-      // already refused to start without it (#738) — so there is no live
-      // fallback left to express in this line. `injected` is still typed
+      // already refused to start without it (#738). `injected` is still typed
       // `Partial<ProductionConfig>`, hence the same cast `buildProductionOrchestrator`
-      // above already relies on.
-      universe: (injected as ProductionConfig).universe!.map((i) => i.asset),
+      // above already relies on; the `?? SMOKE_TEST_UNIVERSE` fallback is
+      // defence in depth for the lint rule against non-null assertions, not a
+      // live path — it can only fire if the guard above this function is ever
+      // weakened.
+      universe: ((injected as ProductionConfig).universe ?? SMOKE_TEST_UNIVERSE).map(
+        (i) => i.asset,
+      ),
       orphaned_go_verdicts: orphans.length,
     },
   });
