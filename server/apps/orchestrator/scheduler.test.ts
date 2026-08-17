@@ -41,35 +41,47 @@ function assets(instruments: readonly UniverseInstrument[]): string[] {
 }
 
 describe('UniverseScheduler.nextTick', () => {
-  it('fires crypto instruments when the stock market is closed', () => {
+  it('plans nothing when the market is closed — no always-open exception for any asset_class', () => {
+    // #738: crypto is out of Samurai's scope, and `DEFAULT_UNIVERSE` no
+    // longer declares any crypto row — but the point of this test is the
+    // GATE, not the universe: even a universe that DID carry a crypto
+    // instrument would get no special treatment here (see the
+    // 'gates a crypto instrument on the calendar like any other' test below).
+    // ~orchestrator-spec.md:362 — "assert instead that no instrument ticks
+    // into a closed market, with no always-open exception."
     const plan = makeScheduler().nextTick(clockAt(MARKET_CLOSED));
 
-    expect(assets(plan.instruments)).toEqual(['BTC-USD', 'ETH-USD']);
+    expect(plan.instruments).toEqual([]);
   });
 
-  it('fires the full universe when the stock market is open', () => {
+  it('fires the full universe when the market is open', () => {
     const plan = makeScheduler().nextTick(clockAt(MARKET_OPEN));
 
-    expect(assets(plan.instruments)).toEqual(['SPY', 'QQQ', 'AAPL', 'TSLA', 'BTC-USD', 'ETH-USD']);
+    expect(assets(plan.instruments)).toEqual(['SPY', 'QQQ', 'AAPL', 'TSLA']);
   });
 
   it('never fires a stock instrument on a holiday', () => {
     const holiday = new Date('2026-07-03T14:00:00Z');
     const plan = makeScheduler({ calendar: calendarOpenAt() }).nextTick(clockAt(holiday));
 
-    expect(plan.instruments.every((instrument) => instrument.asset_class === 'crypto')).toBe(true);
+    expect(plan.instruments).toEqual([]);
   });
 
-  it('fires crypto 24/7 across every hour of the day', () => {
-    const scheduler = makeScheduler({ calendar: calendarOpenAt() });
+  it('gates a crypto instrument on the calendar like any other — no bypass', () => {
+    // The regression #738 exists to close: a universe that DOES carry a
+    // crypto row (the smoke harness's `SMOKE_TEST_UNIVERSE` does) must not
+    // get an always-open exception from this scheduler. Gated exactly like
+    // the 'plans nothing when the market is closed' case above, just with a
+    // crypto asset_class in the universe instead of stocks.
+    const cryptoUniverse: readonly UniverseInstrument[] = [
+      { asset: 'BTC-USD', asset_class: 'crypto' },
+    ];
 
-    for (let hour = 0; hour < 24; hour++) {
-      const instant = new Date(Date.UTC(2026, 6, 15, hour));
-      expect(assets(scheduler.nextTick(clockAt(instant)).instruments)).toEqual([
-        'BTC-USD',
-        'ETH-USD',
-      ]);
-    }
+    const closedPlan = makeScheduler({ universe: cryptoUniverse }).nextTick(clockAt(MARKET_CLOSED));
+    const openPlan = makeScheduler({ universe: cryptoUniverse }).nextTick(clockAt(MARKET_OPEN));
+
+    expect(closedPlan.instruments).toEqual([]);
+    expect(assets(openPlan.instruments)).toEqual(['BTC-USD']);
   });
 
   it('excludes stocks at the session close instant (the calendar is half-open)', () => {
@@ -95,7 +107,7 @@ describe('UniverseScheduler.nextTick', () => {
     expect(makeScheduler().nextTick(clockAt(MARKET_OPEN)).tick_time).toEqual(MARKET_OPEN);
   });
 
-  it('gates stocks on a single instant, consulting the calendar once per tick', () => {
+  it('gates the universe on a single instant, consulting the calendar once per tick', () => {
     let calls = 0;
     const calendar: TradingCalendar = {
       isOpen: () => {
@@ -116,21 +128,22 @@ describe('UniverseScheduler.nextTick', () => {
   });
 
   /**
-   * The overnight properties a 14-day unattended soak depends on (#381). The
-   * calendar gate was inert while the universe was crypto-only; with four
-   * equities in it, it runs for ~16 hours of every weekday, and two ways of
-   * "working" would still ruin the soak.
+   * The overnight properties a 14-day unattended soak depends on (#381),
+   * re-verified after #738 removed the always-open exception the soak used
+   * to lean on for crypto. A closed session now produces an EMPTY plan for
+   * the whole universe — see orchestrator-spec.md:346's amendment on why
+   * that emptiness must still be distinguishable from a healthy no-trade
+   * run (that observability lives in tick-loop.ts, not here — see
+   * tick-loop.test.ts).
    */
   describe('a closed session over a 14-day soak', () => {
-    it('keeps ticking crypto rather than starving the loop', () => {
-      // The gate FILTERS the plan; it does not skip the tick. If a closed
-      // session produced an empty plan the loop would idle for 16h a day and
-      // BTC-USD/ETH-USD would go untraded overnight, which is the half of the
-      // universe that trades overnight at all.
+    it('produces an empty plan rather than a stale or crashed one', () => {
       const plan = makeScheduler().nextTick(clockAt(MARKET_CLOSED));
 
-      expect(plan.instruments).not.toHaveLength(0);
-      expect(plan.instruments.every((i) => i.asset_class === 'crypto')).toBe(true);
+      expect(plan.instruments).toEqual([]);
+      // tick_time is still reported — the loop can log/observe a genuinely
+      // empty tick, which is what lets it be told apart from a hang.
+      expect(plan.tick_time).toEqual(MARKET_CLOSED);
     });
 
     it('emits nothing per skipped instrument — the filter is silent by construction', () => {
@@ -143,7 +156,7 @@ describe('UniverseScheduler.nextTick', () => {
       const closedPlan = scheduler.nextTick(clockAt(MARKET_CLOSED));
 
       expect(Object.keys(scheduler)).not.toContain('logger');
-      expect(closedPlan.instruments).toHaveLength(2);
+      expect(closedPlan.instruments).toEqual([]);
     });
 
     it('re-admits the equities on the next open tick without any re-arming', () => {
@@ -151,9 +164,9 @@ describe('UniverseScheduler.nextTick', () => {
       // unattended run has nobody to make.
       const scheduler = makeScheduler();
 
-      expect(assets(scheduler.nextTick(clockAt(MARKET_CLOSED)).instruments)).toHaveLength(2);
-      expect(assets(scheduler.nextTick(clockAt(MARKET_OPEN)).instruments)).toHaveLength(6);
-      expect(assets(scheduler.nextTick(clockAt(MARKET_CLOSED)).instruments)).toHaveLength(2);
+      expect(assets(scheduler.nextTick(clockAt(MARKET_CLOSED)).instruments)).toEqual([]);
+      expect(assets(scheduler.nextTick(clockAt(MARKET_OPEN)).instruments)).toHaveLength(4);
+      expect(assets(scheduler.nextTick(clockAt(MARKET_CLOSED)).instruments)).toEqual([]);
     });
   });
 
@@ -169,5 +182,9 @@ describe('UniverseScheduler.nextTick', () => {
       'NVDA',
       'SOL-USD',
     ]);
+  });
+
+  it('DEFAULT_UNIVERSE carries no crypto row (#738 — crypto out of the production schedule)', () => {
+    expect(DEFAULT_UNIVERSE.every((instrument) => instrument.asset_class !== 'crypto')).toBe(true);
   });
 });

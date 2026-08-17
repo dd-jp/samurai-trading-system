@@ -117,8 +117,18 @@ describe('startFromEnvironment', () => {
 
     // What is left is exactly the per-stage tuning config, which every stage
     // spec says is tuned in paper trading rather than checked in — no
-    // transport remains on this list.
-    expect([...REQUIRED_INJECTED_CONFIG].every((key) => key.endsWith('Config'))).toBe(true);
+    // transport remains on this list. `universe` is the one deliberate
+    // exception (#738): not a per-stage tuning value, but a second config the
+    // same list-and-name mechanism is reused for, because the alternative was
+    // an equities-only default resolving on a closed session into an EMPTY
+    // tick plan indistinguishable from a healthy no-trade run — see
+    // `startFromEnvironment`'s own doc comment on `REQUIRED_INJECTED_CONFIG`.
+    expect(
+      [...REQUIRED_INJECTED_CONFIG]
+        .filter((key) => key !== 'universe')
+        .every((key) => key.endsWith('Config')),
+    ).toBe(true);
+    expect(REQUIRED_INJECTED_CONFIG).toContain('universe');
   });
 
   it('does not still claim the trade-channel/HITL transports are unimplemented (#323)', async () => {

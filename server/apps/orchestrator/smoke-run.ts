@@ -168,6 +168,7 @@ import { CircuitBreakers, resolveRiskConfig } from '../../pipeline/risk-manager/
 import type { VerdictDecision } from '../../pipeline/verdict/index.js';
 import type { Bar } from '../../providers/market-data-service/index.js';
 import {
+  AlwaysOpenCalendar,
   FixtureDataSource,
   MarketDataServiceImpl,
   SqliteMarketDataStore,
@@ -286,9 +287,18 @@ function smokeGdeltClient(): GdeltGkgClient {
 /**
  * The instant the whole run is frozen at — clock, bars, mark and quote alike.
  * A fixed literal rather than `new Date()` so two runs of `yarn smoke` produce
- * identical fixtures and identical decisions; nothing in the offline path
- * compares against real wall-clock time (crypto bypasses
- * `UniverseScheduler`'s calendar gate entirely, per `SMOKE_TEST_UNIVERSE`).
+ * identical fixtures and identical decisions.
+ *
+ * **2026-08-17 (#738) — this instant is NOT inside US equity regular hours**
+ * (`UsEquityRegularHoursCalendar().isOpen(SMOKE_RUN_INSTANT)` is `false`;
+ * measured, not assumed). That used to be irrelevant: crypto bypassed
+ * `UniverseScheduler`'s calendar gate entirely, so `SMOKE_TEST_UNIVERSE`'s
+ * BTC-USD ticked regardless of wall-clock time. `UniverseScheduler` is now
+ * asset-class-blind — every instrument, crypto included, is gated on
+ * whatever calendar `ProductionConfig.tradingCalendar` resolves to — so this
+ * run injects its own `AlwaysOpenCalendar` override below rather than
+ * depending on `SMOKE_RUN_INSTANT` falling inside a real session. Nothing
+ * else in the offline path compares against real wall-clock time.
  */
 export const SMOKE_RUN_INSTANT = new Date('2026-08-04T12:00:00.000Z');
 
@@ -2979,6 +2989,30 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       clock,
       logger,
       universe: SMOKE_TEST_UNIVERSE,
+      // #738: `SMOKE_RUN_INSTANT` is outside US equity regular hours (see its
+      // doc comment), and `UniverseScheduler` no longer exempts crypto from
+      // the calendar gate — so without this override, `SMOKE_TEST_UNIVERSE`'s
+      // BTC-USD would never appear in a tick plan and this run would hang
+      // waiting for a tick that never comes. `equityCalendarFor` honours
+      // `tradingCalendar` before falling back to a real-hours calendar, so
+      // this is a documented `ProductionConfig` override, not a branch inside
+      // the composition root. Scoped to this offline run only — production
+      // resolves its calendar from `mode` as normal.
+      tradingCalendar: new AlwaysOpenCalendar(),
+      // `...profile` below carries `stocksTradingWindow: londonEntryWindow()`
+      // (paper-profile.ts) — an ADDITIONAL narrowing on top of the calendar
+      // (#706), and the scheduler applies it to every instrument now, not
+      // just equities (#738). `buildProductionOrchestrator` widens it to
+      // `withFlattenTail(entryWindow, tradingCalendar, ...)`, and against the
+      // `AlwaysOpenCalendar` above `sessionEnd` is `null`, so the widened
+      // window collapses to the bare London entry window — which
+      // `SMOKE_RUN_INSTANT` (08:00 London) falls outside of, same as US
+      // regular hours. Overridden to unconditionally admit, for the same
+      // reason `tradingCalendar` is: this run needs BTC-USD to tick
+      // regardless of wall-clock time, and production's own window is
+      // untouched by this override (it lives on `ProductionConfig`, not on
+      // the scheduler or `paperStartingProfile` themselves).
+      stocksTradingWindow: () => true,
       // The three overrides `ProductionConfig`'s own doc comments name as the
       // intended offline bindings.
       broker,

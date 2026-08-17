@@ -91,6 +91,21 @@ function buildDeps(overrides: Partial<Parameters<typeof backfillMarketData>[0]> 
   return { deps, store, equityFetches, cryptoFetches };
 }
 
+/**
+ * #738: `DEFAULT_UNIVERSE` no longer carries any crypto row — crypto is out
+ * of Samurai's scope (ADR-0014 amendment), and the default this CLI tool
+ * warms is equities-only now. The crypto routing (`fetchCryptoBars`) itself
+ * is untouched code, still reachable for a caller that passes a universe
+ * with a crypto instrument in it — `MIXED_UNIVERSE` below is exactly that,
+ * used only by the routing test, so the DEFAULT-universe test reflects what
+ * `DEFAULT_UNIVERSE` actually resolves to.
+ */
+const MIXED_UNIVERSE: readonly UniverseInstrument[] = [
+  ...DEFAULT_UNIVERSE,
+  { asset: 'BTC-USD', asset_class: 'crypto' },
+  { asset: 'ETH-USD', asset_class: 'crypto' },
+];
+
 describe('backfillMarketData', () => {
   it('fetches and fills every (instrument, window) pair from an empty store', async () => {
     const { deps, equityFetches, cryptoFetches } = buildDeps();
@@ -99,15 +114,16 @@ describe('backfillMarketData', () => {
 
     expect(coverage).toHaveLength(DEFAULT_UNIVERSE.length * WARM_START_WINDOWS.length);
     expect(coverage.every((row) => row.satisfied)).toBe(true);
-    // 4 equities x WARM_START_WINDOWS.length windows, 2 crypto x WARM_START_WINDOWS.length
-    // windows. Derived from WARM_START_WINDOWS.length rather than a literal so this doesn't
-    // rot the next time that list gains/loses a timeframe (#742 added '5m').
+    // 4 equities x WARM_START_WINDOWS.length windows, 0 crypto — DEFAULT_UNIVERSE
+    // is equities-only since #738. Derived from WARM_START_WINDOWS.length
+    // rather than a literal so this doesn't rot the next time that list
+    // gains/loses a timeframe (#742 added '5m').
     expect(equityFetches).toHaveLength(4 * WARM_START_WINDOWS.length);
-    expect(cryptoFetches).toHaveLength(2 * WARM_START_WINDOWS.length);
+    expect(cryptoFetches).toHaveLength(0);
   });
 
   it('routes stocks to fetchEquityBars and crypto to fetchCryptoBars', async () => {
-    const { deps, equityFetches, cryptoFetches } = buildDeps();
+    const { deps, equityFetches, cryptoFetches } = buildDeps({ universe: MIXED_UNIVERSE });
     await backfillMarketData(deps);
 
     expect([...new Set(equityFetches.map((f) => f.symbol))].sort()).toEqual([

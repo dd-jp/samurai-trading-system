@@ -43,6 +43,10 @@ describe('paperStartingProfile', () => {
       // `universe: ["BTC-USD"]`. The profile is where that is answered,
       // because which instruments a paper run trades is a tuning decision of
       // the same kind as every other value in this file.
+      //
+      // #738: `DEFAULT_UNIVERSE` no longer carries BTC-USD/ETH-USD — crypto
+      // is out of Samurai's scope (ADR-0014 amendment), and the production
+      // schedule this profile feeds must never resolve one.
       const { universe } = paperStartingProfile('paper');
 
       expect(universe?.map((instrument) => instrument.asset)).toEqual([
@@ -50,18 +54,19 @@ describe('paperStartingProfile', () => {
         'QQQ',
         'AAPL',
         'TSLA',
-        'BTC-USD',
-        'ETH-USD',
       ]);
     });
 
-    it('covers both asset classes, so no per-class dial reads as inert', () => {
-      // The startup warn this removes: "no instruments configured for asset
-      // class; volatility breaker reads 0 (inert) for this class {stocks}".
+    it('covers exactly the one asset class it schedules, so the other reads INERT rather than silently misleading (#738)', () => {
+      // Before #738, DEFAULT_UNIVERSE covering both classes silenced the
+      // startup warn below for BOTH. Now that crypto is out of the schedule,
+      // "no instruments configured for asset class; volatility breaker reads
+      // 0 (inert) for this class {crypto}" is the CORRECT startup state, not
+      // a gap this profile should paper over — crypto genuinely never ticks.
       const { universe } = paperStartingProfile('paper');
       const classes = new Set(universe?.map((instrument) => instrument.asset_class));
 
-      expect([...classes].sort()).toEqual(['crypto', 'stocks']);
+      expect([...classes].sort()).toEqual(['stocks']);
     });
 
     it('sizes drift tolerance as a fraction, so a $200 equity has a real gate', () => {

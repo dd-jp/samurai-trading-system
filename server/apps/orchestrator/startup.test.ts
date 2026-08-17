@@ -20,6 +20,7 @@ import {
   assertStorePathMatchesMode,
   missingCredentialEnvVars,
   paperStartingProfile,
+  SMOKE_TEST_UNIVERSE,
   startFromEnvironment,
   startingProfileForMode,
 } from './index.js';
@@ -289,6 +290,10 @@ const STAGE_CONFIGS = {
   } as never,
   costConfig: {} as never,
   ciiConsumerConfig: { pollIntervalMs: 60_000 } as never,
+  // #738: `universe` joined `REQUIRED_INJECTED_CONFIG` — these cases are
+  // about credential/wiring refusals, not about which instruments trade, so
+  // they carry the same narrow default the smoke harness does.
+  universe: SMOKE_TEST_UNIVERSE,
 };
 
 describe('startFromEnvironment — real construction path', () => {
@@ -441,19 +446,24 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       // BTC-USD smoke set it used to log. This is the end-to-end check that
       // the profile's universe survives `startFromEnvironment` — a live paper
       // run that logs `universe: ["BTC-USD"]` is the bug this replaces.
+      //
+      // #738 narrowed `DEFAULT_UNIVERSE` further, to equities-only — crypto
+      // is out of Samurai's scope, so the "FULL" universe this line names no
+      // longer includes BTC-USD/ETH-USD.
       expect(started?.payload).toMatchObject({
         mode: 'paper',
-        universe: ['SPY', 'QQQ', 'AAPL', 'TSLA', 'BTC-USD', 'ETH-USD'],
+        universe: ['SPY', 'QQQ', 'AAPL', 'TSLA'],
       });
 
-      // ...and the equity half is genuinely wired, not merely listed. The
-      // volatility breaker warns "no instruments configured for asset class"
-      // once per class it cannot read, which is exactly what a live paper run
-      // emitted for `stocks` before this change.
+      // ...and the equity half is genuinely wired, not merely listed. Before
+      // #738 the volatility breaker's "no instruments configured for asset
+      // class" warn fired for `stocks`; after #738 it fires for `crypto`
+      // instead — crypto genuinely has zero instruments in the production
+      // schedule now, so that warn is the CORRECT state, not a gap.
       const inertClassWarn = entries.find((entry) =>
         entry.message.includes('no instruments configured for asset class'),
       );
-      expect(inertClassWarn).toBeUndefined();
+      expect(inertClassWarn?.payload).toMatchObject({ asset_class: 'crypto' });
     } finally {
       // The loop, the heartbeat and the fill poll are all armed by `start()`;
       // leaving them running would leak timers into the rest of the suite.

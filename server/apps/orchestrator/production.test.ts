@@ -1840,6 +1840,12 @@ describe('buildProductionOrchestrator', () => {
     const config = stubConfig(db, {
       tickIntervalMs: 1_000,
       heartbeatIntervalMs: 1_000,
+      // #738: the scheduler no longer exempts the default `SMOKE_TEST_UNIVERSE`
+      // (BTC-USD) from the calendar gate, and `START` (12:00 UTC) is outside
+      // `UsEquityRegularHoursCalendar` — this test is about the orphan-scan
+      // ordering, not the calendar, so it forces the plan open the same way
+      // `smoke-run.ts` does.
+      tradingCalendar: new AlwaysOpenCalendar(),
     });
     const orchestrator = buildProductionOrchestrator(config);
     const scanSpy = vi.spyOn(orchestrator.orphanScanner, 'scan');
@@ -2170,14 +2176,15 @@ describe('buildProductionOrchestrator', () => {
       const logger = recordingLogger();
       const config = stubConfig(db, {
         ...paperStartingProfile('paper'),
-        // Narrowed back to one asset class on purpose (#381). The profile now
-        // carries `DEFAULT_UNIVERSE`, which spans crypto AND stocks — and
-        // `stubConfig` injects a single `alpacaDataClient`, which
-        // `buildAlpacaDataSource` correctly REFUSES for a mixed universe (one
-        // wire client cannot serve both Alpaca path roots). These cases are
-        // about the feedback cycle, so they hold the market-data wiring at the
-        // shape they were written against; the widened universe and its
-        // routing source are asserted directly, elsewhere in this file.
+        // Narrowed to one asset class on purpose (#381, and unaffected by
+        // #738's later narrowing of `DEFAULT_UNIVERSE` itself to
+        // equities-only): `stubConfig` injects a single `alpacaDataClient`,
+        // which `buildAlpacaDataSource` correctly REFUSES for a mixed
+        // universe (one wire client cannot serve both Alpaca path roots).
+        // These cases are about the feedback cycle, so they hold the
+        // market-data wiring at the shape they were written against; a
+        // MIXED universe and its routing source are asserted directly,
+        // elsewhere in this file (`MIXED_UNIVERSE`).
         universe: SMOKE_TEST_UNIVERSE,
         logger,
         tickIntervalMs: QUIET,
@@ -3182,7 +3189,13 @@ describe('buildProductionOrchestrator', () => {
   });
 
   it('schedules the narrow smoke universe by default', () => {
-    const orchestrator = buildProductionOrchestrator(stubConfig(db));
+    // #738: the scheduler gates `SMOKE_TEST_UNIVERSE`'s BTC-USD on the
+    // calendar like any other instrument now — no crypto bypass — so this
+    // test forces the gate open the same way `smoke-run.ts` does, to isolate
+    // what it actually asserts (the DEFAULT universe, not the calendar).
+    const orchestrator = buildProductionOrchestrator(
+      stubConfig(db, { tradingCalendar: new AlwaysOpenCalendar() }),
+    );
     const tickPlan = orchestrator.scheduler.nextTick(new SimulatedClock(START));
     expect(tickPlan.instruments).toEqual([{ asset: 'BTC-USD', asset_class: 'crypto' }]);
   });
@@ -3197,6 +3210,16 @@ describe('buildProductionOrchestrator', () => {
    */
   describe('buildAlpacaDataSource — mixed-universe market data', () => {
     const calendar = new UsEquityRegularHoursCalendar();
+    // #738: `DEFAULT_UNIVERSE` no longer spans both asset classes — crypto is
+    // out of Samurai's scope, so the production default is equities-only.
+    // These cases are about `buildAlpacaDataSource`'s ROUTING given a mixed
+    // universe, which can still be constructed and configured explicitly
+    // (`AssetClass`/`UniverseInstrument` still accept a `'crypto'` row) —
+    // just no longer the shape the default resolves to.
+    const MIXED_UNIVERSE = [
+      ...DEFAULT_UNIVERSE,
+      { asset: 'BTC-USD', asset_class: 'crypto' as const },
+    ];
 
     // `AlpacaHttpDataClient` refuses to be constructed without credentials, and
     // these cases build the real default clients on purpose — building them is
@@ -3216,7 +3239,7 @@ describe('buildProductionOrchestrator', () => {
     });
 
     it('routes per instrument when the universe spans crypto and stocks', () => {
-      const source = buildAlpacaDataSource({}, DEFAULT_UNIVERSE, calendar);
+      const source = buildAlpacaDataSource({}, MIXED_UNIVERSE, calendar);
 
       expect(source).toBeInstanceOf(AssetClassRoutingDataSource);
     });
@@ -3265,7 +3288,7 @@ describe('buildProductionOrchestrator', () => {
       // path root. `universeAssetClasses` is what makes the wiring follow the
       // tick plan.
       expect(universeAssetClasses([{ asset: 'SPY', asset_class: 'stocks' }])).toEqual(['stocks']);
-      expect(universeAssetClasses(DEFAULT_UNIVERSE)).toEqual(['crypto', 'stocks']);
+      expect(universeAssetClasses(MIXED_UNIVERSE)).toEqual(['crypto', 'stocks']);
       expect(universeAssetClasses([])).toEqual([]);
     });
 
@@ -3276,7 +3299,7 @@ describe('buildProductionOrchestrator', () => {
       expect(() =>
         buildAlpacaDataSource(
           { alpacaDataClient: { getBars: vi.fn(), getLatestQuote: vi.fn() } },
-          DEFAULT_UNIVERSE,
+          MIXED_UNIVERSE,
           calendar,
         ),
       ).toThrow(/#358|both/);

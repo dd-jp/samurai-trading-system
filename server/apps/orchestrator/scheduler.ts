@@ -1,10 +1,16 @@
 /**
  * Scheduler (ticket #94) — see docs/specs/orchestrator-spec.md (Module: Scheduler).
  *
- * Crypto instruments always fire (24/7, no session boundaries). Stock
- * instruments fire only when the injected trading calendar reports the market
- * open at `tick_time`, so a tick never fires into a closed market
- * (orchestrator-spec.md stories 1-2).
+ * **2026-08-17 (#738) — crypto is out of Samurai's scope, and this file is
+ * asset-class-blind, not asset-class-aware-and-inert.** Every instrument in
+ * `universe` — whatever its `asset_class` — fires only when the injected
+ * trading calendar reports the market open at `tick_time`, so a tick never
+ * fires into a closed market (orchestrator-spec.md stories 1-2). There is no
+ * "crypto always fires" exception: `asset_class` is read nowhere in this
+ * file. `AssetClass` keeps its `'crypto'` member and `UniverseInstrument`
+ * still accepts crypto rows — a caller that configures one (the smoke
+ * harness does) gets it gated exactly like any other name, by whatever
+ * calendar that caller injects.
  *
  * The calendar is an injected dependency, not designed here — the port already
  * exists at server/providers/market-data-service/trading-calendar.ts (#66), which is the
@@ -19,19 +25,24 @@ import type { Scheduler, TickPlan, UniverseInstrument } from './types.js';
 /**
  * The default universe (ADR-0001, orchestrator-spec.md story 3). Configurable
  * so the covered universe changes without a code change.
+ *
+ * **Crypto-free as of #738.** Crypto is out of Samurai's scope
+ * (ADR-0014 amendment); the two rows this array carried (BTC-USD, ETH-USD)
+ * were removed so the production path never resolves a schedule containing
+ * one by default. `AssetClass` and `UniverseInstrument` still accept a
+ * `'crypto'` row — nothing here forbids one — this array just no longer
+ * declares any. `SMOKE_TEST_UNIVERSE` (production.ts) still does, on purpose.
  */
 export const DEFAULT_UNIVERSE: readonly UniverseInstrument[] = [
   { asset: 'SPY', asset_class: 'stocks' },
   { asset: 'QQQ', asset_class: 'stocks' },
   { asset: 'AAPL', asset_class: 'stocks' },
   { asset: 'TSLA', asset_class: 'stocks' },
-  { asset: 'BTC-USD', asset_class: 'crypto' },
-  { asset: 'ETH-USD', asset_class: 'crypto' },
 ];
 
 export interface SchedulerConfig {
   universe: readonly UniverseInstrument[];
-  /** Gates stock instruments only; crypto never consults it. */
+  /** Gates every instrument in `universe`, regardless of `asset_class`. */
   calendar: TradingCalendar;
   /**
    * An OPTIONAL narrowing of when equities are TICKED, on top of — never
@@ -80,14 +91,15 @@ export class UniverseScheduler implements Scheduler {
     //
     // The window is read once for the same reason, and evaluated only when the
     // calendar already says open — it narrows a session, it cannot open one.
-    const stocksOpen =
+    const marketOpen =
       this.config.calendar.isOpen(tickTime) &&
       (this.config.stocksTradingWindow?.(tickTime) ?? true);
 
     return {
-      instruments: this.config.universe.filter(
-        (instrument) => instrument.asset_class === 'crypto' || stocksOpen,
-      ),
+      // No always-open exception for any asset_class (#738) — every
+      // instrument in the universe is gated on the same calendar/window
+      // instant, or it does not appear in the plan.
+      instruments: marketOpen ? [...this.config.universe] : [],
       tick_time: tickTime,
     };
   }
