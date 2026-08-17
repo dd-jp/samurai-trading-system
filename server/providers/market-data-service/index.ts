@@ -20,6 +20,8 @@ export {
 export type { NormalizeContext, RawCandle } from './ingestion.js';
 export { completedBars, deriveBacktestMark, normalizeBars } from './ingestion.js';
 export { isMarkStale, markAgeMs } from './mark-freshness.js';
+export type { RvolDegradedReason, RvolReading } from './rvol.js';
+export { computeRvol, RVOL_SESSION_WINDOW } from './rvol.js';
 export { MarketDataServiceImpl } from './service.js';
 export type { SessionVwap } from './session-features.js';
 export { computeSessionVwap } from './session-features.js';
@@ -65,6 +67,7 @@ export type { LiveObservation, SourceConfig } from './sources/normalizing-data-s
 export {
   InSessionUnderfetchError,
   NormalizingDataSource,
+  RawFetchLimitExceededError,
 } from './sources/normalizing-data-source.js';
 export { SqliteMarketDataStore } from './sqlite-market-data-store.js';
 export { closeTimeOf, isDailyTimeframe, timeframeToMs } from './timeframe.js';

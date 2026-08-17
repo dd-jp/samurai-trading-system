@@ -71,11 +71,41 @@ const MAX_RAW_WIDEN_FACTOR = 8;
  *   trading day, so this never widens at all.
  * - `fetchMark`'s backtest path (`markTimeframe`, `1m`, `lookback` 1): ~8.5
  *   hours.
- * No live call site combines a minute timeframe with a large lookback. One
- * that did would want a rows term here, as `RETRY_MAX_ROWS` is for the
- * client's own retry, rather than a multiple alone.
+ * - `computeRvol` (`rvol.ts`, #747): `5m`, `lookback` in the hundreds (ten
+ *   prior sessions' worth of same-clock-time buckets, plus the current
+ *   session) — the minute-timeframe/large-lookback combination this
+ *   comment used to flag as unmeasured. See `MAX_RAW_LIMIT_ABSOLUTE` below,
+ *   which is the rows term this paragraph anticipated.
  */
 const MAX_RAW_LIMIT_MULTIPLE = 32;
+/**
+ * Absolute ceiling on the raw request, in ROWS rather than a multiple of the
+ * caller's own ask (issue #747). `MAX_RAW_LIMIT_MULTIPLE` bounds the widen
+ * relative to what the caller first asked for, which is fine when that ask
+ * is small (15-20 bars, as every call site above this const's doc comment
+ * was, until #747) — but a multiple alone has no ceiling that does not
+ * itself grow with the caller's ask, and RVOL's ten-prior-session 5m window
+ * is exactly the shape this repo's own normalizing data source had already
+ * flagged as never having been exercised: a minute timeframe with a large
+ * lookback.
+ *
+ * 20,000 raw rows is comfortably above what RVOL itself needs (a
+ * `lookback` in the hundreds, widened across at most a few weeks of
+ * calendar time to clear ten trading sessions plus weekends/holidays — low
+ * thousands of raw 5m rows even before normalization drops the
+ * out-of-session ones) while staying below `AlpacaHttpDataClient`'s own
+ * `RETRY_MAX_ROWS` (25,000) page-walk ceiling for a single `fetchRawCandles`
+ * call, so the two caps do not fight each other. It is independent of
+ * `firstRawLimit` on purpose: the whole point of an absolute cap, versus the
+ * multiple above, is that it does not grow with the caller's own request.
+ *
+ * Enforced twice: it clamps `rawLimitCeiling` alongside the multiple below,
+ * AND a caller whose very first ask already exceeds it fails loud before any
+ * fetch is attempted — see the check at the top of `fetchBars`. Widening
+ * this value is a deliberate, reviewed choice, not something a caller should
+ * be able to force by asking for more.
+ */
+const MAX_RAW_LIMIT_ABSOLUTE = 20_000;
 
 /**
  * The caller asked for `requested` COMPLETED, IN-SESSION bars and the widened
@@ -131,6 +161,44 @@ export class InSessionUnderfetchError extends Error {
     this.received = details.received;
     this.rawRequested = details.rawRequested;
     this.attempts = details.attempts;
+  }
+}
+
+/**
+ * The caller's minimum raw ask (`window.lookback + FORMING_BAR_FETCH_MARGIN`)
+ * already exceeds `MAX_RAW_LIMIT_ABSOLUTE` (issue #747) — refused BEFORE any
+ * fetch is attempted, rather than silently clamping the request and serving
+ * whatever a truncated widen happens to produce (which `InSessionUnderfetchError`
+ * would then report as an ordinary session-normalization shortfall,
+ * misnaming the real cause). A `window.lookback` this large is a
+ * caller/config error — bump `MAX_RAW_LIMIT_ABSOLUTE` deliberately if a
+ * future caller genuinely needs it, rather than reflexively raising the
+ * caller's own ask.
+ */
+export class RawFetchLimitExceededError extends Error {
+  readonly instrument: string;
+  readonly timeframe: string;
+  readonly requestedRawLimit: number;
+  readonly absoluteLimit: number;
+
+  constructor(details: {
+    instrument: string;
+    timeframe: string;
+    requestedRawLimit: number;
+    absoluteLimit: number;
+    source: string;
+  }) {
+    super(
+      `${details.source} bars for ${details.instrument} ${details.timeframe}: the first raw ask ` +
+        `(${details.requestedRawLimit} candles) already exceeds the absolute raw-row cap of ` +
+        `${details.absoluteLimit}. Refusing to fetch unbounded history. Lower window.lookback, or ` +
+        'raise MAX_RAW_LIMIT_ABSOLUTE in normalizing-data-source.ts as a deliberate, reviewed change.',
+    );
+    this.name = 'RawFetchLimitExceededError';
+    this.instrument = details.instrument;
+    this.timeframe = details.timeframe;
+    this.requestedRawLimit = details.requestedRawLimit;
+    this.absoluteLimit = details.absoluteLimit;
   }
 }
 
@@ -273,7 +341,19 @@ export abstract class NormalizingDataSource implements DataSource {
       calendar: this.config.calendar,
     };
     const firstRawLimit = window.lookback + FORMING_BAR_FETCH_MARGIN;
-    const rawLimitCeiling = firstRawLimit * MAX_RAW_LIMIT_MULTIPLE;
+    if (firstRawLimit > MAX_RAW_LIMIT_ABSOLUTE) {
+      throw new RawFetchLimitExceededError({
+        instrument,
+        timeframe: window.timeframe,
+        requestedRawLimit: firstRawLimit,
+        absoluteLimit: MAX_RAW_LIMIT_ABSOLUTE,
+        source: this.config.source,
+      });
+    }
+    const rawLimitCeiling = Math.min(
+      firstRawLimit * MAX_RAW_LIMIT_MULTIPLE,
+      MAX_RAW_LIMIT_ABSOLUTE,
+    );
 
     let rawLimit = firstRawLimit;
     let attempts = 0;

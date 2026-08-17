@@ -17,7 +17,7 @@
 import type { TradingCalendar } from '../trading-calendar.js';
 import { UsEquityRegularHoursCalendar } from '../trading-calendar.js';
 import { type AlpacaBar, AlpacaDataSource, type AlpacaMarketDataClient } from './alpaca-source.js';
-import { InSessionUnderfetchError } from './normalizing-data-source.js';
+import { InSessionUnderfetchError, RawFetchLimitExceededError } from './normalizing-data-source.js';
 
 const HOUR_MS = 3_600_000;
 
@@ -252,6 +252,67 @@ describe('the retry is bounded, and exhaustion is loud', () => {
     expect(underfetch.received).toBe(0);
     expect(underfetch.attempts).toBe(3);
     expect(underfetch.message).toContain('SPY');
+  });
+});
+
+describe('the absolute raw-row cap (#747)', () => {
+  it('clamps the widen ceiling below the 32x multiple once the multiple would exceed 20,000 rows', async () => {
+    // firstRawLimit = 701 (700 + FORMING_BAR_FETCH_MARGIN). 701*32 = 22,432 —
+    // above MAX_RAW_LIMIT_ABSOLUTE (20,000) — so the ceiling this widen is
+    // bounded by is the absolute cap, not the multiple. A ten-prior-session
+    // 5m RVOL lookback is exactly this shape (issue #747).
+    const { client, limits } = recordingClient((limit) => hourlyCandles(SESSION_SHUT, limit));
+    const source = new AlpacaDataSource(client, { asset_class: 'stocks', calendar: NEVER_OPEN });
+
+    await expect(
+      source.fetchBars('SPY', { timeframe: '1h', lookback: 700 }, SESSION_SHUT),
+    ).rejects.toThrow(InSessionUnderfetchError);
+
+    // 701 -> 5,608 (8x, nothing survived) -> 20,000 (would-be 44,864 clamped
+    // to the absolute cap) -> widen(20,000) also clamps to 20,000, which is
+    // <= the current rawLimit, so the loop stops there rather than issuing a
+    // fourth, identical request.
+    expect(limits).toEqual([701, 5608, 20000]);
+    expect(Math.max(...limits)).toBeLessThanOrEqual(20_000);
+  });
+
+  it('fails loud, before any fetch, when the caller’s own first ask already exceeds the absolute cap', async () => {
+    const { client, limits } = recordingClient((limit) => hourlyCandles(SESSION_SHUT, limit));
+    const source = new AlpacaDataSource(client, {
+      asset_class: 'stocks',
+      calendar: new UsEquityRegularHoursCalendar(),
+    });
+
+    // lookback 20,000 + FORMING_BAR_FETCH_MARGIN (1) = 20,001 > 20,000.
+    await expect(
+      source.fetchBars('SPY', { timeframe: '5m', lookback: 20_000 }, MID_SESSION),
+    ).rejects.toThrow(RawFetchLimitExceededError);
+
+    // Refused before any request reached the client — never an unbounded
+    // fetch, never a silently truncated one.
+    expect(limits).toEqual([]);
+  });
+
+  it('names the instrument, timeframe, and both limits on the thrown error', async () => {
+    const { client } = recordingClient((limit) => hourlyCandles(SESSION_SHUT, limit));
+    const source = new AlpacaDataSource(client, {
+      asset_class: 'stocks',
+      calendar: new UsEquityRegularHoursCalendar(),
+    });
+
+    const error = await source
+      .fetchBars('SPY', { timeframe: '5m', lookback: 25_000 }, MID_SESSION)
+      .then(
+        (bars) => bars,
+        (thrown: unknown) => thrown,
+      );
+
+    expect(error).toBeInstanceOf(RawFetchLimitExceededError);
+    const capped = error as RawFetchLimitExceededError;
+    expect(capped.instrument).toBe('SPY');
+    expect(capped.timeframe).toBe('5m');
+    expect(capped.requestedRawLimit).toBe(25_001);
+    expect(capped.absoluteLimit).toBe(20_000);
   });
 });
 
