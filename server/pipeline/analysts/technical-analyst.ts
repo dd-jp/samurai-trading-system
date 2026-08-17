@@ -68,6 +68,7 @@
 import {
   type Bar,
   type BarWindow,
+  computeSessionVwap,
   type IndicatorSpec,
   InsufficientBarsError,
   minimumBarsFor,
@@ -861,6 +862,32 @@ export const technicalAnalyst: Analyst = {
       { macd, adx, squeeze, donchian, participation },
     );
 
+    // #746 — session-anchored VWAP, informational only: no vote, no cap, no
+    // change to `assessAxes`'s arithmetic. Reuses `technicalBars` (the same
+    // shared 5m warm-up window every core/enrichment read above is served
+    // from) rather than issuing its own fetch. `input.calendar` is resolved
+    // by the orchestrator per `signal.asset_class`
+    // (`AnalystOrchestratorDeps.sessionCalendars`); not caught here, on
+    // purpose — a calendar that cannot answer at all (`TradingCalendar`'s
+    // documented throw) is exactly as fatal to this mandatory analyst as a
+    // misordered bar feed, and containment is the same tick-loop backstop
+    // `computeIndicator`'s own doc comment traces.
+    //
+    // Computed on `signal.asset` — the traded instrument, which on the live
+    // equity leg is the leveraged ETP, not its liquid US underlying. #744's
+    // volume caveat applies here exactly as it would to a registry indicator
+    // kind: this instrument's volume is market-maker/wrapper flow, not
+    // informed flow. Routing this at the underlying instead would need a
+    // screening/underlying-instrument identity this codebase does not have —
+    // see `session-features.ts`'s doc comment for why that gap is recorded
+    // rather than papered over.
+    const session = computeSessionVwap(technicalBars, input.calendar, asOf);
+    const sessionLine =
+      session.vwap === null
+        ? `Session VWAP (${INDICATOR_TIMEFRAME}): no session to anchor to`
+        : `Session VWAP (${INDICATOR_TIMEFRAME}): ${session.vwap} — price ${lastCandle.close} is ` +
+          `${(session.distance_from_vwap as number) >= 0 ? '+' : ''}${session.distance_from_vwap} from it`;
+
     // No fallback numeric here on purpose: an empty context read has no
     // volume to average, and reporting "avg volume 0" would be a fabricated
     // claim about the tape, not an approximation (the same fabrication class
@@ -889,6 +916,7 @@ export const technicalAnalyst: Analyst = {
         ...unavailable.map((entry) => entry.line),
         `Axis votes: ${voteSummary} — net ${assessment.net} over ${assessment.availableAxes} ` +
           `available axes, confidence ${assessment.confidence}`,
+        sessionLine,
         contextLine,
         `MI context: ${marketContext.news.length} news, ${marketContext.social.length} social items in window`,
       ],

@@ -1,5 +1,6 @@
 import type { Bar } from '../../providers/market-data-service/index.js';
 import {
+  AlwaysOpenCalendar,
   FixtureDataSource,
   MarketDataServiceImpl,
   SqliteMarketDataStore,
@@ -75,6 +76,10 @@ function buildInput(signal: Signal, trace_id: string, newsSentiment: 1 | 0 | -1 
     clock,
     market_intelligence: marketIntelligence,
     market_data: marketData,
+    // #746: fundamental never reads it, but AnalystInput.calendar is
+    // required, so every test-built input must inject one explicitly rather
+    // than leave it undefined.
+    calendar: new AlwaysOpenCalendar(),
   };
 }
 

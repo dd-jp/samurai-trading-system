@@ -1,6 +1,7 @@
 import { fundamentalAnalyst } from '../../pipeline/analysts/index.js';
 import { NO_DATA_MARKER } from '../../pipeline/analysts/types.js';
 import type { Clock } from '../../shared/index.js';
+import { AlwaysOpenCalendar } from '../market-data-service/index.js';
 import { MiArchiveStore } from './archive/mi-archive-store.js';
 import { MarketIntelligenceStore } from './index.js';
 import { MiIngestAgent } from './mi-ingest-agent.js';
@@ -112,6 +113,7 @@ describe('MiIngestAgent', () => {
       clock,
       market_intelligence: store,
       market_data: marketData,
+      calendar: new AlwaysOpenCalendar(),
     };
 
     const before = await fundamentalAnalyst.run(input);

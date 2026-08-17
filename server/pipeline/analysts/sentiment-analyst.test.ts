@@ -1,5 +1,6 @@
 import type { Bar } from '../../providers/market-data-service/index.js';
 import {
+  AlwaysOpenCalendar,
   FixtureDataSource,
   MarketDataServiceImpl,
   SqliteMarketDataStore,
@@ -79,6 +80,8 @@ function buildInput(
     clock,
     market_intelligence: marketIntelligence,
     market_data: marketData,
+    // #746: sentiment never reads it, but AnalystInput.calendar is required.
+    calendar: new AlwaysOpenCalendar(),
   };
 }
 

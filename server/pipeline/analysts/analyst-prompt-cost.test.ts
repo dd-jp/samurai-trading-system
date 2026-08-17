@@ -21,6 +21,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  AlwaysOpenCalendar,
   type Bar,
   FixtureDataSource,
   MarketDataServiceImpl,
@@ -90,6 +91,7 @@ async function runTechnical(): Promise<AnalystView> {
       'backtest',
       new SqliteMarketDataStore(openSharedStore(':memory:')),
     ),
+    calendar: new AlwaysOpenCalendar(),
   });
 }
 

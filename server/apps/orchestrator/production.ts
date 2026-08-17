@@ -576,6 +576,15 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     market_intelligence: marketIntelligence,
     market_data: marketData,
     /**
+     * #746: reuses the SAME `sessionCalendars` pair the flatten rule resolved
+     * above rather than deriving a second one — see
+     * `AnalystOrchestratorDeps.sessionCalendars`'s doc comment for why a
+     * second derivation is the dangerous move (#696 found exactly that class
+     * of bug once already). `production.test.ts` asserts this is the real
+     * pair, not the orchestrator's `AlwaysOpenCalendar` default.
+     */
+    sessionCalendars,
+    /**
      * #745: `technical_indicator_unavailable{kind}`. Wired here, unconditionally
      * and with no config switch — an unwired counter is indistinguishable from
      * an instrument whose axes are all available, which is the exact reading an
