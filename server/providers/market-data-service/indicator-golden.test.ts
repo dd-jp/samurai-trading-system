@@ -61,7 +61,16 @@ interface GoldenCase {
    * failure to catch it would be a golden case that silently stops running.
    */
   indicator: IndicatorKind;
-  period: number;
+  /** Scalar-period cases (the original four kinds). Mutually exclusive with `params`. */
+  period?: number;
+  /**
+   * Named-parameter cases (#744's additions, and #744's own single-period
+   * new kinds too) — see `generate-indicator-golden.py`'s `case_params`.
+   * Additive on the fixture schema: existing cases keep `period`, new ones
+   * carry `params` instead, so a diff on the fixture shows only what #744
+   * added.
+   */
+  params?: Record<string, number>;
   from: number;
   to: number;
   note: string;
@@ -135,13 +144,42 @@ const specFor = (kind: IndicatorKind, period: number, windowLength: number): Ind
   timeframe: '1h',
 });
 
+/** The `params`-shaped analogue of `specFor`, for #744's named-parameter cases. */
+const specForParams = (
+  kind: IndicatorKind,
+  params: Record<string, number>,
+  windowLength: number,
+): IndicatorSpec => ({
+  indicator: kind,
+  params,
+  lookback: windowLength,
+  timeframe: '1h',
+});
+
+/**
+ * Canonical params per kind (#744) — must match `generate-indicator-golden
+ * .py`'s own canonical sets exactly, since these drive the `boundary_*` and
+ * `full_window_*` case name lookups below.
+ */
+const CANONICAL_PARAMS: Partial<Record<IndicatorKind, Record<string, number>>> = {
+  macd_histogram: { fast: 12, slow: 26, signal: 9 },
+  bb_kc_squeeze: { bb_period: 20, bb_mult: 2, kc_period: 20, kc_mult: 1.5 },
+};
+
 const windowFor = (testCase: GoldenCase): Bar[] => BARS.slice(testCase.from, testCase.to);
 
+/**
+ * Builds the spec a golden case implies, dispatching on which of
+ * `period`/`params` the case carries — the same additive schema
+ * `generate-indicator-golden.py`'s `main()` dispatches on.
+ */
+const specForCase = (testCase: GoldenCase, windowLength: number): IndicatorSpec =>
+  testCase.params !== undefined
+    ? specForParams(testCase.indicator, testCase.params, windowLength)
+    : specFor(testCase.indicator, testCase.period as number, windowLength);
+
 const valueFor = (testCase: GoldenCase): number =>
-  computeIndicator(
-    windowFor(testCase),
-    specFor(testCase.indicator, testCase.period, testCase.to - testCase.from),
-  );
+  computeIndicator(windowFor(testCase), specForCase(testCase, testCase.to - testCase.from));
 
 const caseNamed = (name: string): GoldenCase => {
   const found = golden.cases.find((entry) => entry.name === name);
@@ -160,10 +198,12 @@ describe('computeIndicator against an independent reference', () => {
     });
   }
 
-  it('covers all four shipped kinds, so a new kind cannot arrive unbaselined', () => {
+  it('covers every shipped kind, so a new kind cannot arrive unbaselined', () => {
     // The plan's ordering rule made executable: assert the existing four
-    // before adding any new kind. If B4/B5 add a kind and this list is not
-    // extended with it, this fails.
+    // before adding any new kind. If a future step adds a kind and this list
+    // is not extended with it, this fails. #744 grew this from four kinds to
+    // nine (`atr_pct`, `macd_histogram`, `adx`, `donchian_pos`,
+    // `bb_kc_squeeze`).
     const covered = new Set(golden.cases.map((entry) => entry.indicator));
     // Compared against the REGISTRY, not a literal (#703 B2). As a literal this
     // guard had the defect it exists to prevent: adding a kind to `INDICATORS`
@@ -172,6 +212,20 @@ describe('computeIndicator against an independent reference', () => {
     expect([...covered].sort()).toEqual([...INDICATOR_KINDS].sort());
   });
 });
+
+/**
+ * `boundary_<kind>_14` for the seven single-period kinds; the two
+ * multi-parameter kinds carry their canonical parameter set in the name
+ * instead (matching `generate-indicator-golden.py`'s `case_params` calls),
+ * since "14" cannot name a `fast`/`slow`/`signal` or
+ * `bb_period`/`kc_period` combination.
+ */
+const boundaryCaseName = (kind: IndicatorKind): string =>
+  kind === 'macd_histogram'
+    ? 'boundary_macd_histogram_12_26_9'
+    : kind === 'bb_kc_squeeze'
+      ? 'boundary_bb_kc_squeeze_20_20'
+      : `boundary_${kind}_14`;
 
 describe('the boundary the goldens sit on', () => {
   // The comfortable window is where every seeding convention agrees. The
@@ -182,18 +236,19 @@ describe('the boundary the goldens sit on', () => {
   // boundary_<kind>_14" — instead of shipping with no boundary baseline. A
   // literal list would have quietly kept passing for the four it names.
   for (const kind of INDICATOR_KINDS) {
-    const testCase = caseNamed(`boundary_${kind}_14`);
+    const testCase = caseNamed(boundaryCaseName(kind));
+    const params = CANONICAL_PARAMS[kind] ?? { period: 14 };
 
     it(`${kind}: the golden window is exactly minimumBarsFor, not one bar more`, () => {
       const length = testCase.to - testCase.from;
-      expect(length).toBe(minimumBarsFor(specFor(kind, 14, length)));
+      expect(length).toBe(minimumBarsFor(specForParams(kind, params, length)));
     });
 
     it(`${kind}: one bar fewer throws rather than answering`, () => {
       const length = testCase.to - testCase.from - 1;
       const short = BARS.slice(testCase.from + 1, testCase.to);
 
-      expect(() => computeIndicator(short, specFor(kind, 14, length))).toThrow(
+      expect(() => computeIndicator(short, specForParams(kind, params, length))).toThrow(
         InsufficientBarsError,
       );
     });
