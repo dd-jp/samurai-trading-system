@@ -3492,9 +3492,11 @@ describe('buildProductionOrchestrator', () => {
     // Drive the real SequentialTickRunner over stubbed steps so the audit /
     // current_tick side effects are the production SQLite ones, not fakes.
     const runner = new SequentialTickRunner({
-      exitCheck: async () => {
-        throw new Error('unreachable');
-      },
+      // #785: a quorum-skipped decision pass now runs the exit check itself
+      // (no Trader entry point of its own to carry the flatten), so this is
+      // reachable here — unlike debate/risk/verdict/execution, which stay
+      // unreachable behind the quorum skip.
+      exitCheck: async () => null,
       analysts: async () => [],
       debate: async () => {
         throw new Error('unreachable');
@@ -3529,7 +3531,10 @@ describe('buildProductionOrchestrator', () => {
       },
     );
 
-    expect(orchestrator.persistence.auditLog.getByTraceId('trace-audit')).toHaveLength(1);
+    // Two rows (#785): 'analysts' for the quorum skip, then 'position_check'
+    // for the flatten evaluation the quorum-skip pass now also performs.
+    const rows = orchestrator.persistence.auditLog.getByTraceId('trace-audit');
+    expect(rows.map((row) => row.stage)).toEqual(['analysts', 'position_check']);
     expect(orchestrator.persistence.currentTickStore.get('BTC-USD')).toBeUndefined();
   });
 });

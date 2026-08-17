@@ -786,7 +786,10 @@ describe('runTickPlan decision gate (#743)', () => {
     // The acceptance criterion of the split, stated as a count: a full 1h bar
     // of ticks at the production cadence (2 minutes — read off the paper
     // profile so a retune keeps this test honest) runs the analysts exactly
-    // once, and the exit check on every other tick.
+    // once. Every tick still runs the exit check exactly once (#785): the
+    // bar's one decision pass quorum-skips and evaluates the flatten itself
+    // (no Trader entry point of its own to carry it), and every other tick
+    // takes the tick path, which always runs it.
     const steps: TickSteps = {
       exitCheck: vi.fn(async () => null),
       analysts: vi.fn(async () => []), // quorum skip — the chain ends here
@@ -818,7 +821,7 @@ describe('runTickPlan decision gate (#743)', () => {
     }
 
     expect(steps.analysts).toHaveBeenCalledTimes(1);
-    expect(steps.exitCheck).toHaveBeenCalledTimes(ticksPerBar - 1);
+    expect(steps.exitCheck).toHaveBeenCalledTimes(ticksPerBar);
 
     // ...and the NEXT bar's first tick decides again.
     const nextBar = new Date(barOpen.getTime() + 3_600_000);
@@ -831,7 +834,7 @@ describe('runTickPlan decision gate (#743)', () => {
     // the decision chain is dead, and the flatten must still reach Execution
     // from the cheap path. This is the 2f22033 defect shape: an exit path
     // accidentally coupled to the decision path strands a live position.
-    const closedGate: DecisionGate = { claim: () => undefined, rescind: () => undefined };
+    const closedGate: DecisionGate = { claim: () => undefined, rescind: () => 'stale' };
     const exit: OrderIntent = {
       idempotency_key: 'key-btc-flatten',
       instrument: 'BTC-USD',
@@ -981,5 +984,97 @@ describe('runTickPlan decision gate (#743)', () => {
       config,
     );
     expect(third[0]?.final_stage).toBe('position_check');
+  });
+
+  // ── The retry bound (#785): a PERSISTENTLY failing decision pass must not
+  // rescind for the rest of the bar — up to ~30 analyst rebuilds at the
+  // production cadence, exactly the churn #743 exists to remove. ───────────
+  describe('bounded decision-pass retry (#785)', () => {
+    it('stops retrying after the budget and reports the forfeit loudly, over a full bar of ticks', async () => {
+      // Every decision pass throws — a PERSISTENT fault, not a transient one.
+      const runner: TickRunner = {
+        async runInstrument(_signal, ctx) {
+          if (ctx.decision_bar !== undefined) {
+            throw new Error('persistently broken decision pass');
+          }
+          return { trace_id: ctx.trace_id, final_stage: 'position_check' };
+        },
+      };
+      const maxRetries = 3;
+      const gate = new DebateBarDecisionGate(maxRetries);
+      const logger: Logger & { entries: Parameters<Logger['log']>[0][] } = {
+        entries: [],
+        log(entry) {
+          this.entries.push(entry);
+        },
+      };
+      const config = { ...loopConfig(gate), logger };
+
+      const barOpen = new Date('2026-07-15T14:00:00Z');
+      const ticksPerBar = 3_600_000 / TICK_INTERVAL_MS;
+      const outcomes = [];
+      for (let i = 0; i < ticksPerBar; i++) {
+        const at = new Date(barOpen.getTime() + i * TICK_INTERVAL_MS);
+        outcomes.push(
+          (await runTickPlan(planAt(at, 'BTC-USD'), runner, { now: () => at }, config))[0],
+        );
+      }
+
+      // Every claimed decision pass throws until the budget is exhausted;
+      // after that the gate refuses further claims for the rest of the bar,
+      // so the runner never sees `decision_bar` again this bar and every
+      // remaining tick is a cheap, SUCCEEDING tick pass — not a retry.
+      const decisionAttempts = outcomes.filter((o) => o?.error !== undefined).length;
+      expect(decisionAttempts).toBe(maxRetries);
+      expect(outcomes.slice(maxRetries).every((o) => o?.final_stage === 'position_check')).toBe(
+        true,
+      );
+
+      // NAMED, loud forfeit report — this is what #785's acceptance criterion
+      // ("an explicit forfeit state that alerts") demands: distinguishable
+      // from the ordinary per-attempt "instrument failed" line already
+      // emitted by the catch block.
+      const forfeitEntry = logger.entries.find((entry) =>
+        entry.message.includes('retry budget exhausted'),
+      );
+      expect(forfeitEntry).toBeDefined();
+      expect(forfeitEntry?.level).toBe('error');
+      expect(forfeitEntry?.payload).toMatchObject({ instrument: 'BTC-USD' });
+
+      // Bounded, not unbounded: `runInstrument` was claimed (and threw) only
+      // `maxRetries` times over the WHOLE bar, not once per remaining tick
+      // (which would be `ticksPerBar` at the production cadence).
+      expect(decisionAttempts).toBeLessThan(ticksPerBar);
+    });
+
+    it('the next bar claims and retries fresh after the previous bar forfeited', async () => {
+      let call = 0;
+      const runner: TickRunner = {
+        async runInstrument(_signal, ctx) {
+          if (ctx.decision_bar !== undefined) {
+            call++;
+            throw new Error(`decision pass failure #${call}`);
+          }
+          return { trace_id: ctx.trace_id, final_stage: 'position_check' };
+        },
+      };
+      const gate = new DebateBarDecisionGate(1); // forfeits on the FIRST failure
+      const config = loopConfig(gate);
+
+      const barOpen = new Date('2026-07-15T14:00:00Z');
+      const first = await runTickPlan(planAt(barOpen, 'BTC-USD'), runner, CLOCK, config);
+      expect(first[0]?.error).toContain('decision pass failure #1');
+
+      // Same bar, later tick: forfeited — no more claims, no more throws.
+      const midBar = new Date(barOpen.getTime() + TICK_INTERVAL_MS);
+      const second = await runTickPlan(planAt(midBar, 'BTC-USD'), runner, CLOCK, config);
+      expect(second[0]?.final_stage).toBe('position_check');
+      expect(second[0]?.error).toBeUndefined();
+
+      // The NEXT bar opens with a fresh claim and a fresh budget.
+      const nextBar = new Date(barOpen.getTime() + 3_600_000);
+      const third = await runTickPlan(planAt(nextBar, 'BTC-USD'), runner, CLOCK, config);
+      expect(third[0]?.error).toContain('decision pass failure #2');
+    });
   });
 });

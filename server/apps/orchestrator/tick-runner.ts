@@ -16,21 +16,31 @@
  *     straight-line sequential chain over the already-specced stage
  *     contracts — no stage decision logic lives here.
  *
- * Exactly ONE Trader entry point runs per pass. A decision pass does not also
- * run the tick path's exit check, because the Trader's own routing evaluates
- * the flatten window FIRST on its holding branch (`decide.ts`, #668) — so the
- * flatten is evaluated on every pass through whichever entry point the pass
- * runs, and running both would emit the same-keyed exit twice and write two
- * audit rows per tail stage in one trace. The one pass this can cost a
- * flatten on is a decision pass that short-circuits before Trader (a quorum
- * skip); the next tick, two minutes later, is a tick pass and fires it.
- * Before the split, a quorum skip lost the flatten for a full tick interval
- * in exactly the same way — this is not a new exposure, and it is now bounded
- * by τ rather than by the old everything-is-a-decision cadence.
+ * Exactly ONE Trader entry point runs per pass. A decision pass that REACHES
+ * the Trader does not also run the tick path's exit check, because the
+ * Trader's own routing evaluates the flatten window FIRST on its holding
+ * branch (`decide.ts`, #668) — so the flatten is evaluated on every pass
+ * through whichever entry point the pass runs, and running both would emit
+ * the same-keyed exit twice and write two audit rows per tail stage in one
+ * trace.
+ *
+ * A decision pass that short-circuits BEFORE the Trader (a quorum skip, empty
+ * view set) is the one pass with no Trader entry point of its own to carry
+ * the flatten — so it runs the tick path's exit check itself (#785) rather
+ * than skip flatten evaluation for the tick. Before #785, a quorum-skip pass
+ * returned at `final_stage: 'analysts'` without evaluating the flatten at
+ * all: bounded at one tick (the gate has already claimed the bar, so every
+ * later tick in it takes the tick path, which does flatten), and in practice
+ * near-zero risk since decision passes land at bar open and the flatten
+ * window is the bar's last five minutes — but that safety was a coincidence
+ * of the 1h grid, not a property of the code, and flat-by-close (ADR-0014) is
+ * load-bearing enough that the cheap path must be ABLE to flatten, not merely
+ * usually not need to. See `runExitCheckPass` below, shared with the tick
+ * path so there is exactly one place that evaluates a flatten.
  *
  * Short-circuit exits, each returning the stage that ended the pass:
- *   position_check — null exit intent (the common case: ~29 of 30 passes)
- *   analysts — empty view set (quorum skip, analysts-spec.md story 21)
+ *   position_check — null exit intent (the common case: ~29 of 30 passes;
+ *                    also reached from a quorum-skipped decision pass, #785)
  *   trader   — null intent (no-trade; `Trader.decide` is `OrderIntent | null`)
  *   risk     — `rejected`
  *   verdict  — `no_go`
@@ -168,16 +178,16 @@ export class SequentialTickRunner implements TickRunner {
       };
     };
 
-    const decisionBar = ctx.decision_bar;
-    if (decisionBar === undefined) {
-      // ── TICK PASS (#743): the cheap, position-facing path. ────────────────
-      // No analysts, no debate — the exit check's input carries neither, so an
-      // exit CANNOT read analyst output (constraint 4 of the split). The bar
-      // is floored HERE, once, onto the same grid the decision gate uses; the
-      // exit intent's idempotency key dedupes on it, so every tick-pass
-      // flatten inside one bar re-keys to the same order.
+    /**
+     * The position-facing exit check (#743, extracted for #785): no analysts,
+     * no debate — the exit check's input carries neither, so an exit CANNOT
+     * read analyst output (constraint 4 of the split). Shared by the tick
+     * path (every non-decision tick) and a quorum-skipped decision pass
+     * (#785) — the two cheap-path callers that have no Trader entry point of
+     * their own to carry the flatten.
+     */
+    const runExitCheckPass = async (bar: Date): Promise<TickOutcome> => {
       markStage('position_check');
-      const bar = floorToBar(clock.now(), DEBATE_BAR_TIMEFRAME_MS);
       const exitInput = { trace_id, instrument, bar, clock };
       const exitIntent = await this.steps.exitCheck(exitInput);
       // #748: the tick path can now fire TWO kinds of exit, so the audit row
@@ -204,6 +214,15 @@ export class SequentialTickRunner implements TickRunner {
           ? { early_exit_fired: true }
           : { flatten_fired: true },
       );
+    };
+
+    const decisionBar = ctx.decision_bar;
+    if (decisionBar === undefined) {
+      // ── TICK PASS (#743): the cheap, position-facing path. ────────────────
+      // The bar is floored HERE, once, onto the same grid the decision gate
+      // uses; the exit intent's idempotency key dedupes on it, so every
+      // tick-pass flatten inside one bar re-keys to the same order.
+      return runExitCheckPass(floorToBar(clock.now(), DEBATE_BAR_TIMEFRAME_MS));
     }
 
     // ── DECISION PASS: the full chain, once per debate bar. ─────────────────
@@ -212,8 +231,14 @@ export class SequentialTickRunner implements TickRunner {
     const views = await this.steps.analysts(analystsInput);
     record('analysts', views.length === 0 ? 'quorum_skip' : 'quorum_met', analystsInput, views);
     if (views.length === 0) {
-      currentTickStore.delete(instrument);
-      return { trace_id, final_stage: 'analysts' };
+      // A quorum skip has no Trader entry point of its own to carry the
+      // flatten (#785) — so this pass still evaluates it, through the exact
+      // same exit check the tick path uses. `decisionBar.open_time` is the
+      // gate's OWN bar (the single derivation for a decision pass, #687/#743)
+      // rather than a fresh `floorToBar(clock.now(), ...)` — the gate has
+      // already done this derivation for this pass, and a second one could
+      // only disagree with it, never improve on it.
+      return runExitCheckPass(decisionBar.open_time);
     }
 
     markStage('debate');
