@@ -242,6 +242,39 @@ describe('ADR-0018 D5 deployment envelope', () => {
     expect(finalSizeOf(withRoom)).toBeCloseTo(100, 6);
   });
 
+  it('#740: admits a second index ETP within the envelope, refuses a third once it is exhausted — keyed on the subclass cap, not a position count', () => {
+    // Three DIFFERENT tickers, not three calls against one instrument: if the
+    // gate were counting positions rather than netting notional, nothing
+    // here would distinguish it from a "max 2 positions" rule. `'3IGL'` is a
+    // third index_etp_3x ticker with no counterpart elsewhere in this file.
+    const threeTickerCap: SubclassDeploymentCap = {
+      ...DEPLOYMENT_CAP,
+      subclass_of: { ...SUBCLASS_OF, '3IGL': 'index_etp_3x' },
+    };
+
+    // First entry deploys all but £50 of the £262.50 envelope.
+    const first = decide(intentFor('3USL', INDEX_CAP - 50), {}, threeTickerCap);
+    expect(first.status).toBe('approved');
+    expect(finalSizeOf(first)).toBeCloseTo(INDEX_CAP - 50, 6);
+
+    // A second, DIFFERENT instrument in the same subclass is admitted — but
+    // only for the £50 of room the envelope has left, not its own full cap.
+    const second = decide(intentFor('3UKL', 10_000), { '3USL': INDEX_CAP - 50 }, threeTickerCap);
+    expect(second.status).toBe('approved');
+    expect(finalSizeOf(second)).toBeCloseTo(50, 6);
+    expect(second.binding_constraint).toBe('per_subclass_deployment_cap');
+
+    // A third, again DIFFERENT, instrument arrives once the subclass is fully
+    // deployed and is refused outright — never forwarded as a sliver.
+    const third = decide(
+      intentFor('3IGL', 10_000),
+      { '3USL': INDEX_CAP - 50, '3UKL': 50 },
+      threeTickerCap,
+    );
+    expect(third.status).toBe('rejected');
+    expect(third.binding_constraint).toBe('min_viable_size');
+  });
+
   it('leaves exposure in OTHER subclasses out of the netting', () => {
     // A single-stock holding must not consume the index envelope.
     const decision = decide(intentFor('3USL', 10_000), { '3LAP': 180, 'BTC-USD': 500 });

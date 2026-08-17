@@ -950,6 +950,63 @@ describe('buildRiskStep', () => {
     expect(decision.binding_constraint).toBe('circuit_breaker:portfolio');
   });
 
+  it('#740: persists a below-viable-size refusal to risk_log with a binding_constraint distinct from a circuit-breaker refusal', async () => {
+    // Verified against the actual persisted `risk_log` ROW `riskLog.write`
+    // receives (below), not the in-memory `RiskDecision.reasons` array — a
+    // post-mortem reads the store, never the process's own memory.
+    const writes: unknown[] = [];
+    const riskLog = { write: (record: unknown) => writes.push(record) };
+
+    // Trimmed to £5 notional by the £5 per-asset-class cap, which is below
+    // the £100 `min_viable_size` floor — a dust residual that must refuse
+    // rather than forward.
+    const step = buildRiskStep({
+      config: {
+        ...RISK_CONFIG,
+        per_asset_class_cap: { crypto: 100_000, stocks: 5 },
+        min_viable_size: 100,
+      },
+      correlationConfig: { window: { timeframe: '1d', lookback: 30 }, min_bars: 5 },
+      ciiConsumer: { getScores: vi.fn(() => ({})) },
+      marketData: FAKE_MARKET_DATA,
+      circuitBreakers: new CircuitBreakers({
+        daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+        max_drawdown_pct: 0.2,
+        max_consecutive_losses: 5,
+        volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+        auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+      }),
+      accountState: FAKE_ACCOUNT_STATE,
+      volatility: FAKE_VOLATILITY,
+      getOpenPositions: async () => NO_POSITIONS,
+      maxMarkAge: TEST_MAX_MARK_AGE,
+      mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
+      riskLog,
+    });
+
+    const decision = await step({
+      trace_id: TRACE_ID,
+      intent: makeIntent({ size: 10, entry: 100 }),
+      clock: CLOCK,
+    });
+
+    expect(decision.status).toBe('rejected');
+    expect(decision.binding_constraint).toBe('min_viable_size');
+    expect(decision.order_intent).toBeNull();
+
+    expect(writes).toHaveLength(1);
+    const row = writes[0] as { status: string; binding_constraint: string | null };
+    expect(row.status).toBe('rejected');
+    expect(row.binding_constraint).toBe('min_viable_size');
+    // Distinct from the OTHER rejection cause covered above (a tripped
+    // breaker) at the persisted-row level — the property the ticket asks
+    // to be verified, not merely inspected.
+    expect(row.binding_constraint).not.toBe('circuit_breaker:portfolio');
+  });
+
   describe('#726: risk_log on the per-subclass cap gate throw', () => {
     // AAPL is deliberately absent from `subclass_of` — the D5 envelope is
     // declared (armed) but this instrument was never added to the pool file,
