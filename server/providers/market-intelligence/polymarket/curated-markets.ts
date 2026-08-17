@@ -51,13 +51,28 @@
  * | `us-recession-2027` | $278 | $12,704 | ingests |
  *
  * All eight slugs resolve — nothing here has rotted yet. The refusals are the
- * fail-closed guard working, and the CPI rows in particular gain volume as the
- * print approaches, so the set is expected to widen rather than being wrong.
- * But the honest reading of this table on merge day is THREE live macro series,
- * not eight, and a row that never recovers must not decay in silence — which is
- * what the consecutive-refusal escalation in `polymarket-agent.ts#refuse` is
- * for. Whether these floors are the right floors is David's call; they are set
- * where a market's quoted probability is a price someone actually paid.
+ * fail-closed guard working. But the honest reading of this table on merge day
+ * is THREE live macro series, not eight, and volume arriving later does not
+ * rescue all five: measured on the same probe, the bullish leg of
+ * `us-cpi-annual-hot-tail` sits at 0.9945 and `us-core-cpi-mom-hot-tail` at
+ * 0.9755. That is the SAME disqualifier this file uses to reject the Fed cut
+ * leg above, mirrored — a probability with 0.0055 of headroom cannot clear a
+ * ±0.02 dead band, so those two rows would emit `sentiment: 0` forever even at
+ * $1M of volume. They likely need re-pointing at a ladder bucket with real
+ * headroom, which is a judgment for review, not a patch here.
+ * `us-recession-2026` at 0.925 is marginal for the same reason.
+ *
+ * The three that both clear book quality and have room to move are
+ * `fed-2026-09` (0.705), `fed-2026-10` (0.765) and `us-recession-2027` (0.725)
+ * — and note the first two are the SAME macro view one meeting apart, so under
+ * `directionFrom`'s unweighted mean two of the three live rows cast one vote
+ * twice. That is the cross-row half of the vote-inflation limitation recorded
+ * in `polymarket-agent.ts`.
+ *
+ * A row that never recovers must not decay in silence, which is what the
+ * consecutive-refusal escalation in `polymarket-agent.ts#refuse` is for.
+ * Whether these floors are the right floors is David's call; they are set where
+ * a market's quoted probability is a price someone actually paid.
  *
  * ## Slug rot is a known, unmitigated limitation
  *
