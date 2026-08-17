@@ -96,7 +96,7 @@ New research goes to `~/hermes-assistant/research/<topic>-<date>-raw.md` (raw) a
 - Persistent state (SQLite/Postgres) — crash-restart must not lose open positions
 - Idempotent order IDs, partial-fill handling, rate-limit resilient
 - API keys: trade-only permissions, **withdrawals disabled**, IP-whitelisted
-- Log every signal, every fill. Track PnL, max drawdown, win rate — **risk-adjusted against a matched control, never return-only against buy-and-hold.** `docs/research/12-edge-hypothesis-critique.md` **D4** rules out return-only comparisons against a risk-targeted stream. The primary control is the recorded thesis's falsifier arm 2 (same name, same ladder, same stop, entry by indicator alone, no LLM); outside benchmarks report return *and* drawdown together. Owned by [#636](https://github.com/dd-jp/samurai-trading-system/issues/636).
+- Log every signal, every fill. Track PnL, max drawdown, win rate — **risk-adjusted against a matched control, never return-only against buy-and-hold.** `docs/research/12-edge-hypothesis-critique.md` **D4** rules out return-only comparisons against a risk-targeted stream. The primary control is the recorded thesis's falsifier arm 2 (same name, **same exit rule**, same stop, entry by indicator alone, no LLM — the exit is ADR-0018 D3's neutral single bracket; this line said "same ladder" until 2026-08-17, when [#708](https://github.com/dd-jp/samurai-trading-system/issues/708)'s rejection of the tranche ladder was recorded); outside benchmarks report return *and* drawdown together. Owned by [#636](https://github.com/dd-jp/samurai-trading-system/issues/636).
 
 ## When in doubt
 
