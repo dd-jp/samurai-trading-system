@@ -411,7 +411,8 @@ describe('GdeltIngestAgent', () => {
     const archive = new MiArchiveStore();
     const throwing: Logger = {
       log: () => {
-        // What an EPIPE out of JsonLogger's unguarded stdout write looks like.
+        // What a `JsonLogger` with no sink left to record on looks like (#714),
+        // and what any injected `Logger` is free to do.
         throw new Error('EPIPE');
       },
     } as unknown as Logger;

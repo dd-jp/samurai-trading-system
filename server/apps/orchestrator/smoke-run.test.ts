@@ -25,6 +25,7 @@ import {
   evaluateSmokeGate,
   FixedAccountStateProvider,
   formatSmokeReport,
+  type LoggerResilienceEvidence,
   runSmoke,
   SMOKE_LLM_RESPONSE,
   SMOKE_RUN_INSTANT,
@@ -218,6 +219,7 @@ function healthyGateOptions(
     minTicks?: number;
     exitPath?: ExitPathEvidence;
     cryptoEmulation?: CryptoEmulationEvidence;
+    loggerResilience?: LoggerResilienceEvidence;
   } = {},
 ) {
   return {
@@ -225,6 +227,23 @@ function healthyGateOptions(
     llmRateLimiterSnapshot: meteredSnapshot(),
     exitPath: overrides.exitPath ?? healthyExitPath(),
     cryptoEmulation: overrides.cryptoEmulation ?? healthyCryptoEmulation(),
+    loggerResilience: overrides.loggerResilience ?? healthyLoggerResilience(),
+  };
+}
+
+/** What `runLoggerResilienceScenario` reports when both #714 mechanisms hold. */
+function healthyLoggerResilience(
+  overrides: Partial<LoggerResilienceEvidence> = {},
+): LoggerResilienceEvidence {
+  return {
+    stdoutRetired: true,
+    degradationRecordedInFile: true,
+    linesAfterStdoutDeath: 1,
+    escalatedWhenNothingCouldRecord: true,
+    lastResortTraceOnStderr: true,
+    fatalRecordedInFile: true,
+    fatalExitCode: 1,
+    ...overrides,
   };
 }
 
@@ -427,6 +446,76 @@ describe('evaluateSmokeGate', () => {
 
     expect(gate.failures.some((failure) => failure.includes('no row in debate_log'))).toBe(true);
     expect(gate.failures.some((failure) => failure.includes('#388 defect'))).toBe(false);
+  });
+
+  // #714 — the logging-fault mechanisms. Each of these fails the gate on its
+  // own, because each is a different way for an unattended soak to end or to
+  // go quietly blind.
+  it('fails when a dead stdout pipe stopped the run instead of degrading it', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        loggerResilience: healthyLoggerResilience({
+          stdoutRetired: false,
+          linesAfterStdoutDeath: 0,
+        }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('dead stdout pipe'))).toBe(true);
+  });
+
+  it('fails when the stdout failure was swallowed without a durable record', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        loggerResilience: healthyLoggerResilience({ degradationRecordedInFile: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('continue blind'))).toBe(true);
+  });
+
+  it('fails when a logger with nowhere left to record kept going anyway', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        loggerResilience: healthyLoggerResilience({ escalatedWhenNothingCouldRecord: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('swallowed its failure'))).toBe(true);
+  });
+
+  it('fails when the no-sink escalation left no trace on stderr', () => {
+    // The throw is swallowed inside a tick by design (#573), so stderr is the
+    // only thing standing between that ordering and a run trading blind.
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        loggerResilience: healthyLoggerResilience({ lastResortTraceOnStderr: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('wrote nothing to stderr'))).toBe(true);
+  });
+
+  it('fails when an unhandled fault was shrugged off rather than recorded and exited', () => {
+    // The constraint that matters most: a blanket swallow at the composition
+    // root would leave a live-money process trading in an unknown state.
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        loggerResilience: healthyLoggerResilience({ fatalExitCode: 0 }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('unknown state'))).toBe(true);
   });
 
   it('fails when no GO verdict was recorded, naming the no-go reasons seen', () => {

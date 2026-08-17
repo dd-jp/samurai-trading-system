@@ -117,6 +117,9 @@
  * forever — the run would submit orders and never ingest a fill. One frozen
  * instant for both collapses that gap to zero.
  */
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { deflateRawSync } from 'node:zlib';
 import type {
@@ -182,8 +185,8 @@ import {
   LoggingResidualExposureAlertChannel,
   LoggingUnpricedFillAlertChannel,
 } from './console-channels.js';
-import { startFromEnvironment } from './index.js';
-import { JsonLogger } from './logger.js';
+import { installFaultHandlers, startFromEnvironment } from './index.js';
+import { buildEntrypointLogger, JsonLogger, type StdoutStream } from './logger.js';
 import { paperStartingProfile } from './paper-profile.js';
 import { worstCaseLlmCallsForAssetClass } from './production/debate-adapter.js';
 import type { AccountStateProvider } from './production/direct-bind.js';
@@ -1511,6 +1514,160 @@ async function runCryptoEmulationScenario(db: SqliteHandle): Promise<CryptoEmula
   };
 }
 
+/**
+ * What the logging-fault scenario (#714) observed. Every field is an EFFECT —
+ * a line on disk, a chosen exit code — not "an object was constructed".
+ */
+export interface LoggerResilienceEvidence {
+  /** Stdout was retired rather than retried after the pipe died. */
+  stdoutRetired: boolean;
+  /** The degradation notice reached the durable file — the failure was not lost. */
+  degradationRecordedInFile: boolean;
+  /** Lines that reached the file AFTER stdout died: the run kept its trace. */
+  linesAfterStdoutDeath: number;
+  /** A logger with nowhere to record the failure threw instead of continuing blind. */
+  escalatedWhenNothingCouldRecord: boolean;
+  /**
+   * That same logger still left the line on stderr. The throw alone is not
+   * enough: inside a tick it is swallowed by `safeLog` (#573), so stderr is the
+   * only trace that ordering produces.
+   */
+  lastResortTraceOnStderr: boolean;
+  /** The fault handler's record of an unhandled fault reached the durable file. */
+  fatalRecordedInFile: boolean;
+  /** The exit code the fault handler chose. Null if it never called `exit`. */
+  fatalExitCode: number | null;
+}
+
+/** A stdout that can be killed the way a real pipe dies: asynchronously. */
+class BreakablePipe implements StdoutStream {
+  private listener?: (error: Error) => void;
+  /** Set to make `write` throw, modelling synchronous (file/TTY) stdio. */
+  throwOn?: Error;
+  /** Lines that reached it while it was alive. */
+  readonly lines: string[] = [];
+
+  write(line: string): boolean {
+    if (this.throwOn !== undefined) throw this.throwOn;
+    this.lines.push(line);
+    return true;
+  }
+
+  on(_event: 'error', listener: (error: Error) => void): this {
+    this.listener = listener;
+    return this;
+  }
+
+  breakPipe(): void {
+    if (this.listener === undefined) {
+      throw new Error(
+        'smoke logging-fault scenario: nothing subscribed to stdout errors — ' +
+          '`buildEntrypointLogger` stopped calling `watchStdoutErrors` (#714), so a broken ' +
+          'pipe would reach `uncaughtException` and end an unattended soak',
+      );
+    }
+    this.listener(new Error('EPIPE: broken pipe'));
+  }
+}
+
+/**
+ * The logging-fault scenario (#714) — the pre-soak gate's fourth leg.
+ *
+ * A soak dies from a closed terminal only in production, never in a unit test,
+ * and the two mechanisms that stop it (`watchStdoutErrors` and
+ * `installFaultHandlers`) live at the entrypoint, which nothing else in this
+ * gate exercises. Wiring a mechanism means adding its enforcement assertion
+ * here (#430), so this drives BOTH against a REAL `RotatingFileSink` on disk
+ * and reads the resulting file back — the effect, not the construction.
+ *
+ * The file goes to a temp directory, removed afterwards: like the `:memory:`
+ * store, a gate must leave no artefacts in the checkout, and in particular
+ * must not create the `logs/` a real soak writes to.
+ */
+function runLoggerResilienceScenario(): LoggerResilienceEvidence {
+  const directory = mkdtempSync(join(tmpdir(), 'samurai-smoke-log-'));
+  try {
+    const filePath = join(directory, 'orchestrator.log');
+    const stdout = new BreakablePipe();
+    // The REAL entrypoint builder, so a regression that stops subscribing to
+    // stdout errors, or stops opening the file, fails this run.
+    const logger = buildEntrypointLogger(
+      { filePath, maxBytes: 1024 * 1024, maxRotatedFiles: 1 },
+      stdout,
+    );
+    const entry = (message: string) => ({
+      trace_id: 'smoke-logging-fault',
+      stage: 'orchestrator',
+      level: 'info' as const,
+      message,
+      payload: {},
+    });
+
+    logger.log(entry('before the pipe died'));
+    stdout.breakPipe();
+    logger.log(entry('after the pipe died'));
+
+    const afterPipe = readLogLines(filePath);
+    const degradationRecordedInFile = afterPipe.some(
+      (line) =>
+        (line.payload as { log_stdout_sink?: string } | undefined)?.log_stdout_sink === 'degraded',
+    );
+    const linesAfterStdoutDeath = afterPipe.filter(
+      (line) => line.message === 'after the pipe died',
+    ).length;
+
+    // The other half of the rule: with no sink able to hold the report, the
+    // logger must NOT degrade quietly.
+    let escalatedWhenNothingCouldRecord = false;
+    const deadStdout = new BreakablePipe();
+    deadStdout.throwOn = new Error('EBADF');
+    const stderrLines: string[] = [];
+    const sinkless = new JsonLogger(undefined, deadStdout, {
+      write: (line) => {
+        stderrLines.push(line);
+      },
+    });
+    try {
+      sinkless.log(entry('nowhere to go'));
+    } catch {
+      escalatedWhenNothingCouldRecord = true;
+    }
+    const lastResortTraceOnStderr = stderrLines.some((line) => line.includes('nowhere to go'));
+
+    // And the composition root's fault net: an unhandled fault is recorded
+    // durably and exits, rather than being shrugged off.
+    const exits: number[] = [];
+    const handlers = new Map<string, (error: unknown) => void>();
+    installFaultHandlers(logger, {
+      exit: (code) => exits.push(code),
+      stderr: () => {},
+      on: (event, handler) => handlers.set(event, handler),
+    });
+    handlers.get('uncaughtException')?.(new Error('smoke-injected fault'));
+
+    return {
+      stdoutRetired: logger.stdoutRetired,
+      degradationRecordedInFile,
+      linesAfterStdoutDeath,
+      escalatedWhenNothingCouldRecord,
+      lastResortTraceOnStderr,
+      fatalRecordedInFile: readLogLines(filePath).some((line) =>
+        line.message.includes('uncaughtException'),
+      ),
+      fatalExitCode: exits[0] ?? null,
+    };
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+function readLogLines(filePath: string): { message: string; payload?: unknown }[] {
+  return readFileSync(filePath, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { message: string; payload?: unknown });
+}
+
 /** One tick's audit trail: the stages it reached and what each decided. */
 export interface SmokeTick {
   trace_id: string;
@@ -1779,6 +1936,14 @@ export function evaluateSmokeGate(
      * on the mechanism this gates.
      */
     cryptoEmulation: CryptoEmulationEvidence;
+    /**
+     * The logging-fault scenario's evidence (#714) — required for the same
+     * "compile error, not a silent no-op" reason the three above are. What it
+     * gates is a soak that dies on day three because someone closed its
+     * terminal: nothing else in this gate, and no unit test, exercises the
+     * entrypoint's stdout `'error'` subscription or its fault net.
+     */
+    loggerResilience: LoggerResilienceEvidence;
   },
 ): SmokeGateResult {
   const failures: string[] = [];
@@ -1893,6 +2058,46 @@ export function evaluateSmokeGate(
   // that an object was constructed and not that a log line was emitted. A
   // check on construction passes for a component nothing calls, which is the
   // defect itself.
+  // #714 — the logging-fault mechanisms, asserted on their durable effects.
+  const logging = options.loggerResilience;
+  if (!logging.stdoutRetired || logging.linesAfterStdoutDeath === 0) {
+    failures.push(
+      'a dead stdout pipe did not leave the logger degraded-but-running — stdout was not ' +
+        `retired (${logging.stdoutRetired}) or nothing reached the file afterwards ` +
+        `(${logging.linesAfterStdoutDeath} lines). An unattended soak (#238) dies the moment ` +
+        'its terminal closes, which is #714 exactly',
+    );
+  }
+  if (!logging.degradationRecordedInFile) {
+    failures.push(
+      'stdout failed and nothing recorded it on the surviving sink — the run would continue ' +
+        'blind, and a sink that silently stopped working is indistinguishable from a quiet ' +
+        'system (#714)',
+    );
+  }
+  if (!logging.escalatedWhenNothingCouldRecord) {
+    failures.push(
+      'a logger with no sink left to record on swallowed its failure instead of throwing — ' +
+        'the degrade in #714 is only honest because it stops when the failure can no longer ' +
+        'be written down anywhere',
+    );
+  }
+  if (!logging.lastResortTraceOnStderr) {
+    failures.push(
+      'a logger with no sink left threw but wrote nothing to stderr — and that throw is raised ' +
+        "inside a tick, where tick-loop's catch and safeLog swallow it by design (#573). " +
+        'Without the stderr line the run would keep trading with no trace on any stream (#714)',
+    );
+  }
+  if (!logging.fatalRecordedInFile || logging.fatalExitCode !== 1) {
+    failures.push(
+      'an unhandled fault was not recorded durably and exited with ' +
+        `${logging.fatalExitCode ?? 'no code'} rather than 1 — the fault net must record where ` +
+        'a soak can find it and STOP. A live-money process that keeps running in an unknown ' +
+        'state with open positions is worse than one that dies (#714)',
+    );
+  }
+
   if (debates.length > 0 && observations.cosineSetups.length === 0) {
     failures.push(
       'a debate resolved and reached the Trader, but no row in cosine_setups — `decide()` did ' +
@@ -2654,12 +2859,18 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     // contends with nothing above.
     const cryptoEmulation = await runCryptoEmulationScenario(db);
 
+    // #714: the entrypoint's logging-fault mechanisms, on a real file sink in
+    // a temp directory. Independent of the store and the clock, so it runs
+    // beside the three scenarios above rather than inside any of them.
+    const loggerResilience = runLoggerResilienceScenario();
+
     const observations = readSmokeObservations(db, smokeMiArchive);
     const gate = evaluateSmokeGate(observations, {
       minTicks: targetTicks,
       alpacaWireClientReached: alpacaBrokerClient.reached,
       llmRateLimiterSnapshot: llmRateLimiter.snapshot(),
       cryptoEmulation,
+      loggerResilience,
       exitPath: {
         ...exitPathHarnessResult,
         // Alerts from BOTH the six-stage tick loop and the exit-path harness —

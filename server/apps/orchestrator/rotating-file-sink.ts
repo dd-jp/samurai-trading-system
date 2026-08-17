@@ -352,11 +352,14 @@ export class RotatingFileSink {
    * Reports the degradation, and swallows a failure to report it.
    *
    * Raised in review on #349, and not theoretical: the shipped `onFailure` is
-   * `warnOnStdout` (logger.ts), and `process.stdout.write` throws EPIPE the
-   * moment the far end of the pipe goes away — routine for a long-running
-   * process someone attached to and detached from, or one whose supervisor
-   * closed the pipe. Without this catch, `attempt`'s handler for a *file*
-   * failure would itself throw, straight out of `write()` and into a tick.
+   * `warnOnStdout` (logger.ts), and stdout can be dead — routine for a
+   * long-running process someone attached to and detached from, or one whose
+   * supervisor closed the pipe. Without this catch, `attempt`'s handler for a
+   * *file* failure would itself throw, straight out of `write()` and into a
+   * tick. (Measured for #714: on a *pipe* that failure is asynchronous — an
+   * `'error'` event, not a throw from `write` — so this catch covers the
+   * synchronous stdio case, a file or TTY stdout, and `watchStdoutErrors`
+   * covers the other.)
    *
    * There is nowhere left to escalate at that point: the file sink is gone and
    * the stream that reports on it is gone too. The only correct behaviour is
@@ -366,9 +369,11 @@ export class RotatingFileSink {
     try {
       this.options.onFailure?.(message);
     } catch {
-      // Both sinks are broken. Losing the message is strictly better than
-      // losing the run — this class's one hard guarantee is that a logging
-      // call inside a tick never throws.
+      // Both sinks are broken. Losing THIS message is strictly better than
+      // losing the run here — this class's one hard guarantee is that IT never
+      // throws into a tick. What happens next is `JsonLogger`'s call, not this
+      // one's: with nothing left able to record, its next `log` propagates
+      // rather than continuing blind (#714).
     }
   }
 }

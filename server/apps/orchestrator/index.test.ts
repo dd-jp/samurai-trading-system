@@ -8,9 +8,11 @@
  * export surface as well as the entrypoint); every test below relies on that
  * implicitly, since a top-level start would hang the suite.
  */
+import type { LogEntry } from '../../shared/index.js';
 import {
   assertStorePathMatchesMode,
   buildShutdownHandler,
+  installFaultHandlers,
   missingCredentialEnvVars,
   paperStartingProfile,
   REQUIRED_INJECTED_CONFIG,
@@ -520,5 +522,98 @@ describe('buildShutdownHandler', () => {
     await drained;
     await Promise.resolve();
     expect(exits).toEqual([0]);
+  });
+});
+
+describe('installFaultHandlers (#714)', () => {
+  /** Captures the handlers instead of attaching them to the real process. */
+  function harness() {
+    const handlers = new Map<string, (error: unknown) => void>();
+    const exits: number[] = [];
+    const errors: string[] = [];
+    const logged: LogEntry[] = [];
+    return {
+      handlers,
+      exits,
+      errors,
+      logged,
+      logger: {
+        log: (entry: LogEntry) => {
+          logged.push(entry);
+        },
+      },
+      effects: {
+        exit: (code: number) => {
+          exits.push(code);
+        },
+        stderr: (message: string) => {
+          errors.push(message);
+        },
+        on: (
+          event: 'uncaughtException' | 'unhandledRejection',
+          handler: (error: unknown) => void,
+        ) => {
+          handlers.set(event, handler);
+        },
+      },
+    };
+  }
+
+  it('installs handlers for both unhandled fault kinds', () => {
+    const h = harness();
+    installFaultHandlers(h.logger, h.effects);
+
+    expect([...h.handlers.keys()].sort()).toEqual(['uncaughtException', 'unhandledRejection']);
+  });
+
+  for (const fault of ['uncaughtException', 'unhandledRejection'] as const) {
+    it(`records a ${fault} durably and exits non-zero rather than continuing`, () => {
+      // The constraint this handler exists to hold: it is NOT a swallow. A
+      // trading process in an unknown state with open positions must stop —
+      // restart-time reconciliation (#209) is built for a death mid-pass;
+      // nothing is built for trading on after an exception nobody saw.
+      const h = harness();
+      installFaultHandlers(h.logger, h.effects);
+
+      h.handlers.get(fault)?.(new Error('a stage exploded'));
+
+      expect(h.exits).toEqual([1]);
+      expect(h.logged).toHaveLength(1);
+      expect(h.logged[0].level).toBe('error');
+      expect(h.logged[0].message).toContain(fault);
+      expect(h.logged[0].payload).toMatchObject({ fault, error: 'a stage exploded' });
+      expect(h.errors.join('')).toMatch(/a stage exploded/);
+    });
+  }
+
+  it('still exits when the logger itself has no sink left to record on', () => {
+    // The escalation `JsonLogger` performs when both its sinks are gone lands
+    // here, so this handler must not be the thing that throws.
+    const h = harness();
+    installFaultHandlers(
+      {
+        log: () => {
+          throw new Error('structured logging reached no sink');
+        },
+      },
+      h.effects,
+    );
+
+    expect(() => h.handlers.get('uncaughtException')?.(new Error('EPIPE'))).not.toThrow();
+    expect(h.exits).toEqual([1]);
+  });
+
+  it('reports by message only, never the thrown object', () => {
+    // Same posture as the startup catch and `buildShutdownHandler`: a
+    // config-bearing error must not put credentials on stderr.
+    const h = harness();
+    installFaultHandlers(h.logger, h.effects);
+    const secretive = Object.assign(new Error('boom'), { apiKey: 'sk-live-must-not-leak' });
+
+    h.handlers.get('uncaughtException')?.(secretive);
+
+    expect(h.errors.join('')).toMatch(/boom/);
+    expect(h.errors.join('')).not.toMatch(/sk-live-must-not-leak/);
+    expect(JSON.stringify(h.logged)).not.toMatch(/sk-live-must-not-leak/);
   });
 });
