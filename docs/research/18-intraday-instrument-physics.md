@@ -137,6 +137,71 @@ Against `CONTEXT.md`'s recorded 20–25% tolerance, full deployment is 2.2–3.5
 | **£262 (35%)** | **23.1%** | 35.8% |
 | **£188 (25%)** | 17.0% | **26.2%** |
 
+> ### ⚠️ Both tables above are measured at the WRONG BRACKET — [#729](https://github.com/dd-jp/samurai-trading-system/issues/729), 2026-08-17
+>
+> `18-drawdown-envelope.py` (added by #729) is the generator these rows never had. It reproduces
+> every published figure **exactly**, which identifies both the definition and the inputs — and the
+> inputs are not the declared exit rule.
+>
+> **The definition** is max drawdown of a **drift-removed, fixed-fraction, simple-compounded** equity
+> curve (`equity *= 1 + f·r`) over the bracketed per-trade series, 2,659 sessions. That is why neither
+> linear nor log scaling re-derives the ladder: simple compounding scales as `f^0.854` (index) and
+> `f^0.873` (single-stock) against the recorded `f^0.855` / `f^0.874`.
+>
+> **The inputs** are two brackets from the *pre-neutral* grid — the `SLS = {1.5, 3}` sweep — not the
+> neutral brackets this document recommends and [ADR-0018](../adr/0018-intraday-thresholds-sizing-and-the-signal-bar.md) D3 declares:
+>
+> | subclass | bracket the envelope was measured at | bracket the system will trade | sd measured / recorded |
+> | --- | --- | --- | --- |
+> | 3× index | **TP +3.0% / SL −1.50%** | TP +2.0% / SL −2.16% | 1.553% / 1.55% |
+> | 3× single-stock | **TP +6.0% / SL −3.00%** | TP +6.0% / SL −6.25% | 4.006% / 4.01% |
+>
+> At those brackets the generator returns 55.6 / 31.6 / 23.1 / 17.0 and 88.0 / 50.0 / 35.8 / 26.2 —
+> all eight rows to the last decimal. The identification is confirmed independently by ADR-0018 D5's
+> own aside that a strict 25% tolerance needs *"roughly ~24%"* deployment: solved on the single-stock
+> provenance series, the tolerance binds at **f = 0.237**.
+>
+> **Re-measured at the declared brackets, drift removed, same definition:**
+>
+> | deployed fraction | 3× index (TP +2.0 / SL −2.16) | 3× single-stock (TP +6.0 / SL −6.25) |
+> | --- | --- | --- |
+> | 100% | 61.9% *(recorded 55.6%)* | **97.8%** *(recorded 88.0%)* |
+> | 50% | 35.9% *(31.6%)* | **71.7%** *(50.0%)* |
+> | 35% | **26.2%** *(23.1%)* | 55.2% *(35.8%)* |
+> | 25% | 19.2% *(17.0%)* | **41.8%** *(26.2%)* |
+> | per-trade sd | 1.574% (ann. 25.0%) | **5.362%** (ann. 85.1%) |
+>
+> **The single-stock stop is the whole story.** #724 froze the neutral stop at **−6.25%**, which is
+> 2.08× the −3.00% the envelope was measured at, and per-trade sd rises 4.01% → 5.36% with it. At the
+> declared 25% deployment the drawdown envelope is **41.8%, not 26.2%** — an overshoot of ~17 pp
+> against `CONTEXT.md`'s 20–25% band, where ADR-0018 D5 records and accepts an overshoot of 1.2 pp.
+> The index row moves too, but only from inside the band to its edge: 23.1% → 26.2% at 35%.
+>
+> **Deployment that actually holds the tolerance at the declared brackets** (bisection, not
+> interpolation between ladder rows):
+>
+> | subclass | ≤25% envelope | ≤20% envelope | currently declared |
+> | --- | --- | --- | --- |
+> | 3× index | f = **0.332** | f = 0.261 | 0.35 |
+> | 3× single-stock | f = **0.142** | f = 0.112 | 0.25 |
+>
+> Two mitigations are real and neither closes the gap. ADR-0018's sizing amendment establishes that
+> fixed-fractional sizing on *current* equity makes these upper bounds rather than estimates. And
+> drift removal is deliberately pessimistic — the measured mean is −0.147%/trade (index) and
+> −0.489%/trade (single-stock), so the traded series is *worse* than the drift-removed one, not
+> better; removing drift flatters the envelope here rather than stressing it.
+>
+> Reproduce with:
+>
+> ```
+> SAMURAI_DATA_DIR=<dir> python3 docs/research/18-fetch-bars.py SPY  2016-01-04T00:00:00Z 2026-08-01T00:00:00Z 5Min
+> SAMURAI_DATA_DIR=<dir> python3 docs/research/18-fetch-bars.py TSLA 2016-01-04T00:00:00Z 2026-08-01T00:00:00Z 1Min
+> SAMURAI_DATA_DIR=<dir> python3 docs/research/18-drawdown-envelope.py
+> ```
+>
+> **Not resolved here:** whether to re-size to f = 0.142 / 0.332, re-open the single-stock stop, or
+> accept a 41.8% envelope. That is an ADR-0018 D5 amendment and David's call.
+
 ### What the study actually produces
 
 Not a profit estimate. **The bar the entry signal has to clear:**
