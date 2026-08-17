@@ -36,6 +36,17 @@ By what verification even means — the split matters, because "verify against c
 
 Not "stale" — **false**. Each would send an implementer at the wrong thing.
 
+> **Dispositioned 2026-08-17**, on David's instruction, after this report was first written. None was implemented and none was deleted — a false body is not a finished ticket.
+>
+> | # | Action taken |
+> | --- | --- |
+> | [#504](https://github.com/dd-jp/samurai-trading-system/issues/504) | **Body replaced.** The "no writer" justification is struck and replaced with the measured LSE-ETP news coverage hole; scope item 5's crypto batch deleted per ADR-0015; the `src/` path corrected to `server/providers/`. Ticket stays open — the work is unbuilt |
+> | [#514](https://github.com/dd-jp/samurai-trading-system/issues/514) | **Body rewritten.** Three false table rows struck in place; the critical path re-pointed at #665/#666/#734/#636; the timeline withdrawn as derived from a code-only path; the ordered post-soak tail preserved intact, which is why a bare close was refused |
+> | [#645](https://github.com/dd-jp/samurai-trading-system/issues/645) | **Closed as `not planned`**, with the three false premises recorded in the closing comment. Successor **[#821](https://github.com/dd-jp/samurai-trading-system/issues/821)** opened, carrying the measurement, the #627 rename table and the exclusion rules a checker must get right |
+> | [#809](https://github.com/dd-jp/samurai-trading-system/issues/809) | **Rescoped and retitled** to the verified cause — `vitest.config.ts` declares no `reporters` — with an expiry of **2026-09-17** on the flake record so it can no longer sit open unfalsifiable |
+>
+> Net: the open count is unchanged at 41 (#645 closed, #821 opened). No other issue was touched.
+
 ### [#504](https://github.com/dd-jp/samurai-trading-system/issues/504) — the justification is false, the work is real
 
 The body's load-bearing claim is that *"the `news` bucket … still has no writer."* It has one: `mi-ingest-agent.ts:78` writes `type: 'news'`, constructed in the production composition root at `production.ts:962` and `:1245`. The Polymarket work itself is genuinely unbuilt — `grep -rni polymarket server/` returns zero — so **keep the ticket and replace the body.** The real justification is the LSE-ETP coverage hole `market-intelligence-spec.md:69` measured: *"Alpaca News returns 0 items for 3USL/3LDE/SGLN and 5 each for AAPL/SPY/BTCUSD."* Scope item 5's crypto batch is dead per ADR-0015's amendment.
