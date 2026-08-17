@@ -17,15 +17,17 @@
  *   pending-approval-mutated-in-place lifecycle the `dial_adjustments`
  *   schema exists to support (its own comment: "pending_approval rows are
  *   mutated in place on approval/rejection — the one exception to
- *   append-only"). No current caller drives this: `runDailyCycle` queues a
- *   gated loosening into `result.loosen_pending_approval` and
- *   `LoosenApprovalChannel.requestLoosenApproval`, not into this log
- *   (feedback-loop-spec.md names "acting on the human's answer" as a later
- *   cycle's job or a later ticket's). These two methods are the store-level
- *   capability that later ticket will call — deliberately not on the
- *   `AdjustmentLog` port itself, since widening a port for a caller that
- *   doesn't exist yet would be exactly the kind of invented business logic
- *   `SqliteConfigTrialLog`'s module doc warns against.
+ *   append-only"). **No caller drives this, and after #736 none ever will.**
+ *   The caller it was held for was the loosen-approval gate, and ADR-0013
+ *   Decision 2 removed it: `runDailyCycle` now applies every threshold move
+ *   and `append`s it as a resolved row, so nothing produces a
+ *   `pending_approval`. The two methods stay only because the `status` column
+ *   and its lifecycle are still in the schema (migration
+ *   `0002_dial_adjustments_reason.sql`, shared-sqlite-store-spec.md) and
+ *   retiring a persisted status is a schema change, not part of removing a
+ *   control. Read them as dead storage capability, not as a live approval
+ *   path — and note `getEntries()` still filters them out, so a row written
+ *   by hand cannot masquerade as an applied move.
  *
  * `cycle_date` has no equivalent field on `Adjustment`/`PendingApprovalAdjustment`
  * (another documented port/schema gap, `SqliteConfigTrialLog`'s `config_json`
@@ -101,7 +103,11 @@ export class SqliteAdjustmentLog implements AdjustmentLog {
     }));
   }
 
-  /** Queues a gated loosening. Returns the row `id` — the key `resolvePendingApproval` needs. */
+  /**
+   * Writes a `pending_approval` row. No caller exists — the loosen gate that
+   * would have produced one was removed by #736; see this module's doc.
+   * Returns the row `id` — the key `resolvePendingApproval` needs.
+   */
   recordPendingApproval(entry: PendingApprovalAdjustment): number {
     const info = this.db
       .prepare(

@@ -109,7 +109,7 @@ export {
   type StdoutStream,
   watchStdoutErrors,
 } from './logger.js';
-export { TradeChannelLoosenApproval } from './loosen-approval-channel.js';
+export { TradeChannelLoosenNotice } from './loosen-notification-channel.js';
 export { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
 export {
   type OrphanAlertChannel,
