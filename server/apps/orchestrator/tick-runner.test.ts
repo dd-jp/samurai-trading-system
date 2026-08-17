@@ -266,7 +266,12 @@ describe('SequentialTickRunner.runInstrument', () => {
     });
   });
 
-  it('short-circuits at Analysts when the view set is empty (quorum skip)', async () => {
+  it('short-circuits at Analysts when the view set is empty (quorum skip), but still evaluates the flatten (#785)', async () => {
+    // #785: a quorum skip has no Trader entry point of its own to carry the
+    // flatten, so it runs the exit check itself instead of skipping flatten
+    // evaluation for the tick. Debate/Trader/Execution stay unreachable —
+    // the flatten reaches the broker through Risk/Verdict/Execution's shared
+    // tail, never through the debate chain.
     const steps = makeSteps({ analysts: vi.fn(async () => []) });
 
     const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, makeCtx());
@@ -274,7 +279,10 @@ describe('SequentialTickRunner.runInstrument', () => {
     expect(steps.debate).not.toHaveBeenCalled();
     expect(steps.trader).not.toHaveBeenCalled();
     expect(steps.execution).not.toHaveBeenCalled();
-    expect(outcome).toEqual({ trace_id: TRACE_ID, final_stage: 'analysts' });
+    // No exit was due (the default `exitCheck` fake returns null), so the
+    // pass ends at the exit check, not at 'analysts'.
+    expect(steps.exitCheck).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual({ trace_id: TRACE_ID, final_stage: 'position_check' });
   });
 
   it('short-circuits at the Trader on a null intent (no-trade)', async () => {
@@ -950,6 +958,85 @@ describe('SequentialTickRunner tick pass (#743)', () => {
     expect(outcome.final_stage).toBe('risk');
     expect(outcome.early_exit_fired).toBe(true);
     expect(outcome.flatten_fired).toBeUndefined();
+  });
+});
+
+/**
+ * #785: a quorum-skipped decision pass has no Trader entry point of its own
+ * to carry the flatten (the Trader's routing is what evaluates it on every
+ * OTHER pass, per `decide.ts` #668), so it must run the exit check itself
+ * rather than return at `final_stage: 'analysts'` having evaluated nothing.
+ * Flat-by-close (ADR-0014) is load-bearing: the cheap path must be ABLE to
+ * flatten, not merely usually not need to.
+ */
+describe('SequentialTickRunner quorum-skip flatten (#785)', () => {
+  function quorumSkipSteps(overrides: Partial<TickSteps> = {}): TickSteps {
+    return makeSteps({
+      analysts: vi.fn(async () => []),
+      debate: vi.fn(async () => {
+        throw new Error('unreachable: quorum-skipped, no Trader entry point runs');
+      }),
+      trader: vi.fn(async () => {
+        throw new Error('unreachable: quorum-skipped, no Trader entry point runs');
+      }),
+      ...overrides,
+    });
+  }
+
+  it('fires the flatten through Risk -> Verdict -> Execution on a quorum-skipped pass', async () => {
+    const exit = exitIntent('flatten');
+    const steps = quorumSkipSteps({
+      exitCheck: vi.fn(async () => exit),
+      risk: vi.fn(async () => approvedRisk(exit)),
+      verdict: vi.fn(async () => goVerdict(exit)),
+    });
+
+    const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, makeCtx());
+
+    // MUTATION DISCRIMINATOR (#785 acceptance: "revert either guard and a
+    // named test fails"): reverting the quorum-skip branch to its pre-#785
+    // shape (`return { trace_id, final_stage: 'analysts' }` without calling
+    // `runExitCheckPass`) makes `steps.exitCheck` never get called and
+    // `final_stage` come back as `'analysts'` instead of `'execution'` —
+    // this assertion fails under that reversion.
+    expect(outcome.final_stage).toBe('execution');
+    expect(outcome.flatten_fired).toBe(true);
+    expect(steps.exitCheck).toHaveBeenCalledTimes(1);
+    expect(steps.debate).not.toHaveBeenCalled();
+    expect(steps.trader).not.toHaveBeenCalled();
+  });
+
+  it('keeps a rejected flatten observable on a quorum-skipped pass: risk is the final stage, flatten_fired still set', async () => {
+    const exit = exitIntent('flatten');
+    const steps = quorumSkipSteps({
+      exitCheck: vi.fn(async () => exit),
+      risk: vi.fn(async () => rejectedRisk()),
+    });
+
+    const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, makeCtx());
+
+    expect(outcome.final_stage).toBe('risk');
+    expect(outcome.flatten_fired).toBe(true);
+  });
+
+  it('hands the exit check the GATE bar, not a fresh clock re-floor', async () => {
+    // The gate claimed 13:00's bar; the clock has since moved into 14:00's.
+    // The exit check must key to 13:00 — the gate's own derivation — not a
+    // second, independently-floored bar (#687/#743's "one derivation per
+    // pass" reasoning, extended to the quorum-skip's exit check).
+    const claimedOpen = new Date('2026-07-15T13:00:00Z');
+    const steps = quorumSkipSteps();
+    const ctx = makeCtx({
+      decision_bar: {
+        id: `${claimedOpen.toISOString()}@3600000`,
+        open_time: claimedOpen,
+        timeframe_ms: 3_600_000,
+      },
+    });
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    expect(steps.exitCheck).toHaveBeenCalledWith(expect.objectContaining({ bar: claimedOpen }));
   });
 });
 

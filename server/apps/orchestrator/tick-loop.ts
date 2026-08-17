@@ -133,8 +133,33 @@ export async function runTickPlan(
         // bar being silently forfeited to a transient failure (#743). The
         // debate adapter's same-bar memo and the #617 short-circuit make the
         // retry cheap when the failed pass had already persisted its row.
+        //
+        // The retry is BOUNDED (#785): a persistently failing pass would
+        // otherwise rescind every tick for the rest of the bar — up to ~30
+        // analyst rebuilds at the production cadence, the exact churn #743
+        // exists to remove, reappearing under a sustained fault. Once the
+        // gate's retry budget for this bar is exhausted, `rescind` KEEPS the
+        // claim (no further retry this bar) and reports `'forfeited'`, which
+        // must be reported loudly here — a silent 30x-retry storm and a
+        // silently-abandoned bar are both the quiet-tick-vs-broken-system
+        // signature #625 exists to keep out of this codebase.
         if (decisionBar !== undefined) {
-          config.decisionGate.rescind(instrument.asset, decisionBar);
+          const rescindResult = config.decisionGate.rescind(instrument.asset, decisionBar);
+          if (rescindResult === 'forfeited') {
+            safeLog(config.logger, {
+              trace_id,
+              stage: 'tick-loop',
+              level: 'error',
+              message:
+                `decision pass retry budget exhausted, bar forfeit: ${instrument.asset} — ` +
+                `bar ${decisionBar.id} will run the tick path only for its remainder`,
+              payload: {
+                instrument: instrument.asset,
+                asset_class: instrument.asset_class,
+                bar: decisionBar.id,
+              },
+            });
+          }
         }
         // Not swallowed: still reaches the logger, still gets a durable
         // `audit_log` row (below — the runner itself never writes one for a

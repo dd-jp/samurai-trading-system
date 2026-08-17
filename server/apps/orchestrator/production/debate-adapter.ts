@@ -686,9 +686,37 @@ export function buildDebateStep(
    * In-memory and restart-clean, deliberately: `DebateLogStore` exposes no
    * by-bar lookup (`ports.ts` — `writeLog`/`getByDebateId` only), so a
    * restart mid-bar re-runs the analysts once and, if their views drifted
-   * across the restart, pays for one fresh debate. That residual window is
-   * recorded on #781; widening the store port to close it is not this
-   * change's call to make.
+   * across the restart, pays for one fresh debate.
+   *
+   * RECORDED DECISION (#785, moved from #781 when #783 closed it): one
+   * duplicate debate per instrument per restart is ACCEPTED rather than
+   * closed by widening `DebateLogStore` with a by-bar accessor. Three things
+   * bound the cost rather than eliminate it, but bound it tightly enough that
+   * a port widening is not worth its own migration + SQLite implementation +
+   * test surface right now:
+   *
+   *   1. It fires at most ONCE per instrument per restart — the first tick
+   *      after a restart either lands on the SAME bar the process crashed
+   *      mid-way through (one extra debate, then the new process's own
+   *      per-bar memo takes over for the rest of that bar) or a later bar
+   *      (no duplicate at all, since the fresh process has no residual claim
+   *      to re-enter).
+   *   2. Deploys are a HUMAN action here (single-MacBook host, no
+   *      auto-restart supervisor in front of this process) — a restart
+   *      mid-bar is not a steady-state occurrence the way a tick is; it is
+   *      bounded by how often the operator restarts the process, which is
+   *      orders of magnitude below the bar cadence.
+   *   3. The cost itself is one LLM debate call, not a correctness violation
+   *      — the duplicate is a wasted spend, not a duplicate ORDER (the #617
+   *      short-circuit and this same memo still prevent the Trader from ever
+   *      seeing two confidence samples for one bar within a single process's
+   *      lifetime; only the cross-restart case can double-pay for the debate
+   *      itself).
+   *
+   * A by-bar `DebateLogStore` accessor remains the right fix if restart
+   * frequency or the duplicate's cost ever changes enough to matter — this
+   * decision is about today's shape of both, not a permanent ceiling on the
+   * port.
    */
   const resolvedBarByInstrument = new Map<string, { barMs: number; debate_id: string }>();
 
