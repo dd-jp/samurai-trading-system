@@ -35,10 +35,31 @@
  * - Polygon's free tier DOES serve `1h` aggregates, which the live tick path
  *   runs on — a fallback that could not would have been inert where it
  *   matters most.
- * - ⚠️ Polygon's hourly series INCLUDES extended-hours bars (08:00Z–23:00Z)
- *   where Alpaca's does not, so a fallback-served `1h` window can carry
- *   pre/post-market bars a primary-served one would not. Detectable through
- *   `bars.source` and not corrected anywhere today.
+ * - Hourly SESSION COVERAGE AGREES. Both vendors return 16 `1h` bars per
+ *   trading day over 08:00Z–23:00Z on the same window (SPY, 2026-08-10 ->
+ *   2026-08-14, 80 bars each) — i.e. both include the extended-hours
+ *   sessions, so a fallback-served `1h` window spans the same wall clock as
+ *   a primary-served one and a fixed `lookback: N` does not silently change
+ *   meaning across the vendor boundary. An earlier draft of this doc claimed
+ *   Polygon carried extended hours where Alpaca did not; that was inferred
+ *   from a one-sided probe and is FALSE — both were then measured.
+ *
+ * ## Alert volume — throttled, deliberately
+ *
+ * A stall is not one event; it is a condition that persists for as long as
+ * the vendor is down, and every tick that reads bars while it lasts triggers
+ * another failover. Unthrottled, a day-long Alpaca stall across a four-name
+ * equities universe posts alerts into the escalation chat until the operator
+ * mutes it — and #342's whole argument is that a muted escalation chat also
+ * mutes the orphan verdict and the kill-line. So this follows the repo's
+ * existing bounded-repeat convention (`ALERT_REPEAT_EVERY_NO_DATA`,
+ * `ALERT_REPEAT_EVERY_DIAGNOSTICS`): loud on the FIRST failover of an
+ * incident, then every `ALERT_REPEAT_EVERY_FAILOVERS`-th while it persists,
+ * with the suppressed count carried on the next alert that does go out so
+ * the operator still sees the true rate. A gap longer than
+ * `FAILOVER_INCIDENT_GAP_MS` counts as a NEW incident and is loud again —
+ * that is what makes a recovery-then-restall audible instead of being
+ * swallowed by a counter that never resets.
  *
  * ## Pacing on the boot path — WARN AND DEFAULT, never refuse to boot
  *
@@ -105,6 +126,12 @@ export const EQUITIES_FALLBACK_VENDOR = 'polygon';
  */
 export interface DataFailoverAlert extends FailoverEvent {
   reported_at: Date;
+  /**
+   * How many failovers for this instrument/timeframe were suppressed by the
+   * throttle since the last alert that went out — 0 on the first alert of an
+   * incident. Carried so a bounded-repeat alert still reports the true rate.
+   */
+  suppressed_since_last: number;
 }
 
 /**
@@ -138,6 +165,48 @@ export function resolveFallbackPacing(logger: Logger, env: NodeJS.ProcessEnv = p
       payload: { pacing: 'polygon', applied: 'default' },
     });
     return DEFAULT_POLYGON_PACING;
+  }
+}
+
+/**
+ * Alert on the first failover of an incident, then every eighth while it
+ * persists — the same bounded-repeat constant `ALERT_REPEAT_EVERY_NO_DATA`
+ * (mi-coverage.ts) and `ALERT_REPEAT_EVERY_DIAGNOSTICS` (#698) use.
+ */
+export const ALERT_REPEAT_EVERY_FAILOVERS = 8;
+
+/**
+ * Quiet time after which the next failover for the same instrument/timeframe
+ * is a NEW incident, loud again. One hour is the live tick path's own bar
+ * interval: a vendor that served every bar for an hour recovered, and its
+ * next failure is news rather than a continuation.
+ */
+export const FAILOVER_INCIDENT_GAP_MS = 60 * 60 * 1000;
+
+/**
+ * Per-(instrument, timeframe) alert throttle — in memory and restart-clean,
+ * the same posture `TraderDiagnosticThrottle` and the MI coverage monitor
+ * take: a process that just started has no evidence about the previous one's
+ * ticks.
+ */
+export class DataFailoverAlertThrottle {
+  readonly #state = new Map<string, { count: number; lastAt: number; suppressed: number }>();
+
+  /** Records a failover and answers whether it should reach the channel. */
+  decide(event: FailoverEvent, now: Date): { alert: boolean; suppressedSinceLast: number } {
+    const key = `${event.symbol}|${event.timeframe}`;
+    const at = now.getTime();
+    const previous = this.#state.get(key);
+
+    if (previous === undefined || at - previous.lastAt > FAILOVER_INCIDENT_GAP_MS) {
+      this.#state.set(key, { count: 1, lastAt: at, suppressed: 0 });
+      return { alert: true, suppressedSinceLast: 0 };
+    }
+
+    const count = previous.count + 1;
+    const alert = (count - 1) % ALERT_REPEAT_EVERY_FAILOVERS === 0;
+    this.#state.set(key, { count, lastAt: at, suppressed: alert ? 0 : previous.suppressed + 1 });
+    return { alert, suppressedSinceLast: alert ? previous.suppressed : 0 };
   }
 }
 
@@ -183,6 +252,8 @@ export function buildFailoverDataSource(deps: LiveDataFailoverDeps): DataSource 
       return polygon.getBars(symbol, window.timeframe, asOf, window.lookback);
     });
 
+  const throttle = new DataFailoverAlertThrottle();
+
   const equitiesLeg: DataSourceFallbackLeg = {
     leg: 'equities',
     name: EQUITIES_FALLBACK_VENDOR,
@@ -194,8 +265,16 @@ export function buildFailoverDataSource(deps: LiveDataFailoverDeps): DataSource 
     primaryName: EQUITIES_PRIMARY_VENDOR,
     fallbackFor: (instrument) => (equities.has(instrument) ? equitiesLeg : undefined),
     alert: (event) => {
+      const reportedAt = deps.now();
+      const { alert, suppressedSinceLast } = throttle.decide(event, reportedAt);
+      if (!alert) return;
+
       void deps.alertChannel
-        .postDataFailoverAlert({ ...event, reported_at: deps.now() })
+        .postDataFailoverAlert({
+          ...event,
+          reported_at: reportedAt,
+          suppressed_since_last: suppressedSinceLast,
+        })
         .catch((error: unknown) => {
           deps.logger.log({
             trace_id: 'data-failover',

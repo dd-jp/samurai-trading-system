@@ -468,6 +468,7 @@ export class LoggingDataFailoverAlertChannel implements DataFailoverAlertChannel
         primary: alert.primaryName,
         fallback: alert.fallbackName,
         reported_at: alert.reported_at.toISOString(),
+        suppressed_since_last: alert.suppressed_since_last,
       },
     });
   }

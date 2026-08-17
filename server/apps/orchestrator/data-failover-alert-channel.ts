@@ -24,6 +24,10 @@ function formatDataFailoverAlert(alert: DataFailoverAlert): string {
     `Samurai MARKET-DATA FAILOVER (${alert.leg}): ${alert.primaryName} failed for ` +
     `${alert.symbol} ${alert.timeframe} at ${alert.reported_at.toISOString()} — ` +
     `${alert.primaryError}\n` +
+    (alert.suppressed_since_last > 0
+      ? `${alert.suppressed_since_last} further failover(s) for this instrument were suppressed ` +
+        'by the alert throttle since the last message — the stall is ongoing, not intermittent.\n'
+      : '') +
     `${alert.fallbackName} is serving those bars instead. The run continues on a DEGRADED ` +
     'data path: fallback bars are stamped with their own source, and their volume convention ' +
     "differs from the primary's, which moves getADV()'s denominator while they sit in the " +

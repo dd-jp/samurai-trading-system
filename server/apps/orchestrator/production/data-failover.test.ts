@@ -6,13 +6,21 @@
  * Two of them are decisions the issue asked to be recorded with reasoning,
  * and a documented decision nothing asserts is a comment: the
  * malformed-pacing-override posture, and that a failed alert POST cannot
- * turn a survived vendor stall into a thrown tick.
+ * turn a survived vendor stall into a thrown tick. The alert THROTTLE is
+ * asserted here too: a stall persists across ticks, and an escalation chat
+ * flooded by it gets muted along with everything else on that channel.
  */
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Bar, BarWindow } from '../../../providers/market-data-service/index.js';
 import { DEFAULT_POLYGON_PACING, type LogEntry, type Logger } from '../../../shared/index.js';
-import { buildFailoverDataSource, resolveFallbackPacing } from './data-failover.js';
+import {
+  ALERT_REPEAT_EVERY_FAILOVERS,
+  buildFailoverDataSource,
+  type DataFailoverAlert,
+  FAILOVER_INCIDENT_GAP_MS,
+  resolveFallbackPacing,
+} from './data-failover.js';
 
 const ASOF = new Date('2026-08-17T14:00:00.000Z');
 const WINDOW: BarWindow = { timeframe: '1h', lookback: 2 };
@@ -116,6 +124,68 @@ describe('buildFailoverDataSource', () => {
 
     await expect(source.fetchBars('BTC-USD', WINDOW, ASOF)).rejects.toThrow('alpaca 503');
     expect(equitiesFallbackBarFetcher).not.toHaveBeenCalled();
+  });
+
+  it('throttles a persisting stall to one alert, then every eighth, carrying the suppressed count', async () => {
+    // A stall is a CONDITION, not an event: every tick that reads bars while
+    // it lasts fails over again. Unthrottled, a day-long stall floods the
+    // escalation chat until the operator mutes it — and #342's argument is
+    // that muting that chat also mutes the orphan verdict and the kill-line.
+    const postDataFailoverAlert = vi.fn(async (_alert: DataFailoverAlert) => undefined);
+    let now = ASOF;
+    const source = buildFailoverDataSource({
+      primary: stallingPrimary(),
+      universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      equitiesFallbackBarFetcher: async () => [fallbackBar()],
+      alertChannel: { postDataFailoverAlert },
+      logger: recordingLogger(),
+      now: () => now,
+    });
+
+    for (let tick = 0; tick < ALERT_REPEAT_EVERY_FAILOVERS + 1; tick += 1) {
+      now = new Date(ASOF.getTime() + tick * 60_000);
+      await source.fetchBars('SPY', WINDOW, now);
+    }
+
+    expect(postDataFailoverAlert).toHaveBeenCalledTimes(2);
+    expect(postDataFailoverAlert.mock.calls[0]?.[0]).toMatchObject({ suppressed_since_last: 0 });
+    expect(postDataFailoverAlert.mock.calls[1]?.[0]).toMatchObject({
+      suppressed_since_last: ALERT_REPEAT_EVERY_FAILOVERS - 1,
+    });
+  });
+
+  it('is loud again for a NEW incident after a quiet gap, and throttles each instrument separately', async () => {
+    // A counter that never resets would swallow a recovery-then-restall, and
+    // a counter shared across instruments would hide a second name going down.
+    const postDataFailoverAlert = vi.fn(async (_alert: DataFailoverAlert) => undefined);
+    let now = ASOF;
+    const source = buildFailoverDataSource({
+      primary: stallingPrimary(),
+      universe: [
+        { asset: 'SPY', asset_class: 'stocks' },
+        { asset: 'QQQ', asset_class: 'stocks' },
+      ],
+      equitiesFallbackBarFetcher: async () => [fallbackBar()],
+      alertChannel: { postDataFailoverAlert },
+      logger: recordingLogger(),
+      now: () => now,
+    });
+
+    await source.fetchBars('SPY', WINDOW, now);
+    await source.fetchBars('QQQ', WINDOW, now);
+    // Second SPY failover a minute later — same incident, suppressed.
+    now = new Date(ASOF.getTime() + 60_000);
+    await source.fetchBars('SPY', WINDOW, now);
+    // And one well past the incident gap, measured from that second failover
+    // rather than from the first — a new incident, loud again.
+    now = new Date(ASOF.getTime() + 60_000 + FAILOVER_INCIDENT_GAP_MS + 1);
+    await source.fetchBars('SPY', WINDOW, now);
+
+    expect(postDataFailoverAlert.mock.calls.map((call) => call[0].symbol)).toEqual([
+      'SPY',
+      'QQQ',
+      'SPY',
+    ]);
   });
 
   it('logs, and does not rethrow, an alert POST that fails', async () => {
