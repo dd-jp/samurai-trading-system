@@ -134,6 +134,7 @@ import type {
   FeedbackConfig,
 } from '../../pipeline/feedback-loop/index.js';
 import {
+  assertKillThresholdsWithinBounds,
   computeMetrics,
   runDailyCycle,
   SqliteAdjustmentLog,
@@ -425,6 +426,23 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     config.traderConfig,
     config.tickIntervalMs ?? DEFAULT_TICK_INTERVAL_MS,
   );
+
+  // Fourth of the same family, and the one ADR-0013 calls a precondition of
+  // its own safety rather than a tidiness item (#638). With no human gate left
+  // anywhere, the numeric thresholds ARE the stop, so a config edit is the
+  // whole distance between this process and an arbitrary risk limit.
+  //
+  // The breaker half of the clamp runs inside `CircuitBreakers`' constructor
+  // below — every construction, not just this one. The kill lines have no
+  // constructor to hang it on, so they are refused here, before a store handle
+  // is open. Refused, never coerced: a silently clamped kill line reads as
+  // accepted, and the operator then believes a limit is in force that is not.
+  if (config.feedback !== undefined) {
+    assertKillThresholdsWithinBounds(
+      config.feedback.config.kill_thresholds,
+      'buildProductionComponents',
+    );
+  }
 
   // `capitalCeilingUsd` is optional on `ProductionConfig` (paper/backtest
   // boots and the hundreds of tests that never touch live money need not set

@@ -10,6 +10,7 @@
  * for the offline backtest, where a database file would be pure overhead.
  */
 import type { ClosedTrade, ClosedTradeStore, TuningStore } from '../../shared/index.js';
+import { assertThresholdWithinBounds } from '../../shared/index.js';
 import type { Adjustment, AdjustmentLog, BreachAlert, BreachAlertChannel } from './types.js';
 
 export class InMemoryClosedTradeStore implements ClosedTradeStore {
@@ -82,12 +83,19 @@ export class InMemoryTuningStore implements TuningStore {
     return { ...this.thresholds };
   }
 
+  /**
+   * Clamped exactly as `SqliteTuningStore` is (#638). A fixture that accepted
+   * a bound crossing the real store refuses would let a test prove the
+   * Feedback Loop can do something it cannot — which is worse than no fixture.
+   */
   setRiskThreshold(name: string, value: number): void {
+    assertThresholdWithinBounds(name, value, 'InMemoryTuningStore.setRiskThreshold');
     this.thresholds[name] = value;
   }
 
   /** First-write-wins, mirroring `SqliteTuningStore.seedRiskThreshold` (#433). */
   seedRiskThreshold(name: string, value: number): boolean {
+    assertThresholdWithinBounds(name, value, 'InMemoryTuningStore.seedRiskThreshold');
     if (this.thresholds[name] !== undefined) {
       return false;
     }

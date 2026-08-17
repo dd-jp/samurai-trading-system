@@ -17,6 +17,7 @@
  */
 import { RSI_SPEC, SMA_SPEC } from '../../pipeline/analysts/technical-analyst.js';
 import { computeIndicator } from '../../providers/market-data-service/index.js';
+import { GUARDED_THRESHOLD_NAMES } from '../../shared/index.js';
 import {
   buildSmokeFixtureBars,
   ConstantResponseLlmClient,
@@ -30,6 +31,7 @@ import {
   SMOKE_LLM_RESPONSE,
   SMOKE_RUN_INSTANT,
   type SmokeObservations,
+  type ThresholdClampEvidence,
   UnreachableAlpacaClient,
 } from './smoke-run.js';
 
@@ -220,6 +222,7 @@ function healthyGateOptions(
     exitPath?: ExitPathEvidence;
     cryptoEmulation?: CryptoEmulationEvidence;
     loggerResilience?: LoggerResilienceEvidence;
+    thresholdClamp?: ThresholdClampEvidence;
   } = {},
 ) {
   return {
@@ -228,6 +231,22 @@ function healthyGateOptions(
     exitPath: overrides.exitPath ?? healthyExitPath(),
     cryptoEmulation: overrides.cryptoEmulation ?? healthyCryptoEmulation(),
     loggerResilience: overrides.loggerResilience ?? healthyLoggerResilience(),
+    thresholdClamp: overrides.thresholdClamp ?? healthyThresholdClamp(),
+  };
+}
+
+/** What `runThresholdClampScenario` reports when every #638 seam refuses. */
+function healthyThresholdClamp(
+  overrides: Partial<ThresholdClampEvidence> = {},
+): ThresholdClampEvidence {
+  return {
+    probedNames: [...GUARDED_THRESHOLD_NAMES],
+    liveReadAccepted: [],
+    writeDoorAccepted: [],
+    breakerConstructionRefused: true,
+    killLineCheckRefused: true,
+    shippedConfigAccepted: true,
+    ...overrides,
   };
 }
 
@@ -446,6 +465,85 @@ describe('evaluateSmokeGate', () => {
 
     expect(gate.failures.some((failure) => failure.includes('no row in debate_log'))).toBe(true);
     expect(gate.failures.some((failure) => failure.includes('#388 defect'))).toBe(false);
+  });
+
+  // #638 — the in-code threshold clamp. Each of these fails the gate on its
+  // own: ADR-0013 leaves the numeric thresholds as the only stop, so any seam
+  // that accepts an out-of-bound value is the whole control gone.
+  it('fails when the LIVE risk_thresholds read accepted an out-of-bound value', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        thresholdClamp: healthyThresholdClamp({ liveReadAccepted: ['max_drawdown_pct'] }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('LIVE risk_thresholds read'))).toBe(
+      true,
+    );
+  });
+
+  it('fails when the Feedback Loop write door accepted an out-of-bound value', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        thresholdClamp: healthyThresholdClamp({ writeDoorAccepted: ['max_pbo'] }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('write door accepted'))).toBe(true);
+  });
+
+  it('fails when the breaker constructor accepted a drawdown pair that can never fire', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        thresholdClamp: healthyThresholdClamp({ breakerConstructionRefused: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('0.95/0.90'))).toBe(true);
+  });
+
+  it('fails when the kill-line boot check accepted a softened PBO threshold', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        thresholdClamp: healthyThresholdClamp({ killLineCheckRefused: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('PBO threshold of 0.5'))).toBe(true);
+  });
+
+  it('fails when a guarded threshold was never probed — an unseen limit is not enforced', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        thresholdClamp: healthyThresholdClamp({
+          probedNames: GUARDED_THRESHOLD_NAMES.filter((name) => name !== 'max_pbo'),
+        }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('guarded thresholds'))).toBe(true);
+  });
+
+  it('fails when the clamp refuses the SHIPPED configuration — the bound is wrong, not the config', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        thresholdClamp: healthyThresholdClamp({ shippedConfigAccepted: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('shipped paper breaker'))).toBe(true);
   });
 
   // #714 — the logging-fault mechanisms. Each of these fails the gate on its

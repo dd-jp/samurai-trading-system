@@ -1781,6 +1781,33 @@ describe('buildProductionOrchestrator', () => {
     await orchestrator.stop();
   });
 
+  it('REFUSES TO BOOT when a kill line is configured past its in-code clamp (#638)', () => {
+    // ADR-0013 makes the numeric thresholds the only stop left, so a config
+    // edit was the entire distance between the running system and an arbitrary
+    // risk limit. Refusing the process is the correct answer — a silent clamp
+    // would read as accepted and leave the operator believing a limit is in
+    // force that is not.
+    const config = stubConfig(db, {
+      feedback: {
+        intervalMs: 1_000,
+        config: {
+          weights: { max_step: 0.05, floor: 0.5, ceiling: 1.5, tighten_is: 'decrease' },
+          kill_thresholds: {
+            // The one hard kill criterion in the whole record, softened tenfold.
+            max_pbo: 0.5,
+            min_oos_sharpe: 0.5,
+            min_deflated_sharpe: 0.95,
+            max_live_backtest_divergence: 0.5,
+          },
+        } as unknown as FeedbackConfig,
+        approvals: { requestLoosenApproval: vi.fn() } as never,
+      },
+    });
+
+    expect(() => buildProductionOrchestrator(config)).toThrow(/max_pbo/);
+    expect(() => buildProductionOrchestrator(config)).toThrow(/REFUSED, not clamped/);
+  });
+
   it('runs the daily feedback cycle on its own timer when configured', async () => {
     const logger = recordingLogger();
     const config = stubConfig(db, {

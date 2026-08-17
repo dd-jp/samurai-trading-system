@@ -66,6 +66,20 @@ export {
   safeLog,
 } from './safe-log.js';
 export { sanitizeLogText } from './sanitize-log-text.js';
+// #638: the in-code clamp on the kill-line and breaker thresholds. Exported
+// from the shared barrel because the three paths that can put a threshold into
+// force — boot-time construction, the tuning store's write, and the Risk
+// Manager's live read — sit in three different packages and must consult ONE
+// bounds table, or the clamp drifts apart into three that disagree.
+export type { GuardedThresholdName, ThresholdBound } from './threshold-bounds.js';
+export {
+  assertThresholdsWithinBounds,
+  assertThresholdWithinBounds,
+  boundFor,
+  GUARDED_THRESHOLD_BOUNDS,
+  GUARDED_THRESHOLD_NAMES,
+  ThresholdBoundViolationError,
+} from './threshold-bounds.js';
 export type {
   AssetClass,
   ClosedTrade,

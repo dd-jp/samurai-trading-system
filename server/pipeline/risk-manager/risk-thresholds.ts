@@ -43,6 +43,7 @@
  * - `cii_threshold` — drives a WARNING, not a limit. Tightening it changes no
  *   decision, which is the exact defect this ticket exists to fix.
  */
+import { assertThresholdsWithinBounds } from '../../shared/index.js';
 import type { RiskConfig } from './types.js';
 
 /**
@@ -137,6 +138,23 @@ export function resolveRiskConfig(
   base: RiskConfig,
   live: Record<string, number>,
 ): { config: RiskConfig; applied: Partial<Record<RiskThresholdKey, number>> } {
+  // #638: the clamp on the LIVE path, and the reason it checks the whole `live`
+  // record rather than only the six keys this function applies.
+  //
+  // A boot-time-only clamp constrains nothing the Feedback Loop does: these
+  // rows are re-read on every `evaluate()`, so a value written between two
+  // ticks binds on the second one without passing through startup again. And
+  // once ADR-0013's loosen gate is gone (#736), the loop moves a dial with
+  // nobody in the path at all.
+  //
+  // Checking every row means the guard travels with the ALLOW-LIST rather than
+  // with today's contents: a guarded threshold added to `RISK_THRESHOLD_KEYS`
+  // later is bounded here the moment it is added, and a guarded row that is
+  // present but NOT applied still stops the process — a stored value that
+  // crosses a bright line means something in the system tried to cross it, and
+  // ignoring the row would leave that silent.
+  assertThresholdsWithinBounds(live, 'RiskManager live threshold read (risk_thresholds table)');
+
   const applied: Partial<Record<RiskThresholdKey, number>> = {};
   for (const key of RISK_THRESHOLD_KEYS) {
     const value = live[key];
