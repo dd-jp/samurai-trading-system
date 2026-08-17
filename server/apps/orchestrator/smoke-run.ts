@@ -267,8 +267,10 @@ const SMOKE_INSTRUMENT = SMOKE_TEST_UNIVERSE[0]?.asset ?? 'BTC-USD';
  *   `atr_lookback: 14`) and the volatility breaker's ATR(14). #319's
  *   minimum-length guard in `computeIndicator` rejects a window shorter than
  *   `period + 1`, because `atr()` spends the first bar seeding
- *   `previousClose`, so 14 periods need 15 bars. 60 clears it with room for
- *   the `lookback: 15` spec and any warm-up a future indicator wants.
+ *   `previousClose`, so 14 periods need 15 bars. Since #722 the binding `1h`
+ *   consumer is instead the technical analyst's `RSI_SPEC`, which asks for the
+ *   converged warm-up of **57**; 60 clears that by three bars, and anything
+ *   below 57 would silently compute a shorter-warmed RSI rather than throw.
  * - `1m` x 60 — the short-timeframe reads the Analysts take.
  * - `1d` x 40 — the widest daily consumers: `adv_window` (`{'1d', 20}`,
  *   `executionConfig.simulated`) and `correlationConfig` (`{'1d', 30}` with
@@ -298,12 +300,28 @@ const SMOKE_MARK_PRICE = 160;
  * SMA(14) AND RSI(14) is under 70 (`technical-analyst.ts` `directionFrom`), and
  * a monotonic ramp has no down bars at all, so its RSI is exactly 100: the
  * analyst returns `neutral`, "overbought", on the strongest possible uptrend.
- * These pullbacks put RSI at **63.16** and the close above its SMA, which is
+ * These pullbacks put RSI at **68.52** and the close above its SMA, which is
  * what the analyst actually needs.
  *
- * The RSI is identical for every entry in `SMOKE_BAR_SERIES` because the
- * indicator reads back exactly 15 closes — two whole cycles of this pattern —
- * so the timeframe's bar count cannot shift it.
+ * That was **63.16** until #722 re-pointed `RSI_SPEC` from the 15-bar
+ * fabrication floor to the converged `recommendedWarmupFor` of 57, which is the
+ * repricing that ticket accepted. The cycle is deliberately NOT re-tuned to
+ * restore the old number: 63.16 was a warm-up artefact, and fitting the fixture
+ * to reproduce it would be preserving exactly what #722 removed.
+ *
+ * **The margin to the overbought gate is now 1.48 points, not 6.84.** Wilder's
+ * smoothing weights this pattern's recent up-bars more heavily than the plain
+ * mean did, so the fixture sits closer to 70 than it used to; a future edit to
+ * `SMOKE_CLOSE_CYCLE` that adds any upward bias can push it over, at which
+ * point the analyst reads `neutral`/"overbought" and the gate fails with
+ * nothing traded. That failure is loud, which is why the thin margin is
+ * recorded rather than padded.
+ *
+ * Only the `1h` series feeds it (`technical-analyst.ts` pins
+ * `INDICATOR_TIMEFRAME`), and 60 bars clears the 57 the spec asks for by three.
+ * `1d` x 40 does NOT clear it, which costs nothing today because no RSI reads
+ * daily bars — but it is why the count below is a floor forced by a consumer
+ * rather than a round number.
  */
 const SMOKE_CLOSE_CYCLE: readonly number[] = [-2, -2, -3, 3, 3, 3, 3];
 

@@ -17,7 +17,11 @@
  * inputs, which a real LLM call would not guarantee.
  */
 
-import type { BarWindow, IndicatorSpec } from '../../providers/market-data-service/index.js';
+import {
+  type BarWindow,
+  type IndicatorSpec,
+  recommendedWarmupFor,
+} from '../../providers/market-data-service/index.js';
 import type { AnalystView, Direction } from '../debate-engine/index.js';
 import type { Analyst, AnalystInput, AssetClass } from './types.js';
 
@@ -38,28 +42,51 @@ export const SMA_SPEC: IndicatorSpec = {
   lookback: INDICATOR_LOOKBACK,
 };
 /**
- * `lookback: INDICATOR_LOOKBACK + 1`, and `params.period` pinned rather than
- * left to the `?? lookback` fallback — the same shape `trader/decide.ts`'s
- * `atrIndicatorSpec` and `production.ts`'s `DEFAULT_VOLATILITY_INDICATOR`
- * carry, for the same reason. `rsi` consumes the first bar only to seed the
- * previous close, so N bars yield N-1 changes: this used to ask for 14 bars
- * and get an RSI averaged over 13 changes but divided by 14 — presented in
- * `key_points` as "RSI(14)". Issue #319 made that throw instead of lying, so
- * the width is now correct rather than merely unenforced. Leaving `params`
- * empty and bumping only `lookback` would have silently made this an RSI(15).
- *
- * Exported for the same reason `atrIndicatorSpec` is (#304): so
- * `indicator-golden.test.ts` can pin THIS spec rather than a hand-rebuilt copy
- * that would keep passing if the real one drifted. It pins one fact in
- * particular — `lookback` is exactly `minimumBarsFor`, so `rsi`'s Wilder
- * smoothing loop runs ZERO times here and the value the debate reads is the
- * simple-mean seed. See that file's "what the live path actually asks for".
+ * The ARITY floor this spec used to sit on: `INDICATOR_LOOKBACK + 1`, with
+ * `params.period` pinned rather than left to the `?? lookback` fallback — the
+ * same shape `trader/decide.ts`'s `atrIndicatorSpec` and `production.ts`'s
+ * `DEFAULT_VOLATILITY_INDICATOR` carry, for the same reason. `rsi` consumes
+ * the first bar only to seed the previous close, so N bars yield N-1 changes:
+ * this used to ask for 14 bars and get an RSI averaged over 13 changes but
+ * divided by 14 — presented in `key_points` as "RSI(14)". Issue #319 made that
+ * throw instead of lying. Leaving `params` empty and bumping only `lookback`
+ * would have silently made this an RSI(15), which is why the period is pinned.
  */
-export const RSI_SPEC: IndicatorSpec = {
+const RSI_FLOOR_SPEC: IndicatorSpec = {
   indicator: 'rsi',
   params: { period: INDICATOR_LOOKBACK },
   timeframe: INDICATOR_TIMEFRAME,
   lookback: INDICATOR_LOOKBACK + 1,
+};
+
+/**
+ * RSI(14) over a CONVERGED warm-up — `recommendedWarmupFor` = `4 x period + 1`
+ * = 57 bars — rather than the `minimumBarsFor` floor of 15 (#722).
+ *
+ * At the floor, `changes.slice(period)` is empty, so `rsi`'s Wilder smoothing
+ * loop ran ZERO times and the value the debate read was the simple-mean seed:
+ * Cutler's RSI wearing Wilder's name. That is not an alternative convention,
+ * it is a warm-up artefact — the number was a function of where the window
+ * happened to start. Measured against a converged 200-bar warm-up on the same
+ * bar it moved a median 4.6 RSI points, p90 12.0, and flipped the 70/30
+ * overbought/oversold classification on 18% of bars
+ * (`docs/reviews/indicator-characterisation-2026-08-16.md` F2). Adopting the
+ * recommendation reprices every technical opinion in the system at once; that
+ * is a knowing, accepted cost, decided on #722 rather than a side effect.
+ *
+ * Derived from `recommendedWarmupFor` rather than written as 57, so the spec
+ * cannot drift away from the function that justifies it. `minimumBarsFor` is
+ * still 15 and is deliberately unchanged: it is the fabrication floor, and a
+ * cold instrument that holds only 20 bars still gets a (less-warm) RSI rather
+ * than no view at all.
+ *
+ * Exported for the same reason `atrIndicatorSpec` is (#304): so the goldens and
+ * `rsi-warmup.test.ts` pin THIS spec rather than a hand-rebuilt copy that would
+ * keep passing if the real one drifted.
+ */
+export const RSI_SPEC: IndicatorSpec = {
+  ...RSI_FLOOR_SPEC,
+  lookback: recommendedWarmupFor(RSI_FLOOR_SPEC),
 };
 
 /** RSI above this alongside a rising close is treated as overbought, not confirming bullish. */

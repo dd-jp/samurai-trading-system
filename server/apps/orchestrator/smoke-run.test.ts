@@ -15,6 +15,7 @@
  * real timers and drain it. It is the only test in the suite that does, which
  * is the whole point of the ticket.
  */
+import { RSI_SPEC, SMA_SPEC } from '../../pipeline/analysts/technical-analyst.js';
 import { computeIndicator } from '../../providers/market-data-service/index.js';
 import {
   buildSmokeFixtureBars,
@@ -610,20 +611,19 @@ describe('buildSmokeFixtureBars', () => {
     // bars has RSI exactly 100 and `directionFrom` treats >= 70 as overbought.
     // The desk therefore never agreed, and the run's only directional
     // participant was the mediator. Assert the analyst's own rule instead.
-    const sma = computeIndicator(hourly, {
-      indicator: 'sma',
-      params: { period: 14 },
-      timeframe: '1h',
-      lookback: 14,
-    });
-    const rsi = computeIndicator(hourly, {
-      indicator: 'rsi',
-      params: { period: 14 },
-      timeframe: '1h',
-      lookback: 15,
-    });
+    //
+    // The REAL specs, not rebuilt literals (#722): this used to hand-build
+    // `lookback: 15` while feeding it all 60 hourly bars, so it agreed with the
+    // analyst only by accident and would have gone on passing had the fixture
+    // stopped clearing the spec's warm-up. Slicing by `RSI_SPEC.lookback` also
+    // makes the fixture-depth requirement an assertion rather than a comment.
+    expect(hourly.length).toBeGreaterThanOrEqual(RSI_SPEC.lookback);
+    const sma = computeIndicator(hourly.slice(-SMA_SPEC.lookback), SMA_SPEC);
+    const rsi = computeIndicator(hourly.slice(-RSI_SPEC.lookback), RSI_SPEC);
 
     expect(last.close).toBeGreaterThan(sma);
+    // 68.52 under the converged warm-up, against 63.16 under the old floor —
+    // still bullish, with 1.48 points of headroom to the overbought gate.
     expect(rsi).toBeLessThan(70);
     expect(rsi).toBeGreaterThan(50);
   });

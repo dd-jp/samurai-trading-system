@@ -310,14 +310,19 @@ export function minimumBarsFor(spec: IndicatorSpec): number {
  * A warm-up long enough that one more bar no longer moves the value — the
  * WIDTH question, kept strictly separate from `minimumBarsFor`'s ARITY one.
  *
- * B1 measured what the difference costs. All three live specs (`RSI_SPEC`,
- * `atrIndicatorSpec(14)`, `DEFAULT_VOLATILITY_INDICATOR`) sit at exactly
- * `minimumBarsFor`, so `changes.slice(period)` is empty and the smoothing loop
- * runs ZERO times: what the debate reads as "RSI(14)" is the simple-mean seed,
+ * B1 measured what the difference costs. Every live spec used to sit at exactly
+ * `minimumBarsFor`, so `changes.slice(period)` was empty and the smoothing loop
+ * ran ZERO times: what the debate read as "RSI(14)" was the simple-mean seed,
  * Cutler's RSI rather than Wilder's. Against a converged warm-up on the same
- * bar that is a median 4.6 RSI points, p90 12.0, and it flips the 70/30
+ * bar that was a median 4.6 RSI points, p90 12.0, and it flipped the 70/30
  * overbought/oversold classification on 18% of bars —
  * `docs/reviews/indicator-characterisation-2026-08-16.md` F1/F2.
+ *
+ * **`RSI_SPEC` adopts this (#722)**; the same review records the after-figures.
+ * The ATR specs (`atrIndicatorSpec(14)`, `DEFAULT_VOLATILITY_INDICATOR`) are
+ * still on the floor — the identical gap, owned by `atr-equivalence.test.ts`
+ * and untouched here, because moving it reprices every stop rather than every
+ * opinion.
  *
  * **`minimumBarsFor` is deliberately NOT raised to this.** It is the
  * fabrication floor: below it every kind here answers with a window it did not
@@ -339,8 +344,9 @@ export function minimumBarsFor(spec: IndicatorSpec): number {
  * `rsi-warmup.test.ts` at 14 bars of history against 400.
  *
  * Adopting this for a live spec is a separate, deliberate decision — it
- * reprices every technical opinion in the system at once — and belongs to the
- * wayfinder map, not to this function existing.
+ * reprices every technical opinion in the system at once. #722 took it for
+ * RSI. Any further adoption is the same kind of decision and not a
+ * consequence of this one.
  */
 export function recommendedWarmupFor(spec: IndicatorSpec): number {
   const definition = definitionFor(spec.indicator);

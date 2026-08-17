@@ -9,7 +9,7 @@ import {
 import { MarketIntelligenceStore } from '../../providers/market-intelligence/index.js';
 import type { Clock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
-import { technicalAnalyst } from './technical-analyst.js';
+import { RSI_SPEC, technicalAnalyst } from './technical-analyst.js';
 import type { AnalystInput, Signal } from './types.js';
 
 class ManualClock implements Clock {
@@ -137,8 +137,9 @@ describe('technicalAnalyst', () => {
    * false: `RSI_SPEC` asked for 14 bars with no pinned period, so
    * `computeIndicator` saw 13 changes, divided by 14 anyway, and reported the
    * result as a 14-period RSI. The guard turned that into a throw, so the
-   * spec was widened to `lookback: 15` with `period: 14` — the same shape
-   * `atrIndicatorSpec` carries.
+   * spec was widened to `lookback: 15` with `period: 14`, and #722 widened it
+   * further to the converged `recommendedWarmupFor` of 57. The label has to
+   * keep matching the arithmetic through both moves, which is what this pins.
    *
    * Zig-zag closes, not the module's steady uptrend: a monotonic series has
    * `avgLoss === 0`, so `rsi` short-circuits to 100 and a 13-change window is
@@ -168,13 +169,14 @@ describe('technicalAnalyst', () => {
   it('reports an RSI genuinely seeded over 14 changes, not 13 divided by 14 (#319)', async () => {
     const view = await technicalAnalyst.run(buildInput(signal, 'trace-1', ZIGZAG));
 
-    // Recomputed from the same bars with the honest spec: 15 bars, period 14.
-    const honest = computeIndicator(ZIGZAG.slice(-15), {
-      indicator: 'rsi',
-      params: { period: 14 },
-      timeframe: '1h',
-      lookback: 15,
-    });
+    // Recomputed from the same bars with the REAL spec, not a rebuilt copy: a
+    // literal would keep passing if `RSI_SPEC` drifted, which is the mistake
+    // #722 had to correct here (the copy pinned `lookback: 15` and went on
+    // asserting the floor's value after the live spec moved to 57). Only
+    // `params.period` reaches the arithmetic, so passing all 20 fixture bars
+    // with a 57-bar spec computes exactly what the analyst computed from the
+    // 20 the fixture source could serve.
+    const honest = computeIndicator(ZIGZAG, RSI_SPEC);
     // The nearest computable stand-in for what it used to report. The exact
     // old value — 13 changes divided by 14 — is no longer expressible: the
     // guard is what stops `computeIndicator` producing it. An honest RSI(13)

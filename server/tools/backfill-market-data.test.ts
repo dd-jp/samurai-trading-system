@@ -54,6 +54,17 @@ function generateBars(instrument: string, timeframe: string, asOf: Date, count: 
 
 const ASOF = new Date('2026-08-07T12:30:00Z');
 
+/**
+ * The derived `1h` depth, read from `WARM_START_WINDOWS` rather than repeated
+ * as a literal: #722 moved it from 20 to 57 (the technical analyst's converged
+ * RSI warm-up), and three assertions here silently pinned the old number.
+ */
+const HOURLY_WARM_START = ((): number => {
+  const window = WARM_START_WINDOWS.find((candidate) => candidate.timeframe === '1h');
+  if (window === undefined) throw new Error('expected a 1h window in WARM_START_WINDOWS');
+  return window.lookback;
+})();
+
 function buildDeps(overrides: Partial<Parameters<typeof backfillMarketData>[0]> = {}) {
   const db = openSharedStore(':memory:');
   const store = new SqliteMarketDataStore(db);
@@ -123,7 +134,7 @@ describe('backfillMarketData', () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteMarketDataStore(db);
     // Simulate a prior run that completed SPY's 1h window only.
-    store.appendBars(generateBars('SPY', '1h', ASOF, 20));
+    store.appendBars(generateBars('SPY', '1h', ASOF, HOURLY_WARM_START));
 
     const equityFetches: { symbol: string; window: BarWindow }[] = [];
     const cryptoFetches: { symbol: string; window: BarWindow }[] = [];
@@ -156,7 +167,7 @@ describe('backfillMarketData', () => {
     await backfillMarketData(deps); // re-run, should be a no-op fetch-wise (idempotent test above) and a no-op write-wise here
 
     const rows = store.readBars('SPY', '1h', ASOF, 1000);
-    expect(rows).toHaveLength(20); // not 40
+    expect(rows).toHaveLength(HOURLY_WARM_START); // not twice that
   });
 
   it('reports first bar / last bar / row count per (instrument, timeframe)', async () => {
@@ -164,7 +175,11 @@ describe('backfillMarketData', () => {
     const coverage = await backfillMarketData(deps);
 
     const spy1h = coverage.find((row) => row.instrument === 'SPY' && row.timeframe === '1h');
-    expect(spy1h).toMatchObject({ rows: 20, required: 20, satisfied: true });
+    expect(spy1h).toMatchObject({
+      rows: HOURLY_WARM_START,
+      required: HOURLY_WARM_START,
+      satisfied: true,
+    });
     expect(spy1h?.first_bar).toBeDefined();
     expect(spy1h?.last_bar).toBeDefined();
     if (spy1h?.first_bar === undefined || spy1h?.last_bar === undefined) {

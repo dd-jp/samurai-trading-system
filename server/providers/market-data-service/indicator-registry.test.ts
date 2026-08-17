@@ -7,10 +7,11 @@
  *      cannot exist in the arithmetic and not in the arity. That property is
  *      enforced by the compiler (`Record<IndicatorKind, IndicatorDefinition>`),
  *      and what remains testable is that the table still says the right things.
- *   2. `recommendedWarmupFor` exists, is a DIFFERENT number from
- *      `minimumBarsFor` for every recursive kind, and — the point — is not
- *      wired into anything yet. Adopting it reprices every technical opinion in
- *      the system and is a decision for the map, not a side effect of B2.
+ *   2. `recommendedWarmupFor` is a DIFFERENT number from `minimumBarsFor` for
+ *      every recursive kind, it genuinely converges, and — since #722 — it is
+ *      what `RSI_SPEC` asks for. That adoption was B2's open finding F2 and is
+ *      the deliberate repricing of every technical opinion the debate reads;
+ *      ATR and SMA stay on the floor, so the two are pinned separately below.
  */
 import { describe, expect, it } from 'vitest';
 import { RSI_SPEC, SMA_SPEC } from '../../pipeline/analysts/technical-analyst.js';
@@ -124,18 +125,33 @@ describe('recommendedWarmupFor — the width question, not the arity one', () =>
     expect(Math.abs(floor - converged)).toBeGreaterThan(Math.abs(recommended - converged));
   });
 
-  it('does NOT change what the live specs ask for', () => {
-    // B2 adds the dial. It does not turn it. Every live spec still sits on the
-    // fabrication floor, which is finding F2 — open, and owned by the wayfinder
-    // map rather than closed silently here, because widening the warm-up
-    // reprices every technical opinion the debate ever reads.
-    for (const spec of [RSI_SPEC, SMA_SPEC, atrIndicatorSpec(PERIOD, '1h')]) {
+  it('is what RSI_SPEC now asks for — the analyst reads a converged Wilder RSI (#722)', () => {
+    // B2 added the dial; #722 turned it, for RSI only. The assertion this
+    // replaces pinned `RSI_SPEC.lookback === minimumBarsFor(RSI_SPEC)` (15) and
+    // was designed to fail here, so that adopting the warm-up would be a
+    // visible change rather than a quiet one. This is that change.
+    //
+    // Derived, not literal: `RSI_SPEC` composes `recommendedWarmupFor`, so this
+    // asserts the two cannot drift apart, and the `57` pins the value the
+    // repricing was measured at.
+    expect(RSI_SPEC.lookback).toBe(recommendedWarmupFor(RSI_SPEC));
+    expect(RSI_SPEC.lookback).toBe(57);
+    expect(RSI_SPEC.lookback).toBeGreaterThan(minimumBarsFor(RSI_SPEC));
+    // The floor itself is untouched: 15 bars still produce a value, so a cold
+    // instrument degrades to a less-warm RSI rather than to no view at all.
+    expect(minimumBarsFor(RSI_SPEC)).toBe(15);
+  });
+
+  it('is NOT adopted by the other live specs, which stay on the floor', () => {
+    // #722's scope is F2 — the RSI the debate reads — and nothing else. ATR's
+    // equivalent gap is owned by `trader/atr-equivalence.test.ts`, and moving
+    // it here would reprice every stop in the system as a side effect.
+    // `SMA_SPEC` is warm-up BLIND (`rsi-warmup.test.ts` pins 14 bars against
+    // 400), so the floor is not a compromise for it at all.
+    for (const spec of [SMA_SPEC, atrIndicatorSpec(PERIOD, '1h')]) {
       expect(spec.lookback).toBe(minimumBarsFor(spec));
     }
-
-    // And the gap that leaves open, stated as a number so closing it is a
-    // visible change rather than a quiet one.
-    expect(recommendedWarmupFor(RSI_SPEC)).toBe(57);
-    expect(RSI_SPEC.lookback).toBe(15);
+    expect(recommendedWarmupFor(atrIndicatorSpec(PERIOD, '1h'))).toBe(57);
+    expect(atrIndicatorSpec(PERIOD, '1h').lookback).toBe(15);
   });
 });
