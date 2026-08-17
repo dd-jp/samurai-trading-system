@@ -449,6 +449,40 @@ describe('RiskManagerImpl.evaluate — min-viable-size re-check', () => {
 
     expect(decision.status).toBe('approved');
   });
+
+  it('#740: a size refusal is distinguishable from a conviction (risk-critic) refusal — different binding_constraint tags on otherwise-identical rejected decisions', () => {
+    // A post-mortem reading `risk_log` alone must be able to tell "the desk
+    // was full / the residual was dust" from "the signal itself was judged
+    // weak" — the two have opposite remedies (widen the envelope vs distrust
+    // the debate) and a shared tag would erase the distinction. This asserts
+    // it on the ACTUAL `RiskDecision` shape `direct-bind.ts`'s `buildRiskStep`
+    // spreads verbatim into the persisted `risk_log` row (see that module's
+    // `deps.riskLog?.write({ ..., binding_constraint: decision.binding_constraint, ... })`),
+    // not against the in-memory `reasons` array alone.
+    const sizeConfig = makeConfig({
+      per_asset_class_cap: { crypto: 1_000_000, stocks: 50 },
+      min_viable_size: 100,
+    });
+    const sizeDecision = new RiskManagerImpl(sizeConfig).evaluate(
+      makeInput({ intent: makeIntent({ size: 100, entry: 100, asset_class: 'stocks' }) }),
+    );
+
+    const convictionDecision = new RiskManagerImpl(makeConfig()).evaluate(
+      makeInput({
+        critic: {
+          verdict: 'reject',
+          max_notional: null,
+          reasoning: 'debate conviction unsupported by the setup precedent',
+        },
+      }),
+    );
+
+    expect(sizeDecision.status).toBe('rejected');
+    expect(convictionDecision.status).toBe('rejected');
+    expect(sizeDecision.binding_constraint).toBe('min_viable_size');
+    expect(convictionDecision.binding_constraint).toBe('risk_critic:reject');
+    expect(sizeDecision.binding_constraint).not.toBe(convictionDecision.binding_constraint);
+  });
 });
 
 describe('RiskManagerImpl.evaluate — audit fields', () => {
