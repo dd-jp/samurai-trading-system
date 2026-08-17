@@ -1760,24 +1760,28 @@ export interface EntrypointFaultGuardEvidence {
 }
 
 /**
- * A stdout stand-in with the same "throw when nothing subscribed" trick as
- * `BreakablePipe.breakPipe` above (#714): a mutation that stops calling
- * `watchStdoutErrors` inside `watchDashboardStdout` / `watchSupervisorStdout`
- * makes this throw, which aborts `yarn smoke` loudly rather than passing the
- * gate silently.
+ * A stdout/stderr stand-in with the same "throw when nothing subscribed"
+ * trick as `BreakablePipe.breakPipe` above (#714): a mutation that stops
+ * calling `watchStdoutErrors` on either stream inside `watchDashboardStdout` /
+ * `watchSupervisorStdout` makes this throw, which aborts `yarn smoke` loudly
+ * rather than passing the gate silently. Also implements `write`, since the
+ * same object stands in for stderr (the reporting channel) as well as stdout.
  */
 class NoListenerBreakablePipe {
   private listener?: (error: Error) => void;
+  readonly lines: string[] = [];
   on(_event: 'error', listener: (error: Error) => void): this {
     this.listener = listener;
     return this;
   }
-  breakPipe(name: string): void {
+  write(line: string): void {
+    this.lines.push(line);
+  }
+  breakPipe(name: string, streamName: 'stdout' | 'stderr'): void {
     if (this.listener === undefined) {
       throw new Error(
-        `smoke entrypoint-fault-guard scenario: nothing subscribed to ${name}'s stdout errors ` +
-          '(#764) — a broken pipe would reach uncaughtException, same class #714 fixed for the ' +
-          'orchestrator',
+        `smoke entrypoint-fault-guard scenario: nothing subscribed to ${name}'s ${streamName} ` +
+          `errors (#764) — a broken pipe would reach uncaughtException${streamName === 'stdout' ? ', same class #714 fixed for the orchestrator' : ' with no report ever landing, defeating the continue-posture at the one moment it exists to cover'}`,
       );
     }
     this.listener(new Error('EPIPE: broken pipe'));
@@ -1805,15 +1809,9 @@ function runEntrypointFaultGuardScenario(): EntrypointFaultGuardEvidence {
     ) => void,
     install: (effects: ContinueOnFaultEffects) => void,
   ): EntrypointFaultGuardEvidence['entries'][number] {
-    const pipe = new NoListenerBreakablePipe();
-    const stdoutFaultLines: string[] = [];
-    // stderr only needs `write` here — the `on` in its type is satisfied by a
-    // no-op, since this scenario does not also break stderr (that is covered
-    // directly in each entrypoint's own fault-guard.test.ts).
-    watchStdout(pipe, {
-      on: () => pipe,
-      write: (line) => stdoutFaultLines.push(line as string),
-    });
+    const stdoutPipe = new NoListenerBreakablePipe();
+    const stderrPipe = new NoListenerBreakablePipe();
+    watchStdout(stdoutPipe, stderrPipe);
     // A mutation that stops calling `watchStdoutErrors` on stdout inside
     // `watchStdout` leaves nothing subscribed, so `breakPipe` throws —
     // propagated rather than caught, aborting this run loudly, matching
@@ -1822,7 +1820,13 @@ function runEntrypointFaultGuardScenario(): EntrypointFaultGuardEvidence {
     // throw itself is the enforcement, and a field that can only ever read
     // `true` when reached is the vacuous-backstop shape #388 warns about
     // above.
-    pipe.breakPipe(name);
+    stdoutPipe.breakPipe(name, 'stdout');
+    // Same trick for stderr — a mutation that stops subscribing to stderr's
+    // own error event (the fix for the reporting-channel-shares-the-fd gap;
+    // see each fault-guard.ts's "Both streams, not just stdout") leaves
+    // nothing subscribed here too, so this throws just as loudly.
+    stderrPipe.breakPipe(name, 'stderr');
+    const stdoutFaultLines = stderrPipe.lines;
 
     const arbitraryFaultLines: string[] = [];
     const handlers = new Map<string, (error: unknown) => void>();
