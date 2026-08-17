@@ -9,7 +9,7 @@ import {
 import { MarketIntelligenceStore } from '../../providers/market-intelligence/index.js';
 import type { Clock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
-import { RSI_SPEC, technicalAnalyst } from './technical-analyst.js';
+import { confidenceFrom, RSI_SPEC, technicalAnalyst } from './technical-analyst.js';
 import type { AnalystInput, Signal } from './types.js';
 
 class ManualClock implements Clock {
@@ -201,6 +201,48 @@ describe('technicalAnalyst', () => {
     await expect(
       technicalAnalyst.run(buildInput(signal, 'trace-1', ZIGZAG.slice(0, 14))),
     ).rejects.toThrow(InsufficientBarsError);
+  });
+
+  /**
+   * A halted or auction-flat instrument (#725): every close identical, so
+   * every RSI change is zero. Before the fix `rsi`'s `avgLoss === 0` branch
+   * did not check `avgGain`, so this `0/0` shape answered 100 — the same
+   * value a strictly rising window gets — and `confidenceFrom` reported
+   * 0.95, near-maximum strength, for a tape that had not moved at all.
+   * `docs/reviews/indicator-characterisation-2026-08-16.md` F3 pinned this
+   * and deliberately did not fix it; this is the fix.
+   */
+  const FLAT: Bar[] = ((): Bar[] => {
+    const start = new Date('2026-07-14T00:00:00Z').getTime();
+    return Array.from({ length: 60 }, (_, i) => {
+      const closeTime = new Date(start + i * 60 * 60 * 1000);
+      return {
+        instrument: INSTRUMENT,
+        timeframe: TIMEFRAME,
+        open_time: new Date(closeTime.getTime() - 60 * 60 * 1000),
+        close_time: closeTime,
+        open: 100,
+        high: 100,
+        low: 100,
+        close: 100,
+        volume: 10,
+        source: 'fixture',
+      };
+    });
+  })();
+
+  it('reports confidence near the floor, not 0.95, on a flat tape (#725)', async () => {
+    const view = await technicalAnalyst.run(buildInput(signal, 'trace-1', FLAT));
+
+    expect(view.key_points).toContain(`RSI(14)=50`);
+    // Before the fix this was 0.95 (confidenceFrom(100)). 50 is the
+    // midpoint `confidenceFrom` treats as "no information": `|50-50|/50`
+    // clamps to the 0.05 floor, so the analyst stays present in the debate
+    // (technical is `mandatory`) but argues at near-minimum rather than
+    // near-maximum strength.
+    expect(view.confidence).toBe(confidenceFrom(50));
+    expect(view.confidence).toBeCloseTo(0.05, 6);
+    expect(view.direction).toBe('neutral');
   });
 
   it('holds no state across calls: an intervening call with different inputs does not affect a repeat call', async () => {
