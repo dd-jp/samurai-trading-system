@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 
 import { RISK_THRESHOLD_KEYS } from '../../pipeline/risk-manager/index.js';
 import {
+  buildStartingProfileConfigs,
   D5_DEPLOYMENT_FRACTION_OF_EQUITY_LEG,
   d5EnvelopeFor,
   EQUITY_LEG_FRACTION_OF_CAPITAL,
@@ -115,10 +116,28 @@ describe('the Trader and the Risk Manager classify from ONE derivation (#739)', 
     // nothing consults. Two independently built maps would let the stage that
     // SIZES a position and the stage that CAPS it disagree about what the
     // instrument is, and the disagreement would be invisible in every log.
-    const profile = paperStartingProfile('paper');
-    const universe = profile.universe ?? DEFAULT_UNIVERSE;
+    // Built against a CLASSIFIED universe on purpose: with `DEFAULT_UNIVERSE`
+    // the expected and actual maps are both `{}`, so the assertion passes
+    // whether or not the composition root carries the classification at all.
+    const universe: readonly UniverseInstrument[] = [
+      { asset: '3USL', asset_class: 'stocks', subclass: 'index_etp_3x' },
+      { asset: '3LAP', asset_class: 'stocks', subclass: 'single_stock_etp_3x' },
+    ];
 
-    expect(profile.traderConfig.subclass_of).toEqual(subclassOfUniverse(universe));
+    const configs = buildStartingProfileConfigs(LIVE_CAPITAL, universe);
+
+    expect(configs.traderConfig.subclass_of).toEqual({
+      '3USL': 'index_etp_3x',
+      '3LAP': 'single_stock_etp_3x',
+    });
+    // The same rows arm the Risk Manager's envelope, from the same argument.
+    expect(configs.riskConfig.per_subclass_deployment_cap?.subclass_of).toEqual(
+      configs.traderConfig.subclass_of,
+    );
+    expect(configs.universe).toBe(universe);
+
+    // And the default profile is unarmed, because `DEFAULT_UNIVERSE` is.
+    expect(paperStartingProfile('paper').traderConfig.subclass_of).toEqual({});
   });
 
   it('arms both stages off the same universe rows, or neither', () => {

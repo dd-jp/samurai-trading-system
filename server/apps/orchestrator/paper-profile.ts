@@ -981,7 +981,20 @@ const STOCKS_MAX_DEBATES_PER_WINDOW = 15;
  * refusal there cannot be bypassed by importing the values, and each call gets
  * its own copy.
  */
-export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
+export function buildStartingProfileConfigs(
+  equityAnchorUsd: number,
+  /**
+   * The universe this profile's gates are keyed to AND the list the run ticks
+   * — one argument, because they must not be two lists (#739).
+   *
+   * Parameterised rather than pinned so the ADR-0018 arming can be exercised
+   * against a CLASSIFIED universe. With `DEFAULT_UNIVERSE` hardcoded, every
+   * assertion that the classification reaches the Trader compares `{}` with
+   * `{}` and passes whether or not the wiring exists at all — a tautology, and
+   * this repo's dominant defect shape wearing a test.
+   */
+  universe: readonly UniverseInstrument[] = DEFAULT_UNIVERSE,
+): Pick<
   ProductionConfig,
   | 'universe'
   | 'traderConfig'
@@ -1018,10 +1031,10 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
   // sizes unclassified names with no envelope, or throws on every entry.
   //
   // Naming `DEFAULT_UNIVERSE` twice — once here and once at the `universe` field
-  // below — made that a convention held by matching identifiers. One local, read
-  // by both, makes it hold by construction, so if this ever takes the universe
-  // as a parameter the gate follows it without anyone remembering to look.
-  const universe = DEFAULT_UNIVERSE;
+  // below — made that a convention held by matching identifiers. One parameter,
+  // read by both, makes it hold by construction: the D5 gate's classification,
+  // the Trader's `subclass_of` and the ticked list are the same list or none of
+  // them are.
   const subclassCap = d5EnvelopeFor(universe);
 
   const traderConfig: TraderConfig = {
@@ -1847,7 +1860,8 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
      * cap still governs the SHAPE of the spend; the limiter is the ceiling
      * underneath it.
      */
-    universe: DEFAULT_UNIVERSE,
+    // The argument, not the constant (#739).
+    universe,
     traderConfig,
     riskConfig,
     verdictConfig,
