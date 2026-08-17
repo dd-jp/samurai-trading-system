@@ -133,6 +133,15 @@ export async function enforceLatencyBudget(params: {
   trace_id: string;
   debate_id: string;
   /**
+   * The bar `debate_id` was hashed over (#687). Required alongside it rather
+   * than read off the partial state, because a timed-out debate may have no
+   * partial state at all — and the fallback `DebateResult` this function
+   * returns is still the one the Trader keys its order on, so it has to name a
+   * bar. Same value, same call site: `buildDebateStep` floors one clock read
+   * and passes it to `computeDebateId` and to here.
+   */
+  bar: Date;
+  /**
    * Receives the debate's cancellation signal. Existing zero-argument callers
    * still typecheck (TypeScript allows a function that ignores parameters) —
    * they simply keep the old abandon-on-timeout behaviour, which is why the
@@ -142,7 +151,7 @@ export async function enforceLatencyBudget(params: {
   getCurrentState: () => PartialDebateState | undefined;
   logger: DebateLogger;
 }): Promise<DebateResult> {
-  const { assetClass, trace_id, debate_id, produceResult, getCurrentState, logger } = params;
+  const { assetClass, trace_id, debate_id, bar, produceResult, getCurrentState, logger } = params;
   const budget_ms = LATENCY_BUDGET_MS[assetClass];
   const started_at = Date.now();
 
@@ -210,6 +219,10 @@ export async function enforceLatencyBudget(params: {
       latency_ms: elapsed_ms,
       direction: partial.direction,
       debate_id: partial.debate_id,
+      // From the caller, not from `partial`: a timed-out debate is still a
+      // decision for the bar the tick was taken in, and the two shapes below
+      // must name the same bar whether or not a round completed (#687).
+      bar_timestamp: bar,
       timed_out,
     };
   }
@@ -226,6 +239,7 @@ export async function enforceLatencyBudget(params: {
     latency_ms: elapsed_ms,
     direction: LOW_CONFIDENCE_FALLBACK.direction,
     debate_id,
+    bar_timestamp: bar,
     timed_out,
   };
 }

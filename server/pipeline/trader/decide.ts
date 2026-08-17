@@ -24,10 +24,15 @@ import {
   type OrderIntent,
   totalHeldQuantity,
 } from '../../shared/index.js';
-// Imported from the defining module rather than the debate-engine barrel: the
-// barrel pulls the whole engine's module graph into the Trader path and would
-// make a future debate-engine -> trader import a cycle.
-import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../debate-engine/debate-log-store.js';
+// TYPE-only, and from the defining module rather than the debate-engine
+// barrel, for the reason the deleted `floorToBar` import used to state: the
+// barrel pulls the whole engine's module graph into the Trader path. A type
+// import is erased at compile time, so this adds no runtime edge — and it is
+// deliberately the ONLY thing this module now takes from the debate engine.
+// The bar grid (`floorToBar`, `DEBATE_BAR_TIMEFRAME_MS`) used to be imported
+// here as values so the Trader could re-derive the decision bar; it no longer
+// is, because the Trader no longer derives it (#687).
+import type { DebateResult } from '../debate-engine/types.js';
 import { NO_PRECEDENT_MULTIPLIER, retrieveCosinePrecedent } from './cosine-precedent.js';
 import { computeIdempotencyKey, intentSideFor } from './idempotency-key.js';
 import { buildSetupVector } from './setup-vector.js';
@@ -281,59 +286,60 @@ function withinFlattenWindow(input: TraderInput, assetClass: AssetClass): Flatte
 
 /**
  * The decision's BAR COORDINATE — the input `computeIdempotencyKey` needs to
- * be stable across every tick that shares a bar (#616).
+ * be stable across every tick that shares a bar (#616), and the coordinate the
+ * `debate_id` on the very same intent is hashed over (#687).
  *
- * This used to be `mark.observed_at`, and in backtest that is a real bar
- * coordinate (`deriveBacktestMark` derives it from the bar). **In paper and
- * live it is the venue's latest-quote wire timestamp at millisecond
- * resolution** — Alpaca's `quote.t`, and the same shape in the ccxt and IBKR
- * sources. Paper runs the live branch, and the mark cache cannot bridge ticks
- * (`markTtlMs` defaults to 5s against a 15-minute tick), so the key changed on
- * every pass.
+ * ## It is INHERITED, never derived
  *
- * That made every key-based dedup layer inert in production at once: local
- * `findByKey`, the `open_positions` primary key backstop, and the broker
- * `client_order_id`. Crash-replay protection — the exact scenario the key
- * exists for — was gone in precisely the two modes that trade real orders,
- * while the backtest path kept the invariant looking held, which is why no
- * test caught it.
+ * This function does not compute anything and takes no clock. It reads the bar
+ * the Debate stage already floored and carried forward on `DebateResult`
+ * (`bar_timestamp`). That is the whole of #687's fix, and the signature is the
+ * enforcement: there is no `asOf` to floor, `decide.ts` imports neither
+ * `floorToBar` nor `DEBATE_BAR_TIMEFRAME_MS`, and re-deriving the coordinate
+ * would take a new import a reviewer can see.
  *
- * Flooring `asOf` rather than the mark's timestamp is deliberate: `asOf` is
- * `clock.now()`, the same value `buildDebateStep` floors for `debate_id`, so
- * the two land on the same coordinate **whenever both clock reads fall in the
- * same bar** — which is the guarantee, and it is weaker than "provably the same
- * coordinate". A bar boundary falling between the Debate stage's read and this
- * one, or a crash-restart resuming in the next bar, still splits the key from
- * its `debate_id`. What it does remove is the mark-timestamp split: a mark
- * observed a fraction after an hour boundary would otherwise floor to the next
- * bar on every tick rather than occasionally.
+ * ## Two earlier shapes, and why each failed
  *
- * That residual split is **#687**, and it is not cosmetic: bar N+1's own
- * genuine decision then computes the key the straddling intent already took,
- * and is suppressed as a duplicate. Closing it needs the bar carried FORWARD
- * from the Debate step rather than re-derived here, and `DebateResult`
- * deliberately carries no bar coordinate (`buildDebateLog` takes
- * `instrument`/`bar_timestamp` from the caller), so the fix is a contract
- * change across the debate/trader seam.
+ * It was first `mark.observed_at`. In backtest that is a real bar coordinate
+ * (`deriveBacktestMark` derives it from the bar); **in paper and live it is the
+ * venue's latest-quote wire timestamp at millisecond resolution** — Alpaca's
+ * `quote.t`, and the same shape in the ccxt and IBKR sources. The mark cache
+ * cannot bridge ticks (`markTtlMs` defaults to 5s against a 15-minute tick), so
+ * the key changed on every pass and every key-based dedup layer was inert in
+ * production at once: local `findByKey`, the `open_positions` primary key
+ * backstop, and the broker `client_order_id`. The backtest path kept the
+ * invariant looking held, which is why no test caught it (#616).
  *
- * **The grid is stated, not inherited.** `floorToBar`'s timeframe argument is
- * passed explicitly as `DEBATE_BAR_TIMEFRAME_MS` rather than left to its
- * default, because the coupling is the point: the decision bar IS the debate's
- * bar, by definition, and the two must move together or not at all. Relying on
- * a shared default made that look like a coincidence — change `floorToBar`'s
- * default for some other caller and this silently re-grids, which is #616's
- * failure mode inverted. A finer grid here would collapse several decision bars
- * onto one key, so `findByKey` and the broker `client_order_id` would suppress
- * legitimate orders; a suppressed order is indistinguishable from a skip in
- * `trader_log`, which is exactly why #616 went unnoticed for as long as it did.
+ * #616 then floored `clock.now()` here. That is stable within a bar, but it is
+ * a SECOND clock read: it agreed with the debate's only while both landed in
+ * the same bar. A debate that straddles an hour boundary — LLM round-trips,
+ * retries, a latency-budget timeout — was logged at bar N and keyed at bar N+1,
+ * and bar N+1's own genuine decision then computed the key the straddling
+ * intent had already taken and was suppressed as a duplicate (#687).
  *
- * Deliberately NOT `config.atr_timeframe`. That is the window the ATR is
- * measured over — a volatility-estimation choice, independently tunable, and
- * pinned to something other than 1h by its own test. Keying the decision bar on
- * it would tie the order-dedup coordinate to a risk-tuning knob.
+ * ## What is consequently NOT decided here any more
+ *
+ * The GRID. A finer grid would collapse several decision bars onto one key, so
+ * `findByKey` and the broker `client_order_id` would suppress legitimate
+ * orders. The grid now has exactly one statement in the system — `floorToBar`'s
+ * `DEBATE_BAR_TIMEFRAME_MS`, applied once in `buildDebateStep` — instead of two
+ * that had to be kept saying the same thing. It was never `config.atr_timeframe`
+ * and still is not: that is the window the ATR is measured over, a
+ * volatility-estimation choice, independently tunable, and keying the
+ * order-dedup coordinate on a risk-tuning knob was never the intent.
+ *
+ * ## What this does NOT fix
+ *
+ * The straddling intent is still DECIDED late: after the fix its
+ * `decision_timestamp` is bar N while the wall clock is in N+1, so Verdict's
+ * staleness gate sees an age above one bar and may no-go it. That is the
+ * fail-safe direction — refusing a late intent beats corrupting the next bar's
+ * key — and it is also, usefully, the marker that tells a straddle apart from
+ * an ordinary tick in `trader_log`: `decision_timestamp` no longer floors onto
+ * the bar containing `created_at`.
  */
-function decisionBarFor(asOf: Date): Date {
-  return floorToBar(asOf, DEBATE_BAR_TIMEFRAME_MS);
+function decisionBarFor(debate: DebateResult): Date {
+  return debate.bar_timestamp;
 }
 
 /**
@@ -524,7 +530,7 @@ async function buildBracket(
   const side = sideFor(debate.direction);
   const direction = side === 'buy' ? 1 : -1;
 
-  const decisionBar = decisionBarFor(asOf);
+  const decisionBar = decisionBarFor(debate);
 
   return emit(
     {
@@ -611,7 +617,7 @@ async function buildExitIntent(
 
   const asOf = clock.now();
   const mark = await marketData.getMark(instrument, asOf);
-  const decisionBar = decisionBarFor(asOf);
+  const decisionBar = decisionBarFor(debate);
 
   return emit(
     {

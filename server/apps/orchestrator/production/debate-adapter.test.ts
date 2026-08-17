@@ -162,6 +162,44 @@ describe('buildDebateStep', () => {
     // #393 was about: before the fix both columns held 14:32:07.
     expect(row?.created_at.toISOString()).toBe(midBar.toISOString());
     expect(row?.trace_id).toBe('trace-mid-bar');
+    // #687: and the SAME floored bar is carried forward to the Trader on the
+    // result, so the intent's idempotency key lands on the coordinate
+    // `debate_id` was hashed over even if the Trader runs after 15:00. This is
+    // the one place in the system that floors a clock read for the bar grid.
+    expect(result.bar_timestamp.toISOString()).toBe(bar.toISOString());
+  });
+
+  /**
+   * #687 on the replay path, which is the case a re-derivation gets wrong most
+   * quietly: the row was written in bar N, and this tick — a later tick in bar
+   * N, or the first tick after a process restart within it — must be keyed to
+   * the row's bar, not to whenever the replay ran.
+   */
+  it('replays a persisted row with the ROWs bar_timestamp, not a fresh clock read (#687)', async () => {
+    const store = new InMemoryDebateLogStore();
+    const step = buildDebateStep(fakeLlmClient(), store, unlimited(), UNCAPPED_SPEND);
+    const views = [makeView()];
+    const bar = new Date('2026-07-28T14:00:00Z');
+
+    const first = await step({
+      trace_id: 'trace-first',
+      instrument: 'AAPL',
+      views,
+      asset_class: ASSET_CLASS,
+      clock: { now: () => new Date('2026-07-28T14:02:00Z') },
+    });
+
+    const replayed = await step({
+      trace_id: 'trace-replay',
+      instrument: 'AAPL',
+      views,
+      asset_class: ASSET_CLASS,
+      clock: { now: () => new Date('2026-07-28T14:57:31Z') },
+    });
+
+    expect(replayed.debate_id).toBe(first.debate_id);
+    expect(replayed.bar_timestamp.toISOString()).toBe(bar.toISOString());
+    expect(replayed.bar_timestamp).toEqual(store.getByDebateId(first.debate_id)?.bar_timestamp);
   });
 
   it('applies analyst weights to the resolved debate, and logs the WEIGHTED result (#435)', async () => {

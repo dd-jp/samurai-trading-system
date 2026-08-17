@@ -56,6 +56,9 @@ function makeDebate(overrides: Partial<DebateResult> = {}): DebateResult {
     latency_ms: 1200,
     direction: 'bullish',
     debate_id: 'debate-1',
+    // #687: NOW is bar-aligned, so this is the bar the Trader now inherits
+    // instead of flooring a clock read of its own.
+    bar_timestamp: NOW,
     ...overrides,
   };
 }

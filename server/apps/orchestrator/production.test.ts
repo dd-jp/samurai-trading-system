@@ -1039,6 +1039,9 @@ describe('composed tick chain (integration)', () => {
         latency_ms: 10,
         direction: 'bearish',
         debate_id: 'debate-568-wiring',
+        // #687: the Trader keys the exit on the DEBATE's bar. START is
+        // bar-aligned, so this is the bar the old clock-flooring produced.
+        bar_timestamp: START,
       },
       clock,
     });

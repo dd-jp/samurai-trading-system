@@ -18,6 +18,8 @@ function makeContribution(overrides: Partial<AnalystContribution> = {}): Analyst
   };
 }
 
+const BAR = new Date('2026-07-14T09:00:00Z');
+
 function makeResult(overrides: Partial<DebateResult> = {}): DebateResult {
   return {
     synthesis: 'Bulls have the stronger case this bar.',
@@ -31,6 +33,7 @@ function makeResult(overrides: Partial<DebateResult> = {}): DebateResult {
     latency_ms: 8000,
     direction: 'bullish',
     debate_id: 'debate-1',
+    bar_timestamp: BAR,
     ...overrides,
   };
 }
@@ -38,10 +41,12 @@ function makeResult(overrides: Partial<DebateResult> = {}): DebateResult {
 describe('buildDebateLog', () => {
   it('projects a completed DebateResult into a DebateLog row', () => {
     const result = makeResult();
-    const bar_timestamp = new Date('2026-07-14T09:00:00Z');
+    const bar_timestamp = BAR;
     const created_at = new Date('2026-07-14T09:00:08Z');
 
-    const log = buildDebateLog(result, 'BTC-USD', bar_timestamp, created_at);
+    // #687: the bar is PROJECTED off the result, not passed in. A row can no
+    // longer claim a bar coordinate its own `debate_id` does not encode.
+    const log = buildDebateLog(result, 'BTC-USD', created_at);
 
     expect(log).toEqual({
       debate_id: 'debate-1',
@@ -69,7 +74,6 @@ describe('buildDebateLog', () => {
     const log = buildDebateLog(
       makeResult({ confidence: 0.83 }),
       'BTC-USD',
-      new Date('2026-07-14T09:00:00Z'),
       new Date('2026-07-14T09:00:08Z'),
     );
 
@@ -81,12 +85,7 @@ describe('InMemoryDebateLogStore', () => {
   it('a completed debate: row exists and is joinable by debate_id', () => {
     const store = new InMemoryDebateLogStore();
     const result = makeResult();
-    const log = buildDebateLog(
-      result,
-      'BTC-USD',
-      new Date('2026-07-14T09:00:00Z'),
-      new Date('2026-07-14T09:00:08Z'),
-    );
+    const log = buildDebateLog(result, 'BTC-USD', new Date('2026-07-14T09:00:08Z'));
 
     store.writeLog(log);
 
@@ -107,13 +106,15 @@ describe('InMemoryDebateLogStore', () => {
     const first = buildDebateLog(
       makeResult({ debate_id: 'debate-1' }),
       'BTC-USD',
-      new Date('2026-07-14T09:00:00Z'),
       new Date('2026-07-14T09:00:08Z'),
     );
     const second = buildDebateLog(
-      makeResult({ debate_id: 'debate-2', direction: 'bearish' }),
+      makeResult({
+        debate_id: 'debate-2',
+        direction: 'bearish',
+        bar_timestamp: new Date('2026-07-14T09:05:00Z'),
+      }),
       'ETH-USD',
-      new Date('2026-07-14T09:05:00Z'),
       new Date('2026-07-14T09:05:07Z'),
     );
 
