@@ -20,6 +20,7 @@ export {
 export type { NormalizeContext, RawCandle } from './ingestion.js';
 export { completedBars, deriveBacktestMark, normalizeBars } from './ingestion.js';
 export { isMarkStale, markAgeMs } from './mark-freshness.js';
+export { collectMarks } from './marks-batch.js';
 export type { RvolDegradedReason, RvolReading } from './rvol.js';
 export { computeRvol, RVOL_SESSION_WINDOW } from './rvol.js';
 export { MarketDataServiceImpl } from './service.js';
@@ -108,6 +109,7 @@ export type {
   Mark,
   MarketDataService,
   MarketDataStore,
+  MarkRead,
   Quote,
 } from './types.js';
 export { INDICATOR_KINDS } from './types.js';

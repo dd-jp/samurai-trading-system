@@ -8,6 +8,7 @@
 import type { Clock } from '../../shared/index.js';
 import { buildIndicatorCacheKey, IndicatorCache } from './indicator-cache.js';
 import { computeIndicator } from './indicators.js';
+import { collectMarks } from './marks-batch.js';
 import { timeframeToMs } from './timeframe.js';
 import type {
   Bar,
@@ -18,6 +19,7 @@ import type {
   Mark,
   MarketDataService,
   MarketDataStore,
+  MarkRead,
 } from './types.js';
 
 /**
@@ -247,6 +249,32 @@ export class MarketDataServiceImpl implements MarketDataService {
       );
     }
     return stored;
+  }
+
+  /**
+   * The batch form (#289 H8). See `MarketDataService.getMarks` for the
+   * contract; this implementation adds nothing to it beyond the concurrency.
+   *
+   * Each instrument still goes through `getMark`, so the TTL cache, the
+   * `latest_mark` write and the backtest no-write rule all apply exactly as
+   * they do to a single read — this is a batching of the CALL, not a second
+   * mark path that could drift from the first. `DataSource` has no batch
+   * `fetchMark`, so a genuinely single round-trip to the venue is not
+   * available to build on today; what this collapses is the caller's N call
+   * sites into one, and with them the N places a partial failure could be
+   * handled differently.
+   *
+   * Every read is attempted even after one has failed — the point of the
+   * result type is that the caller gets the WHOLE picture, and a short-circuit
+   * would hand it the same one-of-N diagnosis `Promise.all` already gave. That
+   * containment lives in `collectMarks`, shared with the doubles, so no
+   * implementation of this method can quietly adopt a different policy.
+   */
+  async getMarks(
+    instruments: readonly string[],
+    asOf: Date = this.clock.now(),
+  ): Promise<Map<string, MarkRead>> {
+    return collectMarks((instrument, at) => this.getMark(instrument, at), instruments, asOf);
   }
 
   /**

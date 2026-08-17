@@ -21,10 +21,12 @@ import {
   AlwaysOpenCalendar,
   type Bar,
   type BarWindow,
+  collectMarks,
   type IndicatorSpec,
   type IndicatorValue,
   type Mark,
   type MarketDataService,
+  type MarkRead,
   UsEquityRegularHoursCalendar,
 } from '../../providers/market-data-service/index.js';
 import type {
@@ -96,6 +98,10 @@ class FixtureMarketData implements MarketDataService {
       source: 'fixture',
       asset_class: 'stocks',
     };
+  }
+
+  async getMarks(instruments: readonly string[], asOf: Date): Promise<Map<string, MarkRead>> {
+    return collectMarks((instrument, at) => this.getMark(instrument, at), instruments, asOf);
   }
 
   async getIndicator(

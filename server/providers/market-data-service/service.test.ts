@@ -393,6 +393,90 @@ describe('MarketDataServiceImpl.getMark', () => {
   });
 });
 
+describe('MarketDataServiceImpl.getMarks (#289 H8)', () => {
+  /**
+   * A source that answers for some instruments and throws for others, so a
+   * batch read can be observed to be PARTIAL rather than all-or-nothing.
+   */
+  class SelectiveDataSource implements DataSource {
+    constructor(private readonly failing: ReadonlySet<string>) {}
+
+    async fetchBars(): Promise<Bar[]> {
+      return [];
+    }
+
+    async fetchMark(instrument: string, asOf: Date): Promise<Mark> {
+      if (this.failing.has(instrument)) {
+        throw new Error(`feed down for ${instrument}`);
+      }
+      return { price: 42, observed_at: asOf, source: 'selective', asset_class: 'stocks' };
+    }
+  }
+
+  function selectiveService(failing: string[]) {
+    return new MarketDataServiceImpl(
+      new SelectiveDataSource(new Set(failing)),
+      new ManualClock(ASOF),
+      'backtest',
+      new SqliteMarketDataStore(openSharedStore(':memory:')),
+    );
+  }
+
+  it('answers every requested instrument, keyed by instrument', async () => {
+    const service = selectiveService([]);
+
+    const marks = await service.getMarks(['AAPL', 'MSFT'], ASOF);
+
+    expect([...marks.keys()].sort()).toEqual(['AAPL', 'MSFT']);
+    const aapl = marks.get('AAPL');
+    expect(aapl?.ok).toBe(true);
+    expect(aapl?.ok === true ? aapl.mark.price : null).toBe(42);
+  });
+
+  /**
+   * The property the whole seam exists for: one instrument's failure must not
+   * decide the others'. A rejecting `Promise.all` reports whichever promise
+   * lost the race and discards the rest, which is exactly the diagnosis
+   * `computePortfolioView` needs whole.
+   */
+  it('reports a per-instrument failure without failing the batch', async () => {
+    const service = selectiveService(['MSFT']);
+
+    const marks = await service.getMarks(['AAPL', 'MSFT', 'TSLA'], ASOF);
+
+    expect(marks.get('AAPL')?.ok).toBe(true);
+    expect(marks.get('TSLA')?.ok).toBe(true);
+    const msft = marks.get('MSFT');
+    expect(msft?.ok).toBe(false);
+    expect(msft?.ok === false ? String(msft.error) : '').toContain('feed down for MSFT');
+  });
+
+  it('reports every failure, not just the first', async () => {
+    const service = selectiveService(['AAPL', 'MSFT']);
+
+    const marks = await service.getMarks(['AAPL', 'MSFT'], ASOF);
+
+    expect(marks.get('AAPL')?.ok).toBe(false);
+    expect(marks.get('MSFT')?.ok).toBe(false);
+  });
+
+  it('reads a repeated instrument once', async () => {
+    const dataSource = new SelectiveDataSource(new Set());
+    const fetchMark = vi.spyOn(dataSource, 'fetchMark');
+    const service = new MarketDataServiceImpl(
+      dataSource,
+      new ManualClock(ASOF),
+      'backtest',
+      new SqliteMarketDataStore(openSharedStore(':memory:')),
+    );
+
+    const marks = await service.getMarks(['AAPL', 'AAPL'], ASOF);
+
+    expect(marks.size).toBe(1);
+    expect(fetchMark).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('MarketDataServiceImpl.getSpreadEstimate', () => {
   it('returns null for an instrument with no bid/ask source, not a fabricated value', async () => {
     const service = buildService('backtest', new ManualClock(ASOF));

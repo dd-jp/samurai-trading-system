@@ -435,6 +435,7 @@ describe('core vs enrichment — the availability trade-off (#745)', () => {
     const input = buildInput(uptrend(60), undefined, (inner) => ({
       getBars: inner.getBars.bind(inner),
       getMark: inner.getMark.bind(inner),
+      getMarks: inner.getMarks.bind(inner),
       getADV: inner.getADV.bind(inner),
       getSpreadEstimate: inner.getSpreadEstimate.bind(inner),
       async getIndicator(
@@ -461,6 +462,7 @@ describe('core vs enrichment — the availability trade-off (#745)', () => {
     const input = buildInput(uptrend(60), telemetry, (inner) => ({
       getBars: inner.getBars.bind(inner),
       getMark: inner.getMark.bind(inner),
+      getMarks: inner.getMarks.bind(inner),
       getADV: inner.getADV.bind(inner),
       getSpreadEstimate: inner.getSpreadEstimate.bind(inner),
       async getIndicator(
@@ -495,6 +497,7 @@ describe('core vs enrichment — the availability trade-off (#745)', () => {
     const input = buildInput(uptrend(19), recordingTelemetry(), (inner) => ({
       getBars: inner.getBars.bind(inner),
       getMark: inner.getMark.bind(inner),
+      getMarks: inner.getMarks.bind(inner),
       getADV: inner.getADV.bind(inner),
       getSpreadEstimate: inner.getSpreadEstimate.bind(inner),
       async getIndicator(

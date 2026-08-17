@@ -8,6 +8,7 @@ import {
   AlwaysOpenCalendar,
   type Bar,
   type BarWindow,
+  collectMarks,
   type IndicatorKind,
   type IndicatorSpec,
   type IndicatorValue,
@@ -15,6 +16,7 @@ import {
   LseRegularHoursCalendar,
   type Mark,
   type MarketDataService,
+  type MarkRead,
   type TradingCalendar,
   UsEquityRegularHoursCalendar,
 } from '../../providers/market-data-service/index.js';
@@ -116,6 +118,15 @@ class FixtureMarketData implements MarketDataService {
       source: 'fixture',
       asset_class: this.assetClass,
     };
+  }
+
+  /**
+   * #289 H8: the batch form, over this double's own `getMark`. Shared
+   * `collectMarks` rather than a hand-rolled loop so a double cannot express a
+   * partial-failure policy the real service does not have.
+   */
+  async getMarks(instruments: readonly string[], asOf: Date): Promise<Map<string, MarkRead>> {
+    return collectMarks((instrument, at) => this.getMark(instrument, at), instruments, asOf);
   }
 
   /**

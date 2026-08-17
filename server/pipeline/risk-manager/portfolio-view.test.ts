@@ -5,9 +5,15 @@ import type {
   IndicatorValue,
   Mark,
   MarketDataService,
+  MarkRead,
 } from '../../providers/market-data-service/index.js';
+import { collectMarks } from '../../providers/market-data-service/index.js';
 import type { OpenPosition } from '../../shared/index.js';
-import { computePortfolioView, type PortfolioAccountingInput } from './portfolio-view.js';
+import {
+  computePortfolioView,
+  type PortfolioAccountingInput,
+  StaleMarkError,
+} from './portfolio-view.js';
 
 const asOf = new Date('2026-07-15T09:30:00Z');
 
@@ -19,7 +25,7 @@ function makeMarketData(prices: Record<string, number>): MarketDataService {
   const getMark = vi.fn(
     async (instrument: string, _asOf: Date): Promise<Mark> => makeMark(prices[instrument] ?? 0),
   );
-  return {
+  const service: MarketDataService = {
     getBars: vi.fn(async (_i: string, _w: BarWindow, _a: Date): Promise<Bar[]> => []),
     getIndicator: vi.fn(
       async (_i: string, _s: IndicatorSpec, _a: Date): Promise<IndicatorValue> => {
@@ -27,9 +33,17 @@ function makeMarketData(prices: Record<string, number>): MarketDataService {
       },
     ),
     getMark,
+    // Routed through `service.getMark` rather than the `getMark` const, so a
+    // test that REPLACES the property after construction (several below do)
+    // still sees its own double through the batch path.
+    getMarks: vi.fn(
+      async (instruments: readonly string[], at: Date): Promise<Map<string, MarkRead>> =>
+        collectMarks((instrument, a) => service.getMark(instrument, a), instruments, at),
+    ),
     getSpreadEstimate: vi.fn(async (_i: string, _a: Date): Promise<number | null> => null),
     getADV: vi.fn(async (_i: string, _w: BarWindow, _a: Date): Promise<number> => 0),
   };
+  return service;
 }
 
 function makePosition(overrides: Partial<OpenPosition> = {}): OpenPosition {
@@ -315,18 +329,27 @@ describe('computePortfolioView — feed staleness (#640)', () => {
   function makeMarketDataObservedAt(
     marks: Record<string, { price: number; observed_at: Date; asset_class?: 'crypto' | 'stocks' }>,
   ): MarketDataService {
+    const getMark = vi.fn(async (instrument: string, _a: Date): Promise<Mark> => {
+      const entry = marks[instrument];
+      if (!entry) throw new Error(`no fixture mark for ${instrument}`);
+      return {
+        price: entry.price,
+        observed_at: entry.observed_at,
+        source: 'test',
+        asset_class: entry.asset_class ?? 'stocks',
+      };
+    });
     return {
       ...makeMarketData({}),
-      getMark: vi.fn(async (instrument: string): Promise<Mark> => {
-        const entry = marks[instrument];
-        if (!entry) throw new Error(`no fixture mark for ${instrument}`);
-        return {
-          price: entry.price,
-          observed_at: entry.observed_at,
-          source: 'test',
-          asset_class: entry.asset_class ?? 'stocks',
-        };
-      }),
+      getMark,
+      // Overridden alongside `getMark`, not inherited from the spread: the
+      // base double's `getMarks` closes over the base's OWN `getMark`, so
+      // leaving it would serve this describe's staleness cases a fresh
+      // fixture mark and pass vacuously.
+      getMarks: vi.fn(
+        async (instruments: readonly string[], at: Date): Promise<Map<string, MarkRead>> =>
+          collectMarks(getMark, instruments, at),
+      ),
     };
   }
 
@@ -432,5 +455,145 @@ describe('computePortfolioView — feed staleness (#640)', () => {
     const view = await computePortfolioView(input);
 
     expect(view.exposure_by_instrument.AAPL).toBe(11_000);
+  });
+});
+
+describe('computePortfolioView — batch mark read (#289 H8)', () => {
+  /**
+   * A market-data double whose batch read answers for some instruments and
+   * fails for others, which is the shape `MarketDataService.getMarks` exists to
+   * express and `getMark` cannot.
+   */
+  function makeBatchMarketData(
+    marks: Record<string, { price: number; observed_at?: Date } | { error: string }>,
+  ): MarketDataService {
+    return {
+      ...makeMarketData({}),
+      getMarks: vi.fn(
+        async (instruments: readonly string[], _a: Date): Promise<Map<string, MarkRead>> =>
+          new Map(
+            instruments.map((instrument): [string, MarkRead] => {
+              const entry = marks[instrument];
+              if (entry === undefined || 'error' in entry) {
+                return [
+                  instrument,
+                  { ok: false, error: new Error(entry?.error ?? `no fixture for ${instrument}`) },
+                ];
+              }
+              return [
+                instrument,
+                {
+                  ok: true,
+                  mark: {
+                    price: entry.price,
+                    observed_at: entry.observed_at ?? asOf,
+                    source: 'test',
+                    asset_class: 'stocks',
+                  },
+                },
+              ];
+            }),
+          ),
+      ),
+    };
+  }
+
+  function twoPositions(): OpenPosition[] {
+    return [
+      makePosition({ instrument: 'AAPL', idempotency_key: 'AAPL-k' }),
+      makePosition({ instrument: 'MSFT', idempotency_key: 'MSFT-k' }),
+    ];
+  }
+
+  it('reads every held instrument in one batch call, not one call per instrument', async () => {
+    const marketData = makeBatchMarketData({ AAPL: { price: 100 }, MSFT: { price: 200 } });
+    const input = makeInput({ positions: twoPositions(), marketData });
+
+    const view = await computePortfolioView(input);
+
+    expect(marketData.getMarks).toHaveBeenCalledTimes(1);
+    expect(marketData.getMark).not.toHaveBeenCalled();
+    expect(view.exposure_by_instrument).toEqual({ AAPL: 10_000, MSFT: 20_000 });
+  });
+
+  /**
+   * The correctness half of #289 H8 (2026-08-16 triage): every consumer of
+   * `exposure_by_instrument` reads an ABSENT key as zero exposure —
+   * `per_asset_cap - (… ?? 0)`, the class and subclass sums, the correlation
+   * gate's `Object.keys()` — so a view built from a partial mark set hands
+   * every cap a bigger envelope than the book justifies, on a live-money path.
+   * There is no partial view that is also a conservative one.
+   */
+  it('refuses to produce a view at all when any mark is missing', async () => {
+    const input = makeInput({
+      positions: twoPositions(),
+      marketData: makeBatchMarketData({ AAPL: { price: 100 }, MSFT: { error: 'feed down' } }),
+    });
+
+    await expect(computePortfolioView(input)).rejects.toThrow(/MSFT/);
+  });
+
+  it('names every unreadable instrument, not just the first', async () => {
+    const input = makeInput({
+      positions: twoPositions(),
+      marketData: makeBatchMarketData({
+        AAPL: { error: 'feed down for AAPL' },
+        MSFT: { error: 'feed down for MSFT' },
+      }),
+    });
+
+    // A rejecting `Promise.all` reported whichever lookup lost the race and
+    // discarded the rest, so an operator saw one instrument and had to re-run
+    // to learn the second was also dark.
+    const error = await computePortfolioView(input).catch((caught: unknown) => caught);
+    expect(String((error as Error).message)).toMatch(/AAPL/);
+    expect(String((error as Error).message)).toMatch(/MSFT/);
+    expect((error as AggregateError).errors).toHaveLength(2);
+  });
+
+  it('folds a STALE mark into the same report as an unreadable one', async () => {
+    const input = makeInput({
+      positions: twoPositions(),
+      marketData: makeBatchMarketData({
+        AAPL: { price: 100, observed_at: new Date(asOf.getTime() - 20 * 60_000) },
+        MSFT: { error: 'feed down for MSFT' },
+      }),
+    });
+
+    // Both are "this book cannot be valued right now"; splitting them across
+    // two passes would make the operator fix one and rediscover the other.
+    const error = await computePortfolioView(input).catch((caught: unknown) => caught);
+    expect(String((error as Error).message)).toMatch(/AAPL/);
+    expect(String((error as Error).message)).toMatch(/MSFT/);
+  });
+
+  it('throws the single failure unwrapped when exactly one instrument failed', async () => {
+    const input = makeInput({
+      positions: [makePosition({ instrument: 'AAPL', idempotency_key: 'AAPL-k' })],
+      marketData: makeBatchMarketData({
+        AAPL: { price: 100, observed_at: new Date(asOf.getTime() - 20 * 60_000) },
+      }),
+    });
+
+    // The named type survives the batching: a caller distinguishing "the feed
+    // is alive and lying" from a transport failure still can, without matching
+    // on message text through an AggregateError wrapper.
+    await expect(computePortfolioView(input)).rejects.toThrow(StaleMarkError);
+  });
+
+  it('asks for each instrument once when two lots hold the same name', async () => {
+    const marketData = makeBatchMarketData({ AAPL: { price: 100 } });
+    const input = makeInput({
+      positions: [
+        makePosition({ instrument: 'AAPL', idempotency_key: 'AAPL-1' }),
+        makePosition({ instrument: 'AAPL', idempotency_key: 'AAPL-2' }),
+      ],
+      marketData,
+    });
+
+    const view = await computePortfolioView(input);
+
+    expect(marketData.getMarks).toHaveBeenCalledWith(['AAPL'], asOf);
+    expect(view.exposure_by_instrument.AAPL).toBe(20_000);
   });
 });

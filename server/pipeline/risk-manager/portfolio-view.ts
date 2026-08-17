@@ -10,8 +10,8 @@
  * The daily-PnL *division* does happen here though (#332), and deliberately:
  * its unrealized term is a mark-to-market over open positions, and this
  * function has already fetched every mark it needs for the exposure math. Doing
- * it in the account provider instead would mean a second round of `getMark`
- * calls for the same instruments at the same instant.
+ * it in the account provider instead would mean a second round of mark reads
+ * for the same instruments at the same instant.
  */
 import { isMarkStale, type MarketDataService } from '../../providers/market-data-service/index.js';
 import type { AssetClass, OpenPosition } from '../../shared/index.js';
@@ -86,14 +86,14 @@ export class StaleMarkError extends Error {
  * Fails closed on a missing mark instead of defaulting to zero.
  *
  * Unreachable today — `marks` is built from exactly the instruments held, and
- * `MarketDataService.getMark` either answers or throws, so the `Promise.all`
- * above has already rejected if any lookup failed. The guard is here for the
- * day that stops being true (an instrument-key normalization mismatch between
- * the store and the data service is the obvious way in): a zero mark silently
- * reports a real position as zero exposure, which understates gross exposure
- * and drawdown and hands Risk a green light for a trade it would otherwise
- * block. For a view whose entire job is bounding risk, "I don't know" must
- * stop the sweep, not read as "nothing there".
+ * `readMarks` below has already thrown if any of them could not be valued. The
+ * guard is here for the day that stops being true (an instrument-key
+ * normalization mismatch between the store and the data service is the obvious
+ * way in): a zero mark silently reports a real position as zero exposure,
+ * which understates gross exposure and drawdown and hands Risk a green light
+ * for a trade it would otherwise block. For a view whose entire job is
+ * bounding risk, "I don't know" must stop the sweep, not read as "nothing
+ * there".
  */
 function markFor(marks: Map<string, number>, instrument: string): number {
   const mark = marks.get(instrument);
@@ -142,6 +142,136 @@ function dailyPnlFor(basis: SessionBasis, unrealized: number): DailyPnl {
   return { known: true, pct: (basis.realized_pnl + unrealized) / basis.open_equity };
 }
 
+/**
+ * Every held instrument's mark, in ONE batch read, or nothing (#289 H8).
+ *
+ * ## Why the whole view fails on a partial mark read
+ *
+ * The alternative the ticket names — produce a view carrying a known-missing
+ * mark and let the cap arithmetic see the hole — was rejected on what the
+ * consumers actually do with `exposure_by_instrument`. Every one of them reads
+ * an ABSENT key as ZERO exposure, and every one of them is thereby more
+ * permissive for it:
+ *
+ * - `perAssetExposureCap` (index.ts): `per_asset_cap - (exposure[i] ?? 0)` —
+ *   an unvalued lot reads as a fully unused per-asset envelope.
+ * - `perSubclassDeploymentCap` (index.ts, ADR-0018 D5 / #721): sums the
+ *   subclass's instruments, so a missing one understates `deployedToSubclass`
+ *   and widens `cap - deployed` — a notional cap against a fraction of current
+ *   equity, on the live-money path, at a 2-minute tick.
+ * - `portfolioGrossExposureCap` (index.ts): same understatement, portfolio-wide.
+ * - the concentration/correlation gate (production/direct-bind.ts) and
+ *   `insufficient_history` (tick-runner.ts) both enumerate `Object.keys()`, so
+ *   an unvalued holding is not merely mis-sized — it is invisible.
+ *
+ * Making the hole visible instead of fatal therefore means changing
+ * `PortfolioView`'s type AND adding a refusal at all five sites, arriving at
+ * the same end state (no order is placed) by five paths instead of one, with
+ * every future consumer free to forget the sixth. A pass that cannot value the
+ * book does not place an order, which is what refusing here already achieves.
+ *
+ * ## What the batch buys beyond one call
+ *
+ * The failure REPORT. The previous `Promise.all` over N `getMark` calls
+ * rejected with whichever lookup lost the race and discarded the others, so a
+ * feed outage across three names showed the operator one. `getMarks` returns
+ * every instrument's outcome, and this function folds the unreadable ones and
+ * the STALE ones (#640, judged here because the class bound lives here and not
+ * in MDS — see `MarketDataService.getMarks`) into a single report naming all
+ * of them.
+ *
+ * A single failure is thrown ON ITS OWN rather than inside an `AggregateError`
+ * of one, so `StaleMarkError`'s "the feed is alive and lying" signal still
+ * reaches a caller matching on the type rather than on message text — the
+ * reason that class exists.
+ */
+async function readMarks(
+  marketData: MarketDataService,
+  classByInstrument: ReadonlyMap<string, AssetClass>,
+  asOf: Date,
+  max_mark_age: Record<AssetClass, number>,
+): Promise<Map<string, number>> {
+  const instruments = [...classByInstrument.keys()];
+  const reads = await marketData.getMarks(instruments, asOf);
+
+  const marks = new Map<string, number>();
+  const failures: Error[] = [];
+
+  for (const instrument of instruments) {
+    const read = reads.get(instrument);
+    if (read === undefined) {
+      // A service that answered the batch but omitted an instrument it was
+      // asked for. Not distinguished from a read failure here: either way this
+      // book has an unvalued position in it.
+      failures.push(
+        new Error(
+          `computePortfolioView: the batch mark read returned no entry for held instrument ` +
+            `'${instrument}'.`,
+        ),
+      );
+      continue;
+    }
+    if (!read.ok) {
+      // Re-wrapped rather than re-thrown as the source threw it, because a
+      // data-source error need not name the instrument it was for ('request
+      // timed out' is a real message), and a single-failure report that cannot
+      // say WHICH held position is unvalued sends the operator looking through
+      // the whole book. The original travels as `cause`, unread.
+      failures.push(
+        new Error(
+          `computePortfolioView: the mark read for held instrument '${instrument}' failed, so ` +
+            'the book cannot be valued.',
+          { cause: read.error },
+        ),
+      );
+      continue;
+    }
+
+    // #640: fail closed on a STALE mark, not merely on a missing one.
+    //
+    // A mark ARRIVING is not evidence the feed is alive — in live it may serve
+    // from a TTL cache, and a halted or thin instrument keeps returning its
+    // last trade indefinitely. Valuing the book off that price is the failure
+    // the Risk Manager exists to prevent: exposure, drawdown and daily PnL are
+    // all computed from these marks, so a frozen price silently freezes the
+    // drawdown breaker at whatever it read last and hands every cap a number
+    // that stopped being true.
+    //
+    // Collected rather than thrown on sight, so one stale name does not hide a
+    // second dark one from the same report.
+    const assetClass = classByInstrument.get(instrument) ?? read.mark.asset_class;
+    if (isMarkStale(read.mark, asOf, max_mark_age[assetClass])) {
+      failures.push(
+        new StaleMarkError(instrument, read.mark.observed_at, asOf, max_mark_age[assetClass]),
+      );
+      continue;
+    }
+
+    marks.set(instrument, read.mark.price);
+  }
+
+  if (failures.length === 1) {
+    throw failures[0];
+  }
+  if (failures.length > 1) {
+    const named = [...classByInstrument.keys()]
+      .filter((instrument) => !marks.has(instrument))
+      .map((instrument) => `'${instrument}'`)
+      .join(', ');
+    throw new AggregateError(
+      failures,
+      `computePortfolioView: ${failures.length} held instrument(s) could not be valued at ` +
+        `${asOf.toISOString()} — ${named}. Refusing to produce a partial view: every consumer of ` +
+        'exposure_by_instrument reads an absent instrument as zero exposure, so a book valued ' +
+        'without these would widen the per-asset, per-subclass and gross caps that size real ' +
+        'orders.',
+      { cause: failures[0] },
+    );
+  }
+
+  return marks;
+}
+
 export async function computePortfolioView(
   input: PortfolioAccountingInput,
 ): Promise<PortfolioView> {
@@ -165,34 +295,7 @@ export async function computePortfolioView(
     positions.map((position) => [position.instrument, position.asset_class]),
   );
 
-  const instruments = [...classByInstrument.keys()];
-  const marks = new Map<string, number>(
-    await Promise.all(
-      instruments.map(async (instrument) => {
-        const mark = await marketData.getMark(instrument, asOf);
-        // #640: fail closed on a STALE mark, not merely on a missing one.
-        //
-        // `getMark` answering is not evidence the feed is alive — in live it
-        // may serve from a TTL cache, and a halted or thin instrument keeps
-        // returning its last trade indefinitely. Valuing the book off that
-        // price is the failure the Risk Manager exists to prevent: exposure,
-        // drawdown and daily PnL are all computed from these marks, so a
-        // frozen price silently freezes the drawdown breaker at whatever it
-        // read last and hands every cap a number that stopped being true.
-        //
-        // Throwing (rather than skipping the instrument) is the same posture
-        // as `markFor` below and for the same reason: a partial view is not a
-        // conservative view. The throw aborts this instrument's pass, which
-        // places no order — the existing fail-closed behaviour on a read that
-        // FAILS, now extended to a read that merely LIES.
-        const assetClass = classByInstrument.get(instrument) ?? mark.asset_class;
-        if (isMarkStale(mark, asOf, max_mark_age[assetClass])) {
-          throw new StaleMarkError(instrument, mark.observed_at, asOf, max_mark_age[assetClass]);
-        }
-        return [instrument, mark.price] as const;
-      }),
-    ),
-  );
+  const marks = await readMarks(marketData, classByInstrument, asOf, max_mark_age);
 
   const exposure_by_instrument: Record<string, number> = {};
   const exposure_by_class = { crypto: 0, stocks: 0 };
