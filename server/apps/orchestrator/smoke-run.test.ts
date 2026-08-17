@@ -22,6 +22,7 @@ import {
   buildSmokeFixtureBars,
   ConstantResponseLlmClient,
   type CryptoEmulationEvidence,
+  type EntrypointFaultGuardEvidence,
   type ExitPathEvidence,
   evaluateSmokeGate,
   FixedAccountStateProvider,
@@ -222,6 +223,7 @@ function healthyGateOptions(
     exitPath?: ExitPathEvidence;
     cryptoEmulation?: CryptoEmulationEvidence;
     loggerResilience?: LoggerResilienceEvidence;
+    entrypointFaultGuards?: EntrypointFaultGuardEvidence;
     thresholdClamp?: ThresholdClampEvidence;
   } = {},
 ) {
@@ -231,7 +233,29 @@ function healthyGateOptions(
     exitPath: overrides.exitPath ?? healthyExitPath(),
     cryptoEmulation: overrides.cryptoEmulation ?? healthyCryptoEmulation(),
     loggerResilience: overrides.loggerResilience ?? healthyLoggerResilience(),
+    entrypointFaultGuards: overrides.entrypointFaultGuards ?? healthyEntrypointFaultGuards(),
     thresholdClamp: overrides.thresholdClamp ?? healthyThresholdClamp(),
+  };
+}
+
+/** What `runEntrypointFaultGuardScenario` (#764) reports when both entrypoints are wired. */
+function healthyEntrypointFaultGuards(
+  overrides: Partial<EntrypointFaultGuardEvidence['entries'][number]>[] = [],
+): EntrypointFaultGuardEvidence {
+  const base: EntrypointFaultGuardEvidence['entries'] = [
+    {
+      name: 'service-api',
+      faultReportedOnStderr: true,
+      continuesOnArbitraryFault: true,
+    },
+    {
+      name: 'supervisor',
+      faultReportedOnStderr: true,
+      continuesOnArbitraryFault: true,
+    },
+  ];
+  return {
+    entries: base.map((entry, index) => ({ ...entry, ...overrides[index] })),
   };
 }
 
@@ -630,6 +654,48 @@ describe('evaluateSmokeGate', () => {
 
     expect(gate.passed).toBe(false);
     expect(gate.failures.some((failure) => failure.includes('unknown state'))).toBe(true);
+  });
+
+  // #764 — the service-api and supervisor entrypoint fault guards, on the
+  // same "each check fails the gate on its own" basis as #714's above.
+  //
+  // There is no test here for "stdout error subscription did not degrade a
+  // destroyed pipe": that outcome is not a boolean the gate reads, it is
+  // `NoListenerBreakablePipe.breakPipe` throwing inside
+  // `runEntrypointFaultGuardScenario` and aborting the whole smoke run before
+  // `evaluateSmokeGate` is ever called — proven directly by the mutation
+  // table in the #764 PR description, not by a fixture flag here.
+
+  it('fails when an entrypoint stdout fault was not reported on stderr', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        entrypointFaultGuards: healthyEntrypointFaultGuards([{}, { faultReportedOnStderr: false }]),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(
+      gate.failures.some(
+        (failure) => failure.includes('supervisor') && failure.includes('not reported on stderr'),
+      ),
+    ).toBe(true);
+  });
+
+  it('fails when an entrypoint fault handler did not continue the process', () => {
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        entrypointFaultGuards: healthyEntrypointFaultGuards([{ continuesOnArbitraryFault: false }]),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(
+      gate.failures.some(
+        (failure) => failure.includes('service-api') && failure.includes('did not continue'),
+      ),
+    ).toBe(true);
   });
 
   it('fails when no GO verdict was recorded, naming the no-go reasons seen', () => {

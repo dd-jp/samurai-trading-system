@@ -191,9 +191,22 @@ import {
   SimulatedClock,
   TokenBucket,
 } from '../../shared/index.js';
+import type {
+  ContinueOnFaultEffects,
+  ErrorStream as FaultGuardErrorStream,
+  StdoutStream as FaultGuardStdoutStream,
+} from '../../shared/stdout-fault-guard.js';
 import { openSharedStore, type SharedStore as SqliteHandle } from '../../shared/store/index.js';
 import type { CostConfig } from '../../tools/backtest/index.js';
 import { CostModelImpl } from '../../tools/backtest/index.js';
+import {
+  installDashboardContinueOnFault,
+  watchDashboardStdout,
+} from '../service-api/fault-guard.js';
+import {
+  installSupervisorContinueOnFault,
+  watchSupervisorStdout,
+} from '../supervisor/fault-guard.js';
 import type { AlertChannels } from './alert-transport.js';
 import {
   LoggingAnalystSkipAlertChannel,
@@ -1729,6 +1742,121 @@ function runLoggerResilienceScenario(): LoggerResilienceEvidence {
   }
 }
 
+/**
+ * What the #764 entrypoint fault guards observed, per entrypoint. Every field
+ * is an EFFECT of driving the REAL exported guard functions
+ * (`service-api/fault-guard.ts`, `supervisor/fault-guard.ts`) against a fake
+ * shaped like the async-`'error'`-only pipe #714 measured — not "the function
+ * exists".
+ */
+export interface EntrypointFaultGuardEvidence {
+  entries: {
+    name: 'service-api' | 'supervisor';
+    /** The stdout fault was reported on stderr — not silently absorbed. */
+    faultReportedOnStderr: boolean;
+    /** An arbitrary uncaught fault was reported and the process was NOT told to exit. */
+    continuesOnArbitraryFault: boolean;
+  }[];
+}
+
+/**
+ * A stdout/stderr stand-in with the same "throw when nothing subscribed"
+ * trick as `BreakablePipe.breakPipe` above (#714): a mutation that stops
+ * calling `watchStdoutErrors` on either stream inside `watchDashboardStdout` /
+ * `watchSupervisorStdout` makes this throw, which aborts `yarn smoke` loudly
+ * rather than passing the gate silently. Also implements `write`, since the
+ * same object stands in for stderr (the reporting channel) as well as stdout.
+ */
+class NoListenerBreakablePipe {
+  private listener?: (error: Error) => void;
+  readonly lines: string[] = [];
+  on(_event: 'error', listener: (error: Error) => void): this {
+    this.listener = listener;
+    return this;
+  }
+  write(line: string): void {
+    this.lines.push(line);
+  }
+  breakPipe(name: string, streamName: 'stdout' | 'stderr'): void {
+    if (this.listener === undefined) {
+      throw new Error(
+        `smoke entrypoint-fault-guard scenario: nothing subscribed to ${name}'s ${streamName} ` +
+          `errors (#764) — a broken pipe would reach uncaughtException${streamName === 'stdout' ? ', same class #714 fixed for the orchestrator' : ' with no report ever landing, defeating the continue-posture at the one moment it exists to cover'}`,
+      );
+    }
+    this.listener(new Error('EPIPE: broken pipe'));
+  }
+}
+
+/**
+ * The #764 entrypoint fault-guard scenario — the pre-soak gate's fifth leg,
+ * alongside #714's `runLoggerResilienceScenario` above.
+ *
+ * #714 fixed the unguarded-stdout class for the orchestrator only, and
+ * captured — rather than fixed — the same class on the service-api and
+ * supervisor entrypoints. #764 fixes those two, with a DIFFERENT
+ * arbitrary-fault decision from the orchestrator's (continue, not stop — see
+ * each `fault-guard.ts`'s own doc for the reasoning). This drives the REAL
+ * exported functions from both modules, exactly as `runLoggerResilienceScenario`
+ * drives the real `buildEntrypointLogger` rather than a stand-in.
+ */
+function runEntrypointFaultGuardScenario(): EntrypointFaultGuardEvidence {
+  function probe(
+    name: 'service-api' | 'supervisor',
+    watchStdout: (
+      stdout: FaultGuardStdoutStream,
+      stderr: FaultGuardStdoutStream & FaultGuardErrorStream,
+    ) => void,
+    install: (effects: ContinueOnFaultEffects) => void,
+  ): EntrypointFaultGuardEvidence['entries'][number] {
+    const stdoutPipe = new NoListenerBreakablePipe();
+    const stderrPipe = new NoListenerBreakablePipe();
+    watchStdout(stdoutPipe, stderrPipe);
+    // A mutation that stops calling `watchStdoutErrors` on stdout inside
+    // `watchStdout` leaves nothing subscribed, so `breakPipe` throws —
+    // propagated rather than caught, aborting this run loudly, matching
+    // `runLoggerResilienceScenario`'s own `BreakablePipe.breakPipe` (#714).
+    // There is deliberately no boolean field recording this outcome: the
+    // throw itself is the enforcement, and a field that can only ever read
+    // `true` when reached is the vacuous-backstop shape #388 warns about
+    // above.
+    stdoutPipe.breakPipe(name, 'stdout');
+    // Same trick for stderr — a mutation that stops subscribing to stderr's
+    // own error event (the fix for the reporting-channel-shares-the-fd gap;
+    // see each fault-guard.ts's "Both streams, not just stdout") leaves
+    // nothing subscribed here too, so this throws just as loudly.
+    stderrPipe.breakPipe(name, 'stderr');
+    const stdoutFaultLines = stderrPipe.lines;
+
+    const arbitraryFaultLines: string[] = [];
+    const handlers = new Map<string, (error: unknown) => void>();
+    install({
+      stderr: { write: (line) => arbitraryFaultLines.push(line as string) },
+      on: (event, handler) => handlers.set(event, handler),
+    });
+    if (!handlers.has('uncaughtException') || !handlers.has('unhandledRejection')) {
+      throw new Error(
+        `smoke entrypoint-fault-guard scenario: ${name} did not subscribe to both ` +
+          'uncaughtException and unhandledRejection (#764)',
+      );
+    }
+    handlers.get('uncaughtException')?.(new Error('smoke-injected fault'));
+
+    return {
+      name,
+      faultReportedOnStderr: stdoutFaultLines.length > 0,
+      continuesOnArbitraryFault: arbitraryFaultLines.length > 0,
+    };
+  }
+
+  return {
+    entries: [
+      probe('service-api', watchDashboardStdout, installDashboardContinueOnFault),
+      probe('supervisor', watchSupervisorStdout, installSupervisorContinueOnFault),
+    ],
+  };
+}
+
 function readLogLines(filePath: string): { message: string; payload?: unknown }[] {
   return readFileSync(filePath, 'utf8')
     .split('\n')
@@ -2247,6 +2375,15 @@ export function evaluateSmokeGate(
      * arbitrary risk limit.
      */
     thresholdClamp: ThresholdClampEvidence;
+    /**
+     * The service-api/supervisor stdout + arbitrary-fault guards' evidence
+     * (#764) — required for the same "compile error, not a silent no-op"
+     * reason the mechanisms above are. #714 fixed the unguarded-stdout class
+     * for the orchestrator only; nothing else in this gate, and no unit test,
+     * drives the two other entrypoints' guards against the actual async
+     * `'error'` event a destroyed pipe delivers.
+     */
+    entrypointFaultGuards: EntrypointFaultGuardEvidence;
   },
 ): SmokeGateResult {
   const failures: string[] = [];
@@ -2399,6 +2536,30 @@ export function evaluateSmokeGate(
         'a soak can find it and STOP. A live-money process that keeps running in an unknown ' +
         'state with open positions is worse than one that dies (#714)',
     );
+  }
+
+  // #764 — the same stdout-write class #714 fixed for the orchestrator,
+  // decided separately for the service-api and supervisor entrypoints.
+  // There is no `stdoutErrorHandled` field here to check: an entrypoint that
+  // stopped subscribing to stdout's error event makes
+  // `runEntrypointFaultGuardScenario`'s `pipe.breakPipe(name)` throw, which
+  // aborts this whole run (`GATE: FAIL`, exit 1) before this loop is ever
+  // reached — a boolean that could only ever read `true` on the path that
+  // reaches it would be the vacuous-backstop shape #388 warns about above.
+  for (const guard of options.entrypointFaultGuards.entries) {
+    if (guard.faultReportedOnStderr !== true) {
+      failures.push(
+        `${guard.name} stdout fault was not reported on stderr — a degrade that is not recorded ` +
+          'anywhere is indistinguishable from a quiet failure (#764)',
+      );
+    }
+    if (!guard.continuesOnArbitraryFault) {
+      failures.push(
+        `${guard.name} arbitrary-fault handler did not continue the process — this entrypoint ` +
+          'decided CONTINUE, not the orchestrator STOP: exiting takes the other half of the ' +
+          'system down through the supervisor rule that either child dying stops the other (#764)',
+      );
+    }
   }
 
   // #638 — the in-code clamp on the last stop ADR-0013 leaves standing.
@@ -3261,6 +3422,10 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     // beside the three scenarios above rather than inside any of them.
     const loggerResilience = runLoggerResilienceScenario();
 
+    // #764: the service-api and supervisor entrypoints' own stdout + fault
+    // guards, driven for real — see runEntrypointFaultGuardScenario's doc.
+    const entrypointFaultGuards = runEntrypointFaultGuardScenario();
+
     // #638: negative probes through every seam that can put a risk threshold
     // into force, against the SHIPPED paper values. Its own in-memory store, so
     // it writes nothing the observations below read back.
@@ -3273,6 +3438,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       llmRateLimiterSnapshot: llmRateLimiter.snapshot(),
       cryptoEmulation,
       loggerResilience,
+      entrypointFaultGuards,
       thresholdClamp,
       exitPath: {
         ...exitPathHarnessResult,
