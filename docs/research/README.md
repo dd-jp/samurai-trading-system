@@ -21,6 +21,7 @@ Rules:
 1. **Never delete.** Archived docs are the audit trail behind live-money decisions and are preserved byte-for-byte apart from a single successor pointer under the title.
 2. **A doc is superseded only by a named successor, and the pointer lives in the doc** — not only here. An archived file must tell a reader who arrives via search or a stale link that it has been replaced.
 3. **New research takes the next free number in its band.** Never reuse a number; never add a date suffix to a live doc.
+   - **The `10`–`19` strategy band is FULL as of 2026-08-17, and rule 3 is already broken once.** [`18-entry-time-conditional-brackets.md`](18-entry-time-conditional-brackets.md) (#708) shares `18` with [`18-intraday-instrument-physics.md`](18-intraday-instrument-physics.md) because there was no free number and it extends that doc's Result 4. Flagged deliberately rather than shipped quietly. **David's ruling needed:** extend the band (e.g. `10`–`19` → `10`–`29`, renumbering MI), or archive docs 10 and 12 — both already **superseded on horizon** per #632 — and reuse the numbers under an explicit exception to "never reuse".
 4. **The Stage 2 proxy KILL does not apply to the hypothesis.** When a Stage 2 pass finally runs on the doc-10 strategy, it is a new doc in the `10`s, not an update to doc 13.
 
 ## Live frontier — read these first
@@ -36,6 +37,7 @@ Rules:
 | **Crypto / LLM** | [`15-crypto-premia-and-llm-layer.md`](15-crypto-premia-and-llm-layer.md) | Carry rejected (FCA), momentum rejected (N=2), LLM shadow-mode only |
 | **Crypto venue fees** | [`19-crypto-venue-fees.md`](19-crypto-venue-fees.md) | RESEARCHED (#671), corrected 2026-08-10 — Crypto.com **Exchange** + 5,000 CRO is the best branch (**+0.605%/trade** vs £0 at base) and the only one independent of volume tier and maker/taker fill. The **App is a different product** and negative-expectancy. Coinbase is a real fallback (+0.25–0.45%/trade). Recorded in ADR-0015; venue gated on #673, fee tier on #667 |
 | **Intraday instrument physics** | [`18-intraday-instrument-physics.md`](18-intraday-instrument-physics.md) | MEASURED (#635) — a broad tracker reaches +1% on 9.8% of days; universe is **movers**, LSE leveraged ETPs. Rests on one 3USL spread quote (#666) |
+| **Entry-time brackets under truncation** | [`18-entry-time-conditional-brackets.md`](18-entry-time-conditional-brackets.md) | MEASURED (#708) — **REJECT** the entry-time/range-conditional schedule: cells are not separable at ~300 trades. Flat-by-close is the large effect (index bracket resolves 19.4% at open entry, 4.7% by t0=60). #704's ladder does **not** beat the single bracket (t = −0.20, paired). #654's ≥8.00 pp bound measures 6.38 pp |
 | **Tick latency economics** | [`41-tick-latency-economics.md`](41-tick-latency-economics.md) | MEASURED (#657/#670) — τ\* = 21.8 min; drift mean-reverts, tail diffuses. ADR-0008's $3.0/day was 3.4x high |
 | **Market intelligence** | [`20-mi-decisions.md`](20-mi-decisions.md) | DECIDED — Alpaca News + GDELT + calendar spine; Massive and Guardian killed |
 | **Data vendors** | [`30-data-vendor-decisions.md`](30-data-vendor-decisions.md) | SETTLED — the whole historical stack runs at £0 |
@@ -45,7 +47,7 @@ Rules:
 
 **Foundations** — [`00-summary.md`](00-summary.md), [`01-full-report-with-sources.md`](01-full-report-with-sources.md), [`02-staged-deployment-plan.md`](02-staged-deployment-plan.md). Strategy-evaluation research and the stage-gated deployment plan. Doc 02 is the source of the kill line every Stage 2 verdict cites.
 
-**Strategy / edge** — `10` hypothesis, `11` measurement (+ `11-trend-signal-measurement.py`), `12` critique, `13` Stage 2 proxy verdict, [`14-backtest-pitfalls.md`](14-backtest-pitfalls.md), `15` crypto/LLM, [`16-risk-debate-finding.md`](16-risk-debate-finding.md) (open finding, not a decision), [`17-universe-manipulation-guardrails.md`](17-universe-manipulation-guardrails.md), [`18-intraday-instrument-physics.md`](18-intraday-instrument-physics.md), [`19-crypto-venue-fees.md`](19-crypto-venue-fees.md).
+**Strategy / edge** — `10` hypothesis, `11` measurement (+ `11-trend-signal-measurement.py`), `12` critique, `13` Stage 2 proxy verdict, [`14-backtest-pitfalls.md`](14-backtest-pitfalls.md), `15` crypto/LLM, [`16-risk-debate-finding.md`](16-risk-debate-finding.md) (open finding, not a decision), [`17-universe-manipulation-guardrails.md`](17-universe-manipulation-guardrails.md), [`18-intraday-instrument-physics.md`](18-intraday-instrument-physics.md), [`18-entry-time-conditional-brackets.md`](18-entry-time-conditional-brackets.md) (second `18` — see rule 3), [`19-crypto-venue-fees.md`](19-crypto-venue-fees.md).
 
 **Market intelligence** — `20` decisions, [`21-mi-ingestion-architecture.md`](21-mi-ingestion-architecture.md), [`22-mi-source-licensing.md`](22-mi-source-licensing.md), [`23-polymarket-source.md`](23-polymarket-source.md).
 

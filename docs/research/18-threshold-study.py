@@ -103,13 +103,31 @@ def reaction_dates(symbol, session_days):
     return react
 
 
-def simulate(sessions, days, lev, tp_pct, sl_pct, cost_pct):
-    """Long at open, TP/SL on ETP terms, else flat at close. Returns net % list."""
+def simulate(sessions, days, lev, tp_pct, sl_pct, cost_pct, t0=0, flatten=None):
+    """Long at open, TP/SL on ETP terms, else flat at close. Returns net % list.
+
+    `t0` offsets the entry by whole minutes past the 09:30 ET open: the position
+    is opened at the OPEN of the first bar at or after 09:30 + t0. `t0 = 0` is
+    therefore `bars[0][1]`, byte-for-byte the entry ADR-0018 was computed on —
+    which is what makes it usable as the regression control (#708).
+
+    `flatten` is an optional `date -> ET minute-of-day` at which a position that
+    has reached neither level is closed at market, paying the full round trip.
+    `None` keeps ADR-0018's behaviour of holding to the session close. The two
+    defaults together mean an unparameterised call is unchanged by this addition.
+    """
     tp_u = tp_pct / lev / 100.0
     sl_u = sl_pct / lev / 100.0
+    start = 9 * 60 + 30 + t0
     out = []
     for d in days:
         bars = sessions[d]
+        if t0 or flatten is not None:
+            end = flatten(d) if flatten is not None else 24 * 60
+            bars = [b for b in bars if start <= b[0] < end]
+            if not bars:
+                HITS["no_entry"] += 1
+                continue
         o = bars[0][1]
         if o <= 0:
             continue
