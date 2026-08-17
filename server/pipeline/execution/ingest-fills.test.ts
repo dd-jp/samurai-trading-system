@@ -516,9 +516,9 @@ describe('ExecutionImpl.ingestFills', () => {
       ]);
       broker.rearmFailure = new Error('venue rejected the OCO order');
       const residualExposureAlerts = makeResidualExposureAlerts();
-      // A real `Logger` can throw — `JsonLogger`'s own primary
-      // `process.stdout.write` is deliberately unguarded (EPIPE on a broken
-      // pipe, orchestrator/logger.ts). `maybeRearmResidual`'s whole contract
+      // A real `Logger` can throw — `JsonLogger` throws once no sink is left
+      // that could record the failure (#714, orchestrator/logger.ts), and an
+      // injected one can throw for any reason. `maybeRearmResidual`'s whole contract
       // is "never throws"; a logging call inside it must not be the thing
       // that breaks that.
       const throwingLogger: Logger = {

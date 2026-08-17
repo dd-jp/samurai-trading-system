@@ -670,10 +670,9 @@ describe('runTickPlan', () => {
       });
 
       it('survives logger.log throwing on the same path — worker still returns a failed outcome, siblings still run', async () => {
-        // A real `Logger` can throw: `JsonLogger`'s own primary
-        // `process.stdout.write` is deliberately unguarded (EPIPE on a
-        // broken pipe), and a rotating file sink can hit a full disk
-        // (rotating-file-sink.ts). Every `logger.log` call on this path must
+        // A real `Logger` can throw: `JsonLogger` degrades a failing sink but
+        // throws once NO sink is left to record the failure on (#714), and an
+        // injected one can throw for any reason at all. Every `logger.log` call on this path must
         // be safe against that, not just the audit write.
         const logger: Logger = {
           log: vi.fn(() => {

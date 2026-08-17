@@ -83,15 +83,18 @@ export class GdeltIngestAgent {
   /**
    * Logs, absorbing a throw from the logger itself.
    *
-   * Not paranoia about a hypothetical: `JsonLogger`'s `process.stdout.write` is
-   * deliberately unguarded (`shared/safe-log.ts` sets out why), so an EPIPE on a
-   * broken pipe throws out of `log`. Everywhere else in the pipeline that would
-   * surface as a rejected promise some caller awaits. Here it would not —
-   * `production.ts` is the only site in the repo that calls an agent as
-   * `void refresh(...)`, and no `process.on('unhandledRejection')` handler is
-   * installed, so on Node 22 an escaped rejection terminates a process that is
-   * meant to run unattended for fourteen days. The "never throws" contract
-   * `refresh` advertises has to cover its own logging or it is not a contract.
+   * Not paranoia about a hypothetical: `JsonLogger` throws when no sink is
+   * left that could record its own failure (#714 — a broken stdout pipe alone
+   * no longer does it, but a broken pipe *plus* a dead file sink does), and an
+   * injected `Logger` can throw for any reason. Everywhere else in the
+   * pipeline that would surface as a rejected promise some caller awaits. Here
+   * it would not — `production.ts` is the only site in the repo that calls an
+   * agent as `void refresh(...)`. #714 installed
+   * `process.on('unhandledRejection')` at the orchestrator entrypoint, and it
+   * deliberately EXITS rather than swallowing (see `installFaultHandlers`), so
+   * an escaped rejection here still ends a run meant to be unattended for
+   * fourteen days. The "never throws" contract `refresh` advertises has to
+   * cover its own logging or it is not a contract.
    */
   private log(entry: LogEntry): void {
     const logger = this.deps.logger;

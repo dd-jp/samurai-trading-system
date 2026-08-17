@@ -115,9 +115,10 @@ export interface ExecutionInput {
    * hand.
    *
    * SAFE INSIDE A CATCH is the hard requirement, not a nicety:
-   * `JsonLogger.log`'s primary `process.stdout.write` is deliberately
-   * unguarded (orchestrator/logger.ts — an EPIPE on a broken pipe is
-   * `JsonLogger`'s problem elsewhere, not here), so every call site on this
+   * `JsonLogger.log` survives a failing sink but still throws in one case —
+   * when NO sink is left that could record the failure (#714,
+   * orchestrator/logger.ts), and any foreign `Logger` may throw for any
+   * reason — so every call site on this
    * field goes through `shared/safe-log.ts`'s `safeLog`/`logCaughtFailure`
    * (the same helper orchestrator/tick-loop.ts's `safeLog` was extracted
    * from, #573) — never `logger.log` directly — so a throwing logger can
