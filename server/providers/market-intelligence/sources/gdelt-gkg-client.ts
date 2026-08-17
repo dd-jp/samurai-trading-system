@@ -40,6 +40,21 @@
  * `sign(toneDelta)` scoring #556 specified are a separate, later step, kept
  * apart on purpose — see that agent's header for why the archive has to lead
  * the signal by a full baseline window.
+ *
+ * ## Shutdown, and why the abort signal stops at the rate limiter (#702)
+ *
+ * `latestBatchUrl` and `fetchBatch` both accept an optional `AbortSignal`, but
+ * it is threaded ONLY into `this.rateLimiter.acquire(signal)`, never into the
+ * request itself. That is a deliberate asymmetry, not a partial job: a poll
+ * parked on the token bucket has done no work and ordered nothing, so
+ * abandoning it costs nothing; a poll already mid-request is the one whose
+ * archive write `GdeltIngestAgent.whenIdle`'s drain exists to order, so it is
+ * left to settle on its own (bounded, as before, by
+ * `AbortSignal.timeout(REQUEST_TIMEOUT_MS)`). Composing the shutdown signal
+ * into the request's own signal via `AbortSignal.any` would abort that
+ * download too — `fetch` cannot distinguish "waiting for headers" from
+ * "streaming the body", so there is no way to compose the two signals without
+ * losing the distinction the whole design turns on.
  */
 
 import { inflateRawSync } from 'node:zlib';
@@ -314,9 +329,13 @@ export class GdeltGkgClient {
    *
    * No credentials anywhere in this module — GDELT is open data, so unlike the
    * Alpaca client there is nothing to check in the constructor.
+   *
+   * `signal` (#702) bounds only the rate-limiter wait, not the request that
+   * follows — see the class doc for why the two are treated differently on
+   * shutdown.
    */
-  async latestBatchUrl(): Promise<string> {
-    await this.rateLimiter.acquire();
+  async latestBatchUrl(signal?: AbortSignal): Promise<string> {
+    await this.rateLimiter.acquire(signal);
     const response = await this.fetchImpl(`${this.baseUrl}/lastupdate.txt`, requestInit());
     if (!response.ok) {
       throw new Error(
@@ -369,8 +388,21 @@ export class GdeltGkgClient {
     return `${base.protocol}//${base.host}${named.pathname}`;
   }
 
-  /** Downloads, inflates, parses and theme-filters one batch file. */
-  async fetchBatch(fileUrl: string): Promise<GdeltGkgBatch> {
+  /**
+   * Downloads, inflates, parses and theme-filters one batch file.
+   *
+   * `signal` (#702), same shape as `latestBatchUrl`: it can abandon this call
+   * while it is parked on the rate limiter, but once the download itself is
+   * under way `signal` is not consulted again. `GdeltIngestAgent.whenIdle`
+   * relies on that: a poll that has actually started downloading is worth
+   * letting finish, because its archive write is the thing the shutdown drain
+   * exists to order — see that class's header and `TokenBucket.acquire`'s doc
+   * comment for the fuller argument. Composing `signal` into the request's own
+   * `AbortSignal.timeout` (via `AbortSignal.any`) was considered and rejected
+   * for exactly that reason: it would cancel a download that is already
+   * mid-flight, which is the one state #702 says must be left alone.
+   */
+  async fetchBatch(fileUrl: string, signal?: AbortSignal): Promise<GdeltGkgBatch> {
     // Pinned here as well as in `latestBatchUrl`, because this method is public
     // and a caller that assembled a URL some other way must not reach a host we
     // never configured. Re-pinning an already-pinned URL is a no-op.
@@ -380,7 +412,7 @@ export class GdeltGkgClient {
       throw new Error(`GdeltGkgClient: cannot read a batch timestamp from ${fileUrl}.`);
     }
 
-    await this.rateLimiter.acquire();
+    await this.rateLimiter.acquire(signal);
     const response = await this.fetchImpl(url, requestInit());
     if (!response.ok) {
       throw new Error(
@@ -414,8 +446,8 @@ export class GdeltGkgClient {
   }
 
   /** Convenience: whatever GDELT published most recently. */
-  async fetchLatestBatch(): Promise<GdeltGkgBatch> {
-    return this.fetchBatch(await this.latestBatchUrl());
+  async fetchLatestBatch(signal?: AbortSignal): Promise<GdeltGkgBatch> {
+    return this.fetchBatch(await this.latestBatchUrl(signal), signal);
   }
 
   /**

@@ -68,6 +68,18 @@ export class GdeltIngestAgent {
   private current: Promise<boolean> | undefined;
 
   /**
+   * Aborts the in-flight poll's rate-limiter wait, if it has one (#702).
+   *
+   * Created alongside `current` and cleared alongside it. `whenIdle` fires
+   * this before awaiting `current` — it is the "signals" half of "signals,
+   * then awaits the settled poll". Firing it when no poll is running (or when
+   * the running poll is already past the rate limiter) is harmless: an
+   * `AbortController` with no listener left to abandon just sets `aborted`
+   * and nothing reads it again.
+   */
+  private currentAbort: AbortController | undefined;
+
+  /**
    * The most recent batch this process has *decoded*, held or not.
    *
    * The archive cursor only knows about batches that produced rows, so a batch
@@ -141,12 +153,15 @@ export class GdeltIngestAgent {
    */
   async refresh(trace_id = 'gdelt-ingest'): Promise<boolean> {
     if (this.current !== undefined) return false;
-    const run = this.poll(trace_id);
+    const abortController = new AbortController();
+    this.currentAbort = abortController;
+    const run = this.poll(trace_id, abortController.signal);
     this.current = run;
     try {
       return await run;
     } finally {
       this.current = undefined;
+      this.currentAbort = undefined;
     }
   }
 
@@ -158,15 +173,28 @@ export class GdeltIngestAgent {
    * store the shutdown has since closed. The write is guarded, so this is a
    * cleaner shutdown rather than a correctness fix, but "degrades to a warn" is
    * a worse contract than "does not happen".
+   *
+   * Bounded rather than merely awaited (#702): the in-flight poll it drains can
+   * be parked on `GdeltGkgClient`'s rate limiter (up to ~5s per token on the
+   * shipped pacing), waiting on a request, or mid-download. Signalling
+   * `currentAbort` before awaiting abandons the FIRST of those instantly — a
+   * parked poll has done no work and ordered nothing — while leaving the other
+   * two to settle on their own, because a poll that already reached the
+   * network is the one whose archive write this drain exists to order.
+   * `GdeltGkgClient`'s header has the fuller argument for why the two are not
+   * treated the same. The abort surfaces through `poll`'s own try/catch as an
+   * `AbortError`, which logs the same "batch fetch failed" warn any other
+   * fetch failure does — no new failure mode.
    */
   async whenIdle(): Promise<void> {
+    this.currentAbort?.abort();
     await this.current?.catch(() => undefined);
   }
 
-  private async poll(trace_id: string): Promise<boolean> {
+  private async poll(trace_id: string, signal: AbortSignal): Promise<boolean> {
     let batch: GdeltGkgBatch;
     try {
-      const url = await this.deps.client.latestBatchUrl();
+      const url = await this.deps.client.latestBatchUrl(signal);
       const candidate = batchTimeFromUrl(url);
       if (candidate === undefined) {
         // Abandoned here rather than fallen through to the download, because
@@ -193,7 +221,7 @@ export class GdeltIngestAgent {
       // the whole saving the cursor exists for.
       const cursor = this.effectiveCursor();
       if (cursor !== undefined && candidate <= cursor) return false;
-      batch = await this.deps.client.fetchBatch(url);
+      batch = await this.deps.client.fetchBatch(url, signal);
     } catch (error) {
       this.logFailure(
         {
