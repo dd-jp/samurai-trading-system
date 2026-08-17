@@ -121,7 +121,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { deflateRawSync } from 'node:zlib';
+import { crc32, deflateRawSync } from 'node:zlib';
 import type {
   AssetClass,
   LlmClient,
@@ -210,6 +210,15 @@ import { SMOKE_TEST_UNIVERSE } from './production.js';
 import type { Logger } from './types.js';
 
 /**
+ * How many of `smokeGdeltClient`'s canned rows the theme filter should keep.
+ *
+ * Named because the gate below and the fixture above are the same fact stated
+ * twice: edit the fixture to carry three rows and a hardcoded `1` in the gate
+ * turns a correct run red, or worse, keeps passing for the wrong reason.
+ */
+const SMOKE_GDELT_EXPECTED_ROWS = 1;
+
+/**
  * A GDELT client serving one canned batch, over a real deflate zip.
  *
  * Built rather than mocked so the gate exercises the WHOLE decode path — zip
@@ -219,19 +228,26 @@ import type { Logger } from './types.js';
  *
  * Two rows: one carrying a watched theme, one not, so the run's archived count
  * is 1 and a filter that has stopped filtering shows up as 2.
- */
-/**
- * How many of `smokeGdeltClient`'s canned rows the theme filter should keep.
  *
- * Named because the gate below and the fixture above are the same fact stated
- * twice: edit the fixture to carry three rows and a hardcoded `1` in the gate
- * turns a correct run red, or worse, keeps passing for the wrong reason.
+ * The `lastupdate.txt` fixture is GDELT's real three-line shape (export /
+ * mentions / gkg, each `size md5 url`), not the one-line stub this used to be
+ * (#713 item 4): `GdeltGkgClient.latestBatchUrl` selects the gkg entry by
+ * `.gkg.csv.zip` suffix out of three lines, per the client's own unit tests,
+ * and a one-line manifest here would still pass smoke if the client
+ * regressed to "parse line N". This does not cover every such regression —
+ * "parse the LAST line" would still happen to select the right entry, since
+ * gkg is listed last both here and in the real manifest — the reordered case
+ * is covered by `gdelt-gkg-client.test.ts`'s "selects the gkg file by
+ * suffix, not by line position", not by smoke.
  */
-const SMOKE_GDELT_EXPECTED_ROWS = 1;
-
 function smokeGdeltClient(): GdeltGkgClient {
   const stamp = '20260101120000';
   const url = `http://data.gdeltproject.org/gdeltv2/${stamp}.gkg.csv.zip`;
+  const lastupdate = [
+    `44212 c2b1cae80b87a07106acb37a837c014d http://data.gdeltproject.org/gdeltv2/${stamp}.export.CSV.zip`,
+    `61450 e86d6493d86819b56d5cc413828825df http://data.gdeltproject.org/gdeltv2/${stamp}.mentions.CSV.zip`,
+    `3370784 f7c5359b15d09d7e931f8338cd6a7e60 ${url}`,
+  ].join('\n');
   const row = (id: string, themes: string, tone: string): string => {
     const columns = new Array<string>(27).fill('');
     columns[0] = id;
@@ -248,11 +264,13 @@ function smokeGdeltClient(): GdeltGkgClient {
   ].join('\n');
 
   const name = Buffer.from(`${stamp}.gkg.csv`);
-  const deflated = deflateRawSync(Buffer.from(csv));
+  const uncompressed = Buffer.from(csv);
+  const deflated = deflateRawSync(uncompressed);
   const header = Buffer.alloc(30);
   header.writeUInt32LE(0x04034b50, 0);
   header.writeUInt16LE(20, 4);
   header.writeUInt16LE(8, 8);
+  header.writeUInt32LE(crc32(uncompressed), 14);
   header.writeUInt16LE(name.length, 26);
   header.writeUInt16LE(0, 28);
   const archive = Buffer.concat([header, name, deflated]);
@@ -260,7 +278,7 @@ function smokeGdeltClient(): GdeltGkgClient {
   return new GdeltGkgClient({
     fetchImpl: (async (input: string | URL) =>
       String(input).endsWith('lastupdate.txt')
-        ? new Response(`123 abc ${url}`)
+        ? new Response(lastupdate)
         : new Response(archive)) as unknown as typeof fetch,
   });
 }

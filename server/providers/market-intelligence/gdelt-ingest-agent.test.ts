@@ -134,13 +134,12 @@ describe('GdeltIngestAgent', () => {
     const agent = new GdeltIngestAgent({ archive, client: stubClient({}), clock });
     await agent.refresh();
 
-    const nextUrl = 'http://data.gdeltproject.org/gdeltv2/20260815154500.gkg.csv.zip';
     const nextTime = new Date('2026-08-15T15:45:00Z');
     const later = new GdeltIngestAgent({
       archive,
       client: stubClient({
-        url: nextUrl,
-        batch: batch([record({ native_id: 'n-1', batch_time: nextTime })], nextUrl),
+        url: LATER_BATCH_URL,
+        batch: batch([record({ native_id: 'n-1', batch_time: nextTime })], LATER_BATCH_URL),
       }),
       clock,
     });
@@ -175,6 +174,57 @@ describe('GdeltIngestAgent', () => {
     const retry = new GdeltIngestAgent({ archive, client: stubClient({}), clock });
     await expect(retry.refresh()).resolves.toBe(true);
     expect(archive.latestUpdatedAt(SOURCE_GDELT)?.getTime()).toBe(BATCH_TIME.getTime());
+    archive.close();
+  });
+
+  it(
+    'warns under its own cause, not "batch fetch failed", when the cursor read hits a closed ' +
+      'store (#713 item 5)',
+    async () => {
+      const archive = new MiArchiveStore();
+      archive.close(); // Simulates shutdown racing a stray poll: the store is
+      // already closed by the time `effectiveCursor()` reads it.
+      const logger = collectingLogger();
+      const client = stubClient({});
+      const agent = new GdeltIngestAgent({ archive, client, clock, logger });
+
+      // Behaviour is unchanged — still resolves false, still does not crash —
+      // but the earlier structure caught this in the fetch try/catch and
+      // logged the fetch's message, blaming a request that never happened.
+      await expect(agent.refresh()).resolves.toBe(false);
+      const warns = logger.entries.filter((entry) => entry.level === 'warn');
+      expect(warns).toHaveLength(1);
+      expect(warns[0]?.message).not.toMatch(/GDELT batch fetch failed/);
+      expect(warns[0]?.message).toMatch(/outside the fetch\/write paths/);
+      // The client must never have been reached: the cursor read happens
+      // before the network call, closed store or not.
+      expect(client.latestBatchUrl).not.toHaveBeenCalled();
+    },
+  );
+
+  it('resolves false and warns rather than crashing when the clock throws (#713 item 6)', async () => {
+    const archive = new MiArchiveStore();
+    const logger = collectingLogger();
+    const throwingClock: Clock = {
+      now: () => {
+        throw new Error('injected clock failure');
+      },
+    };
+    const agent = new GdeltIngestAgent({
+      archive,
+      client: stubClient({ batch: batch([record()]) }),
+      clock: throwingClock,
+      logger,
+    });
+
+    // `production.ts` calls this as `void refresh(...)` with no
+    // `unhandledRejection` handler for this call site — a throwing clock must
+    // degrade the same way a failed fetch does, not reject.
+    await expect(agent.refresh()).resolves.toBe(false);
+    expect(archive.rawRows(SOURCE_GDELT)).toEqual([]);
+    const warns = logger.entries.filter((entry) => entry.level === 'warn');
+    expect(warns).toHaveLength(1);
+    expect(warns[0]?.message).toMatch(/outside the fetch\/write paths/);
     archive.close();
   });
 
