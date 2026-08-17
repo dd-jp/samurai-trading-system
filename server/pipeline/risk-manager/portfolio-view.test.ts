@@ -606,7 +606,9 @@ describe('computePortfolioView — batch mark read (#289 H8)', () => {
     };
     const input = makeInput({ positions: [makePosition({ instrument: 'AAPL' })], marketData });
 
-    await expect(computePortfolioView(input)).rejects.toThrow(/no entry for held instrument 'AAPL'/);
+    await expect(computePortfolioView(input)).rejects.toThrow(
+      /no entry for held instrument 'AAPL'/,
+    );
   });
 
   it('carries the source reason in the thrown message, not only in cause', async () => {

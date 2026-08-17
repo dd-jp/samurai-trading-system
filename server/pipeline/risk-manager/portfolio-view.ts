@@ -156,8 +156,9 @@ function dailyPnlFor(basis: SessionBasis, unrealized: number): DailyPnl {
  *
  * Keep the refusal total. A partial view is not a conservative one: every
  * consumer of `exposure_by_instrument` reads an absent key as ZERO exposure
- * and is more permissive for it — enumerated on `SubclassDeploymentCap` in
- * types.ts, not re-derived here. That makes no order more likely to be placed
+ * and is more permissive for it — enumerated on `MarketDataService.getMarks`
+ * (providers/market-data-service/types.ts), not re-derived here. That makes no
+ * order more likely to be placed
  * on the ENTRY path, which is where this refusal was reasoned about. It is NOT
  * true of the EXIT path, where refusing to value the book suppresses a flatten
  * and one dark name blocks the flatten of the whole book — #841.
