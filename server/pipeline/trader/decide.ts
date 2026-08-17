@@ -38,6 +38,7 @@ import { NO_PRECEDENT_MULTIPLIER, retrieveCosinePrecedent } from './cosine-prece
 import { readSignalDecay } from './early-exit.js';
 import { computeIdempotencyKey, intentSideFor } from './idempotency-key.js';
 import { buildSetupVector } from './setup-vector.js';
+import { resolveSubclassBracket, riskFractionFor } from './subclass-bracket.js';
 import type { AssetClass, TraderConfig, TraderInput } from './types.js';
 
 /** trader-spec.md Module: Side Derivation. `neutral` has no directional edge to act on. */
@@ -486,13 +487,35 @@ async function buildBracket(
   const entry = mark.price;
   if (!Number.isFinite(entry)) return skip('mark_not_finite');
 
+  // ADR-0018 D3/D5 (#739). `bracket === null` is "no universe row declares a
+  // subclass", which is `DEFAULT_UNIVERSE`, `SMOKE_TEST_UNIVERSE` and every
+  // backtest fixture — none of them a leveraged ETP ADR-0018 prices — and those
+  // keep the pre-ADR-0018 ATR geometry below. An armed map with this instrument
+  // missing THROWS rather than falling back (see `resolveSubclassBracket`);
+  // sizing an unclassified name on the other subclass's numbers is the silent
+  // error the ADR's sizing amendment exists to prevent.
+  const bracket = resolveSubclassBracket(instrument, config.subclass_of, config.subclass_brackets);
+
   const volFloor = config.vol_floor_fraction * entry;
   const effectiveVol = Math.max(atr, volFloor);
-  const stopDistance = config.atr_k * effectiveVol;
+  // Under the frozen bracket the stop is a percentage of ENTRY and ATR does not
+  // enter it at all — that is the withdrawal of the ATR-floating geometry
+  // (trader-spec.md "Sizing math"), not a re-parameterisation of it.
+  const stopDistance = bracket === null ? config.atr_k * effectiveVol : bracket.stop_pct * entry;
   if (stopDistance <= 0) return skip('stop_distance_not_positive');
+  const targetDistance =
+    bracket === null ? config.reward_risk_multiple * stopDistance : bracket.take_profit_pct * entry;
 
   const convictionMult = convictionMultiplier(debate.confidence, config.conviction_floor);
-  const baseRiskFraction = maxRiskFor(mark.asset_class, config) * convictionMult;
+  // `riskFractionFor` is D5's deployment converted through D3's frozen stop, so
+  // that `size x entry` lands on `deployment_fraction x equity` — the assertion
+  // that discriminates it from both of the ADR's recorded error modes. The
+  // asset-class multiplier is superseded on this path (trader-spec.md: the
+  // surviving dial is `risk_fraction` keyed on subclass) and cannot express
+  // ADR-0018's split, because both ETP subclasses are the same asset class.
+  const maxRiskFraction =
+    bracket === null ? maxRiskFor(mark.asset_class, config) : riskFractionFor(bracket);
+  const baseRiskFraction = maxRiskFraction * convictionMult;
   const nonConvergedHaircut = debate.converged ? 1 : config.non_converged_haircut;
 
   // The setup this decision represents, embedded once and used twice: to find
@@ -547,7 +570,7 @@ async function buildBracket(
       size,
       entry,
       stop: entry - direction * stopDistance,
-      target: entry + direction * config.reward_risk_multiple * stopDistance,
+      target: entry + direction * targetDistance,
       time_in_force: config.time_in_force[mark.asset_class],
       decision_timestamp: decisionBar,
       metadata: {
@@ -563,6 +586,9 @@ async function buildBracket(
           vol_floor_factor: atr > 0 ? effectiveVol / atr : 1,
           non_converged_haircut: nonConvergedHaircut,
           cosine_multiplier: precedent.cosine_multiplier,
+          // Spread rather than field-by-field so a bracket field added to
+          // config cannot be silently dropped from the audit record.
+          ...(bracket === null ? {} : { frozen_bracket: { ...bracket } }),
         },
         cosine_precedent: {
           neighbor_count: precedent.neighbor_count,

@@ -1,7 +1,11 @@
 /**
  * The indicator-based early exit (#748) — the third clause of the exit model
- * `docs/specs/trader-spec.md` records ("a tranche profit ladder with a hard
- * stop AND an indicator-based early exit"), restored.
+ * `docs/specs/trader-spec.md` records, restored. The spec's exit model is a
+ * single frozen bracket per subclass AND an indicator-based early exit — #708
+ * measured the tranche ladder this comment used to cite and killed it (ladder
+ * 4.52 pp vs single bracket 4.19 pp over 897 OOS sessions, paired t = -0.20,
+ * under the cost model most generous to the ladder). This clause is unaffected
+ * by that: it is orthogonal to how the price legs are shaped.
  *
  * ## What it is for
  *
@@ -113,9 +117,9 @@ export interface EarlyExitConfig {
  * +2.00%/−2.16% bracket against. A vote of `0` is the MODAL state of a quiet
  * intraday tape: RSI mid-range and a MACD histogram near zero is what most
  * bars look like most of the session. Releasing on `0` would therefore fire on
- * most positions in most sessions, converting the truncation cost the ladder
- * exists to manage into a near-certainty and paying a round trip for it each
- * time.
+ * most positions in most sessions, converting the truncation cost the take-
+ * profit leg exists to manage into a near-certainty and paying a round trip for
+ * it each time.
  *
  * `-1` requires both oscillator inputs to net AGAINST the held side — the
  * thesis contradicted rather than merely unconfirmed. That is the reading of

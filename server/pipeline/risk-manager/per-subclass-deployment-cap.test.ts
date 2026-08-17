@@ -31,6 +31,14 @@ const EQUITY_LEG = 750;
 const INDEX_CAP = 0.35 * EQUITY_LEG; // 262.50 — D5's "~£260"
 const SINGLE_STOCK_CAP = 0.25 * EQUITY_LEG; // 187.50 — D5's "~£190"
 
+/**
+ * The equity every case below is decided against. The caps are declared as
+ * FRACTIONS of it (#739), so the cash figures above are what the gate resolves
+ * to at this equity rather than what it stores — which is the whole change: a
+ * frozen amount is a rising fraction of a falling book.
+ */
+const PORTFOLIO_EQUITY = 100_000;
+
 const SUBCLASS_OF: Record<string, InstrumentSubclass> = {
   '3USL': 'index_etp_3x',
   '3UKL': 'index_etp_3x',
@@ -40,9 +48,9 @@ const SUBCLASS_OF: Record<string, InstrumentSubclass> = {
 
 const DEPLOYMENT_CAP: SubclassDeploymentCap = {
   subclass_of: SUBCLASS_OF,
-  cap: {
-    index_etp_3x: INDEX_CAP,
-    single_stock_etp_3x: SINGLE_STOCK_CAP,
+  cap_fraction_of_equity: {
+    index_etp_3x: INDEX_CAP / PORTFOLIO_EQUITY,
+    single_stock_etp_3x: SINGLE_STOCK_CAP / PORTFOLIO_EQUITY,
     crypto: null,
   },
 };
@@ -75,9 +83,12 @@ const NO_CORRELATION: CorrelationEstimate = {
   insufficient_history: [],
 };
 
-const portfolioWith = (exposure: Record<string, number>): PortfolioView => ({
-  equity: 100_000,
-  peak_equity: 100_000,
+const portfolioWith = (
+  exposure: Record<string, number>,
+  equity: number = PORTFOLIO_EQUITY,
+): PortfolioView => ({
+  equity,
+  peak_equity: PORTFOLIO_EQUITY,
   drawdown_pct: 0,
   exposure_by_instrument: exposure,
   exposure_by_class: { crypto: 0, stocks: 0 },
@@ -135,12 +146,13 @@ const decide = (
   // `null` means "declare no envelope". Not `undefined`, which a default
   // parameter cannot distinguish from an omitted argument.
   cap: SubclassDeploymentCap | null = DEPLOYMENT_CAP,
+  equity: number = PORTFOLIO_EQUITY,
 ) =>
   new RiskManagerImpl(configWith(cap ?? undefined)).evaluate({
     trace_id: 'trace-d5',
     intent,
     clock: CLOCK,
-    portfolio: portfolioWith(exposure),
+    portfolio: portfolioWith(exposure, equity),
     breakers: NO_BREAKERS,
     next_breaker_state: NO_PERSISTED_BREAKERS,
     correlation: NO_CORRELATION,
@@ -181,6 +193,21 @@ describe('ADR-0018 D5 deployment envelope', () => {
 
     expect(finalSizeOf(decision)).toBeCloseTo(SINGLE_STOCK_CAP, 6);
     expect(SINGLE_STOCK_CAP).toBeLessThan(INDEX_CAP);
+  });
+
+  it('resolves the envelope against the equity read of THIS decision, not a frozen amount', () => {
+    // The discriminator for #739, and the only assertion a fixed-cash
+    // regression cannot also pass: same intent, same config, two equity reads.
+    // A frozen £262 is 34.9% of a £750 book and 58.2% of a £450 one, so under
+    // the old form exposure rises as a fraction of equity exactly as equity
+    // falls and the drawdown bound stops bounding at the first loss.
+    const full = decide(intentFor('3USL', 10_000), {}, DEPLOYMENT_CAP, PORTFOLIO_EQUITY);
+    const halved = decide(intentFor('3USL', 10_000), {}, DEPLOYMENT_CAP, PORTFOLIO_EQUITY / 2);
+
+    expect(finalSizeOf(full)).toBeCloseTo(INDEX_CAP, 6);
+    expect(finalSizeOf(halved)).toBeCloseTo(INDEX_CAP / 2, 6);
+    expect(finalSizeOf(halved)).toBeLessThan(finalSizeOf(full));
+    expect(halved.binding_constraint).toBe('per_subclass_deployment_cap');
   });
 
   it('nets across every instrument of the subclass, not per position', () => {
@@ -279,7 +306,10 @@ describe('ADR-0018 D5 deployment envelope', () => {
     // to prevent, so the test asserts the throw AND the NaN it replaced.
     const holed = {
       subclass_of: SUBCLASS_OF,
-      cap: { single_stock_etp_3x: SINGLE_STOCK_CAP, crypto: null },
+      cap_fraction_of_equity: {
+        single_stock_etp_3x: SINGLE_STOCK_CAP / PORTFOLIO_EQUITY,
+        crypto: null,
+      },
     } as unknown as SubclassDeploymentCap;
 
     expect(() => decide(intentFor('3USL', 10_000), {}, holed)).toThrow(
@@ -298,7 +328,10 @@ describe('ADR-0018 D5 deployment envelope', () => {
   it('#726: the missing-cap throw carries a structured binding_constraint naming the subclass', () => {
     const holed = {
       subclass_of: SUBCLASS_OF,
-      cap: { single_stock_etp_3x: SINGLE_STOCK_CAP, crypto: null },
+      cap_fraction_of_equity: {
+        single_stock_etp_3x: SINGLE_STOCK_CAP / PORTFOLIO_EQUITY,
+        crypto: null,
+      },
     } as unknown as SubclassDeploymentCap;
 
     try {
@@ -336,7 +369,10 @@ describe('ADR-0018 D5 deployment envelope', () => {
     // every other test here would still pass. This is the one that would fail.
     const holed = {
       subclass_of: SUBCLASS_OF,
-      cap: { single_stock_etp_3x: SINGLE_STOCK_CAP, crypto: null },
+      cap_fraction_of_equity: {
+        single_stock_etp_3x: SINGLE_STOCK_CAP / PORTFOLIO_EQUITY,
+        crypto: null,
+      },
     } as unknown as SubclassDeploymentCap;
     const flatten = { ...intentFor('3USL', 10_000), intent_type: 'exit' as const };
 

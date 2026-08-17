@@ -221,7 +221,7 @@ Four consequences, each a decision the implementation must take rather than inhe
 
 **There is no explicit position-count cap, and there should not be one.** Admission runs until the subclass envelope is reached: the Risk Manager admits an entry while `deployed + next_size <= subclass_cap`, and trims or refuses past it.
 
-**`subclass_cap` is ADR-0018 D5's fraction of CURRENT EQUITY, netted across the subclass — 35% for `index_etp_3x`, 25% for `single_stock_etp_3x`, and `null` (no measured envelope) for crypto.** At ADR-0015's £750 leg that is ~£262.50 and ~£187.50 **at inception only**; the config carries the *fraction* and the composition root resolves it against the live equity read on every decision.
+**`subclass_cap` is ADR-0018 D5's fraction of CURRENT EQUITY, netted across the subclass — 35% for `index_etp_3x`, 25% for `single_stock_etp_3x`, and `null` (no measured envelope) for crypto.** At ADR-0015's £750 leg that is ~£262.50 and ~£187.50 **at inception only**; the config carries the *fraction* and the gate resolves it against `portfolio.equity` — the equity read of the decision being evaluated — on every decision.
 
 **Fixed cash was rejected, and the reason is directional** *(#721, 2026-08-16)*. A frozen £262 is 34.9% of a £750 book, 43.7% of £600 and 58.2% of £450 — exposure rises as a fraction of equity exactly as equity falls, so the drawdown bound stops bounding at the first loss. The fractional form is self-correcting, and it also makes D5's recorded envelope **conservative**: doc 18's ladder rows describe fixed-cash deployments, and since fractional sizing shrinks exposure after a loss, cumulative loss is strictly smaller. **23.1% / 26.2% are upper bounds for this rule, not estimates of it.**
 

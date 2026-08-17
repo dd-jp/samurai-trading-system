@@ -3,6 +3,7 @@ import { type ExecutionConfig, SqliteExecutionStore } from '../../../pipeline/ex
 import type { RiskConfig } from '../../../pipeline/risk-manager/index.js';
 import { CircuitBreakers } from '../../../pipeline/risk-manager/index.js';
 import {
+  ADR_0018_SUBCLASS_BRACKETS,
   DEFAULT_EARLY_EXIT_CONFIG,
   FixtureSetupStore,
   type TraderConfig,
@@ -129,6 +130,10 @@ describe('buildTraderStep', () => {
       conviction_floor: 0.5,
       max_risk_per_trade: 0.01,
       asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
+      subclass_brackets: ADR_0018_SUBCLASS_BRACKETS,
+      // Unarmed: this fixture's universe declares no subclass, so sizing keeps
+      // the pre-ADR-0018 geometry these expectations were written against.
+      subclass_of: {},
       atr_timeframe: '1h',
       atr_lookback: 14,
       atr_k: 2,
@@ -183,11 +188,83 @@ describe('buildTraderStep', () => {
     expect(FAKE_ACCOUNT_STATE.getAccountState).toHaveBeenCalled();
   });
 
+  it("brackets and sizes off ADR-0018's frozen row once the config classifies the instrument", async () => {
+    // The composition-root half of #739: `paperTradingProfile` fills
+    // `subclass_of` from the universe, and THIS is the binding that carries it
+    // into the live decision. A per-subclass table the production step never
+    // consults is this repo's dominant defect shape, so the assertion is on the
+    // emitted intent's geometry and deployment rather than on the config.
+    const config: TraderConfig = {
+      conviction_floor: 0.5,
+      max_risk_per_trade: 0.01,
+      asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
+      subclass_brackets: ADR_0018_SUBCLASS_BRACKETS,
+      subclass_of: { AAPL: 'index_etp_3x' },
+      atr_timeframe: '1h',
+      atr_lookback: 14,
+      atr_k: 2,
+      vol_floor_fraction: 0.002,
+      non_converged_haircut: 1,
+      reward_risk_multiple: 2,
+      min_viable_notional: 10,
+      scale_in_conviction_delta: 0.1,
+      early_exit: DEFAULT_EARLY_EXIT_CONFIG,
+      time_in_force: { crypto: 'gtc', stocks: 'day' },
+      flatten_before_close_ms: 5 * 60 * 1_000,
+    };
+    const step = buildTraderStep({
+      marketData: FAKE_MARKET_DATA,
+      circuitBreakers: new CircuitBreakers({
+        daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+        max_drawdown_pct: 0.2,
+        max_consecutive_losses: 5,
+        volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+        auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+      }),
+      accountState: FAKE_ACCOUNT_STATE,
+      volatility: FAKE_VOLATILITY,
+      getOpenPositions: async () => NO_POSITIONS,
+      maxMarkAge: TEST_MAX_MARK_AGE,
+      mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
+      config,
+      setupStore: new FixtureSetupStore(),
+      getExitFillSizes: async () => new Map<string, number>(),
+      sessionCalendars: {
+        crypto: new AlwaysOpenCalendar(),
+        stocks: new UsEquityRegularHoursCalendar(),
+      },
+    });
+
+    const intent = await step({
+      trace_id: TRACE_ID,
+      instrument: 'AAPL',
+      debate: makeDebate({ confidence: 1 }),
+      clock: CLOCK,
+    });
+
+    if (intent === null) throw new Error('expected an entry intent');
+    // Mark is 100 and the index row is +2.00% / -2.16%.
+    expect(intent.stop).toBeCloseTo(97.84, 9);
+    expect(intent.target).toBeCloseTo(102, 9);
+    // Equity is the fake account's $10,000, and the no-precedent haircut is
+    // 0.75x — stated rather than divided out, so the number below is the whole
+    // deployment this binding actually produces: 0.35 x 10,000 x 0.75.
+    expect(intent.size * intent.entry).toBeCloseTo(0.35 * 10_000 * 0.75, 6);
+    expect(intent.metadata.sizing.frozen_bracket?.stop_pct).toBe(0.0216);
+  });
+
   it('returns null for a non-converged, low-confidence debate (no behavior change to decide())', async () => {
     const config: TraderConfig = {
       conviction_floor: 0.9,
       max_risk_per_trade: 0.01,
       asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
+      subclass_brackets: ADR_0018_SUBCLASS_BRACKETS,
+      // Unarmed: this fixture's universe declares no subclass, so sizing keeps
+      // the pre-ADR-0018 geometry these expectations were written against.
+      subclass_of: {},
       atr_timeframe: '1h',
       atr_lookback: 14,
       atr_k: 2,
@@ -250,6 +327,10 @@ describe('buildTraderStep', () => {
       conviction_floor: 0.5,
       max_risk_per_trade: 0.01,
       asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
+      subclass_brackets: ADR_0018_SUBCLASS_BRACKETS,
+      // Unarmed: this fixture's universe declares no subclass, so sizing keeps
+      // the pre-ADR-0018 geometry these expectations were written against.
+      subclass_of: {},
       atr_timeframe: '1h',
       atr_lookback: 14,
       atr_k: 2,
@@ -375,6 +456,10 @@ describe('buildTraderStep capital ceiling (#511)', () => {
     conviction_floor: 0.5,
     max_risk_per_trade: 0.01,
     asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
+    subclass_brackets: ADR_0018_SUBCLASS_BRACKETS,
+    // Unarmed: this fixture's universe declares no subclass, so sizing keeps
+    // the pre-ADR-0018 geometry these expectations were written against.
+    subclass_of: {},
     atr_timeframe: '1h',
     atr_lookback: 14,
     atr_k: 2,
@@ -505,6 +590,10 @@ describe('buildTraderSteps exit_reason persistence (#748)', () => {
     conviction_floor: 0.5,
     max_risk_per_trade: 0.01,
     asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
+    subclass_brackets: ADR_0018_SUBCLASS_BRACKETS,
+    // Unarmed: this fixture's universe declares no subclass, so sizing keeps
+    // the pre-ADR-0018 geometry these expectations were written against.
+    subclass_of: {},
     atr_timeframe: '1h',
     atr_lookback: 14,
     atr_k: 2,
@@ -598,6 +687,10 @@ describe('buildTraderStep diagnostic escalation (#698, #710)', () => {
     conviction_floor: 0.5,
     max_risk_per_trade: 0.01,
     asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
+    subclass_brackets: ADR_0018_SUBCLASS_BRACKETS,
+    // Unarmed: this fixture's universe declares no subclass, so sizing keeps
+    // the pre-ADR-0018 geometry these expectations were written against.
+    subclass_of: {},
     atr_timeframe: '1h',
     atr_lookback: 14,
     atr_k: 2,
@@ -866,7 +959,7 @@ describe('buildRiskStep', () => {
       ...RISK_CONFIG,
       per_subclass_deployment_cap: {
         subclass_of: {},
-        cap: { index_etp_3x: 1_000, single_stock_etp_3x: 1_000, crypto: null },
+        cap_fraction_of_equity: { index_etp_3x: 0.1, single_stock_etp_3x: 0.1, crypto: null },
       },
     };
 

@@ -452,18 +452,24 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
   // `NaN`, and `NaN < config.min_viable_size` is false too — so the intent
   // clears both this gate and the min-viable floor with no envelope at all.
   // That is the exact failure D5 exists to prevent, arriving silently.
-  const cap: number | null | undefined = declared.cap[subclass];
-  if (cap === undefined) {
+  const capFraction: number | null | undefined = declared.cap_fraction_of_equity[subclass];
+  if (capFraction === undefined) {
     throw new PerSubclassCapUnresolvableError(
       `per_subclass_deployment_cap declares ${intent.instrument} as '${subclass}' but carries no ` +
-        `cap for that subclass (known: ${Object.keys(declared.cap).join(', ') || 'none'}). ADR-0018 ` +
+        `cap for that subclass (known: ` +
+        `${Object.keys(declared.cap_fraction_of_equity).join(', ') || 'none'}). ADR-0018 ` +
         `D5's envelope cannot be resolved without one, and the alternative to this throw is sizing ` +
         `the position with no envelope at all. Add the subclass to the cap record.`,
       intent.instrument,
       `per_subclass_deployment_cap:no_cap_for_subclass:${subclass}`,
     );
   }
-  if (cap === null) return null;
+  if (capFraction === null) return null;
+
+  // Resolved against the equity read of THIS decision (#739), which is the
+  // whole point of the fractional form: a frozen cash cap is a rising fraction
+  // of a falling book, so it stops bounding drawdown at the first loss.
+  const cap = capFraction * portfolio.equity;
 
   const deployedToSubclass = Object.entries(portfolio.exposure_by_instrument)
     .filter(([instrument]) => declared.subclass_of[instrument] === subclass)
