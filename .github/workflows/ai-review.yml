@@ -17,6 +17,38 @@ permissions:
   contents: read
   pull-requests: write
 
+# Keyed on the resolved PR number (not run id) so a manual dispatch racing a
+# `synchronize` on the same PR — or two dispatches — share ONE group instead
+# of both running to completion in parallel and both posting (#610): with
+# slices taking 300-430s each, a simultaneous duplicate is real model spend
+# and a duplicated review body.
+#
+# Deliberately at WORKFLOW level, not job level. The review job below has a
+# 2-leg matrix (nous-deepseek, nous-kimi); a job-level group whose key omits
+# matrix.* evaluates to the SAME string for both legs of one run, so it would
+# put both legs of a single run in one group and serialize/cancel-cross them
+# against each other — halving review coverage while reading like a guard.
+# The duplication this exists to stop is the whole RUN, not one leg of it.
+#
+# `github.event.pull_request.number` and `github.event.inputs.pr_number` both
+# stringify to the same PR number, so a `pull_request` run and a
+# `workflow_dispatch` run for the same PR land in the same group.
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  # Cancel a stale run only when a FRESH `pull_request` event supersedes it:
+  # a new push makes the in-progress review of an old commit obsolete, and
+  # the fresh run reproduces whatever failure signal (#567's
+  # "no usable review", or this run's own review) still applies. Never
+  # cancel on `workflow_dispatch` — that trigger is an explicit, deliberate
+  # request (often for a MERGED or CLOSED PR, per the comment on the trigger
+  # below), and cancelling it would both waste spend already committed and
+  # silently drop the request nobody would think to retry. A
+  # `workflow_dispatch` run still queues behind whatever is in-flight in the
+  # same group rather than running alongside it, which is what actually
+  # prevents the concurrent double-spend/double-post #610 exists to stop —
+  # queueing does that without cancelling anything.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   review:
     runs-on: ubuntu-latest
