@@ -184,10 +184,19 @@ neither figure should be used to judge an individual cell — that is what the p
 **Conditioning the bracket buys nothing. This is the study's result, and it is not a
 close call.** Read the `vs bar` column down both tables. Across all 42 rows the
 re-solved bracket beats the declared one by at most **0.56 pp** (index `t0 = 45`
-quiet), the median improvement is under 0.1 pp, and eight cells come out *worse*. Set
-that against the standard errors in the neighbouring column — 0.44 to 2.16 pp. The
-entire effect #708 proposed to harvest is an order of magnitude smaller than the noise
-on measuring it, at every offset, in every tercile, on both subclasses.
+quiet), the median improvement is under 0.1 pp, and **11 of the 42 cells come out
+worse** — 5 on the index, 6 on single-stock. Against a bar of roughly 4 pp, on both
+subclasses, that is a rounding error with no consistent sign.
+
+The claim here is economic, not statistical, and deliberately so. `vs bar` is a
+**paired** quantity — the two brackets are priced on identical sessions — so the `± SE`
+column beside it, which is the unpaired error on the cell edge alone, is **not** its
+noise level and is not used as one. A paired standard error would be much smaller, and
+some of these 0.3–0.5 pp differences might well be distinguishable from zero. It would
+not matter: an effect of half a point against a four-point bar, changing sign from cell
+to cell, is not a bracket schedule worth building whatever its t-statistic. (Where a
+paired test *does* decide something — the ladder — it is computed properly; see the
+rider section, t = −0.20.)
 
 **The large tercile spread is real, and it is not the brackets.** The spread is
 genuinely striking — single-stock `t0 = 15` runs quiet 6.40, normal 6.85, busy 0.22;
@@ -195,7 +204,10 @@ genuinely striking — single-stock `t0 = 15` runs quiet 6.40, normal 6.85, busy
 like a strong conditional signal, and an earlier draft of this document read it that
 way. But the `bar` column tracks it almost exactly: 6.42 / 6.94 / −0.09 at `t0 = 15`,
 8.83 against 1.20 at `t0 = 30`. **The declared bracket is just as cheap on those
-sessions.** Busy sessions need less accuracy edge because they travel further and so
+sessions.** (That `t0 = 15` busy bar is **−0.09 pp** — formally a negative required
+edge, meaning the declared bracket has positive expectancy on those 312 sessions before
+any signal at all. It is within noise of zero and should not be read as a free lunch;
+it is printed as measured rather than floored at zero.) Busy sessions need less accuracy edge because they travel further and so
 lose less to the flatten — they resolve 48.7% against quiet's 36.8% at `t0 = 15` — and
 that is [#635](https://github.com/dd-jp/samurai-trading-system/issues/635)'s result,
 already known, not a bracket schedule. Re-solving the stop on top of it adds nothing.
@@ -333,8 +345,8 @@ sessions at its own offset — which is both the fairer test and, on the single-
 subclass, the harsher one.
 
 - **Both subclasses: the conditioning buys nothing.** `vs bar` never exceeds 0.56 pp
-  in either direction across all 42 rows, against standard errors of 0.44–2.16, and
-  eight cells are actively worse. The sharpest single measurement is the index
+  in either direction across all 42 rows, against a bar of roughly 4 pp, and **11 of
+  the 42 cells are actively worse**. The sharpest single measurement is the index
   `t0 = 0` pooled cell, which re-solves the stop to −2.31% and **buys 0.08 pp** (4.11
   against 4.19) on an SE of roughly 0.7. Nothing in the grid does better. This
   conclusion does not depend on cell size: it holds at the ~900-trade pooled marginals
