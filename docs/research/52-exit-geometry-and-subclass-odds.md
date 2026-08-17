@@ -119,8 +119,9 @@ rarely fire, degenerating into hold-to-close").
 **The trap is mostly index-side.** A 3× single-stock tape is volatile enough that resolve
 rates stay high even at narrow brackets — TSLA, MSTR and PLTR resolve ~100% at +1.0%,
 where SPY resolves 67.7% and collapses from there. **The degeneracy risk is a property of
-the subclass, not of the width in the abstract**, which is a reason the two subclasses
-need separate geometry that is independent of the reasons D3 already gives.
+the subclass, not of the width in the abstract**. D3 already prescribes separate geometry
+per subclass; this run neither adds a reason for that nor argues against it, it only
+records that the resolve rates behave differently by subclass.
 
 ## 7. Result — the design axes, measured at matched width
 
@@ -162,7 +163,12 @@ against neutral's 4.11 on SPY) — that entire effect was the denominator.
 | PLTR | 1.29 | 1.77 | frozen better by 0.48 |
 
 Five of seven marginally favour floating, two favour frozen, **every difference is well
-inside the ~1.2 pp standard errors**, and the median gap is ~0.15 pp. Uncontrolled, the
+inside the ~1.2 pp standard errors**, and the median gap is ~0.15 pp. Two caveats on that
+tally, both pointing the same way. QQQ's width-matched `k` solved to 0.502, so its matched
+row is not independent evidence — it is the k=0.50 probe under a different label. And that
+near-coincidence is itself instructive: k=0.500 scores 2.43 and k=0.502 scores 2.51, so a
+0.4% change in the stop moves the bar 0.08 pp, which is the same order as most of the
+"differences" in the table above. Read the 5/7 as a coin, not as a direction. Uncontrolled, the
 same comparison looked decisive for ATR (3.27 against frozen's 4.19 on SPY) — again purely
 width.
 
