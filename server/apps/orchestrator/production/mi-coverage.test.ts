@@ -1,18 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { MarketContext } from '../../../providers/market-intelligence/index.js';
-import type { Logger, LogEntry } from '../../../shared/index.js';
+import type { LogEntry, Logger } from '../../../shared/index.js';
 import {
   checkMiCoverage,
   hasCoverageFor,
-  MiCoverageMonitor,
-  subclassFor,
-  UNCLASSIFIED_SUBCLASS,
   type MiCoverageAlert,
   type MiCoverageAlertChannel,
   type MiCoverageContextSource,
   type MiCoverageEvent,
+  MiCoverageMonitor,
   type MiCoverageTelemetry,
+  subclassFor,
+  UNCLASSIFIED_SUBCLASS,
 } from './mi-coverage.js';
 
 const NOW = new Date('2026-08-17T09:00:00Z');
@@ -386,7 +386,7 @@ describe('checkMiCoverage', () => {
   });
 
   it('never throws when no alert channel is configured at all', async () => {
-    const { deps } = buildDeps({ covered: false, alertChannel: undefined });
+    const { deps } = buildDeps({ covered: false });
     // Simulate the "absent channel" composition-root state directly.
     (deps as { alertChannel: MiCoverageAlertChannel | undefined }).alertChannel = undefined;
 

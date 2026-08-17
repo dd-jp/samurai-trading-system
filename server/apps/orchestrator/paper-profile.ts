@@ -117,8 +117,8 @@ import {
 } from './production.js';
 import { DEFAULT_UNIVERSE } from './scheduler.js';
 import { SqliteDailyEquityStore } from './sqlite-daily-equity-store.js';
-import { subclassOfUniverse } from './types.js';
 import type { UniverseInstrument } from './types.js';
+import { subclassOfUniverse } from './types.js';
 
 // Re-exported for existing importers (#739's "ONE derivation" moved to
 // `types.ts` in #752 to break a `production.ts` <-> `paper-profile.ts` import

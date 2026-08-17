@@ -57,7 +57,7 @@ import type {
 } from '../../../pipeline/analysts/index.js';
 import { type Logger, sanitizeLogText } from '../../../shared/index.js';
 import type { TickSteps } from '../types.js';
-import { checkMiCoverage, type CheckMiCoverageDeps } from './mi-coverage.js';
+import { type CheckMiCoverageDeps, checkMiCoverage } from './mi-coverage.js';
 
 /**
  * A run of consecutive quorum skips on one instrument (#431, analysts-spec.md

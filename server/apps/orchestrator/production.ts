@@ -203,7 +203,6 @@ import { JsonLogger } from './logger.js';
 import type { OrphanGoVerdict, OrphanVerdictScanner } from './orphan-verdict-scan.js';
 import { AlpacaAccountStateProvider } from './production/account-state.js';
 import { buildAnalystsStep } from './production/analysts-adapter.js';
-import { MiCoverageMonitor } from './production/mi-coverage.js';
 import { buildDebateStep } from './production/debate-adapter.js';
 import {
   buildExecutionStep,
@@ -217,6 +216,7 @@ import {
   type PortfolioSnapshot,
 } from './production/direct-bind.js';
 import { assertFlattenWindowCoversTickInterval } from './production/flatten-tick-coupling.js';
+import { MiCoverageMonitor } from './production/mi-coverage.js';
 import { withOnTradeClose } from './production/on-trade-close-hookup.js';
 import { withFlattenTail } from './production/stocks-tick-window.js';
 import { MarketDataVolatilityReadingProvider } from './production/volatility-reading-provider.js';
@@ -226,8 +226,8 @@ import { SqliteDailyEquityStore } from './sqlite-daily-equity-store.js';
 import { SqliteSessionEquityStore } from './sqlite-session-equity-store.js';
 import { runTickPlan } from './tick-loop.js';
 import { SequentialTickRunner } from './tick-runner.js';
-import { subclassOfUniverse } from './types.js';
 import type { Logger, Scheduler, TickRunner, TickSteps, UniverseInstrument } from './types.js';
+import { subclassOfUniverse } from './types.js';
 
 /**
  * The first paper run's universe (ADR-0004 §4, orchestrator-spec.md story
