@@ -245,13 +245,11 @@ function healthyEntrypointFaultGuards(
   const base: EntrypointFaultGuardEvidence['entries'] = [
     {
       name: 'service-api',
-      stdoutErrorHandled: true,
       faultReportedOnStderr: true,
       continuesOnArbitraryFault: true,
     },
     {
       name: 'supervisor',
-      stdoutErrorHandled: true,
       faultReportedOnStderr: true,
       continuesOnArbitraryFault: true,
     },
@@ -660,21 +658,13 @@ describe('evaluateSmokeGate', () => {
 
   // #764 — the service-api and supervisor entrypoint fault guards, on the
   // same "each check fails the gate on its own" basis as #714's above.
-  it('fails when an entrypoint stdout error subscription did not degrade a destroyed pipe', () => {
-    const gate = evaluateSmokeGate(
-      transactedObservations(),
-      healthyGateOptions({
-        entrypointFaultGuards: healthyEntrypointFaultGuards([{ stdoutErrorHandled: false }]),
-      }),
-    );
-
-    expect(gate.passed).toBe(false);
-    expect(
-      gate.failures.some(
-        (failure) => failure.includes('service-api') && failure.includes('did not degrade'),
-      ),
-    ).toBe(true);
-  });
+  //
+  // There is no test here for "stdout error subscription did not degrade a
+  // destroyed pipe": that outcome is not a boolean the gate reads, it is
+  // `NoListenerBreakablePipe.breakPipe` throwing inside
+  // `runEntrypointFaultGuardScenario` and aborting the whole smoke run before
+  // `evaluateSmokeGate` is ever called — proven directly by the mutation
+  // table in the #764 PR description, not by a fixture flag here.
 
   it('fails when an entrypoint stdout fault was not reported on stderr', () => {
     const gate = evaluateSmokeGate(

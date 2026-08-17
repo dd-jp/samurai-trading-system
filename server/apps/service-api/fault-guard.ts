@@ -33,6 +33,24 @@
  * left for a follow-up, in the spirit of #714 capturing this ticket rather
  * than scope-creeping its own fix.
  *
+ * ## Both streams, not just stdout
+ *
+ * The realistic failure this ticket targets — a closed terminal, a detached
+ * tmux session torn down from under the process — does not usually destroy
+ * only stdout. `JsonLogger.lastResort` (logger.ts, #714) already notes stderr
+ * "most often shares the very pipe or terminal that stdout just lost." Both
+ * `watchDashboardStdout`'s own report and `installDashboardContinueOnFault`'s
+ * fault report write to stderr; if stderr is dead too and nothing subscribes
+ * to *its* `'error'` event, that write becomes a second, unguarded async
+ * fault — an uncaughtException with no handler installed for it, defeating
+ * the continue-posture at the one moment it exists to cover. Confirmed
+ * empirically (parent destroys both `child.stdout` and `child.stderr`
+ * mid-stream): with only a stdout listener, the process died after 4 writes
+ * on the stderr report's own async EPIPE; with a stderr listener added
+ * (a no-op — there is nowhere left to report to), the process ran to
+ * completion. So `watchDashboardStdout` subscribes to stderr's `'error'`
+ * event too, with a no-op handler.
+ *
  * ## Two guards, installed at two different times (deliberately)
  *
  * `watchDashboardStdout` must be installed **immediately**, before the first
@@ -64,11 +82,22 @@ import {
  * than reaching `uncaughtException` — see the module doc's measurement.
  * Reports once, on stderr, that console output is lost; HTTP responses do not
  * go through stdout and are unaffected.
+ *
+ * Also subscribes to stderr's own `'error'` event, with a no-op handler —
+ * see the module doc's "Both streams, not just stdout". stderr is the
+ * reporting channel above; if it is dead too there is nowhere left to report
+ * that fault to, but the subscription alone is enough to stop it reaching
+ * `uncaughtException`.
  */
 export function watchDashboardStdout(
   stdout: StdoutStream = process.stdout,
-  stderr: ErrorStream = process.stderr,
+  stderr: StdoutStream & ErrorStream = process.stderr,
 ): void {
+  watchStdoutErrors(stderr, () => {
+    // Nowhere left to report to — see the module doc. The subscription
+    // itself is the entire mechanism.
+  });
+
   let reported = false;
   watchStdoutErrors(stdout, (error) => {
     if (reported) return;

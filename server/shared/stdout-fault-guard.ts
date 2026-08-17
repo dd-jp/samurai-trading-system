@@ -39,6 +39,18 @@
  * stdout's own `'error'` event, so what reaches its callback is a stdout
  * fault by construction. `installContinueOnFault` below classifies nothing
  * either: every arbitrary fault that reaches it is reported the same way.
+ *
+ * ## This module has no opinion on which stream — call it for both
+ *
+ * `watchStdoutErrors` is generic over anything shaped like `StdoutStream`, not
+ * hard-wired to `process.stdout`. Both entrypoints call it a second time
+ * against `process.stderr` with a no-op handler, because stderr is where this
+ * module's own fault reports land, and on the failure this ticket targets
+ * (closed terminal, torn-down detached tmux) stdout and stderr frequently
+ * share the same underlying fd — see each entrypoint's `fault-guard.ts` for
+ * the empirical confirmation. A no-op subscription is still the entire fix:
+ * Node stops treating the event as uncaught the moment a listener exists,
+ * regardless of what it does.
  */
 
 /** The subset of `process.stdout` this module needs to subscribe to. */

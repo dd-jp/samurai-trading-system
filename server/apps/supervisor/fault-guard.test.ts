@@ -19,22 +19,63 @@ class FakeStdout {
   }
 }
 
+/**
+ * Same shape as `FakeStdout`, plus `write` — stands in for `process.stderr`,
+ * which is both the reporting channel and (per the module doc's "Both
+ * streams, not just stdout") a stream that must itself have an `'error'`
+ * listener so a dead stderr degrades instead of reaching `uncaughtException`.
+ */
+class FakeStderr {
+  private listener?: (error: Error) => void;
+  readonly lines: string[] = [];
+  on(_event: 'error', listener: (error: Error) => void): this {
+    this.listener = listener;
+    return this;
+  }
+  write(line: string): void {
+    this.lines.push(line);
+  }
+  emitError(error: Error): void {
+    if (this.listener === undefined) {
+      throw new Error(
+        'smoke: nothing subscribed to supervisor stderr errors — watchSupervisorStdout stopped ' +
+          'calling watchStdoutErrors on stderr (#764), so a dead stderr report would itself ' +
+          'reach uncaughtException',
+      );
+    }
+    this.listener(error);
+  }
+}
+
 describe('watchSupervisorStdout', () => {
   it('degrades a destroyed stdout pipe instead of throwing, and reports once on stderr', () => {
     const stdout = new FakeStdout();
-    const stderrLines: string[] = [];
-    watchSupervisorStdout(stdout, { write: (line) => stderrLines.push(line as string) });
+    const stderr = new FakeStderr();
+    watchSupervisorStdout(stdout, stderr);
 
     expect(() => stdout.emitError(new Error('EPIPE'))).not.toThrow();
     stdout.emitError(new Error('EPIPE'));
 
-    expect(stderrLines).toHaveLength(1);
-    expect(stderrLines[0]).toContain('supervisor: stdout write failed');
+    expect(stderr.lines).toHaveLength(1);
+    expect(stderr.lines[0]).toContain('supervisor: stdout write failed');
   });
 
   it('is provable by removal: nothing subscribed raises on the fake', () => {
     const stdout = new FakeStdout();
     expect(() => stdout.emitError(new Error('EPIPE'))).toThrow(/nothing subscribed/);
+  });
+
+  it('also degrades a destroyed stderr — the reporting channel itself is guarded', () => {
+    const stdout = new FakeStdout();
+    const stderr = new FakeStderr();
+    watchSupervisorStdout(stdout, stderr);
+
+    expect(() => stderr.emitError(new Error('EPIPE'))).not.toThrow();
+  });
+
+  it('is provable by removal: an unguarded stderr raises on the fake', () => {
+    const stderr = new FakeStderr();
+    expect(() => stderr.emitError(new Error('EPIPE'))).toThrow(/nothing subscribed/);
   });
 });
 

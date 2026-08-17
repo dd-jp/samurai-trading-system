@@ -41,6 +41,20 @@
  * `kill -9`, matching the escape hatch `supervisor.ts` already documents for
  * a stuck drain; a supervisor that is simply gone is not.
  *
+ * ## Both streams, not just stdout
+ *
+ * The realistic failure this ticket targets — a closed terminal, a detached
+ * tmux session torn down from under the process — does not usually destroy
+ * only stdout; stderr shares the same fd more often than not
+ * (`JsonLogger.lastResort`, logger.ts, #714). Both `watchSupervisorStdout`'s
+ * own report and `installSupervisorContinueOnFault`'s fault report write to
+ * stderr; an unguarded, also-dead stderr turns that report itself into a
+ * second async fault with no handler, undoing the continue-posture. Confirmed
+ * empirically the same way as the dashboard's guard (see its module doc) —
+ * a stdout-only listener died 4 writes in on the stderr report's own EPIPE; a
+ * no-op stderr listener ran to completion. So `watchSupervisorStdout`
+ * subscribes to stderr's `'error'` event too, with a no-op handler.
+ *
  * ## Two guards, installed at two different times (deliberately)
  *
  * `watchSupervisorStdout` must be installed **immediately**, before the first
@@ -71,11 +85,19 @@ import {
  * Reports once, on stderr, that console output is lost; the children's own
  * stdio is `inherit`, so their output goes straight to the real fds and is
  * unaffected by this process's own stream dying.
+ *
+ * Also subscribes to stderr's own `'error'` event, with a no-op handler —
+ * see the module doc's "Both streams, not just stdout".
  */
 export function watchSupervisorStdout(
   stdout: StdoutStream = process.stdout,
-  stderr: ErrorStream = process.stderr,
+  stderr: StdoutStream & ErrorStream = process.stderr,
 ): void {
+  watchStdoutErrors(stderr, () => {
+    // Nowhere left to report to — see the module doc. The subscription
+    // itself is the entire mechanism.
+  });
+
   let reported = false;
   watchStdoutErrors(stdout, (error) => {
     if (reported) return;

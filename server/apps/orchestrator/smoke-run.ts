@@ -1752,8 +1752,6 @@ function runLoggerResilienceScenario(): LoggerResilienceEvidence {
 export interface EntrypointFaultGuardEvidence {
   entries: {
     name: 'service-api' | 'supervisor';
-    /** The destroyed-pipe error event degraded rather than throwing. */
-    stdoutErrorHandled: boolean;
     /** The stdout fault was reported on stderr — not silently absorbed. */
     faultReportedOnStderr: boolean;
     /** An arbitrary uncaught fault was reported and the process was NOT told to exit. */
@@ -1801,16 +1799,29 @@ class NoListenerBreakablePipe {
 function runEntrypointFaultGuardScenario(): EntrypointFaultGuardEvidence {
   function probe(
     name: 'service-api' | 'supervisor',
-    watchStdout: (stdout: FaultGuardStdoutStream, stderr: FaultGuardErrorStream) => void,
+    watchStdout: (
+      stdout: FaultGuardStdoutStream,
+      stderr: FaultGuardStdoutStream & FaultGuardErrorStream,
+    ) => void,
     install: (effects: ContinueOnFaultEffects) => void,
   ): EntrypointFaultGuardEvidence['entries'][number] {
     const pipe = new NoListenerBreakablePipe();
     const stdoutFaultLines: string[] = [];
-    watchStdout(pipe, { write: (line) => stdoutFaultLines.push(line as string) });
-    // A mutation that stops calling `watchStdoutErrors` inside `watchStdout`
-    // leaves nothing subscribed, so `breakPipe` throws — propagated rather
-    // than caught, aborting this run loudly, matching
+    // stderr only needs `write` here — the `on` in its type is satisfied by a
+    // no-op, since this scenario does not also break stderr (that is covered
+    // directly in each entrypoint's own fault-guard.test.ts).
+    watchStdout(pipe, {
+      on: () => pipe,
+      write: (line) => stdoutFaultLines.push(line as string),
+    });
+    // A mutation that stops calling `watchStdoutErrors` on stdout inside
+    // `watchStdout` leaves nothing subscribed, so `breakPipe` throws —
+    // propagated rather than caught, aborting this run loudly, matching
     // `runLoggerResilienceScenario`'s own `BreakablePipe.breakPipe` (#714).
+    // There is deliberately no boolean field recording this outcome: the
+    // throw itself is the enforcement, and a field that can only ever read
+    // `true` when reached is the vacuous-backstop shape #388 warns about
+    // above.
     pipe.breakPipe(name);
 
     const arbitraryFaultLines: string[] = [];
@@ -1829,7 +1840,6 @@ function runEntrypointFaultGuardScenario(): EntrypointFaultGuardEvidence {
 
     return {
       name,
-      stdoutErrorHandled: true,
       faultReportedOnStderr: stdoutFaultLines.length > 0,
       continuesOnArbitraryFault: arbitraryFaultLines.length > 0,
     };
@@ -2526,13 +2536,13 @@ export function evaluateSmokeGate(
 
   // #764 — the same stdout-write class #714 fixed for the orchestrator,
   // decided separately for the service-api and supervisor entrypoints.
+  // There is no `stdoutErrorHandled` field here to check: an entrypoint that
+  // stopped subscribing to stdout's error event makes
+  // `runEntrypointFaultGuardScenario`'s `pipe.breakPipe(name)` throw, which
+  // aborts this whole run (`GATE: FAIL`, exit 1) before this loop is ever
+  // reached — a boolean that could only ever read `true` on the path that
+  // reaches it would be the vacuous-backstop shape #388 warns about above.
   for (const guard of options.entrypointFaultGuards.entries) {
-    if (!guard.stdoutErrorHandled) {
-      failures.push(
-        `${guard.name} stdout error subscription did not degrade a destroyed pipe — a broken ` +
-          'pipe would reach uncaughtException by default (#764, the same class #714 measured)',
-      );
-    }
     if (guard.faultReportedOnStderr !== true) {
       failures.push(
         `${guard.name} stdout fault was not reported on stderr — a degrade that is not recorded ` +
