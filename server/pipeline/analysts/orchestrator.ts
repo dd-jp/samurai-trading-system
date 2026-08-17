@@ -21,9 +21,13 @@
  * how the tick runner already recognizes a quorum skip (tick-runner.ts).
  */
 
-import type { MarketDataService } from '../../providers/market-data-service/index.js';
+import {
+  AlwaysOpenCalendar,
+  type MarketDataService,
+  type TradingCalendar,
+} from '../../providers/market-data-service/index.js';
 import type { MarketIntelligenceStore } from '../../providers/market-intelligence/index.js';
-import type { Clock } from '../../shared/index.js';
+import type { AssetClass, Clock } from '../../shared/index.js';
 import type { AnalystView } from '../debate-engine/index.js';
 import { fundamentalAnalyst } from './fundamental-analyst.js';
 import { sentimentAnalyst } from './sentiment-analyst.js';
@@ -61,12 +65,38 @@ export interface AnalystOrchestratorDeps {
   market_intelligence: MarketIntelligenceStore;
   market_data: MarketDataService;
   /**
+   * Per-asset-class trading calendars (#746), threaded straight onto every
+   * `AnalystInput` below — this class does not itself compute anything from
+   * them, only resolves `signal.asset_class` to the right one.
+   *
+   * Optional and defaults to a pair of `AlwaysOpenCalendar`s: the SAFE
+   * default is "no session to anchor to" for every asset class
+   * (`session-features.ts` reads that as a real `null`, never a fabricated
+   * value), not a guessed-at real calendar a caller happened not to supply.
+   * `production.ts` already resolves the real pair for the flatten rule
+   * (`sessionCalendars`, ADR-0014) and reuses it here rather than deriving a
+   * second one — a second derivation inherits bugs independently of the
+   * first, exactly what #696 found for `UsEquityRegularHoursCalendar`.
+   * `production.test.ts` asserts the composition root supplies the real pair,
+   * mirroring the #745 telemetry-wiring test for the same defect class (a
+   * mechanism nothing calls).
+   */
+  sessionCalendars?: Record<AssetClass, TradingCalendar>;
+  /**
    * Where an analyst's counters go (#745). Threaded straight onto every
    * `AnalystInput` below — this class neither reads nor aggregates it, because
    * the counter is per-read and this layer only sees per-persona outcomes.
    * Absent in tests and in the backtest; `production.ts` supplies it.
    */
   telemetry?: AnalystTelemetry;
+}
+
+/** The safe default for `AnalystOrchestratorDeps.sessionCalendars` — see its doc comment. */
+function defaultSessionCalendars(): Record<AssetClass, TradingCalendar> {
+  return {
+    crypto: new AlwaysOpenCalendar(),
+    stocks: new AlwaysOpenCalendar(),
+  };
 }
 
 export interface AnalystOrchestratorOptions {
@@ -116,6 +146,7 @@ async function withTimeout<T>(
 
 export class AnalystOrchestrator {
   private readonly timeoutMs: number;
+  private readonly sessionCalendars: Record<AssetClass, TradingCalendar>;
 
   constructor(
     private readonly deps: AnalystOrchestratorDeps,
@@ -123,6 +154,7 @@ export class AnalystOrchestrator {
     options: AnalystOrchestratorOptions = {},
   ) {
     this.timeoutMs = options.timeout_ms ?? DEFAULT_ANALYST_TIMEOUT_MS;
+    this.sessionCalendars = deps.sessionCalendars ?? defaultSessionCalendars();
   }
 
   /**
@@ -171,6 +203,7 @@ export class AnalystOrchestrator {
                 clock,
                 market_intelligence: this.deps.market_intelligence,
                 market_data: this.deps.market_data,
+                calendar: this.sessionCalendars[signal.asset_class],
                 ...(this.deps.telemetry === undefined ? {} : { telemetry: this.deps.telemetry }),
               }),
               this.timeoutMs,

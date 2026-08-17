@@ -17,7 +17,10 @@
  * `DebateResult` from debate-engine).
  */
 
-import type { MarketDataService } from '../../providers/market-data-service/index.js';
+import type {
+  MarketDataService,
+  TradingCalendar,
+} from '../../providers/market-data-service/index.js';
 import type { MarketIntelligenceStore } from '../../providers/market-intelligence/index.js';
 import type { AssetClass, Clock } from '../../shared/index.js';
 import type { AnalystView } from '../debate-engine/index.js';
@@ -98,6 +101,22 @@ export interface AnalystInput {
   clock: Clock;
   market_intelligence: MarketIntelligenceStore;
   market_data: MarketDataService;
+  /**
+   * The instrument's trading calendar (#746), threaded explicitly rather than
+   * resolved by an analyst itself. `technicalAnalyst`'s session VWAP
+   * (`session-features.ts`) is the first consumer: it anchors to
+   * `calendar.sessionStart` and reads `calendar.sessionEnd(asOf) === null` as
+   * "no session to anchor to" (crypto's `AlwaysOpenCalendar`).
+   *
+   * REQUIRED, not optional — every `AnalystInput` the orchestrator builds
+   * carries a real calendar (`AnalystOrchestratorDeps.sessionCalendars`
+   * defaults to a pair of `AlwaysOpenCalendar`s when the composition root does
+   * not override it, so this field is never undefined; the default merely
+   * means "no session feature" rather than "no calendar"). A test that builds
+   * `AnalystInput` directly (bypassing the orchestrator) must supply one
+   * explicitly — never read from the ambient clock or a module-level default.
+   */
+  calendar: TradingCalendar;
   /**
    * Optional so a backtest or a focused unit test can run without a sink.
    * Optionality is also how a counter ends up dead in production, which is why

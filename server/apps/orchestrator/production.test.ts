@@ -912,6 +912,98 @@ describe('technical_indicator_unavailable is wired by the composition root (#745
   });
 });
 
+/**
+ * #746 — `AnalystOrchestratorDeps.sessionCalendars` is wired by the
+ * composition root, mirroring the #745 telemetry-wiring test immediately
+ * above for the same defect class: a mechanism nothing calls. Driven against
+ * the REAL `buildProductionComponents`, not a unit test of `AnalystOrchestrator`
+ * in isolation — a stubbed deps object would prove the orchestrator CAN thread
+ * a calendar, not that `production.ts` actually supplies its real
+ * `sessionCalendars` pair rather than leaving the orchestrator's safe
+ * `AlwaysOpenCalendar` default in place.
+ */
+describe('sessionCalendars is wired by the composition root (#746)', () => {
+  let db: SqliteHandle;
+
+  beforeEach(() => {
+    db = openSharedStore(':memory:');
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it('threads the real per-asset-class calendar to the analyst — a stocks instrument gets a real session VWAP, not the orchestrator default', async () => {
+    const clock = new SimulatedClock(START);
+    // 19 5m bars: enough for the technical analyst's CORE reads (mandatory),
+    // same shape as the #745 test above — the session VWAP line renders
+    // regardless of the enrichment axes, which is not this test's concern.
+    const bars = [
+      ...fixtureBars('AAPL', '5m', 19, 5 * 60_000),
+      ...fixtureBars('AAPL', '1h', 20, 60 * 60_000),
+    ];
+    const config = stubConfig(db, {
+      ...REAL_CONFIGS,
+      clock,
+      dataSource: new FixtureDataSource(
+        bars,
+        { price: 160, observed_at: START, source: 'fixture' },
+        'stocks',
+      ),
+      llmClient: new MockLlmClient(),
+      // Default (`mode: 'paper'` from `stubConfig`) resolves through
+      // `equityCalendarFor` to `UsEquityRegularHoursCalendar` — a calendar
+      // with a real session, unlike the orchestrator's `AlwaysOpenCalendar`
+      // default.
+    });
+
+    const { steps } = buildProductionComponents(config);
+    const views = await steps.analysts({
+      trace_id: 'trace-746-root',
+      signal: { asset: 'AAPL', asset_class: 'stocks' },
+      clock,
+    });
+
+    const technical = views.find((view) => view.analyst_type === 'technical');
+    expect(technical).toBeDefined();
+    const sessionLine = technical?.key_points.find((line) => line.startsWith('Session VWAP (5m):'));
+    expect(sessionLine).toBeDefined();
+    // If the orchestrator's own `AlwaysOpenCalendar` default were reached
+    // instead of `production.ts`'s real `sessionCalendars.stocks`, this would
+    // read exactly "Session VWAP (5m): no session to anchor to" regardless of
+    // asset class — the wiring gap this test exists to catch.
+    expect(sessionLine).not.toBe('Session VWAP (5m): no session to anchor to');
+  });
+
+  it('still reports no session to anchor to for crypto — AlwaysOpenCalendar is the correct wiring, not a leftover default', async () => {
+    const clock = new SimulatedClock(START);
+    const bars = [
+      ...fixtureBars('BTC-USD', '5m', 19, 5 * 60_000),
+      ...fixtureBars('BTC-USD', '1h', 20, 60 * 60_000),
+    ];
+    const config = stubConfig(db, {
+      ...REAL_CONFIGS,
+      clock,
+      dataSource: new FixtureDataSource(
+        bars,
+        { price: 160, observed_at: START, source: 'fixture' },
+        'crypto',
+      ),
+      llmClient: new MockLlmClient(),
+    });
+
+    const { steps } = buildProductionComponents(config);
+    const views = await steps.analysts({
+      trace_id: 'trace-746-crypto',
+      signal: { asset: 'BTC-USD', asset_class: 'crypto' },
+      clock,
+    });
+
+    const technical = views.find((view) => view.analyst_type === 'technical');
+    expect(technical?.key_points).toContain('Session VWAP (5m): no session to anchor to');
+  });
+});
+
 describe('composed tick chain (integration)', () => {
   let db: SqliteHandle;
 

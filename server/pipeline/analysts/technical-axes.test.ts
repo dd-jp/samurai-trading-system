@@ -9,6 +9,7 @@
  * ticket specified, and the guards around it are real".
  */
 import {
+  AlwaysOpenCalendar,
   type Bar,
   FixtureDataSource,
   type IndicatorSpec,
@@ -102,6 +103,11 @@ function buildInput(
     clock,
     market_intelligence: new MarketIntelligenceStore(clock),
     market_data: marketDataOverride === undefined ? inner : marketDataOverride(inner),
+    // #746: AnalystInput.calendar is required. `AlwaysOpenCalendar` keeps the
+    // session VWAP inert (null) for these axis-arithmetic tests, which is
+    // correct — SIGNAL is crypto, and the null path is asserted directly in
+    // `session-features.test.ts` rather than re-asserted per axis test here.
+    calendar: new AlwaysOpenCalendar(),
     ...(telemetry === undefined ? {} : { telemetry }),
   };
 }

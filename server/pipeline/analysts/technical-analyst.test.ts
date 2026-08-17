@@ -6,11 +6,14 @@ import type {
   Quote,
 } from '../../providers/market-data-service/index.js';
 import {
+  AlwaysOpenCalendar,
   computeIndicator,
   FixtureDataSource,
   InsufficientBarsError,
   MarketDataServiceImpl,
   SqliteMarketDataStore,
+  type TradingCalendar,
+  UsEquityRegularHoursCalendar,
 } from '../../providers/market-data-service/index.js';
 import { MarketIntelligenceStore } from '../../providers/market-intelligence/index.js';
 import type { Clock } from '../../shared/index.js';
@@ -114,7 +117,12 @@ function buildContextBars(): Bar[] {
 const BARS = [...buildBars(), ...buildContextBars()];
 const ASOF = buildBars()[buildBars().length - 1].close_time;
 
-function buildInput(signal: Signal, trace_id: string, bars: Bar[] = BARS): AnalystInput {
+function buildInput(
+  signal: Signal,
+  trace_id: string,
+  bars: Bar[] = BARS,
+  calendar: TradingCalendar = new AlwaysOpenCalendar(),
+): AnalystInput {
   // Derived from the '5m' series specifically, not `bars.at(-1)`: `bars` may
   // interleave two timeframes (5m technical + 1h context) whose array order
   // is incidental, and asOf must sit at/after the LATEST bar of whichever
@@ -161,6 +169,7 @@ function buildInput(signal: Signal, trace_id: string, bars: Bar[] = BARS): Analy
     clock,
     market_intelligence: marketIntelligence,
     market_data: marketData,
+    calendar,
   };
 }
 
@@ -183,6 +192,38 @@ describe('technicalAnalyst', () => {
     expect(view.confidence).toBeLessThanOrEqual(1);
     expect(Array.isArray(view.key_points)).toBe(true);
     expect(view.timestamp).toEqual(ASOF);
+  });
+
+  /**
+   * #746 — the session VWAP line, wired end to end through
+   * `computeSessionVwap` and `input.calendar` rather than asserted only at
+   * the module level (`session-features.test.ts` covers the arithmetic
+   * itself). These two tests inject an explicit calendar rather than reading
+   * the ambient clock, per the ticket's acceptance criteria.
+   */
+  it('reports "no session to anchor to" under AlwaysOpenCalendar — null is the real answer, not a midnight anchor', async () => {
+    const view = await technicalAnalyst.run(
+      buildInput(signal, 'trace-1', BARS, new AlwaysOpenCalendar()),
+    );
+
+    // Exact match, not `.startsWith` — a fabricated midnight-UTC-anchored
+    // number dressed as a reading would still start with "Session VWAP (5m):"
+    // and only an exact-string check catches it appending anything numeric.
+    expect(view.key_points).toContain('Session VWAP (5m): no session to anchor to');
+    expect(view.key_points.filter((line) => line.startsWith('Session VWAP (5m):'))).toHaveLength(1);
+  });
+
+  it('reports a real session-anchored VWAP and distance under a calendar with a session (#746)', async () => {
+    const stocksSignal: Signal = { asset: INSTRUMENT, asset_class: 'stocks' };
+    const view = await technicalAnalyst.run(
+      buildInput(stocksSignal, 'trace-1', BARS, new UsEquityRegularHoursCalendar()),
+    );
+
+    const sessionLine = view.key_points.find((line) => line.startsWith('Session VWAP (5m):'));
+    expect(sessionLine).toBeDefined();
+    expect(sessionLine).toMatch(
+      /^Session VWAP \(5m\): \d+(\.\d+)? — price \d+(\.\d+)? is [+-]?\d+(\.\d+)? from it$/,
+    );
   });
 
   it('reports real avg volume for the 1h context read by default (#742)', async () => {
@@ -457,6 +498,7 @@ describe('technicalAnalyst — single 5m bar fetch per instrument per tick (#742
         clock,
         market_intelligence: marketIntelligence,
         market_data: marketData,
+        calendar: new AlwaysOpenCalendar(),
       },
       counting,
     };
