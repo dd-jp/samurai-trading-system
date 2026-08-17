@@ -252,6 +252,59 @@ describe('JsonLogger when stdout fails (#714)', () => {
     expect(logger.stdoutRetired).toBe(false);
   });
 
+  it('falls back to stderr when stdout was retired first and the file retires later', () => {
+    // The ordering a soak actually hits — terminal closes on day three, disk
+    // fills on day nine — and the one where the throw lands inside a tick and
+    // is swallowed by #573's `safeLog`. So stderr, not the throw, is what
+    // keeps the run from trading with no trace anywhere.
+    const stdout = new FakeStdout();
+    const stderr: string[] = [];
+    const sink = { write: () => {}, degraded: false };
+    const logger = new JsonLogger(sink, stdout, { write: (line) => stderr.push(line) });
+
+    stdout.throwOn = new Error('EPIPE: broken pipe');
+    logger.log(ENTRY);
+    expect(logger.stdoutRetired).toBe(true);
+    expect(stderr).toHaveLength(0);
+
+    // Now the file sink retires too, the way `RotatingFileSink` does it:
+    // silently, still returning from `write`.
+    sink.degraded = true;
+    expect(() => logger.log({ ...ENTRY, message: 'after both sinks died' })).toThrow(
+      /reached no sink/,
+    );
+
+    const written = stderr.map((line) => JSON.parse(line));
+    expect(written[0].message).toMatch(/no sink left/);
+    expect(written[0].payload).toMatchObject({
+      log_stdout_sink: 'degraded',
+      log_file_sink: 'degraded',
+    });
+    expect(written[1].message).toBe('after both sinks died');
+
+    // The notice is said once; the lines themselves keep coming.
+    expect(() => logger.log({ ...ENTRY, message: 'and again' })).toThrow();
+    expect(stderr.map((line) => JSON.parse(line).message)).toEqual([
+      written[0].message,
+      'after both sinks died',
+      'and again',
+    ]);
+  });
+
+  it('still throws when the last-resort stderr write throws too', () => {
+    const stdout = new FakeStdout();
+    stdout.throwOn = new Error('EBADF');
+    const logger = new JsonLogger(undefined, stdout, {
+      write: () => {
+        throw new Error('stderr is as dead as stdout');
+      },
+    });
+
+    // The escalation survives its own last resort failing — the guard around
+    // the stderr write must not become the thing that reports.
+    expect(() => logger.log(ENTRY)).toThrow(/EBADF/);
+  });
+
   it('throws out of the stdout error listener when nothing can record the failure', () => {
     // The async half of the same escalation: it reaches `uncaughtException`,
     // whose handler (index.ts) records what it can and exits deliberately.

@@ -43,9 +43,37 @@
  *   stdout dies, stdout when the file dies.
  * - *When it cannot be recorded anywhere, the process must not continue.*
  *   Both sinks gone means this run can no longer produce evidence of what it
- *   did with real money. Propagating hands it to the composition root's fault
- *   handler (`index.ts`'s `installFaultHandlers`), which records what it can
- *   on stderr and exits deliberately, rather than trading on invisibly.
+ *   did with real money, so `log` writes a last-resort notice on stderr and
+ *   then throws.
+ *
+ * ### Where that throw actually lands, stated honestly (#714)
+ *
+ * It depends on which sink died first, and only one of the two orderings
+ * reaches the composition root's fault handler:
+ *
+ * - **File first, then stdout.** The `'error'` listener in `watchStdoutErrors`
+ *   finds nothing durable to record on and throws *from inside an event
+ *   listener*, which is a genuine `uncaughtException`:
+ *   `installFaultHandlers` records what it can and exits 1.
+ * - **Stdout first, then the file.** Every later `log` reaches no sink and
+ *   throws *from inside a tick*, where `tick-loop.ts` catches everything a
+ *   tick throws and `shared/safe-log.ts` swallows a throwing logger by
+ *   deliberate design (#573). The throw does **not** end the run.
+ *
+ * The second ordering is the likelier one for a soak (the terminal closes on
+ * day three; the disk fills on day nine), so the throw alone would leave the
+ * run trading with no trace anywhere — the outcome this whole decision exists
+ * to prevent. Hence the stderr write, which is attempted *before* the throw
+ * and is what actually holds the evidence: stderr is a genuinely separate
+ * destination under `yarn orchestrator > log.txt`, under `| tee`, and under a
+ * supervisor that splits the two streams.
+ *
+ * It is a last resort and not a third managed sink, and the run is **not**
+ * declared healthy because stderr accepted the line: stderr most often shares
+ * the very pipe or terminal that stdout just lost, so a write that "succeeded"
+ * there is weak evidence of anything. `log` therefore still throws. Whether
+ * that throw stops the process is the caller's decision — #573's swallow is
+ * intentional and is not overridden from inside a logger.
  *
  * Until #714 the primary `process.stdout.write` was unguarded. Chasing that
  * back: #95 (PR #124) neither asked about nor recorded any reasoning for it —
@@ -105,6 +133,17 @@ export interface StdoutStream {
 }
 
 /**
+ * The last-resort stream, used only when neither sink can take a line.
+ *
+ * Deliberately narrower than `StdoutStream`: no `'error'` subscription, because
+ * this is not a managed sink and nothing degrades on its behalf. Every write to
+ * it is wrapped — see `lastResort`.
+ */
+export interface ErrorStream {
+  write(line: string): unknown;
+}
+
+/**
  * The wire format, in one place: used for the log lines themselves and for the
  * sink-failure warn, which has to be written straight to stdout without
  * re-entering the logger.
@@ -143,10 +182,12 @@ function describe(error: unknown): string {
 export class JsonLogger implements Logger {
   private fileSinkFailed = false;
   private stdoutDegraded = false;
+  private noSinkReported = false;
 
   constructor(
     private readonly fileSink?: LogLineSink,
     private readonly stdout: StdoutStream = process.stdout,
+    private readonly stderr: ErrorStream = process.stderr,
   ) {}
 
   /**
@@ -160,6 +201,11 @@ export class JsonLogger implements Logger {
    * logging failure worth surviving. Callers inside a `catch` still route
    * through `shared/safe-log.ts` — a `Logger` there is injected and may be
    * anything.
+   *
+   * **And the throw is not assumed to be fatal.** On the stdout-first ordering
+   * it is raised inside a tick, where #573's `safeLog` swallows it on purpose;
+   * that is why the line and the notice go to stderr *first*. See the module
+   * doc's "where that throw actually lands".
    */
   log(entry: LogEntry): void {
     const line = formatLogLine(entry);
@@ -168,7 +214,9 @@ export class JsonLogger implements Logger {
     if (reachedStdout || reachedFile) return;
 
     // Nowhere left. Not swallowed — see the module doc: a run that cannot
-    // record what it did with real money must stop, not continue blind.
+    // record what it did with real money must not carry on unremarked.
+    this.reportNoSink();
+    this.lastResort(line);
     throw new Error(
       'structured logging reached no sink: stdout and the log file are both unavailable, and ' +
         'the failure could not be recorded anywhere. A trading process that cannot log must ' +
@@ -195,8 +243,15 @@ export class JsonLogger implements Logger {
       return true;
     } catch (error) {
       // Rethrow when nothing durable can hold the report: `log` would
-      // otherwise return having written nowhere and said nothing.
-      if (!this.degradeStdout(error)) throw error;
+      // otherwise return having written nowhere and said nothing. Same
+      // last-resort trace as `log`'s own escalation, for the same reason — a
+      // caller that swallows this throw must still leave the operator
+      // something.
+      if (!this.degradeStdout(error)) {
+        this.reportNoSink();
+        this.lastResort(line);
+        throw error;
+      }
       return false;
     }
   }
@@ -226,6 +281,44 @@ export class JsonLogger implements Logger {
     if (!recorded) return false;
     this.stdoutDegraded = true;
     return true;
+  }
+
+  /**
+   * Says once, on stderr, that structured logging has run out of sinks.
+   *
+   * Once per process and not once per line: the condition is permanent, and a
+   * per-line copy would bury the lines themselves — which are the point, and
+   * which follow it.
+   */
+  private reportNoSink(): void {
+    if (this.noSinkReported) return;
+    this.noSinkReported = true;
+    this.lastResort(
+      degradationLine(
+        'structured logging has no sink left: stdout is unavailable and the log file is not ' +
+          'recording. Subsequent log lines are written here, on stderr, and are the only trace ' +
+          'this run still produces (#714).',
+        { log_stdout_sink: 'degraded', log_file_sink: 'degraded' },
+      ),
+    );
+  }
+
+  /**
+   * Writes to stderr, ignoring any failure.
+   *
+   * The swallow is correct exactly here and nowhere else: this is already the
+   * both-sinks-gone path, the caller throws immediately afterwards regardless,
+   * and stderr on a host whose stdout just died is a coin toss. A last resort
+   * that can itself throw is not a last resort —
+   * `tools/backfill-market-data.ts` guards its `console.error` for the same
+   * reason.
+   */
+  private lastResort(line: string): void {
+    try {
+      this.stderr.write(line);
+    } catch {
+      // Nothing left to try, and nothing to report it on.
+    }
   }
 
   /** Whether stdout has been retired — the enforcement surface for #714. */
@@ -340,6 +433,7 @@ export function watchStdoutErrors(logger: JsonLogger, stdout: StdoutStream = pro
 export function buildEntrypointLogger(
   config?: FileSinkConfig,
   stdout: StdoutStream = process.stdout,
+  stderr: ErrorStream = process.stderr,
 ): JsonLogger {
   const sink = new RotatingFileSink({
     ...(config ?? fileSinkConfigFromEnvironment()),
@@ -347,7 +441,7 @@ export function buildEntrypointLogger(
       warnOnStdout(message, stdout);
     },
   });
-  const logger = new JsonLogger(sink, stdout);
+  const logger = new JsonLogger(sink, stdout, stderr);
   watchStdoutErrors(logger, stdout);
   return logger;
 }

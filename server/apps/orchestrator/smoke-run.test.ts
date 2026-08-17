@@ -240,6 +240,7 @@ function healthyLoggerResilience(
     degradationRecordedInFile: true,
     linesAfterStdoutDeath: 1,
     escalatedWhenNothingCouldRecord: true,
+    lastResortTraceOnStderr: true,
     fatalRecordedInFile: true,
     fatalExitCode: 1,
     ...overrides,
@@ -487,6 +488,20 @@ describe('evaluateSmokeGate', () => {
 
     expect(gate.passed).toBe(false);
     expect(gate.failures.some((failure) => failure.includes('swallowed its failure'))).toBe(true);
+  });
+
+  it('fails when the no-sink escalation left no trace on stderr', () => {
+    // The throw is swallowed inside a tick by design (#573), so stderr is the
+    // only thing standing between that ordering and a run trading blind.
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({
+        loggerResilience: healthyLoggerResilience({ lastResortTraceOnStderr: false }),
+      }),
+    );
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.some((failure) => failure.includes('wrote nothing to stderr'))).toBe(true);
   });
 
   it('fails when an unhandled fault was shrugged off rather than recorded and exited', () => {

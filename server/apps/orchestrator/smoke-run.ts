@@ -1527,6 +1527,12 @@ export interface LoggerResilienceEvidence {
   linesAfterStdoutDeath: number;
   /** A logger with nowhere to record the failure threw instead of continuing blind. */
   escalatedWhenNothingCouldRecord: boolean;
+  /**
+   * That same logger still left the line on stderr. The throw alone is not
+   * enough: inside a tick it is swallowed by `safeLog` (#573), so stderr is the
+   * only trace that ordering produces.
+   */
+  lastResortTraceOnStderr: boolean;
   /** The fault handler's record of an unhandled fault reached the durable file. */
   fatalRecordedInFile: boolean;
   /** The exit code the fault handler chose. Null if it never called `exit`. */
@@ -1615,12 +1621,18 @@ function runLoggerResilienceScenario(): LoggerResilienceEvidence {
     let escalatedWhenNothingCouldRecord = false;
     const deadStdout = new BreakablePipe();
     deadStdout.throwOn = new Error('EBADF');
-    const sinkless = new JsonLogger(undefined, deadStdout);
+    const stderrLines: string[] = [];
+    const sinkless = new JsonLogger(undefined, deadStdout, {
+      write: (line) => {
+        stderrLines.push(line);
+      },
+    });
     try {
       sinkless.log(entry('nowhere to go'));
     } catch {
       escalatedWhenNothingCouldRecord = true;
     }
+    const lastResortTraceOnStderr = stderrLines.some((line) => line.includes('nowhere to go'));
 
     // And the composition root's fault net: an unhandled fault is recorded
     // durably and exits, rather than being shrugged off.
@@ -1638,6 +1650,7 @@ function runLoggerResilienceScenario(): LoggerResilienceEvidence {
       degradationRecordedInFile,
       linesAfterStdoutDeath,
       escalatedWhenNothingCouldRecord,
+      lastResortTraceOnStderr,
       fatalRecordedInFile: readLogLines(filePath).some((line) =>
         line.message.includes('uncaughtException'),
       ),
@@ -2067,6 +2080,13 @@ export function evaluateSmokeGate(
       'a logger with no sink left to record on swallowed its failure instead of throwing — ' +
         'the degrade in #714 is only honest because it stops when the failure can no longer ' +
         'be written down anywhere',
+    );
+  }
+  if (!logging.lastResortTraceOnStderr) {
+    failures.push(
+      'a logger with no sink left threw but wrote nothing to stderr — and that throw is raised ' +
+        "inside a tick, where tick-loop's catch and safeLog swallow it by design (#573). " +
+        'Without the stderr line the run would keep trading with no trace on any stream (#714)',
     );
   }
   if (!logging.fatalRecordedInFile || logging.fatalExitCode !== 1) {
