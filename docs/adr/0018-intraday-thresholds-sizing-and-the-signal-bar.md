@@ -64,6 +64,8 @@ One pooled pair per subclass (index ETP, single-stock ETP, crypto). The levels f
 
 Measured on a **drift-removed** series, so this is the pure volatility envelope with zero edge assumed:
 
+> ⚠️ **Every figure in this decision — the table below, the 23.1% / 26.2% fractions, and the "1.2 pp overshoot" — is measured at a bracket this ADR does not declare, and is understated. Read the [#729](https://github.com/dd-jp/samurai-trading-system/issues/729) verification note at the end of D5 before lifting any of them.**
+
 | subclass | per-trade sd | annualised vol | max drawdown at full £750 |
 | --- | --- | --- | --- |
 | 3× index ETP | 1.55% | 24.6% | **55.6%** |

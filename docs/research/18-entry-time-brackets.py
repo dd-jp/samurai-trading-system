@@ -138,14 +138,26 @@ def control(sub, sessions, days):
     print("      series identical to the unparameterised call: PASS (n=%d)" % s["n"])
     print("      resolves %.1f%%  (doc 18 records %.1f%%)   closes out %.1f%%"
           % (resolves, sub["recorded_resolves"], 100.0 - resolves))
-    print("      accuracy edge needed %.2f pp  (doc 18 records %.2f pp)"
+    print("      accuracy edge needed %.2f pp  (doc 18 records %.2f pp)  [ALGEBRA, not a test:"
           % (edge, sub["recorded_edge"]))
+    print("      cost/(tp+sl) over three declared constants cannot disagree with the ADR]")
     print("      P(tp first) %.1f%%   P(sl first) %.1f%%   exp %+.4f%%/trade"
           % (100.0 * base_hits.get("tp", 0) / tot, 100.0 * base_hits.get("sl", 0) / tot,
              s["exp"]))
-    ok = (abs(resolves - sub["recorded_resolves"]) <= 0.15
-          and abs(edge - sub["recorded_edge"]) <= 0.01)
-    print("      reproduces ADR-0018: %s" % ("YES" if ok else "NO"))
+    # Be precise about what this control does and does not establish. Two of the
+    # three printed lines are genuine checks; the third is arithmetic.
+    #   - the reparam assert above IS a real regression test: it proves adding
+    #     t0/flatten left the untruncated series byte-identical.
+    #   - `resolves` IS data-dependent, and it is the only line that CAN
+    #     disagree with the record. On the index it does: 48.7 measured against
+    #     48.8 recorded, admitted by the 0.15 pp tolerance below.
+    #   - `edge` is cost/(tp+sl) over constants. It returns the recorded figure
+    #     unconditionally and verifies nothing. It is printed for the reader,
+    #     and deliberately NOT counted as a reproduction.
+    resolves_ok = abs(resolves - sub["recorded_resolves"]) <= 0.15
+    ok = resolves_ok
+    print("      resolves fraction matches the record to within 0.15 pp: %s (delta %+.2f pp)"
+          % ("YES" if resolves_ok else "NO", resolves - sub["recorded_resolves"]))
     return ok
 
 
@@ -332,8 +344,11 @@ def run(sub):
           % tp)
     print("      `n` counts TRADES, not days: past the flatten there is no entry at all,")
     print("      and `entered` reports what fraction of the cell's sessions produced one.")
-    print("      %-4s %-7s %5s %8s %7s %8s %8s %7s %6s"
-          % ("t0", "tercile", "n", "entered", "stop", "resolves", "edge pp", "+/- SE", "in win"))
+    print("      `bar` is the DECLARED bracket on that cell's own sessions at that cell's own")
+    print("      offset, so `vs bar` varies only the bracket — not the slice, not truncation.")
+    print("      %-4s %-7s %5s %8s %7s %8s %8s %7s %6s %7s %6s"
+          % ("t0", "tercile", "n", "entered", "stop", "resolves", "edge pp", "+/- SE",
+             "bar", "vs bar", "in win"))
     rows = []
     for t0 in T0_GRID:
         ratios = range_ratios(sessions, days, t0)
@@ -384,19 +399,86 @@ def run(sub):
             # are already inseparable at this bound — so the understatement cannot flip
             # any conclusion drawn from it.
             se = (s["sd"] / math.sqrt(s["n"])) / width * 100.0
-            print("      %-4d %-7s %5d %6.0f%% %7.2f%% %7.1f%% %8.2f %7.2f %6s"
+            cell_bar, _, _ = declared_bar_on(sub, sessions, ds_oos, t0)
+            print("      %-4d %-7s %5d %6.0f%% %7.2f%% %7.1f%% %8.2f %7.2f %6.2f %+6.2f %6s"
                   % (t0, name, s["n"], 100.0 * s["n"] / max(1, len(ds_oos)), -sl,
-                     resolves, edge, se, "yes" if in_window else "NO"))
+                     resolves, edge, se,
+                     cell_bar if cell_bar is not None else float("nan"),
+                     (edge - cell_bar) if cell_bar is not None else float("nan"),
+                     "yes" if in_window else "NO"))
             rows.append({"t0": t0, "cell": name, "sl": sl, "edge": edge, "se": se,
                          "resolves": resolves, "in_window": in_window,
                          "n": s["n"], "coverage": s["n"] / max(1, len(ds_oos)),
-                         "exp": s["exp"]})
+                         "exp": s["exp"], "bar": cell_bar})
     return sub, sessions, days, is_days, oos_days, rows, ok
 
 
-def rider(sub, sessions, days):
+def declared_bar_on(sub, sessions, ds_oos, t0):
+    """The declared bracket's required edge, on a GIVEN slice, at a GIVEN offset.
+
+    Factored out so the same quantity serves two jobs: the pooled comparator
+    below (whole OOS, t0=0), and the per-cell comparator in the cells table
+    (that cell's own sessions, that cell's own offset).
+
+    The per-cell use is the one that decides anything. A cell can look cheap
+    for two quite different reasons: because re-solving the stop on its
+    conditioning slice bought a better bracket, or because its sessions travel
+    further and so eat less truncation. Judging every cell against one pooled
+    bar cannot tell those apart — busy sessions resolve more often, so they
+    would look cheap under the second reason alone, which is just #635's
+    low-range-days-don't-travel result wearing a different hat. Holding the
+    slice and the offset fixed and varying only the bracket isolates the part
+    the conditioning actually bought.
+    """
+    lev, cost, tp, sl = sub["lev"], sub["cost"], sub["tp"], sub["recorded_sl"]
+    HITS.clear()
+    net = simulate(sessions, ds_oos, lev, tp, sl, cost, t0=t0, flatten=flatten_at)
+    if not net:
+        return None, None, None
+    h = dict(HITS)
+    e_gross = sum(net) / len(net) + cost
+    delta = (cost - e_gross) / (tp + sl) * 100.0
+    resolved = 100.0 * (h.get("tp", 0) + h.get("sl", 0)) / max(1, sum(h.values()))
+    return delta, resolved, e_gross
+
+
+def truncated_bar(sub, sessions, days):
+    """The declared bracket's required edge, re-priced under the 16:25 flatten.
+
+    This is the ONLY honest comparator for the cells. ADR-0018's recorded figure
+    is untruncated and full-sample, so judging a truncated out-of-sample cell
+    against it moves truncation, sample period and conditioning all at once —
+    and the index correction showed the difference is not decorative (4.33 pp
+    untruncated versus 4.19 pp here). Runs per subclass, deliberately: the
+    ladder below is index-only because #704 defines the ladder at index levels,
+    but this comparator needs no ladder and applies to both subclasses.
+    """
+    tp, sl = sub["tp"], sub["recorded_sl"]
+    oos = [d for d in days if d.year >= 2023]
+    delta, resolved, e_gross = declared_bar_on(sub, sessions, oos, 0)
+    print("\n   -- THE POOLED BAR (t0=0, whole out-of-sample)")
+    print("      declared bracket TP %+.2f%% / SL -%.2f%%, truncated at 16:25, same %d OOS sessions"
+          % (tp, sl, len(oos)))
+    print("      resolves %.1f%% truncated (%.1f%% untruncated)  E_gross %+.4f%%  -> bar %.2f pp"
+          % (resolved, sub["recorded_resolves"], e_gross, delta))
+    print("      ADR-0018's recorded %.2f pp is untruncated AND full-sample: it is NOT the"
+          % sub["recorded_edge"])
+    print("      comparator for any cell above, and is not used as one. Nor is this pooled")
+    print("      figure — each cell carries its own bar, on its own sessions, in the table.")
+    return delta
+
+
+def rider(sub, sessions, days, bar):
     lev, cost = sub["lev"], sub["cost"]
     if sub["symbol"] != "SPY":
+        # #704 specifies the 50/25/25 ladder at INDEX bracket levels (+1/+2/+3
+        # over -2.16%). Running those levels against a single-stock ETP, whose
+        # declared bracket is +6.00/-6.25, would not test #704's claim — it
+        # would invent a different ladder and test that. The truncated-bar
+        # comparator above is what this subclass needs, and it already ran.
+        print("\n   -- RIDER: skipped. #704's ladder is defined at index bracket levels")
+        print("      (+1/+2/+3 over -2.16%); it is not a single-stock proposal and is not")
+        print("      re-scaled here. The truncated bar above is this subclass's comparator.")
         return None
     print("\n   -- RIDER: 50/25/25 ladder vs the single bracket, BOTH truncated at 16:25")
     oos = [d for d in days if d.year >= 2023]
@@ -462,7 +544,15 @@ def main():
             print("== %s: %s missing - fetch with 18-fetch-bars.py first" % (sub["label"], path))
             continue
         sub, sessions, days, is_days, oos_days, rows, ok = run(sub)
-        r = rider(sub, sessions, days)
+        bar = truncated_bar(sub, sessions, days)
+        r = rider(sub, sessions, days, bar)
+        if r is not None:
+            # The rider's own CONTROL arm is the same quantity by a second code
+            # path (SPY's declared stop and LADDER_STOP are both 2.16). If these
+            # ever disagree, one of the two is wrong and the comparison is void.
+            assert abs(r["single"] - bar) < 0.005, (
+                "the rider's control and the truncated bar disagree: %.4f vs %.4f"
+                % (r["single"], bar))
         results.append((sub, rows, r, days))
 
     print("\n=== SELECTION ACCOUNTING")
@@ -471,8 +561,29 @@ def main():
         years = (days[-1] - days[0]).days / 365.25
         limit = minbtl_limit(years)
         declared = len(T0_GRID) * len(TERCILES)
+        # Two whole offsets cannot carry a tercile split, for opposite reasons,
+        # and BOTH are pre-registration defects the measurement found rather
+        # than results. They are subtracted here instead of being dropped
+        # quietly, because the tables below reach 21 rows only by counting
+        # POOLED marginals that were never among the 21 declared cells.
+        #   t0=0   — the conditioning variable does not exist yet. Realised
+        #            range since the open is identically zero AT the open, so
+        #            the terciles are undefined by construction, not merely
+        #            thin. Reported POOLED only.
+        #   t0=120 — entry at 11:30 ET is past the 11:25 ET flatten on 2,476 of
+        #            2,659 sessions. The 183 that do trade are the UK/US DST
+        #            mismatch weeks, where the London-to-ET offset is 4 or 6
+        #            hours rather than 5, and 35-43 in-sample entries cannot
+        #            solve a stop.
+        unmeasurable = 2 * len(TERCILES)
+        measurable = declared - unmeasurable
         print("   declared cells per subclass: %d (7 offsets x 3 terciles)" % declared)
-        print("   subclasses: %d  ->  %d cells in total" % (len(results), declared * len(results)))
+        print("   of which measurable: %d — t0=0 has no range yet (terciles undefined) and"
+              % measurable)
+        print("   t0=120 falls past the flatten; %d cells per subclass are unmeasurable"
+              % unmeasurable)
+        print("   subclasses: %d  ->  %d declared / %d measurable in total"
+              % (len(results), declared * len(results), measurable * len(results)))
         print("   sample %.1f years  ->  MinBTL supports %d independent trials" % (years, limit))
         print("   %s" % ("within budget" if declared * len(results) <= limit
                          else "EXCEEDS the budget"))
