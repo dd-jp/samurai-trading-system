@@ -52,6 +52,7 @@ import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/
 import { DebateBarDecisionGate } from './decision-bar-gate.js';
 import { paperStartingProfile } from './paper-profile.js';
 import { MIN_RETURN_OBSERVATIONS } from './production/daily-equity-metrics-source.js';
+import type { DataFailoverAlert } from './production/data-failover.js';
 import { buildPersistence } from './production/direct-bind.js';
 import { MIN_TICKS_INSIDE_FLATTEN_WINDOW } from './production/flatten-tick-coupling.js';
 import {
@@ -3479,6 +3480,183 @@ describe('buildProductionOrchestrator', () => {
           calendar,
         ),
       ).not.toThrow();
+    });
+  });
+
+  /**
+   * #562 — the LIVE orchestrator's OHLCV failover, asserted THROUGH
+   * `buildProductionOrchestrator` rather than against `FailoverDataSource` in
+   * isolation (which `failover-data-source.test.ts` covers).
+   *
+   * That distinction is the whole point of the issue: #560 landed a working
+   * `withOhlcvFailover` and wired it into the backfill script only, so the
+   * live path kept a single vendor with no catch, no second source and no
+   * alert. A unit test of the wrapper would have stayed green throughout.
+   * These cases fail if the composition root stops constructing one.
+   *
+   * Driven through `orchestrator.marketData`, the real `MarketDataServiceImpl`
+   * the root built, against a COLD `:memory:` store — a warm store would
+   * satisfy `getBars` from the Tier-2 cache and never reach the source at all,
+   * which would pass for the wrong reason.
+   */
+  describe('live OHLCV failover (#562) — from the composition root', () => {
+    const EQUITIES_UNIVERSE = [{ asset: 'SPY', asset_class: 'stocks' as const }];
+    const WINDOW = { timeframe: '1h', lookback: 2 } as const;
+
+    /**
+     * `START` is 08:00 ET on a Wednesday, so the newest bars completed by then
+     * belong to TUESDAY's regular session (18:00Z/19:00Z opens = 14:00/15:00
+     * ET). Picked in session on purpose: the fallback is session-normalized
+     * against the same `UsEquityRegularHoursCalendar` the primary uses, so an
+     * out-of-session fixture would be dropped and every case here would pass
+     * for the wrong reason.
+     */
+    function fallbackBarAt(openTime: string): Bar {
+      const open_time = new Date(openTime);
+      return {
+        instrument: 'SPY',
+        timeframe: '1h',
+        open_time,
+        close_time: new Date(open_time.getTime() + 3_600_000),
+        open: 100,
+        high: 101,
+        low: 99,
+        close: 100.5,
+        volume: 1_000,
+        source: 'polygon',
+      };
+    }
+
+    const FALLBACK_BARS: readonly Bar[] = [
+      fallbackBarAt('2026-07-28T18:00:00.000Z'),
+      fallbackBarAt('2026-07-28T19:00:00.000Z'),
+    ];
+    const FALLBACK_BAR = FALLBACK_BARS[1] as Bar;
+
+    /** An Alpaca market-data client that cannot answer — the stall being survived. */
+    function stallingAlpacaClient(): NonNullable<ProductionConfig['alpacaDataClient']> {
+      return {
+        getBars: vi.fn(async (): Promise<AlpacaBar[]> => {
+          throw new Error('alpaca 503');
+        }),
+        getLatestQuote: vi.fn(
+          async (): Promise<AlpacaQuote> => ({ t: START.toISOString(), ap: 100, bp: 99 }),
+        ),
+      };
+    }
+
+    it('serves equities bars from the fallback vendor when the primary throws', async () => {
+      const fallback = vi.fn(async () => [...FALLBACK_BARS]);
+      const orchestrator = buildProductionOrchestrator(
+        stubConfig(db, {
+          universe: EQUITIES_UNIVERSE,
+          alpacaDataClient: stallingAlpacaClient(),
+          equitiesFallbackBarFetcher: fallback,
+          dataFailoverAlerts: { postDataFailoverAlert: vi.fn(async () => undefined) },
+        }),
+      );
+
+      const bars = await orchestrator.marketData.getBars('SPY', WINDOW, START);
+
+      expect(bars.map((bar) => bar.source)).toEqual(['polygon', 'polygon']);
+      expect(fallback).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * The invariant #818 found missing: a bar reaching the store carries the
+     * same SESSION semantics whichever vendor served it.
+     *
+     * The primary is a `NormalizingDataSource` and drops out-of-session
+     * candles; the fallback vendor client applies no calendar and serves
+     * ~16 `1h` bars a day over 08:00Z-23:00Z. Wired raw, a failover silently
+     * replaced ~2 regular sessions of ATR window with ~1 extended-hours day,
+     * and `failover-data-source.ts` never re-derives a fallback bar, so the
+     * contamination outlived the stall.
+     */
+    it('drops out-of-session fallback bars instead of persisting them', async () => {
+      const preMarket = fallbackBarAt('2026-07-28T09:00:00.000Z');
+      const orchestrator = buildProductionOrchestrator(
+        stubConfig(db, {
+          universe: EQUITIES_UNIVERSE,
+          alpacaDataClient: stallingAlpacaClient(),
+          equitiesFallbackBarFetcher: vi.fn(async () => [preMarket, ...FALLBACK_BARS]),
+          dataFailoverAlerts: { postDataFailoverAlert: vi.fn(async () => undefined) },
+        }),
+      );
+
+      const bars = await orchestrator.marketData.getBars('SPY', WINDOW, START);
+
+      expect(bars.map((bar) => bar.open_time.toISOString())).toEqual(
+        FALLBACK_BARS.map((bar) => bar.open_time.toISOString()),
+      );
+
+      // And the durable effect, not just the return value: nothing
+      // out-of-session reached the `bars` table, which is what an ATR read on
+      // a later tick would have been computed over.
+      const stored = db
+        .prepare('SELECT open_time, source FROM bars WHERE instrument = ? ORDER BY open_time')
+        .all('SPY') as { open_time: string; source: string }[];
+      expect(stored.map((row) => row.source)).toEqual(['polygon', 'polygon']);
+      expect(
+        stored.some((row) => new Date(row.open_time).getTime() === preMarket.open_time.getTime()),
+      ).toBe(false);
+    });
+
+    it('raises the failover on the injected alert channel, not only the log', async () => {
+      const posted: DataFailoverAlert[] = [];
+      const orchestrator = buildProductionOrchestrator(
+        stubConfig(db, {
+          universe: EQUITIES_UNIVERSE,
+          alpacaDataClient: stallingAlpacaClient(),
+          equitiesFallbackBarFetcher: vi.fn(async () => [FALLBACK_BAR]),
+          dataFailoverAlerts: {
+            postDataFailoverAlert: async (alert) => {
+              posted.push(alert);
+            },
+          },
+        }),
+      );
+
+      await orchestrator.marketData.getBars('SPY', WINDOW, START);
+
+      // The channel, not stderr — `SAMURAI_ALERTS=telegram` binds
+      // `TradeChannelDataFailoverAlert` into this exact slot
+      // (alert-transport.ts), so reaching the port is what makes the alert
+      // reachable from a phone during an unattended soak.
+      expect(posted).toHaveLength(1);
+      expect(posted[0]).toMatchObject({
+        leg: 'equities',
+        symbol: 'SPY',
+        timeframe: '1h',
+        primaryName: 'alpaca',
+        fallbackName: 'polygon',
+        primaryError: 'alpaca 503',
+      });
+    });
+
+    it('leaves an injected config.dataSource unwrapped', async () => {
+      // The seam's own contract: a caller that brought its own source has
+      // already decided where bars come from, and the root must not silently
+      // put a second vendor behind it.
+      const fallback = vi.fn(async () => [FALLBACK_BAR]);
+      const injected = {
+        fetchBars: vi.fn(async (): Promise<Bar[]> => [FALLBACK_BAR]),
+        fetchMark: vi.fn(async () => {
+          throw new Error('unreachable — this case never marks');
+        }),
+      };
+      const orchestrator = buildProductionOrchestrator(
+        stubConfig(db, {
+          universe: EQUITIES_UNIVERSE,
+          dataSource: injected,
+          equitiesFallbackBarFetcher: fallback,
+        }),
+      );
+
+      await orchestrator.marketData.getBars('SPY', WINDOW, START);
+
+      expect(injected.fetchBars).toHaveBeenCalledTimes(1);
+      expect(fallback).not.toHaveBeenCalled();
     });
   });
 

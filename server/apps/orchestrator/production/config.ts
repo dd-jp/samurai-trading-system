@@ -33,6 +33,7 @@ import type {
 } from '../../../pipeline/verdict/index.js';
 import type {
   AlpacaMarketDataClient,
+  BarFetcher,
   DataSource,
   IndicatorSpec,
   TradingCalendar,
@@ -51,6 +52,7 @@ import type { OrphanAlertChannel } from '../orphan-verdict-scan.js';
 import type { Logger, UniverseInstrument } from '../types.js';
 import type { AnalystSkipAlertChannel } from './analysts-adapter.js';
 import { DEFAULT_STAGE2_MAX_AGE_DAYS } from './daily-equity-metrics-source.js';
+import type { DataFailoverAlertChannel } from './data-failover.js';
 import type { AccountStateProvider, VolatilityReadingProvider } from './direct-bind.js';
 import type { MiCoverageAlertChannel } from './mi-coverage.js';
 import type { ThresholdClampAlertChannel } from './threshold-clamp-alert.js';
@@ -254,6 +256,25 @@ export interface AlertChannelSlots {
    * (#625/#691's signature).
    */
   thresholdClampAlerts?: ThresholdClampAlertChannel;
+  /**
+   * Where a LIVE OHLCV failover is escalated (#562): the primary market-data
+   * vendor threw for one (instrument, timeframe) and the fallback vendor is
+   * serving those bars instead. Defaults to
+   * `LoggingDataFailoverAlertChannel`, with the same caveat as
+   * `miCoverageAlerts` — the log-only stand-in cannot wake anyone, and #562's
+   * third criterion is explicit that the failover must reach the LIVE
+   * transport rather than the script output #560 settled for.
+   * `TradeChannelDataFailoverAlert` (data-failover-alert-channel.ts) is what
+   * an unattended soak (#238) needs, and `SAMURAI_ALERTS=telegram` (#322)
+   * supplies it — the fourteenth `ALERT_CHANNEL_FIELDS` member.
+   *
+   * An alert, never a refusal: the failover has already worked by the time
+   * this fires, and the bars it produced carry the serving vendor in
+   * `bars.source`. What the alert buys is that a fourteen-day unattended run
+   * degrading to a second vendor is a fact somebody knows about while it is
+   * happening.
+   */
+  dataFailoverAlerts?: DataFailoverAlertChannel;
 }
 
 /**
@@ -363,6 +384,18 @@ export interface ProductionConfig extends AlertChannelSlots {
    * same rationale as `broker`, for `FixtureDataSource`/ccxt/IBKR.
    */
   dataSource?: DataSource;
+  /**
+   * Overrides the EQUITIES OHLCV FALLBACK fetcher (#562) — what serves bars
+   * while the primary vendor is throwing. Defaults to a lazily constructed
+   * `PolygonBarsClient` (data-failover.ts); supplying `dataSource` bypasses
+   * this field entirely, since that seam replaces the whole wrapped source.
+   *
+   * Injectable for the same reason `alpacaDataClient` is: `PolygonBarsClient`
+   * refuses to be constructed without `POLYGON_API_KEY`, so a test — or any
+   * offline composition root — needs a way to exercise the failover path
+   * without a credential.
+   */
+  equitiesFallbackBarFetcher?: BarFetcher;
   /**
    * Overrides the `AnthropicLlmClient` this module would otherwise build
    * around `NousMessagesClient` (#274, retargeted by ADR-0009) — same

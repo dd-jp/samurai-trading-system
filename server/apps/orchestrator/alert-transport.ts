@@ -106,6 +106,7 @@ import { TelegramBotApiClient, TelegramChannel } from '../../pipeline/verdict/in
 import type { SharedStore as SqliteHandle } from '../../shared/store/index.js';
 import { TradeChannelAnalystSkipAlert } from './analyst-skip-alert-channel.js';
 import { TradeChannelBreachAlert } from './breach-alert-channel.js';
+import { TradeChannelDataFailoverAlert } from './data-failover-alert-channel.js';
 import { TradeChannelFlattenReconcileAlert } from './flatten-reconcile-alert-channel.js';
 import { TradeChannelHeartbeat } from './heartbeat-channel.js';
 import { TradeChannelLoosenNotice } from './loosen-notification-channel.js';
@@ -216,6 +217,13 @@ export const ALERT_CHANNEL_FIELDS = [
   // every tick is indistinguishable from outside from a quiet market with no
   // setups.
   'thresholdClampAlerts',
+  // #562 — the fourteenth. The live orchestrator gained an OHLCV fallback in
+  // the same change, and its alert had to reach the live transport rather
+  // than the place #560's equivalent went: the backfill script's stdout,
+  // which nobody reads during an unattended soak. The condition it reports
+  // (bars now served by a second vendor with a different volume convention)
+  // is invisible from outside — the tick keeps producing answers.
+  'dataFailoverAlerts',
 ] as const satisfies readonly (keyof AlertChannelSlots)[];
 
 /**
@@ -456,6 +464,14 @@ export function buildAlertChannels(deps: {
     // `traderDiagnosticAlerts`.
     ...(deps.injected.thresholdClampAlerts === undefined
       ? { thresholdClampAlerts: new TradeChannelThresholdClampAlert(telegram, chatId, deps.logger) }
+      : {}),
+    // #562. The escalation chat: the run has left its primary market-data
+    // vendor and is reading bars from a fallback with a different volume
+    // convention. #560's own failover alert reached the backfill script's
+    // stdout, which is exactly the "nobody is watching" hole this list exists
+    // to close.
+    ...(deps.injected.dataFailoverAlerts === undefined
+      ? { dataFailoverAlerts: new TradeChannelDataFailoverAlert(telegram, chatId) }
       : {}),
   };
 }

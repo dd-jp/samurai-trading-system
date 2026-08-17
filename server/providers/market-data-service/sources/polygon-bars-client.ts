@@ -1,10 +1,14 @@
 /**
  * Polygon free-tier aggregates — the EQUITIES FALLBACK for the #512
- * warm-start backfill script (#496), and ONLY that. Not a `DataSource` port
- * implementation (`../market-data-service/sources/`); the live composition
- * root (`server/apps/orchestrator/production.ts`) never imports this module — see
- * `backfill-market-data.ts`'s module doc for the composition-root trace and
- * the residual gap this leaves on the live equities leg.
+ * warm-start backfill script (#496) and, since #562, for the LIVE
+ * orchestrator's equities leg as well. Still not a `DataSource` port
+ * implementation: it serves BARS only, and the live path wraps it as the
+ * fallback `BarFetcher` inside `FailoverDataSource`
+ * (`./failover-data-source.ts`), built by `buildFailoverDataSource`
+ * (`server/apps/orchestrator/production/data-failover.ts`) and injected at
+ * `production.ts`'s `config.dataSource` seam. Marks and quotes are NOT
+ * failed over to this client — see `failover-data-source.ts`'s module doc
+ * for why a delayed aggregate feed must not price an open position.
  *
  * ADR-0001 / `docs/research/31-free-ohlcv-evidence.md` name
  * Polygon free tier as the equities fallback:

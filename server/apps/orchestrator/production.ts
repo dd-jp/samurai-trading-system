@@ -178,6 +178,7 @@ import {
   LoggingAnalystSkipAlertChannel,
   LoggingAnalystTelemetry,
   LoggingBreachAlertChannel,
+  LoggingDataFailoverAlertChannel,
   LoggingFlattenOverfillAlertChannel,
   LoggingFlattenReconcileAlertChannel,
   LoggingHeartbeatChannel,
@@ -203,6 +204,7 @@ import { JsonLogger } from './logger.js';
 import type { OrphanGoVerdict, OrphanVerdictScanner } from './orphan-verdict-scan.js';
 import { AlpacaAccountStateProvider } from './production/account-state.js';
 import { buildAnalystsStep } from './production/analysts-adapter.js';
+import { buildFailoverDataSource } from './production/data-failover.js';
 import { buildDebateStep } from './production/debate-adapter.js';
 import {
   buildExecutionStep,
@@ -560,9 +562,44 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   const venuePacing = config.venuePacing ?? resolveVenuePacing();
   const alpacaBucket = new TokenBucket(venuePacing.alpaca);
 
+  /**
+   * Hoisted above the analysts (#745), which now take a telemetry sink built on
+   * it, and above the market-data wiring by #562, which logs a malformed
+   * fallback-pacing override through it at boot. It depends on nothing but
+   * `config`, so both moves are free — the same reasoning that hoisted
+   * `breachAlerts` below.
+   */
+  const logger = config.logger ?? new JsonLogger();
+
   const universe = config.universe ?? SMOKE_TEST_UNIVERSE;
+  /**
+   * #562: the live orchestrator's bars now fail over, per leg, instead of
+   * every bar the running system reads coming from one vendor with no catch,
+   * no second source and no alert.
+   *
+   * `buildAlpacaDataSource` is unchanged and still builds the PRIMARY — the
+   * failover is a wrapper around whatever it returns, which is why a mixed
+   * universe's `AssetClassRoutingDataSource` keeps routing exactly as before
+   * and only the equities instruments in it acquire a fallback. The
+   * `config.dataSource` seam still short-circuits both: a caller that brings
+   * its own source (`FixtureDataSource`, a backtest source) has already
+   * decided where bars come from, and wrapping it would be this module
+   * overriding that decision.
+   */
   const dataSource =
-    config.dataSource ?? buildAlpacaDataSource(config, universe, tradingCalendar, alpacaBucket);
+    config.dataSource ??
+    buildFailoverDataSource({
+      primary: buildAlpacaDataSource(config, universe, tradingCalendar, alpacaBucket),
+      universe,
+      // The primary's own calendar, not a second instance: the fallback's bars
+      // are session-normalized against it so a failover cannot change what a
+      // `lookback` means at the store.
+      calendar: tradingCalendar,
+      equitiesFallbackBarFetcher: config.equitiesFallbackBarFetcher,
+      alertChannel: config.dataFailoverAlerts ?? new LoggingDataFailoverAlertChannel(logger),
+      logger,
+      now: () => clock.now(),
+    });
   const marketData: MarketDataService = new MarketDataServiceImpl(
     dataSource,
     clock,
@@ -579,13 +616,6 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // stores — the same reasoning as `setupStore` below, and the same defect
   // (#432) that would otherwise recur.
   const marketIntelligence = new MarketIntelligenceStore(clock);
-
-  /**
-   * Hoisted above the analysts (#745), which now take a telemetry sink built on
-   * it. It depends on nothing but `config`, so the move is free — the same
-   * reasoning that hoisted `breachAlerts` below.
-   */
-  const logger = config.logger ?? new JsonLogger();
 
   // #752: one monitor for the whole process, restart-clean in memory like
   // `consecutiveSkips` (analysts-adapter.ts). Exposed on `ProductionComponents`

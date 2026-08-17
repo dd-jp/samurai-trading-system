@@ -22,9 +22,11 @@ import {
   buildSmokeFixtureBars,
   ConstantResponseLlmClient,
   type CryptoEmulationEvidence,
+  type DataFailoverEvidence,
   type EntrypointFaultGuardEvidence,
   type ExitPathEvidence,
   evaluateSmokeGate,
+  FAILOVER_IN_SESSION_OPEN_TIMES,
   FixedAccountStateProvider,
   formatSmokeReport,
   type LoggerResilienceEvidence,
@@ -225,6 +227,7 @@ function healthyGateOptions(
     loggerResilience?: LoggerResilienceEvidence;
     entrypointFaultGuards?: EntrypointFaultGuardEvidence;
     thresholdClamp?: ThresholdClampEvidence;
+    dataFailover?: DataFailoverEvidence;
   } = {},
 ) {
   return {
@@ -235,6 +238,29 @@ function healthyGateOptions(
     loggerResilience: overrides.loggerResilience ?? healthyLoggerResilience(),
     entrypointFaultGuards: overrides.entrypointFaultGuards ?? healthyEntrypointFaultGuards(),
     thresholdClamp: overrides.thresholdClamp ?? healthyThresholdClamp(),
+    dataFailover: overrides.dataFailover ?? healthyDataFailover(),
+  };
+}
+
+/** What `runDataFailoverScenario` (#562) reports when the root builds a FailoverDataSource. */
+function healthyDataFailover(overrides: Partial<DataFailoverEvidence> = {}): DataFailoverEvidence {
+  return {
+    storedSources: FAILOVER_IN_SESSION_OPEN_TIMES.map(() => 'polygon'),
+    storedOpenTimes: FAILOVER_IN_SESSION_OPEN_TIMES,
+    alerts: [
+      {
+        leg: 'equities',
+        symbol: 'SPY',
+        timeframe: '1h',
+        primaryName: 'alpaca',
+        fallbackName: 'polygon',
+        primaryError: 'alpaca 503 (smoke failover probe)',
+        reported_at: new Date('2026-08-04T12:00:00.000Z'),
+        suppressed_since_last: 0,
+      },
+    ],
+    readError: null,
+    ...overrides,
   };
 }
 
@@ -1599,5 +1625,58 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
     expect(gate.failures.some((failure) => failure.includes('stop-leg fill never came back'))).toBe(
       true,
     );
+  });
+
+  describe('the OHLCV failover (#562)', () => {
+    it('fails when the composition root read threw instead of failing over', () => {
+      // The mutation this check exists to catch: delete
+      // `buildFailoverDataSource` from production.ts and the primary's throw
+      // reaches the caller. No unit test of the wrapper can see that.
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({
+          dataFailover: healthyDataFailover({
+            readError: 'alpaca 503 (smoke failover probe)',
+            storedSources: [],
+            storedOpenTimes: [],
+            alerts: [],
+          }),
+        }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('threw instead of failing over');
+    });
+
+    it('fails when an out-of-session fallback bar reached the store', () => {
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({
+          dataFailover: healthyDataFailover({
+            storedSources: ['polygon', 'polygon', 'polygon'],
+            storedOpenTimes: ['2026-08-03T09:00:00.000Z', ...FAILOVER_IN_SESSION_OPEN_TIMES],
+          }),
+        }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('session-normalized set');
+    });
+
+    it('fails when the fallback served bars but alerted nobody', () => {
+      const gate = evaluateSmokeGate(
+        transactedObservations(),
+        healthyGateOptions({ dataFailover: healthyDataFailover({ alerts: [] }) }),
+      );
+
+      expect(gate.passed).toBe(false);
+      expect(gate.failures.join(' ')).toContain('DataFailoverAlertChannel');
+    });
+
+    it('passes when the root failed over, normalized and alerted', () => {
+      const gate = evaluateSmokeGate(transactedObservations(), healthyGateOptions());
+
+      expect(gate.failures.filter((failure) => failure.includes('#562'))).toEqual([]);
+    });
   });
 });
