@@ -11,11 +11,19 @@
  * `dashboard` scripts, which would each start their own `tsc`.
  */
 import { pathToFileURL } from 'node:url';
+import { installSupervisorContinueOnFault, watchSupervisorStdout } from './fault-guard.js';
 import { startSupervisor } from './supervisor.js';
 
 // Entrypoint guard, matching orchestrator/index.ts: this file is importable,
 // and importing it must not spawn two processes.
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  // #764: installed before the startup banner below — the earliest
+  // `console.*` call in this file — and before `startSupervisor()`. See
+  // `fault-guard.ts` for the measurement and why the arbitrary-fault handler
+  // (installed after `startSupervisor()` returns) is a separate call at a
+  // separate time.
+  watchSupervisorStdout();
+
   console.log('Samurai serve → starting orchestrator + dashboard. Ctrl+C to stop both.');
 
   let supervisor: ReturnType<typeof startSupervisor>;
@@ -28,6 +36,12 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(1);
   }
+
+  // #764: installed only once both children are actually spawned — the
+  // `try/catch` above already stops the process on a pre-spawn failure, and a
+  // continue-posture handler installed before it runs would risk swallowing
+  // exactly the failure that block exists to surface.
+  installSupervisorContinueOnFault();
 
   // Forwarded, never acted on locally: the orchestrator drains on SIGINT, and
   // exiting here first would orphan that drain mid-tick. `done` resolves only

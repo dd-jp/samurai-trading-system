@@ -21,9 +21,18 @@
 import { fileURLToPath } from 'node:url';
 import { AlpacaHttpBrokerClient } from '../../pipeline/execution/index.js';
 import { openSharedStore, resolveStoreMode, sharedStorePath } from '../../shared/store/index.js';
+import { installDashboardContinueOnFault, watchDashboardStdout } from './fault-guard.js';
 import { ProviderStatusPoller } from './provider-status.js';
 import { bundleDiagnostic, createDashboardServer } from './server.js';
 import { SqliteQueryStore } from './sqlite-query-store.js';
+
+// #764: installed before anything else in this file writes a line — the
+// bundle-diagnostic warn below is the earliest `console.*` call, and
+// `console.log`/`console.error` write through `process.stdout`/`process.stderr`
+// the same way a raw write does. See `fault-guard.ts` for the measurement and
+// why the arbitrary-fault handler (installed further down, after boot) is a
+// separate call installed at a separate time.
+watchDashboardStdout();
 
 const port = Number(process.env.PORT ?? 8787);
 const host = process.env.HOST ?? '127.0.0.1';
@@ -117,6 +126,14 @@ const server = createDashboardServer({
 });
 
 await server.start();
+
+// #764: installed only after boot succeeds — `resolveStoreMode()` (#330) and
+// `openSharedStore` above refuse on purpose, and a continue-posture handler
+// installed before they run would risk swallowing exactly the refusal they
+// exist to surface. A fault during boot still stops the process; only a
+// fault while serving continues from here on. See `fault-guard.ts`.
+installDashboardContinueOnFault();
+
 // Started after the server is listening, and not awaited: the first poll makes
 // two network calls, and holding the page hostage to a slow third party would
 // invert the priority — the store-backed views need no provider at all.
