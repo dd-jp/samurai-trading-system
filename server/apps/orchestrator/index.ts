@@ -210,6 +210,18 @@ export { TradeChannelUnpricedFillAlert } from './unpriced-fill-channel.js';
  * told which one, by name, rather than silently inheriting a profile nobody
  * chose. The shipped entrypoint passes the profile explicitly; nothing
  * defaults to it.
+ *
+ * **`universe` joined this list in #738, and it is the odd one out on
+ * purpose.** Every other member is a per-stage tuning value with no sane
+ * process-wide default; `universe` actually has one — `buildProductionComponents`
+ * (production.ts) still falls back to `SMOKE_TEST_UNIVERSE` for a library
+ * caller that constructs an orchestrator directly. This process's own
+ * composition root is different: an equities-only fallback resolved on a
+ * closed session produces an EMPTY tick plan, which is indistinguishable from
+ * a healthy no-trade run (#691, #625 both presented with exactly that
+ * signature) — so `startFromEnvironment` refuses to guess and demands an
+ * explicitly-configured universe instead. The library default is unchanged;
+ * only this entrypoint's silence is closed.
  */
 export const REQUIRED_INJECTED_CONFIG = [
   'traderConfig',
@@ -220,6 +232,7 @@ export const REQUIRED_INJECTED_CONFIG = [
   'breakerConfig',
   'costConfig',
   'ciiConsumerConfig',
+  'universe',
 ] as const satisfies readonly (keyof ProductionConfig)[];
 
 const MODES = ['live', 'paper', 'backtest'] as const;
@@ -643,7 +656,12 @@ export async function startFromEnvironment(
     payload: {
       env,
       mode,
-      universe: (injected.universe ?? SMOKE_TEST_UNIVERSE).map((i) => i.asset),
+      // `injected.universe` is guaranteed defined here — REQUIRED_INJECTED_CONFIG
+      // already refused to start without it (#738) — so there is no live
+      // fallback left to express in this line. `injected` is still typed
+      // `Partial<ProductionConfig>`, hence the same cast `buildProductionOrchestrator`
+      // above already relies on.
+      universe: (injected as ProductionConfig).universe!.map((i) => i.asset),
       orphaned_go_verdicts: orphans.length,
     },
   });

@@ -74,12 +74,19 @@ describe('the equity entry window (#706)', () => {
     expect(stocksFiringAt(saturday)).toBe(false);
   });
 
-  it('leaves crypto untouched at every hour', () => {
-    // Crypto never consults the calendar and must never consult the window.
-    for (const time of ['02:00', '09:00', '14:35', '15:45', '23:30']) {
-      const plan = schedulerAt(true).nextTick(clockAt(at(time)));
-      expect(plan.instruments.some((i) => i.asset_class === 'crypto')).toBe(true);
-    }
+  it('gates crypto on the same calendar and window as everything else (#738)', () => {
+    // #738 removed the always-open exception: `UniverseScheduler` is
+    // asset-class-blind, so BTC-USD in `UNIVERSE` above is gated on the SAME
+    // LSE calendar + overlap window as `3USL` — present inside the overlap,
+    // absent outside it, exactly like the equity assertions above.
+    const cryptoFiringAt = (time: string): boolean =>
+      schedulerAt(true)
+        .nextTick(clockAt(at(time)))
+        .instruments.some((i) => i.asset_class === 'crypto');
+
+    expect(cryptoFiringAt('09:00')).toBe(false);
+    expect(cryptoFiringAt('14:35')).toBe(true);
+    expect(cryptoFiringAt('15:45')).toBe(false);
   });
 
   it('is off by default, so existing profiles and the harness are unchanged', () => {
