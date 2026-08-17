@@ -17,6 +17,7 @@ import { TradeChannelHeartbeat } from './heartbeat-channel.js';
 import { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
 import type { ProductionConfig } from './production.js';
 import { TradeChannelResidualExposureAlert } from './residual-exposure-alert-channel.js';
+import { TradeChannelThresholdClampAlert } from './threshold-clamp-alert-channel.js';
 import type { Logger } from './types.js';
 import { TradeChannelUnpricedFillAlert } from './unpriced-fill-channel.js';
 
@@ -278,6 +279,7 @@ describe('buildAlertChannels — telegram', () => {
     expect(channels.unpricedFillAlerts).toBeInstanceOf(TradeChannelUnpricedFillAlert);
     expect(channels.residualExposureAlerts).toBeInstanceOf(TradeChannelResidualExposureAlert);
     expect(channels.breachAlerts).toBeInstanceOf(TradeChannelBreachAlert);
+    expect(channels.thresholdClampAlerts).toBeInstanceOf(TradeChannelThresholdClampAlert);
   });
 
   /**

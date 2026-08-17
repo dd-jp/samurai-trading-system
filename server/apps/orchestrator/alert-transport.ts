@@ -115,6 +115,7 @@ import { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
 import type { AlertChannelSlots, ProductionConfig } from './production.js';
 import { TradeChannelResidualExposureAlert } from './residual-exposure-alert-channel.js';
 import { SqliteAuditLog } from './sqlite-audit-log.js';
+import { TradeChannelThresholdClampAlert } from './threshold-clamp-alert-channel.js';
 import { TradeChannelTraderDiagnosticAlert } from './trader-diagnostic-alert-channel.js';
 import type { Logger } from './types.js';
 import { TradeChannelUnpricedFillAlert } from './unpriced-fill-channel.js';
@@ -206,6 +207,15 @@ export const ALERT_CHANNEL_FIELDS = [
   // still runs, narrowed by one analyst's worth of evidence, and the
   // heartbeat keeps beating regardless.
   'miCoverageAlerts',
+  // #766 — the thirteenth. Same hole as `traderDiagnosticAlerts`: a real
+  // channel type (`ThresholdClampAlertChannel`, production/threshold-clamp-
+  // alert.ts) landing in the SAME change as its transport. The condition it
+  // reports — #638's in-code clamp refusing an out-of-bound `risk_thresholds`
+  // row at runtime — was already fail-closed on trading; what was missing was
+  // that the refusal reached only a log line, so a run in which it trips on
+  // every tick is indistinguishable from outside from a quiet market with no
+  // setups.
+  'thresholdClampAlerts',
 ] as const satisfies readonly (keyof AlertChannelSlots)[];
 
 /**
@@ -439,6 +449,13 @@ export function buildAlertChannels(deps: {
     // not a beat — same reasoning as `analystSkipAlerts`.
     ...(deps.injected.miCoverageAlerts === undefined
       ? { miCoverageAlerts: new TradeChannelMiCoverageAlert(telegram, chatId) }
+      : {}),
+    // #766. The escalation chat: an out-of-bound risk threshold tripping the
+    // #638 clamp at runtime is a decision waiting on the operator (fix the
+    // risk_thresholds row), not a beat — same reasoning as
+    // `traderDiagnosticAlerts`.
+    ...(deps.injected.thresholdClampAlerts === undefined
+      ? { thresholdClampAlerts: new TradeChannelThresholdClampAlert(telegram, chatId, deps.logger) }
       : {}),
   };
 }

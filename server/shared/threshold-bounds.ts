@@ -29,15 +29,20 @@
  * here THROWS. At boot that refuses the process. On the tuning-store write it
  * refuses the write and leaves the prior in-bound value standing. On the live
  * read it refuses to produce a risk decision at all: that throw is raised
- * inside a tick, so `tick-loop.ts`'s per-instrument catch (#507) takes it —
- * the instrument pass ABORTS, no order is placed, an `error` log line and an
+ * inside a tick, caught by `buildRiskStep`'s own catch (direct-bind.ts),
+ * which alerts through `ThresholdClampAlertChannel` (#766) and then
+ * re-throws unchanged for `tick-loop.ts`'s per-instrument catch (#507) — the
+ * instrument pass ABORTS, no order is placed, an `error` log line and an
  * `audit_log` row with `decision: 'crashed'` are written, and the loop
- * continues with the next instrument. It does NOT reach
- * `installFaultHandlers` and it does NOT raise an alert. That is fail-closed
- * on trading — no order can pass a Risk stage that threw — but it is not a
- * halt, so the boot-time and write-door checks are what actually keep a
- * mis-set line out of a running process. Alerting on a crashed instrument is
- * a separate gap, adjacent to #639.
+ * continues with the next instrument. That is fail-closed on trading — no
+ * order can pass a Risk stage that threw — and, since #766, audible: the
+ * boot-time and write-door checks are what keep a mis-set line out of a
+ * running process in the first place, and the live-read alert is what tells
+ * an operator one got in anyway. `RiskManagerImpl.evaluate()` (index.ts)
+ * skips this resolve entirely for an exit intent, so a tripped clamp refuses
+ * new entries without touching the exit/flatten path — see that method's own
+ * doc comment for why the ordering there is load-bearing (ADR-0014's
+ * flat-by-close invariant).
  *
  * ## Names
  *
@@ -257,4 +262,24 @@ export function assertThresholdsWithinBounds(
   if (violations.length > 1) {
     throw new Error(violations.map((violation) => violation.message).join('\n'));
   }
+}
+
+/**
+ * Recognises a clamp refusal regardless of shape (#766).
+ *
+ * A single crossing throws `ThresholdBoundViolationError`; TWO OR MORE at
+ * once (`assertThresholdsWithinBounds`, above) throw a plain `Error` whose
+ * text is the joined violation messages, not the typed class — the exact
+ * shape a `catch (error) { if (error instanceof ThresholdBoundViolationError)
+ * ... }` at either alert seam would miss, silencing the more alarming case
+ * (a config with multiple crossings) while the single-crossing case pages
+ * correctly. Matching on the shared "in-code clamp" phrase every
+ * `ThresholdBoundViolationError` message carries (see its constructor, above)
+ * closes that gap without giving the aggregate its own class — nothing else
+ * in the codebase catches the aggregate specifically, so introducing one
+ * would be a distinction with no second reader.
+ */
+export function isThresholdBoundViolation(error: unknown): boolean {
+  if (error instanceof ThresholdBoundViolationError) return true;
+  return error instanceof Error && error.message.includes('in-code clamp');
 }

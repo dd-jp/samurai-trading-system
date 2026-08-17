@@ -873,3 +873,45 @@ describe('RiskManagerImpl.evaluate — risk-critic skip record (review 2026-08-0
     expect(decision.reasons.some((reason) => reason.includes('risk_critic: skipped'))).toBe(false);
   });
 });
+
+describe('RiskManagerImpl.evaluate — exit bypasses the live threshold clamp (#766)', () => {
+  it('approves an exit even when the live risk_thresholds table has an out-of-bound row', () => {
+    // max_pbo's bound is 0.05 (threshold-bounds.ts) — 0.5 is a bright-line
+    // crossing, and resolveRiskConfig throws on it for an ENTRY. Before #766
+    // that resolve ran ahead of the exit bypass below, so it threw for an
+    // exit too — stranding the flatten/exit path behind a corrupt threshold
+    // row (ADR-0014's flat-by-close invariant).
+    const manager = new RiskManagerImpl(makeConfig(), {
+      getRiskThresholds: () => ({ max_pbo: 0.5 }),
+    });
+
+    const decision = manager.evaluate(makeInput({ intent: makeIntent({ intent_type: 'exit' }) }));
+
+    expect(decision.status).toBe('approved');
+  });
+
+  it('still refuses an ENTRY when the live risk_thresholds table has an out-of-bound row', () => {
+    // The other half: a probe that only checked the exit above could not
+    // tell a working clamp from one that stopped enforcing anything at all.
+    const manager = new RiskManagerImpl(makeConfig(), {
+      getRiskThresholds: () => ({ max_pbo: 0.5 }),
+    });
+
+    expect(() => manager.evaluate(makeInput())).toThrow(/in-code clamp/);
+  });
+
+  it("leaves an exit's cii_threshold-driven warnings unchanged whether or not the table is consulted", () => {
+    // The no-op argument the fix's own doc comment makes: cii_threshold is
+    // not in RISK_THRESHOLD_KEYS, so resolveRiskConfig never touches it —
+    // skipping the resolve for an exit changes nothing about what an exit
+    // decides.
+    const withoutSource = new RiskManagerImpl(makeConfig({ cii_threshold: 70 })).evaluate(
+      makeInput({ intent: makeIntent({ intent_type: 'exit' }) }),
+    );
+    const withSource = new RiskManagerImpl(makeConfig({ cii_threshold: 70 }), {
+      getRiskThresholds: () => ({ max_position_size: 5_000 }),
+    }).evaluate(makeInput({ intent: makeIntent({ intent_type: 'exit' }) }));
+
+    expect(withSource.warnings).toEqual(withoutSource.warnings);
+  });
+});

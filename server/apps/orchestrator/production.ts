@@ -170,7 +170,7 @@ import {
   NousSentimentClient,
 } from '../../providers/market-intelligence/index.js';
 import type { AssetClass, Clock, TuningStore } from '../../shared/index.js';
-import { resolveVenuePacing, TokenBucket } from '../../shared/index.js';
+import { isThresholdBoundViolation, resolveVenuePacing, TokenBucket } from '../../shared/index.js';
 import { tryNousCredentials } from '../../shared/llm/index.js';
 import { SqliteRiskLogStore, SqliteTraderLogStore } from '../../shared/store/index.js';
 import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
@@ -1126,6 +1126,14 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // construction and `autoTighten`'s response to a kill-line breach
       // changes no decision.
       thresholds: tuningStore,
+      // #766: the live-read clamp trip escalation. Same conditional-spread
+      // idiom as `traderDiagnosticAlerts` above, required by
+      // `exactOptionalPropertyTypes`: omitted rather than passed as
+      // `undefined` under `log-only`, where the catch's own logger is the
+      // whole reporting path.
+      ...(config.thresholdClampAlerts === undefined
+        ? {}
+        : { thresholdClampAlerts: config.thresholdClampAlerts }),
       // #726: sink for the catch's own guarded `riskLog.write` failure —
       // without it, a store failure while reporting a gate throw has nowhere
       // to go but silent loss (still fine; see that catch's doc comment) with
@@ -1853,6 +1861,21 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         message: 'daily feedback cycle failed',
         payload: { error: error instanceof Error ? error.message : String(error) },
       });
+
+      // #766: the daily kill-line check's half of #638's clamp — a throw here
+      // (`computeMetrics` via `assertKillThresholdsWithinBounds` /
+      // `assertThresholdsWithinBounds`, metrics.ts) previously left the cycle
+      // silently un-run with nothing beyond this log line. Runs once a day at
+      // most (this catch fires at most once per `runFeedbackCycle` call), so
+      // no latch is needed the way the live-read seam's per-tick catch needs
+      // one.
+      if (isThresholdBoundViolation(error)) {
+        config.thresholdClampAlerts?.postThresholdClampAlert({
+          where: 'daily-kill-line-check',
+          message: error instanceof Error ? error.message : String(error),
+          reported_at: clock.now(),
+        });
+      }
     }
   };
 

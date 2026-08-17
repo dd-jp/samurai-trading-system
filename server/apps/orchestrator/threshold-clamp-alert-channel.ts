@@ -1,0 +1,67 @@
+/**
+ * Trade-channel adapter for the threshold-clamp trip alert (#766) — the
+ * thirteenth outbound operator escalation.
+ *
+ * Same shape as `TradeChannelTraderDiagnosticAlert`: wrap the
+ * already-provisioned Telegram client rather than introduce a second
+ * integration, post to the ESCALATION chat (never the heartbeat chat, #342),
+ * and fire-and-forget since the port is synchronous — mirroring
+ * `TradeChannelBreachAlert`'s reasoning, this is a rare, severe event and the
+ * page must not be able to block the catch it was raised from.
+ */
+import type { TelegramClient } from '../../pipeline/verdict/index.js';
+import type {
+  ThresholdClampAlert,
+  ThresholdClampAlertChannel,
+} from './production/threshold-clamp-alert.js';
+import type { Logger } from './types.js';
+
+const WHERE_LABEL: Record<ThresholdClampAlert['where'], string> = {
+  'live-read':
+    'the live risk_thresholds read (RiskManagerImpl.evaluate, every tick) — new entries are ' +
+    'refused; exits and the flat-by-close flatten do not consult this table and are unaffected',
+  'daily-kill-line-check':
+    "the daily feedback cycle's kill-line check (computeMetrics) — the cycle stopped " +
+    'completing; the four kill-lines are unevaluated until the offending row is fixed',
+};
+
+function formatThresholdClampAlert(alert: ThresholdClampAlert): string {
+  return (
+    `Samurai THRESHOLD CLAMP TRIPPED: ${WHERE_LABEL[alert.where]}.\n` +
+    `Detected ${alert.reported_at.toISOString()}.\n` +
+    `Refusal: ${alert.message}\n` +
+    'An out-of-bound risk threshold was REFUSED rather than applied (#638) — this is fail-' +
+    'closed on trading, not a live risk exposure. Fix the offending risk_thresholds row.'
+  );
+}
+
+export class TradeChannelThresholdClampAlert implements ThresholdClampAlertChannel {
+  readonly #telegram: TelegramClient;
+  readonly #chatId: string;
+  readonly #logger: Logger;
+
+  constructor(telegram: TelegramClient, chatId: string, logger: Logger) {
+    this.#telegram = telegram;
+    this.#chatId = chatId;
+    this.#logger = logger;
+  }
+
+  postThresholdClampAlert(alert: ThresholdClampAlert): void {
+    const text = formatThresholdClampAlert(alert);
+    void this.#telegram.sendMessage(this.#chatId, text).catch((error: unknown) => {
+      // The one alert whose failure to send must itself stay visible — see
+      // `TradeChannelBreachAlert`'s identical reasoning.
+      this.#logger.log({
+        trace_id: 'threshold-clamp',
+        stage: 'risk',
+        level: 'error',
+        message: 'threshold-clamp alert failed to send — the clamp trip still stands',
+        payload: {
+          where: alert.where,
+          reported_at: alert.reported_at.toISOString(),
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+    });
+  }
+}

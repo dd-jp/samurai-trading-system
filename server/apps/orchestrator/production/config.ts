@@ -53,6 +53,7 @@ import type { AnalystSkipAlertChannel } from './analysts-adapter.js';
 import { DEFAULT_STAGE2_MAX_AGE_DAYS } from './daily-equity-metrics-source.js';
 import type { AccountStateProvider, VolatilityReadingProvider } from './direct-bind.js';
 import type { MiCoverageAlertChannel } from './mi-coverage.js';
+import type { ThresholdClampAlertChannel } from './threshold-clamp-alert.js';
 import type { TraderDiagnosticAlertChannel } from './trader-diagnostic-alert.js';
 
 /**
@@ -231,6 +232,28 @@ export interface AlertChannelSlots {
    * nothing on exactly the days coverage is patchy.
    */
   miCoverageAlerts?: MiCoverageAlertChannel;
+  /**
+   * Where an out-of-bound `risk_thresholds` row tripping #638's in-code clamp
+   * at RUNTIME is escalated (#766) — the live-read seam
+   * (`RiskManagerImpl.evaluate()`, every tick) and the daily kill-line check
+   * (`computeMetrics`). Absent = log-only, and there is deliberately NO
+   * `Logging…Channel` standing in behind it, the same reason
+   * `traderDiagnosticAlerts` has none: both catch sites already write an
+   * `error`-level log line before reaching this port, so a logging
+   * implementation would emit each trip twice.
+   * `TradeChannelThresholdClampAlert` (threshold-clamp-alert-channel.ts) is
+   * what an unattended soak (#238) needs, and `SAMURAI_ALERTS=telegram`
+   * supplies it — the thirteenth `ALERT_CHANNEL_FIELDS` member.
+   *
+   * Both trips are already fail-closed on trading without this channel — an
+   * out-of-bound threshold cannot place an order, and `RiskManagerImpl`
+   * skips the live resolve entirely for an exit intent (index.ts), so the
+   * flat-by-close flatten is unaffected either way. What an absent channel
+   * costs is discoverability: a run in which the live-read clamp trips on
+   * every tick looks, from outside, like a quiet market with no setups
+   * (#625/#691's signature).
+   */
+  thresholdClampAlerts?: ThresholdClampAlertChannel;
 }
 
 /**
