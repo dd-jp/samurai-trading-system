@@ -37,6 +37,12 @@ export default defineConfig({
     // `data/samurai-*.sqlite` in this checkout — see the file for the incident
     // this exists to prevent.
     globalSetup: ['./vitest.global-setup.ts'],
+    // Fails any test FILE that tried to reach a host off this machine. Runs
+    // per file rather than once per run (unlike `globalSetup` above) because
+    // `globalThis.fetch` is per-worker state and the report has to name the
+    // file that escaped — see the file for the 92-passing-tests-two-live-vendors
+    // measurement that produced it.
+    setupFiles: ['./vitest.setup.ts'],
     coverage: {
       provider: 'v8',
       include: ['server/**/*.ts', 'contracts/**/*.ts'],

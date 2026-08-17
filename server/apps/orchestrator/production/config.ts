@@ -43,6 +43,7 @@ import type {
   CiiScoreProvider,
   GdeltGkgClient,
   MiArchiveStore,
+  PolymarketWireClient,
 } from '../../../providers/market-intelligence/index.js';
 import type { Clock, ClosedTradeStore, VenuePacingConfig } from '../../../shared/index.js';
 import type { SharedStore as SqliteHandle } from '../../../shared/store/index.js';
@@ -498,6 +499,23 @@ export interface ProductionConfig extends AlertChannelSlots {
    * leaves it undefined and gets the real client.
    */
   gdeltClient?: GdeltGkgClient;
+  /**
+   * Gap between Polymarket macro polls. Default 1 hour
+   * (`DEFAULT_POLYMARKET_POLL_INTERVAL_MS`, #504).
+   *
+   * Its own cadence rather than the tick's, for GDELT's reason: the curated
+   * table is macro, not per-instrument, so hanging it off a per-instrument
+   * refresh would poll it once per universe member for one shared result.
+   */
+  polymarketPollIntervalMs?: number;
+  /**
+   * The Polymarket fetcher, injectable — load-bearing for the same reason
+   * `gdeltClient` is. Polymarket's public APIs need **no key**, so nothing
+   * gates a test that forgot to stub it: it would silently hit the live
+   * vendor on every unit run. Tests and the offline smoke gate inject a stub
+   * here; production leaves it undefined and gets the real client.
+   */
+  polymarketClient?: PolymarketWireClient;
   /**
    * Bounds concurrent instrument passes within one tick. Default 1.
    *

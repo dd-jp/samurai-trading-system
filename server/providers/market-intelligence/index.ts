@@ -329,6 +329,28 @@ export {
   type NousSentimentClientOptions,
 } from './grok/nous-sentiment-client.js';
 export { MiIngestAgent, type MiIngestAgentDeps, wireSymbol } from './mi-ingest-agent.js';
+// The Polymarket macro/event path (#504) — the second `news` writer, added for
+// the measured LSE-ETP coverage hole rather than for an empty bucket.
+export {
+  CURATED_MACRO_MARKETS,
+  type CuratedMacroMarket,
+  type PolymarketOutcome,
+} from './polymarket/curated-markets.js';
+export {
+  floorToPolymarketBucket,
+  POLYMARKET_ASSET_CLASS,
+  POLYMARKET_REFRESH_MS,
+  PolymarketAgent,
+  type PolymarketAgentDeps,
+  type PolymarketWireClient,
+  SOURCE_POLYMARKET,
+} from './polymarket/polymarket-agent.js';
+export {
+  PolymarketClient,
+  type PolymarketClientOptions,
+  type PolymarketMarket,
+  type PolymarketPricePoint,
+} from './polymarket/polymarket-client.js';
 export { type ScorableItem, scoreItems, UNSCORED } from './scoring/item-scorer.js';
 export { type AlpacaNewsArticle, AlpacaNewsClient } from './sources/alpaca-news-client.js';
 export {

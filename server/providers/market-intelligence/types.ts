@@ -23,8 +23,12 @@ export interface AgentIntelligence {
   /**
    * `alpaca-news` added by the MI rework (#553, map #552) — the first
    * deterministic fetcher, alongside the two retrieval-era agent ids.
+   * `polymarket` added by #504, the macro/event path. Widening this union is a
+   * TYPE change and nothing more: there is no `market_intelligence` table
+   * (`index.ts` — the store is in-memory and restart-clean), so no migration
+   * is involved, whatever `nous-sentiment-client.ts`'s header claims.
    */
-  agent_id: 'deepresearch' | 'grok' | 'alpaca-news';
+  agent_id: 'deepresearch' | 'grok' | 'alpaca-news' | 'polymarket';
   timestamp: Date;
   asset_class: AssetClass;
   items: IntelligenceItem[];

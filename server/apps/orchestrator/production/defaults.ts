@@ -66,6 +66,19 @@ export const DEFAULT_FILL_POLL_INTERVAL_MS = 15_000;
  */
 export const DEFAULT_GDELT_POLL_INTERVAL_MS = 5 * 60_000;
 /**
+ * How often the Polymarket poller is OFFERED a chance to run (#504).
+ *
+ * The cadence itself is `POLYMARKET_REFRESH_MS` (1h) and the agent's own
+ * epoch-floored bucket enforces it: a poll inside a bucket already fetched
+ * returns immediately, making no request at all. So this timer only decides
+ * how promptly a bucket rollover is noticed. Fifteen minutes rather than a
+ * matching hour for `DEFAULT_GDELT_POLL_INTERVAL_MS`'s phase argument — a
+ * poller ticking at exactly the bucket width, started just after an hour
+ * boundary, would lag every bucket by almost the full hour forever. The extra
+ * polls are free: three of the four make no network call.
+ */
+export const DEFAULT_POLYMARKET_POLL_INTERVAL_MS = 15 * 60_000;
+/**
  * ATR(14): the conventional realized-volatility read, and the same shape
  * `SimulatedAdapterConfig.volatility_indicator` carries for
  * `MarketState.volatility`. `'atr'` is one of the four indicators

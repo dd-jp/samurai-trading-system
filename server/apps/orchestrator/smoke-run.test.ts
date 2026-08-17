@@ -176,6 +176,8 @@ function transactedObservations(): SmokeObservations {
       { idempotency_key: 'idem-exit-1', instrument: 'BTC-USD', status: 'submitted' },
     ],
     gdeltRowsArchived: 1,
+    polymarketRowsArchived: 1,
+    polymarketNewsItems: 1,
     // #430 — one per wired mechanism. A healthy run has all of them.
     cosineSetups: [{ debate_id: 'debate-1', instrument: 'BTC-USD' }],
     riskThresholds: [{ name: 'max_position_size', value: 5_000 }],
@@ -390,6 +392,28 @@ describe('evaluateSmokeGate', () => {
 
     expect(gate.passed).toBe(false);
     expect(gate.failures.join(' ')).toContain('GDELT archived 0 macro rows');
+  });
+
+  it('fails when the Polymarket poller archived nothing — the no-caller shape (#504)', () => {
+    const observations = transactedObservations();
+    observations.polymarketRowsArchived = 0;
+
+    const gate = evaluateSmokeGate(observations, healthyGateOptions());
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.join(' ')).toContain('Polymarket archived 0 macro rows');
+  });
+
+  it('fails when Polymarket fetched but nothing reached the news bucket (#504)', () => {
+    // The half an archive count cannot see: rows written, items invisible to
+    // the analyst that the whole source exists to feed.
+    const observations = transactedObservations();
+    observations.polymarketNewsItems = 0;
+
+    const gate = evaluateSmokeGate(observations, healthyGateOptions());
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.join(' ')).toContain('Polymarket put 0 items in the news bucket');
   });
 
   it('fails when the GDELT theme filter stopped filtering (#556)', () => {
@@ -840,6 +864,8 @@ describe('formatSmokeReport', () => {
       closedTrades: [],
       flattenSubmissions: [],
       gdeltRowsArchived: 1,
+      polymarketRowsArchived: 1,
+      polymarketNewsItems: 1,
 
       cosineSetups: [],
       riskThresholds: [],
@@ -1147,6 +1173,8 @@ describe('runSmoke (end-to-end, real composition root)', () => {
       closedTrades: [],
       flattenSubmissions: [],
       gdeltRowsArchived: 1,
+      polymarketRowsArchived: 1,
+      polymarketNewsItems: 1,
 
       cosineSetups: [],
       riskThresholds: [],

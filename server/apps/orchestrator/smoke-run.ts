@@ -179,9 +179,14 @@ import {
   UsEquityRegularHoursCalendar,
 } from '../../providers/market-data-service/index.js';
 import {
+  CURATED_MACRO_MARKETS,
   GdeltGkgClient,
+  type MarketIntelligenceStore,
   MiArchiveStore,
+  POLYMARKET_ASSET_CLASS,
+  PolymarketClient,
   SOURCE_GDELT,
+  SOURCE_POLYMARKET,
 } from '../../providers/market-intelligence/index.js';
 import { delay } from '../../shared/http/delay.js';
 import type { OrderIntent } from '../../shared/index.js';
@@ -307,6 +312,86 @@ function smokeGdeltClient(): GdeltGkgClient {
 }
 
 /**
+ * How many Polymarket macro items the canned wire should produce (#504).
+ *
+ * Named for `SMOKE_GDELT_EXPECTED_ROWS`' reason — the fixture below and the
+ * gate are one fact stated twice, and a hardcoded number in the gate would
+ * either turn a correct fixture change red or, worse, keep passing for the
+ * wrong reason. ONE: the fixture serves a healthy market for the first curated
+ * row, a thin-volume market for the second, and a rotted (empty) event for
+ * every other row. So 0 means the poller never ran from the composition root,
+ * and 2 means the fail-closed volume guard stopped biting.
+ */
+const SMOKE_POLYMARKET_EXPECTED_ITEMS = 1;
+
+/**
+ * A Polymarket client serving canned Gamma and CLOB responses.
+ *
+ * A REAL `PolymarketClient` behind a fake `fetchImpl`, not a hand-rolled fake
+ * returning parsed objects — `smokeGdeltClient`'s header has the argument, and
+ * it applies with equal force here: Gamma serialises `outcomes`,
+ * `outcomePrices` and `clobTokenIds` as JSON-encoded STRINGS, and that decode
+ * is most of what this client is. A fake returning ready-made objects would
+ * leave it unexercised in the one gate that runs the real composition root.
+ *
+ * The event payloads are derived from `CURATED_MACRO_MARKETS` rather than
+ * restating slugs, so the shipped table and this fixture cannot drift: a row
+ * re-pointed at a new slug keeps working here without an edit.
+ */
+function smokePolymarketClient(): PolymarketClient {
+  const [healthy, thin] = CURATED_MACRO_MARKETS;
+  const marketFor = (slug: string, volume24hr: number): Record<string, unknown> => ({
+    slug,
+    question: 'Smoke macro market',
+    outcomes: '["Yes", "No"]',
+    outcomePrices: '["0.34", "0.66"]',
+    clobTokenIds: '["token-yes", "token-no"]',
+    bestBid: 0.65,
+    bestAsk: 0.66,
+    spread: 0.01,
+    volume24hr,
+    liquidityNum: 250_000,
+    updatedAt: new Date(SMOKE_RUN_INSTANT.getTime() - 5 * 60_000).toISOString(),
+    closed: false,
+  });
+
+  const eventsFor = (slug: string): unknown[] => {
+    if (healthy !== undefined && slug === healthy.eventSlug) {
+      return [{ slug, markets: [marketFor(healthy.marketSlug, 533_307)] }];
+    }
+    if (thin !== undefined && slug === thin.eventSlug) {
+      // Below `MIN_VOLUME_24H_USD`, so the agent must refuse it — the negative
+      // half of this probe, and the reason the expected count is 1 and not 2.
+      return [{ slug, markets: [marketFor(thin.marketSlug, 5)] }];
+    }
+    // Every other curated row reads as rotted: Gamma answers with an empty
+    // array for a slug that no longer exists, which is the shape the agent
+    // logs a warn for and ingests nothing on.
+    return [];
+  };
+
+  // A 24h hourly series ending at the frozen run instant, rising 0.60 -> 0.66.
+  // A +0.06 delta clears the ±0.02 dead band, so the item is `sentiment: 1`
+  // with `confidence` 0.30 — a real direction rather than a dead-band zero,
+  // which would pass the gate while proving less.
+  const history = Array.from({ length: 25 }, (_, index) => ({
+    t: Math.floor((SMOKE_RUN_INSTANT.getTime() - (24 - index) * 60 * 60_000) / 1000),
+    p: 0.6 + (0.06 * index) / 24,
+  }));
+
+  return new PolymarketClient({
+    fetchImpl: (async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('/prices-history')) {
+        return new Response(JSON.stringify({ history }));
+      }
+      const slug = new URL(url).searchParams.get('slug') ?? '';
+      return new Response(JSON.stringify(eventsFor(slug)));
+    }) as unknown as typeof fetch,
+  });
+}
+
+/**
  * The instant the whole run is frozen at — clock, bars, mark and quote alike.
  * A fixed literal rather than `new Date()` so two runs of `yarn smoke` produce
  * identical fixtures and identical decisions.
@@ -321,6 +406,13 @@ function smokeGdeltClient(): GdeltGkgClient {
  * run injects its own `AlwaysOpenCalendar` override below rather than
  * depending on `SMOKE_RUN_INSTANT` falling inside a real session. Nothing
  * else in the offline path compares against real wall-clock time.
+ *
+ * The exact-hour alignment is LOAD-BEARING for the Polymarket gate (#504).
+ * Items are stamped at the ingest instant (#782), and
+ * `MarketIntelligenceStore.getContext()` floors its window end to the debate
+ * bar, so an item stamped at 12:00:00.000 is visible while one stamped at
+ * 12:00:00.001 is not until 13:00. Do not nudge this constant off the hour
+ * without expecting `news items served: 0` with a row still archived.
  */
 export const SMOKE_RUN_INSTANT = new Date('2026-08-04T12:00:00.000Z');
 
@@ -1934,6 +2026,17 @@ export interface SmokeObservations {
    */
   gdeltRowsArchived: number;
   /**
+   * Rows the Polymarket macro layer archived, and the items it actually put in
+   * front of `fundamental` (#504).
+   *
+   * BOTH, deliberately. The archive row proves a fetch happened; only the
+   * store read proves the item reached the `news` bucket the analyst queries —
+   * and the gap between those two claims is where this repo's dominant defect
+   * (a mechanism nothing consumes) lives.
+   */
+  polymarketRowsArchived: number;
+  polymarketNewsItems: number;
+  /**
    * From `cosine_setups` — the row `Trader.decide` writes at decision time
    * (#432). Observed here for `debates`' reason and from the same defect: the
    * retrieval mechanism (#75) and the store (#198) both existed and `decide()`
@@ -1981,6 +2084,7 @@ export interface SmokeObservations {
 export function readSmokeObservations(
   db: SqliteHandle,
   miArchive?: MiArchiveStore,
+  marketIntelligence?: MarketIntelligenceStore,
 ): SmokeObservations {
   const auditRows = db
     .prepare('SELECT trace_id, stage, decision FROM audit_log ORDER BY rowid')
@@ -2017,6 +2121,14 @@ export function readSmokeObservations(
       .prepare('SELECT idempotency_key, instrument, status FROM flatten_submissions ORDER BY rowid')
       .all() as SmokeObservations['flattenSubmissions'],
     gdeltRowsArchived: miArchive?.rawRows(SOURCE_GDELT).length ?? 0,
+    polymarketRowsArchived: miArchive?.rawRows(SOURCE_POLYMARKET).length ?? 0,
+    // The SAME 24h window `fundamental` reads (`MI_CONTEXT_WINDOW_MS`), on the
+    // same store instance, so this counts what the analyst would have seen and
+    // not merely what was written.
+    polymarketNewsItems:
+      marketIntelligence
+        ?.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'smoke')
+        .news.filter((item) => item.source === SOURCE_POLYMARKET).length ?? 0,
     // #430. Each of these is a mechanism that was, at some point, fully built,
     // fully unit-tested and called by nothing in production. The table row is
     // the only evidence that a caller exists.
@@ -3192,6 +3304,37 @@ export function evaluateSmokeGate(
     );
   }
 
+  // #504/#430. Two counts, because they answer different questions: the
+  // archive row says a fetch reached the vendor path, the store item says the
+  // fundamental analyst could actually see the result. A mechanism that
+  // fetches and stores nothing readable is the shape this repo keeps shipping.
+  //
+  // What these two cover is the STARTUP refresh only — `start()` fires
+  // `void polymarketAgent.refresh('startup')` once, and the repeating
+  // `setInterval` behind it runs at DEFAULT_POLYMARKET_POLL_INTERVAL_MS
+  // (15 minutes) against a smoke run that finishes in seconds, so it provably
+  // never fires here. The recurring poll is UNCOVERED by this gate; only the
+  // composition-root wiring of the first refresh is.
+  if (observations.polymarketRowsArchived !== SMOKE_POLYMARKET_EXPECTED_ITEMS) {
+    failures.push(
+      `Polymarket archived ${observations.polymarketRowsArchived} macro rows, expected exactly ` +
+        `${SMOKE_POLYMARKET_EXPECTED_ITEMS} — 0 means the startup refresh never ran from the ` +
+        'composition root, more means the fail-closed guard stopped refusing the thin-volume ' +
+        'market the fixture serves (#504)',
+    );
+  }
+  if (observations.polymarketNewsItems !== SMOKE_POLYMARKET_EXPECTED_ITEMS) {
+    failures.push(
+      `Polymarket put ${observations.polymarketNewsItems} items in the news bucket, expected ` +
+        `exactly ${SMOKE_POLYMARKET_EXPECTED_ITEMS} — 0 with rows archived means the items ` +
+        'never reached MarketIntelligenceStore, or were stamped outside the debate bar the ' +
+        'analysts query. Items now carry the INGEST INSTANT (#782), and getContext floors its ' +
+        'window to the hour, so this count depends on SMOKE_RUN_INSTANT being exactly ' +
+        'hour-aligned — a smoke clock that drifts off the hour before the startup refresh ' +
+        'lands would read 0 here with a row archived (#504, #782)',
+    );
+  }
+
   return { passed: failures.length === 0, failures };
 }
 
@@ -3272,6 +3415,13 @@ export function formatSmokeReport(
   // One canned batch of two rows, one of which carries a watched theme — so 1
   // is correct and 2 would mean the theme filter has stopped filtering.
   lines.push('', `GDELT macro rows archived: ${observations.gdeltRowsArchived}`);
+  // One healthy market, one refused on thin volume, the rest served as rotted
+  // slugs — so 1 and 1 is correct and anything else is a wiring or guard
+  // change.
+  lines.push(
+    `Polymarket macro rows archived: ${observations.polymarketRowsArchived}, ` +
+      `news items served: ${observations.polymarketNewsItems}`,
+  );
 
   lines.push('');
   if (gate.passed) {
@@ -3509,6 +3659,12 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // whole macro layer unproven in the one gate that runs the real
       // composition root.
       gdeltClient: smokeGdeltClient(),
+      // Polymarket needs no key either, so without this injection the run
+      // would reach the live vendor from `start()` and break the banner's
+      // "no credentials, no network" claim. A canned wire keeps the claim true
+      // AND keeps the whole decode/guard/ingest path exercised — see
+      // `smokePolymarketClient`.
+      polymarketClient: smokePolymarketClient(),
       clock,
       logger,
       universe: SMOKE_TEST_UNIVERSE,
@@ -3618,7 +3774,15 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     // the root's `config.dataSource ??` seam short-circuits the failover there.
     const dataFailover = await runDataFailoverScenario(logger);
 
-    const observations = readSmokeObservations(db, smokeMiArchive);
+    // Safe to read the Polymarket counts here, and only here: `start()` fires
+    // the first refresh as `void polymarketAgent.refresh('startup')`, so its
+    // store write is in flight after `start()` resolves — but `stop()` (line
+    // above, in the `finally`) awaits `polymarketAgent.whenIdle()` in its
+    // `Promise.allSettled`, which drains it. Moving this read ABOVE the
+    // `orchestrator.stop()` call would race that write. The two earlier
+    // `readSmokeObservations(db)` calls pass no store, so they observe ticks
+    // and fills only and are unaffected.
+    const observations = readSmokeObservations(db, smokeMiArchive, orchestrator.marketIntelligence);
     const gate = evaluateSmokeGate(observations, {
       minTicks: targetTicks,
       alpacaWireClientReached: alpacaBrokerClient.reached,

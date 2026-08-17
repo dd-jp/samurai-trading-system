@@ -168,6 +168,8 @@ import {
   type MiArchiveStore,
   MiIngestAgent,
   NousSentimentClient,
+  PolymarketAgent,
+  PolymarketClient,
 } from '../../providers/market-intelligence/index.js';
 import type { AssetClass, Clock, TuningStore } from '../../shared/index.js';
 import { isThresholdBoundViolation, resolveVenuePacing, TokenBucket } from '../../shared/index.js';
@@ -291,6 +293,7 @@ import {
   DEFAULT_GDELT_POLL_INTERVAL_MS,
   DEFAULT_HEARTBEAT_INTERVAL_MS,
   DEFAULT_LLM_RATE_LIMIT_CONFIG,
+  DEFAULT_POLYMARKET_POLL_INTERVAL_MS,
   DEFAULT_TICK_INTERVAL_MS,
   DEFAULT_VOLATILITY_INDICATOR,
   universeAssetClasses,
@@ -309,6 +312,14 @@ export interface ProductionOrchestrator {
   logger: Logger;
   /** #752: the market-intelligence coverage monitor — see `ProductionComponents.marketIntelligenceCoverage`. */
   marketIntelligenceCoverage: MiCoverageMonitor;
+  /**
+   * The MI store itself (#504), exposed for `marketIntelligenceCoverage`'s
+   * reason: the offline smoke gate has to read back what the ingestion agents
+   * actually put in front of the analysts. An archive row proves a fetch
+   * happened; only a `getContext` read proves the item reached the bucket
+   * `fundamental` queries.
+   */
+  marketIntelligence: MarketIntelligenceStore;
   /**
    * Runs the orphan scan once, then starts the heartbeat interval and the
    * tick loop. Resolves once startup is done — the loop keeps running after.
@@ -391,6 +402,22 @@ export interface ProductionComponents {
    */
   gdeltIngestAgent: GdeltIngestAgent | undefined;
   /**
+   * The Polymarket macro/event ingester (#504) — the second writer of the
+   * `news` bucket, beside `MiIngestAgent`.
+   *
+   * Never `undefined`, unlike `gdeltIngestAgent`: that one needs an archive to
+   * write into, while this one's product is a store write and the archive is
+   * optional provenance. There is no credential to check either — Polymarket's
+   * read APIs are keyless — so there is no run in which this should not exist.
+   *
+   * Exposed for `gdeltIngestAgent`'s reason: it is polled from
+   * `buildProductionOrchestrator`'s own timer rather than from a tick step, so
+   * without this field the composition root would have to build a SECOND
+   * instance, and two agents on two timers would double the vendor traffic and
+   * each hold half the bucket state.
+   */
+  polymarketAgent: PolymarketAgent;
+  /**
    * The market-intelligence coverage monitor (#752) — the instance
    * `steps.analysts` reads and writes every tick. Exposed for the reason
    * `llmRateLimiter` is: a caller (or a test) can read `.degraded` and
@@ -399,6 +426,13 @@ export interface ProductionComponents {
    * defect class.
    */
   marketIntelligenceCoverage: MiCoverageMonitor;
+  /**
+   * The MI store the ingestion agents write and the analysts read (#504).
+   * Exposed so a caller — the offline smoke gate, specifically — can read back
+   * what actually reached the bucket `fundamental` queries, rather than
+   * inferring it from an archive row that only proves a fetch happened.
+   */
+  marketIntelligence: MarketIntelligenceStore;
 }
 
 /**
@@ -1020,6 +1054,32 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
           logger,
         });
 
+  /**
+   * The Polymarket macro/event layer (#504) — the second `news` writer.
+   *
+   * Built unconditionally: no credentials to check (the read APIs are keyless),
+   * no LLM call in the path, and its product is the store write, so unlike the
+   * GDELT archiver it is useful even on a run with no MI archive. The archive
+   * is passed when one exists, for the raw bytes replay needs.
+   *
+   * It writes the same `news` bucket `miIngestAgent` does, and that is the
+   * point rather than a duplication: the Benzinga wire returns ZERO items for
+   * 3USL/3LDE/SGLN, the LSE ETPs ADR-0016 actually trades, and a 3x FTSE ETP
+   * has no company news to return. Macro is what moves it. Note plainly what
+   * this does NOT do: these items are filed under macro series names, never
+   * tickers, so `MiCoverageMonitor` — which matches `entity === instrument` —
+   * will still report those three as uncovered. Filing them under tickers
+   * would quiet the counter without telling the analysts anything about the
+   * ticker.
+   */
+  const polymarketAgent = new PolymarketAgent({
+    client: config.polymarketClient ?? new PolymarketClient(),
+    store: marketIntelligence,
+    clock,
+    logger,
+    ...(config.miArchive === undefined ? {} : { archive: config.miArchive }),
+  });
+
   if (grokAgent === undefined) {
     logger.log({
       trace_id: 'startup',
@@ -1208,6 +1268,8 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     executionDeps,
     llmRateLimiter,
     gdeltIngestAgent,
+    polymarketAgent,
+    marketIntelligence,
     marketIntelligenceCoverage: miCoverageMonitor,
   };
 }
@@ -1715,6 +1777,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   let heartbeatHandle: NodeJS.Timeout | undefined;
   let feedbackHandle: NodeJS.Timeout | undefined;
   let gdeltHandle: NodeJS.Timeout | undefined;
+  let polymarketHandle: NodeJS.Timeout | undefined;
 
   // Execution's two polled surfaces, bound once. Built from the same
   // `ExecutionStepDeps` the tick step uses, so the two paths cannot drift.
@@ -1920,6 +1983,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     analysts: components.analysts,
     logger,
     marketIntelligenceCoverage: components.marketIntelligenceCoverage,
+    marketIntelligence: components.marketIntelligence,
 
     async start(): Promise<OrphanGoVerdict[]> {
       const orphans = await persistence.orphanScanner.scan(
@@ -2042,6 +2106,26 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
           void gdeltIngestAgent.refresh('gdelt-poll');
         }, config.gdeltPollIntervalMs ?? DEFAULT_GDELT_POLL_INTERVAL_MS);
       }
+
+      /**
+       * Polymarket polls on its OWN timer too (#504), for GDELT's first
+       * reason: the curated table is macro, not per-instrument, so hanging it
+       * off the per-instrument analysts step would poll it once per universe
+       * member for one shared result. The download argument does not apply
+       * (these are small JSON documents), but the agent's hourly bucket means
+       * most polls make no request at all, so the tick path would gain
+       * nothing by owning it.
+       *
+       * Fire-and-forget is safe for the same reason: `refresh` never throws
+       * and returns `false` on any vendor failure — the contract its own tests
+       * pin. Immediately, then on the interval, so a restart does not start
+       * the run with an empty `news` bucket for up to a full period.
+       */
+      const polymarketAgent = components.polymarketAgent;
+      void polymarketAgent.refresh('startup');
+      polymarketHandle = setInterval(() => {
+        void polymarketAgent.refresh('polymarket-poll');
+      }, config.polymarketPollIntervalMs ?? DEFAULT_POLYMARKET_POLL_INTERVAL_MS);
 
       fillSync = startFillSync({
         execution: fillSyncExecution,
@@ -2249,6 +2333,10 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         clearInterval(gdeltHandle);
         gdeltHandle = undefined;
       }
+      if (polymarketHandle !== undefined) {
+        clearInterval(polymarketHandle);
+        polymarketHandle = undefined;
+      }
       // Both drains started before either is awaited: they are independent,
       // and awaiting them in series would make shutdown take the sum of a
       // tick and a fill poll rather than the longer of the two.
@@ -2259,6 +2347,10 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       // drain can land after the store is closed. The write is guarded, so this
       // makes shutdown ordering deterministic rather than fixing a crash.
       const drainingGdelt = components.gdeltIngestAgent?.whenIdle();
+      // Same ordering argument as the GDELT drain: clearing the timer stops
+      // the NEXT poll, not the one already in flight, and that one ends in a
+      // store and archive write.
+      const drainingPolymarket = components.polymarketAgent.whenIdle();
       loop = undefined;
       fillSync = undefined;
       // `allSettled`, not two sequential awaits: `buildShutdownHandler`'s doc
@@ -2267,7 +2359,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       // series would leave the second drain's promise unawaited on that path
       // — an unhandled rejection, and the fill poll's drain silently
       // discarded during shutdown. This still drains both concurrently.
-      await Promise.allSettled([stopping, stoppingFillSync, drainingGdelt]);
+      await Promise.allSettled([stopping, stoppingFillSync, drainingGdelt, drainingPolymarket]);
     },
   };
 }
