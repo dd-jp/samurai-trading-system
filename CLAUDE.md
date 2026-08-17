@@ -56,7 +56,7 @@ This rule is NON-NEGOTIABLE. Never fill the gap with your own code.
 
 Existing research (DON'T overwrite, reference) — all live under `docs/research/`. **Navigation starts at `docs/research/README.md`**, which holds the live frontier, the supersession map, and the old→new rename table.
 
-**Naming scheme (consolidated 2026-08-08).** Live docs are `NN-slug.md` with no date suffix and a unique number, banded by track: `00`–`02` foundations (numbers frozen — specs cite them as "docs 00/01/02" by number), `10`s strategy/edge, `20`s market intelligence, `30`s data vendors, `40`s infra. Superseded run-records live in `docs/research/archive/` as `YYYY-MM-DD-slug.md`, preserved verbatim — **never deleted**, and raw run logs under `archive/raw/`.
+**Naming scheme (consolidated 2026-08-08).** Live docs are `NN-slug.md` with no date suffix and a unique number, banded by track: `00`–`02` foundations (numbers frozen — specs cite them as "docs 00/01/02" by number), `10`s strategy/edge (**CLOSED 2026-08-17, band full** — [#786](https://github.com/dd-jp/samurai-trading-system/issues/786)), `20`s market intelligence, `30`s data vendors, `40`s infra, `50`s **intraday horizon** (the ADR-0014-era product — new strategy research goes here, not the `10`s). Superseded run-records live in `docs/research/archive/` as `YYYY-MM-DD-slug.md`, preserved verbatim — **never deleted**, and raw run logs under `archive/raw/`.
 
 Key docs:
 
