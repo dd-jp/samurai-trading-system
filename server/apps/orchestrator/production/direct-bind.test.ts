@@ -821,6 +821,24 @@ describe('buildRiskStep', () => {
       expect(writes).toHaveLength(1);
       expect((writes[0] as { status: string }).status).toBe('approved');
     });
+
+    it('propagates the original gate error unchanged even if the risk_log write itself throws', async () => {
+      // Guards the catch's own side effect the same way #507 guards
+      // tick-loop.ts's: a SQLite failure (disk full, locked handle) writing
+      // the diagnostic row must not replace the diagnostic itself. Without
+      // the inner try/catch around `riskLog.write`, this would reject with
+      // "boom" instead of "AAPL has no subclass" — the operator gets an
+      // opaque store error instead of the actionable one.
+      const step = buildStep({
+        write: () => {
+          throw new Error('boom');
+        },
+      });
+
+      await expect(
+        step({ trace_id: TRACE_ID, intent: makeIntent({ intent_type: 'entry' }), clock: CLOCK }),
+      ).rejects.toThrow(/AAPL has no subclass/);
+    });
   });
 });
 

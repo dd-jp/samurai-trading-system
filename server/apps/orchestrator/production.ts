@@ -1033,6 +1033,11 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // construction and `autoTighten`'s response to a kill-line breach
       // changes no decision.
       thresholds: tuningStore,
+      // #726: sink for the catch's own guarded `riskLog.write` failure —
+      // without it, a store failure while reporting a gate throw has nowhere
+      // to go but silent loss (still fine; see that catch's doc comment) with
+      // no trace at all.
+      logger,
     }),
     verdict: buildVerdictStep({
       ...breakerStateDeps,

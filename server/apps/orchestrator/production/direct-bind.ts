@@ -81,7 +81,7 @@ import type {
   SetupStore,
   TraderLogStore,
 } from '../../../shared/index.js';
-import { describeThrown, sanitizeLogText } from '../../../shared/index.js';
+import { describeThrown, safeLog, sanitizeLogText } from '../../../shared/index.js';
 // Aliased: this module already imports a DIFFERENT `SharedStore` above (an
 // unrelated `execution/index.js` interface, `ExecutionStepDeps.store`'s
 // type) — the alias names which one `VerdictStepDeps.store` actually is,
@@ -529,6 +529,14 @@ export interface RiskStepDeps extends BreakerStateDeps {
   thresholds?: RiskThresholdSource;
   /** #328: the decision record. Same optionality rationale as `traderLog`. */
   riskLog?: RiskLogStore;
+  /**
+   * #726: where the catch around `evaluate()` reports a failed `riskLog.write`
+   * itself (guarding that write must not let a store failure replace the
+   * original gate error — see the catch's own doc comment). Same
+   * optionality rationale as the trader step's `logger` above: a test can
+   * stay silent, the production path supplies the real sink.
+   */
+  logger?: Logger;
 }
 
 export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
@@ -619,15 +627,39 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
         error instanceof PerSubclassCapUnresolvableError
           ? error.bindingConstraint
           : `risk_evaluate_error:${intent.instrument}`;
-      deps.riskLog?.write({
-        ...riskLogBase,
-        status: 'error',
-        binding_constraint,
-        reasons: [describeThrown(error)],
-        original_size: null,
-        final_size: null,
-        stop_tightened: false,
-      });
+      // Guarded the same way #507's own side effects are guarded
+      // (tick-loop.ts): this write must not itself throw and replace the
+      // original error before it reaches #507's catch one layer up — that
+      // would trade "3USL has no subclass" for an opaque SQLite failure and
+      // destroy the exact diagnostic this fix exists to preserve. A failure
+      // here is logged, not silently dropped, then the ORIGINAL error still
+      // propagates unconditionally via the outer `throw error;` below.
+      try {
+        deps.riskLog?.write({
+          ...riskLogBase,
+          status: 'error',
+          binding_constraint,
+          reasons: [describeThrown(error)],
+          original_size: null,
+          final_size: null,
+          stop_tightened: false,
+        });
+      } catch (logError) {
+        if (deps.logger) {
+          safeLog(deps.logger, {
+            trace_id,
+            stage: 'risk',
+            level: 'error',
+            message: `risk_log write failed for a gate throw on ${intent.instrument}`,
+            payload: {
+              instrument: intent.instrument,
+              binding_constraint,
+              original_error: describeThrown(error),
+              log_error: describeThrown(logError),
+            },
+          });
+        }
+      }
       throw error;
     }
 
