@@ -5,6 +5,7 @@ import type {
   IndicatorValue,
   Mark,
   MarketDataService,
+  MarkRead,
 } from '../../providers/market-data-service/index.js';
 import {
   type CorrelationConfig,
@@ -43,6 +44,9 @@ function makeMarketData(barsByInstrument: Record<string, Bar[]>): MarketDataServ
       },
     ),
     getMark: vi.fn(async (_i: string, _a: Date): Promise<Mark> => {
+      throw new Error('not used in these tests');
+    }),
+    getMarks: vi.fn(async (_i: readonly string[], _a: Date): Promise<Map<string, MarkRead>> => {
       throw new Error('not used in these tests');
     }),
     getSpreadEstimate: vi.fn(async (_i: string, _a: Date): Promise<number | null> => null),

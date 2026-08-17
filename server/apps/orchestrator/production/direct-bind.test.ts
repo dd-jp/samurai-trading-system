@@ -15,6 +15,7 @@ import type {
 } from '../../../pipeline/verdict/index.js';
 import {
   AlwaysOpenCalendar,
+  collectMarks,
   type IndicatorSpec,
   type TradingCalendar,
   UsEquityRegularHoursCalendar,
@@ -58,15 +59,20 @@ function makeBars(count: number) {
   });
 }
 
+const FAKE_GET_MARK = vi.fn(async (_instrument: string, _asOf: Date) => ({
+  price: 100,
+  observed_at: NOW,
+  asset_class: 'stocks' as const,
+  source: 'fixture',
+}));
+
 const FAKE_MARKET_DATA = {
   getBars: vi.fn(async () => makeBars(20)),
   getIndicator: vi.fn(),
-  getMark: vi.fn(async () => ({
-    price: 100,
-    observed_at: NOW,
-    asset_class: 'stocks' as const,
-    source: 'fixture',
-  })),
+  getMark: FAKE_GET_MARK,
+  getMarks: vi.fn(async (instruments: readonly string[], asOf: Date) =>
+    collectMarks(FAKE_GET_MARK, instruments, asOf),
+  ),
   getSpreadEstimate: vi.fn(async () => null),
   getADV: vi.fn(async () => 1000),
 };

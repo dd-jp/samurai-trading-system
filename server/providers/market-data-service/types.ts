@@ -186,6 +186,21 @@ export interface DataSource {
 }
 
 /**
+ * One instrument's outcome in a batch mark read (#289 H8) — a mark, or the
+ * reason there isn't one.
+ *
+ * A discriminated union rather than `Mark | undefined` so a caller cannot
+ * reach the price without first deciding what to do about the failures, and so
+ * the ORIGINAL throw survives to the caller's report instead of being
+ * flattened into "missing". `error` is `unknown` for the reason every catch in
+ * this repo keeps it `unknown`: it is whatever the source threw, re-thrown or
+ * aggregated by the caller, never inspected here.
+ */
+export type MarkRead =
+  | { readonly ok: true; readonly mark: Mark }
+  | { readonly ok: false; readonly error: unknown };
+
+/**
  * The single test seam consumers inject. Deterministic given inputs +
  * clock; source is injected. Subset of the full spec interface — `getBars`,
  * `getMark`, `getIndicator` (#65), and the #67 spread/ADV helpers.
@@ -211,6 +226,28 @@ export interface MarketDataService {
   getBars(instrument: string, window: BarWindow, asOf: Date): Promise<Bar[]>;
   getIndicator(instrument: string, spec: IndicatorSpec, asOf: Date): Promise<IndicatorValue>;
   getMark(instrument: string, asOf: Date): Promise<Mark>;
+  /**
+   * Every requested instrument's mark at one `asOf`, keyed by instrument
+   * (#289 H8).
+   *
+   * Result-typed per instrument rather than `Promise<Map<string, Mark>>`,
+   * because the caller this exists for values a whole book: a rejecting
+   * `Promise.all` over N `getMark` calls reports whichever lookup lost the
+   * race and DISCARDS the rest, and a Map that simply omits the failures is
+   * worse still — `PortfolioView.exposure_by_instrument`'s consumers all read
+   * an absent key as zero exposure, so a silently-partial answer widens every
+   * risk cap that reads it. `MarkRead` makes "we did not get this one" a value
+   * the caller must handle rather than a hole it can miss.
+   *
+   * Staleness is NOT judged here. The freshness bound is per asset class and
+   * per consumer (`PortfolioAccountingInput.max_mark_age` vs
+   * `VerdictConfig.max_mark_age`), and MDS holds neither — see
+   * `computePortfolioView`, which applies its own bound to what this returns.
+   *
+   * Duplicates in `instruments` are read once; the returned Map has one entry
+   * per DISTINCT instrument.
+   */
+  getMarks(instruments: readonly string[], asOf: Date): Promise<Map<string, MarkRead>>;
   /**
    * Best-effort bid/ask spread (ask - bid) where the source provides a
    * quote; `null` otherwise. MDS never fabricates a spread it can't

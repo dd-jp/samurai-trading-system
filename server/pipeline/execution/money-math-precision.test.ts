@@ -25,7 +25,9 @@ import type {
   IndicatorValue,
   Mark,
   MarketDataService,
+  MarkRead,
 } from '../../providers/market-data-service/index.js';
+import { collectMarks } from '../../providers/market-data-service/index.js';
 import type { Clock, ClosedTrade, OpenPosition } from '../../shared/index.js';
 import type { CostModel } from '../../tools/backtest/index.js';
 import { realizedR } from '../feedback-loop/index.js';
@@ -487,16 +489,21 @@ describe('money-math precision (ADR-0005)', () => {
     const notOnThisPath = (method: string) => async (): Promise<never> => {
       throw new Error(`computePortfolioView called ${method}: equity must price off marks only`);
     };
+    const getMark = vi.fn(
+      async (instrument: string, _a: Date): Promise<Mark> => ({
+        price: Number(marks[instrument]),
+        observed_at: NOW,
+        source: 'test',
+        asset_class: 'crypto',
+      }),
+    );
     const marketData: MarketDataService = {
       getBars: vi.fn(notOnThisPath('getBars') as () => Promise<Bar[]>),
       getIndicator: vi.fn(notOnThisPath('getIndicator') as () => Promise<IndicatorValue>),
-      getMark: vi.fn(
-        async (instrument: string): Promise<Mark> => ({
-          price: Number(marks[instrument]),
-          observed_at: NOW,
-          source: 'test',
-          asset_class: 'crypto',
-        }),
+      getMark,
+      getMarks: vi.fn(
+        async (instruments: readonly string[], at: Date): Promise<Map<string, MarkRead>> =>
+          collectMarks(getMark, instruments, at),
       ),
       getSpreadEstimate: vi.fn(notOnThisPath('getSpreadEstimate') as () => Promise<number | null>),
       getADV: vi.fn(notOnThisPath('getADV') as () => Promise<number>),
