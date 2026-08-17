@@ -190,12 +190,14 @@ import {
 import { openSharedStore, type SharedStore as SqliteHandle } from '../../shared/store/index.js';
 import type { CostConfig } from '../../tools/backtest/index.js';
 import { CostModelImpl } from '../../tools/backtest/index.js';
+import type { AlertChannels } from './alert-transport.js';
 import {
   LoggingAnalystSkipAlertChannel,
   LoggingBreachAlertChannel,
   LoggingFlattenReconcileAlertChannel,
   LoggingHeartbeatChannel,
   LoggingLoosenNotificationChannel,
+  LoggingMiCoverageAlertChannel,
   LoggingOcoDoubleFillAlertChannel,
   LoggingOrphanAlertChannel,
   LoggingResidualExposureAlertChannel,
@@ -2954,6 +2956,55 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     // archived. In-memory, as the config comment below explains.
     const smokeMiArchive = new MiArchiveStore();
 
+    // Every `ALERT_CHANNEL_FIELDS` member (alert-transport.ts), typed as
+    // `Required<AlertChannels>` so a future field added to `AlertChannelSlots`
+    // (production/config.ts) and to `ALERT_CHANNEL_FIELDS` fails `yarn
+    // typecheck` HERE, at the smoke run's own injection site, if this object
+    // is not updated to match — rather than waiting for a developer to
+    // notice `SAMURAI_ALERTS` is suddenly demanded of a clean checkout
+    // (#803's regression: a twelfth channel, `miCoverageAlerts`, landed
+    // without this injection, and only `alert-transport.ts`'s own
+    // exhaustiveness check caught the missing FIELD — nothing caught the
+    // missing INJECTION here, because `resolveAlertsMode`'s all-or-nothing
+    // exemption is a runtime property this object satisfies by construction,
+    // not one TypeScript enforced before this line existed).
+    //
+    // Log-only throughout: this run is attended and offline by definition.
+    // `verdictAlerts`/`traderDiagnosticAlerts` are bare no-ops rather than
+    // `Logging…Channel` stand-ins because their real implementations already
+    // log everything they'd otherwise duplicate (see each field's inline
+    // history below `git blame` before #803 folded them into this object).
+    const smokeAlertChannels = {
+      heartbeatChannel: new LoggingHeartbeatChannel(logger),
+      orphanAlerts: new LoggingOrphanAlertChannel(logger),
+      unpricedFillAlerts: new LoggingUnpricedFillAlertChannel(logger),
+      ocoDoubleFillAlerts: new LoggingOcoDoubleFillAlertChannel(logger),
+      breachAlerts: new LoggingBreachAlertChannel(logger),
+      loosenNotices: new LoggingLoosenNotificationChannel(logger),
+      analystSkipAlerts: new LoggingAnalystSkipAlertChannel(logger),
+      // #576: recorded, not just logged — see `tickLoopResidualAlerts` above.
+      residualExposureAlerts: tickLoopResidualAlerts,
+      // The six-stage tick loop above never reaches a flatten (no exit
+      // intent is ever driven through it — see `runExitPathScenarios`'s own
+      // file doc for why), so there is nothing here for the gate to read
+      // back; a plain log-only instance is enough.
+      flattenReconcileAlerts: new LoggingFlattenReconcileAlertChannel(logger),
+      verdictAlerts: { notify: async () => {} },
+      // A bare no-op rather than a log-only stand-in, deliberately:
+      // `postTraderDiagnosticAlert` (direct-bind.ts) writes every diagnostic
+      // to the log at `error` BEFORE it consults the port, so a logging
+      // instance here would emit each condition twice. Swallowing nothing —
+      // measured rather than assumed: a counting stub in this slot records
+      // zero diagnostics across a full smoke run. Matters because
+      // `ALERT_AFTER_CONSECUTIVE_DIAGNOSTICS` is 1, so a first diagnostic
+      // alerts immediately and a silent no-op would eat it; re-measure
+      // rather than trust this line if the offline calendar or the fixture
+      // bars ever change.
+      traderDiagnosticAlerts: { postTraderDiagnosticAlert: async () => {} },
+      // #752 — the twelfth `ALERT_CHANNEL_FIELDS` member.
+      miCoverageAlerts: new LoggingMiCoverageAlertChannel(logger),
+    } satisfies Required<AlertChannels>;
+
     const orchestrator = await startFromEnvironment({
       // The same checked-in tuning values `yarn orchestrator` runs on, at the
       // same `mode: 'paper'` — so the HITL gate resolves through
@@ -3023,61 +3074,14 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // defaults reach Alpaca over the network.
       accountState: new FixedAccountStateProvider(),
       alpacaBrokerClient,
-      // Naming log-only alerting explicitly. Injecting all of
-      // `ALERT_CHANNEL_FIELDS` is also what makes `resolveAlertsMode` return
-      // `undefined` (alert-transport.ts), so this run neither reads
-      // `SAMURAI_ALERTS` nor falls back by omission. Miss one and the gate
-      // starts demanding an environment variable of every developer who runs
-      // it — which is why the list is derived, not remembered.
-      heartbeatChannel: new LoggingHeartbeatChannel(logger),
-      orphanAlerts: new LoggingOrphanAlertChannel(logger),
-      unpricedFillAlerts: new LoggingUnpricedFillAlertChannel(logger),
-      // #586 — the ninth `ALERT_CHANNEL_FIELDS` member; injected so this
-      // run stays exempt from SAMURAI_ALERTS (see the derived-list comment
-      // below).
-      ocoDoubleFillAlerts: new LoggingOcoDoubleFillAlertChannel(logger),
-      breachAlerts: new LoggingBreachAlertChannel(logger),
-      loosenNotices: new LoggingLoosenNotificationChannel(logger),
-      analystSkipAlerts: new LoggingAnalystSkipAlertChannel(logger),
-      // #576: recorded, not just logged — see `tickLoopResidualAlerts` above.
-      // Became an `ALERT_CHANNEL_FIELDS` member in #551 (the eighth channel);
-      // this injection already covered it before that landed, so `resolveAlertsMode`'s
-      // exemption logic (below) needed no change here — see the next comment.
-      residualExposureAlerts: tickLoopResidualAlerts,
-      // #519 — the ninth channel (`ALERT_CHANNEL_FIELDS`, alert-transport.ts).
-      // The six-stage tick loop above never reaches a flatten (no exit intent
-      // is ever driven through it — see `runExitPathScenarios`'s own file doc
-      // for why), so there is nothing here for the gate to read back; a
-      // plain log-only instance is enough to keep this injection list
-      // exhaustive against `ALERT_CHANNEL_FIELDS`, the same posture
-      // `orphanAlerts`/`unpricedFillAlerts`/etc. already take below.
-      flattenReconcileAlerts: new LoggingFlattenReconcileAlertChannel(logger),
-      // #465 — the seventh channel; #551 later added an eighth
-      // (`residualExposureAlerts`, above). `resolveAlertsMode` exempts a
-      // caller that supplies EVERY field in `ALERT_CHANNEL_FIELDS` from
-      // needing SAMURAI_ALERTS, so adding a field to that list makes this
-      // injection incomplete and the smoke run demands the variable. A
-      // log-only notifier keeps the offline run self-contained.
-      verdictAlerts: { notify: async () => {} },
-      // #698 — the eleventh `ALERT_CHANNEL_FIELDS` member. Injected for the
-      // reason the comment above gives: the exemption is all-or-nothing, so
-      // adding a field to that list without adding it here is what makes this
-      // run start demanding `SAMURAI_ALERTS`.
-      //
-      // A bare no-op rather than a log-only stand-in, which is where this one
-      // differs from `orphanAlerts` and the rest. It is the only channel with
-      // no `Logging…Channel` counterpart, deliberately:
-      // `postTraderDiagnosticAlert` (direct-bind.ts) writes every diagnostic to
-      // the log at `error` BEFORE it consults the port, so a logging instance
-      // here would emit each condition twice.
-      //
-      // Swallowing nothing, and that was measured rather than assumed — a
-      // counting stub in this slot records zero diagnostics across a full smoke
-      // run. It matters because `ALERT_AFTER_CONSECUTIVE_DIAGNOSTICS` is 1, so
-      // a first diagnostic alerts immediately and a silent no-op would eat it;
-      // re-measure rather than trust this line if the offline calendar or the
-      // fixture bars ever change.
-      traderDiagnosticAlerts: { postTraderDiagnosticAlert: async () => {} },
+      // Naming log-only alerting explicitly, exhaustively over
+      // `ALERT_CHANNEL_FIELDS` — see `smokeAlertChannels` above for why it is
+      // a separate `satisfies Required<AlertChannels>` object rather than
+      // inline fields here. Injecting all of `ALERT_CHANNEL_FIELDS` is also
+      // what makes `resolveAlertsMode` return `undefined`
+      // (alert-transport.ts), so this run neither reads `SAMURAI_ALERTS` nor
+      // falls back by omission.
+      ...smokeAlertChannels,
       tickIntervalMs,
       fillPollIntervalMs,
       // Fast enough to fire several times inside a ~1s run. The heartbeat is a
