@@ -82,6 +82,8 @@ export {
 export type { BarFetcher, FailoverAlerter, FailoverEvent } from './sources/ohlcv-failover.js';
 export type { PolygonBarsClientOptions } from './sources/polygon-bars-client.js';
 export { PolygonBarsClient } from './sources/polygon-bars-client.js';
+export type { SessionNormalizationConfig } from './sources/session-normalized-fetcher.js';
+export { withSessionNormalization } from './sources/session-normalized-fetcher.js';
 export { SqliteMarketDataStore } from './sqlite-market-data-store.js';
 export { closeTimeOf, isDailyTimeframe, timeframeToMs } from './timeframe.js';
 export type { TradingCalendar } from './trading-calendar.js';

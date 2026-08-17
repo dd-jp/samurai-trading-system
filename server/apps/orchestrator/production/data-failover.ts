@@ -1,103 +1,68 @@
 /**
- * The LIVE orchestrator's OHLCV failover wiring (#562) — the half #560 did
- * not cover.
+ * The LIVE orchestrator's OHLCV failover wiring (#562): builds the equities
+ * leg's fallback fetcher and hands `FailoverDataSource`
+ * (providers/market-data-service) the per-instrument lookup it routes on.
+ * `production.ts` is the only caller.
  *
- * #560 wrapped the #512 warm-start backfill SCRIPT's fetchers in
- * `withOhlcvFailover` and said so; the live orchestrator kept a single
- * vendor for every bar it read, for a run that is meant to go fourteen days
- * unattended. This module is what `production.ts` calls to close that: it
- * builds the equities leg's fallback fetcher and hands
- * `FailoverDataSource` (providers/market-data-service) the per-instrument
- * lookup it routes on.
+ * ## Equities only
  *
- * ## Equities only — deliberately
+ * Only the equities leg (Alpaca -> Polygon) is wired. Crypto is out of
+ * Samurai's scope (ADR-0015's 2026-08-16 amendment), so the Coinbase/Bitstamp
+ * pairing the backfill script uses has no live counterpart. A crypto
+ * instrument gets NO fallback and its primary error propagates unchanged —
+ * `FailoverDataSource` states that as its contract rather than reaching it by
+ * accident.
  *
- * Only the equities leg (Alpaca -> Polygon) is wired. Crypto left Samurai's
- * scope on 2026-08-16 (ADR-0015's amendment; CLAUDE.md's "Live capital"
- * line), so the Coinbase/Bitstamp pairing the backfill script uses has no
- * live counterpart to wire here — and #562's own crypto criterion ("compare
- * Alpaca and Coinbase stamping and volume conventions before adding a third
- * crypto writer") is a prerequisite for work that is no longer this system's.
- * A crypto instrument therefore gets NO fallback and its primary error
- * propagates unchanged, which `FailoverDataSource` states as its contract
- * rather than reaching by accident.
+ * ## What the equities fallback serves (probed 2026-08-17, #562)
  *
- * ## What the equities fallback actually serves (probed 2026-08-17, #562)
+ * Recorded in `docs/research/31-free-ohlcv-evidence.md`; repeated here because
+ * it is this wiring's own risk surface.
  *
- * Recorded in `docs/research/31-free-ohlcv-evidence.md` and repeated here
- * because it is the wiring's own risk surface:
+ * - Daily stamping agrees, in winter as in summer: Alpaca and Polygon both
+ *   anchor a `1Day` bar to ET midnight (05:00Z in EST, 04:00Z in EDT), so the
+ *   `(instrument, timeframe, open_time)` key cannot take one trading day as
+ *   two rows across the vendor boundary and `getADV()` cannot double-count.
+ * - Polygon's free tier serves `1h` aggregates, which is the timeframe the
+ *   live tick path runs on.
+ * - Both vendors' RAW `1h` payloads carry the extended-hours sessions (16 bars
+ *   per trading day over 08:00Z-23:00Z; SPY, 2026-08-10 -> 2026-08-14, 80 bars
+ *   each). That is a claim about the WIRE, not about the `DataSource` port:
+ *   the primary is a `NormalizingDataSource` and drops out-of-session candles
+ *   before they leave it, so a raw fallback fetcher would put a different
+ *   window behind the same `lookback`. `withSessionNormalization` closes that
+ *   — see `session-normalized-fetcher.ts` for the invariant it holds.
  *
- * - Daily stamping AGREES in winter as well as summer — Alpaca and Polygon
- *   both anchor a `1Day` bar to ET midnight (05:00Z in EST, 04:00Z in EDT),
- *   so the `(instrument, timeframe, open_time)` key cannot take one trading
- *   day as two rows across the vendor boundary, and `getADV()` cannot
- *   double-count.
- * - Polygon's free tier DOES serve `1h` aggregates, which the live tick path
- *   runs on — a fallback that could not would have been inert where it
- *   matters most.
- * - Hourly SESSION COVERAGE AGREES. Both vendors return 16 `1h` bars per
- *   trading day over 08:00Z–23:00Z on the same window (SPY, 2026-08-10 ->
- *   2026-08-14, 80 bars each) — i.e. both include the extended-hours
- *   sessions, so a fallback-served `1h` window spans the same wall clock as
- *   a primary-served one and a fixed `lookback: N` does not silently change
- *   meaning across the vendor boundary. An earlier draft of this doc claimed
- *   Polygon carried extended hours where Alpaca did not; that was inferred
- *   from a one-sided probe and is FALSE — both were then measured.
+ * ## Alert volume — throttled
  *
- * ## Alert volume — throttled, deliberately
+ * A stall is a CONDITION, not an event: every tick that reads bars while it
+ * lasts fails over again, and an unthrottled day-long stall floods the
+ * escalation chat until the operator mutes it — which under #342 also mutes
+ * the orphan verdict and the kill-line. So, per the repo's bounded-repeat
+ * convention (`ALERT_REPEAT_EVERY_NO_DATA`, `ALERT_REPEAT_EVERY_DIAGNOSTICS`):
+ * loud on the first failover of an incident, then every
+ * `ALERT_REPEAT_EVERY_FAILOVERS`-th while it persists, with the suppressed
+ * count carried onto the next alert that goes out so the operator sees the
+ * true rate. A gap longer than `FAILOVER_INCIDENT_GAP_MS` is a NEW incident
+ * and is loud again, which is what keeps a recovery-then-restall audible.
  *
- * A stall is not one event; it is a condition that persists for as long as
- * the vendor is down, and every tick that reads bars while it lasts triggers
- * another failover. Unthrottled, a day-long Alpaca stall across a four-name
- * equities universe posts alerts into the escalation chat until the operator
- * mutes it — and #342's whole argument is that a muted escalation chat also
- * mutes the orphan verdict and the kill-line. So this follows the repo's
- * existing bounded-repeat convention (`ALERT_REPEAT_EVERY_NO_DATA`,
- * `ALERT_REPEAT_EVERY_DIAGNOSTICS`): loud on the FIRST failover of an
- * incident, then every `ALERT_REPEAT_EVERY_FAILOVERS`-th while it persists,
- * with the suppressed count carried on the next alert that does go out so
- * the operator still sees the true rate. A gap longer than
- * `FAILOVER_INCIDENT_GAP_MS` counts as a NEW incident and is loud again —
- * that is what makes a recovery-then-restall audible instead of being
- * swallowed by a counter that never resets.
+ * ## Pacing on the boot path — warn and default, never refuse to boot
  *
- * ## Pacing on the boot path — WARN AND DEFAULT, never refuse to boot
+ * `SAMURAI_PACING_POLYGON_*` is resolved AT BOOT, so an operator sees a
+ * malformed override in the startup log rather than at first failover — but it
+ * is never fatal: the variable is logged at `warn` and `DEFAULT_POLYGON_PACING`
+ * applies. It paces a DEGRADATION MITIGATION touched only once the primary has
+ * already failed, so refusing to boot for a typo in it would take the whole
+ * book offline to avoid a stall the fallback exists to survive. That is the
+ * opposite of `SAMURAI_ALERTS`/`SAMURAI_MODE`/`dataSourceAssetClass`, which do
+ * refuse, and which gate whether the system operates correctly at all.
+ * `venue-pacing.ts` keeps the variable out of `VENUE_KEYS` so this stays
+ * possible.
  *
- * #510/#512/#560 kept `SAMURAI_PACING_POLYGON_*` out of
- * `VENUE_KEYS`/`resolveVenuePacing` precisely so a typo in a backfill-only
- * variable could not fail live orchestrator startup mid-soak. Giving the
- * live path a Polygon fallback means the live path now reads that variable,
- * so that protection has to be re-established on purpose rather than lost as
- * a side effect. Two candidate postures, and the repo's default answer
- * elsewhere is the wrong one here:
- *
- * - **Refuse to boot on a malformed override** — what `SAMURAI_ALERTS`,
- *   `SAMURAI_MODE` and `dataSourceAssetClass` do. Those gate whether the
- *   system operates CORRECTLY: alerts that silently degrade, a live host
- *   reached from a paper mode, an asset class routed to the wrong API root.
- *   `SAMURAI_PACING_POLYGON_*` gates none of that. It gates how fast a
- *   DEGRADATION MITIGATION polls a vendor that is only touched when the
- *   primary has already failed. Refusing to boot for it inverts the risk
- *   this whole issue exists to reduce: a mistyped fallback-pacing variable
- *   would take the entire book offline, which is strictly worse than the
- *   stall the fallback exists to survive.
- * - **Resolve lazily, at first failover** — keeps boot clean, and detonates
- *   the malformed value at the exact moment the fallback is needed. That is
- *   the worst possible time to discover it.
- *
- * So: resolved AT BOOT (loud and early, in the startup log where an operator
- * checks their configuration) but never fatal — a malformed override is
- * logged at `warn`, naming the variable, and `DEFAULT_POLYGON_PACING` is used
- * instead. The system boots paced at a checked-in default that is known safe
- * for Polygon's free tier, which is what the operator would have got by not
- * setting the variable at all.
- *
- * The Polygon CLIENT stays lazily constructed for the same family of reason
- * `backfill-market-data.ts` gives: `PolygonBarsClient`'s constructor throws
- * when `POLYGON_API_KEY` is unset, and an unset key must not stop the
- * orchestrator booting on a day Alpaca never stalls. A missing key surfaces
- * as the fallback's own failure inside `withOhlcvFailover`'s combined error,
- * scoped to the one pair that failed over.
+ * The Polygon CLIENT is constructed lazily: its constructor throws when
+ * `POLYGON_API_KEY` is unset, and an unset key must not stop the orchestrator
+ * booting on a day Alpaca never stalls. A missing key then surfaces inside
+ * `withOhlcvFailover`'s combined error, scoped to the one pair that failed
+ * over.
  */
 import {
   type BarFetcher,
@@ -106,6 +71,8 @@ import {
   FailoverDataSource,
   type FailoverEvent,
   PolygonBarsClient,
+  type TradingCalendar,
+  withSessionNormalization,
 } from '../../../providers/market-data-service/index.js';
 import {
   DEFAULT_POLYGON_PACING,
@@ -127,9 +94,11 @@ export const EQUITIES_FALLBACK_VENDOR = 'polygon';
 export interface DataFailoverAlert extends FailoverEvent {
   reported_at: Date;
   /**
-   * How many failovers for this instrument/timeframe were suppressed by the
-   * throttle since the last alert that went out — 0 on the first alert of an
-   * incident. Carried so a bounded-repeat alert still reports the true rate.
+   * How many failovers for this instrument/timeframe the throttle suppressed
+   * since the last alert that went out. Non-zero on the first alert of a NEW
+   * incident when the PREVIOUS incident ended with suppressed failovers — its
+   * tail is reported here rather than lost, so the count over a run is the
+   * true failover rate rather than the alerted one.
    */
   suppressed_since_last: number;
 }
@@ -189,10 +158,9 @@ export const FAILOVER_INCIDENT_GAP_MS = 60 * 60 * 1000;
  * leg. A future system that runs two legs at once must widen the key, or the
  * same ticker on both legs would share one counter.
  *
- * In memory and restart-clean,
- * the same posture `TraderDiagnosticThrottle` and the MI coverage monitor
- * take: a process that just started has no evidence about the previous one's
- * ticks.
+ * In memory and restart-clean, the same posture `TraderDiagnosticThrottle` and
+ * the MI coverage monitor take: a process that just started has no evidence
+ * about the previous one's ticks.
  */
 export class DataFailoverAlertThrottle {
   readonly #state = new Map<string, { count: number; lastAt: number; suppressed: number }>();
@@ -205,7 +173,12 @@ export class DataFailoverAlertThrottle {
 
     if (previous === undefined || at - previous.lastAt > FAILOVER_INCIDENT_GAP_MS) {
       this.#state.set(key, { count: 1, lastAt: at, suppressed: 0 });
-      return { alert: true, suppressedSinceLast: 0 };
+      // The previous incident's TAIL — the failovers between its last
+      // bounded-repeat alert and the quiet gap — is reported here rather than
+      // discarded. Dropping it makes the claimed "true rate" false by
+      // construction: 12 failovers then an hour quiet alerts at #1 and #9, and
+      // #10-#12 are never counted anywhere.
+      return { alert: true, suppressedSinceLast: previous?.suppressed ?? 0 };
     }
 
     const count = previous.count + 1;
@@ -220,9 +193,20 @@ export interface LiveDataFailoverDeps {
   primary: DataSource;
   universe: readonly UniverseInstrument[];
   /**
-   * The equities fallback fetcher. Injected for tests and for any caller
-   * that wants a different vendor; defaults to a LAZILY constructed
-   * `PolygonBarsClient` (see the module doc for why lazy).
+   * The equities session calendar — THE SAME instance the primary was built
+   * with (`buildAlpacaDataSource`'s `tradingCalendar`). The fallback's bars
+   * are normalized against it so a bar reaching the store carries the same
+   * session semantics whichever vendor served it; passing a different
+   * calendar here reintroduces exactly the divergence this closes.
+   */
+  calendar: TradingCalendar;
+  /**
+   * The equities fallback fetcher, as the VENDOR serves it — raw, uncalendared.
+   * Injected for tests and for any caller that wants a different vendor;
+   * defaults to a LAZILY constructed `PolygonBarsClient` (see the module doc
+   * for why lazy). Whatever it is, it is wrapped in
+   * `withSessionNormalization` before `FailoverDataSource` sees it, so an
+   * injected fetcher cannot opt out of the session invariant either.
    */
   equitiesFallbackBarFetcher?: BarFetcher | undefined;
   /** Raised on every failover. Guarded — a throwing channel cannot break a fetch. */
@@ -250,12 +234,24 @@ export function buildFailoverDataSource(deps: LiveDataFailoverDeps): DataSource 
 
   const pacing = resolveFallbackPacing(deps.logger);
   let polygon: PolygonBarsClient | undefined;
-  const fallbackBarFetcher: BarFetcher =
+  const rawFallbackBarFetcher: BarFetcher =
     deps.equitiesFallbackBarFetcher ??
     ((symbol, window, asOf) => {
       polygon ??= new PolygonBarsClient({ rateLimiter: new TokenBucket(pacing) });
       return polygon.getBars(symbol, window.timeframe, asOf, window.lookback);
     });
+
+  // The session invariant, applied to whatever serves the fallback — see
+  // `session-normalized-fetcher.ts`. Applied here rather than inside
+  // `FailoverDataSource` because the calendar belongs to the composition
+  // root: the primary's own calendar is private to `NormalizingDataSource`,
+  // and the wrapper must use the SAME one rather than a second guess at it.
+  const fallbackBarFetcher = withSessionNormalization({
+    fetch: rawFallbackBarFetcher,
+    source: EQUITIES_FALLBACK_VENDOR,
+    asset_class: 'stocks',
+    calendar: deps.calendar,
+  });
 
   const throttle = new DataFailoverAlertThrottle();
 

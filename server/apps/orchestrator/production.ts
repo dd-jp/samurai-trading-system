@@ -591,6 +591,10 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     buildFailoverDataSource({
       primary: buildAlpacaDataSource(config, universe, tradingCalendar, alpacaBucket),
       universe,
+      // The primary's own calendar, not a second instance: the fallback's bars
+      // are session-normalized against it so a failover cannot change what a
+      // `lookback` means at the store.
+      calendar: tradingCalendar,
       equitiesFallbackBarFetcher: config.equitiesFallbackBarFetcher,
       alertChannel: config.dataFailoverAlerts ?? new LoggingDataFailoverAlertChannel(logger),
       logger,

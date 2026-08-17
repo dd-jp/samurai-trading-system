@@ -13,16 +13,19 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Bar, BarWindow } from '../../../providers/market-data-service/index.js';
+import { UsEquityRegularHoursCalendar } from '../../../providers/market-data-service/index.js';
 import { DEFAULT_POLYGON_PACING, type LogEntry, type Logger } from '../../../shared/index.js';
 import {
   ALERT_REPEAT_EVERY_FAILOVERS,
   buildFailoverDataSource,
   type DataFailoverAlert,
+  DataFailoverAlertThrottle,
   FAILOVER_INCIDENT_GAP_MS,
   resolveFallbackPacing,
 } from './data-failover.js';
 
-const ASOF = new Date('2026-08-17T14:00:00.000Z');
+/** Monday 12:00 ET — inside US regular hours, so a bar completed here survives session normalization. */
+const ASOF = new Date('2026-08-17T16:00:00.000Z');
 const WINDOW: BarWindow = { timeframe: '1h', lookback: 2 };
 
 function recordingLogger(): Logger & { entries: LogEntry[] } {
@@ -34,7 +37,7 @@ function fallbackBar(): Bar {
   return {
     instrument: 'SPY',
     timeframe: '1h',
-    open_time: new Date('2026-08-17T13:00:00.000Z'),
+    open_time: new Date('2026-08-17T15:00:00.000Z'),
     close_time: ASOF,
     open: 1,
     high: 2,
@@ -93,6 +96,7 @@ describe('buildFailoverDataSource', () => {
     const postDataFailoverAlert = vi.fn(async () => undefined);
     const source = buildFailoverDataSource({
       primary: stallingPrimary(),
+      calendar: new UsEquityRegularHoursCalendar(),
       universe: [{ asset: 'SPY', asset_class: 'stocks' }],
       equitiesFallbackBarFetcher: async () => [fallbackBar()],
       alertChannel: { postDataFailoverAlert },
@@ -108,6 +112,31 @@ describe('buildFailoverDataSource', () => {
     );
   });
 
+  it('session-normalizes the fallback, including an INJECTED fetcher', async () => {
+    // The invariant #818 found missing: a bar reaching the store carries the
+    // same session semantics whichever vendor served it. The primary is a
+    // `NormalizingDataSource`; a vendor client is a bare `BarFetcher` that
+    // applies no calendar and serves ~16 `1h` bars a day over 08:00Z-23:00Z.
+    // Asserted on an INJECTED fetcher on purpose — the wrap must not be
+    // something only the default Polygon path gets.
+    const preMarket: Bar = { ...fallbackBar(), open_time: new Date('2026-08-17T09:00:00.000Z') };
+    const source = buildFailoverDataSource({
+      primary: stallingPrimary(),
+      calendar: new UsEquityRegularHoursCalendar(),
+      universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      equitiesFallbackBarFetcher: async () => [preMarket, fallbackBar()],
+      alertChannel: { postDataFailoverAlert: vi.fn(async () => undefined) },
+      logger: recordingLogger(),
+      now: () => ASOF,
+    });
+
+    const bars = await source.fetchBars('SPY', WINDOW, ASOF);
+
+    expect(bars.map((bar) => bar.open_time.toISOString())).toEqual([
+      fallbackBar().open_time.toISOString(),
+    ]);
+  });
+
   it('leaves a crypto instrument with no fallback — equities-only by scope', async () => {
     // ADR-0015's 2026-08-16 amendment took crypto out of Samurai's scope, so
     // the Coinbase/Bitstamp pairing the backfill script uses has no live
@@ -115,6 +144,7 @@ describe('buildFailoverDataSource', () => {
     const equitiesFallbackBarFetcher = vi.fn(async () => [fallbackBar()]);
     const source = buildFailoverDataSource({
       primary: stallingPrimary(),
+      calendar: new UsEquityRegularHoursCalendar(),
       universe: [{ asset: 'BTC-USD', asset_class: 'crypto' }],
       equitiesFallbackBarFetcher,
       alertChannel: { postDataFailoverAlert: vi.fn(async () => undefined) },
@@ -135,6 +165,7 @@ describe('buildFailoverDataSource', () => {
     let now = ASOF;
     const source = buildFailoverDataSource({
       primary: stallingPrimary(),
+      calendar: new UsEquityRegularHoursCalendar(),
       universe: [{ asset: 'SPY', asset_class: 'stocks' }],
       equitiesFallbackBarFetcher: async () => [fallbackBar()],
       alertChannel: { postDataFailoverAlert },
@@ -161,6 +192,7 @@ describe('buildFailoverDataSource', () => {
     let now = ASOF;
     const source = buildFailoverDataSource({
       primary: stallingPrimary(),
+      calendar: new UsEquityRegularHoursCalendar(),
       universe: [
         { asset: 'SPY', asset_class: 'stocks' },
         { asset: 'QQQ', asset_class: 'stocks' },
@@ -194,6 +226,7 @@ describe('buildFailoverDataSource', () => {
     const logger = recordingLogger();
     const source = buildFailoverDataSource({
       primary: stallingPrimary(),
+      calendar: new UsEquityRegularHoursCalendar(),
       universe: [{ asset: 'SPY', asset_class: 'stocks' }],
       equitiesFallbackBarFetcher: async () => [fallbackBar()],
       alertChannel: {
@@ -214,5 +247,44 @@ describe('buildFailoverDataSource', () => {
     const errors = logger.entries.filter((entry) => entry.level === 'error');
     expect(errors).toHaveLength(1);
     expect(errors[0]?.message).toContain('telegram 502');
+  });
+});
+
+describe('DataFailoverAlertThrottle', () => {
+  const event = {
+    leg: 'equities' as const,
+    symbol: 'SPY',
+    timeframe: '1h',
+    primaryName: 'alpaca',
+    fallbackName: 'polygon',
+    primaryError: 'alpaca 503',
+  };
+
+  it('carries the tail of suppressed failovers onto the NEXT incident, not into the bin', () => {
+    // The module claims the suppressed count is carried on the next alert
+    // that does go out "so the operator still sees the true rate". Without
+    // this, every failover between the last bounded-repeat alert and the
+    // incident gap is silently unreported: 12 failovers then an hour quiet
+    // alerts at #1 and #9, and #10-#12 vanish.
+    const throttle = new DataFailoverAlertThrottle();
+    const decisions = Array.from({ length: 12 }, (_, i) =>
+      throttle.decide(event, new Date(ASOF.getTime() + i * 60_000)),
+    );
+
+    expect(decisions.filter((decision) => decision.alert)).toHaveLength(2);
+
+    const newIncident = throttle.decide(
+      event,
+      new Date(ASOF.getTime() + 11 * 60_000 + FAILOVER_INCIDENT_GAP_MS + 1),
+    );
+
+    expect(newIncident.alert).toBe(true);
+    expect(newIncident.suppressedSinceLast).toBe(3);
+  });
+
+  it('reports nothing suppressed for a first-ever failover', () => {
+    const throttle = new DataFailoverAlertThrottle();
+
+    expect(throttle.decide(event, ASOF)).toEqual({ alert: true, suppressedSinceLast: 0 });
   });
 });

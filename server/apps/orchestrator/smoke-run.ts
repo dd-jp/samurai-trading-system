@@ -176,6 +176,7 @@ import {
   FixtureDataSource,
   MarketDataServiceImpl,
   SqliteMarketDataStore,
+  UsEquityRegularHoursCalendar,
 } from '../../providers/market-data-service/index.js';
 import {
   GdeltGkgClient,
@@ -224,10 +225,11 @@ import {
 import { installFaultHandlers, startFromEnvironment } from './index.js';
 import { buildEntrypointLogger, JsonLogger, type StdoutStream } from './logger.js';
 import { paperStartingProfile } from './paper-profile.js';
+import type { DataFailoverAlert } from './production/data-failover.js';
 import { worstCaseLlmCallsForAssetClass } from './production/debate-adapter.js';
 import type { AccountStateProvider } from './production/direct-bind.js';
 import { buildExecutionSurface } from './production/direct-bind.js';
-import { SMOKE_TEST_UNIVERSE } from './production.js';
+import { buildProductionOrchestrator, SMOKE_TEST_UNIVERSE } from './production.js';
 import type { Logger } from './types.js';
 
 /**
@@ -2309,6 +2311,126 @@ function runThresholdClampScenario(
   }
 }
 
+/** What `evaluateSmokeGate` needs from the OHLCV failover scenario (#562). */
+export interface DataFailoverEvidence {
+  /** `bars.source` values the store holds for the failed-over instrument, in `open_time` order. */
+  storedSources: readonly string[];
+  /** `open_time`s the store holds, ISO — so an out-of-session row is visible, not merely counted. */
+  storedOpenTimes: readonly string[];
+  /** Failover alerts that reached the injected channel. */
+  alerts: readonly DataFailoverAlert[];
+  /** The primary's throw, if the read failed outright instead of failing over. */
+  readError: string | null;
+}
+
+/**
+ * Regular-hours `1h` opens on the last trading session completed before
+ * `SMOKE_RUN_INSTANT` (Tuesday 08:00 ET), plus one PRE-MARKET open the vendor
+ * would also serve. The pre-market row is the negative half: the fallback must
+ * drop it, because the primary's own `NormalizingDataSource` would have.
+ */
+const FAILOVER_FIXTURE_OPEN_TIMES = [
+  '2026-08-03T09:00:00.000Z',
+  '2026-08-03T18:00:00.000Z',
+  '2026-08-03T19:00:00.000Z',
+] as const;
+
+export const FAILOVER_IN_SESSION_OPEN_TIMES: readonly string[] =
+  FAILOVER_FIXTURE_OPEN_TIMES.slice(1);
+
+/**
+ * The OHLCV failover's enforcement assertion (#562), per the standard that
+ * wiring a mechanism means asserting it HERE (#430).
+ *
+ * Driven through `buildProductionOrchestrator` — the real composition root —
+ * with a market-data client that cannot answer and a fallback fetcher that
+ * can, against a COLD `:memory:` store so the read cannot be satisfied from
+ * the Tier-2 cache. Deleting the root's `buildFailoverDataSource` call makes
+ * this scenario record the primary's throw and the gate FAIL, which a unit
+ * test of the wrapper cannot do by construction.
+ *
+ * It asserts the DURABLE effect, not construction: a `bars` row stamped
+ * `polygon`, and no out-of-session row beside it.
+ */
+async function runDataFailoverScenario(logger: Logger): Promise<DataFailoverEvidence> {
+  const db = openSharedStore(':memory:');
+  try {
+    const clock = new SimulatedClock(SMOKE_RUN_INSTANT);
+    const profile = paperStartingProfile('paper');
+    const alerts: DataFailoverAlert[] = [];
+
+    const orchestrator = buildProductionOrchestrator({
+      ...profile,
+      db,
+      clock,
+      logger,
+      universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      // The REAL equity calendar, not this run's `AlwaysOpenCalendar`
+      // override: an always-open calendar would drop nothing, and the
+      // out-of-session half of this probe would pass vacuously.
+      tradingCalendar: new UsEquityRegularHoursCalendar(),
+      stocksTradingWindow: () => true,
+      // The stall being survived.
+      alpacaDataClient: {
+        getBars: async () => {
+          throw new Error('alpaca 503 (smoke failover probe)');
+        },
+        getLatestQuote: async () => ({ t: SMOKE_RUN_INSTANT.toISOString(), ap: 100, bp: 99 }),
+      },
+      // The vendor's own coverage: extended hours included, uncalendared.
+      equitiesFallbackBarFetcher: async (symbol, window) =>
+        FAILOVER_FIXTURE_OPEN_TIMES.map((openTime): Bar => {
+          const open_time = new Date(openTime);
+          return {
+            instrument: symbol,
+            timeframe: window.timeframe,
+            open_time,
+            close_time: new Date(open_time.getTime() + 3_600_000),
+            open: 100,
+            high: 101,
+            low: 99,
+            close: 100.5,
+            volume: 1_000,
+            source: 'polygon',
+          };
+        }),
+      dataFailoverAlerts: {
+        postDataFailoverAlert: async (alert) => {
+          alerts.push(alert);
+        },
+      },
+      miArchive: new MiArchiveStore(),
+      accountState: new FixedAccountStateProvider(),
+      alpacaBrokerClient: new UnreachableAlpacaClient(),
+      llmClient: new ConstantResponseLlmClient(),
+    });
+
+    let readError: string | null = null;
+    try {
+      await orchestrator.marketData.getBars(
+        'SPY',
+        { timeframe: '1h', lookback: 2 },
+        SMOKE_RUN_INSTANT,
+      );
+    } catch (error) {
+      readError = error instanceof Error ? error.message : String(error);
+    }
+
+    const stored = db
+      .prepare('SELECT open_time, source FROM bars WHERE instrument = ? ORDER BY open_time')
+      .all('SPY') as { open_time: string; source: string }[];
+
+    return {
+      storedSources: stored.map((row) => row.source),
+      storedOpenTimes: stored.map((row) => new Date(row.open_time).toISOString()),
+      alerts,
+      readError,
+    };
+  } finally {
+    db.close();
+  }
+}
+
 export function evaluateSmokeGate(
   observations: SmokeObservations,
   options: {
@@ -2385,6 +2507,15 @@ export function evaluateSmokeGate(
      * `'error'` event a destroyed pipe delivers.
      */
     entrypointFaultGuards: EntrypointFaultGuardEvidence;
+    /**
+     * The OHLCV failover's evidence (#562) — required, not optional, for the
+     * same "compile error, not a silent no-op" reason the mechanisms above
+     * are. The composition root's `config.dataSource ??` seam short-circuits
+     * the failover for the main run (which injects a fixture source), so
+     * without this probe deleting the entire `buildFailoverDataSource` call
+     * site would leave `yarn smoke` green — #430's defect class exactly.
+     */
+    dataFailover: DataFailoverEvidence;
   },
 ): SmokeGateResult {
   const failures: string[] = [];
@@ -2618,6 +2749,49 @@ export function evaluateSmokeGate(
         "either the exit/flatten path is stranded behind #638's clamp (a materially worse " +
         "defect than #766 was filed for: ADR-0014's flat-by-close invariant has no session-end " +
         'job to catch a missed flatten) or the clamp stopped refusing entries at all (#766)',
+    );
+  }
+
+  // #562 — the live orchestrator's OHLCV failover, asserted on its DURABLE
+  // effect: a bar the fallback served, in the store, with the fallback's own
+  // provenance and the primary's session semantics.
+  const failover = options.dataFailover;
+  if (failover.readError !== null) {
+    failures.push(
+      `the composition root's equities bar read threw instead of failing over: ` +
+        `${failover.readError} — a stalled primary must degrade to the fallback vendor, not ` +
+        'stop the tick. The root is not building a FailoverDataSource at all (#562)',
+    );
+  }
+  if (!failover.storedSources.every((source) => source === 'polygon')) {
+    failures.push(
+      `the bars the fallback served were stamped [${failover.storedSources.join(', ')}] in the ` +
+        "store rather than all 'polygon' — provenance is the only thing that makes a " +
+        'fallback-sourced row detectable after the stall, and nothing re-derives it (#562)',
+    );
+  }
+  if (failover.storedSources.length === 0) {
+    failures.push(
+      'no bars row landed from the fallback vendor — the failover produced nothing durable, so ' +
+        'a stage reading bars on the next tick still has no data (#562)',
+    );
+  }
+  if (
+    failover.storedOpenTimes.length !== FAILOVER_IN_SESSION_OPEN_TIMES.length ||
+    !failover.storedOpenTimes.every((openTime, i) => openTime === FAILOVER_IN_SESSION_OPEN_TIMES[i])
+  ) {
+    failures.push(
+      `the fallback persisted bars at [${failover.storedOpenTimes.join(', ')}] where the ` +
+        `session-normalized set is [${FAILOVER_IN_SESSION_OPEN_TIMES.join(', ')}] — the primary ` +
+        'is a NormalizingDataSource and drops out-of-session candles, so a raw fallback puts a ' +
+        'different window behind the same lookback and an ATR spans extended hours instead of ' +
+        'regular sessions, permanently (#562)',
+    );
+  }
+  if (failover.alerts.length === 0) {
+    failures.push(
+      'the failover served bars but raised nothing on the DataFailoverAlertChannel — an ' +
+        'unattended soak that silently switched vendors is a stall nobody learns about (#562)',
     );
   }
 
@@ -3439,6 +3613,11 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     // it writes nothing the observations below read back.
     const thresholdClamp = runThresholdClampScenario(profile.breakerConfig, profile.riskConfig);
 
+    // #562: the OHLCV failover, on its own composition root and its own cold
+    // in-memory store — the main run above injects a fixture data source, so
+    // the root's `config.dataSource ??` seam short-circuits the failover there.
+    const dataFailover = await runDataFailoverScenario(logger);
+
     const observations = readSmokeObservations(db, smokeMiArchive);
     const gate = evaluateSmokeGate(observations, {
       minTicks: targetTicks,
@@ -3448,6 +3627,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       loggerResilience,
       entrypointFaultGuards,
       thresholdClamp,
+      dataFailover,
       exitPath: {
         ...exitPathHarnessResult,
         // Alerts from BOTH the six-stage tick loop and the exit-path harness —

@@ -52,11 +52,11 @@ import type { TokenBucketConfig } from './token-bucket.js';
  * below matters more rather than less for it: `data-failover.ts` calls that
  * separate entry point inside a try/catch and WARNS-AND-DEFAULTS on a
  * malformed override instead of refusing to boot, precisely so this
- * paragraph's failure mode stays impossible. See `resolvePolygonPacing` below: same underlying
- * parsing/validation (`resolveBucketPacing`), a separate entry point that
- * only ever reads `SAMURAI_PACING_POLYGON_*`, so neither direction of the
- * coupling exists — this module's own `resolveVenuePacing()` never touches
- * Polygon, and Polygon's resolution never touches Alpaca/ccxt/IBKR.
+ * paragraph's failure mode stays impossible. See `resolvePolygonPacing` below:
+ * same underlying parsing/validation (`resolveBucketPacing`), a separate entry
+ * point that only ever reads `SAMURAI_PACING_POLYGON_*`, so neither direction
+ * of the coupling exists — this module's own `resolveVenuePacing()` never
+ * touches Polygon, and Polygon's resolution never touches Alpaca/ccxt/IBKR.
  */
 export type VenueKey = 'alpaca' | 'ccxt' | 'ibkr';
 
