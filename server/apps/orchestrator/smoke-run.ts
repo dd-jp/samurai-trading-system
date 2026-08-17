@@ -267,10 +267,12 @@ const SMOKE_INSTRUMENT = SMOKE_TEST_UNIVERSE[0]?.asset ?? 'BTC-USD';
  *   `atr_lookback: 14`) and the volatility breaker's ATR(14). #319's
  *   minimum-length guard in `computeIndicator` rejects a window shorter than
  *   `period + 1`, because `atr()` spends the first bar seeding
- *   `previousClose`, so 14 periods need 15 bars. Since #722 the binding `1h`
- *   consumer is instead the technical analyst's `RSI_SPEC`, which asks for the
- *   converged warm-up of **57**; 60 clears that by three bars, and anything
- *   below 57 would silently compute a shorter-warmed RSI rather than throw.
+ *   `previousClose`, so 14 periods need 15 bars. That throw is still the only
+ *   HARD floor on this count. Since #722 the DEEPEST `1h` ask is the technical
+ *   analyst's `RSI_SPEC` at the converged warm-up of **57**, and 60 clears it
+ *   by three — but 57 is a SOFT floor: below it the RSI silently computes over
+ *   a shorter warm-up rather than throwing, so shrinking this series would
+ *   degrade the analyst's read without failing anything.
  * - `1m` x 60 — the short-timeframe reads the Analysts take.
  * - `1d` x 40 — the widest daily consumers: `adv_window` (`{'1d', 20}`,
  *   `executionConfig.simulated`) and `correlationConfig` (`{'1d', 30}` with
