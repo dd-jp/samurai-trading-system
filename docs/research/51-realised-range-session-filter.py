@@ -154,23 +154,38 @@ def clustered_se(values, keys):
     return math.sqrt(var)
 
 
-def max_drawdown(trades, calendar):
+def max_drawdown(trades, calendar, drift_removed=False):
     """Max peak-to-trough of the cumulative per-session portfolio return, in pp.
 
     One portfolio return per calendar session — the equal-weight mean over the
     names that traded that session, and 0 on sessions the arm did not trade, so
     both arms are measured over the SAME calendar. Simple sum, not compounded:
     this is a required-edge study, not a sizing study, and D5 owns compounding.
+
+    `drift_removed` subtracts each arm's own mean session return first. Added
+    as a DIAGNOSTIC after the first run, and disclosed as such in the doc: the
+    raw figure on this tape is not a dispersion measure at all. Unconditional
+    entry at the declared bracket has negative expectancy by construction — the
+    whole point of ADR-0018's bar is that the signal has to supply the edge — so
+    the raw equity curve declines almost monotonically and its max drawdown is
+    just (trades x mean loss). Any filter that trades less therefore "wins" on
+    raw drawdown automatically. Adopt condition 3 is scored on the raw figure as
+    pre-registered; the drift-removed figure is reported beside it so a reader
+    can see that the pre-registered condition is close to vacuous here.
     """
     by_date = defaultdict(list)
     for d, net, _ in trades:
         by_date[d].append(net)
+    daily = [(sum(by_date[d]) / len(by_date[d])) if d in by_date else 0.0
+             for d in calendar]
+    if drift_removed and daily:
+        mu = sum(daily) / len(daily)
+        daily = [x - mu for x in daily]
     cum = 0.0
     peak = 0.0
     dd = 0.0
-    for d in calendar:
-        rs = by_date.get(d)
-        cum += (sum(rs) / len(rs)) if rs else 0.0
+    for x in daily:
+        cum += x
         peak = max(peak, cum)
         dd = max(dd, peak - cum)
     return dd
@@ -194,6 +209,7 @@ def arm_stats(trades, calendar, cost, width):
         "bar": bar, "sd": sd, "se_naive": se_naive, "se_clustered": se_clu,
         "resolve": 100.0 * resolved / n,
         "dd": max_drawdown(trades, calendar),
+        "dd_dr": max_drawdown(trades, calendar, drift_removed=True),
     }
 
 
@@ -261,9 +277,10 @@ def report_arm(tag, s):
         print("      %-12s (no trades)" % tag)
         return
     print("      %-12s n=%-5d sessions=%-5d  bar %6.2f pp  (clustered SE %.2f, "
-          "naive %.2f)  resolves %5.1f%%  maxDD %6.2f pp  sd %.2f%%"
+          "naive %.2f)  resolves %5.1f%%  maxDD %7.2f pp (drift-removed %6.2f)  "
+          "E_net %+.4f%%  sd %.2f%%"
           % (tag, s["n"], s["sessions"], s["bar"], s["se_clustered"],
-             s["se_naive"], s["resolve"], s["dd"], s["sd"]))
+             s["se_naive"], s["resolve"], s["dd"], s["dd_dr"], s["e_net"], s["sd"]))
 
 
 def run(sub):
@@ -366,7 +383,7 @@ def run(sub):
           % (100.0 * w_oos,
              (sum(x[1] for x in on_oos) / len(on_oos) + cost) if on_oos else float("nan"),
              (sum(x[1] for x in un_oos) / len(un_oos) + cost) if un_oos else float("nan")))
-    print("      BAR REDUCTION %+.2f pp   clustered SE %.2f   t %+.2f" % (red, se_red, t))
+    print("      BAR REDUCTION %+.4f pp   clustered SE %.4f   t %+.3f" % (red, se_red, t))
     if s_on and s_off:
         # Cross-check: the identity above must reproduce the differenced bars.
         assert abs((s_off["bar"] - s_on["bar"]) - red) < 1e-6, "gap identity broken"
@@ -378,11 +395,19 @@ def run(sub):
     c4 = w_oos >= BAR_MIN_TRADE_RETENTION
     print("      (1) reduction >= %.2f pp                : %-5s (%+.2f pp)"
           % (BAR_MIN_REDUCTION_PP, "PASS" if c1 else "FAIL", red))
-    print("      (2) reduction >= %.1f x clustered SE     : %-5s (t %+.2f)"
+    # Three decimals deliberately. The single-stock arm lands at t = +1.996 and
+    # rounds to "+2.00" at two, which reads as a PASS beside a 2.0 threshold it
+    # does not actually clear. A threshold that can be crossed by rounding is
+    # not a threshold, and the printed figure has to show that.
+    print("      (2) reduction >= %.1f x clustered SE     : %-5s (t %+.3f)"
           % (BAR_MIN_T, "PASS" if c2 else "FAIL", t))
-    print("      (3) max drawdown not worse              : %-5s (%.2f on vs %.2f off pp)"
+    print("      (3) max drawdown not worse              : %-5s (%.2f on vs %.2f off pp;"
           % ("PASS" if c3 else "FAIL",
              s_on["dd"] if s_on else float("nan"), s_off["dd"] if s_off else float("nan")))
+    print("          drift-removed %.2f on vs %.2f off — see the note on max_drawdown:"
+          % (s_on["dd_dr"] if s_on else float("nan"),
+             s_off["dd_dr"] if s_off else float("nan")))
+    print("          the raw form rewards trading less on a negative-expectancy tape)")
     print("      (4) keeps >= %.0f%% of trades             : %-5s (%.1f%%)"
           % (100 * BAR_MIN_TRADE_RETENTION, "PASS" if c4 else "FAIL", 100.0 * w_oos))
     verdict = "ADOPT" if (c1 and c2 and c3 and c4) else "REJECT"
@@ -493,11 +518,14 @@ def main():
                          else "EXCEEDS the budget"))
     print("\n=== SUMMARY")
     for r in results:
-        print("   %-22s theta %.4f  armed %4.1f%%  bar %.2f -> %.2f pp  "
-              "reduction %+.2f (SE %.2f, t %+.2f)  maxDD %.2f -> %.2f pp  %s"
+        print("   %-22s theta %.4f  armed %4.1f%%  trades %d -> %d  bar %.2f -> %.2f pp  "
+              "reduction %+.2f (clustered SE %.2f, t %+.2f)  maxDD %.1f -> %.1f pp "
+              "(drift-removed %.1f -> %.1f)  MDE %.2f pp  %s"
               % (r["sub"]["label"], r["theta"], 100.0 * r["w"],
+                 r["off"]["n"], r["on"]["n"],
                  r["off"]["bar"], r["on"]["bar"], r["red"], r["se"], r["t"],
-                 r["off"]["dd"], r["on"]["dd"], r["verdict"]))
+                 r["off"]["dd"], r["on"]["dd"], r["off"]["dd_dr"], r["on"]["dd_dr"],
+                 r["mde"], r["verdict"]))
 
 
 if __name__ == "__main__":
