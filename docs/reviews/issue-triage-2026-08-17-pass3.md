@@ -37,13 +37,15 @@ This is pass 2's own subject — an artifact asserting a fact and going stale �
 | --- | --- | --- |
 | **A. True duplicate** — same defect, same site | **0** | — |
 | **B. Dissolves-on-resolution** — one issue's answer may remove the other entirely | 1 pair | Sequence, do not merge |
-| **C. Competing scope** — two open issues answer the same question differently | 2 pairs | Resolve the contradiction before either is worked |
+| **C. Competing scope** — two open issues answer the same question differently | **0** (2 claimed, both falsified on verification — §3) | — |
 | **D. Overlapping fix surface** — same lines, different defects; will conflict if worked in parallel | 4 clusters | Batch into one PR, or order them |
 | **E. Subsumption / merge candidate** — one's scope is contained in another's | 3 pairs | Fold and close one |
 | **F. Same class, separate sites** | 4 groups | Cross-link, keep both open |
 | **G. Duplicated effort** — different tickets, same work done twice | 1 | Scope one out |
 
-**No two open issues are true duplicates.** That is worth stating plainly: 46 issues, no redundant pair. The titles in this backlog are unusually specific and the filing discipline is working. What the backlog *does* have is fifteen pairs that will waste work if they are picked up independently, and the rest of this report is those.
+**No two open issues are true duplicates.** That is worth stating plainly: 46 issues, no redundant pair. The titles in this backlog are unusually specific and the filing discipline is working. What the backlog *does* have is **thirteen** pairs that will waste work if they are picked up independently, and the rest of this report is those.
+
+*Originally fifteen. A verification pass over the full bodies falsified both Category C pairs (§3) — in each case the filer had declared the disposition in the part of the body this report's 1,400-character read cut off. Everything else was re-verified and stands; the record is §11.*
 
 ---
 
@@ -82,31 +84,30 @@ The index leg is the same story with more room: `0.5 × 0.35 = 0.175` against th
 
 ---
 
-## 3. Category C — two open issues answering the same question differently
+## 3. Category C — WITHDRAWN. Both candidate pairs were falsified on verification
 
-### 3.1 [#636](https://github.com/dd-jp/samurai-trading-system/issues/636) asks a question [#753](https://github.com/dd-jp/samurai-trading-system/issues/753) has already answered
+**This section originally asserted two competing-scope pairs. A verification pass over the full bodies falsified both.** Both were artifacts of this report's own 1,400-character truncation: in each case the disposition I said was missing is written in the part of the body that was cut. The category count in §1 is therefore **0, not 2**, and recommendations 5 and 8 are withdrawn. The mechanism is worth recording — a triage that reads the head of a body will systematically find "undeclared" the things a careful filer declared at the end.
 
-#636's remaining open half is stated as *which spec owns computing the falsifier control arm*. It sits in pass 1's list of seven issues awaiting David.
+### 3.1 WITHDRAWN — [#753](https://github.com/dd-jp/samurai-trading-system/issues/753) does *not* answer [#636](https://github.com/dd-jp/samurai-trading-system/issues/636), and says so explicitly
 
-#753's body already prescribes the answer in full:
+The claim was that #753's body prescribes the answer to #636's open half. It does not, and the error was mine in reading what #636's open half *is*.
 
-> the deterministic axis vote produces a direction and a confidence **without any model call**, so the control is that vote thresholded, routed through the same Trader, Risk and Execution chain with the debate stage bypassed.
+- **#636's open half is spec ownership**, not design: *"Which spec owns computing the falsifier control arm's metrics and the risk-adjusted outside benchmarks, and where is the comparison emitted?"* It is a `cost-model-backtest-spec.md` vs `feedback-loop-spec.md` question, evidenced by `benchmark` appearing **0 times** in both.
+- **#753 disclaims that question in terms:** *"This ticket makes the mandate real by **building** the control. It does **not** decide which spec owns declaring it — that is #636's question and David's to answer."*
+- The passage I quoted (the axis vote thresholded, debate bypassed) answers *how the control is produced* — which #636 already treats as settled: *"The producer is nearly free… the open work is **ownership, wiring and emission**, not a new metric."*
 
-That is a design, a component boundary and an owner. #753 also names itself *"the open half of #636"* — so the tickets agree they are one piece of work, and disagree about whether it is decided.
+So the two tickets are cleanly separated parent/child, not competing scope. **No action. #636 stays a live decision on David's frontier and cannot be discharged by pointing at #753.**
 
-**This is not a duplicate and #753 should not absorb #636's label.** It is a live inconsistency in the backlog's own state: an implementation ticket carrying a specified design, downstream of a decision ticket that is recorded as unanswered and is blocking David's queue. One of two things is true, and the backlog does not say which — either #753's design is the answer and #636 closes with it as its resolution comment, or #753 is prescribing a design nobody ratified and its body should be struck back to the parts ADR-0014/0017 mandate.
+### 3.2 WITHDRAWN — [#707](https://github.com/dd-jp/samurai-trading-system/issues/707) already declares its disposition against [#750](https://github.com/dd-jp/samurai-trading-system/issues/750), in advance, for all three outcomes
 
-**Recommend: put #636 to David as "does #753's shape answer this?" rather than as an open design question.** That is a yes/no, not a design session, and it removes one of the seven from the frontier at near-zero cost.
+The claim was that #707 could return positive and collide with #750's single-axis, zero-trials design with no rule for combining them. #707's "Outcomes, declared before the result" section pre-empts exactly this, and its reasoning is the same one I raised:
 
-### 3.2 [#707](https://github.com/dd-jp/samurai-trading-system/issues/707) and [#750](https://github.com/dd-jp/samurai-trading-system/issues/750) both decide the screening axis, and #750 has already closed the question
+> **PARTIAL** … Admissible then as a **hard eligibility gate on the pool** … and **never** as a second ranked axis, and never as an entry rule.
+> *"This restriction is load-bearing. C2 went to a single axis specifically so the screener contributes **zero trials** to the PBO accounting. A second ranked axis reintroduces a relative weight, weights are fitted parameters, and the zero-trial property is quietly gone."*
 
-#750's title is *"**One** screening axis: measured round-trip cost, contributing zero trials"*, and its 2026-08-17 banner records that David replaced the previous axis the same day after measurement falsified it. The design is deliberately singular and deliberately trial-free.
+**FAIL** is likewise declared (*"build nothing. C2's single ranked axis stands alone"*), and a 2026-08-17 banner already reconciles the ticket with #750's replaced axis, including that a PARTIAL *"must say how the two gates compose rather than assume an empty slot."*
 
-#707 measures whether a *different* instrument-level ranking axis — the trailing 12-month mean of `(close − open)/open` — persists, explicitly as a candidate for the funnel's opening step. Its own framing concedes the risk: *"Adjacent evidence disfavours it."*
-
-If #707 returns positive, the backlog holds two ranked screening axes with no rule for combining them, and #750's zero-trials property is spent — #707 is by construction a trial. If #707 returns negative, nothing changes. **The tension is one-sided and cheap to pre-empt:** #707 needs a declared disposition for a positive result *before* it runs, because "we measured it and it works" is the worst moment to discover the screener is specified as single-axis.
-
-**Recommend: add one line to #707 stating what a positive result does to #750** — replaces the cost axis, becomes a second axis under a stated combination rule, or is recorded and not adopted. Both prior passes treated these as a pure dependency chain via #813; the axis collision is not a dependency.
+**Residual, stated narrowly and not as a collision:** the **PASS** branch routes to *"a 5-minute confirmation at the frozen bracket"* and is the one outcome that does not restate the never-a-second-ranked-axis bar. The bar is load-bearing by #707's own argument and applies a fortiori to PASS, so this is at most a one-line tidy, not the undeclared disposition §3.2 originally claimed. Filed here rather than as a recommendation.
 
 ---
 
@@ -231,6 +232,7 @@ Checked against both prior reports so nothing here is restated as new, and so no
 | #791 half-overtaken by #818; re-scope to backfill + quarantine | pass 2 §2.3 | Condition now met (§0) — the re-scope is due today |
 | #719 → #720 parent/child; #631 → #636/#655/#665/#666 | both | By design. Not duplication |
 | #666 gates #750 | #666's own banner | Dependency, unchanged |
+| #813 blocks #707; #636/#753 parent-child | pass 1 / #753's own body | Confirmed by §11; my §3 attempts to promote either to *competing scope* were falsified |
 | #798 and #800 "cheaper to decide together" | #800's own body | **Direction added** (§2): #800 first, because #798's envelope is a function of #800's answer — and one of the three outcomes removes #798 entirely |
 
 ---
@@ -241,10 +243,10 @@ Checked against both prior reports so nothing here is restated as new, and so no
 2. **Merge [#822](https://github.com/dd-jp/samurai-trading-system/issues/822) and [#825](https://github.com/dd-jp/samurai-trading-system/issues/825) into one ticket carrying both fix shapes** — a `ProductionConfig` field *and* a conditional resolution — then do [#823](https://github.com/dd-jp/samurai-trading-system/issues/823) against the resulting branch (§4.1).
 3. **Decide [#800](https://github.com/dd-jp/samurai-trading-system/issues/800) before [#798](https://github.com/dd-jp/samurai-trading-system/issues/798)**, and re-run `18-drawdown-envelope.py` at the resolved fraction — #798's envelope is a function of #800's answer, and one of the three outcomes removes #798 entirely (§2). #800 AC4 also reopens `EQUITY_LEG_FRACTION_OF_CAPITAL` itself, so do not assume the `0.5` survives.
 4. **Fold [#828](https://github.com/dd-jp/samurai-trading-system/issues/828) into [#824](https://github.com/dd-jp/samurai-trading-system/issues/824)'s second half**, or narrow #824 to the breaker (§4.2). #828 is also this backlog's only untriaged issue.
-5. **Put [#636](https://github.com/dd-jp/samurai-trading-system/issues/636) to David as "does #753's design answer this?"** rather than as an open design question (§3.1) — removes one of the seven frontier items for the cost of a yes/no.
+5. ~~**Put [#636](https://github.com/dd-jp/samurai-trading-system/issues/636) to David as "does #753's design answer this?"**~~ — **WITHDRAWN on verification (§3.1).** #753 explicitly disclaims deciding which spec owns the control; #636 is a live decision and stays on the frontier.
 6. **Fold [#514](https://github.com/dd-jp/samurai-trading-system/issues/514)'s ordered tail into [#238](https://github.com/dd-jp/samurai-trading-system/issues/238)** and close #514 — #238 needs a body rewrite anyway (§5.1).
 7. **Scope [#826](https://github.com/dd-jp/samurai-trading-system/issues/826) to the Alpaca leg**, ceding the LSE mark source to [#734](https://github.com/dd-jp/samurai-trading-system/issues/734) (§4.3).
-8. **Declare in [#707](https://github.com/dd-jp/samurai-trading-system/issues/707) what a positive result does to [#750](https://github.com/dd-jp/samurai-trading-system/issues/750)** before it runs (§3.2).
+8. ~~**Declare in [#707](https://github.com/dd-jp/samurai-trading-system/issues/707) what a positive result does to [#750](https://github.com/dd-jp/samurai-trading-system/issues/750)**~~ — **WITHDRAWN on verification (§3.2).** #707 declares all three outcomes in advance, including the never-a-second-ranked-axis bar. At most a one-line tidy on the PASS branch.
 9. **Cross-link [#683](https://github.com/dd-jp/samurai-trading-system/issues/683)/[#756](https://github.com/dd-jp/samurai-trading-system/issues/756)**, and record in #756 that `conviction_floor` is a sizing input at `decide.ts:509`, not only a gate (§4.4).
 10. **List the seven open failover findings in [#773](https://github.com/dd-jp/samurai-trading-system/issues/773)** so its reviewer does not re-derive them (§7).
 
@@ -260,3 +262,37 @@ Four caveats:
 2. **Only the duplicate axis was run.** Code verdicts are inherited from pass 1 and pass 2 except where §0 corrects them; no issue's underlying defect was re-verified beyond the specific lines each pairing turns on.
 3. **§2's `f = 0.125` envelope figure is interpolated**, not re-run, and it assumes `EQUITY_LEG_FRACTION_OF_CAPITAL` stays `0.5` — which #800 AC4 explicitly reopens. The `f ≈ 0.142` break-even it is compared against is ADR-0018's own published number. Re-run the generator before closing #798 on it.
 4. **Nothing was mutated.** No issue closed, edited, relabelled or commented on. All ten recommendations are unexecuted.
+
+*Caveat 1 is no longer hypothetical: the verification pass in §11 read the full bodies and the truncation cost this report two of its fifteen findings.*
+
+---
+
+## 11. Verification pass — every flagged pair re-checked against the full body and the tree
+
+Run after the report was first written, on the question *"do these claims survive being checked?"* Full issue bodies (no truncation) via `gh issue view`, plus the cited code.
+
+**2 of 15 findings falsified, both in §3. 13 stand.**
+
+| Claim | Method | Verdict |
+| --- | --- | --- |
+| 46 open issues | `gh issue list --state open` | **Confirmed** — 46 |
+| §0 PR #818 merged at `b4a8a27` | `gh pr view 818` | **Confirmed** — `MERGED`, `b4a8a2778c9f…`, 2026-08-17T20:08:04Z |
+| §0 backfill alerter still `console.error` | `backfill-market-data.ts:314` | **Confirmed** |
+| §2 Trader deploys `0.35` / `0.25` unscaled | `subclass-bracket.ts:100`, `:104` | **Confirmed** — `D5_INDEX_ETP_DEPLOYMENT_FRACTION = 0.35` |
+| §2 D5 gate scales by `0.5` | `paper-profile.ts:377`, `:426`; `risk-manager/index.ts:449` | **Confirmed** — and `subclass-deployment-cap.test.ts:43` asserts `0.5 × LIVE_CAPITAL = 750`, i.e. the constant encodes a **£1,500 two-leg book**, which is precisely what crypto's removal reopens |
+| §2 #800 AC4 reopens the constant | full body | **Confirmed** verbatim |
+| §3.1 #753 answers #636 | full bodies | **FALSIFIED** — #753: *"It does **not** decide which spec owns declaring it"*; #636's open half is spec ownership, not design |
+| §3.2 #707 has no declared disposition | full body | **FALSIFIED** — all three outcomes declared in advance; PARTIAL bars a second ranked axis on the zero-trials argument |
+| §4.1 #822/#825 fixes do not compose | both fix-shape paragraphs, verbatim | **Confirmed** — #822 is `config.fallbackPacing ?? resolveFallbackPacing(logger)`; with no config field supplied the call still runs and still warns, which is #825's whole symptom |
+| §4.2 #824 claims a second half it has not measured | full bodies | **Confirmed** — #824: *"plus a re-derived Polygon pacing budget… Both halves are needed"*; #828 measures 1 → 4 requests and would edit the same `DEFAULT_POLYGON_PACING`. **Amendment: #828 already lists #824 under Related**, so the cross-link half of the recommendation is done; the scope overlap is not |
+| §4.2 #828 opened after pass 2 | `gh issue view 828 --json createdAt` | **Confirmed** — 20:07:24Z, 40s before #818 merged |
+| §4.3 #826's option 3 is #734's job | full body | **Confirmed** verbatim, and #826 does not cite #734 anywhere |
+| §4.4 #683 cites the wrong line | full body vs `decide.ts:392` | **Confirmed** — body says `decide.ts:168` |
+| §4.4 `conviction_floor` is also a sizing input | `decide.ts:509` | **Confirmed** |
+| §4.5 both touch `replay-driver.ts` | file present, 546 lines | **Confirmed** — `:497` in range |
+| §5.1 #514 concedes its framing | full body | **Confirmed** — *"Not code. The binding constraints are all outside the tree"*, with an explicit *"Deliberately post-soak"* tail |
+| §6 `computeRvol` has no caller | grep, non-test | **Confirmed** — defined and re-exported, never called |
+| §6 `assertValidPool` promises a check it does not run | `lse-etp-pool.ts:539-555` | **Confirmed** — docstring promises the identity fields are *"non-empty **and distinct**"*; the body checks non-empty only, no distinctness test |
+| §7 #773 covers PR #560 plus three others | full body | **Confirmed** — #532, #546, #560, #566, with #546 *"re-arming protective legs on a partial flatten"* |
+
+**What the two falsifications have in common** is the finding worth keeping: both were declared in a body's tail, and both were called undeclared by a pass that read the head. The categories that survived verification intact are the ones anchored in **code** (§4.1, §4.4, §6) or in a **cross-artifact contradiction** (§0, §2) rather than in the absence of a statement. Absence-of-statement findings from a truncated read are the unreliable class, and this report produced exactly two of them and got both wrong.
