@@ -64,18 +64,21 @@ Both tickets know about each other — #800's body already says *"both are D5 am
 
 Put the two together:
 
-| Reading of #800 | effective single-stock `f` | vs the `f ≈ 0.142` the tolerance needs |
+| Resolution of #800 | effective single-stock `f` | vs the `f ≈ 0.142` the tolerance needs |
 | --- | --- | --- |
-| Trader's (unscaled) | **0.25** | 1.76× over — #798 is live, ~41.8% against a ~20–25% band |
-| D5 gate's (0.5-scaled) | **0.125** | **already inside it** — #798's overshoot does not exist |
+| Trader's reading wins — drop the `0.5` from the cap | **0.25** | 1.76× over — #798 is live, ~41.8% against a ~20–25% band |
+| D5 gate's reading wins — scale the Trader by `0.5` too | **0.125** | **already inside it** — #798's overshoot does not exist |
+| `EQUITY_LEG_FRACTION_OF_CAPITAL` itself is re-set to `1.0` | **0.25** | 1.76× over — #798 is live again *even under the D5 gate's reading* |
 
-The index leg is the same story with more room: `0.5 × 0.35 = 0.175` against the `f ≈ 0.332` the tolerance needs.
+The index leg is the same story with more room: `0.5 × 0.35 = 0.175` against the `f ≈ 0.332` the tolerance needs, and `0.35` unscaled.
 
-**So #798 is only a question under one of #800's two answers.** Deciding #798 first — re-sizing 25% down toward 14%, re-opening the frozen stop, or accepting a 41.8% envelope — would be deciding against a deployment fraction that the other stage never used, and a subsequent #800 resolution in the D5 gate's favour would halve the result again to ~7%.
+**The third row is not hypothetical.** #800's acceptance criterion 4 reads: *"The `EQUITY_LEG_FRACTION_OF_CAPITAL` question is resolved against ADR-0015 given crypto's removal from scope, rather than left as a constant nobody owns"* — and its body says crypto's departure "reopens what the equity leg should be a fraction of." CLAUDE.md is explicit that the equity leg's share of capital is **open and must not be settled by inference**. The `0.5` encodes a two-leg book that no longer exists; the natural post-crypto reading is that the equity leg takes the whole book, which restores `f = 0.25` regardless of which stage's denominator wins.
+
+**So the safe statement is not "one answer dissolves #798" — it is that #798's envelope is a function of #800's resolution, and the published 41.8% assumes an unscaled 25% that no stage may end up using.** Deciding #798 first — re-sizing 25% down toward 14%, re-opening the frozen stop, or accepting a 41.8% envelope — would be deciding against a deployment fraction two of #800's three outcomes do not produce. Under the middle row a subsequent #800 resolution would halve any #798 result again to ~7%; under the third row #798 survives untouched.
 
 **Recommend: #800 is answered first, and #798 is re-derived at the resolved denominator rather than at 25%.** Both are David's calls and both are ADR-0018 amendments, so this is a sequencing note inside one decision session, not a blocker. It does not weaken #800 — that issue is a genuine 2× contradiction between two stages and must be resolved regardless of which way it goes.
 
-*Caveat stated: the envelope is a max-drawdown of a fixed-fraction compounded equity curve, so it is monotone in `f` but not exactly linear. The `f ≈ 0.142` and `f ≈ 0.332` break-evens are ADR-0018's own published numbers, and 0.125 sits below 0.142 with margin — but the ~22% figure implied for `f = 0.125` is an interpolation, not a re-run of `18-drawdown-envelope.py`. Re-run it at the resolved fraction before closing #798.*
+*Caveats stated. (a) The envelope is a max-drawdown of a fixed-fraction compounded equity curve, so it is monotone in `f` but not exactly linear. The `f ≈ 0.142` and `f ≈ 0.332` break-evens are ADR-0018's own published numbers, and 0.125 sits below 0.142 with margin — but the ~22% figure implied for `f = 0.125` is an interpolation, not a re-run of `18-drawdown-envelope.py`. (b) The middle row holds only while `EQUITY_LEG_FRACTION_OF_CAPITAL` stays at `0.5`, which #800 AC4 puts in play. Re-run the generator at the resolved fraction before closing #798 either way.*
 
 ---
 
@@ -228,7 +231,7 @@ Checked against both prior reports so nothing here is restated as new, and so no
 | #791 half-overtaken by #818; re-scope to backfill + quarantine | pass 2 §2.3 | Condition now met (§0) — the re-scope is due today |
 | #719 → #720 parent/child; #631 → #636/#655/#665/#666 | both | By design. Not duplication |
 | #666 gates #750 | #666's own banner | Dependency, unchanged |
-| #798 and #800 "cheaper to decide together" | #800's own body | **Direction added** (§2): #800 first, because one of its answers dissolves #798 |
+| #798 and #800 "cheaper to decide together" | #800's own body | **Direction added** (§2): #800 first, because #798's envelope is a function of #800's answer — and one of the three outcomes removes #798 entirely |
 
 ---
 
@@ -236,7 +239,7 @@ Checked against both prior reports so nothing here is restated as new, and so no
 
 1. **Re-scope [#791](https://github.com/dd-jp/samurai-trading-system/issues/791) now** — #818 has merged and `backfill-market-data.ts:314` is still `console.error`, so pass 2's condition is met (§0).
 2. **Merge [#822](https://github.com/dd-jp/samurai-trading-system/issues/822) and [#825](https://github.com/dd-jp/samurai-trading-system/issues/825) into one ticket carrying both fix shapes** — a `ProductionConfig` field *and* a conditional resolution — then do [#823](https://github.com/dd-jp/samurai-trading-system/issues/823) against the resulting branch (§4.1).
-3. **Decide [#800](https://github.com/dd-jp/samurai-trading-system/issues/800) before [#798](https://github.com/dd-jp/samurai-trading-system/issues/798)**, and re-run `18-drawdown-envelope.py` at the resolved fraction — #798 may not survive the answer (§2).
+3. **Decide [#800](https://github.com/dd-jp/samurai-trading-system/issues/800) before [#798](https://github.com/dd-jp/samurai-trading-system/issues/798)**, and re-run `18-drawdown-envelope.py` at the resolved fraction — #798's envelope is a function of #800's answer, and one of the three outcomes removes #798 entirely (§2). #800 AC4 also reopens `EQUITY_LEG_FRACTION_OF_CAPITAL` itself, so do not assume the `0.5` survives.
 4. **Fold [#828](https://github.com/dd-jp/samurai-trading-system/issues/828) into [#824](https://github.com/dd-jp/samurai-trading-system/issues/824)'s second half**, or narrow #824 to the breaker (§4.2). #828 is also this backlog's only untriaged issue.
 5. **Put [#636](https://github.com/dd-jp/samurai-trading-system/issues/636) to David as "does #753's design answer this?"** rather than as an open design question (§3.1) — removes one of the seven frontier items for the cost of a yes/no.
 6. **Fold [#514](https://github.com/dd-jp/samurai-trading-system/issues/514)'s ordered tail into [#238](https://github.com/dd-jp/samurai-trading-system/issues/238)** and close #514 — #238 needs a body rewrite anyway (§5.1).
@@ -255,5 +258,5 @@ Four caveats:
 
 1. **Bodies were read to 1,400 characters.** Fifteen were truncated, listed in the coverage note. A relation asserted only in a long body's tail was not seen.
 2. **Only the duplicate axis was run.** Code verdicts are inherited from pass 1 and pass 2 except where §0 corrects them; no issue's underlying defect was re-verified beyond the specific lines each pairing turns on.
-3. **§2's `f = 0.125` envelope figure is interpolated**, not re-run. The `f ≈ 0.142` break-even it is compared against is ADR-0018's own published number. Re-run the generator before closing #798 on it.
+3. **§2's `f = 0.125` envelope figure is interpolated**, not re-run, and it assumes `EQUITY_LEG_FRACTION_OF_CAPITAL` stays `0.5` — which #800 AC4 explicitly reopens. The `f ≈ 0.142` break-even it is compared against is ADR-0018's own published number. Re-run the generator before closing #798 on it.
 4. **Nothing was mutated.** No issue closed, edited, relabelled or commented on. All ten recommendations are unexecuted.
