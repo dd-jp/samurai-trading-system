@@ -9,10 +9,11 @@
 | Band | Track |
 |---|---|
 | `00`–`02` | Foundations — **numbers frozen**, specs cite them as "docs 00/01/02" by number with no path |
-| `10`–`19` | Strategy / edge |
+| `10`–`19` | Strategy / edge — **CLOSED 2026-08-17, band full.** Pre-ADR-0014 horizon work; see rule 3 |
 | `20`–`29` | Market intelligence |
 | `30`–`39` | Data vendors |
 | `40`–`49` | Infra / tooling |
+| `50`–`59` | **Intraday horizon** — the ADR-0014-era product: entry timing, brackets, truncation, session structure |
 
 **Archived docs are `archive/YYYY-MM-DD-slug.md`** — date first, no number, because they are dated artifacts rather than index entries. Raw run logs live in [`archive/raw/`](archive/raw/).
 
@@ -21,7 +22,10 @@ Rules:
 1. **Never delete.** Archived docs are the audit trail behind live-money decisions and are preserved byte-for-byte apart from a single successor pointer under the title.
 2. **A doc is superseded only by a named successor, and the pointer lives in the doc** — not only here. An archived file must tell a reader who arrives via search or a stale link that it has been replaced.
 3. **New research takes the next free number in its band.** Never reuse a number; never add a date suffix to a live doc.
-   - **The `10`–`19` strategy band is FULL as of 2026-08-17, and rule 3 is already broken once.** [`18-entry-time-conditional-brackets.md`](18-entry-time-conditional-brackets.md) (#708) shares `18` with [`18-intraday-instrument-physics.md`](18-intraday-instrument-physics.md) because there was no free number and it extends that doc's Result 4. Flagged deliberately rather than shipped quietly. **David's ruling needed:** extend the band (e.g. `10`–`19` → `10`–`29`, renumbering MI), or archive docs 10 and 12 — both already **superseded on horizon** per #632 — and reuse the numbers under an explicit exception to "never reuse".
+   - **The `10`–`19` strategy band filled on 2026-08-17 and is now CLOSED.** Ruled by David on [#786](https://github.com/dd-jp/samurai-trading-system/issues/786): rather than renumber, **open a new `50`–`59` band for intraday-horizon research**. New strategy work at the ADR-0014 intraday horizon goes there; `10`–`19` takes no new numbers.
+   - **Why not the alternatives.** Extending `10`–`19` into the `20`s would have moved 174 citations across 40+ files — 8 of them inside `archive/`, which rule 1 preserves byte-for-byte, and many more in GitHub issue text that cannot be rewritten at all, so some citations would have been left permanently wrong. Reusing the numbers of docs 10 and 12 was rejected because **neither doc is archivable**: they are superseded *on horizon only*, and each still carries live content the current product depends on — doc 10's E2 overnight-carry finding is *why* the thesis is flat-by-close, and doc 12's **D4** governs [#636](https://github.com/dd-jp/samurai-trading-system/issues/636) and is bound by `CLAUDE.md`'s Key Constraints. Reuse also fails silently: a missed citation resolves to a *different* document rather than breaking.
+   - **The one collision is resolved.** `18-entry-time-conditional-brackets.md` was the band's overflow and is now [`50-entry-time-conditional-brackets.md`](50-entry-time-conditional-brackets.md). No number is shared by two live docs.
+   - **Scripts are out of scope of the banding rule**, which is scoped to `NN-slug.md`. The `18-*.py` files keep their numbers — they belong to the ADR-0018 / doc-18 evidence family, and `11-trend-signal-measurement.py` is the standing precedent for a script sharing a doc's number.
 4. **The Stage 2 proxy KILL does not apply to the hypothesis.** When a Stage 2 pass finally runs on the doc-10 strategy, it is a new doc in the `10`s, not an update to doc 13.
 
 ## Live frontier — read these first
@@ -37,7 +41,7 @@ Rules:
 | **Crypto / LLM** | [`15-crypto-premia-and-llm-layer.md`](15-crypto-premia-and-llm-layer.md) | Carry rejected (FCA), momentum rejected (N=2), LLM shadow-mode only |
 | **Crypto venue fees** | [`19-crypto-venue-fees.md`](19-crypto-venue-fees.md) | RESEARCHED (#671), corrected 2026-08-10 — Crypto.com **Exchange** + 5,000 CRO is the best branch (**+0.605%/trade** vs £0 at base) and the only one independent of volume tier and maker/taker fill. The **App is a different product** and negative-expectancy. Coinbase is a real fallback (+0.25–0.45%/trade). Recorded in ADR-0015; venue gated on #673, fee tier on #667 |
 | **Intraday instrument physics** | [`18-intraday-instrument-physics.md`](18-intraday-instrument-physics.md) | MEASURED (#635) — a broad tracker reaches +1% on 9.8% of days; universe is **movers**, LSE leveraged ETPs. Rests on one 3USL spread quote (#666) |
-| **Entry-time brackets under truncation** | [`18-entry-time-conditional-brackets.md`](18-entry-time-conditional-brackets.md) | MEASURED (#708) — **REJECT** the entry-time/range-conditional schedule: cells are not separable at ~300 trades. Flat-by-close is the large effect (index bracket resolves 19.4% at open entry, 4.7% by t0=60). #704's ladder does **not** beat the single bracket (t = −0.20, paired). #654's ≥8.00 pp bound measures 6.38 pp |
+| **Entry-time brackets under truncation** | [`50-entry-time-conditional-brackets.md`](50-entry-time-conditional-brackets.md) | MEASURED (#708) — **REJECT** the entry-time/range-conditional schedule, both subclasses: judged against the declared bracket on each cell's *own* sessions, conditioning buys ≤0.56 pp against a ~4 pp bar and is worse in 11 of 42 cells. Flat-by-close is the large effect, and it has **opposite sign** by subclass (index bar 4.33 → 4.19 pp, single-stock 3.35 → **3.85** pp). #704's ladder does **not** beat the single bracket (t = −0.20, paired). Range terciles belong to the *sessions*, not the bracket — split to #787 |
 | **Tick latency economics** | [`41-tick-latency-economics.md`](41-tick-latency-economics.md) | MEASURED (#657/#670) — τ\* = 21.8 min; drift mean-reverts, tail diffuses. ADR-0008's $3.0/day was 3.4x high |
 | **Market intelligence** | [`20-mi-decisions.md`](20-mi-decisions.md) | DECIDED — Alpaca News + GDELT + calendar spine; Massive and Guardian killed |
 | **Data vendors** | [`30-data-vendor-decisions.md`](30-data-vendor-decisions.md) | SETTLED — the whole historical stack runs at £0 |
@@ -47,7 +51,9 @@ Rules:
 
 **Foundations** — [`00-summary.md`](00-summary.md), [`01-full-report-with-sources.md`](01-full-report-with-sources.md), [`02-staged-deployment-plan.md`](02-staged-deployment-plan.md). Strategy-evaluation research and the stage-gated deployment plan. Doc 02 is the source of the kill line every Stage 2 verdict cites.
 
-**Strategy / edge** — `10` hypothesis, `11` measurement (+ `11-trend-signal-measurement.py`), `12` critique, `13` Stage 2 proxy verdict, [`14-backtest-pitfalls.md`](14-backtest-pitfalls.md), `15` crypto/LLM, [`16-risk-debate-finding.md`](16-risk-debate-finding.md) (open finding, not a decision), [`17-universe-manipulation-guardrails.md`](17-universe-manipulation-guardrails.md), [`18-intraday-instrument-physics.md`](18-intraday-instrument-physics.md), [`18-entry-time-conditional-brackets.md`](18-entry-time-conditional-brackets.md) (second `18` — see rule 3), [`19-crypto-venue-fees.md`](19-crypto-venue-fees.md).
+**Strategy / edge** — `10` hypothesis, `11` measurement (+ `11-trend-signal-measurement.py`), `12` critique, `13` Stage 2 proxy verdict, [`14-backtest-pitfalls.md`](14-backtest-pitfalls.md), `15` crypto/LLM, [`16-risk-debate-finding.md`](16-risk-debate-finding.md) (open finding, not a decision), [`17-universe-manipulation-guardrails.md`](17-universe-manipulation-guardrails.md), [`18-intraday-instrument-physics.md`](18-intraday-instrument-physics.md), [`19-crypto-venue-fees.md`](19-crypto-venue-fees.md). **Band closed — see rule 3.**
+
+**Intraday horizon** — [`50-entry-time-conditional-brackets.md`](50-entry-time-conditional-brackets.md) (+ `18-entry-time-brackets.py`, `18-fetch-bars.py`). New research at the ADR-0014 intraday, flat-by-close horizon goes here. [`18-intraday-instrument-physics.md`](18-intraday-instrument-physics.md) is thematically part of this track but keeps its `18` — it predates the band and is cited by number in nine places; rule 1's spirit is that a stable citation beats a tidy index.
 
 **Market intelligence** — `20` decisions, [`21-mi-ingestion-architecture.md`](21-mi-ingestion-architecture.md), [`22-mi-source-licensing.md`](22-mi-source-licensing.md), [`23-polymarket-source.md`](23-polymarket-source.md).
 
@@ -71,6 +77,7 @@ Closed GitHub issues and merged PRs cite the old paths; this table is how you re
 
 | Old | New |
 |---|---|
+| `18-entry-time-conditional-brackets.md` | `50-entry-time-conditional-brackets.md` (#786 — the `10`–`19` band closed) |
 | `03-historical-data-vendor-options.md` | `archive/2026-07-21-historical-data-vendor-options.md` |
 | `04-worldmonitor-as-mi-source.md` | `archive/2026-07-22-worldmonitor-as-mi-source.md` |
 | `05-tradingagents-risk-debate-finding.md` | `16-risk-debate-finding.md` |

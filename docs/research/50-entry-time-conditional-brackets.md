@@ -2,14 +2,14 @@
 
 **R2 — [#708](https://github.com/dd-jp/samurai-trading-system/issues/708), under map [#703](https://github.com/dd-jp/samurai-trading-system/issues/703). Measured 2026-08-17.**
 
-> **Numbering, flagged not hidden.** `README.md`'s scheme wants a unique number per live
-> doc, and the `10`–`19` strategy band is **full**. This doc takes the `18-` prefix
-> deliberately, joining the doc-18 / ADR-0018 evidence family it extends (which already
-> shares the number across four `18-*.py` scripts) — but that collides with
-> `18-intraday-instrument-physics.md`, which is a live doc, not a script. The ruling is
-> David's: extend the band, or archive docs 10/12, which `CLAUDE.md` and the README
-> already call superseded on horizon. Tracked as
-> [#786](https://github.com/dd-jp/samurai-trading-system/issues/786).
+> **Numbering, resolved.** This doc shipped as a second `18-` because the `10`–`19`
+> strategy band was full, flagged rather than hidden. [#786](https://github.com/dd-jp/samurai-trading-system/issues/786)
+> ruled it on 2026-08-17: the `10`–`19` band is **closed**, a new `50`–`59`
+> **intraday horizon** band opens, and this doc is its first entry. Renumbering the
+> existing bands was rejected — it would have moved 174 citations, including some inside
+> `archive/` (preserved byte-for-byte) and in GitHub issue text that cannot be rewritten.
+> Its scripts keep their `18-` prefixes: they belong to the ADR-0018 evidence family, and
+> the banding rule is scoped to `NN-slug.md`.
 
 Extends Result 4 of [`18-intraday-instrument-physics.md`](18-intraday-instrument-physics.md), which closes with its own limitation:
 
