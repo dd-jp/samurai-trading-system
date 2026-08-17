@@ -39,6 +39,8 @@ Event conditioning was tested directly rather than assumed away. Earnings-reacti
 
 ## Decision 3 — the levels are the **neutral bracket**
 
+> **This is the live exit rule.** The 2026-08-16 amendment below replaced it with a tranche ladder; [#708](https://github.com/dd-jp/samurai-trading-system/issues/708) measured that ladder and rejected it, so **that amendment is withdrawn and Decision 3 stands unamended** — one frozen bracket per subclass, flat by close, as shipped in [#739](https://github.com/dd-jp/samurai-trading-system/issues/739).
+
 **The rule, declared before fitting:** the bracket in which take-profit and stop are **equally likely to be hit first**, unconditionally. At that bracket the position is a fair coin, so the entry signal's only job is directional accuracy, and the edge it must supply is exactly the round-trip cost amortised over the bracket width.
 
 | subclass | round trip | **take-profit** | **stop** | resolves at a level | accuracy edge required |
@@ -91,13 +93,21 @@ Measured on a **drift-removed** series, so this is the pure volatility envelope 
 
 **The crypto brackets are not set by this ADR.** #660's 4%/2% levels are unmeasured. The same engine applies — crypto 1-minute is free from 2021-01-04 per doc 33 — but "session" is undefined for crypto until [#667](https://github.com/dd-jp/samurai-trading-system/issues/667) fixes the flatten rule, so the measurement is blocked, not skipped.
 
-## Amendment — 2026-08-16: the exit is a tranche ladder, and the reason is truncation
+## Amendment — 2026-08-16, WITHDRAWN 2026-08-17: the tranche ladder was declared, then measured and rejected
 
-- **Amends:** Decision 3 (the neutral bracket as the exit *rule*) and Decision 4 (re-selection versus re-calibration)
+- **Amended:** Decision 3 (the neutral bracket as the exit *rule*) and Decision 4 (re-selection versus re-calibration)
 - **Earned by:** [#704](https://github.com/dd-jp/samurai-trading-system/issues/704), grilled and resolved 2026-08-16 under map [#703](https://github.com/dd-jp/samurai-trading-system/issues/703)
-- **Parameters pending:** [#708](https://github.com/dd-jp/samurai-trading-system/issues/708)
+- **Withdrawn by:** [#708](https://github.com/dd-jp/samurai-trading-system/issues/708)'s ladder rider, 2026-08-17; recorded by [#814](https://github.com/dd-jp/samurai-trading-system/issues/814)
 
-**The declared exit rule changes from a single neutral bracket to a tranche ladder over one shared wide stop.** Decision 4 requires that a rule change be recorded as one rather than arriving as new percentages, and this is that record.
+> **THE LIVE EXIT RULE IS DECISION 3's SINGLE NEUTRAL BRACKET, ONE PER SUBCLASS — +2.00% / −2.16% on a 3× index ETP, +6.00% / −6.25% on a 3× single-stock ETP, flat by close. There is no tranche ladder on the trading path, and there is no deferred one.**
+>
+> This amendment declared the ladder as the exit rule and made that declaration *falsifiable* on #708's rider (see "The tranche vector is NOT set here" below, which pre-recorded this outcome as a result rather than a reversal). **The rider ran and the ladder did not clear.** Over the same 897 out-of-sample sessions with both arms truncated at the 16:25 London flatten ([`docs/research/50-entry-time-conditional-brackets.md`](../research/50-entry-time-conditional-brackets.md)): the 50/25/25 ladder requires **4.52 pp** of accuracy edge against the single bracket's **4.19 pp**, paired difference **−0.0022%/trade, SE 0.0106, t = −0.20 on n = 897** — indistinguishable, point estimate against the ladder, and under the cost model **most generous to it** (one round trip charged on full notional for what is physically three exits). Under #704's own stated terms a ladder that fails to beat the single bracket means the single bracket stands, so **the tranche vector is dead rather than deferred**.
+>
+> Shipped accordingly: [#739](https://github.com/dd-jp/samurai-trading-system/issues/739) (`f4e6b1c`) froze one bracket per subclass in `server/pipeline/trader/subclass-bracket.ts`, wired as `subclass_brackets: ADR_0018_SUBCLASS_BRACKETS`.
+>
+> **The section below is kept as the record of what was declared and why**, because its reasoning — the withdrawal of the 4.60 pp width formula, the truncation mechanism, and the neutral-stop bijection at "What is amended, and what is not" — remains correct and is why the ladder had to be measured at all. Read it as history, not as the rule.
+
+**The declared exit rule changed from a single neutral bracket to a tranche ladder over one shared wide stop.** Decision 4 requires that a rule change be recorded as one rather than arriving as new percentages, and this was that record. **It has since been withdrawn — see the banner above.**
 
 ### The justification, and the one that was rejected
 
@@ -117,13 +127,15 @@ Two properties make this admissible under Decision 4 where the formula argument 
 
 ### What is amended, and what is not
 
-**Amended:** the declared exit rule is now *a tranche ladder over one shared stop, flat by close*, in place of *the single neutral bracket*.
+**Amended, then withdrawn:** this declared the exit rule to be *a tranche ladder over one shared stop, flat by close*, in place of *the single neutral bracket*. **#708's rider rejected it at t = −0.20 (n = 897), so the amendment is withdrawn and the single neutral bracket per subclass is the live rule** — the banner at the head of this amendment carries the measurement and the shipped configuration. Nothing else in this amendment was ever the rule; the rest of this section is what survived it.
 
-**Not amended — Decision 3's arithmetic stands:** the neutral-bracket levels, the 4.33 pp and 3.35 pp bars, and the bijection from take-profit to neutral stop (+1.0↔−1.03, +2.0↔−2.16, +3.0↔−3.35). That bijection is what makes the ladder's cost explicit: **one shared stop can be neutral for at most one tranche.** Against −2.16% the +2.0% tranche is neutral; +1.0% sits over a stop wider than its partner and +3.0% over one tighter, each carrying an `E_gross` term of opposite sign. This is stated rather than hidden, because it is exactly why the vector needs measuring.
+**Still standing — Decision 3's arithmetic, never amended and unaffected by the withdrawal:** the neutral-bracket levels, the 4.33 pp and 3.35 pp bars, and the bijection from take-profit to neutral stop (+1.0↔−1.03, +2.0↔−2.16, +3.0↔−3.35). That bijection is what makes the ladder's cost explicit: **one shared stop can be neutral for at most one tranche.** Against −2.16% the +2.0% tranche is neutral; +1.0% sits over a stop wider than its partner and +3.0% over one tighter, each carrying an `E_gross` term of opposite sign. This is stated rather than hidden, because it is exactly why the vector needs measuring.
 
 **Not amended — Decision 4's discipline:** this is one rule change, recorded once, with its justification named. It does not license revisiting the percentages later without a further amendment.
 
-### The tranche vector is NOT set here
+### The tranche vector is NOT set here — and never will be
+
+> **Resolved 2026-08-17.** The rider named below reported: the vector is **not adopted**. What follows is the pre-measurement statement, kept because its last paragraph is the clause that fired.
 
 The candidate vector — 50%@+1.0% / 25%@+2.0% / 25%@+3.0% over a shared −2.16% stop — and **the bar the signal must clear** are both **pending #708's ladder rider**, which measures `E_gross` per tranche and computes `Δ = (cost − E_gross)/width` directly rather than assuming neutrality. They are deliberately absent from this amendment; #704 resolved the *rule* precisely because the map was grilled before the measurement ran.
 
@@ -132,6 +144,8 @@ The candidate vector — 50%@+1.0% / 25%@+2.0% / 25%@+3.0% over a shared −2.16
 **Consequence for implementation:** the build ships the neutral single bracket +2.00 / −2.16 first — its bar is exact and needs no amendment — and gains tranches once they are priced.
 
 **If the rider prices the ladder worse than the single bracket under truncation,** the truncation argument is falsified and the single bracket stands. Recorded up front so that outcome is a result rather than a reversal.
+
+> **This is the clause that fired.** The rider priced the ladder no better than the single bracket (t = −0.20, n = 897), so the single bracket stands and **the build never gains tranches**. Separately, #708 measured that truncation moves the *index* bar from **+4.33 pp to +4.19 pp** and reports the truncated single-stock bar as **3.85 pp** — those are the truncated comparators, and they are the reference for the ladder-versus-bracket comparison above. They do not amend Decision 3's untruncated +4.33 pp / +3.35 pp, which remain this ADR's declared bars.
 
 ### Consequence of the same-day crypto ruling
 
