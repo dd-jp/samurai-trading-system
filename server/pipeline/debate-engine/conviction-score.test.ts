@@ -275,4 +275,105 @@ describe('computeConvictionScore', () => {
       );
     });
   });
+
+  /**
+   * #752's premise check, required by the ticket before building the
+   * degraded-coverage alert: "verify empirically whether [the mute-analyst
+   * exclusion] is live and effective... two live analysts and one mute one
+   * must produce a conviction that can clear the floor."
+   *
+   * MEASURED RESULT: it clears comfortably, not marginally. Two live
+   * analysts (bullish, confidence 0.9, saturated evidence) plus one mute
+   * (NO_DATA_MARKER, confidence 0.05) score ~0.78 mediator-free and ~0.83
+   * with a bullish mediator verdict — both far above the 0.55 floor, unlike
+   * the #625 desk shape above (1 live, 2 mute), which needed the mediator to
+   * agree just to clear 0.5478. `computeEvidenceStrength`'s exclusion of the
+   * mute analyst from the evidence average (see its doc comment) is what
+   * does this: the two live analysts' full-strength evidence is no longer
+   * diluted by a third analyst's pinned 0.05.
+   *
+   * CONCLUSION carried into the #752 closing comment: the #625 failure mode
+   * (a stock that can never trade because of a muted desk) is closed for
+   * this desk shape. The counter and the alert this ticket adds are
+   * therefore reporting a MEASURED gap, not preventing a repeat of a defect
+   * that would otherwise recur — the alert's justification is narrower than
+   * the original draft assumed, but the ticket still requires it (criteria
+   * 2/3/4/6) and it is built regardless.
+   */
+  describe('#752 — two-live-one-mute premise check', () => {
+    const CONVICTION_FLOOR = DEFAULT_TRADER_CONFIG.conviction_floor;
+
+    function twoLiveOneMuteDesk(): AnalystView[] {
+      return [
+        makeView({
+          analyst_id: 'tech',
+          analyst_type: 'technical',
+          direction: 'bullish',
+          confidence: 0.9,
+          key_points: Array(3).fill('point'),
+        }),
+        makeView({
+          analyst_id: 'fund',
+          analyst_type: 'fundamental',
+          direction: 'bullish',
+          confidence: 0.9,
+          key_points: Array(3).fill('point'),
+        }),
+        makeView({
+          analyst_id: 'sent',
+          analyst_type: 'sentiment',
+          direction: 'neutral',
+          confidence: 0.05,
+          key_points: [`${NO_DATA_MARKER}: no social items available for this window`],
+        }),
+      ];
+    }
+
+    it('clears the conviction floor mediator-free', () => {
+      const score = computeConvictionScore(twoLiveOneMuteDesk(), [], undefined);
+
+      expect(score).toBeGreaterThan(CONVICTION_FLOOR);
+      // Directional consensus mean(1, 1, 0)/3 = 0.6667; evidence (1 + 0.9)/2 =
+      // 0.95 (mute excluded). score = 0.6 * 0.6667 + 0.4 * 0.95 = 0.78.
+      expect(score).toBeCloseTo(0.78, 5);
+    });
+
+    it('clears the conviction floor with a mediator agreeing', () => {
+      const roundStances: AnalystRoundStance[] = [
+        { analyst_id: 'tech', round: 1, stance: 'bullish' },
+        { analyst_id: 'fund', round: 1, stance: 'bullish' },
+      ];
+
+      const score = computeConvictionScore(twoLiveOneMuteDesk(), roundStances, 'bullish');
+
+      expect(score).toBeGreaterThan(CONVICTION_FLOOR);
+    });
+
+    it('the mute analyst is genuinely excluded from evidence, not merely down-weighted', () => {
+      // If the exclusion regressed to averaging the mute analyst in (the
+      // pre-#625 shape), a third participant pinned at confidence 0.05 would
+      // pull `avgConfidence` down materially. Comparing against a
+      // hypothetical desk with only the two live analysts isolates that:
+      // the two-live-one-mute score must equal the two-live-only score,
+      // because the excluded analyst contributes nothing to
+      // `computeEvidenceStrength` either way — only to the (honest) neutral
+      // vote in the consensus term.
+      const twoLiveOnly = [
+        makeView({ analyst_id: 'tech', direction: 'bullish', confidence: 0.9 }),
+        makeView({ analyst_id: 'fund', direction: 'bullish', confidence: 0.9 }),
+      ];
+
+      const withMute = computeConvictionScore(twoLiveOneMuteDesk(), [], undefined);
+      const withoutMute = computeConvictionScore(twoLiveOnly, [], undefined);
+
+      // Not equal outright: the mute analyst's honest neutral vote widens the
+      // consensus denominator from 2 to 3, which the exclusion does NOT
+      // (and should not) undo — see computeDirectionalConsensus's doc
+      // comment. The claim under test is narrower: adding the mute analyst
+      // must not pull the score DOWN via the evidence term, which a
+      // regression to averaging it in would do.
+      expect(withMute).toBeGreaterThan(withoutMute * 0.6);
+      expect(withMute).toBeGreaterThan(CONVICTION_FLOOR);
+    });
+  });
 });

@@ -109,6 +109,7 @@ import { TradeChannelBreachAlert } from './breach-alert-channel.js';
 import { TradeChannelFlattenReconcileAlert } from './flatten-reconcile-alert-channel.js';
 import { TradeChannelHeartbeat } from './heartbeat-channel.js';
 import { TradeChannelLoosenNotice } from './loosen-notification-channel.js';
+import { TradeChannelMiCoverageAlert } from './mi-coverage-alert-channel.js';
 import { TradeChannelOcoDoubleFillAlert } from './oco-double-fill-channel.js';
 import { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
 import type { AlertChannelSlots, ProductionConfig } from './production.js';
@@ -197,6 +198,14 @@ export const ALERT_CHANNEL_FIELDS = [
   // the heartbeat keeps beating, so the only symptom is a book that quietly
   // stops trading.
   'traderDiagnosticAlerts',
+  // #752 — the twelfth. A real channel type (`MiCoverageAlertChannel`,
+  // production/mi-coverage.ts) landing in the SAME change as its transport,
+  // like `traderDiagnosticAlerts` before it: the condition it reports (a name
+  // in the active list with no scored market-intelligence item inside the
+  // staleness window) is invisible from outside by construction — the debate
+  // still runs, narrowed by one analyst's worth of evidence, and the
+  // heartbeat keeps beating regardless.
+  'miCoverageAlerts',
 ] as const satisfies readonly (keyof AlertChannelSlots)[];
 
 /**
@@ -424,6 +433,12 @@ export function buildAlertChannels(deps: {
     // chat #342 expects the operator to mute.
     ...(deps.injected.traderDiagnosticAlerts === undefined
       ? { traderDiagnosticAlerts: new TradeChannelTraderDiagnosticAlert(telegram, chatId) }
+      : {}),
+    // #752. The escalation chat: a coverage gap on a live-path name is a
+    // decision waiting on the operator (does GDELT need to land sooner?),
+    // not a beat — same reasoning as `analystSkipAlerts`.
+    ...(deps.injected.miCoverageAlerts === undefined
+      ? { miCoverageAlerts: new TradeChannelMiCoverageAlert(telegram, chatId) }
       : {}),
   };
 }

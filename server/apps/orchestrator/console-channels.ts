@@ -50,6 +50,14 @@ import type { CiiScoreProvider } from '../../providers/market-intelligence/index
 import type { HeartbeatChannel } from './heartbeat.js';
 import type { OrphanAlertChannel, OrphanGoVerdict } from './orphan-verdict-scan.js';
 import type { AnalystSkipAlert, AnalystSkipAlertChannel } from './production/analysts-adapter.js';
+import {
+  MI_NO_DATA_BY_NAME_COUNTER,
+  MI_NO_DATA_BY_SUBCLASS_COUNTER,
+  type MiCoverageAlert,
+  type MiCoverageAlertChannel,
+  type MiCoverageEvent,
+  type MiCoverageTelemetry,
+} from './production/mi-coverage.js';
 import type { Logger } from './types.js';
 
 /**
@@ -357,6 +365,67 @@ export class LoggingAnalystTelemetry implements AnalystTelemetry {
         kind: event.kind,
         required: event.required,
         received: event.received,
+      },
+    });
+  }
+}
+
+/**
+ * `mi_no_data_by_name{instrument}` / `mi_no_data_by_subclass{subclass}` (#752),
+ * written to the log stream — same convention as `LoggingAnalystTelemetry`:
+ * the log IS the metric store, and a scrape aggregates by `payload.counter`.
+ * Fires only on a miss; a rate is the scrape's job, dividing by the tick
+ * count recorded elsewhere.
+ */
+export class LoggingMiCoverageTelemetry implements MiCoverageTelemetry {
+  constructor(private readonly logger: Logger) {}
+
+  noDataObserved(event: MiCoverageEvent): void {
+    this.logger.log({
+      trace_id: event.trace_id,
+      stage: 'analysts',
+      level: 'warn',
+      message:
+        `${MI_NO_DATA_BY_NAME_COUNTER}{instrument="${event.instrument}"} ` +
+        `${MI_NO_DATA_BY_SUBCLASS_COUNTER}{subclass="${event.subclass}"}: ${event.instrument} ` +
+        `has no scored market-intelligence item inside the staleness window`,
+      payload: {
+        counter_by_name: MI_NO_DATA_BY_NAME_COUNTER,
+        counter_by_subclass: MI_NO_DATA_BY_SUBCLASS_COUNTER,
+        instrument: event.instrument,
+        asset_class: event.asset_class,
+        subclass: event.subclass,
+      },
+    });
+  }
+}
+
+/**
+ * The degraded-coverage alert (#752), written to the log at `warn` — a
+ * counter's severity, not an escalation's: this is the log-only stand-in
+ * `SAMURAI_ALERTS=log-only` selects, and it CANNOT wake anyone (criterion 6).
+ * `TradeChannelMiCoverageAlert` (mi-coverage-alert-channel.ts) is the
+ * reachable-from-a-phone implementation `SAMURAI_ALERTS=telegram` selects
+ * (alert-transport.ts) — the twelfth `ALERT_CHANNEL_FIELDS` member.
+ */
+export class LoggingMiCoverageAlertChannel implements MiCoverageAlertChannel {
+  constructor(private readonly logger: Logger) {}
+
+  async postCoverageAlert(alert: MiCoverageAlert): Promise<void> {
+    this.logger.log({
+      trace_id: 'mi-coverage',
+      stage: 'analysts',
+      level: 'warn',
+      message:
+        `market-intelligence coverage degraded for ${alert.instrument} (subclass=` +
+        `${alert.subclass}) — no scored item inside the staleness window. ` +
+        'SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram ' +
+        'for an unattended run.',
+      payload: {
+        instrument: alert.instrument,
+        asset_class: alert.asset_class,
+        subclass: alert.subclass,
+        reported_at: alert.reported_at.toISOString(),
       },
     });
   }

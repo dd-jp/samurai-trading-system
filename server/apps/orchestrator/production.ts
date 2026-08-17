@@ -182,6 +182,8 @@ import {
   LoggingFlattenReconcileAlertChannel,
   LoggingHeartbeatChannel,
   LoggingLoosenNotificationChannel,
+  LoggingMiCoverageAlertChannel,
+  LoggingMiCoverageTelemetry,
   LoggingOcoDoubleFillAlertChannel,
   LoggingOrphanAlertChannel,
   LoggingResidualExposureAlertChannel,
@@ -201,6 +203,7 @@ import { JsonLogger } from './logger.js';
 import type { OrphanGoVerdict, OrphanVerdictScanner } from './orphan-verdict-scan.js';
 import { AlpacaAccountStateProvider } from './production/account-state.js';
 import { buildAnalystsStep } from './production/analysts-adapter.js';
+import { MiCoverageMonitor } from './production/mi-coverage.js';
 import { buildDebateStep } from './production/debate-adapter.js';
 import {
   buildExecutionStep,
@@ -223,6 +226,7 @@ import { SqliteDailyEquityStore } from './sqlite-daily-equity-store.js';
 import { SqliteSessionEquityStore } from './sqlite-session-equity-store.js';
 import { runTickPlan } from './tick-loop.js';
 import { SequentialTickRunner } from './tick-runner.js';
+import { subclassOfUniverse } from './types.js';
 import type { Logger, Scheduler, TickRunner, TickSteps, UniverseInstrument } from './types.js';
 
 /**
@@ -301,6 +305,8 @@ export interface ProductionOrchestrator {
   broker: BrokerAdapter;
   analysts: AnalystOrchestrator;
   logger: Logger;
+  /** #752: the market-intelligence coverage monitor — see `ProductionComponents.marketIntelligenceCoverage`. */
+  marketIntelligenceCoverage: MiCoverageMonitor;
   /**
    * Runs the orphan scan once, then starts the heartbeat interval and the
    * tick loop. Resolves once startup is done — the loop keeps running after.
@@ -382,6 +388,15 @@ export interface ProductionComponents {
    * download for one set of rows.
    */
   gdeltIngestAgent: GdeltIngestAgent | undefined;
+  /**
+   * The market-intelligence coverage monitor (#752) — the instance
+   * `steps.analysts` reads and writes every tick. Exposed for the reason
+   * `llmRateLimiter` is: a caller (or a test) can read `.degraded` and
+   * `.missingInstruments` directly, which is the only way to catch this
+   * mechanism reverting to a counter nothing reads — this repo's dominant
+   * defect class.
+   */
+  marketIntelligenceCoverage: MiCoverageMonitor;
 }
 
 /**
@@ -571,6 +586,13 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * reasoning that hoisted `breachAlerts` below.
    */
   const logger = config.logger ?? new JsonLogger();
+
+  // #752: one monitor for the whole process, restart-clean in memory like
+  // `consecutiveSkips` (analysts-adapter.ts). Exposed on `ProductionComponents`
+  // so a caller can assert the degraded-coverage flag actually moves — the
+  // same reasoning `llmRateLimiter` documents for why it is a field here
+  // rather than a local this function throws away.
+  const miCoverageMonitor = new MiCoverageMonitor();
 
   const analysts = new AnalystOrchestrator({
     market_intelligence: marketIntelligence,
@@ -1039,6 +1061,20 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // adapter's doc comment (issue #358 item 4).
     analysts: buildAnalystsStep(analysts, logger, {
       skipAlerts: config.analystSkipAlerts ?? new LoggingAnalystSkipAlertChannel(logger),
+      // #752: the per-name/per-subclass NO_DATA counter and the
+      // degraded-coverage alert. `subclassOfUniverse` is the SAME derivation
+      // #739 uses for the Risk Manager gate and the Trader's frozen bracket
+      // (types.ts), so an unclassified instrument here is exactly the state
+      // `DEFAULT_UNIVERSE` is in until the #749 pool file lands — bucketed as
+      // `UNCLASSIFIED_SUBCLASS`, never dropped.
+      coverage: {
+        contextSource: marketIntelligence,
+        subclassOf: subclassOfUniverse(universe),
+        telemetry: new LoggingMiCoverageTelemetry(logger),
+        alertChannel: config.miCoverageAlerts ?? new LoggingMiCoverageAlertChannel(logger),
+        monitor: miCoverageMonitor,
+        logger,
+      },
       // #464: the only writer `MarketIntelligenceStore` has. Absent under
       // SAMURAI_SENTIMENT=off — no agent, no calls, and the analysts keep
       // reporting NO_DATA_MARKER (#463), which is the honest default rather
@@ -1134,6 +1170,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     executionDeps,
     llmRateLimiter,
     gdeltIngestAgent,
+    marketIntelligenceCoverage: miCoverageMonitor,
   };
 }
 
@@ -1829,6 +1866,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     broker: components.broker,
     analysts: components.analysts,
     logger,
+    marketIntelligenceCoverage: components.marketIntelligenceCoverage,
 
     async start(): Promise<OrphanGoVerdict[]> {
       const orphans = await persistence.orphanScanner.scan(

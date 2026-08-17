@@ -57,6 +57,7 @@ import type {
 } from '../../../pipeline/analysts/index.js';
 import { type Logger, sanitizeLogText } from '../../../shared/index.js';
 import type { TickSteps } from '../types.js';
+import { checkMiCoverage, type CheckMiCoverageDeps } from './mi-coverage.js';
 
 /**
  * A run of consecutive quorum skips on one instrument (#431, analysts-spec.md
@@ -122,6 +123,15 @@ export interface AnalystsStepOptions {
    * saying NO DATA.
    */
   marketIntelligence?: MarketIntelligenceRefresh;
+  /**
+   * The per-name/per-subclass `NO_DATA` coverage check (#752). Absent means
+   * no coverage counting and no degraded-coverage alert — the honest default
+   * for a caller (a focused unit test, a backtest) that has not wired
+   * `MarketIntelligenceStore` and a subclass map through. Never gates the
+   * tick either way: see `checkMiCoverage`'s doc comment for why an alert and
+   * not a refusal.
+   */
+  coverage?: CheckMiCoverageDeps;
 }
 
 /** The one method the analysts step calls on `GrokAgent`. */
@@ -151,6 +161,18 @@ export function buildAnalystsStep(
     // is an optional input, and an xAI outage must degrade the debate to
     // NO_DATA_MARKER rather than fail a tick that would otherwise have traded.
     await options.marketIntelligence?.refresh(trace_id, signal.asset, signal.asset_class);
+
+    // #752: after the refresh, so the freshest write for this tick is what
+    // the coverage check reads. Never gates the tick — see `checkMiCoverage`'s
+    // doc comment (mi-coverage.ts) for why this is an alert, not a refusal.
+    if (options.coverage !== undefined) {
+      await checkMiCoverage(options.coverage, {
+        trace_id,
+        instrument: signal.asset,
+        assetClass: signal.asset_class,
+        reportedAt: clock.now(),
+      });
+    }
 
     const result = await orchestrator.runAnalysts(trace_id, signal, clock);
 
