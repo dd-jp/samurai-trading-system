@@ -49,37 +49,34 @@ describe('moveDirection', () => {
     expect(moveDirection(0.5, 0.4, makeDial({ tighten_is: 'increase' }))).toBe('loosen');
   });
 
-  it('treats a no-op as tightening — it relaxes nothing, so it needs no approval', () => {
+  it('treats a no-op as tightening — it relaxes nothing, so it announces nothing', () => {
     expect(moveDirection(0.5, 0.5, makeDial())).toBe('tighten');
   });
 });
 
 describe('applyGuardrail', () => {
-  it('gates a loosening when gating is on', () => {
-    const outcome = applyGuardrail(0.5, 0.9, makeDial({ tighten_is: 'decrease' }), true);
-    expect(outcome).toEqual({ to: 0.55, direction: 'loosen', gated: true });
+  it('bounds a loosening and labels it — no gate, since #736 removed it', () => {
+    const outcome = applyGuardrail(0.5, 0.9, makeDial({ tighten_is: 'decrease' }));
+    // No `gated` key at all: the outcome shape cannot express a wait-for-a-human.
+    expect(outcome).toEqual({ to: 0.55, direction: 'loosen' });
   });
 
-  it('does not gate a tightening', () => {
-    const outcome = applyGuardrail(0.5, 0.1, makeDial({ tighten_is: 'decrease' }), true);
-    expect(outcome).toEqual({ to: 0.45, direction: 'tighten', gated: false });
-  });
-
-  it('never gates when gating is off, even for a loosening', () => {
-    const outcome = applyGuardrail(0.5, 0.9, makeDial({ tighten_is: 'decrease' }), false);
-    expect(outcome.gated).toBe(false);
+  it('bounds a tightening the same way', () => {
+    const outcome = applyGuardrail(0.5, 0.1, makeDial({ tighten_is: 'decrease' }));
+    expect(outcome).toEqual({ to: 0.45, direction: 'tighten' });
   });
 
   it('reports the direction of the BOUNDED move, not the raw target', () => {
     // Target is far past the ceiling; the bounded move is still a loosening.
-    const outcome = applyGuardrail(0.5, 99, makeDial({ tighten_is: 'decrease' }), true);
+    const outcome = applyGuardrail(0.5, 99, makeDial({ tighten_is: 'decrease' }));
     expect(outcome.to).toBeCloseTo(0.55, 10);
     expect(outcome.direction).toBe('loosen');
   });
 
-  it('does not gate a move the hard band flattens to a no-op', () => {
-    // Already at the ceiling, asked to loosen further: nothing to approve.
-    const outcome = applyGuardrail(0.9, 99, makeDial({ tighten_is: 'decrease' }), true);
-    expect(outcome).toEqual({ to: 0.9, direction: 'tighten', gated: false });
+  it('flattens a move the hard band cannot honour to a no-op', () => {
+    // Already at the ceiling, asked to loosen further: the hard band wins, and
+    // a move of zero is not a loosening.
+    const outcome = applyGuardrail(0.9, 99, makeDial({ tighten_is: 'decrease' }));
+    expect(outcome).toEqual({ to: 0.9, direction: 'tighten' });
   });
 });

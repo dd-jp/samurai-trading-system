@@ -80,10 +80,12 @@
  * is #275's remaining half. See `verdictConfig.automation_level` below for
  * what that means for the `manual` setting in practice.
  *
- * The Feedback Loop's `LoosenApprovalChannel` is emphatically NOT that
- * exception, despite the similar name: it returns `void` and collects no
- * answer, so #366 resolved it from `SAMURAI_ALERTS` like the outbound four and
- * the `feedback` block below names no transport either.
+ * The Feedback Loop's `LoosenNotificationChannel` is emphatically NOT that
+ * exception: it returns `void` and collects no answer, so #366 resolved it
+ * from `SAMURAI_ALERTS` like the outbound four and the `feedback` block below
+ * names no transport either. #736 renamed it from `LoosenApprovalChannel` once
+ * ADR-0013 Decision 2 removed the gate it was named for — it announces an
+ * applied loosening now rather than requesting one.
  */
 import type { RateLimitConfig } from '../../pipeline/debate-engine/index.js';
 import type { ExecutionConfig } from '../../pipeline/execution/index.js';
@@ -664,9 +666,10 @@ function buildFeedbackConfig(caps: RiskCaps): FeedbackConfig {
     floor: PAPER_ANALYST_WEIGHT_FLOOR,
     ceiling: PAPER_ANALYST_WEIGHT_CEILING,
     /**
-     * `DERIVED` — descriptive only for a weight. `runDailyCycle` passes
-     * `gate_loosening: false` for weights (they "tune freely within bounds"),
-     * so this only labels the `Adjustment.direction` written to the audit log.
+     * `DERIVED` — descriptive only for a weight. A weight carries no safety
+     * semantics ("tune freely within bounds"), so this only labels the
+     * `Adjustment.direction` written to the audit log and never decides
+     * whether a move is announced — only a risk threshold's loosening is.
      * `decrease` because less influence for a lens is the safer direction, the
      * same reading `TunableDial`'s doc gives for `max_position_size`.
      */

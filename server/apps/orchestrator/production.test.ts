@@ -1800,7 +1800,7 @@ describe('buildProductionOrchestrator', () => {
             max_live_backtest_divergence: 0.5,
           },
         } as unknown as FeedbackConfig,
-        approvals: { requestLoosenApproval: vi.fn() } as never,
+        loosenNotices: { notifyLoosenApplied: vi.fn() } as never,
       },
     });
 
@@ -1825,7 +1825,7 @@ describe('buildProductionOrchestrator', () => {
         config: {
           weights: { max_step: 0.05, floor: 0.5, ceiling: 1.5, tighten_is: 'decrease' },
         } as unknown as FeedbackConfig,
-        approvals: { requestLoosenApproval: vi.fn() } as never,
+        loosenNotices: { notifyLoosenApplied: vi.fn() } as never,
       },
     });
     const orchestrator = buildProductionOrchestrator(config);
@@ -2076,11 +2076,18 @@ describe('buildProductionOrchestrator', () => {
     });
 
     /**
-     * The fail-closed property, asserted where it actually lives: the store.
+     * #736's property, asserted where it actually lives: the store.
+     *
+     * This describe used to assert the opposite — that a proposed loosening
+     * expired unapplied in paper and live. ADR-0013 Decision 2 rejected that
+     * state in as many words ("a queue that nobody drains is not a control —
+     * it is a permanently-stuck dial that reads as governed"), and these cases
+     * now prove the removal end to end, through the real composition root and
+     * the real SQLite tuning store rather than a fixture.
      *
      * The profile declares no `risk_thresholds` dial (nothing writes that
      * table yet), so this case adds one and seeds a value — otherwise the
-     * gated path is unreachable and the test would be vacuous.
+     * path is unreachable and the test would be vacuous.
      */
     function loosenConfig(overrides: Partial<ProductionConfig> = {}): {
       config: ProductionConfig;
@@ -2111,8 +2118,8 @@ describe('buildProductionOrchestrator', () => {
             },
           },
         },
-        // Raising a loss-bounding cap: the move the loop may never make on
-        // its own authority.
+        // Raising a loss-bounding cap — the move that used to be queued for a
+        // human and therefore never made at all.
         proposals: [{ kind: 'risk_threshold', name: 'max_position_size', target: 6_000 }],
       };
 
@@ -2121,84 +2128,88 @@ describe('buildProductionOrchestrator', () => {
       return { config, feedback, logger, tuning };
     }
 
-    it('refuses to loosen a risk threshold nobody approved — the dial does not move', async () => {
+    it('APPLIES the loosening in paper mode and records it as reversible', async () => {
       const { config, logger, tuning } = loosenConfig();
       const orchestrator = buildProductionOrchestrator(config);
 
       await orchestrator.start();
       await vi.advanceTimersByTimeAsync(1_500);
 
-      // THE assertion. No approval transport in this repo can deliver a "yes"
-      // back to the process, so a proposed loosening must expire unapplied
-      // rather than fall through to the value it asked for.
-      expect(tuning.getRiskThresholds().max_position_size).toBe(5_000);
-      // ...and it is not written to the audit log either: nothing happened,
-      // so nothing is recorded as having happened.
+      // THE assertion of #736, and the exact line this test used to assert the
+      // negation of. Bounded to one `max_step`, not the 6,000 proposed.
+      expect(tuning.getRiskThresholds().max_position_size).toBe(5_500);
+      // ...and it IS written to the audit log: ADR-0013 requires every applied
+      // change logged and reversible, and `from` is what reverses it.
       expect(
         db
-          .prepare('SELECT COUNT(*) AS n FROM dial_adjustments WHERE dial_name = ?')
+          .prepare(
+            'SELECT from_value AS f, to_value AS t, direction AS d, status AS s ' +
+              'FROM dial_adjustments WHERE dial_name = ?',
+          )
           .get('max_position_size'),
-      ).toEqual({ n: 0 });
+      ).toEqual({ f: 5_000, t: 5_500, d: 'loosen', s: 'applied' });
 
       const cycle = logger.entries.find(
         (entry) => entry.message === 'daily feedback cycle complete',
       );
       expect(cycle?.payload).toMatchObject({
-        loosen_pending_approval: ['max_position_size'],
-        applied: false,
+        param_updates: { max_position_size: { from: 5_000, to: 5_500, direction: 'loosen' } },
+        applied: true,
       });
+      // The field that named the queue is gone with it.
+      expect(cycle?.payload).not.toHaveProperty('loosen_pending_approval');
 
       await orchestrator.stop();
     });
 
-    it('falls back to the log-only channel and says the threshold stayed put', async () => {
+    it('falls back to the log-only channel and says the threshold MOVED', async () => {
       const { config, logger } = loosenConfig();
       const orchestrator = buildProductionOrchestrator(config);
 
       await orchestrator.start();
       await vi.advanceTimersByTimeAsync(1_500);
 
-      // Nothing supplied `loosenApprovals`, so the composition root's own
+      // Nothing supplied `loosenNotices`, so the composition root's own
       // stand-in is what the cycle reached — the same default shape
       // `breachAlerts` has.
-      const entry = logger.entries.find((e) => e.message.includes('LOOSENING proposed'));
+      const entry = logger.entries.find((e) => e.message.includes('LOOSENING applied'));
       expect(entry?.level).toBe('warn');
-      expect(entry?.payload).toMatchObject({ name: 'max_position_size', applied: false });
+      expect(entry?.payload).toMatchObject({ name: 'max_position_size', applied: true });
 
       await orchestrator.stop();
     });
 
     it('uses the transport SAMURAI_ALERTS selected when one is supplied', async () => {
-      const requestLoosenApproval = vi.fn();
-      const { config, tuning } = loosenConfig({ loosenApprovals: { requestLoosenApproval } });
+      const notifyLoosenApplied = vi.fn();
+      const { config, tuning } = loosenConfig({ loosenNotices: { notifyLoosenApplied } });
       const orchestrator = buildProductionOrchestrator(config);
 
       await orchestrator.start();
       await vi.advanceTimersByTimeAsync(1_500);
 
-      expect(requestLoosenApproval).toHaveBeenCalledTimes(1);
-      expect(requestLoosenApproval.mock.calls[0]?.[0]).toMatchObject({
+      expect(notifyLoosenApplied).toHaveBeenCalledTimes(1);
+      expect(notifyLoosenApplied.mock.calls[0]?.[0]).toMatchObject({
         name: 'max_position_size',
         from: 5_000,
-        // The BOUNDED value a human would be approving, not the raw target —
-        // one `max_step`, not the 6,000 the proposal asked for.
+        // The BOUNDED value actually written, not the raw target — one
+        // `max_step`, not the 6,000 the proposal asked for.
         to: 5_500,
       });
-      // Notifying is not applying, whichever channel carries it.
-      expect(tuning.getRiskThresholds().max_position_size).toBe(5_000);
+      // The notice reports the store, whichever channel carries it.
+      expect(tuning.getRiskThresholds().max_position_size).toBe(5_500);
 
       await orchestrator.stop();
     });
 
-    it('still lets an explicit per-cycle approvals override win', async () => {
+    it('still lets an explicit per-cycle loosenNotices override win', async () => {
       const perCycle = vi.fn();
       const topLevel = vi.fn();
       const { config, feedback } = loosenConfig({
-        loosenApprovals: { requestLoosenApproval: topLevel },
+        loosenNotices: { notifyLoosenApplied: topLevel },
       });
       const orchestrator = buildProductionOrchestrator({
         ...config,
-        feedback: { ...feedback, approvals: { requestLoosenApproval: perCycle } },
+        feedback: { ...feedback, loosenNotices: { notifyLoosenApplied: perCycle } },
       });
 
       await orchestrator.start();
@@ -2492,7 +2503,7 @@ describe('buildProductionOrchestrator', () => {
         feedback: {
           intervalMs: 1_000,
           config: feedbackConfig(),
-          approvals: { requestLoosenApproval: vi.fn() },
+          loosenNotices: { notifyLoosenApplied: vi.fn() },
           metrics: {
             source: {
               getDailyMetrics: () =>

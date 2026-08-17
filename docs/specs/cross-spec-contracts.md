@@ -112,8 +112,10 @@ stop**, and a config edit was the entire distance between the running system and
 an arbitrary risk limit. ADR-0013 calls the clamp "a precondition of this ADR
 being safe, not a tidiness item". The threat model is not a fat-fingered file —
 it is the **Feedback Loop walking a dial by itself**, with nobody in the path at
-all once [#736](https://github.com/dd-jp/samurai-trading-system/issues/736)
-removes the loosen gate.
+all since [#736](https://github.com/dd-jp/samurai-trading-system/issues/736)
+removed the loosen gate. That is no longer a future condition: `runDailyCycle`
+applies every bounded loosening in every mode and only tells the operator
+afterwards, so this table is the sole remaining stop.
 
 **Guarded values, and where each bound comes from:**
 

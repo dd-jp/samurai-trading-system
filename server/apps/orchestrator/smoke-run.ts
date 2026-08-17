@@ -194,7 +194,7 @@ import {
   LoggingBreachAlertChannel,
   LoggingFlattenReconcileAlertChannel,
   LoggingHeartbeatChannel,
-  LoggingLoosenApprovalChannel,
+  LoggingLoosenNotificationChannel,
   LoggingOcoDoubleFillAlertChannel,
   LoggingOrphanAlertChannel,
   LoggingResidualExposureAlertChannel,
@@ -1954,9 +1954,9 @@ function refuses(probe: () => void): boolean {
  * The threshold-clamp scenario (#638) — negative probes through the REAL seams.
  *
  * ADR-0013 makes the numeric thresholds the only stop left: nothing re-arms by
- * hand and nothing gates a loosening, so a config edit — or, once #736 lands,
- * the Feedback Loop on its own — is the entire distance between the running
- * system and an arbitrary risk limit. Wiring a mechanism means adding its
+ * hand and nothing gates a loosening, so a config edit — or, since #736, the
+ * Feedback Loop on its own — is the entire distance between the running system
+ * and an arbitrary risk limit. Wiring a mechanism means adding its
  * enforcement assertion here (#430), and the enforcement being asserted is a
  * REFUSAL: for every guarded name, an out-of-bound value is pushed at each seam
  * that can put a number into force, and the seam must reject it.
@@ -2966,7 +2966,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // below).
       ocoDoubleFillAlerts: new LoggingOcoDoubleFillAlertChannel(logger),
       breachAlerts: new LoggingBreachAlertChannel(logger),
-      loosenApprovals: new LoggingLoosenApprovalChannel(logger),
+      loosenNotices: new LoggingLoosenNotificationChannel(logger),
       analystSkipAlerts: new LoggingAnalystSkipAlertChannel(logger),
       // #576: recorded, not just logged — see `tickLoopResidualAlerts` above.
       // Became an `ALERT_CHANNEL_FIELDS` member in #551 (the eighth channel);

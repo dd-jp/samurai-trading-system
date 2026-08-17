@@ -79,10 +79,11 @@ describe('resolveRiskConfig', () => {
     expect(config.concentration).toEqual({ cap: 2_000, threshold: 0.7 });
   });
 
-  it('honours a LOOSENING — the human approval that produced it must mean something', () => {
-    // daily-cycle.ts queues a threshold loosening into `loosen_pending_approval`
-    // and never applies it unapproved, so a loosened row in the table has
-    // already been through the guardrail bounds and a human.
+  it('honours a LOOSENING — the bounds that produced it are the control, not this read', () => {
+    // daily-cycle.ts applies a threshold loosening itself (#736, ADR-0013
+    // Decision 2), so a loosened row in the table has already been through the
+    // dial's [floor, ceiling] and the in-code clamp at the write door. What
+    // guards this read is the clamp re-check below, not a second-guess.
     const { config } = resolveRiskConfig(makeConfig(), { max_position_size: 9_000 });
 
     expect(config.max_position_size).toBe(9_000);

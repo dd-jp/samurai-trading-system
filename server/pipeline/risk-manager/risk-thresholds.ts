@@ -122,10 +122,13 @@ export interface RiskThresholdSource {
  * The store is authoritative where it has a value, and the static config is
  * the fallback where it does not. Deliberately NOT "the tighter of the two":
  * a loosening that reached the table has already been through the Feedback
- * Loop's guardrail bounds and, for a threshold dial, a human approval
- * (`daily-cycle.ts` queues it into `loosen_pending_approval` and never applies
- * it unapproved). Second-guessing that here would make the approval mean
- * nothing.
+ * Loop's per-dial `[floor, ceiling]` and the in-code clamp at the tuning
+ * store's write door (#638), which refuses a guarded threshold that would
+ * cross its research-mandated line. Since #736 no human is in that path at
+ * all — ADR-0013 Decision 2 — which is precisely why this function re-checks
+ * the WHOLE stored record against the clamp below rather than trusting the
+ * writer. Taking the tighter of the two here would not add a control; it
+ * would silently discard a bounded move the system is entitled to make.
  *
  * A value that is not a positive finite number is ignored rather than applied.
  * That is not defensive decoration: these are the numbers that bound loss, and
@@ -144,8 +147,8 @@ export function resolveRiskConfig(
   // A boot-time-only clamp constrains nothing the Feedback Loop does: these
   // rows are re-read on every `evaluate()`, so a value written between two
   // ticks binds on the second one without passing through startup again. And
-  // once ADR-0013's loosen gate is gone (#736), the loop moves a dial with
-  // nobody in the path at all.
+  // since #736 removed ADR-0013's loosen gate, the loop moves a dial — in
+  // either direction — with nobody in the path at all.
   //
   // Checking every row means the guard travels with the ALLOW-LIST rather than
   // with today's contents: a guarded threshold added to `RISK_THRESHOLD_KEYS`

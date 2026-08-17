@@ -451,7 +451,7 @@ describe('paperStartingProfile', () => {
       // operator's alerts go is a deployment decision resolved from
       // `SAMURAI_ALERTS` (alert-transport.ts), and hard-coding one posture
       // into a checked-in file is what #322 exists to prevent.
-      expect(feedback?.approvals).toBeUndefined();
+      expect(feedback?.loosenNotices).toBeUndefined();
       expect(feedback?.intervalMs).toBeUndefined();
     });
 
@@ -588,7 +588,7 @@ describe('paperStartingProfile', () => {
       const config = paperStartingProfile('paper').feedback?.config;
       if (config === undefined) throw new Error('no feedback config');
 
-      const requestLoosenApproval = vi.fn();
+      const notifyLoosenApplied = vi.fn();
       // `runDailyCycle` rejects a config whose `strategy_params` and
       // `risk_thresholds` share a name (`param_updates` is one flat map and
       // would silently drop one). Running the real cycle over the real
@@ -600,13 +600,13 @@ describe('paperStartingProfile', () => {
         tuning: new InMemoryTuningStore(),
         adjustments: { append: vi.fn() },
         config,
-        approvals: { requestLoosenApproval },
+        loosen_notices: { notifyLoosenApplied },
         proposals: [],
-        mode: 'paper',
       });
 
       expect(result.applied).toBe(false);
-      expect(result.loosen_pending_approval).toEqual([]);
+      expect(result.param_updates).toEqual({});
+      expect(notifyLoosenApplied).not.toHaveBeenCalled();
     });
   });
 });

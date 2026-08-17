@@ -110,7 +110,7 @@ export class SqliteTuningStore implements TuningStore {
    * audit trail a limit moved when it did not.
    *
    * ADR-0013 requires exactly this ("rejected in code if it would cross a hard
-   * bound") and, once #736 removes the loosen gate, this is the only thing
+   * bound") and, since #736 removed the loosen gate, this is the only thing
    * between an automated loop and an arbitrary risk limit.
    */
   setRiskThreshold(name: string, value: number): void {

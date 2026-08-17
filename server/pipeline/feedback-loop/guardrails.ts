@@ -2,13 +2,23 @@
  * Bounded, asymmetric guardrails (#91). See
  * docs/specs/feedback-loop-spec.md ("Module: Guardrailed Tuning").
  *
- * Two rules, applied in order:
- *  1. BOUNDED — a cycle moves a dial at most `max_step`, and never outside
- *     the human-set `[floor, ceiling]`. This is what stops a single bad day
- *     swinging a weight (acceptance criterion #4).
- *  2. ASYMMETRIC — a risk threshold may auto-TIGHTEN freely; LOOSENING it
- *     requires a human. The loop can never relax its own safety limits
- *     unsupervised.
+ * One rule: BOUNDED — a cycle moves a dial at most `max_step`, and never
+ * outside the human-set `[floor, ceiling]`. This is what stops a single bad
+ * day swinging a weight (acceptance criterion #4).
+ *
+ * The second rule used to be ASYMMETRIC-BY-APPROVAL: a risk threshold could
+ * auto-tighten freely, but loosening one waited on a human. **That gate is
+ * gone** ([ADR-0013](../../../docs/adr/0013-no-human-gate-anywhere.md)
+ * Decision 2, #736) — "a queue that nobody drains is not a control — it is a
+ * permanently-stuck dial that reads as governed." Every move now applies.
+ *
+ * The asymmetry that survives is not approval-vs-no-approval, and it is not
+ * enforced here: it is that loosening is BOUNDED where tightening is free —
+ * by `[floor, ceiling]` below, and past that by the in-code clamp on the
+ * guarded thresholds (`server/shared/threshold-bounds.ts`, #638), which
+ * REFUSES a crossing at the tuning store's write door rather than coercing
+ * it. This module still only step-caps and clamps; it decides nothing about
+ * who may move a dial, because nobody has to be asked.
  *
  * Pure functions: they decide, they do not write.
  */
@@ -32,7 +42,7 @@ export function boundedStep(current: number, target: number, dial: TunableDial):
 /**
  * Which way a move points relative to the dial's declared safe direction.
  * A no-op move (`to === from`) reports 'tighten': it relaxes nothing, so
- * treating it as a loosening would queue a pointless approval request.
+ * calling it a loosening would announce a relaxation that did not happen.
  */
 export function moveDirection(from: number, to: number, dial: TunableDial): 'tighten' | 'loosen' {
   if (to === from) {
@@ -43,30 +53,25 @@ export function moveDirection(from: number, to: number, dial: TunableDial): 'tig
 }
 
 export interface GuardrailOutcome {
-  /** The bounded value — written iff `gated` is false. */
+  /** The bounded value. Always written by the caller when it differs from `current`. */
   to: number;
   direction: 'tighten' | 'loosen';
-  /**
-   * True when this move must wait for a human. Only ever true for a risk
-   * threshold moving in its loosening direction.
-   */
-  gated: boolean;
 }
 
 /**
  * Route one proposed move through the guardrails.
  *
- * `gate_loosening` is true for risk thresholds and false for strategy params
- * and analyst weights — the spec gates only the safety dials; the other two
- * tune freely inside their bounds.
+ * There is no per-dial variation left: weights, strategy params and risk
+ * thresholds all step-cap and clamp identically. The `gate_loosening`
+ * parameter and the `gated` outcome it produced were removed with the human
+ * gate (#736) rather than left defaulted to `false`, so no caller can
+ * reintroduce a wait-for-a-human path by passing `true`.
  */
 export function applyGuardrail(
   current: number,
   target: number,
   dial: TunableDial,
-  gate_loosening: boolean,
 ): GuardrailOutcome {
   const to = boundedStep(current, target, dial);
-  const direction = moveDirection(current, to, dial);
-  return { to, direction, gated: gate_loosening && direction === 'loosen' };
+  return { to, direction: moveDirection(current, to, dial) };
 }

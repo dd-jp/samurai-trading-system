@@ -126,8 +126,8 @@ function detectBreaches(input: MetricsInput): string[] {
 
 /**
  * Step every declared risk threshold toward its safe extreme by at most
- * `max_step` — never gated, since tightening is always free (spec: "auto-
- * tighten risk thresholds freely"). Reuses `applyGuardrail` with the target
+ * `max_step` — the defensive response to a kill-line breach, and the one
+ * dial move that needs no proposal. Reuses `applyGuardrail` with the target
  * pinned at the tighten-direction bound, so a threshold already at its
  * extreme is a no-op rather than an out-of-band write.
  */
@@ -142,7 +142,7 @@ function autoTighten(input: MetricsInput, now: Date): void {
     }
 
     const target = dial.tighten_is === 'increase' ? dial.ceiling : dial.floor;
-    const { to, direction } = applyGuardrail(current, target, dial, false);
+    const { to, direction } = applyGuardrail(current, target, dial);
     if (to === current) {
       continue;
     }

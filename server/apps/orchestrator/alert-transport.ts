@@ -108,7 +108,7 @@ import { TradeChannelAnalystSkipAlert } from './analyst-skip-alert-channel.js';
 import { TradeChannelBreachAlert } from './breach-alert-channel.js';
 import { TradeChannelFlattenReconcileAlert } from './flatten-reconcile-alert-channel.js';
 import { TradeChannelHeartbeat } from './heartbeat-channel.js';
-import { TradeChannelLoosenApproval } from './loosen-approval-channel.js';
+import { TradeChannelLoosenNotice } from './loosen-notification-channel.js';
 import { TradeChannelOcoDoubleFillAlert } from './oco-double-fill-channel.js';
 import { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
 import type { AlertChannelSlots, ProductionConfig } from './production.js';
@@ -135,12 +135,13 @@ export type AlertsMode = (typeof ALERTS_MODES)[number];
  * fourth outbound escalation, and it had the same shape of hole as the
  * original three — a real channel type with no transport selected for it.
  *
- * `loosenApprovals` joined in #366, and belongs here despite the name for the
- * reason `approvals` does not: `LoosenApprovalChannel.requestLoosenApproval`
+ * `loosenNotices` joined in #366 (as `loosenApprovals`) and belongs here for
+ * the reason `approvals` does not: `LoosenNotificationChannel.notifyLoosenApplied`
  * returns `void`. It is a one-way push telling a human that the Feedback Loop
- * refused to relax a risk threshold on its own — no answer is collected, no
- * poll is started, and nothing this process does depends on a reply. That makes
- * it the fifth outbound escalation, not a second HITL round trip.
+ * DID relax a risk threshold on its own — no answer is collected, no poll is
+ * started, and nothing this process does depends on a reply. #736 renamed it
+ * to match: it was already an escalation and never a round trip, and the old
+ * name claimed a gate that ADR-0013 Decision 2 removed.
  *
  * **This list used to be hand-maintained against `ProductionConfig` directly,
  * and the same hole — a real channel type with no transport selected for it —
@@ -177,7 +178,7 @@ export const ALERT_CHANNEL_FIELDS = [
   // stream during an unattended soak.
   'flattenReconcileAlerts',
   'breachAlerts',
-  'loosenApprovals',
+  'loosenNotices',
   // #431 — the sixth. Same hole as the original three: a real channel type
   // (analysts-spec.md story 25) with no transport selected for it, and the
   // failure it reports (the analyst stage skipping every tick) is invisible in
@@ -352,12 +353,13 @@ export function buildAlertChannels(deps: {
     level: 'info',
     message:
       `${ENV_VAR}=telegram — orphaned go verdicts, stuck unpriced fills, unprotected residual ` +
-      'positions, unresolved flatten reconciliations, kill-threshold breaches and proposed ' +
+      'positions, unresolved flatten reconciliations, kill-threshold breaches and APPLIED ' +
       `risk-threshold loosenings will be pushed to the escalation chat (TELEGRAM_CHAT_ID). ` +
       `${heartbeatClause} ` +
       'Keep the escalation chat unmuted. No approval poll is started here: HITL approvals ' +
-      'still resolve through ProductionConfig.approvals (#275), and a loosening request is ' +
-      'outbound-only — replying to it approves nothing, and the threshold stays put (#366).',
+      'still resolve through ProductionConfig.approvals (#275), and the loosening notice is ' +
+      'outbound-only — it reports a dial the Feedback Loop already moved on its own authority, ' +
+      'inside the hard bounds, and no reply to it is read (#366/#736).',
     // Never the token, and never either chat id: none is a secret worth a log
     // line, and the token is a bearer credential for the entire bot. The
     // heartbeat field is the machine-readable form of the clause above — two
@@ -398,11 +400,12 @@ export function buildAlertChannels(deps: {
     ...(deps.injected.breachAlerts === undefined
       ? { breachAlerts: new TradeChannelBreachAlert(telegram, chatId, deps.logger) }
       : {}),
-    // #366. The escalation chat, not the heartbeat chat: a proposed loosening
-    // is a decision waiting on the operator, and the whole point of #342's
-    // split is that decisions do not share a destination with the beat.
-    ...(deps.injected.loosenApprovals === undefined
-      ? { loosenApprovals: new TradeChannelLoosenApproval(telegram, chatId, deps.logger) }
+    // #366/#736. The escalation chat, not the heartbeat chat: a risk limit
+    // the system widened by itself is an event the operator has to see, and
+    // the whole point of #342's split is that those do not share a
+    // destination with the beat.
+    ...(deps.injected.loosenNotices === undefined
+      ? { loosenNotices: new TradeChannelLoosenNotice(telegram, chatId, deps.logger) }
       : {}),
     // #465. The escalation chat rather than the heartbeat's: a trade that
     // executed, or the system halting itself, is an event — not a beat.

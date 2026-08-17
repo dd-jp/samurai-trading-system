@@ -67,9 +67,9 @@
  * no in-repo source have the same two homes every comparable input already
  * had: the `FeedbackConfig` values are starting values, so they sit in
  * `paperStartingProfile` (paper-profile.ts) beside the other eight sets, and
- * the loosen-approval channel is a transport, so it is selected from
+ * the loosen-notice channel is a transport, so it is selected from
  * `SAMURAI_ALERTS` (alert-transport.ts) and defaults to
- * `LoggingLoosenApprovalChannel` here. Before that, the 14-day soak (#238)
+ * `LoggingLoosenNotificationChannel` here. Before that, the 14-day soak (#238)
  * would have run stage 6 of a 6-stage pipeline dead for the whole window.
  *
  * `computeMetrics` — the kill-line detector — runs in that same timer, after
@@ -180,7 +180,7 @@ import {
   LoggingFlattenOverfillAlertChannel,
   LoggingFlattenReconcileAlertChannel,
   LoggingHeartbeatChannel,
-  LoggingLoosenApprovalChannel,
+  LoggingLoosenNotificationChannel,
   LoggingOcoDoubleFillAlertChannel,
   LoggingOrphanAlertChannel,
   LoggingResidualExposureAlertChannel,
@@ -1620,20 +1620,21 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     adjustments: new SqliteAdjustmentLog(config.db),
   };
   /**
-   * #366. Resolved once, outside the timer callback, for `feedbackStores`'
-   * reason — and read in the same precedence order the alert channels use: an
-   * explicit per-cycle override first, then the transport `SAMURAI_ALERTS`
-   * selected, then the log-only stand-in.
+   * #366, retargeted by #736. Resolved once, outside the timer callback, for
+   * `feedbackStores`' reason — and read in the same precedence order the alert
+   * channels use: an explicit per-cycle override first, then the transport
+   * `SAMURAI_ALERTS` selected, then the log-only stand-in.
    *
-   * Whichever wins, none of them can approve: the port returns `void`, so an
-   * unanswered request leaves the risk threshold untouched. That is
-   * fail-closed, and it is a property of `runDailyCycle` gating the write —
-   * not of the channel being trustworthy.
+   * Whichever wins, none of them gates anything: the port returns `void` and
+   * is asked nothing. Since ADR-0013 Decision 2 the cycle applies its own
+   * bounded loosenings and this channel only reports them, so a channel that
+   * fails to deliver costs visibility of a move that already happened — the
+   * bounds are what keep it safe, not the notice.
    */
-  const loosenApprovals =
-    config.feedback?.approvals ??
-    config.loosenApprovals ??
-    new LoggingLoosenApprovalChannel(logger);
+  const loosenNotices =
+    config.feedback?.loosenNotices ??
+    config.loosenNotices ??
+    new LoggingLoosenNotificationChannel(logger);
 
   /**
    * The detector's source, built once at construction (#379) — never per cycle,
@@ -1744,9 +1745,10 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         clock,
         ...feedbackStores,
         config: feedback.config,
-        approvals: loosenApprovals,
+        loosen_notices: loosenNotices,
         proposals: feedback.proposals ?? [],
-        mode: config.mode,
+        // No `mode` here since #736: the cycle ran one path in backtest and a
+        // different, gated one in paper and live, and the gate is gone.
       });
       logger.log({
         trace_id: 'feedback-cycle',
