@@ -149,7 +149,13 @@ export class MarketIntelligenceStore {
    * "how fresh is ingestion" signal (`STALENESS_THRESHOLD_MS` is 5s/30s — a
    * wall-clock question), no production consumer reads either field, and
    * neither is hashed. Quantising them to the hour would only make `stale`
-   * vacuously true.
+   * vacuously true. The consequence, stated because it was impossible before:
+   * the two halves of a `MarketContext` can now disagree. An item ingested at
+   * 14:30 sets `last_updated: 14:30, stale: false` while `news`/`social` are
+   * still empty until 15:00, so a caller reading both must NOT conclude
+   * "ingestion is fresh and there is genuinely no news". Read the item lists
+   * for what the debate saw; read `last_updated`/`stale` only for whether the
+   * ingest agents are alive.
    *
    * KNOWN LIMIT, stated rather than claimed away: this floors a SECOND clock
    * read rather than inheriting the gate's `decision_bar.open_time` — the
