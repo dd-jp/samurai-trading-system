@@ -6,7 +6,7 @@ A third pass on the same day, asked for as *"triage open issues for duplicates."
 
 **Coverage.** All 46 open issues listed; **all 46 bodies read**, each truncated at 1,400 characters. That is the whole body for 31 of them and the opening section for 15. A duplicate asserted only in the tail of a long body — #238, #514, #631, #636, #664, #683, #707, #750, #751, #773, #791, #793, #797, #813, #828 are the truncated ones — would not have been caught. Pairs were then verified against the tree, not against each other's prose.
 
-**Nothing was closed, commented on, relabelled or edited by this run.** Recommendations only, matching both prior passes.
+**Written as recommendations only, then verified (§11) and applied (§12).** Two issues closed, six bodies edited, one label removed, ten comments — all on 2026-08-17, all citing this report. Every decision reserved to David was left to him.
 
 ---
 
@@ -261,7 +261,7 @@ Four caveats:
 1. **Bodies were read to 1,400 characters.** Fifteen were truncated, listed in the coverage note. A relation asserted only in a long body's tail was not seen.
 2. **Only the duplicate axis was run.** Code verdicts are inherited from pass 1 and pass 2 except where §0 corrects them; no issue's underlying defect was re-verified beyond the specific lines each pairing turns on.
 3. **§2's `f = 0.125` envelope figure is interpolated**, not re-run, and it assumes `EQUITY_LEG_FRACTION_OF_CAPITAL` stays `0.5` — which #800 AC4 explicitly reopens. The `f ≈ 0.142` break-even it is compared against is ADR-0018's own published number. Re-run the generator before closing #798 on it.
-4. **Nothing was mutated.** No issue closed, edited, relabelled or commented on. All ten recommendations are unexecuted.
+4. ~~**Nothing was mutated.**~~ **Superseded — the recommendations were applied on 2026-08-17 after verification. See §12.** As first written, this run mutated nothing; the dispositions were carried out in a later pass, and §12 is the record of exactly what changed.
 
 *Caveat 1 is no longer hypothetical: the verification pass in §11 read the full bodies and the truncation cost this report two of its fifteen findings.*
 
@@ -296,3 +296,29 @@ Run after the report was first written, on the question *"do these claims surviv
 | §7 #773 covers PR #560 plus three others | full body | **Confirmed** — #532, #546, #560, #566, with #546 *"re-arming protective legs on a partial flatten"* |
 
 **What the two falsifications have in common** is the finding worth keeping: both were declared in a body's tail, and both were called undeclared by a pass that read the head. The categories that survived verification intact are the ones anchored in **code** (§4.1, §4.4, §6) or in a **cross-artifact contradiction** (§0, §2) rather than in the absence of a statement. Absence-of-statement findings from a truncated read are the unreliable class, and this report produced exactly two of them and got both wrong.
+
+---
+
+## 12. Dispositions applied — 2026-08-17
+
+The eight surviving numbered recommendations plus three body-level ones were carried out on the issues after §11's verification. Two issues closed, six bodies edited, one label removed, ten comments. Every mutation cites this report.
+
+| # | Recommendation | Applied as |
+| --- | --- | --- |
+| 1 | Re-scope #791 | **Body edited.** Banner recording #818's merge; AC1 struck and replaced with the *backfill* alerter only, pointing at the `dataFailoverAlerts` slot rather than a second transport. AC2 (quarantine) unchanged |
+| 2 | Merge #822 + #825 | **#825 closed into #822.** #822 retitled and given a section carrying **both** fix shapes, plus #825's load-bearing constraint that pacing stays resolved at boot. #823 commented with the ordering |
+| 3 | #800 before #798 | **Both commented.** #798 carries the three-outcome table; #800 carries the direction plus the `subclass-deployment-cap.test.ts:43` evidence that the constant encodes the dissolved £1,500 two-leg book |
+| 4 | #828 vs #824 | **#824 narrowed to the breaker** (body edited, pacing half struck, "both halves" kept as a *dependency*); #828 commented as sole owner of the budget |
+| 5 | ~~#636 / #753~~ | **Withdrawn — falsified (§3.1).** No mutation |
+| 6 | Fold #514 into #238 | **#514 closed**, its post-soak tail moved into #238's body as a sequence, its critical-path table preserved in the close comment. #238's unsatisfiable-ACs problem flagged in-body as deliberately *not* fixed here |
+| 7 | Scope #826 to Alpaca | **Body edited**, option 3 struck; #734 commented that it now owns a second consumer |
+| 8 | ~~#707 / #750~~ | **Withdrawn — falsified (§3.2).** No mutation. The PASS-branch tidy was judged too thin to justify editing a ticket whose outcomes are declared |
+| 9 | Cross-link #683 / #756 | **Both commented**, including the `decide.ts:509` sizing consumer and a correction of #683's stale `:168` citation |
+| 10 | Failover findings in #773 | **Body edited** with the seven-row coverage table, and #546 named as the strongest first target since nothing is filed against it |
+| §4.5 | #664 / #289 ordering | **#289 commented, then re-filed on [#836](https://github.com/dd-jp/samurai-trading-system/issues/836)** — H11 was split into its own ticket at 22:15Z, mid-disposition, so the ticket that now owns `replay-driver.ts` carries the note. Not just a conflict warning: the incremental ATR state must be keyed on the resolved timeframe once #664 lands |
+| §6 g1 | #797 / #790 / #807 class | **#807 commented** with the verified docstring-vs-body gap, and pass 1's "#807 is not blocked by #751" explicitly preserved |
+| §6 g4 | #688 / #689 revisit condition | **Both commented** with a proposed row-count-plus-backstop bar, flagged as David's to confirm. **`ready-for-agent` removed from #689** — gated on history that cannot exist until #734, the same defect pass 1 flagged on #688 |
+
+**The backlog moved under this pass.** It was 46 open at `765b65b`; after two closes it stands at **50**, because six issues were filed while the dispositions were being applied — #833/#834/#835 (Polymarket ingestion) at 21:07Z and #836/#837/#838 (#289's H11/M7/M9/M10 limbs, split out) at 22:15Z. **None of the six is triaged by this report**, and one of them — #836 — took over a pairing this report had already filed. That is the same staleness §0 caught pass 2 in, at a shorter interval: a triage of a live backlog is accurate at a SHA, not at a date.
+
+**What was deliberately not done.** No decision reserved to David was taken: #798/#800 got sequencing and evidence, not an answer; #688/#689's thresholds are proposals in comments, not body edits; #238's acceptance criteria were left unsatisfiable rather than rewritten by inference. Both closes are reversible and neither discarded content — #825's constraint is in #822's body, #514's tail is in #238's and its table in its own close comment.
