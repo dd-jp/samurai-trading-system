@@ -52,6 +52,7 @@ import type { Logger, UniverseInstrument } from '../types.js';
 import type { AnalystSkipAlertChannel } from './analysts-adapter.js';
 import { DEFAULT_STAGE2_MAX_AGE_DAYS } from './daily-equity-metrics-source.js';
 import type { AccountStateProvider, VolatilityReadingProvider } from './direct-bind.js';
+import type { MiCoverageAlertChannel } from './mi-coverage.js';
 import type { TraderDiagnosticAlertChannel } from './trader-diagnostic-alert.js';
 
 /**
@@ -214,6 +215,22 @@ export interface AlertChannelSlots {
    * day; see `notable-verdict.ts` for why the line falls where it does.
    */
   verdictAlerts?: TradeChannelNotifier;
+  /**
+   * Where a degraded market-intelligence coverage gap is escalated (#752) — a
+   * name in the active list with no scored item inside the staleness window.
+   * Defaults to `LoggingMiCoverageAlertChannel`, with the same caveat as
+   * `heartbeatChannel`: log-only is reachable only by an operator reading the
+   * log stream, and criterion 6 of #752 is explicit that log-only does NOT
+   * satisfy this alert. `TradeChannelMiCoverageAlert`
+   * (mi-coverage-alert-channel.ts) is what an unattended soak (#238) needs,
+   * and `SAMURAI_ALERTS=telegram` (#322) is what supplies it — the twelfth
+   * `ALERT_CHANNEL_FIELDS` member.
+   *
+   * Deliberately an alert, not a refusal to start — see mi-coverage.ts's file
+   * doc comment for why: a system that will not start on a data gap trades
+   * nothing on exactly the days coverage is patchy.
+   */
+  miCoverageAlerts?: MiCoverageAlertChannel;
 }
 
 /**

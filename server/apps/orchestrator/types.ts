@@ -44,6 +44,27 @@ export interface UniverseInstrument {
   subclass?: InstrumentSubclass;
 }
 
+/**
+ * Instrument -> subclass, from the universe — the ONE derivation of the
+ * classification (#739), moved here from `paper-profile.ts` in #752 so
+ * `production.ts` can read it too without creating a `production.ts` <->
+ * `paper-profile.ts` import cycle (`paper-profile.ts` already imports types
+ * FROM `production.ts`). `paper-profile.ts` re-exports this rather than
+ * redefining it, so the Risk Manager's D5 gate, the Trader's frozen bracket,
+ * and #752's per-subclass coverage counter all read the SAME map — three
+ * independently built maps would be three places for an instrument to be
+ * classified differently.
+ */
+export function subclassOfUniverse(
+  universe: readonly UniverseInstrument[],
+): Record<string, InstrumentSubclass> {
+  return Object.fromEntries(
+    universe.flatMap((instrument) =>
+      instrument.subclass === undefined ? [] : [[instrument.asset, instrument.subclass] as const],
+    ),
+  );
+}
+
 /** What fires this tick, decided by the Scheduler against the injected clock. */
 export interface TickPlan {
   instruments: UniverseInstrument[];

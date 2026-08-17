@@ -55,6 +55,10 @@ import { MIN_RETURN_OBSERVATIONS } from './production/daily-equity-metrics-sourc
 import { buildPersistence } from './production/direct-bind.js';
 import { MIN_TICKS_INSIDE_FLATTEN_WINDOW } from './production/flatten-tick-coupling.js';
 import {
+  MI_NO_DATA_BY_NAME_COUNTER,
+  MI_NO_DATA_BY_SUBCLASS_COUNTER,
+} from './production/mi-coverage.js';
+import {
   buildAlpacaDataSource,
   buildDefaultLlmClient,
   buildProductionComponents,
@@ -920,6 +924,91 @@ describe('technical_indicator_unavailable is wired by the composition root (#745
     // without knowing the payload schema.
     expect(counters[0]?.message).toContain(INDICATOR_UNAVAILABLE_COUNTER);
     expect(counters[0]?.trace_id).toBe('trace-745-root');
+  });
+});
+
+/**
+ * #752 — the per-name/per-subclass `NO_DATA` coverage counter and the
+ * degraded-coverage alert are wired at the composition root, mirroring the
+ * #745 telemetry-wiring test above for the same defect class: a counter or
+ * an alert nothing calls. Driven against the REAL `buildProductionComponents`
+ * — `MarketIntelligenceStore` starts empty and no MI writer is configured in
+ * this stub, so the ticking instrument is guaranteed to miss coverage.
+ */
+describe('market-intelligence coverage is wired by the composition root (#752)', () => {
+  let db: SqliteHandle;
+
+  beforeEach(() => {
+    db = openSharedStore(':memory:');
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it('records the counter, posts the alert naming the instrument, sets the degraded flag, and does not halt the tick', async () => {
+    const clock = new SimulatedClock(START);
+    const bars = [
+      ...fixtureBars('BTC-USD', '5m', 30, 5 * 60_000),
+      ...fixtureBars('BTC-USD', '1h', 30, 60 * 60_000),
+    ];
+    const logger = recordingLogger();
+    const alertsPosted: unknown[] = [];
+    const config = stubConfig(db, {
+      ...REAL_CONFIGS,
+      clock,
+      logger,
+      dataSource: new FixtureDataSource(
+        bars,
+        { price: 160, observed_at: START, source: 'fixture' },
+        'crypto',
+      ),
+      llmClient: new MockLlmClient(),
+      miCoverageAlerts: {
+        postCoverageAlert: async (alert) => {
+          alertsPosted.push(alert);
+        },
+      },
+    });
+
+    const components = buildProductionComponents(config);
+
+    // Not degraded before any tick has run — the flag is a live read, not a
+    // default-on latch.
+    expect(components.marketIntelligenceCoverage.degraded).toBe(false);
+
+    const views = await components.steps.analysts({
+      trace_id: 'trace-752-root',
+      signal: { asset: 'BTC-USD', asset_class: 'crypto' },
+      clock,
+    });
+
+    // Criterion 3: the run still starts — the tick produced its views rather
+    // than throwing or blocking.
+    expect(views.length).toBeGreaterThan(0);
+
+    // Criterion 1: the counter is recorded and reaches the log stream.
+    const counterEntries = logger.entries
+      .map((entry) => ({
+        ...entry,
+        fields: entry.payload as
+          | { counter_by_name?: string; counter_by_subclass?: string; instrument?: string }
+          | undefined,
+      }))
+      .filter((entry) => entry.fields?.counter_by_name === MI_NO_DATA_BY_NAME_COUNTER);
+    expect(counterEntries).toHaveLength(1);
+    expect(counterEntries[0]?.fields?.instrument).toBe('BTC-USD');
+    expect(counterEntries[0]?.fields?.counter_by_subclass).toBe(MI_NO_DATA_BY_SUBCLASS_COUNTER);
+
+    // Criterion 2: the alert names the instrument and reaches the injected
+    // channel — proving `production.ts` actually wires `config.miCoverageAlerts`
+    // rather than leaving the log-only default in place.
+    expect(alertsPosted).toHaveLength(1);
+    expect(alertsPosted[0]).toMatchObject({ instrument: 'BTC-USD' });
+
+    // Criterion 2: the degraded-coverage flag is set on the run.
+    expect(components.marketIntelligenceCoverage.degraded).toBe(true);
+    expect(components.marketIntelligenceCoverage.missingInstruments).toContain('BTC-USD');
   });
 });
 

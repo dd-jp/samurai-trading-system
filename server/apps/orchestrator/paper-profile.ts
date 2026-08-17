@@ -118,6 +118,12 @@ import {
 import { DEFAULT_UNIVERSE } from './scheduler.js';
 import { SqliteDailyEquityStore } from './sqlite-daily-equity-store.js';
 import type { UniverseInstrument } from './types.js';
+import { subclassOfUniverse } from './types.js';
+
+// Re-exported for existing importers (#739's "ONE derivation" moved to
+// `types.ts` in #752 to break a `production.ts` <-> `paper-profile.ts` import
+// cycle — see that function's doc comment).
+export { subclassOfUniverse };
 
 /** The header's three-value provenance taxonomy, as data. */
 export type ValueProvenance = 'SPEC' | 'DERIVED' | 'UNSOURCED';
@@ -420,26 +426,6 @@ export function subclassDeploymentCapFractionsOfEquity(): Record<
       fraction === null ? null : fraction * EQUITY_LEG_FRACTION_OF_CAPITAL,
     ]),
   ) as Record<InstrumentSubclass, number | null>;
-}
-
-/**
- * Instrument -> subclass, from the universe — the ONE derivation of the
- * classification (#739).
- *
- * Shared by the Risk Manager's D5 gate (`d5EnvelopeFor`) and the Trader's
- * frozen bracket (`TraderConfig.subclass_of`) deliberately: two independently
- * built maps are two places for an instrument to be classified differently,
- * and the two stages would then cap and size the same position under different
- * subclasses.
- */
-export function subclassOfUniverse(
-  universe: readonly UniverseInstrument[],
-): Record<string, InstrumentSubclass> {
-  return Object.fromEntries(
-    universe.flatMap((instrument) =>
-      instrument.subclass === undefined ? [] : [[instrument.asset, instrument.subclass] as const],
-    ),
-  );
 }
 
 /**
