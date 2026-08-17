@@ -799,6 +799,17 @@ describe('SequentialTickRunner.runInstrument — risk warnings surfacing (#303)'
  * — the exit check and, on an intent, the Risk → Verdict → Execution tail.
  * Nothing else.
  */
+/**
+ * An in-process exit intent, named by WHY it exists (#748). The runner reads
+ * `metadata.exit_reason` to decide which flag to stamp and what to write into
+ * the audit row, so a test fixture that omitted it would exercise a shape no
+ * Trader entry point can produce.
+ */
+function exitIntent(reason: 'flatten' | 'signal_decay'): OrderIntent {
+  const base = makeIntent({ intent_type: 'exit', side: 'sell' });
+  return { ...base, metadata: { ...base.metadata, exit_reason: reason } };
+}
+
 describe('SequentialTickRunner tick pass (#743)', () => {
   /** Steps whose decision chain is UNREACHABLE — analysts and debate throw. */
   function tickOnlySteps(overrides: Partial<TickSteps> = {}): TickSteps {
@@ -841,7 +852,7 @@ describe('SequentialTickRunner tick pass (#743)', () => {
   });
 
   it('fires the flatten through Risk → Verdict → Execution and stamps flatten_fired', async () => {
-    const exit = makeIntent({ intent_type: 'exit', side: 'sell' });
+    const exit = exitIntent('flatten');
     const steps = tickOnlySteps({
       exitCheck: vi.fn(async () => exit),
       risk: vi.fn(async () => approvedRisk(exit)),
@@ -885,7 +896,7 @@ describe('SequentialTickRunner tick pass (#743)', () => {
   });
 
   it('keeps a rejected flatten observable: risk is the final stage, flatten_fired still set', async () => {
-    const exit = makeIntent({ intent_type: 'exit', side: 'sell' });
+    const exit = exitIntent('flatten');
     const steps = tickOnlySteps({
       exitCheck: vi.fn(async () => exit),
       risk: vi.fn(async () => rejectedRisk()),
@@ -896,6 +907,49 @@ describe('SequentialTickRunner tick pass (#743)', () => {
 
     expect(outcome.final_stage).toBe('risk');
     expect(outcome.flatten_fired).toBe(true);
+  });
+
+  // ── #748: the indicator-based early exit rides the SAME cheap path. ──────
+  it('fires an INDICATOR-BASED EARLY EXIT on a tick that performs no analyst run', async () => {
+    const exit = exitIntent('signal_decay');
+    const steps = tickOnlySteps({
+      exitCheck: vi.fn(async () => exit),
+      risk: vi.fn(async () => approvedRisk(exit)),
+      verdict: vi.fn(async () => goVerdict(exit)),
+    });
+    const ctx = makeCtx({ decision_bar: undefined });
+
+    const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    // The acceptance criterion, asserted rather than assumed: the release
+    // reached the broker on a pass where the analyst step would have THROWN if
+    // anything had touched it, and the debate step likewise. An early exit that
+    // needed either could not have completed this pass at all.
+    expect(outcome.final_stage).toBe('execution');
+    expect(outcome.early_exit_fired).toBe(true);
+    expect(outcome.flatten_fired).toBeUndefined();
+    expect(steps.analysts).not.toHaveBeenCalled();
+    expect(steps.debate).not.toHaveBeenCalled();
+    expect(steps.trader).not.toHaveBeenCalled();
+
+    const rows = (ctx.auditLog as SqliteAuditLog).getByTraceId(TRACE_ID);
+    // Named apart from a flatten in the audit spine, not merged into it.
+    expect(rows[0]?.decision).toBe('signal_decay');
+  });
+
+  it('keeps a rejected early exit observable: risk is the final stage, early_exit_fired still set', async () => {
+    const exit = exitIntent('signal_decay');
+    const steps = tickOnlySteps({
+      exitCheck: vi.fn(async () => exit),
+      risk: vi.fn(async () => rejectedRisk()),
+    });
+    const ctx = makeCtx({ decision_bar: undefined });
+
+    const outcome = await new SequentialTickRunner(steps).runInstrument(SIGNAL, ctx);
+
+    expect(outcome.final_stage).toBe('risk');
+    expect(outcome.early_exit_fired).toBe(true);
+    expect(outcome.flatten_fired).toBeUndefined();
   });
 });
 

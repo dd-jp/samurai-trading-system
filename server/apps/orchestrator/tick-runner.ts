@@ -128,12 +128,12 @@ export class SequentialTickRunner implements TickRunner {
      * The shared Risk -> Verdict -> Execution tail. Both paths converge here
      * once a Trader entry point produced an intent, so the gate-vs-actor
      * separation (Execution only on a Verdict `go`) is enforced in exactly
-     * one place. `extras` lets the tick path stamp `flatten_fired` onto
-     * whichever terminal outcome the tail reaches.
+     * one place. `extras` lets the tick path stamp `flatten_fired` or
+     * `early_exit_fired` onto whichever terminal outcome the tail reaches.
      */
     const runIntentTail = async (
       intent: OrderIntent,
-      extras: Pick<TickOutcome, 'flatten_fired'>,
+      extras: Pick<TickOutcome, 'early_exit_fired' | 'flatten_fired'>,
     ): Promise<TickOutcome> => {
       markStage('risk');
       const riskInput = { trace_id, intent, clock };
@@ -180,9 +180,13 @@ export class SequentialTickRunner implements TickRunner {
       const bar = floorToBar(clock.now(), DEBATE_BAR_TIMEFRAME_MS);
       const exitInput = { trace_id, instrument, bar, clock };
       const exitIntent = await this.steps.exitCheck(exitInput);
+      // #748: the tick path can now fire TWO kinds of exit, so the audit row
+      // names which — `flatten` and `signal_decay` are different events with
+      // different causes, and one shared `'flatten'` string would make an
+      // early release read as a session ending four hours early.
       record(
         'position_check',
-        exitIntent === null ? 'no_exit_due' : 'flatten',
+        exitIntent === null ? 'no_exit_due' : (exitIntent.metadata.exit_reason ?? 'exit'),
         exitInput,
         exitIntent,
       );
@@ -190,7 +194,16 @@ export class SequentialTickRunner implements TickRunner {
         currentTickStore.delete(instrument);
         return { trace_id, final_stage: 'position_check' };
       }
-      return runIntentTail(exitIntent, { flatten_fired: true });
+      // Separate flags rather than one `exit_fired`, for the reason
+      // `flatten_fired` exists at all: a rejected flatten and a rejected early
+      // release are both invisible without a flag, and folding them together
+      // would lose exactly the distinction the flag was added to preserve.
+      return runIntentTail(
+        exitIntent,
+        exitIntent.metadata.exit_reason === 'signal_decay'
+          ? { early_exit_fired: true }
+          : { flatten_fired: true },
+      );
     }
 
     // ── DECISION PASS: the full chain, once per debate bar. ─────────────────

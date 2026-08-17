@@ -13,6 +13,8 @@
  * soak produces. A skip is a decision.
  */
 
+import type { ExitReason } from './types.js';
+
 /** One Trader decision. `intent_type: null` with a `skip_reason` is a decision not to trade. */
 export interface TraderDecisionRecord {
   trace_id: string;
@@ -20,6 +22,18 @@ export interface TraderDecisionRecord {
   /** Joins `debate_log`. The debate's content is not duplicated — that record already exists. */
   debate_id: string;
   intent_type: 'entry' | 'scale_in' | 'exit' | null;
+  /**
+   * WHY the exit exists (#748) — `'flatten'`, `'signal_decay'` or
+   * `'direction_flip'`. Present exactly when `intent_type` is `'exit'`, null
+   * otherwise.
+   *
+   * Without it the three in-process exits are one indistinguishable row here,
+   * and "the system released a position because its thesis died" and "the
+   * session ended" become the same fact. Typed as the domain union rather than
+   * `string` so a fourth kind of exit cannot be written without deciding to add
+   * one.
+   */
+  exit_reason: ExitReason | null;
   /** Why no order was produced. Present exactly when `intent_type` is null. */
   skip_reason: string | null;
   /**
