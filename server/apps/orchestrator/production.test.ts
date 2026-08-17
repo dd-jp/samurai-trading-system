@@ -561,6 +561,70 @@ describe('buildProductionComponents', () => {
     },
   );
 
+  it(
+    "wires the run's own Logger into AlpacaBrokerAdapterInput.logger (#609) — a real " +
+      'fill-sweep failure through the composition-root-built broker gets a local trace ' +
+      'through the SAME logger, not a dropped seam',
+    async () => {
+      // #609's whole point, mirrored off the #573 test just above: a unit
+      // test on `AlpacaBrokerAdapter` alone constructs its input by hand, so
+      // it cannot tell whether `buildProductionComponents` actually threads
+      // the real `Logger` through to it rather than the field silently going
+      // unwired. This asserts the composition root, not just the adapter.
+      const logger = recordingLogger();
+      const config = stubConfig(db, { logger });
+      const components = buildProductionComponents(config);
+
+      // A stocks order, unlike `goVerdict()`'s crypto one, submits through
+      // the NATIVE bracket path (`submitOrder`) rather than the emulated one
+      // — the loop `fetchNewFills`'s #609 fix logs from directly. Built from
+      // scratch rather than spreading `goVerdict().order` (`OrderIntent |
+      // null` on `VerdictDecision` — a spread of a nullable type loses the
+      // required-ness TS would otherwise check).
+      const baseGo = goVerdict();
+      const stocksOrder: OrderIntent = {
+        ...(baseGo.order as OrderIntent),
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        idempotency_key: 'idem-exec-stocks',
+      };
+      const stocksVerdict: VerdictDecision = {
+        ...baseGo,
+        order: stocksOrder,
+        idempotency_key: 'idem-exec-stocks',
+      };
+      await components.steps.execution(stocksVerdict);
+
+      // A genuine per-source failure on the just-submitted bracket — an
+      // unparseable `filled_qty`, not the modelled/expected
+      // `UnpricedFillError` — read through the SAME `alpacaBrokerClient` the
+      // composition root gave the broker. Cast the same way `stubConfig`
+      // casts its own `alpacaBrokerClient` fixture (line ~165): this double
+      // only needs the fields `fetchNewFills`'s bracket loop actually reads.
+      config.alpacaBrokerClient.getOrder = vi.fn(async () => ({
+        id: 'alpaca-order-1',
+        client_order_id: 'idem-exec-stocks',
+        status: 'filled',
+        filled_qty: 'N/A',
+        filled_avg_price: '100.02',
+        filled_at: START.toISOString(),
+        legs: [],
+      })) as unknown as typeof config.alpacaBrokerClient.getOrder;
+
+      // Single bracket, all-failed sweep: `fetchNewFills` throws (the
+      // pre-existing, unchanged behaviour) — the assertion below is about
+      // the log line #609 now emits BEFORE that throw, not about the throw
+      // itself.
+      await components.broker.fetchNewFills(new Date(0)).catch(() => undefined);
+
+      expect(
+        logger.entries.some(
+          (entry) => entry.message === 'Alpaca fetchNewFills: per-source failure',
+        ),
+      ).toBe(true);
+    },
+  );
+
   it('buildProductionTickRunner returns a SequentialTickRunner', () => {
     expect(buildProductionTickRunner(stubConfig(db))).toBeInstanceOf(SequentialTickRunner);
   });

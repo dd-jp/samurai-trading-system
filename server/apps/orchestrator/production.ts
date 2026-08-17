@@ -702,6 +702,12 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // reason `unpricedFillAlerts` is.
       ocoDoubleFillAlerts:
         config.ocoDoubleFillAlerts ?? new LoggingOcoDoubleFillAlertChannel(logger),
+      // #609: `AlpacaBrokerAdapterInput.logger`, required for the same reason
+      // `ExecutionInput.logger` is (#573) — a dropped wiring here is now a
+      // `tsc` error at every composition root instead of a silent gap a soak
+      // would have to surface. This is the same `logger` already built above
+      // for the rest of this composition root, not a second instance.
+      logger,
       ...(config.unpricedFillAgeOutMs === undefined
         ? {}
         : { unpricedFillAgeOutMs: config.unpricedFillAgeOutMs }),
