@@ -50,7 +50,7 @@ import {
   recommendedWarmupFor,
 } from '../../providers/market-data-service/index.js';
 import {
-  confidenceFrom,
+  momentumVote,
   RSI_OVERBOUGHT,
   RSI_OVERSOLD,
   RSI_SPEC,
@@ -248,14 +248,25 @@ const flipsAgainstWarm = (lookback: number): number[] =>
     return live >= OVERBOUGHT !== warm >= OVERBOUGHT || live < OVERSOLD !== warm < OVERSOLD;
   });
 
-/** Largest `confidenceFrom` ratio, either direction, against the converged one. */
-const worstConfidenceRatio = (lookback: number): number =>
-  Math.max(
-    ...REGION.map((end) => {
-      const live = confidenceFrom(rsiAt(end, lookback));
-      const warm = confidenceFrom(rsiAt(end, WARM));
-      return Math.max(live / warm, warm / live);
-    }),
+/**
+ * Bars in REGION whose MOMENTUM VOTE differs from the converged one.
+ *
+ * This replaces a `confidenceFrom` ratio (#745). `confidenceFrom` was
+ * `|rsi - 50| / 50` and WAS the analyst's whole confidence, so a warm-up shift
+ * was directly a confidence shift. Under the axis vote, confidence is
+ * `|net| / availableAxes` and RSI reaches it only through the momentum axis's
+ * vote — so the honest successor measurement is how often the warm-up flips
+ * that vote, which is exactly the quantity that now moves the numerator.
+ * Retargeting the old ratio at the new confidence would have measured the
+ * other three axes' fixtures instead of the RSI warm-up.
+ *
+ * `undefined` for the MACD half on purpose: this file measures the RSI
+ * warm-up, and pairing it with a second oscillator would mix two effects.
+ */
+const momentumFlipsAgainstWarm = (lookback: number): number[] =>
+  REGION.filter(
+    (end) =>
+      momentumVote(rsiAt(end, lookback), undefined) !== momentumVote(rsiAt(end, WARM), undefined),
   );
 
 /**
@@ -288,11 +299,16 @@ describe('what the missing warm-up cost — the floor, measured', () => {
     expect(flipped.length / REGION.length).toBeGreaterThan(0.12);
   });
 
-  it('moves the confidence the debate weights the analyst by, by more than 4x', () => {
-    // `confidenceFrom` is `|rsi - 50| / 50`, so a warm-up shift is a
-    // confidence shift, and confidence is what the debate weights an analyst
-    // by. Same period, same bar, different history length.
-    expect(worstConfidenceRatio(FLOOR)).toBeGreaterThan(4);
+  it('flips the momentum vote the analyst carries into the debate, on 1 bar in 8', () => {
+    // The consequence under #745's axis vote: RSI drives the MOMENTUM axis, and
+    // a flipped momentum vote moves `net` by 1 or 2 out of a denominator of at
+    // most 4 — i.e. it moves the confidence the debate weights the analyst by,
+    // and can move `direction` outright. Same period, same bar, different
+    // history length.
+    const flipped = momentumFlipsAgainstWarm(FLOOR);
+
+    expect(flipped.length).toBeGreaterThan(10);
+    expect(flipped.length / REGION.length).toBeGreaterThan(0.08);
   });
 });
 
@@ -329,7 +345,16 @@ describe('what the adopted warm-up costs instead — the live spec, measured (#7
     expect(flipsAgainstWarm(FLOOR).length).toBeGreaterThan(20);
   });
 
-  it('moves the analyst confidence by under 1.5x, where the floor moved it over 4x', () => {
-    expect(worstConfidenceRatio(RSI_SPEC.lookback)).toBeLessThan(1.5);
+  it('flips the momentum vote on at most 2 bars, where the floor flipped 1 in 8', () => {
+    // The successor to the old confidence-ratio assertion (#745): the same
+    // "and the adopted warm-up costs almost none of it" claim, stated against
+    // the quantity RSI now actually moves.
+    //
+    // 2 rather than the 70/30 test's 1, and measured rather than assumed: the
+    // momentum vote has THREE boundaries (30, 50, 70) where that test has two,
+    // so there is more line for a near-converged bar to straddle. 2 of 141 is
+    // 1.4% against the floor's 12%+.
+    expect(momentumFlipsAgainstWarm(RSI_SPEC.lookback).length).toBeLessThanOrEqual(2);
+    expect(momentumFlipsAgainstWarm(FLOOR).length).toBeGreaterThan(10);
   });
 });

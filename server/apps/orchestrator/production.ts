@@ -176,6 +176,7 @@ import { SqliteRiskLogStore, SqliteTraderLogStore } from '../../shared/store/ind
 import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
 import {
   LoggingAnalystSkipAlertChannel,
+  LoggingAnalystTelemetry,
   LoggingBreachAlertChannel,
   LoggingFlattenOverfillAlertChannel,
   LoggingFlattenReconcileAlertChannel,
@@ -564,12 +565,26 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // (#432) that would otherwise recur.
   const marketIntelligence = new MarketIntelligenceStore(clock);
 
+  /**
+   * Hoisted above the analysts (#745), which now take a telemetry sink built on
+   * it. It depends on nothing but `config`, so the move is free — the same
+   * reasoning that hoisted `breachAlerts` below.
+   */
+  const logger = config.logger ?? new JsonLogger();
+
   const analysts = new AnalystOrchestrator({
     market_intelligence: marketIntelligence,
     market_data: marketData,
+    /**
+     * #745: `technical_indicator_unavailable{kind}`. Wired here, unconditionally
+     * and with no config switch — an unwired counter is indistinguishable from
+     * an instrument whose axes are all available, which is the exact reading an
+     * operator must not be given. `production.test.ts` asserts this line exists
+     * by driving a thin instrument through the composed step and reading the
+     * log, rather than by inspecting the field.
+     */
+    telemetry: new LoggingAnalystTelemetry(logger),
   });
-
-  const logger = config.logger ?? new JsonLogger();
 
   // One instance, both ends of `cosine_setups` (#432): the Trader's `decide`
   // WRITES the setup at decision time and `onTradeClose` LABELS it with the

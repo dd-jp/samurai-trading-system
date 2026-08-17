@@ -28,7 +28,13 @@ import type { AnalystView } from '../debate-engine/index.js';
 import { fundamentalAnalyst } from './fundamental-analyst.js';
 import { sentimentAnalyst } from './sentiment-analyst.js';
 import { technicalAnalyst } from './technical-analyst.js';
-import type { Analyst, AnalystFailure, AnalystRunResult, Signal } from './types.js';
+import type {
+  Analyst,
+  AnalystFailure,
+  AnalystRunResult,
+  AnalystTelemetry,
+  Signal,
+} from './types.js';
 
 const ALL_PERSONAS: Analyst[] = [technicalAnalyst, fundamentalAnalyst, sentimentAnalyst];
 
@@ -54,6 +60,13 @@ const ATTEMPTS_PER_PERSONA = 2;
 export interface AnalystOrchestratorDeps {
   market_intelligence: MarketIntelligenceStore;
   market_data: MarketDataService;
+  /**
+   * Where an analyst's counters go (#745). Threaded straight onto every
+   * `AnalystInput` below — this class neither reads nor aggregates it, because
+   * the counter is per-read and this layer only sees per-persona outcomes.
+   * Absent in tests and in the backtest; `production.ts` supplies it.
+   */
+  telemetry?: AnalystTelemetry;
 }
 
 export interface AnalystOrchestratorOptions {
@@ -158,6 +171,7 @@ export class AnalystOrchestrator {
                 clock,
                 market_intelligence: this.deps.market_intelligence,
                 market_data: this.deps.market_data,
+                ...(this.deps.telemetry === undefined ? {} : { telemetry: this.deps.telemetry }),
               }),
               this.timeoutMs,
               persona.analyst_type,

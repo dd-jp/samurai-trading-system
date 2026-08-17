@@ -74,9 +74,9 @@ Key architectural decisions:
 28. As the Analysts layer, I want backtest replay to reuse the exact same analyst code path as live, so that backtests exercise real code with no behavioral drift.
 29. As an Analyst, I want to be clock-blind, so that I cannot tell a live tick from a replayed one — the only difference is the data source.
 30. As the system, I want no-lookahead enforced by an injected clock at the data-service layer, so that during replay the services only return data timestamped at or before the simulated time T.
-31. As the system, I want a response cache keyed by (analyst, input-snapshot hash), so that re-running a historical window (param sweeps, debugging) hits the cache instead of paying for LLM calls again.
-32. As the system, I want backtest runs to use a cheap model tier for bulk iteration and a premium tier for final validation, so that I can iterate cheaply and validate faithfully.
-33. As the system, I want replay to force LLM temperature 0 (or fixed seed), so that backtests are reproducible and PBO/overfitting metrics remain meaningful.
+31. As the system, I want re-running a historical window (param sweeps, debugging) to cost **nothing extra and produce byte-identical views**, so that a re-run is a re-computation rather than a second bill. *(Replaced 2026-08-16 with story 12. This read "a response cache keyed by (analyst, input-snapshot hash) ... instead of paying for LLM calls again". A deterministic analyst has no call to pay for and no nondeterminism to cache around: the cache existed only to buy back reproducibility from a model, and it is the model that left. The Debate Engine, where the LLM now exclusively lives, still needs this — as a debate-engine concern.)*
+32. As the system, I want backtest iteration to be **free at this layer**, so that bulk parameter sweeps are bounded by CPU rather than by spend. *(Replaced 2026-08-16 with story 12. This read "a cheap model tier for bulk iteration and a premium tier for final validation". With no analyst LLM there is no tier to pick, and — importantly — no "cheap tier for iteration, premium for validation" gap in which a swept configuration and its validation run could disagree because they were reasoned about by different models.)*
+33. As the system, I want replay to be reproducible **by construction**, so that PBO/overfitting metrics remain meaningful. *(Replaced 2026-08-16 with story 12. This read "force LLM temperature 0 (or fixed seed)". Temperature 0 is not determinism — it is a lower-variance sampler over a model that can still be re-versioned underneath a run. An arithmetic rule over a pinned bar window is determinism, and it is what `docs/research/13-stage2-proxy-verdict.md`'s selection accounting requires of the inputs it scores.)*
 
 ## Implementation Decisions
 
@@ -217,19 +217,19 @@ Fundamental and Sentiment analysts consume free text sourced from Market Intelli
 - Replay reuses the exact live analyst code path. The analyst is clock-blind; the only difference between live and replay is the data source (live feed vs. historical store).
 - **No-lookahead** is enforced by an **injected clock at the data-service layer**. Both Market Intelligence and the Market Data Service read "now" from the injected clock and filter `timestamp <= clock.now()`. In replay the clock is the simulated time T.
 - **The historical data store is out of scope for the Analysts layer** — it is owned by the data services (the Market Data Service persists OHLCV natively; Market Intelligence's historical store is the still-open ticket #21). Stage 1 depends on replayable data services but does not build the store.
-- **LLM replay cost** is handled by a response cache keyed by `(analyst, input-snapshot hash)`: real LLM calls on the first pass, cache hits on re-runs. This pairs with the tiered LLM decision — a cheap model tier for bulk backtest iteration, a premium tier for final validation.
-- **Reproducibility** — replay forces LLM temperature 0 (or a fixed seed) so a cache-cold re-run matches a cache-warm one, keeping PBO/overfitting metrics meaningful. Live mode may keep normal temperature.
+- **LLM replay cost at this layer is zero**, because there is no LLM at this layer *(2026-08-16, with story 12)*. The response cache and the cheap/premium backtest tiers this bullet used to specify were machinery for a nondeterministic analyst; both are withdrawn here and neither is re-created. They remain live decisions for the **Debate Engine**, which is where the model now is.
+- **Reproducibility is structural, not configured** *(2026-08-16)*. Identical inputs produce byte-identical views because the reasoning is arithmetic over a pinned bar window — no temperature to set, no seed to fix, no cache-warm/cache-cold distinction to reconcile. That is a stronger guarantee than the temperature-0 one it replaces: temperature 0 still rides a model that can be re-versioned under a run, and a re-versioned model would silently invalidate every PBO/DSR figure computed against the old one.
 
 ## Testing Decisions
 
 ### What Makes a Good Test
 
 - Test external behavior at the orchestrator seam (`runAnalysts(signal) -> AnalystRunResult`), not internal implementation.
-- Mock the two data services (Market Intelligence, Market Data Service) and the LLM — the orchestration logic (applicability, parallelism, retry, quorum, skip/alert) is what's under test.
+- Mock the two data services (Market Intelligence, Market Data Service) — the orchestration logic (applicability, parallelism, retry, quorum, skip/alert) is what's under test. *(Amended 2026-08-16: this also said "and the LLM". There is no LLM at this layer to mock, and a test that mocks one would be describing a seam that must not exist — `server/pipeline/analysts/analyst-prompt-cost.test.ts` asserts its absence by scanning this package's imports.)*
 - Test failure modes explicitly: mandatory analyst fails → tick skipped; optional analyst fails → reduced set proceeds; malformed output treated as failure.
 - Test the alert threshold: one skip is silent, two consecutive skips fire an alert.
 - Use an injected mock clock to test no-lookahead: replayed data-service reads never return data timestamped after `clock.now()`.
-- Test determinism: temperature-0 replay with a warm cache reproduces a cold-cache run's views.
+- Test determinism directly: the same `(Signal, asOf)` over the same fixture bars produces an identical `AnalystView`, asserted by equality. *(Amended 2026-08-16: this read "temperature-0 replay with a warm cache reproduces a cold-cache run's views" — a test of caching machinery that no longer exists. `technical-analyst.test.ts` runs the analyst twice and compares the whole view.)*
 
 ### Modules to Test
 
@@ -249,13 +249,12 @@ Fundamental and Sentiment analysts consume free text sourced from Market Intelli
 **Backtesting Replay**
 - Same code path exercised live and in replay (no divergence).
 - No-lookahead via injected clock (data services filter `timestamp <= clock.now()`).
-- Response cache keyed by input-snapshot hash (re-run hits cache, makes no new LLM call).
-- Temperature-0 reproducibility.
+- Byte-identical views from identical inputs, with no cache and no LLM call to avoid *(2026-08-16)*.
 
 ### Prior Art
 
 - No test infrastructure exists yet — this is pre-implementation.
-- LLM mock patterns mirror the Debate Engine spec: deterministic responses for orchestration testing, randomized for integration testing.
+- LLM mock patterns are a **Debate Engine** concern only *(2026-08-16)*. This layer's tests need no LLM double; `MockLlmClient` appears in an analyst test exactly once, to measure the debate prompt this layer's output is rendered into, never to stand in for analyst reasoning.
 - Time-based testing uses a mock clock (already anticipated by the Market Intelligence spec) to simulate time windows and replay without real delays.
 
 ## Out of Scope
@@ -282,15 +281,15 @@ The Analysts layer reads weights from the shared store; how the Feedback Loop co
 
 **Self-Learning / Online Model Training**
 
-Analysts are static (rule-driven + LLM reasoning); they do not self-retrain. The only adaptation in the system is Feedback-Loop weight tuning, which is bounded and does not change the underlying market model (per CONTEXT.md). Autonomous model retraining / RL is deliberately excluded — it would undermine the "economically explainable edge" and PBO-discipline invariants.
+Analysts are static (rule-driven; deterministic as of 2026-08-16 — no LLM reasoning at this layer); they do not self-retrain. The only adaptation in the system is Feedback-Loop weight tuning, which is bounded and does not change the underlying market model (per CONTEXT.md). Autonomous model retraining / RL is deliberately excluded — it would undermine the "economically explainable edge" and PBO-discipline invariants.
 
 **Conviction Score & Confidence Calibration**
 
-How an analyst arrives at its `confidence` value (calibration, prompt engineering) is an implementation detail. This spec fixes the output shape, not the reasoning internals.
+How an analyst arrives at its `confidence` value is an implementation detail. This spec fixes the output shape, not the reasoning internals — which is the allowance the technical analyst's axis vote (#745: one vote per axis, `confidence = |net| / availableAxes`, capped when the volatility gate says the tape is not trending) sits inside. *(Amended 2026-08-16: "calibration, prompt engineering" — there is no prompt at this layer to engineer.)*
 
-**LLM Selection & Prompt Engineering**
+**Prompt Engineering At This Layer**
 
-Which exact models fill the cheap/fast and stronger/slower tiers, prompt design, and the per-call cost ceiling are implementation details (the cost ceiling is explicitly deferred until real usage data exists).
+There is none, and that is the specified state rather than an unfilled gap *(2026-08-16, replacing "LLM Selection & Prompt Engineering: which exact models fill the cheap/fast and stronger/slower tiers, prompt design, and the per-call cost ceiling")*. No model is selected, so there is no per-call cost ceiling to defer either. What IS in scope, and is a hard requirement rather than an implementation detail, is the direction of the interpretation: an analyst's `key_points` are rendered into the debate prompt inside `wrapUntrusted`'s block, so any band, legend or decoder that explains those numbers must be computed in the analyst and travel INSIDE that block. Writing it into the prompt instead would make trusted text explain untrusted numbers.
 
 ## Further Notes
 
@@ -342,10 +341,10 @@ Potential enhancements (not in this spec):
 
 Wayfinder decisions for this stage live in [docs/wayfinder/analysts-map.md](../wayfinder/analysts-map.md) (migrated from GitHub issue #22). Decisions synthesized here:
 
-- **Analyst role definitions and contracts** — primary+context input model, fixed `AnalystView` output, parallel-with-applicability-filtering execution, latency-tiered LLM usage, overlap allowed (defer to Debate Engine).
+- **Analyst role definitions and contracts** — primary+context input model, fixed `AnalystView` output, parallel-with-applicability-filtering execution, deterministic reasoning *(2026-08-16, replacing "latency-tiered LLM usage" — see "Where the LLM belongs")*, overlap allowed (defer to Debate Engine).
 - **Analyst failure handling** — role-dependent quorum (Technical + Fundamental mandatory, Sentiment optional), uniform single-retry, skip-the-tick on mandatory hard-block (no stale fallback), alert after 2 consecutive skips.
 - **Analyst state management** — stateless analysts (pure function of data + weight), upstream data services supply rolling features, trivial crash-restart, weights in shared SQLite owned by the Feedback Loop and applied downstream.
-- **Backtesting replay** — same code path live vs. replay, no-lookahead via injected clock at the data-service layer, historical store owned by data services, input-hash response cache + cheap tier for bulk, temperature-0 for reproducibility.
+- **Backtesting replay** — same code path live vs. replay, no-lookahead via injected clock at the data-service layer, historical store owned by data services, reproducibility by construction *(2026-08-16, replacing "input-hash response cache + cheap tier for bulk, temperature-0" — those move to the Debate Engine with the model)*.
 
 Dependencies on other stages:
 - **Market Data Service** — new Stage 0-level component (OHLCV + technical indicators) surfaced during state-management grilling; needs its own wayfinder map. The Analysts layer depends on it but does not build it.

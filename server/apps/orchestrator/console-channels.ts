@@ -20,6 +20,9 @@
  * the one still reached by omission, because wiring an inbound HITL round trip
  * through Telegram is #275's remaining half, not #322's.
  */
+
+import type { AnalystTelemetry, IndicatorUnavailableEvent } from '../../pipeline/analysts/index.js';
+import { INDICATOR_UNAVAILABLE_COUNTER } from '../../pipeline/analysts/index.js';
 import type {
   FlattenOverfillAlertChannel,
   FlattenOverfillWarning,
@@ -310,6 +313,50 @@ export class LoggingAnalystSkipAlertChannel implements AnalystSkipAlertChannel {
         consecutive_skips: alert.consecutive_skips,
         failures: alert.failures,
         reported_at: alert.reported_at.toISOString(),
+      },
+    });
+  }
+}
+
+/**
+ * `technical_indicator_unavailable{kind}` (#745), written to the log stream.
+ *
+ * This is a COUNTER, not an alert, and the level says so: an enrichment axis
+ * short of bars is the designed degradation — the technical analyst is
+ * `mandatory`, and the whole point of the core/enrichment split is that a cold
+ * or thin instrument still produces a usable view instead of forfeiting the
+ * tick as a `quorum_skip`. So `warn`, not `error`: worth counting, never worth
+ * paging. A `debug` would be worse — the operational question this exists to
+ * answer is "how much of the axis panel has this instrument actually been
+ * voting on", and a level nobody ships cannot answer it.
+ *
+ * There is no metrics registry in this system; the log stream IS the metric
+ * store (`rotating-file-sink.ts`), so the counter name is emitted as a field
+ * rather than incremented in a gauge, and a scrape aggregates by
+ * `payload.counter` + `payload.kind`. Named from
+ * `INDICATOR_UNAVAILABLE_COUNTER` so the sink and any future scrape cannot
+ * drift apart on spelling.
+ */
+export class LoggingAnalystTelemetry implements AnalystTelemetry {
+  constructor(private readonly logger: Logger) {}
+
+  indicatorUnavailable(event: IndicatorUnavailableEvent): void {
+    this.logger.log({
+      trace_id: event.trace_id,
+      stage: 'analysts',
+      level: 'warn',
+      message:
+        `${INDICATOR_UNAVAILABLE_COUNTER}{kind="${event.kind}"}: ${event.instrument} ` +
+        `${event.axis} axis left the vote denominator — ${event.kind} needed ${event.required} ` +
+        `bars, had ${event.received}`,
+      payload: {
+        counter: INDICATOR_UNAVAILABLE_COUNTER,
+        analyst_type: event.analyst_type,
+        instrument: event.instrument,
+        axis: event.axis,
+        kind: event.kind,
+        required: event.required,
+        received: event.received,
       },
     });
   }

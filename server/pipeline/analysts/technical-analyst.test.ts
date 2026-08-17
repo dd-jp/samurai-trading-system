@@ -15,7 +15,17 @@ import {
 import { MarketIntelligenceStore } from '../../providers/market-intelligence/index.js';
 import type { Clock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
-import { confidenceFrom, RSI_SPEC, technicalAnalyst, WARMUP_5M } from './technical-analyst.js';
+import {
+  ADX_SPEC,
+  ATR_PCT_SPEC,
+  DONCHIAN_SPEC,
+  MACD_SPEC,
+  RSI_SPEC,
+  SMA_SPEC,
+  SQUEEZE_SPEC,
+  technicalAnalyst,
+  WARMUP_5M,
+} from './technical-analyst.js';
 import type { AnalystInput, Signal } from './types.js';
 
 class ManualClock implements Clock {
@@ -273,7 +283,11 @@ describe('technicalAnalyst', () => {
     });
 
     expect(honest).not.toBeCloseTo(narrower, 6);
-    expect(view.key_points).toContain(`RSI(14)=${honest}`);
+    // #745 renders the RSI inside the MOMENTUM axis line, already interpreted
+    // (the band is computed here, never explained to the model in the prompt).
+    // The number itself is what this test is about and it is unchanged.
+    const momentum = view.key_points.find((line) => line.startsWith('Momentum (5m):'));
+    expect(momentum).toContain(`RSI(14) ${honest}`);
   });
 
   it('rejects rather than reporting an RSI(14) it has only 14 bars for (#319)', async () => {
@@ -316,15 +330,19 @@ describe('technicalAnalyst', () => {
   it('reports confidence near the floor, not 0.95, on a flat tape (#725)', async () => {
     const view = await technicalAnalyst.run(buildInput(signal, 'trace-1', FLAT));
 
-    expect(view.key_points).toContain(`RSI(14)=50`);
-    // Before the fix this was 0.95 (confidenceFrom(100)). 50 is the
-    // midpoint `confidenceFrom` treats as "no information": `|50-50|/50`
-    // clamps to the 0.05 floor, so the analyst stays present in the debate
-    // (technical is `mandatory`) but argues at near-minimum rather than
-    // near-maximum strength.
-    expect(view.confidence).toBe(confidenceFrom(50));
-    expect(view.confidence).toBeCloseTo(0.05, 6);
+    const momentum = view.key_points.find((line) => line.startsWith('Momentum (5m):'));
+    expect(momentum).toContain('RSI(14) 50');
+    // Before #725 this was 0.95: `rsi` answered 100 for a `0/0` window and the
+    // old `confidenceFrom` read `|100-50|/50` as near-maximum strength for a
+    // tape that had not moved. Under #745's axis vote the same flat tape
+    // produces a zero vote on EVERY available axis (close equals SMA,
+    // RSI at the midline, no participating volume, Donchian mid-range), so
+    // `|net| / availableAxes` is 0 — and the volatility gate caps on top,
+    // because a flat tape has ADX 0. The analyst stays present in the debate
+    // (technical is `mandatory`) and argues at zero strength.
+    expect(view.confidence).toBe(0);
     expect(view.direction).toBe('neutral');
+    expect(view.key_points.some((line) => line.includes('confidence capped at 0.4'))).toBe(true);
   });
 
   it('holds no state across calls: an intervening call with different inputs does not affect a repeat call', async () => {
@@ -381,15 +399,45 @@ describe('technicalAnalyst — single 5m bar fetch per instrument per tick (#742
     }
   }
 
+  /**
+   * A store warm enough to serve EVERY 5m spec (#745), which the 70-bar
+   * fixture above no longer is: `MACD_SPEC.lookback` is 112 bars, and
+   * `cachedBars`' `rows.length < window.lookback` guard means a store holding
+   * fewer than a spec asks for falls through to a second real fetch. That is
+   * the honest production shape — a warm instrument holds `WARMUP_5M` bars —
+   * and it is the only shape in which "one fetch per tick" is a claim about
+   * the collapse rather than about the fixture.
+   */
+  const LIVE_BARS: Bar[] = ((): Bar[] => {
+    const start = new Date('2026-07-01T00:00:00Z').getTime();
+    const bars = Array.from({ length: WARMUP_5M }, (_, i) => {
+      const closeTime = new Date(start + i * BAR_INTERVAL_MS);
+      const close = 100 + i;
+      return {
+        instrument: INSTRUMENT,
+        timeframe: TIMEFRAME,
+        open_time: new Date(closeTime.getTime() - BAR_INTERVAL_MS),
+        close_time: closeTime,
+        open: close - 1,
+        high: close + 1,
+        low: close - 1,
+        close,
+        volume: 10 + i,
+        source: 'fixture',
+      } satisfies Bar;
+    });
+    return [...bars, ...buildContextBars()];
+  })();
+
   function buildLiveInput(signal: Signal): { input: AnalystInput; counting: CountingDataSource } {
-    // See the comment on the same pattern in `buildInput` above: BARS
+    // See the comment on the same pattern in `buildInput` above: LIVE_BARS
     // interleaves the '5m' and '1h' series, so asOf must be derived from the
     // '5m' series specifically, not the array's incidental last element.
-    const asOf = BARS.filter((bar) => bar.timeframe === TIMEFRAME).at(-1)?.close_time as Date;
+    const asOf = LIVE_BARS.filter((bar) => bar.timeframe === TIMEFRAME).at(-1)?.close_time as Date;
     const clock = new ManualClock(asOf);
     const counting = new CountingDataSource(
       new FixtureDataSource(
-        BARS,
+        LIVE_BARS,
         { price: 999, observed_at: asOf, source: 'fixture-live' },
         signal.asset_class,
       ),
@@ -423,13 +471,24 @@ describe('technicalAnalyst — single 5m bar fetch per instrument per tick (#742
     expect(counting.fetchBarsCallsByTimeframe.get('5m')).toBe(1);
   });
 
-  it('WARMUP_5M is wide enough to cover RSI_SPEC.lookback, which is what makes the collapse hold', () => {
-    // If this ever regresses (a period bump on RSI_SPEC without a matching
+  it('WARMUP_5M is wide enough to cover EVERY 5m spec, which is what makes the collapse hold', () => {
+    // If this ever regresses (a period bump on any spec without a matching
     // WARMUP_5M bump), the store the warm-up fetch fills would fall short of
-    // RSI_SPEC's own window, `cachedBars`'s `rows.length < window.lookback`
-    // guard would miss, and the collapse above would silently degrade to two
+    // that spec's own window, `cachedBars`'s `rows.length < window.lookback`
+    // guard would miss, and the collapse above would silently degrade to six
     // fetches rather than fail loud — this pins the invariant that prevents
-    // that.
-    expect(WARMUP_5M).toBeGreaterThanOrEqual(RSI_SPEC.lookback);
+    // that. Every #745 spec is listed, not just the widest, so adding a spec
+    // without adding it here is the only way to slip past.
+    for (const spec of [
+      SMA_SPEC,
+      RSI_SPEC,
+      ATR_PCT_SPEC,
+      MACD_SPEC,
+      ADX_SPEC,
+      SQUEEZE_SPEC,
+      DONCHIAN_SPEC,
+    ]) {
+      expect(WARMUP_5M).toBeGreaterThanOrEqual(spec.lookback);
+    }
   });
 });
