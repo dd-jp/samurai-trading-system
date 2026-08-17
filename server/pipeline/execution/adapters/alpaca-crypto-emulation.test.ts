@@ -17,6 +17,7 @@
  * restart resumes from the journal instead of guessing.
  */
 import { TokenBucket } from '../../../shared/index.js';
+import { recordingLogger } from '../../../shared/recording-logger.js';
 import type { BrokerStateStore } from '../broker-state-store.js';
 import { InMemoryBrokerStateStore } from '../broker-state-store.js';
 import type { OcoDoubleFillAlert, OcoDoubleFillAlertChannel } from '../oco-double-fill-alert.js';
@@ -213,6 +214,7 @@ function makeAdapter(
     state,
     unpricedFillAlerts: { postUnpricedFillAlert: async () => {} },
     ocoDoubleFillAlerts: doubleFills,
+    logger: recordingLogger(),
   });
 }
 

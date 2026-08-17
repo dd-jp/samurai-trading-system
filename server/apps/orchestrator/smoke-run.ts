@@ -1460,7 +1460,10 @@ const CRYPTO_EMULATION_LOT_KEY = 'smoke-crypto-emulated-lot';
  * the entry, sweep (arms the legs), fill the stop, sweep (cancels the
  * sibling), then read the journal back off the SAME db the gate reads.
  */
-async function runCryptoEmulationScenario(db: SqliteHandle): Promise<CryptoEmulationEvidence> {
+async function runCryptoEmulationScenario(
+  db: SqliteHandle,
+  logger: Logger,
+): Promise<CryptoEmulationEvidence> {
   const client = new CryptoEmulationScenarioClient();
   const adapter = new AlpacaBrokerAdapter({
     client,
@@ -1469,6 +1472,9 @@ async function runCryptoEmulationScenario(db: SqliteHandle): Promise<CryptoEmula
     unpricedFillAlerts: {
       postUnpricedFillAlert: async () => {},
     },
+    // #609: the SAME logger `runSmoke` built above, not a second instance —
+    // matches the composition-root convention `production.ts` follows.
+    logger,
     // A double fill is impossible in this script (the target is cancelled
     // before it could ever fill), so an alert here is itself a defect —
     // thrown rather than swallowed, failing the run loudly.
@@ -3050,7 +3056,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     // #586: the emulated crypto protective legs, on the REAL AlpacaBrokerAdapter
     // over the same db — its own lot key and its own scripted client, so it
     // contends with nothing above.
-    const cryptoEmulation = await runCryptoEmulationScenario(db);
+    const cryptoEmulation = await runCryptoEmulationScenario(db, logger);
 
     // #714: the entrypoint's logging-fault mechanisms, on a real file sink in
     // a temp directory. Independent of the store and the clock, so it runs
