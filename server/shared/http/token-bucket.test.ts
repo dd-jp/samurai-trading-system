@@ -115,6 +115,61 @@ describe('TokenBucket', () => {
 });
 
 /**
+ * #702: a caller parked on `acquire()` has done no work yet, so a shutdown
+ * abandoning it should not wait out any part of the refill. No timers are
+ * ever advanced in these tests — the whole point is that the rejection does
+ * not depend on time passing.
+ */
+describe('TokenBucket abort signal (#702)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('rejects a parked acquire the instant the signal aborts, without waiting for refill', async () => {
+    // A near-zero refill rate: if this ever actually waited it out, the test
+    // would hang (or blow vitest's default timeout) rather than pass.
+    const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 0.0001 });
+    await bucket.acquire();
+
+    const controller = new AbortController();
+    const pending = bucket.acquire(controller.signal);
+    controller.abort();
+
+    await expect(pending).rejects.toThrow();
+  });
+
+  it('rejects instantly for an already-aborted signal, and leaves the token for the next caller', async () => {
+    const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 1 });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(bucket.acquire(controller.signal)).rejects.toThrow();
+    // The aborted call never took the token — an unsignalled caller still
+    // acquires immediately.
+    await expect(bucket.acquire()).resolves.toBeUndefined();
+  });
+
+  it('still blocks and admits normally when no signal is passed', async () => {
+    const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 1 });
+    await bucket.acquire();
+
+    let admitted = false;
+    const pending = bucket.acquire().then(() => {
+      admitted = true;
+    });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(admitted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await pending;
+    expect(admitted).toBe(true);
+  });
+});
+
+/**
  * #391's acceptance criterion: "order placement cannot be starved behind a
  * market-data burst". One bucket paces both consumers because Alpaca's limit
  * is per account, so the reserve is what keeps the shared budget safe for the

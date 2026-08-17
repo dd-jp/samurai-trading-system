@@ -67,9 +67,16 @@ export class TokenBucket {
    * fire together — precisely the burst the bucket exists to prevent. Waking,
    * re-refilling and re-testing means the loser of the race simply waits
    * again.
+   *
+   * `signal` (#702) is for a caller that may be ABANDONED rather than waited
+   * out — a shutdown draining `GdeltIngestAgent`, specifically. A parked
+   * `acquire()` has done no work and ordered nothing yet, unlike a request
+   * already in flight, so aborting it costs nothing and is the whole point:
+   * see `GdeltGkgClient` for why the signal stops HERE and is not threaded
+   * into the request that follows.
    */
-  async acquire(): Promise<void> {
-    await this.take(0);
+  async acquire(signal?: AbortSignal): Promise<void> {
+    await this.take(0, signal);
   }
 
   /**
@@ -79,14 +86,18 @@ export class TokenBucket {
    * of bar fetches cannot park an order behind the refill. A background caller
    * on a drained bucket waits for the reserve to be re-minted ON TOP of its
    * own token, which is the intended cost: data is late, orders are not.
+   *
+   * No `signal` parameter: nothing today abandons a background market-data
+   * fetch on shutdown, so it would be plumbing nothing calls.
    */
   async acquireBackground(): Promise<void> {
     await this.take(this.config.reserveForPriority ?? 0);
   }
 
-  private async take(reserve: number): Promise<void> {
+  private async take(reserve: number, signal?: AbortSignal): Promise<void> {
     const needed = 1 + reserve;
     while (true) {
+      signal?.throwIfAborted();
       this.refill();
       if (this.tokens >= needed) {
         this.tokens -= 1;
@@ -96,8 +107,35 @@ export class TokenBucket {
       // positive; a non-positive rate is a misconfiguration that would park
       // every call forever rather than pace it.
       const waitMs = ((needed - this.tokens) / this.config.refillPerSecond) * 1000;
-      await delay(Math.max(waitMs, 0));
+      await this.waitOrAbort(Math.max(waitMs, 0), signal);
     }
+  }
+
+  /**
+   * `delay`, but abandoned the instant `signal` fires instead of ridden out
+   * (#702).
+   *
+   * Deliberately local rather than a change to `delay` itself: every OTHER
+   * caller of `delay` in this codebase is a backoff or pacing wait with no
+   * signal to plumb, and `delay`'s own doc comment records that as
+   * intentional. Re-checked with `signal.aborted` before racing the timer,
+   * because a signal already aborted before this call will never fire another
+   * `'abort'` event to listen for.
+   */
+  private waitOrAbort(ms: number, signal?: AbortSignal): Promise<void> {
+    if (signal === undefined) return delay(ms);
+    if (signal.aborted) return Promise.reject(signal.reason as Error);
+    return new Promise((resolve, reject) => {
+      const onAbort = (): void => {
+        clearTimeout(timer);
+        reject(signal.reason as Error);
+      };
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      }, ms);
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
   }
 
   /** Credits elapsed time as tokens, never above `capacity` (burst is bounded). */

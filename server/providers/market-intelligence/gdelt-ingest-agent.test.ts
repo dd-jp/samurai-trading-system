@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Clock, Logger } from '../../shared/index.js';
+import { TokenBucket } from '../../shared/index.js';
 import { MiArchiveStore } from './archive/mi-archive-store.js';
 import { GdeltIngestAgent, SOURCE_GDELT } from './gdelt-ingest-agent.js';
-import type { GdeltGkgBatch, GdeltGkgClient, GdeltGkgRecord } from './sources/gdelt-gkg-client.js';
+import {
+  type GdeltGkgBatch,
+  GdeltGkgClient,
+  type GdeltGkgRecord,
+} from './sources/gdelt-gkg-client.js';
 
 const NOW = new Date('2026-08-15T15:32:00Z');
 const clock: Clock = { now: () => NOW };
@@ -328,6 +333,54 @@ describe('GdeltIngestAgent', () => {
     await expect(agent.whenIdle()).resolves.toBeUndefined();
     archive.close();
   });
+
+  it(
+    'abandons a poll parked on the rate limiter instead of waiting it out, unlike a poll ' +
+      'already mid-download (#702)',
+    async () => {
+      const archive = new MiArchiveStore();
+      const logger = collectingLogger();
+      // Real GdeltGkgClient + real TokenBucket, not the stub the other tests
+      // use — a mock `latestBatchUrl` would happily "accept" a signal argument
+      // it never looks at, which would prove nothing about the actual wiring
+      // from GdeltIngestAgent through GdeltGkgClient into TokenBucket.acquire.
+      //
+      // The refill rate is nowhere near real: with capacity 1 and one token
+      // already spent, the next acquire needs a token that takes roughly
+      // 2,700 hours to mint. If `whenIdle` did not abort the wait, this test
+      // would hang until vitest's per-test timeout killed it — there is no
+      // fake-timer trick used here, the abort itself is what has to be fast.
+      const rateLimiter = new TokenBucket({ capacity: 1, refillPerSecond: 0.0001 });
+      await rateLimiter.acquire();
+      const client = new GdeltGkgClient({
+        rateLimiter,
+        fetchImpl: (() => {
+          throw new Error(
+            'must not reach the network — the poll should be abandoned at the rate limiter',
+          );
+        }) as unknown as typeof fetch,
+      });
+      const agent = new GdeltIngestAgent({ archive, client, clock, logger });
+
+      const polling = agent.refresh();
+      // No `await` between `refresh()` and `whenIdle()`: the poll has not had
+      // a chance to run past `rateLimiter.acquire()` yet, which is exactly the
+      // "parked on a token" state #702 is about.
+      await agent.whenIdle();
+
+      // Settles to `false` — the abort lands in `poll`'s own catch, same as
+      // any other fetch failure, not a hang and not a rejection out of
+      // `refresh()`.
+      await expect(polling).resolves.toBe(false);
+      expect(archive.rawRows(SOURCE_GDELT)).toEqual([]);
+      expect(
+        logger.entries.some(
+          (entry) => entry.level === 'warn' && /GDELT batch fetch failed/.test(entry.message),
+        ),
+      ).toBe(true);
+      archive.close();
+    },
+  );
 
   it('is idempotent when a later batch re-offers rows already held', async () => {
     const archive = new MiArchiveStore();
