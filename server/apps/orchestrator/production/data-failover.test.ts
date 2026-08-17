@@ -3,12 +3,12 @@
  * failover mechanism itself (`failover-data-source.test.ts`) and from the
  * fact that the composition root builds one (`production.test.ts`).
  *
- * Two of them are decisions the issue asked to be recorded with reasoning,
- * and a documented decision nothing asserts is a comment: the
- * malformed-pacing-override posture, and that a failed alert POST cannot
- * turn a survived vendor stall into a thrown tick. The alert THROTTLE is
- * asserted here too: a stall persists across ticks, and an escalation chat
- * flooded by it gets muted along with everything else on that channel.
+ * A documented decision nothing asserts is a comment, so each decision this
+ * wiring records is asserted here: the malformed-pacing-override posture,
+ * the equities-only scope, that a failed alert POST cannot turn a survived
+ * vendor stall into a thrown tick, and the alert THROTTLE — a stall persists
+ * across ticks, and an escalation chat flooded by it gets muted along with
+ * everything else on that channel.
  */
 import { describe, expect, it, vi } from 'vitest';
 

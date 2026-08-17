@@ -184,7 +184,12 @@ export const ALERT_REPEAT_EVERY_FAILOVERS = 8;
 export const FAILOVER_INCIDENT_GAP_MS = 60 * 60 * 1000;
 
 /**
- * Per-(instrument, timeframe) alert throttle — in memory and restart-clean,
+ * Per-(instrument, timeframe) alert throttle. The key deliberately omits
+ * `leg`: exactly one leg (equities) is live, so an instrument identifies its
+ * leg. A future system that runs two legs at once must widen the key, or the
+ * same ticker on both legs would share one counter.
+ *
+ * In memory and restart-clean,
  * the same posture `TraderDiagnosticThrottle` and the MI coverage monitor
  * take: a process that just started has no evidence about the previous one's
  * ticks.
