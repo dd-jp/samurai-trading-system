@@ -2,6 +2,7 @@ import type { AnalystOrchestrator } from '../../../pipeline/analysts/index.js';
 import type { AnalystView } from '../../../pipeline/debate-engine/index.js';
 import type { Clock, LogEntry, Logger } from '../../../shared/index.js';
 import { type AnalystSkipAlert, buildAnalystsStep } from './analysts-adapter.js';
+import { MiCoverageMonitor } from './mi-coverage.js';
 
 const NOW = new Date('2026-07-28T14:00:00Z');
 const CLOCK: Clock = { now: () => NOW };
@@ -498,6 +499,101 @@ describe('buildAnalystsStep', () => {
           clock: CLOCK,
         }),
       ).resolves.toEqual([]);
+    });
+  });
+
+  /**
+   * #752: the coverage check is wired at the tick boundary, not merely
+   * declared. Verifying by call, not by inspection — a `coverage` option
+   * that this adapter never reached would be exactly this repo's dominant
+   * defect class (a tested mechanism nothing calls).
+   */
+  describe('market-intelligence coverage (#752)', () => {
+    function passingOrchestrator(): AnalystOrchestrator {
+      const runAnalysts = vi.fn(async () => ({
+        views: [makeView()],
+        analyst_count: 1,
+        skipped: false,
+        failures: [],
+      }));
+      return { runAnalysts } as unknown as AnalystOrchestrator;
+    }
+
+    it('calls the coverage context source once per tick, for the ticking instrument', async () => {
+      const getContext = vi.fn(() => ({
+        timestamp: NOW,
+        asset_class: 'stocks' as const,
+        news: [],
+        social: [],
+        conflicts: [],
+        stale: true,
+        last_updated: null,
+      }));
+      const step = buildAnalystsStep(passingOrchestrator(), undefined, {
+        coverage: {
+          contextSource: { getContext },
+          subclassOf: {},
+          telemetry: { noDataObserved: vi.fn() },
+          alertChannel: { postCoverageAlert: vi.fn(async () => undefined) },
+          monitor: new MiCoverageMonitor(),
+          logger: undefined,
+        },
+      });
+
+      await step({
+        trace_id: 'trace-1',
+        signal: { asset: '3USL', asset_class: 'stocks' },
+        clock: CLOCK,
+      });
+
+      expect(getContext).toHaveBeenCalledTimes(1);
+      expect(getContext).toHaveBeenCalledWith('stocks', expect.any(Number), 'trace-1');
+    });
+
+    it('does not gate the tick — the analysts still run and views still return when coverage is missing', async () => {
+      const orchestrator = passingOrchestrator();
+      const step = buildAnalystsStep(orchestrator, undefined, {
+        coverage: {
+          contextSource: {
+            getContext: () => ({
+              timestamp: NOW,
+              asset_class: 'stocks' as const,
+              news: [],
+              social: [],
+              conflicts: [],
+              stale: true,
+              last_updated: null,
+            }),
+          },
+          subclassOf: {},
+          telemetry: { noDataObserved: vi.fn() },
+          alertChannel: { postCoverageAlert: vi.fn(async () => undefined) },
+          monitor: new MiCoverageMonitor(),
+          logger: undefined,
+        },
+      });
+
+      const result = await step({
+        trace_id: 'trace-1',
+        signal: { asset: '3USL', asset_class: 'stocks' },
+        clock: CLOCK,
+      });
+
+      expect(orchestrator.runAnalysts).toHaveBeenCalledTimes(1);
+      expect(result).toHaveLength(1);
+    });
+
+    it('is optional — an absent coverage option calls nothing and does not throw', async () => {
+      const orchestrator = passingOrchestrator();
+      const step = buildAnalystsStep(orchestrator);
+
+      await expect(
+        step({
+          trace_id: 'trace-1',
+          signal: { asset: '3USL', asset_class: 'stocks' },
+          clock: CLOCK,
+        }),
+      ).resolves.toHaveLength(1);
     });
   });
 });
