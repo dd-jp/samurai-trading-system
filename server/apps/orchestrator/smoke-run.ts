@@ -299,16 +299,24 @@ const SMOKE_INSTRUMENT = SMOKE_TEST_UNIVERSE[0]?.asset ?? 'BTC-USD';
  * The fixture bar series, per timeframe. Each count is a floor forced by
  * something downstream, not a round number:
  *
+ * - `5m` x 60 — the technical analyst's `SMA_SPEC`/`RSI_SPEC` (#742 moved the
+ *   technical read from `1h` to `5m`, retaining `1h` only as context — see
+ *   below). #319's minimum-length guard in `computeIndicator` rejects a
+ *   window shorter than `period + 1`, so `RSI_SPEC`'s period-14 arithmetic
+ *   needs 15 bars as a HARD floor; `RSI_SPEC`'s own lookback is the converged
+ *   warm-up of **57** (`recommendedWarmupFor`), and 60 clears it by three —
+ *   but 57 is a SOFT floor: below it the RSI silently computes over a shorter
+ *   warm-up rather than throwing, so shrinking this series would degrade the
+ *   analyst's read without failing anything. `WARMUP_5M` (260) asks for more
+ *   than this series holds; `FixtureDataSource` returns however many exist
+ *   rather than padding, and `MarketDataServiceImpl.cachedBars`'s route 1
+ *   still collapses `SMA_SPEC`/`RSI_SPEC` to the one fetch this makes, since
+ *   60 already clears `RSI_SPEC.lookback`.
  * - `1h` x 60 — the Trader's ATR stop (`atr_timeframe: '1h'`,
- *   `atr_lookback: 14`) and the volatility breaker's ATR(14). #319's
- *   minimum-length guard in `computeIndicator` rejects a window shorter than
- *   `period + 1`, because `atr()` spends the first bar seeding
- *   `previousClose`, so 14 periods need 15 bars. That throw is still the only
- *   HARD floor on this count. Since #722 the DEEPEST `1h` ask is the technical
- *   analyst's `RSI_SPEC` at the converged warm-up of **57**, and 60 clears it
- *   by three — but 57 is a SOFT floor: below it the RSI silently computes over
- *   a shorter warm-up rather than throwing, so shrinking this series would
- *   degrade the analyst's read without failing anything.
+ *   `atr_lookback: 14`, unchanged by #742) and the volatility breaker's
+ *   ATR(14) — same `period + 1` = 15-bar hard floor as above. Also now the
+ *   technical analyst's 1h CONTEXT read (`CONTEXT_CANDLE_LOOKBACK`, 20) —
+ *   60 clears that too.
  * - `1m` x 60 — the short-timeframe reads the Analysts take.
  * - `1d` x 40 — the widest daily consumers: `adv_window` (`{'1d', 20}`,
  *   `executionConfig.simulated`) and `correlationConfig` (`{'1d', 30}` with
@@ -321,6 +329,7 @@ const SMOKE_INSTRUMENT = SMOKE_TEST_UNIVERSE[0]?.asset ?? 'BTC-USD';
  * outgrows the fixtures fails a test rather than the gate.
  */
 const SMOKE_BAR_SERIES: readonly { timeframe: string; count: number; stepMs: number }[] = [
+  { timeframe: '5m', count: 60, stepMs: 5 * 60 * 1_000 },
   { timeframe: '1h', count: 60, stepMs: 60 * 60 * 1_000 },
   { timeframe: '1m', count: 60, stepMs: 60_000 },
   { timeframe: '1d', count: 40, stepMs: 24 * 60 * 60 * 1_000 },
@@ -355,8 +364,12 @@ const SMOKE_MARK_PRICE = 160;
  * nothing traded. That failure is loud, which is why the thin margin is
  * recorded rather than padded.
  *
- * Only the `1h` series feeds it (`technical-analyst.ts` pins
- * `INDICATOR_TIMEFRAME`), and 60 bars clears the 57 the spec asks for by three.
+ * Only the `5m` series feeds it (#742 moved `technical-analyst.ts`'s
+ * `INDICATOR_TIMEFRAME` from `1h` to `5m`), and 60 bars clears the 57 the spec
+ * asks for by three. `buildTrendingCloses` depends only on `count`/`lastClose`,
+ * not `timeframe`, so the `5m` series carries the identical close values the
+ * `1h` series used to (including RSI's exact 68.52/1.48-point margin above) —
+ * the move did not require retuning this cycle.
  * `1d` x 40 does NOT clear it, which costs nothing today because no RSI reads
  * daily bars — but it is why the count below is a floor forced by a consumer
  * rather than a round number.
