@@ -43,9 +43,11 @@ export interface RevalidationSnapshot {
 
 /**
  * Fire-and-forget human alert on a kill-threshold breach (spec story 13, "the
- * trade channel"). Deliberately NOT `LoosenApprovalChannel`: a breach alert
- * expects no response — the kill/rework call is the human's to make later,
- * out of band — whereas a loosening is a request this module waits on.
+ * trade channel"). Still a separate port from `LoosenNotificationChannel`
+ * even though both are now outbound-only: they carry different events to
+ * different urgencies — a kill-line breach is the edge dying, a loosening
+ * notice is a dial that moved — and #639 split them precisely so that
+ * removing the loosen gate could not take breach alerting with it.
  */
 export interface BreachAlertChannel {
   postBreachAlert(alert: BreachAlert): void;
@@ -141,7 +143,7 @@ export interface MetricsReport {
  * So: returning `undefined` is a first-class answer meaning "no suite this
  * cycle", not an error. The orchestrator says so out loud rather than booking
  * it as a passing check. Backtest and Stage-2 harnesses supply their own
- * implementations, exactly as they do for `LoosenApprovalChannel`.
+ * implementations, exactly as they do for `LoosenNotificationChannel`.
  */
 export interface DailyMetricsSource {
   getDailyMetrics(): DailyMetricsSample | undefined;

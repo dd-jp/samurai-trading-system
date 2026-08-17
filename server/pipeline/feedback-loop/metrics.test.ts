@@ -105,6 +105,39 @@ function makeInput(overrides: MetricsInputOverrides = {}): {
 }
 
 describe('computeMetrics', () => {
+  it('refuses to score a cycle against a softened kill line (#638)', () => {
+    // The boot check cannot cover this: `FeedbackConfig` is held for the life
+    // of the process, so the per-cycle check is what stops a verdict being
+    // REPORTED against a line that is not the recorded one.
+    const { input } = makeInput({
+      config: makeConfig({
+        kill_thresholds: {
+          max_pbo: 0.5,
+          min_oos_sharpe: 0.5,
+          min_deflated_sharpe: 0.95,
+          max_live_backtest_divergence: 0.5,
+        },
+      }),
+    });
+
+    expect(() => computeMetrics(input)).toThrow(/max_pbo/);
+  });
+
+  it('refuses a cycle whose Sharpe kill lines have been lowered (#638)', () => {
+    const { input } = makeInput({
+      config: makeConfig({
+        kill_thresholds: {
+          max_pbo: 0.05,
+          min_oos_sharpe: 0.1,
+          min_deflated_sharpe: 0.5,
+          max_live_backtest_divergence: 0.5,
+        },
+      }),
+    });
+
+    expect(() => computeMetrics(input)).toThrow(/min_oos_sharpe[\s\S]*min_deflated_sharpe/);
+  });
+
   it('recomposes the daily suite and revalidation output verbatim, with no breaches when healthy', () => {
     const { input } = makeInput();
     const report = computeMetrics(input);

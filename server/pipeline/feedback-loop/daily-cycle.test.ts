@@ -12,8 +12,8 @@ import type { SqliteTuningStore } from './sqlite-tuning-store.js';
 import type {
   DailyCycleInput,
   FeedbackConfig,
-  LoosenApprovalChannel,
-  LoosenApprovalRequest,
+  LoosenAppliedNotice,
+  LoosenNotificationChannel,
   TunableDial,
 } from './types.js';
 
@@ -24,11 +24,11 @@ function makeClock(at: Date = NOW): Clock {
   return { now: () => at };
 }
 
-class RecordingApprovals implements LoosenApprovalChannel {
-  readonly requests: LoosenApprovalRequest[] = [];
+class RecordingLoosenNotices implements LoosenNotificationChannel {
+  readonly notices: LoosenAppliedNotice[] = [];
 
-  requestLoosenApproval(request: LoosenApprovalRequest): void {
-    this.requests.push(request);
+  notifyLoosenApplied(notice: LoosenAppliedNotice): void {
+    this.notices.push(notice);
   }
 }
 
@@ -99,7 +99,7 @@ interface Harness {
   input: DailyCycleInput;
   tuning: SqliteTuningStore;
   adjustments: SqliteAdjustmentLog;
-  approvals: RecordingApprovals;
+  notices: RecordingLoosenNotices;
 }
 
 function makeHarness(overrides: Partial<DailyCycleInput> = {}): Harness {
@@ -113,9 +113,8 @@ function makeHarness(overrides: Partial<DailyCycleInput> = {}): Harness {
     tuning: openTuningStore({ weights: { bull: 0.5 } }),
     adjustments: openAdjustmentLog(),
     config: makeConfig(),
-    approvals: new RecordingApprovals(),
+    loosen_notices: new RecordingLoosenNotices(),
     proposals: [],
-    mode: 'live',
     ...overrides,
   };
 
@@ -126,7 +125,7 @@ function makeHarness(overrides: Partial<DailyCycleInput> = {}): Harness {
     input,
     tuning: input.tuning as SqliteTuningStore,
     adjustments: input.adjustments as SqliteAdjustmentLog,
-    approvals: input.approvals as RecordingApprovals,
+    notices: input.loosen_notices as RecordingLoosenNotices,
   };
 }
 
@@ -285,18 +284,17 @@ describe('runDailyCycle — asymmetric risk-threshold guardrails', () => {
     },
   });
 
-  function thresholdHarness(target: number, mode: 'live' | 'paper' | 'backtest' = 'live'): Harness {
+  function thresholdHarness(target: number): Harness {
     return makeHarness({
       tuning: openTuningStore({ weights: {}, thresholds: { max_position_size: 1000 } }),
       trades: openClosedTradeStore([]),
       config: thresholdConfig,
       proposals: [{ kind: 'risk_threshold', name: 'max_position_size', target }],
-      mode,
     });
   }
 
-  it('applies a tightening without asking anyone', () => {
-    const { input, tuning, approvals } = thresholdHarness(500);
+  it('applies a tightening without asking anyone, and announces nothing', () => {
+    const { input, tuning, notices } = thresholdHarness(500);
 
     const result = runDailyCycle(input);
 
@@ -306,41 +304,51 @@ describe('runDailyCycle — asymmetric risk-threshold guardrails', () => {
       direction: 'tighten',
     });
     expect(tuning.getRiskThresholds().max_position_size).toBe(900);
-    expect(result.loosen_pending_approval).toEqual([]);
-    expect(approvals.requests).toEqual([]);
+    // A tightening narrows what the system may lose; it is not news.
+    expect(notices.notices).toEqual([]);
   });
 
-  it('routes a loosening to human approval and does NOT write it', () => {
-    const { input, tuning, approvals, adjustments } = thresholdHarness(2000);
+  /**
+   * THE assertion of #736. Before it, this exact input wrote nothing in live
+   * and paper and queued a request no transport could answer, so the dial
+   * ratcheted one way for a whole soak. ADR-0013 Decision 2: "Every dial
+   * change — tighten or loosen — is applied, logged and reversible."
+   *
+   * There is no `mode` parameter to sweep any more — the gate was the only
+   * thing that read it — so this one path IS live, paper and backtest.
+   */
+  it('APPLIES a loosening, logs it, and announces it', () => {
+    const { input, tuning, notices, adjustments } = thresholdHarness(2000);
 
     const result = runDailyCycle(input);
 
-    expect(result.loosen_pending_approval).toEqual(['max_position_size']);
-    expect(result.param_updates).toEqual({});
-    // The safety limit is unchanged until a human says otherwise.
-    expect(tuning.getRiskThresholds().max_position_size).toBe(1000);
-    expect(adjustments.getEntries()).toEqual([]);
-    expect(approvals.requests).toEqual([
-      { name: 'max_position_size', from: 1000, to: 1100, requested_at: NOW },
+    // Bounded to one max_step, not the 2000 asked for.
+    expect(result.param_updates.max_position_size).toEqual({
+      from: 1000,
+      to: 1100,
+      direction: 'loosen',
+    });
+    expect(tuning.getRiskThresholds().max_position_size).toBe(1100);
+    expect(result.applied).toBe(true);
+    // Reversible: the `from` is what an operator rolls back to.
+    expect(adjustments.getEntries()).toMatchObject([
+      {
+        dial: 'risk_threshold',
+        name: 'max_position_size',
+        from: 1000,
+        to: 1100,
+        direction: 'loosen',
+        reason: 'proposal',
+      },
+    ]);
+    // A dial that moves itself has to say so — past tense, after the write.
+    expect(notices.notices).toEqual([
+      { name: 'max_position_size', from: 1000, to: 1100, applied_at: NOW },
     ]);
   });
 
-  it('routes a loosening to human approval in paper mode, same as live', () => {
-    const { input, tuning, approvals, adjustments } = thresholdHarness(2000, 'paper');
-
-    const result = runDailyCycle(input);
-
-    expect(result.loosen_pending_approval).toEqual(['max_position_size']);
-    expect(result.param_updates).toEqual({});
-    expect(tuning.getRiskThresholds().max_position_size).toBe(1000);
-    expect(adjustments.getEntries()).toEqual([]);
-    expect(approvals.requests).toEqual([
-      { name: 'max_position_size', from: 1000, to: 1100, requested_at: NOW },
-    ]);
-  });
-
-  it('honours tighten_is increase — a decrease is then the gated direction', () => {
-    const { input, tuning } = makeHarness({
+  it('honours tighten_is increase — a decrease is then the loosening', () => {
+    const { input, tuning, notices } = makeHarness({
       tuning: openTuningStore({ weights: {}, thresholds: { min_viable_size: 100 } }),
       trades: openClosedTradeStore([]),
       config: makeConfig({
@@ -358,23 +366,24 @@ describe('runDailyCycle — asymmetric risk-threshold guardrails', () => {
 
     const result = runDailyCycle(input);
 
-    expect(result.loosen_pending_approval).toEqual(['min_viable_size']);
-    expect(tuning.getRiskThresholds().min_viable_size).toBe(100);
+    expect(result.param_updates.min_viable_size).toMatchObject({ direction: 'loosen' });
+    expect(tuning.getRiskThresholds().min_viable_size).toBe(90);
+    expect(notices.notices).toMatchObject([{ name: 'min_viable_size', from: 100, to: 90 }]);
   });
 
-  it('auto-handles the approval in backtest and records it, so replay runs the same path', () => {
-    const { input, tuning, adjustments, approvals } = thresholdHarness(2000, 'backtest');
+  it('does not announce a loosening the hard band flattens into a no-op', () => {
+    // Already at the dial ceiling and asked for more: nothing moves, so there
+    // is nothing to tell anyone. The `[floor, ceiling]` band is what ADR-0013
+    // keeps — only the per-change human gate went.
+    const { input, tuning, notices, adjustments } = thresholdHarness(9_000);
+    tuning.setRiskThreshold('max_position_size', 5000);
 
     const result = runDailyCycle(input);
 
-    expect(result.loosen_pending_approval).toEqual([]);
-    expect(tuning.getRiskThresholds().max_position_size).toBe(1100);
-    expect(approvals.requests).toEqual([]);
-    expect(adjustments.getEntries()[0]).toMatchObject({
-      dial: 'risk_threshold',
-      direction: 'loosen',
-      reason: 'proposal:backtest_auto_approved',
-    });
+    expect(result.param_updates).toEqual({});
+    expect(tuning.getRiskThresholds().max_position_size).toBe(5000);
+    expect(adjustments.getEntries()).toEqual([]);
+    expect(notices.notices).toEqual([]);
   });
 
   it('bounds a tightening by max_step just like a weight', () => {
@@ -383,6 +392,66 @@ describe('runDailyCycle — asymmetric risk-threshold guardrails', () => {
     runDailyCycle(input);
 
     expect(tuning.getRiskThresholds().max_position_size).toBe(900);
+  });
+});
+
+/**
+ * The other half of #736, and the half that stops the fix becoming a
+ * regression. ADR-0013 Decision 2 removed the per-change human gate *within*
+ * the hard bounds and kept the bounds: every change is "rejected in code if it
+ * would cross a hard bound". #638 put that clamp on `setRiskThreshold`, so it
+ * binds on the Feedback Loop's own write door — which is now the only thing
+ * standing between an automatic loosening and an arbitrary risk limit.
+ *
+ * `max_drawdown_pct` is used deliberately: it is one of the names in
+ * `GUARDED_THRESHOLD_BOUNDS` (max 0.35). A test written against an unguarded
+ * name like `max_position_size` would pass while proving nothing.
+ */
+describe('runDailyCycle — the #638 clamp still binds on an automatic loosening', () => {
+  function drawdownHarness(ceiling: number, target: number): Harness {
+    return makeHarness({
+      tuning: openTuningStore({ weights: {}, thresholds: { max_drawdown_pct: 0.3 } }),
+      trades: openClosedTradeStore([]),
+      config: makeConfig({
+        risk_thresholds: {
+          // A dial whose own ceiling is deliberately mis-set ABOVE the in-code
+          // clamp: the dial bounds are config and the clamp is not, which is
+          // exactly the case the clamp exists for.
+          max_drawdown_pct: makeDial({
+            max_step: 0.1,
+            floor: 0.05,
+            ceiling,
+            tighten_is: 'decrease',
+          }),
+        },
+      }),
+      proposals: [{ kind: 'risk_threshold', name: 'max_drawdown_pct', target }],
+    });
+  }
+
+  it('REFUSES a loosening past the in-code clamp, writing nothing and telling nobody', () => {
+    const { input, tuning, adjustments, notices } = drawdownHarness(0.5, 0.5);
+
+    // Refused, not coerced: a silently clamped value would read as accepted.
+    expect(() => runDailyCycle(input)).toThrow(/max_drawdown_pct/);
+
+    // The dial did not move, no reversibility record claims it did, and no
+    // operator was told a limit widened that did not.
+    expect(tuning.getRiskThresholds().max_drawdown_pct).toBe(0.3);
+    expect(adjustments.getEntries()).toEqual([]);
+    expect(notices.notices).toEqual([]);
+  });
+
+  it('allows a loosening that stays inside the clamp', () => {
+    // 0.30 -> 0.34 is a real widening of the drawdown breaker, and it is under
+    // the 0.35 line, so nothing refuses it. This is the control for the test
+    // above: it proves the refusal is the bound, not the direction.
+    const { input, tuning, notices } = drawdownHarness(0.34, 0.34);
+
+    runDailyCycle(input);
+
+    expect(tuning.getRiskThresholds().max_drawdown_pct).toBeCloseTo(0.34, 10);
+    expect(notices.notices).toMatchObject([{ name: 'max_drawdown_pct' }]);
   });
 });
 
@@ -408,13 +477,15 @@ describe('runDailyCycle — strategy params', () => {
   }
 
   it('tunes freely in BOTH directions — only risk thresholds are gated', () => {
-    const { input, tuning, approvals } = paramHarness(2);
+    const { input, tuning, notices } = paramHarness(2);
 
     const result = runDailyCycle(input);
 
     expect(tuning.getStrategyParams().conviction_multiplier).toBeCloseTo(1.1, 10);
-    expect(result.loosen_pending_approval).toEqual([]);
-    expect(approvals.requests).toEqual([]);
+    // Only a risk threshold's loosening is announced — a strategy param
+    // carries no safety semantics.
+    expect(result.param_updates.conviction_multiplier).toMatchObject({ direction: 'loosen' });
+    expect(notices.notices).toEqual([]);
   });
 
   it('stays inside its hard bounds', () => {

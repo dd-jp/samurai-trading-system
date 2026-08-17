@@ -125,6 +125,8 @@ function runBudgetedDebate(personas: DebatePersonas, logger: DebateLogger) {
     assetClass: 'crypto',
     trace_id: 'trace-1',
     debate_id: 'debate-1',
+    // #687: the same bar `runDebate` hashes, so the timeout fallback names it too.
+    bar: CLOCK.now(),
     produceResult: (signal) =>
       runDebate(
         { views: [makeView('a1'), makeView('a2')], instrument: 'BTC-USD', bar: CLOCK.now() },

@@ -14,7 +14,7 @@ import type {
 import type {
   AdjustmentLog,
   FeedbackConfig,
-  LoosenApprovalChannel,
+  LoosenNotificationChannel,
   TuningProposal,
 } from './tuning.js';
 
@@ -36,25 +36,36 @@ export interface DailyCycleInput {
   /** Where every applied move is recorded. */
   adjustments: AdjustmentLog;
   config: FeedbackConfig;
-  approvals: LoosenApprovalChannel;
+  /**
+   * Where an APPLIED risk-threshold loosening is announced. Not a gate: the
+   * cycle does not wait on it and does not read anything back.
+   */
+  loosen_notices: LoosenNotificationChannel;
   /** Param/threshold moves requested this cycle. Weights are not proposed — they are attributed. */
   proposals: TuningProposal[];
-  /**
-   * Backtest auto-handles loosening approvals (like Verdict's HITL bypass)
-   * and records them, so a replay exercises the same code path as live.
-   * Paper takes the same gated approval path as live.
+  /*
+   * `mode: 'live' | 'paper' | 'backtest'` was removed by #736. It existed for
+   * one expression — `const gate = isThreshold && mode !== 'backtest'`, which
+   * auto-applied a loosening in replay and queued it for a human in paper and
+   * live. ADR-0013 Decision 2 removed the gate, which left `mode` read by
+   * nothing; a field carried "for completeness" that no code consults is the
+   * same shape of lie the gate was. All three modes now run one path. Left as
+   * a note so a profile that still passes `mode` fails to compile rather than
+   * setting a knob nothing reads.
    */
-  mode: 'live' | 'paper' | 'backtest';
 }
 
 /** Shape frozen by feedback-loop-spec.md ("Key Interfaces"). */
 export interface DailyCycleResult {
   /** Per `analyst_id`, bounded. */
   weight_updates: Record<string, { from: number; to: number }>;
-  /** Strategy params AND risk thresholds, keyed by name. */
+  /**
+   * Strategy params AND risk thresholds, keyed by name — every one of them
+   * WRITTEN. Since #736 an applied loosening appears here with
+   * `direction: 'loosen'`; the old sibling field `loosen_pending_approval`
+   * is gone, because nothing is pending and the queue it named never drained.
+   */
   param_updates: Record<string, { from: number; to: number; direction: 'tighten' | 'loosen' }>;
-  /** Risk-threshold loosenings awaiting human OK — proposed, NOT written. */
-  loosen_pending_approval: string[];
   /** True if the cycle wrote at least one dial. */
   applied: boolean;
 }

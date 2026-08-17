@@ -1,7 +1,45 @@
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildEntrypointLogger, JsonLogger } from './logger.js';
+import {
+  buildEntrypointLogger,
+  JsonLogger,
+  type StdoutStream,
+  watchStdoutErrors,
+} from './logger.js';
+
+/**
+ * A stdout stand-in that can be broken in either of the two ways a real one
+ * breaks: synchronously (file/TTY stdio) and asynchronously (a pipe, which is
+ * what a soak actually has — see `watchStdoutErrors`).
+ */
+class FakeStdout implements StdoutStream {
+  readonly lines: string[] = [];
+  private listener?: (error: Error) => void;
+  /** Set to make `write` throw, modelling synchronous stdio. */
+  throwOn?: Error;
+
+  write(line: string): boolean {
+    if (this.throwOn !== undefined) throw this.throwOn;
+    this.lines.push(line);
+    return true;
+  }
+
+  on(_event: 'error', listener: (error: Error) => void): this {
+    this.listener = listener;
+    return this;
+  }
+
+  /** Delivers what Node delivers on a dead pipe: an async `'error'` event. */
+  breakPipe(error = new Error('EPIPE: broken pipe')): void {
+    if (this.listener === undefined) throw new Error('nothing subscribed to stdout errors');
+    this.listener(error);
+  }
+
+  parsed(): { level: string; message: string; payload?: Record<string, unknown> }[] {
+    return this.lines.map((line) => JSON.parse(line));
+  }
+}
 
 let dir: string;
 let stdout: string[];
@@ -25,6 +63,13 @@ afterEach(() => {
   }
   rmSync(dir, { recursive: true, force: true });
 });
+
+/** A logger over both fakes, wired the way `buildEntrypointLogger` wires the real one. */
+function buildLoggerOverFakes(stdout: FakeStdout, file: string[]): JsonLogger {
+  const logger = new JsonLogger({ write: (line) => file.push(line) }, stdout);
+  watchStdoutErrors(logger, stdout);
+  return logger;
+}
 
 const ENTRY = {
   trace_id: 'trace-1',
@@ -107,11 +152,12 @@ describe('JsonLogger', () => {
     expect(stdout.map((s) => JSON.parse(s).message)).toEqual(['decided']);
     expect(writes).toBe(2);
 
-    // The documented asymmetry, pinned: a *later* call does throw — but from
-    // `log`'s own primary `process.stdout.write` (#95 behaviour, and the same
-    // posture `buildShutdownHandler` takes with stderr), never from the sink
-    // path. Requirement 4 is about sink failures; a dead stdout is a different
-    // decision that this ticket deliberately does not take.
+    // Rewritten for #714, which took the decision this comment used to say
+    // had been deferred. A *later* call still throws, but no longer because
+    // stdout is unguarded: both sinks are now gone (the file retired on
+    // ENOSPC, stdout on EPIPE), so there is nowhere to record the failure and
+    // the rule is that the logger stops rather than continuing blind. The
+    // throw carries stdout's own error.
     expect(() => logger.log(ENTRY)).toThrow(/EPIPE/);
     // 3, not 4: the sink's degradation was reported once and never retried.
     expect(writes).toBe(3);
@@ -128,6 +174,144 @@ describe('JsonLogger', () => {
     }).log(ENTRY);
 
     expect(attempts).toBe(1);
+  });
+});
+
+describe('JsonLogger when stdout fails (#714)', () => {
+  /** The soak case: a pipe dies asynchronously and the run must continue. */
+  it('degrades to the file sink on an async stdout error and keeps logging there', () => {
+    const stdout = new FakeStdout();
+    const file: string[] = [];
+    const logger = buildLoggerOverFakes(stdout, file);
+
+    logger.log(ENTRY);
+    stdout.breakPipe();
+    logger.log({ ...ENTRY, message: 'after the pipe died' });
+
+    // The failure itself is recorded — durably, on the sink that survived.
+    const degradation = file.map((l) => JSON.parse(l)).find((e) => e.level === 'warn');
+    expect(degradation.payload.log_stdout_sink).toBe('degraded');
+    expect(degradation.message).toMatch(/EPIPE/);
+    // ...and the run keeps producing its trace on the file.
+    expect(file.map((l) => JSON.parse(l).message)).toContain('after the pipe died');
+    // Stdout is retired, not retried: the line after the break never went there.
+    expect(stdout.parsed().map((e) => e.message)).toEqual(['decided']);
+    expect(logger.stdoutRetired).toBe(true);
+  });
+
+  it('records the degradation once, however many error events arrive', () => {
+    // A dead pipe emits one `'error'` per subsequent write — 22 of them in the
+    // measurement in `watchStdoutErrors`. The durable log must not fill with
+    // copies of its own failure.
+    const stdout = new FakeStdout();
+    const file: string[] = [];
+    const logger = buildLoggerOverFakes(stdout, file);
+
+    for (let i = 0; i < 10; i += 1) stdout.breakPipe();
+    logger.log(ENTRY);
+
+    expect(file.map((l) => JSON.parse(l)).filter((e) => e.level === 'warn')).toHaveLength(1);
+  });
+
+  it('degrades on a synchronous stdout throw too', () => {
+    // stdout attached to a file or TTY is synchronous, so the failure arrives
+    // at the write call instead. Same rule, other half.
+    const stdout = new FakeStdout();
+    const file: string[] = [];
+    const logger = buildLoggerOverFakes(stdout, file);
+    stdout.throwOn = new Error('ENOSPC: no space left on device');
+
+    expect(() => logger.log(ENTRY)).not.toThrow();
+
+    const written = file.map((l) => JSON.parse(l));
+    expect(written[0].payload.log_stdout_sink).toBe('degraded');
+    expect(written[1].message).toBe('decided');
+  });
+
+  it('throws rather than degrading when there is no sink to record the failure on', () => {
+    // The rule that makes the degrade honest: nothing is swallowed unless the
+    // swallowing is written down somewhere that survives.
+    const stdout = new FakeStdout();
+    stdout.throwOn = new Error('EBADF');
+    const logger = new JsonLogger(undefined, stdout);
+
+    expect(() => logger.log(ENTRY)).toThrow(/EBADF/);
+  });
+
+  it('throws when the file sink has silently retired, rather than reporting a lost line as durable', () => {
+    // `RotatingFileSink.write` swallows its own I/O failures and returns
+    // normally, so "it did not throw" is not evidence of durability. Without
+    // the `degraded` check the logger would degrade stdout into a sink that
+    // writes nowhere — running blind, which is the outcome #714 forbids.
+    const stdout = new FakeStdout();
+    const retired = { write: () => {}, degraded: true };
+    const logger = new JsonLogger(retired, stdout);
+
+    stdout.throwOn = new Error('EPIPE: broken pipe');
+    expect(() => logger.log(ENTRY)).toThrow(/EPIPE/);
+    expect(logger.stdoutRetired).toBe(false);
+  });
+
+  it('falls back to stderr when stdout was retired first and the file retires later', () => {
+    // The ordering a soak actually hits — terminal closes on day three, disk
+    // fills on day nine — and the one where the throw lands inside a tick and
+    // is swallowed by #573's `safeLog`. So stderr, not the throw, is what
+    // keeps the run from trading with no trace anywhere.
+    const stdout = new FakeStdout();
+    const stderr: string[] = [];
+    const sink = { write: () => {}, degraded: false };
+    const logger = new JsonLogger(sink, stdout, { write: (line) => stderr.push(line) });
+
+    stdout.throwOn = new Error('EPIPE: broken pipe');
+    logger.log(ENTRY);
+    expect(logger.stdoutRetired).toBe(true);
+    expect(stderr).toHaveLength(0);
+
+    // Now the file sink retires too, the way `RotatingFileSink` does it:
+    // silently, still returning from `write`.
+    sink.degraded = true;
+    expect(() => logger.log({ ...ENTRY, message: 'after both sinks died' })).toThrow(
+      /reached no sink/,
+    );
+
+    const written = stderr.map((line) => JSON.parse(line));
+    expect(written[0].message).toMatch(/no sink left/);
+    expect(written[0].payload).toMatchObject({
+      log_stdout_sink: 'degraded',
+      log_file_sink: 'degraded',
+    });
+    expect(written[1].message).toBe('after both sinks died');
+
+    // The notice is said once; the lines themselves keep coming.
+    expect(() => logger.log({ ...ENTRY, message: 'and again' })).toThrow();
+    expect(stderr.map((line) => JSON.parse(line).message)).toEqual([
+      written[0].message,
+      'after both sinks died',
+      'and again',
+    ]);
+  });
+
+  it('still throws when the last-resort stderr write throws too', () => {
+    const stdout = new FakeStdout();
+    stdout.throwOn = new Error('EBADF');
+    const logger = new JsonLogger(undefined, stdout, {
+      write: () => {
+        throw new Error('stderr is as dead as stdout');
+      },
+    });
+
+    // The escalation survives its own last resort failing — the guard around
+    // the stderr write must not become the thing that reports.
+    expect(() => logger.log(ENTRY)).toThrow(/EBADF/);
+  });
+
+  it('throws out of the stdout error listener when nothing can record the failure', () => {
+    // The async half of the same escalation: it reaches `uncaughtException`,
+    // whose handler (index.ts) records what it can and exits deliberately.
+    const stdout = new FakeStdout();
+    watchStdoutErrors(new JsonLogger(undefined, stdout), stdout);
+
+    expect(() => stdout.breakPipe()).toThrow(/could not be recorded on any other sink/);
   });
 });
 
@@ -163,6 +347,25 @@ describe('buildEntrypointLogger', () => {
     // ...and the process keeps logging.
     expect(() => logger.log(ENTRY)).not.toThrow();
     expect(stdout.map((s) => JSON.parse(s).message)).toContain('decided');
+  });
+
+  it('subscribes to stdout errors, so a broken pipe degrades instead of ending the run', () => {
+    // The wiring #714 turns on. Asserted here rather than at the entrypoint
+    // guard, which no test can reach — the reason this function is exported at
+    // all. Removing the `watchStdoutErrors` call fails this test.
+    const filePath = join(dir, 'watched.log');
+    const stdoutStream = new FakeStdout();
+    const logger = buildEntrypointLogger(
+      { filePath, maxBytes: 4096, maxRotatedFiles: 2 },
+      stdoutStream,
+    );
+
+    expect(() => stdoutStream.breakPipe()).not.toThrow();
+
+    logger.log({ ...ENTRY, message: 'after the pipe died' });
+    const written = readFileSync(filePath, 'utf8');
+    expect(written).toMatch(/"log_stdout_sink":"degraded"/);
+    expect(written).toContain('after the pipe died');
   });
 
   it('reads its configuration from the environment when none is passed', () => {

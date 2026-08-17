@@ -231,5 +231,8 @@ export async function runDebate(
     latency_ms: clock.now().getTime() - startedAt,
     direction: synthesis.direction,
     debate_id: computeDebateId(instrument, bar, views),
+    // The SAME `bar` that was just hashed into `debate_id`, carried forward to
+    // the Trader so it never floors a second clock read of its own (#687).
+    bar_timestamp: bar,
   };
 }

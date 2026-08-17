@@ -14,7 +14,7 @@
  */
 
 import type { Clock, TuningStore } from '../../shared/index.js';
-import { SystemClock } from '../../shared/index.js';
+import { assertThresholdWithinBounds, SystemClock } from '../../shared/index.js';
 import type { SharedStore } from '../../shared/store/index.js';
 
 /**
@@ -101,7 +101,20 @@ export class SqliteTuningStore implements TuningStore {
     return this.kvGetAll(RISK_THRESHOLDS);
   }
 
+  /**
+   * #638: the write door. Every Feedback Loop threshold change lands here —
+   * `runDailyCycle`'s proposals and `autoTighten`'s defensive sweep both — so
+   * this is the one place that can refuse a bound crossing regardless of which
+   * caller proposed it. The refusal is a throw, not a clamp: leaving the prior
+   * in-bound row standing while pretending the write succeeded would tell the
+   * audit trail a limit moved when it did not.
+   *
+   * ADR-0013 requires exactly this ("rejected in code if it would cross a hard
+   * bound") and, since #736 removed the loosen gate, this is the only thing
+   * between an automated loop and an arbitrary risk limit.
+   */
   setRiskThreshold(name: string, value: number): void {
+    assertThresholdWithinBounds(name, value, 'SqliteTuningStore.setRiskThreshold');
     this.kvSet(RISK_THRESHOLDS, name, value);
   }
 
@@ -111,6 +124,10 @@ export class SqliteTuningStore implements TuningStore {
    * would re-open a cap `autoTighten` had narrowed on a kill-line breach.
    */
   seedRiskThreshold(name: string, value: number): boolean {
+    // Seeding is a write like any other (#638) — the composition root's static
+    // config reaches the live table through here, so an unclamped seed would
+    // re-open at startup exactly what `setRiskThreshold` refuses at runtime.
+    assertThresholdWithinBounds(name, value, 'SqliteTuningStore.seedRiskThreshold');
     const result = this.db
       .prepare(
         `INSERT INTO ${RISK_THRESHOLDS.table}

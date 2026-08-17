@@ -206,12 +206,12 @@ interface SetupVector {
 
 ### Cross-Spec Requirement: DebateResult additions
 
-The Trader consumes `DebateResult` and, being mechanical (no LLM), needs two fields the **current** Debate Engine contract does not provide (debate-engine-spec.md `DebateResult` = synthesis, position, confidence, contributions, disagreement_summary, open_items, converged, rounds_completed, latency_ms):
+The Trader consumes `DebateResult` and, being mechanical (no LLM), needs two fields beyond the base Debate Engine contract (debate-engine-spec.md `DebateResult` = synthesis, position, confidence, contributions, disagreement_summary, open_items, converged, rounds_completed, latency_ms):
 
 1. **`direction: 'bullish' | 'bearish' | 'neutral'`** — the structured signal the Trader maps to `side`. Without it, deriving side from the free-text `position` would require an LLM (which the Trader deliberately omits). The mediator already knows the direction; it just needs to be exposed structurally.
 2. **`debate_id: string`, deterministic** = hash of the debate's inputs (instrument + bar + the AnalystView set). Must be stable across the Debate Engine's re-run-from-scratch (no-persistence, #10), so it is a reliable provenance/setup-store join key. (It is NOT used in the idempotency key — that keys on instrument + bar.)
 
-**This must be reconciled into the Debate Engine spec and its implementation tickets (#24 Domain Types & Contracts) during the cross-spec verification pass — do not build the Trader on an unstated contract.** Recorded in both wayfinder maps.
+**Both are defined.** `debate-engine-spec.md` specs `direction` and `debate_id` on `DebateResult`, and `cross-spec-contracts.md` §1/§2 record them as settled, load-bearing fields — not an open contract question.
 
 ### Module: Side Derivation
 
@@ -295,7 +295,7 @@ Routing against `positionState`, producing `intent_type`:
 - No-precedent → 0.75× + flag.
 
 **Position Awareness**
-- Each routing case produces the correct `intent_type` (entry / scale_in / exit / flip / hold-null).
+- Each routing case produces the correct `intent_type` (entry / scale_in / exit / hold-null). There is no `flip` case: `OrderIntent.intent_type` is `'entry' | 'scale_in' | 'exit'` by design — a reversal is exit-then-fresh-entry, tested as two cases (an `exit` on the held side, followed by a subsequent `entry` decision once flat).
 
 **Determinism & Idempotency**
 - Same input → same idempotency key and same intent.

@@ -80,10 +80,12 @@
  * is #275's remaining half. See `verdictConfig.automation_level` below for
  * what that means for the `manual` setting in practice.
  *
- * The Feedback Loop's `LoosenApprovalChannel` is emphatically NOT that
- * exception, despite the similar name: it returns `void` and collects no
- * answer, so #366 resolved it from `SAMURAI_ALERTS` like the outbound four and
- * the `feedback` block below names no transport either.
+ * The Feedback Loop's `LoosenNotificationChannel` is emphatically NOT that
+ * exception: it returns `void` and collects no answer, so #366 resolved it
+ * from `SAMURAI_ALERTS` like the outbound four and the `feedback` block below
+ * names no transport either. #736 renamed it from `LoosenApprovalChannel` once
+ * ADR-0013 Decision 2 removed the gate it was named for — it announces an
+ * applied loosening now rather than requesting one.
  */
 import type { RateLimitConfig } from '../../pipeline/debate-engine/index.js';
 import type { ExecutionConfig } from '../../pipeline/execution/index.js';
@@ -664,9 +666,10 @@ function buildFeedbackConfig(caps: RiskCaps): FeedbackConfig {
     floor: PAPER_ANALYST_WEIGHT_FLOOR,
     ceiling: PAPER_ANALYST_WEIGHT_CEILING,
     /**
-     * `DERIVED` — descriptive only for a weight. `runDailyCycle` passes
-     * `gate_loosening: false` for weights (they "tune freely within bounds"),
-     * so this only labels the `Adjustment.direction` written to the audit log.
+     * `DERIVED` — descriptive only for a weight. A weight carries no safety
+     * semantics ("tune freely within bounds"), so this only labels the
+     * `Adjustment.direction` written to the audit log and never decides
+     * whether a move is announced — only a risk threshold's loosening is.
      * `decrease` because less influence for a lens is the safer direction, the
      * same reading `TunableDial`'s doc gives for `max_position_size`.
      */
@@ -1146,15 +1149,29 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
     /**
      * UNSOURCED (milliseconds; spec puts exact thresholds out of scope).
      *
-     * Sized against the right clock, which is the trap here. Gate 1 measures
-     * `now - order.decision_timestamp`, and `decision_timestamp` is
-     * `mark.observed_at` (trader/decide.ts) — the *quote's own* timestamp
-     * (`AlpacaDataSource.fetchLiveObservation`), deliberately not
-     * `clock.now()`, so a crash-restart re-deciding the same bar keeps its
-     * idempotency key. It is emphatically NOT the ATR bar's close time: were
-     * it, a 5-minute bound under a `'1h'` `atr_timeframe` would no-go every
-     * trade on staleness forever. For BTC-USD, which quotes continuously,
-     * `observed_at` lands within seconds of the decision.
+     * Sized against the right clock, which is the trap here — and **this note
+     * was left stale by #616 and is corrected here (#687)**. It used to read:
+     * "`decision_timestamp` is `mark.observed_at` (trader/decide.ts) — the
+     * *quote's own* timestamp, deliberately not `clock.now()` … It is
+     * emphatically NOT the ATR bar's close time: were it, a 5-minute bound
+     * under a `'1h'` `atr_timeframe` would no-go every trade on staleness
+     * forever."
+     *
+     * `decision_timestamp` has NOT been the quote timestamp since #616. It is
+     * the DECISION BAR — floored onto `DEBATE_BAR_TIMEFRAME_MS` (1h), which is
+     * what made the idempotency key stable within a bar — and since #687 it is
+     * the debate's bar, inherited rather than re-floored. So the sentence above
+     * describes the hazard correctly and then denies it applies: gate 1 now
+     * measures how far into the BAR the tick is, not how old the quote is. At a
+     * 15-minute cadence a crypto tick at bar+15/30/45 already reads 15/30/45
+     * minutes of "signal age" against a 5-minute bound.
+     *
+     * The values below are deliberately NOT changed here — re-sizing a live
+     * gate is a product decision, not a side effect of a keying fix — but they
+     * are no longer measuring what this note said they measured, and #687's PR
+     * files that separately. After #687 a straddling intent can also carry a
+     * `decision_timestamp` a full bar behind, which this gate refuses; refusing
+     * a late intent is the fail-safe direction and is the intended outcome.
      *
      * 5 min crypto / 15 min stocks, with several tick intervals
      * (`DEFAULT_TICK_INTERVAL_MS`, 60s) of headroom either way. The asymmetry

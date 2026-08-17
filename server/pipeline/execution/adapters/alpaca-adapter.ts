@@ -9,7 +9,7 @@
  * guarantee by hand, journalled in `broker_brackets`, invisible above the
  * `BrokerAdapter` seam.
  *
- * The Alpaca trading client is injected (`AlpacaClient`), mirroring the
+ * The Alpaca trading client is injected (`AlpacaBrokerClient`), mirroring the
  * injected-client pattern already used for market data
  * (server/providers/market-data-service/sources/alpaca-source.ts): connection/auth is an
  * ops concern (trade-only key, withdrawals disabled, IP-whitelisted per
@@ -34,6 +34,8 @@
 import {
   type Clock,
   DEFAULT_VENUE_PACING,
+  type Logger,
+  logCaughtFailure,
   SystemClock,
   TokenBucket,
 } from '../../../shared/index.js';
@@ -54,7 +56,7 @@ import type {
   NormalizedPosition,
 } from '../types.js';
 import type { UnpricedFillAlertChannel } from '../unpriced-fill-alert.js';
-import type { AlpacaClient, AlpacaOrder, AlpacaOrderLeg } from './alpaca-client.js';
+import type { AlpacaBrokerClient, AlpacaOrder, AlpacaOrderLeg } from './alpaca-client.js';
 import { AlpacaCryptoLegEmulation } from './alpaca-crypto-emulation.js';
 // The shared normalization layer (PR #600 review): both this adapter and the
 // crypto emulation consume it, and neither imports the other's runtime code
@@ -84,8 +86,21 @@ import {
  */
 export const DEFAULT_UNPRICED_FILL_AGE_OUT_MS = 15 * 60_000;
 
+/**
+ * `LogEntry.trace_id` for every `fetchNewFills` failure this adapter logs
+ * (#609). This adapter receives no per-call trace id the way `ExecutionInput`
+ * does (`trace_id` there is threaded from `FILL_SYNC_TRACE_ID`/
+ * `RECONCILE_TRACE_ID` — see that field's doc) — `BrokerAdapter.fetchNewFills`
+ * takes only `since`, and importing an orchestrator-level constant into this
+ * adapter would invert the module layering. A fixed, adapter-owned id is the
+ * cheaper answer: every line this adapter ever logs is already scoped to
+ * "the Alpaca fill sweep" by construction, so there is no second axis worth
+ * threading one for.
+ */
+const ALPACA_FILL_SWEEP_TRACE_ID = 'alpaca-fetch-new-fills';
+
 export interface AlpacaBrokerAdapterInput {
-  client: AlpacaClient;
+  client: AlpacaBrokerClient;
   /**
    * Optional so existing wiring (server/apps/orchestrator/production.ts) keeps
    * working; when absent the adapter still paces itself rather than running
@@ -149,6 +164,36 @@ export interface AlpacaBrokerAdapterInput {
    * the rest of the system does. Defaults to `SystemClock`.
    */
   clock?: Clock;
+  /**
+   * Where a `fetchNewFills` sweep failure becomes locally diagnosable (#609)
+   * — the same port-level decision #573 made on `ExecutionInput.logger`, and
+   * for the same reason: `fetchNewFills`'s per-source `failures` array
+   * (bracket/flatten/rearm broker errors, `recordUnpricedFill`/
+   * `clearUnpricedFill` journal-write failures, the unpriced-fill alert
+   * fallback's own delivery failure) was accumulated but had nowhere local to
+   * go, so it was silently dropped on EVERY poll where the same sweep also
+   * read a fill from another source — close to always on a live
+   * multi-instrument universe (see the throw gate's own comment in
+   * `fetchNewFills`).
+   *
+   * `AlpacaBrokerAdapterInput` is a DIFFERENT port from `ExecutionInput`
+   * (`ingestFills()` calls this adapter, not the reverse — #608's sibling
+   * enumeration recorded that as the reason this was filed as its own
+   * ticket rather than folded into #573), so this is a second, independent
+   * instance of the same decision, not a reuse of the field. It resolves the
+   * same way: REQUIRED, not optional. An omitted seam at a composition root
+   * is this repo's dominant defect class (`unpricedFillAlerts`/
+   * `ocoDoubleFillAlerts` above already refuse a silent default for the
+   * identical reason), and `production.ts` already builds one `logger` above
+   * this adapter's construction site and now passes it through rather than
+   * gaining a second, unrecorded one.
+   *
+   * Safe inside a catch, structurally: every call site here routes through
+   * `logCaughtFailure` (`shared/safe-log.ts`), never `logger.log` directly,
+   * so a throwing injected `Logger` cannot escape and re-open the very
+   * abort blast radius #569/#573 closed on the execution port.
+   */
+  logger: Logger;
 }
 
 export class AlpacaBrokerAdapter implements BrokerAdapter {
@@ -232,12 +277,15 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * equities-only.
    */
   private readonly emulation: AlpacaCryptoLegEmulation;
+  /** #609 — see `AlpacaBrokerAdapterInput.logger`'s doc for why this has no default. */
+  private readonly logger: Logger;
 
   constructor(private readonly input: AlpacaBrokerAdapterInput) {
     this.rateLimiter = input.rateLimiter ?? new TokenBucket(DEFAULT_VENUE_PACING.alpaca);
     this.state = input.state ?? new InMemoryBrokerStateStore();
     this.clock = input.clock ?? new SystemClock();
     this.unpricedFillAgeOutMs = input.unpricedFillAgeOutMs ?? DEFAULT_UNPRICED_FILL_AGE_OUT_MS;
+    this.logger = input.logger;
 
     this.emulation = new AlpacaCryptoLegEmulation({
       client: input.client,
@@ -1059,25 +1107,51 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // on whether some OTHER bracket happened to produce a fill this sweep.
     await this.escalateAgedUnpricedFills(failures);
 
+    // #609: make every accumulated failure locally diagnosable BEFORE the
+    // throw/return split below decides — that split is exactly where the bug
+    // lived: on any poll where `fills.length > 0`, `failures` fell out of
+    // scope entirely unreported (a `recordUnpricedFill`/`clearUnpricedFill`
+    // journal-write failure, a non-`UnpricedFillError` broker error on one
+    // bracket/flatten/rearm, `escalateAgedUnpricedFills`'s own named
+    // alert-delivery replacement), which on a live multi-instrument universe
+    // is close to always. Logging here, unconditionally on `failures.length`,
+    // fixes exactly that: a clean sweep (`failures.length === 0`) logs
+    // nothing, and a partial success — fills read from one source, a failure
+    // on another — now emits one line per failure regardless of whether the
+    // sweep goes on to throw below. Diagnosis-only: this does not change what
+    // `fetchNewFills` returns or whether it throws, only whether a failure
+    // that already happened leaves a local trace. `logCaughtFailure` is the
+    // same safe-inside-a-catch helper #573 wired onto `ExecutionInput`.
+    for (const failure of failures) {
+      logCaughtFailure(
+        this.logger,
+        {
+          trace_id: ALPACA_FILL_SWEEP_TRACE_ID,
+          stage: 'execution',
+          level: 'error',
+          message: 'Alpaca fetchNewFills: per-source failure',
+        },
+        failure,
+        {
+          // Batching at this one discard point (rather than #573's per-catch
+          // style) loses which of the four loops this failure came from — all
+          // four funnel through the same `this.call('fetchNewFills', ...)`
+          // operation name. These counts restore that, and `fills_read` is the
+          // one that names the #609 case specifically: >0 here is exactly the
+          // "fills.length > 0 discarded failures silently" bug this fixes.
+          bracket_failures: bracketFailures,
+          flatten_failures: flattenFailures,
+          rearm_failures: rearmFailures,
+          emulation_failures: emulationFailures,
+          fills_read: fills.length,
+        },
+      );
+    }
+
     // Progress wins when there is any: dropping good fills to report a bad
     // bracket would re-create the account-wide stall this isolation removes.
     // A wholly-failed sweep is the one case where throwing costs nothing — and
     // it must not be reported as the "no new fills" that an empty array means.
-    //
-    // #573 sweep: on any OTHER poll — `fills.length > 0` — `failures` falls
-    // out of scope here UNREPORTED: a `recordUnpricedFill`/`clearUnpricedFill`
-    // journal-write failure, a non-`UnpricedFillError` broker error on one
-    // bracket/flatten/rearm, and `escalateAgedUnpricedFills`'s own named
-    // alert-delivery replacement are all silently dropped the moment ANY
-    // other bracket in the same sweep produced a fill — which, on a live
-    // multi-instrument universe, is close to always. Left silent rather than
-    // fixed here: `AlpacaBrokerAdapterInput` above carries no `Logger` — it is
-    // a DIFFERENT port than `ExecutionInput` (`ingestFills()` calls THIS
-    // adapter, it is not called BY it), so wiring one in is a second,
-    // unrecorded decision outside this ticket's scope, not a one-line reuse
-    // of the mechanism #573 added there. Filed as #609 — `production.ts`
-    // already has `logger` in scope at this adapter's construction site, so
-    // that fix is cheap.
     if (fills.length === 0 && failures.length > 0) {
       throw new AggregateError(
         failures,

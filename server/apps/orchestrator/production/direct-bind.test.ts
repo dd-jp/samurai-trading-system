@@ -109,6 +109,9 @@ function makeDebate(overrides: Partial<DebateResult> = {}): DebateResult {
     latency_ms: 10,
     direction: 'bullish',
     debate_id: 'debate-1',
+    // #687: NOW is bar-aligned, so this is the bar the Trader now inherits
+    // instead of flooring a clock read of its own.
+    bar_timestamp: NOW,
     ...overrides,
   };
 }
@@ -730,6 +733,115 @@ describe('buildRiskStep', () => {
 
     expect(decision.status).toBe('rejected');
     expect(decision.binding_constraint).toBe('circuit_breaker:portfolio');
+  });
+
+  describe('#726: risk_log on the per-subclass cap gate throw', () => {
+    // AAPL is deliberately absent from `subclass_of` — the D5 envelope is
+    // declared (armed) but this instrument was never added to the pool file,
+    // which is exactly the hole `perSubclassDeploymentCap` refuses to size
+    // around.
+    const ARMED_CAP_CONFIG: RiskConfig = {
+      ...RISK_CONFIG,
+      per_subclass_deployment_cap: {
+        subclass_of: {},
+        cap: { index_etp_3x: 1_000, single_stock_etp_3x: 1_000, crypto: null },
+      },
+    };
+
+    function makeRiskLog() {
+      const writes: unknown[] = [];
+      return { store: { write: (record: unknown) => writes.push(record) }, writes };
+    }
+
+    function buildStep(riskLog: ReturnType<typeof makeRiskLog>['store']) {
+      return buildRiskStep({
+        config: ARMED_CAP_CONFIG,
+        correlationConfig: { window: { timeframe: '1d', lookback: 30 }, min_bars: 5 },
+        ciiConsumer: { getScores: vi.fn(() => ({})) },
+        marketData: FAKE_MARKET_DATA,
+        circuitBreakers: new CircuitBreakers({
+          daily_loss_pct: 0.05,
+          daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+          max_drawdown_pct: 0.2,
+          max_consecutive_losses: 5,
+          volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+          auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+        }),
+        accountState: FAKE_ACCOUNT_STATE,
+        volatility: FAKE_VOLATILITY,
+        getOpenPositions: async () => NO_POSITIONS,
+        maxMarkAge: TEST_MAX_MARK_AGE,
+        mode: 'paper',
+        breakerState: NOOP_BREAKER_STATE,
+        portfolioSnapshots: new Map(),
+        riskLog,
+      });
+    }
+
+    it('writes a risk_log row naming the unclassified subclass, then re-throws unchanged', async () => {
+      const { store, writes } = makeRiskLog();
+      const step = buildStep(store);
+
+      await expect(
+        step({ trace_id: TRACE_ID, intent: makeIntent({ intent_type: 'entry' }), clock: CLOCK }),
+      ).rejects.toThrow(/AAPL has no subclass/);
+
+      expect(writes).toHaveLength(1);
+      const row = writes[0] as {
+        trace_id: string;
+        instrument: string;
+        status: string;
+        binding_constraint: string | null;
+      };
+      expect(row.trace_id).toBe(TRACE_ID);
+      expect(row.instrument).toBe('AAPL');
+      expect(row.status).toBe('error');
+      // An operator reading this row alone must be able to tell which
+      // instrument/subclass was missing without opening the code.
+      expect(row.binding_constraint).toBe(
+        'per_subclass_deployment_cap:unclassified_instrument:AAPL',
+      );
+    });
+
+    it('still returns before the entry-gate loop on an exit, even with the same armed-but-unclassified config', async () => {
+      // The sharpest edge on the throw: ADR-0014's flat-by-close reaches Risk
+      // as an `exit`, and `evaluate()` returns before `ENTRY_CAP_GATES` (and
+      // this gate) is ever entered. Pinned again here, at the binding level,
+      // so the try/catch this fix adds around `evaluate()` cannot be the thing
+      // that regresses it — the pipeline-level pin already lives in
+      // `per-subclass-deployment-cap.test.ts`.
+      const { store, writes } = makeRiskLog();
+      const step = buildStep(store);
+
+      const decision = await step({
+        trace_id: TRACE_ID,
+        intent: makeIntent({ intent_type: 'exit' }),
+        clock: CLOCK,
+      });
+
+      expect(decision.status).toBe('approved');
+      expect(decision.binding_constraint).toBeNull();
+      expect(writes).toHaveLength(1);
+      expect((writes[0] as { status: string }).status).toBe('approved');
+    });
+
+    it('propagates the original gate error unchanged even if the risk_log write itself throws', async () => {
+      // Guards the catch's own side effect the same way #507 guards
+      // tick-loop.ts's: a SQLite failure (disk full, locked handle) writing
+      // the diagnostic row must not replace the diagnostic itself. Without
+      // the inner try/catch around `riskLog.write`, this would reject with
+      // "boom" instead of "AAPL has no subclass" — the operator gets an
+      // opaque store error instead of the actionable one.
+      const step = buildStep({
+        write: () => {
+          throw new Error('boom');
+        },
+      });
+
+      await expect(
+        step({ trace_id: TRACE_ID, intent: makeIntent({ intent_type: 'entry' }), clock: CLOCK }),
+      ).rejects.toThrow(/AAPL has no subclass/);
+    });
   });
 });
 

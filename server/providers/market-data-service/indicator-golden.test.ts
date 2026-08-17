@@ -40,8 +40,10 @@
  *   diverge; these cases are what would catch it.
  * - That `lookback` is a real input to the recursive kinds and is not one to
  *   `sma` — the fact that makes `lookback` part of the cache key.
- * - Two conventions that read as bugs and are not: a dead-flat window returns
- *   RSI **100**, and `atr` over one returns exactly **0**.
+ * - Two conventions that read as bugs and are not: a strictly rising window
+ *   returns RSI **100** (a dead-flat window instead returns the neutral
+ *   midpoint **50**, #725 — see "the flat-tape fix" below), and `atr` over a
+ *   flat window returns exactly **0**.
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -232,9 +234,12 @@ describe('what the warm-up buys, and where it buys nothing', () => {
     // `|rsi - 50| / 50`, so on this fixture's final bar a 15-bar warm-up
     // yields ~0.24 confidence and a 400-bar warm-up ~0.05 — a five-fold swing
     // in how loudly the technical analyst speaks into the debate, from the
-    // lookback alone, with the same period on the same bar. Anyone changing
-    // `INDICATOR_TIMEFRAME` or a spec's `lookback` (step B3 moves both) is
-    // changing this, and it should be a number they had to look at.
+    // lookback alone, with the same period on the same bar. #722 is the
+    // decision this swing forced: `RSI_SPEC` left the 15-bar floor for the
+    // converged 57. The two cases stay at 15 and 400 because what they price
+    // is the SENSITIVITY, not the live spec — anyone changing
+    // `INDICATOR_TIMEFRAME` or a spec's `lookback` is changing this, and it
+    // should be a number they had to look at.
     const short = caseNamed('warmup_sensitivity_rsi_14_15').expected;
     const long = caseNamed('warmup_sensitivity_rsi_14_400').expected;
 
@@ -244,14 +249,9 @@ describe('what the warm-up buys, and where it buys nothing', () => {
 });
 
 describe('conventions that read as bugs and are not', () => {
-  it('answers RSI 100 on a dead-flat window, where nothing has moved at all', () => {
-    // `avgLoss === 0` returns 100 (`indicators.ts:67-69`) without checking
-    // whether `avgGain` is also 0. On a strictly rising window that is the
-    // standard answer; on a halted or auction-flat instrument it means the
-    // technical analyst reports maximum-confidence overbought on a tape that
-    // did not move. Pinned here so the behaviour is a decision on the record
-    // rather than something a soak discovers.
-    expect(valueFor(caseNamed('flat_dojis_rsi_14'))).toBe(100);
+  it('answers RSI 100 on a strictly rising window', () => {
+    // `avgGain > 0 && avgLoss === 0` — the standard Wilder reading for a
+    // window with only up-moves.
     expect(valueFor(caseNamed('rising_run_rsi_14'))).toBe(100);
   });
 
@@ -281,6 +281,25 @@ describe('conventions that read as bugs and are not', () => {
       (gapping.to - gapping.from);
 
     expect(valueFor(gapping)).toBeGreaterThan(perBarRange);
+  });
+});
+
+describe('the flat-tape fix (#725)', () => {
+  // `avgLoss === 0` used to return 100 without checking whether `avgGain`
+  // was also 0. A dead-flat window — every close identical, every change
+  // zero — hit that same branch and answered 100, the same value a
+  // strictly rising window gets. On a halted or auction-flat instrument
+  // (the live LSE leveraged-ETP universe, ADR-0016) that meant the
+  // technical analyst reported `confidence: 0.95` — near-maximum strength
+  // — on a tape that had not moved at all.
+  // `docs/reviews/indicator-characterisation-2026-08-16.md` F3 pinned this
+  // and deliberately did not fix it; these cases pin the fix instead.
+  it('answers the neutral midpoint 50 on a dead-flat window, not 100', () => {
+    expect(valueFor(caseNamed('flat_dojis_rsi_14'))).toBe(50);
+  });
+
+  it('answers 50 regardless of which period asked — the 0/0 shape does not depend on width', () => {
+    expect(valueFor(caseNamed('flat_dojis_rsi_5'))).toBe(50);
   });
 });
 

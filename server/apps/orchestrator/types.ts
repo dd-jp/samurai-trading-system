@@ -44,41 +44,6 @@ export interface UniverseInstrument {
   subclass?: InstrumentSubclass;
 }
 
-/**
- * Read the subclass a bracket or a position size is about to be computed
- * from, refusing when it is absent.
- *
- * ADR-0018 D5 sizes the equity leg *down* — ~35% for index ETPs, ~25% for
- * single-stock — because the measured volatility envelope at full deployment
- * runs 2.2x to 3.5x outside `CONTEXT.md`'s tolerance before any edge exists.
- * A missing subclass falling back to a default would therefore fall back to
- * the one setting the ADR exists to forbid, and it would do it silently, on
- * the money path. Fail loud instead.
- *
- * **No production caller yet, and that is stated rather than left to be
- * discovered** (three review passes raised it, correctly, against this repo's
- * named no-caller defect class). The consumer is ADR-0018 D3's per-subclass
- * bracket — +2.00/-2.16 for a 3x index ETP against +6.00/-6.25 for a 3x
- * single-stock — which is step A2 of map #703 and is NOT on this branch.
- *
- * It is not a second copy of the risk gate's throw, which is the other reading
- * worth ruling out. They take different inputs and answer different questions:
- * `perSubclassDeploymentCap` resolves a subclass from the CONFIG map
- * (`SubclassDeploymentCap.subclass_of`) to size a netted envelope, while this
- * resolves it from the UNIVERSE ROW a bracket is about to be computed for.
- * A2 has a `UniverseInstrument` in hand and no risk config; if it turns out to
- * have neither, delete this rather than leaving it uncalled.
- */
-export function requireSubclass(instrument: UniverseInstrument): InstrumentSubclass {
-  if (instrument.subclass === undefined) {
-    throw new Error(
-      `${instrument.asset} has no subclass; ADR-0018 brackets and sizing cannot be resolved without one. ` +
-        `Add it to the pool file rather than defaulting - a default here is full deployment.`,
-    );
-  }
-  return instrument.subclass;
-}
-
 /** What fires this tick, decided by the Scheduler against the injected clock. */
 export interface TickPlan {
   instruments: UniverseInstrument[];

@@ -27,21 +27,30 @@ function makePortfolio(overrides: Partial<PortfolioView> = {}): PortfolioView {
   };
 }
 
+/**
+ * Every `_pct` here is a FRACTION, not a percentage — 0.03 is three percent.
+ * That is the scale `portfolio-view.ts` computes (`(peak - equity) / peak`) and
+ * the scale `paper-profile.ts` ships, and these fixtures used to be on a
+ * percentage scale instead: self-consistent within a case, since both sides of
+ * every comparison were scaled the same way, but a config no production path
+ * would ever hold. #638's clamp is stated in fractions, so the mismatch had to
+ * be resolved rather than papered over — the fixtures were the wrong half.
+ */
 function makeConfig(overrides: Partial<BreakerConfig> = {}): BreakerConfig {
   return {
-    daily_loss_pct: 3,
+    daily_loss_pct: 0.03,
     // Higher than the portfolio tier in the fixture, so the two tiers are
     // separable in tests: a portfolio-tier breach does not incidentally trip
     // the class tier, and a class-tier breach has to be set up deliberately.
-    daily_loss_pct_by_class: { crypto: 5, stocks: 5 },
-    max_drawdown_pct: 20,
+    daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+    max_drawdown_pct: 0.2,
     max_consecutive_losses: 4,
     volatility: {
       baseline: { crypto: 2, stocks: 1 },
       multiplier: 2,
     },
     auto_rearm: {
-      recovery_drawdown_pct: 10,
+      recovery_drawdown_pct: 0.1,
       max_days_tripped: 5,
     },
     ...overrides,
@@ -69,23 +78,23 @@ describe('CircuitBreakers', () => {
   });
 
   it('trips the daily-loss breaker at the portfolio tier once cumulative loss exceeds threshold', () => {
-    const breakers = new CircuitBreakers(makeConfig({ daily_loss_pct: 3 }));
+    const breakers = new CircuitBreakers(makeConfig({ daily_loss_pct: 0.03 }));
 
     const belowThreshold = breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ daily_pnl: pnl(-2) }) }),
+      makeInput({ portfolio: makePortfolio({ daily_pnl: pnl(-0.02) }) }),
     );
     expect(belowThreshold.portfolio_tripped).toBe(false);
 
     const atThreshold = breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ daily_pnl: pnl(-3.5) }) }),
+      makeInput({ portfolio: makePortfolio({ daily_pnl: pnl(-0.035) }) }),
     );
     expect(atThreshold.portfolio_tripped).toBe(true);
     expect(atThreshold.armed_breakers).toContain('daily_loss_soft');
   });
 
   it('auto-resets the daily-loss breaker once daily PnL recovers (soft, stateless)', () => {
-    const breakers = new CircuitBreakers(makeConfig({ daily_loss_pct: 3 }));
-    breakers.evaluate(makeInput({ portfolio: makePortfolio({ daily_pnl: pnl(-5) }) }));
+    const breakers = new CircuitBreakers(makeConfig({ daily_loss_pct: 0.03 }));
+    breakers.evaluate(makeInput({ portfolio: makePortfolio({ daily_pnl: pnl(-0.05) }) }));
 
     const recovered = breakers.evaluate(
       makeInput({ portfolio: makePortfolio({ daily_pnl: pnl(0) }) }),
@@ -94,7 +103,7 @@ describe('CircuitBreakers', () => {
   });
 
   it('HALTS new entries when the daily figure is unknown, and names why (#333)', () => {
-    const breakers = new CircuitBreakers(makeConfig({ daily_loss_pct: 3 }));
+    const breakers = new CircuitBreakers(makeConfig({ daily_loss_pct: 0.03 }));
     const unknown = { known: false, reason: 'no session-open equity observed' } as const;
 
     const state = breakers.evaluate(
@@ -159,8 +168,8 @@ describe('CircuitBreakers', () => {
         portfolio: makePortfolio({
           daily_pnl: {
             crypto: { known: false, reason: 'no crypto session-open equity observed' },
-            stocks: { known: true, pct: -1 },
-            portfolio: { known: true, pct: -1 },
+            stocks: { known: true, pct: -0.01 },
+            portfolio: { known: true, pct: -0.01 },
           },
         }),
       }),
@@ -175,7 +184,7 @@ describe('CircuitBreakers', () => {
 
   it('halts ONE class on its own daily-loss breach, leaving the other tradeable (#333)', () => {
     const breakers = new CircuitBreakers(
-      makeConfig({ daily_loss_pct: 3, daily_loss_pct_by_class: { crypto: 5, stocks: 5 } }),
+      makeConfig({ daily_loss_pct: 0.03, daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 } }),
     );
 
     // Crypto down 6% while stocks are up 4%. All three figures share one
@@ -186,9 +195,9 @@ describe('CircuitBreakers', () => {
       makeInput({
         portfolio: makePortfolio({
           daily_pnl: {
-            crypto: { known: true, pct: -6 },
-            stocks: { known: true, pct: 4 },
-            portfolio: { known: true, pct: -2 },
+            crypto: { known: true, pct: -0.06 },
+            stocks: { known: true, pct: 0.04 },
+            portfolio: { known: true, pct: -0.02 },
           },
         }),
       }),
@@ -201,7 +210,7 @@ describe('CircuitBreakers', () => {
 
   it('keeps the account-wide floor: a portfolio breach halts everything regardless of class', () => {
     const breakers = new CircuitBreakers(
-      makeConfig({ daily_loss_pct: 3, daily_loss_pct_by_class: { crypto: 5, stocks: 5 } }),
+      makeConfig({ daily_loss_pct: 0.03, daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 } }),
     );
 
     // Both classes inside their own 5% tier, portfolio through its 3% floor.
@@ -211,9 +220,9 @@ describe('CircuitBreakers', () => {
       makeInput({
         portfolio: makePortfolio({
           daily_pnl: {
-            crypto: { known: true, pct: -4 },
-            stocks: { known: true, pct: -4 },
-            portfolio: { known: true, pct: -4 },
+            crypto: { known: true, pct: -0.04 },
+            stocks: { known: true, pct: -0.04 },
+            portfolio: { known: true, pct: -0.04 },
           },
         }),
       }),
@@ -226,13 +235,13 @@ describe('CircuitBreakers', () => {
 
   it('recomputes the per-class tier every call — non-sticky, like the rest of the soft tier', () => {
     const breakers = new CircuitBreakers(
-      makeConfig({ daily_loss_pct: 3, daily_loss_pct_by_class: { crypto: 5, stocks: 5 } }),
+      makeConfig({ daily_loss_pct: 0.03, daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 } }),
     );
     const breached = makePortfolio({
       daily_pnl: {
-        crypto: { known: true, pct: -6 },
+        crypto: { known: true, pct: -0.06 },
         stocks: { known: true, pct: 0 },
-        portfolio: { known: true, pct: -3 },
+        portfolio: { known: true, pct: -0.03 },
       },
     });
 
@@ -247,7 +256,7 @@ describe('CircuitBreakers', () => {
 
   it('joins the volatility halt rather than replacing it — either source halts the class', () => {
     const breakers = new CircuitBreakers(
-      makeConfig({ daily_loss_pct: 3, daily_loss_pct_by_class: { crypto: 5, stocks: 5 } }),
+      makeConfig({ daily_loss_pct: 0.03, daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 } }),
     );
 
     // Crypto through its daily-loss tier; stocks through the volatility tier.
@@ -258,9 +267,9 @@ describe('CircuitBreakers', () => {
         volatility: { crypto: 1, stocks: 5 },
         portfolio: makePortfolio({
           daily_pnl: {
-            crypto: { known: true, pct: -6 },
+            crypto: { known: true, pct: -0.06 },
             stocks: { known: true, pct: 0 },
-            portfolio: { known: true, pct: -2 },
+            portfolio: { known: true, pct: -0.02 },
           },
         }),
       }),
@@ -272,10 +281,10 @@ describe('CircuitBreakers', () => {
   });
 
   it('leaves daily_pnl_unknown unarmed when the figure is known', () => {
-    const breakers = new CircuitBreakers(makeConfig({ daily_loss_pct: 3 }));
+    const breakers = new CircuitBreakers(makeConfig({ daily_loss_pct: 0.03 }));
 
     const state = breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ daily_pnl: pnl(-1) }) }),
+      makeInput({ portfolio: makePortfolio({ daily_pnl: pnl(-0.01) }) }),
     );
 
     expect(state.armed_breakers).not.toContain('daily_pnl_unknown');
@@ -306,20 +315,20 @@ describe('CircuitBreakers', () => {
   it('holds the hard drawdown trip anywhere inside the hysteresis band, and clears below it', () => {
     const breakers = new CircuitBreakers(
       makeConfig({
-        max_drawdown_pct: 20,
-        auto_rearm: { recovery_drawdown_pct: 10, max_days_tripped: 999 },
+        max_drawdown_pct: 0.2,
+        auto_rearm: { recovery_drawdown_pct: 0.1, max_days_tripped: 999 },
       }),
     );
 
     // Inside the band but never tripped: state is untripped and stays so, so
     // the band itself is not what arms the breaker.
     const belowThreshold = breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ drawdown_pct: 15 }) }),
+      makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.15 }) }),
     );
     expect(belowThreshold.portfolio_tripped).toBe(false);
 
     const tripped = breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ drawdown_pct: 22 }) }),
+      makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.22 }) }),
     );
     expect(tripped.portfolio_tripped).toBe(true);
     expect(tripped.armed_breakers).toContain('portfolio_drawdown_hard');
@@ -327,13 +336,13 @@ describe('CircuitBreakers', () => {
     // Same 15% reading as the first call, opposite verdict — that asymmetry
     // IS the hysteresis. A partial recovery does not resume trading.
     const insideBand = breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ drawdown_pct: 15 }) }),
+      makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.15 }) }),
     );
     expect(insideBand.portfolio_tripped).toBe(true);
     expect(insideBand.armed_breakers).toContain('portfolio_drawdown_hard');
 
     const belowBand = breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ drawdown_pct: 5 }) }),
+      makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.05 }) }),
     );
     expect(belowBand.portfolio_tripped).toBe(false);
     expect(belowBand.armed_breakers).not.toContain('portfolio_drawdown_hard');
@@ -352,19 +361,19 @@ describe('CircuitBreakers', () => {
   ] as const)('auto-re-arms the hard drawdown breaker on recovery in %s mode — ADR-0013 left no operator to call reArm()', (mode) => {
     const breakers = new CircuitBreakers(
       makeConfig({
-        max_drawdown_pct: 20,
-        auto_rearm: { recovery_drawdown_pct: 10, max_days_tripped: 999 },
+        max_drawdown_pct: 0.2,
+        auto_rearm: { recovery_drawdown_pct: 0.1, max_days_tripped: 999 },
       }),
     );
-    breakers.evaluate(makeInput({ portfolio: makePortfolio({ drawdown_pct: 25 }), mode }));
+    breakers.evaluate(makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.25 }), mode }));
 
     const insideBand = breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ drawdown_pct: 15 }), mode }),
+      makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.15 }), mode }),
     );
     expect(insideBand.portfolio_tripped).toBe(true);
 
     const recovered = breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ drawdown_pct: 5 }), mode }),
+      makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.05 }), mode }),
     );
     expect(recovered.portfolio_tripped).toBe(false);
   });
@@ -381,13 +390,13 @@ describe('CircuitBreakers', () => {
   ] as const)('does NOT re-arm on elapsed time alone in %s mode while the drawdown persists', (mode) => {
     const breakers = new CircuitBreakers(
       makeConfig({
-        max_drawdown_pct: 20,
-        auto_rearm: { recovery_drawdown_pct: 10, max_days_tripped: 1 },
+        max_drawdown_pct: 0.2,
+        auto_rearm: { recovery_drawdown_pct: 0.1, max_days_tripped: 1 },
       }),
     );
     breakers.evaluate(
       makeInput({
-        portfolio: makePortfolio({ drawdown_pct: 25 }),
+        portfolio: makePortfolio({ drawdown_pct: 0.25 }),
         mode,
         clock: makeClock('2026-07-01T00:00:00Z'),
       }),
@@ -397,7 +406,7 @@ describe('CircuitBreakers', () => {
     // this many times over in backtest.
     const stillTripped = breakers.evaluate(
       makeInput({
-        portfolio: makePortfolio({ drawdown_pct: 25 }),
+        portfolio: makePortfolio({ drawdown_pct: 0.25 }),
         mode,
         clock: makeClock('2026-08-01T00:00:00Z'),
       }),
@@ -412,16 +421,16 @@ describe('CircuitBreakers', () => {
     // condition would hold the trip indefinitely, and reArm() releases anyway.
     const breakers = new CircuitBreakers(
       makeConfig({
-        max_drawdown_pct: 20,
-        auto_rearm: { recovery_drawdown_pct: 10, max_days_tripped: 999 },
+        max_drawdown_pct: 0.2,
+        auto_rearm: { recovery_drawdown_pct: 0.1, max_days_tripped: 999 },
       }),
     );
-    breakers.evaluate(makeInput({ portfolio: makePortfolio({ drawdown_pct: 25 }) }));
+    breakers.evaluate(makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.25 }) }));
 
     breakers.reArm();
 
     const cleared = breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ drawdown_pct: 15 }) }),
+      makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.15 }) }),
     );
     expect(cleared.portfolio_tripped).toBe(false);
   });
@@ -430,13 +439,13 @@ describe('CircuitBreakers', () => {
     // reArm() is not an override of the UPPER edge — the trip test runs first
     // in every `evaluate()`, so releasing at a still-breaching drawdown buys
     // exactly one call. Pinned because the docblock says so.
-    const breakers = new CircuitBreakers(makeConfig({ max_drawdown_pct: 20 }));
-    breakers.evaluate(makeInput({ portfolio: makePortfolio({ drawdown_pct: 25 }) }));
+    const breakers = new CircuitBreakers(makeConfig({ max_drawdown_pct: 0.2 }));
+    breakers.evaluate(makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.25 }) }));
 
     breakers.reArm();
 
     const reTripped = breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ drawdown_pct: 25 }) }),
+      makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.25 }) }),
     );
     expect(reTripped.portfolio_tripped).toBe(true);
     expect(reTripped.armed_breakers).toContain('portfolio_drawdown_hard');
@@ -444,34 +453,34 @@ describe('CircuitBreakers', () => {
 
   it('auto-re-arms the hard drawdown breaker under the backtest mode flag once recovered', () => {
     const config = makeConfig({
-      max_drawdown_pct: 20,
-      auto_rearm: { recovery_drawdown_pct: 10, max_days_tripped: 999 },
+      max_drawdown_pct: 0.2,
+      auto_rearm: { recovery_drawdown_pct: 0.1, max_days_tripped: 999 },
     });
     const breakers = new CircuitBreakers(config);
     breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ drawdown_pct: 25 }), mode: 'backtest' }),
+      makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.25 }), mode: 'backtest' }),
     );
 
     const stillAboveRecovery = breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ drawdown_pct: 15 }), mode: 'backtest' }),
+      makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.15 }), mode: 'backtest' }),
     );
     expect(stillAboveRecovery.portfolio_tripped).toBe(true);
 
     const recovered = breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ drawdown_pct: 5 }), mode: 'backtest' }),
+      makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.05 }), mode: 'backtest' }),
     );
     expect(recovered.portfolio_tripped).toBe(false);
   });
 
   it('auto-re-arms the hard drawdown breaker in backtest mode after the configured day timeout', () => {
     const config = makeConfig({
-      max_drawdown_pct: 20,
+      max_drawdown_pct: 0.2,
       auto_rearm: { recovery_drawdown_pct: 0, max_days_tripped: 3 },
     });
     const breakers = new CircuitBreakers(config);
     breakers.evaluate(
       makeInput({
-        portfolio: makePortfolio({ drawdown_pct: 25 }),
+        portfolio: makePortfolio({ drawdown_pct: 0.25 }),
         mode: 'backtest',
         clock: makeClock('2026-07-01T00:00:00Z'),
       }),
@@ -479,7 +488,7 @@ describe('CircuitBreakers', () => {
 
     const beforeTimeout = breakers.evaluate(
       makeInput({
-        portfolio: makePortfolio({ drawdown_pct: 25 }),
+        portfolio: makePortfolio({ drawdown_pct: 0.25 }),
         mode: 'backtest',
         clock: makeClock('2026-07-02T00:00:00Z'),
       }),
@@ -488,7 +497,7 @@ describe('CircuitBreakers', () => {
 
     const afterTimeout = breakers.evaluate(
       makeInput({
-        portfolio: makePortfolio({ drawdown_pct: 25 }),
+        portfolio: makePortfolio({ drawdown_pct: 0.25 }),
         mode: 'backtest',
         clock: makeClock('2026-07-05T00:00:00Z'),
       }),
@@ -542,14 +551,14 @@ describe('CircuitBreakers — hysteresis band validation (#634)', () => {
    * indistinguishable from never having been breached.
    */
   it.each([
-    { recovery: 20, label: 'equal to the trip level (zero-width band)' },
-    { recovery: 25, label: 'above the trip level (inverted band)' },
+    { recovery: 0.2, label: 'equal to the trip level (zero-width band)' },
+    { recovery: 0.25, label: 'above the trip level (inverted band)' },
   ])('refuses a config whose recovery threshold is $label', ({ recovery }) => {
     expect(
       () =>
         new CircuitBreakers(
           makeConfig({
-            max_drawdown_pct: 20,
+            max_drawdown_pct: 0.2,
             auto_rearm: { recovery_drawdown_pct: recovery, max_days_tripped: 5 },
           }),
         ),
@@ -561,11 +570,15 @@ describe('CircuitBreakers — hysteresis band validation (#634)', () => {
       () =>
         new CircuitBreakers(
           makeConfig({
-            max_drawdown_pct: 0.3,
-            auto_rearm: { recovery_drawdown_pct: 0.3, max_days_tripped: 5 },
+            // Both edges inside #638's clamp, so this case still exercises the
+            // WIDTH check rather than tripping the bounds check first —
+            // `0.3` on the recovery edge is now refused for crossing its own
+            // ceiling, which is a different (and correct) complaint.
+            max_drawdown_pct: 0.25,
+            auto_rearm: { recovery_drawdown_pct: 0.25, max_days_tripped: 5 },
           }),
         ),
-    ).toThrow(/\(0\.3\).*\(0\.3\)/s);
+    ).toThrow(/\(0\.25\).*\(0\.25\)/s);
   });
 
   it('accepts the shipped paper values — the guard bounds the band, it does not forbid one', () => {
@@ -599,11 +612,11 @@ describe('CircuitBreakers — crash-restart persistence (#203)', () => {
   });
 
   it('survives a fresh CircuitBreakers instance constructed from a persisted hard-drawdown trip', () => {
-    const config = makeConfig({ max_drawdown_pct: 20 });
+    const config = makeConfig({ max_drawdown_pct: 0.2 });
     const before = new CircuitBreakers(config);
     before.evaluate(
       makeInput({
-        portfolio: makePortfolio({ drawdown_pct: 25 }),
+        portfolio: makePortfolio({ drawdown_pct: 0.25 }),
         clock: makeClock('2026-07-10T00:00:00Z'),
       }),
     );
@@ -628,7 +641,7 @@ describe('CircuitBreakers — crash-restart persistence (#203)', () => {
     // from "the trip was re-derived from the current drawdown".
     const after = new CircuitBreakers(config, persisted);
     const stillTripped = after.evaluate(
-      makeInput({ portfolio: makePortfolio({ drawdown_pct: 15 }), mode: 'live' }),
+      makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.15 }), mode: 'live' }),
     );
 
     expect(stillTripped.portfolio_tripped).toBe(true);
@@ -658,9 +671,9 @@ describe('CircuitBreakers — crash-restart persistence (#203)', () => {
   });
 
   it('a re-armed/released breaker persists as cleared for the next restart', () => {
-    const config = makeConfig({ max_drawdown_pct: 20 });
+    const config = makeConfig({ max_drawdown_pct: 0.2 });
     const before = new CircuitBreakers(config);
-    before.evaluate(makeInput({ portfolio: makePortfolio({ drawdown_pct: 25 }) }));
+    before.evaluate(makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.25 }) }));
     before.reArm();
 
     const persisted = before.getPersistedState();

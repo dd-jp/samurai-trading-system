@@ -4,7 +4,7 @@
 **Scope:** `server/providers/market-data-service/indicators.ts` and the three live `IndicatorSpec`s
 that consume it. Step **B1** of the intraday build sequence, under wayfinder map
 [#703](https://github.com/dd-jp/samurai-trading-system/issues/703).
-**Status:** OPEN — F1 and F2 are pinned by tests and are not yet acted on; F2 is owned by step B2 and tracked as [#722](https://github.com/dd-jp/samurai-trading-system/issues/722). *(Issue filed 2026-08-16: "owned by step B2" pointed at no ticket, which made a measured defect in a live signal a silent deferral rather than a tracked one. F3 is noted there and still has no issue of its own.)*
+**Status:** OPEN — **F2 is CLOSED** ([#722](https://github.com/dd-jp/samurai-trading-system/issues/722), 2026-08-17): `RSI_SPEC` now asks for the converged warm-up, and the after-figures are recorded beside the before-figures in F2 below. **F3 is CLOSED** ([#725](https://github.com/dd-jp/samurai-trading-system/issues/725), 2026-08-17): `rsi` now special-cases the `avgGain === 0 && avgLoss === 0` window, and the resolution is recorded beside the finding in F3 below. F1 remains open for the two ATR specs, which still sit on the floor. *(Issue filed 2026-08-16: "owned by step B2" pointed at no ticket, which made a measured defect in a live signal a silent deferral rather than a tracked one.)*
 
 ## Why this review happened before anything else was built
 
@@ -47,13 +47,14 @@ cases a random walk never produces and where seeding conventions bite.
 
 ## Findings
 
-### F1 — The live "RSI(14)" is not Wilder's RSI. It is the seed. *(open)*
+### F1 — The live "RSI(14)" was not Wilder's RSI. It was the seed. *(open for ATR; RSI fixed by #722)*
 
-`RSI_SPEC` carries `lookback: 15` with `params.period: 14`, which is exactly `minimumBarsFor`. At
-that width `changes.slice(period)` is empty, so **`rsi`'s smoothing loop executes zero times in
-production**. The value the debate reads is the simple-mean seed — Cutler's RSI — not the Wilder
-RSI the surrounding doc comments describe. The same holds for `atrIndicatorSpec(14)` and
-`DEFAULT_VOLATILITY_INDICATOR`, both `lookback: 15`.
+`RSI_SPEC` carried `lookback: 15` with `params.period: 14`, which is exactly `minimumBarsFor`. At
+that width `changes.slice(period)` is empty, so **`rsi`'s smoothing loop executed zero times in
+production**. The value the debate read was the simple-mean seed — Cutler's RSI — not the Wilder
+RSI the surrounding doc comments describe. `RSI_SPEC` now asks for 57 bars (see F2's resolution),
+so the RSI half of this is closed. The same still holds for `atrIndicatorSpec(14)` and
+`DEFAULT_VOLATILITY_INDICATOR`, both `lookback: 15`, and that half stays open.
 
 For ATR this was **already known and already pinned**: `trader/atr-equivalence.test.ts` says so in
 as many words, and this review does not re-file it. For RSI nothing said so anywhere.
@@ -62,42 +63,117 @@ This is not a defect in `indicators.ts` — the arithmetic is correct for the wi
 agrees with the independent reference on all 32 golden cases. It is a **warm-up** choice that lives
 in the spec.
 
-### F2 — The missing warm-up flips the analyst's classification on ~18% of bars. *(open, owned by B2)*
+### F2 — The missing warm-up flipped the analyst's classification on ~18% of bars. *(CLOSED by #722)*
 
 Measured over the fixture's ordinary random-walk region (the synthetic segments excluded, since
-they would inflate every number), comparing RSI(14) at the live `lookback: 15` against RSI(14) at a
-converged 200-bar warm-up on the same bar:
+they would inflate every number), comparing RSI(14) against RSI(14) at a converged 200-bar warm-up
+on the same bar. The **floor** column is the original measurement, at the `lookback: 15` the live
+spec carried when this review was written; the **converged** column is the same measurement re-run
+after #722 re-pointed `RSI_SPEC` at `recommendedWarmupFor` (`4 x period + 1` = 57 bars). Both are
+produced by `rsi-warmup.test.ts`, which now pins both halves rather than retargeting the first.
 
-| Quantity | Value |
-|---|---|
-| Median shift | **4.6 RSI points** |
-| p90 shift | **12.0 RSI points** |
-| Bars where the 70/30 overbought/oversold classification flips | **18%** (25 of 141) |
-| Maximum swing in `confidenceFrom` | **> 4x** |
+| Quantity | Floor (`lookback: 15`) | Converged (`lookback: 57`) |
+|---|---|---|
+| Median shift | **4.60 RSI points** | **0.23 RSI points** |
+| p90 shift | **11.97 RSI points** | **0.55 RSI points** |
+| Worst bar in the region | 17.66 RSI points | 0.94 RSI points |
+| Bars where the 70/30 overbought/oversold classification flips | **17.7%** (25 of 141) | **0.7%** (1 of 141) |
+| Maximum swing in `confidenceFrom` | **4.52x** | **1.17x** |
+| Mean `confidenceFrom` over the region | 0.240 | 0.197 (200-bar: 0.195) |
+
+The flip rate is ~0 rather than exactly 0, and the test asserts `<= 1` rather than `=== 0`
+deliberately: a bar sitting a fraction of a point from 70 can still land on the other side of the
+line at 57 bars versus 200. Convergence is a claim about the distribution, not about every draw —
+which is also why the converged column's worst bar (0.94) is *not* better than the floor's best
+(0.056). A seed can hit the converged value by luck; what it cannot do is hit it reliably.
 
 `directionFrom` gates on 70/30 and `confidenceFrom` is `|rsi − 50| / 50`, so this is not an
 abstraction: nearly one bar in five, the analyst's `direction` and the weight the debate gives it
 both depend on a history length nobody chose.
 
-**Status after B2:** the dial now exists — `recommendedWarmupFor(spec)` returns `4 × period + 1`
-for the recursive kinds and `minimumBarsFor` for `sma`, which is warm-up-blind. It is a **new
-export with no production caller**, and `minimumBarsFor` was deliberately not raised: it is the
-fabrication floor, `decide.ts:126` pre-checks against it, and raising it would turn "this number
-would be better with more history" into "this instrument cannot trade".
+**Status after B2:** the dial exists — `recommendedWarmupFor(spec)` returns `4 × period + 1` for
+the recursive kinds and `minimumBarsFor` for `sma`, which is warm-up-blind. `minimumBarsFor` was
+deliberately not raised then and is not raised now: it is the fabrication floor, `decide.ts:126`
+pre-checks against it, and raising it would turn "this number would be better with more history"
+into "this instrument cannot trade". A cold instrument holding 20 bars still gets a (less-warm)
+RSI rather than no view at all.
 
-So F2 stays **open**. Re-pointing `RSI_SPEC` at the recommendation reprices every technical
-opinion in the system at once, which is a decision for the wayfinder map rather than a side effect
-of adding the function. `indicator-registry.test.ts` pins both halves: that the recommendation
-converges (within 0.5 RSI points of a 200-bar warm-up, where the floor is strictly further away),
-and that all three live specs still sit on the floor — so adopting it will be a visible change to
-that assertion rather than a quiet one.
+**Resolution (#722, 2026-08-17): adopt.** The alternative — keeping the floor and renaming the
+series to Cutler's — was rejected by the owner: at `lookback: 15` the Wilder recursion has not
+converged, so the number is a function of where the window happens to start. That is a warm-up
+artefact, not a defensible alternative convention. Re-pointing `RSI_SPEC` reprices every technical
+opinion in the system at once, and that cost was accepted knowingly.
 
-### F3 — A dead-flat window reads as maximum-confidence overbought. *(open, low frequency)*
+What moved with it:
+
+- `RSI_SPEC.lookback` is composed from `recommendedWarmupFor` rather than written as `57`, so the
+  spec cannot drift away from the function that justifies it.
+- `indicator-registry.test.ts`'s pinning assertion — which existed precisely so this adoption would
+  be visible rather than quiet — now asserts convergence for RSI and the floor for SMA and ATR
+  separately. The companion assertion that the recommendation converges within 0.5 RSI points of a
+  200-bar warm-up is untouched.
+- `WARM_START_WINDOWS` (`backfill-market-data.ts`) went `1h`/20 → `1h`/57. Without it the adoption
+  would have been inert on the path that matters most: a warm-started store holding 20 bars serves
+  20, and `computeIndicator` computes a 20-bar RSI on the first tick without throwing, since 20
+  clears the floor.
+- The smoke fixture's RSI moved 63.16 → 68.52 and the run still transacts end to end. The close
+  cycle was **not** re-tuned to restore 63.16 — that number was the artefact this change removed —
+  but the margin to the overbought gate is now 1.48 points rather than 6.84, which is recorded in
+  `smoke-run.ts` rather than padded.
+
+**ATR is out of scope and still on the floor.** `atrIndicatorSpec(14)` and
+`DEFAULT_VOLATILITY_INDICATOR` carry the identical gap (F1); moving them reprices every stop in the
+system rather than every opinion, and `trader/atr-equivalence.test.ts` still owns it.
+
+### F3 — A dead-flat window reads as maximum-confidence overbought. *(CLOSED by #725)*
 
 `avgLoss === 0` returns 100 without checking whether `avgGain` is also 0. On a strictly rising
 window that is the standard answer; on a halted or auction-flat instrument the analyst reports
 `confidence: 0.95` on a tape that did not move. `direction` is safely `neutral` (last close equals
-the SMA exactly), so this inflates certainty rather than inventing a side. Pinned, not changed.
+the SMA exactly), so this inflates certainty rather than inventing a side. Pinned, not changed —
+at the time this review was written.
+
+**Resolution (#725, 2026-08-17): return 50, not throw.** `rsi` now checks
+`avgGain === 0 && avgLoss === 0` before the pre-existing `avgLoss === 0` branch and answers the
+neutral midpoint 50 rather than falling into the same 100 a strictly rising window gets. A strictly
+rising window (`avgGain > 0 && avgLoss === 0`) is unaffected and still answers 100.
+
+Two options were on the table — return 50, or refuse (throw) — and 50 was taken. Refusing would
+forfeit the instrument for the tick: the technical analyst is `mandatory`
+(`technical-analyst.ts`), so a throw from `computeIndicator` escalates to a per-instrument
+`quorum_skip` (traced in `computeIndicator`'s own doc comment in `indicators.ts`), the same
+posture #319 gives a genuinely too-short window. A flat tape during an auction or a halt is not
+that — it is a real, expected market state on the live LSE leveraged-ETP universe (ADR-0016), not
+a data error, so treating it as an exception the instrument cannot trade through was judged the
+wrong posture. 50 is also not an arbitrary placeholder: it is the exact value `confidenceFrom`
+(`|rsi − 50| / 50`, clamped to `[0.05, 0.95]`) already treats as "no information", so the fix reads
+as "tell the truth about not knowing" rather than "invent a number".
+
+Measured before/after on a strictly flat window (`FLAT` fixture, `technical-analyst.test.ts`):
+
+| Quantity | Before | After |
+|---|---|---|
+| `rsi.value` | 100 | 50 |
+| `confidenceFrom(rsi.value)` | 0.95 | 0.05 |
+| `direction` | `neutral` | `neutral` (unchanged) |
+
+`direction` does not move — `directionFrom` gates on `lastClose` vs `sma` and the 70/30 RSI bands,
+and a flat window already lands in neither the bullish nor bearish arm regardless of which RSI
+branch fires — so the fix is confidence-only, which is exactly the half of F3 that mattered: the
+debate was never told to buy a halted instrument, but it was told to listen to it at near-maximum
+volume.
+
+**Other `0/0` sites checked and not found.** `sma` and `ema` divide by a bar/window count that
+`minimumBarsFor` already guarantees is `>= 1`; `atr`'s seed divides by `seedRanges.length`, the
+same guaranteed-nonzero count (F4 already records this asymmetry as unreachable for a different
+reason). `rsi`'s `avgGain / avgLoss` is the only division in this module where BOTH sides can
+independently be zero — every other division here is a mean over a non-empty count, not a ratio of
+two independently-zeroable accumulators. No sibling issue is filed; there is no sibling defect.
+
+Fixture: `flat_dojis_rsi_14` (pre-existing, now asserts 50 rather than 100) and the new
+`flat_dojis_rsi_5` (same dead-flat segment, a different period, confirming the 50 does not depend
+on width) in `__fixtures__/indicator-golden.json`, regenerated from
+`generate-indicator-golden.py`.
 
 ### F4 — `atr`'s seed divisor asymmetry is unreachable, not a bug. *(closed by inspection)*
 
@@ -173,6 +249,51 @@ code at all, which is not true and was never the claim, so it is stated precisel
 | `indicators.ts` | The two parallel `switch`es became one `Record<IndicatorKind, IndicatorDefinition>`; `recommendedWarmupFor` added | B2. The registry's `seedBars` reproduce the old switch arity exactly and delegate to the same helpers; `recommendedWarmupFor` gives F2 a number and has no production caller by design. |
 | `production/stocks-tick-window.ts` | The entry window ∪ flatten tail composition | **F5, and this one IS production.** It is a defect fix, not a characterisation — it restores flat-by-close, which the A3 entry window had switched off. Listed here rather than buried because "no production change" would be false without it. |
 
-`minimumBarsFor` is deliberately NOT raised, so the live specs still sit on the fabrication floor and
-the debate still reads Cutler's RSI. F2 stays open; adopting `recommendedWarmupFor` is B2's call and
-a visible change to `indicator-registry.test.ts`'s pinning assertion.
+`minimumBarsFor` is deliberately NOT raised, so it still answers the arity question alone.
+
+## What changed in the #722 pass (2026-08-17)
+
+| Changed | What | Why |
+| --- | --- | --- |
+| `technical-analyst.ts` | `RSI_SPEC.lookback` composed from `recommendedWarmupFor` (15 → 57) | The adoption itself. **This one IS production and it moves a live number.** |
+| `indicator-registry.test.ts` | The floor-pinning assertion split: RSI asserts convergence, SMA/ATR assert the floor | The assertion was built to fail here. It did. |
+| `rsi-warmup.test.ts` | The three "what it costs" measurements now name `minimumBarsFor` explicitly, and a second set measures the live spec beside them | Retargeting the first set at `RSI_SPEC` would have turned the evidence for the change into a restatement of the change. |
+| `backfill-market-data.ts` | `WARM_START_WINDOWS` `1h`/20 → `1h`/57, and its derivation prose | Without it a warm-started store serves 20 bars and the first tick computes a 20-bar RSI without complaint. |
+| `smoke-run.ts` / `smoke-run.test.ts` | The 63.16 → 68.52 repricing recorded; the test recomputes from `RSI_SPEC`/`SMA_SPEC` rather than hand-built literals | The literals pinned `lookback: 15` while feeding 60 bars, so they agreed with the analyst only by accident. |
+
+### Thresholds re-checked against the unbiased series
+
+A threshold fitted to a biased input is not automatically valid against an unbiased one, so every
+threshold downstream of the RSI was re-checked rather than carried forward silently.
+
+- **`RSI_OVERBOUGHT` 70 / `RSI_OVERSOLD` 30** — conventional Wilder levels, not fitted to anything
+  this system measured. They were, if anything, *mis*applied to a series that was not Wilder's;
+  they are now applied to one that is. Carried forward deliberately.
+- **`confidenceFrom` = `|rsi − 50| / 50`, clamped to [0.05, 0.95]** — a formula, not a fit, and
+  unchanged. Its **output distribution moves**: over the measurement region the mean technical
+  confidence falls from **0.240 to 0.197** (−18%), because a converged RSI sits closer to 50 than a
+  seed does. The technical analyst now speaks proportionally more quietly into every debate.
+- **`traderConfig.conviction_floor` 0.55 — NOT re-derived, and named rather than assumed safe.**
+  Analyst confidence feeds `computeEvidenceStrength`'s `avgConfidence`, so a systematically quieter
+  technical analyst lowers conviction on exactly the desk shape [#625](https://github.com/dd-jp/samurai-trading-system/issues/625)
+  found pinned at a 0.5478 ceiling against this 0.55 floor. 0.55 is a spec constant rather than a
+  number fitted to RSI output, so nothing here invalidates it — but the headroom above it just got
+  smaller, and re-deriving it needs a soak against the converged series, not a unit test.
+- **ATR-derived stops, the volatility breaker, `min_bars`, `adv_window`, the correlation window** —
+  none read the RSI. Unaffected.
+
+## What changed in the #725 pass (2026-08-17)
+
+| Changed | What | Why |
+| --- | --- | --- |
+| `indicators.ts` | `rsi` gained an `avgGain === 0 && avgLoss === 0` branch, checked before the pre-existing `avgLoss === 0` one, returning 50 instead of falling through to 100 | The fix itself. **This one IS production and it moves a live number** — the RSI value AND the `confidence` derived from it, on any flat window. |
+| `generate-indicator-golden.py` | `_rsi_from` gained the same branch; `flat_dojis_rsi_14`'s note and expected value updated (100 → 50); new `flat_dojis_rsi_5` case added | The reference must special-case the same shape or it would disagree with a correct `indicators.ts` rather than agree with a buggy one. |
+| `indicator-golden.json` | Regenerated — `flat_dojis_rsi_14.expected` 100 → 50, `flat_dojis_rsi_5` added | Generated, not hand-edited; `git diff --exit-code` after regenerating is CI's guard. |
+| `indicator-golden.test.ts` | `flat_dojis_rsi_14`'s assertion moved out of "conventions that read as bugs and are not" into a new "the flat-tape fix (#725)" block asserting 50; `flat_dojis_rsi_5` pinned alongside it | The old framing ("this reads like a bug and isn't") stopped being true for the flat case — it now IS the fix, not a documented quirk. `rising_run_rsi_14` (avgGain > 0) stays in the original block; it is unaffected. |
+| `indicator.test.ts` | New case: `getIndicator` over a strictly flat 20-bar window returns `rsi.value === 50` | Service-level coverage of the same shape, independent of the golden fixture. |
+| `technical-analyst.test.ts` | New case: the analyst run over a flat 60-bar window reports `RSI(14)=50` and `confidence === confidenceFrom(50) ≈ 0.05`, `direction === 'neutral'` | The issue's actual complaint was `confidence`, not the RSI number alone — this is the assertion that closes it. |
+
+**Other `0/0` sites checked, none found.** See F3's resolution above for the full reasoning; `sma`,
+`ema`, and `atr`'s seed all divide by a bar count `minimumBarsFor` already guarantees is non-zero,
+never by a ratio of two independently-zeroable accumulators the way `rsi`'s `avgGain / avgLoss` is.
+No follow-up issue filed.

@@ -226,9 +226,10 @@ describe('RotatingFileSink — degradation (never throws into a tick)', () => {
 
   it('does not let a throwing onFailure escape into the caller', () => {
     // Raised in review on #349, and real: `onFailure` is `warnOnStdout`, and
-    // `process.stdout.write` throws EPIPE when the far end of the pipe goes
-    // away — routine for a long-running process someone attached to and
-    // detached from. Without this, a *file* failure would be converted into an
+    // stdout can be dead — routine for a long-running process someone attached
+    // to and detached from. (On a pipe that surfaces asynchronously rather
+    // than as this throw; see `watchStdoutErrors`. A file or TTY stdout throws
+    // here.) Without this, a *file* failure would be converted into an
     // exception thrown out of `write()` and straight into a tick, which is the
     // one thing this class must never do.
     const filePath = join(dir, 'orchestrator.log');

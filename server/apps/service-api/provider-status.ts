@@ -39,7 +39,7 @@
  * market-data key is what stalls the pipeline at `analysts: quorum_skip`.
  */
 
-import type { AlpacaClient } from '../../pipeline/execution/adapters/alpaca-client.js';
+import type { AlpacaBrokerClient } from '../../pipeline/execution/adapters/alpaca-client.js';
 import { fetchWithTimeout } from '../../shared/http/fetch-with-timeout.js';
 
 /**
@@ -49,7 +49,7 @@ import { fetchWithTimeout } from '../../shared/http/fetch-with-timeout.js';
  *
  * The split is along behavior: everything below this line does live HTTP
  * probing and holds mutable in-memory state, and none of it can cross to a
- * browser. `ProviderStatusPoller` in particular reaches `AlpacaClient` in
+ * browser. `ProviderStatusPoller` in particular reaches `AlpacaBrokerClient` in
  * `server/pipeline/execution/`, so moving it would have dragged the broker adapter types
  * into the client's TypeScript program — the opposite of the point.
  */
@@ -144,7 +144,7 @@ function swallow(): void {}
  * Bounds a promise that this module cannot bound from the inside.
  *
  * The Polygon probe gets its deadline from `fetchWithTimeout`, but the Alpaca
- * probe goes through the injected `AlpacaClient` interface, which promises
+ * probe goes through the injected `AlpacaBrokerClient` interface, which promises
  * nothing about timeouts — the real `AlpacaHttpBrokerClient` has its own, a
  * different implementation need not. Without this, one hung `getAccount()`
  * leaves `pollOnce` pending forever, and because the two probes share a
@@ -178,7 +178,7 @@ function stateForStatus(status: number): ProviderState {
 
 export interface ProviderStatusPollerOptions {
   /**
-   * The same `AlpacaClient` the broker adapter uses. Omit to render Alpaca as
+   * The same `AlpacaBrokerClient` the broker adapter uses. Omit to render Alpaca as
    * `not_configured` — a dashboard started without trading credentials still
    * works, it just cannot show a balance.
    */
@@ -186,7 +186,7 @@ export interface ProviderStatusPollerOptions {
   // `exactOptionalPropertyTypes` the two differ, and the caller
   // (dashboard/index.ts) passes the result of a build that returns `undefined`
   // when credentials are missing — which is the normal case here, not an edge.
-  alpaca?: AlpacaClient | undefined;
+  alpaca?: AlpacaBrokerClient | undefined;
   /** Defaults to `process.env.POLYGON_API_KEY`; absent renders Polygon as `not_configured`. */
   polygonApiKey?: string;
   polygonBaseUrl?: string;
@@ -205,7 +205,7 @@ export interface ProviderStatusPollerOptions {
 export class ProviderStatusPoller implements ProviderStatusReader {
   private panel: ProviderStatusPanel = NOT_YET_POLLED;
   private timer: NodeJS.Timeout | undefined;
-  private readonly alpaca: AlpacaClient | undefined;
+  private readonly alpaca: AlpacaBrokerClient | undefined;
   private readonly polygonApiKey: string | undefined;
   private readonly polygonBaseUrl: string;
   private readonly intervalMs: number;

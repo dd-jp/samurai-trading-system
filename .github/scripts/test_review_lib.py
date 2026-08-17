@@ -640,13 +640,19 @@ def test_duplicate_detection_survives_the_string_coercion():
 
 
 def test_error_text_is_scrubbed_before_it_can_be_published():
+    # `sk-FAKE…` — not a realistic key shape, so it can't trip secret
+    # scanning or push protection, while staying >=32 chars so the
+    # high-entropy redaction rule still fires on it (#610 item 4).
     leaky = (
-        "502 from https://gw.internal/v1/chat?api_key=sk-abcd1234efgh5678ijkl9012mnop3456 "
-        "(Authorization: Bearer sk-live-9f8e7d6c5b4a3210zyxwvutsrqponmlk) upstream refused"
+        "502 from https://gw.internal/v1/chat?api_key=sk-FAKEabcd1234efgh5678ijkl9012mnop3456 "
+        "(Authorization: Bearer sk-FAKElive9f8e7d6c5b4a3210zyxwvutsrqponmlk) upstream refused"
     )
     scrubbed = review_lib.safe_error_text(RuntimeError(leaky))
 
-    for secret in ("sk-abcd1234efgh5678ijkl9012mnop3456", "sk-live-9f8e7d6c5b4a3210zyxwvutsrqponmlk"):
+    for secret in (
+        "sk-FAKEabcd1234efgh5678ijkl9012mnop3456",
+        "sk-FAKElive9f8e7d6c5b4a3210zyxwvutsrqponmlk",
+    ):
         assert secret not in scrubbed
     assert "gw.internal" not in scrubbed
     assert "api_key=" not in scrubbed
@@ -673,8 +679,11 @@ def test_redaction_does_not_eat_the_diagnostic():
     # the high-entropy and URL rules catch what the separator rule now skips.
     for leaky, secret in [
         ("HTTP 401: invalid api-key aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-        ("token: sk-9f8e7d6c5b4a3210zyxwvutsrqponmlk", "sk-9f8e7d6c5b4a3210zyxwvutsrqponmlk"),
-        ("Authorization: Bearer sk-live-9f8e7d6c5b4a3210zyxwvutsrqponml", "sk-live-9f8e7d6c5b4a3210zyxwvutsrqponml"),
+        ("token: sk-FAKE9f8e7d6c5b4a3210zyxwvutsrqponmlk", "sk-FAKE9f8e7d6c5b4a3210zyxwvutsrqponmlk"),
+        (
+            "Authorization: Bearer sk-FAKElive9f8e7d6c5b4a3210zyxwvutsrqponml",
+            "sk-FAKElive9f8e7d6c5b4a3210zyxwvutsrqponml",
+        ),
     ]:
         assert secret not in review_lib.safe_error_text(RuntimeError(leaky))
 
@@ -695,7 +704,7 @@ def test_a_leaky_refusal_does_not_publish_the_secret_in_the_review_body():
     def fake_call(diff, changed_files, **kwargs):
         if changed_files == ["src/b.ts"]:
             exc = RuntimeError(
-                "400 https://gw.internal/v1?token=sk-topsecret0123456789abcdefghij rejected"
+                "400 https://gw.internal/v1?token=sk-FAKEtopsecret0123456789abcdefghij rejected"
             )
             exc.status_code = 400
             raise exc
@@ -703,7 +712,7 @@ def test_a_leaky_refusal_does_not_publish_the_secret_in_the_review_body():
 
     payload = review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
 
-    assert "sk-topsecret0123456789abcdefghij" not in payload["summary_markdown"]
+    assert "sk-FAKEtopsecret0123456789abcdefghij" not in payload["summary_markdown"]
     assert "gw.internal" not in payload["summary_markdown"]
     assert "was refused by the provider" in payload["summary_markdown"]
 
@@ -715,7 +724,9 @@ def test_the_exhausted_retries_body_is_scrubbed_too():
     class Leaky(FakeCompletions):
         def create(self, **_kwargs):
             self.calls += 1
-            raise RuntimeError("524 from https://gw.internal/v1?key=sk-leak0123456789abcdefghijkl")
+            raise RuntimeError(
+                "524 from https://gw.internal/v1?key=sk-FAKEleak0123456789abcdefghijkl"
+            )
 
     client = FakeClient([])
     client.completions = Leaky([])
@@ -723,7 +734,7 @@ def test_the_exhausted_retries_body_is_scrubbed_too():
 
     result = _call(client)
 
-    assert "sk-leak0123456789abcdefghijkl" not in result["summary_markdown"]
+    assert "sk-FAKEleak0123456789abcdefghijkl" not in result["summary_markdown"]
     assert "gw.internal" not in result["summary_markdown"]
     assert "524" in result["summary_markdown"]
 
@@ -817,10 +828,168 @@ def test_an_auth_refusal_stops_immediately_instead_of_paying_for_the_rest():
         exc.status_code = 401
         raise exc
 
-    with pytest.raises(RuntimeError, match="credentials or endpoint rejected"):
+    with pytest.raises(RuntimeError, match="credentials, endpoint, or request configuration"):
         review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
 
     assert calls == ["src/a.ts"], "must not pay for slices 2 and 3"
+
+
+def test_a_404_stops_immediately_too():
+    """The endpoint URL is fixed for the whole run, so a 404 on slice 1 is a
+    404 on every remaining slice regardless of that slice's content — same
+    reasoning as the 401/403 short-circuit, just for a different code."""
+    diff = "".join(
+        _file_diff(p, lines_per_hunk=40) for p in ("src/a.ts", "src/b.ts", "src/c.ts")
+    )
+    calls = []
+
+    def fake_call(diff, changed_files, **kwargs):
+        calls.append(changed_files[0])
+        exc = RuntimeError("404 Not Found")
+        exc.status_code = 404
+        raise exc
+
+    with pytest.raises(RuntimeError, match="credentials, endpoint, or request configuration"):
+        review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
+
+    assert calls == ["src/a.ts"], "must not pay for slices 2 and 3"
+
+
+def test_a_config_class_400_stops_immediately():
+    """A 400 naming `max_tokens` or `model` as its `param` is about the
+    REQUEST we sent, not this slice's diff — every remaining slice sends the
+    identical value and would be refused identically."""
+    diff = "".join(
+        _file_diff(p, lines_per_hunk=40) for p in ("src/a.ts", "src/b.ts", "src/c.ts")
+    )
+    calls = []
+
+    def fake_call(diff, changed_files, **kwargs):
+        calls.append(changed_files[0])
+        exc = RuntimeError("max_tokens is too large: 32768")
+        exc.status_code = 400
+        exc.param = "max_tokens"
+        raise exc
+
+    with pytest.raises(RuntimeError, match="credentials, endpoint, or request configuration"):
+        review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
+
+    assert calls == ["src/a.ts"], "must not pay for slices 2 and 3"
+
+
+def test_a_config_class_400_short_circuits_via_the_body_shape_too():
+    """A hand-built exception (or one not routed through the openai SDK's
+    unwrapping) may carry the OpenAI-shaped error as `.body` instead of a
+    bare `.param` attribute — `_request_param` must read either shape."""
+    diff = "".join(
+        _file_diff(p, lines_per_hunk=40) for p in ("src/a.ts", "src/b.ts", "src/c.ts")
+    )
+    calls = []
+
+    def fake_call(diff, changed_files, **kwargs):
+        calls.append(changed_files[0])
+        exc = RuntimeError("model not found")
+        exc.status_code = 400
+        exc.body = {"error": {"message": "model not found", "param": "model"}}
+        raise exc
+
+    with pytest.raises(RuntimeError, match="credentials, endpoint, or request configuration"):
+        review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
+
+    assert calls == ["src/a.ts"]
+
+
+def test_a_400_naming_an_unrecognised_param_does_not_short_circuit():
+    """Only `max_tokens`/`model` are OUR non-content request arguments. A 400
+    naming something else — e.g. a field the provider derived from the diff
+    content itself — has no basis for being treated as request-wide."""
+    diff = "".join(
+        _file_diff(p, lines_per_hunk=40) for p in ("src/a.ts", "src/b.ts", "src/c.ts")
+    )
+    calls = []
+
+    def fake_call(diff, changed_files, **kwargs):
+        calls.append(changed_files[0])
+        if changed_files == ["src/a.ts"]:
+            exc = RuntimeError("messages content rejected")
+            exc.status_code = 400
+            exc.param = "messages"
+            raise exc
+        return {"summary_markdown": "", "inline_comments": [], "verdict": "APPROVE"}
+
+    payload = review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
+
+    assert calls == ["src/a.ts", "src/b.ts", "src/c.ts"]
+    assert "Partial review" in payload["summary_markdown"]
+
+
+def test_a_400_naming_max_tokens_in_the_message_but_not_as_param_does_not_short_circuit():
+    """Classification is on the status code and the structured `param` field,
+    never a message match — matching "max_tokens" as text would misclassify
+    a message that merely quotes it back without the request being at fault
+    (and would break the two all-refused tests below, which set no param)."""
+    diff = "".join(
+        _file_diff(p, lines_per_hunk=40) for p in ("src/a.ts", "src/b.ts", "src/c.ts")
+    )
+    calls = []
+
+    def fake_call(diff, changed_files, **kwargs):
+        calls.append(changed_files[0])
+        if changed_files == ["src/a.ts"]:
+            exc = RuntimeError("content mentions max_tokens in a code sample")
+            exc.status_code = 400
+            raise exc
+        return {"summary_markdown": "", "inline_comments": [], "verdict": "APPROVE"}
+
+    payload = review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
+
+    assert calls == ["src/a.ts", "src/b.ts", "src/c.ts"]
+    assert "Partial review" in payload["summary_markdown"]
+
+
+def test_a_422_does_not_short_circuit():
+    """422 ("a rejected payload," per `_FATAL_STATUS_CODES`'s own comment)
+    can turn on what was IN the request — the diff itself — so unlike 404 it
+    is not unconditionally endpoint-level, and stays on the per-slice path."""
+    diff = "".join(
+        _file_diff(p, lines_per_hunk=40) for p in ("src/a.ts", "src/b.ts", "src/c.ts")
+    )
+    calls = []
+
+    def fake_call(diff, changed_files, **kwargs):
+        calls.append(changed_files[0])
+        if changed_files == ["src/a.ts"]:
+            exc = RuntimeError("422 Unprocessable Entity")
+            exc.status_code = 422
+            raise exc
+        return {"summary_markdown": "", "inline_comments": [], "verdict": "APPROVE"}
+
+    payload = review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
+
+    assert calls == ["src/a.ts", "src/b.ts", "src/c.ts"]
+    assert "Partial review" in payload["summary_markdown"]
+
+
+def test_request_param_reads_both_the_attribute_and_the_body_shapes():
+    attr_only = RuntimeError("x")
+    attr_only.param = "max_tokens"
+    assert review_lib._request_param(attr_only) == "max_tokens"
+
+    unwrapped_body = RuntimeError("x")
+    unwrapped_body.body = {"param": "model"}
+    assert review_lib._request_param(unwrapped_body) == "model"
+
+    enveloped_body = RuntimeError("x")
+    enveloped_body.body = {"error": {"param": "model"}}
+    assert review_lib._request_param(enveloped_body) == "model"
+
+    nothing = RuntimeError("x")
+    assert review_lib._request_param(nothing) is None
+
+    not_a_string = RuntimeError("x")
+    not_a_string.param = ["max_tokens"]
+    not_a_string.body = {"param": 123}
+    assert review_lib._request_param(not_a_string) is None
 
 
 def test_a_content_refusal_does_not_short_circuit():
@@ -852,7 +1021,7 @@ def test_the_all_refused_error_is_scrubbed():
     def fake_call(diff, changed_files, **kwargs):
         exc = RuntimeError(
             "400 max_tokens is too large: 32768 "
-            "(https://gw.internal/v1?key=sk-leak0123456789abcdefghijkl)"
+            "(https://gw.internal/v1?key=sk-FAKEleak0123456789abcdefghijkl)"
         )
         exc.status_code = 400
         raise exc
@@ -861,7 +1030,7 @@ def test_the_all_refused_error_is_scrubbed():
         review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
 
     message = str(caught.value)
-    assert "sk-leak0123456789abcdefghijkl" not in message
+    assert "sk-FAKEleak0123456789abcdefghijkl" not in message
     assert "gw.internal" not in message
     # The provider's actual reason still survives — that is the whole point.
     assert "max_tokens is too large: 32768" in message
@@ -873,14 +1042,14 @@ def test_the_auth_short_circuit_error_is_scrubbed_too():
     diff = _file_diff("src/a.ts", lines_per_hunk=40) + _file_diff("src/b.ts", lines_per_hunk=40)
 
     def fake_call(diff, changed_files, **kwargs):
-        exc = RuntimeError("403 forbidden for token: sk-secret0123456789abcdefghijklmn")
+        exc = RuntimeError("403 forbidden for token: sk-FAKEsecret0123456789abcdefghijklmn")
         exc.status_code = 403
         raise exc
 
     with pytest.raises(RuntimeError) as caught:
         review_lib.review_diff(diff, [], call=fake_call, max_chars=1200)
 
-    assert "sk-secret0123456789abcdefghijklmn" not in str(caught.value)
+    assert "sk-FAKEsecret0123456789abcdefghijklmn" not in str(caught.value)
     # Raised inside the `except`, so __context__ still holds the original —
     # `from None` sets __suppress_context__, which is what stops the traceback
     # printing the unscrubbed text.
@@ -951,6 +1120,62 @@ def test_a_single_file_bigger_than_the_whole_ceiling_keeps_nothing_and_says_so(t
 
     assert text == ""
     assert "src/gen/huge.ts" in skipped[0]
+
+
+def test_a_giant_single_line_file_past_the_cut_does_not_block_the_scan(tmp_path):
+    """The exact case MAX_TOTAL_DIFF_CHARS's docstring cites: a minified or
+    generated file that is one line with no embedded newline. Before the
+    bound, `pending += chunk` would accumulate the WHOLE remainder of that
+    line — megabytes — before the scan could resume. The file after the
+    blob must still be found and named."""
+    blob_line = "x" * (3 * review_lib._MAX_PENDING_LINE_CHARS)
+    diff = (
+        _file_diff("src/gen/before.ts", hunks=1, lines_per_hunk=30)
+        + f"diff --git a/src/gen/blob.min.js b/src/gen/blob.min.js\n"
+        f"--- a/src/gen/blob.min.js\n+++ b/src/gen/blob.min.js\n"
+        f"@@ -1,1 +1,1 @@\n-old\n+{blob_line}\n"
+        + _file_diff("src/gen/after.ts", hunks=1, lines_per_hunk=30)
+    )
+    path = tmp_path / "diff.txt"
+    path.write_text(diff)
+
+    # Large enough that BOTH before.ts's and blob.min.js's headers land in
+    # the initial bounded read (so the cut boundary lands after before.ts,
+    # not mid-file), small enough that most of the giant blob line is still
+    # read by the streamed scan below, not the initial read.
+    text, skipped = review_lib.read_capped_diff(str(path), limit=2000)
+
+    assert text.startswith("diff --git ")
+    assert "src/gen/before.ts" in text
+    assert "src/gen/blob.min.js" not in text
+    assert "src/gen/blob.min.js" in skipped[0]
+    # The scan must have resumed past the blob: the file AFTER it is named.
+    assert "src/gen/after.ts" in skipped[0]
+
+
+def test_a_blob_containing_a_fake_header_does_not_produce_a_false_name(tmp_path):
+    """Trimming `pending` to a tail window (instead of dropping it and
+    tracking only THAT a line is overlong) would let a `diff --git` string
+    that merely appears inside the blob's content get parsed as if it were a
+    real header — naming a file that was never actually dropped, which is
+    the one thing this banner must never do."""
+    ghost_header = "diff --git a/ghost.ts b/ghost.ts"
+    padding = "z" * (2 * review_lib._MAX_PENDING_LINE_CHARS)
+    blob_line = padding + " " + ghost_header + " " + padding
+    diff = (
+        _file_diff("src/gen/before.ts", hunks=1, lines_per_hunk=30)
+        + "diff --git a/src/gen/blob.min.js b/src/gen/blob.min.js\n"
+        "--- a/src/gen/blob.min.js\n+++ b/src/gen/blob.min.js\n"
+        f"@@ -1,1 +1,1 @@\n-old\n+{blob_line}\n"
+    )
+    path = tmp_path / "diff.txt"
+    path.write_text(diff)
+
+    text, skipped = review_lib.read_capped_diff(str(path), limit=2000)
+
+    assert text.startswith("diff --git ")
+    assert "ghost.ts" not in skipped[0]
+    assert "src/gen/blob.min.js" in skipped[0]
 
 
 # --- markdown injection via a path ------------------------------------------
@@ -1140,21 +1365,25 @@ def test_the_slice_cap_also_suppresses_the_duplicate_listing():
         assert summary.count(path) == 1
 
 
-def test_git_failure_makes_the_file_list_unknown_not_empty():
+def test_git_failure_makes_the_file_list_unknown_not_empty(monkeypatch):
     """[] would read as 'the slicer missed nothing' and make the cross-check
-    silently vacuous for the whole run."""
+    silently vacuous for the whole run.
+
+    `review_lib.subprocess` is the real stdlib module, so assigning to
+    `.run` directly patches it process-wide for anything else importing
+    `subprocess` in the same interpreter. `monkeypatch.setattr` makes both
+    the intent (this is a patch, scoped to this test) and the teardown
+    (restored automatically, even on failure) explicit — a manual
+    try/finally restores correctly but reads as an ordinary attribute write
+    until you notice what module it's on (#610 item 5)."""
 
     class Failed:
         returncode = 1
         stdout = ""
         stderr = "fatal: bad revision 'origin/main...HEAD'"
 
-    original = review_lib.subprocess.run
-    try:
-        review_lib.subprocess.run = lambda *a, **k: Failed()
-        assert review_lib.get_changed_files("main") is None
-    finally:
-        review_lib.subprocess.run = original
+    monkeypatch.setattr(review_lib.subprocess, "run", lambda *a, **k: Failed())
+    assert review_lib.get_changed_files("main") is None
 
     # And the no-base-ref case is 'unknown' for the same reason.
     assert review_lib.get_changed_files("") is None
@@ -1491,3 +1720,64 @@ def test_a_429_is_still_treated_as_transient():
 
     assert client.completions.calls == review_lib.TRANSIENT_MAX_ATTEMPTS
     assert result["verdict"] is None
+
+
+# --- mechanism 5: a reviewer that produced nothing must not read as `pass` (#567) --
+
+
+def test_no_usable_review_is_true_when_every_attempted_slice_is_unusable():
+    diff = _file_diff("src/a.ts", lines_per_hunk=40) + _file_diff("src/b.ts", lines_per_hunk=40)
+
+    def fake_call(diff, changed_files, **kwargs):
+        # The exact shape `call_model` returns once its retries are exhausted.
+        return {"summary_markdown": "_skipped_", "inline_comments": [], "verdict": None}
+
+    payload = review_lib.review_diff(diff, ["src/a.ts", "src/b.ts"], call=fake_call, max_chars=1200)
+
+    assert payload["no_usable_review"] is True
+    assert payload["event"] == "COMMENT"
+
+
+def test_no_usable_review_is_false_when_even_one_slice_comes_back_usable():
+    """The #567 defect is 'never reviewed', not 'partial coverage' — those
+    already get a disclosure banner and a capped verdict, and must not also
+    trip the harder failure this ticket adds, or one flaky slice on an
+    otherwise-fine large PR turns red for no new reason."""
+    diff = _file_diff("src/a.ts", lines_per_hunk=40) + _file_diff("src/b.ts", lines_per_hunk=40)
+    results = [
+        {"summary_markdown": "fine", "inline_comments": [], "verdict": "APPROVE"},
+        {"summary_markdown": "_skipped_", "inline_comments": [], "verdict": None},
+    ]
+    calls = []
+
+    def fake_call(diff, changed_files, **kwargs):
+        calls.append(diff)
+        return results[len(calls) - 1]
+
+    payload = review_lib.review_diff(diff, ["src/a.ts"], call=fake_call, max_chars=1200)
+
+    assert payload["no_usable_review"] is False
+    assert "Partial review" in payload["summary_markdown"]  # still disclosed, just not fatal
+
+
+def test_no_usable_review_is_false_on_a_genuinely_empty_diff():
+    """Nothing was ever attempted on a no-op diff — that's not the 'attempted
+    and got nothing back' failure this flag exists to catch, and flagging it
+    would turn every no-op PR into a hard failure."""
+    payload = review_lib.review_diff("", [], call=lambda **_k: None)
+
+    assert payload["no_usable_review"] is False
+
+
+def test_no_usable_review_defaults_false_without_coverage():
+    payload = review_lib.build_review_payload(
+        DIFF, {"summary_markdown": "x", "inline_comments": [], "verdict": "APPROVE"}
+    )
+
+    assert payload["no_usable_review"] is False
+
+
+def test_review_coverage_no_usable_review_property():
+    assert review_lib.ReviewCoverage(slices_total=2, slices_reviewed=0).no_usable_review is True
+    assert review_lib.ReviewCoverage(slices_total=2, slices_reviewed=1).no_usable_review is False
+    assert review_lib.ReviewCoverage(slices_total=0, slices_reviewed=0).no_usable_review is False

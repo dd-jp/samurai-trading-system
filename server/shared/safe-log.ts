@@ -4,11 +4,13 @@
  *
  * Extracted from orchestrator/tick-loop.ts (#573) once a second caller
  * (execution/ingest-fills.ts, execution/reconcile.ts) needed the identical
- * guarantee: `JsonLogger`'s own primary `process.stdout.write` is
- * deliberately unguarded (orchestrator/logger.ts's own doc comment — an
- * EPIPE on a broken pipe is `JsonLogger`'s problem to survive, not every
- * caller's), so any `Logger.log` call reached from inside error-handling code
- * can itself throw. Three consumers reusing one implementation is what keeps
+ * guarantee: a `Logger.log` call reached from inside error-handling code can
+ * itself throw. #714 narrowed *when* that happens for `JsonLogger` — a broken
+ * stdout pipe now degrades to the file sink instead of propagating — but did
+ * not remove it, deliberately: when NO sink is left that could record the
+ * failure, `JsonLogger` throws rather than continue blind, and every `Logger`
+ * these call sites actually receive is injected and may throw for reasons this
+ * module does not control. Three consumers reusing one implementation is what keeps
  * "a log call inside a catch must not itself throw" one property to audit
  * instead of three copies that can silently drift apart.
  */

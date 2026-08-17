@@ -1,7 +1,7 @@
 /**
  * Concrete `LlmClient` (ticket #31 AC: "Concrete implementation using
  * configured LLM provider"). The wire client is injected rather than
- * constructed here, mirroring `AlpacaClient`/`CcxtBrokerClient` — connection
+ * constructed here, mirroring `AlpacaBrokerClient`/`CcxtBrokerClient` — connection
  * provisioning (API key, base URL) is an ops concern, and `AnthropicMessagesClient`
  * is deliberately the narrow slice of the Anthropic Messages API this file
  * uses, so any real SDK client (or a test double) satisfies it structurally

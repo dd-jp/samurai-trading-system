@@ -38,7 +38,7 @@ export interface AlpacaQuote {
   bp: number;
 }
 
-export interface AlpacaClient {
+export interface AlpacaMarketDataClient {
   /**
    * `partial` (issue #292) is the caller's short-read policy: omitted or
    * `'error'` means an implementation that CAN detect an under-covered range
@@ -68,10 +68,10 @@ export interface AlpacaSourceOptions {
 }
 
 export class AlpacaDataSource extends NormalizingDataSource {
-  readonly #client: AlpacaClient;
+  readonly #client: AlpacaMarketDataClient;
   readonly #markTimeframe: string;
 
-  constructor(client: AlpacaClient, options: AlpacaSourceOptions) {
+  constructor(client: AlpacaMarketDataClient, options: AlpacaSourceOptions) {
     super({
       source: 'alpaca',
       asset_class: options.asset_class,

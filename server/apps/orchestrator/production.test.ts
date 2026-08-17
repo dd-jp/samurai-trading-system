@@ -561,6 +561,70 @@ describe('buildProductionComponents', () => {
     },
   );
 
+  it(
+    "wires the run's own Logger into AlpacaBrokerAdapterInput.logger (#609) — a real " +
+      'fill-sweep failure through the composition-root-built broker gets a local trace ' +
+      'through the SAME logger, not a dropped seam',
+    async () => {
+      // #609's whole point, mirrored off the #573 test just above: a unit
+      // test on `AlpacaBrokerAdapter` alone constructs its input by hand, so
+      // it cannot tell whether `buildProductionComponents` actually threads
+      // the real `Logger` through to it rather than the field silently going
+      // unwired. This asserts the composition root, not just the adapter.
+      const logger = recordingLogger();
+      const config = stubConfig(db, { logger });
+      const components = buildProductionComponents(config);
+
+      // A stocks order, unlike `goVerdict()`'s crypto one, submits through
+      // the NATIVE bracket path (`submitOrder`) rather than the emulated one
+      // — the loop `fetchNewFills`'s #609 fix logs from directly. Built from
+      // scratch rather than spreading `goVerdict().order` (`OrderIntent |
+      // null` on `VerdictDecision` — a spread of a nullable type loses the
+      // required-ness TS would otherwise check).
+      const baseGo = goVerdict();
+      const stocksOrder: OrderIntent = {
+        ...(baseGo.order as OrderIntent),
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        idempotency_key: 'idem-exec-stocks',
+      };
+      const stocksVerdict: VerdictDecision = {
+        ...baseGo,
+        order: stocksOrder,
+        idempotency_key: 'idem-exec-stocks',
+      };
+      await components.steps.execution(stocksVerdict);
+
+      // A genuine per-source failure on the just-submitted bracket — an
+      // unparseable `filled_qty`, not the modelled/expected
+      // `UnpricedFillError` — read through the SAME `alpacaBrokerClient` the
+      // composition root gave the broker. Cast the same way `stubConfig`
+      // casts its own `alpacaBrokerClient` fixture (line ~165): this double
+      // only needs the fields `fetchNewFills`'s bracket loop actually reads.
+      config.alpacaBrokerClient.getOrder = vi.fn(async () => ({
+        id: 'alpaca-order-1',
+        client_order_id: 'idem-exec-stocks',
+        status: 'filled',
+        filled_qty: 'N/A',
+        filled_avg_price: '100.02',
+        filled_at: START.toISOString(),
+        legs: [],
+      })) as unknown as typeof config.alpacaBrokerClient.getOrder;
+
+      // Single bracket, all-failed sweep: `fetchNewFills` throws (the
+      // pre-existing, unchanged behaviour) — the assertion below is about
+      // the log line #609 now emits BEFORE that throw, not about the throw
+      // itself.
+      await components.broker.fetchNewFills(new Date(0)).catch(() => undefined);
+
+      expect(
+        logger.entries.some(
+          (entry) => entry.message === 'Alpaca fetchNewFills: per-source failure',
+        ),
+      ).toBe(true);
+    },
+  );
+
   it('buildProductionTickRunner returns a SequentialTickRunner', () => {
     expect(buildProductionTickRunner(stubConfig(db))).toBeInstanceOf(SequentialTickRunner);
   });
@@ -784,6 +848,7 @@ describe('composed tick chain (integration)', () => {
     const clock = new SimulatedClock(START);
     const hourMs = 60 * 60 * 1_000;
     const bars = [
+      ...fixtureBars('BTC-USD', '5m', 60, 5 * 60_000),
       ...fixtureBars('BTC-USD', '1h', 60, hourMs),
       ...fixtureBars('BTC-USD', '1m', 60, 60_000),
       ...fixtureBars('BTC-USD', '1d', 40, 24 * hourMs),
@@ -895,6 +960,7 @@ describe('composed tick chain (integration)', () => {
     const clock = new SimulatedClock(START);
     const hourMs = 60 * 60 * 1_000;
     const bars = [
+      ...fixtureBars('BTC-USD', '5m', 60, 5 * 60_000),
       ...fixtureBars('BTC-USD', '1h', 60, hourMs),
       ...fixtureBars('BTC-USD', '1m', 60, 60_000),
       ...fixtureBars('BTC-USD', '1d', 40, 24 * hourMs),
@@ -968,6 +1034,7 @@ describe('composed tick chain (integration)', () => {
     const hourMs = 60 * 60 * 1_000;
     const dataSource = new FixtureDataSource(
       [
+        ...fixtureBars('BTC-USD', '5m', 60, 5 * 60_000),
         ...fixtureBars('BTC-USD', '1h', 60, hourMs),
         ...fixtureBars('BTC-USD', '1m', 60, 60_000),
         ...fixtureBars('BTC-USD', '1d', 40, 24 * hourMs),
@@ -1039,6 +1106,9 @@ describe('composed tick chain (integration)', () => {
         latency_ms: 10,
         direction: 'bearish',
         debate_id: 'debate-568-wiring',
+        // #687: the Trader keys the exit on the DEBATE's bar. START is
+        // bar-aligned, so this is the bar the old clock-flooring produced.
+        bar_timestamp: START,
       },
       clock,
     });
@@ -1781,6 +1851,33 @@ describe('buildProductionOrchestrator', () => {
     await orchestrator.stop();
   });
 
+  it('REFUSES TO BOOT when a kill line is configured past its in-code clamp (#638)', () => {
+    // ADR-0013 makes the numeric thresholds the only stop left, so a config
+    // edit was the entire distance between the running system and an arbitrary
+    // risk limit. Refusing the process is the correct answer — a silent clamp
+    // would read as accepted and leave the operator believing a limit is in
+    // force that is not.
+    const config = stubConfig(db, {
+      feedback: {
+        intervalMs: 1_000,
+        config: {
+          weights: { max_step: 0.05, floor: 0.5, ceiling: 1.5, tighten_is: 'decrease' },
+          kill_thresholds: {
+            // The one hard kill criterion in the whole record, softened tenfold.
+            max_pbo: 0.5,
+            min_oos_sharpe: 0.5,
+            min_deflated_sharpe: 0.95,
+            max_live_backtest_divergence: 0.5,
+          },
+        } as unknown as FeedbackConfig,
+        loosenNotices: { notifyLoosenApplied: vi.fn() } as never,
+      },
+    });
+
+    expect(() => buildProductionOrchestrator(config)).toThrow(/max_pbo/);
+    expect(() => buildProductionOrchestrator(config)).toThrow(/REFUSED, not clamped/);
+  });
+
   it('runs the daily feedback cycle on its own timer when configured', async () => {
     const logger = recordingLogger();
     const config = stubConfig(db, {
@@ -1798,7 +1895,7 @@ describe('buildProductionOrchestrator', () => {
         config: {
           weights: { max_step: 0.05, floor: 0.5, ceiling: 1.5, tighten_is: 'decrease' },
         } as unknown as FeedbackConfig,
-        approvals: { requestLoosenApproval: vi.fn() } as never,
+        loosenNotices: { notifyLoosenApplied: vi.fn() } as never,
       },
     });
     const orchestrator = buildProductionOrchestrator(config);
@@ -2049,11 +2146,18 @@ describe('buildProductionOrchestrator', () => {
     });
 
     /**
-     * The fail-closed property, asserted where it actually lives: the store.
+     * #736's property, asserted where it actually lives: the store.
+     *
+     * This describe used to assert the opposite — that a proposed loosening
+     * expired unapplied in paper and live. ADR-0013 Decision 2 rejected that
+     * state in as many words ("a queue that nobody drains is not a control —
+     * it is a permanently-stuck dial that reads as governed"), and these cases
+     * now prove the removal end to end, through the real composition root and
+     * the real SQLite tuning store rather than a fixture.
      *
      * The profile declares no `risk_thresholds` dial (nothing writes that
      * table yet), so this case adds one and seeds a value — otherwise the
-     * gated path is unreachable and the test would be vacuous.
+     * path is unreachable and the test would be vacuous.
      */
     function loosenConfig(overrides: Partial<ProductionConfig> = {}): {
       config: ProductionConfig;
@@ -2084,8 +2188,8 @@ describe('buildProductionOrchestrator', () => {
             },
           },
         },
-        // Raising a loss-bounding cap: the move the loop may never make on
-        // its own authority.
+        // Raising a loss-bounding cap — the move that used to be queued for a
+        // human and therefore never made at all.
         proposals: [{ kind: 'risk_threshold', name: 'max_position_size', target: 6_000 }],
       };
 
@@ -2094,84 +2198,88 @@ describe('buildProductionOrchestrator', () => {
       return { config, feedback, logger, tuning };
     }
 
-    it('refuses to loosen a risk threshold nobody approved — the dial does not move', async () => {
+    it('APPLIES the loosening in paper mode and records it as reversible', async () => {
       const { config, logger, tuning } = loosenConfig();
       const orchestrator = buildProductionOrchestrator(config);
 
       await orchestrator.start();
       await vi.advanceTimersByTimeAsync(1_500);
 
-      // THE assertion. No approval transport in this repo can deliver a "yes"
-      // back to the process, so a proposed loosening must expire unapplied
-      // rather than fall through to the value it asked for.
-      expect(tuning.getRiskThresholds().max_position_size).toBe(5_000);
-      // ...and it is not written to the audit log either: nothing happened,
-      // so nothing is recorded as having happened.
+      // THE assertion of #736, and the exact line this test used to assert the
+      // negation of. Bounded to one `max_step`, not the 6,000 proposed.
+      expect(tuning.getRiskThresholds().max_position_size).toBe(5_500);
+      // ...and it IS written to the audit log: ADR-0013 requires every applied
+      // change logged and reversible, and `from` is what reverses it.
       expect(
         db
-          .prepare('SELECT COUNT(*) AS n FROM dial_adjustments WHERE dial_name = ?')
+          .prepare(
+            'SELECT from_value AS f, to_value AS t, direction AS d, status AS s ' +
+              'FROM dial_adjustments WHERE dial_name = ?',
+          )
           .get('max_position_size'),
-      ).toEqual({ n: 0 });
+      ).toEqual({ f: 5_000, t: 5_500, d: 'loosen', s: 'applied' });
 
       const cycle = logger.entries.find(
         (entry) => entry.message === 'daily feedback cycle complete',
       );
       expect(cycle?.payload).toMatchObject({
-        loosen_pending_approval: ['max_position_size'],
-        applied: false,
+        param_updates: { max_position_size: { from: 5_000, to: 5_500, direction: 'loosen' } },
+        applied: true,
       });
+      // The field that named the queue is gone with it.
+      expect(cycle?.payload).not.toHaveProperty('loosen_pending_approval');
 
       await orchestrator.stop();
     });
 
-    it('falls back to the log-only channel and says the threshold stayed put', async () => {
+    it('falls back to the log-only channel and says the threshold MOVED', async () => {
       const { config, logger } = loosenConfig();
       const orchestrator = buildProductionOrchestrator(config);
 
       await orchestrator.start();
       await vi.advanceTimersByTimeAsync(1_500);
 
-      // Nothing supplied `loosenApprovals`, so the composition root's own
+      // Nothing supplied `loosenNotices`, so the composition root's own
       // stand-in is what the cycle reached — the same default shape
       // `breachAlerts` has.
-      const entry = logger.entries.find((e) => e.message.includes('LOOSENING proposed'));
+      const entry = logger.entries.find((e) => e.message.includes('LOOSENING applied'));
       expect(entry?.level).toBe('warn');
-      expect(entry?.payload).toMatchObject({ name: 'max_position_size', applied: false });
+      expect(entry?.payload).toMatchObject({ name: 'max_position_size', applied: true });
 
       await orchestrator.stop();
     });
 
     it('uses the transport SAMURAI_ALERTS selected when one is supplied', async () => {
-      const requestLoosenApproval = vi.fn();
-      const { config, tuning } = loosenConfig({ loosenApprovals: { requestLoosenApproval } });
+      const notifyLoosenApplied = vi.fn();
+      const { config, tuning } = loosenConfig({ loosenNotices: { notifyLoosenApplied } });
       const orchestrator = buildProductionOrchestrator(config);
 
       await orchestrator.start();
       await vi.advanceTimersByTimeAsync(1_500);
 
-      expect(requestLoosenApproval).toHaveBeenCalledTimes(1);
-      expect(requestLoosenApproval.mock.calls[0]?.[0]).toMatchObject({
+      expect(notifyLoosenApplied).toHaveBeenCalledTimes(1);
+      expect(notifyLoosenApplied.mock.calls[0]?.[0]).toMatchObject({
         name: 'max_position_size',
         from: 5_000,
-        // The BOUNDED value a human would be approving, not the raw target —
-        // one `max_step`, not the 6,000 the proposal asked for.
+        // The BOUNDED value actually written, not the raw target — one
+        // `max_step`, not the 6,000 the proposal asked for.
         to: 5_500,
       });
-      // Notifying is not applying, whichever channel carries it.
-      expect(tuning.getRiskThresholds().max_position_size).toBe(5_000);
+      // The notice reports the store, whichever channel carries it.
+      expect(tuning.getRiskThresholds().max_position_size).toBe(5_500);
 
       await orchestrator.stop();
     });
 
-    it('still lets an explicit per-cycle approvals override win', async () => {
+    it('still lets an explicit per-cycle loosenNotices override win', async () => {
       const perCycle = vi.fn();
       const topLevel = vi.fn();
       const { config, feedback } = loosenConfig({
-        loosenApprovals: { requestLoosenApproval: topLevel },
+        loosenNotices: { notifyLoosenApplied: topLevel },
       });
       const orchestrator = buildProductionOrchestrator({
         ...config,
-        feedback: { ...feedback, approvals: { requestLoosenApproval: perCycle } },
+        feedback: { ...feedback, loosenNotices: { notifyLoosenApplied: perCycle } },
       });
 
       await orchestrator.start();
@@ -2465,7 +2573,7 @@ describe('buildProductionOrchestrator', () => {
         feedback: {
           intervalMs: 1_000,
           config: feedbackConfig(),
-          approvals: { requestLoosenApproval: vi.fn() },
+          loosenNotices: { notifyLoosenApplied: vi.fn() },
           metrics: {
             source: {
               getDailyMetrics: () =>

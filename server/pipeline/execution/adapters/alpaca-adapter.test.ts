@@ -1,6 +1,7 @@
 import type { MarketDataService } from '../../../providers/market-data-service/index.js';
 import type { OrderIntent } from '../../../shared/index.js';
 import { type Clock, TokenBucket } from '../../../shared/index.js';
+import { recordingLogger } from '../../../shared/recording-logger.js';
 import type { CostModel } from '../../../tools/backtest/index.js';
 import type { VerdictDecision } from '../../verdict/index.js';
 import { BrokerError } from '../broker-error.js';
@@ -11,7 +12,7 @@ import { openTestExecutionStore } from '../sqlite-store-harness.js';
 import type { ExecutionConfig, ExecutionInput, NativeBracketRequest } from '../types.js';
 import type { UnpricedFillAlert, UnpricedFillAlertChannel } from '../unpriced-fill-alert.js';
 import { AlpacaBrokerAdapter, DEFAULT_UNPRICED_FILL_AGE_OUT_MS } from './alpaca-adapter.js';
-import type { AlpacaClient, AlpacaOrder } from './alpaca-client.js';
+import type { AlpacaBrokerClient, AlpacaOrder } from './alpaca-client.js';
 
 /**
  * These tests are about bracket submission and fill normalization, not
@@ -72,7 +73,7 @@ function acceptedOrder(overrides: Partial<AlpacaOrder> = {}): AlpacaOrder {
   };
 }
 
-function makeClient(overrides: Partial<AlpacaClient> = {}): AlpacaClient {
+function makeClient(overrides: Partial<AlpacaBrokerClient> = {}): AlpacaBrokerClient {
   return {
     submitOrder: vi.fn().mockResolvedValue(acceptedOrder()),
     getOrder: vi.fn().mockResolvedValue(acceptedOrder()),
@@ -181,6 +182,7 @@ describe('AlpacaBrokerAdapter.submitBracket', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
     });
 
     await adapter.submitBracket(makeBracket());
@@ -212,6 +214,7 @@ describe('AlpacaBrokerAdapter.submitBracket', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
     });
 
     const ack = await adapter.submitBracket(
@@ -261,6 +264,7 @@ describe('AlpacaBrokerAdapter.submitBracket', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
     });
 
     await adapter.submitBracket(
@@ -276,6 +280,7 @@ describe('AlpacaBrokerAdapter.submitBracket', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
     });
 
     const ack = await adapter.submitBracket(makeBracket());
@@ -304,6 +309,7 @@ describe('AlpacaBrokerAdapter.submitBracket', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
     });
 
     const ack = await adapter.submitBracket(makeBracket());
@@ -324,6 +330,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
     });
     await adapter.submitBracket(makeBracket());
 
@@ -356,6 +363,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
     });
     await adapter.submitBracket(makeBracket());
 
@@ -409,6 +417,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
     });
     await adapter.submitBracket(makeBracket());
 
@@ -429,6 +438,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
     });
     await adapter.submitBracket(makeBracket());
 
@@ -452,6 +462,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
     });
     await adapter.submitBracket(makeBracket());
 
@@ -466,6 +477,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
     });
 
     expect(await adapter.fetchNewFills(new Date(0))).toEqual([]);
@@ -490,6 +502,7 @@ describe('AlpacaBrokerAdapter integration: entry fill then stop-out', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
     });
     await adapter.submitBracket(makeBracket());
 
@@ -587,6 +600,7 @@ describe('AlpacaBrokerAdapter outbound call discipline', () => {
       rateLimiter,
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
     });
 
     await adapter.submitBracket(makeBracket());
@@ -614,6 +628,7 @@ describe('AlpacaBrokerAdapter outbound call discipline', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
     });
 
     const error = await adapter.submitBracket(makeBracket()).catch((thrown: unknown) => thrown);
@@ -660,6 +675,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills on inconsistent venue data', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
     });
     await adapter.submitBracket(makeBracket());
 
@@ -688,6 +704,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills on inconsistent venue data', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
     });
     await adapter.submitBracket(makeBracket());
 
@@ -733,6 +750,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills on inconsistent venue data', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
     });
     await adapter.submitBracket(makeBracket({ client_order_id: 'poisoned-lot' }));
     await adapter.submitBracket(makeBracket({ client_order_id: 'healthy-lot' }));
@@ -743,6 +761,128 @@ describe('AlpacaBrokerAdapter.fetchNewFills on inconsistent venue data', () => {
     // is retried next sweep (dedup on broker_fill_id makes that free).
     expect(fills).toHaveLength(1);
     expect(fills[0]).toMatchObject({ client_order_id: 'healthy-lot', qty: 50, price: 100.02 });
+  });
+});
+
+/**
+ * #609: `fetchNewFills` accumulated `failures` but discarded them whenever
+ * the same sweep also read a fill from another source — `fills.length > 0`
+ * skipped the throw gate entirely, and nothing else in this file ever logged
+ * the array. Fixed by giving `AlpacaBrokerAdapterInput` a required `Logger`
+ * (the same port-level decision #573 made on `ExecutionInput`) and logging
+ * every accumulated failure, unconditionally, before that gate runs.
+ */
+describe('AlpacaBrokerAdapter.fetchNewFills failure logging (#609)', () => {
+  it('logs a per-source failure even when another source in the same sweep produced a fill', async () => {
+    const client = makeClient({
+      getOrder: vi
+        .fn()
+        // Swept first (insertion order): a genuine fill.
+        .mockResolvedValueOnce(
+          acceptedOrder({
+            id: 'alpaca-healthy',
+            status: 'filled',
+            filled_qty: '50',
+            filled_avg_price: '100.02',
+            filled_at: '2026-07-15T15:00:00Z',
+          }),
+        )
+        // Swept second: an unparseable filled_qty is a genuine failure (a
+        // plain Error, not the modelled/expected UnpricedFillError), so it
+        // lands in `failures` — this is the exact "source A fills, source B
+        // fails in the SAME sweep" shape #609 was filed against.
+        .mockResolvedValueOnce(
+          acceptedOrder({
+            id: 'alpaca-broken',
+            status: 'filled',
+            filled_qty: 'N/A',
+            filled_avg_price: '100.02',
+            filled_at: '2026-07-15T15:00:00Z',
+          }),
+        ),
+    });
+    const logger = recordingLogger();
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger,
+    });
+    await adapter.submitBracket(makeBracket({ client_order_id: 'healthy-lot' }));
+    await adapter.submitBracket(makeBracket({ client_order_id: 'broken-lot' }));
+
+    const fills = await adapter.fetchNewFills(new Date(0));
+
+    // The healthy lot's fill is still returned — this ticket does not change
+    // that — but before #609 the broken lot's failure was silently dropped
+    // right here, precisely because a fill was also read this sweep.
+    expect(fills).toHaveLength(1);
+    expect(logger.entries).toHaveLength(1);
+    expect(logger.entries[0]).toMatchObject({
+      level: 'error',
+      message: 'Alpaca fetchNewFills: per-source failure',
+      payload: {
+        error: expect.stringMatching(/unparseable filled_qty 'N\/A'/),
+        // fills_read > 0 is the #609 shape itself: a source failed in the
+        // SAME sweep that also read a fill, the exact case the throw gate
+        // (`fills.length === 0 && failures.length > 0`) never sees.
+        fills_read: 1,
+        bracket_failures: 1,
+      },
+    });
+  });
+
+  it('logs nothing on a clean sweep with no failures', async () => {
+    const logger = recordingLogger();
+    const client = makeClient({
+      getOrder: vi.fn().mockResolvedValue(
+        acceptedOrder({
+          status: 'filled',
+          filled_qty: '100',
+          filled_avg_price: '100.02',
+          filled_at: '2026-07-15T14:05:00Z',
+        }),
+      ),
+    });
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger,
+    });
+    await adapter.submitBracket(makeBracket());
+
+    const fills = await adapter.fetchNewFills(new Date(0));
+
+    expect(fills).toHaveLength(1);
+    expect(logger.entries).toEqual([]);
+  });
+
+  // #524: an unpriced fill with a working journal is the MODELLED, expected
+  // condition — the age-out clock, not a failure — and is deliberately never
+  // pushed to `failures` (see the bracket loop's own comment on that). This
+  // is the quiet path that actually matters in production (far more common
+  // than a spotless sweep): if this ever starts logging, #524's "an unpriced
+  // fill is not a failure" decision has been silently reversed at the log
+  // layer this ticket adds.
+  it('logs nothing for an unpriced fill with a working journal (#524, not a #609 failure)', async () => {
+    const logger = recordingLogger();
+    const client = makeClient({ getOrder: vi.fn().mockResolvedValue(unpricedOrder()) });
+    const adapter = new AlpacaBrokerAdapter({
+      client,
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger,
+    });
+    await adapter.submitBracket(makeBracket());
+
+    const fills = await adapter.fetchNewFills(new Date(0));
+
+    expect(fills).toHaveLength(0);
+    expect(logger.entries).toEqual([]);
   });
 });
 
@@ -759,7 +899,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
   async function submitAndSweep(options: {
     clock: FixedClock;
     alerts: UnpricedFillAlertChannel;
-    client: AlpacaClient;
+    client: AlpacaBrokerClient;
     state?: InMemoryBrokerStateStore;
     ageOutMs?: number;
   }): Promise<AlpacaBrokerAdapter> {
@@ -768,6 +908,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: options.alerts,
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
       clock: options.clock,
       ...(options.state === undefined ? {} : { state: options.state }),
       ...(options.ageOutMs === undefined ? {} : { unpricedFillAgeOutMs: options.ageOutMs }),
@@ -917,6 +1058,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: alerts,
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
       clock,
     });
     await adapter.submitFlatten('BTC-USD', 'sell', 0.5, 'flatten-key');
@@ -968,6 +1110,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: alerts,
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
       clock,
     });
     await adapter.submitBracket(
@@ -1015,6 +1158,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: alerts,
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
       clock,
     });
     await adapter.submitBracket(makeBracket({ client_order_id: 'stuck-lot' }));
@@ -1102,6 +1246,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: alerts,
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
       state,
       clock,
     });
@@ -1141,6 +1286,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
       state,
       clock,
     });
@@ -1201,6 +1347,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
     });
     await adapter.submitFlatten('AAPL', 'sell', 12, 'flatten-key');
 
@@ -1229,6 +1376,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
     });
     await adapter.submitBracket(makeBracket());
     await adapter.submitFlatten('TSLA', 'sell', 5, 'flatten-key');
@@ -1258,12 +1406,13 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
  * three of which could not fire.
  */
 describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
-  function adapterWith(client: AlpacaClient): AlpacaBrokerAdapter {
+  function adapterWith(client: AlpacaBrokerClient): AlpacaBrokerAdapter {
     return new AlpacaBrokerAdapter({
       client,
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
     });
   }
 
@@ -2078,6 +2227,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       rateLimiter: permissiveLimiter(),
       unpricedFillAlerts: recordingAlerts(),
       ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+      logger: recordingLogger(),
       clock: fixedClock,
     });
     const input: ExecutionInput = {
@@ -2165,6 +2315,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
         rateLimiter: permissiveLimiter(),
         unpricedFillAlerts: recordingAlerts(),
         ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+        logger: recordingLogger(),
         clock: fixedClock,
       });
 
@@ -2182,6 +2333,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
         rateLimiter: permissiveLimiter(),
         unpricedFillAlerts: recordingAlerts(),
         ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+        logger: recordingLogger(),
         clock: fixedClock,
       });
 
@@ -2209,6 +2361,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
         rateLimiter: permissiveLimiter(),
         unpricedFillAlerts: recordingAlerts(),
         ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+        logger: recordingLogger(),
         clock: fixedClock,
         state,
       });
@@ -2262,6 +2415,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
         rateLimiter: permissiveLimiter(),
         unpricedFillAlerts: recordingAlerts(),
         ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+        logger: recordingLogger(),
         clock: fixedClock,
       });
       await first.submitFlatten('AAPL', 'sell', 10, 'flatten-1');
@@ -2273,6 +2427,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
         rateLimiter: permissiveLimiter(),
         unpricedFillAlerts: recordingAlerts(),
         ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+        logger: recordingLogger(),
         clock: fixedClock,
       });
 

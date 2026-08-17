@@ -7,6 +7,13 @@ import {
 } from './latency-budget.js';
 import type { DebateResult } from './types.js';
 
+/**
+ * The bar the debate was taken in (#687). `enforceLatencyBudget` takes it
+ * alongside `debate_id` so that a timed-out debate's fallback result still
+ * names a bar for the Trader to key on.
+ */
+const BAR = new Date('2026-07-15T10:00:00Z');
+
 function makeLogger(): DebateLogger {
   return {
     logInputs: vi.fn(),
@@ -32,6 +39,7 @@ function makeResult(overrides: Partial<DebateResult> = {}): DebateResult {
     latency_ms: 8000,
     direction: 'bullish',
     debate_id: 'debate-1',
+    bar_timestamp: BAR,
     ...overrides,
   };
 }
@@ -75,6 +83,7 @@ describe('enforceLatencyBudget', () => {
       assetClass: 'crypto',
       trace_id: 'trace-1',
       debate_id: 'debate-1',
+      bar: BAR,
       produceResult: () => resolvesAfter(5_000, result),
       getCurrentState: () => undefined,
       logger,
@@ -92,6 +101,7 @@ describe('enforceLatencyBudget', () => {
       assetClass: 'crypto',
       trace_id: 'trace-1',
       debate_id: 'debate-1',
+      bar: BAR,
       produceResult: () => new Promise(() => {}),
       getCurrentState: () => undefined,
       logger,
@@ -118,6 +128,7 @@ describe('enforceLatencyBudget', () => {
       assetClass: 'stocks',
       trace_id: 'trace-1',
       debate_id: 'debate-1',
+      bar: BAR,
       produceResult: () => new Promise(() => {}),
       getCurrentState: () => undefined,
       logger,
@@ -144,6 +155,7 @@ describe('enforceLatencyBudget', () => {
       assetClass: 'crypto',
       trace_id: 'trace-1',
       debate_id: 'debate-crypto',
+      bar: BAR,
       produceResult: () => new Promise(() => {}),
       getCurrentState: () => undefined,
       logger,
@@ -152,6 +164,7 @@ describe('enforceLatencyBudget', () => {
       assetClass: 'stocks',
       trace_id: 'trace-2',
       debate_id: 'debate-stocks',
+      bar: BAR,
       produceResult: () => new Promise(() => {}),
       getCurrentState: () => undefined,
       logger,
@@ -181,6 +194,7 @@ describe('enforceLatencyBudget', () => {
       assetClass: 'crypto',
       trace_id: 'trace-1',
       debate_id: 'debate-1',
+      bar: BAR,
       produceResult: () => new Promise(() => {}),
       getCurrentState: () => partial,
       logger,
@@ -205,6 +219,7 @@ describe('enforceLatencyBudget', () => {
       assetClass: 'crypto',
       trace_id: 'trace-1',
       debate_id: 'debate-1',
+      bar: BAR,
       produceResult: () => new Promise(() => {}),
       getCurrentState: () => undefined,
       logger,
@@ -228,6 +243,7 @@ describe('enforceLatencyBudget', () => {
       assetClass: 'stocks',
       trace_id: 'trace-9',
       debate_id: 'debate-9',
+      bar: BAR,
       produceResult: () => new Promise(() => {}),
       getCurrentState: () => undefined,
       logger,
@@ -254,6 +270,7 @@ describe('enforceLatencyBudget', () => {
       assetClass: 'crypto',
       trace_id: 'trace-1',
       debate_id: 'debate-1',
+      bar: BAR,
       produceResult: (signal) => {
         seen = signal;
         return resolvesAfter(5_000, makeResult());
@@ -277,6 +294,7 @@ describe('enforceLatencyBudget', () => {
       assetClass: 'crypto',
       trace_id: 'trace-1',
       debate_id: 'debate-1',
+      bar: BAR,
       produceResult: (signal) => {
         seen = signal;
         return new Promise(() => {});
@@ -302,6 +320,7 @@ describe('enforceLatencyBudget', () => {
       assetClass: 'crypto',
       trace_id: 'trace-1',
       debate_id: 'debate-1',
+      bar: BAR,
       produceResult: (signal) => {
         seen = signal;
         return new Promise(() => {});
@@ -332,6 +351,7 @@ describe('enforceLatencyBudget', () => {
       assetClass: 'stocks',
       trace_id: 'trace-1',
       debate_id: 'debate-1',
+      bar: BAR,
       produceResult: () => resolvesAfter(1_000, makeResult()),
       getCurrentState: () => undefined,
       logger,
@@ -354,6 +374,7 @@ describe('enforceLatencyBudget', () => {
         assetClass: 'crypto',
         trace_id: 'trace-1',
         debate_id: 'debate-1',
+        bar: BAR,
         // The realistic shape post-#347: the debate rejects when its signal
         // aborts, AFTER the budget has already returned the fallback.
         produceResult: (signal) =>
@@ -385,6 +406,7 @@ describe('enforceLatencyBudget', () => {
       assetClass: 'crypto',
       trace_id: 'trace-1',
       debate_id: 'debate-1',
+      bar: BAR,
       produceResult: () =>
         new Promise((_resolve, reject) => {
           setTimeout(() => reject(new Error('mediator exploded')), 1_000);
@@ -409,6 +431,7 @@ describe('enforceLatencyBudget', () => {
       assetClass: 'crypto',
       trace_id: 'trace-1',
       debate_id: 'debate-1',
+      bar: BAR,
       produceResult: () => resolvesAfter(1_000, makeResult()),
       getCurrentState: () => undefined,
       logger,

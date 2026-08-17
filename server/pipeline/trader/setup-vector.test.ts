@@ -37,18 +37,34 @@ function debate(overrides: Partial<DebateResult> = {}): DebateResult {
     latency_ms: 1000,
     direction: 'bullish',
     debate_id: 'debate-1',
+    bar_timestamp: new Date('2026-07-15T10:00:00Z'),
     ...overrides,
   };
 }
 
+/**
+ * A recorded-looking two-round history whose LAST element is the final
+ * position, matching the direction of causality in
+ * `buildAnalystContributions` (final position is read off the end of the
+ * recorded history, never used to fabricate it). `[final_position]` — a
+ * one-element array whose only element is the parameter itself — was the
+ * fabrication #599/#615/#618 removed everywhere else in the tree (#624).
+ */
 function contribution(final_position: 'bullish' | 'bearish' | 'neutral') {
+  const opening: 'bullish' | 'bearish' | 'neutral' =
+    final_position === 'neutral' ? 'bullish' : 'neutral';
+  const stance_during_debate = [opening, final_position];
   return {
     analyst_id: `a-${final_position}`,
     analyst_type: 'technical',
-    stance_during_debate: [final_position],
+    stance_during_debate,
     final_position,
     rationale: '',
-    influence_score: 0.5,
+    // `opening` is always different from `final_position` by construction
+    // above, so this two-round history always has exactly one transition —
+    // computeInfluenceScore's rule (changes / (rounds - 1)) gives 1, not a
+    // hand-picked reading.
+    influence_score: 1,
   };
 }
 

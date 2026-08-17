@@ -67,9 +67,9 @@
  * no in-repo source have the same two homes every comparable input already
  * had: the `FeedbackConfig` values are starting values, so they sit in
  * `paperStartingProfile` (paper-profile.ts) beside the other eight sets, and
- * the loosen-approval channel is a transport, so it is selected from
+ * the loosen-notice channel is a transport, so it is selected from
  * `SAMURAI_ALERTS` (alert-transport.ts) and defaults to
- * `LoggingLoosenApprovalChannel` here. Before that, the 14-day soak (#238)
+ * `LoggingLoosenNotificationChannel` here. Before that, the 14-day soak (#238)
  * would have run stage 6 of a 6-stage pipeline dead for the whole window.
  *
  * `computeMetrics` — the kill-line detector — runs in that same timer, after
@@ -134,6 +134,7 @@ import type {
   FeedbackConfig,
 } from '../../pipeline/feedback-loop/index.js';
 import {
+  assertKillThresholdsWithinBounds,
   computeMetrics,
   runDailyCycle,
   SqliteAdjustmentLog,
@@ -179,7 +180,7 @@ import {
   LoggingFlattenOverfillAlertChannel,
   LoggingFlattenReconcileAlertChannel,
   LoggingHeartbeatChannel,
-  LoggingLoosenApprovalChannel,
+  LoggingLoosenNotificationChannel,
   LoggingOcoDoubleFillAlertChannel,
   LoggingOrphanAlertChannel,
   LoggingResidualExposureAlertChannel,
@@ -425,6 +426,23 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     config.traderConfig,
     config.tickIntervalMs ?? DEFAULT_TICK_INTERVAL_MS,
   );
+
+  // Fourth of the same family, and the one ADR-0013 calls a precondition of
+  // its own safety rather than a tidiness item (#638). With no human gate left
+  // anywhere, the numeric thresholds ARE the stop, so a config edit is the
+  // whole distance between this process and an arbitrary risk limit.
+  //
+  // The breaker half of the clamp runs inside `CircuitBreakers`' constructor
+  // below — every construction, not just this one. The kill lines have no
+  // constructor to hang it on, so they are refused here, before a store handle
+  // is open. Refused, never coerced: a silently clamped kill line reads as
+  // accepted, and the operator then believes a limit is in force that is not.
+  if (config.feedback !== undefined) {
+    assertKillThresholdsWithinBounds(
+      config.feedback.config.kill_thresholds,
+      'buildProductionComponents',
+    );
+  }
 
   // `capitalCeilingUsd` is optional on `ProductionConfig` (paper/backtest
   // boots and the hundreds of tests that never touch live money need not set
@@ -684,6 +702,12 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // reason `unpricedFillAlerts` is.
       ocoDoubleFillAlerts:
         config.ocoDoubleFillAlerts ?? new LoggingOcoDoubleFillAlertChannel(logger),
+      // #609: `AlpacaBrokerAdapterInput.logger`, required for the same reason
+      // `ExecutionInput.logger` is (#573) — a dropped wiring here is now a
+      // `tsc` error at every composition root instead of a silent gap a soak
+      // would have to surface. This is the same `logger` already built above
+      // for the rest of this composition root, not a second instance.
+      logger,
       ...(config.unpricedFillAgeOutMs === undefined
         ? {}
         : { unpricedFillAgeOutMs: config.unpricedFillAgeOutMs }),
@@ -1033,6 +1057,11 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // construction and `autoTighten`'s response to a kill-line breach
       // changes no decision.
       thresholds: tuningStore,
+      // #726: sink for the catch's own guarded `riskLog.write` failure —
+      // without it, a store failure while reporting a gate throw has nowhere
+      // to go but silent loss (still fine; see that catch's doc comment) with
+      // no trace at all.
+      logger,
     }),
     verdict: buildVerdictStep({
       ...breakerStateDeps,
@@ -1597,20 +1626,21 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     adjustments: new SqliteAdjustmentLog(config.db),
   };
   /**
-   * #366. Resolved once, outside the timer callback, for `feedbackStores`'
-   * reason — and read in the same precedence order the alert channels use: an
-   * explicit per-cycle override first, then the transport `SAMURAI_ALERTS`
-   * selected, then the log-only stand-in.
+   * #366, retargeted by #736. Resolved once, outside the timer callback, for
+   * `feedbackStores`' reason — and read in the same precedence order the alert
+   * channels use: an explicit per-cycle override first, then the transport
+   * `SAMURAI_ALERTS` selected, then the log-only stand-in.
    *
-   * Whichever wins, none of them can approve: the port returns `void`, so an
-   * unanswered request leaves the risk threshold untouched. That is
-   * fail-closed, and it is a property of `runDailyCycle` gating the write —
-   * not of the channel being trustworthy.
+   * Whichever wins, none of them gates anything: the port returns `void` and
+   * is asked nothing. Since ADR-0013 Decision 2 the cycle applies its own
+   * bounded loosenings and this channel only reports them, so a channel that
+   * fails to deliver costs visibility of a move that already happened — the
+   * bounds are what keep it safe, not the notice.
    */
-  const loosenApprovals =
-    config.feedback?.approvals ??
-    config.loosenApprovals ??
-    new LoggingLoosenApprovalChannel(logger);
+  const loosenNotices =
+    config.feedback?.loosenNotices ??
+    config.loosenNotices ??
+    new LoggingLoosenNotificationChannel(logger);
 
   /**
    * The detector's source, built once at construction (#379) — never per cycle,
@@ -1721,9 +1751,10 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         clock,
         ...feedbackStores,
         config: feedback.config,
-        approvals: loosenApprovals,
+        loosen_notices: loosenNotices,
         proposals: feedback.proposals ?? [],
-        mode: config.mode,
+        // No `mode` here since #736: the cycle ran one path in backtest and a
+        // different, gated one in paper and live, and the gate is gone.
       });
       logger.log({
         trace_id: 'feedback-cycle',

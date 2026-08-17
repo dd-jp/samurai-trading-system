@@ -38,7 +38,7 @@ export {
 } from './sources/alpaca-http-client.js';
 export type {
   AlpacaBar,
-  AlpacaClient,
+  AlpacaMarketDataClient,
   AlpacaQuote,
   AlpacaSourceOptions,
 } from './sources/alpaca-source.js';

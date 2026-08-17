@@ -14,7 +14,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Clock, InstrumentSubclass, OrderIntent } from '../../shared/index.js';
-import { RiskManagerImpl } from './index.js';
+import { PerSubclassCapUnresolvableError, RiskManagerImpl } from './index.js';
 import { RISK_THRESHOLD_KEYS } from './risk-thresholds.js';
 import type {
   BreakerState,
@@ -246,6 +246,24 @@ describe('ADR-0018 D5 deployment envelope', () => {
     expect(() => decide(intentFor('SPY', 10_000))).toThrow(/ADR-0018 D5/);
   });
 
+  it('#726: the unclassified-instrument throw carries a structured binding_constraint naming the instrument', () => {
+    // `direct-bind.ts`'s `buildRiskStep` catches this to write the `risk_log`
+    // row the throw would otherwise leave absent (#726) — it reads
+    // `bindingConstraint` directly rather than re-parsing the message, so this
+    // field is load-bearing for that fix, not incidental.
+    try {
+      decide(intentFor('SPY', 10_000));
+      expect.unreachable('expected perSubclassDeploymentCap to throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(PerSubclassCapUnresolvableError);
+      const typed = error as PerSubclassCapUnresolvableError;
+      expect(typed.instrument).toBe('SPY');
+      expect(typed.bindingConstraint).toBe(
+        'per_subclass_deployment_cap:unclassified_instrument:SPY',
+      );
+    }
+  });
+
   it('throws on a subclass missing from the cap record rather than sizing on NaN', () => {
     // `cap` is total over `InstrumentSubclass` at COMPILE time only, and
     // `subclass_of` is assembled from the pool file at runtime — so this pair
@@ -275,6 +293,25 @@ describe('ADR-0018 D5 deployment envelope', () => {
       SINGLE_STOCK_CAP,
       6,
     );
+  });
+
+  it('#726: the missing-cap throw carries a structured binding_constraint naming the subclass', () => {
+    const holed = {
+      subclass_of: SUBCLASS_OF,
+      cap: { single_stock_etp_3x: SINGLE_STOCK_CAP, crypto: null },
+    } as unknown as SubclassDeploymentCap;
+
+    try {
+      decide(intentFor('3USL', 10_000), {}, holed);
+      expect.unreachable('expected perSubclassDeploymentCap to throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(PerSubclassCapUnresolvableError);
+      const typed = error as PerSubclassCapUnresolvableError;
+      expect(typed.instrument).toBe('3USL');
+      expect(typed.bindingConstraint).toBe(
+        'per_subclass_deployment_cap:no_cap_for_subclass:index_etp_3x',
+      );
+    }
   });
 
   it('rejects rather than scaling in when the subclass is already at its envelope', () => {

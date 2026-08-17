@@ -18,7 +18,7 @@
  * would otherwise make quantity vanish from the accounting with no record,
  * unnoticed through a 14-day unattended soak (#238).
  *
- * `warn`, not `error` — the same distinction `LoggingLoosenApprovalChannel`
+ * `warn`, not `error` — the same distinction `LoggingLoosenNotificationChannel`
  * draws: nothing this call does is broken, the split still completes and the
  * poll still succeeds. This is a diagnostic trail for an invariant violation
  * elsewhere, not itself a failure of `ingestFills()`.

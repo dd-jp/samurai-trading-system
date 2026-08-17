@@ -1,4 +1,3 @@
-import itertools
 import json
 import re
 import subprocess
@@ -328,15 +327,44 @@ def diff_git_paths(raw_line: str) -> tuple[str, str] | None:
     return (rest[2 : splits[0]], rest[splits[0] + 3 :])
 
 
+# Read granularity for the streamed tail scan in `read_capped_diff` below.
+_TAIL_SCAN_READ_CHARS = 65536
+
+# A `diff --git a/<path> b/<path>` header line is bounded by real
+# path-length limits (a Linux/macOS path is capped at 4096 bytes each side),
+# so a not-yet-newline-terminated line already longer than this can never
+# still resolve into one. Past this point the rest of that line is dropped
+# rather than held, which is what keeps `read_capped_diff`'s scan bounded
+# even against a single line spanning megabytes with no embedded newline —
+# a minified or generated file, the exact case MAX_TOTAL_DIFF_CHARS cites as
+# the reason the read-time ceiling exists at all.
+_MAX_PENDING_LINE_CHARS = 16384
+
+
+def _cap_pending_line(pending: str, skipping: bool) -> tuple[str, bool]:
+    """Drop `pending` once it can no longer be a `diff --git` header line.
+
+    Returns the (possibly-cleared) buffer and whether the scan is now mid an
+    overlong line it has stopped tracking."""
+    if len(pending) > _MAX_PENDING_LINE_CHARS:
+        return "", True
+    return pending, skipping
+
+
 def read_capped_diff(
     path: str, limit: int = MAX_TOTAL_DIFF_CHARS
 ) -> tuple[str, list[str]]:
     """Read a diff file, bounded, cutting on a file boundary.
 
     Returns (diff_text, skipped_reasons). The remainder past the cut is
-    streamed a line at a time — never held in memory — purely to NAME the
-    files being dropped, so the banner can say what went unreviewed instead
-    of the run silently reviewing a prefix.
+    streamed in fixed-size chunks purely to NAME the files being dropped, so
+    the banner can say what went unreviewed instead of the run silently
+    reviewing a prefix. The not-yet-terminated tail line is bounded to
+    `_MAX_PENDING_LINE_CHARS` rather than held in full — a single line with
+    no embedded newline for megabytes (minified/generated output) would
+    otherwise defeat the point of streaming past the cut at all. Peak
+    retained text for this pass is therefore one read chunk plus that cap,
+    not "the whole file," but it is not literally zero either.
     """
     with open(path) as handle:
         text = handle.read(limit + 1)
@@ -355,15 +383,23 @@ def read_capped_diff(
 
         dropped: list[str] = []
         truncated_names = False
-        # Stitched, not chained: `read()` can stop mid-line, so a `diff --git`
-        # header straddling the boundary would be missed by any scheme that
-        # treats the two halves as separate chunks. `pending` carries the
-        # trailing partial line forward and never grows past one line.
-        pending = tail_start
-        for chunk in itertools.chain([""], handle):
+        # `pending` carries the trailing partial line forward across reads —
+        # a `diff --git` header straddling a chunk boundary would be missed
+        # by any scheme that treated reads as independent — capped by
+        # `_cap_pending_line` so it never grows past one bounded line
+        # regardless of how long the underlying line actually is.
+        pending, skipping_overlong_line = _cap_pending_line(tail_start, False)
+        for chunk in iter(lambda: handle.read(_TAIL_SCAN_READ_CHARS), ""):
             pending += chunk
             lines = pending.split("\n")
             pending = lines.pop()
+            if skipping_overlong_line and lines:
+                # `lines[0]` is only the TAIL of the line the cap made us
+                # stop tracking — its start is already gone, so it can never
+                # be parsed as a header. Everything after it is a normal,
+                # fully-seen line.
+                lines = lines[1:]
+                skipping_overlong_line = False
             for raw in lines:
                 paths = diff_git_paths(raw)
                 if paths is None:
@@ -372,8 +408,11 @@ def read_capped_diff(
                     dropped.append(paths[1])
                 else:
                     truncated_names = True
-        for raw in [pending]:
-            paths = diff_git_paths(raw)
+            pending, skipping_overlong_line = _cap_pending_line(
+                pending, skipping_overlong_line
+            )
+        if not skipping_overlong_line:
+            paths = diff_git_paths(pending)
             if paths is not None and len(dropped) < _MAX_NAMED_DROPPED_FILES:
                 dropped.append(paths[1])
 
@@ -514,6 +553,23 @@ class ReviewCoverage(NamedTuple):
     @property
     def is_complete(self) -> bool:
         return not self.content_was_lost and not self.coverage_unverified
+
+    @property
+    def no_usable_review(self) -> bool:
+        """True when the reviewer attempted at least one slice and NONE of
+        them came back usable — the shape #567 reports: the check goes green
+        having produced no review at all.
+
+        Deliberately narrower than `content_was_lost`: a PR where 9/10 slices
+        came back fine and one didn't is a partial-coverage disclosure, not a
+        "this reviewer never ran" failure — flagging that too would turn one
+        flaky slice on a large, legitimate PR into a red job, which is the
+        disruption the issue itself warns against. And `slices_total == 0`
+        (nothing was ever attempted — a no-op diff, or every byte skipped
+        before any model call) is excluded on purpose: nothing was attempted
+        there, which is a different failure mode than attempting and getting
+        nothing back."""
+        return self.slices_total > 0 and self.slices_reviewed == 0
 
     def disclosure(self) -> str:
         """Markdown banner naming exactly what went unread. Empty when the
@@ -939,14 +995,16 @@ def review_diff(
             if not _is_fatal_request_error(exc):
                 raise
             detail = safe_error_text(exc)
-            # An auth-class refusal can never be slice-specific: the key and
-            # the endpoint are shared by every call. Carrying on would buy up
-            # to MAX_SLICES-1 more guaranteed-identical failures at full
-            # price, so stop at the first one.
-            if _is_auth_request_error(exc):
+            # A shared-cause refusal (auth, endpoint, or a config-class 400 —
+            # see `_is_shared_cause_error`) can never be slice-specific.
+            # Carrying on would buy up to MAX_SLICES-1 more
+            # guaranteed-identical failures at full price, so stop at the
+            # first one.
+            if _is_shared_cause_error(exc):
                 raise RuntimeError(
-                    f"reviewer credentials or endpoint rejected on slice "
-                    f"{index + 1}/{len(plan.slices)}; no further slices attempted: {detail}"
+                    f"reviewer credentials, endpoint, or request configuration rejected "
+                    f"on slice {index + 1}/{len(plan.slices)}; no further slices "
+                    f"attempted: {detail}"
                 ) from None
             # A refusal about this slice's CONTENT (a provider content filter
             # tripping on one file) must not discard every other slice's
@@ -1049,6 +1107,17 @@ _FATAL_STATUS_CODES = frozenset({400, 401, 403, 404, 422})
 # slices, each of which is a paid call.
 _AUTH_STATUS_CODES = frozenset({401, 403})
 
+# The two request arguments `call_model` itself sets per call (not per
+# slice) — see its signature below. A 400 whose provider-reported `param`
+# names one of these is, by construction, about the REQUEST, not about
+# whatever diff content that request happened to carry: every remaining
+# slice sends the identical `max_tokens`/`model` and would be refused
+# identically. A 400 naming anything else (or naming nothing, which is the
+# common case — see `_request_param`) stays on the existing per-slice-content
+# path, because #601's own reasoning for leaving 400 alone still holds for
+# that case: a content filter can be slice-specific.
+_CONFIG_REQUEST_PARAMS = frozenset({"max_tokens", "model"})
+
 
 def _request_status(exc: BaseException) -> int | None:
     status = getattr(exc, "status_code", None)
@@ -1059,8 +1128,76 @@ def _request_status(exc: BaseException) -> int | None:
     return status if isinstance(status, int) else None
 
 
+def _request_param(exc: BaseException) -> str | None:
+    """The request parameter a 400 named as its cause, when the provider's
+    error body is OpenAI-shaped.
+
+    The openai SDK's `_make_status_error` unwraps the `{"error": {...}}`
+    envelope before constructing the exception, so a real `BadRequestError`
+    exposes `.param` directly (`APIError.__init__` reads it off the
+    already-unwrapped body). The `.body` fallback below covers a caller that
+    built the exception by hand (this file's own tests, or a future one)
+    rather than going through the SDK's error path, checking both the
+    unwrapped and the still-enveloped shape.
+
+    Returns None whenever `param` is absent in both shapes — which is the
+    ordinary case for Nous's endpoint: nothing in this codebase has ever
+    observed what shape its 4xx bodies take (see the comments elsewhere in
+    this file on its undocumented behaviour), so a 400 with no recognisable
+    `param` is treated as unclassifiable rather than guessed at, and falls
+    through to the existing per-slice-content path."""
+    param = getattr(exc, "param", None)
+    if isinstance(param, str):
+        return param
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        candidate = body.get("param")
+        if not isinstance(candidate, str):
+            nested = body.get("error")
+            candidate = nested.get("param") if isinstance(nested, dict) else None
+        if isinstance(candidate, str):
+            return candidate
+    return None
+
+
 def _is_auth_request_error(exc: BaseException) -> bool:
     return _request_status(exc) in _AUTH_STATUS_CODES
+
+
+def _is_config_request_error(exc: BaseException) -> bool:
+    """A 400 whose named `param` is one of OUR non-content request
+    arguments — see `_CONFIG_REQUEST_PARAMS`. Deliberately NOT a message
+    match: this file classifies fatal-vs-transient on the status code alone
+    (see `_is_fatal_request_error`), and matching text like "max_tokens" in
+    an error string would misclassify a message that merely quotes it back
+    without the request itself being at fault."""
+    return _request_status(exc) == 400 and _request_param(exc) in _CONFIG_REQUEST_PARAMS
+
+
+def _is_shared_cause_error(exc: BaseException) -> bool:
+    """True for a fatal refusal that cannot be about THIS slice's content:
+    the key and the endpoint (401/403/404) or a rejected non-content request
+    parameter (400 config-class) are identical on every call this run makes.
+    Carrying on would buy up to MAX_SLICES-1 more guaranteed-identical
+    failures at full price, so `review_diff` stops at the first one instead
+    of retrying across the remaining slices.
+
+    404 is unconditional, not param-gated like 400: the endpoint URL is
+    fixed for the whole run, so a 404 on slice 1 is a 404 on every slice
+    regardless of what that slice's diff contains — there is no
+    slice-specific reading of "wrong endpoint" the way there is for 400.
+
+    422 is deliberately NOT included: `_FATAL_STATUS_CODES`'s own comment
+    calls it "a rejected payload," which can turn on what was IN the
+    request (the diff itself), so unlike 404 it is not unconditionally
+    endpoint-level, and this file has no observed evidence from Nous's
+    endpoint to classify it further — it stays fatal-but-not-short-circuited,
+    same as an unclassifiable 400."""
+    return (
+        _is_auth_request_error(exc)
+        or _request_status(exc) == 404
+        or _is_config_request_error(exc)
+    )
 
 
 def _is_fatal_request_error(exc: BaseException) -> bool:
@@ -1266,4 +1403,11 @@ def build_review_payload(
         "comments": accepted,
         "event": event,
         "verdict": verdict,
+        # Read by the workflow to decide whether to (a) post a standalone PR
+        # comment naming the reviewer that produced nothing and (b) fail the
+        # job rather than let it report `pass` with no review behind it (#567).
+        # False, never absent, when there's no coverage info to check — a
+        # missing key would make a `payload.get("no_usable_review")` typo
+        # downstream silently mean "never fails" instead of erroring loudly.
+        "no_usable_review": coverage is not None and coverage.no_usable_review,
     }

@@ -58,7 +58,12 @@ export function intentSideFor(intentType: 'entry' | 'scale_in' | 'exit'): Intent
  * held.
  *
  * `decisionBarFor` in `decide.ts` is the one supported way to produce this
- * value; it floors `clock.now()` onto the same grid `debate_id` uses.
+ * value, and since #687 it PRODUCES nothing: it returns
+ * `DebateResult.bar_timestamp`, the bar the Debate stage floored and hashed
+ * into `debate_id`. It used to floor a `clock.now()` of its own onto the same
+ * grid, which agreed with the debate's read only while both landed in the same
+ * bar — a debate straddling an hour boundary keyed its intent to the NEXT bar
+ * and took the key that bar's own genuine decision would need.
  *
  * **FIXED (#686) — the payload now carries `side`, an open/close discriminator.**
  * Before it did not, and once the key became stable within a bar (#616) while

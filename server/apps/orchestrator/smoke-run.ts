@@ -117,8 +117,11 @@
  * forever — the run would submit orders and never ingest a fill. One frozen
  * instant for both collapses that gap to zero.
  */
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { deflateRawSync } from 'node:zlib';
+import { crc32, deflateRawSync } from 'node:zlib';
 import type {
   AssetClass,
   LlmClient,
@@ -128,7 +131,7 @@ import type {
 } from '../../pipeline/debate-engine/index.js';
 import { MAX_ROUNDS_BY_ASSET_CLASS, RateLimiter } from '../../pipeline/debate-engine/index.js';
 import type {
-  AlpacaClient,
+  AlpacaBrokerClient,
   AlpacaLimitOrderRequest,
   AlpacaOrder,
   AlpacaStopLimitOrderRequest,
@@ -152,7 +155,16 @@ import {
   SqliteBrokerStateStore,
   SqliteExecutionStore,
 } from '../../pipeline/execution/index.js';
-import type { SessionBasisByClass } from '../../pipeline/risk-manager/index.js';
+import {
+  assertKillThresholdsWithinBounds,
+  SqliteTuningStore,
+} from '../../pipeline/feedback-loop/index.js';
+import type {
+  BreakerConfig,
+  RiskConfig,
+  SessionBasisByClass,
+} from '../../pipeline/risk-manager/index.js';
+import { CircuitBreakers, resolveRiskConfig } from '../../pipeline/risk-manager/index.js';
 import type { VerdictDecision } from '../../pipeline/verdict/index.js';
 import type { Bar } from '../../providers/market-data-service/index.js';
 import {
@@ -167,7 +179,13 @@ import {
 } from '../../providers/market-intelligence/index.js';
 import { delay } from '../../shared/http/delay.js';
 import type { OrderIntent } from '../../shared/index.js';
-import { SimulatedClock, TokenBucket } from '../../shared/index.js';
+import {
+  boundFor,
+  GUARDED_THRESHOLD_NAMES,
+  SimulatedClock,
+  ThresholdBoundViolationError,
+  TokenBucket,
+} from '../../shared/index.js';
 import { openSharedStore, type SharedStore as SqliteHandle } from '../../shared/store/index.js';
 import type { CostConfig } from '../../tools/backtest/index.js';
 import { CostModelImpl } from '../../tools/backtest/index.js';
@@ -176,20 +194,29 @@ import {
   LoggingBreachAlertChannel,
   LoggingFlattenReconcileAlertChannel,
   LoggingHeartbeatChannel,
-  LoggingLoosenApprovalChannel,
+  LoggingLoosenNotificationChannel,
   LoggingOcoDoubleFillAlertChannel,
   LoggingOrphanAlertChannel,
   LoggingResidualExposureAlertChannel,
   LoggingUnpricedFillAlertChannel,
 } from './console-channels.js';
-import { startFromEnvironment } from './index.js';
-import { JsonLogger } from './logger.js';
+import { installFaultHandlers, startFromEnvironment } from './index.js';
+import { buildEntrypointLogger, JsonLogger, type StdoutStream } from './logger.js';
 import { paperStartingProfile } from './paper-profile.js';
 import { worstCaseLlmCallsForAssetClass } from './production/debate-adapter.js';
 import type { AccountStateProvider } from './production/direct-bind.js';
 import { buildExecutionSurface } from './production/direct-bind.js';
 import { SMOKE_TEST_UNIVERSE } from './production.js';
 import type { Logger } from './types.js';
+
+/**
+ * How many of `smokeGdeltClient`'s canned rows the theme filter should keep.
+ *
+ * Named because the gate below and the fixture above are the same fact stated
+ * twice: edit the fixture to carry three rows and a hardcoded `1` in the gate
+ * turns a correct run red, or worse, keeps passing for the wrong reason.
+ */
+const SMOKE_GDELT_EXPECTED_ROWS = 1;
 
 /**
  * A GDELT client serving one canned batch, over a real deflate zip.
@@ -201,19 +228,26 @@ import type { Logger } from './types.js';
  *
  * Two rows: one carrying a watched theme, one not, so the run's archived count
  * is 1 and a filter that has stopped filtering shows up as 2.
- */
-/**
- * How many of `smokeGdeltClient`'s canned rows the theme filter should keep.
  *
- * Named because the gate below and the fixture above are the same fact stated
- * twice: edit the fixture to carry three rows and a hardcoded `1` in the gate
- * turns a correct run red, or worse, keeps passing for the wrong reason.
+ * The `lastupdate.txt` fixture is GDELT's real three-line shape (export /
+ * mentions / gkg, each `size md5 url`), not the one-line stub this used to be
+ * (#713 item 4): `GdeltGkgClient.latestBatchUrl` selects the gkg entry by
+ * `.gkg.csv.zip` suffix out of three lines, per the client's own unit tests,
+ * and a one-line manifest here would still pass smoke if the client
+ * regressed to "parse line N". This does not cover every such regression —
+ * "parse the LAST line" would still happen to select the right entry, since
+ * gkg is listed last both here and in the real manifest — the reordered case
+ * is covered by `gdelt-gkg-client.test.ts`'s "selects the gkg file by
+ * suffix, not by line position", not by smoke.
  */
-const SMOKE_GDELT_EXPECTED_ROWS = 1;
-
 function smokeGdeltClient(): GdeltGkgClient {
   const stamp = '20260101120000';
   const url = `http://data.gdeltproject.org/gdeltv2/${stamp}.gkg.csv.zip`;
+  const lastupdate = [
+    `44212 c2b1cae80b87a07106acb37a837c014d http://data.gdeltproject.org/gdeltv2/${stamp}.export.CSV.zip`,
+    `61450 e86d6493d86819b56d5cc413828825df http://data.gdeltproject.org/gdeltv2/${stamp}.mentions.CSV.zip`,
+    `3370784 f7c5359b15d09d7e931f8338cd6a7e60 ${url}`,
+  ].join('\n');
   const row = (id: string, themes: string, tone: string): string => {
     const columns = new Array<string>(27).fill('');
     columns[0] = id;
@@ -230,11 +264,13 @@ function smokeGdeltClient(): GdeltGkgClient {
   ].join('\n');
 
   const name = Buffer.from(`${stamp}.gkg.csv`);
-  const deflated = deflateRawSync(Buffer.from(csv));
+  const uncompressed = Buffer.from(csv);
+  const deflated = deflateRawSync(uncompressed);
   const header = Buffer.alloc(30);
   header.writeUInt32LE(0x04034b50, 0);
   header.writeUInt16LE(20, 4);
   header.writeUInt16LE(8, 8);
+  header.writeUInt32LE(crc32(uncompressed), 14);
   header.writeUInt16LE(name.length, 26);
   header.writeUInt16LE(0, 28);
   const archive = Buffer.concat([header, name, deflated]);
@@ -242,7 +278,7 @@ function smokeGdeltClient(): GdeltGkgClient {
   return new GdeltGkgClient({
     fetchImpl: (async (input: string | URL) =>
       String(input).endsWith('lastupdate.txt')
-        ? new Response(`123 abc ${url}`)
+        ? new Response(lastupdate)
         : new Response(archive)) as unknown as typeof fetch,
   });
 }
@@ -263,12 +299,24 @@ const SMOKE_INSTRUMENT = SMOKE_TEST_UNIVERSE[0]?.asset ?? 'BTC-USD';
  * The fixture bar series, per timeframe. Each count is a floor forced by
  * something downstream, not a round number:
  *
+ * - `5m` x 60 — the technical analyst's `SMA_SPEC`/`RSI_SPEC` (#742 moved the
+ *   technical read from `1h` to `5m`, retaining `1h` only as context — see
+ *   below). #319's minimum-length guard in `computeIndicator` rejects a
+ *   window shorter than `period + 1`, so `RSI_SPEC`'s period-14 arithmetic
+ *   needs 15 bars as a HARD floor; `RSI_SPEC`'s own lookback is the converged
+ *   warm-up of **57** (`recommendedWarmupFor`), and 60 clears it by three —
+ *   but 57 is a SOFT floor: below it the RSI silently computes over a shorter
+ *   warm-up rather than throwing, so shrinking this series would degrade the
+ *   analyst's read without failing anything. `WARMUP_5M` (260) asks for more
+ *   than this series holds; `FixtureDataSource` returns however many exist
+ *   rather than padding, and `MarketDataServiceImpl.cachedBars`'s route 1
+ *   still collapses `SMA_SPEC`/`RSI_SPEC` to the one fetch this makes, since
+ *   60 already clears `RSI_SPEC.lookback`.
  * - `1h` x 60 — the Trader's ATR stop (`atr_timeframe: '1h'`,
- *   `atr_lookback: 14`) and the volatility breaker's ATR(14). #319's
- *   minimum-length guard in `computeIndicator` rejects a window shorter than
- *   `period + 1`, because `atr()` spends the first bar seeding
- *   `previousClose`, so 14 periods need 15 bars. 60 clears it with room for
- *   the `lookback: 15` spec and any warm-up a future indicator wants.
+ *   `atr_lookback: 14`, unchanged by #742) and the volatility breaker's
+ *   ATR(14) — same `period + 1` = 15-bar hard floor as above. Also now the
+ *   technical analyst's 1h CONTEXT read (`CONTEXT_CANDLE_LOOKBACK`, 20) —
+ *   60 clears that too.
  * - `1m` x 60 — the short-timeframe reads the Analysts take.
  * - `1d` x 40 — the widest daily consumers: `adv_window` (`{'1d', 20}`,
  *   `executionConfig.simulated`) and `correlationConfig` (`{'1d', 30}` with
@@ -281,6 +329,7 @@ const SMOKE_INSTRUMENT = SMOKE_TEST_UNIVERSE[0]?.asset ?? 'BTC-USD';
  * outgrows the fixtures fails a test rather than the gate.
  */
 const SMOKE_BAR_SERIES: readonly { timeframe: string; count: number; stepMs: number }[] = [
+  { timeframe: '5m', count: 60, stepMs: 5 * 60 * 1_000 },
   { timeframe: '1h', count: 60, stepMs: 60 * 60 * 1_000 },
   { timeframe: '1m', count: 60, stepMs: 60_000 },
   { timeframe: '1d', count: 40, stepMs: 24 * 60 * 60 * 1_000 },
@@ -298,12 +347,32 @@ const SMOKE_MARK_PRICE = 160;
  * SMA(14) AND RSI(14) is under 70 (`technical-analyst.ts` `directionFrom`), and
  * a monotonic ramp has no down bars at all, so its RSI is exactly 100: the
  * analyst returns `neutral`, "overbought", on the strongest possible uptrend.
- * These pullbacks put RSI at **63.16** and the close above its SMA, which is
+ * These pullbacks put RSI at **68.52** and the close above its SMA, which is
  * what the analyst actually needs.
  *
- * The RSI is identical for every entry in `SMOKE_BAR_SERIES` because the
- * indicator reads back exactly 15 closes — two whole cycles of this pattern —
- * so the timeframe's bar count cannot shift it.
+ * That was **63.16** until #722 re-pointed `RSI_SPEC` from the 15-bar
+ * fabrication floor to the converged `recommendedWarmupFor` of 57, which is the
+ * repricing that ticket accepted. The cycle is deliberately NOT re-tuned to
+ * restore the old number: 63.16 was a warm-up artefact, and fitting the fixture
+ * to reproduce it would be preserving exactly what #722 removed.
+ *
+ * **The margin to the overbought gate is now 1.48 points, not 6.84.** Wilder's
+ * smoothing weights this pattern's recent up-bars more heavily than the plain
+ * mean did, so the fixture sits closer to 70 than it used to; a future edit to
+ * `SMOKE_CLOSE_CYCLE` that adds any upward bias can push it over, at which
+ * point the analyst reads `neutral`/"overbought" and the gate fails with
+ * nothing traded. That failure is loud, which is why the thin margin is
+ * recorded rather than padded.
+ *
+ * Only the `5m` series feeds it (#742 moved `technical-analyst.ts`'s
+ * `INDICATOR_TIMEFRAME` from `1h` to `5m`), and 60 bars clears the 57 the spec
+ * asks for by three. `buildTrendingCloses` depends only on `count`/`lastClose`,
+ * not `timeframe`, so the `5m` series carries the identical close values the
+ * `1h` series used to (including RSI's exact 68.52/1.48-point margin above) —
+ * the move did not require retuning this cycle.
+ * `1d` x 40 does NOT clear it, which costs nothing today because no RSI reads
+ * daily bars — but it is why the count below is a floor forced by a consumer
+ * rather than a round number.
  */
 const SMOKE_CLOSE_CYCLE: readonly number[] = [-2, -2, -3, 3, 3, 3, 3];
 
@@ -480,7 +549,7 @@ export class FixedAccountStateProvider implements AccountStateProvider {
  * exercising a fabricated Alpaca. `smoke-run.test.ts` asserts it was never
  * touched.
  */
-export class UnreachableAlpacaClient implements AlpacaClient {
+export class UnreachableAlpacaClient implements AlpacaBrokerClient {
   /** Set if anything ever reached this client — asserted against in tests. */
   reached = false;
 
@@ -1279,7 +1348,7 @@ async function runExitPathScenarios(input: {
  * live API does, so a regression back to `order_class: 'bracket'` fails
  * this run the same way it would fail the soak.
  */
-class CryptoEmulationScenarioClient implements AlpacaClient {
+class CryptoEmulationScenarioClient implements AlpacaBrokerClient {
   private readonly orders = new Map<string, AlpacaOrder>();
   private readonly idsByClientOrderId = new Map<string, string>();
   /** Every venue order id a cancel reached — the sibling-cancel evidence. */
@@ -1422,7 +1491,10 @@ const CRYPTO_EMULATION_LOT_KEY = 'smoke-crypto-emulated-lot';
  * the entry, sweep (arms the legs), fill the stop, sweep (cancels the
  * sibling), then read the journal back off the SAME db the gate reads.
  */
-async function runCryptoEmulationScenario(db: SqliteHandle): Promise<CryptoEmulationEvidence> {
+async function runCryptoEmulationScenario(
+  db: SqliteHandle,
+  logger: Logger,
+): Promise<CryptoEmulationEvidence> {
   const client = new CryptoEmulationScenarioClient();
   const adapter = new AlpacaBrokerAdapter({
     client,
@@ -1431,6 +1503,9 @@ async function runCryptoEmulationScenario(db: SqliteHandle): Promise<CryptoEmula
     unpricedFillAlerts: {
       postUnpricedFillAlert: async () => {},
     },
+    // #609: the SAME logger `runSmoke` built above, not a second instance —
+    // matches the composition-root convention `production.ts` follows.
+    logger,
     // A double fill is impossible in this script (the target is cancelled
     // before it could ever fill), so an alert here is itself a defect —
     // thrown rather than swallowed, failing the run loudly.
@@ -1489,6 +1564,160 @@ async function runCryptoEmulationScenario(db: SqliteHandle): Promise<CryptoEmula
     siblingCancelled:
       targetVenueId !== undefined && client.cancelledOrderIds.includes(targetVenueId),
   };
+}
+
+/**
+ * What the logging-fault scenario (#714) observed. Every field is an EFFECT —
+ * a line on disk, a chosen exit code — not "an object was constructed".
+ */
+export interface LoggerResilienceEvidence {
+  /** Stdout was retired rather than retried after the pipe died. */
+  stdoutRetired: boolean;
+  /** The degradation notice reached the durable file — the failure was not lost. */
+  degradationRecordedInFile: boolean;
+  /** Lines that reached the file AFTER stdout died: the run kept its trace. */
+  linesAfterStdoutDeath: number;
+  /** A logger with nowhere to record the failure threw instead of continuing blind. */
+  escalatedWhenNothingCouldRecord: boolean;
+  /**
+   * That same logger still left the line on stderr. The throw alone is not
+   * enough: inside a tick it is swallowed by `safeLog` (#573), so stderr is the
+   * only trace that ordering produces.
+   */
+  lastResortTraceOnStderr: boolean;
+  /** The fault handler's record of an unhandled fault reached the durable file. */
+  fatalRecordedInFile: boolean;
+  /** The exit code the fault handler chose. Null if it never called `exit`. */
+  fatalExitCode: number | null;
+}
+
+/** A stdout that can be killed the way a real pipe dies: asynchronously. */
+class BreakablePipe implements StdoutStream {
+  private listener?: (error: Error) => void;
+  /** Set to make `write` throw, modelling synchronous (file/TTY) stdio. */
+  throwOn?: Error;
+  /** Lines that reached it while it was alive. */
+  readonly lines: string[] = [];
+
+  write(line: string): boolean {
+    if (this.throwOn !== undefined) throw this.throwOn;
+    this.lines.push(line);
+    return true;
+  }
+
+  on(_event: 'error', listener: (error: Error) => void): this {
+    this.listener = listener;
+    return this;
+  }
+
+  breakPipe(): void {
+    if (this.listener === undefined) {
+      throw new Error(
+        'smoke logging-fault scenario: nothing subscribed to stdout errors — ' +
+          '`buildEntrypointLogger` stopped calling `watchStdoutErrors` (#714), so a broken ' +
+          'pipe would reach `uncaughtException` and end an unattended soak',
+      );
+    }
+    this.listener(new Error('EPIPE: broken pipe'));
+  }
+}
+
+/**
+ * The logging-fault scenario (#714) — the pre-soak gate's fourth leg.
+ *
+ * A soak dies from a closed terminal only in production, never in a unit test,
+ * and the two mechanisms that stop it (`watchStdoutErrors` and
+ * `installFaultHandlers`) live at the entrypoint, which nothing else in this
+ * gate exercises. Wiring a mechanism means adding its enforcement assertion
+ * here (#430), so this drives BOTH against a REAL `RotatingFileSink` on disk
+ * and reads the resulting file back — the effect, not the construction.
+ *
+ * The file goes to a temp directory, removed afterwards: like the `:memory:`
+ * store, a gate must leave no artefacts in the checkout, and in particular
+ * must not create the `logs/` a real soak writes to.
+ */
+function runLoggerResilienceScenario(): LoggerResilienceEvidence {
+  const directory = mkdtempSync(join(tmpdir(), 'samurai-smoke-log-'));
+  try {
+    const filePath = join(directory, 'orchestrator.log');
+    const stdout = new BreakablePipe();
+    // The REAL entrypoint builder, so a regression that stops subscribing to
+    // stdout errors, or stops opening the file, fails this run.
+    const logger = buildEntrypointLogger(
+      { filePath, maxBytes: 1024 * 1024, maxRotatedFiles: 1 },
+      stdout,
+    );
+    const entry = (message: string) => ({
+      trace_id: 'smoke-logging-fault',
+      stage: 'orchestrator',
+      level: 'info' as const,
+      message,
+      payload: {},
+    });
+
+    logger.log(entry('before the pipe died'));
+    stdout.breakPipe();
+    logger.log(entry('after the pipe died'));
+
+    const afterPipe = readLogLines(filePath);
+    const degradationRecordedInFile = afterPipe.some(
+      (line) =>
+        (line.payload as { log_stdout_sink?: string } | undefined)?.log_stdout_sink === 'degraded',
+    );
+    const linesAfterStdoutDeath = afterPipe.filter(
+      (line) => line.message === 'after the pipe died',
+    ).length;
+
+    // The other half of the rule: with no sink able to hold the report, the
+    // logger must NOT degrade quietly.
+    let escalatedWhenNothingCouldRecord = false;
+    const deadStdout = new BreakablePipe();
+    deadStdout.throwOn = new Error('EBADF');
+    const stderrLines: string[] = [];
+    const sinkless = new JsonLogger(undefined, deadStdout, {
+      write: (line) => {
+        stderrLines.push(line);
+      },
+    });
+    try {
+      sinkless.log(entry('nowhere to go'));
+    } catch {
+      escalatedWhenNothingCouldRecord = true;
+    }
+    const lastResortTraceOnStderr = stderrLines.some((line) => line.includes('nowhere to go'));
+
+    // And the composition root's fault net: an unhandled fault is recorded
+    // durably and exits, rather than being shrugged off.
+    const exits: number[] = [];
+    const handlers = new Map<string, (error: unknown) => void>();
+    installFaultHandlers(logger, {
+      exit: (code) => exits.push(code),
+      stderr: () => {},
+      on: (event, handler) => handlers.set(event, handler),
+    });
+    handlers.get('uncaughtException')?.(new Error('smoke-injected fault'));
+
+    return {
+      stdoutRetired: logger.stdoutRetired,
+      degradationRecordedInFile,
+      linesAfterStdoutDeath,
+      escalatedWhenNothingCouldRecord,
+      lastResortTraceOnStderr,
+      fatalRecordedInFile: readLogLines(filePath).some((line) =>
+        line.message.includes('uncaughtException'),
+      ),
+      fatalExitCode: exits[0] ?? null,
+    };
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+function readLogLines(filePath: string): { message: string; payload?: unknown }[] {
+  return readFileSync(filePath, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { message: string; payload?: unknown });
 }
 
 /** One tick's audit trail: the stages it reached and what each decided. */
@@ -1709,6 +1938,126 @@ export interface SmokeGateResult {
  * conjunction for the same reason requirements 1-7 above are: each names a
  * different one of the six.
  */
+/**
+ * What the threshold-clamp probe (#638) observed. Every field records a
+ * REFUSAL that actually happened at a real seam, not that a validator exists.
+ */
+export interface ThresholdClampEvidence {
+  /**
+   * The guarded names this probe drove. Compared against
+   * `GUARDED_THRESHOLD_NAMES` by the gate, so deleting a row from the bounds
+   * table turns the gate red instead of quietly shrinking what is covered.
+   */
+  probedNames: readonly string[];
+  /** Guarded names the LIVE `risk_thresholds` read accepted out of bounds. */
+  liveReadAccepted: readonly string[];
+  /** Guarded names the Feedback Loop's write door accepted out of bounds. */
+  writeDoorAccepted: readonly string[];
+  /** The breaker constructor refused an out-of-bound drawdown pair. */
+  breakerConstructionRefused: boolean;
+  /** The kill-line boot check refused a softened PBO line. */
+  killLineCheckRefused: boolean;
+  /** The SHIPPED paper values still boot — the clamp bounds a dial, not forbids one. */
+  shippedConfigAccepted: boolean;
+}
+
+/** A value one whole unit outside whichever edge the bound states. */
+function outOfBoundValueFor(name: string): number {
+  const bound = boundFor(name);
+  if (bound === undefined) {
+    throw new Error(`smoke threshold-clamp probe: '${name}' has no bound — the table changed`);
+  }
+  if (bound.max !== undefined) return bound.max + 1;
+  if (bound.min !== undefined) return bound.min - 1;
+  throw new Error(`smoke threshold-clamp probe: '${name}' states neither edge`);
+}
+
+function refuses(probe: () => void): boolean {
+  try {
+    probe();
+    return false;
+  } catch (error) {
+    // Only a BOUNDS refusal counts. Any other throw — a TypeError from a
+    // changed shape, say — would otherwise read as the clamp working while the
+    // probe never reached it, which is the shape of defect this gate exists
+    // to catch. The aggregate form (several crossings at once) is a plain
+    // `Error` carrying the same sentence, so it is matched on the message.
+    if (error instanceof ThresholdBoundViolationError) return true;
+    return error instanceof Error && error.message.includes('in-code clamp');
+  }
+}
+
+/**
+ * The threshold-clamp scenario (#638) — negative probes through the REAL seams.
+ *
+ * ADR-0013 makes the numeric thresholds the only stop left: nothing re-arms by
+ * hand and nothing gates a loosening, so a config edit — or, since #736, the
+ * Feedback Loop on its own — is the entire distance between the running system
+ * and an arbitrary risk limit. Wiring a mechanism means adding its
+ * enforcement assertion here (#430), and the enforcement being asserted is a
+ * REFUSAL: for every guarded name, an out-of-bound value is pushed at each seam
+ * that can put a number into force, and the seam must reject it.
+ *
+ * The live read is the one that matters. `RiskManagerImpl.evaluate()`
+ * re-resolves its config from the `risk_thresholds` table on every call, so a
+ * boot-only clamp would constrain nothing the loop does between two ticks.
+ */
+function runThresholdClampScenario(
+  breakerConfig: BreakerConfig,
+  riskConfig: RiskConfig,
+): ThresholdClampEvidence {
+  const db = openSharedStore(':memory:');
+  try {
+    const store = new SqliteTuningStore(db, new SimulatedClock(SMOKE_RUN_INSTANT));
+    const liveReadAccepted: string[] = [];
+    const writeDoorAccepted: string[] = [];
+
+    for (const name of GUARDED_THRESHOLD_NAMES) {
+      const bad = outOfBoundValueFor(name);
+      if (!refuses(() => resolveRiskConfig(riskConfig, { [name]: bad }))) {
+        liveReadAccepted.push(name);
+      }
+      if (!refuses(() => store.setRiskThreshold(name, bad))) {
+        writeDoorAccepted.push(name);
+      }
+    }
+
+    return {
+      probedNames: [...GUARDED_THRESHOLD_NAMES],
+      liveReadAccepted,
+      writeDoorAccepted,
+      breakerConstructionRefused: refuses(
+        () =>
+          new CircuitBreakers({
+            ...breakerConfig,
+            // The pair the pre-existing relative width check happily accepts:
+            // 0.90 is strictly below 0.95, so ordering passes and the drawdown
+            // breaker never fires.
+            max_drawdown_pct: 0.95,
+            auto_rearm: { ...breakerConfig.auto_rearm, recovery_drawdown_pct: 0.9 },
+          }),
+      ),
+      killLineCheckRefused: refuses(() =>
+        assertKillThresholdsWithinBounds(
+          {
+            max_pbo: 0.5,
+            min_oos_sharpe: 0.5,
+            min_deflated_sharpe: 0.95,
+            max_live_backtest_divergence: 0.5,
+          },
+          'smoke threshold-clamp probe',
+        ),
+      ),
+      // The other half, and the reason this is not a one-sided check: a clamp
+      // that refused the shipped configuration would be a broken clamp, and
+      // every negative probe above would still pass.
+      shippedConfigAccepted: !refuses(() => new CircuitBreakers(breakerConfig)),
+    };
+  } finally {
+    db.close();
+  }
+}
+
 export function evaluateSmokeGate(
   observations: SmokeObservations,
   options: {
@@ -1759,6 +2108,23 @@ export function evaluateSmokeGate(
      * on the mechanism this gates.
      */
     cryptoEmulation: CryptoEmulationEvidence;
+    /**
+     * The logging-fault scenario's evidence (#714) — required for the same
+     * "compile error, not a silent no-op" reason the three above are. What it
+     * gates is a soak that dies on day three because someone closed its
+     * terminal: nothing else in this gate, and no unit test, exercises the
+     * entrypoint's stdout `'error'` subscription or its fault net.
+     */
+    loggerResilience: LoggerResilienceEvidence;
+    /**
+     * The threshold-clamp probe's evidence (#638) — required, not optional,
+     * for the same "compile error, not a silent no-op" reason the four above
+     * are. What it gates is the only stop ADR-0013 leaves standing: with no
+     * human gate anywhere, a config edit (or, after #736, the Feedback Loop by
+     * itself) is the entire distance between the running system and an
+     * arbitrary risk limit.
+     */
+    thresholdClamp: ThresholdClampEvidence;
   },
 ): SmokeGateResult {
   const failures: string[] = [];
@@ -1873,6 +2239,95 @@ export function evaluateSmokeGate(
   // that an object was constructed and not that a log line was emitted. A
   // check on construction passes for a component nothing calls, which is the
   // defect itself.
+  // #714 — the logging-fault mechanisms, asserted on their durable effects.
+  const logging = options.loggerResilience;
+  if (!logging.stdoutRetired || logging.linesAfterStdoutDeath === 0) {
+    failures.push(
+      'a dead stdout pipe did not leave the logger degraded-but-running — stdout was not ' +
+        `retired (${logging.stdoutRetired}) or nothing reached the file afterwards ` +
+        `(${logging.linesAfterStdoutDeath} lines). An unattended soak (#238) dies the moment ` +
+        'its terminal closes, which is #714 exactly',
+    );
+  }
+  if (!logging.degradationRecordedInFile) {
+    failures.push(
+      'stdout failed and nothing recorded it on the surviving sink — the run would continue ' +
+        'blind, and a sink that silently stopped working is indistinguishable from a quiet ' +
+        'system (#714)',
+    );
+  }
+  if (!logging.escalatedWhenNothingCouldRecord) {
+    failures.push(
+      'a logger with no sink left to record on swallowed its failure instead of throwing — ' +
+        'the degrade in #714 is only honest because it stops when the failure can no longer ' +
+        'be written down anywhere',
+    );
+  }
+  if (!logging.lastResortTraceOnStderr) {
+    failures.push(
+      'a logger with no sink left threw but wrote nothing to stderr — and that throw is raised ' +
+        "inside a tick, where tick-loop's catch and safeLog swallow it by design (#573). " +
+        'Without the stderr line the run would keep trading with no trace on any stream (#714)',
+    );
+  }
+  if (!logging.fatalRecordedInFile || logging.fatalExitCode !== 1) {
+    failures.push(
+      'an unhandled fault was not recorded durably and exited with ' +
+        `${logging.fatalExitCode ?? 'no code'} rather than 1 — the fault net must record where ` +
+        'a soak can find it and STOP. A live-money process that keeps running in an unknown ' +
+        'state with open positions is worse than one that dies (#714)',
+    );
+  }
+
+  // #638 — the in-code clamp on the last stop ADR-0013 leaves standing.
+  const clamp = options.thresholdClamp;
+  const missingFromProbe = GUARDED_THRESHOLD_NAMES.filter(
+    (name) => !clamp.probedNames.includes(name),
+  );
+  if (missingFromProbe.length > 0 || clamp.probedNames.length !== GUARDED_THRESHOLD_NAMES.length) {
+    failures.push(
+      `the threshold-clamp probe covered ${clamp.probedNames.length} of ` +
+        `${GUARDED_THRESHOLD_NAMES.length} guarded thresholds (missing: ` +
+        `${missingFromProbe.join(', ') || 'none'}) — a bounds-table entry that nothing probes ` +
+        'is a limit nobody has seen enforced (#638)',
+    );
+  }
+  if (clamp.liveReadAccepted.length > 0) {
+    failures.push(
+      `the LIVE risk_thresholds read accepted out-of-bound values for ` +
+        `${clamp.liveReadAccepted.join(', ')} — RiskManagerImpl.evaluate() re-resolves its ` +
+        'config from that table on every call, so this is the path the Feedback Loop moves a ' +
+        'dial on between two ticks, with no boot in between (#638/ADR-0013)',
+    );
+  }
+  if (clamp.writeDoorAccepted.length > 0) {
+    failures.push(
+      `the Feedback Loop write door accepted out-of-bound values for ` +
+        `${clamp.writeDoorAccepted.join(', ')} — ADR-0013 requires every dial change to be ` +
+        'rejected in code if it would cross a hard bound, and after #736 there is nobody in ' +
+        'the path at all (#638)',
+    );
+  }
+  if (!clamp.breakerConstructionRefused) {
+    failures.push(
+      'the breaker constructor accepted a 0.95/0.90 drawdown pair — the pre-existing check is ' +
+        'a relative ordering test only, so this boots a system whose hard drawdown breaker ' +
+        'can never fire (#638)',
+    );
+  }
+  if (!clamp.killLineCheckRefused) {
+    failures.push(
+      'the kill-line boot check accepted a PBO threshold of 0.5 — CONTEXT.md states 0.05 as a ' +
+        'bright line and the Feedback Loop holds the only mutable copy of it (#638)',
+    );
+  }
+  if (!clamp.shippedConfigAccepted) {
+    failures.push(
+      'the shipped paper breaker configuration is itself refused by the clamp — the bound is ' +
+        'wrong, not the config, and every negative probe above would still pass (#638)',
+    );
+  }
+
   if (debates.length > 0 && observations.cosineSetups.length === 0) {
     failures.push(
       'a debate resolved and reached the Trader, but no row in cosine_setups — `decide()` did ' +
@@ -2548,7 +3003,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // below).
       ocoDoubleFillAlerts: new LoggingOcoDoubleFillAlertChannel(logger),
       breachAlerts: new LoggingBreachAlertChannel(logger),
-      loosenApprovals: new LoggingLoosenApprovalChannel(logger),
+      loosenNotices: new LoggingLoosenNotificationChannel(logger),
       analystSkipAlerts: new LoggingAnalystSkipAlertChannel(logger),
       // #576: recorded, not just logged — see `tickLoopResidualAlerts` above.
       // Became an `ALERT_CHANNEL_FIELDS` member in #551 (the eighth channel);
@@ -2632,7 +3087,17 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     // #586: the emulated crypto protective legs, on the REAL AlpacaBrokerAdapter
     // over the same db — its own lot key and its own scripted client, so it
     // contends with nothing above.
-    const cryptoEmulation = await runCryptoEmulationScenario(db);
+    const cryptoEmulation = await runCryptoEmulationScenario(db, logger);
+
+    // #714: the entrypoint's logging-fault mechanisms, on a real file sink in
+    // a temp directory. Independent of the store and the clock, so it runs
+    // beside the three scenarios above rather than inside any of them.
+    const loggerResilience = runLoggerResilienceScenario();
+
+    // #638: negative probes through every seam that can put a risk threshold
+    // into force, against the SHIPPED paper values. Its own in-memory store, so
+    // it writes nothing the observations below read back.
+    const thresholdClamp = runThresholdClampScenario(profile.breakerConfig, profile.riskConfig);
 
     const observations = readSmokeObservations(db, smokeMiArchive);
     const gate = evaluateSmokeGate(observations, {
@@ -2640,6 +3105,8 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       alpacaWireClientReached: alpacaBrokerClient.reached,
       llmRateLimiterSnapshot: llmRateLimiter.snapshot(),
       cryptoEmulation,
+      loggerResilience,
+      thresholdClamp,
       exitPath: {
         ...exitPathHarnessResult,
         // Alerts from BOTH the six-stage tick loop and the exit-path harness —

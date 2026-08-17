@@ -1,5 +1,5 @@
 /**
- * Shared test fixture (issue #362 review). An `AlpacaClient` whose `getBars`
+ * Shared test fixture (issue #362 review). An `AlpacaMarketDataClient` whose `getBars`
  * genuinely tracks the requested `limit` — unlike this module's other test
  * doubles, which return a fixed array regardless of args. Generates exactly
  * `limit` sequential hourly candles ending at the CURRENT (forming) hour
@@ -14,9 +14,9 @@
  * regression, through a real empty store) — same generator, two different
  * assertions on top of it.
  */
-import type { AlpacaBar, AlpacaClient } from './sources/alpaca-source.js';
+import type { AlpacaBar, AlpacaMarketDataClient } from './sources/alpaca-source.js';
 
-export function formingCandleClient(quoteAsOf: Date): AlpacaClient {
+export function formingCandleClient(quoteAsOf: Date): AlpacaMarketDataClient {
   return {
     getBars: async (_symbol, _timeframe, asOf, limit): Promise<AlpacaBar[]> => {
       const hourFloor = new Date(asOf);

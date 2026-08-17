@@ -43,9 +43,12 @@ has to name its convention rather than trust a library.
 Three behaviours here are conventions, not mathematics, and the goldens exist
 to make a change to any of them a failing test rather than a silent reprice:
 
-  1. `avgLoss == 0` returns 100. On a strictly rising window that is the
-     standard answer. On a DEAD FLAT window it is also 100 — see the
-     `flat_*` cases, which are in the fixture on purpose.
+  1. `avgLoss == 0` returns 100, UNLESS `avgGain` is also 0, in which case it
+     returns 50 (#725). On a strictly rising window (`avgGain > 0`) 100 is
+     the standard answer. On a DEAD FLAT window — every change zero, both
+     averages 0 — `0/0` is not "maximum strength going up", it is "no
+     information", so it takes 50, the neutral midpoint — see the `flat_*`
+     cases, which are in the fixture on purpose.
   2. Recursive kinds (`ema`, `rsi`, `atr`) depend on the WHOLE window, not
      just the last `period` bars, so `lookback` is a real input: the same
      `period` over a longer warm-up is a different number. The
@@ -206,9 +209,14 @@ def ema_series(closes, period):
 
 
 def _rsi_from(avg_gain, avg_loss):
-    # The convention, stated where it happens: no down-moves in the smoothed
-    # average means RSI 100, INCLUDING the case where there were no up-moves
-    # either. A dead-flat window reads as maximally overbought.
+    # The convention, stated where it happens (#725, `indicators.ts`'s `rsi`).
+    # `avg_gain == 0 and avg_loss == 0` is checked FIRST and separately: a
+    # dead-flat window — every change zero — is "no information", not
+    # "maximally overbought", so it answers the neutral midpoint 50 rather
+    # than falling into the `avg_loss == 0` branch below. That branch still
+    # answers 100 for a strictly rising window, where `avg_gain > 0`.
+    if avg_gain == 0 and avg_loss == 0:
+        return 50.0
     if avg_loss == 0:
         return 100.0
     rs = avg_gain / avg_loss
@@ -404,7 +412,17 @@ def build_cases():
         14,
         240,
         260,
-        "high == low == open == close: RSI reads 100 on a market that has not moved",
+        "high == low == open == close: avgGain == avgLoss == 0, RSI reads the "
+        "neutral midpoint 50 rather than the 100 a strictly rising window gets (#725)",
+    )
+    case(
+        "flat_dojis_rsi_5",
+        "rsi",
+        5,
+        240,
+        260,
+        "same dead-flat segment, a different period: RSI 50 on a halted/auction "
+        "tape does not depend on which period asked for it (#725)",
     )
     case(
         "flat_dojis_atr_14",

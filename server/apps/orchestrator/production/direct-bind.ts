@@ -40,6 +40,7 @@ import type {
   CircuitBreakers,
   PersistedBreakerState,
   RiskConfig,
+  RiskDecision,
   RiskThresholdSource,
   SessionBasisByClass,
   VolatilityReading,
@@ -49,6 +50,7 @@ import {
   computeCorrelationEstimate,
   computePortfolioView,
   countryForInstrument,
+  PerSubclassCapUnresolvableError,
   RiskManagerImpl,
 } from '../../../pipeline/risk-manager/index.js';
 import type { TraderConfig } from '../../../pipeline/trader/index.js';
@@ -79,7 +81,7 @@ import type {
   SetupStore,
   TraderLogStore,
 } from '../../../shared/index.js';
-import { sanitizeLogText } from '../../../shared/index.js';
+import { describeThrown, safeLog, sanitizeLogText } from '../../../shared/index.js';
 // Aliased: this module already imports a DIFFERENT `SharedStore` above (an
 // unrelated `execution/index.js` interface, `ExecutionStepDeps.store`'s
 // type) — the alias names which one `VerdictStepDeps.store` actually is,
@@ -527,6 +529,14 @@ export interface RiskStepDeps extends BreakerStateDeps {
   thresholds?: RiskThresholdSource;
   /** #328: the decision record. Same optionality rationale as `traderLog`. */
   riskLog?: RiskLogStore;
+  /**
+   * #726: where the catch around `evaluate()` reports a failed `riskLog.write`
+   * itself (guarding that write must not let a store failure replace the
+   * original gate error — see the catch's own doc comment). Same
+   * optionality rationale as the trader step's `logger` above: a test can
+   * stay silent, the production path supplies the real sink.
+   */
+  logger?: Logger;
 }
 
 export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
@@ -562,30 +572,10 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
     // "the critic was never consulted". The mechanical steps remain the safety
     // net. Do not read this comment as "wiring pending" — the step has never
     // run in any environment. See docs/reviews/triage-2026-08-06.md F-5.
-    const decision = riskManager.evaluate({
-      trace_id,
-      intent,
-      clock,
-      portfolio,
-      breakers,
-      next_breaker_state,
-      correlation,
-      cii,
-      mode: deps.mode,
-    });
-
-    // Written on rejection too — the case that has no downstream record at all
-    // today, since a rejected intent never reaches Verdict.
     const daily = portfolio.daily_pnl;
-    deps.riskLog?.write({
+    const riskLogBase = {
       trace_id,
       instrument: intent.instrument,
-      status: decision.status,
-      binding_constraint: decision.binding_constraint,
-      reasons: decision.reasons,
-      original_size: decision.modifications?.original_size ?? null,
-      final_size: decision.modifications?.final_size ?? null,
-      stop_tightened: decision.modifications?.stop_tightened ?? false,
       breakers: {
         portfolio_tripped: breakers.portfolio_tripped,
         crypto_tripped: breakers.asset_class_tripped.crypto,
@@ -606,6 +596,83 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
         daily_pnl_unknown_reason: daily.portfolio.known ? null : daily.portfolio.reason,
       },
       created_at: clock.now(),
+    };
+
+    let decision: RiskDecision;
+    try {
+      decision = riskManager.evaluate({
+        trace_id,
+        intent,
+        clock,
+        portfolio,
+        breakers,
+        next_breaker_state,
+        correlation,
+        cii,
+        mode: deps.mode,
+      });
+    } catch (error) {
+      // #726: `perSubclassDeploymentCap` (risk-manager/index.ts) is the only
+      // entry gate that throws rather than returning a decision — deliberately,
+      // per that gate's own doc comment, so a half-populated pool file cannot
+      // look like a quiet market with no setups. But a throw skips the
+      // `riskLog.write` below entirely, so the refused instrument left NO
+      // `risk_log` row at all, only the durable-but-separate `audit_log` row
+      // and log line #507's catch in `tick-loop.ts` produces one level up.
+      // This is the fix: write the row HERE, from the catch, naming the
+      // unresolved subclass when the error is the one this gate throws — then
+      // RE-THROW UNCHANGED. The throw itself must still reach #507's catch;
+      // this only adds a durable record beside it, it does not replace it.
+      const binding_constraint =
+        error instanceof PerSubclassCapUnresolvableError
+          ? error.bindingConstraint
+          : `risk_evaluate_error:${intent.instrument}`;
+      // Guarded the same way #507's own side effects are guarded
+      // (tick-loop.ts): this write must not itself throw and replace the
+      // original error before it reaches #507's catch one layer up — that
+      // would trade "3USL has no subclass" for an opaque SQLite failure and
+      // destroy the exact diagnostic this fix exists to preserve. A failure
+      // here is logged, not silently dropped, then the ORIGINAL error still
+      // propagates unconditionally via the outer `throw error;` below.
+      try {
+        deps.riskLog?.write({
+          ...riskLogBase,
+          status: 'error',
+          binding_constraint,
+          reasons: [describeThrown(error)],
+          original_size: null,
+          final_size: null,
+          stop_tightened: false,
+        });
+      } catch (logError) {
+        if (deps.logger) {
+          safeLog(deps.logger, {
+            trace_id,
+            stage: 'risk',
+            level: 'error',
+            message: `risk_log write failed for a gate throw on ${intent.instrument}`,
+            payload: {
+              instrument: intent.instrument,
+              binding_constraint,
+              original_error: describeThrown(error),
+              log_error: describeThrown(logError),
+            },
+          });
+        }
+      }
+      throw error;
+    }
+
+    // Written on rejection too — the case that has no downstream record at all
+    // today, since a rejected intent never reaches Verdict.
+    deps.riskLog?.write({
+      ...riskLogBase,
+      status: decision.status,
+      binding_constraint: decision.binding_constraint,
+      reasons: decision.reasons,
+      original_size: decision.modifications?.original_size ?? null,
+      final_size: decision.modifications?.final_size ?? null,
+      stop_tightened: decision.modifications?.stop_tightened ?? false,
     });
 
     return decision;

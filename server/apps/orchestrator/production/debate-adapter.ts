@@ -57,10 +57,11 @@
  * was constructed in `production.ts` and called by nothing, so a live paper run
  * of fully converged debates left the table at zero rows and
  * `feedback-loop/attribution.ts` with no input at all. The write belongs here
- * rather than in `tick-runner.ts` because this is the only place that holds
- * BOTH the resolved `DebateResult` and the exact `bar` that went into its
- * `debate_id` hash — the tick runner would have to call `clock.now()` a second
- * time and would stamp the row with a bar the id does not encode. See
+ * because this is where the row's inputs are: the resolved `DebateResult`, the
+ * instrument, the trace id and the clock. The bar is no longer among those
+ * reasons — since #687 it rides on `DebateResult.bar_timestamp`, so
+ * `buildDebateLog` projects it off the result and no caller can stamp a row
+ * with a bar the `debate_id` does not encode. See
  * `persistDebateLog` for what is written when a debate does not converge, and
  * what is deliberately not written when one fails partway.
  */
@@ -381,12 +382,11 @@ function persistDebateLog(params: {
   store: DebateLogStore;
   result: DebateResult;
   instrument: string;
-  bar: Date;
   clock: Clock;
   trace_id: string;
   logger: Logger | undefined;
 }): DebateLog | undefined {
-  const { store, result, instrument, bar, clock, trace_id, logger } = params;
+  const { store, result, instrument, clock, trace_id, logger } = params;
 
   const winner = store.getByDebateId(result.debate_id);
   if (winner !== undefined) {
@@ -418,7 +418,7 @@ function persistDebateLog(params: {
   // within the same bar carries a FRESH trace against the same content-hashed
   // `debate_id` and must not overwrite the attribution of the debate it did
   // not run.
-  store.writeLog(buildDebateLog(result, instrument, bar, clock.now(), trace_id));
+  store.writeLog(buildDebateLog(result, instrument, clock.now(), trace_id));
 
   return undefined;
 }
@@ -487,7 +487,11 @@ export function worstCaseLlmCallsForAssetClass(assetClass: AssetClass): number {
  * `accumulateCredit` cannot distinguish from a real debate in which no analyst
  * took a stance.
  */
-export function rateLimitedDebateResult(debate_id: string, reason: string): DebateResult {
+export function rateLimitedDebateResult(
+  debate_id: string,
+  bar: Date,
+  reason: string,
+): DebateResult {
   return {
     synthesis: `Debate not started: ${reason}`,
     position: 'No position — the debate was not admitted under the LLM rate-limit budget.',
@@ -500,6 +504,11 @@ export function rateLimitedDebateResult(debate_id: string, reason: string): Deba
     latency_ms: 0,
     direction: 'neutral',
     debate_id,
+    // The bar this tick belongs to, even though no debate ran (#687). The
+    // Trader short-circuits on `confidence: 0` and never keys an order off it,
+    // but the field is required by the contract precisely so that no producer
+    // gets to leave the coordinate unstated for a later consumer to re-derive.
+    bar_timestamp: bar,
     rate_limited: { reason },
   };
 }
@@ -515,9 +524,13 @@ export function rateLimitedDebateResult(debate_id: string, reason: string): Deba
  * already understands as "the debate was not admitted"; the reason string is
  * what distinguishes them.
  */
-export function spendCappedDebateResult(debate_id: string, reason: string): DebateResult {
+export function spendCappedDebateResult(
+  debate_id: string,
+  bar: Date,
+  reason: string,
+): DebateResult {
   return {
-    ...rateLimitedDebateResult(debate_id, reason),
+    ...rateLimitedDebateResult(debate_id, bar, reason),
     position: 'No position — the debate was not admitted under the LLM spend cap.',
   };
 }
@@ -565,6 +578,12 @@ export function replayedDebateResult(persisted: ReplayableDebateLog): DebateResu
     latency_ms: 0,
     direction: persisted.direction,
     debate_id: persisted.debate_id,
+    // Read off the ROW, exactly like `debate_id` above and for the same reason
+    // (#687). This is the case a re-derivation gets wrong most cheaply: the row
+    // was written in bar N, this replay may be serving a tick minutes later —
+    // including a tick after a process restart — and the intent must be keyed
+    // to the bar the row records, not to whenever the replay happened to run.
+    bar_timestamp: persisted.bar_timestamp,
   };
 }
 
@@ -762,7 +781,7 @@ export function buildDebateStep(
           budget_usd: spend.budget_usd,
         },
       });
-      return spendCappedDebateResult(debate_id, spend.reason ?? 'spend cap reached');
+      return spendCappedDebateResult(debate_id, bar, spend.reason ?? 'spend cap reached');
     }
 
     const reservation = rateLimiter.reserve(
@@ -781,7 +800,7 @@ export function buildDebateStep(
           "universe's real debate rate, not that the market is quiet.",
         payload: { instrument, asset_class, debate_id },
       });
-      return rateLimitedDebateResult(debate_id, reservation.reason);
+      return rateLimitedDebateResult(debate_id, bar, reservation.reason);
     }
 
     // METERING, per call, for the debate just admitted. Wrapped here rather
@@ -828,6 +847,9 @@ export function buildDebateStep(
         assetClass: asset_class,
         trace_id,
         debate_id,
+        // The same floored read that produced `debate_id`, so a timed-out
+        // debate's fallback result names the bar it was taken in (#687).
+        bar,
         produceResult: (signal) =>
           runDebate({ views, instrument, bar }, personas, {
             signal,
@@ -868,7 +890,6 @@ export function buildDebateStep(
       store: debateLog,
       result: weighted,
       instrument,
-      bar,
       clock,
       trace_id,
       logger,

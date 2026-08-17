@@ -68,6 +68,18 @@ export class GdeltIngestAgent {
   private current: Promise<boolean> | undefined;
 
   /**
+   * Aborts the in-flight poll's rate-limiter wait, if it has one (#702).
+   *
+   * Created alongside `current` and cleared alongside it. `whenIdle` fires
+   * this before awaiting `current` — it is the "signals" half of "signals,
+   * then awaits the settled poll". Firing it when no poll is running (or when
+   * the running poll is already past the rate limiter) is harmless: an
+   * `AbortController` with no listener left to abandon just sets `aborted`
+   * and nothing reads it again.
+   */
+  private currentAbort: AbortController | undefined;
+
+  /**
    * The most recent batch this process has *decoded*, held or not.
    *
    * The archive cursor only knows about batches that produced rows, so a batch
@@ -83,15 +95,18 @@ export class GdeltIngestAgent {
   /**
    * Logs, absorbing a throw from the logger itself.
    *
-   * Not paranoia about a hypothetical: `JsonLogger`'s `process.stdout.write` is
-   * deliberately unguarded (`shared/safe-log.ts` sets out why), so an EPIPE on a
-   * broken pipe throws out of `log`. Everywhere else in the pipeline that would
-   * surface as a rejected promise some caller awaits. Here it would not —
-   * `production.ts` is the only site in the repo that calls an agent as
-   * `void refresh(...)`, and no `process.on('unhandledRejection')` handler is
-   * installed, so on Node 22 an escaped rejection terminates a process that is
-   * meant to run unattended for fourteen days. The "never throws" contract
-   * `refresh` advertises has to cover its own logging or it is not a contract.
+   * Not paranoia about a hypothetical: `JsonLogger` throws when no sink is
+   * left that could record its own failure (#714 — a broken stdout pipe alone
+   * no longer does it, but a broken pipe *plus* a dead file sink does), and an
+   * injected `Logger` can throw for any reason. Everywhere else in the
+   * pipeline that would surface as a rejected promise some caller awaits. Here
+   * it would not — `production.ts` is the only site in the repo that calls an
+   * agent as `void refresh(...)`. #714 installed
+   * `process.on('unhandledRejection')` at the orchestrator entrypoint, and it
+   * deliberately EXITS rather than swallowing (see `installFaultHandlers`), so
+   * an escaped rejection here still ends a run meant to be unattended for
+   * fourteen days. The "never throws" contract `refresh` advertises has to
+   * cover its own logging or it is not a contract.
    */
   private log(entry: LogEntry): void {
     const logger = this.deps.logger;
@@ -135,15 +150,45 @@ export class GdeltIngestAgent {
    *
    * Concurrent calls do not stack: a call made while a poll is in flight returns
    * `false` immediately rather than starting a second download.
+   *
+   * The "never throws" contract used to hold by audit rather than structure:
+   * `poll`'s own try/catch covers the fetch, but `effectiveCursor()`'s SQLite
+   * read and `clock.now()` sit outside it, so a closed-store throw (shutdown
+   * racing a stray poll) or a throwing clock would have escaped `poll`
+   * uncaught (#713 items 5 and 6). The catch below closes that: it wraps the
+   * WHOLE poll, not just the fetch, so anything `poll` throws — now or from
+   * code added there later — degrades to a warn instead of an unhandled
+   * rejection in `production.ts`'s `void refresh(...)`. It does not change
+   * what `poll`'s inner try/catch already handles: an aborted or failed fetch
+   * is still caught there first and still logs "batch fetch failed" (see
+   * `whenIdle`) — this only catches what THAT catch does not.
    */
   async refresh(trace_id = 'gdelt-ingest'): Promise<boolean> {
     if (this.current !== undefined) return false;
-    const run = this.poll(trace_id);
+    const abortController = new AbortController();
+    this.currentAbort = abortController;
+    const run = this.poll(trace_id, abortController.signal).catch((error: unknown) => {
+      this.logFailure(
+        {
+          trace_id,
+          stage: 'market_intelligence',
+          level: 'warn',
+          message:
+            'market intelligence: GDELT poll failed outside the fetch/write paths (cursor read ' +
+            'or clock); no macro rows archived this poll. Not fatal — the tick continues on ' +
+            'whatever the archive already holds.',
+        },
+        error,
+        { source: SOURCE_GDELT },
+      );
+      return false;
+    });
     this.current = run;
     try {
       return await run;
     } finally {
       this.current = undefined;
+      this.currentAbort = undefined;
     }
   }
 
@@ -155,15 +200,36 @@ export class GdeltIngestAgent {
    * store the shutdown has since closed. The write is guarded, so this is a
    * cleaner shutdown rather than a correctness fix, but "degrades to a warn" is
    * a worse contract than "does not happen".
+   *
+   * Bounded rather than merely awaited (#702): the in-flight poll it drains can
+   * be parked on `GdeltGkgClient`'s rate limiter (up to ~5s per token on the
+   * shipped pacing), waiting on a request, or mid-download. Signalling
+   * `currentAbort` before awaiting abandons the FIRST of those instantly — a
+   * parked poll has done no work and ordered nothing — while leaving the other
+   * two to settle on their own, because a poll that already reached the
+   * network is the one whose archive write this drain exists to order.
+   * `GdeltGkgClient`'s header has the fuller argument for why the two are not
+   * treated the same. The abort surfaces through `poll`'s own try/catch as an
+   * `AbortError`, which logs the same "batch fetch failed" warn any other
+   * fetch failure does — no new failure mode.
    */
   async whenIdle(): Promise<void> {
+    this.currentAbort?.abort();
     await this.current?.catch(() => undefined);
   }
 
-  private async poll(trace_id: string): Promise<boolean> {
+  private async poll(trace_id: string, signal: AbortSignal): Promise<boolean> {
+    // Read OUTSIDE the fetch try/catch, deliberately (#713 item 5). This is a
+    // SQLite read (`archive.latestUpdatedAt`), not a network call, and a
+    // closed store — shutdown racing a stray poll — throws here, not from the
+    // fetch. Inside the try below it would have been caught and logged as
+    // "GDELT batch fetch failed", which is the wrong cause: nothing was
+    // fetched. Left outside, it propagates to `refresh`'s blanket catch, which
+    // logs it under its own name instead.
+    const cursor = this.effectiveCursor();
     let batch: GdeltGkgBatch;
     try {
-      const url = await this.deps.client.latestBatchUrl();
+      const url = await this.deps.client.latestBatchUrl(signal);
       const candidate = batchTimeFromUrl(url);
       if (candidate === undefined) {
         // Abandoned here rather than fallen through to the download, because
@@ -188,9 +254,8 @@ export class GdeltIngestAgent {
       // 15-minute publication cadence, a restart or a fast tick will often see
       // the batch it already holds, and re-downloading 3.4MB to discard it is
       // the whole saving the cursor exists for.
-      const cursor = this.effectiveCursor();
       if (cursor !== undefined && candidate <= cursor) return false;
-      batch = await this.deps.client.fetchBatch(url);
+      batch = await this.deps.client.fetchBatch(url, signal);
     } catch (error) {
       this.logFailure(
         {

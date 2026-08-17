@@ -5,8 +5,9 @@
  * (#414) are testable without a tick ever having run, including the ones the
  * current schema cannot yet produce in production.
  */
+
+import { PIPELINE_STAGES } from '../../../contracts/pipeline.js';
 import { buildPipelineView } from './pipeline-query.js';
-import { PIPELINE_STAGES } from './pipeline-types.js';
 import type { PipelineActivity, PipelineLiveTick, PipelineStageEvent } from './types.js';
 
 const T0 = new Date('2026-08-05T12:00:00.000Z');

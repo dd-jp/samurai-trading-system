@@ -22,6 +22,7 @@ export {
 } from './fixture-stores.js';
 export { applyGuardrail, boundedStep, type GuardrailOutcome, moveDirection } from './guardrails.js';
 export {
+  assertKillThresholdsWithinBounds,
   computeMetrics,
   DSR_INSIGNIFICANT,
   LIVE_BACKTEST_DIVERGENCE_OVER_MAX,
@@ -50,8 +51,8 @@ export type {
   FeedbackConfig,
   FeedbackLoop,
   KillThresholds,
-  LoosenApprovalChannel,
-  LoosenApprovalRequest,
+  LoosenAppliedNotice,
+  LoosenNotificationChannel,
   MetricsInput,
   MetricsReport,
   OnTradeCloseInput,
