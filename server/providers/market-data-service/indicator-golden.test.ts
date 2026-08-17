@@ -232,9 +232,12 @@ describe('what the warm-up buys, and where it buys nothing', () => {
     // `|rsi - 50| / 50`, so on this fixture's final bar a 15-bar warm-up
     // yields ~0.24 confidence and a 400-bar warm-up ~0.05 — a five-fold swing
     // in how loudly the technical analyst speaks into the debate, from the
-    // lookback alone, with the same period on the same bar. Anyone changing
-    // `INDICATOR_TIMEFRAME` or a spec's `lookback` (step B3 moves both) is
-    // changing this, and it should be a number they had to look at.
+    // lookback alone, with the same period on the same bar. #722 is the
+    // decision this swing forced: `RSI_SPEC` left the 15-bar floor for the
+    // converged 57. The two cases stay at 15 and 400 because what they price
+    // is the SENSITIVITY, not the live spec — anyone changing
+    // `INDICATOR_TIMEFRAME` or a spec's `lookback` is changing this, and it
+    // should be a number they had to look at.
     const short = caseNamed('warmup_sensitivity_rsi_14_15').expected;
     const long = caseNamed('warmup_sensitivity_rsi_14_400').expected;
 

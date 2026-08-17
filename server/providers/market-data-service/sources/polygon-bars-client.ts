@@ -15,7 +15,7 @@
  * Free tier is a 2-year rolling window at 5 calls/min (PROBED, research
  * doc), which physically cannot serve a cold multi-year backfill — it is
  * usable ONLY in the increment-only role, which is exactly what this script
- * plays (`WARM_START_WINDOWS` is `1h`/20 and `1d`/30, days not years).
+ * plays (`WARM_START_WINDOWS` is `1h`/57 and `1d`/30, days not years).
  * `resolvePolygonPacing()` (already script-only — see `venue-pacing.ts`)
  * paces this client the same way it paces `HttpPolygonClient`.
  *

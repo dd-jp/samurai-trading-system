@@ -25,10 +25,16 @@
  * `DEFAULT_UNIVERSE` instrument on a live/paper first tick. As of this
  * writing that is:
  *
- *   - `1h`, lookback 20 — the deepest of the technical analyst's and
- *     sentiment analyst's context-candle windows (both 20), their SMA/RSI
- *     specs (14/15), the trader's ATR stop window (15), and the
- *     volatility-breaker's ATR reading (15). All five read `1h` bars.
+ *   - `1h`, lookback 57 — the technical analyst's `RSI_SPEC`, which #722
+ *     re-pointed from the 15-bar fabrication floor to the converged
+ *     `recommendedWarmupFor` (`4 x period + 1` = 57). It now dominates the
+ *     analysts' context-candle windows (both 20), `SMA_SPEC` (14), the
+ *     trader's ATR stop window (15) and the volatility-breaker's ATR reading
+ *     (15). All of them read `1h` bars. Leaving this at 20 would have made the
+ *     RSI adoption inert on the path that matters most: a warm-started store
+ *     holding 20 bars serves 20, and `computeIndicator` would quietly compute
+ *     a 20-bar RSI on the first tick rather than the 57-bar one the spec asks
+ *     for — no throw, since 20 clears the floor.
  *   - `1d`, lookback 30 — the Risk Manager's pairwise-correlation window,
  *     the only `1d` consumer that fires on a real (non-`SimulatedAdapter`)
  *     paper run. It dominates the simulated cost model's `adv_window`
@@ -114,7 +120,7 @@ import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
 
 /** See the module doc "The derived timeframe list" above for the citation trail. */
 export const WARM_START_WINDOWS: readonly BarWindow[] = [
-  { timeframe: '1h', lookback: 20 },
+  { timeframe: '1h', lookback: 57 },
   { timeframe: '1d', lookback: 30 },
 ];
 
