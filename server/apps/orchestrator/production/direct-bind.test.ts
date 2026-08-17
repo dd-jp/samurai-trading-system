@@ -14,9 +14,11 @@ import type {
 } from '../../../pipeline/verdict/index.js';
 import {
   AlwaysOpenCalendar,
+  type IndicatorSpec,
   type TradingCalendar,
   UsEquityRegularHoursCalendar,
 } from '../../../providers/market-data-service/index.js';
+import type { TraderDecisionRecord } from '../../../shared/decision-records.js';
 import type { Clock, LogEntry, Logger, OpenPosition, OrderIntent } from '../../../shared/index.js';
 import { openSharedStore } from '../../../shared/store/index.js';
 import { OrphanVerdictScanner } from '../orphan-verdict-scan.js';
@@ -27,6 +29,7 @@ import {
   buildPersistence,
   buildRiskStep,
   buildTraderStep,
+  buildTraderSteps,
   buildVerdictStep,
   sizingEquity,
 } from './direct-bind.js';
@@ -467,6 +470,116 @@ describe('buildTraderStep capital ceiling (#511)', () => {
  * with the alert, and that the line carries the tick's own trace. Every one of
  * them was wrong or untested when the throttle's unit tests were fully green.
  */
+/**
+ * #748. The Trader now names three different in-process exits and `trader_log`
+ * has a column for them — but the COMPOSITION is where that column gets its
+ * value, and this repo's dominant defect class is a tested mechanism nothing
+ * calls. `decide.test.ts` proves the intent carries `metadata.exit_reason`;
+ * `sqlite-decision-record-stores.test.ts` proves the column round-trips. Only
+ * this pins the wire between them: dropping `intent.metadata.exit_reason` from
+ * `buildTraderSteps`' exit-path write leaves both of those green and every
+ * released position in the soak indistinguishable from a flat-by-close.
+ */
+describe('buildTraderSteps exit_reason persistence (#748)', () => {
+  const HELD: OpenPosition = {
+    idempotency_key: 'existing-key',
+    debate_id: 'debate-that-opened-the-lot',
+    instrument: 'AAPL',
+    asset_class: 'stocks',
+    side: 'buy',
+    intent_type: 'entry',
+    requested_size: 50,
+    filled_size: 50,
+    avg_entry_price: 100,
+    stop: 90,
+    target: 110,
+    order_state: 'filled',
+    broker_order_ids: ['broker-1'],
+    opened_at: new Date(NOW.getTime() - 60 * 60 * 1_000),
+    decision_timestamp: new Date(NOW.getTime() - 60 * 60 * 1_000),
+    conviction: 0.6,
+    converged: true,
+  };
+
+  const CONFIG: TraderConfig = {
+    conviction_floor: 0.5,
+    max_risk_per_trade: 0.01,
+    asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
+    atr_timeframe: '1h',
+    atr_lookback: 14,
+    atr_k: 2,
+    vol_floor_fraction: 0.002,
+    non_converged_haircut: 0.5,
+    reward_risk_multiple: 2,
+    min_viable_notional: 10,
+    scale_in_conviction_delta: 0.1,
+    early_exit: DEFAULT_EARLY_EXIT_CONFIG,
+    time_in_force: { crypto: 'gtc', stocks: 'day' },
+    flatten_before_close_ms: 5 * 60 * 1_000,
+  };
+
+  it('records signal_decay on the row the exit-check path writes', async () => {
+    const written: TraderDecisionRecord[] = [];
+    // Momentum netting AGAINST the held long: RSI below 50 and a negative MACD
+    // histogram is the `-1` the default criterion releases on.
+    const marketData = {
+      ...FAKE_MARKET_DATA,
+      getIndicator: vi.fn(async (_instrument: string, spec: IndicatorSpec) => ({
+        indicator: spec.indicator,
+        value: spec.indicator === 'rsi' ? 40 : -0.5,
+        as_of_bar_close: NOW,
+      })),
+    };
+
+    const { exitCheck } = buildTraderSteps({
+      marketData,
+      circuitBreakers: new CircuitBreakers({
+        daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+        max_drawdown_pct: 0.2,
+        max_consecutive_losses: 5,
+        volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+        auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+      }),
+      accountState: FAKE_ACCOUNT_STATE,
+      volatility: FAKE_VOLATILITY,
+      getOpenPositions: async () => [HELD],
+      maxMarkAge: TEST_MAX_MARK_AGE,
+      mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
+      config: CONFIG,
+      setupStore: new FixtureSetupStore(),
+      // Nothing exited yet — the whole 50 is still held. A non-empty map here
+      // is the amount ALREADY closed (#568), so seeding it would leave zero to
+      // release and the exit would correctly decline to fire.
+      getExitFillSizes: async () => new Map<string, number>(),
+      sessionCalendars: {
+        crypto: new AlwaysOpenCalendar(),
+        stocks: new UsEquityRegularHoursCalendar(),
+      },
+      traderLog: { write: (record) => written.push(record) },
+    });
+
+    const intent = await exitCheck({
+      trace_id: TRACE_ID,
+      instrument: 'AAPL',
+      clock: CLOCK,
+      bar: new Date(NOW.getTime() - 60 * 60 * 1_000),
+    });
+
+    expect(intent?.intent_type).toBe('exit');
+    expect(intent?.metadata.exit_reason).toBe('signal_decay');
+    expect(written).toHaveLength(1);
+    // The row, not the intent — this is the assertion the composition owes.
+    expect(written[0]?.exit_reason).toBe('signal_decay');
+    expect(written[0]?.intent_type).toBe('exit');
+    // Attributed to the debate that OPENED the lot, not to a debate this tick
+    // never ran — the tick path has no `DebateResult` at all.
+    expect(written[0]?.debate_id).toBe('debate-that-opened-the-lot');
+  });
+});
+
 describe('buildTraderStep diagnostic escalation (#698, #710)', () => {
   /**
    * A calendar that answers with a close already in the past — the fault
