@@ -10,6 +10,8 @@
  * own suite owns that) and a live broker round-trip (ADR-0004's "wiring
  * validated" bar is a manual E2E run, not a unit test).
  */
+
+import { INDICATOR_UNAVAILABLE_COUNTER } from '../../pipeline/analysts/index.js';
 import {
   AnthropicLlmClient,
   MockLlmClient,
@@ -834,6 +836,82 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
  * already ships (`FixtureDataSource`, `SimulatedBrokerAdapter`,
  * `MockLlmClient`), and the stores are the real `Sqlite*` ones.
  */
+/**
+ * #745 — the counter behind an unavailable analyst axis, asserted AT THE
+ * COMPOSITION ROOT.
+ *
+ * Deliberately not "the analyst calls the sink when given one" (that is
+ * `technical-axes.test.ts`'s job): a counter that only exists when a test
+ * hands it in is dead in production, and this repo's dominant defect class is
+ * exactly that — a tested mechanism nothing calls. This drives the REAL
+ * `buildProductionComponents` analysts step against a thin instrument and
+ * reads the log the wired sink writes to.
+ */
+describe('technical_indicator_unavailable is wired by the composition root (#745)', () => {
+  let db: SqliteHandle;
+
+  beforeEach(() => {
+    db = openSharedStore(':memory:');
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it('emits the counter for every enrichment axis a thin instrument cannot fill', async () => {
+    const clock = new SimulatedClock(START);
+    // 19 5m bars: enough for the core (SMA 14, RSI 15, ATR% 15), short of
+    // every enrichment kind. Before #745 this instrument produced no view at
+    // all — the technical analyst is `mandatory`, so it was a `quorum_skip`.
+    const bars = [
+      ...fixtureBars('BTC-USD', '5m', 19, 5 * 60_000),
+      ...fixtureBars('BTC-USD', '1h', 20, 60 * 60_000),
+    ];
+    const logger = recordingLogger();
+    const config = stubConfig(db, {
+      ...REAL_CONFIGS,
+      clock,
+      logger,
+      dataSource: new FixtureDataSource(
+        bars,
+        { price: 160, observed_at: START, source: 'fixture' },
+        'crypto',
+      ),
+      llmClient: new MockLlmClient(),
+    });
+
+    const { steps } = buildProductionComponents(config);
+    const views = await steps.analysts({
+      trace_id: 'trace-745-root',
+      signal: { asset: 'BTC-USD', asset_class: 'crypto' },
+      clock,
+    });
+
+    // The whole point of the split: a view, not a quorum skip.
+    expect(views.some((view) => view.analyst_type === 'technical')).toBe(true);
+
+    // `LogEntry.payload` is `{}`-typed at the port, so the counter fields are
+    // read through a narrow local view rather than by widening the port.
+    const counters = logger.entries
+      .map((entry) => ({
+        ...entry,
+        fields: entry.payload as { counter?: string; kind?: string } | undefined,
+      }))
+      .filter((entry) => entry.fields?.counter === INDICATOR_UNAVAILABLE_COUNTER);
+    expect(counters.map((entry) => entry.fields?.kind).sort()).toEqual([
+      'adx',
+      'bb_kc_squeeze',
+      'donchian_pos',
+      'macd_histogram',
+      'volume_participation',
+    ]);
+    // The counter's own name reaches the log line, so a scrape can find it
+    // without knowing the payload schema.
+    expect(counters[0]?.message).toContain(INDICATOR_UNAVAILABLE_COUNTER);
+    expect(counters[0]?.trace_id).toBe('trace-745-root');
+  });
+});
+
 describe('composed tick chain (integration)', () => {
   let db: SqliteHandle;
 
