@@ -368,7 +368,9 @@ function unzipFirstEntry(buffer: Buffer): string {
     throw new Error(
       `GdeltGkgClient: inflated entry's CRC-32 (0x${actualCrc.toString(16)}) does not match the ` +
         `zip local header's declared CRC-32 (0x${declaredCrc.toString(16)}) — the archive is ` +
-        'corrupt or was tampered with in transit.',
+        'corrupt — truncated or mangled in transit. NOT a tamper check: a CRC-32 is ' +
+        'recomputable, so an attacker who could rewrite the bytes could rewrite this too. ' +
+        'Authenticity is the host pin’s job (`pinToBaseUrl`), not this comparison’s.',
     );
   }
 
