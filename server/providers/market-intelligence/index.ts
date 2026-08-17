@@ -4,6 +4,15 @@
  * Ticket #69: push (subscribe) + staleness. Agent orchestration and conflict
  * resolution are not ticketed under epic #52 and are not implemented here.
  */
+// The bar grid, imported from its one defining module rather than restated
+// here (`decide.ts`: "the grid now has exactly one statement in the system").
+// `debate-log-store.ts` is imported directly instead of the debate-engine
+// barrel so this provider does not pull the engine's module graph; the file
+// itself has only type imports.
+import {
+  DEBATE_BAR_TIMEFRAME_MS,
+  floorToBar,
+} from '../../pipeline/debate-engine/debate-log-store.js';
 import type { Clock } from '../../shared/index.js';
 import type {
   AgentIntelligence,
@@ -92,19 +101,74 @@ export class MarketIntelligenceStore {
    * `asOf` is resolved from the injected clock, never from item timestamps or
    * wall-clock `Date.now()` directly — this is what makes the no-lookahead
    * guarantee hold under replay. Only items with
-   * `asOf - timeWindow <= item.timestamp <= asOf` are returned; an item
-   * published after `asOf` is never returned.
+   * `windowEnd - timeWindow <= item.timestamp <= windowEnd` are returned; an
+   * item published after `windowEnd` is never returned.
+   *
+   * ## Why the window is FLOORED to the debate bar (#782)
+   *
+   * `windowEnd` is not the raw clock read: it is `floorToBar(asOf)`, the same
+   * grid and the same function the decision gate keys a debate to. The raw
+   * clock read gave a ROLLING window, so an item ageing out of it — or one
+   * ingested mid-bar — changed `news.length`/`social.length` between two ticks
+   * of ONE debate bar. Three things read those counts, and none of them should
+   * move within a bar:
+   *
+   *   1. `technical-analyst.ts` puts them verbatim in `key_points`
+   *      ("MI context: N news, M social items in window"), and `key_points` is
+   *      hashed into `debate_id` (`debate-id.ts`). A changed count is a changed
+   *      id, which misses the #617 same-bar short-circuit and pays for a second
+   *      debate on a bar that already has one.
+   *   2. `sentiment-analyst.ts` derives `direction` AND `confidence` from
+   *      `social`, and `fundamental-analyst.ts` does the same from `news`. This
+   *      is the part that is not merely a spend leak: a second, different
+   *      confidence sample on the same bar is what
+   *      `scale_in_conviction_delta` can turn into an extra lot.
+   *   3. `mi-coverage.ts` counts coverage over the SAME 24h window on purpose
+   *      ("the same window the debate itself sees"), so it must floor with the
+   *      analysts or start disagreeing with them mid-bar.
+   *
+   * Every other analyst input is already sampled on a bar grid (`getBars` /
+   * `getIndicator` pin to `barIndex(timeframe, asOf)`); MI was the one
+   * wall-clock sample left. Flooring makes it a function of closed bars too.
+   * It does NOT make the views byte-identical within a 1h debate bar — the
+   * technical read is 5m since #742, so its readings still move on the 5m grid
+   * (see `debate-log-store.ts`'s AMENDED 2026-08-17 note). This closes the
+   * wall-clock input, not that one.
+   *
+   * ## What it deliberately does not do
+   *
+   * No throw, no gate, no new branch: an empty store still returns an empty
+   * context, which market-intelligence-spec.md is explicit about ("emit empty
+   * intelligence, never block the pipeline"). Flooring can only move
+   * `windowEnd` BACKWARDS, so the no-lookahead guarantee is strengthened, never
+   * weakened, and the cost is that an item ingested mid-bar is not visible
+   * until the next bar opens — at most one hour of latency against a 24h
+   * window, on a path whose consumer (the debate) runs once per bar anyway.
+   *
+   * `last_updated`/`stale` stay on the UNFLOORED read. They are the operational
+   * "how fresh is ingestion" signal (`STALENESS_THRESHOLD_MS` is 5s/30s — a
+   * wall-clock question), no production consumer reads either field, and
+   * neither is hashed. Quantising them to the hour would only make `stale`
+   * vacuously true.
+   *
+   * KNOWN LIMIT, stated rather than claimed away: this floors a SECOND clock
+   * read rather than inheriting the gate's `decision_bar.open_time` — the
+   * two-derivations shape `decide.ts` describes as #687. A pass that straddles
+   * the hour boundary floors here to bar N+1 while the debate is keyed to bar
+   * N. That is no worse than the pre-existing cross-restart case #785 accepted;
+   * threading the decision bar down to the analysts is the clean fix and is not
+   * this change.
    */
   getContext(assetClass: AssetClass, timeWindow: Duration, _trace_id: string): MarketContext {
     const asOf = this.clock.now();
-    const windowStart = asOf.getTime() - timeWindow;
+    const windowEnd = floorToBar(asOf, DEBATE_BAR_TIMEFRAME_MS).getTime();
+    const windowStart = windowEnd - timeWindow;
 
     const inWindow = this.stored
       .filter((entry) => entry.asset_class === assetClass)
       .map((entry) => entry.item)
       .filter(
-        (item) =>
-          item.timestamp.getTime() <= asOf.getTime() && item.timestamp.getTime() >= windowStart,
+        (item) => item.timestamp.getTime() <= windowEnd && item.timestamp.getTime() >= windowStart,
       );
 
     const lastUpdated = this.lastUpdated(assetClass, asOf);
