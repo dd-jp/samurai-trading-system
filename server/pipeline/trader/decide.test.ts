@@ -19,10 +19,10 @@ import {
   UsEquityRegularHoursCalendar,
 } from '../../providers/market-data-service/index.js';
 import type { Clock, OpenPosition } from '../../shared/index.js';
-import type { DebateResult } from '../debate-engine/index.js';
 // #748: the early exit reads the analyst's own momentum specs, so the tests pin
 // THOSE rather than hand-rebuilt copies that would keep passing on drift.
 import { MACD_SPEC, RSI_SPEC } from '../analysts/technical-analyst.js';
+import type { DebateResult } from '../debate-engine/index.js';
 import { checkExitsWithReason, decide, decideWithReason, type ExitCheckInput } from './decide.js';
 import { FixtureSetupStore } from './fixture-setup-store.js';
 // Imported so the #687 cases can state WHICH bar the key must be on, rather
@@ -2064,7 +2064,15 @@ describe('checkExitsWithReason — the indicator-based early exit (#748)', () =>
 
     // The named, priced subset — and the whole of it. A third read here is a
     // per-tick cost this change did not price.
-    expect(requested).toEqual([RSI_SPEC.indicator, MACD_SPEC.indicator]);
+    //
+    // The ORDER is asserted, not incidental. `cachedBars` rejects a hit on
+    // `rows.length < window.lookback` before it consults the per-interval fetch
+    // record, so the widest window has to go first or the second call misses on
+    // depth and issues a second upstream fetch. MACD's warm-up is 112 bars and
+    // RSI's is 57; reversing these two lines doubles the network cost this
+    // change priced at one fetch per bar interval.
+    expect(MACD_SPEC.lookback).toBeGreaterThan(RSI_SPEC.lookback);
+    expect(requested).toEqual([MACD_SPEC.indicator, RSI_SPEC.indicator]);
   });
 
   it('names all THREE in-process exit reasons apart — flatten, signal_decay, direction_flip', async () => {

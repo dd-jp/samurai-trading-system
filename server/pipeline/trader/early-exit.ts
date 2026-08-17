@@ -47,6 +47,15 @@
  * The indicator cache keys on `asOf` and so does not hit across ticks; the bar
  * cache is the one that matters and it does.
  *
+ * That "one fetch" is conditional on ORDER, and the order below is load-bearing.
+ * `cachedBars` refuses a hit when `rows.length < window.lookback` — it checks
+ * depth BEFORE it checks the per-interval fetch record, and that record is keyed
+ * on `(instrument, timeframe)` with no lookback in the key. `MACD_SPEC` wants
+ * 112 bars and `RSI_SPEC` wants 57, so reading RSI first would fill the store
+ * with 57 rows, mark the interval fetched, and then MACD would still miss on
+ * depth and issue a SECOND fetch. Widest first, and the narrower read is served
+ * from the same window: one fetch and two store reads per 5m interval.
+ *
  * **No LLM call, ever.** Nothing in this module can reach a model client: it
  * takes a `MarketDataService` and pure functions, and that is the whole of its
  * dependency surface.
@@ -70,12 +79,7 @@ import {
   InsufficientBarsError,
   type MarketDataService,
 } from '../../providers/market-data-service/index.js';
-import {
-  type AxisVote,
-  MACD_SPEC,
-  momentumVote,
-  RSI_SPEC,
-} from '../analysts/technical-analyst.js';
+import { type AxisVote, MACD_SPEC, momentumVote, RSI_SPEC } from '../analysts/technical-analyst.js';
 
 /**
  * The decay criterion — INJECTED, never a constant read from module scope
@@ -181,12 +185,15 @@ export async function readSignalDecay(input: {
   let rsi: number;
   let macd: number;
   try {
-    // Sequential rather than `Promise.all`, on purpose: the two share one
-    // (instrument, 5m) bar window, and the first call is what populates
-    // `getBars`' per-interval fetch cache. Racing them makes both miss and
+    // Sequential and WIDEST FIRST, on purpose. The two share one
+    // (instrument, 5m) bar window, and `cachedBars` rejects a hit on
+    // `rows.length < window.lookback` before it ever looks at the per-interval
+    // fetch record. MACD's 112-bar window therefore has to be the one that
+    // populates the store; RSI's 57 is then served from it. Racing them with
+    // `Promise.all`, or reading RSI first, makes the second call miss and
     // doubles the upstream fetches this module claims not to make.
-    rsi = (await marketData.getIndicator(instrument, RSI_SPEC, asOf)).value;
     macd = (await marketData.getIndicator(instrument, MACD_SPEC, asOf)).value;
+    rsi = (await marketData.getIndicator(instrument, RSI_SPEC, asOf)).value;
   } catch (cause) {
     if (cause instanceof InsufficientBarsError) {
       return { verdict: 'signal_unavailable', signed_momentum: null };

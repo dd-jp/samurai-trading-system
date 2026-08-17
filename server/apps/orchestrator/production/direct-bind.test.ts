@@ -134,7 +134,7 @@ describe('buildTraderStep', () => {
       reward_risk_multiple: 2,
       min_viable_notional: 10,
       scale_in_conviction_delta: 0.1,
-    early_exit: DEFAULT_EARLY_EXIT_CONFIG,
+      early_exit: DEFAULT_EARLY_EXIT_CONFIG,
       time_in_force: { crypto: 'gtc', stocks: 'day' },
       flatten_before_close_ms: 5 * 60 * 1_000,
     };
@@ -193,7 +193,7 @@ describe('buildTraderStep', () => {
       reward_risk_multiple: 2,
       min_viable_notional: 10,
       scale_in_conviction_delta: 0.1,
-    early_exit: DEFAULT_EARLY_EXIT_CONFIG,
+      early_exit: DEFAULT_EARLY_EXIT_CONFIG,
       time_in_force: { crypto: 'gtc', stocks: 'day' },
       flatten_before_close_ms: 5 * 60 * 1_000,
     };
@@ -255,7 +255,7 @@ describe('buildTraderStep', () => {
       reward_risk_multiple: 2,
       min_viable_notional: 10,
       scale_in_conviction_delta: 0.1,
-    early_exit: DEFAULT_EARLY_EXIT_CONFIG,
+      early_exit: DEFAULT_EARLY_EXIT_CONFIG,
       time_in_force: { crypto: 'gtc', stocks: 'day' },
       flatten_before_close_ms: 5 * 60 * 1_000,
     };

@@ -228,10 +228,19 @@ interface TickOutcome {
   // and the intent's `intent_type: 'exit'` is the record. Present so a flatten
   // whose Verdict said no_go is still visible as a flatten that FIRED
   // (`flatten_fired: true, final_stage: 'verdict'`), rather than a
-  // healthy-looking no-trade tick. There is no separate early-exit flag:
-  // bracket exits rest at the venue, so the flatten is the only in-process
-  // exit the tick path can fire.
+  // healthy-looking no-trade tick.
   flatten_fired?: boolean;
+  // true when a TICK-PATH pass's exit check released a position because its
+  // momentum signal decayed (#748). Mutually exclusive with `flatten_fired` —
+  // the flatten window is checked first and returns before the decay read, so
+  // a tick inside the window is a flatten and never an early exit. Set even
+  // when Verdict rejects the release, for the same reason `flatten_fired` is.
+  //
+  // This is a separate flag rather than a reuse of `flatten_fired` because the
+  // two answer different questions of a soak: "did the session end" and "did
+  // the thesis die". Until #748 the flatten was the only in-process exit the
+  // tick path could fire (bracket exits rest at the venue); it no longer is.
+  early_exit_fired?: boolean;
 }
 
 interface Logger {
