@@ -35,5 +35,15 @@ export {
   SqliteSetupStore,
   type SqliteSetupStoreOptions,
 } from './sqlite-setup-store.js';
+export {
+  ADR_0018_SUBCLASS_BRACKETS,
+  D5_INDEX_ETP_DEPLOYMENT_FRACTION,
+  D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION,
+  resolveSubclassBracket,
+  riskFractionFor,
+  type SubclassBracket,
+  type SubclassBracketTable,
+  SubclassBracketUnresolvableError,
+} from './subclass-bracket.js';
 export type { AssetClass, Trader, TraderConfig, TraderInput } from './types.js';
 export { assertTraderConfigSound, DEFAULT_TRADER_CONFIG } from './types.js';

@@ -15,12 +15,14 @@ import type {
 import type {
   AssetClass,
   Clock,
+  InstrumentSubclass,
   OpenPosition,
   OrderIntent,
   SetupStore,
 } from '../../shared/index.js';
 import type { DebateResult } from '../debate-engine/index.js';
 import { DEFAULT_EARLY_EXIT_CONFIG, type EarlyExitConfig } from './early-exit.js';
+import { ADR_0018_SUBCLASS_BRACKETS, type SubclassBracketTable } from './subclass-bracket.js';
 
 export type { AssetClass };
 
@@ -61,17 +63,59 @@ export interface TraderConfig {
    * position than an equivalent stock position.
    */
   asset_class_risk_multiplier: Record<AssetClass, number>;
+  /**
+   * ADR-0018 D3's frozen bracket and D5's deployment envelope, per subclass
+   * (#739) — the live exit geometry and the live sizing denominator wherever
+   * `subclass_of` classifies the instrument.
+   *
+   * Config rather than constants because every number in it is a single quote
+   * that #666 may move: ADR-0018 says "both brackets and both bars move
+   * directly with them". `ADR_0018_SUBCLASS_BRACKETS` is the checked-in default.
+   */
+  subclass_brackets: SubclassBracketTable;
+  /**
+   * Instrument -> the subclass ADR-0018 prices it under, built at the
+   * composition root from the universe (`subclassOfUniverse`) — the SAME
+   * derivation that feeds `SubclassDeploymentCap.subclass_of`, so the Trader's
+   * bracket and the Risk Manager's envelope cannot disagree about what an
+   * instrument is.
+   *
+   * **Empty means the per-subclass regime is not armed**, which is the state
+   * `DEFAULT_UNIVERSE` and `SMOKE_TEST_UNIVERSE` are in (neither holds a
+   * leveraged ETP ADR-0018 prices), and the pre-ADR-0018 ATR geometry still
+   * sizes those. A PARTLY populated map arms it and unclassified names throw —
+   * identical arming semantics to the Risk Manager's D5 gate, deliberately, so
+   * one pool file arms both stages or neither.
+   */
+  subclass_of: Readonly<Record<string, InstrumentSubclass>>;
   /** Timeframe of the bars ATR is computed from. */
   atr_timeframe: string;
   /** Number of true-range periods averaged into ATR. */
   atr_lookback: number;
-  /** Stop distance = atr_k x max(ATR, vol floor). */
+  /**
+   * Stop distance = atr_k x max(ATR, vol floor) — the PRE-ADR-0018 geometry.
+   *
+   * **Inert wherever `subclass_of` arms the frozen bracket** (#739): under
+   * ADR-0018 D3 the stop is a frozen percentage of entry per subclass, and
+   * trader-spec.md's "Sizing math" withdraws the ATR-floating stop as the live
+   * rule. It still sizes the universes that declare no subclass at all.
+   *
+   * Kept rather than deleted, and `atrFor` with it, because ATR has three
+   * other jobs the frozen stop does not touch: the setup vector cosine
+   * precedent retrieves on, the Feedback Loop's realized-R labelling, and the
+   * volatility halt ADR-0018's sizing amendment names as "the only
+   * volatility-responsive mechanism until the stop floats". Deleting the keys
+   * and the ATR computation in one change is how that halt loses its input
+   * while the diff reads as a cleanup.
+   */
   atr_k: number;
   /**
    * The volatility floor, expressed as a fraction of entry price rather than
    * an absolute price distance: ATR is in price units, so an absolute floor
    * could not be one config shared across BTC-USD and AAPL. Bounds size from
    * below when volatility is ultra-low.
+   *
+   * Inert under a frozen bracket, exactly as `atr_k` is.
    */
   vol_floor_fraction: number;
   /** Applied when the debate did not converge (`converged: false`). */
@@ -81,6 +125,12 @@ export interface TraderConfig {
    * requires a target on the bracket but does not pin how far out it sits;
    * deriving it from the stop keeps the reward:risk ratio constant across
    * volatility regimes rather than fixing an arbitrary price distance.
+   *
+   * **Inert wherever the frozen bracket applies** (#739), and it has to be:
+   * ADR-0018 D3's take-profit is a measured level, not a ratio off the stop,
+   * and 2.0 x the frozen 2.16% index stop would place the target at 4.32%
+   * rather than the declared +2.00%. Kept for the unarmed universes, alongside
+   * `atr_k` and `vol_floor_fraction`.
    */
   reward_risk_multiple: number;
   /**
@@ -127,6 +177,12 @@ export interface TraderConfig {
 export const DEFAULT_TRADER_CONFIG: TraderConfig = {
   conviction_floor: 0.55,
   max_risk_per_trade: 0.01,
+  subclass_brackets: ADR_0018_SUBCLASS_BRACKETS,
+  // Empty by default: the brackets are declared, the regime is not armed until
+  // a universe classifies its instruments. `paperTradingProfile` fills this
+  // from the universe it schedules, so arming is a pool-file edit rather than
+  // a code change.
+  subclass_of: {},
   asset_class_risk_multiplier: {
     crypto: 0.5,
     stocks: 1.0,

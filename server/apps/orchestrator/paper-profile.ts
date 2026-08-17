@@ -96,7 +96,12 @@ import type {
   RiskConfig,
   SubclassDeploymentCap,
 } from '../../pipeline/risk-manager/index.js';
-import { DEFAULT_TRADER_CONFIG, type TraderConfig } from '../../pipeline/trader/index.js';
+import {
+  D5_INDEX_ETP_DEPLOYMENT_FRACTION,
+  D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION,
+  DEFAULT_TRADER_CONFIG,
+  type TraderConfig,
+} from '../../pipeline/trader/index.js';
 import type { VerdictConfig } from '../../pipeline/verdict/index.js';
 import { londonEntryWindow } from '../../providers/market-data-service/index.js';
 import type { CiiConsumerConfig } from '../../providers/market-intelligence/index.js';
@@ -156,6 +161,24 @@ export const PAPER_PROFILE_PROVENANCE = {
   'traderConfig.atr_lookback': 'SPEC',
   'traderConfig.atr_k': 'SPEC',
   'traderConfig.vol_floor_fraction': 'SPEC',
+  // ADR-0018 D3's frozen brackets and D5's deployment fractions (#739). SPEC
+  // rather than DERIVED throughout: every one of these is a measured level the
+  // ADR states, not a value computed here. `subclass_of` is a single leaf
+  // because it is empty — the emptiness IS the decision, exactly as
+  // `feedback.config.strategy_params`'s is: `DEFAULT_UNIVERSE` declares no
+  // subclass, so the regime is unarmed until the pool file classifies its rows.
+  'traderConfig.subclass_of': 'SPEC',
+  'traderConfig.subclass_brackets.index_etp_3x.take_profit_pct': 'SPEC',
+  'traderConfig.subclass_brackets.index_etp_3x.stop_pct': 'SPEC',
+  'traderConfig.subclass_brackets.index_etp_3x.deployment_fraction': 'SPEC',
+  'traderConfig.subclass_brackets.index_etp_3x.round_trip_cost_pct': 'SPEC',
+  'traderConfig.subclass_brackets.single_stock_etp_3x.take_profit_pct': 'SPEC',
+  'traderConfig.subclass_brackets.single_stock_etp_3x.stop_pct': 'SPEC',
+  'traderConfig.subclass_brackets.single_stock_etp_3x.deployment_fraction': 'SPEC',
+  'traderConfig.subclass_brackets.single_stock_etp_3x.round_trip_cost_pct': 'SPEC',
+  // `crypto: null` — "ADR-0018 sets no bracket here" — is a leaf value like any
+  // other and carries the same provenance: it is the ADR's own answer.
+  'traderConfig.subclass_brackets.crypto': 'SPEC',
   'traderConfig.non_converged_haircut': 'SPEC',
   'traderConfig.reward_risk_multiple': 'SPEC',
   'traderConfig.min_viable_notional': 'SPEC',
@@ -350,46 +373,73 @@ export const EQUITY_LEG_FRACTION_OF_CAPITAL = 0.5;
 /**
  * ADR-0018 D5 — max deployment per subclass, as a fraction of the EQUITY LEG.
  *
- * At ADR-0015's £750 leg these are the ADR's own figures: 0.35 x 750 = £262.50
- * ("~£260") and 0.25 x 750 = £187.50 ("~£190"), holding measured max drawdown
- * at 23.1% and 26.2%. That reproduction is the check that the base is right —
- * any other base produces numbers no document contains.
+ * At ADR-0015's £750 leg these reproduce the ADR's own illustrative figures:
+ * 0.35 x 750 = £262.50 ("~£260") and 0.25 x 750 = £187.50 ("~£190"). That
+ * reproduction is the check that the base is right — any other base produces
+ * numbers no document contains — but the CASH figures are illustrative only:
+ * D5's sizing amendment settles the rule as a fraction resolved against
+ * current equity, which is what `subclassDeploymentCapFractionsOfEquity`
+ * hands the gate.
  *
- * `single_stock_etp_3x` at 0.25 carries D5's stated ~1.2 pp overshoot of
- * CONTEXT.md's 20-25% drawdown band. It is a named constant with this citation
- * rather than a bare `0.25` in a config literal precisely so the overshoot
- * cannot be inherited silently. Do NOT tighten it to ~0.24 to make the band
- * fit: no measured row in docs/research/18-intraday-instrument-physics.md
- * covers that fraction, and D5 requires a re-measurement before adopting one.
+ * The two fractions are the Trader's named D5 constants, imported rather than
+ * restated (`trader/subclass-bracket.ts`), so the envelope the Risk Manager
+ * caps at and the envelope the Trader sizes to cannot drift apart — and so
+ * the single-stock row's overshoot citation exists in exactly one place. That
+ * overshoot is ~17 pp, not D5's published ~1.2 pp; see the constant.
  *
  * `crypto` is `null` — "D5 measured no envelope here" — not a number waiting
- * to be guessed. See `SubclassDeploymentCap.cap`.
+ * to be guessed. See `SubclassDeploymentCap.cap_fraction_of_equity`.
  */
 export const D5_DEPLOYMENT_FRACTION_OF_EQUITY_LEG: Readonly<
   Record<InstrumentSubclass, number | null>
 > = {
-  index_etp_3x: 0.35,
-  single_stock_etp_3x: 0.25,
+  index_etp_3x: D5_INDEX_ETP_DEPLOYMENT_FRACTION,
+  single_stock_etp_3x: D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION,
   crypto: null,
 };
 
 /**
- * ADR-0018 D5's envelope for one equity anchor, in account currency.
+ * ADR-0018 D5's envelope as fractions of TOTAL account equity — the form the
+ * gate resolves against `portfolio.equity` on every decision (#739).
  *
- * Same shape as `riskCapsFor`: the fractions are the decision, the currency
- * amounts are arithmetic, so re-scaling to a differently-funded account is one
- * edit at the anchor rather than one per subclass.
+ * D5's fractions are of the EQUITY LEG and `RiskPortfolioView.equity` is the
+ * whole account, so each is scaled by `EQUITY_LEG_FRACTION_OF_CAPITAL`. That
+ * factor is preserved verbatim from the equity-anchor form this replaced: at
+ * the anchor equity the resulting cash cap is unchanged, so this change moves
+ * the BASIS (frozen anchor -> live equity) and nothing else. Whether the
+ * equity leg should now take the whole book — crypto having left scope — is
+ * open and is ADR-0015's amendment to make, not this function's.
  */
-export function subclassDeploymentCapsFor(
-  equityAnchorUsd: number,
-): Record<InstrumentSubclass, number | null> {
-  const equityLeg = equityAnchorUsd * EQUITY_LEG_FRACTION_OF_CAPITAL;
+export function subclassDeploymentCapFractionsOfEquity(): Record<
+  InstrumentSubclass,
+  number | null
+> {
   return Object.fromEntries(
     Object.entries(D5_DEPLOYMENT_FRACTION_OF_EQUITY_LEG).map(([subclass, fraction]) => [
       subclass,
-      fraction === null ? null : fraction * equityLeg,
+      fraction === null ? null : fraction * EQUITY_LEG_FRACTION_OF_CAPITAL,
     ]),
   ) as Record<InstrumentSubclass, number | null>;
+}
+
+/**
+ * Instrument -> subclass, from the universe — the ONE derivation of the
+ * classification (#739).
+ *
+ * Shared by the Risk Manager's D5 gate (`d5EnvelopeFor`) and the Trader's
+ * frozen bracket (`TraderConfig.subclass_of`) deliberately: two independently
+ * built maps are two places for an instrument to be classified differently,
+ * and the two stages would then cap and size the same position under different
+ * subclasses.
+ */
+export function subclassOfUniverse(
+  universe: readonly UniverseInstrument[],
+): Record<string, InstrumentSubclass> {
+  return Object.fromEntries(
+    universe.flatMap((instrument) =>
+      instrument.subclass === undefined ? [] : [[instrument.asset, instrument.subclass] as const],
+    ),
+  );
 }
 
 /**
@@ -409,16 +459,11 @@ export function subclassDeploymentCapsFor(
  */
 export function d5EnvelopeFor(
   universe: readonly UniverseInstrument[],
-  equityAnchorUsd: number,
 ): SubclassDeploymentCap | undefined {
-  const subclass_of = Object.fromEntries(
-    universe.flatMap((instrument) =>
-      instrument.subclass === undefined ? [] : [[instrument.asset, instrument.subclass] as const],
-    ),
-  );
+  const subclass_of = subclassOfUniverse(universe);
   if (Object.keys(subclass_of).length === 0) return undefined;
 
-  return { subclass_of, cap: subclassDeploymentCapsFor(equityAnchorUsd) };
+  return { subclass_of, cap_fraction_of_equity: subclassDeploymentCapFractionsOfEquity() };
 }
 
 /**
@@ -977,7 +1022,7 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
   // by both, makes it hold by construction, so if this ever takes the universe
   // as a parameter the gate follows it without anyone remembering to look.
   const universe = DEFAULT_UNIVERSE;
-  const subclassCap = d5EnvelopeFor(universe, equityAnchorUsd);
+  const subclassCap = d5EnvelopeFor(universe);
 
   const traderConfig: TraderConfig = {
     // SPEC — `DEFAULT_TRADER_CONFIG` (server/pipeline/trader/types.ts) is the one set of
@@ -989,6 +1034,14 @@ export function buildStartingProfileConfigs(equityAnchorUsd: number): Pick<
     // Spread by reference, never copied — a second copy of these numbers
     // would drift from the trader's own default the first time either moves.
     ...DEFAULT_TRADER_CONFIG,
+    // ADR-0018 D3/D5 (#739) — the SAME classification the Risk Manager's D5
+    // gate caps against, from the same universe and the same derivation, so
+    // the stage that sizes a position and the stage that bounds it cannot
+    // disagree about what subclass an instrument is. `DEFAULT_UNIVERSE`
+    // declares no subclasses today, so this is empty and the frozen bracket is
+    // unarmed until the LSE-ETP pool file (#703 C1) classifies its rows —
+    // exactly the state `subclassCap` above is in, and for the same reason.
+    subclass_of: subclassOfUniverse(universe),
     // `time_in_force` is no longer overridden here (#381). It used to be
     // pinned to `gtc` for BTC-USD because the field was a single string and
     // the profile's universe was crypto-only; widening to `DEFAULT_UNIVERSE`

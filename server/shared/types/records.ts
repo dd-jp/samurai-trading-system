@@ -87,12 +87,38 @@ export interface OrderIntentMetadata {
     /** After conviction scaling. */
     base_risk_fraction: number;
     conviction_multiplier: number;
-    /** Effect of max(ATR, vol_floor). */
+    /**
+     * Effect of max(ATR, vol_floor).
+     *
+     * Still recorded when `frozen_bracket` is present, and then it describes
+     * the ATR read only — under the frozen stop it moved neither the geometry
+     * nor the size (#739). Read the two fields together: `frozen_bracket`
+     * present means this one had no effect on the intent.
+     */
     vol_floor_factor: number;
     /** 1.0 if converged. */
     non_converged_haircut: number;
     /** 0.5-1.5, or 0.75 no-precedent default. */
     cosine_multiplier: number;
+    /**
+     * ADR-0018 D3/D5's frozen bracket, as it was resolved for THIS decision
+     * (#739). Present exactly when the per-subclass regime is armed for the
+     * instrument, absent on the universes that declare no subclass and still
+     * size off ATR.
+     *
+     * `round_trip_cost_pct` is recorded here and nowhere else in the intent: it
+     * enters neither the geometry nor the size (D3's percentages are already
+     * frozen; the cost only sets the accuracy bar the debate layer must clear,
+     * which the Trader does not compute), so persisting the quote the decision
+     * was made under is what keeps a later expectancy accounting from reading a
+     * constant that #666 has since moved.
+     */
+    frozen_bracket?: {
+      take_profit_pct: number;
+      stop_pct: number;
+      deployment_fraction: number;
+      round_trip_cost_pct: number;
+    };
   };
   cosine_precedent: {
     neighbor_count: number;

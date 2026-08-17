@@ -21,7 +21,11 @@ import { SimulatedBrokerAdapter, SqliteExecutionStore } from '../../pipeline/exe
 import type { DailyMetricsSample, FeedbackConfig } from '../../pipeline/feedback-loop/index.js';
 import { SqliteTuningStore } from '../../pipeline/feedback-loop/index.js';
 import type { VolatilityReading } from '../../pipeline/risk-manager/index.js';
-import { DEFAULT_TRADER_CONFIG, SqliteSetupStore } from '../../pipeline/trader/index.js';
+import {
+  ADR_0018_SUBCLASS_BRACKETS,
+  DEFAULT_TRADER_CONFIG,
+  SqliteSetupStore,
+} from '../../pipeline/trader/index.js';
 import type {
   ApprovalOutcome,
   ApprovalRequest,
@@ -315,6 +319,13 @@ const REAL_CONFIGS = {
     reward_risk_multiple: 2,
     min_viable_notional: 10,
     time_in_force: 'gtc',
+    subclass_brackets: ADR_0018_SUBCLASS_BRACKETS,
+    // #739. Present and EMPTY, not absent: this fixture is cast to its stage
+    // type, so an omitted field is not a typecheck failure — it is a `decide`
+    // that throws mid-chain, which is exactly what happened when this field was
+    // first added. Empty means the per-subclass regime is unarmed, which is the
+    // state of the universe these integration cases drive.
+    subclass_of: {},
   },
   riskConfig: {
     max_position_size: 100_000,

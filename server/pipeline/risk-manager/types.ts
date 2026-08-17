@@ -225,12 +225,16 @@ export interface RiskConfig {
  *    and it must never become a dial the Feedback Loop can widen — see the
  *    deliberate absence from `RISK_THRESHOLD_KEYS` (risk-thresholds.ts), the
  *    allow-list backing the `risk_thresholds` table.
- * 2. **The single-stock fraction knowingly overshoots.** 26.2% sits ~1.2 pp
- *    above CONTEXT.md's 20-25% band; D5 accepts the overshoot explicitly and
- *    warns that whatever consumes the fraction consumes the overshoot with
- *    it. Tightening to ~24% is NOT available: no measured row in
- *    docs/research/18-intraday-instrument-physics.md covers it, and D5 says
- *    re-measure before adopting one.
+ * 2. **The single-stock fraction knowingly overshoots, and by more than D5
+ *    published.** D5's rows were measured at the pre-neutral `SLS = {1.5, 3}`
+ *    grid rather than at the brackets D3 declares and #724 froze; re-measured
+ *    at the declared stops the envelope is ~26.2% (index, 35%) and ~41.8%
+ *    (single-stock, 25%), so the recorded ~1.2 pp overshoot of CONTEXT.md's
+ *    20-25% band is really ~17 pp (D5's #729 verification note, 2026-08-17).
+ *    The fractions stay at 0.35 / 0.25 regardless: that note "records the
+ *    measurement only", and re-sizing to the f ~= 0.332 / 0.142 that would
+ *    hold the tolerance is an amendment nobody has made. Tightening either
+ *    number here would be an unrecorded re-selection, which D4 forbids.
  */
 export interface SubclassDeploymentCap {
   /**
@@ -241,7 +245,23 @@ export interface SubclassDeploymentCap {
    */
   subclass_of: Readonly<Record<string, InstrumentSubclass>>;
   /**
-   * Subclass -> max notional deployed to that subclass, in account currency.
+   * Subclass -> max notional deployed to that subclass, as a FRACTION OF
+   * CURRENT EQUITY resolved at evaluation time (#739) — not a frozen cash
+   * amount, which is what this field carried until ADR-0018's sizing
+   * amendment settled the basis.
+   *
+   * **The fractional form is what makes the drawdown bound keep bounding.** A
+   * fixed £262 is 34.9% of a £750 book, 43.7% of £600 and 58.2% of £450, so
+   * under a frozen amount exposure rises as a fraction of equity exactly as
+   * equity falls and the envelope stops binding at the first loss. Because
+   * exposure now shrinks after a loss, cumulative loss under this rule is
+   * strictly smaller than under the fixed-cash deployment doc 18's rows
+   * describe — D5's envelope figures are UPPER BOUNDS for what is implemented
+   * here, not estimates of it.
+   *
+   * Each fraction is `EQUITY_LEG_FRACTION_OF_CAPITAL x` D5's own per-subclass
+   * fraction (paper-profile.ts), because D5 deploys a fraction of the EQUITY
+   * LEG and `RiskPortfolioView.equity` is the whole account.
    *
    * Total over `InstrumentSubclass` so a new subclass is a compile error here
    * rather than a silent absence, which on this gate would read as "no cap".
@@ -251,7 +271,7 @@ export interface SubclassDeploymentCap {
    * and nothing else, and the crypto leg is parked out of the tick loop
    * (#705). `per_asset_class_cap.crypto` still bounds it.
    */
-  cap: Readonly<Record<InstrumentSubclass, number | null>>;
+  cap_fraction_of_equity: Readonly<Record<InstrumentSubclass, number | null>>;
 }
 
 /** The red-team critic's verdict on one gated `OrderIntent` (ADR-0003, #204). Produced *outside* `evaluate()` by critic.ts and consumed here as pre-built data.
