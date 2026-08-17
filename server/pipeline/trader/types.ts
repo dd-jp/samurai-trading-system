@@ -20,6 +20,7 @@ import type {
   SetupStore,
 } from '../../shared/index.js';
 import type { DebateResult } from '../debate-engine/index.js';
+import { DEFAULT_EARLY_EXIT_CONFIG, type EarlyExitConfig } from './early-exit.js';
 
 export type { AssetClass };
 
@@ -110,6 +111,17 @@ export interface TraderConfig {
    * every other threshold here.
    */
   scale_in_conviction_delta: number;
+  /**
+   * The indicator-based early exit's decay criterion (#748) — injected, so the
+   * threshold that can close a real position is never a constant read out of
+   * module scope. See `early-exit.ts` for the read it configures and
+   * `DEFAULT_EARLY_EXIT_CONFIG` for the default's reasoning.
+   *
+   * Non-optional, for the reason `sessionCalendars` is: an optional block would
+   * let the composition root drop it and leave the exit silently unarmed, which
+   * in a soak log looks exactly like a session whose positions never decayed.
+   */
+  early_exit: EarlyExitConfig;
 }
 
 export const DEFAULT_TRADER_CONFIG: TraderConfig = {
@@ -129,6 +141,7 @@ export const DEFAULT_TRADER_CONFIG: TraderConfig = {
   time_in_force: { crypto: 'gtc', stocks: 'day' },
   scale_in_conviction_delta: 0.1,
   flatten_before_close_ms: 5 * 60 * 1_000,
+  early_exit: DEFAULT_EARLY_EXIT_CONFIG,
 };
 
 /**

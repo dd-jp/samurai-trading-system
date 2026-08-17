@@ -2,7 +2,11 @@ import type { DebateResult } from '../../../pipeline/debate-engine/index.js';
 import { type ExecutionConfig, SqliteExecutionStore } from '../../../pipeline/execution/index.js';
 import type { RiskConfig } from '../../../pipeline/risk-manager/index.js';
 import { CircuitBreakers } from '../../../pipeline/risk-manager/index.js';
-import { FixtureSetupStore, type TraderConfig } from '../../../pipeline/trader/index.js';
+import {
+  DEFAULT_EARLY_EXIT_CONFIG,
+  FixtureSetupStore,
+  type TraderConfig,
+} from '../../../pipeline/trader/index.js';
 import type {
   ApprovalOutcome,
   VerdictConfig,
@@ -130,6 +134,7 @@ describe('buildTraderStep', () => {
       reward_risk_multiple: 2,
       min_viable_notional: 10,
       scale_in_conviction_delta: 0.1,
+    early_exit: DEFAULT_EARLY_EXIT_CONFIG,
       time_in_force: { crypto: 'gtc', stocks: 'day' },
       flatten_before_close_ms: 5 * 60 * 1_000,
     };
@@ -188,6 +193,7 @@ describe('buildTraderStep', () => {
       reward_risk_multiple: 2,
       min_viable_notional: 10,
       scale_in_conviction_delta: 0.1,
+    early_exit: DEFAULT_EARLY_EXIT_CONFIG,
       time_in_force: { crypto: 'gtc', stocks: 'day' },
       flatten_before_close_ms: 5 * 60 * 1_000,
     };
@@ -249,6 +255,7 @@ describe('buildTraderStep', () => {
       reward_risk_multiple: 2,
       min_viable_notional: 10,
       scale_in_conviction_delta: 0.1,
+    early_exit: DEFAULT_EARLY_EXIT_CONFIG,
       time_in_force: { crypto: 'gtc', stocks: 'day' },
       flatten_before_close_ms: 5 * 60 * 1_000,
     };
@@ -373,6 +380,7 @@ describe('buildTraderStep capital ceiling (#511)', () => {
     reward_risk_multiple: 2,
     min_viable_notional: 0.01,
     scale_in_conviction_delta: 0.1,
+    early_exit: DEFAULT_EARLY_EXIT_CONFIG,
     time_in_force: { crypto: 'gtc', stocks: 'day' },
     flatten_before_close_ms: 5 * 60 * 1_000,
   };
@@ -485,6 +493,7 @@ describe('buildTraderStep diagnostic escalation (#698, #710)', () => {
     reward_risk_multiple: 2,
     min_viable_notional: 10,
     scale_in_conviction_delta: 0.1,
+    early_exit: DEFAULT_EARLY_EXIT_CONFIG,
     time_in_force: { crypto: 'gtc', stocks: 'day' },
     flatten_before_close_ms: 5 * 60 * 1_000,
   };

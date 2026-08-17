@@ -19,6 +19,7 @@ import {
   minimumBarsFor,
 } from '../../providers/market-data-service/index.js';
 import {
+  type ExitReason,
   heldQuantitiesFor,
   type OpenPosition,
   type OrderIntent,
@@ -34,6 +35,7 @@ import {
 // is, because the Trader no longer derives it (#687).
 import type { DebateResult } from '../debate-engine/types.js';
 import { NO_PRECEDENT_MULTIPLIER, retrieveCosinePrecedent } from './cosine-precedent.js';
+import { readSignalDecay } from './early-exit.js';
 import { computeIdempotencyKey, intentSideFor } from './idempotency-key.js';
 import { buildSetupVector } from './setup-vector.js';
 import type { AssetClass, TraderConfig, TraderInput } from './types.js';
@@ -584,13 +586,20 @@ async function buildBracket(
 async function buildExitIntent(
   input: TraderInput,
   positions: OpenPosition[],
+  exitReason: ExitReason,
 ): Promise<TraderOutcome> {
   const { debate } = input;
-  return buildFlattenExit(input, positions, decisionBarFor(debate), {
-    debate_id: debate.debate_id,
-    conviction: debate.confidence,
-    converged: debate.converged,
-  });
+  return buildFlattenExit(
+    input,
+    positions,
+    decisionBarFor(debate),
+    {
+      debate_id: debate.debate_id,
+      conviction: debate.confidence,
+      converged: debate.converged,
+    },
+    exitReason,
+  );
 }
 
 /**
@@ -621,6 +630,7 @@ async function buildFlattenExit(
   positions: OpenPosition[],
   decisionBar: Date,
   attribution: ExitAttribution,
+  exitReason: ExitReason,
 ): Promise<TraderOutcome> {
   const { clock, config, exitFillSizes, instrument, marketData } = input;
 
@@ -660,7 +670,14 @@ async function buildFlattenExit(
 
   return emit(
     {
-      idempotency_key: computeIdempotencyKey(instrument, decisionBar, 'close'),
+      // #748: the early exit takes its OWN key discriminator, so a release and
+      // a later mandatory flatten in the same bar cannot hash to one key and
+      // have the flatten deduped away. See `IntentSide`.
+      idempotency_key: computeIdempotencyKey(
+        instrument,
+        decisionBar,
+        exitReason === 'signal_decay' ? 'early_close' : 'close',
+      ),
       instrument,
       asset_class: mark.asset_class,
       side: closingSide,
@@ -673,6 +690,7 @@ async function buildFlattenExit(
       decision_timestamp: decisionBar,
       metadata: {
         debate_id: attribution.debate_id,
+        exit_reason: exitReason,
         conviction: attribution.conviction,
         converged: attribution.converged,
         sizing: {
@@ -747,11 +765,29 @@ export type TraderSkipReason =
   // check has nothing to evaluate. By far the commonest tick-path outcome and
   // entirely healthy — it is the exit-cadence sibling of a quiet decision.
   | 'no_open_position'
-  // #743, tick path only: a lot is held and the flat-by-close window has not
-  // opened yet. Also healthy — holding through the session is what a position
-  // is for. Distinct from `no_open_position` so a soak can tell "flat" from
-  // "holding, exit not yet due" without joining `open_positions`.
-  | 'flatten_not_due'
+  // #748, tick path only: a lot is held, the flat-by-close window has not
+  // opened, and the momentum axis still supports the held side. The healthy
+  // holding outcome and by far the commonest one on an instrument that holds
+  // something — holding through the session is what a position is for.
+  //
+  // **This REPLACES #743's `flatten_not_due`**, which is deliberately gone
+  // rather than kept alongside. Once the early exit runs on every non-flatten
+  // tick, "the flatten is not due" is no longer a decision the Trader reaches:
+  // it is a branch it passes THROUGH on the way to the decay read. Keeping the
+  // old member would have left a value nothing can emit — the no-caller shape
+  // this codebase keeps shipping — and, worse, would have made a working hold
+  // and a decay read that never ran the same row.
+  | 'signal_still_supports_position'
+  // #748, tick path only: a lot is held, the flatten is not due, and the
+  // momentum read could not be taken at all — an instrument too cold for the
+  // MACD warm-up, typically in the first session after it enters the universe.
+  //
+  // Its OWN reason, not folded into `signal_still_supports_position`, and the
+  // distinction is the point: one says the signal was read and still supports
+  // the position, the other says nothing was read. A soak in which this appears
+  // steadily is a soak whose early exit is not running, and under one shared
+  // reason that is indistinguishable from a healthy hold.
+  | 'early_exit_signal_unavailable'
   | 'no_position_side'
   | 'atr_insufficient_bars'
   | 'atr_not_finite'
@@ -956,7 +992,7 @@ async function routeDecision(
     // has stopped resolving sessions produces `false` and no exit at all — the
     // second being precisely the silent case #698 was filed for.
     if (flattenWindow.diagnostic !== null) diagnostics.push(flattenWindow.diagnostic);
-    if (flattenWindow.within) return buildExitIntent(input, positions);
+    if (flattenWindow.within) return buildExitIntent(input, positions, 'flatten');
   }
 
   if (debate.direction === 'neutral' || !debate.converged) {
@@ -965,7 +1001,7 @@ async function routeDecision(
 
   const desiredSide = sideFor(debate.direction);
   if (desiredSide !== existingSide) {
-    return buildExitIntent(input, positions);
+    return buildExitIntent(input, positions, 'direction_flip');
   }
 
   const mostRecentLot = positions.reduce((latest, lot) =>
@@ -1006,16 +1042,26 @@ export type ExitCheckInput = Pick<
 };
 
 /**
- * Evaluates ONLY the position-facing exits for one instrument: is a lot held,
- * and is the flat-by-close window (#668, ADR-0014) open for its venue? If so,
- * the same flatten intent the decision path would build — held quantities,
- * degenerate stop/target, `'close'`-side idempotency key on `input.bar`.
+ * Evaluates the position-facing exits for one instrument, in this order:
+ *
+ * 1. Is a lot held at all?
+ * 2. Is the flat-by-close window (#668, ADR-0014) open for its venue? If so,
+ *    the same flatten intent the decision path would build — held quantities,
+ *    degenerate stop/target, `'close'`-side idempotency key on `input.bar`.
+ * 3. Has the held side's signal DECAYED (#748)? If so, the same builder emits
+ *    the same shape of exit, distinguished by `metadata.exit_reason:
+ *    'signal_decay'` and by an `'early_close'` idempotency-key discriminator.
+ *
+ * **The order is a safety property, not a style choice.** The flatten is
+ * evaluated on a tick and nowhere else, so it is decided before anything that
+ * can throw or decline. See the comment at the branch itself.
  *
  * What it deliberately does NOT evaluate: entries, scale-ins, and the
  * direction-flip exit — all of those are answers to "what does the debate
  * say", which is a decision-path question and runs once per debate bar. This
- * function consults no `AnalystView` and no `DebateResult`; its exit
- * attribution comes off the most recent open lot.
+ * function consults no `AnalystView` and no `DebateResult` and makes no model
+ * call; its exit attribution comes off the most recent open lot and its decay
+ * read comes off the indicator registry.
  *
  * Mirrors `decideWithReason`'s shape (an outcome plus collected diagnostics)
  * so the adapter that writes `trader_log` and escalates diagnostics treats
@@ -1049,14 +1095,48 @@ async function routeExitCheck(
   // stopped resolving sessions (a skip) — the second is #698's silent case,
   // and at a 2-minute tick THIS is now the path that reports it most often.
   if (flattenWindow.diagnostic !== null) diagnostics.push(flattenWindow.diagnostic);
-  if (!flattenWindow.within) return skip('flatten_not_due');
 
   const mostRecentLot = positions.reduce((latest, lot) =>
     lot.opened_at > latest.opened_at ? lot : latest,
   );
-  return buildFlattenExit(input, positions, input.bar, {
+  const attribution = {
     debate_id: mostRecentLot.debate_id,
     conviction: mostRecentLot.conviction,
     converged: mostRecentLot.converged,
+  };
+
+  // FLAT BY CLOSE FIRST, AND THE ORDER IS THE SAFETY ARGUMENT (#748).
+  //
+  // The flatten is evaluated on a tick and NOWHERE ELSE — there is no
+  // session-end job (orchestrator-spec.md, tick/decision split, constraint 1) —
+  // so anything placed ahead of it can cost the book an overnight carry. Put
+  // the decay read first and a cold instrument's `InsufficientBarsError`, a
+  // store outage, or any future throw inside it takes out the flatten with it.
+  // Below this line, nothing the early exit does can reach the flatten: it has
+  // already returned.
+  if (flattenWindow.within) {
+    return buildFlattenExit(input, positions, input.bar, attribution, 'flatten');
+  }
+
+  // The indicator-based early exit (#748). Reached only when the flatten is not
+  // due, and it consults ONLY indicators — no `AnalystView`, no `DebateResult`,
+  // no model call. `ExitCheckInput` has no field any of those could arrive
+  // through, which is orchestrator-spec.md constraint 4 enforced by the type,
+  // and this change adds none.
+  const decay = await readSignalDecay({
+    instrument,
+    side: existingSide,
+    marketData: input.marketData,
+    asOf: input.clock.now(),
+    config: input.config.early_exit,
   });
+  if (decay.verdict === 'signal_unavailable') return skip('early_exit_signal_unavailable');
+  if (decay.verdict === 'holds') return skip('signal_still_supports_position');
+
+  // A release, built by the SAME builder the flatten uses — so "can only reduce
+  // or close, never open or increase" holds by construction rather than by a
+  // second code path agreeing to behave. `buildFlattenExit` sizes to the held
+  // quantity, takes the closing side, and emits `intent_type: 'exit'`; there is
+  // no argument to it that could produce anything else.
+  return buildFlattenExit(input, positions, input.bar, attribution, 'signal_decay');
 }

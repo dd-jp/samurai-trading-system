@@ -21,6 +21,7 @@ export type {
 export type {
   ClosedTrade,
   DebateLog,
+  ExitReason,
   Fill,
   OpenPosition,
   OrderIntent,

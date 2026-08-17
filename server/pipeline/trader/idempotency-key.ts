@@ -27,7 +27,27 @@ import { createHash } from 'node:crypto';
  * protecting, and separates only the closing side — which is the one that must
  * never be suppressed.
  */
-export type IntentSide = 'open' | 'close';
+export type IntentSide = 'open' | 'close' | 'early_close';
+
+/**
+ * **`'early_close'` is #748's discriminator, and it is load-bearing exactly as
+ * `'close'` was in #686.**
+ *
+ * The indicator-based early exit and the flat-by-close flatten can both fire in
+ * the SAME debate bar — the bar is an hour and the flatten window is the last
+ * five minutes of the session, so an early release at 15:40 and the mandatory
+ * flatten at 16:25 share a bar whenever the session's last bar is the one the
+ * decay landed in. Under a shared `'close'` key they hash identically, and
+ * `findByKey` / the `open_positions` PK / the venue `client_order_id` all
+ * suppress the SECOND — which is the flatten. That is the #686 failure verbatim:
+ * a position carried overnight against ADR-0014, produced by the very change
+ * that was supposed to release positions earlier.
+ *
+ * It suppresses the second whether or not the early exit fully closed the lot:
+ * an early exit whose Risk or Verdict said `no_go`, or which closed only part of
+ * the book, still writes the submission record the flatten's key would collide
+ * with.
+ */
 
 /**
  * The opening/closing side of an intent type.

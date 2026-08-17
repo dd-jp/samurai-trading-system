@@ -162,6 +162,10 @@ export const PAPER_PROFILE_PROVENANCE = {
   'traderConfig.time_in_force.crypto': 'SPEC',
   'traderConfig.time_in_force.stocks': 'SPEC',
   'traderConfig.scale_in_conviction_delta': 'SPEC',
+  // #748: the indicator-based early exit's decay criterion. SPEC, like every
+  // other Trader threshold — `DEFAULT_EARLY_EXIT_CONFIG` is spread in unchanged
+  // and its default is argued at its definition, not fitted here.
+  'traderConfig.early_exit.momentum_release_at': 'SPEC',
   'riskConfig.max_position_size': 'UNSOURCED',
   'riskConfig.per_asset_cap': 'UNSOURCED',
   'riskConfig.per_asset_class_cap.crypto': 'UNSOURCED',
