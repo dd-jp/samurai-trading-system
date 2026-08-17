@@ -129,12 +129,80 @@ describe('PolymarketAgent.refresh', () => {
     expect(newsFor(store)[0]?.confidence).toBeCloseTo(0.05, 6);
   });
 
-  it('stamps the item at the floored refresh bucket so the debate bar can see it', async () => {
+  it('stamps the item at the INGEST INSTANT, not the floored bucket (#782)', async () => {
     const { agent, store } = agentWith({});
 
     await agent.refresh('t1');
 
-    expect(newsFor(store)[0]?.timestamp).toEqual(new Date('2026-08-17T12:00:00Z'));
+    // `NOW` is on the hour, so this is the one instant at which the two
+    // candidate stamps agree — the discriminating case is the mid-bar one
+    // below, and this only pins that nothing shifts the stamp off `now`.
+    expect(newsFor(store)[0]?.timestamp).toEqual(NOW);
+  });
+
+  /**
+   * The regression #782 fixed, re-entering through a second writer.
+   *
+   * `getContext` sets `windowEnd = floorToBar(asOf, 1h)` and drops anything
+   * stamped past it, precisely so `news.length` cannot move within one debate
+   * bar. Three things read that count: `technical-analyst` puts it verbatim in
+   * `key_points`, which is hashed into `debate_id` — so a count that changes
+   * mid-bar produces a second `debate_id` on a bar that already had one, misses
+   * #617's same-bar short-circuit and pays for a SECOND debate against ADR-0008's
+   * budget; and `fundamental-analyst` derives a second, different confidence
+   * from the same bar, which `scale_in_conviction_delta` can turn into an extra
+   * lot.
+   *
+   * Stamping the item at the floored bucket backdates it INTO the already-open
+   * bar and does exactly that. `market-intelligence-spec.md` states the accepted
+   * contract in one line: "an item ingested mid-bar is not visible until the
+   * next bar opens."
+   */
+  it('is invisible for the rest of the bar it was ingested into (#782)', async () => {
+    const midBar = new Date('2026-08-17T10:11:00Z');
+    let asOf = midBar;
+    const movingClock: Clock = { now: () => asOf };
+    const store = new MarketIntelligenceStore(movingClock);
+    const agent = new PolymarketAgent({
+      client: {
+        fetchEventMarket: async () => market({ updatedAt: new Date('2026-08-17T10:08:00Z') }),
+        // A 24h series ending at the mid-bar instant, so the history-span guard
+        // passes against the moving clock rather than against `NOW`.
+        fetchPriceHistory: async () =>
+          Array.from({ length: 25 }, (_, index) => ({
+            at: new Date(midBar.getTime() - (24 - index) * 60 * 60 * 1000),
+            probability: 0.67 + (0.035 * index) / 24,
+          })),
+      },
+      store,
+      clock: movingClock,
+      table: [ENTRY],
+    });
+
+    await expect(agent.refresh('t1')).resolves.toBe(true);
+
+    // Stamped when it was ingested, not backdated to 10:00.
+    const stored = store.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'test');
+    expect(stored.last_updated).toEqual(midBar);
+
+    // Still 10:11 — same bar, and the count the debate hashes must not have
+    // moved. Reading through `getContext` rather than the item is the point:
+    // this is a statement about what the ANALYST sees.
+    expect(store.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'test').news).toHaveLength(
+      0,
+    );
+
+    // 10:59 — the bar has not closed, so it is still invisible.
+    asOf = new Date('2026-08-17T10:59:59Z');
+    expect(store.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'test').news).toHaveLength(
+      0,
+    );
+
+    // 11:00 — the next bar opens and the item becomes visible, once, for good.
+    asOf = new Date('2026-08-17T11:00:00Z');
+    expect(store.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'test').news).toHaveLength(
+      1,
+    );
   });
 
   it('does not re-fetch inside the same hourly bucket', async () => {
@@ -182,6 +250,45 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
     // silence.
     await agent.refresh('t2');
     expect(fetchEventMarket).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * Gamma and the CLOB are independent endpoints (`gamma-api.polymarket.com`
+   * and `clob.polymarket.com`), so "Gamma healthy, CLOB down" is an ordinary
+   * outage rather than a contrived one. The Gamma-side throw is already handled
+   * as transient — it does not count as an answer and leaves the bucket
+   * unmarked, which is what makes the next pass retry. The CLOB-side throw must
+   * be treated the same way: a transport failure is not an answer just because
+   * a DIFFERENT transport answered first. Crediting it marks the bucket and
+   * buys an hour of silence on an outage that may have lasted seconds.
+   */
+  it('retries after a CLOB outage rather than marking the hour answered', async () => {
+    const { agent, store, fetchEventMarket } = agentWith({
+      historyError: new Error('clob 503'),
+    });
+
+    await expect(agent.refresh('t1')).resolves.toBe(false);
+    expect(newsFor(store)).toHaveLength(0);
+
+    // The bucket is NOT marked, so the next pass re-asks — the same contract
+    // the Gamma-side transport failure above holds to.
+    await agent.refresh('t2');
+    expect(fetchEventMarket).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * The other side of the same line, so the fix above cannot be "never mark the
+   * bucket". A row REFUSED on book quality is a real answer — the vendor was
+   * reachable and the book was thin — and re-asking within the hour would only
+   * repeat it.
+   */
+  it('still marks the hour answered when every row was refused on book quality', async () => {
+    const { agent, fetchEventMarket } = agentWith({ market: market({ volume24hr: 5 }) });
+
+    await expect(agent.refresh('t1')).resolves.toBe(false);
+
+    await agent.refresh('t2');
+    expect(fetchEventMarket).toHaveBeenCalledTimes(1);
   });
 
   it.each([

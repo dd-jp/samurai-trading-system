@@ -78,8 +78,19 @@
  * an hourly cadence one curated row contributes up to 24 items to the
  * analysts' 24h window. Decision 4 stops one event casting five votes along
  * the OUTCOME axis; the time axis is the same inflation and is not addressed.
- * It is uniform across rows, so it scales the vote count rather than skewing
- * the direction, which is why it is recorded rather than solved here.
+ *
+ * It is uniform WITHIN this source, so it does not skew one curated row
+ * against another. It is **not** uniform across the `news` bucket, and saying
+ * so would be false: `directionFrom` averages over every item in the bucket,
+ * and the other writer (`MiIngestAgent`, Alpaca/Benzinga) is not replayed
+ * hourly. On a universe where Alpaca does return items — the ~5 each it
+ * returns for AAPL/SPY (#552) — a handful of curated rows replayed hourly
+ * reach ~72 items in the same 24h window, so the mean is roughly 14:1 this
+ * source's, on DIRECTION as well as vote count, and on the confidence the
+ * Debate Engine sizes against. It is only harmless on the live LSE-ETP
+ * universe (ADR-0016), where Alpaca contributes 0 and there is nothing to
+ * drown out. Recorded rather than solved here because the dedup belongs in
+ * `MarketIntelligenceStore.ingest`, not in one source.
  *
  * ## No spend plumbing, and no Convergence Engine
  *
@@ -119,9 +130,14 @@ export const POLYMARKET_ASSET_CLASS: AssetClass = 'stocks';
  *
  * One hour = 1/24th of the analysts' 24h context window. DERIVED from
  * staleness, not from cost — unlike `GROK_REFRESH_MS`, which is a cost
- * fraction, because this path is free. It also happens to equal
- * `DEBATE_BAR_TIMEFRAME_MS`, which is what makes the bucket-floored item
- * stamp land exactly on the bar `getContext` floors its window to (#782).
+ * fraction, because this path is free.
+ *
+ * It also happens to equal `DEBATE_BAR_TIMEFRAME_MS`, and that coincidence
+ * bounds the visibility latency rather than removing it: items are stamped at
+ * the ingest instant (see `#buildItem`) and `getContext` floors its window end
+ * to the bar, so at most one refresh's worth of item waits for the next bar to
+ * open. An earlier draft of this comment claimed the bucket floor made the
+ * stamp land ON that bar — it did, and that was the #782 defect, not the fix.
  */
 export const POLYMARKET_REFRESH_MS = 60 * 60 * 1000;
 
@@ -265,6 +281,27 @@ function endpointsOf(
   return { baseline, latest };
 }
 
+/**
+ * What one curated row produced this pass, and — the part that matters —
+ * whether it ANSWERED.
+ *
+ * `refused` is an answer: the vendor was reachable and the book was thin, the
+ * slug rotted, or the series was too short. Re-asking inside the hour would
+ * only repeat it, so the bucket is marked.
+ *
+ * `transport-failed` is not an answer, and it is a distinct case from `refused`
+ * rather than a shade of it. Gamma and the CLOB are INDEPENDENT endpoints, so a
+ * pass can read every market from Gamma and reach no price history at all; if
+ * the Gamma read alone credited the row, that outage would mark the bucket and
+ * suppress the retry for the rest of the hour. Whichever transport failed, the
+ * answer is the same one the Gamma-side throw already gets: contribute nothing,
+ * leave the bucket unmarked, let the next pass re-ask.
+ */
+type BuiltRow =
+  | { outcome: 'item'; item: IntelligenceItem; raw: RawArchiveRow }
+  | { outcome: 'refused' }
+  | { outcome: 'transport-failed' };
+
 export class PolymarketAgent {
   /** The bucket already fetched. In-memory: a restart refetches, which is correct. */
   #bucket: number | undefined;
@@ -375,8 +412,6 @@ export class PolymarketAgent {
         continue;
       }
 
-      answered += 1;
-
       if (market === undefined) {
         // Slug rot, and the loudest case in this file. A decayed table degrades
         // to silent zero-ingest — the exact mute-analyst state this source
@@ -398,20 +433,26 @@ export class PolymarketAgent {
             market_slug: entry.marketSlug,
           },
         });
+        // Gamma ANSWERED — with "there is no such market". A decayed table is a
+        // durable state, not an outage, so re-asking inside the hour repeats it.
+        answered += 1;
         continue;
       }
 
       const built = await this.#buildItem(trace_id, entry, market, now, bucketAt);
-      if (built === undefined) continue;
+      if (built.outcome === 'transport-failed') continue;
+      answered += 1;
+      if (built.outcome === 'refused') continue;
       items.push(built.item);
       raws.push(built.raw);
     }
 
     if (items.length === 0) {
       // The bucket is marked only when SOMETHING answered: a pass in which
-      // every row threw is a vendor outage and must be retried, while a pass
-      // in which every row was refused on book quality is a real answer and
-      // re-asking within the hour would only repeat it.
+      // every row failed on a TRANSPORT — Gamma's or the CLOB's, see
+      // `BuiltRow` — is a vendor outage and must be retried, while a pass in
+      // which every row was refused on book quality, or rotted, is a real
+      // answer and re-asking within the hour would only repeat it.
       if (answered > 0) this.#bucket = bucketAt.getTime();
       return false;
     }
@@ -424,7 +465,10 @@ export class PolymarketAgent {
       this.#deps.archive?.write(raws, []);
       this.#deps.store.ingest({
         agent_id: SOURCE_POLYMARKET,
-        timestamp: bucketAt,
+        // The envelope stamp, which `MarketIntelligenceStore.ingest` carries
+        // but never reads — it filters on the ITEM timestamp. Set to the same
+        // ingest instant the items carry so the two cannot disagree.
+        timestamp: now,
         asset_class: POLYMARKET_ASSET_CLASS,
         items,
       });
@@ -461,14 +505,14 @@ export class PolymarketAgent {
     return true;
   }
 
-  /** One curated row → one item, or `undefined` with the refusal logged. */
+  /** One curated row → an item, a logged refusal, or a transport failure. */
   async #buildItem(
     trace_id: string,
     entry: CuratedMacroMarket,
     market: PolymarketMarket,
     now: Date,
     bucketAt: Date,
-  ): Promise<{ item: IntelligenceItem; raw: RawArchiveRow } | undefined> {
+  ): Promise<BuiltRow> {
     const refusal = refuseOnBook(market, now);
     if (refusal !== undefined) return this.#refuse(trace_id, entry, refusal);
 
@@ -498,12 +542,13 @@ export class PolymarketAgent {
           message:
             `polymarket: price history for '${entry.id}' failed; it contributes nothing this ` +
             'refresh. The 24h delta is the signal, so a level without a baseline is not ' +
-            'ingested at all.',
+            'ingested at all. The CLOB is a separate endpoint from Gamma, so this counts as ' +
+            'NO answer: the bucket is not marked and the next pass retries.',
         },
         error,
         { source: SOURCE_POLYMARKET, curated_id: entry.id },
       );
-      return undefined;
+      return { outcome: 'transport-failed' };
     }
 
     const endpoints = endpointsOf(history, now);
@@ -517,10 +562,29 @@ export class PolymarketAgent {
       id: `${SOURCE_POLYMARKET}:${entry.id}:${bucketAt.toISOString()}`,
       source: SOURCE_POLYMARKET,
       type: 'news',
-      // The FLOORED bucket, not `now`. `getContext` floors its window end to
-      // the debate bar (#782) and drops anything stamped past it, so an item
-      // stamped mid-bar would be invisible until the next bar opened.
-      timestamp: bucketAt,
+      // `now`, the INGEST INSTANT — never the floored bucket. `getContext`
+      // floors its window end to the debate bar and drops anything stamped
+      // past it (#782), and that dropping is the feature, not an obstacle: it
+      // is what stops `news.length` moving between two ticks of ONE bar.
+      // `technical-analyst` puts that count verbatim in `key_points`, which is
+      // hashed into `debate_id`, so a count that grows mid-bar buys a SECOND
+      // paid debate on a bar that already had one (#617, ADR-0008's budget) —
+      // and `fundamental-analyst` emits a second, different confidence on the
+      // same bar, which `scale_in_conviction_delta` can turn into an extra lot.
+      //
+      // Stamping `bucketAt` backdates the item INTO the already-open bar and
+      // re-opens exactly that. The poll timer is 15 minutes at an arbitrary
+      // phase and the tick interval is 60s, so an ingest at 10:11 stamped 10:00
+      // is visible to a read at 10:12 and was not visible at 10:05.
+      // `market-intelligence-spec.md` states the contract this now honours:
+      // "an item ingested mid-bar is not visible until the next bar opens" —
+      // at most one hour of latency against a 24h window, on a path whose
+      // consumer runs once per bar anyway.
+      //
+      // `id` and `native_id` stay keyed to `bucketAt` on purpose: they are the
+      // replay/dedup coordinates and must be stable for a replay stepping the
+      // same grid, which a wall-clock instant is not.
+      timestamp: now,
       entity: entry.entity,
       headline:
         `${entry.label}: ${baseline.probability.toFixed(3)} -> ` +
@@ -554,10 +618,10 @@ export class PolymarketAgent {
     // The row answered, so its refusal streak starts over: the escalation must
     // fire on a row that is dead, not on one that was quiet last Tuesday.
     this.#refusals.delete(entry.id);
-    return { item, raw };
+    return { outcome: 'item', item, raw };
   }
 
-  #refuse(trace_id: string, entry: CuratedMacroMarket, reason: string): undefined {
+  #refuse(trace_id: string, entry: CuratedMacroMarket, reason: string): BuiltRow {
     const streak = (this.#refusals.get(entry.id) ?? 0) + 1;
     this.#refusals.set(entry.id, streak);
     // A row parked below the book-quality floors forever is functionally a
@@ -581,6 +645,6 @@ export class PolymarketAgent {
           'distinguishable from "looked and saw nothing".',
       payload: { source: SOURCE_POLYMARKET, curated_id: entry.id, consecutive_refusals: streak },
     });
-    return undefined;
+    return { outcome: 'refused' };
   }
 }

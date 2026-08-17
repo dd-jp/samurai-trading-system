@@ -43,8 +43,9 @@ import {
   SqliteMarketDataStore,
   UsEquityRegularHoursCalendar,
 } from '../../providers/market-data-service/index.js';
+import { PolymarketClient } from '../../providers/market-intelligence/index.js';
 import type { OrderIntent } from '../../shared/index.js';
-import { SimulatedClock } from '../../shared/index.js';
+import { SimulatedClock, TokenBucket } from '../../shared/index.js';
 import { DEFAULT_NOUS_MODELS } from '../../shared/llm/index.js';
 import { openSharedStore, type SharedStore as SqliteHandle } from '../../shared/store/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
@@ -110,6 +111,23 @@ const START = new Date('2026-07-29T12:00:00.000Z');
  */
 const NO_FILL_POLL_MS = 20 * 24 * 60 * 60 * 1_000;
 
+/**
+ * Parks the Polymarket poll timer for the same reason, and it is not merely a
+ * speed knob (#504).
+ *
+ * The composition root starts a `setInterval` firing `refresh` every
+ * `DEFAULT_POLYMARKET_POLL_INTERVAL_MS`. Several cases here advance fake timers
+ * by 47 HOURS in one step, which fires that interval ~190 times; each firing
+ * walks all eight curated rows, and because `offlinePolymarketClient` throws on
+ * the transport the agent deliberately leaves its hourly bucket UNMARKED so the
+ * next pass retries. That is correct production behaviour (a vendor outage must
+ * not suppress the retry) and ~1,500 pointless stub calls inside a 5s test
+ * budget — three cases timed out on it. The startup `refresh` still runs on
+ * every boot, so the wiring this file exists to assert is untouched; only the
+ * repeat is parked.
+ */
+const NO_POLYMARKET_POLL_MS = 20 * 24 * 60 * 60 * 1_000;
+
 function recordingLogger(): Logger & { entries: Parameters<Logger['log']>[0][] } {
   const entries: Parameters<Logger['log']>[0][] = [];
   return { entries, log: (entry) => entries.push(entry) };
@@ -131,6 +149,32 @@ function recordingLogger(): Logger & { entries: Parameters<Logger['log']>[0][] }
  */
 type StubConfig = ProductionConfig &
   Required<Pick<ProductionConfig, 'alpacaBrokerClient' | 'heartbeatChannel'>>;
+
+/**
+ * A Polymarket client that reaches no network, injected by `stubConfig` into
+ * every boot in this file (#504).
+ *
+ * The composition root builds this agent UNCONDITIONALLY — its read APIs are
+ * keyless, so unlike every other vendor here nothing else gates it — and
+ * `start()` fires `void polymarketAgent.refresh('startup')` immediately. Before
+ * this existed, a DNS-level probe over this file recorded live calls to
+ * `gamma-api.polymarket.com` and `clob.polymarket.com` while all 92 tests
+ * passed, because `refresh` never throws by contract and the failure was
+ * swallowed into a `warn`. `vitest.setup.ts` is the backstop that made it
+ * visible; this is the fix that makes the file honest rather than merely
+ * refused.
+ *
+ * The pacing override is `startup.test.ts`'s, for its reason: the shipped
+ * `capacity: 2, refillPerSecond: 0.2` is right for a real vendor and pure
+ * wall-clock coupling for a stub that throws before it reaches a socket, and
+ * this file boots the orchestrator 29 times.
+ */
+const offlinePolymarketClient = new PolymarketClient({
+  rateLimiter: new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 }),
+  fetchImpl: (async () => {
+    throw new Error('offline: the test suite must not reach Polymarket');
+  }) as unknown as typeof fetch,
+});
 
 function stubConfig(db: SqliteHandle, overrides: Partial<ProductionConfig> = {}): StubConfig {
   const submitOrder = vi.fn(async () => ({
@@ -181,6 +225,8 @@ function stubConfig(db: SqliteHandle, overrides: Partial<ProductionConfig> = {})
         async (): Promise<AlpacaQuote> => ({ t: START.toISOString(), ap: 100, bp: 99 }),
       ),
     },
+    polymarketClient: offlinePolymarketClient,
+    polymarketPollIntervalMs: NO_POLYMARKET_POLL_MS,
     llmClient: { complete: vi.fn() } as unknown as ProductionConfig['llmClient'],
     heartbeatChannel: { postHeartbeat: vi.fn(async () => undefined) },
     approvals: {

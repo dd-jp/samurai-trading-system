@@ -406,6 +406,13 @@ function smokePolymarketClient(): PolymarketClient {
  * run injects its own `AlwaysOpenCalendar` override below rather than
  * depending on `SMOKE_RUN_INSTANT` falling inside a real session. Nothing
  * else in the offline path compares against real wall-clock time.
+ *
+ * The exact-hour alignment is LOAD-BEARING for the Polymarket gate (#504).
+ * Items are stamped at the ingest instant (#782), and
+ * `MarketIntelligenceStore.getContext()` floors its window end to the debate
+ * bar, so an item stamped at 12:00:00.000 is visible while one stamped at
+ * 12:00:00.001 is not until 13:00. Do not nudge this constant off the hour
+ * without expecting `news items served: 0` with a row still archived.
  */
 export const SMOKE_RUN_INSTANT = new Date('2026-08-04T12:00:00.000Z');
 
@@ -3301,10 +3308,17 @@ export function evaluateSmokeGate(
   // archive row says a fetch reached the vendor path, the store item says the
   // fundamental analyst could actually see the result. A mechanism that
   // fetches and stores nothing readable is the shape this repo keeps shipping.
+  //
+  // What these two cover is the STARTUP refresh only — `start()` fires
+  // `void polymarketAgent.refresh('startup')` once, and the repeating
+  // `setInterval` behind it runs at DEFAULT_POLYMARKET_POLL_INTERVAL_MS
+  // (15 minutes) against a smoke run that finishes in seconds, so it provably
+  // never fires here. The recurring poll is UNCOVERED by this gate; only the
+  // composition-root wiring of the first refresh is.
   if (observations.polymarketRowsArchived !== SMOKE_POLYMARKET_EXPECTED_ITEMS) {
     failures.push(
       `Polymarket archived ${observations.polymarketRowsArchived} macro rows, expected exactly ` +
-        `${SMOKE_POLYMARKET_EXPECTED_ITEMS} — 0 means the poller never ran from the ` +
+        `${SMOKE_POLYMARKET_EXPECTED_ITEMS} — 0 means the startup refresh never ran from the ` +
         'composition root, more means the fail-closed guard stopped refusing the thin-volume ' +
         'market the fixture serves (#504)',
     );
@@ -3314,7 +3328,10 @@ export function evaluateSmokeGate(
       `Polymarket put ${observations.polymarketNewsItems} items in the news bucket, expected ` +
         `exactly ${SMOKE_POLYMARKET_EXPECTED_ITEMS} — 0 with rows archived means the items ` +
         'never reached MarketIntelligenceStore, or were stamped outside the debate bar the ' +
-        'analysts query (#504, #782)',
+        'analysts query. Items now carry the INGEST INSTANT (#782), and getContext floors its ' +
+        'window to the hour, so this count depends on SMOKE_RUN_INSTANT being exactly ' +
+        'hour-aligned — a smoke clock that drifts off the hour before the startup refresh ' +
+        'lands would read 0 here with a row archived (#504, #782)',
     );
   }
 
@@ -3757,6 +3774,14 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     // the root's `config.dataSource ??` seam short-circuits the failover there.
     const dataFailover = await runDataFailoverScenario(logger);
 
+    // Safe to read the Polymarket counts here, and only here: `start()` fires
+    // the first refresh as `void polymarketAgent.refresh('startup')`, so its
+    // store write is in flight after `start()` resolves — but `stop()` (line
+    // above, in the `finally`) awaits `polymarketAgent.whenIdle()` in its
+    // `Promise.allSettled`, which drains it. Moving this read ABOVE the
+    // `orchestrator.stop()` call would race that write. The two earlier
+    // `readSmokeObservations(db)` calls pass no store, so they observe ticks
+    // and fills only and are unaffected.
     const observations = readSmokeObservations(db, smokeMiArchive, orchestrator.marketIntelligence);
     const gate = evaluateSmokeGate(observations, {
       minTicks: targetTicks,
