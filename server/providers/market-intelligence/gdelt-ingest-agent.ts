@@ -150,12 +150,39 @@ export class GdeltIngestAgent {
    *
    * Concurrent calls do not stack: a call made while a poll is in flight returns
    * `false` immediately rather than starting a second download.
+   *
+   * The "never throws" contract used to hold by audit rather than structure:
+   * `poll`'s own try/catch covers the fetch, but `effectiveCursor()`'s SQLite
+   * read and `clock.now()` sit outside it, so a closed-store throw (shutdown
+   * racing a stray poll) or a throwing clock would have escaped `poll`
+   * uncaught (#713 items 5 and 6). The catch below closes that: it wraps the
+   * WHOLE poll, not just the fetch, so anything `poll` throws — now or from
+   * code added there later — degrades to a warn instead of an unhandled
+   * rejection in `production.ts`'s `void refresh(...)`. It does not change
+   * what `poll`'s inner try/catch already handles: an aborted or failed fetch
+   * is still caught there first and still logs "batch fetch failed" (see
+   * `whenIdle`) — this only catches what THAT catch does not.
    */
   async refresh(trace_id = 'gdelt-ingest'): Promise<boolean> {
     if (this.current !== undefined) return false;
     const abortController = new AbortController();
     this.currentAbort = abortController;
-    const run = this.poll(trace_id, abortController.signal);
+    const run = this.poll(trace_id, abortController.signal).catch((error: unknown) => {
+      this.logFailure(
+        {
+          trace_id,
+          stage: 'market_intelligence',
+          level: 'warn',
+          message:
+            'market intelligence: GDELT poll failed outside the fetch/write paths (cursor read ' +
+            'or clock); no macro rows archived this poll. Not fatal — the tick continues on ' +
+            'whatever the archive already holds.',
+        },
+        error,
+        { source: SOURCE_GDELT },
+      );
+      return false;
+    });
     this.current = run;
     try {
       return await run;
@@ -192,6 +219,14 @@ export class GdeltIngestAgent {
   }
 
   private async poll(trace_id: string, signal: AbortSignal): Promise<boolean> {
+    // Read OUTSIDE the fetch try/catch, deliberately (#713 item 5). This is a
+    // SQLite read (`archive.latestUpdatedAt`), not a network call, and a
+    // closed store — shutdown racing a stray poll — throws here, not from the
+    // fetch. Inside the try below it would have been caught and logged as
+    // "GDELT batch fetch failed", which is the wrong cause: nothing was
+    // fetched. Left outside, it propagates to `refresh`'s blanket catch, which
+    // logs it under its own name instead.
+    const cursor = this.effectiveCursor();
     let batch: GdeltGkgBatch;
     try {
       const url = await this.deps.client.latestBatchUrl(signal);
@@ -219,7 +254,6 @@ export class GdeltIngestAgent {
       // 15-minute publication cadence, a restart or a fast tick will often see
       // the batch it already holds, and re-downloading 3.4MB to discard it is
       // the whole saving the cursor exists for.
-      const cursor = this.effectiveCursor();
       if (cursor !== undefined && candidate <= cursor) return false;
       batch = await this.deps.client.fetchBatch(url, signal);
     } catch (error) {

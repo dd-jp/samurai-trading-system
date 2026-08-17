@@ -24,7 +24,11 @@
  * header is sufficient and pulls in no dependency — the repo has no zip library
  * and this did not justify adding one. The header's name and extra-field
  * lengths are **read**, not assumed: they were 22 and 28 in the sampled batch
- * and both are variable.
+ * and both are variable. The header's CRC-32 is checked against the inflated
+ * bytes (`unzipFirstEntry`) — this module's byte-integrity control, chosen
+ * over the manifest's md5 because the manifest is the untrusted channel
+ * `pinToBaseUrl` already refuses to trust; see the check site for the fuller
+ * argument.
  *
  * The TSV carries 27 columns. The four this reads: `0` GKGRECORDID, `1`
  * V2.1DATE, `7` V1THEMES (semicolon-delimited), `15` V1.5TONE (comma-delimited,
@@ -57,7 +61,7 @@
  * losing the distinction the whole design turns on.
  */
 
-import { inflateRawSync } from 'node:zlib';
+import { crc32, inflateRawSync } from 'node:zlib';
 import { TokenBucket } from '../../../shared/index.js';
 import { allWatchedThemes } from './gdelt-themes.js';
 
@@ -128,6 +132,22 @@ const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 
 /** Guards a decompression bomb: 10.5MB observed, 512MB refused. */
 const MAX_INFLATED_BYTES = 512 * 1024 * 1024;
+
+/**
+ * Refuse a `lastupdate.txt` response larger than this rather than parsing it.
+ *
+ * `response.text()` in `latestBatchUrl` is otherwise this module's only
+ * uncapped read — the batch path caps twice (`content-length`, then the
+ * materialised buffer), and this mirrors that shape. The manifest is three
+ * `size md5 url` lines in practice (a few hundred bytes), so 64KB is
+ * generous; nothing enforces the three-line shape, hence the cap. Note what
+ * this does NOT do, the same admitted limit `MAX_ARCHIVE_BYTES` carries:
+ * `response.text()` still materialises the whole body before the post-read
+ * check can fire, whatever the header claims. Refusing the RESULT is enough
+ * to stop an oversized manifest being parsed; a true streaming bound would
+ * need a running byte count, which three lines of text does not justify.
+ */
+const MAX_MANIFEST_BYTES = 64 * 1024;
 
 /** GKG 2.1 column indices, named once. */
 const COL = {
@@ -266,11 +286,32 @@ export function batchTimeFromUrl(fileUrl: string): Date | undefined {
  * it `unzipFirstEntry` keeps the code honest about which of those two things is
  * true; an earlier docblock here claimed a rejection this function never made.
  */
+/**
+ * General-purpose bit flag bit 3: "sizes and CRC-32 are in a trailing data
+ * descriptor, not the local header". When set, the local header's CRC-32
+ * field is 0 by construction and would fail every real batch if compared naively —
+ * this decoder does not read the trailing descriptor, so a set bit 3 has to
+ * be refused explicitly rather than silently compared against a meaningless
+ * zero. Confirmed unset against a live batch fetched 2026-08-17 (general
+ * purpose flag `0x0000`); GDELT's files are static and not streamed, so this
+ * is not expected to fire, but nothing upstream enforces it.
+ */
+const DATA_DESCRIPTOR_FLAG = 0x0008;
+
 function unzipFirstEntry(buffer: Buffer): string {
   if (buffer.length < 30 || buffer.readUInt32LE(0) !== 0x04034b50) {
     throw new Error('GdeltGkgClient: response is not a zip archive (bad local file header).');
   }
+  const generalPurposeFlag = buffer.readUInt16LE(6);
+  if ((generalPurposeFlag & DATA_DESCRIPTOR_FLAG) !== 0) {
+    throw new Error(
+      'GdeltGkgClient: zip entry uses a streaming data descriptor (general purpose bit 3); ' +
+        'this decoder does not read the trailing descriptor, so the local header carries no ' +
+        'CRC-32 to verify against.',
+    );
+  }
   const method = buffer.readUInt16LE(8);
+  const declaredCrc = buffer.readUInt32LE(14);
   const nameLength = buffer.readUInt16LE(26);
   const extraLength = buffer.readUInt16LE(28);
   const body = buffer.subarray(30 + nameLength + extraLength);
@@ -308,6 +349,29 @@ function unzipFirstEntry(buffer: Buffer): string {
       `GdeltGkgClient: unsupported zip compression method ${method} (expected 8 deflate or 0 stored).`,
     );
   }
+
+  // The byte-integrity check this module's own docs name as its job (#713 item
+  // 3). The manifest's md5 (`lastupdate.txt`, `size md5 url`) was considered
+  // instead and declined: it travels the SAME channel `pinToBaseUrl` already
+  // treats as untrusted — a manifest that could name a hostile host could name
+  // a matching hostile md5 just as easily, so verifying it adds nothing over
+  // the host pin. Transit corruption is TLS's job (AEAD), not this module's.
+  // The zip local header's CRC-32 is a better fit: it costs nothing extra to
+  // wire in (no plumbing across `latestBatchUrl`/`fetchBatch`, unlike the
+  // manifest md5, which is fetched in a separate call from the batch and would
+  // need threading through both public methods to compare), it is CHECKED
+  // against the bytes actually inflated rather than a value fetched
+  // separately, and `crc32` on a ~10.5MB buffer is sub-millisecond — the
+  // measured cost this item asked to weigh is negligible either way.
+  const actualCrc = crc32(inflated);
+  if (actualCrc !== declaredCrc) {
+    throw new Error(
+      `GdeltGkgClient: inflated entry's CRC-32 (0x${actualCrc.toString(16)}) does not match the ` +
+        `zip local header's declared CRC-32 (0x${declaredCrc.toString(16)}) — the archive is ` +
+        'corrupt or was tampered with in transit.',
+    );
+  }
+
   return inflated.toString('utf8');
 }
 
@@ -342,7 +406,24 @@ export class GdeltGkgClient {
         `GdeltGkgClient: lastupdate.txt returned HTTP ${response.status} ${response.statusText}.`,
       );
     }
+    // Refused BEFORE `text()` where the server declares a length, mirroring
+    // `fetchBatch`'s two-step guard on `MAX_ARCHIVE_BYTES` — see
+    // `MAX_MANIFEST_BYTES` for why neither check is a true streaming bound.
+    const declaredLength = Number(response.headers.get('content-length'));
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_MANIFEST_BYTES) {
+      throw new Error(
+        `GdeltGkgClient: lastupdate.txt declares ${declaredLength} bytes, above the ` +
+          `${MAX_MANIFEST_BYTES} ceiling — refusing to read it.`,
+      );
+    }
     const text = await response.text();
+    const textBytes = Buffer.byteLength(text, 'utf8');
+    if (textBytes > MAX_MANIFEST_BYTES) {
+      throw new Error(
+        `GdeltGkgClient: lastupdate.txt is ${textBytes} bytes, above the ${MAX_MANIFEST_BYTES} ` +
+          'ceiling — refusing to parse it.',
+      );
+    }
     // Three lines — export, mentions, gkg — each `size md5 url`. Matching on the
     // suffix rather than the line index: the order is conventional, not
     // contractual, and picking the wrong file would parse a totally different
@@ -406,17 +487,21 @@ export class GdeltGkgClient {
     // Pinned here as well as in `latestBatchUrl`, because this method is public
     // and a caller that assembled a URL some other way must not reach a host we
     // never configured. Re-pinning an already-pinned URL is a no-op.
+    // `url`, not `fileUrl`, in every diagnostic below: the request actually
+    // goes to the pinned rewrite — different protocol, query dropped — so
+    // citing the pre-pin argument would name a URL we never fetched. This
+    // module's whole point is that the two are different things.
     const url = this.pinToBaseUrl(fileUrl);
     const batchTime = batchTimeFromUrl(url);
     if (batchTime === undefined) {
-      throw new Error(`GdeltGkgClient: cannot read a batch timestamp from ${fileUrl}.`);
+      throw new Error(`GdeltGkgClient: cannot read a batch timestamp from ${url}.`);
     }
 
     await this.rateLimiter.acquire(signal);
     const response = await this.fetchImpl(url, requestInit());
     if (!response.ok) {
       throw new Error(
-        `GdeltGkgClient: ${fileUrl} returned HTTP ${response.status} ${response.statusText}.`,
+        `GdeltGkgClient: ${url} returned HTTP ${response.status} ${response.statusText}.`,
       );
     }
     // Refused BEFORE `arrayBuffer()` where the server declares a length, so the
@@ -427,14 +512,14 @@ export class GdeltGkgClient {
     const declared = Number(response.headers.get('content-length'));
     if (Number.isFinite(declared) && declared > MAX_ARCHIVE_BYTES) {
       throw new Error(
-        `GdeltGkgClient: ${fileUrl} declares ${declared} bytes, above the ${MAX_ARCHIVE_BYTES} ` +
+        `GdeltGkgClient: ${url} declares ${declared} bytes, above the ${MAX_ARCHIVE_BYTES} ` +
           'ceiling — refusing to download it inside a tick.',
       );
     }
     const buffer = Buffer.from(await response.arrayBuffer());
     if (buffer.length > MAX_ARCHIVE_BYTES) {
       throw new Error(
-        `GdeltGkgClient: ${fileUrl} is ${buffer.length} bytes, above the ${MAX_ARCHIVE_BYTES} ` +
+        `GdeltGkgClient: ${url} is ${buffer.length} bytes, above the ${MAX_ARCHIVE_BYTES} ` +
           'ceiling — refusing to buffer it inside a tick.',
       );
     }
