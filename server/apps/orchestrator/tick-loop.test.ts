@@ -1,9 +1,12 @@
 import type { Signal } from '../../pipeline/analysts/index.js';
-import type { Clock } from '../../shared/index.js';
+import type { Clock, OrderIntent } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
+import { DebateBarDecisionGate, type DecisionGate } from './decision-bar-gate.js';
+import { paperStartingProfile } from './paper-profile.js';
 import { SqliteAuditLog } from './sqlite-audit-log.js';
 import { SqliteCurrentTickStore } from './sqlite-current-tick-store.js';
 import { runTickPlan } from './tick-loop.js';
+import { SequentialTickRunner } from './tick-runner.js';
 import type {
   AuditLog,
   CurrentTickStore,
@@ -12,6 +15,7 @@ import type {
   TickOutcome,
   TickPlan,
   TickRunner,
+  TickSteps,
   UniverseInstrument,
 } from './types.js';
 
@@ -86,6 +90,7 @@ describe('runTickPlan', () => {
       logger: LOGGER,
       auditLog: makeAuditLog(),
       currentTickStore: makeCurrentTickStore(),
+      decisionGate: new DebateBarDecisionGate(),
     });
     await settle();
 
@@ -118,6 +123,7 @@ describe('runTickPlan', () => {
       logger: LOGGER,
       auditLog: makeAuditLog(),
       currentTickStore: makeCurrentTickStore(),
+      decisionGate: new DebateBarDecisionGate(),
     });
 
     expect(runner.runInstrument).toHaveBeenCalledTimes(6);
@@ -140,6 +146,7 @@ describe('runTickPlan', () => {
       logger: LOGGER,
       auditLog: makeAuditLog(),
       currentTickStore: makeCurrentTickStore(),
+      decisionGate: new DebateBarDecisionGate(),
     });
 
     expect(outcomes.map((outcome) => outcome.trace_id)).toEqual([
@@ -158,6 +165,7 @@ describe('runTickPlan', () => {
       logger: LOGGER,
       auditLog: makeAuditLog(),
       currentTickStore: makeCurrentTickStore(),
+      decisionGate: new DebateBarDecisionGate(),
     });
     await settle();
 
@@ -187,6 +195,7 @@ describe('runTickPlan', () => {
       logger: LOGGER,
       auditLog: makeAuditLog(),
       currentTickStore: makeCurrentTickStore(),
+      decisionGate: new DebateBarDecisionGate(),
     });
 
     expect(signals).toEqual([
@@ -210,6 +219,7 @@ describe('runTickPlan', () => {
       logger: LOGGER,
       auditLog: makeAuditLog(),
       currentTickStore: makeCurrentTickStore(),
+      decisionGate: new DebateBarDecisionGate(),
     });
 
     expect(contexts.map((ctx) => ctx.trace_id)).toEqual(['trace-1', 'trace-2', 'trace-3']);
@@ -232,6 +242,7 @@ describe('runTickPlan', () => {
       logger: LOGGER,
       auditLog: makeAuditLog(),
       currentTickStore,
+      decisionGate: new DebateBarDecisionGate(),
     });
 
     expect(contexts.every((ctx) => ctx.currentTickStore === currentTickStore)).toBe(true);
@@ -249,6 +260,7 @@ describe('runTickPlan', () => {
       logger: LOGGER,
       auditLog: makeAuditLog(),
       currentTickStore: makeCurrentTickStore(),
+      decisionGate: new DebateBarDecisionGate(),
     });
 
     const traceIds = outcomes.map((outcome) => outcome.trace_id);
@@ -270,6 +282,7 @@ describe('runTickPlan', () => {
       logger: LOGGER,
       auditLog: makeAuditLog(),
       currentTickStore: makeCurrentTickStore(),
+      decisionGate: new DebateBarDecisionGate(),
     });
 
     // A literal 0-worker pool would run nothing and resolve empty.
@@ -321,6 +334,7 @@ describe('runTickPlan', () => {
       logger: LOGGER,
       auditLog: makeAuditLog(),
       currentTickStore: makeCurrentTickStore(),
+      decisionGate: new DebateBarDecisionGate(),
     });
 
     // QQQ and AAPL both complete before the slow SPY pass.
@@ -336,6 +350,7 @@ describe('runTickPlan', () => {
       logger: LOGGER,
       auditLog: makeAuditLog(),
       currentTickStore: makeCurrentTickStore(),
+      decisionGate: new DebateBarDecisionGate(),
     });
 
     expect(outcomes).toEqual([]);
@@ -362,6 +377,7 @@ describe('runTickPlan', () => {
         logger: LOGGER,
         auditLog: makeAuditLog(),
         currentTickStore: makeCurrentTickStore(),
+        decisionGate: new DebateBarDecisionGate(),
       });
 
       // The two healthy instruments ran to completion — the throw cost only
@@ -393,6 +409,7 @@ describe('runTickPlan', () => {
         logger: LOGGER,
         auditLog: makeAuditLog(),
         currentTickStore: makeCurrentTickStore(),
+        decisionGate: new DebateBarDecisionGate(),
       });
       pending.then(() => {
         settled = true;
@@ -434,6 +451,7 @@ describe('runTickPlan', () => {
         logger,
         auditLog: makeAuditLog(),
         currentTickStore: makeCurrentTickStore(),
+        decisionGate: new DebateBarDecisionGate(),
       });
 
       expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: 'debate exploded' });
@@ -461,6 +479,7 @@ describe('runTickPlan', () => {
         logger: LOGGER,
         auditLog: makeAuditLog(),
         currentTickStore: makeCurrentTickStore(),
+        decisionGate: new DebateBarDecisionGate(),
       });
 
       expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: 'a string rejection' });
@@ -482,6 +501,7 @@ describe('runTickPlan', () => {
         logger: LOGGER,
         auditLog: makeAuditLog(),
         currentTickStore: makeCurrentTickStore(),
+        decisionGate: new DebateBarDecisionGate(),
       });
 
       expect(outcomes[1]).toEqual({
@@ -510,6 +530,7 @@ describe('runTickPlan', () => {
         logger: LOGGER,
         auditLog: makeAuditLog(),
         currentTickStore: makeCurrentTickStore(),
+        decisionGate: new DebateBarDecisionGate(),
       });
 
       expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: '[object Object]' });
@@ -540,6 +561,7 @@ describe('runTickPlan', () => {
         logger: LOGGER,
         auditLog,
         currentTickStore: makeCurrentTickStore(),
+        decisionGate: new DebateBarDecisionGate(),
       });
 
       expect(auditLog.records).toHaveLength(1);
@@ -580,6 +602,7 @@ describe('runTickPlan', () => {
         logger: LOGGER,
         auditLog,
         currentTickStore: makeCurrentTickStore(),
+        decisionGate: new DebateBarDecisionGate(),
       });
 
       // Only QQQ (the throw) gets an audit row from THIS layer — SPY's
@@ -617,6 +640,7 @@ describe('runTickPlan', () => {
           logger: LOGGER,
           auditLog,
           currentTickStore: makeCurrentTickStore(),
+          decisionGate: new DebateBarDecisionGate(),
         });
 
         expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: 'debate exploded' });
@@ -649,6 +673,7 @@ describe('runTickPlan', () => {
           logger,
           auditLog,
           currentTickStore: makeCurrentTickStore(),
+          decisionGate: new DebateBarDecisionGate(),
         });
 
         const auditFailureEntry = logger.entries.find((entry) =>
@@ -692,6 +717,7 @@ describe('runTickPlan', () => {
           logger,
           auditLog: makeAuditLog(),
           currentTickStore: makeCurrentTickStore(),
+          decisionGate: new DebateBarDecisionGate(),
         });
 
         expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: 'debate exploded' });
@@ -722,11 +748,238 @@ describe('runTickPlan', () => {
           logger,
           auditLog,
           currentTickStore: makeCurrentTickStore(),
+          decisionGate: new DebateBarDecisionGate(),
         });
 
         expect(outcomes[1]).toEqual({ trace_id: 'trace-2', error: 'debate exploded' });
         expect(outcomes[0]).toEqual({ trace_id: 'trace-1', final_stage: 'execution' });
       });
     });
+  });
+});
+
+/**
+ * The tick/decision split, at the loop seam (#743): the gate is consulted per
+ * instrument on the PLAN's tick time, a granted claim rides into
+ * `TickContext.decision_bar`, and a claimed pass that THROWS hands the claim
+ * back so the bar is retried rather than forfeited.
+ */
+describe('runTickPlan decision gate (#743)', () => {
+  const TICK_INTERVAL_MS = paperStartingProfile('paper').tickIntervalMs;
+
+  function planAt(tickTime: Date, ...assets: string[]): TickPlan {
+    return { ...makePlan(...assets), tick_time: tickTime };
+  }
+
+  function loopConfig(decisionGate: DecisionGate) {
+    return {
+      max_concurrent_instruments: 1,
+      newTraceId: countingTraceIds(),
+      logger: LOGGER,
+      auditLog: makeAuditLog(),
+      currentTickStore: makeCurrentTickStore(),
+      decisionGate,
+    };
+  }
+
+  it('runs the analysts ONCE over a full debate bar of production-interval ticks', async () => {
+    // The acceptance criterion of the split, stated as a count: a full 1h bar
+    // of ticks at the production cadence (2 minutes — read off the paper
+    // profile so a retune keeps this test honest) runs the analysts exactly
+    // once, and the exit check on every other tick.
+    const steps: TickSteps = {
+      exitCheck: vi.fn(async () => null),
+      analysts: vi.fn(async () => []), // quorum skip — the chain ends here
+      debate: vi.fn(async () => {
+        throw new Error('unreachable: quorum-skipped');
+      }),
+      trader: vi.fn(async () => {
+        throw new Error('unreachable');
+      }),
+      risk: vi.fn(async () => {
+        throw new Error('unreachable');
+      }),
+      verdict: vi.fn(async () => {
+        throw new Error('unreachable');
+      }),
+      execution: vi.fn(async () => {
+        throw new Error('unreachable');
+      }),
+    };
+    const runner = new SequentialTickRunner(steps);
+    const gate = new DebateBarDecisionGate();
+    const config = loopConfig(gate);
+
+    const barOpen = new Date('2026-07-15T14:00:00Z');
+    const ticksPerBar = 3_600_000 / TICK_INTERVAL_MS;
+    for (let i = 0; i < ticksPerBar; i++) {
+      const at = new Date(barOpen.getTime() + i * TICK_INTERVAL_MS);
+      await runTickPlan(planAt(at, 'BTC-USD'), runner, { now: () => at }, config);
+    }
+
+    expect(steps.analysts).toHaveBeenCalledTimes(1);
+    expect(steps.exitCheck).toHaveBeenCalledTimes(ticksPerBar - 1);
+
+    // ...and the NEXT bar's first tick decides again.
+    const nextBar = new Date(barOpen.getTime() + 3_600_000);
+    await runTickPlan(planAt(nextBar, 'BTC-USD'), runner, { now: () => nextBar }, config);
+    expect(steps.analysts).toHaveBeenCalledTimes(2);
+  });
+
+  it('still fires the flatten on every tick when the gate NEVER opens', async () => {
+    // Mutation discriminator, hazard 1: force the gate permanently closed —
+    // the decision chain is dead, and the flatten must still reach Execution
+    // from the cheap path. This is the 2f22033 defect shape: an exit path
+    // accidentally coupled to the decision path strands a live position.
+    const closedGate: DecisionGate = { claim: () => undefined, rescind: () => undefined };
+    const exit: OrderIntent = {
+      idempotency_key: 'key-btc-flatten',
+      instrument: 'BTC-USD',
+      asset_class: 'crypto',
+      side: 'sell',
+      intent_type: 'exit',
+      size: 1,
+      entry: 100,
+      stop: 95,
+      target: 110,
+      time_in_force: 'gtc',
+      decision_timestamp: NOW,
+      metadata: {
+        debate_id: 'debate-prior-bar',
+        conviction: 0.7,
+        converged: true,
+        sizing: {
+          base_risk_fraction: 0.01,
+          conviction_multiplier: 1,
+          vol_floor_factor: 1,
+          non_converged_haircut: 1,
+          cosine_multiplier: 0.75,
+        },
+        cosine_precedent: { neighbor_count: 0, weighted_mean_r: null, no_precedent: true },
+      },
+    };
+    const steps: TickSteps = {
+      exitCheck: vi.fn(async () => exit),
+      analysts: vi.fn(async () => {
+        throw new Error('unreachable: the gate never opens');
+      }),
+      debate: vi.fn(async () => {
+        throw new Error('unreachable');
+      }),
+      trader: vi.fn(async () => {
+        throw new Error('unreachable');
+      }),
+      risk: vi.fn(async () => ({
+        status: 'approved' as const,
+        order_intent: exit,
+        modifications: { original_size: 1, final_size: 1, stop_tightened: false },
+        binding_constraint: null,
+        reasons: [],
+        warnings: [],
+        risk_snapshot: { exposure: {}, drawdown_pct: 0, armed_breakers: [] },
+        next_breaker_state: [],
+      })),
+      verdict: vi.fn(async () => ({
+        status: 'go' as const,
+        order: exit,
+        no_go_reason: null,
+        approval_path: 'automated' as const,
+        would_require_approval: false,
+        idempotency_key: exit.idempotency_key,
+        timestamp: NOW,
+      })),
+      execution: vi.fn(async () => ({
+        status: 'submitted' as const,
+        idempotency_key: exit.idempotency_key,
+        broker_order_ids: ['broker-1'],
+        order_state: 'submitted' as const,
+        reason: null,
+        timestamp: NOW,
+      })),
+    };
+    const runner = new SequentialTickRunner(steps);
+    const config = loopConfig(closedGate);
+
+    for (let i = 0; i < 3; i++) {
+      const at = new Date(NOW.getTime() + i * TICK_INTERVAL_MS);
+      const outcomes = await runTickPlan(planAt(at, 'BTC-USD'), runner, { now: () => at }, config);
+      expect(outcomes[0]?.final_stage).toBe('execution');
+      expect(outcomes[0]?.flatten_fired).toBe(true);
+    }
+
+    expect(steps.execution).toHaveBeenCalledTimes(3);
+    expect(steps.analysts).not.toHaveBeenCalled();
+  });
+
+  it('consults the gate on the PLAN tick time and passes the claim into ctx', async () => {
+    const seen: Array<TickContext['decision_bar']> = [];
+    const runner: TickRunner = {
+      async runInstrument(_signal, ctx) {
+        seen.push(ctx.decision_bar);
+        return { trace_id: ctx.trace_id, final_stage: 'position_check' };
+      },
+    };
+    const gate = new DebateBarDecisionGate();
+    const config = loopConfig(gate);
+    const midBar = new Date('2026-07-15T14:32:00Z');
+
+    // A clock deliberately in a DIFFERENT bar than the plan: the gate must key
+    // off `plan.tick_time` — every instrument in one plan gated on the same
+    // instant, and in replay the plan time is the deterministic coordinate.
+    const laterClock: Clock = { now: () => new Date('2026-07-15T15:10:00Z') };
+    await runTickPlan(planAt(midBar, 'BTC-USD'), runner, laterClock, config);
+    await runTickPlan(planAt(midBar, 'BTC-USD'), runner, laterClock, config);
+
+    expect(seen[0]?.open_time).toEqual(new Date('2026-07-15T14:00:00Z'));
+    expect(seen[0]?.timeframe_ms).toBe(3_600_000);
+    // Second tick in the same bar: no claim, tick path only — the property
+    // whose absence was #617 (every tick a decision).
+    expect(seen[1]).toBeUndefined();
+  });
+
+  it('rescinds the claim when the claimed pass throws, so the next tick retries the bar', async () => {
+    let call = 0;
+    const runner: TickRunner = {
+      async runInstrument(_signal, ctx) {
+        call++;
+        if (ctx.decision_bar !== undefined && call === 1) {
+          throw new Error('transient LLM failure at bar open');
+        }
+        return {
+          trace_id: ctx.trace_id,
+          final_stage: ctx.decision_bar === undefined ? 'position_check' : 'trader',
+        };
+      },
+    };
+    const gate = new DebateBarDecisionGate();
+    const config = loopConfig(gate);
+
+    const first = await runTickPlan(
+      planAt(new Date('2026-07-15T14:00:00Z'), 'BTC-USD'),
+      runner,
+      CLOCK,
+      config,
+    );
+    expect(first[0]?.error).toContain('transient LLM failure');
+
+    // Without the rescind this tick would be a tick pass and the bar's
+    // decision would be silently forfeited — a quiet hour indistinguishable
+    // from a quiet market (#625's signature).
+    const second = await runTickPlan(
+      planAt(new Date('2026-07-15T14:02:00Z'), 'BTC-USD'),
+      runner,
+      CLOCK,
+      config,
+    );
+    expect(second[0]?.final_stage).toBe('trader');
+
+    // And a SUCCESSFUL pass keeps its claim: the third tick is a tick pass.
+    const third = await runTickPlan(
+      planAt(new Date('2026-07-15T14:04:00Z'), 'BTC-USD'),
+      runner,
+      CLOCK,
+      config,
+    );
+    expect(third[0]?.final_stage).toBe('position_check');
   });
 });

@@ -17,7 +17,7 @@ import {
 } from '../../providers/market-data-service/index.js';
 import type { Clock, OpenPosition } from '../../shared/index.js';
 import type { DebateResult } from '../debate-engine/index.js';
-import { decide, decideWithReason } from './decide.js';
+import { checkExitsWithReason, decide, decideWithReason, type ExitCheckInput } from './decide.js';
 import { FixtureSetupStore } from './fixture-setup-store.js';
 // Imported so the #687 cases can state WHICH bar the key must be on, rather
 // than only comparing two `decide()` calls against each other — two calls that
@@ -1761,5 +1761,112 @@ describe('decideWithReason — named skip reasons (#475)', () => {
 
     expect(await decide(input)).toBeNull();
     expect((await decideWithReason(input)).intent).toBeNull();
+  });
+});
+
+/**
+ * The Trader's exit-only entry point (#743) — what the tick path runs 29 of
+ * every 30 passes. `ExitCheckInput` carries no `debate` and no views by
+ * construction; everything asserted here must be reachable from position
+ * state, the calendar and a mark alone.
+ */
+describe('checkExitsWithReason — the tick-path exit entry point (#743)', () => {
+  // Same US-equity geometry as the flat-by-close suite above: close 20:00 UTC,
+  // `flatten_before_close_ms` 5 min, so 19:56 is inside the window.
+  const INSIDE_WINDOW = new Date('2026-07-15T19:56:00Z');
+  const OUTSIDE_WINDOW = new Date('2026-07-15T15:00:00Z');
+  // Deliberately NOT the bar the clock would floor to (19:56 floors to 19:00):
+  // the runner floored this pass's bar once and passed it down, and re-deriving
+  // it from the clock in here is the #687 defect shape one seam down. The key
+  // assertion below fails if the implementation re-floors.
+  const TICK_BAR = new Date('2026-07-15T18:00:00Z');
+
+  function exitInput(overrides: Partial<ExitCheckInput> = {}): ExitCheckInput {
+    const base = traderInput();
+    return {
+      trace_id: base.trace_id,
+      instrument: base.instrument,
+      clock: new ManualClock(INSIDE_WINDOW),
+      config: base.config,
+      marketData: base.marketData,
+      sessionCalendars: base.sessionCalendars,
+      positionState: async () => [openPosition({ side: 'buy', filled_size: 10 })],
+      exitFillSizes: base.exitFillSizes,
+      bar: TICK_BAR,
+      ...overrides,
+    };
+  }
+
+  it('skips with no_open_position when flat', async () => {
+    const outcome = await checkExitsWithReason(exitInput({ positionState: async () => [] }));
+
+    expect(outcome.intent).toBeNull();
+    expect(outcome.skip_reason).toBe('no_open_position');
+  });
+
+  it('skips with flatten_not_due when holding outside the window — "flat" and "waiting" stay distinguishable', async () => {
+    const outcome = await checkExitsWithReason(
+      exitInput({ clock: new ManualClock(OUTSIDE_WINDOW) }),
+    );
+
+    expect(outcome.intent).toBeNull();
+    expect(outcome.skip_reason).toBe('flatten_not_due');
+  });
+
+  it('emits the flatten inside the window, attributed to the debate that OPENED the lot', async () => {
+    const outcome = await checkExitsWithReason(exitInput());
+
+    expect(outcome.intent?.intent_type).toBe('exit');
+    expect(outcome.intent?.side).toBe('sell');
+    expect(outcome.intent?.size).toBe(10);
+    // There is no debate on a tick pass; the attribution is read off the open
+    // lot — the decision this exit is a consequence of.
+    expect(outcome.intent?.metadata.debate_id).toBe('debate-existing');
+    expect(outcome.intent?.metadata.conviction).toBe(0.6);
+  });
+
+  it('keys the exit to the PASSED bar, not a clock re-floor', async () => {
+    const outcome = await checkExitsWithReason(exitInput());
+
+    // 19:56 floors to 19:00; the passed bar is 18:00. Equal keys prove the
+    // passed coordinate won — and this is the same key a decision-pass flatten
+    // on the same bar computes, so the two paths dedupe on one order.
+    expect(outcome.intent?.idempotency_key).toBe(
+      computeIdempotencyKey(exitInput().instrument, TICK_BAR, 'close'),
+    );
+    expect(outcome.intent?.idempotency_key).not.toBe(
+      computeIdempotencyKey(exitInput().instrument, new Date('2026-07-15T19:00:00Z'), 'close'),
+    );
+  });
+
+  it('attributes to the MOST RECENT lot when several are open', async () => {
+    const older = openPosition({ side: 'buy', filled_size: 10 });
+    const newer = openPosition({
+      idempotency_key: 'newer-key',
+      debate_id: 'debate-newer',
+      side: 'buy',
+      filled_size: 5,
+      conviction: 0.9,
+      opened_at: new Date('2026-07-15T14:00:00Z'),
+    });
+    const outcome = await checkExitsWithReason(
+      exitInput({ positionState: async () => [older, newer] }),
+    );
+
+    expect(outcome.intent?.metadata.debate_id).toBe('debate-newer');
+    // ...while the SIZE still flattens the whole book, both lots.
+    expect(outcome.intent?.size).toBe(15);
+  });
+
+  it("ignores other instruments — their lots are not this instrument's exit", async () => {
+    const outcome = await checkExitsWithReason(
+      exitInput({
+        positionState: async () => [
+          openPosition({ instrument: 'TSLA', side: 'buy', filled_size: 10 }),
+        ],
+      }),
+    );
+
+    expect(outcome.skip_reason).toBe('no_open_position');
   });
 });

@@ -75,7 +75,26 @@ export interface Mark {
  * member has a row in `indicators.ts`'s `INDICATORS` registry, and TypeScript
  * enforces that: the registry is a `Record` over this union.
  */
-export const INDICATOR_KINDS = ['sma', 'ema', 'rsi', 'atr'] as const;
+export const INDICATOR_KINDS = [
+  'sma',
+  'ema',
+  'rsi',
+  'atr',
+  // #744 additions. `atr_pct` and `bb_kc_squeeze` are SCALE-DEPENDENT (they
+  // carry price/volatility units, not just a normalized oscillator reading):
+  // on a leveraged ETP these scale with the leverage factor versus the
+  // liquid US underlying, so a spec comparing the two across instruments
+  // must target one consistently (docs/adr/0016, the volume-caveat
+  // reasoning extended to leverage). None of the five reads `bar.volume` —
+  // the volume-derived-targets-the-underlying criterion has no work under
+  // this ticket; it stays live for whichever future kind (RVOL, MFI) first
+  // consumes volume.
+  'atr_pct',
+  'macd_histogram',
+  'adx',
+  'donchian_pos',
+  'bb_kc_squeeze',
+] as const;
 
 export type IndicatorKind = (typeof INDICATOR_KINDS)[number];
 

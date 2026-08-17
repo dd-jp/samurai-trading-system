@@ -26,9 +26,26 @@ import { type Bar, INDICATOR_KINDS, type IndicatorKind, type IndicatorSpec } fro
 
 const PERIOD = 14;
 
+/**
+ * Canonical params per kind (#744) — the single-period kinds all get
+ * `{ period: PERIOD }`; the two multi-parameter additions get a realistic
+ * named-parameter set instead, since `specFor`'s old single-`period` shape
+ * can no longer describe every row in `INDICATOR_KINDS`.
+ */
+const canonicalParams = (kind: IndicatorKind): Record<string, number> => {
+  switch (kind) {
+    case 'macd_histogram':
+      return { fast: 12, slow: 26, signal: 9 };
+    case 'bb_kc_squeeze':
+      return { bb_period: 20, bb_mult: 2, kc_period: 20, kc_mult: 1.5 };
+    default:
+      return { period: PERIOD };
+  }
+};
+
 const specFor = (kind: IndicatorKind, lookback: number): IndicatorSpec => ({
   indicator: kind,
-  params: { period: PERIOD },
+  params: canonicalParams(kind),
   lookback,
   timeframe: '1h',
 });
@@ -73,6 +90,36 @@ describe('one registry, not two switches', () => {
     expect(minimumBarsFor(specFor('atr', 20))).toBe(PERIOD + 1);
   });
 
+  it('declares the #744 arity for the five new kinds too', () => {
+    // Same intent as the block above, extended to the new kinds — this is
+    // the row-by-row boundary a `minimumBars` closure that lied would fail.
+    expect(minimumBarsFor(specFor('atr_pct', 20))).toBe(PERIOD + 1);
+    expect(minimumBarsFor(specFor('donchian_pos', 20))).toBe(PERIOD);
+    // 2 x period: the structural ADX floor, not a warm-up preference — see
+    // the `adx` row's comment in indicators.ts.
+    expect(minimumBarsFor(specFor('adx', 20))).toBe(2 * PERIOD);
+    // max(fast, slow) + signal - 1, with the canonical 12/26/9.
+    expect(minimumBarsFor(specFor('macd_histogram', 40))).toBe(26 + 9 - 1);
+    // max(bb_period, kc_period + 1), with the canonical 20/20.
+    expect(minimumBarsFor(specFor('bb_kc_squeeze', 40))).toBe(20 + 1);
+  });
+
+  for (const kind of INDICATOR_KINDS) {
+    it(`${kind}: exactly minimumBarsFor computes, one bar fewer throws by name`, () => {
+      // The registry-driven boundary: a `minimumBars` closure perturbed by
+      // one bar for any single kind fails exactly this test, by that kind's
+      // name, rather than a generic "some kind is off" failure.
+      const required = minimumBarsFor(specFor(kind, 60));
+
+      expect(() =>
+        computeIndicator(BARS.slice(0, required), specFor(kind, required)),
+      ).not.toThrow();
+      expect(() =>
+        computeIndicator(BARS.slice(0, required - 1), specFor(kind, required - 1)),
+      ).toThrow(InsufficientBarsError);
+    });
+  }
+
   it('still throws below the floor for every kind, by that same arity', () => {
     for (const kind of INDICATOR_KINDS) {
       const required = minimumBarsFor(specFor(kind, 20));
@@ -91,7 +138,9 @@ describe('one registry, not two switches', () => {
     const bogus = { ...specFor('rsi', 20), indicator: 'macd' as IndicatorKind };
 
     expect(() => computeIndicator(BARS.slice(0, 20), bogus)).toThrow(/Unsupported indicator: macd/);
-    expect(() => minimumBarsFor(bogus)).toThrow(/Known kinds: sma, ema, rsi, atr/);
+    expect(() => minimumBarsFor(bogus)).toThrow(
+      /Known kinds: sma, ema, rsi, atr, atr_pct, macd_histogram, adx, donchian_pos, bb_kc_squeeze/,
+    );
   });
 });
 

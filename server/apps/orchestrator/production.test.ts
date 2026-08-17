@@ -43,6 +43,7 @@ import { DEFAULT_NOUS_MODELS } from '../../shared/llm/index.js';
 import { openSharedStore, type SharedStore as SqliteHandle } from '../../shared/store/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
 import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
+import { DebateBarDecisionGate } from './decision-bar-gate.js';
 import { paperStartingProfile } from './paper-profile.js';
 import { MIN_RETURN_OBSERVATIONS } from './production/daily-equity-metrics-source.js';
 import { buildPersistence } from './production/direct-bind.js';
@@ -901,6 +902,12 @@ describe('composed tick chain (integration)', () => {
         logger,
         auditLog: persistence.auditLog,
         currentTickStore: persistence.currentTickStore,
+        // #743: this is the composed DECISION chain — the pass needs a claim.
+        decision_bar: {
+          id: `${START.toISOString()}@3600000`,
+          open_time: START,
+          timeframe_ms: 3_600_000,
+        },
       },
     );
 
@@ -1003,6 +1010,12 @@ describe('composed tick chain (integration)', () => {
         logger: recordingLogger(),
         auditLog: persistence.auditLog,
         currentTickStore: persistence.currentTickStore,
+        // #743: this is the composed DECISION chain — the pass needs a claim.
+        decision_bar: {
+          id: `${START.toISOString()}@3600000`,
+          open_time: START,
+          timeframe_ms: 3_600_000,
+        },
       },
     );
 
@@ -1155,6 +1168,7 @@ describe('startTickLoop', () => {
       clock: new SimulatedClock(START),
       logger: recordingLogger(),
       persistence: persistence() as never,
+      decisionGate: new DebateBarDecisionGate(),
       tickIntervalMs: 1_000,
       maxConcurrentInstruments: 1,
     });
@@ -1183,6 +1197,7 @@ describe('startTickLoop', () => {
       clock: new SimulatedClock(START),
       logger: recordingLogger(),
       persistence: persistence() as never,
+      decisionGate: new DebateBarDecisionGate(),
       tickIntervalMs: 1_000,
       maxConcurrentInstruments: 1,
     });
@@ -1218,6 +1233,7 @@ describe('startTickLoop', () => {
       clock: new SimulatedClock(START),
       logger,
       persistence: persistence() as never,
+      decisionGate: new DebateBarDecisionGate(),
       tickIntervalMs: 1_000,
       maxConcurrentInstruments: 1,
     });
@@ -1280,6 +1296,7 @@ describe('startTickLoop', () => {
       clock: new SimulatedClock(START),
       logger: recordingLogger(),
       persistence: persistence() as never,
+      decisionGate: new DebateBarDecisionGate(),
       tickIntervalMs: 1_000,
       maxConcurrentInstruments: 2,
     });
@@ -1356,6 +1373,7 @@ describe('startTickLoop', () => {
       clock: new SimulatedClock(START),
       logger: recordingLogger(),
       persistence: persistence() as never,
+      decisionGate: new DebateBarDecisionGate(),
       tickIntervalMs: 1_000,
       maxConcurrentInstruments: 2,
     });
@@ -1410,6 +1428,7 @@ describe('startTickLoop', () => {
       clock: new SimulatedClock(START),
       logger: recordingLogger(),
       persistence: persistence() as never,
+      decisionGate: new DebateBarDecisionGate(),
       tickIntervalMs: 1_000,
       maxConcurrentInstruments: 2,
     });
@@ -1441,6 +1460,7 @@ describe('startTickLoop', () => {
       clock: new SimulatedClock(START),
       logger: recordingLogger(),
       persistence: persistence() as never,
+      decisionGate: new DebateBarDecisionGate(),
       tickIntervalMs: 1_000,
       maxConcurrentInstruments: 1,
     });
@@ -1488,6 +1508,7 @@ describe('startTickLoop', () => {
       clock: new SimulatedClock(START),
       logger: recordingLogger(),
       persistence: persistence() as never,
+      decisionGate: new DebateBarDecisionGate(),
       tickIntervalMs: 1_000,
       maxConcurrentInstruments: 1,
     });
@@ -1525,6 +1546,7 @@ describe('startTickLoop', () => {
       clock: new SimulatedClock(START),
       logger,
       persistence: persistence() as never,
+      decisionGate: new DebateBarDecisionGate(),
       tickIntervalMs: 1_000,
       maxConcurrentInstruments: 1,
     });
@@ -1582,6 +1604,7 @@ describe('startTickLoop', () => {
       clock: new SimulatedClock(START),
       logger,
       persistence: persistence() as never,
+      decisionGate: new DebateBarDecisionGate(),
       tickIntervalMs: 1_000,
       maxConcurrentInstruments: 1,
     });
@@ -1607,6 +1630,7 @@ describe('startTickLoop', () => {
       clock: new SimulatedClock(START),
       logger: recordingLogger(),
       persistence: persistence() as never,
+      decisionGate: new DebateBarDecisionGate(),
       tickIntervalMs: 1_000,
       maxConcurrentInstruments: 1,
     });
@@ -3129,6 +3153,9 @@ describe('buildProductionOrchestrator', () => {
     // Drive the real SequentialTickRunner over stubbed steps so the audit /
     // current_tick side effects are the production SQLite ones, not fakes.
     const runner = new SequentialTickRunner({
+      exitCheck: async () => {
+        throw new Error('unreachable');
+      },
       analysts: async () => [],
       debate: async () => {
         throw new Error('unreachable');
@@ -3153,6 +3180,13 @@ describe('buildProductionOrchestrator', () => {
         logger: recordingLogger(),
         auditLog: orchestrator.persistence.auditLog,
         currentTickStore: orchestrator.persistence.currentTickStore,
+        // #743: a decision pass — this test exercises the quorum-skip audit
+        // row, which only the decision chain writes.
+        decision_bar: {
+          id: `${START.toISOString()}@3600000`,
+          open_time: START,
+          timeframe_ms: 3_600_000,
+        },
       },
     );
 

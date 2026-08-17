@@ -41,8 +41,16 @@ export interface TickStatus {
    * stages and a tick can never report standing in a stage that does not run.
    * Deriving it means a seventh stage becoming real surfaces here as a type
    * error instead of silently going unreported.
+   *
+   * `'position_check'` (#743) is the tick path's own stage — the
+   * exit-check-only pass that runs every tick between decisions. It is a
+   * union member here rather than a `PipelineStage`, because the pipeline
+   * lane view renders the DECISION chain and a tick-path pass occupies no
+   * decision stage; but the in-flight indicator must still be able to say
+   * "position check in progress", since after the tick/decision split that
+   * is the most common in-flight state the system has.
    */
-  stage: Exclude<PipelineStage, 'invalidation'>;
+  stage: Exclude<PipelineStage, 'invalidation'> | 'position_check';
   trace_id: string;
 }
 

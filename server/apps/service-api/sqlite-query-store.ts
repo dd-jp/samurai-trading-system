@@ -489,6 +489,15 @@ export class SqliteQueryStore implements DashboardQueryStore {
         .all(from, until) as PipelineTickRow[]
     )
       .filter((row) => laneInstruments.has(row.instrument))
+      // #743: a tick-path pass upserts `stage: 'position_check'`, which is not
+      // a decision-chain stage and has no lane column — the lane view renders
+      // the decision chain, and after the split ~29 of 30 passes are tick-path.
+      // Excluded here rather than widened into `PIPELINE_STAGES`, so the lanes
+      // keep meaning "where is the decision", while `getTickStatus` (the
+      // telemetry strip's in-flight indicator) still reports the pass.
+      .filter((row): row is PipelineTickRow & { stage: PipelineStage } => {
+        return row.stage !== 'position_check';
+      })
       .map<PipelineLiveTick>((row) => ({
         instrument: row.instrument,
         asset_class: row.asset_class,
