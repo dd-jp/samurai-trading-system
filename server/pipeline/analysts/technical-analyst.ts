@@ -25,11 +25,45 @@ import {
 import type { AnalystView, Direction } from '../debate-engine/index.js';
 import type { Analyst, AnalystInput, AssetClass } from './types.js';
 
-const INDICATOR_TIMEFRAME = '1h';
+/**
+ * Issue #742: the technical read moves from 1h to 5m. At period 14, a 1h
+ * SMA/RSI is a 2.3-session lookback on a position that must be flat by
+ * close (ADR-0014) — a signal about a different holding period than the one
+ * being traded. 1h is retained separately, below, as always-on CONTEXT
+ * (`CONTEXT_TIMEFRAME`), not as an input to direction/confidence.
+ *
+ * Deliberately NOT moved in this change (per #742): `trader/decide.ts`'s
+ * `atrIndicatorSpec` timeframe (`TraderConfig.atr_timeframe`) and
+ * `production/defaults.ts`'s `DEFAULT_VOLATILITY_INDICATOR`. Those feed the
+ * stop and halt paths; bundling them would make this signal-horizon
+ * experiment inseparable from a risk-parameter change.
+ */
+const INDICATOR_TIMEFRAME = '5m';
+/** 1h read retained as context only — never feeds direction/confidence. */
+const CONTEXT_TIMEFRAME = '1h';
 const INDICATOR_LOOKBACK = 14;
 const CONTEXT_CANDLE_LOOKBACK = 20;
 /** 24h news/sentiment context window, matching the always-on context frame. */
 const MI_CONTEXT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The one shared 5m warm-up every 5m spec below (`SMA_SPEC`, `RSI_SPEC`)
+ * relies on. `run()` fetches this window FIRST and awaits it, so the store
+ * holds >= this many 5m bars before `SMA_SPEC`/`RSI_SPEC` are requested;
+ * both specs' own (smaller) lookbacks are then served by
+ * `MarketDataServiceImpl`'s `cachedBars` route 1 (same instrument+timeframe,
+ * already fetched this bar interval) instead of issuing their own source
+ * fetches — one fetch and one store read per tick, not one per indicator.
+ *
+ * 260 comfortably covers `RSI_SPEC`'s own lookback (`recommendedWarmupFor`
+ * on period 14 = 57 bars) with margin, so a live instrument's ordinary warm
+ * store never falls through to a second fetch. The 1m-fetch "large limit"
+ * warning documented in `alpaca-http-client.ts` does not transfer here:
+ * that warning is about `DataSource.fetchBars`' own pagination search
+ * widening past its buffer at large `limit`, and 260 5m bars is well under
+ * a percent of any request budget mentioned there.
+ */
+export const WARMUP_5M = 260;
 
 /**
  * `sma` reads the closes directly, so an SMA(14) is exactly 14 bars: the
@@ -121,10 +155,19 @@ export const technicalAnalyst: Analyst = {
   async run(input: AnalystInput): Promise<AnalystView> {
     const { signal, clock } = input;
     const asOf = clock.now();
+    const technicalWindow: BarWindow = { timeframe: INDICATOR_TIMEFRAME, lookback: WARMUP_5M };
     const contextWindow: BarWindow = {
-      timeframe: INDICATOR_TIMEFRAME,
+      timeframe: CONTEXT_TIMEFRAME,
       lookback: CONTEXT_CANDLE_LOOKBACK,
     };
+
+    // Awaited BEFORE the Promise.all below, on purpose (#742): this is the
+    // shared 5m warm-up fetch. SMA_SPEC/RSI_SPEC's own getIndicator calls
+    // run concurrently with the (separate-timeframe) context read below, and
+    // by then the store already holds >= WARMUP_5M 5m bars for this
+    // instrument, so both specs are served from the store instead of each
+    // triggering their own DataSource.fetchBars call.
+    const technicalBars = await input.market_data.getBars(signal.asset, technicalWindow, asOf);
 
     const [candles, sma, rsi, marketContext] = await Promise.all([
       input.market_data.getBars(signal.asset, contextWindow, asOf),
@@ -137,14 +180,25 @@ export const technicalAnalyst: Analyst = {
       ),
     ]);
 
-    const lastCandle = candles.at(-1);
+    const lastCandle = technicalBars.at(-1);
     if (!lastCandle) {
-      throw new Error(`No bars for ${signal.asset} at or before ${asOf.toISOString()}`);
+      throw new Error(
+        `No ${INDICATOR_TIMEFRAME} bars for ${signal.asset} at or before ${asOf.toISOString()}`,
+      );
     }
 
     const direction = directionFrom(lastCandle.close, sma.value, rsi.value);
     const confidence = confidenceFrom(rsi.value);
-    const avgVolume = candles.reduce((sum, candle) => sum + candle.volume, 0) / candles.length;
+    // No fallback numeric here on purpose: an empty context read has no
+    // volume to average, and reporting "avg volume 0" would be a fabricated
+    // claim about the tape, not an approximation (the same fabrication class
+    // #319 made computeIndicator throw on rather than silently answer).
+    // `direction`/`confidence` never depend on this string, so an absent 1h
+    // context degrades the prose only, never the decision.
+    const contextLine =
+      candles.length === 0
+        ? `Context (${CONTEXT_TIMEFRAME}): unavailable`
+        : `Context (${CONTEXT_TIMEFRAME}): ${candles.length} candles, avg volume ${candles.reduce((sum, candle) => sum + candle.volume, 0) / candles.length}`;
 
     return {
       trace_id: input.trace_id,
@@ -155,7 +209,7 @@ export const technicalAnalyst: Analyst = {
       key_points: [
         `Last close ${lastCandle.close} vs SMA(${INDICATOR_LOOKBACK})=${sma.value}`,
         `RSI(${INDICATOR_LOOKBACK})=${rsi.value}`,
-        `Context: ${candles.length} candles, avg volume ${avgVolume}`,
+        contextLine,
         `MI context: ${marketContext.news.length} news, ${marketContext.social.length} social items in window`,
       ],
       timestamp: asOf,

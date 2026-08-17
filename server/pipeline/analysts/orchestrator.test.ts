@@ -20,19 +20,21 @@ class ManualClock implements Clock {
 }
 
 const INSTRUMENT = 'BTC-USD';
-const TIMEFRAME = '1h';
+/** #742: the technical analyst's indicators read '5m' bars now, '1h' having moved to context-only. */
+const TIMEFRAME = '5m';
+const BAR_INTERVAL_MS = 5 * 60 * 1000;
 const BAR_COUNT = 30;
 const START = new Date('2026-07-14T00:00:00Z').getTime();
 
 function buildBars(): Bar[] {
   const bars: Bar[] = [];
   for (let i = 0; i < BAR_COUNT; i++) {
-    const closeTime = new Date(START + i * 60 * 60 * 1000);
+    const closeTime = new Date(START + i * BAR_INTERVAL_MS);
     const close = 100 + i;
     bars.push({
       instrument: INSTRUMENT,
       timeframe: TIMEFRAME,
-      open_time: new Date(closeTime.getTime() - 60 * 60 * 1000),
+      open_time: new Date(closeTime.getTime() - BAR_INTERVAL_MS),
       close_time: closeTime,
       open: close - 1,
       high: close + 1,

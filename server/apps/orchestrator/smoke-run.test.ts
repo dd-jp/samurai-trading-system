@@ -766,6 +766,9 @@ describe('buildSmokeFixtureBars', () => {
    * instead.
    */
   it('supplies more bars than every lookback the paper profile reads', () => {
+    // #742: RSI_SPEC/SMA_SPEC read '5m' now; '1h' remains the Trader's ATR
+    // timeframe (unchanged) and the technical analyst's context read.
+    expect(countFor('5m')).toBeGreaterThanOrEqual(RSI_SPEC.lookback);
     expect(countFor('1h')).toBeGreaterThanOrEqual(15);
     expect(countFor('1m')).toBeGreaterThanOrEqual(15);
     expect(countFor('1d')).toBeGreaterThanOrEqual(30);
@@ -780,12 +783,18 @@ describe('buildSmokeFixtureBars', () => {
   });
 
   it('trends upward, so the analysts agree and conviction clears the floor', () => {
-    const hourly = bars
-      .filter((bar) => bar.timeframe === '1h')
+    // #742: the technical analyst's read moved from '1h' to '5m'; this test
+    // now filters the '5m' series, which is what `SMA_SPEC`/`RSI_SPEC`
+    // actually read in production. `buildTrendingCloses` depends only on
+    // `count`/`lastClose`, not `timeframe`, so the '5m' series carries the
+    // same close values the '1h' series always has — the RSI/margin figures
+    // quoted below (68.52, 1.48 points) are unchanged by the move.
+    const fiveMinute = bars
+      .filter((bar) => bar.timeframe === '5m')
       .sort((a, b) => a.close_time.getTime() - b.close_time.getTime());
-    const first = hourly[0];
-    const last = hourly[hourly.length - 1];
-    if (first === undefined || last === undefined) throw new Error('no hourly fixture bars');
+    const first = fiveMinute[0];
+    const last = fiveMinute[fiveMinute.length - 1];
+    if (first === undefined || last === undefined) throw new Error('no 5m fixture bars');
 
     expect(last.close).toBeGreaterThan(first.close);
     // A non-degenerate true range, so the Trader's ATR stop is a real distance
@@ -804,9 +813,9 @@ describe('buildSmokeFixtureBars', () => {
     // analyst only by accident and would have gone on passing had the fixture
     // stopped clearing the spec's warm-up. Slicing by `RSI_SPEC.lookback` also
     // makes the fixture-depth requirement an assertion rather than a comment.
-    expect(hourly.length).toBeGreaterThanOrEqual(RSI_SPEC.lookback);
-    const sma = computeIndicator(hourly.slice(-SMA_SPEC.lookback), SMA_SPEC);
-    const rsi = computeIndicator(hourly.slice(-RSI_SPEC.lookback), RSI_SPEC);
+    expect(fiveMinute.length).toBeGreaterThanOrEqual(RSI_SPEC.lookback);
+    const sma = computeIndicator(fiveMinute.slice(-SMA_SPEC.lookback), SMA_SPEC);
+    const rsi = computeIndicator(fiveMinute.slice(-RSI_SPEC.lookback), RSI_SPEC);
 
     expect(last.close).toBeGreaterThan(sma);
     // 68.52 under the converged warm-up, against 63.16 under the old floor —

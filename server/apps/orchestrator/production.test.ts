@@ -848,6 +848,7 @@ describe('composed tick chain (integration)', () => {
     const clock = new SimulatedClock(START);
     const hourMs = 60 * 60 * 1_000;
     const bars = [
+      ...fixtureBars('BTC-USD', '5m', 60, 5 * 60_000),
       ...fixtureBars('BTC-USD', '1h', 60, hourMs),
       ...fixtureBars('BTC-USD', '1m', 60, 60_000),
       ...fixtureBars('BTC-USD', '1d', 40, 24 * hourMs),
@@ -959,6 +960,7 @@ describe('composed tick chain (integration)', () => {
     const clock = new SimulatedClock(START);
     const hourMs = 60 * 60 * 1_000;
     const bars = [
+      ...fixtureBars('BTC-USD', '5m', 60, 5 * 60_000),
       ...fixtureBars('BTC-USD', '1h', 60, hourMs),
       ...fixtureBars('BTC-USD', '1m', 60, 60_000),
       ...fixtureBars('BTC-USD', '1d', 40, 24 * hourMs),
@@ -1032,6 +1034,7 @@ describe('composed tick chain (integration)', () => {
     const hourMs = 60 * 60 * 1_000;
     const dataSource = new FixtureDataSource(
       [
+        ...fixtureBars('BTC-USD', '5m', 60, 5 * 60_000),
         ...fixtureBars('BTC-USD', '1h', 60, hourMs),
         ...fixtureBars('BTC-USD', '1m', 60, 60_000),
         ...fixtureBars('BTC-USD', '1d', 40, 24 * hourMs),

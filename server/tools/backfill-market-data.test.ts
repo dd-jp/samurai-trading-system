@@ -99,9 +99,11 @@ describe('backfillMarketData', () => {
 
     expect(coverage).toHaveLength(DEFAULT_UNIVERSE.length * WARM_START_WINDOWS.length);
     expect(coverage.every((row) => row.satisfied)).toBe(true);
-    // 4 equities x 2 windows, 2 crypto x 2 windows.
-    expect(equityFetches).toHaveLength(8);
-    expect(cryptoFetches).toHaveLength(4);
+    // 4 equities x WARM_START_WINDOWS.length windows, 2 crypto x WARM_START_WINDOWS.length
+    // windows. Derived from WARM_START_WINDOWS.length rather than a literal so this doesn't
+    // rot the next time that list gains/loses a timeframe (#742 added '5m').
+    expect(equityFetches).toHaveLength(4 * WARM_START_WINDOWS.length);
+    expect(cryptoFetches).toHaveLength(2 * WARM_START_WINDOWS.length);
   });
 
   it('routes stocks to fetchEquityBars and crypto to fetchCryptoBars', async () => {
@@ -539,8 +541,12 @@ describe('warm-start payoff (#512 AC: no bar HTTP calls on a warm first tick)', 
     const { deps, store } = buildDeps();
     await backfillMarketData(deps);
 
-    // A few minutes later, still inside the same 1h/1d interval as ASOF.
-    const tickAsOf = new Date(ASOF.getTime() + 5 * 60_000);
+    // A couple of minutes later, still inside the same 5m/1h/1d interval as
+    // ASOF (12:30:00Z). #742 added a '5m' window to WARM_START_WINDOWS; a
+    // 5-minute offset from a bar boundary would cross into the NEXT 5m bar
+    // and legitimately trigger a fetch for that timeframe, which is not what
+    // this AC is testing — 2 minutes stays inside [12:30, 12:35).
+    const tickAsOf = new Date(ASOF.getTime() + 2 * 60_000);
     const source = new CountingDataSource();
     // Fresh instance: empty lastBarFetch, the same as a newly started process.
     const service = new MarketDataServiceImpl(source, new ManualClock(tickAsOf), 'live', store);
