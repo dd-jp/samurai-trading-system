@@ -199,6 +199,35 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     expect(decision.modifications?.final_size).toBeCloseTo(deployed, 6);
   });
 
+  it('sizes against the ACCOUNT, so funding above the book overshoots it', () => {
+    // The precondition the deletion of `EQUITY_LEG_FRACTION_OF_CAPITAL` rests
+    // on, asserted rather than only written down. That constant was an
+    // account -> leg conversion: `portfolio.equity` is the whole Alpaca
+    // account (`production/account-state.ts:129`, one blended `GET /v2/account`
+    // figure — there is no per-leg accounting and no Trading212Adapter),
+    // while D5's fractions are of the LEG. Deleting it is correct exactly
+    // while the funded equity equals the book.
+    //
+    // Fund above £1,000 and the same 35% resolves against the account: £525 on
+    // a £1,500 account, not £350. The repair would then be a live
+    // `book / equity` conversion, NOT a re-introduced constant.
+    const overfunded = 1_500;
+    const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * overfunded;
+
+    expect(intended).toBeCloseTo(525, 6);
+    expect(intended).toBeGreaterThan(D5_INDEX_ETP_DEPLOYMENT_FRACTION * LIVE_BOOK_GBP);
+
+    const decision = decide(
+      d5InIsolation(overfunded),
+      intentFor('3USL', intended, 'entry'),
+      {},
+      overfunded,
+    );
+
+    expect(decision.status).not.toBe('rejected');
+    expect(decision.modifications?.final_size).toBeCloseTo(intended, 6);
+  });
+
   it('leaves NO room for a scale-in once an entry took the full envelope — #800 AC3 is NOT satisfied', () => {
     // Recorded as behaviour, not asserted as desirable. `buildBracket` sizes a
     // `scale_in` exactly like an entry (decide.ts:391), so a first fill at the
@@ -224,10 +253,18 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
 describe("D5's envelope is unreachable in the SHIPPED profile, at every book size", () => {
   it('trims the Trader\'s D5-sized entry to the 5% per-trade cap instead', () => {
     // Found by these tests, not reasoned to. `max_position_size` is 5% of
-    // equity and D5's index envelope is 35% of the SAME equity, so the generic
-    // per-trade cap binds first — the Trader asks for £350 on the £1,000 book
-    // and gets £50, with `per_trade_size_cap` recorded as binding on every
-    // entry.
+    // equity and D5's index envelope is 35% of the SAME equity, so whenever
+    // the Trader's ask exceeds 5% the generic per-trade cap binds first: a
+    // full-conviction index ask of £350 on the £1,000 book gets £50.
+    //
+    // £350 is the CEILING, not the typical ask. `decide.ts:575` stacks
+    // `convictionMultiplier x non_converged_haircut x cosine_multiplier` on
+    // D5's fraction, so the intent is `0.35 x M x equity` for
+    // M in (0, 1.5] — the per-trade cap binds only for M > 1/7, and the next
+    // case records what happens below that. What holds unconditionally is the
+    // weaker, more consequential claim: 0.05 < 0.35 means D5 can never be the
+    // binding constraint on a first entry, so its per-subclass split has no
+    // effect on any order.
     const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY;
 
     const decision = decide(shippedConfig(), intentFor('3USL', intended, 'entry'));
@@ -237,6 +274,24 @@ describe("D5's envelope is unreachable in the SHIPPED profile, at every book siz
       RISK_CAP_EQUITY_FRACTIONS.max_position_size * EQUITY,
       6,
     );
+  });
+
+  it('does NOT trim a low-conviction ask — the per-trade cap is not universal', () => {
+    // Bounding the finding above. With the multiplier stack at, say,
+    // conviction 0.6 (`convictionMultiplier` = (0.60 - 0.55) / 0.45 ~ 0.111)
+    // and no precedent (0.75x), M ~ 0.083 < 1/7, so the ask lands at ~£29 —
+    // under the £50 per-trade cap, and NO cap binds. `per_trade_size_cap` is
+    // therefore not recorded on every entry, and #886 must not claim it is.
+    const M = ((0.6 - 0.55) / 0.45) * 0.75;
+    const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * M * EQUITY;
+
+    expect(intended).toBeLessThan(RISK_CAP_EQUITY_FRACTIONS.max_position_size * EQUITY);
+
+    const decision = decide(shippedConfig(), intentFor('3USL', intended, 'entry'));
+
+    expect(decision.status).not.toBe('rejected');
+    expect(decision.modifications?.final_size).toBeCloseTo(intended, 6);
+    expect(decision.binding_constraint).not.toBe('per_trade_size_cap');
   });
 
   it('is SCALE-INVARIANT — a bigger book does not make D5 bind', () => {
