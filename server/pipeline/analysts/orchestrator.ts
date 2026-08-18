@@ -186,8 +186,19 @@ export class AnalystOrchestrator {
    * Runs every applicable persona in parallel and enforces the
    * role-dependent quorum. Returns the full breakdown (failures included)
    * for callers that need more than the bare view list.
+   *
+   * `bar` (#811) is the claimed decision bar's opening boundary — the caller's
+   * single derivation for this pass (`DecisionGate.claim`) — threaded onto
+   * every `AnalystInput` below unchanged. This class does not derive a bar of
+   * its own from `clock`; see `AnalystInput.bar`'s doc comment for why a
+   * second derivation is exactly the defect this parameter exists to close.
    */
-  async runAnalysts(trace_id: string, signal: Signal, clock: Clock): Promise<AnalystRunResult> {
+  async runAnalysts(
+    trace_id: string,
+    signal: Signal,
+    clock: Clock,
+    bar: Date,
+  ): Promise<AnalystRunResult> {
     const applicable = this.personas.filter((persona) => persona.applies_to(signal.asset_class));
     const analyst_count = applicable.length;
 
@@ -205,6 +216,7 @@ export class AnalystOrchestrator {
                 trace_id,
                 signal,
                 clock,
+                bar,
                 market_intelligence: this.deps.market_intelligence,
                 market_data: this.deps.market_data,
                 calendar: this.sessionCalendars[signal.asset_class],
@@ -260,8 +272,9 @@ export class AnalystOrchestrator {
     trace_id: string;
     signal: Signal;
     clock: Clock;
+    bar: Date;
   }): Promise<AnalystView[]> {
-    const result = await this.runAnalysts(input.trace_id, input.signal, input.clock);
+    const result = await this.runAnalysts(input.trace_id, input.signal, input.clock, input.bar);
     return result.views;
   }
 }

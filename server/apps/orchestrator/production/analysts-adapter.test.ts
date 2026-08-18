@@ -6,6 +6,7 @@ import { MiCoverageMonitor } from './mi-coverage.js';
 
 const NOW = new Date('2026-07-28T14:00:00Z');
 const CLOCK: Clock = { now: () => NOW };
+const BAR = new Date('2026-07-28T14:00:00Z');
 
 function makeView(overrides: Partial<AnalystView> = {}): AnalystView {
   return {
@@ -21,7 +22,7 @@ function makeView(overrides: Partial<AnalystView> = {}): AnalystView {
 }
 
 describe('buildAnalystsStep', () => {
-  it('narrows AnalystRunResult to bare AnalystView[] and passes the 3-arg call through unmodified', async () => {
+  it('narrows AnalystRunResult to bare AnalystView[] and passes the 4-arg call through unmodified (#811: bar)', async () => {
     const views = [makeView()];
     const runAnalysts = vi.fn(async () => ({
       views,
@@ -36,6 +37,7 @@ describe('buildAnalystsStep', () => {
       trace_id: 'trace-1',
       signal: { asset: 'AAPL', asset_class: 'stocks' },
       clock: CLOCK,
+      bar: BAR,
     });
 
     expect(result).toBe(views);
@@ -43,6 +45,7 @@ describe('buildAnalystsStep', () => {
       'trace-1',
       { asset: 'AAPL', asset_class: 'stocks' },
       CLOCK,
+      BAR,
     );
   });
 
@@ -60,6 +63,7 @@ describe('buildAnalystsStep', () => {
       trace_id: 'trace-1',
       signal: { asset: 'BTC-USD', asset_class: 'crypto' },
       clock: CLOCK,
+      bar: BAR,
     });
 
     expect(result).toEqual([]);
@@ -96,6 +100,7 @@ describe('buildAnalystsStep', () => {
         trace_id: 'trace-9',
         signal: { asset: 'BTC-USD', asset_class: 'crypto' },
         clock: CLOCK,
+        bar: BAR,
       });
 
       expect(result).toEqual([]);
@@ -127,6 +132,7 @@ describe('buildAnalystsStep', () => {
         trace_id: 'trace-9',
         signal: { asset: 'BTC-USD', asset_class: 'crypto' },
         clock: CLOCK,
+        bar: BAR,
       });
 
       expect(result).toHaveLength(1);
@@ -150,6 +156,7 @@ describe('buildAnalystsStep', () => {
         trace_id: 'trace-9',
         signal: { asset: 'AAPL', asset_class: 'stocks' },
         clock: CLOCK,
+        bar: BAR,
       });
 
       expect(entries).toEqual([]);
@@ -194,6 +201,7 @@ describe('buildAnalystsStep', () => {
           trace_id: 'trace-9',
           signal: { asset: 'BTC-USD', asset_class: 'crypto' },
           clock: CLOCK,
+          bar: BAR,
         });
 
         const serialized = JSON.stringify(entries);
@@ -226,6 +234,7 @@ describe('buildAnalystsStep', () => {
           trace_id: 'trace-9',
           signal: { asset: 'BTC-USD', asset_class: 'crypto' },
           clock: CLOCK,
+          bar: BAR,
         });
 
         const serialized = JSON.stringify(entries);
@@ -252,6 +261,7 @@ describe('buildAnalystsStep', () => {
           trace_id: 'trace-9',
           signal: { asset: 'BTC-USD', asset_class: 'crypto' },
           clock: CLOCK,
+          bar: BAR,
         });
 
         const serialized = JSON.stringify(entries);
@@ -284,6 +294,7 @@ describe('buildAnalystsStep', () => {
           trace_id: 'trace-9',
           signal: { asset: 'BTC-USD', asset_class: 'crypto' },
           clock: CLOCK,
+          bar: BAR,
         });
 
         const [entry] = entries as [LogEntry];
@@ -326,6 +337,7 @@ describe('buildAnalystsStep', () => {
           trace_id: 'trace-9',
           signal: { asset, asset_class: 'crypto' as const },
           clock: CLOCK,
+          bar: BAR,
         });
       }
 
@@ -497,6 +509,7 @@ describe('buildAnalystsStep', () => {
           trace_id: 'trace-9',
           signal: { asset: 'AAPL', asset_class: 'stocks' },
           clock: CLOCK,
+          bar: BAR,
         }),
       ).resolves.toEqual([]);
     });
@@ -544,6 +557,7 @@ describe('buildAnalystsStep', () => {
         trace_id: 'trace-1',
         signal: { asset: '3USL', asset_class: 'stocks' },
         clock: CLOCK,
+        bar: BAR,
       });
 
       expect(getContext).toHaveBeenCalledTimes(1);
@@ -577,6 +591,7 @@ describe('buildAnalystsStep', () => {
         trace_id: 'trace-1',
         signal: { asset: '3USL', asset_class: 'stocks' },
         clock: CLOCK,
+        bar: BAR,
       });
 
       expect(orchestrator.runAnalysts).toHaveBeenCalledTimes(1);
@@ -592,6 +607,7 @@ describe('buildAnalystsStep', () => {
           trace_id: 'trace-1',
           signal: { asset: '3USL', asset_class: 'stocks' },
           clock: CLOCK,
+          bar: BAR,
         }),
       ).resolves.toHaveLength(1);
     });

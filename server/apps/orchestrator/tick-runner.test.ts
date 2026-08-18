@@ -317,6 +317,26 @@ describe('SequentialTickRunner.runInstrument', () => {
     expect(steps.trader).toHaveBeenCalledWith(expect.objectContaining({ instrument: 'AAPL' }));
   });
 
+  /**
+   * #811. `steps.analysts` used to receive no bar at all — `MarketIntelligenceStore.getContext`
+   * floored a second, independent read of the clock, which could disagree with the gate's bar on
+   * a straddle. The gate's `decision_bar.open_time` is the single derivation for this pass; this
+   * pins that the runner threads it onto the analysts step unchanged, the same value `debate`
+   * receives as its own `bar`.
+   */
+  it("threads the gate's decision bar onto the analysts step, unchanged and matching debate's bar (#811)", async () => {
+    const steps = makeSteps();
+
+    await new SequentialTickRunner(steps).runInstrument(SIGNAL, makeCtx());
+
+    expect(steps.analysts).toHaveBeenCalledWith(
+      expect.objectContaining({ bar: DECISION_BAR.open_time }),
+    );
+    expect(steps.debate).toHaveBeenCalledWith(
+      expect.objectContaining({ bar: DECISION_BAR.open_time }),
+    );
+  });
+
   it('passes the Analyst views to the Debate and the debate to the Trader', async () => {
     const views = [makeView(), makeView({ analyst_id: 'sentiment-1' })];
     const debate = makeDebate({ debate_id: 'debate-xyz' });

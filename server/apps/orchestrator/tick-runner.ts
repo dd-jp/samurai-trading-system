@@ -227,7 +227,11 @@ export class SequentialTickRunner implements TickRunner {
 
     // ── DECISION PASS: the full chain, once per debate bar. ─────────────────
     markStage('analysts');
-    const analystsInput = { trace_id, signal, clock };
+    // `bar` is the gate's — the single derivation for this pass (#687/#743),
+    // threaded to the analysts (and, through them, to
+    // `MarketIntelligenceStore.getContext`) unchanged (#811) rather than
+    // re-derived from `clock.now()` a second time.
+    const analystsInput = { trace_id, signal, clock, bar: decisionBar.open_time };
     const views = await this.steps.analysts(analystsInput);
     record('analysts', views.length === 0 ? 'quorum_skip' : 'quorum_met', analystsInput, views);
     if (views.length === 0) {

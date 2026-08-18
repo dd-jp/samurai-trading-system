@@ -74,6 +74,10 @@ function buildInput(signal: Signal, trace_id: string, newsSentiment: 1 | 0 | -1 
     trace_id,
     signal,
     clock,
+    // #811: AnalystInput.bar is required too — the claimed decision bar's
+    // open_time, which in every other production case is already floored to
+    // the debate-bar grid. ASOF stands in for it here, unchanged.
+    bar: ASOF,
     market_intelligence: marketIntelligence,
     market_data: marketData,
     // #746: fundamental never reads it, but AnalystInput.calendar is

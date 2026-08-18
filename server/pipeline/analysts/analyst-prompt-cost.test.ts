@@ -80,6 +80,7 @@ async function runTechnical(): Promise<AnalystView> {
     trace_id: 'trace-cost',
     signal: SIGNAL,
     clock,
+    bar: asOf,
     market_intelligence: new MarketIntelligenceStore(clock),
     market_data: new MarketDataServiceImpl(
       new FixtureDataSource(

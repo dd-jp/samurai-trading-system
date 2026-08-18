@@ -949,6 +949,7 @@ describe('technical_indicator_unavailable is wired by the composition root (#745
       trace_id: 'trace-745-root',
       signal: { asset: 'BTC-USD', asset_class: 'crypto' },
       clock,
+      bar: START,
     });
 
     // The whole point of the split: a view, not a quorum skip.
@@ -1030,6 +1031,7 @@ describe('market-intelligence coverage is wired by the composition root (#752)',
       trace_id: 'trace-752-root',
       signal: { asset: 'BTC-USD', asset_class: 'crypto' },
       clock,
+      bar: START,
     });
 
     // Criterion 3: the run still starts — the tick produced its views rather
@@ -1111,6 +1113,7 @@ describe('sessionCalendars is wired by the composition root (#746)', () => {
       trace_id: 'trace-746-root',
       signal: { asset: 'AAPL', asset_class: 'stocks' },
       clock,
+      bar: START,
     });
 
     const technical = views.find((view) => view.analyst_type === 'technical');
@@ -1146,6 +1149,7 @@ describe('sessionCalendars is wired by the composition root (#746)', () => {
       trace_id: 'trace-746-crypto',
       signal: { asset: 'BTC-USD', asset_class: 'crypto' },
       clock,
+      bar: START,
     });
 
     const technical = views.find((view) => view.analyst_type === 'technical');

@@ -155,7 +155,7 @@ export function buildAnalystsStep(
    */
   const consecutiveSkips = new Map<string, number>();
 
-  return async ({ trace_id, signal, clock }) => {
+  return async ({ trace_id, signal, clock, bar }) => {
     // BEFORE the analysts, so a refreshed window is visible to the very tick
     // that paid for it. `GrokAgent.refresh` never throws — market intelligence
     // is an optional input, and an xAI outage must degrade the debate to
@@ -174,7 +174,7 @@ export function buildAnalystsStep(
       });
     }
 
-    const result = await orchestrator.runAnalysts(trace_id, signal, clock);
+    const result = await orchestrator.runAnalysts(trace_id, signal, clock, bar);
 
     if (logger !== undefined && result.failures.length > 0) {
       const mandatoryFailed = result.failures.some((failure) => failure.role === 'mandatory');

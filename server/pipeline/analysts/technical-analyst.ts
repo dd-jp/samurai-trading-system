@@ -850,6 +850,7 @@ export const technicalAnalyst: Analyst = {
         signal.asset_class,
         MI_CONTEXT_WINDOW_MS,
         input.trace_id,
+        input.bar,
       ),
     ]);
 
