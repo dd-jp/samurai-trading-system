@@ -79,19 +79,19 @@ describe('the timestamp round-trip (#837 M7)', () => {
     expect(() => toStoredTimestamp(new Date('not a date'))).toThrow(RangeError);
   });
 
-  // #884: the store tests are largely insensitive to a uniform timestamp-format
-  // change — every write and bound comparison parameter flows through this same
-  // helper, so a uniform format drift keeps rows mutually consistent and TEXT
-  // ordering still "works". A mutation probe confirmed it: a milliseconds-
-  // dropping writer only turned 4 of ~3900 tests red, none of them a store test.
-  // The real invariant is the STORED_TIMESTAMP width/precision check inside
-  // `toStoredTimestamp`, and nothing in production ever exercises its reject
-  // branch on a non-millisecond string — every real `Date.prototype.toISOString()`
-  // call always emits one. That means a regex weakening (e.g. making the
-  // milliseconds group optional) would slip past every other test in this
-  // suite AND every store test, silently. Mock `toISOString()` to prove the
-  // guard itself still rejects a non-millisecond string, independent of
-  // whether any real `Date` can currently produce one.
+  // #884: a writer that strips milliseconds after this file's own format
+  // assertions run (e.g. `toStoredTimestamp` returning
+  // `text.replace(/\.\d{3}Z$/, 'Z')`) IS caught — by this file's own
+  // "writes the fixed-width..."/"round-trips..." tests and by 4 tests in
+  // `sqlite-setup-store.test.ts` (verified: 8/101 red under that mutation).
+  // What nothing catches is the guard itself being weakened, because no real
+  // `Date.prototype.toISOString()` call ever emits a non-millisecond string —
+  // production never reaches the reject branch. Loosening STORED_TIMESTAMP to
+  // make the milliseconds group optional (`(\.\d{3})?Z$`) left every other
+  // test in this suite green, all 41 `sqlite-shared-store` tests green, and
+  // all 12 `sqlite-setup-store` tests green — 100/101 passed, only this test
+  // failed. Mock `toISOString()` to drive a non-millisecond string through the
+  // guard's real entry point and pin that it still rejects.
   it('rejects a non-millisecond format even though the input Date is valid', () => {
     const spy = vi.spyOn(Date.prototype, 'toISOString').mockReturnValue('2026-08-18T09:30:00Z');
     try {

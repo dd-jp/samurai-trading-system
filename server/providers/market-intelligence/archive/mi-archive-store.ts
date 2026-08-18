@@ -40,8 +40,8 @@
  * declined to convert it — different DB, a separate migrations dir, and
  * adopting the helpers would introduce a `providers/market-intelligence →
  * shared/store` import that does not exist today. That deferral is still the
- * right call, but every raw round-trip added here (10 as of #884, growing —
- * #863 added more after #852 merged) widens it. Before adding another one,
+ * right call, but this file keeps accruing fresh raw round-trips after the
+ * #852 merge (#863 added more), so it widens rather than staying flat. Before adding another one,
  * re-check whether the import-direction cost still outweighs converting.
  */
 
