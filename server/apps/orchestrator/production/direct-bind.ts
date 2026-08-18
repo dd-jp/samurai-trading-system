@@ -714,12 +714,17 @@ async function degradedPortfolioForExit(
  * in the same trace still gate against one observation. Degrading is a
  * fallback from a throw, never a mode.
  *
- * A throw that is NOT about marks (the account read failing, say) is
- * re-raised by the degraded attempt itself, which performs the same reads —
- * so a non-mark fault still aborts the tick and reaches #507's catch. And if
- * the retry happens to value everything (a feed that recovered between the
- * two reads), it is reported as no degradation at all rather than as a
- * degradation with nothing in it.
+ * A throw the degraded attempt CANNOT explain is re-raised unchanged. The
+ * degraded attempt does not perform every read the strict one does — no
+ * volatility reading, no `evaluate()`/`save()` — so it can succeed while the
+ * real fault (a volatility outage, a failing `breaker_state` write) is still
+ * there. If it comes back with nothing unvalued, marks were not the problem,
+ * and swallowing the original would make a persistent non-mark fault
+ * invisible on every exit tick: the same silence this ticket exists to
+ * remove, relocated. Re-raising aborts the tick into #507's catch exactly as
+ * it did before this ticket. The cost is the narrow case of a feed that
+ * recovered between the two reads, which now aborts one tick rather than
+ * proceeding — no worse than the pre-ticket behaviour.
  *
  * `computeStrict` is passed in rather than chosen here because the two seams
  * derive the strict view differently BY SPEC: Risk consumes the per-trace
@@ -738,10 +743,8 @@ async function snapshotForExit(
     const reason = describeThrown(error);
     const snapshot = await degradedPortfolioForExit(deps, clock);
     const unvalued_instruments = snapshot.portfolio.unvalued_instruments;
-    return {
-      snapshot,
-      degradation: unvalued_instruments.length === 0 ? null : { unvalued_instruments, reason },
-    };
+    if (unvalued_instruments.length === 0) throw error;
+    return { snapshot, degradation: { unvalued_instruments, reason } };
   }
 }
 

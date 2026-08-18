@@ -1420,6 +1420,34 @@ describe('buildRiskStep', () => {
       expect(posted).toHaveLength(0);
     });
 
+    it('re-raises an exit failure the degraded attempt cannot explain, instead of swallowing it', async () => {
+      const { channel, posted } = makeAlerts();
+      // The book values cleanly; it is the VOLATILITY read that fails — one
+      // of the reads the degraded attempt deliberately skips. So the fallback
+      // succeeds with nothing unvalued, and the real fault would vanish on
+      // every exit tick if the original throw were dropped here.
+      const step = buildStep({
+        marketData: FAKE_MARKET_DATA,
+        getOpenPositions: async () => [makeHeld('AAPL')],
+        volatility: {
+          getVolatilityReading: async () => {
+            throw new Error('volatility feed unavailable');
+          },
+        },
+        exitValuationAlerts: channel,
+      });
+
+      await expect(
+        step({
+          trace_id: TRACE_ID,
+          intent: makeIntent({ intent_type: 'exit', instrument: 'AAPL' }),
+          clock: CLOCK,
+        }),
+      ).rejects.toThrow(/volatility feed unavailable/);
+      // And it is not miscast as a valuation degradation on the way out.
+      expect(posted).toHaveLength(0);
+    });
+
     it('does NOT degrade for an entry — the whole-book refusal still stands and still throws', async () => {
       const { channel, posted } = makeAlerts();
       const step = buildStep({ exitValuationAlerts: channel });
