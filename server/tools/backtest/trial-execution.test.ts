@@ -1,5 +1,6 @@
 import { digest } from '../../apps/orchestrator/index.js';
 import type { Bar } from '../../providers/market-data-service/index.js';
+import { AlwaysOpenCalendar } from '../../providers/market-data-service/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { InMemoryConfigTrialLog } from './config-trial-log.js';
 import type { EvalExecutor, EvalOptions, EvalReport } from './eval-types.js';
@@ -9,6 +10,7 @@ import { type ReplayBarSource, ReplayDriver, type ReplayInstrument } from './rep
 import {
   buildTrialGrid,
   CRYPTO_PERIODS_PER_YEAR,
+  periodsPerYearFor,
   type ReplayRunner,
   runTrialGrid,
   STOCK_PERIODS_PER_YEAR,
@@ -586,6 +588,8 @@ function makeAssetClass(
         clock: new SimulatedClock(window.start),
         universe: [instrument],
         capitalPerTrade: 10_000,
+        timeframe: '1d',
+        sessionCalendar: new AlwaysOpenCalendar(),
       }),
   };
 }
@@ -746,5 +750,34 @@ describe('sizeTrialGridToSample', () => {
     expect(first.selected.map((e) => e.config_hash)).toEqual(
       second.selected.map((e) => e.config_hash),
     );
+  });
+});
+
+/**
+ * #664: `periodsPerYear` is the annualization base for every Sharpe, Sortino
+ * and Calmar in the suite. The two module constants are DAILY bar counts, and
+ * threading a timeframe end-to-end while leaving them in place is exactly the
+ * "config changed, consumer still reads the literal" defect this repo has hit
+ * before — nothing errors, every metric is simply ~20x wrong.
+ */
+describe('periodsPerYearFor (#664)', () => {
+  it('keeps the daily answers exactly as they were', () => {
+    expect(periodsPerYearFor('stocks', '1d')).toBe(STOCK_PERIODS_PER_YEAR);
+    expect(periodsPerYearFor('crypto', '1d')).toBe(CRYPTO_PERIODS_PER_YEAR);
+  });
+
+  it('counts intraday bars per session — 390 one-minute bars a US trading day', () => {
+    expect(periodsPerYearFor('stocks', '1m')).toBe(252 * 390);
+    expect(periodsPerYearFor('stocks', '5m')).toBe(252 * 78);
+  });
+
+  it('counts a 24-hour venue over the whole day, not a cash session', () => {
+    expect(periodsPerYearFor('crypto', '1m')).toBe(365 * 1_440);
+  });
+
+  it('refuses a bar longer than the session it would be counted in', () => {
+    // A 1-hour stock bar is fine (6.5 a session); a 12-hour one is not, and
+    // silently returning 0.54 bars a year would poison every annualized metric.
+    expect(() => periodsPerYearFor('stocks', '12h')).toThrow(/longer than the stocks session/);
   });
 });

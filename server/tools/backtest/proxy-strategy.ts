@@ -44,25 +44,35 @@ export interface ProxySignal {
  * seeds from the start of whatever window it is given.
  */
 /**
- * The timeframe every spec in this module describes (#315).
+ * `timeframe` is the timeframe the caller's `bars` are on (#664).
  *
- * Stage 2's whole universe is ingested as daily aggregates. Descriptive rather
- * than selecting: `computeIndicator` runs on a slice the caller already holds,
- * so the field records WHICH bars these are instead of choosing them.
+ * It was a module constant `REPLAY_TIMEFRAME = '1d'` until then, justified by
+ * "Stage 2's whole universe is ingested as daily aggregates" (#315). ADR-0014
+ * moved the product to an intraday, flat-by-close horizon, so that premise is
+ * gone and the value is the caller's to state.
+ *
+ * It remains DESCRIPTIVE rather than selecting: `computeIndicator` runs on a
+ * slice the caller already holds, so the field records WHICH bars these are
+ * instead of choosing them. That is precisely why a constant is not good
+ * enough — a `'1d'` label on minute bars is a false record and nothing
+ * downstream would catch it. `ReplayDriver` checks the value against
+ * `Bar.timeframe` before any of this runs.
  */
-const REPLAY_TIMEFRAME = '1d';
-
-export function proxySignal(bars: readonly Bar[], config: ProxyStrategyConfig): ProxySignal {
+export function proxySignal(
+  bars: readonly Bar[],
+  config: ProxyStrategyConfig,
+  timeframe: string,
+): ProxySignal {
   const fastSma = computeIndicator(bars.slice(-config.fastWindow) as Bar[], {
     indicator: 'sma',
     params: {},
-    timeframe: REPLAY_TIMEFRAME,
+    timeframe,
     lookback: config.fastWindow,
   });
   const slowSma = computeIndicator(bars.slice(-config.slowWindow) as Bar[], {
     indicator: 'sma',
     params: {},
-    timeframe: REPLAY_TIMEFRAME,
+    timeframe,
     lookback: config.slowWindow,
   });
 
@@ -86,7 +96,7 @@ export function proxySignal(bars: readonly Bar[], config: ProxyStrategyConfig): 
   const atrValue = computeIndicator(bars.slice(-(config.atrWindow + 1)) as Bar[], {
     indicator: 'atr',
     params: {},
-    timeframe: REPLAY_TIMEFRAME,
+    timeframe,
     lookback: config.atrWindow,
   });
 

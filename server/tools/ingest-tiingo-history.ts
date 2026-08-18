@@ -14,7 +14,11 @@
  * to add — the 5-year MinBTL verdict becomes computable without any Polygon
  * entitlement.
  */
-import { HttpTiingoClient, Stage2HistoricalStore } from './backtest/index.js';
+import {
+  DEFAULT_STAGE2_TIMEFRAME,
+  HttpTiingoClient,
+  Stage2HistoricalStore,
+} from './backtest/index.js';
 import {
   CRYPTO_SYMBOLS,
   STAGE2_PINNED_WINDOW,
@@ -30,7 +34,12 @@ export interface IngestHistoryDeps {
 
 export async function ingestTiingoHistory(deps: IngestHistoryDeps): Promise<void> {
   const print = deps.print ?? console.log;
-  const store = new Stage2HistoricalStore(deps.client, deps.dbPath);
+  // DAILY, stated explicitly (#664): this script backfills crypto daily
+  // history, which is the only resolution `HttpTiingoClient` serves.
+  const store = new Stage2HistoricalStore(deps.client, {
+    timeframe: DEFAULT_STAGE2_TIMEFRAME,
+    dbPath: deps.dbPath,
+  });
   const window = STAGE2_PINNED_WINDOW;
 
   print(

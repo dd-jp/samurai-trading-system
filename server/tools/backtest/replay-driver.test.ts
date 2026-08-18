@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Bar } from '../../providers/market-data-service/index.js';
-import { computeIndicator } from '../../providers/market-data-service/index.js';
+import { AlwaysOpenCalendar, computeIndicator } from '../../providers/market-data-service/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { EvalExecutorImpl } from './eval-executor.js';
 import { LookaheadViolationError } from './lookahead.js';
@@ -164,6 +164,9 @@ function makeDeps(
     clock: new SimulatedClock(new Date(Date.UTC(2023, 11, 1))),
     universe: UNIVERSE,
     capitalPerTrade: 10_000,
+    // Daily, which is what every pre-#664 test in this file meant implicitly.
+    timeframe: '1d',
+    sessionCalendar: new AlwaysOpenCalendar(),
     ...overrides,
   };
 
@@ -483,6 +486,8 @@ describe('ReplayDriver.run', () => {
       clock: new SimulatedClock(day(0)),
       universe,
       capitalPerTrade: 10_000,
+      timeframe: '1d',
+      sessionCalendar: new AlwaysOpenCalendar(),
     };
 
     await new ReplayDriver(deps).run(CONFIG, window);

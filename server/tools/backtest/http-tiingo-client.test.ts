@@ -58,7 +58,7 @@ describe('HttpTiingoClient', () => {
       ]);
     }) as unknown as typeof fetch;
 
-    const bars = await makeClient(fetchImpl).fetchAggregates('SPY', WINDOW);
+    const bars = await makeClient(fetchImpl).fetchAggregates('SPY', WINDOW, '1d');
 
     expect(bars).toEqual([
       { t: Date.parse('2021-08-06T00:00:00.000Z'), o: 100, h: 110, l: 95, c: 105, v: 1_000 },
@@ -86,7 +86,7 @@ describe('HttpTiingoClient', () => {
       ]);
     }) as unknown as typeof fetch;
 
-    const bars = await makeClient(fetchImpl).fetchAggregates('BTC-USD', WINDOW);
+    const bars = await makeClient(fetchImpl).fetchAggregates('BTC-USD', WINDOW, '1d');
 
     expect(bars).toEqual([
       {
@@ -107,7 +107,7 @@ describe('HttpTiingoClient', () => {
       return jsonResponse([]);
     }) as unknown as typeof fetch;
 
-    await makeClient(fetchImpl).fetchAggregates('SPY', WINDOW);
+    await makeClient(fetchImpl).fetchAggregates('SPY', WINDOW, '1d');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
@@ -116,6 +116,21 @@ describe('HttpTiingoClient', () => {
       async () => new Response('nope', { status: 429, statusText: 'Too Many Requests' }),
     ) as unknown as typeof fetch;
 
-    await expect(makeClient(fetchImpl).fetchAggregates('SPY', WINDOW)).rejects.toThrow(/HTTP 429/);
+    await expect(makeClient(fetchImpl).fetchAggregates('SPY', WINDOW, '1d')).rejects.toThrow(
+      /HTTP 429/,
+    );
+  });
+});
+
+describe('HttpTiingoClient — timeframe (#664)', () => {
+  it('refuses a non-daily request rather than silently serving day bars', async () => {
+    const client = new HttpTiingoClient({
+      apiKey: 'test-key',
+      fetchImpl: async () => new Response('[]'),
+    });
+
+    await expect(
+      client.fetchAggregates('BTC-USD', { start: new Date(0), end: new Date(1) }, '1m'),
+    ).rejects.toThrow(/serves '1d' only/);
   });
 });

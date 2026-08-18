@@ -19,8 +19,10 @@
  * far back the sample reaches — the variable under test.
  */
 
+import { timeframeToMs } from '../providers/market-data-service/index.js';
 import {
   type DateRange,
+  DEFAULT_STAGE2_TIMEFRAME,
   FreeStackAggregatesClient,
   HttpPolygonClient,
   type PolygonClient,
@@ -60,6 +62,32 @@ export interface Stage2Source {
   client: PolygonClient;
   window: DateRange;
   label: Stage2SourceLabel;
+  /** The bar resolution this run ingests and replays (#664). */
+  timeframe: string;
+}
+
+/**
+ * The bar resolution a direct run uses — `STAGE2_TIMEFRAME`, default `'1d'`.
+ *
+ * Default daily, for the same reason `STAGE2_SOURCE` defaults to Polygon:
+ * flipping it would silently change what every existing invocation measures,
+ * including the runs the prior verdicts were written from. Intraday is opt-in,
+ * so the diff stays additive.
+ *
+ * `STAGE2_TIMEFRAME=1m STAGE2_SOURCE=free-stack` is the invocation #664 exists
+ * to make possible — Alpaca's free tier serves full SIP consolidated 1-minute
+ * bars from 2016-01-04 (#656), which is why intraday is only offered on the
+ * free stack. Polygon here is a free-tier fallback key (2-year window,
+ * 5 req/min) and `HttpPolygonClient` refuses anything but `'1d'` outright.
+ *
+ * Validated through `timeframeToMs`, so a typo (`'1min'`) fails at resolution
+ * rather than after the first vendor call.
+ */
+export function resolveStage2Timeframe(env: NodeJS.ProcessEnv = process.env): string {
+  const timeframe = env.STAGE2_TIMEFRAME?.trim();
+  if (timeframe === undefined || timeframe.length === 0) return DEFAULT_STAGE2_TIMEFRAME;
+  timeframeToMs(timeframe);
+  return timeframe;
 }
 
 /**
@@ -69,6 +97,7 @@ export interface Stage2Source {
  */
 export function resolveStage2Source(env: NodeJS.ProcessEnv = process.env): Stage2Source {
   const requested = env.STAGE2_SOURCE ?? 'polygon';
+  const timeframe = resolveStage2Timeframe(env);
 
   if (requested === 'polygon') {
     return {
@@ -82,6 +111,7 @@ export function resolveStage2Source(env: NodeJS.ProcessEnv = process.env): Stage
       ),
       window: STAGE2_PINNED_WINDOW,
       label: 'polygon',
+      timeframe,
     };
   }
 
@@ -93,6 +123,7 @@ export function resolveStage2Source(env: NodeJS.ProcessEnv = process.env): Stage
       }),
       window: STAGE2_FREE_STACK_WINDOW,
       label: 'free-stack',
+      timeframe,
     };
   }
 

@@ -60,7 +60,7 @@ describe('proxySignal', () => {
   it('signals long when the fast SMA leads the slow SMA (uptrend)', () => {
     const bars = buildTrendingBars(10, 100, 1);
 
-    const signal = proxySignal(bars, BASE_CONFIG);
+    const signal = proxySignal(bars, BASE_CONFIG, '1d');
 
     expect(signal.direction).toBe('long');
   });
@@ -68,7 +68,7 @@ describe('proxySignal', () => {
   it('signals short when the fast SMA trails the slow SMA (downtrend) and shorting is allowed', () => {
     const bars = buildTrendingBars(10, 100, -1);
 
-    const signal = proxySignal(bars, BASE_CONFIG);
+    const signal = proxySignal(bars, BASE_CONFIG, '1d');
 
     expect(signal.direction).toBe('short');
   });
@@ -76,7 +76,7 @@ describe('proxySignal', () => {
   it('stays flat when neither SMA leads (perfectly flat bars)', () => {
     const bars = buildFlatBars(10, 100);
 
-    const signal = proxySignal(bars, BASE_CONFIG);
+    const signal = proxySignal(bars, BASE_CONFIG, '1d');
 
     expect(signal.direction).toBe('flat');
     expect(signal.stop).toBe(100);
@@ -86,7 +86,7 @@ describe('proxySignal', () => {
   it('stays flat on a downtrend when allowShort is false, instead of signaling short', () => {
     const bars = buildTrendingBars(10, 100, -1);
 
-    const signal = proxySignal(bars, { ...BASE_CONFIG, allowShort: false });
+    const signal = proxySignal(bars, { ...BASE_CONFIG, allowShort: false }, '1d');
 
     expect(signal.direction).toBe('flat');
   });
@@ -102,7 +102,7 @@ describe('proxySignal', () => {
     const bars = buildTrendingBars(10, 100, 1);
     const config = { ...BASE_CONFIG, atrStopMult, atrTargetMult };
 
-    const signal = proxySignal(bars, config);
+    const signal = proxySignal(bars, config, '1d');
     const lastClose = bars[bars.length - 1].close;
     const atrValue = computeIndicator(bars.slice(-(config.atrWindow + 1)), {
       indicator: 'atr',
@@ -119,7 +119,7 @@ describe('proxySignal', () => {
   it('places the stop below and target above entry for a long signal', () => {
     const bars = buildTrendingBars(10, 100, 1);
 
-    const signal = proxySignal(bars, BASE_CONFIG);
+    const signal = proxySignal(bars, BASE_CONFIG, '1d');
     const lastClose = bars[bars.length - 1].close;
 
     expect(signal.stop).toBeLessThan(lastClose);
@@ -129,7 +129,7 @@ describe('proxySignal', () => {
   it('places the stop above and target below entry for a short signal', () => {
     const bars = buildTrendingBars(10, 100, -1);
 
-    const signal = proxySignal(bars, BASE_CONFIG);
+    const signal = proxySignal(bars, BASE_CONFIG, '1d');
     const lastClose = bars[bars.length - 1].close;
 
     expect(signal.stop).toBeGreaterThan(lastClose);

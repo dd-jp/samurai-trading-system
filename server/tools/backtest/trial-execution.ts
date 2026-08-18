@@ -40,6 +40,7 @@
  */
 
 import { digest } from '../../apps/orchestrator/index.js';
+import { isDailyTimeframe, timeframeToMs } from '../../providers/market-data-service/index.js';
 import type { ConfigTrialLog } from './config-trial-log.js';
 import { EvalExecutorImpl } from './eval-executor.js';
 import type { EvalExecutor, EvalReport } from './eval-types.js';
@@ -70,6 +71,51 @@ const TRIAL_SEED = 0;
 
 export const STOCK_PERIODS_PER_YEAR = 252;
 export const CRYPTO_PERIODS_PER_YEAR = 365;
+
+/** US cash-session length in minutes — 09:30 to 16:00 ET. */
+const US_REGULAR_SESSION_MINUTES = 6.5 * 60;
+const MINUTES_PER_DAY = 24 * 60;
+
+/**
+ * How many bars of `timeframe` an asset class prints in a year (#664).
+ *
+ * `periodsPerYear` is the annualization base for every Sharpe, Sortino and
+ * Calmar in the suite — `sharpe_annual = sharpe_per_period * sqrt(periodsPerYear)`.
+ * The two constants above are DAILY bar counts, and they were the only answer
+ * available while the harness could only replay daily.
+ *
+ * They are wrong by a factor of ~sqrt(390) on a 1-minute replay, and this is
+ * exactly the class of defect #664 was warned about: a timeframe parameter
+ * threaded end-to-end while a derived quantity keeps its daily literal. Nothing
+ * would have failed — every metric would simply have been understated ~20x, and
+ * the kill-lines are stated in annualized Sharpe.
+ *
+ * Regular hours only for stocks, deliberately: `FreeStackAggregatesClient`
+ * requests no `feed`/extended-hours parameter, so what Alpaca serves for an
+ * equity is the regular session. Overstating the bar count would OVERSTATE the
+ * annualized Sharpe, which is the dangerous direction.
+ */
+export function periodsPerYearFor(assetClass: 'stocks' | 'crypto', timeframe: string): number {
+  const barMinutes = timeframeToMs(timeframe) / 60_000;
+  const tradingDays = assetClass === 'stocks' ? STOCK_PERIODS_PER_YEAR : CRYPTO_PERIODS_PER_YEAR;
+
+  // A day-grained bar is one bar per trading day whatever the venue's session
+  // length — the arithmetic below would divide a 6.5-hour session by a 24-hour
+  // bar and report 0.27 stock bars a year.
+  if (isDailyTimeframe(timeframe)) return tradingDays;
+
+  const sessionMinutes = assetClass === 'stocks' ? US_REGULAR_SESSION_MINUTES : MINUTES_PER_DAY;
+
+  if (barMinutes > sessionMinutes) {
+    throw new Error(
+      `periodsPerYearFor: a '${timeframe}' bar is longer than the ${assetClass} session ` +
+        `(${sessionMinutes} minutes), so it cannot be counted per session. Use a day-grained ` +
+        'timeframe, or state the annualization base explicitly.',
+    );
+  }
+
+  return tradingDays * (sessionMinutes / barMinutes);
+}
 
 const FAST_WINDOWS = [10, 20] as const;
 const SLOW_WINDOWS = [30, 50] as const;

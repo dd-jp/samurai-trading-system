@@ -30,6 +30,7 @@
  * error conventions follow `HttpPolygonClient`.
  */
 
+import { timeframeToMs, toAlpacaTimeframe } from '../../providers/market-data-service/index.js';
 import { TokenBucket } from '../../shared/index.js';
 import type { PolygonAggregate, PolygonClient } from './stage2-historical-store.js';
 import type { DateRange } from './universe.js';
@@ -52,13 +53,55 @@ const COINBASE_CHUNK_DAYS = 290;
 const DAY_MS = 86_400_000;
 
 /**
- * Guards a malformed/cyclical `next_page_token` or a non-advancing chunk walk
- * from spinning forever. Ten years of daily bars is ~37 Coinbase chunks and a
- * single Alpaca page, so this is far above any legitimate run.
+ * Floor for the page guard below. Ten years of DAILY bars is ~37 Coinbase
+ * chunks and a single Alpaca page, so this was ample while daily was the only
+ * resolution — see `maxAlpacaPagesFor`.
  */
-const MAX_PAGES = 200;
+const MIN_MAX_PAGES = 200;
 
-/** Conservative shared pacing: Alpaca free allows 200 req/min, Coinbase ~10 req/s. */
+/**
+ * Head-room multiplier on the arithmetically-expected page count.
+ *
+ * The bound has to stay generous enough that a legitimate run never trips it
+ * (the guard THROWS; a run it kills is a run that produced nothing) while
+ * staying finite enough to catch a cyclical `next_page_token`. 4x covers
+ * extended-hours bars, which the expected-count arithmetic below deliberately
+ * does not model.
+ */
+const PAGE_GUARD_HEADROOM = 4;
+
+/**
+ * How many Alpaca pages a window at `timeframe` could legitimately need (#664).
+ *
+ * A fixed 200 was fine for daily bars — one page covers ten years — and is
+ * WRONG for minute bars: ten years of 1-minute SPY bars is ~985k bars, ~99
+ * pages at the 10,000-bar page limit, and a 2-minute or a 30-second-equivalent
+ * request scales from there. A fixed cap would have turned a legitimate deep
+ * intraday backfill into a thrown error, i.e. exactly the silent-truncation-
+ * shaped failure the guard exists to prevent, inverted.
+ *
+ * Deliberately arithmetic over the WHOLE elapsed span rather than over trading
+ * hours: it is an upper bound on a guard, so overestimating is the safe
+ * direction, and it needs no calendar.
+ */
+export function maxAlpacaPagesFor(window: DateRange, timeframe: string): number {
+  const spanMs = Math.max(0, window.end.getTime() - window.start.getTime());
+  const expectedBars = spanMs / timeframeToMs(timeframe);
+  const expectedPages = Math.ceil(expectedBars / ALPACA_PAGE_LIMIT);
+  return Math.max(MIN_MAX_PAGES, expectedPages * PAGE_GUARD_HEADROOM);
+}
+
+/**
+ * Conservative shared pacing: Alpaca's Basic (free) plan allows **200
+ * requests/minute** and Coinbase ~10 req/s.
+ *
+ * `refillPerSecond: 3` is 180 requests/minute sustained — under Alpaca's 200
+ * with headroom — and `acquire()` is awaited once per PAGE below, on both
+ * legs, so a deep intraday backfill (hundreds of pages, #664) is paced by the
+ * same bucket a daily backfill was. That is the whole of #664's rate-limit
+ * item: no second mechanism, because a second limiter over the same socket
+ * would only be able to make the combined rate WRONG.
+ */
 const DEFAULT_PACING = { capacity: 5, refillPerSecond: 3 } as const;
 
 function truncateForError(value: string): string {
@@ -183,10 +226,18 @@ export class FreeStackAggregatesClient implements PolygonClient {
     this.rateLimiter = options.rateLimiter ?? new TokenBucket(DEFAULT_PACING);
   }
 
-  async fetchAggregates(symbol: string, window: DateRange): Promise<PolygonAggregate[]> {
+  /**
+   * `timeframe` is required and threaded to the venue (#664) — see
+   * `PolygonClient.fetchAggregates` for why it is not defaulted.
+   */
+  async fetchAggregates(
+    symbol: string,
+    window: DateRange,
+    timeframe: string,
+  ): Promise<PolygonAggregate[]> {
     return isCryptoSymbol(symbol)
-      ? this.fetchCoinbase(symbol, window)
-      : this.fetchAlpaca(symbol, window);
+      ? this.fetchCoinbase(symbol, window, timeframe)
+      : this.fetchAlpaca(symbol, window, timeframe);
   }
 
   /**
@@ -194,7 +245,25 @@ export class FreeStackAggregatesClient implements PolygonClient {
    * map keyed by open time so an overlapping chunk boundary yields one bar,
    * not two — Coinbase's `start`/`end` are inclusive at both ends.
    */
-  private async fetchCoinbase(symbol: string, window: DateRange): Promise<PolygonAggregate[]> {
+  private async fetchCoinbase(
+    symbol: string,
+    window: DateRange,
+    timeframe: string,
+  ): Promise<PolygonAggregate[]> {
+    // Crypto stays DAILY-ONLY, deliberately (#664). Coinbase does serve 60s
+    // granularity, so this is a scope decision and not a capability one:
+    // crypto left Samurai's scope on 2026-08-16 (ADR-0015's amendment), and
+    // #664 says leave existing crypto paths alone rather than extending them.
+    // Refusing loudly is the honest form of "left alone" — the alternative,
+    // silently serving daily candles against an intraday request, would give
+    // a crypto replay a timeframe label its bars do not have.
+    if (timeframe !== '1d') {
+      throw new Error(
+        `FreeStackAggregatesClient: crypto (${symbol}) is served at '1d' only; got ` +
+          `'${timeframe}'. Crypto left Samurai's scope on 2026-08-16 (ADR-0015 amendment), so ` +
+          'the intraday work of #664 deliberately does not extend the Coinbase leg.',
+      );
+    }
     const byTime = new Map<number, PolygonAggregate>();
     let cursor = window.start.getTime();
     const endMs = window.end.getTime();
@@ -202,9 +271,9 @@ export class FreeStackAggregatesClient implements PolygonClient {
 
     while (cursor <= endMs) {
       pages++;
-      if (pages > MAX_PAGES) {
+      if (pages > MIN_MAX_PAGES) {
         throw new Error(
-          `FreeStackAggregatesClient: exceeded ${MAX_PAGES} Coinbase chunks for ${symbol} — ` +
+          `FreeStackAggregatesClient: exceeded ${MIN_MAX_PAGES} Coinbase chunks for ${symbol} — ` +
             'refusing to walk further (non-advancing chunk guard).',
         );
       }
@@ -254,7 +323,16 @@ export class FreeStackAggregatesClient implements PolygonClient {
     return [...byTime.values()].sort((a, b) => a.t - b.t);
   }
 
-  private async fetchAlpaca(symbol: string, window: DateRange): Promise<PolygonAggregate[]> {
+  private async fetchAlpaca(
+    symbol: string,
+    window: DateRange,
+    timeframe: string,
+  ): Promise<PolygonAggregate[]> {
+    // Mapped through the market-data-service's own converter rather than a
+    // second local table: '1m' -> '1Min', '1d' -> '1Day'. One mapping, one
+    // place it can be wrong.
+    const alpacaTimeframe = toAlpacaTimeframe(timeframe);
+    const maxPages = maxAlpacaPagesFor(window, timeframe);
     // Keyed by open time for the same reason as the Coinbase leg: Alpaca
     // documents non-overlapping pages, but a bar silently counted twice would
     // skew every downstream metric rather than failing loudly, and the store
@@ -266,15 +344,16 @@ export class FreeStackAggregatesClient implements PolygonClient {
 
     do {
       pages++;
-      if (pages > MAX_PAGES) {
+      if (pages > maxPages) {
         throw new Error(
-          `FreeStackAggregatesClient: exceeded ${MAX_PAGES} Alpaca pages for ${symbol} — ` +
+          `FreeStackAggregatesClient: exceeded ${maxPages} Alpaca pages for ${symbol} at ` +
+            `${timeframe} — ` +
             'refusing to follow next_page_token further (malformed/cyclical pagination guard).',
         );
       }
       const params = new URLSearchParams({
         symbols: symbol,
-        timeframe: '1Day',
+        timeframe: alpacaTimeframe,
         start: window.start.toISOString(),
         end: window.end.toISOString(),
         limit: String(ALPACA_PAGE_LIMIT),

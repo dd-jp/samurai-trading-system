@@ -173,7 +173,31 @@ export class HttpPolygonClient implements PolygonClient {
     this.rateLimiter = options.rateLimiter ?? new TokenBucket(resolvePolygonPacing());
   }
 
-  async fetchAggregates(symbol: string, window: DateRange): Promise<PolygonAggregate[]> {
+  /**
+   * DAILY ONLY, and it refuses rather than silently serving daily (#664).
+   *
+   * Polygon's aggregates endpoint does take a multiplier/timespan pair, so this
+   * is a plan decision rather than an API limit: the key this repo holds is
+   * free-tier — a two-year window at five requests a minute — which
+   * `stage2-source.ts` already designates fallback-only, never a backfill
+   * source. Intraday backfill runs on Alpaca (#656's measured 1-minute SIP
+   * history from 2016-01-04). Accepting `'1m'` here and returning day bars
+   * would label them `'1m'` in the store, which is the corruption this
+   * ticket's whole timeframe-scoping exists to prevent.
+   */
+  async fetchAggregates(
+    symbol: string,
+    window: DateRange,
+    timeframe: string,
+  ): Promise<PolygonAggregate[]> {
+    if (timeframe !== '1d') {
+      throw new Error(
+        `HttpPolygonClient.fetchAggregates: this client serves '1d' only; got '${timeframe}'. ` +
+          'The Polygon key here is free-tier (2-year window, 5 req/min) and is fallback-only ' +
+          'per stage2-source.ts — run intraday backfill through FreeStackAggregatesClient ' +
+          '(Alpaca) instead.',
+      );
+    }
     const ticker = toPolygonTicker(symbol);
     const from = toPolygonDate(window.start);
     const to = toPolygonDate(window.end);

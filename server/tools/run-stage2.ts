@@ -22,18 +22,19 @@
  * Usage: `POLYGON_API_KEY=... npx tsc -p tsconfig.build.json && node dist/server/tools/run-stage2.js`
  * (or wire an `npm run stage2` script once this has been run for real once).
  */
+import { isDailyTimeframe } from '../providers/market-data-service/index.js';
 import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
 import {
   type CostConfig,
   CostModelImpl,
-  CRYPTO_PERIODS_PER_YEAR,
   type DateRange,
+  DEFAULT_STAGE2_TIMEFRAME,
   InMemoryConfigTrialLog,
   type PolygonClient,
+  periodsPerYearFor,
   renderStage2Verdict,
   runTrialGrid,
   SqliteStage2SelectionStore,
-  STOCK_PERIODS_PER_YEAR,
   Stage2HistoricalStore,
   type Stage2Selection,
   type Stage2Verdict,
@@ -190,6 +191,13 @@ export interface RunStage2Deps {
   dbPath?: string;
   capitalPerTrade?: number;
   averageCapital?: number;
+  /**
+   * The bar resolution to ingest and replay (#664). Defaults to `'1d'`, which
+   * is what every run before #664 did.
+   *
+   * An intraday value makes this an EQUITIES-ONLY run — see `universeFor`.
+   */
+  timeframe?: string;
   costConfig?: CostConfig;
   /** Sink for the printed report — defaults to `console.log`. */
   print?: (line: string) => void;
@@ -222,6 +230,21 @@ interface ReplayContext {
 }
 
 /**
+ * Which symbols a run of `timeframe` covers (#664).
+ *
+ * Daily runs keep the full six-symbol MVP universe, unchanged. An INTRADAY run
+ * is equities-only: crypto left Samurai's scope on 2026-08-16 (ADR-0015's
+ * amendment), and #664 says leave the crypto paths alone rather than extend
+ * them — `FreeStackAggregatesClient`'s Coinbase leg accordingly refuses any
+ * non-daily request. Narrowing here rather than letting that throw makes the
+ * scope decision legible at the runner, where a reader is deciding what the
+ * verdict is a verdict ABOUT.
+ */
+export function universeFor(timeframe: string): readonly string[] {
+  return isDailyTimeframe(timeframe) ? [...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS] : [...STOCK_SYMBOLS];
+}
+
+/**
  * The sub-window of `requested` that EVERY symbol actually has bars for.
  *
  * Intersected, not unioned: the grid replays one universe per asset class, and
@@ -247,11 +270,13 @@ interface ReplayContext {
 export function effectiveWindow(
   store: { bars: (symbol: string, window: DateRange) => Array<{ close_time: Date }> },
   requested: DateRange,
+  /** Defaults to the full daily universe, which is what every pre-#664 call meant. */
+  symbols: readonly string[] = [...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS],
 ): DateRange {
   let start = requested.start;
   let end = requested.end;
 
-  for (const symbol of [...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS]) {
+  for (const symbol of symbols) {
     const bars = store.bars(symbol, requested);
     let first: Date | undefined;
     let last: Date | undefined;
@@ -301,13 +326,28 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
   const capitalPerTrade = deps.capitalPerTrade ?? DEFAULT_CAPITAL_PER_TRADE;
   const averageCapital = deps.averageCapital ?? DEFAULT_AVERAGE_CAPITAL;
 
-  const store = new Stage2HistoricalStore(deps.polygonClient, deps.dbPath ?? ':memory:');
+  const timeframe = deps.timeframe ?? DEFAULT_STAGE2_TIMEFRAME;
+  const symbols = universeFor(timeframe);
+
+  const store = new Stage2HistoricalStore(deps.polygonClient, {
+    timeframe,
+    dbPath: deps.dbPath ?? ':memory:',
+  });
 
   print(
-    `Stage 2: ingesting ${STOCK_SYMBOLS.length + CRYPTO_SYMBOLS.length} MVP-universe symbols ` +
+    `Stage 2: ingesting ${symbols.length} MVP-universe symbols at ${timeframe} ` +
       `over ${window.start.toISOString()} .. ${window.end.toISOString()}`,
   );
-  for (const symbol of [...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS]) {
+  if (!isDailyTimeframe(timeframe)) {
+    print(
+      'Stage 2: WARNING — this is an INTRADAY run. The cost config below was calibrated ' +
+        'against DAILY ATR14 (see CALIBRATED_COST_CONFIG), so its ' +
+        'spreadVolatilityCoefficient models a spread roughly an order of magnitude too ' +
+        'narrow at minute resolution. #664 shipped the capability to replay intraday, not ' +
+        'a cost model calibrated for it — do not read these numbers as a Stage 2 verdict.',
+    );
+  }
+  for (const symbol of symbols) {
     await store.ingest(symbol, window);
     const barCount = store.bars(symbol, window).length;
     print(`  ingested ${symbol}: ${barCount} bars`);
@@ -330,7 +370,7 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
   // lags the request narrows the END instead of the start (stale or partial
   // vendor data), and warning only on the start would let that shrink the
   // sample invisibly — the run output would read as a full-window run.
-  const effective = effectiveWindow(store, window);
+  const effective = effectiveWindow(store, window, symbols);
   const narrowedStart = effective.start.getTime() > window.start.getTime();
   const narrowedEnd = effective.end.getTime() < window.end.getTime();
   if (narrowedStart || narrowedEnd) {
@@ -361,14 +401,27 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
   const configTrialLog = new InMemoryConfigTrialLog();
   const ctx: ReplayContext = { store, costModel, window: effective, capitalPerTrade };
 
-  const stocks = makeAssetClass(ctx, 'stocks', STOCK_SYMBOLS, STOCK_PERIODS_PER_YEAR);
-  const crypto = makeAssetClass(ctx, 'crypto', CRYPTO_SYMBOLS, CRYPTO_PERIODS_PER_YEAR);
+  // `periodsPerYearFor`, not the daily constants (#664): `periodsPerYear` is
+  // the annualization base for every Sharpe in the suite, so a 1-minute replay
+  // annualized off 252 understates it by ~sqrt(390).
+  const stocks = makeAssetClass(
+    ctx,
+    'stocks',
+    STOCK_SYMBOLS,
+    periodsPerYearFor('stocks', timeframe),
+  );
+  const assetClasses = isDailyTimeframe(timeframe)
+    ? [
+        stocks,
+        makeAssetClass(ctx, 'crypto', CRYPTO_SYMBOLS, periodsPerYearFor('crypto', timeframe)),
+      ]
+    : [stocks];
 
   // #405: state the sizing POSITIVELY, before the run, rather than reporting
   // `exceeded: true` after 12 trials have already been spent. The cap exists
   // to constrain the search; a reader should see what it constrained it to.
   const results = await runTrialGrid({
-    assetClasses: [stocks, crypto],
+    assetClasses,
     window: effective,
     averageCapital,
     configTrialLog,
@@ -518,9 +571,18 @@ function printReport(
 if (import.meta.url === `file://${process.argv[1]}`) {
   // Polygon (2y) unless `STAGE2_SOURCE=free-stack` asks for the ten-year free
   // stack — see `stage2-source.ts` for why the old path stays the default.
-  const { client: polygonClient, window: runWindow, label } = resolveStage2Source();
+  const {
+    client: polygonClient,
+    window: runWindow,
+    label,
+    // #664: read from `STAGE2_TIMEFRAME` (default '1d'), so a direct run — the
+    // only real caller of this script — is what drives an intraday replay.
+    // `STAGE2_TIMEFRAME=1m STAGE2_SOURCE=free-stack` is the intended intraday
+    // invocation.
+    timeframe: runTimeframe,
+  } = resolveStage2Source();
   console.log(
-    `Stage 2 source: ${label} over ${runWindow.start.toISOString()} .. ` +
+    `Stage 2 source: ${label} at ${runTimeframe} over ${runWindow.start.toISOString()} .. ` +
       `${runWindow.end.toISOString()}`,
   );
   // Stated explicitly at the entrypoint rather than by changing `runStage2`'s
@@ -536,6 +598,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     polygonClient,
     costConfig: costConfigFromEnv(),
     window: runWindow,
+    timeframe: runTimeframe,
     // Stated here rather than by changing `runStage2`'s `:memory:` default, so
     // only a direct run persists bars and every existing caller and test keeps
     // the isolated in-memory store it was written against (#495).

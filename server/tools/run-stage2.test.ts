@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { UsEquityRegularHoursCalendar } from './../providers/market-data-service/index.js';
 import type { PolygonAggregate, PolygonClient } from './backtest/index.js';
 import { minbtl } from './backtest/index.js';
 import {
@@ -9,6 +10,7 @@ import {
   runStage2,
   STAGE2_SCRATCH_DB_PATH,
   STOCK_SYMBOLS,
+  universeFor,
 } from './run-stage2.js';
 
 const DAY_MS = 86_400_000;
@@ -328,5 +330,121 @@ describe('a direct run persists its bars instead of starting empty (#495)', () =
 
   it("leaves runStage2's own default at :memory: so tests stay isolated", () => {
     expect(source).toContain("deps.dbPath ?? ':memory:'");
+  });
+});
+
+/**
+ * #664: the real runner driving an INTRADAY replay end to end.
+ *
+ * This is the test that distinguishes "the parameter exists" from "a caller
+ * sets it" — the repo's dominant defect class is a mechanism nothing calls.
+ * `runStage2` is the composition root a direct run uses (`STAGE2_TIMEFRAME=1m
+ * STAGE2_SOURCE=free-stack node dist/server/tools/run-stage2.js`), and this
+ * exercises it over minute bars spanning ~40 real US sessions, with no network
+ * anywhere near it.
+ */
+describe('runStage2 at minute resolution (#664)', () => {
+  const CALENDAR = new UsEquityRegularHoursCalendar();
+  const MINUTE_MS = 60_000;
+  /** Bars per session — the last 90 minutes, which is where the flatten lands. */
+  const BARS_PER_SESSION = 90;
+
+  /**
+   * Session closes taken from the calendar itself rather than hand-computed:
+   * that is what keeps the fixture right across the DST change and the
+   * modelled early closes, without this test re-deriving either.
+   */
+  function sessionCloses(from: Date, count: number, everyNthSession: number): Date[] {
+    const closes: Date[] = [];
+    let cursor = from;
+    let seen = 0;
+    while (closes.length < count) {
+      const next = CALENDAR.sessionEnd(cursor);
+      if (next === null) throw new Error('the equity calendar must report a close');
+      if (seen % everyNthSession === 0) closes.push(next);
+      seen++;
+      cursor = next;
+    }
+    return closes;
+  }
+
+  function minuteAggregates(closes: readonly Date[]): PolygonAggregate[] {
+    const out: PolygonAggregate[] = [];
+    closes.forEach((close, session) => {
+      // Sessions trend alternately up and down so the dual-SMA rule both enters
+      // and, sometimes, turns — a monotone fixture would only ever flatten.
+      const drift = session % 2 === 0 ? 0.02 : -0.02;
+      const base = 100 + 10 * Math.sin((2 * Math.PI * session) / 9);
+      for (let i = 0; i < BARS_PER_SESSION; i++) {
+        const openMs = close.getTime() - (BARS_PER_SESSION - i) * MINUTE_MS;
+        const price = base + drift * i;
+        out.push({
+          t: openMs,
+          o: price,
+          h: price + 0.05,
+          l: price - 0.05,
+          c: price + drift,
+          v: 5_000,
+        });
+      }
+    });
+    return out;
+  }
+
+  it('ingests equities only, replays minute bars, and renders a verdict', async () => {
+    const closes = sessionCloses(new Date('2026-01-05T12:00:00.000Z'), 40, 8);
+    const first = closes[0] as Date;
+    const last = closes[closes.length - 1] as Date;
+    const window = {
+      start: new Date(first.getTime() - BARS_PER_SESSION * MINUTE_MS),
+      end: new Date(last.getTime() + MINUTE_MS),
+    };
+
+    const asked: { symbol: string; timeframe: string }[] = [];
+    const client: PolygonClient = {
+      async fetchAggregates(symbol, _window, timeframe) {
+        asked.push({ symbol, timeframe });
+        return minuteAggregates(closes);
+      },
+    };
+
+    const lines: string[] = [];
+    const verdict = await runStage2({
+      polygonClient: client,
+      window,
+      timeframe: '1m',
+      print: (line) => lines.push(line),
+    });
+
+    // The timeframe reached the vendor seam, for every symbol asked for...
+    expect(asked.every((call) => call.timeframe === '1m')).toBe(true);
+    // ...and the symbols asked for are the equities only. Crypto left scope
+    // (ADR-0015, 2026-08-16) and the Coinbase leg refuses intraday outright, so
+    // an intraday run that still asked for BTC-USD would abort mid-ingest.
+    expect(asked.map((call) => call.symbol).sort()).toEqual([...STOCK_SYMBOLS].sort());
+    for (const symbol of CRYPTO_SYMBOLS) {
+      expect(asked.some((call) => call.symbol === symbol)).toBe(false);
+    }
+
+    // A verdict was actually rendered over the intraday sample — one kill-line
+    // check set, for stocks alone.
+    expect(verdict.kill_line_checks.length).toBeGreaterThan(0);
+    expect(verdict.kill_line_checks.every((check) => check.asset_class === 'stocks')).toBe(true);
+
+    // And the run says out loud that its cost model is calibrated for daily
+    // bars. Shipping the capability without that warning is how a repo that has
+    // already been wrong-in-sign twice gets there a third time.
+    expect(lines.join('\n')).toContain('INTRADAY run');
+  }, 120_000);
+});
+
+describe('universeFor (#664)', () => {
+  it('keeps the full six-symbol MVP universe for a daily run', () => {
+    expect(universeFor('1d')).toEqual([...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS]);
+  });
+
+  it('narrows an intraday run to equities — crypto left scope (ADR-0015)', () => {
+    expect(universeFor('1m')).toEqual([...STOCK_SYMBOLS]);
+    expect(universeFor('5m')).toEqual([...STOCK_SYMBOLS]);
   });
 });

@@ -39,6 +39,7 @@ import {
   CostModelImpl,
   CRYPTO_PERIODS_PER_YEAR,
   type DateRange,
+  DEFAULT_STAGE2_TIMEFRAME,
   EvalExecutorImpl,
   GrossOfCostsTradeSource,
   HttpPolygonClient,
@@ -160,10 +161,12 @@ export async function runCostDecomposition(
   const requested = deps.window ?? PINNED_VERDICT_WINDOW;
   const costConfig = deps.costConfig ?? PESSIMISTIC_COST_CONFIG;
 
-  const store = new Stage2HistoricalStore(
-    deps.polygonClient,
-    deps.dbPath ?? 'stage2-cost-decomposition.sqlite',
-  );
+  // DAILY, stated explicitly (#664): this script decomposes the costs of the
+  // recorded daily verdict runs, so it must keep replaying what they replayed.
+  const store = new Stage2HistoricalStore(deps.polygonClient, {
+    timeframe: DEFAULT_STAGE2_TIMEFRAME,
+    dbPath: deps.dbPath ?? 'stage2-cost-decomposition.sqlite',
+  });
 
   print(
     `Stage 2 cost decomposition: ingesting over ${requested.start.toISOString()} .. ` +
