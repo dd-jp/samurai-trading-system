@@ -114,4 +114,30 @@ It also interacts with [ADR-0017](0017-validation-gates-paper-operational-thesis
 
 **So the open question is:** does the equity leg become £1,500, stay at £750 with £750 held back for the future crypto system, or something else? It needs its own record before the live ramp, and it should be decided against the drawdown envelope rather than against the fact that the money is idle.
 
+> **ANSWERED 2026-08-18 — see the amendment below.** It is "something else": the book is re-based to **£1,000, all equity**. This section is left as written because the *question* it frames is what the next amendment answers; read the two together and do not quote the £750/£1,500 options as live.
+
 **Unchanged by this amendment:** the ISA restriction, the GBP LSE-listed ETF/ETC constraint on the equity leg, and the equity venue itself (Trading 212 ISA).
+
+## Amendment — 2026-08-18: the book is **£1,000, all equity**
+
+- **Earned by:** [#800](https://github.com/dd-jp/samurai-trading-system/issues/800) (AC4) and [#798](https://github.com/dd-jp/samurai-trading-system/issues/798), which both terminated on this one ruling
+- **Decided by:** David — *"we are cancelling crypto so equity book takes 1000£"*
+- **Answers:** the question the 2026-08-16 amendment opened and deliberately left open
+
+**The 2026-08-16 amendment asked whether the equity leg becomes £1,500, stays at £750, or "something else". It is something else: the total book is re-based from £1,500 to £1,000, and all of it is equity.** The £750 held for crypto is not reallocated — £500 of it leaves Samurai's book with the crypto system it was for, and £250 joins the equity side.
+
+### What follows mechanically
+
+**There is no longer a leg to be a fraction of.** ADR-0018 D5's "fraction of the equity leg" and "fraction of the account" are now the same quantity, so the `EQUITY_LEG_FRACTION_OF_CAPITAL = 0.5` that encoded the split is **deleted**, not set to `1.0`, and D5's fractions reach `RiskPortfolioView.equity` unscaled (`paper-profile.ts`). `LIVE_BOOK_GBP = 1_000` records the inception figure; the gate still resolves against live equity per D5's sizing amendment (#739).
+
+**Cash at risk per position roughly doubles**, and the ~£260/~£190 figures D5 published are historical — they were calibrated on the £750 leg. On the £1,000 book the same fractions resolve to **£350 (index) and £250 (single-stock)**, against **£175 / £125** under the split. The percentage envelope is what D5 bounds and it is unchanged; the absolute loss at the envelope is what moves.
+
+**This makes [#798](https://github.com/dd-jp/samurai-trading-system/issues/798) live rather than dissolving it, and that is the load-bearing consequence.** The single-stock subclass now deploys `f = 0.25` **unscaled** — exactly the fraction D5 published and measured — and D5's #729 verification note measures the drawdown at that fraction and the declared brackets at **~41.8%**, roughly 17 pp above `CONTEXT.md`'s 20–25% tolerance. Under the 0.5 scaler the effective `f = 0.125` sat below the `f ≈ 0.142` the tolerance needs, and #798 would largely have dissolved; at £750-funded it would have dissolved outright. **The ruling picks the branch on which the overshoot is real**, so #798 is now a required decision before the live ramp, not a contingent one. Nothing mis-sizes today only because `lse-etp-pool.ts` is deliberately unwired ([#751](https://github.com/dd-jp/samurai-trading-system/issues/751) is the deadline).
+
+**No re-run of the envelope generator is needed to say that.** `f = 0.25` and the ~41.8% figure are ADR-0018's own published, measured pair; it was the *scaled* `f = 0.125` that would have required a fresh run of `18-drawdown-envelope.py`, and that branch is now moot.
+
+### What this does not change
+
+The **ISA restriction**, the **GBP LSE-listed ETF/ETC constraint**, the **Trading 212 venue**, and **[ADR-0017](0017-validation-gates-paper-operational-thesis-expectancy.md)'s £100–200 live ramp** — the ramp is sized to surface the three unconfirmables at the smallest size producing real fills, and a smaller total book does not change what it is for. The **UK tax position** is if anything looser: CGT was already immaterial at £1,500 against a £3,000 exempt amount.
+
+`docs/research/54-capital-economics-vs-signal-accuracy.md` states its arithmetic **per £1,000 notional**, which is now the book rather than a convenient unit — its 0.55 pp cost-in-accuracy figure applies directly, and the £5,000 column there is hypothetical.

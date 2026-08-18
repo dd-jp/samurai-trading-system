@@ -88,10 +88,18 @@ net_£/yr = N × E(p)/100 × notional − bill
 ```
 
 **Capital is deliberately not substituted.** #658's £500–1,000, and the later £750 equity leg, are both
-superseded: how much the equity leg takes is open under
-[#800](https://github.com/dd-jp/samurai-trading-system/issues/800), and the deployment fraction is open under
-[#798](https://github.com/dd-jp/samurai-trading-system/issues/798). Multiply through by the notional when
-those are decided.
+superseded. Multiply through by the notional once the deployment fraction is settled.
+
+> **Half of that resolved on 2026-08-18, after this doc was written.** David re-based the book to **£1,000,
+> all equity** (ADR-0015's 2026-08-18 amendment, closing
+> [#800](https://github.com/dd-jp/samurai-trading-system/issues/800)), so the **£1,000 column below is the
+> book, not an illustrative unit** — the 0.55 pp cost-in-accuracy figure applies as written, and the £5,000
+> column is hypothetical. The deployment fraction remains open under
+> [#798](https://github.com/dd-jp/samurai-trading-system/issues/798), which the same ruling made *harder*:
+> single-stock `f = 0.25` now applies unscaled, at a measured ~41.8% drawdown. Note the two move in opposite
+> directions for this doc's purposes — a **smaller** book raises the bill's share of accuracy, while a
+> **larger** deployment fraction raises the notional each trade earns on. Neither figure here is re-derived;
+> nothing in the identities depends on the book size.
 
 **At `p = 0.5` — no signal, which is what doc 52 measures — the trading term dwarfs the bill.** QQQ, 252
 sessions, £1,000 notional: `252 × −0.1231% × £1,000 = −£310/yr` against a £58/yr bill. **That is #658's

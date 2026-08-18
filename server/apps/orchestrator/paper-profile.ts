@@ -362,27 +362,35 @@ export function riskCapsFor(equityAnchorUsd: number): RiskCaps {
 export const PAPER_RISK_CAPS: RiskCaps = riskCapsFor(PAPER_ACCOUNT_EQUITY_ANCHOR);
 
 /**
- * The share of total capital that is the EQUITY leg (ADR-0015): £1,500 live,
- * split £750 equity / £750 crypto (#660). ADR-0018 D5's deployment fractions
- * are fractions of that leg, not of the account, so the leg has to be nameable
- * before D5 can be expressed at all.
+ * ADR-0015's book, as decided by David on 2026-08-18: **£1,000, all equity.**
  *
- * Deliberately NOT derived from `RISK_CAP_EQUITY_FRACTIONS.per_asset_class_cap_stocks`,
- * which is the other plausible base and is wrong twice: it is UNSOURCED where
- * this is an ADR, and — decisively — it is a Feedback Loop dial
- * (`RISK_THRESHOLD_KEYS`, risk-thresholds.ts), so basing D5 on it would let
- * the loop widen the drawdown envelope at runtime. D5's envelope is measured
- * drift-removed with zero edge assumed; nothing the loop learns may move it.
+ * There is no longer a leg to be a fraction OF. Crypto left scope on
+ * 2026-08-16 (#705) and the book was re-based from £1,500-split-in-two to a
+ * single £1,000 equity book, so ADR-0018 D5's "fraction of the equity leg" and
+ * "fraction of the account" are now the same quantity. The `0.5` scaler this
+ * replaces encoded the two-leg book and is deleted rather than set to 1.0: a
+ * constant that can only ever be 1 is the kind of thing #800 was filed to
+ * remove, not to preserve.
+ *
+ * Recorded here because the number is load-bearing twice over — it is what
+ * D5's published cash figures were calibrated against, and it is the base the
+ * drawdown envelope of #798 is a fraction of. It is NOT the live account
+ * balance: the gate resolves against `portfolio.equity` on every decision
+ * (#739), and this is the inception figure the ADR names.
  */
-export const EQUITY_LEG_FRACTION_OF_CAPITAL = 0.5;
+export const LIVE_BOOK_GBP = 1_000;
 
 /**
  * ADR-0018 D5 — max deployment per subclass, as a fraction of the EQUITY LEG.
  *
- * At ADR-0015's £750 leg these reproduce the ADR's own illustrative figures:
- * 0.35 x 750 = £262.50 ("~£260") and 0.25 x 750 = £187.50 ("~£190"). That
- * reproduction is the check that the base is right — any other base produces
- * numbers no document contains — but the CASH figures are illustrative only:
+ * At the £750 leg D5 was WRITTEN against these reproduce the ADR's own
+ * illustrative figures: 0.35 x 750 = £262.50 ("~£260") and 0.25 x 750 =
+ * £187.50 ("~£190"). That reproduction is the check that the base is right —
+ * any other base produces numbers no document contains — and it is kept as a
+ * provenance check even though the book is now £1,000 all-equity
+ * (`LIVE_BOOK_GBP`), where the same fractions resolve to £350 and £250. The
+ * FRACTIONS did not change on 2026-08-18; only what they are a fraction of.
+ * The CASH figures are illustrative either way:
  * D5's sizing amendment settles the rule as a fraction resolved against
  * current equity, which is what `subclassDeploymentCapFractionsOfEquity`
  * hands the gate.
@@ -408,13 +416,20 @@ export const D5_DEPLOYMENT_FRACTION_OF_EQUITY_LEG: Readonly<
  * ADR-0018 D5's envelope as fractions of TOTAL account equity — the form the
  * gate resolves against `portfolio.equity` on every decision (#739).
  *
- * D5's fractions are of the EQUITY LEG and `RiskPortfolioView.equity` is the
- * whole account, so each is scaled by `EQUITY_LEG_FRACTION_OF_CAPITAL`. That
- * factor is preserved verbatim from the equity-anchor form this replaced: at
- * the anchor equity the resulting cash cap is unchanged, so this change moves
- * the BASIS (frozen anchor -> live equity) and nothing else. Whether the
- * equity leg should now take the whole book — crypto having left scope — is
- * open and is ADR-0015's amendment to make, not this function's.
+ * D5's fractions are of the EQUITY LEG, and since 2026-08-18 the equity leg
+ * IS the whole book (`LIVE_BOOK_GBP`), so no scaling happens here at all —
+ * the identity is why this function still exists rather than callers reading
+ * the table directly. It previously multiplied by an
+ * `EQUITY_LEG_FRACTION_OF_CAPITAL = 0.5` that encoded ADR-0015's £750/£750
+ * split; David's ruling on #800 dissolved the split, so that factor is gone.
+ *
+ * **This DOUBLES the resolved cap** (index 0.175 -> 0.35 of account,
+ * single-stock 0.125 -> 0.25) and it is meant to: 0.25 unscaled is exactly the
+ * `f` ADR-0018 D5 published and measured. It also puts the single-stock
+ * subclass back at the ~41.8% measured drawdown of D5's #729 note, ~17 pp
+ * above `CONTEXT.md`'s 20-25% tolerance — which is #798's whole subject, is
+ * accepted-not-sized-away per the named constant, and does not fire today
+ * because no universe declares a subclass yet.
  */
 export function subclassDeploymentCapFractionsOfEquity(): Record<
   InstrumentSubclass,
@@ -423,7 +438,7 @@ export function subclassDeploymentCapFractionsOfEquity(): Record<
   return Object.fromEntries(
     Object.entries(D5_DEPLOYMENT_FRACTION_OF_EQUITY_LEG).map(([subclass, fraction]) => [
       subclass,
-      fraction === null ? null : fraction * EQUITY_LEG_FRACTION_OF_CAPITAL,
+      fraction,
     ]),
   ) as Record<InstrumentSubclass, number | null>;
 }

@@ -283,9 +283,12 @@ export interface SubclassDeploymentCap {
    * describe — D5's envelope figures are UPPER BOUNDS for what is implemented
    * here, not estimates of it.
    *
-   * Each fraction is `EQUITY_LEG_FRACTION_OF_CAPITAL x` D5's own per-subclass
-   * fraction (paper-profile.ts), because D5 deploys a fraction of the EQUITY
-   * LEG and `RiskPortfolioView.equity` is the whole account.
+   * Each fraction IS D5's own per-subclass fraction (paper-profile.ts),
+   * unscaled. D5 deploys a fraction of the EQUITY LEG and
+   * `RiskPortfolioView.equity` is the whole account — and since 2026-08-18
+   * those are the same thing: David's ruling on #800 re-based the book to
+   * £1,000 all-equity, dissolving ADR-0015's £750/£750 split and with it the
+   * `EQUITY_LEG_FRACTION_OF_CAPITAL = 0.5` that used to sit here.
    *
    * Total over `InstrumentSubclass` so a new subclass is a compile error here
    * rather than a silent absence, which on this gate would read as "no cap".
