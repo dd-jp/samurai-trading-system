@@ -80,22 +80,22 @@ describe('the timestamp round-trip (#837 M7)', () => {
   });
 
   // #884: the store tests are largely insensitive to a uniform timestamp-format
-  // change — a mutation probe found a milliseconds-dropping writer only turns 4
-  // of ~3900 tests red, none of them here. That is because every write and bound
-  // comparison parameter goes through this same helper, so a uniform format
-  // change keeps rows mutually consistent and TEXT ordering still "works". The
-  // real invariant is the STORED_TIMESTAMP width/precision check inside
-  // `toStoredTimestamp` itself, so pin it directly rather than relying on a
-  // downstream store test to notice. `Date.prototype.toISOString` always emits
-  // milliseconds, so the only way to exercise the guard against a
-  // non-millisecond format is to make `toISOString()` return one — standing in
-  // for exactly the `.replace(/\.\d{3}Z$/, 'Z')`-style mutation described above.
+  // change — every write and bound comparison parameter flows through this same
+  // helper, so a uniform format drift keeps rows mutually consistent and TEXT
+  // ordering still "works". A mutation probe confirmed it: a milliseconds-
+  // dropping writer only turned 4 of ~3900 tests red, none of them a store test.
+  // The real invariant is the STORED_TIMESTAMP width/precision check inside
+  // `toStoredTimestamp`, and nothing in production ever exercises its reject
+  // branch on a non-millisecond string — every real `Date.prototype.toISOString()`
+  // call always emits one. That means a regex weakening (e.g. making the
+  // milliseconds group optional) would slip past every other test in this
+  // suite AND every store test, silently. Mock `toISOString()` to prove the
+  // guard itself still rejects a non-millisecond string, independent of
+  // whether any real `Date` can currently produce one.
   it('rejects a non-millisecond format even though the input Date is valid', () => {
     const spy = vi.spyOn(Date.prototype, 'toISOString').mockReturnValue('2026-08-18T09:30:00Z');
     try {
-      expect(() => toStoredTimestamp(new Date('2026-08-18T09:30:00.000Z'))).toThrow(
-        /fixed-width/,
-      );
+      expect(() => toStoredTimestamp(new Date('2026-08-18T09:30:00.000Z'))).toThrow(/fixed-width/);
     } finally {
       spy.mockRestore();
     }
