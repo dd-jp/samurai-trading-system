@@ -806,6 +806,94 @@ describe('ExecutionImpl.execute', () => {
       const row = await store.getFlattenSubmission('key-aapl-1355');
       expect(row?.status).toBe('error');
       expect(row?.reason).toContain('venue timeout on cancel');
+
+      // #867: the lot whose OWN cancel threw is NOT marked unprotected. Its
+      // legs may still be working at the venue (the adapter's `cancel()` is
+      // ordered so a throw usually means nothing was cancelled), and the
+      // #549 sweep would re-arm an OCO over a live bracket — double
+      // protection, which over-closes into a reverse position.
+      expect(await store.getUnprotectedResidualLots()).toEqual([]);
+    });
+
+    // #867, the multi-lot half of the same defect: lot 1's cancel RETURNED,
+    // so its stop and target are provably gone, and then the flatten was
+    // refused — leaving it open with no protection and (before this change)
+    // nothing but a `flatten_submissions` row to say so. `sweepResidualProtection`
+    // only ever retries lots carrying #549's marker, so without this write it
+    // would never look at lot 1 at all.
+    it('marks every already-cancelled lot unprotected when a later cancel fails, so the #549 sweep re-arms it (#867)', async () => {
+      const { store } = openTestExecutionStore();
+      const broker = makeBroker(undefined, undefined, ({ clientOrderId }) => {
+        if (clientOrderId === 'key-aapl-entry-2') throw new Error('venue timeout on cancel');
+      });
+      await seedHeldLot(store);
+      await seedHeldLot(store, { idempotency_key: 'key-aapl-entry-2' });
+
+      const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
+        makeExitGo({ size: 80 }),
+      );
+
+      expect(result.status).toBe('error');
+      expect(broker.flattenCalls).toHaveLength(0);
+      expect((await store.getFlattenSubmission('key-aapl-1355'))?.status).toBe('error');
+
+      // Lot 1 only: confirmed naked. Lot 2's cancel threw, so its state is
+      // unknown and it is deliberately left alone (see the test above).
+      const marked = await store.getUnprotectedResidualLots();
+      expect(marked.map((lot) => lot.position.idempotency_key)).toEqual(['key-aapl-entry-1']);
+    });
+
+    // The marker above is only worth writing if something CONSUMES it — this
+    // repo's dominant defect class is a tested mechanism nothing calls. The
+    // consumer is `sweepResidualProtection`, which the fill-sync loop runs on
+    // cadence (`startFillSync` -> `execution.sweepResidualProtection()`,
+    // production.ts). Driven here through the SAME `Execution` surface that
+    // loop holds, so the assertion is that the naked lot really does get its
+    // stop and target back rather than merely a database column set.
+    it('the #549 sweep then re-arms the lot this path marked, at its full held size (#867)', async () => {
+      const { store } = openTestExecutionStore();
+      const broker = makeBroker(undefined, undefined, ({ clientOrderId }) => {
+        if (clientOrderId === 'key-aapl-entry-2') throw new Error('venue timeout on cancel');
+      });
+      await seedHeldLot(store);
+      await seedHeldLot(store, { idempotency_key: 'key-aapl-entry-2' });
+      // `seedHeldLot` writes the position row only. The sweep recomputes the
+      // residual from the FILL record (`getFills`), not from `filled_size`,
+      // so lot 1 needs the entry fill a real lot would already have — without
+      // it the sweep reads "entry not filled yet, nothing to protect".
+      await store.applyLotAdvance({
+        idempotency_key: 'key-aapl-entry-1',
+        fills: [
+          {
+            idempotency_key: 'key-aapl-entry-1',
+            broker_fill_id: 'fill-entry-lot-1',
+            leg: 'entry',
+            price: 95,
+            qty: 40,
+            fee: 0.1,
+            timestamp: NOW,
+          },
+        ],
+      });
+      const execution = new ExecutionImpl(makeInput({ store, broker }));
+
+      await execution.execute(makeExitGo({ size: 80 }));
+      await execution.sweepResidualProtection();
+
+      // No exit fill ever landed, so the residual IS the whole lot — 40, the
+      // seeded `filled_size`, at the lot's own stop/target.
+      expect(broker.rearmCalls).toEqual([
+        {
+          clientOrderId: 'key-aapl-entry-1',
+          instrument: 'AAPL',
+          side: 'buy',
+          qty: 40,
+          stop: 90,
+          target: 110,
+        },
+      ]);
+      // Re-armed, so the marker is cleared and the sweep stops retrying it.
+      expect(await store.getUnprotectedResidualLots()).toEqual([]);
     });
 
     // Review comment 2, exercised for real rather than via a stubbed gate:
