@@ -34,7 +34,7 @@
  * mass (0.295 for September, on $533k of 24h volume) and are where the news
  * actually lands.
  *
- * ## Only three of these six clear the book-quality floors TODAY
+ * ## Only about half of these six ingest on any given probe
  *
  * Measured live 2026-08-17 against `MIN_VOLUME_24H_USD = 100` and
  * `MIN_LIQUIDITY_USD = 5_000` (`polymarket-agent.ts`):
@@ -55,11 +55,11 @@
  * Re-probed 2026-08-18 (#833), and the volume column MOVES: `fed-2026-12` was
  * at $2,773 and `us-recession-2026` at $763 — both above `MIN_VOLUME_24H_USD`
  * — while `us-recession-2027` had fallen to $3.23 and `fed-2027-01` still
- * reported none. Do not read the verdict column as a standing fact; read it as
- * one probe. The probabilities barely moved on the same day (0.715, 0.765,
- * 0.755, 0.800, 0.925, 0.725), which is the point of the next section: volume
- * is what changes hour to hour, and volume is what lets a pinned row start
- * emitting.
+ * reported none. So the count stayed at three ingesting rows, but not the same
+ * three. Do not read the verdict column as a standing fact; read it as one
+ * probe. The probabilities barely moved over that day (0.715, 0.765, 0.755,
+ * 0.800, 0.925, 0.725), which is the point of the next section: volume is what
+ * changes hour to hour, and volume is what lets a pinned row start emitting.
  *
  * ## The two CPI rows were REMOVED, and pinning is now a guard (#833)
  *
@@ -92,18 +92,26 @@
  * not the deletion is the fix. On the 2026-08-18 re-probe it carried $763 of
  * 24h volume, above `MIN_VOLUME_24H_USD`: it CLEARS book quality now, so
  * without the guard it would already be emitting the permanent zero vote #833
- * predicted. Unlike a 0.9945 tail, a recession probability with months left to
- * run can plausibly come back under 0.90, and if it does the row resumes on
- * its own. While it does not, the guard refuses it and
- * `polymarket-agent.ts#refuse` escalates to `warn` after a day of it — which
- * is the review prompt a silent hand-deletion would not give.
+ * predicted.
  *
- * The three that both clear book quality and have room to move are
- * `fed-2026-09` (0.705), `fed-2026-10` (0.765) and `us-recession-2027` (0.725)
- * — and note the first two are the SAME macro view one meeting apart, so under
- * `directionFrom`'s unweighted mean two of the three live rows cast one vote
- * twice. That is the cross-row half of the vote-inflation limitation recorded
- * in `polymarket-agent.ts`.
+ * The discriminator between deleting and keeping is PLAUSIBLE RETURN TO RANGE,
+ * and nothing else — both a deleted row and a kept-but-pinned one are silent,
+ * and both the CPI legs and this row would log the same escalating `warn`, so
+ * log noise cannot be the argument in either direction. A CPI print bucket at
+ * 0.9945 days from resolution is settled and will only harden; a recession
+ * probability with months left to run can come back under 0.90, and if it does
+ * this row resumes on its own with no edit. That is the whole reason one is
+ * deleted and the other kept.
+ *
+ * WHICH rows both clear book quality and have room to move is a per-probe
+ * fact, not a property of the table. On 2026-08-17 it was `fed-2026-09`
+ * (0.705), `fed-2026-10` (0.765) and `us-recession-2027` (0.725); on 2026-08-18
+ * `us-recession-2027` had dropped to $3.23 of volume and `fed-2026-12` had
+ * risen past the floor. Both probes agree on the count — THREE — and on the
+ * shape of the problem: the Fed rows dominate it, and several of them are the
+ * SAME macro view one meeting apart, so under `directionFrom`'s unweighted
+ * mean one view can cast two or three of the live votes. That is the cross-row
+ * half of the vote-inflation limitation recorded in `polymarket-agent.ts`.
  *
  * A row that never recovers must not decay in silence, which is what the
  * consecutive-refusal escalation in `polymarket-agent.ts#refuse` is for.
