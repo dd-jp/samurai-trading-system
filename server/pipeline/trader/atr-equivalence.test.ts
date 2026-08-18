@@ -27,6 +27,18 @@
  * So this file is not a one-off check: it pins the equivalence Trader's stop
  * placement was calibrated on, and fails loudly if a future change to
  * `computeIndicator`'s `atr` case would move it.
+ *
+ * **Note (#757): `decide.ts` no longer fetches `atr_lookback + 1` bars in
+ * production.** It now fetches the CONVERGED width
+ * (`recommendedWarmupFor(atrIndicatorSpec(...))`, `4 x atr_lookback + 1`) —
+ * see `docs/reviews/indicator-characterisation-2026-08-16.md` F1 and
+ * `atr-warmup.test.ts` for the measurement that gate cleared. Point 1 above
+ * is therefore no longer a claim about the live production width; it still
+ * pins the ALGORITHMIC boundary (plain mean at or below `period` true
+ * ranges, Wilder-smoothed beyond it) at the width the legacy function was
+ * calibrated against, which remains the correct reference for what
+ * `computeIndicator`'s `atr` case computes. `decide.test.ts`'s "ATR bar
+ * window" describes now pin the live fetch width.
  */
 import {
   type Bar,
@@ -153,10 +165,12 @@ describe('ATR migration (#304) — Trader’s deleted computeAtr vs MDS computeI
     expect(mdsAtr(bars, LOOKBACK)).toBe(Number(legacy.toFixed(8)));
   });
 
-  it('DIVERGES beyond that width — why decide.ts fetches lookback + 1, not more', () => {
-    // 5 bars past the call-site width => 5 true ranges past the seed, so
+  it('DIVERGES beyond that width — the boundary that used to make lookback + 1 load-bearing', () => {
+    // 5 bars past the LEGACY seed width => 5 true ranges past the seed, so
     // Wilder's smoothing engages and the two answers part company. This is
-    // the regression a widened fetch would introduce, made visible.
+    // the mechanism `decide.ts` deliberately engages now (#757) by fetching
+    // the converged width instead — the "regression" this used to describe
+    // is the adoption's whole point.
     const bars = pseudoRandomBars(LOOKBACK + 6, 7);
     const legacy = LEGACY_TRADER_ATR(bars, LOOKBACK) as number;
 

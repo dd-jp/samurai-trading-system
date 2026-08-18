@@ -191,16 +191,30 @@ describe('recommendedWarmupFor — the width question, not the arity one', () =>
     expect(minimumBarsFor(RSI_SPEC)).toBe(15);
   });
 
-  it('is NOT adopted by the other live specs, which stay on the floor', () => {
-    // #722's scope is F2 — the RSI the debate reads — and nothing else. ATR's
-    // equivalent gap is owned by `trader/atr-equivalence.test.ts`, and moving
-    // it here would reprice every stop in the system as a side effect.
-    // `SMA_SPEC` is warm-up BLIND (`rsi-warmup.test.ts` pins 14 bars against
-    // 400), so the floor is not a compromise for it at all.
-    for (const spec of [SMA_SPEC, atrIndicatorSpec(PERIOD, '1h')]) {
-      expect(spec.lookback).toBe(minimumBarsFor(spec));
-    }
-    expect(recommendedWarmupFor(atrIndicatorSpec(PERIOD, '1h'))).toBe(57);
-    expect(atrIndicatorSpec(PERIOD, '1h').lookback).toBe(15);
+  it('is NOT adopted by SMA, which is warm-up BLIND regardless', () => {
+    // `SMA_SPEC` reads `slice(-period)` directly — there is no seed/smoothing
+    // split to converge, so the floor is not a compromise for it at all
+    // (`rsi-warmup.test.ts` pins 14 bars against 400).
+    expect(SMA_SPEC.lookback).toBe(minimumBarsFor(SMA_SPEC));
+  });
+
+  it('IS adopted by atrIndicatorSpec — the stop/breaker ATR, converged (#757)', () => {
+    // #722's scope was F2 alone — the RSI the debate reads — and left ATR on
+    // the floor deliberately: adopting it reprices every stop rather than
+    // every opinion, and needed its own declared-before-measured gate. #757
+    // measured (median relative shift 3.0%, p90 6.9% against a declared
+    // median<=15%/p90<=30% gate,
+    // `docs/reviews/indicator-characterisation-2026-08-16.md` F1) and cleared
+    // it, so this assertion — deliberately built to fail the moment that
+    // happened, the same way #722's replaced this file's RSI pin — now
+    // documents the adoption instead of the floor.
+    const spec = atrIndicatorSpec(PERIOD, '1h');
+    expect(spec.lookback).toBe(recommendedWarmupFor(spec));
+    expect(spec.lookback).toBe(57);
+    expect(spec.lookback).toBeGreaterThan(minimumBarsFor(spec));
+    // The floor itself is untouched: 15 bars still produce a value, so a cold
+    // instrument degrades to a less-warm ATR (and a less-warm stop/breaker
+    // reading) rather than to no reading at all.
+    expect(minimumBarsFor(spec)).toBe(15);
   });
 });

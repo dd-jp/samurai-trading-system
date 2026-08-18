@@ -17,6 +17,7 @@ import {
   computeIndicator,
   type IndicatorSpec,
   minimumBarsFor,
+  recommendedWarmupFor,
 } from '../../providers/market-data-service/index.js';
 import {
   type ExitReason,
@@ -55,12 +56,25 @@ function sideFor(direction: 'bullish' | 'bearish'): 'buy' | 'sell' {
  *
  * `params.period` is pinned explicitly rather than left to
  * `computeIndicator`'s `params.period ?? spec.lookback` fallback — with
- * `spec.lookback` being the BAR-WINDOW width (`atr_lookback + 1`, matching
+ * `spec.lookback` being the BAR-WINDOW width (see below, matching
  * `DEFAULT_VOLATILITY_INDICATOR`), that fallback would silently make this an
- * ATR(15), the exact off-by-one commit 0281a8c already had to fix once.
+ * ATR(`lookback`+1-ish), the exact off-by-one commit 0281a8c already had to
+ * fix once.
+ *
+ * `lookback` sits on the CONVERGED warm-up (`recommendedWarmupFor` =
+ * `4 x lookback + 1`), not the `lookback + 1` arity floor (#757,
+ * `docs/reviews/indicator-characterisation-2026-08-16.md` F1 — the same
+ * warm-up gap #722 fixed for `RSI_SPEC`). This field is metadata only for
+ * `computeIndicator` (which reads `bars.length` and `params.period`, not
+ * `spec.lookback`) — the value that actually matters is the bar window
+ * `atrFor`'s caller fetches, which is derived from this same function via
+ * `recommendedWarmupFor(atrIndicatorSpec(...))` at the call site in
+ * `buildBracket`. Keeping both derived from one function is what stops the
+ * spec's declared width and the actual fetch width from drifting apart the
+ * way #722 had to fix for `WARM_START_WINDOWS`.
  */
 export function atrIndicatorSpec(lookback: number, timeframe: string): IndicatorSpec {
-  return {
+  const floor: IndicatorSpec = {
     indicator: 'atr',
     params: { period: lookback },
     // Passed in rather than defaulted (#315). This spec describes the bars the
@@ -70,6 +84,7 @@ export function atrIndicatorSpec(lookback: number, timeframe: string): Indicator
     timeframe,
     lookback: lookback + 1,
   };
+  return { ...floor, lookback: recommendedWarmupFor(floor) };
 }
 
 /**
@@ -396,21 +411,33 @@ async function buildBracket(
     marketData.getMark(instrument, asOf),
     marketData.getBars(
       instrument,
-      // lookback + 1 bars yield `lookback` true ranges: each needs its
-      // predecessor's close. The `+ 1` is also what keeps the ATR a plain
-      // mean of those ranges: `computeIndicator`'s `atr` seeds on the first
-      // `period` ranges and Wilder-smooths the rest, so a window wider than
-      // this engages that smoothing and moves every stop in the system.
+      // CONVERGED width (#757): `recommendedWarmupFor` = `4 x atr_lookback + 1`.
+      // Until #757 this fetched exactly `atr_lookback + 1` bars — one true
+      // range past the seed, so `computeIndicator`'s Wilder smoothing loop ran
+      // ZERO times and the value was a plain mean wearing Wilder's name (the
+      // same warm-up gap #722 fixed for `RSI_SPEC`). Measured before adopting:
+      // median relative shift 3.0%, p90 6.9%, near-zero signed bias, against a
+      // declared median<=15%/p90<=30% gate — see
+      // `docs/reviews/indicator-characterisation-2026-08-16.md` F1.
       //
       // Two tests pin the two halves, and neither pins the other's:
-      // `atr-equivalence.test.ts` pins the ALGORITHMIC boundary (plain mean
-      // at or below `period` ranges, smoothing beyond it); `decide.test.ts`
-      // ("fetches exactly atr_lookback + 1 bars ...") pins THIS window, so
-      // widening the fetch — or dropping `atr_timeframe` — fails a test
-      // rather than silently repricing every stop.
+      // `atr-equivalence.test.ts` pins the ALGORITHMIC boundary (plain mean at
+      // or below `period` ranges, smoothing beyond it) at the historical
+      // `atr_lookback + 1` width, which is no longer the production fetch
+      // width; `decide.test.ts` ("fetches exactly the converged ATR width")
+      // pins THIS window, so narrowing the fetch back to the floor — or
+      // dropping `atr_timeframe` — fails a test rather than silently
+      // reintroducing the seed.
+      //
+      // Derived from `atrIndicatorSpec` rather than restated, so the fetch and
+      // the spec that documents it cannot drift apart the way #722's
+      // `WARM_START_WINDOWS` had to be fixed separately from `RSI_SPEC`.
       //
       // A separate fetch-width margin is applied underneath in fetchBars; see #362.
-      { timeframe: config.atr_timeframe, lookback: config.atr_lookback + 1 },
+      {
+        timeframe: config.atr_timeframe,
+        lookback: recommendedWarmupFor(atrIndicatorSpec(config.atr_lookback, config.atr_timeframe)),
+      },
       asOf,
     ),
   ]);

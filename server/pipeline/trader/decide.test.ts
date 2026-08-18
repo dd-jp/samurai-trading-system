@@ -17,6 +17,7 @@ import {
   type Mark,
   type MarketDataService,
   type MarkRead,
+  recommendedWarmupFor,
   type TradingCalendar,
   UsEquityRegularHoursCalendar,
 } from '../../providers/market-data-service/index.js';
@@ -25,7 +26,13 @@ import type { Clock, OpenPosition } from '../../shared/index.js';
 // THOSE rather than hand-rebuilt copies that would keep passing on drift.
 import { MACD_SPEC, RSI_SPEC } from '../analysts/technical-analyst.js';
 import type { DebateResult } from '../debate-engine/index.js';
-import { checkExitsWithReason, decide, decideWithReason, type ExitCheckInput } from './decide.js';
+import {
+  atrIndicatorSpec,
+  checkExitsWithReason,
+  decide,
+  decideWithReason,
+  type ExitCheckInput,
+} from './decide.js';
 import { FixtureSetupStore } from './fixture-setup-store.js';
 // Imported so the #687 cases can state WHICH bar the key must be on, rather
 // than only comparing two `decide()` calls against each other — two calls that
@@ -450,30 +457,37 @@ describe('decide — volatility', () => {
  * ATR is computed by the Market Data Service now (#304), so the only ATR
  * input Trader still controls is the BAR WINDOW it asks for. These pin that
  * window. Both assertions use a NON-default config on purpose: at
- * `DEFAULT_TRADER_CONFIG` the expected values (`1h`, 15) coincide with
- * `atr_lookback = 14` and with the `DEFAULT_INDICATOR_TIMEFRAME` that
- * `getIndicator` hardcodes, so a default-config assertion would pin two
+ * `DEFAULT_TRADER_CONFIG` the expected values (`1h`, `recommendedWarmupFor`
+ * of `atr_lookback = 14`) coincide with the `DEFAULT_INDICATOR_TIMEFRAME`
+ * that `getIndicator` hardcodes, so a default-config assertion would pin two
  * coincidences instead of two relationships.
  */
-describe('decide — ATR bar window (#304)', () => {
-  it('fetches exactly atr_lookback + 1 bars, so ATR stays a plain mean', async () => {
-    // The `+ 1` is load-bearing. `computeIndicator`'s `atr` seeds on the
-    // first `period` true ranges and Wilder-smooths the rest; N + 1 bars
-    // yield only N ranges, so in production the smoothing loop never runs
-    // and the result is the plain mean Trader's stops were calibrated on.
-    // Widen this fetch and every stop in the system moves — see
-    // atr-equivalence.test.ts, which pins the algorithmic half.
+describe('decide — ATR bar window (#304, #757)', () => {
+  it('fetches the CONVERGED ATR width, not the atr_lookback + 1 arity floor (#757)', async () => {
+    // Until #757 this fetched exactly `atr_lookback + 1` bars — one true
+    // range past the seed, so `computeIndicator`'s `atr` smoothing loop ran
+    // ZERO times in production and the value was a plain mean wearing
+    // Wilder's name (the same warm-up gap #722 fixed for `RSI_SPEC`).
+    // Measured before adopting (median relative shift 3.0%, p90 6.9% against
+    // a declared median<=15%/p90<=30% gate,
+    // `docs/reviews/indicator-characterisation-2026-08-16.md` F1) and cleared
+    // it, so the fetch now asks for `recommendedWarmupFor` instead — see
+    // `atr-equivalence.test.ts` for the algorithmic half (still pinned at the
+    // historical `atr_lookback + 1` width, which is no longer what production
+    // requests).
     //
     // The assertion here is on the REQUEST, not the resulting ATR: the
     // fixture serves its 15 bars whatever it is asked for, so the value
     // computed on this path is not the one production would see. The
-    // request width is the only half a fixture can pin, and it is the half
-    // nothing pinned before.
+    // request width is the only half a fixture can pin.
     const marketData = new FixtureMarketData(bars(15, 2));
 
     await decide(traderInput({ marketData, config: configWith({ atr_lookback: 7 }) }));
 
-    expect(marketData.requestedWindow?.lookback).toBe(8);
+    expect(marketData.requestedWindow?.lookback).toBe(
+      recommendedWarmupFor(atrIndicatorSpec(7, DEFAULT_TRADER_CONFIG.atr_timeframe)),
+    );
+    expect(marketData.requestedWindow?.lookback).toBe(29);
   });
 
   it('fails loudly if getBars serves a descending window, rather than mispricing the stop', async () => {
