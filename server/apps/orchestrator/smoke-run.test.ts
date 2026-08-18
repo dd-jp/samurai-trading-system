@@ -177,6 +177,7 @@ function transactedObservations(): SmokeObservations {
     ],
     gdeltRowsArchived: 1,
     polymarketRowsArchived: 1,
+    polymarketItemsArchived: 1,
     polymarketNewsItems: 1,
     // #430 — one per wired mechanism. A healthy run has all of them.
     cosineSetups: [{ debate_id: 'debate-1', instrument: 'BTC-USD' }],
@@ -402,6 +403,18 @@ describe('evaluateSmokeGate', () => {
 
     expect(gate.passed).toBe(false);
     expect(gate.failures.join(' ')).toContain('Polymarket archived 0 macro rows');
+  });
+
+  it('fails when Polymarket archived raw bytes but no items (#835)', () => {
+    // The regression #835 fixed: `write(raws, [])` leaves the raw count healthy
+    // and the source unreplayable as items.
+    const observations = transactedObservations();
+    observations.polymarketItemsArchived = 0;
+
+    const gate = evaluateSmokeGate(observations, healthyGateOptions());
+
+    expect(gate.passed).toBe(false);
+    expect(gate.failures.join(' ')).toContain('archived 0 items in mi_items');
   });
 
   it('fails when Polymarket fetched but nothing reached the news bucket (#504)', () => {
@@ -865,6 +878,7 @@ describe('formatSmokeReport', () => {
       flattenSubmissions: [],
       gdeltRowsArchived: 1,
       polymarketRowsArchived: 1,
+      polymarketItemsArchived: 1,
       polymarketNewsItems: 1,
 
       cosineSetups: [],
@@ -1176,6 +1190,7 @@ describe('runSmoke (end-to-end, real composition root)', () => {
       flattenSubmissions: [],
       gdeltRowsArchived: 1,
       polymarketRowsArchived: 1,
+      polymarketItemsArchived: 1,
       polymarketNewsItems: 1,
 
       cosineSetups: [],

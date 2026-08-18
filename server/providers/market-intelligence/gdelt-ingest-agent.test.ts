@@ -107,8 +107,8 @@ describe('GdeltIngestAgent', () => {
     // `confidence = f(|toneDelta|)` would then read as HIGH confidence, on day
     // one of the soak. The archive has to lead the signal by a full window, so
     // this half writes bytes and emits nothing.
-    expect(archive.itemsKnownAt('stocks', NOW)).toEqual([]);
-    expect(archive.itemsKnownAt('crypto', NOW)).toEqual([]);
+    expect(archive.itemsKnownAt('stocks', NOW, [SOURCE_GDELT])).toEqual([]);
+    expect(archive.itemsKnownAt('crypto', NOW, [SOURCE_GDELT])).toEqual([]);
     archive.close();
   });
 

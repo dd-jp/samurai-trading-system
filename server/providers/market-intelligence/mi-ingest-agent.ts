@@ -31,12 +31,13 @@
 import type { LlmClient } from '../../pipeline/debate-engine/index.js';
 import type { AssetClass, Clock, Logger } from '../../shared/index.js';
 import type { ArchivedItem, MiArchiveStore, RawArchiveRow } from './archive/mi-archive-store.js';
+import { HYDRATING_MI_SOURCES, MI_SOURCES } from './archive/mi-sources.js';
 import type { MarketIntelligenceStore } from './index.js';
 import { scoreItems } from './scoring/item-scorer.js';
 import type { AlpacaNewsArticle, AlpacaNewsClient } from './sources/alpaca-news-client.js';
 import type { IntelligenceItem } from './types.js';
 
-const SOURCE_ALPACA = 'alpaca-news';
+const SOURCE_ALPACA = MI_SOURCES.alpacaNews;
 
 /**
  * How far back a refresh looks.
@@ -95,7 +96,12 @@ export class MiIngestAgent {
   hydrate(): void {
     const asOf = this.deps.clock.now();
     for (const asset_class of this.deps.assetClasses) {
-      const items = this.deps.archive.itemsKnownAt(asset_class, asOf);
+      // Only the sources whose archived items are dated OBSERVATIONS (#835).
+      // Polymarket's item is a trailing 24h delta and GDELT's, when its scoring
+      // half lands, is a 1h-vs-24h window statistic; replaying either at boot
+      // would re-serve a stale measurement as current. `mi-sources.ts` states
+      // which is which, and typing forces a new source to answer the question.
+      const items = this.deps.archive.itemsKnownAt(asset_class, asOf, HYDRATING_MI_SOURCES);
       if (items.length > 0) {
         this.deps.store.ingest({ agent_id: SOURCE_ALPACA, timestamp: asOf, asset_class, items });
       }

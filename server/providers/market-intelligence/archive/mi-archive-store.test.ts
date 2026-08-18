@@ -1,6 +1,10 @@
 import type { AssetClass } from '../../../shared/index.js';
 import type { IntelligenceItem } from '../types.js';
 import { type ArchivedItem, MiArchiveStore, type RawArchiveRow } from './mi-archive-store.js';
+import { MI_SOURCES } from './mi-sources.js';
+
+/** Every read in this file that is not specifically about source filtering. */
+const ALL_SOURCES = Object.values(MI_SOURCES);
 
 const T0 = new Date('2026-08-15T10:00:00Z');
 
@@ -20,7 +24,7 @@ function item(overrides: Partial<IntelligenceItem> = {}): IntelligenceItem {
 
 function raw(overrides: Partial<RawArchiveRow> = {}): RawArchiveRow {
   return {
-    source: 'alpaca',
+    source: MI_SOURCES.alpacaNews,
     native_id: '1',
     updated_at: T0,
     payload: '{"id":1}',
@@ -32,7 +36,7 @@ function raw(overrides: Partial<RawArchiveRow> = {}): RawArchiveRow {
 
 function archived(overrides: Partial<ArchivedItem> = {}): ArchivedItem {
   return {
-    source: 'alpaca',
+    source: MI_SOURCES.alpacaNews,
     native_id: '1',
     updated_at: T0,
     entity: 'AAPL',
@@ -49,7 +53,7 @@ describe('MiArchiveStore', () => {
 
     store.write([raw()], [archived()]);
 
-    const read = store.itemsKnownAt('stocks', T0);
+    const read = store.itemsKnownAt('stocks', T0, ALL_SOURCES);
     expect(read).toHaveLength(1);
     expect(read[0]?.headline).toBe('Apple beats on revenue');
     expect(read[0]?.sentiment).toBe(1);
@@ -63,7 +67,7 @@ describe('MiArchiveStore', () => {
 
     store.write([raw()], [archived()]);
 
-    expect(store.itemsKnownAt('crypto', T0)).toEqual([]);
+    expect(store.itemsKnownAt('crypto', T0, ALL_SOURCES)).toEqual([]);
   });
 
   /**
@@ -81,8 +85,8 @@ describe('MiArchiveStore', () => {
         [archived({ ingested_at: later, item: item({ timestamp: later }) })],
       );
 
-      expect(store.itemsKnownAt('stocks', T0)).toEqual([]);
-      expect(store.itemsKnownAt('stocks', later)).toHaveLength(1);
+      expect(store.itemsKnownAt('stocks', T0, ALL_SOURCES)).toEqual([]);
+      expect(store.itemsKnownAt('stocks', later, ALL_SOURCES)).toHaveLength(1);
     });
 
     /**
@@ -110,8 +114,8 @@ describe('MiArchiveStore', () => {
 
       // At T0 the vendor's stamp is already in the past, but we had not
       // received the row. It must not be visible.
-      expect(store.itemsKnownAt('stocks', T0)).toEqual([]);
-      expect(store.itemsKnownAt('stocks', weActuallyReceivedIt)).toHaveLength(1);
+      expect(store.itemsKnownAt('stocks', T0, ALL_SOURCES)).toEqual([]);
+      expect(store.itemsKnownAt('stocks', weActuallyReceivedIt, ALL_SOURCES)).toHaveLength(1);
     });
   });
 
@@ -135,10 +139,12 @@ describe('MiArchiveStore', () => {
       // Both revisions are held, so a replay at T0 sees the original and a
       // replay after the correction sees both — rather than the correction
       // retroactively rewriting what was knowable earlier.
-      expect(store.itemsKnownAt('stocks', T0)).toHaveLength(1);
-      expect(store.itemsKnownAt('stocks', T0)[0]?.headline).toBe('Apple beats on revenue');
-      expect(store.itemsKnownAt('stocks', revisedAt)).toHaveLength(2);
-      expect(store.rawRows('alpaca')).toHaveLength(2);
+      expect(store.itemsKnownAt('stocks', T0, ALL_SOURCES)).toHaveLength(1);
+      expect(store.itemsKnownAt('stocks', T0, ALL_SOURCES)[0]?.headline).toBe(
+        'Apple beats on revenue',
+      );
+      expect(store.itemsKnownAt('stocks', revisedAt, ALL_SOURCES)).toHaveLength(2);
+      expect(store.rawRows(MI_SOURCES.alpacaNews)).toHaveLength(2);
     });
   });
 
@@ -148,8 +154,8 @@ describe('MiArchiveStore', () => {
     store.write([raw()], [archived()]);
     store.write([raw()], [archived()]);
 
-    expect(store.itemsKnownAt('stocks', T0)).toHaveLength(1);
-    expect(store.rawRows('alpaca')).toHaveLength(1);
+    expect(store.itemsKnownAt('stocks', T0, ALL_SOURCES)).toHaveLength(1);
+    expect(store.rawRows(MI_SOURCES.alpacaNews)).toHaveLength(1);
   });
 
   /**
@@ -169,19 +175,19 @@ describe('MiArchiveStore', () => {
       ],
     );
 
-    expect(store.itemsKnownAt('stocks', T0)).toHaveLength(2);
+    expect(store.itemsKnownAt('stocks', T0, ALL_SOURCES)).toHaveLength(2);
   });
 
   it('reports the newest updated_at as an incremental cursor', () => {
     const store = new MiArchiveStore();
     const later = new Date('2026-08-15T11:00:00Z');
 
-    expect(store.latestUpdatedAt('alpaca')).toBeUndefined();
+    expect(store.latestUpdatedAt(MI_SOURCES.alpacaNews)).toBeUndefined();
 
     store.write([raw()], [archived()]);
     store.write([raw({ updated_at: later })], [archived({ updated_at: later })]);
 
-    expect(store.latestUpdatedAt('alpaca')?.toISOString()).toBe(later.toISOString());
+    expect(store.latestUpdatedAt(MI_SOURCES.alpacaNews)?.toISOString()).toBe(later.toISOString());
   });
 
   it('records fidelity so a backtest cannot silently blend two lookahead guarantees', () => {
@@ -189,6 +195,6 @@ describe('MiArchiveStore', () => {
 
     store.write([raw({ fidelity: 'backfill' })], [archived()]);
 
-    expect(store.rawRows('alpaca')[0]?.fidelity).toBe('backfill');
+    expect(store.rawRows(MI_SOURCES.alpacaNews)[0]?.fidelity).toBe('backfill');
   });
 });

@@ -41,6 +41,7 @@ import BetterSqlite3 from 'better-sqlite3';
 import type { AssetClass } from '../../../shared/index.js';
 import { runMigrations } from '../../../shared/store/index.js';
 import type { IntelligenceItem } from '../types.js';
+import type { MiSourceId } from './mi-sources.js';
 
 /** `<dir>/migrations`, resolved next to this module — source and build output alike. */
 const MI_MIGRATIONS_DIR = fileURLToPath(new URL('./migrations', import.meta.url));
@@ -58,7 +59,13 @@ export type ArchiveFidelity = 'live' | 'backfill';
 
 /** One immutable vendor record, exactly as fetched. */
 export interface RawArchiveRow {
-  source: string;
+  /**
+   * `MiSourceId`, not `string` (#835): a writer cannot reach the archive
+   * without registering in `MI_SOURCES`, and registering forces a boot policy
+   * into `MI_SOURCE_HYDRATION`. That is what stops a future source silently
+   * inheriting whatever `hydrate()` happens to do.
+   */
+  source: MiSourceId;
   native_id: string;
   updated_at: Date;
   payload: string;
@@ -68,7 +75,7 @@ export interface RawArchiveRow {
 
 /** One normalized, scored item derived from a raw row. */
 export interface ArchivedItem {
-  source: string;
+  source: MiSourceId;
   native_id: string;
   updated_at: Date;
   entity: string;
@@ -187,15 +194,31 @@ export class MiArchiveStore {
    * the bars idiom `close_time <= asOf`. Live passes `clock.now()` and sees
    * everything; a backtest passes simulated `t` and sees exactly what had been
    * fetched by then.
+   *
+   * `sources` narrows the read to the sources the CALLER may replay, because
+   * not every archived item means the same thing when it is read back. Startup
+   * hydration passes `HYDRATING_MI_SOURCES`; see `mi-sources.ts` (#835).
    */
-  itemsKnownAt(asset_class: AssetClass, asOf: Date): IntelligenceItem[] {
+  itemsKnownAt(
+    asset_class: AssetClass,
+    asOf: Date,
+    sources: readonly MiSourceId[],
+  ): IntelligenceItem[] {
+    // Required, not optional-with-a-default (#835). A default would be a
+    // silent policy, and the whole point of `MI_SOURCE_HYDRATION` is that the
+    // policy is stated where it is decided. Callers pass
+    // `HYDRATING_MI_SOURCES` for the boot read; an offline re-derivation names
+    // the one source it is re-deriving.
+    if (sources.length === 0) return [];
+    const placeholders = sources.map(() => '?').join(', ');
     const rows = this.db
       .prepare(
         `SELECT asset_class, item_json FROM mi_items
           WHERE asset_class = ? AND ingested_at <= ?
+            AND source IN (${placeholders})
           ORDER BY timestamp ASC`,
       )
-      .all(asset_class, asOf.toISOString()) as ItemRow[];
+      .all(asset_class, asOf.toISOString(), ...sources) as ItemRow[];
 
     return rows.map((row) => {
       const item = JSON.parse(row.item_json) as IntelligenceItem;
@@ -215,7 +238,7 @@ export class MiArchiveStore {
    * different score for one row, which is exactly the non-determinism #558
    * banned from replay.
    */
-  hasItem(source: string, native_id: string, updated_at: Date): boolean {
+  hasItem(source: MiSourceId, native_id: string, updated_at: Date): boolean {
     const row = this.db
       .prepare(
         `SELECT 1 AS present FROM mi_archive_raw
@@ -231,7 +254,7 @@ export class MiArchiveStore {
    * been fetched. Fetchers use it as an incremental cursor so a restart does
    * not re-request from 2015.
    */
-  latestUpdatedAt(source: string): Date | undefined {
+  latestUpdatedAt(source: MiSourceId): Date | undefined {
     const row = this.db
       .prepare('SELECT MAX(updated_at) AS newest FROM mi_archive_raw WHERE source = ?')
       .get(source) as { newest: string | null } | undefined;
@@ -240,11 +263,11 @@ export class MiArchiveStore {
   }
 
   /** Raw rows for re-derivation — the point of keeping the bytes (#554). */
-  rawRows(source: string): RawArchiveRow[] {
+  rawRows(source: MiSourceId): RawArchiveRow[] {
     const rows = this.db
       .prepare('SELECT * FROM mi_archive_raw WHERE source = ? ORDER BY ingested_at ASC')
       .all(source) as {
-      source: string;
+      source: MiSourceId;
       native_id: string;
       updated_at: string;
       payload: string;

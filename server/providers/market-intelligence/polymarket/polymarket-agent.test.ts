@@ -214,15 +214,45 @@ describe('PolymarketAgent.refresh', () => {
     expect(fetchEventMarket).toHaveBeenCalledTimes(1);
   });
 
-  it('archives the raw market bytes and NO archived items', async () => {
+  it('archives the raw market bytes AND the derived items (#835)', async () => {
     const archive = new MiArchiveStore();
     const { agent } = agentWith({ archive });
 
     await agent.refresh('t1');
 
     expect(archive.rawRows(SOURCE_POLYMARKET)).toHaveLength(1);
-    // Items are deliberately not archived — see the agent header.
-    expect(archive.itemsKnownAt(POLYMARKET_ASSET_CLASS, NOW)).toHaveLength(0);
+    // Reads `mi_items`, not the raw table: writing `[]` for the items is the
+    // exact defect #835 fixed, and only an items read can see it.
+    const archived = archive.itemsKnownAt(POLYMARKET_ASSET_CLASS, NOW, [SOURCE_POLYMARKET]);
+    expect(archived).toHaveLength(1);
+    expect(archived[0]?.source).toBe(SOURCE_POLYMARKET);
+    archive.close();
+  });
+
+  /**
+   * `mi_items` foreign-keys `(source, native_id, updated_at)` into
+   * `mi_archive_raw`, and the store leaves `PRAGMA foreign_keys` at SQLite's
+   * default of OFF — so a drifted key would not throw, it would silently orphan
+   * the item and break the provenance `retrievalEvidence` means (#555).
+   */
+  it('keys the archived item to its own raw row, so provenance links', async () => {
+    const archive = new MiArchiveStore();
+    const { agent } = agentWith({ archive });
+
+    await agent.refresh('t1');
+
+    const raw = archive.rawRows(SOURCE_POLYMARKET)[0];
+    const archived = archive.itemsKnownAt(POLYMARKET_ASSET_CLASS, NOW, [SOURCE_POLYMARKET])[0];
+    expect(raw).toBeDefined();
+    // The item's id and the raw row's key are built from the same (row, bucket)
+    // coordinate, so this is the served item pointing at the bytes it came
+    // from. It matters because `mi_items` foreign-keys
+    // `(source, native_id, updated_at)` into `mi_archive_raw` and the store
+    // leaves `PRAGMA foreign_keys` at SQLite's default of OFF — a drifted key
+    // would not throw, it would silently orphan the item and break the
+    // provenance `retrievalEvidence` means (#555).
+    expect(archived?.id).toBe(`${SOURCE_POLYMARKET}:${raw?.native_id ?? ''}`);
+    archive.close();
   });
 });
 

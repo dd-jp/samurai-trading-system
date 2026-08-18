@@ -79,6 +79,11 @@
  * analysts' 24h window. Decision 4 stops one event casting five votes along
  * the OUTCOME axis; the time axis is the same inflation and is not addressed.
  *
+ * Archiving the items (#835) does not change this, and does not make replay
+ * of this source clean: a replay reading `mi_items` back replays the same
+ * hourly repetition, because the inflation is in what was ingested, not in
+ * what was stored. What #835 fixed is that the rows exist to be read at all.
+ *
  * It is uniform WITHIN this source, so it does not skew one curated row
  * against another. It is **not** uniform across the `news` bucket, and saying
  * so would be false: `directionFrom` averages over every item in the bucket,
@@ -104,7 +109,8 @@
 
 import type { AssetClass, Clock, LogEntry, Logger } from '../../../shared/index.js';
 import { logCaughtFailure, safeLog } from '../../../shared/safe-log.js';
-import type { MiArchiveStore, RawArchiveRow } from '../archive/mi-archive-store.js';
+import type { ArchivedItem, MiArchiveStore, RawArchiveRow } from '../archive/mi-archive-store.js';
+import { MI_SOURCES } from '../archive/mi-sources.js';
 import type { MarketIntelligenceStore } from '../index.js';
 import type { IntelligenceItem } from '../types.js';
 import type { CuratedMacroMarket } from './curated-markets.js';
@@ -112,7 +118,7 @@ import { CURATED_MACRO_MARKETS } from './curated-markets.js';
 import type { PolymarketMarket, PolymarketPricePoint } from './polymarket-client.js';
 
 /** The `source` on every item and archive row this agent writes. */
-export const SOURCE_POLYMARKET = 'polymarket';
+export const SOURCE_POLYMARKET = MI_SOURCES.polymarket;
 
 /**
  * The one asset class these items are ingested under.
@@ -197,8 +203,9 @@ export interface PolymarketAgentDeps {
   store: MarketIntelligenceStore;
   clock: Clock;
   /**
-   * The MI archive, when this run has one. Raw bytes only — see `archiveRows`
-   * for why no `ArchivedItem` is written.
+   * The MI archive, when this run has one. Both the raw bytes and the derived
+   * items are written (#835); `archive/mi-sources.ts` is what keeps the items
+   * from being re-ingested at boot.
    */
   archive?: MiArchiveStore | undefined;
   logger?: Logger | undefined;
@@ -302,6 +309,29 @@ type BuiltRow =
   | { outcome: 'refused' }
   | { outcome: 'transport-failed' };
 
+/**
+ * The archive row for one built item, keyed off the RAW row rather than
+ * re-derived (#835).
+ *
+ * `mi_items` declares `(source, native_id, updated_at)` as a foreign key into
+ * `mi_archive_raw`, and the store does not turn `PRAGMA foreign_keys` on — so a
+ * key that drifted from its raw row would not throw, it would silently orphan
+ * the item and break exactly the provenance `retrievalEvidence` now means
+ * (#555). Reading the triple off `raw` makes drift impossible rather than
+ * merely tested for.
+ */
+function toArchivedItem(item: IntelligenceItem, raw: RawArchiveRow): ArchivedItem {
+  return {
+    source: raw.source,
+    native_id: raw.native_id,
+    updated_at: raw.updated_at,
+    entity: item.entity,
+    asset_class: POLYMARKET_ASSET_CLASS,
+    item,
+    ingested_at: raw.ingested_at,
+  };
+}
+
 export class PolymarketAgent {
   /** The bucket already fetched. In-memory: a restart refetches, which is correct. */
   #bucket: number | undefined;
@@ -387,6 +417,7 @@ export class PolymarketAgent {
 
     const items: IntelligenceItem[] = [];
     const raws: RawArchiveRow[] = [];
+    const archivedItems: ArchivedItem[] = [];
     /** How many rows produced a usable ANSWER — read, refused, or rotted alike. */
     let answered = 0;
 
@@ -445,6 +476,7 @@ export class PolymarketAgent {
       if (built.outcome === 'refused') continue;
       items.push(built.item);
       raws.push(built.raw);
+      archivedItems.push(toArchivedItem(built.item, built.raw));
     }
 
     if (items.length === 0) {
@@ -458,11 +490,19 @@ export class PolymarketAgent {
     }
 
     try {
-      // Raw bytes only, NO archived items. `MiIngestAgent.hydrate()` reloads
-      // archived ITEMS source-agnostically at startup, so an archived item here
-      // would have a restart re-serve a trailing-window statistic as if it were
-      // current. The raws still give replay the bytes and smoke a durable row.
-      this.#deps.archive?.write(raws, []);
+      // Raw bytes AND the derived items (#835). This wrote `[]` for the items
+      // because `MiIngestAgent.hydrate()` reloaded archived items
+      // source-agnostically at startup, so an archived item here would have a
+      // restart re-serve a trailing-window statistic as if it were current —
+      // and, since `MarketIntelligenceStore.ingest` does no dedup by `id`,
+      // compound the time-axis inflation limitation 3 records. That bought the
+      // boot property by giving up replay: this source could not be replayed as
+      // items at all, and its `news` contribution vanished on restart with
+      // nothing on disk to rebuild it from, against the spec's user stories
+      // 26/29/30. `archive/mi-sources.ts` now carries the boot policy per
+      // source, so both properties hold: the items are archived, and
+      // `HYDRATING_MI_SOURCES` excludes this one from the boot read.
+      this.#deps.archive?.write(raws, archivedItems);
       this.#deps.store.ingest({
         agent_id: SOURCE_POLYMARKET,
         // The envelope stamp, which `MarketIntelligenceStore.ingest` carries
