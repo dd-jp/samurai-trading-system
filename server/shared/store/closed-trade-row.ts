@@ -17,7 +17,7 @@
  * cross-spec §4). Nothing here writes; this module is the read shape only.
  */
 
-import type { ClosedTrade } from '../types/records.js';
+import type { ClosedTrade, ExitReason } from '../types/records.js';
 
 /**
  * One `closed_trades` row exactly as `better-sqlite3` returns it.
@@ -39,7 +39,8 @@ export interface ClosedTradeRow {
   fees_total: number;
   opened_at: string;
   closed_at: string;
-  close_reason: 'stop' | 'target' | 'exit';
+  /** #793, migration 0031 — see `ClosedTrade.close_reason`. */
+  close_reason: 'stop' | 'target' | 'exit' | ExitReason;
 }
 
 /** Widens the stored ISO-8601 timestamps back into `Date`s. */

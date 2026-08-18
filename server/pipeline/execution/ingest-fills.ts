@@ -301,7 +301,12 @@ function throwContainedFailures(failures: readonly ContainedFailure[]): void {
  * why this function does not consult `fill.leg` to decide whether a bucket
  * is a flatten's — only afterwards, to force it to `'exit'` on the way out
  * (below), so `advanceLot`'s `isExitFill`/`closedTrade` see one true answer
- * regardless of which adapter reported it.
+ * regardless of which adapter reported it. WHY this flatten closed the
+ * position — a flat-by-close, an early release, or a direction flip — is a
+ * SEPARATE question from what `leg` answers, and travels on `exit_reason`
+ * instead (#793): journalled at write-ahead, read back from
+ * `getFlattenAttribution` here, and carried onto the split fill for
+ * `closedTrade()` to read as `close_reason`.
  *
  * Returns, PER FLATTEN, every lot key it named and this call actually
  * processed (#525) — independent of the per-fill split, which can
@@ -540,8 +545,20 @@ async function redistributeOneFlatten(
       const splitFill: NormalizedFill = {
         ...rawFill,
         // Forced regardless of what the adapter tagged the raw fill — see
-        // `redistributeFlattenFills`'s docstring.
+        // `redistributeFlattenFills`'s docstring. This is the fill-MECHANICS
+        // leg ("a market order that closed the position"), not the reason it
+        // was submitted — `fills.leg` keeps its four-value CHECK unchanged.
         leg: 'exit',
+        // #793: the REASON leg — WHY this flatten was submitted, journalled
+        // on write-ahead (`FlattenSubmissionWriteAhead.exit_reason`,
+        // migration 0031) and read back here so `closedTrade()` can name a
+        // flatten and an early release differently in `close_reason` instead
+        // of collapsing both into `leg`'s generic `'exit'`. Omitted (not set
+        // to `undefined` — `exactOptionalPropertyTypes`) only for a flatten
+        // row written before 0031 (legacy, reason never recorded); every
+        // flatten submitted from here forward always carries one
+        // (`executeExit` refuses to write ahead without it).
+        ...(attribution.exit_reason === null ? {} : { exit_reason: attribution.exit_reason }),
         // `fills`' row identity is `(idempotency_key, broker_fill_id)` — the
         // table's PK — so the SAME venue fill id can legitimately hold ONE
         // ROW PER LOT it is split across. That is the right scope here: a
@@ -1344,7 +1361,14 @@ function closedTrade(
     fees_total: feesTotal,
     opened_at: position.opened_at,
     closed_at: closing.timestamp,
-    close_reason: closing.leg,
+    // #793: 'stop'/'target' already name a bracket hit precisely — left as
+    // `closing.leg`. A flatten-originated close (`closing.leg === 'exit'`)
+    // additionally carries `exit_reason` (migration 0031) naming WHICH of
+    // the three in-process reasons it was; that is the more specific answer
+    // and wins whenever it is present. Falls back to the bare `'exit'` leg
+    // only for a row this system genuinely never recorded a reason for — the
+    // pre-0031 legacy case (see the migration's own doc; not invented here).
+    close_reason: closing.exit_reason ?? closing.leg,
   };
 }
 
@@ -1479,6 +1503,10 @@ function toFill(fill: NormalizedFill, idempotencyKey: string): Fill {
     fee: fill.fee,
     timestamp: fill.timestamp,
     ...(fill.cost_breakdown === undefined ? {} : { cost_breakdown: fill.cost_breakdown }),
+    // #793: UNLIKE `qty_is_cumulative`, this one IS persisted — see
+    // `NormalizedFill.exit_reason`'s doc for why it has to survive to reach
+    // `closedTrade()` on any poll, not only the one that ingested this fill.
+    ...(fill.exit_reason === undefined ? {} : { exit_reason: fill.exit_reason }),
   };
 }
 

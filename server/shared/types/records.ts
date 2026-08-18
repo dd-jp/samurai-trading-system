@@ -62,7 +62,9 @@ export interface OrderIntent {
  * The FOURTH way a position ends — a bracket hit — is deliberately not a member.
  * A stop or target rests at the venue and produces no `OrderIntent` at all, so
  * it is distinguishable by the absence of this field, and it is named
- * separately in `ClosedTrade.close_reason` as `'stop'` / `'target'`.
+ * separately in `ClosedTrade.close_reason` as `'stop'` / `'target'`. The three
+ * members above ARE named in `close_reason` too (#793, migration 0031) — same
+ * values, same meaning, one table down from `trader_log.exit_reason`.
  */
 export type ExitReason =
   /** #668/ADR-0014: the flat-by-close window opened. Time, not price or signal. */
@@ -324,6 +326,17 @@ export interface Fill {
     slippage: number;
     market_impact: number;
   };
+  /**
+   * #793: WHY this fill closed a position, for a `leg: 'exit'` fill produced
+   * by `redistributeOneFlatten` — the flatten's own journalled
+   * `flatten_submissions.exit_reason`, copied onto the split fill so
+   * `closedTrade()` can read it back on any poll, not only the one that
+   * ingested it (migration 0031). Absent on an `'entry'`/`'stop'`/`'target'`
+   * fill (those name their own close reason via `leg` directly, with no
+   * `OrderIntent` behind them to carry one) and on an `'exit'` fill from
+   * before this migration, whose reason was never recorded.
+   */
+  exit_reason?: ExitReason;
 }
 
 /**
@@ -358,5 +371,14 @@ export interface ClosedTrade {
   fees_total: number;
   opened_at: Date;
   closed_at: Date;
-  close_reason: 'stop' | 'target' | 'exit';
+  /**
+   * #793: 'stop'/'target' name a bracket hit (resting at the venue — see
+   * `TickStage`'s doc). 'exit' is the LEGACY value for a flatten/early-release
+   * row written before migration 0031, when the two were not yet
+   * distinguishable here. 'flatten' | 'signal_decay' | 'direction_flip' are
+   * the same three `ExitReason` values `trader_log.exit_reason` already
+   * carries (#748) — the same in-process exit, named the same way in both
+   * tables from migration 0031 forward.
+   */
+  close_reason: 'stop' | 'target' | 'exit' | ExitReason;
 }
