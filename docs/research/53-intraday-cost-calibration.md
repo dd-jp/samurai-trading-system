@@ -211,7 +211,9 @@ TSLA   n=57 median=4.216bps p90=10.032bps spread/ATR median=0.2272 p90=0.5723
 
 **`CALIBRATED_INTRADAY_COST_CONFIG.stocks.spreadVolatilityCoefficient = 0.0697`**, with
 `slippageCoefficient = 0.0697 / 4 = 0.017425` by the daily config's own declared rule. **18.8x the daily-fitted
-0.0037** — the correction moves the model toward charging MORE, which is the safe direction.
+0.0037** — the correction moves the model toward charging MORE than the daily-fitted config charges at 1m,
+which is the safe direction. It does NOT lift a 1m run above what a 1d run charges: see G1, where the floor is
+invariant while the slippage term still shrinks with per-minute ATR.
 
 An independent 4-date trial run beforehand fitted 0.0858 on the same method — same order, same conclusion, and the
 24-date figure is the one adopted.
