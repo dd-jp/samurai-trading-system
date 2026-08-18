@@ -187,9 +187,9 @@ Read-only HTTP view over the same SQLite file the orchestrator writes: pipeline 
 
 | `SAMURAI_MODE` | Store file the dashboard opens |
 | --- | --- |
-| `paper` | `data/samurai-paper.sqlite` |
-| `backtest` | `data/samurai-backtest.sqlite` |
-| `live` | `data/samurai-live.sqlite` |
+| `paper` | `data/samurai-paper.sqlite` <!-- cite-exempt: untracked — a runtime store file, created on first run and gitignored by design; which of the three exists on any given machine depends only on which modes have been run there --> |
+| `backtest` | `data/samurai-backtest.sqlite` <!-- cite-exempt: untracked — a runtime store file, created on first run and gitignored by design; which of the three exists on any given machine depends only on which modes have been run there --> |
+| `live` | `data/samurai-live.sqlite` <!-- cite-exempt: untracked — a runtime store file, created on first run and gitignored by design; which of the three exists on any given machine depends only on which modes have been run there --> |
 
 **Two ways to run it.**
 
