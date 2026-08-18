@@ -21,6 +21,12 @@
  * **A closed issue is deleted, not struck through.** The list's value is that
  * an operator can act on it; a graveyard entry costs them the read.
  *
+ * **Adding an entry means commenting on that issue too**, saying it is cited
+ * here and that closing it makes this list wrong. That comment is the only
+ * thing that reaches the person who closes the issue, who has no reason to know
+ * this file exists — see the #868 note below. An entry added without one
+ * re-creates exactly the silent decay this list has already suffered once.
+ *
  * **Every entry states why it gates a LIVE BOOT**, not merely that it is open.
  * The discriminator is whether it changes what the operator should do at the
  * moment they flip `SAMURAI_MODE=live`. An open ticket that does not is noise
