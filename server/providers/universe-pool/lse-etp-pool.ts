@@ -524,6 +524,31 @@ export function buildRoutingMap(
 }
 
 /**
+ * The `screening_instrument` for a traded `lse_ticker`, or `null` when the
+ * instrument is not a pool row at all (#797).
+ *
+ * **This is a LOOKUP, not a routing map.** It answers "is the instrument I am
+ * about to compute a volume read on a leveraged-ETP wrapper, and if so what is
+ * the informed instrument behind it" — the question #744's volume caveat
+ * forces on every volume-derived read. It is deliberately NOT the inverse of
+ * `buildRoutingMap` and must never be used to pick an API root or place an
+ * order: `screening_instrument` reaching a routing layer is exactly what
+ * `buildRoutingMap`'s doc comment refuses, and nothing here changes that.
+ *
+ * `null` for a non-pool instrument is a real answer, not a miss to paper over.
+ * Every instrument in today's configured universes (`DEFAULT_UNIVERSE`'s SPY,
+ * QQQ, AAPL, TSLA) IS a liquid US instrument, so its own volume is the
+ * informed volume and no caveat is owed — see `technical-analyst.ts`'s RVOL
+ * call site, which renders the caveat only on the non-`null` branch.
+ */
+export function screeningInstrumentFor(
+  lseTicker: string,
+  pool: readonly LseEtpPoolRow[] = LSE_ETP_POOL,
+): string | null {
+  return pool.find((row) => row.lse_ticker === lseTicker)?.screening_instrument ?? null;
+}
+
+/**
  * The count #707 (screener ranking/shortlist) actually consumes: the number
  * of DISTINCT `screening_instrument` values in a pool — rankable
  * underlyings, not tradeable ETP lines. Strictly less than `pool.length`

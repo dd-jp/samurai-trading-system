@@ -421,7 +421,7 @@ describe('technicalAnalyst', () => {
  * repo's dominant defect class: a mechanism that is unit-tested in isolation
  * but that nothing calls the way production calls it.
  */
-describe('technicalAnalyst — single 5m bar fetch per instrument per tick (#742)', () => {
+describe('technicalAnalyst — bounded 5m bar fetches per instrument per tick (#742, #797)', () => {
   class CountingDataSource implements DataSource {
     readonly fetchBarsCallsByTimeframe = new Map<string, number>();
 
@@ -510,13 +510,32 @@ describe('technicalAnalyst — single 5m bar fetch per instrument per tick (#742
     };
   }
 
-  it('issues exactly one 5m DataSource.fetchBars call for the whole tick', async () => {
+  /**
+   * #797 moved this number from 1 to 2, and the honest reading of that is
+   * "one shared warm-up fetch plus RVOL's wider window", NOT "the collapse
+   * broke". The claim #742 made this test for is that SIX 5m spec reads do
+   * not cost six fetches — they still cost zero, all six served by
+   * `cachedBars` route 1 off the `WARMUP_5M` fetch. The second call here is
+   * `RVOL_5M_LOOKBACK` (936 bars, twelve sessions), which route 1 CANNOT
+   * serve off a 260-bar fetch: its hit condition includes the store actually
+   * returning `lookback` rows.
+   *
+   * `LIVE_BARS` holds exactly `WARMUP_5M` 5m bars, so this fixture is the
+   * COLD-store shape by construction and always pays the second fetch. In
+   * production the store is filled by repeated ticks and #512's warm-start
+   * backfill, and once it holds >= `RVOL_5M_LOOKBACK` bars for the
+   * instrument, route 1 serves the RVOL read too and the count returns to 1
+   * — see `RVOL_5M_LOOKBACK`'s doc comment. What is pinned here is that the
+   * ceiling is 2 and not 7: a regression that broke the collapse would show
+   * up as one fetch per spec, which this still catches.
+   */
+  it('issues exactly two 5m DataSource.fetchBars calls — the shared warm-up and RVOL, never one per spec', async () => {
     const signal: Signal = { asset: INSTRUMENT, asset_class: 'crypto' };
     const { input, counting } = buildLiveInput(signal);
 
     await technicalAnalyst.run(input);
 
-    expect(counting.fetchBarsCallsByTimeframe.get('5m')).toBe(1);
+    expect(counting.fetchBarsCallsByTimeframe.get('5m')).toBe(2);
   });
 
   it('WARMUP_5M is wide enough to cover EVERY 5m spec, which is what makes the collapse hold', () => {
