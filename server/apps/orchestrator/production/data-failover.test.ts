@@ -10,11 +10,19 @@
  * across ticks, and an escalation chat flooded by it gets muted along with
  * everything else on that channel.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { Bar, BarWindow } from '../../../providers/market-data-service/index.js';
-import { UsEquityRegularHoursCalendar } from '../../../providers/market-data-service/index.js';
-import { DEFAULT_POLYGON_PACING, type LogEntry, type Logger } from '../../../shared/index.js';
+import {
+  PolygonBarsClient,
+  UsEquityRegularHoursCalendar,
+} from '../../../providers/market-data-service/index.js';
+import {
+  DEFAULT_POLYGON_PACING,
+  type LogEntry,
+  type Logger,
+  TokenBucket,
+} from '../../../shared/index.js';
 import {
   ALERT_REPEAT_EVERY_FAILOVERS,
   buildFailoverDataSource,
@@ -247,6 +255,263 @@ describe('buildFailoverDataSource', () => {
     const errors = logger.entries.filter((entry) => entry.level === 'error');
     expect(errors).toHaveLength(1);
     expect(errors[0]?.message).toContain('telegram 502');
+  });
+});
+
+describe('buildFailoverDataSource — the default Polygon branch (#823)', () => {
+  // Nothing above this block ever leaves `equitiesFallbackBarFetcher`
+  // undefined, so the lazy `new PolygonBarsClient(...)` construction and the
+  // `polygon.getBars(...)` call inside `buildFailoverDataSource`'s default
+  // branch were exercised by nothing (#818 only reached the wrapping — the
+  // fetcher was always injected). These tests let that branch run for real,
+  // against a stubbed `fetch`, rather than re-implementing it here.
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    delete process.env.POLYGON_API_KEY;
+  });
+
+  it('does NOT throw at construction when POLYGON_API_KEY is unset — the throw is scoped to the failover, not the boot path', async () => {
+    // The module doc: "an unset key must not stop the orchestrator booting
+    // on a day Alpaca never stalls... A missing key then surfaces inside
+    // withOhlcvFailover's combined error, scoped to the one pair that failed
+    // over." Asserted as two separate facts: building the source never
+    // throws, and only a read that actually needs the fallback does.
+    delete process.env.POLYGON_API_KEY;
+    const logger = recordingLogger();
+
+    let source: ReturnType<typeof buildFailoverDataSource> | undefined;
+    expect(() => {
+      source = buildFailoverDataSource({
+        primary: stallingPrimary(),
+        calendar: new UsEquityRegularHoursCalendar(),
+        universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+        alertChannel: { postDataFailoverAlert: vi.fn(async () => undefined) },
+        logger,
+        now: () => ASOF,
+      });
+    }).not.toThrow();
+
+    let thrown: unknown;
+    try {
+      await source?.fetchBars('SPY', WINDOW, ASOF);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    // The combined withOhlcvFailover error, naming both vendors...
+    expect((thrown as Error).message).toMatch(/alpaca.*failed.*polygon.*failed/s);
+    // ...whose cause is the key-unset throw from the lazy PolygonBarsClient
+    // construction itself, not a network error — proving it is the
+    // constructor's own guard that surfaced, scoped to this one failover.
+    expect((thrown as Error).cause).toBeInstanceOf(Error);
+    expect(((thrown as Error).cause as Error).message).toMatch(/POLYGON_API_KEY is not set/);
+  });
+
+  it('constructs the client with a TokenBucket(pacing) rate limiter and maps window.lookback to the WIDENED raw limit getBars receives', async () => {
+    // #818 wrapped the fallback in withSessionNormalization, so the `limit`
+    // PolygonBarsClient.getBars sees is NormalizingDataSource's widened raw
+    // ask (window.lookback + FORMING_BAR_FETCH_MARGIN), not the caller's
+    // lookback verbatim. Nothing asserted that mapping before this test.
+    process.env.POLYGON_API_KEY = 'test-key';
+
+    const localAsOf = new Date('2026-08-17T17:00:00.000Z'); // 13:00 ET Monday — mid regular session
+    const localWindow: BarWindow = { timeframe: '1h', lookback: 2 };
+
+    function inSessionAggregate(isoOpenTime: string) {
+      return {
+        t: new Date(isoOpenTime).getTime(),
+        o: 100,
+        h: 101,
+        l: 99,
+        c: 100.5,
+        v: 42,
+      };
+    }
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          results: [
+            inSessionAggregate('2026-08-17T14:00:00.000Z'), // 10:00 ET
+            inSessionAggregate('2026-08-17T15:00:00.000Z'), // 11:00 ET
+            inSessionAggregate('2026-08-17T16:00:00.000Z'), // 12:00 ET
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const getBarsSpy = vi.spyOn(PolygonBarsClient.prototype, 'getBars');
+    // `TokenBucket`'s `config` constructor param is a plain (not `#private`)
+    // property, so capturing `this` off the spy lets the test read back the
+    // exact `TokenBucketConfig` the client's rate limiter was built with —
+    // proving it carries `resolveFallbackPacing`'s result, not just that
+    // SOME limiter is present.
+    let capturedBucket: { config: unknown } | undefined;
+    const acquireBackgroundSpy = vi
+      .spyOn(TokenBucket.prototype, 'acquireBackground')
+      .mockImplementation(async function (this: { config: unknown }) {
+        capturedBucket = this;
+      });
+
+    const source = buildFailoverDataSource({
+      primary: stallingPrimary(),
+      calendar: new UsEquityRegularHoursCalendar(),
+      universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      alertChannel: { postDataFailoverAlert: vi.fn(async () => undefined) },
+      logger: recordingLogger(),
+      now: () => localAsOf,
+    });
+
+    const bars = await source.fetchBars('SPY', localWindow, localAsOf);
+
+    // The Polygon client actually served bars, stamped as such.
+    expect(bars).toHaveLength(2);
+    expect(bars.map((bar) => bar.source)).toEqual(['polygon', 'polygon']);
+
+    // The lookback -> getBars argument mapping: window.lookback (2) is NOT
+    // what reaches the client. `NormalizingDataSource`'s first raw ask is
+    // `lookback + FORMING_BAR_FETCH_MARGIN` (1) = 3, and this window is
+    // satisfied on the first attempt (no widen-and-retry), so 3 is the exact
+    // value getBars is called with.
+    expect(getBarsSpy).toHaveBeenCalledTimes(1);
+    expect(getBarsSpy).toHaveBeenCalledWith('SPY', '1h', localAsOf, 3);
+
+    // The TokenBucket(pacing) rate limiter reaches the client, is actually
+    // exercised on the call path, and carries the resolved pacing (the
+    // checked-in default here, since no SAMURAI_PACING_POLYGON_* override is
+    // set) rather than some other config.
+    expect(acquireBackgroundSpy).toHaveBeenCalledTimes(1);
+    expect(capturedBucket?.config).toEqual(DEFAULT_POLYGON_PACING);
+  });
+
+  it('escalates the raw limit getBars receives across a widen-and-retry, not just the first attempt', async () => {
+    // The #818 scenario this ticket calls out by name: a raw vendor payload
+    // that under-serves IN-SESSION bars relative to what it returns RAW
+    // (extended-hours candles mixed in) makes NormalizingDataSource re-ask
+    // with a LARGER raw limit. Point 3 asks for the actual widened value
+    // that reaches the client on a re-attempt, not only the first ask.
+    process.env.POLYGON_API_KEY = 'test-key';
+
+    // 15:00 ET Monday — after this, session normalization sees a mix of
+    // in-session (09:30-16:00 ET / 13:30-20:00Z) and extended-hours candles.
+    const localAsOf = new Date('2026-08-18T01:00:00.000Z');
+    const localWindow: BarWindow = { timeframe: '1h', lookback: 2 };
+
+    function aggregate(isoOpenTime: string) {
+      return { t: new Date(isoOpenTime).getTime(), o: 100, h: 101, l: 99, c: 100.5, v: 42 };
+    }
+    // Ascending by open_time. The newest two (23:30Z/22:30Z open) are
+    // POST-CLOSE extended-hours candles; only the two around 13:30Z/14:30Z
+    // (09:30/10:30 ET) fall inside the regular session.
+    const rawAggregates = [
+      aggregate('2026-08-17T12:00:00.000Z'), // 08:00 ET — pre-market
+      aggregate('2026-08-17T13:00:00.000Z'), // 09:00 ET — pre-market
+      aggregate('2026-08-17T13:30:00.000Z'), // 09:30 ET — IN SESSION
+      aggregate('2026-08-17T14:30:00.000Z'), // 10:30 ET — IN SESSION
+      aggregate('2026-08-17T20:30:00.000Z'), // 16:30 ET — after close
+      aggregate('2026-08-17T21:30:00.000Z'), // 17:30 ET — after close
+      aggregate('2026-08-17T22:30:00.000Z'), // 18:30 ET — after close
+      aggregate('2026-08-17T23:30:00.000Z'), // 19:30 ET — after close
+    ];
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() =>
+        Promise.resolve(new Response(JSON.stringify({ results: rawAggregates }), { status: 200 })),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const getBarsSpy = vi.spyOn(PolygonBarsClient.prototype, 'getBars');
+    // DEFAULT_POLYGON_PACING is capacity 1 / ~13s refill — real pacing would
+    // make a second attempt in this test wait on the real clock. Not what
+    // this test is about (that's the previous test's job), so bypass it.
+    vi.spyOn(TokenBucket.prototype, 'acquireBackground').mockResolvedValue(undefined);
+
+    const source = buildFailoverDataSource({
+      primary: stallingPrimary(),
+      calendar: new UsEquityRegularHoursCalendar(),
+      universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      alertChannel: { postDataFailoverAlert: vi.fn(async () => undefined) },
+      logger: recordingLogger(),
+      now: () => localAsOf,
+    });
+
+    const bars = await source.fetchBars('SPY', localWindow, localAsOf);
+
+    // The eventual serve is the two IN-SESSION bars, still stamped polygon.
+    expect(bars).toHaveLength(2);
+    expect(bars.map((bar) => bar.source)).toEqual(['polygon', 'polygon']);
+
+    // Exactly two attempts, and the WIDENED raw limit that reaches the
+    // client on the second one: attempt 1 asks for lookback (2) +
+    // FORMING_BAR_FETCH_MARGIN (1) = 3, nothing survives normalization (the
+    // newest 3 raw candles are all post-close), so widenRawLimit has no
+    // survival rate to estimate from (0 in-session out of 3 raw) — the
+    // estimate is Infinity, and MAX_RAW_WIDEN_FACTOR clamps the step to
+    // 3 * 8 = 24 rather than leaving it unbounded. Attempt 2 asks for that
+    // 24 and it is enough (the newest 24 raw candles include both in-session
+    // bars).
+    expect(getBarsSpy.mock.calls.map((call) => call[3])).toEqual([3, 24]);
+    // Every call target is the SAME (symbol, timeframe, asOf); only the
+    // widened raw limit changes between attempts.
+    for (const call of getBarsSpy.mock.calls) {
+      expect(call.slice(0, 3)).toEqual(['SPY', '1h', localAsOf]);
+    }
+  });
+
+  it('reuses the SAME lazily-constructed PolygonBarsClient across calls', async () => {
+    // `polygon ??= new PolygonBarsClient(...)` — constructed once, not once
+    // per fetch. Asserted on the KEY-SET path so the assertion is genuinely
+    // about caching: with the key removed after the first call, a client
+    // re-constructed per fetch would throw on the second call; instead the
+    // second call succeeds identically to the first, proving the SAME
+    // already-constructed instance served it.
+    process.env.POLYGON_API_KEY = 'test-key';
+
+    const localAsOf = new Date('2026-08-17T17:00:00.000Z');
+    const localWindow: BarWindow = { timeframe: '1h', lookback: 2 };
+    function inSessionAggregate(isoOpenTime: string) {
+      return { t: new Date(isoOpenTime).getTime(), o: 100, h: 101, l: 99, c: 100.5, v: 42 };
+    }
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            results: [
+              inSessionAggregate('2026-08-17T14:00:00.000Z'),
+              inSessionAggregate('2026-08-17T15:00:00.000Z'),
+              inSessionAggregate('2026-08-17T16:00:00.000Z'),
+            ],
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    // Two acquireBackground() calls against the real DEFAULT_POLYGON_PACING
+    // (capacity 1, ~13s refill) would wait on the real clock — irrelevant to
+    // what this test asserts (client identity, not pacing), so bypass it.
+    vi.spyOn(TokenBucket.prototype, 'acquireBackground').mockResolvedValue(undefined);
+
+    const source = buildFailoverDataSource({
+      primary: stallingPrimary(),
+      calendar: new UsEquityRegularHoursCalendar(),
+      universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      alertChannel: { postDataFailoverAlert: vi.fn(async () => undefined) },
+      logger: recordingLogger(),
+      now: () => localAsOf,
+    });
+
+    const first = await source.fetchBars('SPY', localWindow, localAsOf);
+    expect(first).toHaveLength(2);
+
+    // If the client were reconstructed per call, this would throw
+    // "POLYGON_API_KEY is not set" instead of succeeding.
+    delete process.env.POLYGON_API_KEY;
+    const second = await source.fetchBars('SPY', localWindow, localAsOf);
+    expect(second).toHaveLength(2);
   });
 });
 
