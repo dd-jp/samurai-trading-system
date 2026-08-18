@@ -17,7 +17,7 @@
  *    reason, in prose, so a reviewer can disagree with the annotation rather
  *    than with a bare string.
  *
- * ## Why these eight
+ * ## Why these six
  *
  * Measured 2026-08-17 against the live Gamma API (`/public-search`,
  * `/events?slug=`). The macro book is one to two orders of magnitude deeper
@@ -34,33 +34,69 @@
  * mass (0.295 for September, on $533k of 24h volume) and are where the news
  * actually lands.
  *
- * ## Only three of these eight clear the book-quality floors TODAY
+ * ## Only three of these six clear the book-quality floors TODAY
  *
  * Measured live 2026-08-17 against `MIN_VOLUME_24H_USD = 100` and
  * `MIN_LIQUIDITY_USD = 5_000` (`polymarket-agent.ts`):
  *
- * | row | 24h volume | liquidity | verdict |
- * | --- | --- | --- | --- |
- * | `fed-2026-09` | $541,447 | $572,848 | ingests |
- * | `fed-2026-10` | $1,138 | $63,554 | ingests |
- * | `fed-2026-12` | $40 | $65,341 | refused (volume) |
- * | `fed-2027-01` | absent | $29,653 | refused (volume) |
- * | `us-cpi-annual-hot-tail` | $12 | $1,886 | refused (volume + liquidity) |
- * | `us-core-cpi-mom-hot-tail` | absent | $324 | refused (volume + liquidity) |
- * | `us-recession-2026` | $35 | $40,769 | refused (volume) |
- * | `us-recession-2027` | $278 | $12,704 | ingests |
+ * | row | 24h volume | liquidity | P(bullish leg) | verdict |
+ * | --- | --- | --- | --- | --- |
+ * | `fed-2026-09` | $541,447 | $572,848 | 0.705 | ingests |
+ * | `fed-2026-10` | $1,138 | $63,554 | 0.765 | ingests |
+ * | `fed-2026-12` | $40 | $65,341 | 0.755 | refused (volume) |
+ * | `fed-2027-01` | absent | $29,653 | 0.800 | refused (volume) |
+ * | `us-recession-2026` | $35 | $40,769 | 0.925 | refused (volume, and pinned) |
+ * | `us-recession-2027` | $278 | $12,704 | 0.725 | ingests |
  *
- * All eight slugs resolve — nothing here has rotted yet. The refusals are the
+ * Every slug resolves — nothing here has rotted yet. The refusals are the
  * fail-closed guard working. But the honest reading of this table on merge day
- * is THREE live macro series, not eight, and volume arriving later does not
- * rescue all five: measured on the same probe, the bullish leg of
- * `us-cpi-annual-hot-tail` sits at 0.9945 and `us-core-cpi-mom-hot-tail` at
- * 0.9755. That is the SAME disqualifier this file uses to reject the Fed cut
- * leg above, mirrored — a probability with 0.0055 of headroom cannot clear a
- * ±0.02 dead band, so those two rows would emit `sentiment: 0` forever even at
- * $1M of volume. They likely need re-pointing at a ladder bucket with real
- * headroom, which is a judgment for review, not a patch here.
- * `us-recession-2026` at 0.925 is marginal for the same reason.
+ * is THREE live macro series, not six.
+ *
+ * Re-probed 2026-08-18 (#833), and the volume column MOVES: `fed-2026-12` was
+ * at $2,773 and `us-recession-2026` at $763 — both above `MIN_VOLUME_24H_USD`
+ * — while `us-recession-2027` had fallen to $3.23 and `fed-2027-01` still
+ * reported none. Do not read the verdict column as a standing fact; read it as
+ * one probe. The probabilities barely moved on the same day (0.715, 0.765,
+ * 0.755, 0.800, 0.925, 0.725), which is the point of the next section: volume
+ * is what changes hour to hour, and volume is what lets a pinned row start
+ * emitting.
+ *
+ * ## The two CPI rows were REMOVED, and pinning is now a guard (#833)
+ *
+ * The table shipped with `us-cpi-annual-hot-tail` and
+ * `us-core-cpi-mom-hot-tail`. Measured on the same 2026-08-17 probe their
+ * bullish legs sat at 0.9945 and 0.9755 — the SAME disqualifier this file uses
+ * to reject the Fed cut leg above, mirrored. Volume arriving later would not
+ * have rescued them: it would have made them WORSE, because clearing the
+ * book-quality floors is what starts a row emitting, and a contract with
+ * 0.0055 of headroom emits `sentiment: 0, confidence: 0.05` every hour
+ * forever. `directionFrom` and `confidenceFrom` (`fundamental-analyst.ts`) are
+ * unweighted means, so that is a permanent zero vote diluting every row that
+ * did move — not the "we looked and it did not move" observation #504's
+ * decision 7 protects. Both rows are gone, and re-pointing the CPI series at a
+ * ladder bucket with real headroom is left open rather than guessed at here.
+ * Note what makes it a judgment and not a lookup: the removed rows tracked the
+ * ladder's hot TAIL precisely because a middle bucket has no direction at all
+ * — its probability rises both when the consensus cools toward it and when it
+ * heats toward it — so "pick a bucket nearer 0.5" is not automatically a
+ * better row, and a reviewer has to weigh headroom against directionality.
+ *
+ * Deleting two rows would not stop the next one, so the durable half of the
+ * fix is `MIN_PROBABILITY_HEADROOM` in `polymarket-agent.ts` — every row, every
+ * pass, is refused unless `min(p, 1 - p) >= 0.10`. That is a runtime check
+ * because `p` is a live quote; there is nothing in this file to test at build
+ * time.
+ *
+ * `us-recession-2026` is DELIBERATELY kept despite sitting at 0.925 — headroom
+ * 0.075, inside the bound — and this is the case that shows why the guard and
+ * not the deletion is the fix. On the 2026-08-18 re-probe it carried $763 of
+ * 24h volume, above `MIN_VOLUME_24H_USD`: it CLEARS book quality now, so
+ * without the guard it would already be emitting the permanent zero vote #833
+ * predicted. Unlike a 0.9945 tail, a recession probability with months left to
+ * run can plausibly come back under 0.90, and if it does the row resumes on
+ * its own. While it does not, the guard refuses it and
+ * `polymarket-agent.ts#refuse` escalates to `warn` after a day of it — which
+ * is the review prompt a silent hand-deletion would not give.
  *
  * The three that both clear book quality and have room to move are
  * `fed-2026-09` (0.705), `fed-2026-10` (0.765) and `us-recession-2027` (0.725)
@@ -128,8 +164,9 @@ export interface CuratedMacroMarket {
 }
 
 /**
- * The tracked set. Eight rows: four Fed decisions, two US CPI tails, two US
- * recession horizons.
+ * The tracked set. Six rows: four Fed decisions and two US recession horizons.
+ * #504 asks for 6–10 series, so this sits at the floor of that range after
+ * #833 removed the two pinned CPI tails.
  */
 export const CURATED_MACRO_MARKETS: readonly CuratedMacroMarket[] = [
   {
@@ -173,28 +210,6 @@ export const CURATED_MACRO_MARKETS: readonly CuratedMacroMarket[] = [
     entity: 'FOMC-2027-01',
     label: 'P(no 25bp hike at the January 2027 FOMC)',
     rationale: 'Same as the September row, the first meeting of the next calendar year.',
-  },
-  {
-    id: 'us-cpi-annual-hot-tail',
-    eventSlug: 'august-inflation-us-annual-1786474662954',
-    marketSlug: 'will-annual-inflation-be-4pt0-or-more-in-august-1786474663065',
-    bullishOutcome: 'No',
-    entity: 'US-CPI-YOY',
-    label: 'P(US annual CPI NOT 4.0%+)',
-    rationale:
-      'The top bucket of the ladder is the hot-print tail. A rising probability of a 4%+ ' +
-      'annual print raises the odds of a tighter policy response, which is bearish. The tail ' +
-      'is chosen over a middle bucket because a middle bucket has no direction at all — its ' +
-      'probability rises both when the consensus cools and when it heats toward that bucket.',
-  },
-  {
-    id: 'us-core-cpi-mom-hot-tail',
-    eventSlug: 'core-cpi-mom-august-2026-1786474662954',
-    marketSlug: 'will-core-cpi-mom-be-0pt6-or-more-in-august-1786474663160',
-    bullishOutcome: 'No',
-    entity: 'US-CORE-CPI-MOM',
-    label: 'P(US core CPI MoM NOT 0.6%+)',
-    rationale: 'The same hot-tail argument as the annual row, on the monthly core series.',
   },
   {
     id: 'us-recession-2026',

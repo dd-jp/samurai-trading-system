@@ -35,10 +35,11 @@
  *
  * No ingest on: a rotted slug, a failed fetch, a closed market, a stale vendor
  * stamp, an absent book, a spread past the bound, volume or liquidity below
- * the floor, or a price history that does not span a full 24h. In every one of
- * those cases the analysts report `NO_DATA_MARKER`, which keeps "we could not
- * look" distinguishable from "we looked and saw nothing" — the #463/#474/#485
- * line.
+ * the floor, a bullish leg pinned so near 0 or 1 that it cannot carry a 24h
+ * delta (`MIN_PROBABILITY_HEADROOM`, #833), or a price history that does not
+ * span a full 24h. In every one of those cases the analysts report
+ * `NO_DATA_MARKER`, which keeps "we could not look" distinguishable from "we
+ * looked and saw nothing" — the #463/#474/#485 line.
  *
  * The **exception, stated because it looks like a violation of that rule**: a
  * delta inside the dead band DOES emit an item, at `sentiment: 0,
@@ -150,6 +151,48 @@ const MIN_CONFIDENCE = 0.05;
 const MAX_CONFIDENCE = 0.95;
 
 /**
+ * The headroom `min(p, 1 - p)` a tracked outcome must have to be a signal
+ * source at all (#833).
+ *
+ * **Why any bound.** `sentiment = sign(delta)` with a ±`DEAD_BAND` dead band,
+ * and a delta inside the band still EMITS — deliberately, #504 decision 7, and
+ * that emit is not in question here. But a contract pinned at 0.9945 has
+ * 0.0055 of room on the upside: it cannot carry a +0.02 delta arithmetically,
+ * and a −0.02 delta is a repricing of a near-settled question rather than the
+ * ordinary daily movement the delta is meant to read. So it emits
+ * `sentiment: 0, confidence: 0.05` every hour, forever. That is not a neutral
+ * observation, it is a permanent zero vote: `directionFrom`
+ * (`pipeline/analysts/fundamental-analyst.ts`) takes an UNWEIGHTED mean of
+ * sentiments and `confidenceFrom` an unweighted mean of confidences, so a
+ * pinned row dilutes both means of every row that did move. A refused row
+ * casts no vote at all — that asymmetry is the whole fix.
+ *
+ * **Why 0.10 and not some other number.** Derived from the confidence formula,
+ * not from the two rows it happens to exclude: the smallest delta that says
+ * anything is `DEAD_BAND`, and `|delta| * CONFIDENCE_SCALE` saturates at
+ * `MAX_CONFIDENCE`. Requiring a row to be able to express at least MID-RANGE
+ * confidence in BOTH directions gives
+ * `((MIN_CONFIDENCE + MAX_CONFIDENCE) / 2) / CONFIDENCE_SCALE = 0.10`. Below
+ * that, the constrained direction can only ever emit near the confidence floor
+ * or nothing at all.
+ *
+ * The stricter alternative — full saturation headroom, 0.19 — was rejected on
+ * margin, not on which rows it drops. Probed live on 2026-08-18, all six
+ * curated rows: 0.715, 0.765, 0.755, 0.800, 0.925, 0.725. Both bounds exclude
+ * exactly the same row (`us-recession-2026`, headroom 0.075), so the margin is
+ * the only discriminator — and 0.19 leaves `fed-2027-01` (0.800) with 0.010 of
+ * it and `fed-2026-10` (0.765) with 0.045, so ordinary drift on a healthy
+ * series would evict it. At 0.10 those margins are 0.100 and 0.135.
+ *
+ * This is a RUNTIME guard and not the build-time table filter #833 proposed,
+ * because `p` is a live quote — there is no curation-time value to test. The
+ * guard applies to every curated row on every pass, so a row that drifts into
+ * the pin later, or a future row added while pinned, is caught without anyone
+ * remembering this rule.
+ */
+export const MIN_PROBABILITY_HEADROOM = 0.1;
+
+/**
  * Book-quality floors. Markets measured at 0.298 (`U.K. Annual Inflation
  * 2026`) and 0.97 (`Bitcoin ETF Flows`) spreads are exactly what these refuse:
  * a probability read off a book that wide is not a price, it is a guess with a
@@ -222,6 +265,18 @@ export function signOfDelta(delta: number): 1 | 0 | -1 {
   if (delta > DEAD_BAND) return 1;
   if (delta < -DEAD_BAND) return -1;
   return 0;
+}
+
+/**
+ * Whether a quoted probability sits too near 0 or 1 to carry a 24h delta.
+ * See `MIN_PROBABILITY_HEADROOM` for the derivation of the bound.
+ */
+export function isPinnedProbability(probability: number): boolean {
+  // The tolerance is not decoration: `1 - 0.9` is 0.09999999999999998 in
+  // binary floating point, so a bare `<` would refuse a market quoted at
+  // exactly the bound. Vendor quotes arrive at two or three decimals, so a
+  // 1e-9 slack cannot admit anything a reviewer would call pinned.
+  return Math.min(probability, 1 - probability) < MIN_PROBABILITY_HEADROOM - 1e-9;
 }
 
 /** `clamp(|delta| * 5, 0.05, 0.95)` — #504 decision 3, verbatim. */
@@ -530,6 +585,29 @@ export class PolymarketAgent {
       return this.#refuse(trace_id, entry, 'the bullish outcome has no CLOB token id');
     }
 
+    // #833. Above the price-history fetch on purpose: a pinned row can never
+    // produce a signal, so the CLOB call is wasted, and running the check
+    // AFTER `refuseOnBook` keeps every existing refusal reason unchanged for a
+    // row that is thin AND pinned. Routed through `#refuse` like every other
+    // book-quality refusal, so the row still counts as ANSWERED and the
+    // bucket marks — this is a durable property of the contract, not an
+    // outage, and re-asking inside the hour would only repeat it.
+    const probability = market.outcomePrices[outcomeIndex];
+    if (probability === undefined || !Number.isFinite(probability)) {
+      return this.#refuse(trace_id, entry, 'the bullish outcome carries no quoted probability');
+    }
+    if (isPinnedProbability(probability)) {
+      return this.#refuse(
+        trace_id,
+        entry,
+        `the bullish outcome is quoted at ${probability}, leaving ` +
+          `${Math.min(probability, 1 - probability).toFixed(4)} of headroom against the ` +
+          `${MIN_PROBABILITY_HEADROOM} minimum — a contract pinned this near certainty cannot ` +
+          'carry a 24h delta, so it would emit a zero vote every hour rather than a signal. ' +
+          'Re-point this row at a bucket with room to move, or drop it, in curated-markets.ts',
+      );
+    }
+
     let history: PolymarketPricePoint[];
     try {
       history = await this.#deps.client.fetchPriceHistory(tokenId);
@@ -629,7 +707,7 @@ export class PolymarketAgent {
     // routine (a quiet hour on a market that trades around a print), so the
     // first day stays `info`; past a full day of consecutive refusals the row
     // is not quiet, it is dead, and that has to reach the same eyes slug rot
-    // does. Measured 2026-08-17: 5 of the 8 curated rows sit below the volume
+    // does. Measured 2026-08-17: 3 of the 6 curated rows sit below the volume
     // floor today, so this is the common path, not an edge (see the PR body).
     const persistent = streak >= REFUSAL_WARN_STREAK;
     this.#log({
