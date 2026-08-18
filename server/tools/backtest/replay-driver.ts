@@ -51,7 +51,13 @@ import {
 import type { ClosedTrade, Fill, SimulatedClock } from '../../shared/index.js';
 import type { ReplayTradeSource } from './eval-types.js';
 import { LookaheadAuditor } from './lookahead.js';
-import { type ProxySignal, type ProxyStrategyConfig, proxySignal } from './proxy-strategy.js';
+import {
+  type ProxySignal,
+  type ProxyStrategyConfig,
+  proxyAtrSpec,
+  proxySignal,
+  proxyWarmupBars,
+} from './proxy-strategy.js';
 import type { CostModel, MarketState, ReplayTimeline } from './types.js';
 import { assertSurvivorshipFree, type DateRange, type InstrumentRegistry } from './universe.js';
 
@@ -406,7 +412,13 @@ export class ReplayDriver {
       open: new Map<string, OpenLot>(),
       pendingFills: new Map<string, Fill[]>(),
     };
-    const warmup = Math.max(config.fastWindow, config.slowWindow, config.atrWindow + 1);
+    // Derived, never restated (#857). This was
+    // `Math.max(fastWindow, slowWindow, atrWindow + 1)` — the ATR ARITY floor,
+    // which capped the visible prefix so low that both ATR slices below could
+    // only ever contain the seed. Widening the slices without widening this
+    // gate is the inert half of the same change; `proxyWarmupBars` is the one
+    // place the width is stated.
+    const warmup = proxyWarmupBars(config, this.deps.timeframe);
 
     const stepped = await this.deps.timeline.barTimestamps(window);
 
@@ -686,6 +698,7 @@ export class ReplayDriver {
     bars: readonly Bar[],
     mid: number,
   ): MarketState {
+    const atrSpec = proxyAtrSpec(config, this.deps.timeframe);
     const advWindow = this.deps.advWindow ?? DEFAULT_ADV_WINDOW;
     const recent = bars.slice(-advWindow);
     const adv = recent.reduce((sum, row) => sum + row.volume, 0) / recent.length;
@@ -704,36 +717,26 @@ export class ReplayDriver {
       adv,
       // The same ATR the strategy sized this lot's stop with — one volatility
       // estimate, so the cost model and the stop cannot disagree about it.
-      // #836/#289 H11 investigated a rolling/incremental ATR here and did NOT
-      // adopt one: this call is always given exactly `atrWindow + 1` bars, so
-      // `atr()`'s true-range array is always exactly `atrWindow` long — the
-      // Wilder smoothing loop (`trueRanges.slice(period)`) is always empty,
-      // and every call answers the plain unweighted mean of the trailing
-      // `atrWindow` true ranges, re-seeded from scratch each time. That is
-      // NOT a genuine Wilder recurrence (contrast `indicators.ts`'s own doc
-      // comment, which assumes converged smoothing) — a persistent
-      // incrementally-updated Wilder accumulator carried bar-to-bar would
-      // compute a DIFFERENT number than this callsite has ever produced, so
-      // one was deliberately not built. A ring-buffer running sum (add
-      // newest true range, subtract oldest) would preserve the "plain mean"
-      // formula but risks float drift against the fresh-sum-every-call
-      // behaviour pinned here; measured, the win was not worth that risk —
-      // see the PR body. Same reseed-every-step shape as the flat/uninformed
-      // findings `indicators.ts` documents for RSI's F1/F2 (#722):
-      // reported, not fixed, here — fixing it reprices every backtest result
-      // and this is a perf-only ticket.
-      volatility: computeIndicator(bars.slice(-(config.atrWindow + 1)) as Bar[], {
-        indicator: 'atr',
-        params: {},
-        // The replay's OWN timeframe (#664) — a literal `'1d'` here was one
-        // of the four hard-coded sites this ticket removed, and the most
-        // silent: descriptive rather than selecting (`computeIndicator` runs
-        // on a slice the caller already holds, #315), so a wrong label here
-        // produces no error, just a false record of which bars the cost
-        // model's volatility was measured on.
-        timeframe: this.deps.timeframe,
-        lookback: config.atrWindow,
-      }),
+      // Both now read the CONVERGED window (#857) via the shared
+      // `proxyAtrSpec`, which is also what keeps that "same ATR" claim true:
+      // one spec, two call sites, no literal to drift.
+      //
+      // Until #857 this was `slice(-(config.atrWindow + 1))` with
+      // `params: {}`, so `atr()`'s true-range array was exactly `atrWindow`
+      // long, `trueRanges.slice(period)` was always empty, and the value was
+      // a plain re-seeded mean wearing Wilder's name. #836/#289 H11 found
+      // that while investigating a rolling accumulator here and correctly
+      // did NOT fix it — a repricing of every backtest number does not belong
+      // inside a perf-only ticket. It is fixed here, with the measurement, in
+      // its own.
+      //
+      // The spec's `timeframe` is the replay's OWN (#664) — a literal `'1d'`
+      // here was one of the four hard-coded sites that ticket removed, and
+      // the most silent: descriptive rather than selecting (`computeIndicator`
+      // runs on a slice the caller already holds, #315), so a wrong label
+      // produces no error, just a false record of which bars the cost model's
+      // volatility was measured on.
+      volatility: computeIndicator(bars.slice(-atrSpec.lookback) as Bar[], atrSpec),
       asset_class: instrument.asset_class,
       timestamp: this.deps.clock.now(),
     };

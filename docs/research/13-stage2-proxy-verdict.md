@@ -40,3 +40,25 @@ Do not cite this KILL as evidence against the hypothesis. It is evidence about a
 ## Provenance
 
 Terminal run at commit `211f425`, full suite 2795 passing, 10.2-year window served from the free stack (Alpaca SIP equities, Coinbase crypto — see [`31-free-ohlcv-evidence.md`](31-free-ohlcv-evidence.md)). Raw run logs for the 2026-08-05 runs are in [`archive/raw/`](archive/raw/). Each row of the chain table links to the full record; those docs are preserved verbatim and are the authoritative audit trail for any number quoted here.
+
+## Provenance stamp — every number above was computed on a SEED-ONLY ATR ([#857](https://github.com/dd-jp/samurai-trading-system/issues/857), 2026-08-18)
+
+All seven runs predate #857. Until then both backtest ATR call sites — the proxy strategy's
+stop/target bracket and the `MarketState.volatility` the cost model charges against — were fed
+exactly `atrWindow + 1` bars, so `indicators.ts`'s Wilder smoothing loop ran **zero times** and every
+ATR reading in this chain is a plain re-seeded mean of the trailing true ranges rather than the
+converged recurrence the live path reads (#757). The numbers above are therefore **not comparable to
+any post-#857 run**, and a future measurement must not be set beside them as if it were the same
+measurement.
+
+**They are retained, not superseded.** The change was measured before adoption on the same harness
+and the same 12-config grid: median ATR shift 2.92%, p90 7.39%, signed mean +0.20%; trade count
+−0.92% and net PnL −0.70% end to end, no PnL sign changes, best config unchanged, one adjacent rank
+swap. That is not the scale that moves PBO 0.35 across a 0.05 line or an OOS pass count of 3/24
+across a kill line, so **the KILL verdict and the reasoning above stand**. Full figures, the
+discriminator declared before the measurement, and the reason a re-run is not available (crypto out
+of scope per ADR-0015's 2026-08-16 amendment; the harness has since moved through #664 and #739) are
+in [`../reviews/indicator-characterisation-2026-08-16.md`](../reviews/indicator-characterisation-2026-08-16.md),
+F1's backtest half.
+
+The linked `archive/` run records are untouched, as the Provenance section above requires.

@@ -358,3 +358,148 @@ threshold downstream of the RSI was re-checked rather than carried forward silen
 `ema`, and `atr`'s seed all divide by a bar count `minimumBarsFor` already guarantees is non-zero,
 never by a ratio of two independently-zeroable accumulators the way `rsi`'s `avgGain / avgLoss` is.
 No follow-up issue filed.
+
+## F1's backtest half — the declared criterion, before measuring ([#857](https://github.com/dd-jp/samurai-trading-system/issues/857), 2026-08-18)
+
+F1 above closed the two **live** ATR specs ([#757](https://github.com/dd-jp/samurai-trading-system/issues/757)).
+It did not touch the backtest, and [#836](https://github.com/dd-jp/samurai-trading-system/issues/836)
+(PR [#856](https://github.com/dd-jp/samurai-trading-system/pull/856)) found the same defect still
+live there and correctly declined to fix it inside a perf-only ticket. This section records the
+criterion **before any measurement is run**, per the convention #757 established.
+
+### The defect, stated in code terms
+
+`server/tools/backtest/proxy-strategy.ts` and `server/tools/backtest/replay-driver.ts` each build an
+ATR `IndicatorSpec` inline with `params: {}` and `lookback: config.atrWindow`, and each feeds it
+exactly `bars.slice(-(config.atrWindow + 1))`. `periodOf` falls back to `spec.lookback`, so the
+period is `atrWindow` and the true-range array is exactly `atrWindow` long — `trueRanges.slice(period)`
+is **always empty** and the Wilder smoothing loop runs zero times. Every backtest ATR reading is the
+plain re-seeded mean of the trailing `atrWindow` true ranges. A third site,
+`replay-driver.ts`'s `warmup = Math.max(fastWindow, slowWindow, atrWindow + 1)`, is the gate that
+decides how many bars those slices can ever contain.
+
+### Adoption is UNCONDITIONAL, and the measurement does not gate it
+
+Stated plainly so that nothing below can be read as the reason for the change.
+
+`computeIndicator({ indicator: 'atr' })` today answers **two different formulas depending on which
+caller asks**: a converged Wilder recurrence for the live registry callers (post-#757), and a plain
+seed mean for the backtest. That is a formula fork under one name, and removing it does not depend
+on the shift being large or small — a *larger* divergence would argue harder for converging, not
+against, so a magnitude gate on adoption is a gate that cannot rationally fail. It is also
+independent of the D4 control-matching argument in #857's body, which survives the objection that
+[#739](https://github.com/dd-jp/samurai-trading-system/issues/739) removed ATR from live stops.
+
+`minimumBarsFor` is **not** raised — same reasoning as #757's third acceptance criterion. The
+fabrication floor and the width dial stay separate functions.
+
+### What the measurement DOES gate: the disposition of recorded Stage 2 results
+
+The seven runs consolidated in [`../research/13-stage2-proxy-verdict.md`](../research/13-stage2-proxy-verdict.md)
+were all computed on the seed-only ATR. They are not numerically comparable to any post-change run.
+Declared discriminator, before measuring:
+
+- **If the recomputation flips a headline verdict field** — PBO across the 0.05 line, DSR
+  significance, OOS pass count across the kill line, or the KILL/GO verdict itself — the chain is
+  marked **superseded**: not citable without a re-run.
+- **If no headline field flips**, the chain is **provenance-stamped and retained**: each number keeps
+  its meaning, annotated as computed on the seed-only ATR.
+
+A **re-run is not on the menu either way**, and that is the constraint that makes retention
+defensible rather than lazy. Run 7 was commit `211f425` on a 10.2-year Alpaca-SIP-equities +
+Coinbase-crypto universe; crypto left Samurai's scope on 2026-08-16 (ADR-0015's amendment), and the
+harness has since moved through #664 (intraday replay) and #739 (frozen per-subclass brackets). A
+run today would be a *new* run on a different universe against a different harness, not a comparable
+re-run. The chain is a historical audit trail; the provenance stamp is what keeps it honest.
+
+`docs/research/archive/**` is **not** edited — `13-stage2-proxy-verdict.md` states those run records
+are preserved verbatim as the authoritative audit trail. The stamp goes on the live consolidating
+doc and here.
+
+### What will be measured, and reported separately
+
+ATR propagates into the replay twice — through `proxySignal`'s stop/target (which trades happen at
+all) and through `marketState.volatility` (what the cost model charges) — and the widened warm-up
+gate is a **second, independent** cause of trade differences. Conflating them would make it
+impossible to say what the ATR change did, so three figures are reported apart:
+
+1. **ATR value delta** — every stamped `marketState.volatility`, seed-only vs converged, on the same
+   bar: median / p90 relative shift and the signed mean. Direct analogue of F1's 3.01% / 6.93% / +0.46%.
+2. **Trade-record delta** — trade count and net PnL per config, both paths named.
+3. **Warm-up shift, isolated** — the tradeable region the widened gate costs, measured on the real
+   grid (`fastWindow` in {10, 20}, `slowWindow` in {30, 50}, `atrWindow` 14: warm-up 30/50 to 57).
+
+Measured through the real `ReplayDriver`, not a hand-rolled ATR loop. No pre-window lead-in fetch is
+built: `BarCursor` reads `source.bars(symbol, window)` and the warm-up is consumed inside the window,
+so widening the gate shrinks the tradeable region rather than requiring more bars. Changing that
+would touch `ReplayBarSource` semantics, which is exactly the smuggled second change #857 forbids.
+
+### The measurement (#857, 2026-08-18)
+
+Run through the **real `ReplayDriver`** on the **real 12-config trial grid** (`buildTrialGrid` —
+`fastWindow` in {10, 20} x `slowWindow` in {30, 50} x the three risk:reward presets, `atrWindow` 14),
+over a deterministic synthetic 4-instrument, 600-daily-bar universe (seeded LCG, identical series on
+every checkout), with a fixed-adverse-tick cost model so trade differences are the strategy's rather
+than the cost model's. Three runs of the same throwaway bench, from the same working tree:
+
+- **A** — `origin/main`: seed-only ATR, warm-up gate `max(fast, slow, atrWindow + 1)`.
+- **C** — `origin/main` with the warm-up gate alone widened to `4 * atrWindow + 1`: still seed-only
+  ATR. This run exists to separate the two causes.
+- **B** — this branch: converged ATR, warm-up gate `proxyWarmupBars`.
+
+#### 1. ATR value delta — converged vs seed-only, same bar
+
+2,176 samples (every bar from index 56 on, all four instruments), ATR(14):
+
+| Quantity | Value |
+| --- | --- |
+| Median relative shift `\|converged − floor\| / floor` | **2.92%** |
+| p90 relative shift | **7.39%** |
+| Worst bar | 17.83% |
+| Mean SIGNED relative shift | **+0.20%** |
+
+Close enough to F1's live figures (median 3.01%, p90 6.93%, signed +0.46%) to be a corroboration
+rather than a coincidence: same indicator, same period, same convergence step, a different series.
+The sign is again near zero rather than a one-directional bias.
+
+#### 2. Trade-record delta, and 3. the warm-up shift, separated
+
+| | A (seed, gate 15) | C (seed, gate 57) | B (converged, gate 57) |
+| --- | --- | --- | --- |
+| Trades, all 12 configs | 974 | 956 | **965** |
+| Net PnL, all 12 configs | 361,081.94 | 354,617.89 | **358,547.70** |
+| First trade taken | 2020-01-31 / 2020-02-20 | 2020-02-27 | 2020-02-27 |
+
+- **Warm-up effect alone (A → C):** −18 trades (**−1.85%**), −6,464.04 PnL (−1.79%). The tradeable
+  region starts 27–42 bars later out of 600 — 4.5–7% of the sample consumed by warm-up that was not
+  before. This is the cost of the wider gate, and it is *not* an ATR effect.
+- **ATR effect alone (C → B):** +9 trades (**+0.94%**), +3,929.81 PnL (+1.11%). This is the repricing
+  the ticket is about.
+- **Combined (A → B):** −9 trades (−0.92%), −2,534.24 PnL (−0.70%).
+
+Selection-relevant detail, since PBO is a statement about ranking rather than about levels: across
+the 12 configs, **no PnL sign changes**, the **best config is unchanged**, and the ranking moves by a
+single adjacent swap (positions 7 and 8: `10/50/2.0` and `20/30/3.0`).
+
+#### Disposition of the recorded Stage 2 chain: provenance-stamped and RETAINED
+
+Against the discriminator declared above, and stating the limit of the evidence plainly:
+
+**What could not be done.** The seven runs could not literally be recomputed. Run 7 was commit
+`211f425` against a 10.2-year Alpaca-SIP-equities + Coinbase-crypto sample; crypto left Samurai's
+scope (ADR-0015, 2026-08-16) and the harness has moved through #664 and #739 since. There is no
+re-run available that would be comparable, which is the constraint the criterion named in advance.
+So the discriminator is answered by the magnitude of the perturbation on the same harness and the
+same grid, not by re-deriving PBO/DSR on the original sample — and that substitution is a weakening
+of the evidence, recorded here rather than glossed.
+
+**What the evidence supports.** A sub-1% change in trade count, a −0.70% change in net PnL, no sign
+changes, an unchanged best config and a single adjacent rank swap are not the scale of perturbation
+that moves PBO 0.35 across a 0.05 line, or an OOS pass count of 3/24 across a kill line. **No
+headline verdict field is at risk**, so the chain is provenance-stamped and retained rather than
+marked superseded. The stamp is on `docs/research/13-stage2-proxy-verdict.md`;
+`docs/research/archive/**` is untouched, as that doc's own provenance section requires.
+
+**What a future run must not do** is compare a post-#857 number against one of those seven as if
+they were the same measurement. They are not: every pre-#857 number carries a seed-only ATR in both
+the bracket that chose the trade and the volatility the cost model charged against.
