@@ -131,6 +131,14 @@ column already used — so every figure here is an upper bound if more than one 
 | £1,000 | 0.55 pp | 0.19 pp |
 | **£350 / £250 — D5's fractions of the £1,000 book** | **1.58 pp** | **0.75 pp** |
 
+> **And D5's envelope may not be what actually funds the position.**
+> [#886](https://github.com/dd-jp/samurai-trading-system/issues/886) (filed 2026-08-19, BLOCKING) records that
+> `per_trade_size_cap` is **5% of the same equity** D5 takes 35%/25% of, so it trims first at every book size:
+> on the £1,000 book the Trader asks for £350 and is handed **£50**. If that is the notional that survives,
+> the bill costs **11.1 pp (index)** and **3.8 pp (single-stock)** — larger than every geometry bar in §2, and
+> the dominant term rather than a second-order one. This document does not decide which cap is right; it
+> records that the answer moves the bill's weight by ~20x, which is why #886 is arming-blocking.
+
 **At the resolved notionals the bill stops being second-order on the index bracket.** 1.58 pp is more than
 half of QQQ's 2.96 pp geometry bar and ~38% of SPY's 4.19 pp; including it, QQQ's break-even is **54.54%**,
 not the 53.51% the £1,000 illustration gives. On the single-stock bracket it stays small — 0.75 pp against
