@@ -365,3 +365,41 @@ describe('the exhausted-search contract (#691)', () => {
     expect(new AlwaysOpenCalendar().sessionEnd(instant)).toBeNull();
   });
 });
+
+/**
+ * #684. Before this, a date past the hand-entered tables' checked coverage
+ * silently got `SESSION_CLOSE_MINUTES` — a normal 16:00 ET close — which is
+ * the DANGEROUS direction for an unmodelled early close: the flatten would
+ * compute against a close time nobody ever checked. Now it throws, the same
+ * "un-modelled, not guessed" posture #691 already gives an exhausted search.
+ */
+describe('the hand-entered table coverage cliff (#684)', () => {
+  const calendar = new UsEquityRegularHoursCalendar();
+  // A Tuesday, ordinary-looking, comfortably past 2027-12-31.
+  const beyondCoverage = new Date('2028-03-14T15:00:00Z');
+
+  it('throws on isOpen for a date past the checked coverage, rather than assuming a normal close', () => {
+    expect(() => calendar.isOpen(beyondCoverage)).toThrow(/past the hand-entered table/);
+  });
+
+  it('throws on sessionEnd for a date past the checked coverage', () => {
+    expect(() => calendar.sessionEnd(beyondCoverage)).toThrow(/past the hand-entered table/);
+  });
+
+  it('throws on sessionStart for a date past the checked coverage', () => {
+    expect(() => calendar.sessionStart(beyondCoverage)).toThrow(/past the hand-entered table/);
+  });
+
+  it('still answers isTradingDay past the cliff — the SAFE direction is unchanged', () => {
+    // A weekday past coverage still reads as a trading day: `isTradingDay`
+    // never consulted the early-close table, only the (empty, past 2027)
+    // holiday table and the weekend check — nothing overnight is carried by
+    // treating a day this calendar cannot see the close of as a phantom
+    // holiday would be worse, not better.
+    expect(calendar.isTradingDay(beyondCoverage)).toBe(true);
+  });
+
+  it('does not throw for the last covered date', () => {
+    expect(() => calendar.isOpen(new Date('2027-12-31T15:00:00Z'))).not.toThrow();
+  });
+});

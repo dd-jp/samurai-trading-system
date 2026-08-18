@@ -50,6 +50,10 @@ import type { CiiScoreProvider } from '../../providers/market-intelligence/index
 import type { HeartbeatChannel } from './heartbeat.js';
 import type { OrphanAlertChannel, OrphanGoVerdict } from './orphan-verdict-scan.js';
 import type { AnalystSkipAlert, AnalystSkipAlertChannel } from './production/analysts-adapter.js';
+import type {
+  CalendarFallbackAlert,
+  CalendarFallbackAlertChannel,
+} from './production/calendar-fallback-alert.js';
 import type { DataFailoverAlert, DataFailoverAlertChannel } from './production/data-failover.js';
 import {
   MI_NO_DATA_BY_NAME_COUNTER,
@@ -469,6 +473,43 @@ export class LoggingDataFailoverAlertChannel implements DataFailoverAlertChannel
         fallback: alert.fallbackName,
         reported_at: alert.reported_at.toISOString(),
         suppressed_since_last: alert.suppressed_since_last,
+      },
+    });
+  }
+}
+
+/**
+ * The paper equity leg's Alpaca `GET /v2/calendar` fetch failed at boot, and
+ * `us-equity-session-source.ts` fell back to the hand-entered session table
+ * (#684). Written to the log at `error`, not `warn`: unlike an OHLCV
+ * failover — where a second vendor is already serving the exact same
+ * data — the fallback here is a DIFFERENT calendar, hand-entered, checked
+ * only through `alert.fallback_coverage_end`, and the whole reason #684
+ * exists is that table's coverage gaps are the dangerous direction for a
+ * flatten boundary. `error` is what an unattended soak's operator needs to
+ * notice this before the fallback's own cliff starts throwing.
+ *
+ * Same caveat as every other log-only stand-in: `SAMURAI_ALERTS=log-only`
+ * cannot page anyone. `TradeChannelCalendarFallbackAlert`
+ * (calendar-fallback-alert-channel.ts) is the reachable-from-a-phone
+ * implementation `SAMURAI_ALERTS=telegram` (#322) selects.
+ */
+export class LoggingCalendarFallbackAlertChannel implements CalendarFallbackAlertChannel {
+  constructor(private readonly logger: Logger) {}
+
+  postCalendarFallbackAlert(alert: CalendarFallbackAlert): void {
+    this.logger.log({
+      trace_id: 'startup',
+      stage: 'orchestrator',
+      level: 'error',
+      message:
+        "paper equity leg's Alpaca calendar fetch failed at boot — fell back to the " +
+        'hand-entered US equity session table. SAMURAI_ALERTS=log-only cannot page anyone ' +
+        'about this; use SAMURAI_ALERTS=telegram for an unattended run.',
+      payload: {
+        reason: alert.reason,
+        fallback_coverage_end: alert.fallback_coverage_end,
+        reported_at: alert.reported_at.toISOString(),
       },
     });
   }

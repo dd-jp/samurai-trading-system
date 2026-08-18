@@ -8,6 +8,19 @@
  * as the Tier-2 bulk cache and the live mark table.
  */
 
+export type {
+  AlpacaCalendarClient,
+  AlpacaCalendarClientOptions,
+  AlpacaCalendarDay,
+  AlpacaSessionRow,
+} from './alpaca-session-calendar.js';
+export {
+  AlpacaCalendarFetchError,
+  AlpacaEquitySessionCalendar,
+  AlpacaHttpCalendarClient,
+  buildAlpacaSessionTable,
+  validateAlpacaCalendarDays,
+} from './alpaca-session-calendar.js';
 export type { FixtureLiveMark } from './fixture-data-source.js';
 export { FixtureDataSource } from './fixture-data-source.js';
 export { buildIndicatorCacheKey, IndicatorCache } from './indicator-cache.js';
@@ -102,6 +115,10 @@ export {
   londonEntryWindow,
   OVERLAP_WINDOW_LAST_ENTRY_MINUTES,
   OVERLAP_WINDOW_OPEN_MINUTES,
+  // #684 — the hand-entered US table's checked coverage cliff; the calendar
+  // fallback alert reports it so an operator knows how far to trust the
+  // fallback.
+  US_TABLE_COVERAGE_END,
   UsEquityRegularHoursCalendar,
 } from './trading-calendar.js';
 export type {
