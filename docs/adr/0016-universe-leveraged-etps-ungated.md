@@ -44,6 +44,8 @@ Gating was proposed to fix a cost problem. Measurement shows the problem does no
 
 **And gating is not free.** It removes trading days, so it removes gross edge with them. Cutting 252 equity trades to 156 costs ~**£141/yr of gross** to save ~£5/yr of spend — a 28:1 loss.
 
+> **Superseded 2026-08-18 — every cost figure in the three paragraphs above is withdrawn.** See the amendment at the foot of this ADR. The `£252`/`£89` bill, the `+£139`/`+£729` book, the `~£12`/`~£5` equity-leg pair and the `~£141`-of-gross-against-£5 comparison behind the **28:1** loss are each a 15-minute-cadence, crypto-in-scope number, and crypto left Samurai's scope on 2026-08-16 ([ADR-0015](0015-live-venue-account-and-book-split.md)'s amendment); the `£141` term is additionally `96 × +0.195%/trade`, voided above. Rebuilt equities-only the bill is **~£58/yr** (`docs/research/54-capital-economics-vs-signal-accuracy.md`), and post-[#617](https://github.com/dd-jp/samurai-trading-system/issues/617) debate spend is **per debate run**, so a gate scales the trading term and the bill together and the 28:1 comparison has no fixed terms left. **Kept for provenance, not for use. Decision 2 itself is unchanged** and now rests on the #685 event-day measurement recorded below.
+
 ### The bar for revisiting
 
 Gating is an **expectancy** question, not a cost question. It pays only if catalyst days are genuinely better:
@@ -54,7 +56,7 @@ Gating is an **expectancy** question, not a cost question. It pays only if catal
 
 **Catalyst days must deliver ≥ 0.312%/trade against the 0.195% all-day average — a 60% expectancy uplift.** Held by [#655](https://github.com/dd-jp/samurai-trading-system/issues/655). **Withdrawn 2026-08-18 — see the amendment at the foot of this ADR; the replacement bar is an accuracy threshold, not an uplift.** If the event study clears it, gate and reopen #658; if not, the universe trades every day the selector finds a setup.
 
-> **Restated 2026-08-10.** The 0.312% bar and the £369 term in it both derive from the 0.195%/trade figure the amendment below voids, so **the arithmetic in this block no longer computes** — it is kept for provenance, not for use. **The decision it supports is unchanged and now rests on direct measurement instead**: earnings-reaction sessions are 1.0378%/trade *worse* than ordinary ones (t = −2.99) and are 1.62% of sessions (re-measured 2026-08-18 by [#685](https://github.com/dd-jp/samurai-trading-system/issues/685); previously 0.92%/trade, t = −2.66, 1.73%). The bar #655 must clear is now stated relative to whatever the entry signal delivers, not to a fixed all-day constant.
+> **Restated 2026-08-10.** The 0.312% bar and the £369 term in it both derive from the 0.195%/trade figure the amendment below voids, so **the arithmetic in this block no longer computes** — it is kept for provenance, not for use. **The decision it supports is unchanged and now rests on direct measurement instead**: earnings-reaction sessions are 1.0378%/trade *worse* than ordinary ones (t = −2.99) and are 1.62% of sessions (re-measured 2026-08-18 by [#685](https://github.com/dd-jp/samurai-trading-system/issues/685); previously 0.92%/trade, t = −2.66, 1.73%). The bar #655 must clear is now stated relative to whatever the entry signal delivers, not to a fixed all-day constant. **Sharpened 2026-08-18: because that anchor is *negative* at the declared brackets, the bar is not a relative uplift at all — it is an absolute accuracy threshold, and the gating question is a comparison of two accuracies. See the amendment at the foot of this ADR.**
 
 ## Consequences
 
@@ -65,6 +67,14 @@ Gating is an **expectancy** question, not a cost question. It pays only if catal
 3. **Catalyst-gating** — ~£5/yr, and likely net negative
 
 Anything proposing to improve the economics should be checked against this ordering first.
+
+> **Superseded 2026-08-18 — the whole ranking is crypto-era and its figures are withdrawn.** Lever 1 is a
+> **crypto** fee schedule and crypto left Samurai's scope on 2026-08-16 ([ADR-0015](0015-live-venue-account-and-book-split.md)'s
+> amendment), so the largest lever no longer exists for this system; levers 2 and 3 (`£252 → £89/yr`, `~£5/yr`)
+> are 15-minute-cadence, crypto-in-scope numbers. The equities-only bill is **~£58/yr** in total
+> (`docs/research/54-capital-economics-vs-signal-accuracy.md`), which is worth **~0.55 pp** of accuracy at
+> £1,000 of position notional — second-order against geometry bars of 1–4 pp. **On the equities-only book the
+> economics are governed by the entry signal's accuracy, not by any lever in this list.** Kept for provenance.
 
 **Single-name concentration is now the norm, not a risk to be diversified away.** The Risk Manager's correlation and concentration limits were specced against a diversified basket and need re-reading against a universe deliberately chosen for co-movement.
 

@@ -59,7 +59,8 @@ round trip 0.18%), single-stock `+6.00 / −6.25` (width 12.25, round trip 0.41%
 | MSTR | single | −0.8772 | 7.16 | 57.16% |
 
 AAPL's row is read per doc 52 §5: at a 9.5% resolve rate the bracket is a time exit wearing a bracket, and
-the bar stops describing the job the signal is being asked to do.
+the bar stops describing the job the signal is being asked to do. **The identity behind this table assumes the
+bracket resolves, so every row is a lower bound that loosens as its resolve rate falls — see §6.6.**
 
 ## 3. The LLM bill, rebuilt equities-only
 
@@ -86,6 +87,11 @@ Annual net, per **£1,000 of position notional**, at accuracy `p` over `N` sessi
 ```
 net_£/yr = N × E(p)/100 × notional − bill
 ```
+
+**Position notional, not leg size.** Every figure below is per **£1,000 of position notional** — the cash
+in a single position — which is *not* the equity leg: under [ADR-0018](../adr/0018-intraday-thresholds-sizing-and-the-signal-bar.md)
+D5's fractions a leg funds a position at a fraction of itself, so leg size and notional differ by that factor
+and must not be read as the same number.
 
 **Capital is deliberately not substituted.** #658's £500–1,000, and the later £750 equity leg, are both
 superseded. Multiply through by the notional once the deployment fraction is settled.
@@ -165,3 +171,10 @@ is profitable or unprofitable."* `p_u` and `p_g` are both unmeasured because the
    narrows nothing here.
 4. **Capital and deployment are open** (#800, #798) — hence per-£1,000 throughout.
 5. **The bill's two factors are assumptions** (§3): instruments debated per day and bars per session.
+6. **The `E(p)` identity assumes the bracket resolves.** `E(p) = (p − 0.5) × width + E_net` prices a win at
+   `+tp` and a loss at `−|sl|`, i.e. it puts no mass on sessions that reach neither leg and exit flat-by-close
+   at whatever the drift left. It is exact only as the resolve rate approaches 100%, and it degrades
+   continuously as that rate falls — so `50% + bar` is a *lower* bound on the accuracy actually required,
+   loosest where resolves are thinnest. Doc 52's declared-bracket resolve rates span **9.5% (AAPL) to 83.1%
+   (MSTR)**. This is why AAPL's row is flagged degenerate rather than merely noisy, and it is a caution on
+   SPY (21.2%) too; PLTR, TSLA and MSTR (61–83%) are the rows the identity describes best.
