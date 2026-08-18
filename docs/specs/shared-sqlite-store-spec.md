@@ -22,7 +22,7 @@ Key architectural decisions:
 - **Hand-rolled numbered migrations** (`migrations/0001_init.sql`, ...) + a `schema_migrations` runner table — no ORM, no new dependency.
 - **WAL mode + `synchronous=FULL`** — implements CONTEXT.md's crash-restart invariant; throughput cost is negligible at this system's write rate.
 - **`openSharedStore(dbPath): SharedStore` factory** — constructor injection everywhere, matching the existing pattern; the Orchestrator's composition root (where the factory is actually called) is separate, not-yet-charted work.
-- **One SQLite file per environment** (`data/samurai-paper.sqlite`, `data/samurai-live.sqlite`) — not a single file with an environment column, so paper/live PnL cross-contamination is physically impossible. Tests use a fresh temp file or `:memory:`.
+- **One SQLite file per environment** (`data/samurai-paper.sqlite`, `data/samurai-live.sqlite`) <!-- cite-exempt: untracked — runtime store files, created on first run and gitignored by design; this line names the convention, not files expected to be in the tree --> — not a single file with an environment column, so paper/live PnL cross-contamination is physically impossible. Tests use a fresh temp file or `:memory:`.
 - **JSON columns for rich, non-queried nested data** (a WorldMonitor/audit_log-style JSONB pattern) — `config_trials.result_json`/`config_json`, `cosine_setups.debate_features_json`/`market_features_json` — rather than decomposing every nested structure into its own columns.
 - **Every table's own consumer dictates its key** — no generic catch-all tables; `analyst_weights`/`strategy_params`/`risk_thresholds` are three tables, not one, because three different stages read them by three different natural keys.
 
@@ -61,7 +61,7 @@ Runs pending migrations, returns a typed handle. Components receive it via const
 
 ### Module: DB File Path Convention
 
-**`data/samurai-{env}.sqlite`** at repo root — one file per environment (`data/samurai-paper.sqlite`, `data/samurai-live.sqlite`), not a single file with an environment column, so paper/live PnL cross-contamination is physically impossible. Tests use a fresh temp file or `:memory:`, never a checked-in test DB. (Resolved: [Decide: DB file path convention](https://github.com/dd-jp/samurai-trading-system/issues/168).)
+**`data/samurai-{env}.sqlite`** at repo root — one file per environment (`data/samurai-paper.sqlite`, `data/samurai-live.sqlite`) <!-- cite-exempt: untracked — runtime store files, created on first run and gitignored by design; this line names the convention, not files expected to be in the tree -->, not a single file with an environment column, so paper/live PnL cross-contamination is physically impossible. Tests use a fresh temp file or `:memory:`, never a checked-in test DB. (Resolved: [Decide: DB file path convention](https://github.com/dd-jp/samurai-trading-system/issues/168).)
 
 ### Module: Consolidated Schema
 
