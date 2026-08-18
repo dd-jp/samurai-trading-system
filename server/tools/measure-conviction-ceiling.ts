@@ -52,20 +52,36 @@
  * stock, and is pre-#789 anyway, so it is the wrong analyst). That half is
  * stated as unmeasured rather than proxied.
  *
- * ## The three desk shapes
+ * ## The four desk shapes
  *
  * A stocks debate runs three analysts. Which branch the other two are on
  * changes the evidence average, and that is exactly the term that produced
- * #625's ceiling, so all three reachable shapes are reported:
+ * #625's ceiling, so every reachable shape is reported:
  *
  * - **absent** — sentiment and fundamental both stamp `NO_DATA_MARKER` (the
  *   #436 empty-store branch). This is the shape every debate in the recorded
  *   soak was on. They are excluded from evidence, still counted as neutral
  *   votes in consensus.
+ * - **hydrated-split** — fundamental has news items, sentiment has no social
+ *   ones. The two read different stores, so this asymmetry is reachable and is
+ *   what the current MI stack most likely produces.
  * - **hydrated-neutral** — the MI store returns items, both read neutral at
  *   the `confidenceFrom` floor 0.05. They now DILUTE the evidence average.
  * - **hydrated-aligned** — both read the technical direction at the
  *   `confidenceFrom` ceiling 0.95.
+ *
+ * ## Two gates this measurement is NOT about
+ *
+ * - `routeDecision` skips at `neutral_direction_while_flat` BEFORE the floor is
+ *   ever consulted (`decide.ts`), and in #625's recorded data that was 265 of
+ *   268 skips against 3 at the floor. Clearing the floor is necessary, not
+ *   sufficient.
+ * - `applyAnalystWeights` (`weighted-conviction.ts`) scales the conviction the
+ *   Trader gates on by `weightedAgreement / unweightedAgreement`, clamped to
+ *   [0, 1], AFTER `runDebate`. Every `analyst_weights` row currently sits at
+ *   1.0 (no closed trades), which makes that factor exactly 1, so the numbers
+ *   here are the numbers the gate sees today — but they are not invariant to a
+ *   feedback loop that has started moving weights.
  *
  * The mediator's verdict is a participant in the consensus term, and it is LLM
  * output that cannot be enumerated offline, so every desk shape is reported
@@ -87,9 +103,14 @@ import type { AnalystView, Direction } from '../pipeline/debate-engine/types.js'
 import { DEFAULT_TRADER_CONFIG } from '../pipeline/trader/types.js';
 
 /** Which branch the sentiment/fundamental pair is on for a given debate. */
-export type DeskShape = 'absent' | 'hydrated-neutral' | 'hydrated-aligned';
+export type DeskShape = 'absent' | 'hydrated-split' | 'hydrated-neutral' | 'hydrated-aligned';
 
-export const DESK_SHAPES: readonly DeskShape[] = ['absent', 'hydrated-neutral', 'hydrated-aligned'];
+export const DESK_SHAPES: readonly DeskShape[] = [
+  'absent',
+  'hydrated-split',
+  'hydrated-neutral',
+  'hydrated-aligned',
+];
 
 /** The mediator's verdict relative to the technical analyst's direction. */
 export type MediatorStance = 'agrees' | 'neutral' | 'opposes';
@@ -218,6 +239,17 @@ export function buildStocksDesk(point: LatticePoint, shape: DeskShape): AnalystV
   switch (shape) {
     case 'absent':
       return [technical, absent('sentiment'), absent('fundamental')];
+    case 'hydrated-split':
+      // The two analysts read DIFFERENT stores — fundamental takes
+      // `marketContext.news`, sentiment takes social — so they hydrate
+      // independently and the desk can sit with one on each branch. This is
+      // the shape the current MI stack most likely produces (`yarn smoke`
+      // serves news items and no social ones).
+      return [
+        technical,
+        absent('sentiment'),
+        view('fundamental', 'neutral', MI_CONFIDENCE_FLOOR, filler(MI_ANALYST_KEY_POINTS, 'fund')),
+      ];
     case 'hydrated-neutral':
       return [
         technical,

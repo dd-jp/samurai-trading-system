@@ -95,6 +95,30 @@ describe('stocks conviction ceiling vs conviction_floor (#756 item 2)', () => {
     expect(hydratedNeutral).toBeGreaterThan(FLOOR);
     expect(hydratedNeutral).toBeLessThan(ceiling('absent', 'agrees'));
   });
+
+  it('clears on every MI branch once the mediator agrees, at a branch-dependent threshold', () => {
+    // The headline "clears from 0.25" is the ALL-ABSENT shape and is the most
+    // permissive one. Fundamental and sentiment read different stores, so the
+    // desk can sit on a split branch, and each branch that re-enters the
+    // evidence average raises the technical confidence needed.
+    const minClearing = (shape: DeskShape): number =>
+      directional(shape, 'agrees')
+        .filter((sample) => sample.clears)
+        .reduce((min, sample) => Math.min(min, sample.confidence), 1);
+
+    expect(minClearing('absent')).toBeCloseTo(0.25, 10);
+    expect(minClearing('hydrated-split')).toBeCloseTo(0.5, 10);
+    expect(minClearing('hydrated-neutral')).toBeCloseTo(0.6667, 10);
+
+    for (const shape of [
+      'absent',
+      'hydrated-split',
+      'hydrated-neutral',
+      'hydrated-aligned',
+    ] as const) {
+      expect(ceiling(shape, 'agrees')).toBeGreaterThan(FLOOR);
+    }
+  });
 });
 
 describe('LOW_CONVICTION_CAP interaction (#756 item 3)', () => {
