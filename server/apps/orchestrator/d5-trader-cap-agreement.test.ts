@@ -318,3 +318,88 @@ describe("D5's envelope is unreachable in the SHIPPED profile, at every book siz
     );
   });
 });
+
+describe('#886 — the ordering above is anchor-relative, and D5 DOES bind below the anchor', () => {
+  // The second describe's unconditional claim ("0.05 < 0.35 at every equity,
+  // so D5 can never be the binding constraint") compares a fraction against a
+  // frozen cash figure, and that is only an ordering where live equity equals
+  // the anchor the caps were built at. `perTradeSizeCap` returns
+  // `config.max_position_size` verbatim (`risk-manager/index.ts:365-368`) — a
+  // static number, built once as `fraction x anchor` (`riskCapsFor`) or
+  // `x the boot ceiling` (`live-profile.ts`, whose own docstring concedes the
+  // six notional caps are STATIC and "when equity is BELOW the ceiling they
+  // are therefore looser"). D5 alone re-resolves against live equity
+  // (`risk-manager/index.ts:513`).
+  //
+  // The scale-invariance case above passes the SAME number as anchor and as
+  // portfolio equity, so it can only ever exercise equity == anchor. These
+  // drive them apart, which is the shape a live run actually has.
+  const ANCHOR = 2_000;
+  const EQUITY_BELOW_ANCHOR = 200; // inside ADR-0017's £100-200 ramp
+
+  it('holds the per-trade cap at its anchor value while D5 falls with the book', () => {
+    const config = shippedConfig(ANCHOR);
+    const staticPerTrade = config.max_position_size;
+    const d5AtLiveEquity = D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY_BELOW_ANCHOR;
+
+    // 5% of the ANCHOR, not of the book being traded.
+    expect(staticPerTrade).toBeCloseTo(RISK_CAP_EQUITY_FRACTIONS.max_position_size * ANCHOR, 6);
+    expect(staticPerTrade).toBeCloseTo(100, 6);
+    expect(d5AtLiveEquity).toBeCloseTo(70, 6);
+    // The ordering the second describe asserts is REVERSED here.
+    expect(d5AtLiveEquity).toBeLessThan(staticPerTrade);
+  });
+
+  it('trims an entry by D5, not by the per-trade cap, at an equity below the anchor', () => {
+    // The behavioural half: an ask that clears every static cap but exceeds
+    // D5's equity-relative envelope. £90 < the £100 static per-trade cap and
+    // under per_asset (£200) / class (£800) / gross (£1,000) / concentration
+    // (£400), all of which are 2,000-anchored — so the only thing that can
+    // bind is D5, at 35% x £200 = £70.
+    const ask = 90;
+
+    const decision = decide(
+      shippedConfig(ANCHOR),
+      intentFor('3USL', ask, 'entry'),
+      {},
+      EQUITY_BELOW_ANCHOR,
+    );
+
+    expect(decision.binding_constraint).toBe('per_subclass_deployment_cap');
+    expect(decision.modifications?.final_size).toBeCloseTo(70, 6);
+  });
+
+  it("is therefore NOT inert here — #800's unscaling doubles the authorised size", () => {
+    // #886's "no effect on any order" is false on this axis. Reconstructing
+    // the pre-#800 gate — D5's fraction halved by the
+    // `EQUITY_LEG_FRACTION_OF_CAPITAL = 0.5` account -> leg conversion this
+    // branch deleted — trims the SAME ask to £35 where the shipped gate now
+    // allows £70. Both are below the £100 static per-trade cap, so the
+    // difference is authorised size, not a cap that never fired.
+    const ask = 90;
+    const shipped = shippedConfig(ANCHOR);
+    const beforeUnscaling: RiskConfig = {
+      ...shipped,
+      per_subclass_deployment_cap: {
+        ...shipped.per_subclass_deployment_cap,
+        cap_fraction_of_equity: {
+          index_etp_3x: 0.5 * D5_INDEX_ETP_DEPLOYMENT_FRACTION,
+          single_stock_etp_3x: 0.5 * D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION,
+        },
+      },
+    } as RiskConfig;
+
+    const before = decide(
+      beforeUnscaling,
+      intentFor('3USL', ask, 'entry'),
+      {},
+      EQUITY_BELOW_ANCHOR,
+    );
+    const after = decide(shipped, intentFor('3USL', ask, 'entry'), {}, EQUITY_BELOW_ANCHOR);
+
+    expect(before.modifications?.final_size).toBeCloseTo(35, 6);
+    expect(after.modifications?.final_size).toBeCloseTo(70, 6);
+    expect(before.binding_constraint).toBe('per_subclass_deployment_cap');
+    expect(after.binding_constraint).toBe('per_subclass_deployment_cap');
+  });
+});
