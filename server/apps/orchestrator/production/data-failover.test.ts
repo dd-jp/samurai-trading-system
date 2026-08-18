@@ -785,6 +785,29 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     expect(logger.entries.filter((entry) => entry.level === 'warn')).toHaveLength(1);
   });
 
+  it('rejects a priority reserve that starves the background lane (#828)', () => {
+    // The third wedge, and the least obvious: `PolygonBarsClient.getBars`
+    // takes the BACKGROUND lane, which asks `take(reserveForPriority)` for
+    // `1 + reserve` tokens. `refill()` clamps the balance to `capacity`, so
+    // `reserve + 1 > capacity` never admits the background caller at ANY
+    // refill rate — the rate here is the checked-in default's, and it still
+    // parks forever. `reserveForPriority` is part of `TokenBucketConfig`, so
+    // #822's `fallbackPacing` seam can set it.
+    const logger = recordingLogger();
+
+    buildFailoverDataSource({
+      primary: stallingPrimary(),
+      calendar: new UsEquityRegularHoursCalendar(),
+      universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      fallbackPacing: { capacity: 1, refillPerSecond: 1 / 13, reserveForPriority: 1 },
+      alertChannel: { postDataFailoverAlert: vi.fn(async () => undefined) },
+      logger,
+      now: () => ASOF,
+    });
+
+    expect(logger.entries.filter((entry) => entry.level === 'warn')).toHaveLength(1);
+  });
+
   it('leaves a well-formed fallbackPacing untouched and silent', () => {
     // The guard must not warn about, or replace, a legitimate override —
     // otherwise it would quietly undo #822's config seam.

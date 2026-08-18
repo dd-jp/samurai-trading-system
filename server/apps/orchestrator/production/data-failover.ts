@@ -75,7 +75,7 @@
  * construction — the field for a vendor that then goes unused is just ignored.
  *
  * `guardFallbackPacing` (#828) then checks whatever pacing was resolved for
- * the two values that would make the bucket park forever instead of pacing —
+ * the three shapes that would make the bucket park forever instead of pacing —
  * same warn-and-default posture, for the same reason. Only the DEFAULT branch
  * consults it, because only that branch builds a `TokenBucket` at all.
  *
@@ -195,8 +195,16 @@ export function resolveFallbackPacing(logger: Logger, env: NodeJS.ProcessEnv = p
  * survive. Loud in the startup log, at boot, before any stall.
  */
 export function guardFallbackPacing(pacing: TokenBucketConfig, logger: Logger): TokenBucketConfig {
+  const reserve = pacing.reserveForPriority ?? 0;
   const wedges =
-    pacing.refillPerSecond <= 0 || !Number.isFinite(pacing.refillPerSecond) || pacing.capacity < 1;
+    pacing.refillPerSecond <= 0 ||
+    !Number.isFinite(pacing.refillPerSecond) ||
+    pacing.capacity < 1 ||
+    // `PolygonBarsClient.getBars` takes the BACKGROUND lane, which asks
+    // `TokenBucket.take(reserveForPriority)` for `1 + reserve` tokens; `refill`
+    // clamps the balance to `capacity`, so a reserve that leaves no room for
+    // the background caller's own token never admits it at ANY refill rate.
+    reserve + 1 > pacing.capacity;
   if (!wedges) return pacing;
 
   logger.log({
@@ -205,9 +213,10 @@ export function guardFallbackPacing(pacing: TokenBucketConfig, logger: Logger): 
     level: 'warn',
     message:
       `Polygon fallback pacing is unusable (capacity ${pacing.capacity}, refillPerSecond ` +
-      `${pacing.refillPerSecond}) and was IGNORED — falling back to the checked-in ` +
-      'DEFAULT_POLYGON_PACING. A non-positive refill rate, or a capacity below one, never ' +
-      'mints the token TokenBucket.take waits for, so every equities OHLCV fallback read ' +
+      `${pacing.refillPerSecond}, reserveForPriority ${reserve}) and was IGNORED — falling back ` +
+      'to the checked-in DEFAULT_POLYGON_PACING. A non-positive refill rate, a capacity below ' +
+      'one, or a priority reserve that leaves no room for the background lane the Polygon ' +
+      'client uses, never mints the token TokenBucket.take waits for, so every equities OHLCV fallback read ' +
       'would have parked forever with no timeout above it (#828) — a silent halt rather than ' +
       'a stall. Fix the configured pacing; the run continues at the default rate.',
     payload: { pacing: 'polygon', applied: 'default' },
