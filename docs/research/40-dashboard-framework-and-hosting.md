@@ -43,11 +43,11 @@ abstract yes/no. Here is where the 1,178 lines sit.
 
 | file | lines | what it is |
 |---|---|---|
-| `src/dashboard/html.ts` | 635 | one exported template literal, `DASHBOARD_HTML` |
+| `src/dashboard/html.ts` | 635 | one exported template literal, `DASHBOARD_HTML` | <!-- cite-exempt: historical — measurement of the pre-#627 tree this doc was written against; the file was replaced by the client bundle -->
 | — `<style>` (L28–242) | ~215 | hand-written CSS, incl. `@keyframes pulse`, `@keyframes pl-settle`, a `prefers-reduced-motion` branch |
 | — markup (L243–294) | ~52 | tab shell + six empty panel `<div>`s |
 | — `<script>` (L295–633) | ~339 | hand-written browser JS, **inside the string**, with `PIPELINE_VIEW_CLIENT_SOURCE` interpolated at L490 |
-| `src/dashboard/pipeline-view.ts` | 543 | render logic written as *real TypeScript*, then serialised to browser source |
+| `src/dashboard/pipeline-view.ts` | 543 | render logic written as *real TypeScript*, then serialised to browser source | <!-- cite-exempt: historical — same pre-#627 measurement; superseded by the Vite client -->
 
 So it is already a single-page application: `fetch('/api/snapshot', {cache:'no-store'})` on a
 3-second `setInterval`, tab state, click and keydown handlers, and incremental DOM patching in

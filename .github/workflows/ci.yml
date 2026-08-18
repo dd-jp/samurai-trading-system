@@ -73,6 +73,20 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: yarn test
 
+      # Backticked inline path citations in markdown (#821). This step is the
+      # mechanism's production caller — the tool is otherwise a complete, tested
+      # thing nothing runs, which is this repo's dominant defect class (#430). The
+      # suite asserts the same green on the real tree, so a local `yarn test` catches
+      # a stale citation too; this step is what makes it a merge gate.
+      #
+      # Never "fix" a red run here by editing a file under docs/adr/,
+      # docs/wayfinder/, docs/research/archive/ or docs/reviews/ — those are not
+      # scanned at all, and rewriting a decision record to satisfy a checker
+      # falsifies the record. The tool's own failure output says so.
+      - name: Path citations resolve
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: yarn check:citations
+
       # The indicator golden fixture is the independent reference the whole
       # characterisation rests on (#703 step B1), and its authority comes from
       # being generated rather than hand-written. Without this step that is an

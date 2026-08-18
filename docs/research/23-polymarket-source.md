@@ -138,7 +138,7 @@ Data age: the near-spot BTC strike carried `updatedAt = 2026-08-06T22:52:20Z` ag
 
 ## 6. Integration surface
 
-A new lightweight consumer at `src/market-intelligence/polymarket/`, mirroring `GrokAgent`'s shape — thin client for the wire, agent owning cadence and the store write — **minus** `spendCap` and `spendSink`, and plus a curated market table. It slots in as a second writer to the same `MarketIntelligenceStore` instance already constructed in `production.ts:1293`.
+A new lightweight consumer at `server/providers/market-intelligence/polymarket/`, mirroring `GrokAgent`'s shape — thin client for the wire, agent owning cadence and the store write — **minus** `spendCap` and `spendSink`, and plus a curated market table. It slots in as a second writer to the same `MarketIntelligenceStore` instance already constructed in `production.ts:1293`.
 
 No Convergence Engine. The spec names one for merging sources, and with a second source there is now nominally something to merge — but the two write to disjoint buckets (`grok` → `social`, `polymarket` → `news`) and are consumed by different analysts, so there is no conflict to resolve. `MarketContext.conflicts` stays `[]`. State that as a deliberate v1 narrowing, the way #464 did, rather than leaving it implicit.
 

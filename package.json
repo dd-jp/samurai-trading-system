@@ -28,6 +28,7 @@
     "test:local": "vitest run --changed origin/main",
     "test:watch": "vitest",
     "e2e": "playwright test --config e2e/playwright.config.ts",
+    "check:citations": "tsx server/tools/check-path-citations.ts",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "precommit": "yarn lint:fix && yarn typecheck && yarn test:coverage"

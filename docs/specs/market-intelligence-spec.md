@@ -377,7 +377,7 @@ News headlines, CII rationale text, and other free text sourced or normalized he
 
 ### Module: Convergence Engine
 
-Replaces the prior 2-agent Conflict Resolution Engine wholesale, per [ADR-0002 §7](../adr/0002-worldmonitor-mi-source.md#7-conflict-resolution-engine--n-source-convergence-engine-full-replacement). Location: `server/providers/market-intelligence/convergence-engine/` (`snapshot.ts`, `signals.ts`, `clustering.ts`, `taxonomy.ts` + matching `*.test.ts` files). Reimplemented from WorldMonitor's documented design (research doc §2) — no code copied from WorldMonitor's AGPL `analysis-core.ts`.
+Replaces the prior 2-agent Conflict Resolution Engine wholesale, per [ADR-0002 §7](../adr/0002-worldmonitor-mi-source.md#7-conflict-resolution-engine--n-source-convergence-engine-full-replacement). Location: `server/providers/market-intelligence/convergence-engine/` (`snapshot.ts`, `signals.ts`, `clustering.ts`, `taxonomy.ts` + matching `*.test.ts` files). Reimplemented from WorldMonitor's documented design (research doc §2) — no code copied from WorldMonitor's AGPL `analysis-core.ts`. <!-- cite-exempt: planned — the convergence-engine module is specced, not built; this marker fails once the path exists -->
 
 **Responsibilities**
 - Assemble a per-tick `StreamSnapshot` from the current cycle's DeepResearch + Grok + WorldMonitor `IntelligenceItem`s.

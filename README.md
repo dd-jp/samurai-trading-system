@@ -4,7 +4,7 @@ Live-money multi-agent trading system covering **crypto and stocks**.
 
 The runtime tick is **six stages** — Analysts → Debate → Trader → Risk → Verdict → Execution — driven by `SequentialTickRunner` (`server/apps/orchestrator/tick-runner.ts`), with a Feedback Loop that adjusts analyst weights and risk thresholds post-trade.
 
-A seventh stage, **Invalidation** (the devil's-advocate critic, between Trader and Risk), is **specced but not built** — see `docs/specs/devils-advocate-spec.md`. The dashboard already renders its column at full width so its rows appear the day it ships (`server/apps/service-api/pipeline-types.ts`), but nothing writes an `invalidation` row today.
+A seventh stage, **Invalidation** (the devil's-advocate critic, between Trader and Risk), is **specced but not built** — see `docs/specs/devils-advocate-spec.md`. The dashboard already reserves its room in the pipeline layout so its rows appear the day it ships (`client/src/lib/room-layout.ts`, whose `STAGE_ORDER` includes `invalidation`), but nothing writes an `invalidation` row today.
 
 ## Architecture
 
