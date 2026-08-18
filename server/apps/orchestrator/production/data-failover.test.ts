@@ -269,6 +269,11 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     delete process.env.POLYGON_API_KEY;
+    // Cleanup lives here, not as a trailing statement inside the two #822/#825
+    // tests below that set this — if the assertion above it throws, an inline
+    // `delete` after the `expect` never runs and the malformed value leaks
+    // into every later test in this file.
+    delete process.env.SAMURAI_PACING_POLYGON_REFILL_PER_SEC;
   });
 
   it('does NOT throw at construction when POLYGON_API_KEY is unset — the throw is scoped to the failover, not the boot path', async () => {
@@ -459,6 +464,123 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     for (const call of getBarsSpy.mock.calls) {
       expect(call.slice(0, 3)).toEqual(['SPY', '1h', localAsOf]);
     }
+  });
+
+  it('takes a non-default pacing from deps.fallbackPacing WITHOUT mutating process.env (#822)', async () => {
+    // Defect 1: `resolveFallbackPacing` used to be the only way in, forcing a
+    // test (or a real caller) to mutate `SAMURAI_PACING_POLYGON_*` to
+    // exercise a non-default rate. `fallbackPacing` is a config field now —
+    // asserted here by supplying a value that differs from
+    // `DEFAULT_POLYGON_PACING` on every field, with no env var touched at
+    // all, and confirming the resolved config actually reaches the
+    // `TokenBucket` the default Polygon fetcher is built with.
+    process.env.POLYGON_API_KEY = 'test-key';
+    expect(process.env.SAMURAI_PACING_POLYGON_CAPACITY).toBeUndefined();
+    expect(process.env.SAMURAI_PACING_POLYGON_REFILL_PER_SEC).toBeUndefined();
+
+    const localAsOf = new Date('2026-08-17T17:00:00.000Z');
+    const localWindow: BarWindow = { timeframe: '1h', lookback: 2 };
+    function inSessionAggregate(isoOpenTime: string) {
+      return { t: new Date(isoOpenTime).getTime(), o: 100, h: 101, l: 99, c: 100.5, v: 42 };
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            results: [
+              inSessionAggregate('2026-08-17T14:00:00.000Z'),
+              inSessionAggregate('2026-08-17T15:00:00.000Z'),
+              inSessionAggregate('2026-08-17T16:00:00.000Z'),
+            ],
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+
+    let capturedBucket: { config: unknown } | undefined;
+    vi.spyOn(TokenBucket.prototype, 'acquireBackground').mockImplementation(async function (this: {
+      config: unknown;
+    }) {
+      capturedBucket = this;
+    });
+
+    const nonDefaultPacing = {
+      capacity: DEFAULT_POLYGON_PACING.capacity + 5,
+      refillPerSecond: DEFAULT_POLYGON_PACING.refillPerSecond + 1,
+      reserveForPriority: (DEFAULT_POLYGON_PACING.reserveForPriority ?? 0) + 1,
+    };
+
+    const source = buildFailoverDataSource({
+      primary: stallingPrimary(),
+      calendar: new UsEquityRegularHoursCalendar(),
+      universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      fallbackPacing: nonDefaultPacing,
+      alertChannel: { postDataFailoverAlert: vi.fn(async () => undefined) },
+      logger: recordingLogger(),
+      now: () => localAsOf,
+    });
+
+    const bars = await source.fetchBars('SPY', localWindow, localAsOf);
+
+    expect(bars).toHaveLength(2);
+    expect(capturedBucket?.config).toEqual(nonDefaultPacing);
+    expect(capturedBucket?.config).not.toEqual(DEFAULT_POLYGON_PACING);
+  });
+
+  it('emits NO startup warn for a malformed SAMURAI_PACING_POLYGON_* when equitiesFallbackBarFetcher is injected (#825)', () => {
+    // Placed in this "(#823) default branch" describe block deliberately —
+    // this test is about the NON-default branch, but it shares the block's
+    // afterEach cleanup for SAMURAI_PACING_POLYGON_REFILL_PER_SEC.
+    //
+    // Defect 2: resolving pacing unconditionally computed (and warned about)
+    // a variable that a run with an injected fetcher never consults. This is
+    // the symptom gone — the malformed var is set, but nothing about Polygon
+    // pacing was ever read, so no warn fires.
+    process.env.SAMURAI_PACING_POLYGON_REFILL_PER_SEC = 'not-a-number';
+    const logger = recordingLogger();
+
+    buildFailoverDataSource({
+      primary: stallingPrimary(),
+      calendar: new UsEquityRegularHoursCalendar(),
+      universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      equitiesFallbackBarFetcher: async () => [fallbackBar()],
+      alertChannel: { postDataFailoverAlert: vi.fn(async () => undefined) },
+      logger,
+      now: () => ASOF,
+    });
+
+    const pacingWarns = logger.entries.filter((entry) =>
+      entry.message.includes('SAMURAI_PACING_POLYGON'),
+    );
+    expect(pacingWarns).toHaveLength(0);
+  });
+
+  it('still resolves pacing EAGERLY at boot, before any fetch, when the default branch is selected (#822 constraint from #825)', () => {
+    // #825 must not be "solved" by making resolution lazy-on-first-failover —
+    // the module doc requires it stay at construction time when the default
+    // Polygon fetcher is the one in play. Asserted by reading the warn
+    // immediately after `buildFailoverDataSource` returns, with no
+    // `fetchBars` call in between: a lazy implementation would leave this log
+    // empty at this point.
+    process.env.SAMURAI_PACING_POLYGON_REFILL_PER_SEC = 'not-a-number';
+    const logger = recordingLogger();
+
+    buildFailoverDataSource({
+      primary: stallingPrimary(),
+      calendar: new UsEquityRegularHoursCalendar(),
+      universe: [{ asset: 'SPY', asset_class: 'stocks' }],
+      // No equitiesFallbackBarFetcher — the default Polygon branch is selected.
+      alertChannel: { postDataFailoverAlert: vi.fn(async () => undefined) },
+      logger,
+      now: () => ASOF,
+    });
+
+    const pacingWarns = logger.entries.filter((entry) =>
+      entry.message.includes('SAMURAI_PACING_POLYGON'),
+    );
+    expect(pacingWarns).toHaveLength(1);
   });
 
   it('reuses the SAME lazily-constructed PolygonBarsClient across calls', async () => {

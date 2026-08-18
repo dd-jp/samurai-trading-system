@@ -3722,6 +3722,41 @@ describe('buildProductionOrchestrator', () => {
       });
     });
 
+    it('threads ProductionConfig.fallbackPacing to the default Polygon fetcher, unresolved, at the real composition root (#822)', () => {
+      // Not merely "the type accepts the field" — a malformed
+      // `SAMURAI_PACING_POLYGON_*` is set, and `config.fallbackPacing` also
+      // supplies a value. If the field reaches `buildFailoverDataSource`
+      // (per its `deps.fallbackPacing ?? resolveFallbackPacing(...)`
+      // wiring), `resolveFallbackPacing` never runs, so the malformed env
+      // var is never read and no warn fires. If the field were merely
+      // accepted by `ProductionConfig` but not threaded through
+      // `production.ts`'s call site, `resolveFallbackPacing` would still run
+      // against the malformed var and this test would catch that with a
+      // warn.
+      process.env.SAMURAI_PACING_POLYGON_REFILL_PER_SEC = 'not-a-number';
+      const logger = recordingLogger();
+
+      try {
+        buildProductionOrchestrator(
+          stubConfig(db, {
+            universe: EQUITIES_UNIVERSE,
+            logger,
+            fallbackPacing: { capacity: 9, refillPerSecond: 9, reserveForPriority: 0 },
+            // No equitiesFallbackBarFetcher and no dataSource override — the
+            // default Polygon branch is the one selected, which is exactly
+            // where the eager resolution (or its absence) happens.
+          }),
+        );
+      } finally {
+        delete process.env.SAMURAI_PACING_POLYGON_REFILL_PER_SEC;
+      }
+
+      const pacingWarns = logger.entries.filter((entry) =>
+        entry.message.includes('SAMURAI_PACING_POLYGON'),
+      );
+      expect(pacingWarns).toHaveLength(0);
+    });
+
     it('leaves an injected config.dataSource unwrapped', async () => {
       // The seam's own contract: a caller that brought its own source has
       // already decided where bars come from, and the root must not silently
