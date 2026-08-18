@@ -380,6 +380,10 @@ export class AlpacaCryptoLegEmulation {
    */
   async sweep(since: Date, fills: NormalizedFill[], failures: unknown[]): Promise<number> {
     let failed = 0;
+    // #842: read once for the whole sweep — see `fetchNewFills`' own
+    // `observedAt` in alpaca-adapter.ts for the reasoning, which applies here
+    // unchanged.
+    const observedAt = this.deps.clock.now();
 
     // Snapshot, for the same mid-iteration-mutation reason every other sweep
     // in this adapter snapshots.
@@ -399,7 +403,7 @@ export class AlpacaCryptoLegEmulation {
         const entry = await this.deps.call('fetchNewFills', () =>
           this.deps.client.getOrder(entryId),
         );
-        collectFill(entry, 'entry', key, instrument, since, fills);
+        collectFill(entry, 'entry', key, instrument, since, observedAt, fills);
 
         const stopId = bracket.stopOrderId;
         const targetId = bracket.targetOrderId;
@@ -407,12 +411,14 @@ export class AlpacaCryptoLegEmulation {
           stopId === null
             ? null
             : await this.deps.call('fetchNewFills', () => this.deps.client.getOrder(stopId));
-        if (stopOrder !== null) collectFill(stopOrder, 'stop', key, instrument, since, fills);
+        if (stopOrder !== null)
+          collectFill(stopOrder, 'stop', key, instrument, since, observedAt, fills);
         const targetOrder =
           targetId === null
             ? null
             : await this.deps.call('fetchNewFills', () => this.deps.client.getOrder(targetId));
-        if (targetOrder !== null) collectFill(targetOrder, 'target', key, instrument, since, fills);
+        if (targetOrder !== null)
+          collectFill(targetOrder, 'target', key, instrument, since, observedAt, fills);
 
         await this.watchDoubleFill(bracket, stopOrder, targetOrder, failures);
 

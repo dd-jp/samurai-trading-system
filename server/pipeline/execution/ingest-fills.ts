@@ -66,7 +66,6 @@ type ExitFill = Fill & { leg: 'stop' | 'target' | 'exit' };
 
 export async function ingestFills(input: ExecutionInput): Promise<void> {
   const { clock, broker, store } = input;
-  const now = clock.now();
 
   const positions = await store.getOpenPositions();
   if (positions.length === 0) return;
@@ -76,6 +75,17 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
   // expected and handled by the dedup below, so this only bounds the query.
   const since = earliest(positions.map((position) => position.opened_at));
   const fills = await broker.fetchNewFills(since);
+
+  // #842: read the clock AFTER the sweep, not before. `fetchNewFills` dates a
+  // fill the venue left undated at ITS OWN read of the same clock, taken part
+  // way through a paced, multi-request sweep — so a `now` sampled before that
+  // sweep is strictly EARLIER under a real clock, and `advanceLot`'s
+  // `timestamp <= now` no-lookahead filter would drop every undated fill on
+  // every poll, forever. Reading here makes `now` the later of the two by
+  // construction. Under the backtest clock (stepped by the harness, never by
+  // this call) both reads return the same instant, so simulated time is
+  // unchanged.
+  const now = clock.now();
 
   // Bucket once by lot rather than re-scanning the whole feed per position:
   // `since` is the OLDEST live lot's `opened_at`, so a single stale open lot
@@ -555,6 +565,14 @@ async function redistributeOneFlatten(
         broker_fill_id: `${rawFill.broker_fill_id}:${lotKey}`,
         qty: take,
         fee: rawFill.fee * share,
+        // #842: CLEARED, not inherited from `...rawFill`. `take` is this
+        // lot's ALLOCATION of the raw fill, not the venue's cumulative
+        // quantity for the order, and the id it is written under is
+        // lot-scoped rather than the bare order id — so neither half of
+        // `qty_is_cumulative`'s contract holds any more, and leaving it set
+        // would invite `advanceLot`'s top-up to take a difference against a
+        // number that was never a cumulative total.
+        qty_is_cumulative: false,
       };
 
       const bucket = byLot.get(lotKey);
@@ -778,13 +796,63 @@ async function advanceLot(
   const lotFills = fills.filter((fill) => fill.timestamp.getTime() <= now.getTime());
 
   const newFills: Fill[] = [];
+  /**
+   * #842: fills the dedup gate rejected that may STILL owe this lot quantity.
+   * A `qty_is_cumulative` feed (Alpaca — see `NormalizedFill`'s field doc)
+   * re-uses one id, the ORDER id, for every observation of a running
+   * `filled_qty`, so "we already have this id" does NOT mean "we already have
+   * this quantity". Collected here and reconciled below rather than inline so
+   * the reconciliation needs ONE store read for the whole call, however many
+   * fills the feed re-offered.
+   */
+  const cumulativeReoffers: NormalizedFill[] = [];
   let ingestedEntry = false;
   let ingestedExit = false;
   for (const fill of lotFills) {
-    if (await store.hasFill(fill.broker_fill_id)) continue;
+    if (await store.hasFill(fill.broker_fill_id)) {
+      if (fill.qty_is_cumulative === true) cumulativeReoffers.push(fill);
+      continue;
+    }
     newFills.push(toFill(fill, position.idempotency_key));
     ingestedEntry ||= fill.leg === 'entry';
     ingestedExit ||= fill.leg === 'exit';
+  }
+
+  /**
+   * The lot's persisted record, read AT MOST ONCE per call and reused by
+   * `recorded` below rather than read twice.
+   *
+   * The honest cost, stated rather than buried: on Alpaca every open lot's
+   * entry order is re-offered on EVERY poll (that is what a cumulative feed
+   * is), so this read now happens once per open lot per poll where before it
+   * happened only when a fill was genuinely new. That is one indexed local
+   * SQLite SELECT per lot on a 15-second cadence against a book of single-
+   * digit concurrent lots — bounded and local, and the alternative (deciding
+   * "is there an increment?" without looking at what is persisted) is exactly
+   * the guess this ticket exists to remove. Feeds that do not set the flag
+   * (Simulated, every backtest) keep the old shape untouched: no
+   * `cumulativeReoffers`, no read.
+   */
+  let persisted: Fill[] | null = null;
+  if (cumulativeReoffers.length > 0) {
+    persisted = await store.getFills(position.idempotency_key);
+    for (const fill of cumulativeReoffers) {
+      // Against `persisted` PLUS this poll's own new rows: a top-up already
+      // computed for the same order id in this same loop must count against
+      // the next one, or two re-offers in one pass would each claim the full
+      // increment.
+      const topUp = cumulativeTopUp(input, position, fill, [...persisted, ...newFills]);
+      if (topUp === null) continue;
+      newFills.push(topUp);
+      // THE POINT OF THE TICKET. `resizeProtectiveLegs` below fires on
+      // `ingestedEntry`, and it sets an ABSOLUTE quantity — book the
+      // increment without setting this and `filled_size` is repaired in the
+      // store while the venue's stop/target stay armed for the stale, smaller
+      // figure, leaving the increment naked. That is the whole defect, moved
+      // one layer down rather than fixed.
+      ingestedEntry ||= topUp.leg === 'entry';
+      ingestedExit ||= topUp.leg === 'exit';
+    }
   }
 
   if (newFills.length === 0) {
@@ -807,7 +875,10 @@ async function advanceLot(
   // ones, in the order the atomic write below will persist them), never from
   // a running total — rebuilding from the record is what makes a re-poll
   // converge on the same numbers instead of drifting.
-  const recorded = [...(await store.getFills(position.idempotency_key)), ...newFills];
+  const recorded = [
+    ...(persisted ?? (await store.getFills(position.idempotency_key))),
+    ...newFills,
+  ];
   const entryFills = recorded.filter((fill) => fill.leg === 'entry');
   const exitFills = recorded.filter(isExitFill);
 
@@ -1277,7 +1348,127 @@ function closedTrade(
   };
 }
 
-/** Normalized broker shape → the stored record, keyed to its lot. */
+/**
+ * Separates a top-up row's id from the base order id it tops up (#842).
+ * `'#'` and not `':'` deliberately: the flatten split in
+ * `redistributeFlattenFills` already owns `':'` for its per-lot suffix, and
+ * the two schemes must stay decidable from the id alone.
+ */
+const TOP_UP_ID_SEPARATOR = '#';
+
+/**
+ * #842. One observation of a CUMULATIVE feed (Alpaca's `getOrder`: a running
+ * `filled_qty` under a fixed order id — see `NormalizedFill.qty_is_cumulative`)
+ * whose id `hasFill` has already seen, turned into the INCREMENT it still owes
+ * this lot — or `null` when it owes nothing.
+ *
+ * Why an extra row rather than amending the existing one: `fills` rows are
+ * append-only by construction (`applyLotAdvance` inserts; there is no update
+ * path, and the table's PK is `(idempotency_key, broker_fill_id)`), and every
+ * derived figure — `filled_size`, `avg_entry_price`, realized PnL, the
+ * residual sweep's `recordedExposure` — is REBUILT from the rows on every
+ * poll. Appending the difference therefore repairs all of them at once, with
+ * no migration: the base id keeps the exact value it was first written under,
+ * so nothing already persisted is re-keyed and no in-flight lot is re-booked
+ * across the deploy boundary.
+ *
+ * The top-up's id embeds the cumulative quantity it settles, which makes it
+ * DETERMINISTIC and STABLE across polls — the same property
+ * `redistributeFlattenFills` needs of its own suffixed ids. A re-poll at the
+ * same cumulative recomputes the same id, finds it among `booked`, computes a
+ * zero delta, and returns `null`. Idempotent by arithmetic, not by luck.
+ */
+function cumulativeTopUp(
+  input: ExecutionInput,
+  position: OpenPosition,
+  fill: NormalizedFill,
+  booked: readonly Fill[],
+): Fill | null {
+  const base = fill.broker_fill_id;
+  const prefix = `${base}${TOP_UP_ID_SEPARATOR}`;
+  const priors = booked.filter(
+    (row) => row.broker_fill_id === base || row.broker_fill_id.startsWith(prefix),
+  );
+  // `hasFill` compares the id VALUE alone, across every lot — so an id it
+  // knows need not be an id THIS lot holds. With no prior row here there is
+  // nothing to take a difference against, and inventing the whole cumulative
+  // quantity as this lot's would double-book whichever lot actually holds it.
+  if (priors.length === 0) return null;
+
+  const bookedQty = totalQty(priors);
+  const delta = fill.qty - bookedQty;
+  // The same relative tolerance `coversQty` judges flatness by (ADR-0005) —
+  // a second tolerance for the same float64 noise is how two surfaces come to
+  // disagree about the same lot.
+  //
+  // `delta < 0` — the venue reporting LESS than we have booked — falls out
+  // here too, silently. It is venue/store divergence rather than a lost
+  // increment, it is not the direction that leaves shares naked (protection
+  // would be OVER-sized, not under), and there is no safe repair from here:
+  // fill rows are append-only and un-booking a persisted fill on a venue
+  // hiccup is strictly worse than carrying it. `reconcile()` owns divergence.
+  if (!(delta > Math.abs(fill.qty) * QTY_EPSILON_RELATIVE)) return null;
+
+  // `price` on a cumulative observation is the cumulative AVERAGE, so the
+  // increment's own price is what makes the average true — and a
+  // `weightedAvgPrice` over base + top-up then reproduces the venue's
+  // reported average to within ADR-0005's summation bound, rather than
+  // drifting toward whichever tranche was larger.
+  const bookedNotional = priors.reduce((sum, row) => sum + row.price * row.qty, 0);
+  const derivedPrice = (fill.price * fill.qty - bookedNotional) / delta;
+  const priceIsUsable = Number.isFinite(derivedPrice) && derivedPrice > 0;
+  if (!priceIsUsable) {
+    // Book the QUANTITY anyway, at the venue's cumulative average. When
+    // quantity and price accuracy conflict, quantity wins: unprotected shares
+    // are the failure that costs real money (no stop covers them, no exposure
+    // cap sees them, flat-by-close does not exit them), whereas a last-tranche
+    // price that is off skews `avg_entry_price` and the R-multiple and nothing
+    // else. Logged because a non-positive derived price means the venue's own
+    // cumulative average and the tranche history disagree, which is worth an
+    // operator's attention even though it does not stop the ingest.
+    safeLog(input.logger, {
+      trace_id: input.trace_id,
+      stage: 'execution',
+      level: 'warn',
+      message:
+        '#842: cumulative fill top-up produced an unusable increment price — booking the ' +
+        "quantity at the venue's cumulative average instead, so avg_entry_price is approximate",
+      payload: {
+        idempotency_key: position.idempotency_key,
+        broker_fill_id: base,
+        booked_qty: bookedQty,
+        venue_cumulative_qty: fill.qty,
+        derived_price: derivedPrice,
+      },
+    });
+  }
+
+  return toFill(
+    {
+      ...fill,
+      broker_fill_id: `${prefix}${fill.qty}`,
+      qty: delta,
+      price: priceIsUsable ? derivedPrice : fill.price,
+      // Fees are cumulative on the same observation, so the increment owes
+      // only what has not been booked. Clamped: a venue that reports a
+      // SHRINKING fee total must not credit this lot a negative fee, which
+      // would read as income in realized PnL.
+      fee: Math.max(0, fill.fee - priors.reduce((sum, row) => sum + row.fee, 0)),
+    },
+    position.idempotency_key,
+  );
+}
+
+/**
+ * Normalized broker shape → the stored record, keyed to its lot.
+ *
+ * Enumerates its fields rather than spreading, which is what keeps
+ * `qty_is_cumulative` (#842) OUT of the persisted row — deliberately, not by
+ * omission: a stored `Fill` is always an increment by the time it is written
+ * (`cumulativeTopUp` has already taken the difference), so a row carrying a
+ * "this is a running total" flag would be a lie that every later rebuild of
+ * `filled_size` would have to re-litigate.
+ */
 function toFill(fill: NormalizedFill, idempotencyKey: string): Fill {
   return {
     idempotency_key: idempotencyKey,

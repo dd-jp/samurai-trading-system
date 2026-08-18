@@ -866,6 +866,14 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     const fills: NormalizedFill[] = [];
     const failures: unknown[] = [];
     /**
+     * #842: the date a fill the venue reports FILLED but does not DATE is
+     * booked at — see `collectFill`'s `filled_at` guard for why Alpaca may
+     * legitimately hand us one. Read ONCE for the whole sweep rather than per
+     * `collectFill` call, so two legs of the same bracket observed in the same
+     * pass cannot be ordered against each other by clock jitter alone.
+     */
+    const observedAt = this.clock.now();
+    /**
      * Counted apart from `failures.length`, which now also collects journal and
      * alert-delivery failures (#298). Reporting those as "brackets failed"
      * would send an operator reading the soak log to the venue to investigate
@@ -886,9 +894,9 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         );
 
         const instrument = fromAlpacaSymbol(symbolOf(entry));
-        collectFill(entry, 'entry', clientOrderId, instrument, since, fills);
+        collectFill(entry, 'entry', clientOrderId, instrument, since, observedAt, fills);
         for (const leg of entry.legs ?? []) {
-          collectFill(leg, legName(leg), clientOrderId, instrument, since, fills);
+          collectFill(leg, legName(leg), clientOrderId, instrument, since, observedAt, fills);
         }
       } catch (error) {
         // Skipped, not swallowed: this bracket contributes nothing to THIS
@@ -1004,7 +1012,15 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     for (const [clientOrderId, orderId] of [...this.flattens]) {
       try {
         const order = await this.call('fetchNewFills', () => this.input.client.getOrder(orderId));
-        collectFill(order, 'exit', clientOrderId, fromAlpacaSymbol(symbolOf(order)), since, fills);
+        collectFill(
+          order,
+          'exit',
+          clientOrderId,
+          fromAlpacaSymbol(symbolOf(order)),
+          since,
+          observedAt,
+          fills,
+        );
         if (mapOrderState(order.status) !== 'submitted') {
           this.flattens.delete(clientOrderId);
         }
@@ -1056,9 +1072,9 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       try {
         const order = await this.call('fetchNewFills', () => this.input.client.getOrder(orderId));
         const instrument = fromAlpacaSymbol(symbolOf(order));
-        collectFill(order, 'target', lotKey, instrument, since, fills);
+        collectFill(order, 'target', lotKey, instrument, since, observedAt, fills);
         for (const leg of order.legs ?? []) {
-          collectFill(leg, legName(leg), lotKey, instrument, since, fills);
+          collectFill(leg, legName(leg), lotKey, instrument, since, observedAt, fills);
         }
         if (mapOrderState(order.status) !== 'submitted') {
           this.rearmedLegs.delete(lotKey);
