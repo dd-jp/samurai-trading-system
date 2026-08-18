@@ -152,7 +152,7 @@ const decide = (
   });
 
 describe('#800 — the Trader intent and the D5 cap agree by construction', () => {
-  it('arms the gate at the Trader\'s OWN fractions, unscaled', () => {
+  it("arms the gate at the Trader's OWN fractions, unscaled", () => {
     // The 2x itself, asserted where it lived: as an equality between the
     // Trader's named constants and the fractions the composition root hands
     // the gate. Under `EQUITY_LEG_FRACTION_OF_CAPITAL = 0.5` these differed by
@@ -163,7 +163,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     expect(caps?.single_stock_etp_3x).toBe(D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION);
   });
 
-  it('does NOT trim an armed index entry sized at the Trader\'s intent', () => {
+  it("does NOT trim an armed index entry sized at the Trader's intent", () => {
     const intended = D5_INDEX_ETP_DEPLOYMENT_FRACTION * EQUITY; // £350 on the book
 
     const decision = decide(d5InIsolation(), intentFor('3USL', intended, 'entry'));
@@ -251,7 +251,7 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
 });
 
 describe("D5's envelope is unreachable in the SHIPPED profile, at every book size", () => {
-  it('trims the Trader\'s D5-sized entry to the 5% per-trade cap instead', () => {
+  it("trims the Trader's D5-sized entry to the 5% per-trade cap instead", () => {
     // Found by these tests, not reasoned to. `max_position_size` is 5% of
     // equity and D5's index envelope is 35% of the SAME equity, so whenever
     // the Trader's ask exceeds 5% the generic per-trade cap binds first: a
