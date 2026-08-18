@@ -66,7 +66,12 @@ export type {
   DataSourceFallbackLeg,
   FailoverDataSourceConfig,
 } from './sources/failover-data-source.js';
-export { FailoverDataSource } from './sources/failover-data-source.js';
+export {
+  FAILOVER_CIRCUIT_COOLDOWN_MS,
+  FAILOVER_CIRCUIT_FAILURE_THRESHOLD,
+  FailoverDataSource,
+  PrimaryCircuitOpenError,
+} from './sources/failover-data-source.js';
 export type {
   IbkrClient,
   IbkrHistoricalBar,

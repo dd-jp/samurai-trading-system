@@ -36,6 +36,8 @@ import {
   AlpacaDataSource,
   AlwaysOpenCalendar,
   AssetClassRoutingDataSource,
+  FAILOVER_CIRCUIT_COOLDOWN_MS,
+  FAILOVER_CIRCUIT_FAILURE_THRESHOLD,
   FixtureDataSource,
   LseRegularHoursCalendar,
   londonEntryWindow,
@@ -3755,6 +3757,88 @@ describe('buildProductionOrchestrator', () => {
         entry.message.includes('SAMURAI_PACING_POLYGON'),
       );
       expect(pacingWarns).toHaveLength(0);
+    });
+
+    /**
+     * #824 — the circuit breaker, asserted from the COMPOSITION ROOT for the
+     * same reason the rest of this block is: `yarn smoke` injects
+     * `config.dataSource` and therefore never reaches `buildFailoverDataSource`
+     * at all, so this case (and the recovery one below) is the only proof that
+     * a breaker exists on the path a live tick actually takes.
+     *
+     * Asserted on the ALPACA CLIENT's own call count, not on the fallback's:
+     * the ticket's cost is the ~30s stalled primary read (three 10s attempts
+     * plus backoff inside `AlpacaHttpDataClient`), so "the primary was never
+     * called" is the claim. The rising fallback count is asserted alongside it
+     * so the case cannot pass merely because the reads stopped happening.
+     */
+    const BREAKER_UNIVERSE = [
+      { asset: 'SPY', asset_class: 'stocks' as const },
+      { asset: 'QQQ', asset_class: 'stocks' as const },
+      { asset: 'AAPL', asset_class: 'stocks' as const },
+      { asset: 'TSLA', asset_class: 'stocks' as const },
+    ];
+
+    /** The fallback bars, stamped with whichever symbol was asked for. */
+    function fallbackFetcherFor() {
+      return vi.fn(async (symbol: string) =>
+        FALLBACK_BARS.map((bar) => ({ ...bar, instrument: symbol })),
+      );
+    }
+
+    it('stops paying the stalled primary once the leg circuit opens (#824)', async () => {
+      const alpaca = stallingAlpacaClient();
+      const fallback = fallbackFetcherFor();
+      const orchestrator = buildProductionOrchestrator(
+        stubConfig(db, {
+          universe: BREAKER_UNIVERSE,
+          alpacaDataClient: alpaca,
+          equitiesFallbackBarFetcher: fallback,
+          dataFailoverAlerts: { postDataFailoverAlert: vi.fn(async () => undefined) },
+        }),
+      );
+
+      for (const symbol of BREAKER_UNIVERSE.map((i) => i.asset)) {
+        const bars = await orchestrator.marketData.getBars(symbol, WINDOW, START);
+        expect(bars.map((bar) => bar.source)).toEqual(['polygon', 'polygon']);
+      }
+
+      // Every one of the four names was served, but only the first
+      // FAILOVER_CIRCUIT_FAILURE_THRESHOLD of them paid Alpaca's timeout.
+      expect(fallback).toHaveBeenCalledTimes(BREAKER_UNIVERSE.length);
+      expect(alpaca.getBars).toHaveBeenCalledTimes(FAILOVER_CIRCUIT_FAILURE_THRESHOLD);
+    });
+
+    it('re-probes the primary after the cooldown, on the orchestrator clock (#824)', async () => {
+      // The unattended-soak property: no operator, no restart. The breaker
+      // ages on the root's own `Clock` — which is why this drives a
+      // `SimulatedClock` forward rather than waiting on wall time.
+      const clock = new SimulatedClock(START);
+      const alpaca = stallingAlpacaClient();
+      const orchestrator = buildProductionOrchestrator(
+        stubConfig(db, {
+          clock,
+          universe: BREAKER_UNIVERSE,
+          alpacaDataClient: alpaca,
+          equitiesFallbackBarFetcher: fallbackFetcherFor(),
+          dataFailoverAlerts: { postDataFailoverAlert: vi.fn(async () => undefined) },
+        }),
+      );
+
+      for (const symbol of BREAKER_UNIVERSE.map((i) => i.asset)) {
+        await orchestrator.marketData.getBars(symbol, WINDOW, START);
+      }
+      expect(alpaca.getBars).toHaveBeenCalledTimes(FAILOVER_CIRCUIT_FAILURE_THRESHOLD);
+
+      // Well past the cooldown, and a WHOLE BAR later: the clock moves a full
+      // `1h` so the Tier-2 cache cannot satisfy the read from the rows the
+      // first pass stored and make the assertion vacuous — a cache hit never
+      // reaches the source at all, and would look exactly like a breaker that
+      // stayed open.
+      expect(60 * 60 * 1000).toBeGreaterThan(FAILOVER_CIRCUIT_COOLDOWN_MS);
+      clock.advanceTo(new Date(START.getTime() + 60 * 60 * 1000));
+      await orchestrator.marketData.getBars('SPY', WINDOW, clock.now());
+      expect(alpaca.getBars).toHaveBeenCalledTimes(FAILOVER_CIRCUIT_FAILURE_THRESHOLD + 1);
     });
 
     it('leaves an injected config.dataSource unwrapped', async () => {
