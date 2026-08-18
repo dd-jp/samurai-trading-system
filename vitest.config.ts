@@ -43,6 +43,13 @@ export default defineConfig({
     // file that escaped — see the file for the 92-passing-tests-two-live-vendors
     // measurement that produced it.
     setupFiles: ['./vitest.setup.ts'],
+    // #809: the console/default reporter is scrollback only — once the
+    // process exits, a failing test's name is gone unless the caller
+    // happened to keep the output. `junit` writes a durable, machine-readable
+    // per-test record to a gitignored path so a failure survives the run.
+    // `default` stays first so existing gate scripts that grep stdout are
+    // unaffected.
+    reporters: ['default', ['junit', { outputFile: './.vitest-reports/junit.xml' }]],
     coverage: {
       provider: 'v8',
       include: ['server/**/*.ts', 'contracts/**/*.ts'],

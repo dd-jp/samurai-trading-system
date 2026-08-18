@@ -228,6 +228,10 @@ npm-debug.log*
 .npm/
 coverage/
 
+# #809: durable per-test JUnit record from vitest.config.ts's `reporters`,
+# so a failing test's name survives after the process/scrollback is gone.
+.vitest-reports/
+
 # Shared SQLite state store (local dev data, never committed)
 *.sqlite
 *.sqlite3

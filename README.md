@@ -279,6 +279,12 @@ yarn vitest run server/pipeline/debate-engine/
 
 The suite is **2920 tests across 188 files** (2919 passing; one `describe.skipIf` integration test that runs only when live LLM credentials are present). Measured 2026-08-09 on `yarn test`.
 
+`vitest.config.ts` also writes a durable, machine-readable per-test record to
+`.vitest-reports/junit.xml` (gitignored) on every run, alongside the normal
+console output. If a gate run fails and the terminal scrollback that showed
+the failing test's name is gone, read that file instead of re-running —
+it survives after the process exits ([#809](https://github.com/dd-jp/samurai-trading-system/issues/809)).
+
 CI (`.github/workflows/ci.yml`) runs on every PR and has two jobs:
 
 - **checks** — `yarn lint`, `yarn typecheck`, `yarn build`, `yarn test`. Each runs even if an earlier one fails, so a lint break can't hide a test break.
