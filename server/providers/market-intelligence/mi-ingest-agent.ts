@@ -17,6 +17,14 @@
  * run silently measured less than it appeared to. `hydrate()` reloads the store
  * from the archive at startup, so a restart costs nothing.
  *
+ * That is true PER SOURCE, not globally (#835). `hydrate()` replays only the
+ * sources `MI_SOURCE_HYDRATION` marks `hydrate` — items that are dated
+ * observations. A source whose item is a trailing-window statistic (Polymarket's
+ * 24h delta) is archived for replay but deliberately NOT pushed back into the
+ * live store at boot, because re-serving a stale measurement as current is a
+ * different defect from losing it. `archive/mi-sources.ts` states each policy
+ * and why.
+ *
  * ## Deviation from #554 sub-decision 4, stated plainly
  *
  * That decision says `MarketIntelligenceStore` "becomes a read-through view
@@ -31,12 +39,13 @@
 import type { LlmClient } from '../../pipeline/debate-engine/index.js';
 import type { AssetClass, Clock, Logger } from '../../shared/index.js';
 import type { ArchivedItem, MiArchiveStore, RawArchiveRow } from './archive/mi-archive-store.js';
+import { HYDRATING_MI_SOURCES, MI_SOURCES } from './archive/mi-sources.js';
 import type { MarketIntelligenceStore } from './index.js';
 import { scoreItems } from './scoring/item-scorer.js';
 import type { AlpacaNewsArticle, AlpacaNewsClient } from './sources/alpaca-news-client.js';
 import type { IntelligenceItem } from './types.js';
 
-const SOURCE_ALPACA = 'alpaca-news';
+const SOURCE_ALPACA = MI_SOURCES.alpacaNews;
 
 /**
  * How far back a refresh looks.
@@ -95,7 +104,12 @@ export class MiIngestAgent {
   hydrate(): void {
     const asOf = this.deps.clock.now();
     for (const asset_class of this.deps.assetClasses) {
-      const items = this.deps.archive.itemsKnownAt(asset_class, asOf);
+      // Only the sources whose archived items are dated OBSERVATIONS (#835).
+      // Polymarket's item is a trailing 24h delta and GDELT's, when its scoring
+      // half lands, is a 1h-vs-24h window statistic; replaying either at boot
+      // would re-serve a stale measurement as current. `mi-sources.ts` states
+      // which is which, and typing forces a new source to answer the question.
+      const items = this.deps.archive.itemsKnownAt(asset_class, asOf, HYDRATING_MI_SOURCES);
       if (items.length > 0) {
         this.deps.store.ingest({ agent_id: SOURCE_ALPACA, timestamp: asOf, asset_class, items });
       }

@@ -3,6 +3,7 @@ import { NO_DATA_MARKER, NOOP_ANALYST_TELEMETRY } from '../../pipeline/analysts/
 import type { Clock } from '../../shared/index.js';
 import { AlwaysOpenCalendar } from '../market-data-service/index.js';
 import { MiArchiveStore } from './archive/mi-archive-store.js';
+import { MI_SOURCES } from './archive/mi-sources.js';
 import { MarketIntelligenceStore } from './index.js';
 import { MiIngestAgent } from './mi-ingest-agent.js';
 import type { AlpacaNewsArticle, AlpacaNewsClient } from './sources/alpaca-news-client.js';
@@ -232,5 +233,69 @@ describe('MiIngestAgent', () => {
     expect(restarted.getContext('stocks', WINDOW, 't').news).toEqual([]);
     afterRestart.hydrate();
     expect(restarted.getContext('stocks', WINDOW, 't').news).toHaveLength(1);
+  });
+
+  /**
+   * #835. Polymarket archives its items so the source is replayable, and its
+   * item is a trailing 24h delta — replaying it at boot would re-serve a stale
+   * measurement as current, and compound the time-axis inflation
+   * `polymarket-agent.ts`'s limitation 3 records. `MI_SOURCE_HYDRATION` is
+   * where that is decided; this is the boot read honouring it.
+   */
+  it('hydrate() replays observation sources and skips archive-only ones (#835)', async () => {
+    const { agent, archive } = build([article()]);
+    await agent.refresh('t', 'AAPL', 'stocks');
+
+    // Seeded directly, so the assertion cannot pass just because nothing wrote
+    // a Polymarket item in the first place.
+    const at = new Date('2026-08-15T11:45:00Z');
+    archive.write(
+      [
+        {
+          source: MI_SOURCES.polymarket,
+          native_id: 'FOMC-2026-09:2026-08-15T11:00:00.000Z',
+          updated_at: at,
+          payload: '{}',
+          ingested_at: at,
+          fidelity: 'live',
+        },
+      ],
+      [
+        {
+          source: MI_SOURCES.polymarket,
+          native_id: 'FOMC-2026-09:2026-08-15T11:00:00.000Z',
+          updated_at: at,
+          entity: 'FOMC-2026-09',
+          asset_class: 'stocks',
+          ingested_at: at,
+          item: {
+            id: 'polymarket:FOMC-2026-09:2026-08-15T11:00:00.000Z',
+            source: MI_SOURCES.polymarket,
+            type: 'news',
+            timestamp: at,
+            entity: 'FOMC-2026-09',
+            headline: 'Fed holds in September: 0.295 -> 0.440 over 24h',
+            sentiment: 1,
+            confidence: 0.7,
+          },
+        },
+      ],
+    );
+
+    const restarted = new MarketIntelligenceStore(clock);
+    new MiIngestAgent({
+      archive,
+      store: restarted,
+      newsClient: newsClient([]),
+      // biome-ignore lint/suspicious/noExplicitAny: minimal LlmClient stand-in.
+      llmClient: scoringClient().client as any,
+      clock,
+      assetClasses: ['stocks'],
+    }).hydrate();
+
+    const news = restarted.getContext('stocks', WINDOW, 't').news;
+    expect(news).toHaveLength(1);
+    expect(news[0]?.source).toBe('benzinga');
+    expect(news.some((entry) => entry.source === MI_SOURCES.polymarket)).toBe(false);
   });
 });

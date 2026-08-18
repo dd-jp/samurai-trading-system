@@ -2045,6 +2045,7 @@ export interface SmokeObservations {
    * (a mechanism nothing consumes) lives.
    */
   polymarketRowsArchived: number;
+  polymarketItemsArchived: number;
   polymarketNewsItems: number;
   /**
    * From `cosine_setups` — the row `Trader.decide` writes at decision time
@@ -2132,6 +2133,13 @@ export function readSmokeObservations(
       .all() as SmokeObservations['flattenSubmissions'],
     gdeltRowsArchived: miArchive?.rawRows(SOURCE_GDELT).length ?? 0,
     polymarketRowsArchived: miArchive?.rawRows(SOURCE_POLYMARKET).length ?? 0,
+    // #835: the ITEMS table, not the raw one. This source wrote `[]` for its
+    // items, which no raw-row count could see, and `hydrate()` deliberately
+    // does not read them back — so without this line nothing in the gate would
+    // notice them going missing again.
+    polymarketItemsArchived:
+      miArchive?.itemsKnownAt(POLYMARKET_ASSET_CLASS, SMOKE_RUN_INSTANT, [SOURCE_POLYMARKET])
+        .length ?? 0,
     // The SAME 24h window `fundamental` reads (`MI_CONTEXT_WINDOW_MS`), on the
     // same store instance, so this counts what the analyst would have seen and
     // not merely what was written.
@@ -3337,6 +3345,13 @@ export function evaluateSmokeGate(
         'market the fixture serves (#504)',
     );
   }
+  if (observations.polymarketItemsArchived !== SMOKE_POLYMARKET_EXPECTED_ITEMS) {
+    failures.push(
+      `Polymarket archived ${observations.polymarketItemsArchived} items in mi_items, expected ` +
+        `exactly ${SMOKE_POLYMARKET_EXPECTED_ITEMS} — 0 with rows archived means the source is ` +
+        'back to writing raw bytes with no items, which makes it unreplayable as items (#835)',
+    );
+  }
   if (observations.polymarketNewsItems !== SMOKE_POLYMARKET_EXPECTED_ITEMS) {
     failures.push(
       `Polymarket put ${observations.polymarketNewsItems} items in the news bucket, expected ` +
@@ -3434,6 +3449,7 @@ export function formatSmokeReport(
   // change.
   lines.push(
     `Polymarket macro rows archived: ${observations.polymarketRowsArchived}, ` +
+      `items archived: ${observations.polymarketItemsArchived}, ` +
       `news items served: ${observations.polymarketNewsItems}`,
   );
 

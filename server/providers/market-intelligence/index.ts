@@ -331,6 +331,13 @@ export {
   type RawArchiveRow,
 } from './archive/mi-archive-store.js';
 export {
+  HYDRATING_MI_SOURCES,
+  MI_SOURCE_HYDRATION,
+  MI_SOURCES,
+  type MiHydrationPolicy,
+  type MiSourceId,
+} from './archive/mi-sources.js';
+export {
   GdeltIngestAgent,
   type GdeltIngestAgentDeps,
   SOURCE_GDELT,

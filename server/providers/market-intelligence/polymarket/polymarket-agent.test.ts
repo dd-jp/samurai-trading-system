@@ -3,7 +3,12 @@ import type { Clock, Logger } from '../../../shared/index.js';
 import { MiArchiveStore } from '../archive/mi-archive-store.js';
 import { MarketIntelligenceStore } from '../index.js';
 import type { CuratedMacroMarket } from './curated-markets.js';
-import { POLYMARKET_ASSET_CLASS, PolymarketAgent, SOURCE_POLYMARKET } from './polymarket-agent.js';
+import {
+  POLYMARKET_ASSET_CLASS,
+  PolymarketAgent,
+  SOURCE_POLYMARKET,
+  toArchivedItem,
+} from './polymarket-agent.js';
 import type { PolymarketMarket, PolymarketPricePoint } from './polymarket-client.js';
 
 const NOW = new Date('2026-08-17T12:00:00Z');
@@ -214,15 +219,49 @@ describe('PolymarketAgent.refresh', () => {
     expect(fetchEventMarket).toHaveBeenCalledTimes(1);
   });
 
-  it('archives the raw market bytes and NO archived items', async () => {
+  it('archives the raw market bytes AND the derived items (#835)', async () => {
     const archive = new MiArchiveStore();
     const { agent } = agentWith({ archive });
 
     await agent.refresh('t1');
 
     expect(archive.rawRows(SOURCE_POLYMARKET)).toHaveLength(1);
-    // Items are deliberately not archived — see the agent header.
-    expect(archive.itemsKnownAt(POLYMARKET_ASSET_CLASS, NOW)).toHaveLength(0);
+    // Reads `mi_items`, not the raw table: writing `[]` for the items is the
+    // exact defect #835 fixed, and only an items read can see it.
+    const archived = archive.itemsKnownAt(POLYMARKET_ASSET_CLASS, NOW, [SOURCE_POLYMARKET]);
+    expect(archived).toHaveLength(1);
+    expect(archived[0]?.source).toBe(SOURCE_POLYMARKET);
+    archive.close();
+  });
+
+  /**
+   * `mi_items` foreign-keys `(source, native_id, updated_at)` into
+   * `mi_archive_raw`, and the store leaves `PRAGMA foreign_keys` at SQLite's
+   * default of OFF — so a drifted key would not throw, it would silently orphan
+   * the item and break the provenance `retrievalEvidence` means (#555).
+   */
+  it('keys the archived item to its own raw row, so provenance links', async () => {
+    const archive = new MiArchiveStore();
+    const { agent } = agentWith({ archive });
+
+    await agent.refresh('t1');
+
+    const raw = archive.rawRows(SOURCE_POLYMARKET)[0];
+    const served = archive.itemsKnownAt(POLYMARKET_ASSET_CLASS, NOW, [SOURCE_POLYMARKET])[0];
+    expect(raw).toBeDefined();
+    expect(served).toBeDefined();
+    if (raw === undefined || served === undefined) return;
+
+    // Asserted against `toArchivedItem` directly, NOT against what
+    // `itemsKnownAt` serves: that read selects `asset_class, item_json` and
+    // never touches the key columns, so a round-trip assertion would stay
+    // green against a drifted `native_id` and prove nothing.
+    const archived = toArchivedItem(served, raw);
+    expect(archived.source).toBe(raw.source);
+    expect(archived.native_id).toBe(raw.native_id);
+    expect(archived.updated_at.toISOString()).toBe(raw.updated_at.toISOString());
+    expect(archived.ingested_at.toISOString()).toBe(raw.ingested_at.toISOString());
+    archive.close();
   });
 });
 

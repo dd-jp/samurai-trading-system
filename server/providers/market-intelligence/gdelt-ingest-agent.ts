@@ -36,6 +36,7 @@
 import type { Clock, LogEntry, Logger } from '../../shared/index.js';
 import { logCaughtFailure, safeLog } from '../../shared/safe-log.js';
 import type { MiArchiveStore, RawArchiveRow } from './archive/mi-archive-store.js';
+import { MI_SOURCES } from './archive/mi-sources.js';
 import {
   batchTimeFromUrl,
   type GdeltGkgBatch,
@@ -43,7 +44,7 @@ import {
 } from './sources/gdelt-gkg-client.js';
 
 /** The archive `source` key for every GDELT row. */
-export const SOURCE_GDELT = 'gdelt-gkg';
+export const SOURCE_GDELT = MI_SOURCES.gdeltGkg;
 
 export interface GdeltIngestAgentDeps {
   archive: MiArchiveStore;
