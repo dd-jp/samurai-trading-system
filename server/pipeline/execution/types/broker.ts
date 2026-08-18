@@ -206,6 +206,24 @@ export interface BrokerAdapter {
    * so a backtest cannot see a fill ahead of simulated T. Re-offering an
    * already-returned fill is expected — `ingestFills()` dedups on
    * `broker_fill_id`.
+   *
+   * NOT PROMISED, deliberately (#838): that a given lot's fills are dated
+   * MONOTONICALLY across successive calls. This port makes an OUTPUT-side
+   * constraint only ("never dated before `since`"); it says nothing about
+   * whether a later call can hand back an EARLIER timestamp for the same lot
+   * than an earlier call did. It cannot promise otherwise, for two reasons.
+   * A lot is not one ordered stream: its entry, stop, target and exit legs
+   * all fill under the SAME `idempotency_key`, and a protective leg can fire
+   * while the entry is still filling, so the lot's fills are not
+   * monotonic even under a perfectly behaved venue. And #842 established that
+   * Alpaca's docs CANNOT settle when `filled_at` is populated relative to
+   * `filled_qty`, so whether the shipped adapter's own re-offers are
+   * monotonic is not determinable, let alone testable. Callers must
+   * therefore never raise `since` to a timestamp they
+   * have already ingested for a lot — an under-fetch is unrecoverable
+   * (`broker_fill_id` dedup guards the opposite direction only). See the
+   * declined per-lot floor in `ingestFills()` for the concrete money-losing
+   * path this rules out.
    */
   fetchNewFills(since: Date): Promise<NormalizedFill[]>;
   /**

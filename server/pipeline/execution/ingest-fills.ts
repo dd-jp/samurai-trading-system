@@ -73,6 +73,52 @@ export async function ingestFills(input: ExecutionInput): Promise<void> {
   // The feed's floor is the oldest live lot: no fill of ours predates the
   // `execute()` that opened the lot it belongs to. Re-offered fills are
   // expected and handled by the dedup below, so this only bounds the query.
+  //
+  // #838 (#289's M10) proposed raising this per lot, to
+  // `max(opened_at, last_ingested_fill_ts)`, so that one stale open lot stops
+  // dragging the feed's span across the whole process lifetime. EVALUATED AND
+  // DECLINED — the floor stays GLOBAL and stays keyed on `opened_at` alone.
+  // Do not reinstate the per-lot floor without re-reading this and #838:
+  //
+  //  * A LOT IS NOT ONE ORDERED STREAM. `last_ingested_fill_ts` is a MAX over
+  //    the lot's `fills` rows, and EVERY LEG SHARES THE LOT'S
+  //    `idempotency_key` (the table's PK is `(idempotency_key,
+  //    broker_fill_id)`; `leg` is a column) — so it is a max over entry,
+  //    stop, target AND exit fills, which nothing orders against each other.
+  //    A stop or target leg activates sized to the quantity filled SO FAR and
+  //    can fire while the entry is still filling; that exit fill then raises
+  //    the floor above the entry's own progression, and the next cumulative
+  //    entry observation — dated at its true, earlier instant —
+  //    is dropped. This needs no assumption about the venue at all.
+  //  * A SECOND path, under #842's venue model: Alpaca may report a positive
+  //    `filled_qty` with a NULL `filled_at`, and `collectFill` then books the
+  //    fill at `observedAt`, the adapter's clock reading at the START of that
+  //    sweep. If `filled_at` turns out to carry FIRST-fill semantics and to
+  //    propagate later than `filled_qty`, a subsequent poll re-offers the
+  //    same order dated at that earlier true instant — below a floor already
+  //    raised to `observedAt`. Whether Alpaca behaves that way is exactly
+  //    what #842 established CANNOT BE DETERMINED from the docs, and that is
+  //    the point: an ordering we cannot determine is an ordering we cannot
+  //    state, and a live-money path must not rest on one.
+  //  * Either path ends the same way, and the ending costs money:
+  //    `collectFill`'s strict `filledAt < since` guard drops the observation
+  //    INSIDE the adapter, so `cumulativeTopUp` never sees the increment and
+  //    the shares it owed this lot are never booked — unprotected, invisible
+  //    to the exposure caps, not exited by flat-by-close. `hasFill` cannot
+  //    recover it: dedup protects against OVER-fetching, and this is
+  //    UNDER-fetching.
+  //  * The GLOBAL floor has no such failure mode: it never rises above a
+  //    lot's own `opened_at`, so a fill dated below anything already ingested
+  //    still lands. The per-lot floor CREATES the drop.
+  //  * `BrokerAdapter.fetchNewFills` deliberately does NOT promise per-lot
+  //    timestamp monotonicity, and cannot — see its doc in types/broker.ts.
+  //  * The win would have been small anyway: `since` does not bound the venue
+  //    round-trips. `AlpacaBrokerAdapter.fetchNewFills` issues one `getOrder`
+  //    per entry in `brackets` regardless of it and filters afterwards, so
+  //    the returned fill count is bounded by brackets x legs, not by span.
+  //    The saving is a constant factor on `hasFill` round-trips per poll;
+  //    `brackets` — never pruned, and the thing that actually grows without
+  //    bound — is untouched by any change to this floor.
   const since = earliest(positions.map((position) => position.opened_at));
   const fills = await broker.fetchNewFills(since);
 
