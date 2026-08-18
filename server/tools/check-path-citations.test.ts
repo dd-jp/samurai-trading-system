@@ -332,16 +332,16 @@ describe('the index resolver, against this repository', () => {
     // Both dot-directories are in `.gitignore` and both have tracked files anyway, so
     // the index alone would admit them; `SKIPPED_DIRS` is what keeps them out, and it is
     // now the ONLY reason the dotfile special case could be deleted.
+    //
+    // Asserted by membership, never as the full set: pinning the exact list would turn
+    // "someone added a top-level directory" into a red citation check, which is the
+    // stale-list cost this checker's whole design exists to avoid.
     const roots = knownRootsOf(REPO_ROOT);
-    expect([...roots].sort()).toEqual([
-      '.github',
-      'client',
-      'contracts',
-      'docs',
-      'e2e',
-      'server',
-      'src',
-    ]);
+    expect(roots.has('.github')).toBe(true);
+    expect(roots.has('server')).toBe(true);
+    expect(roots.has('src')).toBe(true);
+    expect(roots.has('.claude')).toBe(false);
+    expect(roots.has('.yarn')).toBe(false);
   });
 
   it('refuses to guess outside a git checkout rather than falling back to the filesystem', () => {

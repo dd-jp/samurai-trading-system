@@ -187,8 +187,9 @@ export interface TreeResolver {
  * `-z` because a NUL-separated listing needs no unquoting and cannot be confused by a
  * path containing a quote or a newline. Deliberately not memoized: a module-level cache
  * would make the invariance test vacuous — it would pass by never re-listing rather than
- * because the property holds. One `git` call per run, which measures faster than the
- * recursive directory walk it replaced.
+ * because the property holds. One subprocess spawn per run in place of a full recursive
+ * walk: timed three runs each way on this repo, both sit at 0.24s wall clock, so the
+ * swap is not measurably slower — process startup dominates either way.
  */
 export function listIndexedPaths(root: string): readonly string[] {
   let stdout: string;
