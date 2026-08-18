@@ -89,6 +89,36 @@ export interface AnalystTelemetry {
 }
 
 /**
+ * The no-op default (#790). `AnalystInput.telemetry` used to be optional so a
+ * backtest or a focused unit test could run without a sink — but "optional in
+ * the type" is precisely this repo's dominant defect class: a mechanism fully
+ * built, fully tested, and silently absent at the one composition site that
+ * matters (the alert-transport version of this recurred eight times before
+ * `AlertChannelSlots` made it a compiler error). #745 mitigated it for its own
+ * scope with a composition-root test (`production.test.ts`'s
+ * "technical_indicator_unavailable is wired by the composition root"), which
+ * catches today's construction site going quiet but not the next one that
+ * forgets to wire a sink at all.
+ *
+ * This constant is what makes the field itself non-optional without forcing
+ * every caller that has no real sink to invent one: `telemetry:
+ * NOOP_ANALYST_TELEMETRY` (or `input.telemetry ?? NOOP_ANALYST_TELEMETRY` at
+ * a call site threading an optional dependency) is now the ONLY way to build
+ * an `AnalystInput` without a real counter — never simply omitting the field,
+ * which is a compile error. Measured at 8 construction sites repo-wide
+ * (`orchestrator.ts`'s production wiring plus 7 test call sites); tractable,
+ * so this is the non-optional form the ticket prefers over merely recording a
+ * decision.
+ */
+export const NOOP_ANALYST_TELEMETRY: AnalystTelemetry = {
+  indicatorUnavailable(): void {
+    // Intentionally does nothing — the safe default is silence, not a throw:
+    // a counter must never be able to fail a tick (see `AnalystTelemetry`'s
+    // own doc comment).
+  },
+};
+
+/**
  * What the orchestrator assembles for each analyst per tick (analysts-spec.md
  * "Key Interfaces"). No weight here — the analyst is weight-blind; weights
  * are applied downstream in the Debate Engine.
@@ -118,12 +148,16 @@ export interface AnalystInput {
    */
   calendar: TradingCalendar;
   /**
-   * Optional so a backtest or a focused unit test can run without a sink.
-   * Optionality is also how a counter ends up dead in production, which is why
-   * the composition root's wiring has its own test rather than resting on this
-   * field being "usually" populated.
+   * Where an analyst's counters go (#745). REQUIRED, not optional (#790) — see
+   * `NOOP_ANALYST_TELEMETRY`. A caller with no real sink passes that constant
+   * explicitly rather than omitting the field, so a construction site that
+   * forgets to wire a real sink is a silent no-op counter by an EXPLICIT
+   * choice visible in its own source, not an accident TypeScript cannot see.
+   * `production.test.ts`'s composition-root test still exists on top of this
+   * — it is the only check that the sink `production.ts` actually wires is
+   * the LOGGING one, not merely that some sink (real or noop) was supplied.
    */
-  telemetry?: AnalystTelemetry;
+  telemetry: AnalystTelemetry;
 }
 
 /**

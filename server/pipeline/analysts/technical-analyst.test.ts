@@ -29,7 +29,7 @@ import {
   technicalAnalyst,
   WARMUP_5M,
 } from './technical-analyst.js';
-import type { AnalystInput, Signal } from './types.js';
+import { type AnalystInput, NOOP_ANALYST_TELEMETRY, type Signal } from './types.js';
 
 class ManualClock implements Clock {
   constructor(private time: Date) {}
@@ -170,6 +170,7 @@ function buildInput(
     market_intelligence: marketIntelligence,
     market_data: marketData,
     calendar,
+    telemetry: NOOP_ANALYST_TELEMETRY,
   };
 }
 
@@ -499,6 +500,7 @@ describe('technicalAnalyst — single 5m bar fetch per instrument per tick (#742
         market_intelligence: marketIntelligence,
         market_data: marketData,
         calendar: new AlwaysOpenCalendar(),
+        telemetry: NOOP_ANALYST_TELEMETRY,
       },
       counting,
     };

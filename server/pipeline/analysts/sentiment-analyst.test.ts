@@ -9,8 +9,7 @@ import { MarketIntelligenceStore } from '../../providers/market-intelligence/ind
 import type { Clock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { sentimentAnalyst } from './sentiment-analyst.js';
-import type { AnalystInput, Signal } from './types.js';
-import { NO_DATA_MARKER } from './types.js';
+import { type AnalystInput, NO_DATA_MARKER, NOOP_ANALYST_TELEMETRY, type Signal } from './types.js';
 
 class ManualClock implements Clock {
   constructor(private time: Date) {}
@@ -82,6 +81,9 @@ function buildInput(
     market_data: marketData,
     // #746: sentiment never reads it, but AnalystInput.calendar is required.
     calendar: new AlwaysOpenCalendar(),
+    // #790: AnalystInput.telemetry is required too; the no-op default is
+    // correct here since this analyst never reports through it.
+    telemetry: NOOP_ANALYST_TELEMETRY,
   };
 }
 

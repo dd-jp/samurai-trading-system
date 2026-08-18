@@ -10,7 +10,7 @@ import type { Clock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { fundamentalAnalyst } from './fundamental-analyst.js';
 import type { AnalystInput, Signal } from './types.js';
-import { NO_DATA_MARKER } from './types.js';
+import { NO_DATA_MARKER, NOOP_ANALYST_TELEMETRY } from './types.js';
 
 class ManualClock implements Clock {
   constructor(private time: Date) {}
@@ -80,6 +80,9 @@ function buildInput(signal: Signal, trace_id: string, newsSentiment: 1 | 0 | -1 
     // required, so every test-built input must inject one explicitly rather
     // than leave it undefined.
     calendar: new AlwaysOpenCalendar(),
+    // #790: AnalystInput.telemetry is required too; this analyst has nothing
+    // to report through it, so the no-op default is correct here.
+    telemetry: NOOP_ANALYST_TELEMETRY,
   };
 }
 

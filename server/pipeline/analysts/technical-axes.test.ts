@@ -35,7 +35,13 @@ import {
   technicalAnalyst,
   VOTING_AXES,
 } from './technical-analyst.js';
-import type { AnalystInput, AnalystTelemetry, IndicatorUnavailableEvent, Signal } from './types.js';
+import {
+  type AnalystInput,
+  type AnalystTelemetry,
+  type IndicatorUnavailableEvent,
+  NOOP_ANALYST_TELEMETRY,
+  type Signal,
+} from './types.js';
 
 const INSTRUMENT = 'BTC-USD';
 const TIMEFRAME = '5m';
@@ -108,7 +114,7 @@ function buildInput(
     // correct — SIGNAL is crypto, and the null path is asserted directly in
     // `session-features.test.ts` rather than re-asserted per axis test here.
     calendar: new AlwaysOpenCalendar(),
-    ...(telemetry === undefined ? {} : { telemetry }),
+    telemetry: telemetry ?? NOOP_ANALYST_TELEMETRY,
   };
 }
 

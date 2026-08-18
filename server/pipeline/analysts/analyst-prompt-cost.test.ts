@@ -34,7 +34,7 @@ import type { AnalystView } from '../debate-engine/index.js';
 import { MockLlmClient } from '../debate-engine/llm/mock-client.js';
 import { runBullPersona } from '../debate-engine/personas.js';
 import { technicalAnalyst } from './technical-analyst.js';
-import type { Signal } from './types.js';
+import { NOOP_ANALYST_TELEMETRY, type Signal } from './types.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const INSTRUMENT = 'BTC-USD';
@@ -92,6 +92,7 @@ async function runTechnical(): Promise<AnalystView> {
       new SqliteMarketDataStore(openSharedStore(':memory:')),
     ),
     calendar: new AlwaysOpenCalendar(),
+    telemetry: NOOP_ANALYST_TELEMETRY,
   });
 }
 
