@@ -79,6 +79,10 @@ export function proxySignal(bars: readonly Bar[], config: ProxyStrategyConfig): 
     return { direction: 'flat', stop: lastClose, target: lastClose };
   }
 
+  // Always exactly `atrWindow + 1` bars in (per the module doc comment
+  // above), so this is a plain re-seeded mean of the trailing true ranges,
+  // never a converged Wilder recurrence — see the fuller note on the
+  // matching call in `replay-driver.ts`'s `marketState` (#836/#289 H11).
   const atrValue = computeIndicator(bars.slice(-(config.atrWindow + 1)) as Bar[], {
     indicator: 'atr',
     params: {},

@@ -135,6 +135,27 @@ class BarCursor {
   private readonly all: readonly Bar[];
   /** Count of bars revealed so far — also the exclusive end of the visible prefix. */
   private cursor = 0;
+  /**
+   * The visible prefix, grown in place rather than re-sliced from `this.all`
+   * on every `visibleAt` call (#836, #289 H11). The previous shape returned
+   * `this.all.slice(0, this.cursor)` — an O(cursor) copy — on every single
+   * (instrument, timestamp) pair the outer loop visits, T*M times per run,
+   * for O(T^2 * M) total; the indicator maths `proxySignal`/`marketState`
+   * do downstream is already bounded by each indicator's own window
+   * (`bars.slice(-window)`), so this copy was the actual quadratic cost, not
+   * the indicator recompute. Pushing the newly-revealed bars onto the same
+   * array each call, and returning that array by reference, makes an
+   * unchanged step (no new bar to reveal) O(1) and a growing step O(1)
+   * amortized.
+   *
+   * Sharing the array across calls is safe here specifically because every
+   * caller (`run()`'s loop body) only reads from the returned reference
+   * synchronously, within the same iteration, before the next `visibleAt`
+   * call (for the next instrument or the next timestamp) can grow it
+   * further — this module has no concurrency and nothing retains `bars`
+   * past that iteration.
+   */
+  private readonly revealed: Bar[] = [];
 
   constructor(
     private readonly symbol: string,
@@ -175,9 +196,10 @@ class BarCursor {
       const next = this.all[this.cursor] as Bar;
       if (next.close_time.getTime() > at.getTime()) break;
       this.auditor.auditRead(`stage2_bars:${this.symbol}`, next.close_time);
+      this.revealed.push(next);
       this.cursor++;
     }
-    return this.all.slice(0, this.cursor);
+    return this.revealed;
   }
 
   /**
@@ -487,6 +509,24 @@ export class ReplayDriver {
       adv,
       // The same ATR the strategy sized this lot's stop with — one volatility
       // estimate, so the cost model and the stop cannot disagree about it.
+      // #836/#289 H11 investigated a rolling/incremental ATR here and did NOT
+      // adopt one: this call is always given exactly `atrWindow + 1` bars, so
+      // `atr()`'s true-range array is always exactly `atrWindow` long — the
+      // Wilder smoothing loop (`trueRanges.slice(period)`) is always empty,
+      // and every call answers the plain unweighted mean of the trailing
+      // `atrWindow` true ranges, re-seeded from scratch each time. That is
+      // NOT a genuine Wilder recurrence (contrast `indicators.ts`'s own doc
+      // comment, which assumes converged smoothing) — a persistent
+      // incrementally-updated Wilder accumulator carried bar-to-bar would
+      // compute a DIFFERENT number than this callsite has ever produced, so
+      // one was deliberately not built. A ring-buffer running sum (add
+      // newest true range, subtract oldest) would preserve the "plain mean"
+      // formula but risks float drift against the fresh-sum-every-call
+      // behaviour pinned here; measured, the win was not worth that risk —
+      // see the PR body. Same reseed-every-step shape as the flat/uninformed
+      // findings `indicators.ts` documents for RSI's F1/F2 (#722):
+      // reported, not fixed, here — fixing it reprices every backtest result
+      // and this is a perf-only ticket.
       volatility: computeIndicator(bars.slice(-(config.atrWindow + 1)) as Bar[], {
         indicator: 'atr',
         params: {},
