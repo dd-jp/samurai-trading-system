@@ -410,6 +410,74 @@ describe('PolymarketAgent fail-closed guards (#504 scope item 7)', () => {
     expect(newsFor(store)).toHaveLength(0);
   });
 
+  it('refuses a row whose bullish outcome is pinned near certainty, before the CLOB call', async () => {
+    // 0.9945 is `us-cpi-annual-hot-tail` as measured on 2026-08-17 (#833).
+    // The history below moves 0.0245 — past the ±0.02 dead band — so without
+    // the pinned guard this row WOULD emit an item, and the assertion is not
+    // passing for the trivial reason that nothing moved.
+    const { agent, store, fetchPriceHistory } = agentWith({
+      market: market({ outcomePrices: [0.0055, 0.9945], bestBid: 0.99, bestAsk: 0.995 }),
+      history: history(0.97, 0.9945),
+    });
+
+    await expect(agent.refresh('t1')).resolves.toBe(false);
+
+    expect(newsFor(store)).toHaveLength(0);
+    // The guard sits above the price-history fetch, so a pinned row costs no
+    // CLOB call at all.
+    expect(fetchPriceHistory).not.toHaveBeenCalled();
+  });
+
+  it('refuses at 0.075 of headroom and ingests at 0.10 — the bound itself, not just the extremes', async () => {
+    // 0.925 is `us-recession-2026` as measured on 2026-08-17: headroom 0.075,
+    // inside the bound, so it is refused. This is the case that goes red if
+    // MIN_PROBABILITY_HEADROOM is loosened.
+    const marginal = agentWith({
+      market: market({ outcomePrices: [0.075, 0.925], bestBid: 0.92, bestAsk: 0.93 }),
+      history: history(0.88, 0.925),
+    });
+    await marginal.agent.refresh('t1');
+    expect(newsFor(marginal.store)).toHaveLength(0);
+
+    // Exactly at the bound: headroom 0.10 is admitted, so the guard cannot be
+    // tightened without this going red either.
+    const atBound = agentWith({
+      market: market({ outcomePrices: [0.1, 0.9], bestBid: 0.89, bestAsk: 0.9 }),
+      history: history(0.86, 0.9),
+    });
+    await expect(atBound.agent.refresh('t2')).resolves.toBe(true);
+    expect(newsFor(atBound.store)).toHaveLength(1);
+  });
+
+  it('applies the pinned guard to the SHIPPED table, with no table override', async () => {
+    // The dominant defect class here is a guard nothing calls. This agent is
+    // constructed the way `production.ts` constructs it — no `table` — so it
+    // reads CURATED_MACRO_MARKETS itself. Every shipped row is served the same
+    // healthy-but-pinned book; if the guard were not wired to the default
+    // table, all of them would ingest.
+    const store = new MarketIntelligenceStore(clock);
+    const fetchPriceHistory = vi.fn(async () => history(0.97, 0.9945));
+    const agent = new PolymarketAgent({
+      client: {
+        fetchEventMarket: async (_eventSlug: string, marketSlug: string) =>
+          market({
+            slug: marketSlug,
+            outcomePrices: [0.0055, 0.9945],
+            bestBid: 0.99,
+            bestAsk: 0.995,
+          }),
+        fetchPriceHistory,
+      },
+      store,
+      clock,
+    });
+
+    await expect(agent.refresh('t1')).resolves.toBe(false);
+
+    expect(newsFor(store)).toHaveLength(0);
+    expect(fetchPriceHistory).not.toHaveBeenCalled();
+  });
+
   it('keeps the surviving rows when one curated row fails', async () => {
     const second: CuratedMacroMarket = { ...ENTRY, id: 'second', entity: 'US-CPI-YOY' };
     const store = new MarketIntelligenceStore(clock);
