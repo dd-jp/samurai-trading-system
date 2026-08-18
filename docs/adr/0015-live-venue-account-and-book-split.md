@@ -124,11 +124,13 @@ It also interacts with [ADR-0017](0017-validation-gates-paper-operational-thesis
 - **Decided by:** David — *"we are cancelling crypto so equity book takes 1000£"*
 - **Answers:** the question the 2026-08-16 amendment opened and deliberately left open
 
-**The 2026-08-16 amendment asked whether the equity leg becomes £1,500, stays at £750, or "something else". It is something else: the total book is re-based from £1,500 to £1,000, and all of it is equity.** The £750 held for crypto is not reallocated — £500 of it leaves Samurai's book with the crypto system it was for, and £250 joins the equity side.
+**The 2026-08-16 amendment asked whether the equity leg becomes £1,500, stays at £750, or "something else". It is something else: the total book is re-based from £1,500 to £1,000, and all of it is equity.** **This ruling does not allocate the £500 difference** — where it goes, whether to the future crypto system or nowhere, is not decided here and should not be inferred from the arithmetic closing.
 
 ### What follows mechanically
 
-**There is no longer a leg to be a fraction of.** ADR-0018 D5's "fraction of the equity leg" and "fraction of the account" are now the same quantity, so the `EQUITY_LEG_FRACTION_OF_CAPITAL = 0.5` that encoded the split is **deleted**, not set to `1.0`, and D5's fractions reach `RiskPortfolioView.equity` unscaled (`paper-profile.ts`). `LIVE_BOOK_GBP = 1_000` records the inception figure; the gate still resolves against live equity per D5's sizing amendment (#739).
+**There is no longer a leg to be a fraction of.** ADR-0018 D5's "fraction of the equity leg" and "fraction of the account" are now the same quantity, so the `EQUITY_LEG_FRACTION_OF_CAPITAL = 0.5` that encoded the split is **deleted**, not set to `1.0`, and D5's fractions reach `RiskPortfolioView.equity` unscaled (`paper-profile.ts`). `LIVE_BOOK_GBP = 1_000` records the inception figure; the gate still resolves against live equity per D5's sizing amendment (#739). That constant is **documentation and enforces nothing** — no runtime path reads it, so it is not a bound on the book.
+
+**The precondition the deletion rests on, stated because it is a live-money sizing path.** The `0.5` was an *account → leg* conversion: `RiskPortfolioView.equity` is the whole account while D5's fractions are of the leg. Removing it is correct **exactly while the funded equity read equals the book.** If the Trading 212 ISA is ever funded above £1,000, `0.35 × equity` sizes against the account rather than the book — £525 on a £1,500 account, not £350 — and the correct repair is then a `book / equity` conversion resolved live, **not** a re-introduced constant. Fund the account to the book, or wire the conversion.
 
 **Cash at risk per position roughly doubles**, and the ~£260/~£190 figures D5 published are historical — they were calibrated on the £750 leg. On the £1,000 book the same fractions resolve to **£350 (index) and £250 (single-stock)**, against **£175 / £125** under the split. The percentage envelope is what D5 bounds and it is unchanged; the absolute loss at the envelope is what moves.
 

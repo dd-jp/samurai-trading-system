@@ -377,6 +377,21 @@ export const PAPER_RISK_CAPS: RiskCaps = riskCapsFor(PAPER_ACCOUNT_EQUITY_ANCHOR
  * drawdown envelope of #798 is a fraction of. It is NOT the live account
  * balance: the gate resolves against `portfolio.equity` on every decision
  * (#739), and this is the inception figure the ADR names.
+ *
+ * **It is a DOCUMENTATION constant and enforces nothing.** Nothing in the
+ * runtime reads it — the deleted `EQUITY_LEG_FRACTION_OF_CAPITAL` actually
+ * scaled the gate, and this does not replace that role. Stated because
+ * Samurai's dominant defect is the tested mechanism nothing calls: do not
+ * read this as a bound on the book. The book is bounded by what the account
+ * is funded with.
+ *
+ * **And that is the assumption the unscaled form rests on.** The 0.5 was an
+ * ACCOUNT -> LEG conversion, because `RiskPortfolioView.equity` is the whole
+ * account while D5's fractions are of the leg. Deleting it is correct exactly
+ * while the funded equity read EQUALS the book. If the T212 ISA is ever
+ * funded above £1,000, `0.35 x equity` sizes against the account rather than
+ * the book (0.35 x £1,500 = £525, not £350) — and the fix is then a
+ * `book / equity` conversion resolved live, NOT a re-introduced constant.
  */
 export const LIVE_BOOK_GBP = 1_000;
 

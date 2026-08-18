@@ -125,7 +125,11 @@ describe('what the paper profile actually enforces', () => {
     // Stated here rather than discovered in a soak: on a $100k paper anchor
     // the 5% per-trade cap ($5,000) is far tighter than a D5 index envelope of
     // 35% of the whole account ($35,000), so `per_trade_size_cap` trims first
-    // every time. The paper soak is not a test of D5. The envelope DOUBLED on
+    // every time. The paper soak is not a test of D5 — and NOT because of the
+    // anchor: both caps are fractions of the same equity, so 5% < 35% holds at
+    // every book size and D5 cannot bind a first entry at any of them. See
+    // `d5-trader-cap-agreement.test.ts`, which asserts the scale-invariance.
+    // The envelope DOUBLED on
     // 2026-08-18 (#800 — the £750/£750 split dissolved, so D5 no longer scales
     // by 0.5); the domination holds by a wider margin than before, not a
     // narrower one, so the conclusion is unchanged.
