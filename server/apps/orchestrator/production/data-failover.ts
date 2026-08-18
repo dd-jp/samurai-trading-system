@@ -303,6 +303,11 @@ export function buildFailoverDataSource(deps: LiveDataFailoverDeps): DataSource 
   return new FailoverDataSource({
     primary: deps.primary,
     primaryName: EQUITIES_PRIMARY_VENDOR,
+    // The orchestrator's own clock, not wall time (#824): the failover
+    // circuit breaker's cooldown must age on the same clock the tick loop
+    // runs on, or a simulated run would hold a breaker open forever while its
+    // ticks fly past.
+    now: deps.now,
     fallbackFor: (instrument) => (equities.has(instrument) ? equitiesLeg : undefined),
     alert: (event) => {
       const reportedAt = deps.now();
