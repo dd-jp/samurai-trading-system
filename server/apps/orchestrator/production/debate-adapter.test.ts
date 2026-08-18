@@ -1,4 +1,5 @@
 import { fundamentalAnalyst } from '../../../pipeline/analysts/index.js';
+import { NOOP_ANALYST_TELEMETRY } from '../../../pipeline/analysts/types.js';
 import type {
   AnalystView,
   AnthropicMessageRequest,
@@ -545,6 +546,7 @@ describe('buildDebateStep', () => {
         market_intelligence: intelligence,
         market_data: marketData,
         calendar: new AlwaysOpenCalendar(),
+        telemetry: NOOP_ANALYST_TELEMETRY,
       }),
     ];
 

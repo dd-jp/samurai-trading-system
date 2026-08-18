@@ -39,6 +39,7 @@ import type {
   AnalystTelemetry,
   Signal,
 } from './types.js';
+import { NOOP_ANALYST_TELEMETRY } from './types.js';
 
 const ALL_PERSONAS: Analyst[] = [technicalAnalyst, fundamentalAnalyst, sentimentAnalyst];
 
@@ -86,7 +87,10 @@ export interface AnalystOrchestratorDeps {
    * Where an analyst's counters go (#745). Threaded straight onto every
    * `AnalystInput` below — this class neither reads nor aggregates it, because
    * the counter is per-read and this layer only sees per-persona outcomes.
-   * Absent in tests and in the backtest; `production.ts` supplies it.
+   * Optional here (tests and the backtest omit it); `production.ts` supplies
+   * the real sink. `AnalystInput.telemetry` itself is non-optional (#790), so
+   * a missing dep falls back to `NOOP_ANALYST_TELEMETRY` rather than the
+   * field going missing on the input every persona receives.
    */
   telemetry?: AnalystTelemetry;
 }
@@ -204,7 +208,7 @@ export class AnalystOrchestrator {
                 market_intelligence: this.deps.market_intelligence,
                 market_data: this.deps.market_data,
                 calendar: this.sessionCalendars[signal.asset_class],
-                ...(this.deps.telemetry === undefined ? {} : { telemetry: this.deps.telemetry }),
+                telemetry: this.deps.telemetry ?? NOOP_ANALYST_TELEMETRY,
               }),
               this.timeoutMs,
               persona.analyst_type,

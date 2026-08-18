@@ -491,6 +491,47 @@ export function structureVote(donchianPos: number): AxisVote {
  * volume throughout. That is the halted/auction-flat shape #725 already handled
  * in `rsi`, and it is answered the same way: no fabricated 0.5 dressed as a
  * measurement, an explicit "no reading" the caller renders as a zero vote.
+ *
+ * #790 — kept as an in-analyst derivation, NOT migrated into
+ * `market-data-service`'s `INDICATOR_KINDS` registry. Considered and rejected:
+ * a `compute: (bars, spec) => number` registry kind is a TOTAL function — it
+ * cannot return the `null` above, only a number. Folding the halted/flat case
+ * into the registry's usual degenerate-denominator convention (RSI 50,
+ * `donchian_pos` 0.5) would make `assessAxes` render "balanced" for a window
+ * that never traded, which is exactly the fabrication class `null` exists to
+ * avoid — and this string reaches the debate prompt (`analyst-prompt-cost.test.ts`),
+ * so it isn't cosmetic. A registry kind plus an analyst-side pre-check that
+ * re-derives "did anything participate" before trusting the registry's answer
+ * was also considered; it would just duplicate this loop's own arithmetic to
+ * decide whether to call it, buying golden-fixture coverage at the cost of a
+ * second implementation of the same walk. Not worth it for a function this
+ * shape and this small — recording the decision per #790's own escape hatch
+ * rather than shipping a golden fixture that exists only to re-prove
+ * `up === down === 0`.
+ *
+ * The 3x-ETP volume caveat (`market-data-service/types.ts`'s doc comment on
+ * `INDICATOR_KINDS`, echoed in `rvol.ts`) applies here exactly as it does to
+ * `computeSessionVwap` above: `participationBars` is sliced from
+ * `technicalBars`, itself fetched for `signal.asset` — the leveraged ETP on
+ * the live equity leg, not its liquid US underlying. This function's volume
+ * reads are therefore market-maker/wrapper flow, not informed flow, same as
+ * every other volume-derived read in this file. NOT enforced (no routing to
+ * an underlying happens here) for the same reason `rvol.ts` documents its own
+ * gap rather than papering over it: routing needs a screening/underlying
+ * instrument identity (#749) this codebase does not have yet. Recorded, not
+ * silently absent.
+ *
+ * Reconciled with #747's `computeRvol`, deliberately NOT sharing a
+ * definition: RVOL is unsigned magnitude — today's volume in a clock-time
+ * bucket over the MEDIAN of the same bucket across the last 10 sessions,
+ * answering "is more volume trading right now than usually does" — and it
+ * needs a `TradingCalendar` to find that bucket, which is exactly why it
+ * can't be a pure `(bars, spec)` registry kind either (`rvol.ts`'s own doc
+ * comment). `upVolumeShare` is signed direction — of the volume that DID
+ * participate this window, what fraction traded on up-bars, answering "when
+ * volume showed up, which side was it on." Different questions, different
+ * inputs (a calendar vs. none), complementary rather than duplicate; no
+ * shared definition was used, and none should be.
  */
 export function upVolumeShare(bars: Bar[]): number | null {
   let up = 0;
@@ -572,20 +613,20 @@ function unavailableLine(axis: string, kind: string, required: number, received:
  *
  * The counter is `technical_indicator_unavailable{kind}` and is emitted through
  * `AnalystTelemetry`, which the production composition root wires to the
- * logger (`production.ts`). It is optional on `AnalystInput` so a test or a
- * backtest can run without one — but "optional in the type" is exactly how a
- * counter ends up dead in production, so `production.test.ts` asserts the
- * COMPOSITION ROOT supplies one, not merely that this function calls it.
+ * logger (`production.ts`). `AnalystInput.telemetry` is REQUIRED (#790, a
+ * no-op default when there is no real sink) so this call is never guarded —
+ * `production.test.ts` still asserts the COMPOSITION ROOT wires the LOGGING
+ * sink specifically, not merely that some sink was supplied.
  */
 function recordUnavailable(
   input: AnalystInput,
-  telemetry: AnalystTelemetry | undefined,
+  telemetry: AnalystTelemetry,
   axis: TechnicalAxis,
   kind: string,
   required: number,
   received: number,
 ): AxisUnavailable {
-  telemetry?.indicatorUnavailable({
+  telemetry.indicatorUnavailable({
     trace_id: input.trace_id,
     analyst_type: 'technical',
     instrument: input.signal.asset,
