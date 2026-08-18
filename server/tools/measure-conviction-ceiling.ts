@@ -77,8 +77,8 @@
  */
 
 import {
-  assessAxes,
   type AxisAssessment,
+  assessAxes,
   LOW_CONVICTION_CAP,
 } from '../pipeline/analysts/technical-analyst.js';
 import { NO_DATA_MARKER } from '../pipeline/analysts/types.js';
@@ -319,7 +319,9 @@ export function report(floor: number): string {
 
   lines.push('## Ceiling per desk shape and mediator stance');
   lines.push('');
-  lines.push('| desk shape | mediator | ceiling | clears 0.55? | min technical confidence clearing |');
+  lines.push(
+    '| desk shape | mediator | ceiling | clears 0.55? | min technical confidence clearing |',
+  );
   lines.push('| --- | --- | --- | --- | --- |');
 
   let overallCeiling = 0;
@@ -361,6 +363,25 @@ export function report(floor: number): string {
   }
   lines.push('');
 
+  lines.push('## Exact ties at the floor — #683 is load-bearing');
+  lines.push('');
+  const ties = samples.filter(
+    (sample) => sample.direction !== 'neutral' && sample.conviction === floor,
+  );
+  const tieShapes = [
+    ...new Set(
+      ties.map((tie) => `${tie.shape}/${tie.mediator} at technical ${format(tie.confidence)}`),
+    ),
+  ].sort();
+  lines.push(`samples landing EXACTLY on the floor: ${ties.length}`);
+  for (const shape of tieShapes) lines.push(`- ${shape}`);
+  lines.push(
+    'These trade only because the gate is `debate.confidence < conviction_floor` (strict). ' +
+      'Under `<=` they would all skip — so #683 is not a curiosity here, it decides whether ' +
+      'the weakest directional read on the production desk shape trades at all.',
+  );
+  lines.push('');
+
   const belowOne = samples.filter(
     (sample) => sample.clears && sample.confidence < 1 && sample.direction !== 'neutral',
   );
@@ -386,6 +407,8 @@ export function report(floor: number): string {
   return lines.join('\n');
 }
 
-if (process.argv[1]?.endsWith('measure-conviction-ceiling.js')) {
+// Matches both the built entry point and a `tsx` run of the source, so the
+// report is reachable without a full `yarn build`.
+if (/measure-conviction-ceiling\.(js|ts)$/.test(process.argv[1] ?? '')) {
   console.log(report(DEFAULT_TRADER_CONFIG.conviction_floor));
 }
