@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Bar } from '../../providers/market-data-service/index.js';
+import { computeIndicator } from '../../providers/market-data-service/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { EvalExecutorImpl } from './eval-executor.js';
 import { LookaheadViolationError } from './lookahead.js';
@@ -407,6 +408,113 @@ describe('ReplayDriver.run', () => {
     const result = await new ReplayDriver(deps).run(CONFIG, window);
 
     expect(await result.timeline.barTimestamps(window)).toEqual(bars.map((bar) => bar.close_time));
+  });
+
+  it('BarCursor.visibleAt neutrality (#836): the incrementally-revealed prefix matches an independent full-history recompute, bar for bar, across a long multi-instrument run', async () => {
+    // #836/#289 H11 replaced `BarCursor.visibleAt`'s per-call
+    // `this.all.slice(0, this.cursor)` with an array grown in place by
+    // `push`. This test is the neutrality proof for that change: it builds
+    // two long, independently-trending instrument series (so both open and
+    // close lots repeatedly, exercising `visibleAt` on many distinct cursor
+    // positions for each), then — for every fill the driver produces —
+    // independently recomputes `marketState.volatility` and `.adv` from the
+    // TEST's own copy of the fixture bars, sliced fresh with `Array.slice`
+    // exactly the way the pre-#836 code did it (the "recompute path"), and
+    // asserts it equals what the driver (the "incremental path") actually
+    // fed the cost model. Any drift in what `visibleAt` reveals — a stale
+    // element, a wrong count, a mis-ordered push — would show up here as a
+    // volatility/adv mismatch on some fill.
+    const oneUp = (n: number, seedClose: number, amplitude: number) =>
+      Array.from({ length: n }, (_, i) => seedClose + amplitude * Math.sin(i / 3) + i * 0.15);
+
+    const btcCloses = oneUp(80, 100, 6);
+    const ethCloses = oneUp(80, 50, 4);
+    const btcBars = buildBars(btcCloses).map((bar) => ({ ...bar, instrument: 'BTC-USD' }));
+    const ethBars = buildBars(ethCloses).map((bar) => ({ ...bar, instrument: 'ETH-USD' }));
+    const byInstrument = new Map<string, Bar[]>([
+      ['BTC-USD', btcBars],
+      ['ETH-USD', ethBars],
+    ]);
+
+    class MultiInstrumentBarSource implements ReplayBarSource {
+      bars(symbol: string, window: DateRange): Bar[] {
+        return (byInstrument.get(symbol) ?? []).filter(
+          (bar) =>
+            bar.close_time.getTime() >= window.start.getTime() &&
+            bar.close_time.getTime() <= window.end.getTime(),
+        );
+      }
+    }
+
+    const universe: ReplayInstrument[] = [
+      { symbol: 'BTC-USD', asset_class: 'crypto' },
+      { symbol: 'ETH-USD', asset_class: 'crypto' },
+    ];
+
+    const requests: { request: FillRequest; marketState: MarketState }[] = [];
+    class RecordingCostModel implements CostModel {
+      fill(request: FillRequest, marketState: MarketState): CostModelResult {
+        requests.push({ request, marketState: { ...marketState } });
+        const sign = request.side === 'buy' ? 1 : -1;
+        return {
+          fill_price: marketState.mid + sign * 0.05,
+          filled_size: request.size,
+          cost_breakdown: {
+            spread_cost: 0.02,
+            commission: 0.01,
+            slippage: 0.02,
+            market_impact: 0.01,
+          },
+        };
+      }
+    }
+
+    const allBars = [...btcBars, ...ethBars];
+    const window = { start: day(0), end: day(80) };
+    const timestamps = [...new Set(allBars.map((bar) => bar.close_time.getTime()))]
+      .sort((a, b) => a - b)
+      .map((t) => new Date(t));
+
+    const deps: ReplayDriverDeps = {
+      barSource: new MultiInstrumentBarSource(),
+      timeline: { barTimestamps: async () => timestamps },
+      registry: new FixtureRegistry(),
+      costModel: new RecordingCostModel(),
+      clock: new SimulatedClock(day(0)),
+      universe,
+      capitalPerTrade: 10_000,
+    };
+
+    await new ReplayDriver(deps).run(CONFIG, window);
+
+    // Multiple round trips on both instruments, or the test isn't exercising
+    // enough distinct cursor positions to be meaningful.
+    expect(requests.length).toBeGreaterThan(8);
+
+    for (const { request, marketState } of requests) {
+      const fullSeries = (byInstrument.get(request.instrument) ?? []) as Bar[];
+      // The index this fill's bar occupies in the instrument's own series —
+      // located by the timestamp the driver stamped `marketState` with,
+      // which is `clock.now()` at the step the fill was priced, i.e. the
+      // current bar's `close_time`.
+      const index = fullSeries.findIndex(
+        (bar) => bar.close_time.getTime() === marketState.timestamp.getTime(),
+      );
+      expect(index).toBeGreaterThanOrEqual(0);
+      const visiblePrefix = fullSeries.slice(0, index + 1);
+
+      const expectedAtr = computeIndicator(visiblePrefix.slice(-(CONFIG.atrWindow + 1)) as Bar[], {
+        indicator: 'atr',
+        params: {},
+        timeframe: '1d',
+        lookback: CONFIG.atrWindow,
+      });
+      expect(marketState.volatility).toBe(expectedAtr);
+
+      const advRecent = visiblePrefix.slice(-20);
+      const expectedAdv = advRecent.reduce((sum, bar) => sum + bar.volume, 0) / advRecent.length;
+      expect(marketState.adv).toBe(expectedAdv);
+    }
   });
 
   it('never reaches the live gate sequence — no broker/trader/risk/verdict imports', () => {
