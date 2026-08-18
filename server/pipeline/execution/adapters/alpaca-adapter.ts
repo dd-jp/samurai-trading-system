@@ -395,6 +395,41 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * refuses the flatten rather than sending a market order while it is
    * unknown whether the legs it was meant to clear are actually gone.
    *
+   * **ORDER IS LOAD-BEARING (#867). Every LOOKUP happens before ANY
+   * destructive call, and the re-arm is cancelled BEFORE the original
+   * bracket.** The fail-closed posture above is only sound while the
+   * refusal leaves the position no MORE exposed than it already was, and
+   * the shape this method had between #546 and #867 broke that: it
+   * cancelled the bracket first and only THEN issued the `:rearm` lookup —
+   * a lookup that runs for EVERY lot on EVERY exit, including the common
+   * lot that never had a re-arm at all. A degraded venue, an auth blip, or
+   * a timeout outliving the transport's retries therefore threw with the
+   * lot's stop and target ALREADY GONE; `executeExit` refused the flatten,
+   * and the lot sat open, naked, and un-alerted. Hoisting both lookups
+   * above both cancels makes a lookup failure abort with protection fully
+   * intact, which is the only state in which refusing the flatten is the
+   * safer answer.
+   *
+   * Cancelling the re-arm FIRST then makes the ORIGINAL bracket's cancel
+   * the LAST destructive act, so a throw from this method leaves at most
+   * one unconfirmed cancel behind rather than one confirmed removal plus a
+   * failure. That ordering is safe because a bracket and its lot's re-arm
+   * are never BOTH live: `rearmProtectiveLegs` is only ever reached
+   * downstream of a successful `cancel()` of that bracket
+   * (`maybeRearmResidual` in ingest-fills.ts, once a flatten fill lands,
+   * and `sweepResidualProtection`'s retry of a lot that path already
+   * marked) — so when a re-arm exists the original bracket is already
+   * terminal, and the bracket cancel below is a venue no-op that
+   * `cancelOrder` resolves on `404`/`422` rather than throwing
+   * (alpaca-http-client.ts). **Anyone reordering these two cancels back
+   * must re-check that precondition first.**
+   *
+   * The residual this does NOT close: a `cancelOrder` whose RESPONSE is
+   * lost may have cancelled at the venue anyway, so a throw from this
+   * method never PROVES protection survived — it only proves this adapter
+   * could not confirm it is gone. `executeExit`'s catch owns that residue;
+   * see its comment on the cancel loop.
+   *
    * Resolves the ORIGINAL bracket's Alpaca id through the venue rather than
    * the local `brackets` map, for `getOrder`'s reason: that map is
    * populated only by `submitBracket` in this process, so after a restart
@@ -417,15 +452,15 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       return;
     }
 
+    // --- LOOKUPS (non-destructive). #867: everything that can throw while
+    // the lot is still protected happens HERE, above the first cancel.
     const order = await this.call('cancel', () =>
       this.input.client.getOrderByClientOrderId(clientOrderId),
     );
-    if (order !== null) {
-      await this.call('cancel', () => this.input.client.cancelOrder(order.id));
-      this.brackets.delete(clientOrderId);
-    }
-
     const rearmedOrder = await this.resolveRearmedOrder(clientOrderId);
+
+    // --- CANCELS (destructive). Re-arm first, original bracket last — see
+    // the doc comment for why that ordering is both safe and required.
     if (rearmedOrder !== null) {
       await this.call('cancel', () => this.input.client.cancelOrder(rearmedOrder));
       // Deleted only now, after the cancel is confirmed — not before, and
@@ -434,14 +469,18 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       // finds the same order again rather than believing it already gone.
       this.rearmedLegs.delete(clientOrderId);
     }
+
+    if (order !== null) {
+      await this.call('cancel', () => this.input.client.cancelOrder(order.id));
+      this.brackets.delete(clientOrderId);
+    }
   }
 
   /**
    * The re-armed OCO's Alpaca order id for `clientOrderId`'s lot, or `null`
    * if none exists — the two-path resolution `cancel()`'s doc comment
-   * describes. Split out so `cancel()`'s own body reads as "cancel the
-   * bracket, then cancel the re-arm" rather than burying the fallback
-   * chain inline.
+   * describes. Split out so `cancel()`'s own body reads as "look both up,
+   * then cancel both" rather than burying the fallback chain inline.
    */
   private async resolveRearmedOrder(clientOrderId: string): Promise<string | null> {
     const inProcess = this.rearmedLegs.get(clientOrderId);

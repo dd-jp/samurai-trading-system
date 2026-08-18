@@ -10,6 +10,7 @@
  */
 import {
   heldQuantitiesFor,
+  logCaughtFailure,
   type OpenPosition,
   type OrderIntent,
   totalHeldQuantity,
@@ -214,7 +215,10 @@ export class ExecutionImpl implements Execution {
  *    cancel lands. If a cancel fails, the flatten is refused outright: a
  *    market order sent while it is unknown whether the legs it was meant to
  *    clear are actually gone would defeat the whole point of cancelling
- *    first.
+ *    first. #867 kept that refusal and removed its SILENCE — see the cancel
+ *    loop's own comment for what a `cancel()` throw does and does not
+ *    guarantee, and for the lots this path now marks unprotected so the
+ *    #549 sweep re-arms them.
  * 4. **Submit, then resolve the journal row** — the original #508 shape.
  */
 async function executeExit(
@@ -341,17 +345,45 @@ async function executeExit(
     lot_held_quantities: perLotHeld,
   });
 
+  // Lots this loop has ALREADY cancelled successfully, in order. Load-bearing
+  // for the catch below (#867), which is the only thing that reads it.
+  const cancelledLots: OpenPosition[] = [];
   for (const lot of heldLots) {
     try {
       await broker.cancel(lot.idempotency_key, order.instrument);
+      cancelledLots.push(lot);
     } catch (error) {
-      // Provably never reached the broker at all — unlike a `submitFlatten`
-      // failure below, there is no ambiguity to leave for reconcile, so the
+      // WHAT IS GUARANTEED HERE (corrected by #867): no `submitFlatten` was
+      // issued, so — unlike the `submitFlatten` failure below — no order
+      // exists under this idempotency key for reconcile to adopt, and the
       // row resolves to 'error' immediately rather than sitting at
-      // 'submitting' for a sweep that would find nothing to adopt.
+      // 'submitting' for a sweep that would find nothing.
+      //
+      // WHAT IS NOT GUARANTEED, and what this comment used to claim ("provably
+      // never reached the broker at all"): that the broker was not reached, or
+      // that the lots' protective legs survived. Two ways they may not have:
+      // an EARLIER lot in this loop whose cancel returned successfully has
+      // provably lost its stop and target, and even the FAILING lot's cancel
+      // may have landed at the venue with only its response lost. Refusing
+      // the flatten is still the right call — `cancel()` is ordered so that
+      // its throw usually means nothing was destroyed (#867, see its doc), and
+      // flattening while a protective leg may still be working is the #516
+      // reverse-position hazard this whole cancel-first design exists to
+      // prevent — but "refuse" must not also mean "say nothing".
+      //
+      // So the lots that are PROVABLY naked (cancel confirmed, flatten not
+      // sent) get #549's durable marker, which is not a new mechanism: the
+      // `sweepResidualProtection` pass the fill-sync loop already runs on
+      // cadence picks the marker up, recomputes the residual from the fill
+      // record (full held size here, since no exit fill landed) and re-arms
+      // the lot's stop/target — and pages `ResidualExposureAlertChannel` if
+      // it cannot. The failing lot itself is deliberately NOT marked: its
+      // legs may still be live, and re-arming over a live bracket is
+      // double protection, i.e. #516 from the other direction.
       const reason =
         `cancelling held lot '${lot.idempotency_key}' before the flatten failed, so the ` +
         `flatten was not sent: ${error instanceof Error ? error.message : String(error)}`;
+      await markLotsUnprotected(input, cancelledLots, lot.idempotency_key, error, now);
       await store.resolveFlattenError(idempotencyKey, reason, now);
       return result('error', idempotencyKey, now, { reason });
     }
@@ -383,6 +415,78 @@ async function executeExit(
     order_state: ack.order_state,
     broker_order_ids: ack.broker_order_ids,
   });
+}
+
+/**
+ * #867's escalation for a refused exit: record the LOCAL diagnostic and mark
+ * every lot this exit already stripped of its protective legs before the
+ * cancel loop failed, so the state is visible to something that acts on it
+ * rather than only to a `flatten_submissions` row nobody watches.
+ *
+ * `markResidualUnprotected` is #549's existing durable marker, and the
+ * consumer already runs: `sweepResidualProtection` (wired into the fill-sync
+ * loop and into `reconcile()`) reads `getUnprotectedResidualLots()`,
+ * recomputes the residual from the persisted fill record — for a lot this
+ * path marks that is the FULL held quantity, since no exit fill has landed —
+ * re-arms the stop/target through `broker.rearmProtectiveLegs`, and pages
+ * `ResidualExposureAlertChannel` if it cannot. Nothing new is invented here;
+ * this path just stops being the one hole that fed it nothing.
+ *
+ * Never throws, and never replaces the caller's `reason`: every write is
+ * best-effort in the same shape as `bestEffortMarkerWrite` (ingest-fills.ts),
+ * because losing recovery bookkeeping must not also lose the honest error the
+ * caller is about to return.
+ *
+ * The broker's error text goes to the LOGGER only — `logCaughtFailure`
+ * sanitizes it — never into an alert payload (`ResidualExposureAlert`'s
+ * CREDENTIALS note: an Alpaca REST error quotes the failed request, headers
+ * included).
+ */
+async function markLotsUnprotected(
+  input: ExecutionInput,
+  cancelledLots: readonly OpenPosition[],
+  failedLotKey: string,
+  error: unknown,
+  now: Date,
+): Promise<void> {
+  logCaughtFailure(
+    input.logger,
+    {
+      trace_id: input.trace_id,
+      stage: 'execution',
+      level: 'error',
+      message:
+        'executeExit: cancelling a held lot failed, so the flatten was refused — any lot ' +
+        'listed in unprotected_lots had its cancel CONFIRMED before this failure, so it is ' +
+        'now open with no protective legs and is being marked for the #549 sweep to re-arm. ' +
+        "An empty list means nothing was confirmed cancelled. The failing lot's own legs " +
+        'are of unknown state and are deliberately left unmarked (re-arming over a live ' +
+        'bracket is double protection, #516 from the other direction).',
+    },
+    error,
+    { failed_lot: failedLotKey, unprotected_lots: cancelledLots.map((lot) => lot.idempotency_key) },
+  );
+
+  for (const lot of cancelledLots) {
+    try {
+      await input.store.markResidualUnprotected(lot.idempotency_key, now);
+    } catch (markError) {
+      logCaughtFailure(
+        input.logger,
+        {
+          trace_id: input.trace_id,
+          stage: 'execution',
+          level: 'error',
+          message:
+            'executeExit: markResidualUnprotected failed for a lot whose protective legs were ' +
+            'already cancelled — the #549 sweep will not know to re-arm it, so this lot is ' +
+            'open and unprotected with no automatic recovery behind it',
+        },
+        markError,
+        { idempotency_key: lot.idempotency_key },
+      );
+    }
+  }
 }
 
 function result(

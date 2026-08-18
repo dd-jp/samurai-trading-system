@@ -1666,7 +1666,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       return async (clientOrderId: string) => orders[clientOrderId] ?? null;
     }
 
-    it('cancels BOTH the original bracket and the re-armed OCO, original first', async () => {
+    it('cancels BOTH the original bracket and the re-armed OCO, RE-ARM first (#867)', async () => {
       const sequence: string[] = [];
       const getOrderByClientOrderId = vi.fn(
         byClientOrderId({
@@ -1712,7 +1712,9 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
 
       await adapter.cancel('key-1', 'AAPL');
 
-      expect(sequence).toEqual(['bracket-venue-id', 'rearm-venue-id']);
+      // #867: the ORIGINAL bracket's cancel is the LAST destructive act, so a
+      // failure anywhere earlier leaves the lot no more exposed than it was.
+      expect(sequence).toEqual(['rearm-venue-id', 'bracket-venue-id']);
     });
 
     it('finds and cancels a re-armed OCO placed before a restart, when rearmedLegs is empty', async () => {
@@ -1766,12 +1768,48 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
 
       await expect(adapter.cancel('key-1', 'AAPL')).rejects.toThrow();
 
-      // The original bracket's cancel still went out (this method's
-      // existing behaviour is unchanged), but the overall call rejects —
-      // `executeExit` reads this as "cancelling the held lot's legs
-      // failed" and refuses to submit the flatten at all, exactly as it
-      // does when the ORIGINAL cancel fails.
-      expect(cancelOrder).toHaveBeenCalledWith('bracket-venue-id');
+      // #867: the re-arm is cancelled FIRST, so its failure aborts before
+      // the original bracket is touched. `executeExit` reads the throw as
+      // "cancelling the held lot's legs failed" and refuses to submit the
+      // flatten — which is only the safe answer because the lot still has
+      // protection working at the venue, as this assertion pins.
+      expect(cancelOrder).not.toHaveBeenCalledWith('bracket-venue-id');
+      expect(cancelOrder).toHaveBeenCalledTimes(1);
+    });
+
+    // THE #867 DEFECT. Between #546 and #867 the `:rearm` LOOKUP ran AFTER
+    // `cancelOrder(bracket)` had already succeeded, and it ran for every lot
+    // on every exit — including this one, which never had a re-arm at all.
+    // A degraded venue on that lookup therefore threw with the stop and
+    // target already gone, `executeExit` refused the flatten, and the lot sat
+    // open and naked. Both lookups now happen before either cancel.
+    it('does not touch the venue when the :rearm lookup fails — protection stays intact (#867)', async () => {
+      const getOrderByClientOrderId = vi.fn(async (clientOrderId: string) => {
+        if (clientOrderId === 'key-1:rearm') throw new Error('venue unavailable');
+        return { ...acceptedOrder(), id: 'bracket-venue-id' };
+      });
+      const cancelOrder = vi.fn().mockResolvedValue(undefined);
+      const adapter = adapterWith(makeClient({ getOrderByClientOrderId, cancelOrder }));
+
+      await expect(adapter.cancel('key-1', 'AAPL')).rejects.toThrow();
+
+      // The load-bearing assertion: NO cancel went out. The lot's stop and
+      // target are still working, so `executeExit`'s refusal of the flatten
+      // leaves it exactly as protected as it was before the exit was tried.
+      expect(cancelOrder).not.toHaveBeenCalled();
+    });
+
+    it('does not touch the venue when the BRACKET lookup fails either (#867)', async () => {
+      const getOrderByClientOrderId = vi.fn(async (clientOrderId: string) => {
+        if (clientOrderId === 'key-1') throw new Error('venue unavailable');
+        return { ...acceptedOrder(), id: 'rearm-venue-id' };
+      });
+      const cancelOrder = vi.fn().mockResolvedValue(undefined);
+      const adapter = adapterWith(makeClient({ getOrderByClientOrderId, cancelOrder }));
+
+      await expect(adapter.cancel('key-1', 'AAPL')).rejects.toThrow();
+
+      expect(cancelOrder).not.toHaveBeenCalled();
     });
   });
 
