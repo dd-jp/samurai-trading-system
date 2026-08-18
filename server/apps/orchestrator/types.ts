@@ -298,7 +298,23 @@ export interface TickSteps {
     bar: Date;
     clock: Clock;
   }): Promise<OrderIntent | null>;
-  analysts(input: { trace_id: string; signal: Signal; clock: Clock }): Promise<AnalystView[]>;
+  analysts(input: {
+    trace_id: string;
+    signal: Signal;
+    clock: Clock;
+    /**
+     * The decision bar's opening boundary, passed down from
+     * `TickContext.decision_bar` (#811) — the same value `debate`'s `bar`
+     * field below carries, and the SAME derivation (the gate's `claim`, not a
+     * second `floorToBar(clock.now())` taken here or inside an analyst).
+     * `AnalystOrchestrator.runAnalysts` threads it onto every `AnalystInput`
+     * unchanged, and `MarketIntelligenceStore.getContext` floors its window to
+     * it rather than to a fresh clock read — closing the residual #782 left
+     * (a pass straddling the bar boundary floored MI to a different bar than
+     * the debate it fed).
+     */
+    bar: Date;
+  }): Promise<AnalystView[]>;
   debate(input: {
     trace_id: string;
     instrument: string;

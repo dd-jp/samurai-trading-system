@@ -157,17 +157,36 @@ export class MarketIntelligenceStore {
    * for what the debate saw; read `last_updated`/`stale` only for whether the
    * ingest agents are alive.
    *
-   * KNOWN LIMIT, stated rather than claimed away: this floors a SECOND clock
-   * read rather than inheriting the gate's `decision_bar.open_time` — the
-   * two-derivations shape `decide.ts` describes as #687. A pass that straddles
-   * the hour boundary floors here to bar N+1 while the debate is keyed to bar
-   * N. That is no worse than the pre-existing cross-restart case #785 accepted;
-   * threading the decision bar down to the analysts is the clean fix and is not
-   * this change.
+   * ## `bar` (#811) — the residual the paragraph above used to describe
+   *
+   * This used to floor a SECOND, independent clock read rather than inheriting
+   * the gate's `decision_bar.open_time` — the same two-derivations shape
+   * `decide.ts` describes as #687. A pass that straddled the hour boundary
+   * (claimed under bar N, reaching the analysts after the clock had ticked
+   * into bar N+1) floored here to bar N+1 while the debate stayed keyed to
+   * bar N, so the analyst input and the debate record disagreed about which
+   * bar they belonged to.
+   *
+   * `bar`, when supplied, IS `windowEnd` directly — no `floorToBar` call on
+   * it, because it already came out of one (`DecisionGate.claim`) and a
+   * second flooring would just be a second derivation with extra steps. The
+   * three analysts (`technical-analyst.ts`, `fundamental-analyst.ts`,
+   * `sentiment-analyst.ts`) always pass `input.bar` (`AnalystInput.bar` is
+   * required, #811), so the analyst path now has exactly one derivation of
+   * the bar per pass. `bar` stays optional on this method itself — callers
+   * with no decision-bar concept at all (the coverage checker's own window,
+   * `smoke-run.ts`'s post-hoc summary read) fall back to flooring the live
+   * clock, which is no worse than #782 left them and is not this ticket's
+   * scope to change.
    */
-  getContext(assetClass: AssetClass, timeWindow: Duration, _trace_id: string): MarketContext {
+  getContext(
+    assetClass: AssetClass,
+    timeWindow: Duration,
+    _trace_id: string,
+    bar?: Date,
+  ): MarketContext {
     const asOf = this.clock.now();
-    const windowEnd = floorToBar(asOf, DEBATE_BAR_TIMEFRAME_MS).getTime();
+    const windowEnd = (bar ?? floorToBar(asOf, DEBATE_BAR_TIMEFRAME_MS)).getTime();
     const windowStart = windowEnd - timeWindow;
 
     const inWindow = this.stored

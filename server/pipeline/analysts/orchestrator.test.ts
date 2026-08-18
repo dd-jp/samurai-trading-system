@@ -131,7 +131,7 @@ describe('AnalystOrchestrator', () => {
     });
     const signal: Signal = { asset: INSTRUMENT, asset_class: 'crypto' };
 
-    const result = await orchestrator.runAnalysts('trace-1', signal, clock);
+    const result = await orchestrator.runAnalysts('trace-1', signal, clock, ASOF);
 
     expect(result.analyst_count).toBe(2);
     expect(result.skipped).toBe(false);
@@ -147,7 +147,7 @@ describe('AnalystOrchestrator', () => {
     });
     const signal: Signal = { asset: INSTRUMENT, asset_class: 'stocks' };
 
-    const result = await orchestrator.runAnalysts('trace-1', signal, clock);
+    const result = await orchestrator.runAnalysts('trace-1', signal, clock, ASOF);
 
     expect(result.analyst_count).toBe(3);
     expect(result.skipped).toBe(false);
@@ -179,7 +179,7 @@ describe('AnalystOrchestrator', () => {
     });
     const signal: Signal = { asset: INSTRUMENT, asset_class: 'crypto' };
 
-    const result = await orchestrator.runAnalysts('trace-1', signal, clock);
+    const result = await orchestrator.runAnalysts('trace-1', signal, clock, ASOF);
 
     expect(result.skipped).toBe(true);
     expect(result.views).toEqual([]);
@@ -207,7 +207,7 @@ describe('AnalystOrchestrator', () => {
     );
     const signal: Signal = { asset: INSTRUMENT, asset_class: 'stocks' };
 
-    const result = await orchestrator.runAnalysts('trace-1', signal, clock);
+    const result = await orchestrator.runAnalysts('trace-1', signal, clock, ASOF);
 
     expect(result.skipped).toBe(true);
     expect(result.views).toEqual([]);
@@ -220,7 +220,12 @@ describe('AnalystOrchestrator', () => {
     });
 
     // The exact TickSteps.analysts shape must also report the skip as an empty array.
-    const stepResult = await orchestrator.analysts({ trace_id: 'trace-1', signal, clock });
+    const stepResult = await orchestrator.analysts({
+      trace_id: 'trace-1',
+      signal,
+      clock,
+      bar: ASOF,
+    });
     expect(stepResult).toEqual([]);
   });
 
@@ -237,7 +242,7 @@ describe('AnalystOrchestrator', () => {
     );
     const signal: Signal = { asset: INSTRUMENT, asset_class: 'stocks' };
 
-    const result = await orchestrator.runAnalysts('trace-1', signal, clock);
+    const result = await orchestrator.runAnalysts('trace-1', signal, clock, ASOF);
 
     expect(result.skipped).toBe(false);
     expect(result.views.map((v) => v.analyst_type).sort()).toEqual(['fundamental', 'technical']);
@@ -281,7 +286,7 @@ describe('AnalystOrchestrator', () => {
       });
       const signal: Signal = { asset: INSTRUMENT, asset_class: 'stocks' };
 
-      const result = await orchestrator.runAnalysts('trace-1', signal, clock);
+      const result = await orchestrator.runAnalysts('trace-1', signal, clock, ASOF);
 
       expect(result.failures).toEqual([]);
       expect(result.views.map((view) => view.analyst_id).sort()).toEqual(
@@ -348,6 +353,7 @@ describe('AnalystOrchestrator', () => {
         'trace-1',
         { asset: INSTRUMENT, asset_class: 'crypto' },
         clock,
+        ASOF,
       );
 
       expect(flaky.attempts()).toBe(2);
@@ -368,6 +374,7 @@ describe('AnalystOrchestrator', () => {
         'trace-1',
         { asset: INSTRUMENT, asset_class: 'crypto' },
         clock,
+        ASOF,
       );
 
       expect(flaky.attempts()).toBe(2);
@@ -387,6 +394,7 @@ describe('AnalystOrchestrator', () => {
         'trace-1',
         { asset: INSTRUMENT, asset_class: 'crypto' },
         clock,
+        ASOF,
       );
 
       expect(result.skipped).toBe(true);
@@ -406,6 +414,7 @@ describe('AnalystOrchestrator', () => {
         'trace-1',
         { asset: INSTRUMENT, asset_class: 'crypto' },
         clock,
+        ASOF,
       );
 
       expect(healthy.attempts()).toBe(1);
@@ -423,6 +432,7 @@ describe('AnalystOrchestrator', () => {
         'trace-1',
         { asset: INSTRUMENT, asset_class: 'crypto' },
         clock,
+        ASOF,
       );
 
       expect(flaky.attempts()).toBe(2);

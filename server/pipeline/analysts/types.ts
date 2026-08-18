@@ -148,6 +148,25 @@ export interface AnalystInput {
    */
   calendar: TradingCalendar;
   /**
+   * The claimed decision bar's opening boundary (#811) — `TickContext.decision_bar.open_time`,
+   * threaded down through `TickSteps.analysts` and `AnalystOrchestrator.runAnalysts` without a
+   * second derivation anywhere in between. This is what `market_intelligence.getContext` must be
+   * called with, so the MI window floors to the SAME bar the debate is keyed to, rather than
+   * independently flooring whatever `clock.now()` reads when the analyst happens to run.
+   *
+   * Before #811, `MarketIntelligenceStore.getContext` floored a second, independent read of the
+   * clock (#782) — the same two-derivations shape #687 fixed for the Trader one seam over. A pass
+   * that straddles the hour boundary (claimed under bar N, reaching the analysts after the clock
+   * has ticked into bar N+1) floored its MI window to N+1 while the debate stayed keyed to N, so
+   * the analyst input and the debate record disagreed about which bar they belonged to.
+   *
+   * REQUIRED, not optional, for the same reason `telemetry` is (#790): a caller with no real
+   * decision bar (a focused unit test that does not go through the orchestrator) must supply one
+   * explicitly rather than have this field silently fall back to a fresh `floorToBar(clock.now())`
+   * — a fallback here would just be the bug this ticket exists to close, reintroduced as a default.
+   */
+  bar: Date;
+  /**
    * Where an analyst's counters go (#745). REQUIRED, not optional (#790) — see
    * `NOOP_ANALYST_TELEMETRY`. A caller with no real sink passes that constant
    * explicitly rather than omitting the field, so a construction site that

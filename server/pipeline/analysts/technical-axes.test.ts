@@ -107,6 +107,7 @@ function buildInput(
     trace_id: 'trace-745',
     signal: SIGNAL,
     clock,
+    bar: asOf,
     market_intelligence: new MarketIntelligenceStore(clock),
     market_data: marketDataOverride === undefined ? inner : marketDataOverride(inner),
     // #746: AnalystInput.calendar is required. `AlwaysOpenCalendar` keeps the

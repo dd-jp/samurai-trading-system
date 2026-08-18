@@ -111,6 +111,7 @@ describe('MiIngestAgent', () => {
       trace_id: 't',
       signal: { asset: 'AAPL', asset_class: 'stocks' as const },
       clock,
+      bar: NOW,
       market_intelligence: store,
       market_data: marketData,
       calendar: new AlwaysOpenCalendar(),

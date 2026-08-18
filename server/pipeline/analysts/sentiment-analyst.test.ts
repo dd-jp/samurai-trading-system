@@ -77,6 +77,9 @@ function buildInput(
     trace_id,
     signal,
     clock,
+    // #811: AnalystInput.bar is required — the claimed decision bar's
+    // open_time. ASOF stands in for it here, unchanged.
+    bar: ASOF,
     market_intelligence: marketIntelligence,
     market_data: marketData,
     // #746: sentiment never reads it, but AnalystInput.calendar is required.

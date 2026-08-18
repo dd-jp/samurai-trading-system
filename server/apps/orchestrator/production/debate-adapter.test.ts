@@ -543,6 +543,7 @@ describe('buildDebateStep', () => {
         trace_id,
         signal: { asset: 'AAPL', asset_class: 'stocks' },
         clock,
+        bar,
         market_intelligence: intelligence,
         market_data: marketData,
         calendar: new AlwaysOpenCalendar(),

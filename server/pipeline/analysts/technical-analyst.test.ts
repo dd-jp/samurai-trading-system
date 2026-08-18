@@ -167,6 +167,9 @@ function buildInput(
     trace_id,
     signal,
     clock,
+    // #811: AnalystInput.bar is required — the claimed decision bar's
+    // open_time. asOf stands in for it here, unchanged.
+    bar: asOf,
     market_intelligence: marketIntelligence,
     market_data: marketData,
     calendar,
@@ -497,6 +500,7 @@ describe('technicalAnalyst — single 5m bar fetch per instrument per tick (#742
         trace_id: 'trace-live-1',
         signal,
         clock,
+        bar: asOf,
         market_intelligence: marketIntelligence,
         market_data: marketData,
         calendar: new AlwaysOpenCalendar(),

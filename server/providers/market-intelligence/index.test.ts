@@ -205,6 +205,44 @@ describe('MarketIntelligenceStore.getContext', () => {
     ]);
   });
 
+  /**
+   * #811. The claim lands at 13:59:5x (the gate floors it to the 13:00 bar);
+   * the analyst read that consumes it does not execute until 14:00:05, after
+   * the wall clock has already ticked into the 14:00 bar. Before #811,
+   * `getContext` floored a SECOND, independent read of `clock.now()` — so this
+   * pass's MI window would land on the 14:00 bar while the debate it feeds
+   * stays keyed to 13:00, and the two disagree about which bar they belong to.
+   *
+   * The item sits just inside the 13:00-bar window and just outside the
+   * 14:00-bar window, so the two derivations are falsifiable by inclusion: if
+   * `getContext` ever re-floors `asOf` instead of using the passed `bar`, the
+   * item drops out and this test goes red.
+   */
+  it('inherits the claimed decision bar instead of re-deriving one on a straddle (#811)', () => {
+    const clock = new MutableClock(new Date('2026-07-14T13:59:55Z'));
+    const store = new MarketIntelligenceStore(clock);
+    const window = 5 * 60_000; // 5 minutes
+
+    // Claimed while the wall clock was still inside the 13:00 bar — the same
+    // derivation `DebateBarDecisionGate.claim` performs (floorToBar(asOf)).
+    const claimedBar = floorToBar(clock.now(), DEBATE_BAR_TIMEFRAME_MS);
+    expect(claimedBar).toEqual(new Date('2026-07-14T13:00:00Z'));
+
+    // In the [12:55, 13:00] window the CLAIMED bar implies; NOT in the
+    // [13:55, 14:00] window a fresh floor of 14:00:05 would imply.
+    store.ingest(
+      envelope([newsItem({ id: 'claimed-bar-item', timestamp: new Date('2026-07-14T12:59:00Z') })]),
+    );
+
+    // The clock ticks past the hour boundary before the analyst read runs —
+    // the straddle #811 is filed against.
+    clock.advanceTo(new Date('2026-07-14T14:00:05Z'));
+
+    const context = store.getContext('stocks', window, 'trace-1', claimedBar);
+
+    expect(context.news.map((item) => item.id)).toEqual(['claimed-bar-item']);
+  });
+
   it('conflicts is always empty — conflict resolution is not ticketed under epic #52', () => {
     const store = new MarketIntelligenceStore(new FixedClock(new Date('2026-07-14T09:00:00Z')));
     store.ingest(envelope([newsItem()]));
