@@ -1032,6 +1032,12 @@ function exitPathOrder(
         cosine_multiplier: 1,
       },
       cosine_precedent: { neighbor_count: 0, weighted_mean_r: null, no_precedent: true },
+      // #793: `executeExit` now refuses to write ahead without one — this
+      // harness has no debate/trader run behind it, so a fixed 'flatten'
+      // stands in; it exercises the exit path's mechanics (cancel-then-
+      // submit, attribution, `ClosedTrade`), not which of the three reasons
+      // fired.
+      ...(intentType === 'exit' ? { exit_reason: 'flatten' as const } : {}),
     },
   };
 }

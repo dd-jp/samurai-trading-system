@@ -295,6 +295,21 @@ async function executeExit(
     });
   }
 
+  // #793: every exit intent carries `metadata.exit_reason` —
+  // `buildFlattenExit` (trader/decide.ts) requires the argument, so its
+  // absence here means SOME other path constructed an `intent_type: 'exit'`
+  // order without going through it. That is a contract violation worth
+  // refusing loudly, not defaulting past: a silently-guessed reason would
+  // corrupt `flatten_submissions.exit_reason` and, downstream,
+  // `closed_trades.close_reason` on the money path.
+  if (order.metadata.exit_reason === undefined) {
+    return result('error', idempotencyKey, now, {
+      reason:
+        `exit intent for '${order.instrument}' carries no metadata.exit_reason — every exit ` +
+        `intent must name one (ExitReason, shared/types/records.ts)`,
+    });
+  }
+
   // Write-ahead BEFORE any broker call — see the docstring above for why
   // this row exists at all. `writeAheadFlatten` throwing (a genuine store
   // failure, not the duplicate case — `findByKey` above already excludes
@@ -307,6 +322,9 @@ async function executeExit(
     instrument: order.instrument,
     asset_class: order.asset_class,
     side: order.side,
+    // #793: threaded through to `closed_trades.close_reason` via
+    // `flatten_submissions.exit_reason` — see `redistributeOneFlatten`.
+    exit_reason: order.metadata.exit_reason,
     size: order.size,
     submitted_at: now,
     // Which lots this flatten closes AND what each of them holds, so

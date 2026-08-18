@@ -57,6 +57,7 @@ function makeFlattenWriteAhead(
       { idempotency_key: 'key-lot-1', held: 10 },
       { idempotency_key: 'key-lot-2', held: 15 },
     ],
+    exit_reason: 'flatten',
     ...overrides,
   };
 }
@@ -482,6 +483,7 @@ describe('SqliteExecutionStore', () => {
       expect(await store.getFlattenAttribution('flatten-pre-0021')).toEqual({
         lot_idempotency_keys: ['key-lot-1', 'key-lot-2'],
         lot_held_quantities: null,
+        exit_reason: 'flatten',
       });
     });
   });

@@ -115,9 +115,10 @@ export interface AuditLog {
  * The stage a pass reached before terminating (successfully or by
  * short-circuit).
  *
- * `'position_check'` (#743) is the tick path's own stage: the
- * mark/bracket/flatten evaluation that runs on EVERY tick, ahead of — and on
- * most ticks instead of — the decision chain. It is the terminal stage of the
+ * `'position_check'` (#743) is the tick path's own stage: the mark/flatten
+ * evaluation that runs on EVERY tick, ahead of — and on most ticks instead
+ * of — the decision chain. Bracket exits rest at the venue and are never
+ * evaluated here. It is the terminal stage of the
  * most common pass in the system (roughly 29 of every 30 at a 2-minute tick
  * against a 60-minute debate bar), and it must be distinguishable from a
  * decision pass that declined to trade, or a healthy exit-only tick reads as a

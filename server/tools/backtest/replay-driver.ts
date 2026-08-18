@@ -389,7 +389,7 @@ export class ReplayDriver {
     lot: OpenLot,
     bar: Bar,
     bars: readonly Bar[],
-    exit: { reason: ClosedTrade['close_reason']; reference: number },
+    exit: { reason: ReplayCloseReason; reference: number },
   ): void {
     // Closing side is the opposite of the entry's, so the cost model moves the
     // price adversely against the exit — not in its favor.
@@ -504,6 +504,18 @@ export class ReplayDriver {
 }
 
 /**
+ * #793: this proxy replay models exactly three exits — a bracket hit
+ * ('stop'/'target') or the signal turning ('exit', the pre-#748 shape). It
+ * has no `flatten_submissions` journal and no `OrderIntent.metadata` to read
+ * an `ExitReason` from, so it never produces 'flatten' | 'signal_decay' |
+ * 'direction_flip' — a narrower type than `ClosedTrade['close_reason']`
+ * (which now also carries those three) rather than reusing it, so a fill's
+ * `leg` (unaffected by migration 0031 — `fills.leg` keeps its original four
+ * values) can still be assigned `exit.reason` directly.
+ */
+type ReplayCloseReason = 'stop' | 'target' | 'exit';
+
+/**
  * Which exit, if any, this bar produces — and the reference price it is
  * priced against.
  *
@@ -519,7 +531,7 @@ function exitOf(
   lot: OpenLot,
   bar: Bar,
   signal: ProxySignal,
-): { reason: ClosedTrade['close_reason']; reference: number } | undefined {
+): { reason: ReplayCloseReason; reference: number } | undefined {
   if (lot.direction === 'long') {
     if (bar.low <= lot.stop) {
       return { reason: 'stop', reference: bar.open < lot.stop ? bar.open : lot.stop };

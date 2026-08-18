@@ -613,6 +613,10 @@ describe('ExecutionImpl.execute', () => {
         entry: 100,
         stop: 100,
         target: 100,
+        // #793: every exit intent carries `metadata.exit_reason`
+        // (`buildFlattenExit` requires the argument) — `executeExit` now
+        // refuses to write ahead without one.
+        metadata: { ...makeIntent().metadata, exit_reason: 'flatten' },
         ...overrides,
       });
     }
@@ -1140,9 +1144,11 @@ describe('ExecutionImpl.execute', () => {
           filled_size: 40,
           // The Simulated adapter's own raw fill is tagged `leg: 'entry'`
           // (it models a flatten as just another priced fill at submit
-          // time) — `close_reason` reading 'exit' here, not 'entry', proves
-          // `ingestFills()` overrode that tag rather than trusting it.
-          close_reason: 'exit',
+          // time) — `close_reason` reading the flatten's journalled
+          // `exit_reason` ('flatten', `makeExitGo`'s default), not 'entry',
+          // proves `ingestFills()` overrode the adapter's tag AND threaded
+          // the real reason through, rather than trusting either (#793).
+          close_reason: 'flatten',
         });
         // gross = (99.5 - 95) * 40 = 180; fees = 0 (entry) + 0.2 (flatten commission).
         expect(closedTrades[0].realized_pnl_net).toBeCloseTo(180 - 0.2, 6);
@@ -1150,6 +1156,91 @@ describe('ExecutionImpl.execute', () => {
 
         expect((await store.getPosition('key-aapl-entry-1'))?.order_state).toBe('closed');
         expect(await store.getOpenPositions()).toHaveLength(0);
+      });
+
+      // #793 AC: `closed_trades.close_reason` must distinguish a flatten
+      // (broker-visible, time-based) from an early release
+      // (`signal_decay`) — two DIFFERENT in-process reasons a lot can be
+      // exited for, both submitted through the same `intent_type: 'exit'`
+      // path. Before this ticket both collapsed to the single `leg: 'exit'`
+      // tag; this test pins that they now read distinct `close_reason`
+      // values off the exit's own `metadata.exit_reason`.
+      it('gives a signal-decay release and a flatten different close_reason values on their closed-trade rows', async () => {
+        const { store } = openTestExecutionStore();
+        const costModel: CostModel = {
+          fill: vi
+            .fn()
+            .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }) // lot A entry
+            .mockReturnValueOnce({ fill_price: 92, filled_size: 10, cost_breakdown: zeroCosts() }) // lot B entry
+            .mockReturnValueOnce({ fill_price: 95, filled_size: 10, cost_breakdown: zeroCosts() }) // lot A exit (signal_decay)
+            .mockReturnValueOnce({ fill_price: 96, filled_size: 10, cost_breakdown: zeroCosts() }), // lot B exit (flatten)
+        };
+        const marketData = makeMarketData();
+        const broker = new SimulatedBrokerAdapter({
+          clock: fixedClock,
+          costModel,
+          marketData,
+          config: SIMULATED_CONFIG,
+        });
+        const execution = new ExecutionImpl(
+          makeInput({ store, broker, costModel, marketData, clock: fixedClock }),
+        );
+
+        // Two DIFFERENT instruments, each with exactly one open lot, so
+        // each exit below is a full flatten of that instrument's only
+        // held quantity — `executeExit` sizes an exit against the total
+        // held for the instrument (see `heldSize`/`totalHeldQuantity`
+        // above), not against an individual lot, so sharing one
+        // instrument between the two lots would make a size-10 exit an
+        // (refused) partial rather than the full flatten this test needs.
+        await execution.execute(
+          makeGo({
+            idempotency_key: 'key-lot-a',
+            instrument: 'AAPL',
+            size: 10,
+            entry: 90,
+            stop: 85,
+            target: 110,
+          }),
+        );
+        await execution.ingestFills();
+        await execution.execute(
+          makeGo({
+            idempotency_key: 'key-lot-b',
+            instrument: 'MSFT',
+            size: 10,
+            entry: 92,
+            stop: 85,
+            target: 110,
+          }),
+        );
+        await execution.ingestFills();
+
+        await execution.execute(
+          makeExitGo({
+            idempotency_key: 'key-exit-a',
+            instrument: 'AAPL',
+            size: 10,
+            metadata: { ...makeIntent().metadata, exit_reason: 'signal_decay' },
+          }),
+        );
+        await execution.ingestFills();
+        await execution.execute(
+          makeExitGo({
+            idempotency_key: 'key-exit-b',
+            instrument: 'MSFT',
+            size: 10,
+            metadata: { ...makeIntent().metadata, exit_reason: 'flatten' },
+          }),
+        );
+        await execution.ingestFills();
+
+        const closedTrades = await store.getClosedTrades();
+        expect(closedTrades).toHaveLength(2);
+        const byKey = new Map(closedTrades.map((trade) => [trade.idempotency_key, trade]));
+        expect(byKey.get('key-lot-a')?.close_reason).toBe('signal_decay');
+        expect(byKey.get('key-lot-b')?.close_reason).toBe('flatten');
+        expect(byKey.get('key-lot-a')?.close_reason).not.toBe(byKey.get('key-lot-b')?.close_reason);
       });
 
       it('is idempotent across repeated polls of the same flatten fill', async () => {
@@ -1247,8 +1338,8 @@ describe('ExecutionImpl.execute', () => {
         const closedTrades = await store.getClosedTrades();
         expect(closedTrades).toHaveLength(2);
         const byKey = new Map(closedTrades.map((trade) => [trade.idempotency_key, trade]));
-        expect(byKey.get('key-lot-1')).toMatchObject({ filled_size: 10, close_reason: 'exit' });
-        expect(byKey.get('key-lot-2')).toMatchObject({ filled_size: 15, close_reason: 'exit' });
+        expect(byKey.get('key-lot-1')).toMatchObject({ filled_size: 10, close_reason: 'flatten' });
+        expect(byKey.get('key-lot-2')).toMatchObject({ filled_size: 15, close_reason: 'flatten' });
         // Each lot's PnL against its OWN entry price, not a blended average —
         // proof the FIFO split, not a pro-rata one, drove the allocation.
         expect(byKey.get('key-lot-1')?.realized_pnl_net).toBeCloseTo((100 - 90) * 10, 6);

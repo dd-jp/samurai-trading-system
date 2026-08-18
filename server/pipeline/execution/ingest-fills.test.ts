@@ -610,6 +610,7 @@ describe('ExecutionImpl.ingestFills', () => {
           { idempotency_key: 'key-1', held: 6 },
           { idempotency_key: 'key-2', held: 4 },
         ],
+        exit_reason: 'flatten',
       });
       // The raw fill (qty 6) exactly covers key-1's own share, leaving
       // key-2 with ZERO — named by the flatten, but with no new fill of its
@@ -700,6 +701,7 @@ describe('ExecutionImpl.ingestFills', () => {
           { idempotency_key: 'key-1', held: 6 },
           { idempotency_key: 'key-2', held: 4 },
         ],
+        exit_reason: 'flatten',
       });
       const withFlatten = new ScriptedBroker([
         fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 6 }),
@@ -817,6 +819,7 @@ describe('ExecutionImpl.ingestFills', () => {
         size: 10,
         submitted_at: OPENED_AT,
         lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+        exit_reason: 'flatten',
       });
       // NULLed to a pre-migration-0021 row, which is the one shape that still
       // routes the split through `getEntryFillSizes` — the only `await`
@@ -872,6 +875,7 @@ describe('ExecutionImpl.ingestFills', () => {
         size: 10,
         submitted_at: OPENED_AT,
         lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+        exit_reason: 'flatten',
       });
       const withFlatten = new ScriptedBroker([
         fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
@@ -923,6 +927,7 @@ describe('ExecutionImpl.ingestFills', () => {
         size: 10,
         submitted_at: OPENED_AT,
         lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+        exit_reason: 'flatten',
       });
       const withFlatten = new ScriptedBroker([
         fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),
@@ -972,6 +977,7 @@ describe('ExecutionImpl.ingestFills', () => {
         size: 10,
         submitted_at: OPENED_AT,
         lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+        exit_reason: 'flatten',
       });
       // NULLed to a pre-migration-0021 row, routing the split through the
       // now-flaky `getEntryFillSizes` fallback — same technique the existing
@@ -1054,6 +1060,7 @@ describe('ExecutionImpl.ingestFills', () => {
         size: 10,
         submitted_at: OPENED_AT,
         lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+        exit_reason: 'flatten',
       });
       // Acked, as `executeExit` always resolves it synchronously right after
       // `submitFlatten` returns, before any poll ever runs — a row still at
@@ -1124,6 +1131,7 @@ describe('ExecutionImpl.ingestFills', () => {
         size: 10,
         submitted_at: OPENED_AT,
         lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+        exit_reason: 'flatten',
       });
       // Acked, as `executeExit` always resolves it synchronously right after
       // `submitFlatten` returns, before any poll ever runs.
@@ -1201,6 +1209,7 @@ describe('ExecutionImpl.ingestFills', () => {
         size: 6,
         submitted_at: OPENED_AT,
         lot_held_quantities: [{ idempotency_key: 'key-1', held: 6 }],
+        exit_reason: 'flatten',
       });
 
       const withFlatten = new ScriptedBroker([
@@ -1252,6 +1261,7 @@ describe('ExecutionImpl.ingestFills', () => {
         size: 6,
         submitted_at: OPENED_AT,
         lot_held_quantities: [{ idempotency_key: 'key-1', held: 6 }],
+        exit_reason: 'flatten',
       });
 
       // A single scripted broker, polled TWICE: `fetchNewFills` re-offers the
@@ -1302,6 +1312,7 @@ describe('ExecutionImpl.ingestFills', () => {
         size: 10,
         submitted_at: OPENED_AT,
         lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+        exit_reason: 'flatten',
       });
 
       const withFlatten = new ScriptedBroker([
@@ -1340,6 +1351,7 @@ describe('ExecutionImpl.ingestFills', () => {
         size: 6,
         submitted_at: OPENED_AT,
         lot_held_quantities: [{ idempotency_key: 'key-1', held: 6 }],
+        exit_reason: 'flatten',
       });
       const withFlatten = new ScriptedBroker([
         fill({ client_order_id: 'key-1', broker_fill_id: 'e1', leg: 'entry', qty: 10 }),

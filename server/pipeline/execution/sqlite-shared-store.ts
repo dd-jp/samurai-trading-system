@@ -22,6 +22,7 @@
 
 import type {
   ClosedTrade,
+  ExitReason,
   Fill,
   LotHeldQuantity,
   OpenPosition,
@@ -97,6 +98,8 @@ interface FillRow {
   fee: number;
   timestamp: string;
   cost_breakdown_json: string | null;
+  /** #793, migration 0031 — see `Fill.exit_reason`. */
+  exit_reason: ExitReason | null;
 }
 
 /**
@@ -249,8 +252,9 @@ export class SqliteExecutionStore implements SharedStore {
       this.db
         .prepare(
           `INSERT INTO fills (
-             idempotency_key, broker_fill_id, leg, price, qty, fee, timestamp, cost_breakdown_json
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+             idempotency_key, broker_fill_id, leg, price, qty, fee, timestamp, cost_breakdown_json,
+             exit_reason
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           fill.idempotency_key,
@@ -261,6 +265,7 @@ export class SqliteExecutionStore implements SharedStore {
           fill.fee,
           fill.timestamp.toISOString(),
           fill.cost_breakdown === undefined ? null : JSON.stringify(fill.cost_breakdown),
+          fill.exit_reason ?? null,
         );
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {
@@ -447,8 +452,8 @@ export class SqliteExecutionStore implements SharedStore {
         .prepare(
           `INSERT INTO flatten_submissions (
              idempotency_key, instrument, asset_class, side, size,
-             status, submitted_at, lot_idempotency_keys, lot_held_quantities
-           ) VALUES (?, ?, ?, ?, ?, 'submitting', ?, ?, ?)`,
+             status, submitted_at, lot_idempotency_keys, lot_held_quantities, exit_reason
+           ) VALUES (?, ?, ?, ?, ?, 'submitting', ?, ?, ?, ?)`,
         )
         .run(
           submission.idempotency_key,
@@ -462,6 +467,7 @@ export class SqliteExecutionStore implements SharedStore {
           // `getFlattenAttribution` re-establishes it on the way out.
           JSON.stringify(submission.lot_held_quantities.map((lot) => lot.idempotency_key)),
           JSON.stringify(submission.lot_held_quantities.map((lot) => lot.held)),
+          submission.exit_reason,
         );
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {
@@ -534,11 +540,15 @@ export class SqliteExecutionStore implements SharedStore {
   async getFlattenAttribution(idempotency_key: string): Promise<FlattenAttribution | null> {
     const row = this.db
       .prepare(
-        `SELECT lot_idempotency_keys, lot_held_quantities
+        `SELECT lot_idempotency_keys, lot_held_quantities, exit_reason
            FROM flatten_submissions WHERE idempotency_key = ?`,
       )
       .get(idempotency_key) as
-      | { lot_idempotency_keys: string | null; lot_held_quantities: string | null }
+      | {
+          lot_idempotency_keys: string | null;
+          lot_held_quantities: string | null;
+          exit_reason: ExitReason | null;
+        }
       | undefined;
     if (row === undefined || row.lot_idempotency_keys === null) return null;
 
@@ -563,7 +573,11 @@ export class SqliteExecutionStore implements SharedStore {
     }
 
     if (row.lot_held_quantities === null) {
-      return { lot_idempotency_keys: keys, lot_held_quantities: null };
+      return {
+        lot_idempotency_keys: keys,
+        lot_held_quantities: null,
+        exit_reason: row.exit_reason,
+      };
     }
 
     const held = parseJsonColumn(idempotency_key, 'lot_held_quantities', row.lot_held_quantities);
@@ -598,7 +612,11 @@ export class SqliteExecutionStore implements SharedStore {
       paired.push({ idempotency_key: key, held: quantity });
     }
 
-    return { lot_idempotency_keys: keys, lot_held_quantities: paired };
+    return {
+      lot_idempotency_keys: keys,
+      lot_held_quantities: paired,
+      exit_reason: row.exit_reason,
+    };
   }
 
   /**
@@ -821,5 +839,6 @@ function fromFillRow(row: FillRow): Fill {
             Fill['cost_breakdown']
           >,
         }),
+    ...(row.exit_reason === null ? {} : { exit_reason: row.exit_reason }),
   };
 }

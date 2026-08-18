@@ -6,7 +6,7 @@
  * dirty the file every consumer of `Execution` imports. `types.ts` remains a
  * re-export barrel, so no import site changed.
  */
-import type { OrderState } from '../../../shared/index.js';
+import type { ExitReason, OrderState } from '../../../shared/index.js';
 
 /**
  * The normalized abstract bracket Execution hands the adapter: entry +
@@ -100,6 +100,14 @@ export interface NormalizedFill {
    * always an increment by the time it is written, whatever the wire said.
    */
   qty_is_cumulative?: boolean;
+  /**
+   * #793: set by `redistributeOneFlatten` on a flatten's split fill, from the
+   * journalled `flatten_submissions.exit_reason` — WHY the flatten this fill
+   * belongs to was submitted. Unlike `qty_is_cumulative`, this one IS carried
+   * through to the persisted `Fill` row (`toFill`, migration 0031) so
+   * `closedTrade()` can read it back regardless of which poll ingested it.
+   */
+  exit_reason?: ExitReason;
 }
 
 /**

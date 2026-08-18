@@ -6,6 +6,7 @@
 import type {
   AssetClass,
   ClosedTrade,
+  ExitReason,
   Fill,
   LotHeldQuantity,
   OpenPosition,
@@ -298,6 +299,13 @@ export interface FlattenAttribution {
    * such quantities; its fill falls back to the pre-#571 entry-total split.
    */
   lot_held_quantities: readonly LotHeldQuantity[] | null;
+  /**
+   * #793: WHY this flatten was submitted — the same `ExitReason` the exit
+   * intent's `metadata.exit_reason` carried at decide time, journalled
+   * verbatim on write-ahead (migration 0031). `null` for a flatten row
+   * written before that migration, which recorded no such reason.
+   */
+  exit_reason: ExitReason | null;
 }
 
 /** One poll's atomic advance of a single lot — see `SharedStore.applyLotAdvance`. */
@@ -340,4 +348,13 @@ export interface FlattenSubmissionWriteAhead {
    * flatten's own fills persist).
    */
   lot_held_quantities: readonly LotHeldQuantity[];
+  /**
+   * #793: WHY this flatten is being submitted — the exit intent's own
+   * `metadata.exit_reason`, carried straight through so `getFlattenAttribution`
+   * can hand it back to `redistributeOneFlatten` (migration 0031). Every exit
+   * intent carries one (`buildFlattenExit` requires the argument — see
+   * `ExitReason`'s doc); `executeExit` refuses to write ahead without it
+   * rather than defaulting silently.
+   */
+  exit_reason: ExitReason;
 }

@@ -2379,6 +2379,8 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
           entry: 105,
           stop: 105,
           target: 105,
+          // #793: `executeExit` now refuses to write ahead without one.
+          metadata: { ...orderIntent().metadata, exit_reason: 'flatten' },
         }),
       ),
     );

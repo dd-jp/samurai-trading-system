@@ -502,6 +502,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
       size: 10,
       submitted_at: NOW,
       lot_held_quantities: [{ idempotency_key: 'key-aapl-entry', held: 10 }],
+      exit_reason: 'flatten',
       ...overrides,
     });
   }
