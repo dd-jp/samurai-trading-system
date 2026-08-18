@@ -26,7 +26,8 @@
 ### 4) ADR-0018's earnings-day labeling is materially wrong
 **Where:** ADR-0018 §Known weaknesses, tracked as #685.  
 **What:** Earnings releases during the session are classified as same-session reactions, meaning entry precedes the event it is meant to react to. Same-date pre-market and post-close headlines double-count one event. The event-day figure (−1.3267%/trade, t = −4.19) is indicative, not measured, and the structural argument (events are 1.73% of sessions) is what saves Decision 2 — not the magnitude.  
-**Risk:** If #685 re-runs and the structural share argument weakens, the "no gating" decision needs re-derivation. The bar ADR-0018 sets is unaffected; the gating arithmetic is.
+**Risk:** If #685 re-runs and the structural share argument weakens, the "no gating" decision needs re-derivation. The bar ADR-0018 sets is unaffected; the gating arithmetic is.  
+**Resolved 2026-08-18 (#685) — the risk did not materialise; the structural argument *strengthened*.** Both named defects were fixed and both proved inert: all 43 genuine TSLA releases land post-close, so nothing was ever intraday-mislabelled. The figures moved because of a third defect this finding did not name — the matcher accepted previews and commentary — and the corrected numbers are event-only **−1.4433%/trade, n = 15, t = −4.54**, **1.0378%/trade worse than ordinary at t = −2.99**, over **1.62%** of sessions (was 1.73%). Sign and significance both survive, the share falls, so no re-derivation is needed.
 
 ### 5) Market Intelligence still ingests `[]` on every refresh in production
 **Where:** market-intelligence-spec banner (2026-08-15 rework), ADR-0009, #552.  

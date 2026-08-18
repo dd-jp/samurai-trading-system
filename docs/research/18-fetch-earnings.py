@@ -22,8 +22,12 @@ HDR = {
 # APPROXIMATE, and only for the printed preview below. The study does NOT use
 # this: 18-threshold-study.py re-derives earnings dates with a stricter
 # name-anchored matcher (company name prefix + quarter token + EPS), which is
-# what produced ADR-0018's 46 reaction days. The two counts will not reconcile,
-# and this one is the looser of the pair.
+# what produced ADR-0018's 43 reaction days. The two counts will not reconcile,
+# and this one is the looser of the pair — deliberately so, since a preview
+# ("Analyst Predicts 6% Beat On Q2 EPS") is a headline worth previewing here but
+# is NOT an earnings release. The study's matcher requires a reported figure,
+# `EPS $...`; accepting the bare token cost it three spurious reaction days
+# before #685 (46 -> 43).
 PAT = re.compile(
     r"(reports?\s+q[1-4])|(q[1-4]\s+(fy\s*)?\d{2,4}\s*(earnings|results|eps))"
     r"|(earnings\s+(call|results|report)\b)|(\bbeats?\b.*\bestimate)|(\bmisses?\b.*\bestimate)",

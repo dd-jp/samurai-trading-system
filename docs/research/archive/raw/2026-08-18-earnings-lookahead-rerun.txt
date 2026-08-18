@@ -1,0 +1,336 @@
+#685 — earnings reaction-day labelling, corrected run
+=====================================================
+
+Date: 2026-08-18. Supersedes the event rows of the 2026-08-10 run behind
+ADR-0018 Decision 2 and doc 18 Result 4. Criterion declared and committed
+BEFORE this run: see 2026-08-18-earnings-lookahead-criterion.md in this
+directory (commit c253e8c, ahead of any data being pulled).
+
+Data (free on keys already held, per doc 33 — no purchase):
+  SAMURAI_ENV_FILE=<repo>/.env.local SAMURAI_DATA_DIR=/tmp/s685 \
+    python3 docs/research/18-fetch-earnings.py TSLA 2016-01-04 2026-07-31
+      -> TSLA total 37786 headlines
+  SAMURAI_ENV_FILE=<repo>/.env.local SAMURAI_DATA_DIR=/tmp/s685 \
+    python3 docs/research/18-fetch-bars.py TSLA 2016-01-04 2026-07-31 1Min
+      -> 1,915,075 bars
+
+No key value appears anywhere in this record; credentials were read from
+.env.local by the fetch scripts and never printed.
+
+RESULT IN ONE LINE. Both defects the ticket named are REAL but INERT on this
+sample: all 43 genuine TSLA releases are post-close (16:01-17:14 ET), so no
+session is intraday-contaminated and the per-headline double-count already
+collapsed in the old code's (date,label) set. The entire 46 -> 43 correction is
+a THIRD defect the ticket did not name: the `\beps\b` matcher accepted previews
+and commentary, and four such headlines marked three spurious reaction days.
+The corrected event-day figure keeps its sign and its significance.
+
+           |  published (2026-08-10) |  corrected (this run)
+  ---------+-------------------------+----------------------
+  events   |  46                     |  43   (28 IS, 15 OOS; was 28 IS, 18 OOS)
+  event    |  -1.3267%  n=18  t=-4.19|  -1.4433%  n=15  t=-4.54
+  ordinary |  -0.4098%  n=879 t=-2.95|  -0.4055%  n=882 t=-2.93
+  ev - ord |  -0.92%    SE .345 -2.66|  -1.0378%  SE .347  t=-2.99
+  combo    |  -0.4282%  n=897        |  -0.4229%  n=897
+  pooled   |  -0.4257%  n=897 t=-3.10|  -0.4257%  n=897  t=-3.10  (UNCHANGED)
+
+Declared floor: no t is reported below n=10 out-of-sample. n=15 clears it, so
+the t IS reported. Events are now 43/2657 = 1.62% of sessions (was 1.73%), so
+ADR-0018 Decision 2's structural argument holds a fortiori and is NOT restated.
+
+
+==============================================================================
+PART 1 — ATTRIBUTION GATE
+==============================================================================
+Runs the OLD labelling and the NEW one on the SAME bars and the SAME engine.
+The old arms reproducing to the digit is what makes every difference below
+attributable to the labelling rather than to fit drift or a different data pull.
+
+  python3 attribute.py     (harness in this record's Part 4)
+
+sessions 2657  2016-01-04..2026-07-31
+
+== REACTION-DAY RECONCILIATION
+   OLD 46 (ADR-0018 published 46)   NEW 43   excluded intraday 0
+   in OLD, not in NEW: [datetime.date(2023, 7, 14), datetime.date(2024, 10, 22), datetime.date(2025, 6, 9)]
+   in NEW, not in OLD: []
+
+== OLD LABELLING   events IS=28 OOS=18
+   frozen levels: pooled TP+6.0/SL-3.0  ordinary TP+6.0/SL-3.0  event TP+2.0/SL-1.5
+   grid pooled            exp -0.4257%  n=897  SE 0.137  t -3.10
+   ordinary only          exp -0.4098%  n=879  SE 0.139  t -2.95
+   event only             exp -1.3267%  n=18   SE 0.316  t -4.19
+   event minus ordinary   -0.9168%  SE 0.345  t -2.65
+   combination            exp -0.4282%  n=897  SE 0.136  t -3.15
+
+== NEW LABELLING   events IS=28 OOS=15
+   frozen levels: pooled TP+6.0/SL-3.0  ordinary TP+6.0/SL-3.0  event TP+2.0/SL-1.5
+   grid pooled            exp -0.4257%  n=897  SE 0.137  t -3.10
+   ordinary only          exp -0.4055%  n=882  SE 0.138  t -2.93
+   event only             exp -1.4433%  n=15   SE 0.318  t -4.54
+   event minus ordinary   -1.0378%  SE 0.347  t -2.99
+   combination            exp -0.4229%  n=897  SE 0.136  t -3.10
+
+Reproduction gate: PASS. The pooled row is -0.4257%, n=897, t=-3.10 under both
+labellings, matching ADR-0018 exactly, and the OLD event row reproduces
+-1.3267% at n=18 with t=-4.19 and the OLD ordinary row -0.4098% at n=879. The
+published difference is quoted as -0.92% / t=-2.66; computed here on unrounded
+standard errors it is -0.9168% / t=-2.65, i.e. the published t was formed from
+the rounded expectancies. Frozen levels are identical under both labellings
+(pooled and ordinary +6.0/-3.0, event +2.0/-1.5) because the three spurious
+days are all out-of-sample, so the in-sample fits are untouched at 28 events.
+
+The three days dropped: 2023-07-14, 2024-10-22, 2025-06-09. A fourth spurious
+headline (2024-07-13) fell on a Saturday and never marked a session. 46 = 43 + 3.
+
+
+==============================================================================
+PART 2 — CORRECTED RUN (the checked-in script)
+==============================================================================
+
+  TF=1Min SAMURAI_DATA_DIR=/tmp/s685 DUMP_EVENTS=1 \
+    python3 docs/research/18-threshold-study.py TSLA 3 0.41
+
+-- MATCHED EARNINGS EVENTS (deduped, one row per event)
+    1  2016-02-10 16:16 ET  next      Tesla Reports Q4 Adj. EPS $(0.87), Deliveries ~17.478K -Selerity
+    2  2016-05-04 16:04 ET  next      Tesla Reports Q1 EPS $(0.57) vs $(0.58) Est.
+    3  2016-08-03 16:01 ET  next      Tesla Reports Q2 Adj. EPS $(1.06) vs $(1.02) Est.
+    4  2016-10-26 16:07 ET  next      Tesla Reports Q3 EPS $0.14 vs $0.09 Est., Adj. EPS $0.71, Sales $2.3B vs $2.35B Est.
+    5  2017-02-22 16:07 ET  next      Tesla Reports Q4 GAAP EPS $(0.78), Adj. EPS $(0.69) vs $(0.43) Est.
+    6  2017-05-03 16:08 ET  next      Tesla Reports Q1 Adj. EPS $(1.33) vs $(0.81) Est.
+    7  2017-08-02 16:14 ET  next      Tesla Reports Q2 Adj. EPS $(1.33) vs $(1.80) Est., Sales $2.79B vs $2.55B Est.
+    8  2017-11-01 16:18 ET  next      Tesla Reports Q3 Sales $2.98B vs $2.3B Est., GAAP EPS $(3.70) May Not Compare To $(2.30) Est.
+    9  2018-02-07 16:06 ET  next      Tesla Reports Q4 Adj. EPS $(3.04) vs $(3.12) Est.
+   10  2018-05-02 16:12 ET  next      Tesla Motors Q1 EPS $(3.35) Misses $(3.27) Estimate, Sales $3.409B Beat $3.33B Estimate
+   11  2018-08-01 16:06 ET  next      Tesla Motors Q2 EPS $(3.06) Misses $(2.81) Estimate, Sales $4.002B Beat $3.97B Estimate
+   12  2018-10-24 16:14 ET  next      Tesla Motors, Inc. Q3 Adj. EPS $2.90 Does Not Compare To $(0.19) Estimate
+   13  2019-01-30 16:10 ET  next      Tesla Motors Q4 EPS $1.93 Misses $2.26 Estimate, Sales $7.23B Beat $7.08B Estimate
+   14  2019-04-24 17:14 ET  next      Tesla Motors Q1 Adj. EPS $(2.9) Misses $(0.66) Estimate, Total Sales $4.541B Miss $5.44B Estimate
+   15  2019-07-24 16:47 ET  next      Tesla Q2 Adj. EPS $(1.12) Misses $(0.48) Estimate, Sales $6.35B Miss $6.43B Estimate
+   16  2019-10-23 16:55 ET  next      Tesla Q3 Adj. EPS $1.91 Beats $(0.42) Estimate, Sales $6.3B Miss $6.34B Estimate
+   17  2020-01-29 16:18 ET  next      Tesla Q4 EPS $0.81
+   18  2020-04-29 16:14 ET  next      Tesla Q1 Adj. EPS $1.240 Beats $(0.360) Estimate, Sales $5.985B Beat $5.900B Estimate
+   19  2020-07-22 16:23 ET  next      Tesla Q2 GAAP EPS $0.50, Adj. EPS $2.18
+   20  2020-10-21 16:08 ET  next      Tesla Q3 Adj. EPS $0.76 Beats $0.56 Estimate, Sales $8.77B Beat $8.26B Estimate
+   21  2021-01-27 16:08 ET  next      Tesla Q4 EPS $0.80 May Not Compare To $1.01 Estimate
+   22  2021-04-26 16:07 ET  next      Tesla Q1 EPS $0.93 Beats $0.79 Estimate -Reuters
+   23  2021-07-26 16:06 ET  next      Tesla Q2 Adj. EPS $1.45 Beats $0.96 Estimate, Sales $11.96B Beat $11.21B Estimate -Reuters
+   24  2021-10-20 16:06 ET  next      Tesla Q3 EPS $1.86 Beats $1.57 Estimate
+   25  2022-01-26 16:07 ET  next      Tesla Q4 Adj. EPS $2.54 Beats $2.26 Estimate, Sales $17.72B Beat $16.35B Estimate
+   26  2022-04-20 16:05 ET  next      Tesla Q1 EPS $3.22 Beats $2.26 Estimate -Reuters
+   27  2022-07-20 16:05 ET  next      Tesla Q2 EPS $2.27 Beats $1.91 Estimate, Sales $16.93B Miss $17.39B Estimate
+   28  2022-10-19 16:06 ET  next      Tesla Q3 GAAP EPS $0.95, Adj. EPS $1.05 Beats $1.00 Estimate
+   29  2023-01-25 16:06 ET  next      Tesla Q4 EPS $1.19 Beats $1.13 Estimate, Sales $24.32B Beat $24.16B Estimate
+   30  2023-04-19 16:03 ET  next      Tesla Q1 EPS $0.85, Inline, Sales $23.33B Beat $23.29B Estimate
+   31  2023-07-19 16:05 ET  next      Tesla Q2 EPS $0.91 Beats $0.82 Estimate
+   32  2023-10-18 16:07 ET  next      Tesla Q3 Adj. EPS $0.66 Misses $0.73 Estimate, Sales $23.35B Miss $24.38B Estimate
+   33  2024-01-24 16:04 ET  next      Tesla Q4 2023 Adj EPS $0.71 Misses $0.74 Estimate
+   34  2024-04-23 16:05 ET  next      Tesla Q1 2024 Adj EPS $0.45 Misses $0.51 Estimate, Sales $21.301B Miss $22.151B Estimate
+   35  2024-07-23 16:05 ET  next      Tesla Q2 2024 Adj EPS $0.52 Misses $0.62 Estimate, Sales $25.500B Beat $24.726B Estimate
+   36  2024-10-23 16:04 ET  next      Tesla Q3 2024 Adj. EPS $0.72 Beats $0.58 Estimate, Sales $25.182B Miss $25.373B Estimate
+   37  2025-01-29 16:06 ET  next      Tesla Q4 2024 Adj. EPS $0.73 Misses $0.76 Estimate, Sales $25.707B Miss $27.265B Estimate
+   38  2025-04-22 16:07 ET  next      Tesla Q1 Adj. EPS $0.27 Misses $0.41 Estimate, Sales $19.34B Miss $21.35B Estimate
+   39  2025-07-23 16:12 ET  next      Tesla Q2 Adj. EPS $0.40 Misses $0.42 Estimate, Sales $22.50B Miss $22.79B Estimate
+   40  2025-10-22 16:07 ET  next      Tesla Q3 Adj. EPS $0.50 Misses $0.54 Estimate, Sales $28.095B Beat $26.239B Estimate
+   41  2026-01-28 16:03 ET  next      Tesla Q4 Adj. EPS $0.50 Beats $0.45 Estimate, Sales $24.901B Beat $24.778B Estimate
+   42  2026-04-22 16:11 ET  next      Tesla Q1 Adj. EPS $0.41 Beats $0.37 Estimate, Sales $22.387B Miss $22.713B Estimate.
+   43  2026-07-22 16:07 ET  next      Tesla Q2 Adj. EPS $0.33 Misses $0.50 Estimate, Sales $28.236B Beat $25.706B Estimate
+
+== TSLA  lev=3x  cost=0.41%  sessions=2657 (2016-01-04..2026-07-31)  earnings-reaction days=43
+   in-sample 1760 (<=2022)   out-of-sample 897 (>=2023)
+   events 43 (pre-open 0, intraday 0, post-close 43); sessions excluded as intraday-contaminated: 0
+
+-- IN-SAMPLE FITS (<=2022)
+   [pooled, all days] n=1760
+      TP +6.0% / SL -3.0%   exp -0.4629%/trade  win 35.1%  Sharpe -1.86   | TP hit 26.3%  SL hit 60.4%  closed out 13.3%
+      TP +2.0% / SL -3.0%   exp -0.4641%/trade  win 58.6%  Sharpe -3.01   | TP hit 58.3%  SL hit 40.6%  closed out 1.1%
+      TP +4.0% / SL -3.0%   exp -0.4791%/trade  win 41.9%  Sharpe -2.25   | TP hit 39.2%  SL hit 55.3%  closed out 5.5%
+      TP +2.0% / SL -1.5%   exp -0.5643%/trade  win 38.5%  Sharpe -5.26   | TP hit 38.4%  SL hit 61.5%  closed out 0.1%
+      TP +4.0% / SL -1.5%   exp -0.5986%/trade  win 24.0%  Sharpe -4.07   | TP hit 23.4%  SL hit 75.8%  closed out 0.8%
+      TP +6.0% / SL -1.5%   exp -0.6533%/trade  win 18.2%  Sharpe -3.82   | TP hit 14.7%  SL hit 81.1%  closed out 4.3%
+
+   [ordinary days only] n=1732
+      TP +6.0% / SL -3.0%   exp -0.4360%/trade  win 35.5%  Sharpe -1.75   | TP hit 26.5%  SL hit 60.0%  closed out 13.5%
+      TP +4.0% / SL -3.0%   exp -0.4519%/trade  win 42.3%  Sharpe -2.12   | TP hit 39.5%  SL hit 54.8%  closed out 5.6%
+      TP +2.0% / SL -3.0%   exp -0.4540%/trade  win 58.8%  Sharpe -2.94   | TP hit 58.5%  SL hit 40.4%  closed out 1.1%
+      TP +2.0% / SL -1.5%   exp -0.5648%/trade  win 38.5%  Sharpe -5.27   | TP hit 38.4%  SL hit 61.5%  closed out 0.1%
+      TP +4.0% / SL -1.5%   exp -0.5933%/trade  win 24.1%  Sharpe -4.03   | TP hit 23.5%  SL hit 75.7%  closed out 0.8%
+      TP +6.0% / SL -1.5%   exp -0.6503%/trade  win 18.2%  Sharpe -3.81   | TP hit 14.7%  SL hit 81.0%  closed out 4.3%
+
+   [earnings-reaction days only] n=28
+      TP +2.0% / SL -1.5%   exp -0.5350%/trade  win 39.3%  Sharpe -4.88   | TP hit 39.3%  SL hit 60.7%  closed out 0.0%
+      TP +6.0% / SL -1.5%   exp -0.8386%/trade  win 14.3%  Sharpe -4.98   | TP hit 14.3%  SL hit 85.7%  closed out 0.0%
+      TP +4.0% / SL -1.5%   exp -0.9279%/trade  win 17.9%  Sharpe -6.87   | TP hit 17.9%  SL hit 82.1%  closed out 0.0%
+      TP +2.0% / SL -3.0%   exp -1.0886%/trade  win 46.4%  Sharpe -6.81   | TP hit 46.4%  SL hit 53.6%  closed out 0.0%
+      TP +6.0% / SL -3.0%   exp -2.1243%/trade  win 14.3%  Sharpe -10.51   | TP hit 14.3%  SL hit 85.7%  closed out 0.0%
+      TP +4.0% / SL -3.0%   exp -2.1600%/trade  win 17.9%  Sharpe -12.56   | TP hit 17.9%  SL hit 82.1%  closed out 0.0%
+
+-- OUT-OF-SAMPLE (>=2023), levels frozen from the fits above
+   GRID (one level pair, every day): TP +6.0/SL -3.0 -> exp -0.4257%  n=897  win 34.4%  Sharpe -1.65  SE 0.137  t -3.10
+   ORDINARY-ONLY (non-event, intraday-contaminated excluded): TP +6.0/SL -3.0 -> exp -0.4055%  n=882  win 34.7%  SE 0.138  t -2.93
+   EVENT-ONLY (trade only earnings days): TP +2.0/SL -1.5 -> exp -1.4433%  n=15  win 13.3%  SE 0.318  t -4.54
+   EVENT MINUS ORDINARY: -1.0378%/trade  SE 0.347  t -2.99 (Welch, unpaired)
+   COMBINATION (ordinary levels + earnings levels): exp -0.4229%  n=897  win 34.3%  Sharpe -1.64  SE 0.136  t -3.10
+
+-- ANNUALISED on GBP 750, at the out-of-sample trade rate
+   grid_pooled     -0.4257%/trade x GBP750 x 252 trades/yr = GBP -804/yr
+   ordinary_only   -0.4055%/trade x GBP750 x 248 trades/yr = GBP -754/yr
+   event_only      -1.4433%/trade x GBP750 x 4 trades/yr = GBP -46/yr
+   combination     -0.4229%/trade x GBP750 x 252 trades/yr = GBP -799/yr
+
+==============================================================================
+PART 3 — SYNTHETIC CHECK OF THE TWO BRANCHES TSLA NEVER EXERCISES
+==============================================================================
+All 43 real TSLA releases are post-close, so the real run only ever takes the
+"next" branch. This fixture is the only evidence that the "same" (pre-open) and
+"intraday" (excluded) branches behave as specified, and that one event with two
+headlines contributes one reaction day rather than two.
+
+Fixture: a post-close release at 2020-01-29 16:05 ET with a pre-market recap
+the next morning at 08:00; an intraday release at 2020-04-29 11:00; a pre-open
+release at 2020-07-29 08:00.
+
+  python3 check.py
+
+Expected: 4 headlines collapse to 3 events; the post-close pair marks ONLY
+2020-01-30 (the old code marked 2020-01-29 as well); the intraday release
+excludes its own session; the pre-open release marks its own session.
+
+events after dedupe: 3
+   2020-01-29 16:05 next Tesla Reports Q4 Adj. EPS $2.14
+   2020-04-29 11:00 intraday Tesla Q1 Adj. EPS $1.24 Beats Estimate
+   2020-07-29 08:00 same Tesla Q2 Adj. EPS $2.18 Beats Estimate
+react   : [datetime.date(2020, 1, 30), datetime.date(2020, 7, 29)]
+excluded: [datetime.date(2020, 4, 29)]
+
+==============================================================================
+PART 4 - HARNESS
+==============================================================================
+attribute.py and check.py are one-off harnesses, reproduced here so the record
+is self-contained. The corrected logic itself is checked in, in
+docs/research/18-threshold-study.py.
+
+--- attribute.py ---
+"""Attribution gate: reproduce the PUBLISHED arms under the OLD labelling, then
+show what the corrected labelling moves. Same bars, same engine, same grid."""
+import importlib.util, json, os, re
+from datetime import datetime
+
+os.environ["SAMURAI_DATA_DIR"] = "/tmp/s685"
+os.environ["TF"] = "1Min"
+P = "/Users/ddjp/Documents/projects/samurai-trading-system/.claude/worktrees/agent-a039547045b0467cf/docs/research/18-threshold-study.py"
+spec = importlib.util.spec_from_file_location("m", P)
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+
+LEV, COST = 3.0, 0.41
+TPS, SLS = [2.0, 4.0, 6.0], [1.5, 3.0]
+sessions = m.load_sessions("TSLA", "1Min")
+days = sorted(sessions)
+have = set(days)
+print("sessions %d  %s..%s" % (len(days), days[0], days[-1]))
+
+
+def fit(dayset):
+    rows = []
+    for tp in TPS:
+        for sl in SLS:
+            s = m.stats(m.simulate(sessions, dayset, LEV, tp, sl, COST))
+            if s:
+                rows.append((tp, sl, s))
+    rows.sort(key=lambda r: -r[2]["exp"])
+    return rows[0] if rows else None
+
+
+def show(tag, s):
+    if s is None:
+        print("   %-22s none" % tag)
+        return
+    print("   %-22s exp %+.4f%%  n=%-4d SE %.3f  t %+.2f" % (tag, s["exp"], s["n"], s["se"], s["t"]))
+
+
+# ---------- OLD labelling, verbatim from the superseded revision -------------
+name, quarter, eps_old = "tesla", re.compile(r"\bq[1-4]\b"), re.compile(r"\beps\b")
+old_marks = set()
+for line in open("/tmp/s685/news_TSLA.jsonl"):
+    n = json.loads(line)
+    h = n["h"].lower()
+    if not (h.startswith(name) and quarter.search(h) and eps_old.search(h)):
+        continue
+    t = datetime.fromisoformat(n["t"].replace("Z", "+00:00")).astimezone(m.ET)
+    old_marks.add((t.date(), "next" if (t.hour * 60 + t.minute) >= 16 * 60 else "same"))
+old_react = set()
+for d, when in old_marks:
+    if when == "same":
+        if d in have:
+            old_react.add(d)
+    else:
+        for cand in days:
+            if cand > d:
+                old_react.add(cand)
+                break
+
+new_react, excluded = m.reaction_dates("TSLA", have)
+
+print("\n== REACTION-DAY RECONCILIATION")
+print("   OLD %d (ADR-0018 published 46)   NEW %d   excluded intraday %d"
+      % (len(old_react & have), len(new_react & have), len(excluded & have)))
+print("   in OLD, not in NEW:", sorted((old_react & have) - (new_react & have)))
+print("   in NEW, not in OLD:", sorted((new_react & have) - (old_react & have)))
+
+for tag, react, excl in (("OLD", old_react, set()), ("NEW", new_react, excluded)):
+    split = [d for d in days if d.year <= 2022]
+    oos = [d for d in days if d.year >= 2023]
+    ev_is = [d for d in split if d in react and d not in excl]
+    ord_is = [d for d in split if d not in react and d not in excl]
+    ev_oos = [d for d in oos if d in react and d not in excl]
+    ord_oos = [d for d in oos if d not in react and d not in excl]
+    b_pool, b_ord, b_ev = fit(split), fit(ord_is), (fit(ev_is) if len(ev_is) >= 8 else None)
+    print("\n== %s LABELLING   events IS=%d OOS=%d" % (tag, len(ev_is), len(ev_oos)))
+    print("   frozen levels: pooled TP%+.1f/SL-%.1f  ordinary TP%+.1f/SL-%.1f  event TP%+.1f/SL-%.1f"
+          % (b_pool[0], b_pool[1], b_ord[0], b_ord[1],
+             b_ev[0] if b_ev else 0, b_ev[1] if b_ev else 0))
+    show("grid pooled", m.stats(m.simulate(sessions, oos, LEV, b_pool[0], b_pool[1], COST)))
+    s_ord = m.stats(m.simulate(sessions, ord_oos, LEV, b_ord[0], b_ord[1], COST))
+    show("ordinary only", s_ord)
+    s_ev = m.stats(m.simulate(sessions, ev_oos, LEV, b_ev[0], b_ev[1], COST)) if b_ev else None
+    show("event only", s_ev)
+    if s_ev and s_ord:
+        d_ = s_ev["exp"] - s_ord["exp"]
+        se = (s_ev["se"] ** 2 + s_ord["se"] ** 2) ** 0.5
+        print("   %-22s %+.4f%%  SE %.3f  t %+.2f" % ("event minus ordinary", d_, se, d_ / se))
+    combo = (m.simulate(sessions, ord_oos, LEV, b_ord[0], b_ord[1], COST)
+             + (m.simulate(sessions, ev_oos, LEV, b_ev[0], b_ev[1], COST) if b_ev else []))
+    show("combination", m.stats(combo))
+
+--- check.py ---
+import datetime, importlib.util, os
+os.environ["SAMURAI_DATA_DIR"] = "/tmp/s685test"
+p = "/Users/ddjp/Documents/projects/samurai-trading-system/.claude/worktrees/agent-a039547045b0467cf/docs/research/18-threshold-study.py"
+spec = importlib.util.spec_from_file_location("m", p)
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+ev = m.earnings_events("TSLA")
+print("events after dedupe:", len(ev))
+for t, h in ev:
+    print("  ", t.strftime("%Y-%m-%d %H:%M"), m.classify(t), h[:45])
+days = {datetime.date(2020, 1, 29), datetime.date(2020, 1, 30),
+        datetime.date(2020, 4, 29), datetime.date(2020, 4, 30),
+        datetime.date(2020, 7, 29)}
+react, excl = m.reaction_dates("TSLA", days)
+print("react   :", sorted(react))
+print("excluded:", sorted(excl))
+
+--- mk.py (writes the synthetic news fixture) ---
+import json, os
+os.makedirs("/tmp/s685test/bars", exist_ok=True)
+rows = [
+    ("2020-01-29T21:05:00Z", "Tesla Reports Q4 Adj. EPS $2.14"),           # 16:05 ET post-close
+    ("2020-01-30T13:00:00Z", "Tesla Q4 Adj. EPS Recap $2.14 Beats Est"),   # 08:00 ET next morning
+    ("2020-04-29T15:00:00Z", "Tesla Q1 Adj. EPS $1.24 Beats Estimate"),    # 11:00 ET intraday
+    ("2020-07-29T12:00:00Z", "Tesla Q2 Adj. EPS $2.18 Beats Estimate"),    # 08:00 ET pre-open
+]
+with open("/tmp/s685test/news_TSLA.jsonl", "w") as f:
+    for t, h in rows:
+        f.write(json.dumps({"t": t, "h": h}) + "\n")
+print("wrote", len(rows))
