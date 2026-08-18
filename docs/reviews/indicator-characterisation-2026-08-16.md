@@ -327,6 +327,19 @@ threshold downstream of the RSI was re-checked rather than carried forward silen
   found pinned at a 0.5478 ceiling against this 0.55 floor. 0.55 is a spec constant rather than a
   number fitted to RSI output, so nothing here invalidates it — but the headroom above it just got
   smaller, and re-deriving it needs a soak against the converged series, not a unit test.
+  - **2026-08-18 update — the ceiling has now been RE-MEASURED, and the halt is gone**
+    ([#756](https://github.com/dd-jp/samurai-trading-system/issues/756) item 2). #625's 0.5478 was
+    measured against a conviction formula and a technical analyst that have both since been
+    rewritten, so it does not carry. Enumerating the real `assessAxes` lattice through the real
+    `computeConvictionScore` (`server/tools/measure-conviction-ceiling.ts`) gives, on the desk
+    shape every recorded soak debate was on — sentiment and fundamental both `NO_DATA` — a ceiling
+    of **0.7000 against the 0.55 floor**. The minimum technical confidence that clears is
+    **0.25–0.6667 depending on which MI branch the desk is on** (0.25 all-absent, 0.50 with
+    fundamental hydrated alone, 0.6667 with both hydrated and neutral), and every branch clears
+    once the mediator agrees. The floor is still NOT re-derived (that remains #756 item 1 and
+    still needs post-#789 soak data); what changed is that it is no longer arithmetically
+    unreachable. Clearing the floor is necessary but not sufficient — `neutral_direction_while_flat`
+    gates earlier and was 265 of 268 recorded skips.
 - **ATR-derived stops, the volatility breaker, `min_bars`, `adv_window`, the correlation window** —
   none read the RSI. Unaffected.
 
