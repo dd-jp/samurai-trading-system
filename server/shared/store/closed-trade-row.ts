@@ -18,6 +18,7 @@
  */
 
 import type { ClosedTrade, ExitReason } from '../types/records.js';
+import { fromStoredTimestamp } from './sqlite-utils.js';
 
 /**
  * One `closed_trades` row exactly as `better-sqlite3` returns it.
@@ -56,8 +57,8 @@ export function fromClosedTradeRow(row: ClosedTradeRow): ClosedTrade {
     filled_size: row.filled_size,
     realized_pnl_net: row.realized_pnl_net,
     fees_total: row.fees_total,
-    opened_at: new Date(row.opened_at),
-    closed_at: new Date(row.closed_at),
+    opened_at: fromStoredTimestamp(row.opened_at),
+    closed_at: fromStoredTimestamp(row.closed_at),
     close_reason: row.close_reason,
   };
 }

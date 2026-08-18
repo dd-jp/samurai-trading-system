@@ -9,7 +9,9 @@
  * and it cannot be rebuilt from `closed_trades` (it is a function of equity,
  * including unrealized positions, not of realized trades).
  */
+
 import type { SharedStore } from '../../shared/store/index.js';
+import { toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 
 const SINGLETON_KEY = 'default';
 
@@ -48,7 +50,7 @@ export class SqliteAccountStateStore {
            peak_equity = MAX(account_state.peak_equity, excluded.peak_equity),
            updated_at = excluded.updated_at`,
       )
-      .run(SINGLETON_KEY, equity, asOf.toISOString());
+      .run(SINGLETON_KEY, equity, toStoredTimestamp(asOf));
 
     return this.peakEquity() ?? equity;
   }

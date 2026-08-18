@@ -10,6 +10,7 @@
  * a trace is the one that happened; a later write under the same key is a
  * replay, not a correction.
  */
+
 import type {
   RiskDecisionRecord,
   RiskLogStore,
@@ -17,6 +18,7 @@ import type {
   TraderLogStore,
 } from '../decision-records.js';
 import type { SharedStore } from './open-shared-store.js';
+import { toStoredTimestamp } from './sqlite-utils.js';
 
 export class SqliteTraderLogStore implements TraderLogStore {
   constructor(private readonly db: SharedStore) {}
@@ -55,7 +57,7 @@ export class SqliteTraderLogStore implements TraderLogStore {
         record.entry,
         record.stop,
         record.size,
-        record.created_at.toISOString(),
+        toStoredTimestamp(record.created_at),
       );
   }
 }
@@ -97,7 +99,7 @@ export class SqliteRiskLogStore implements RiskLogStore {
         record.portfolio.daily_pnl_crypto_pct,
         record.portfolio.daily_pnl_stocks_pct,
         record.portfolio.daily_pnl_unknown_reason,
-        record.created_at.toISOString(),
+        toStoredTimestamp(record.created_at),
       );
   }
 }

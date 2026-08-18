@@ -23,6 +23,7 @@
 
 import type { ClosedTrade } from '../../shared/index.js';
 import { openSharedStore, type SharedStore } from '../../shared/store/index.js';
+import { toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import { SqliteAdjustmentLog } from './sqlite-adjustment-log.js';
 import { SqliteClosedTradeStore } from './sqlite-closed-trade-store.js';
 import { SqliteTuningStore } from './sqlite-tuning-store.js';
@@ -78,8 +79,8 @@ function seedClosedTrade(db: SharedStore, trade: ClosedTrade): void {
     trade.filled_size,
     trade.realized_pnl_net,
     trade.fees_total,
-    trade.opened_at.toISOString(),
-    trade.closed_at.toISOString(),
+    toStoredTimestamp(trade.opened_at),
+    toStoredTimestamp(trade.closed_at),
     trade.close_reason,
   );
 }

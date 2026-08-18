@@ -10,7 +10,13 @@
  * read-then-write — two adapters (or a retry racing itself) must not be able
  * to lose an update between a select and an insert.
  */
+
 import type { SharedStore } from '../../shared/store/index.js';
+import {
+  fromStoredTimestamp,
+  fromStoredTimestampOrNull,
+  toStoredTimestamp,
+} from '../../shared/store/sqlite-utils.js';
 import type {
   BrokerBracketOrderIds,
   BrokerBracketPhase,
@@ -125,7 +131,7 @@ export class SqliteBrokerStateStore implements BrokerStateStore {
         record.armed_qty,
         record.arming_qty,
         record.arm_attempt,
-        new Date().toISOString(),
+        toStoredTimestamp(new Date()),
       );
   }
 
@@ -169,7 +175,7 @@ export class SqliteBrokerStateStore implements BrokerStateStore {
         ids.entry_order_id,
         ids.stop_order_id,
         ids.target_order_id,
-        new Date().toISOString(),
+        toStoredTimestamp(new Date()),
       );
   }
 
@@ -188,7 +194,7 @@ export class SqliteBrokerStateStore implements BrokerStateStore {
       price: row.price,
       qty: row.qty,
       fee: row.fee,
-      timestamp: new Date(row.timestamp),
+      timestamp: fromStoredTimestamp(row.timestamp),
       // No `cost_breakdown`: only the Simulated adapter produces one, and it
       // has no venue state to persist.
     }));
@@ -253,7 +259,7 @@ export class SqliteBrokerStateStore implements BrokerStateStore {
         fill.price,
         fill.qty,
         fill.fee,
-        fill.timestamp.toISOString(),
+        toStoredTimestamp(fill.timestamp),
       );
   }
 
@@ -288,8 +294,8 @@ export class SqliteBrokerStateStore implements BrokerStateStore {
         observation.leg,
         observation.instrument,
         observation.qty,
-        seenAt.toISOString(),
-        seenAt.toISOString(),
+        toStoredTimestamp(seenAt),
+        toStoredTimestamp(seenAt),
       );
   }
 
@@ -308,9 +314,9 @@ export class SqliteBrokerStateStore implements BrokerStateStore {
       leg: row.leg,
       instrument: row.instrument,
       qty: row.qty,
-      first_seen_at: new Date(row.first_seen_at),
-      last_seen_at: new Date(row.last_seen_at),
-      alerted_at: row.alerted_at === null ? null : new Date(row.alerted_at),
+      first_seen_at: fromStoredTimestamp(row.first_seen_at),
+      last_seen_at: fromStoredTimestamp(row.last_seen_at),
+      alerted_at: fromStoredTimestampOrNull(row.alerted_at),
     }));
   }
 
@@ -325,7 +331,7 @@ export class SqliteBrokerStateStore implements BrokerStateStore {
         `UPDATE broker_unpriced_fills SET alerted_at = ?
           WHERE venue = ? AND client_order_id = ? AND broker_fill_id = ?`,
       )
-      .run(alertedAt.toISOString(), venue, clientOrderId, brokerFillId);
+      .run(toStoredTimestamp(alertedAt), venue, clientOrderId, brokerFillId);
   }
 
   clearUnpricedFill(venue: BrokerVenue, clientOrderId: string, brokerFillId: string): void {

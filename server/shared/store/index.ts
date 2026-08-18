@@ -21,4 +21,11 @@ export {
   sharedStorePath,
 } from './open-shared-store.js';
 export { SqliteRiskLogStore, SqliteTraderLogStore } from './sqlite-decision-record-stores.js';
-export { isUniqueConstraintError } from './sqlite-utils.js';
+export {
+  fromStoredTimestamp,
+  fromStoredTimestampOrNull,
+  isUniqueConstraintError,
+  type StoredTimestamp,
+  toStoredTimestamp,
+  toStoredTimestampOrNull,
+} from './sqlite-utils.js';

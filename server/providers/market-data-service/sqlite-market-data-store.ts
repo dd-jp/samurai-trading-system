@@ -11,6 +11,7 @@
  */
 
 import type { SharedStore } from '../../shared/store/index.js';
+import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import type { Bar, Mark, MarketDataStore } from './types.js';
 
 interface BarRow {
@@ -55,8 +56,8 @@ export class SqliteMarketDataStore implements MarketDataStore {
         insert.run(
           bar.instrument,
           bar.timeframe,
-          bar.open_time.toISOString(),
-          bar.close_time.toISOString(),
+          toStoredTimestamp(bar.open_time),
+          toStoredTimestamp(bar.close_time),
           bar.open,
           bar.high,
           bar.low,
@@ -82,15 +83,15 @@ export class SqliteMarketDataStore implements MarketDataStore {
           ORDER BY close_time DESC
           LIMIT ?`,
       )
-      .all(instrument, timeframe, asOf.toISOString(), lookback) as BarRow[];
+      .all(instrument, timeframe, toStoredTimestamp(asOf), lookback) as BarRow[];
 
     return rows
       .map(
         (row): Bar => ({
           instrument,
           timeframe,
-          open_time: new Date(row.open_time),
-          close_time: new Date(row.close_time),
+          open_time: fromStoredTimestamp(row.open_time),
+          close_time: fromStoredTimestamp(row.close_time),
           open: row.open,
           high: row.high,
           low: row.low,
@@ -114,7 +115,13 @@ export class SqliteMarketDataStore implements MarketDataStore {
            asset_class = excluded.asset_class,
            source = excluded.source`,
       )
-      .run(instrument, mark.price, mark.observed_at.toISOString(), mark.asset_class, mark.source);
+      .run(
+        instrument,
+        mark.price,
+        toStoredTimestamp(mark.observed_at),
+        mark.asset_class,
+        mark.source,
+      );
   }
 
   readLatestMark(instrument: string): Mark | undefined {
@@ -130,7 +137,7 @@ export class SqliteMarketDataStore implements MarketDataStore {
 
     return {
       price: row.price,
-      observed_at: new Date(row.observed_at),
+      observed_at: fromStoredTimestamp(row.observed_at),
       asset_class: row.asset_class,
       source: row.source,
     };

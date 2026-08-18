@@ -14,7 +14,12 @@
  * for an empty table so a first boot constructs `CircuitBreakers` on its
  * untripped defaults rather than an empty-but-present state.
  */
+
 import type { SharedStore as Db } from '../../shared/store/index.js';
+import {
+  fromStoredTimestampOrNull,
+  toStoredTimestampOrNull,
+} from '../../shared/store/sqlite-utils.js';
 import type { PersistedBreakerState } from './types.js';
 
 /** The narrow write seam the tick path needs — see `computeCurrentPortfolioAndBreakers`. */
@@ -40,8 +45,8 @@ export class SqliteBreakerStateStore implements BreakerStatePersistence {
         upsert.run(
           state.tier,
           state.tripped ? 1 : 0,
-          state.tripped_at === null ? null : state.tripped_at.toISOString(),
-          state.reset_at === null ? null : state.reset_at.toISOString(),
+          toStoredTimestampOrNull(state.tripped_at),
+          toStoredTimestampOrNull(state.reset_at),
           state.reason,
         );
       }
@@ -62,8 +67,8 @@ export class SqliteBreakerStateStore implements BreakerStatePersistence {
     return rows.map((row) => ({
       tier: row.tier,
       tripped: row.tripped === 1,
-      tripped_at: row.tripped_at === null ? null : new Date(row.tripped_at),
-      reset_at: row.reset_at === null ? null : new Date(row.reset_at),
+      tripped_at: fromStoredTimestampOrNull(row.tripped_at),
+      reset_at: fromStoredTimestampOrNull(row.reset_at),
       reason: row.reason,
     }));
   }

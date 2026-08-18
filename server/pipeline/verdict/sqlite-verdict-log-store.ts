@@ -43,8 +43,10 @@
  * `OrphanVerdictScanner`) queries `verdict_log` directly over `SharedStore`,
  * not through this class.
  */
+
 import type { VerdictLog, VerdictLogStore } from '../../shared/index.js';
 import type { SharedStore } from '../../shared/store/index.js';
+import { toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 
 export class SqliteVerdictLogStore implements VerdictLogStore {
   constructor(private readonly db: SharedStore) {}
@@ -64,7 +66,7 @@ export class SqliteVerdictLogStore implements VerdictLogStore {
         entry.status,
         entry.no_go_reason,
         entry.hitl_override ? 1 : 0,
-        entry.timestamp.toISOString(),
+        toStoredTimestamp(entry.timestamp),
       );
   }
 }

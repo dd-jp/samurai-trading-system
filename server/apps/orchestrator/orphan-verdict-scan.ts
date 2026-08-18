@@ -45,6 +45,7 @@
  * scan, not in the Verdict pipeline stage.
  */
 import type { SharedStore } from '../../shared/store/index.js';
+import { fromStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import type { Logger } from './types.js';
 
 /** One `verdict_log` `go` row with no corresponding `execution`-stage `audit_log` row. */
@@ -102,7 +103,7 @@ export class OrphanVerdictScanner {
       trace_id: row.trace_id,
       idempotency_key: row.idempotency_key,
       instrument: row.instrument,
-      verdict_timestamp: new Date(row.timestamp),
+      verdict_timestamp: fromStoredTimestamp(row.timestamp),
     }));
 
     for (const orphan of orphans) {

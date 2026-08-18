@@ -14,6 +14,7 @@ import {
   fromClosedTradeRow,
   type SharedStore,
 } from '../../shared/store/index.js';
+import { toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 
 export class SqliteClosedTradeStore implements ClosedTradeStore {
   constructor(private readonly db: SharedStore) {}
@@ -29,7 +30,7 @@ export class SqliteClosedTradeStore implements ClosedTradeStore {
           WHERE closed_at > ? AND closed_at <= ?
           ORDER BY closed_at`,
       )
-      .all(from.toISOString(), to.toISOString()) as ClosedTradeRow[];
+      .all(toStoredTimestamp(from), toStoredTimestamp(to)) as ClosedTradeRow[];
 
     return rows.map(fromClosedTradeRow);
   }

@@ -29,6 +29,7 @@
 import type { Clock } from '../../shared/index.js';
 import { SystemClock } from '../../shared/index.js';
 import type { SharedStore } from '../../shared/store/index.js';
+import { toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import type { ConfigTrialLog } from './config-trial-log.js';
 import type { BacktestReport } from './types.js';
 
@@ -69,7 +70,7 @@ export class SqliteConfigTrialLog implements ConfigTrialLog {
         result.seed,
         JSON.stringify({ config_hash, seed: result.seed }),
         JSON.stringify(result),
-        this.clock.now().toISOString(),
+        toStoredTimestamp(this.clock.now()),
       );
   }
 

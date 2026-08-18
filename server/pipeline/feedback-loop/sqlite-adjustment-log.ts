@@ -39,6 +39,7 @@
  */
 
 import type { SharedStore } from '../../shared/store/index.js';
+import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import type { Adjustment, AdjustmentLog, PendingApprovalAdjustment } from './types.js';
 
 type DialType = 'analyst_weight' | 'strategy_param' | 'risk_threshold';
@@ -76,7 +77,7 @@ export class SqliteAdjustmentLog implements AdjustmentLog {
         entry.to,
         entry.direction,
         cycleDateOf(entry.applied_at),
-        entry.applied_at.toISOString(),
+        toStoredTimestamp(entry.applied_at),
         entry.reason,
       );
   }
@@ -98,7 +99,7 @@ export class SqliteAdjustmentLog implements AdjustmentLog {
       from: row.from_value,
       to: row.to_value,
       direction: row.direction,
-      applied_at: new Date(row.created_at),
+      applied_at: fromStoredTimestamp(row.created_at),
       reason: row.reason,
     }));
   }
@@ -122,7 +123,7 @@ export class SqliteAdjustmentLog implements AdjustmentLog {
         entry.to,
         entry.direction,
         cycleDateOf(entry.requested_at),
-        entry.requested_at.toISOString(),
+        toStoredTimestamp(entry.requested_at),
         entry.reason,
       );
     return Number(info.lastInsertRowid);

@@ -10,7 +10,9 @@
  * boundary is now this system's own (`TradingCalendar.sessionStart`, #331) and
  * the snapshot is local.
  */
+
 import type { SharedStore } from '../../shared/store/index.js';
+import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 
 /** The three snapshot keys: two asset classes plus the portfolio-level figure. */
 export type SessionEquityKey = 'crypto' | 'stocks' | 'portfolio';
@@ -55,7 +57,7 @@ export class SqliteSessionEquityStore {
 
     return {
       open_equity: row.open_equity,
-      open_at: new Date(row.open_at),
+      open_at: fromStoredTimestamp(row.open_at),
       observed_at_boundary: row.observed_at_boundary === 1,
     };
   }
@@ -91,14 +93,14 @@ export class SqliteSessionEquityStore {
            open_at = excluded.open_at,
            observed_at_boundary = excluded.observed_at_boundary`,
       )
-      .run(key, equity, sessionStart.toISOString(), observedAtBoundary ? 1 : 0);
+      .run(key, equity, toStoredTimestamp(sessionStart), observedAtBoundary ? 1 : 0);
   }
 
   /**
    * Realized PnL net of fees for one asset class, strictly after `openAt`.
    *
    * `closed_at > ?` is a TEXT comparison, correct only because both sides are
-   * ISO-8601 UTC via `toISOString()` — fixed-width, zero-padded, `Z`-suffixed,
+   * ISO-8601 UTC via `toStoredTimestamp` — fixed-width, zero-padded, `Z`-suffixed,
    * so lexical order is chronological order. `closed_trades.closed_at` is
    * written that way by `SqliteExecutionStore.writeClosedTrade`, and `open_at`
    * by `put` above. Strict `>` matches the half-open session convention: a
@@ -115,7 +117,7 @@ export class SqliteSessionEquityStore {
            FROM closed_trades
           WHERE asset_class = ? AND closed_at > ?`,
       )
-      .get(assetClass, openAt.toISOString()) as RealizedRow | undefined;
+      .get(assetClass, toStoredTimestamp(openAt)) as RealizedRow | undefined;
 
     return row?.realized ?? 0;
   }
@@ -128,7 +130,7 @@ export class SqliteSessionEquityStore {
            FROM closed_trades
           WHERE closed_at > ?`,
       )
-      .get(openAt.toISOString()) as RealizedRow | undefined;
+      .get(toStoredTimestamp(openAt)) as RealizedRow | undefined;
 
     return row?.realized ?? 0;
   }

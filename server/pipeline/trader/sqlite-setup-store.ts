@@ -8,7 +8,7 @@
  *
  * Two conventions this module fixes:
  *
- * 1. **Timestamps are ISO-8601 UTC TEXT** (`Date.toISOString()`), on write and
+ * 1. **Timestamps are ISO-8601 UTC TEXT** (`toStoredTimestamp`), on write and
  *    on the `asOf` bind alike. `closed_at <= ?` is a string comparison, which
  *    is only correct under one canonical, fixed-width format.
  * 2. **`instrument`/`asset_class`/`idempotency_key` come from the constructor**,
@@ -24,6 +24,7 @@
 
 import type { SetupNeighbor, SetupStore, SetupVector } from '../../shared/index.js';
 import type { SharedStore } from '../../shared/store/index.js';
+import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 
 export type SetupAssetClass = 'crypto' | 'stocks';
 
@@ -75,7 +76,7 @@ export class SqliteSetupStore implements SetupStore {
             AND closed_at IS NOT NULL
             AND closed_at <= ?`,
       )
-      .all(asOf.toISOString()) as SetupRow[];
+      .all(toStoredTimestamp(asOf)) as SetupRow[];
 
     return rows.map((row) => ({
       vector: {
@@ -83,7 +84,7 @@ export class SqliteSetupStore implements SetupStore {
         market_features: JSON.parse(row.market_features_json) as number[],
       },
       r_multiple: row.r_multiple,
-      closed_at: new Date(row.closed_at),
+      closed_at: fromStoredTimestamp(row.closed_at),
     }));
   }
 
@@ -121,7 +122,7 @@ export class SqliteSetupStore implements SetupStore {
         this.assetClass,
         JSON.stringify(vector.debate_features),
         JSON.stringify(vector.market_features),
-        decidedAt.toISOString(),
+        toStoredTimestamp(decidedAt),
       );
   }
 
@@ -139,7 +140,7 @@ export class SqliteSetupStore implements SetupStore {
             SET r_multiple = ?, closed_at = ?
           WHERE debate_id = ? AND r_multiple IS NULL`,
       )
-      .run(r_multiple, closed_at.toISOString(), debate_id);
+      .run(r_multiple, toStoredTimestamp(closed_at), debate_id);
 
     if (result.changes === 0) {
       throw new Error(
