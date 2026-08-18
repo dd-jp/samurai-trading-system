@@ -2251,6 +2251,10 @@ function makeExitProbeInput(overrides: Partial<OrderIntent> = {}) {
         portfolio: { known: true as const, pct: 0 },
       },
       consecutive_losses: 0,
+      // #841: a fully-valued book, which is what this probe is about — the
+      // clamp, not the valuation. A non-empty list here would make the ENTRY
+      // half of the probe pass for the wrong reason.
+      unvalued_instruments: [],
     },
     breakers: {
       portfolio_tripped: false,
@@ -3625,6 +3629,14 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // see production.test.ts's composition-root case for the exercise that
       // does reach it.
       dataFailoverAlerts: new LoggingDataFailoverAlertChannel(logger),
+      // #841 — the fifteenth `ALERT_CHANNEL_FIELDS` member. A bare no-op for
+      // the same reason as `thresholdClampAlerts` above: both seams that
+      // raise it (the risk and verdict binds in direct-bind.ts) write an
+      // `error`-level line before consulting the port. Never exercised in
+      // this run — the fixture data source values every held instrument —
+      // so the enforcement evidence is direct-bind.test.ts's degraded-exit
+      // cases, not this slot.
+      exitValuationAlerts: { postExitValuationDegradedAlert: () => {} },
     } satisfies Required<AlertChannels>;
 
     const orchestrator = await startFromEnvironment({

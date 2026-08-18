@@ -55,6 +55,7 @@ import type { AnalystSkipAlertChannel } from './analysts-adapter.js';
 import { DEFAULT_STAGE2_MAX_AGE_DAYS } from './daily-equity-metrics-source.js';
 import type { DataFailoverAlertChannel } from './data-failover.js';
 import type { AccountStateProvider, VolatilityReadingProvider } from './direct-bind.js';
+import type { ExitValuationDegradedAlertChannel } from './exit-valuation-alert.js';
 import type { MiCoverageAlertChannel } from './mi-coverage.js';
 import type { ThresholdClampAlertChannel } from './threshold-clamp-alert.js';
 import type { TraderDiagnosticAlertChannel } from './trader-diagnostic-alert.js';
@@ -276,6 +277,27 @@ export interface AlertChannelSlots {
    * happening.
    */
   dataFailoverAlerts?: DataFailoverAlertChannel;
+  /**
+   * Where an EXIT priced against a partly-valued book is escalated (#841):
+   * a held instrument's mark could not be read or was stale, so the
+   * flat-by-close flatten was valued WITHOUT it rather than suppressed
+   * outright. Absent = log-only, with deliberately NO `Logging…Channel`
+   * standing in — both seams (`buildRiskStep`, `buildVerdictStep` in
+   * direct-bind.ts) write an `error`-level line before reaching this port,
+   * the same call `thresholdClampAlerts` and `traderDiagnosticAlerts` make.
+   * `TradeChannelExitValuationDegradedAlert`
+   * (exit-valuation-alert-channel.ts) is what an unattended soak (#238)
+   * needs, and `SAMURAI_ALERTS=telegram` supplies it — the fifteenth
+   * `ALERT_CHANNEL_FIELDS` member.
+   *
+   * The condition it reports used to have NO alert at all and was strictly
+   * worse: the refusal aborted the tick, `tick-loop.ts` logged `instrument
+   * failed` at `error`, and the position stayed on — a leveraged ETP
+   * (ADR-0016) carried overnight because a DIFFERENT instrument's feed went
+   * quiet. See `exit-valuation-alert.ts` for why the degradation is safe to
+   * proceed on and why this is not latched.
+   */
+  exitValuationAlerts?: ExitValuationDegradedAlertChannel;
 }
 
 /**

@@ -35,6 +35,7 @@ import {
   buildVerdictStep,
   sizingEquity,
 } from './direct-bind.js';
+import type { ExitValuationDegradedAlert } from './exit-valuation-alert.js';
 import type { TraderDiagnosticAlertChannel } from './trader-diagnostic-alert.js';
 
 const NOW = new Date('2026-07-28T14:00:00Z');
@@ -1271,6 +1272,217 @@ describe('buildRiskStep', () => {
       expect(posted).toHaveLength(1);
     });
   });
+
+  describe('#841: the exit path must not require a whole-book valuation', () => {
+    /**
+     * Two held lots, one of which the feed will not price. Both are 'stocks'
+     * so the per-class freshness bound cannot be the reason a case passes.
+     */
+    function makeHeld(instrument: string): OpenPosition {
+      return {
+        idempotency_key: `held-${instrument}`,
+        debate_id: 'debate-1',
+        instrument,
+        asset_class: 'stocks',
+        side: 'buy',
+        intent_type: 'entry',
+        requested_size: 10,
+        filled_size: 10,
+        avg_entry_price: 90,
+        stop: 80,
+        target: 120,
+        order_state: 'filled',
+        broker_order_ids: [],
+        opened_at: NOW,
+        decision_timestamp: NOW,
+        conviction: 0.8,
+        converged: true,
+      };
+    }
+
+    const HELD = [makeHeld('AAPL'), makeHeld('DARK')];
+
+    /** Prices AAPL; throws for DARK — the single unreadable name. */
+    const DARK_MARKET_DATA = {
+      ...FAKE_MARKET_DATA,
+      getMarks: vi.fn(async (instruments: readonly string[], asOf: Date) =>
+        collectMarks(
+          async (instrument: string, at: Date) => {
+            if (instrument === 'DARK') throw new Error('feed timeout for DARK');
+            return FAKE_GET_MARK(instrument, at);
+          },
+          instruments,
+          asOf,
+        ),
+      ),
+    };
+
+    function makeAlerts() {
+      const posted: ExitValuationDegradedAlert[] = [];
+      return {
+        channel: {
+          postExitValuationDegradedAlert: (alert: ExitValuationDegradedAlert) => posted.push(alert),
+        },
+        posted,
+      };
+    }
+
+    function makeBreakers() {
+      return new CircuitBreakers({
+        daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+        max_drawdown_pct: 0.2,
+        max_consecutive_losses: 5,
+        volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+        auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+      });
+    }
+
+    function buildStep(
+      overrides: Partial<Parameters<typeof buildRiskStep>[0]> = {},
+    ): ReturnType<typeof buildRiskStep> {
+      return buildRiskStep({
+        config: RISK_CONFIG,
+        correlationConfig: { window: { timeframe: '1d', lookback: 30 }, min_bars: 5 },
+        ciiConsumer: { getScores: vi.fn(() => ({})) },
+        marketData: DARK_MARKET_DATA,
+        circuitBreakers: makeBreakers(),
+        accountState: FAKE_ACCOUNT_STATE,
+        volatility: FAKE_VOLATILITY,
+        getOpenPositions: async () => HELD,
+        maxMarkAge: TEST_MAX_MARK_AGE,
+        mode: 'paper',
+        breakerState: NOOP_BREAKER_STATE,
+        portfolioSnapshots: new Map(),
+        ...overrides,
+      });
+    }
+
+    it('flattens the freshly-marked name even though another held instrument is dark', async () => {
+      const riskLogRows: { portfolio: { gross_exposure: number } }[] = [];
+      const step = buildStep({
+        riskLog: { write: (row) => riskLogRows.push(row as never) },
+      });
+
+      const decision = await step({
+        trace_id: TRACE_ID,
+        intent: makeIntent({ intent_type: 'exit', instrument: 'AAPL' }),
+        clock: CLOCK,
+      });
+
+      // The whole point: an order still exists for the name that CAN be
+      // valued. Before #841 this call rejected with the valuation refusal and
+      // the flatten never reached Verdict at all.
+      expect(decision.status).toBe('approved');
+      expect(decision.order_intent?.instrument).toBe('AAPL');
+      // And the fresh name is genuinely still IN the book that was valued —
+      // 10 filled @ 100 — rather than the exit having been let through on an
+      // empty view that skipped every position.
+      expect(riskLogRows[0]?.portfolio.gross_exposure).toBe(1_000);
+    });
+
+    it('escalates the degradation rather than only logging it', async () => {
+      const { channel, posted } = makeAlerts();
+      const step = buildStep({ exitValuationAlerts: channel });
+
+      await step({
+        trace_id: TRACE_ID,
+        intent: makeIntent({ intent_type: 'exit', instrument: 'AAPL' }),
+        clock: CLOCK,
+      });
+
+      expect(posted).toHaveLength(1);
+      expect(posted[0]?.instrument).toBe('AAPL');
+      expect(posted[0]?.seam).toBe('risk');
+      expect(posted[0]?.unvalued_instruments).toEqual(['DARK']);
+      // The reason has to name WHY, not merely that — `describeThrown` prints
+      // the message alone, so a reason that loses the source text is a reason
+      // the operator never reads.
+      expect(posted[0]?.reason).toMatch(/DARK/);
+      expect(posted[0]?.reason).toMatch(/feed timeout/);
+    });
+
+    it('does not alert when the whole book values cleanly — the strict path is still the norm', async () => {
+      const { channel, posted } = makeAlerts();
+      const step = buildStep({
+        marketData: FAKE_MARKET_DATA,
+        getOpenPositions: async () => [makeHeld('AAPL')],
+        exitValuationAlerts: channel,
+      });
+
+      const decision = await step({
+        trace_id: TRACE_ID,
+        intent: makeIntent({ intent_type: 'exit', instrument: 'AAPL' }),
+        clock: CLOCK,
+      });
+
+      expect(decision.status).toBe('approved');
+      expect(posted).toHaveLength(0);
+    });
+
+    it('does NOT degrade for an entry — the whole-book refusal still stands and still throws', async () => {
+      const { channel, posted } = makeAlerts();
+      const step = buildStep({ exitValuationAlerts: channel });
+
+      // Unchanged behaviour: no view, no order, and the tick fails loudly for
+      // #507's catch to record. Every consumer of `exposure_by_instrument`
+      // reads an absent key as zero exposure, so an entry sized against a
+      // book missing DARK would be sized against caps that are all too wide.
+      await expect(
+        step({
+          trace_id: TRACE_ID,
+          intent: makeIntent({ intent_type: 'entry', instrument: 'AAPL' }),
+          clock: CLOCK,
+        }),
+      ).rejects.toThrow(/DARK/);
+      // And the exit-only alert never fires for it.
+      expect(posted).toHaveLength(0);
+    });
+
+    it('a degraded valuation cannot trip — or persist — the sticky drawdown breaker', async () => {
+      // A partial view omits a held lot, which understates equity and so
+      // OVERSTATES drawdown. Evaluating breakers off it could trip the sticky
+      // hard-drawdown tier and write it to `breaker_state`, halting every new
+      // entry on a number that was never true. Peak equity here is far above
+      // the degraded equity (10,000 cash + 1,000 AAPL = 11,000 against a
+      // 1,000,000 peak), which WOULD trip a 20% max drawdown if evaluated.
+      const saved: unknown[] = [];
+      const circuitBreakers = makeBreakers();
+      const step = buildStep({
+        circuitBreakers,
+        breakerState: { save: (state) => saved.push(state) },
+        accountState: {
+          getAccountState: vi.fn(async () => ({
+            cash: 10_000,
+            peak_equity: 1_000_000,
+            daily_basis: {
+              crypto: { known: true, open_equity: 1_000_000, realized_pnl: 0 },
+              stocks: { known: true, open_equity: 1_000_000, realized_pnl: 0 },
+              portfolio: { known: true, open_equity: 1_000_000, realized_pnl: 0 },
+            } as const,
+            consecutive_losses: 0,
+          })),
+        },
+      });
+
+      const decision = await step({
+        trace_id: TRACE_ID,
+        intent: makeIntent({ intent_type: 'exit', instrument: 'AAPL' }),
+        clock: CLOCK,
+      });
+
+      expect(decision.status).toBe('approved');
+      expect(decision.risk_snapshot.armed_breakers).toEqual([]);
+      expect(
+        circuitBreakers
+          .getPersistedState()
+          .some((row) => row.tier === 'portfolio_drawdown' && row.tripped),
+      ).toBe(false);
+      // Nothing persisted from the degraded path either — the strict path is
+      // the only writer of `breaker_state`.
+      expect(saved).toHaveLength(0);
+    });
+  });
 });
 
 describe('buildVerdictStep', () => {
@@ -1356,6 +1568,219 @@ describe('buildVerdictStep', () => {
     });
 
     expect(result.status).toBe('go');
+  });
+
+  it('#841: an EXIT still reaches a verdict when one held instrument cannot be valued', async () => {
+    // The second seam. `buildVerdictStep` re-derives the portfolio for gate
+    // 5, so fixing only `buildRiskStep` would have left the flatten approved
+    // at Risk and dead here — same refusal, same missing order, same silence.
+    const held: OpenPosition = {
+      idempotency_key: 'held-DARK',
+      debate_id: 'debate-1',
+      instrument: 'DARK',
+      asset_class: 'stocks',
+      side: 'buy',
+      intent_type: 'entry',
+      requested_size: 10,
+      filled_size: 10,
+      avg_entry_price: 90,
+      stop: 80,
+      target: 120,
+      order_state: 'filled',
+      broker_order_ids: [],
+      opened_at: NOW,
+      decision_timestamp: NOW,
+      conviction: 0.8,
+      converged: true,
+    };
+    const darkMarketData = {
+      ...FAKE_MARKET_DATA,
+      getMarks: vi.fn(async (instruments: readonly string[], asOf: Date) =>
+        collectMarks(
+          async (instrument: string, at: Date) => {
+            if (instrument === 'DARK') throw new Error('feed timeout for DARK');
+            return FAKE_GET_MARK(instrument, at);
+          },
+          instruments,
+          asOf,
+        ),
+      ),
+    };
+    const posted: ExitValuationDegradedAlert[] = [];
+
+    const riskDecision = {
+      status: 'approved' as const,
+      order_intent: {
+        idempotency_key: 'key-exit-841',
+        instrument: 'AAPL',
+        asset_class: 'stocks' as const,
+        side: 'sell' as const,
+        intent_type: 'exit' as const,
+        size: 10,
+        entry: 100,
+        stop: 95,
+        target: 110,
+        time_in_force: 'day',
+        decision_timestamp: NOW,
+        metadata: {
+          debate_id: 'debate-1',
+          conviction: 0.8,
+          converged: true,
+          exit_reason: 'flatten',
+          sizing: {
+            conviction_multiplier: 1,
+            non_converged_haircut: 1,
+            cosine_multiplier: 0.75,
+            vol_floor_applied: false,
+          },
+          cosine_precedent: { no_precedent: true, nearest_ids: [] },
+        },
+      },
+      modifications: null,
+      binding_constraint: null,
+      reasons: [],
+      warnings: [],
+      risk_snapshot: { exposure: {}, drawdown_pct: 0, armed_breakers: [] },
+      next_breaker_state: [],
+    };
+
+    const db = openSharedStore(':memory:');
+    const step = buildVerdictStep({
+      tradingCalendar: { isOpen: () => true, hasSession: () => true } as never,
+      positionStore: { findByKey: vi.fn(async () => false) },
+      config: VERDICT_CONFIG,
+      approvals: { requestApproval: vi.fn(async (): Promise<ApprovalOutcome> => 'approved') },
+      marketData: darkMarketData,
+      circuitBreakers: new CircuitBreakers({
+        daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+        max_drawdown_pct: 0.2,
+        max_consecutive_losses: 5,
+        volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+        auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+      }),
+      accountState: FAKE_ACCOUNT_STATE,
+      volatility: FAKE_VOLATILITY,
+      getOpenPositions: async () => [held],
+      maxMarkAge: TEST_MAX_MARK_AGE,
+      mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
+      exitValuationAlerts: {
+        postExitValuationDegradedAlert: (alert) => posted.push(alert),
+      },
+      store: db,
+    });
+
+    const result: VerdictDecision = await step({
+      trace_id: TRACE_ID,
+      risk_decision: riskDecision as never,
+      clock: CLOCK,
+    });
+
+    expect(result.status).toBe('go');
+    expect(posted).toHaveLength(1);
+    expect(posted[0]?.seam).toBe('verdict');
+    expect(posted[0]?.unvalued_instruments).toEqual(['DARK']);
+  });
+
+  it('#841: an ENTRY is still refused outright at the verdict seam when the book cannot be valued', async () => {
+    const held: OpenPosition = {
+      idempotency_key: 'held-DARK',
+      debate_id: 'debate-1',
+      instrument: 'DARK',
+      asset_class: 'stocks',
+      side: 'buy',
+      intent_type: 'entry',
+      requested_size: 10,
+      filled_size: 10,
+      avg_entry_price: 90,
+      stop: 80,
+      target: 120,
+      order_state: 'filled',
+      broker_order_ids: [],
+      opened_at: NOW,
+      decision_timestamp: NOW,
+      conviction: 0.8,
+      converged: true,
+    };
+    const darkMarketData = {
+      ...FAKE_MARKET_DATA,
+      getMarks: vi.fn(async (instruments: readonly string[], asOf: Date) =>
+        collectMarks(
+          async (instrument: string, at: Date) => {
+            if (instrument === 'DARK') throw new Error('feed timeout for DARK');
+            return FAKE_GET_MARK(instrument, at);
+          },
+          instruments,
+          asOf,
+        ),
+      ),
+    };
+
+    const riskDecision = {
+      status: 'approved' as const,
+      order_intent: {
+        idempotency_key: 'key-entry-841',
+        instrument: 'AAPL',
+        asset_class: 'stocks' as const,
+        side: 'buy' as const,
+        intent_type: 'entry' as const,
+        size: 10,
+        entry: 100,
+        stop: 95,
+        target: 110,
+        time_in_force: 'day',
+        decision_timestamp: NOW,
+        metadata: {
+          debate_id: 'debate-1',
+          conviction: 0.8,
+          converged: true,
+          sizing: {
+            conviction_multiplier: 1,
+            non_converged_haircut: 1,
+            cosine_multiplier: 0.75,
+            vol_floor_applied: false,
+          },
+          cosine_precedent: { no_precedent: true, nearest_ids: [] },
+        },
+      },
+      modifications: null,
+      binding_constraint: null,
+      reasons: [],
+      warnings: [],
+      risk_snapshot: { exposure: {}, drawdown_pct: 0, armed_breakers: [] },
+      next_breaker_state: [],
+    };
+
+    const db = openSharedStore(':memory:');
+    const step = buildVerdictStep({
+      tradingCalendar: { isOpen: () => true, hasSession: () => true } as never,
+      positionStore: { findByKey: vi.fn(async () => false) },
+      config: VERDICT_CONFIG,
+      approvals: { requestApproval: vi.fn(async (): Promise<ApprovalOutcome> => 'approved') },
+      marketData: darkMarketData,
+      circuitBreakers: new CircuitBreakers({
+        daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+        max_drawdown_pct: 0.2,
+        max_consecutive_losses: 5,
+        volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+        auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+      }),
+      accountState: FAKE_ACCOUNT_STATE,
+      volatility: FAKE_VOLATILITY,
+      getOpenPositions: async () => [held],
+      maxMarkAge: TEST_MAX_MARK_AGE,
+      mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
+      store: db,
+    });
+
+    await expect(
+      step({ trace_id: TRACE_ID, risk_decision: riskDecision as never, clock: CLOCK }),
+    ).rejects.toThrow(/DARK/);
   });
 
   it('persists the go decision to verdict_log (#302 — LoggingVerdict must be wired, not a bare VerdictImpl)', async () => {

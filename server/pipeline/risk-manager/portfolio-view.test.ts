@@ -641,4 +641,60 @@ describe('computePortfolioView — batch mark read (#289 H8)', () => {
     expect((thrown as AggregateError).message).toMatch(/429 rate limited/);
     expect((thrown as AggregateError).message).toMatch(/unknown symbol/);
   });
+
+  describe('unvaluable_marks: exclude — the EXIT path (#841)', () => {
+    it('values what it can and names what it could not, instead of refusing the book', async () => {
+      const input = makeInput({
+        positions: twoPositions(),
+        marketData: makeBatchMarketData({ AAPL: { price: 100 }, MSFT: { error: 'feed down' } }),
+        unvaluable_marks: 'exclude',
+      });
+
+      const view = await computePortfolioView(input);
+
+      // The fresh name is still fully valued — the point of the ticket is
+      // that one dark name stops blocking every OTHER position.
+      expect(view.exposure_by_instrument).toEqual({ AAPL: 10_000 });
+      expect(view.gross_exposure).toBe(10_000);
+      expect(view.unvalued_instruments).toEqual(['MSFT']);
+    });
+
+    it('excludes a STALE mark on the same terms as an unreadable one', async () => {
+      const input = makeInput({
+        positions: twoPositions(),
+        marketData: makeBatchMarketData({
+          AAPL: { price: 100 },
+          MSFT: { price: 200, observed_at: new Date(asOf.getTime() - 60 * 60_000) },
+        }),
+        unvaluable_marks: 'exclude',
+      });
+
+      const view = await computePortfolioView(input);
+
+      expect(view.unvalued_instruments).toEqual(['MSFT']);
+      expect(view.exposure_by_instrument.MSFT).toBeUndefined();
+    });
+
+    it('reports an empty list — never a degraded one — when every mark reads cleanly', async () => {
+      const input = makeInput({
+        positions: twoPositions(),
+        marketData: makeBatchMarketData({ AAPL: { price: 100 }, MSFT: { price: 200 } }),
+        unvaluable_marks: 'exclude',
+      });
+
+      const view = await computePortfolioView(input);
+
+      expect(view.unvalued_instruments).toEqual([]);
+      expect(view.exposure_by_instrument).toEqual({ AAPL: 10_000, MSFT: 20_000 });
+    });
+
+    it("defaults to 'refuse' when the field is omitted — the conservative direction", async () => {
+      const input = makeInput({
+        positions: twoPositions(),
+        marketData: makeBatchMarketData({ AAPL: { price: 100 }, MSFT: { error: 'feed down' } }),
+      });
+
+      await expect(computePortfolioView(input)).rejects.toThrow(/MSFT/);
+    });
+  });
 });

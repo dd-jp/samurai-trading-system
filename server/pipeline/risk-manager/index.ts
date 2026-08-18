@@ -227,6 +227,28 @@ export class RiskManagerImpl implements RiskManager {
       };
     }
 
+    // #841: an entry may not be sized against a book that was only partly
+    // valued. `computePortfolioView` normally refuses to produce such a view
+    // at all, and on the entry path it still does — but the exit path now
+    // takes a degraded one deliberately (`unvaluable_marks: 'exclude'`), so
+    // "no degraded view can exist" stopped being a property of the type and
+    // became a property of one call site in the composition root. This is the
+    // guard that puts it back in the gate: every cap below reads an absent
+    // instrument as ZERO exposure, so a book missing a position is a book
+    // whose per-asset, per-subclass and gross caps are all too wide.
+    //
+    // Placed BELOW the exit branch on purpose — an exit is what the degraded
+    // view exists to let through, and it consults none of these caps.
+    if (portfolio.unvalued_instruments.length > 0) {
+      const binding = 'unvalued_book';
+      return rejected(binding, [
+        `${binding}: ${portfolio.unvalued_instruments.length} held instrument(s) could not be ` +
+          `valued (${portfolio.unvalued_instruments.join(', ')}), so every exposure cap below ` +
+          'would read them as zero exposure and allow a larger entry than the book supports. ' +
+          'Exits are unaffected (they return above this line).',
+      ]);
+    }
+
     const trippedTier = trippedBreakerTier(breakers, intent.asset_class);
     if (trippedTier !== null) {
       const binding = `circuit_breaker:${trippedTier}`;

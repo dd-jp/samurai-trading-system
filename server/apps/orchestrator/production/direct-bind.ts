@@ -36,6 +36,7 @@ import type {
 import { ExecutionImpl } from '../../../pipeline/execution/index.js';
 import type {
   BreakerEvalInput,
+  BreakerState,
   BreakerStatePersistence,
   CircuitBreakers,
   PersistedBreakerState,
@@ -100,6 +101,7 @@ import { OrphanVerdictScanner } from '../orphan-verdict-scan.js';
 import { SqliteAuditLog } from '../sqlite-audit-log.js';
 import { SqliteCurrentTickStore } from '../sqlite-current-tick-store.js';
 import type { TickSteps } from '../types.js';
+import type { ExitValuationDegradedAlertChannel } from './exit-valuation-alert.js';
 import type { ThresholdClampAlertChannel } from './threshold-clamp-alert.js';
 import {
   type TraderDiagnosticAlert,
@@ -545,6 +547,25 @@ interface BreakerStateDeps {
    * `breakerStateDeps` object; keyed by `trace_id`, consumed by Risk.
    */
   portfolioSnapshots: Map<string, PortfolioSnapshot>;
+  /**
+   * #841: where an EXIT priced against a partly-valued book is escalated.
+   * On `BreakerStateDeps` rather than on `RiskStepDeps` because BOTH tick
+   * stages that re-derive the portfolio can hit the condition on the same
+   * tick — Risk when it sizes and records the exit, Verdict when gate 5
+   * re-checks breakers — and a channel on only one of them would leave the
+   * other seam silent, which is the hole this alert exists to close.
+   *
+   * Absent = log-only; both seams write an `error`-level line of their own
+   * first. See `exit-valuation-alert.ts`.
+   */
+  exitValuationAlerts?: ExitValuationDegradedAlertChannel;
+  /**
+   * Sink for the `error`-level lines both seams above write, and (on
+   * `RiskStepDeps`) for #726's guarded `riskLog.write` failure. Optional the
+   * same way every logger in this file is: a test can stay silent, the
+   * production path supplies the real one.
+   */
+  logger?: Logger;
 }
 
 /** One tick's portfolio + breaker observation — see `BreakerStateDeps.portfolioSnapshots`. */
@@ -602,6 +623,185 @@ async function computeCurrentPortfolioAndBreakers(deps: BreakerStateDeps, clock:
   return { portfolio, breakers };
 }
 
+/** One tick's exit valuation, and what it had to leave out to produce one (#841). */
+export interface ExitValuationDegradation {
+  /** The held instruments left unvalued — never empty when this object exists. */
+  unvalued_instruments: readonly string[];
+  /** The strict refusal's own message, naming each dark instrument and why. */
+  reason: string;
+}
+
+/**
+ * The breaker state a DEGRADED valuation is allowed to report (#841).
+ *
+ * Read off the sticky tiers rather than produced by `CircuitBreakers.evaluate()`,
+ * and that is the whole point: a partial view omits a held position, which
+ * understates `gross_exposure`, understates `equity`, and therefore
+ * OVERSTATES `drawdown_pct`. Feeding it to `evaluate()` could trip the hard
+ * drawdown breaker — a STICKY tier, persisted to `breaker_state` and reloaded
+ * at boot — off a mark that was merely late. That would halt every new entry
+ * on the strength of a number that was never true, and write a false
+ * `armed_breakers` into `risk_log` beside it.
+ *
+ * So the degraded path evaluates nothing and persists nothing; it reports
+ * what is already known to be tripped. The stateless tiers (daily loss,
+ * volatility, the per-class ones) read as NOT tripped, which is the right
+ * direction of error here: on the exit path an un-tripped breaker lets the
+ * flatten through, and ADR-0014's flat-by-close is the invariant being
+ * protected. An entry can never see this state — `buildRiskStep` asks for a
+ * degraded snapshot only for an exit intent.
+ *
+ * Both sticky tiers are account-wide, so a trip on either sets the per-class
+ * flags too, exactly as `evaluate()`'s portfolio tier does.
+ */
+function breakersFromStickyState(state: readonly PersistedBreakerState[]): BreakerState {
+  const armed_breakers: string[] = [];
+  let tripped = false;
+  for (const row of state) {
+    if (!row.tripped) continue;
+    tripped = true;
+    armed_breakers.push(row.reason ?? row.tier);
+  }
+  return {
+    portfolio_tripped: tripped,
+    asset_class_tripped: { crypto: tripped, stocks: tripped },
+    armed_breakers,
+  };
+}
+
+/**
+ * The same observation as `computeCurrentPortfolioAndBreakers`, but valuing
+ * whatever CAN be valued instead of refusing the book (#841).
+ *
+ * No volatility read and no `evaluate()`/`save()` — see
+ * `breakersFromStickyState`. Never memoized into `portfolioSnapshots` either:
+ * that memo exists so the Trader and Risk gate one ENTRY against one
+ * observation, and a partial view must never become the observation an entry
+ * is sized against.
+ */
+async function degradedPortfolioForExit(
+  deps: BreakerStateDeps,
+  clock: Clock,
+): Promise<PortfolioSnapshot> {
+  const asOf = clock.now();
+  const [positions, account] = await Promise.all([
+    deps.getOpenPositions(),
+    deps.accountState.getAccountState(asOf),
+  ]);
+  const portfolio = await computePortfolioView({
+    positions,
+    marketData: deps.marketData,
+    asOf,
+    cash: account.cash,
+    peak_equity: account.peak_equity,
+    daily_basis: account.daily_basis,
+    consecutive_losses: account.consecutive_losses,
+    max_mark_age: deps.maxMarkAge,
+    // The one call site in the tree that opts in. See
+    // `PortfolioAccountingInput.unvaluable_marks`.
+    unvaluable_marks: 'exclude',
+  });
+  return { portfolio, breakers: breakersFromStickyState(deps.circuitBreakers.getPersistedState()) };
+}
+
+/**
+ * The EXIT path's valuation (#841): the strict whole-book view when one can
+ * be produced, and a partial one — plus the report that says so — when it
+ * cannot.
+ *
+ * Strict FIRST, always. A tick whose book values cleanly takes exactly the
+ * path it took before this ticket, memo included, so the exit and any entry
+ * in the same trace still gate against one observation. Degrading is a
+ * fallback from a throw, never a mode.
+ *
+ * A throw that is NOT about marks (the account read failing, say) is
+ * re-raised by the degraded attempt itself, which performs the same reads —
+ * so a non-mark fault still aborts the tick and reaches #507's catch. And if
+ * the retry happens to value everything (a feed that recovered between the
+ * two reads), it is reported as no degradation at all rather than as a
+ * degradation with nothing in it.
+ *
+ * `computeStrict` is passed in rather than chosen here because the two seams
+ * derive the strict view differently BY SPEC: Risk consumes the per-trace
+ * memo (B4 — one observation shared with the Trader), Verdict re-derives
+ * fresh (gate 5 must see current breaker state). Picking one here would
+ * silently change the other seam's semantics.
+ */
+async function snapshotForExit(
+  deps: BreakerStateDeps,
+  clock: Clock,
+  computeStrict: () => Promise<PortfolioSnapshot>,
+): Promise<{ snapshot: PortfolioSnapshot; degradation: ExitValuationDegradation | null }> {
+  try {
+    return { snapshot: await computeStrict(), degradation: null };
+  } catch (error) {
+    const reason = describeThrown(error);
+    const snapshot = await degradedPortfolioForExit(deps, clock);
+    const unvalued_instruments = snapshot.portfolio.unvalued_instruments;
+    return {
+      snapshot,
+      degradation: unvalued_instruments.length === 0 ? null : { unvalued_instruments, reason },
+    };
+  }
+}
+
+/**
+ * Makes a degraded exit valuation audible (#841): an `error`-level line
+ * always, and the operator escalation when a transport is wired.
+ *
+ * Not throttled, and not latched once per process the way #766's clamp alert
+ * is — see `exit-valuation-alert.ts` for why. Guarded like every other alert
+ * post in this file: a transport that throws must not take down the exit it
+ * was raised beside, which would reinstate the exact suppression this ticket
+ * removes.
+ */
+function reportExitValuationDegraded(
+  deps: BreakerStateDeps,
+  seam: 'risk' | 'verdict',
+  context: { trace_id: string; instrument: string; clock: Clock },
+  degradation: ExitValuationDegradation,
+): void {
+  const { trace_id, instrument, clock } = context;
+  const logger = deps.logger;
+  if (logger !== undefined) {
+    safeLog(logger, {
+      trace_id,
+      stage: seam,
+      level: 'error',
+      message:
+        `exit valued on a partly-valued book: ${instrument} — ` +
+        `${degradation.unvalued_instruments.length} held instrument(s) could not be valued`,
+      payload: {
+        instrument,
+        seam,
+        unvalued_instruments: degradation.unvalued_instruments,
+        reason: sanitizeLogText(degradation.reason),
+      },
+    });
+  }
+  try {
+    deps.exitValuationAlerts?.postExitValuationDegradedAlert({
+      instrument,
+      seam,
+      unvalued_instruments: degradation.unvalued_instruments,
+      reason: degradation.reason,
+      reported_at: clock.now(),
+    });
+  } catch (error) {
+    if (logger !== undefined) {
+      safeLog(logger, {
+        trace_id,
+        stage: seam,
+        level: 'error',
+        message:
+          'exit-valuation-degraded alert could not be delivered — the exit still went out on a ' +
+          'partly-valued book and nobody has been paged',
+        payload: { instrument, seam, error: sanitizeLogText(describeThrown(error)) },
+      });
+    }
+  }
+}
+
 /**
  * The single member `buildRiskStep` actually calls, rather than the whole
  * `CiiConsumer` class.
@@ -635,14 +835,6 @@ export interface RiskStepDeps extends BreakerStateDeps {
    * `Logging…Channel`: this catch already logs at `error`).
    */
   thresholdClampAlerts?: ThresholdClampAlertChannel;
-  /**
-   * #726: where the catch around `evaluate()` reports a failed `riskLog.write`
-   * itself (guarding that write must not let a store failure replace the
-   * original gate error — see the catch's own doc comment). Same
-   * optionality rationale as the trader step's `logger` above: a test can
-   * stay silent, the production path supplies the real sink.
-   */
-  logger?: Logger;
 }
 
 export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
@@ -662,8 +854,34 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
   return async ({ trace_id, intent, clock }) => {
     // Reuses the Trader's snapshot for this trace (B4) and consumes it — Risk
     // is the memo's last reader; Verdict re-derives fresh by spec.
-    const { portfolio, breakers } = await snapshotForTick(deps, clock, trace_id);
+    //
+    // #841: an EXIT falls back to a PARTIAL valuation when the whole book
+    // cannot be priced, instead of aborting the tick. `computePortfolioView`
+    // enumerates every held instrument, so one dark or stale name used to
+    // suppress the flatten of the ENTIRE book — including names whose marks
+    // were fresh — leaving leveraged ETPs (ADR-0016) on overnight against
+    // ADR-0014's flat-by-close invariant. Sizing an entry needs the whole
+    // book priced; flattening a position already held does not, and
+    // `evaluate()` below returns at `intent_type === 'exit'` before any gate
+    // reads `portfolio` at all.
+    //
+    // The ENTRY path is untouched: `snapshotForTick` still refuses outright,
+    // and `RiskManagerImpl.evaluate` refuses any entry whose view carries a
+    // non-empty `unvalued_instruments` besides.
+    const { snapshot, degradation } =
+      intent.intent_type === 'exit'
+        ? await snapshotForExit(deps, clock, () => snapshotForTick(deps, clock, trace_id))
+        : { snapshot: await snapshotForTick(deps, clock, trace_id), degradation: null };
+    const { portfolio, breakers } = snapshot;
     deps.portfolioSnapshots.delete(trace_id);
+    if (degradation !== null) {
+      reportExitValuationDegraded(
+        deps,
+        'risk',
+        { trace_id, instrument: intent.instrument, clock },
+        degradation,
+      );
+    }
     const next_breaker_state: PersistedBreakerState[] = deps.circuitBreakers.getPersistedState();
 
     const otherInstruments = Object.keys(portfolio.exposure_by_instrument).filter(
@@ -860,7 +1078,31 @@ export function buildVerdictStep(deps: VerdictStepDeps): TickSteps['verdict'] {
     // snapshot risk_decision.risk_snapshot carries from Risk's earlier call
     // in this same tick — Verdict may fire enough later for a breaker to
     // have tripped or cleared in between (verdict-spec.md gate 5).
-    const { breakers } = await computeCurrentPortfolioAndBreakers(deps, clock);
+    //
+    // #841: the SECOND seam that refused an exit over a book it could not
+    // fully value. Fixing only `buildRiskStep` would have left the flatten
+    // approved at Risk and dead here — same refusal, same suppressed order,
+    // same silence. An exit therefore degrades here too; the fallback reports
+    // the sticky breaker tiers rather than evaluating new ones off a partial
+    // view (`breakersFromStickyState`), which is what keeps a late mark from
+    // tripping — and persisting — the hard drawdown breaker.
+    //
+    // Keyed off the intent Risk approved. `order_intent` is null only on a
+    // rejection, which never reaches Verdict; the `?.` is for the type, and
+    // an absent one takes the strict path.
+    const isExit = risk_decision.order_intent?.intent_type === 'exit';
+    const { snapshot, degradation } = isExit
+      ? await snapshotForExit(deps, clock, () => computeCurrentPortfolioAndBreakers(deps, clock))
+      : { snapshot: await computeCurrentPortfolioAndBreakers(deps, clock), degradation: null };
+    const { breakers } = snapshot;
+    if (degradation !== null && risk_decision.order_intent !== null) {
+      reportExitValuationDegraded(
+        deps,
+        'verdict',
+        { trace_id, instrument: risk_decision.order_intent.instrument, clock },
+        degradation,
+      );
+    }
 
     return verdict.decide({
       trace_id,

@@ -60,6 +60,7 @@ function makePortfolio(overrides: Partial<PortfolioView> = {}): PortfolioView {
       portfolio: { known: true, pct: 0 },
     },
     consecutive_losses: 0,
+    unvalued_instruments: [],
     ...overrides,
   };
 }
@@ -138,6 +139,50 @@ describe('RiskManagerImpl.evaluate — exits', () => {
       stop_tightened: false,
     });
     expect(decision.binding_constraint).toBeNull();
+  });
+});
+
+describe('RiskManagerImpl.evaluate — a partly-valued book (#841)', () => {
+  it('refuses an ENTRY sized against a book with an unvalued position in it', () => {
+    // The composition root only ever asks for a degraded view on the exit
+    // path, but "no degraded view reaches an entry" must be a property of the
+    // gate rather than of one call site — every cap below reads an absent
+    // instrument as zero exposure and would allow a larger entry for it.
+    const manager = new RiskManagerImpl(makeConfig());
+    const input = makeInput({
+      intent: makeIntent({ intent_type: 'entry' }),
+      portfolio: makePortfolio({ unvalued_instruments: ['DARK'] }),
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.status).toBe('rejected');
+    expect(decision.binding_constraint).toBe('unvalued_book');
+    expect(decision.reasons.join(' ')).toMatch(/DARK/);
+    expect(decision.order_intent).toBeNull();
+  });
+
+  it('lets an EXIT through on the same book — flat-by-close outranks a complete valuation', () => {
+    const manager = new RiskManagerImpl(makeConfig());
+    const input = makeInput({
+      intent: makeIntent({ intent_type: 'exit', size: 100 }),
+      portfolio: makePortfolio({ unvalued_instruments: ['DARK'] }),
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.status).toBe('approved');
+    expect(decision.order_intent).toEqual(input.intent);
+  });
+
+  it('a scale_in is an entry for this purpose and is refused too', () => {
+    const manager = new RiskManagerImpl(makeConfig());
+    const input = makeInput({
+      intent: makeIntent({ intent_type: 'scale_in' }),
+      portfolio: makePortfolio({ unvalued_instruments: ['DARK'] }),
+    });
+
+    expect(manager.evaluate(input).binding_constraint).toBe('unvalued_book');
   });
 });
 

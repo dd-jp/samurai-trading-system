@@ -48,7 +48,32 @@ export interface PortfolioAccountingInput {
    * VALUE the book is a much heavier action than declining one trade.
    */
   max_mark_age: Record<AssetClass, number>;
+  /**
+   * What to do with a held instrument whose mark cannot be read or is stale
+   * (#841).
+   *
+   * - `'refuse'` (the default): throw, producing NO view at all. The ENTRY
+   *   path's posture, unchanged — sizing an entry needs the whole book
+   *   priced, because every cap reads an absent instrument as zero exposure
+   *   and is more permissive for it.
+   * - `'exclude'`: leave the unvaluable positions out of every figure and
+   *   name them in `PortfolioView.unvalued_instruments`. The EXIT path's
+   *   posture: flattening a position already held does not need the rest of
+   *   the book priced, and refusing the view there suppressed the flatten of
+   *   every other name — including names whose marks were perfectly fresh —
+   *   leaving leveraged ETPs (ADR-0016) on overnight against ADR-0014's
+   *   flat-by-close invariant.
+   *
+   * Optional with a default, unlike `max_mark_age` above, and deliberately:
+   * the default is the CONSERVATIVE value, so a caller that forgets this
+   * field gets the total refusal it always got. The dangerous direction here
+   * is opting IN, which is explicit at every site and grep-able.
+   */
+  unvaluable_marks?: UnvaluableMarkPolicy;
 }
+
+/** See `PortfolioAccountingInput.unvaluable_marks`. */
+export type UnvaluableMarkPolicy = 'refuse' | 'exclude';
 
 /**
  * Thrown when a held instrument's mark is too old to value the book with
@@ -154,14 +179,20 @@ function dailyPnlFor(basis: SessionBasis, unrealized: number): DailyPnl {
  * (#640, judged here because the per-class bound lives here and not in MDS)
  * into a single report naming all of them.
  *
- * Keep the refusal total. A partial view is not a conservative one: every
- * consumer of `exposure_by_instrument` reads an absent key as ZERO exposure
- * and is more permissive for it — enumerated on `MarketDataService.getMarks`
- * (providers/market-data-service/types.ts), not re-derived here. That makes no
- * order more likely to be placed
- * on the ENTRY path, which is where this refusal was reasoned about. It is NOT
- * true of the EXIT path, where refusing to value the book suppresses a flatten
- * and one dark name blocks the flatten of the whole book — #841.
+ * Keep the refusal total ON THE ENTRY PATH. A partial view is not a
+ * conservative one there: every consumer of `exposure_by_instrument` reads an
+ * absent key as ZERO exposure and is more permissive for it — enumerated on
+ * `MarketDataService.getMarks` (providers/market-data-service/types.ts), not
+ * re-derived here. That makes no order more likely to be placed on the ENTRY
+ * path, which is where this refusal was reasoned about.
+ *
+ * It was never true of the EXIT path, where refusing to value the book
+ * SUPPRESSES a flatten and one dark name blocks the flatten of the whole
+ * book. #841 split the two: `unvaluable_marks: 'exclude'` keeps the reads and
+ * the report identical but returns the valued subset plus the names it could
+ * not value, instead of throwing. Which policy applies is the CALLER's choice
+ * and is made per intent type in the composition root — never inferred here,
+ * because this function cannot see whether an order is being opened or closed.
  *
  * A single failure is thrown ON ITS OWN rather than inside an `AggregateError`
  * of one, so `StaleMarkError`'s "the feed is alive and lying" signal still
@@ -178,7 +209,8 @@ async function readMarks(
   classByInstrument: ReadonlyMap<string, AssetClass>,
   asOf: Date,
   max_mark_age: Record<AssetClass, number>,
-): Promise<Map<string, number>> {
+  policy: UnvaluableMarkPolicy,
+): Promise<{ marks: Map<string, number>; unvalued: readonly string[] }> {
   const instruments = [...classByInstrument.keys()];
   const reads = await marketData.getMarks(instruments, asOf);
 
@@ -240,14 +272,23 @@ async function readMarks(
     marks.set(instrument, read.mark.price);
   }
 
+  const unvalued = [...classByInstrument.keys()].filter((instrument) => !marks.has(instrument));
+
+  // #841: the EXIT path takes the valued subset and the list of names it
+  // could not value, rather than nothing at all. The reads, the staleness
+  // judgement and the per-instrument reasons above are IDENTICAL under both
+  // policies — the only difference is whether the report is thrown or
+  // returned. The caller is responsible for making the degradation audible;
+  // see `ExitValuationDegradedAlertChannel` (orchestrator/production).
+  if (policy === 'exclude') {
+    return { marks, unvalued };
+  }
+
   if (failures.length === 1) {
     throw failures[0];
   }
   if (failures.length > 1) {
-    const named = [...classByInstrument.keys()]
-      .filter((instrument) => !marks.has(instrument))
-      .map((instrument) => `'${instrument}'`)
-      .join(', ');
+    const named = unvalued.map((instrument) => `'${instrument}'`).join(', ');
     // Each failure's own text is folded in for the same reason as the
     // single-failure wrap above: `AggregateError.errors` is printed nowhere, so
     // a report naming the instruments but not the reasons tells the operator
@@ -264,7 +305,7 @@ async function readMarks(
     );
   }
 
-  return marks;
+  return { marks, unvalued };
 }
 
 export async function computePortfolioView(
@@ -279,6 +320,7 @@ export async function computePortfolioView(
     daily_basis,
     consecutive_losses,
     max_mark_age,
+    unvaluable_marks = 'refuse',
   } = input;
 
   // The asset class each held instrument is valued under, so the freshness
@@ -290,7 +332,13 @@ export async function computePortfolioView(
     positions.map((position) => [position.instrument, position.asset_class]),
   );
 
-  const marks = await readMarks(marketData, classByInstrument, asOf, max_mark_age);
+  const { marks, unvalued } = await readMarks(
+    marketData,
+    classByInstrument,
+    asOf,
+    max_mark_age,
+    unvaluable_marks,
+  );
 
   const exposure_by_instrument: Record<string, number> = {};
   const exposure_by_class = { crypto: 0, stocks: 0 };
@@ -299,6 +347,13 @@ export async function computePortfolioView(
   const unrealized_by_class: Record<AssetClass, number> = { crypto: 0, stocks: 0 };
 
   for (const position of positions) {
+    // #841: a position the caller allowed to go unvalued contributes NOTHING
+    // to any figure — no exposure, no unrealized PnL. That is understated, not
+    // conservative, which is exactly why `unvalued_instruments` travels on the
+    // view and why `RiskManagerImpl.evaluate` refuses an ENTRY that sees a
+    // non-empty one. Under the default `'refuse'` policy this list is empty
+    // and the loop is byte-for-byte what it was.
+    if (unvalued.includes(position.instrument)) continue;
     // Freeze §4: always filled_size, never requested_size — a partially-filled
     // lot is marked at what actually filled.
     const mark = markFor(marks, position.instrument);
@@ -329,5 +384,6 @@ export async function computePortfolioView(
       ),
     },
     consecutive_losses,
+    unvalued_instruments: unvalued,
   };
 }

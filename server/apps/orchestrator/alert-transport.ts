@@ -107,6 +107,7 @@ import type { SharedStore as SqliteHandle } from '../../shared/store/index.js';
 import { TradeChannelAnalystSkipAlert } from './analyst-skip-alert-channel.js';
 import { TradeChannelBreachAlert } from './breach-alert-channel.js';
 import { TradeChannelDataFailoverAlert } from './data-failover-alert-channel.js';
+import { TradeChannelExitValuationDegradedAlert } from './exit-valuation-alert-channel.js';
 import { TradeChannelFlattenReconcileAlert } from './flatten-reconcile-alert-channel.js';
 import { TradeChannelHeartbeat } from './heartbeat-channel.js';
 import { TradeChannelLoosenNotice } from './loosen-notification-channel.js';
@@ -224,6 +225,14 @@ export const ALERT_CHANNEL_FIELDS = [
   // (bars now served by a second vendor with a different volume convention)
   // is invisible from outside — the tick keeps producing answers.
   'dataFailoverAlerts',
+  // #841 — the fifteenth. Channel type and transport in the SAME change, like
+  // `traderDiagnosticAlerts` and `thresholdClampAlerts` before it. The
+  // condition it reports (an exit priced against a book with a dark held
+  // mark in it) previously had no alert at all AND no exit: the valuation
+  // refusal aborted the tick, so the flatten never fired and the only trace
+  // was `tick-loop.ts`'s `instrument failed` line — a position carried
+  // overnight, reported as a generic tick failure.
+  'exitValuationAlerts',
 ] as const satisfies readonly (keyof AlertChannelSlots)[];
 
 /**
@@ -472,6 +481,19 @@ export function buildAlertChannels(deps: {
     // to close.
     ...(deps.injected.dataFailoverAlerts === undefined
       ? { dataFailoverAlerts: new TradeChannelDataFailoverAlert(telegram, chatId) }
+      : {}),
+    // #841. The escalation chat: a dark mark in the held book is a feed fault
+    // the operator has to act on, and it fires beside a flatten that DID go
+    // out — the one moment the book's own record of itself is incomplete.
+    // Same reasoning as `thresholdClampAlerts`, never the heartbeat chat.
+    ...(deps.injected.exitValuationAlerts === undefined
+      ? {
+          exitValuationAlerts: new TradeChannelExitValuationDegradedAlert(
+            telegram,
+            chatId,
+            deps.logger,
+          ),
+        }
       : {}),
   };
 }

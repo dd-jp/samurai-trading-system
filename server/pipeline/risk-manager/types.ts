@@ -92,6 +92,30 @@ export interface PortfolioView {
    */
   daily_pnl: DailyPnlByClass;
   consecutive_losses: number;
+  /**
+   * Held instruments this view could NOT value, and therefore left out of
+   * every figure above (#841). Empty on every fully-valued view, which is
+   * every view the ENTRY path is ever allowed to see.
+   *
+   * Required rather than optional, and named on the view rather than passed
+   * beside it, for the reason `DailyPnl` is a tagged union: a partial
+   * valuation is indistinguishable from a complete one by inspection —
+   * `exposure_by_instrument` simply has fewer keys, and every consumer reads
+   * an absent key as ZERO exposure (see `readMarks` in portfolio-view.ts).
+   * An optional field would let a partial view reach an entry gate as
+   * `undefined` and read as "fully valued", which is the exact
+   * absent-means-nothing-there failure the refusal exists to prevent. With it
+   * required, `RiskManagerImpl.evaluate` can refuse an entry on a degraded
+   * book and no producer can forget to say the book was degraded.
+   *
+   * Non-empty is reachable ONLY through
+   * `PortfolioAccountingInput.unvaluable_marks: 'exclude'`, which the
+   * composition root requests on the EXIT path alone — flattening a position
+   * already held does not need the rest of the book priced, and refusing the
+   * whole view there suppressed the flatten of every other name (ADR-0014's
+   * flat-by-close is load-bearing).
+   */
+  unvalued_instruments: readonly string[];
 }
 
 /**
