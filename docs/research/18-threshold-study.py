@@ -71,6 +71,11 @@ def load_sessions(symbol, tf=os.environ.get("TF", "5Min")):
 # Earnings are ~90 days apart, so the threshold cannot merge two real events,
 # and it comfortably spans the common shape: a post-close release at 16:05
 # followed by pre-market recaps the next morning.
+# Safe at 5 days only because the matcher requires a reported figure: every
+# observed cluster is one release plus recaps within ~19h (widest gap seen:
+# 2026-04-22 16:11 -> 2026-04-23 12:55). A name that prints twice inside five
+# days (a restatement, an amended filing) would be silently collapsed into one
+# event -- narrow this before reusing the study on such a name.
 EVENT_CLUSTER_DAYS = 5
 
 
