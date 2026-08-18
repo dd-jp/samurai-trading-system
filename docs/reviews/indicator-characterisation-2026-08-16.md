@@ -4,7 +4,7 @@
 **Scope:** `server/providers/market-data-service/indicators.ts` and the three live `IndicatorSpec`s
 that consume it. Step **B1** of the intraday build sequence, under wayfinder map
 [#703](https://github.com/dd-jp/samurai-trading-system/issues/703).
-**Status:** OPEN — **F2 is CLOSED** ([#722](https://github.com/dd-jp/samurai-trading-system/issues/722), 2026-08-17): `RSI_SPEC` now asks for the converged warm-up, and the after-figures are recorded beside the before-figures in F2 below. **F3 is CLOSED** ([#725](https://github.com/dd-jp/samurai-trading-system/issues/725), 2026-08-17): `rsi` now special-cases the `avgGain === 0 && avgLoss === 0` window, and the resolution is recorded beside the finding in F3 below. F1 remains open for the two ATR specs, which still sit on the floor. *(Issue filed 2026-08-16: "owned by step B2" pointed at no ticket, which made a measured defect in a live signal a silent deferral rather than a tracked one.)*
+**Status:** **F1 is CLOSED** ([#757](https://github.com/dd-jp/samurai-trading-system/issues/757), 2026-08-18): both ATR specs now ask for the converged warm-up, and the measurement/outcome is recorded beside the finding in F1 below. **F2 is CLOSED** ([#722](https://github.com/dd-jp/samurai-trading-system/issues/722), 2026-08-17): `RSI_SPEC` now asks for the converged warm-up, and the after-figures are recorded beside the before-figures in F2 below. **F3 is CLOSED** ([#725](https://github.com/dd-jp/samurai-trading-system/issues/725), 2026-08-17): `rsi` now special-cases the `avgGain === 0 && avgLoss === 0` window, and the resolution is recorded beside the finding in F3 below. *(Issue filed 2026-08-16: "owned by step B2" pointed at no ticket, which made a measured defect in a live signal a silent deferral rather than a tracked one.)*
 
 ## Why this review happened before anything else was built
 
@@ -47,14 +47,14 @@ cases a random walk never produces and where seeding conventions bite.
 
 ## Findings
 
-### F1 — The live "RSI(14)" was not Wilder's RSI. It was the seed. *(open for ATR; RSI fixed by #722)*
+### F1 — The live "RSI(14)" was not Wilder's RSI. It was the seed. *(CLOSED for both RSI and ATR — RSI by #722, ATR by #757)*
 
 `RSI_SPEC` carried `lookback: 15` with `params.period: 14`, which is exactly `minimumBarsFor`. At
 that width `changes.slice(period)` is empty, so **`rsi`'s smoothing loop executed zero times in
 production**. The value the debate read was the simple-mean seed — Cutler's RSI — not the Wilder
 RSI the surrounding doc comments describe. `RSI_SPEC` now asks for 57 bars (see F2's resolution),
-so the RSI half of this is closed. The same still holds for `atrIndicatorSpec(14)` and
-`DEFAULT_VOLATILITY_INDICATOR`, both `lookback: 15`, and that half stays open.
+so the RSI half of this is closed. The same held for `atrIndicatorSpec(14)` and
+`DEFAULT_VOLATILITY_INDICATOR`, both `lookback: 15` — see the ATR resolution below.
 
 For ATR this was **already known and already pinned**: `trader/atr-equivalence.test.ts` says so in
 as many words, and this review does not re-file it. For RSI nothing said so anywhere.
@@ -62,6 +62,53 @@ as many words, and this review does not re-file it. For RSI nothing said so anyw
 This is not a defect in `indicators.ts` — the arithmetic is correct for the window it is given, and
 agrees with the independent reference on all 32 golden cases. It is a **warm-up** choice that lives
 in the spec.
+
+**Resolution (#757, 2026-08-18): adopt, against a criterion declared before measuring.** ATR had no
+RSI-style classification to flip, so #757 declared a gate on the GitHub issue *before* running any
+measurement (issue comment, 2026-08-18), rather than measuring first and picking a bar that fit the
+result — the convention this repo's other adoptions (#722) follow.
+
+**Blast-radius correction first.** #739 (ADR-0018 D3/D5, closed before #757 started) had already
+withdrawn ATR from stop sizing for every classified/live instrument:
+`resolveSubclassBracket(...) !== null` (every ADR-0016 leveraged-ETP row) sizes
+`stopDistance = bracket.stop_pct * entry`, ATR-free. So of this finding's original two candidate
+pass bars, "the stop distance the Trader derives" no longer describes a live stop — it now describes
+only the residual `bracket === null` path (`DEFAULT_UNIVERSE` / `SMOKE_TEST_UNIVERSE` / backtest
+fixtures). ATR's three still-live consumers, verified against `main` before measuring: the
+`buildSetupVector` regime feature (`atr / entry`, every tick, both bracket paths), the residual
+stop above, and `MarketDataVolatilityReadingProvider` → `CircuitBreakers.evaluate`'s
+`volatility_halt:<class>` (live in the composition root since #276/#277).
+
+**The declared gate, adapted from the second candidate.** A literal volatility-breaker trip-rate
+measurement is degenerate: `paper-profile.ts`'s `volatility.baseline` is
+`UNCALIBRATED_VOLATILITY_BASELINE = 1_000_000` against real ATR readings of order 1-10 price units
+— deliberately inert, so 0% trips at both widths would trivially "pass" any bar and prove nothing.
+The gate instead measured the RELATIVE SHIFT in the ATR reading itself, floor (`lookback: 15`) vs
+converged (`lookback: 57`, `recommendedWarmupFor`), on `indicator-golden.json`'s ordinary region
+(bars 60-200, same convention as F2's `REGION`) — the input a future baseline calibration would
+anchor to, so a large shift here would mean adopting silently reprices whatever threshold gets
+calibrated onto it later:
+
+| Quantity | Value | Declared bar |
+|---|---|---|
+| Median relative shift `\|converged − floor\| / floor` | **3.01%** | <= 15% |
+| p90 relative shift | **6.93%** | <= 30% |
+| Worst bar in the region | 13.44% | (reported, not gated) |
+| Mean SIGNED relative shift | **+0.46%** | (reported: near-zero, not a risk-increasing bias) |
+| p90 vs a 200-bar reference (convergence check) | 0.35% | (confirms 57 bars has converged) |
+
+Both bars cleared, and the sign is near-zero rather than systematically lower (which would have
+meant a tighter residual stop and a breaker reading conservatively later than it should). **Adopted:**
+`atrIndicatorSpec` and `DEFAULT_VOLATILITY_INDICATOR` now compose `recommendedWarmupFor` exactly as
+`RSI_SPEC` does. Adopting at the spec level alone would have been INERT on the Trader path — unlike
+`getIndicator`, `buildBracket`'s own `getBars` call used a literal `atr_lookback + 1` window rather
+than reading `spec.lookback` — so `decide.ts`'s fetch was widened to match (the same lesson #722's
+`WARM_START_WINDOWS` fix carries). `minimumBarsFor` is unchanged (still 15): a cold instrument still
+gets a less-warm ATR reading rather than no reading at all. Tests: `atr-warmup.test.ts` (new,
+mirrors `rsi-warmup.test.ts`), `atr-equivalence.test.ts` and `decide.test.ts`'s ATR-bar-window
+describes updated to the converged width, `indicator-registry.test.ts`'s floor-pinning assertion
+split the way #722 split RSI out of it. Re-deriving `volatility.baseline`/`multiplier` was explicitly
+out of scope and not touched — that is a soak question, not a unit-test one.
 
 ### F2 — The missing warm-up flipped the analyst's classification on ~18% of bars. *(CLOSED by #722)*
 
@@ -121,9 +168,10 @@ What moved with it:
   but the margin to the overbought gate is now 1.48 points rather than 6.84, which is recorded in
   `smoke-run.ts` rather than padded.
 
-**ATR is out of scope and still on the floor.** `atrIndicatorSpec(14)` and
-`DEFAULT_VOLATILITY_INDICATOR` carry the identical gap (F1); moving them reprices every stop in the
-system rather than every opinion, and `trader/atr-equivalence.test.ts` still owns it.
+**ATR was out of scope here and stayed on the floor — since closed.** `atrIndicatorSpec(14)` and
+`DEFAULT_VOLATILITY_INDICATOR` carried the identical gap (F1); moving them reprices every stop
+rather than every opinion, so it needed its own declared-before-measured gate rather than riding
+this one. #757 (2026-08-18) declared and cleared that gate; see F1's resolution above.
 
 ### F3 — A dead-flat window reads as maximum-confidence overbought. *(CLOSED by #725)*
 

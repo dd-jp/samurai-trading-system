@@ -22,6 +22,7 @@ import {
   AlpacaDataSource,
   AlpacaHttpDataClient,
   AssetClassRoutingDataSource,
+  recommendedWarmupFor,
   type TradingCalendar,
 } from '../../../providers/market-data-service/index.js';
 import type { AssetClass, TokenBucket } from '../../../shared/index.js';
@@ -87,8 +88,21 @@ export const DEFAULT_POLYMARKET_POLL_INTERVAL_MS = 15 * 60_000;
  * permanently reading its failure fallback, which is worse than leaving it a
  * required seam because it looks live.
  *
- * `lookback: 15`, not 14: `atr()` consumes the first bar only to seed
- * `previousClose`, so N bars yield N-1 true ranges. A 14-period ATR needs 15.
+ * `lookback` sits on the CONVERGED warm-up (`recommendedWarmupFor` =
+ * `4 x period + 1` = 57), not the `period + 1` = 15 arity floor (#757,
+ * `docs/reviews/indicator-characterisation-2026-08-16.md` F1). At the floor
+ * `atr`'s Wilder smoothing loop runs zero times and the value is a plain
+ * mean of the 14 true ranges wearing Wilder's name — the same shape #722
+ * fixed for `RSI_SPEC`. `getIndicator` builds its fetch window from this
+ * field (service.ts), so this line alone is what makes the breaker's input
+ * read the converged series rather than the seed.
+ *
+ * Measured before adopting (#757): relative shift floor-vs-converged over
+ * `indicator-golden.json`'s ordinary region, median 3.0%, p90 6.9%, near-zero
+ * signed bias (+0.46%) — cleared the declared gate (median <=15%, p90 <=30%).
+ * `minimumBarsFor` (15) is unchanged: a cold instrument still gets a
+ * (less-warm) ATR reading rather than a permanently `FAILURE_READING`
+ * breaker.
  */
 export const DEFAULT_VOLATILITY_INDICATOR: IndicatorSpec = {
   indicator: 'atr',
@@ -96,7 +110,12 @@ export const DEFAULT_VOLATILITY_INDICATOR: IndicatorSpec = {
   // 1h, matching every other indicator in the live path. Explicit since #315:
   // `getIndicator` used to hardcode this and now reads it from the spec.
   timeframe: '1h',
-  lookback: 15,
+  lookback: recommendedWarmupFor({
+    indicator: 'atr',
+    params: { period: 14 },
+    timeframe: '1h',
+    lookback: 15,
+  }),
 };
 /**
  * The Feedback Loop's cadence — "daily batch" (feedback-loop-spec.md § Cadence

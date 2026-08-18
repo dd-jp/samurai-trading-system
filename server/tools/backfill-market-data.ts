@@ -40,12 +40,16 @@
  *   - `1h`, lookback 57 — retained for what #742 left on `1h`: the technical
  *     analyst's own context-candle read (`CONTEXT_TIMEFRAME`, `key_points`
  *     prose only, never direction/confidence), the trader's ATR stop window
- *     (15) and the volatility-breaker's ATR reading (15) — #742 deliberately
- *     did not move `TraderConfig.atr_timeframe` or
- *     `DEFAULT_VOLATILITY_INDICATOR`, so both still read `1h`. 57 is now wider
- *     than any remaining `1h` consumer needs (the context read only asks for
- *     20); kept at 57 rather than trimmed, since over-covering a lookback is
- *     free and under-covering silently degrades a real analyst input.
+ *     and the volatility-breaker's ATR reading — #742 deliberately did not
+ *     move `TraderConfig.atr_timeframe` or `DEFAULT_VOLATILITY_INDICATOR`, so
+ *     both still read `1h`. Both of those used to ask for only 15 (the
+ *     arity floor); #757 moved them onto `recommendedWarmupFor` too (57,
+ *     `docs/reviews/indicator-characterisation-2026-08-16.md` F1), so this
+ *     line is no longer "wider than any remaining `1h` consumer needs" — it
+ *     is now exactly what the widest `1h` consumer asks for. The context
+ *     read still only needs 20; kept at 57 rather than trimmed, since
+ *     over-covering a lookback is free and under-covering silently degrades
+ *     a real analyst input.
  *   - `1d`, lookback 30 — the Risk Manager's pairwise-correlation window,
  *     the only `1d` consumer that fires on a real (non-`SimulatedAdapter`)
  *     paper run. It dominates the simulated cost model's `adv_window`

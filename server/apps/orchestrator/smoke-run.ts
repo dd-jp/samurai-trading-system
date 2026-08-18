@@ -439,9 +439,12 @@ const SMOKE_INSTRUMENT = SMOKE_TEST_UNIVERSE[0]?.asset ?? 'BTC-USD';
  *   60 already clears `RSI_SPEC.lookback`.
  * - `1h` x 60 — the Trader's ATR stop (`atr_timeframe: '1h'`,
  *   `atr_lookback: 14`, unchanged by #742) and the volatility breaker's
- *   ATR(14) — same `period + 1` = 15-bar hard floor as above. Also now the
- *   technical analyst's 1h CONTEXT read (`CONTEXT_CANDLE_LOOKBACK`, 20) —
- *   60 clears that too.
+ *   ATR(14) — `period + 1` = 15-bar HARD floor as above, but both now ask
+ *   for the converged warm-up of **57** (`recommendedWarmupFor`, #757), same
+ *   soft-floor shape as `RSI_SPEC`'s: 60 clears it by three, and below 57
+ *   the ATR silently computes over a shorter warm-up rather than throwing.
+ *   Also now the technical analyst's 1h CONTEXT read
+ *   (`CONTEXT_CANDLE_LOOKBACK`, 20) — 60 clears that too.
  * - `1m` x 60 — the short-timeframe reads the Analysts take.
  * - `1d` x 40 — the widest daily consumers: `adv_window` (`{'1d', 20}`,
  *   `executionConfig.simulated`) and `correlationConfig` (`{'1d', 30}` with

@@ -893,11 +893,13 @@ describe('buildSmokeFixtureBars', () => {
    * than `period + 1` (ATR spends its first bar seeding `previousClose`). The
    * consumers here are `traderConfig.atr_lookback` (14),
    * `DEFAULT_VOLATILITY_INDICATOR` / `executionConfig.simulated.volatility_indicator`
-   * (ATR(14), lookback 15), `adv_window` ({'1d', 20}) and `correlationConfig`
-   * ({'1d', 30}, min_bars 20). A fixture that stopped clearing any of these
-   * would not fail loudly — it would degrade a stage into skipping, which is
-   * the failure the gate exists to catch. Pinned here so it fails as a test
-   * instead.
+   * (ATR(14) — HARD floor still `period + 1` = 15; both now ask for the
+   * converged warm-up of 57, `recommendedWarmupFor`, #757 — a SOFT floor,
+   * same shape as `RSI_SPEC`'s), `adv_window` ({'1d', 20}) and
+   * `correlationConfig` ({'1d', 30}, min_bars 20). A fixture that stopped
+   * clearing any of these would not fail loudly — it would degrade a stage
+   * into skipping, which is the failure the gate exists to catch. Pinned
+   * here so it fails as a test instead.
    */
   it('supplies more bars than every lookback the paper profile reads', () => {
     // #742: RSI_SPEC/SMA_SPEC read '5m' now; '1h' remains the Trader's ATR
