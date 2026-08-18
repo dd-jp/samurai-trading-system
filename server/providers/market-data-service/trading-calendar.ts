@@ -170,7 +170,13 @@ export class AlwaysOpenCalendar implements TradingCalendar {
   }
 }
 
-const ET_ZONE = 'America/New_York';
+/**
+ * Exported for `alpaca-session-calendar.ts` (#684): the Alpaca-backed
+ * calendar needs the same DST-aware Eastern wall-clock arithmetic this file
+ * already built for `UsEquityRegularHoursCalendar`, and re-deriving it there
+ * would be a second, driftable copy of the `Intl` fixpoint below.
+ */
+export const ET_ZONE = 'America/New_York';
 /** #668 — the live equity leg is LSE-listed GBP ETFs/ETCs (#659, ADR-0015). */
 const LONDON_ZONE = 'Europe/London';
 const SESSION_OPEN_MINUTES = 9 * 60 + 30; // 09:30 ET
@@ -208,8 +214,11 @@ interface ZonedInstant {
   minutesSinceMidnight: number;
 }
 
-/** Resolves an instant into a zone's wall-clock, DST included, via Intl. */
-function toZonedTime(instant: Date, zone: string): ZonedInstant {
+/**
+ * Resolves an instant into a zone's wall-clock, DST included, via Intl.
+ * Exported for `alpaca-session-calendar.ts` (#684) — see `ET_ZONE`'s doc.
+ */
+export function toZonedTime(instant: Date, zone: string): ZonedInstant {
   const parts = wallClockParts(zone).formatToParts(instant);
   const lookup = (type: Intl.DateTimeFormatPartTypes): string =>
     parts.find((part) => part.type === type)?.value ?? '';
@@ -239,7 +248,7 @@ const MS_PER_DAY = 86_400_000;
  * It was `MAX_SESSION_LOOKBACK_DAYS`, which described half its uses and made
  * `sessionEnd`'s error read "lookback days after".
  */
-const MAX_SESSION_SEARCH_DAYS = 10;
+export const MAX_SESSION_SEARCH_DAYS = 10;
 /** One pass computes the UTC offset, the second confirms it. 16:00 ET is never in a DST gap. */
 const MAX_OFFSET_PASSES = 3;
 
@@ -268,7 +277,7 @@ function civilParts(zone: string): Intl.DateTimeFormat {
 }
 
 /** A calendar date in some venue's zone. `month` is 1-based, as rendered. */
-interface ZonedCivilDate {
+export interface ZonedCivilDate {
   year: number;
   month: number;
   day: number;
@@ -321,14 +330,14 @@ function wallClockAsUtc(instant: Date, zone: string): number {
   return Date.UTC(year, month - 1, day, hour, minute, second);
 }
 
-function toCivilDate(instant: Date, zone: string): ZonedCivilDate {
+export function toCivilDate(instant: Date, zone: string): ZonedCivilDate {
   const { year, month, day } = zonedCivilFields(instant, zone);
 
   return { year, month, day };
 }
 
 /** Civil-date arithmetic only — anchored in UTC, so DST never shortens the step. */
-function previousCivilDay({ year, month, day }: ZonedCivilDate): ZonedCivilDate {
+export function previousCivilDay({ year, month, day }: ZonedCivilDate): ZonedCivilDate {
   const previous = new Date(Date.UTC(year, month - 1, day) - MS_PER_DAY);
 
   return {
@@ -339,7 +348,7 @@ function previousCivilDay({ year, month, day }: ZonedCivilDate): ZonedCivilDate 
 }
 
 /** The mirror of `previousCivilDay`, for the forward walk `sessionEnd` needs. */
-function nextCivilDay({ year, month, day }: ZonedCivilDate): ZonedCivilDate {
+export function nextCivilDay({ year, month, day }: ZonedCivilDate): ZonedCivilDate {
   const next = new Date(Date.UTC(year, month - 1, day) + MS_PER_DAY);
 
   return {
@@ -350,7 +359,7 @@ function nextCivilDay({ year, month, day }: ZonedCivilDate): ZonedCivilDate {
 }
 
 /** `2026-12-25` — the key both holiday tables below are written in. */
-function civilDateKey({ year, month, day }: ZonedCivilDate): string {
+export function civilDateKey({ year, month, day }: ZonedCivilDate): string {
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
@@ -368,7 +377,7 @@ function civilDateKey({ year, month, day }: ZonedCivilDate): string {
  * clear of either zone's DST transition hour, so it exists exactly once on
  * every day.
  */
-function wallClockToInstant(
+export function wallClockToInstant(
   date: ZonedCivilDate,
   minutesSinceMidnight: number,
   zone: string,
@@ -479,6 +488,26 @@ const US_EARLY_CLOSE_DAYS = new Set([
 ]);
 
 /**
+ * The last civil date `US_HOLIDAYS`/`US_EARLY_CLOSE_DAYS` were checked
+ * against the NYSE published calendar for (#684). Lexicographic comparison
+ * against `civilDateKey`'s `YYYY-MM-DD` is intentional — it sorts exactly
+ * like the calendar for any date this table will ever hold.
+ *
+ * Past this date `#closeMinutesFor` THROWS instead of returning
+ * `SESSION_CLOSE_MINUTES`. That is a deliberate reversal of `isTradingDay`'s
+ * posture, not an oversight: `isTradingDay` stays permissive past its own
+ * table (a phantom holiday closes nothing that is open, the safe direction),
+ * but the close-MINUTE lookup cannot make the same bet — a real trading day
+ * whose actual close is unknown must not be silently guessed at a normal
+ * 16:00, because that is precisely the unmodelled-early-close failure #684
+ * exists to close (see the module doc's "coverage stops at 2027" gap). The
+ * throw propagates through `isOpen`/`sessionStart`/`sessionEnd` exactly the
+ * way an exhausted `MAX_SESSION_SEARCH_DAYS` walk already does, so callers
+ * that are throw-safe for one are throw-safe for the other.
+ */
+export const US_TABLE_COVERAGE_END = '2027-12-31';
+
+/**
  * US equity regular trading hours: Mon-Fri, 09:30-16:00 ET, with NYSE holidays
  * from `US_HOLIDAYS` and 13:00 early closes from `US_EARLY_CLOSE_DAYS`.
  *
@@ -518,9 +547,18 @@ export class UsEquityRegularHoursCalendar implements TradingCalendar {
    * 13:00 whether the question is asked at 09:35 or at 15:59.
    */
   #closeMinutesFor(civilDate: ZonedCivilDate): number {
-    return US_EARLY_CLOSE_DAYS.has(civilDateKey(civilDate))
-      ? US_EARLY_CLOSE_MINUTES
-      : SESSION_CLOSE_MINUTES;
+    const key = civilDateKey(civilDate);
+    if (key > US_TABLE_COVERAGE_END) {
+      throw new Error(
+        `UsEquityRegularHoursCalendar: ${key} is past the hand-entered table's checked ` +
+          `coverage (through ${US_TABLE_COVERAGE_END}). Whether it is a normal close, an early ` +
+          'close or a full holiday is unknown, and assuming a normal 16:00 ET close is the ' +
+          'DANGEROUS direction (#684) — extend US_HOLIDAYS/US_EARLY_CLOSE_DAYS for this date, or ' +
+          "source the live table from Alpaca's GET /v2/calendar instead of this hand-entered " +
+          'one (alpaca-session-calendar.ts).',
+      );
+    }
+    return US_EARLY_CLOSE_DAYS.has(key) ? US_EARLY_CLOSE_MINUTES : SESSION_CLOSE_MINUTES;
   }
 
   isTradingDay(instant: Date): boolean {

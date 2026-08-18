@@ -217,6 +217,7 @@ import type { AlertChannels } from './alert-transport.js';
 import {
   LoggingAnalystSkipAlertChannel,
   LoggingBreachAlertChannel,
+  LoggingCalendarFallbackAlertChannel,
   LoggingDataFailoverAlertChannel,
   LoggingFlattenReconcileAlertChannel,
   LoggingHeartbeatChannel,
@@ -3637,6 +3638,12 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // so the enforcement evidence is direct-bind.test.ts's degraded-exit
       // cases, not this slot.
       exitValuationAlerts: { postExitValuationDegradedAlert: () => {} },
+      // #684 — the sixteenth `ALERT_CHANNEL_FIELDS` member. This run injects
+      // `tradingCalendar: new UsEquityRegularHoursCalendar()` directly
+      // (below), so `resolveUsEquitySessionCalendar` never runs and this slot
+      // is never exercised — a log-only stand-in is enough, same posture as
+      // `dataFailoverAlerts` above.
+      calendarFallbackAlerts: new LoggingCalendarFallbackAlertChannel(logger),
     } satisfies Required<AlertChannels>;
 
     const orchestrator = await startFromEnvironment({

@@ -106,6 +106,7 @@ import { TelegramBotApiClient, TelegramChannel } from '../../pipeline/verdict/in
 import type { SharedStore as SqliteHandle } from '../../shared/store/index.js';
 import { TradeChannelAnalystSkipAlert } from './analyst-skip-alert-channel.js';
 import { TradeChannelBreachAlert } from './breach-alert-channel.js';
+import { TradeChannelCalendarFallbackAlert } from './calendar-fallback-alert-channel.js';
 import { TradeChannelDataFailoverAlert } from './data-failover-alert-channel.js';
 import { TradeChannelExitValuationDegradedAlert } from './exit-valuation-alert-channel.js';
 import { TradeChannelFlattenReconcileAlert } from './flatten-reconcile-alert-channel.js';
@@ -233,6 +234,14 @@ export const ALERT_CHANNEL_FIELDS = [
   // was `tick-loop.ts`'s `instrument failed` line — a position carried
   // overnight, reported as a generic tick failure.
   'exitValuationAlerts',
+  // #684 — the sixteenth. Channel type and transport in the SAME change, like
+  // `traderDiagnosticAlerts`/`thresholdClampAlerts`/`exitValuationAlerts`
+  // before it. The condition it reports (the paper equity leg's Alpaca
+  // calendar fetch failed at boot and fell back to the hand-entered session
+  // table) is invisible from outside by construction: the run keeps ticking
+  // and flattening on the fallback table, which is a defensible calendar —
+  // just not the venue's own, and not immune to its own coverage cliff.
+  'calendarFallbackAlerts',
 ] as const satisfies readonly (keyof AlertChannelSlots)[];
 
 /**
@@ -489,6 +498,19 @@ export function buildAlertChannels(deps: {
     ...(deps.injected.exitValuationAlerts === undefined
       ? {
           exitValuationAlerts: new TradeChannelExitValuationDegradedAlert(
+            telegram,
+            chatId,
+            deps.logger,
+          ),
+        }
+      : {}),
+    // #684. The escalation chat: a boot-time fallback from the venue's own
+    // calendar to the hand-entered table is a decision waiting on the
+    // operator (check Alpaca connectivity, watch the fallback's own coverage
+    // cliff), not a beat — same reasoning as `thresholdClampAlerts`.
+    ...(deps.injected.calendarFallbackAlerts === undefined
+      ? {
+          calendarFallbackAlerts: new TradeChannelCalendarFallbackAlert(
             telegram,
             chatId,
             deps.logger,

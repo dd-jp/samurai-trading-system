@@ -66,6 +66,7 @@ import {
 import { type LiveStartingProfile, liveStartingProfile } from './live-profile.js';
 import { buildEntrypointLogger, JsonLogger } from './logger.js';
 import { paperStartingProfile } from './paper-profile.js';
+import { resolveUsEquitySessionCalendar } from './production/us-equity-session-source.js';
 import {
   buildProductionOrchestrator,
   type ProductionConfig,
@@ -872,9 +873,30 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
     // opposite posture on purpose: it ends the process. See both doc comments.
     const entrypointLogger = buildEntrypointLogger();
     installFaultHandlers(entrypointLogger);
+    const mode = parseMode(process.env.SAMURAI_MODE);
+    // #684. Resolved HERE, at the real deployment, and not inside
+    // `startFromEnvironment` itself — deliberately, the same reason
+    // `startingProfileForMode` is a separate exported hop rather than inlined
+    // there: `startFromEnvironment` is what dozens of tests call directly with
+    // no `fetch` stubbed, and threading a live Alpaca calendar fetch into it
+    // would turn every one of those into a real outbound network call. Placing
+    // it here means only the actual `yarn orchestrator` process ever awaits
+    // it; `resolveUsEquitySessionCalendar` itself is unit-tested directly with
+    // an injected `AlpacaCalendarClient`, the same split `startingProfileForMode`'s
+    // own doc comment explains for the mode/profile hop.
+    //
+    // PAPER/BACKTEST only — live runs the LSE leg over Trading 212 (ADR-0015),
+    // never Alpaca, so there is nothing to fetch. `startFromEnvironment` still
+    // resolves `equityCalendarFor`'s LSE default when `tradingCalendar` is
+    // omitted (production.ts).
+    const tradingCalendar =
+      mode === 'live'
+        ? undefined
+        : await resolveUsEquitySessionCalendar({ logger: entrypointLogger, now: () => new Date() });
     const orchestrator = await startFromEnvironment({
-      ...startingProfileForMode(parseMode(process.env.SAMURAI_MODE), entrypointLogger),
+      ...startingProfileForMode(mode, entrypointLogger),
       logger: entrypointLogger,
+      ...(tradingCalendar === undefined ? {} : { tradingCalendar }),
     });
     const shutdown = buildShutdownHandler(orchestrator);
     process.on('SIGINT', shutdown);

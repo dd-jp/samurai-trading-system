@@ -57,6 +57,7 @@ import type { HeartbeatChannel } from '../heartbeat.js';
 import type { OrphanAlertChannel } from '../orphan-verdict-scan.js';
 import type { Logger, UniverseInstrument } from '../types.js';
 import type { AnalystSkipAlertChannel } from './analysts-adapter.js';
+import type { CalendarFallbackAlertChannel } from './calendar-fallback-alert.js';
 import { DEFAULT_STAGE2_MAX_AGE_DAYS } from './daily-equity-metrics-source.js';
 import type { DataFailoverAlertChannel } from './data-failover.js';
 import type { AccountStateProvider, VolatilityReadingProvider } from './direct-bind.js';
@@ -303,6 +304,25 @@ export interface AlertChannelSlots {
    * proceed on and why this is not latched.
    */
   exitValuationAlerts?: ExitValuationDegradedAlertChannel;
+  /**
+   * Where a failed Alpaca `GET /v2/calendar` fetch at boot is escalated
+   * (#684) — the paper equity leg fell back to the hand-entered
+   * `UsEquityRegularHoursCalendar` session table instead of the venue's own.
+   * Defaults to `LoggingCalendarFallbackAlertChannel`, with the same caveat
+   * as `miCoverageAlerts`/`dataFailoverAlerts`: log-only cannot page anyone,
+   * and an unattended 14-day soak needs to know its flatten boundary is
+   * running on a table with a coverage cliff rather than the live one.
+   * `TradeChannelCalendarFallbackAlert` (calendar-fallback-alert-channel.ts)
+   * is what `SAMURAI_ALERTS=telegram` (#322) supplies — the sixteenth
+   * `ALERT_CHANNEL_FIELDS` member.
+   *
+   * Never a refusal to boot: see `calendar-fallback-alert.ts`'s file doc for
+   * why #684 chose "alert and continue on the hand table" over refusing to
+   * start on a transient network blip, and why that fallback still cannot
+   * silently take the dangerous direction — the hand table's own coverage
+   * cliff throws rather than guessing a normal close past it.
+   */
+  calendarFallbackAlerts?: CalendarFallbackAlertChannel;
 }
 
 /**
