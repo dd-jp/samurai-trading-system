@@ -43,7 +43,11 @@
  */
 
 import type { Bar, TradingCalendar } from '../../providers/market-data-service/index.js';
-import { computeIndicator, isDailyTimeframe } from '../../providers/market-data-service/index.js';
+import {
+  computeIndicator,
+  isDailyTimeframe,
+  timeframeToMs,
+} from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, Fill, SimulatedClock } from '../../shared/index.js';
 import type { ReplayTradeSource } from './eval-types.js';
 import { LookaheadAuditor } from './lookahead.js';
@@ -116,6 +120,8 @@ export interface ReplayDriverDeps {
    * number rather than imported from `server/pipeline/trader`: this module
    * documents that it imports nothing from the live pipeline, and a test
    * asserting the two agree is cheaper than breaking that.
+   *
+   * WIDENED to one bar when the timeframe is coarser than this — see `run`.
    */
   flattenBeforeCloseMs?: number;
 }
@@ -427,8 +433,21 @@ export class ReplayDriver {
         // and on a venue with no close, which is what keeps both of those
         // paths byte-identical to their pre-#664 behaviour.
         const boundary = flattenBoundary(bar, this.deps.timeframe, this.deps.sessionCalendar);
-        const flattenBeforeCloseMs =
-          this.deps.flattenBeforeCloseMs ?? DEFAULT_FLATTEN_BEFORE_CLOSE_MS;
+        // AT LEAST ONE BAR WIDE (#664). The live rule is wall-clock — flatten
+        // in the last five minutes before the close (trader/decide.ts). A
+        // replay cannot act inside a bar, so on any grid coarser than the
+        // window no bar's OPEN ever falls inside it: on the 15-minute cadence
+        // ADR-0008 §2 records, the last bar of the session opens at CLOSE−15m,
+        // the window never opens, the lot is held, and the carry assertion
+        // below aborts the run — blaming the calendar for what is really an
+        // arithmetic mismatch between the window and the bar size. Widening to
+        // one bar is the honest bar-replay reading of "be flat by close":
+        // flatten on the final bar of the session. `'1m'` and `'5m'` are
+        // unchanged (`max(5min, 1min) = 5min`).
+        const flattenBeforeCloseMs = Math.max(
+          this.deps.flattenBeforeCloseMs ?? DEFAULT_FLATTEN_BEFORE_CLOSE_MS,
+          timeframeToMs(this.deps.timeframe),
+        );
         const withinFlattenWindow =
           boundary !== null && boundary.remainingMs <= flattenBeforeCloseMs;
 

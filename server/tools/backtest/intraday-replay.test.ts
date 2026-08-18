@@ -57,17 +57,24 @@ const CONFIG: ProxyStrategyConfig = {
  * `count` one-minute bars ending exactly at `sessionClose`, on a steady uptrend
  * so the dual-SMA signal opens long after warm-up and never turns.
  */
-function minuteBars(sessionClose: Date, count: number, basePrice = 100): Bar[] {
+function barsOfTimeframe(
+  sessionClose: Date,
+  count: number,
+  barMinutes: number,
+  timeframe: string,
+  basePrice = 100,
+): Bar[] {
   const bars: Bar[] = [];
+  const barMs = barMinutes * MINUTE_MS;
   for (let i = 0; i < count; i++) {
-    const openTime = new Date(sessionClose.getTime() - (count - i) * MINUTE_MS);
+    const openTime = new Date(sessionClose.getTime() - (count - i) * barMs);
     const open = basePrice + i * 0.1;
     const close = open + 0.1;
     bars.push({
       instrument: SYMBOL,
-      timeframe: '1m',
+      timeframe,
       open_time: openTime,
-      close_time: new Date(openTime.getTime() + MINUTE_MS),
+      close_time: new Date(openTime.getTime() + barMs),
       open,
       high: close + 0.01,
       low: open - 0.01,
@@ -138,7 +145,10 @@ function driverOver(
   return { driver: new ReplayDriver(deps), window };
 }
 
-const TWO_SESSIONS = [...minuteBars(FRIDAY_CLOSE, 20), ...minuteBars(MONDAY_CLOSE, 20, 110)];
+const TWO_SESSIONS = [
+  ...barsOfTimeframe(FRIDAY_CLOSE, 20, 1, '1m'),
+  ...barsOfTimeframe(MONDAY_CLOSE, 20, 1, '1m', 110),
+];
 
 describe('intraday replay across a session boundary (#664)', () => {
   it('is flat by every close — no position survives a session, weekend included', async () => {
@@ -251,6 +261,36 @@ describe('intraday replay across a session boundary (#664)', () => {
     // The lot opens on Friday and is still open at the last Monday bar, so it
     // never becomes a ClosedTrade — which is exactly the pre-#664 behaviour.
     expect(trades).toEqual([]);
+  });
+
+  /**
+   * A bar coarser than the flatten window (#664).
+   *
+   * The live rule is WALL-CLOCK: flatten in the last five minutes before the
+   * close. A replay cannot act inside a bar, so on a `'15m'` grid — the cadence
+   * ADR-0008 §2 records, and so the likeliest intraday invocation after `'1m'`
+   * — no bar's OPEN ever falls within five minutes of the close: the last one
+   * opens at CLOSE-15m. Taken literally the window would never open, the lot
+   * would be held, and the carry assertion would abort the run on the first
+   * session boundary, blaming the calendar for what is really an arithmetic
+   * mismatch between the window and the bar.
+   */
+  it('flattens on the last bar even when the bar is coarser than the flatten window', async () => {
+    const bars = [
+      ...barsOfTimeframe(FRIDAY_CLOSE, 20, 15, '15m'),
+      ...barsOfTimeframe(MONDAY_CLOSE, 20, 15, '15m', 110),
+    ];
+    const { driver, window } = driverOver(bars, { timeframe: '15m' });
+
+    const trades = await (await driver.run(CONFIG, window)).trades.closedTrades(window);
+
+    expect(trades.length).toBe(2);
+    expect(trades.map((trade) => trade.close_reason)).toEqual(trades.map(() => 'flatten'));
+    // The last bar of each session — the one closing AT the close.
+    expect(trades.map((trade) => trade.closed_at.toISOString())).toEqual([
+      FRIDAY_CLOSE.toISOString(),
+      MONDAY_CLOSE.toISOString(),
+    ]);
   });
 
   it('refuses a bar series whose resolution is not the one it was configured for', async () => {
