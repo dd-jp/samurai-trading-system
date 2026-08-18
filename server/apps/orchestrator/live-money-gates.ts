@@ -91,10 +91,22 @@ export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: 
   },
   {
     issue: 800,
-    // Verified OPEN 2026-08-18: `gh issue view 800`. Labelled BLOCKING(arming)
+    // Verified OPEN 2026-08-19: `gh issue view 800`. Labelled BLOCKING(arming)
     // on the issue itself. Note this profile's ceiling env var is named
     // SAMURAI_LIVE_MAX_CAPITAL_USD — USD — against a GBP book.
-    gap: 'Trader and the ADR-0018 D5 cap disagree 2x on what portfolio.equity denominates, so the size that reaches the broker is not the size either side believes it authorised',
+    //
+    // Rewritten 2026-08-19: the 2x denominator disagreement this entry used to
+    // name was RESOLVED on the branch that added this line (D5 unscaled, the
+    // book re-based to £1,000 all-equity). What keeps #800 open, and keeps it
+    // arming-blocking, is below.
+    gap: 'portfolio.equity is one blended GET /v2/account figure with no per-leg accounting, so every D5 envelope is correct only while the funded equity equals the declared book — fund the ISA past it and the same fractions authorise proportionally more cash than the book was sized for',
+  },
+  {
+    issue: 886,
+    // Verified OPEN 2026-08-19: `gh issue view 886`. Labelled BLOCKING(arming)
+    // on the issue itself. Cited here per this module's own rule; see the
+    // comment left on #886 recording the citation.
+    gap: 'per_trade_size_cap is a STATIC cash figure derived from the boot ceiling while the D5 envelope is a live fraction of portfolio.equity, so which one binds depends on how far equity sits below that ceiling — the two caps are not comparable as fractions and neither side of the pair is reliably the operative limit on an entry',
   },
   {
     issue: 798,
@@ -117,7 +129,7 @@ export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: 
  * a date newer than the last verification is a false claim in an operator-facing
  * safety message, and a date older than the list is what #868 was filed about.
  */
-export const LIVE_MONEY_GATES_VERIFIED_ON = '2026-08-18';
+export const LIVE_MONEY_GATES_VERIFIED_ON = '2026-08-19';
 
 /** The command that re-verifies the list, named in the operator-facing summary. */
 export const LIVE_MONEY_GATES_RECHECK_COMMAND = 'yarn check:live-gates';

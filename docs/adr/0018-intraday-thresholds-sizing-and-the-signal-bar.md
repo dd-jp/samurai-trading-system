@@ -93,6 +93,8 @@ Measured on a **drift-removed** series, so this is the pure volatility envelope 
 
 **ADR-0015's £750/£750 split now means allocated, not deployed, capital** on the equity side. The split itself is unchanged.
 
+> **The split is gone as of 2026-08-18** (ADR-0015's amendment of that date: the book is **£1,000, all equity**). The distinction this paragraph draws — allocated versus deployed — survives and is the reason the fractions, not the cash figures, are the rule. What changes is the base: D5's fractions now apply to the **whole account** unscaled, so ~£260/~£190 become **£350/£250**, and the single-stock row runs at the `f = 0.25` whose measured drawdown is the ~41.8% of the #729 note below — [#798](https://github.com/dd-jp/samurai-trading-system/issues/798)'s subject, now unavoidable rather than contingent.
+
 **The crypto brackets are not set by this ADR.** #660's 4%/2% levels are unmeasured. The same engine applies — crypto 1-minute is free from 2021-01-04 per doc 33 — but "session" is undefined for crypto until [#667](https://github.com/dd-jp/samurai-trading-system/issues/667) fixes the flatten rule, so the measurement is blocked, not skipped.
 
 ## Amendment — 2026-08-16, WITHDRAWN 2026-08-17: the tranche ladder was declared, then measured and rejected
