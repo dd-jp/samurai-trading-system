@@ -54,7 +54,11 @@ import type { Bar } from '../providers/market-data-service/index.js';
 import { computeIndicator } from '../providers/market-data-service/index.js';
 import { TokenBucket } from '../shared/http/token-bucket.js';
 import type { DateRange } from './backtest/index.js';
-import { HttpPolygonClient, Stage2HistoricalStore } from './backtest/index.js';
+import {
+  DEFAULT_STAGE2_TIMEFRAME,
+  HttpPolygonClient,
+  Stage2HistoricalStore,
+} from './backtest/index.js';
 import { CRYPTO_SYMBOLS, STOCK_SYMBOLS } from './run-stage2.js';
 
 /** The ATR window the grid holds fixed, and therefore the one the cost model sees. */
@@ -254,10 +258,13 @@ export async function runSpreadCalibration(
     throw new Error('runSpreadCalibration: ALPACA_API_KEY and ALPACA_API_SECRET are required.');
   }
 
-  const store = new Stage2HistoricalStore(
-    new HttpPolygonClient(),
-    deps.dbPath ?? 'stage2-cost-decomposition.sqlite',
-  );
+  // DAILY, stated explicitly (#664): this calibration fits spread against
+  // ATR14 measured on DAILY bars, which is the whole basis of
+  // `CALIBRATED_COST_CONFIG`. An intraday recalibration is separate work.
+  const store = new Stage2HistoricalStore(new HttpPolygonClient(), {
+    timeframe: DEFAULT_STAGE2_TIMEFRAME,
+    dbPath: deps.dbPath ?? 'stage2-cost-decomposition.sqlite',
+  });
   const quotes = new AlpacaQuoteClient(keyId, secret);
 
   const bars = new Map<string, Bar[]>();

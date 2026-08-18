@@ -53,6 +53,10 @@ export {
   AlpacaHttpDataClient,
   DEFAULT_ALPACA_DATA_FEED,
   resolveAlpacaDataFeed,
+  // #664: the Stage 2 backfill client (server/tools/backtest) now maps its
+  // requested timeframe through this same converter rather than keeping a
+  // second '1m' -> '1Min' table of its own.
+  toAlpacaTimeframe,
 } from './sources/alpaca-http-client.js';
 export type {
   AlpacaBar,

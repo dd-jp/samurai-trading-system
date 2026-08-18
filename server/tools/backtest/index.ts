@@ -140,6 +140,8 @@ export type {
   SplitEval,
 } from './eval-types.js';
 export type { FreeStackAggregatesClientOptions } from './free-stack-aggregates-client.js';
+// `maxAlpacaPagesFor` is deliberately NOT re-exported for the same reason
+// `isCryptoSymbol` is not: it has no consumer outside its module.
 // `isCryptoSymbol` is deliberately NOT re-exported: nothing outside this
 // module consumes it, and `docs/coding-standards.md` rules that a barrel entry
 // with no external consumer is dead surface. It stays exported from its own
@@ -161,13 +163,17 @@ export type {
   ReplayInstrument,
   ReplayRunResult,
 } from './replay-driver.js';
-export { ReplayDriver } from './replay-driver.js';
+export { DEFAULT_FLATTEN_BEFORE_CLOSE_MS, ReplayDriver } from './replay-driver.js';
 export type { SplitOptions, SplitScheme } from './splits.js';
 export { generateSplits } from './splits.js';
 export { SqliteConfigTrialLog } from './sqlite-config-trial-log.js';
 export { SqliteStage2SelectionStore } from './sqlite-stage2-selection-store.js';
-export type { PolygonAggregate, PolygonClient } from './stage2-historical-store.js';
-export { Stage2HistoricalStore } from './stage2-historical-store.js';
+export type {
+  PolygonAggregate,
+  PolygonClient,
+  Stage2HistoricalStoreOptions,
+} from './stage2-historical-store.js';
+export { DEFAULT_STAGE2_TIMEFRAME, Stage2HistoricalStore } from './stage2-historical-store.js';
 export { type Stage2Selection, selectionsFrom } from './stage2-selection.js';
 export type {
   ConfigKillLineCheck,
@@ -191,6 +197,7 @@ export type {
 export {
   buildTrialGrid,
   CRYPTO_PERIODS_PER_YEAR,
+  periodsPerYearFor,
   runTrialGrid,
   STOCK_PERIODS_PER_YEAR,
   sizeTrialGridToSample,

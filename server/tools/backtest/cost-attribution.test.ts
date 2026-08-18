@@ -1,4 +1,5 @@
 import type { Bar } from '../../providers/market-data-service/index.js';
+import { AlwaysOpenCalendar } from '../../providers/market-data-service/index.js';
 import type { Fill } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import {
@@ -127,6 +128,8 @@ function runReplay(costModel: CostModel): Promise<ReplayRunResult> {
     clock: new SimulatedClock(WINDOW.start),
     universe: UNIVERSE,
     capitalPerTrade: 10_000,
+    timeframe: '1d',
+    sessionCalendar: new AlwaysOpenCalendar(),
   }).run(CONFIG, WINDOW);
 }
 

@@ -71,7 +71,7 @@ describe('HttpPolygonClient', () => {
       fetchImpl,
       rateLimiter: unlimitedBucket(),
     });
-    const aggregates = await client.fetchAggregates('SPY', window);
+    const aggregates = await client.fetchAggregates('SPY', window, '1d');
 
     expect(aggregates).toEqual([{ t: 1, o: 1, h: 2, l: 0.5, c: 1.5, v: 100 }]);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -90,7 +90,7 @@ describe('HttpPolygonClient', () => {
       rateLimiter: unlimitedBucket(),
     });
 
-    await client.fetchAggregates('BTC-USD', window);
+    await client.fetchAggregates('BTC-USD', window, '1d');
 
     const [url] = fetchImpl.mock.calls[0] as [string];
     expect(url).toContain('/v2/aggs/ticker/X%3ABTCUSD/range/1/day/');
@@ -104,7 +104,7 @@ describe('HttpPolygonClient', () => {
       rateLimiter: unlimitedBucket(),
     });
 
-    const aggregates = await client.fetchAggregates('SPY', window);
+    const aggregates = await client.fetchAggregates('SPY', window, '1d');
     expect(aggregates).toEqual([]);
   });
 
@@ -128,7 +128,7 @@ describe('HttpPolygonClient', () => {
       fetchImpl,
       rateLimiter: unlimitedBucket(),
     });
-    const aggregates = await client.fetchAggregates('SPY', window);
+    const aggregates = await client.fetchAggregates('SPY', window, '1d');
 
     expect(aggregates).toEqual([
       { t: 1, o: 1, h: 1, l: 1, c: 1, v: 1 },
@@ -160,7 +160,7 @@ describe('HttpPolygonClient', () => {
       rateLimiter: unlimitedBucket(),
     });
 
-    await expect(client.fetchAggregates('SPY', window)).rejects.toThrow(/exceeded .* pages/);
+    await expect(client.fetchAggregates('SPY', window, '1d')).rejects.toThrow(/exceeded .* pages/);
   });
 
   it('throws on a non-ok HTTP response without leaking the API key', async () => {
@@ -171,8 +171,10 @@ describe('HttpPolygonClient', () => {
       rateLimiter: unlimitedBucket(),
     });
 
-    await expect(client.fetchAggregates('SPY', window)).rejects.toThrow(/HTTP 500/);
-    await expect(client.fetchAggregates('SPY', window)).rejects.not.toThrow(new RegExp(FAKE_KEY));
+    await expect(client.fetchAggregates('SPY', window, '1d')).rejects.toThrow(/HTTP 500/);
+    await expect(client.fetchAggregates('SPY', window, '1d')).rejects.not.toThrow(
+      new RegExp(FAKE_KEY),
+    );
   });
 
   // Wire validation (issue #509). Before this ticket `results` was cast
@@ -189,7 +191,9 @@ describe('HttpPolygonClient', () => {
         rateLimiter: unlimitedBucket(),
       });
 
-      await expect(client.fetchAggregates('SPY', window)).rejects.toThrow(/malformed aggregate/);
+      await expect(client.fetchAggregates('SPY', window, '1d')).rejects.toThrow(
+        /malformed aggregate/,
+      );
     });
 
     it('rejects an aggregate whose OHLCV field is the wrong type (out-of-type body)', async () => {
@@ -204,7 +208,9 @@ describe('HttpPolygonClient', () => {
         rateLimiter: unlimitedBucket(),
       });
 
-      await expect(client.fetchAggregates('SPY', window)).rejects.toThrow(/malformed aggregate/);
+      await expect(client.fetchAggregates('SPY', window, '1d')).rejects.toThrow(
+        /malformed aggregate/,
+      );
     });
 
     it('rejects an aggregate carrying a non-finite OHLCV field', async () => {
@@ -219,7 +225,9 @@ describe('HttpPolygonClient', () => {
         rateLimiter: unlimitedBucket(),
       });
 
-      await expect(client.fetchAggregates('SPY', window)).rejects.toThrow(/malformed aggregate/);
+      await expect(client.fetchAggregates('SPY', window, '1d')).rejects.toThrow(
+        /malformed aggregate/,
+      );
     });
 
     it('rejects a response body that is not an object at all', async () => {
@@ -230,7 +238,7 @@ describe('HttpPolygonClient', () => {
         rateLimiter: unlimitedBucket(),
       });
 
-      await expect(client.fetchAggregates('SPY', window)).rejects.toThrow(
+      await expect(client.fetchAggregates('SPY', window, '1d')).rejects.toThrow(
         /malformed response body/,
       );
     });
@@ -243,7 +251,9 @@ describe('HttpPolygonClient', () => {
         rateLimiter: unlimitedBucket(),
       });
 
-      await expect(client.fetchAggregates('SPY', window)).rejects.toThrow(/malformed 'results'/);
+      await expect(client.fetchAggregates('SPY', window, '1d')).rejects.toThrow(
+        /malformed 'results'/,
+      );
     });
 
     it('stops pagination rather than throwing when next_url is present but the wrong type', async () => {
@@ -259,7 +269,7 @@ describe('HttpPolygonClient', () => {
         rateLimiter: unlimitedBucket(),
       });
 
-      const aggregates = await client.fetchAggregates('SPY', window);
+      const aggregates = await client.fetchAggregates('SPY', window, '1d');
       expect(aggregates).toEqual([{ t: 1, o: 1, h: 1, l: 1, c: 1, v: 1 }]);
       expect(fetchImpl).toHaveBeenCalledTimes(1);
     });
@@ -327,7 +337,7 @@ describe('HttpPolygonClient free-tier pacing (#510)', () => {
     await bucket.acquire();
 
     const client = new HttpPolygonClient({ apiKey: FAKE_KEY, fetchImpl, rateLimiter: bucket });
-    const pending = client.fetchAggregates('SPY', window);
+    const pending = client.fetchAggregates('SPY', window, '1d');
 
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -355,7 +365,7 @@ describe('HttpPolygonClient free-tier pacing (#510)', () => {
 
     const burst = 6; // > 5, the free-tier ceiling this bucket paces against.
     const pending = Promise.all(
-      Array.from({ length: burst }, (_, i) => client.fetchAggregates(`SYM${i}`, window)),
+      Array.from({ length: burst }, (_, i) => client.fetchAggregates(`SYM${i}`, window, '1d')),
     );
 
     // The bucket starts full at `capacity`: that many calls fire for free.
@@ -406,5 +416,19 @@ describe('HttpPolygonClient free-tier pacing (#510)', () => {
     } finally {
       delete process.env.SAMURAI_PACING_POLYGON_REFILL_PER_SEC;
     }
+  });
+});
+
+describe('HttpPolygonClient — timeframe (#664)', () => {
+  it('refuses a non-daily request rather than silently serving day bars', async () => {
+    const client = new HttpPolygonClient({
+      apiKey: 'test-key',
+      fetchImpl: async () => new Response('{}'),
+      rateLimiter: new TokenBucket({ capacity: 100, refillPerSecond: 1000 }),
+    });
+
+    await expect(
+      client.fetchAggregates('SPY', { start: new Date(0), end: new Date(1) }, '1m'),
+    ).rejects.toThrow(/serves '1d' only/);
   });
 });

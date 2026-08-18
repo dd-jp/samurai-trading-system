@@ -96,7 +96,22 @@ export class HttpTiingoClient implements PolygonClient {
     this.minRequestSpacingMs = options.minRequestSpacingMs ?? MIN_REQUEST_SPACING_MS;
   }
 
-  async fetchAggregates(symbol: string, window: DateRange): Promise<PolygonAggregate[]> {
+  /**
+   * DAILY ONLY, and it refuses rather than silently serving daily (#664) — see
+   * `HttpPolygonClient.fetchAggregates` for the same reasoning. This client
+   * exists for crypto daily history, and crypto left Samurai's scope on
+   * 2026-08-16 (ADR-0015 amendment), so it gains no intraday path.
+   */
+  async fetchAggregates(
+    symbol: string,
+    window: DateRange,
+    timeframe: string,
+  ): Promise<PolygonAggregate[]> {
+    if (timeframe !== '1d') {
+      throw new Error(
+        `HttpTiingoClient.fetchAggregates: this client serves '1d' only; got '${timeframe}'.`,
+      );
+    }
     await this.paceRequest();
     return symbol.endsWith('-USD')
       ? this.fetchCrypto(symbol, window)

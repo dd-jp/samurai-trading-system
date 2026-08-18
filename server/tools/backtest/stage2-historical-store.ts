@@ -27,14 +27,15 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
 import type { Bar } from '../../providers/market-data-service/index.js';
-import { closeTimeOf } from '../../providers/market-data-service/index.js';
+import { closeTimeOf, timeframeToMs } from '../../providers/market-data-service/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/sqlite-utils.js';
 import type { ReplayTimeline } from './types.js';
 import type { DateRange, InstrumentListing, InstrumentRegistry } from './universe.js';
 
-const TIMEFRAME = '1d';
+/** The timeframe every path used before #664 made it a parameter. */
+export const DEFAULT_STAGE2_TIMEFRAME = '1d';
 
-/** One Polygon daily aggregate, timestamped at the bar's open (epoch ms). */
+/** One Polygon aggregate, timestamped at the bar's open (epoch ms). */
 export interface PolygonAggregate {
   t: number;
   o: number;
@@ -46,8 +47,21 @@ export interface PolygonAggregate {
 
 /** The transport seam — a real Polygon/Massive HTTP client, or a test fake. */
 export interface PolygonClient {
-  /** Daily aggregates for `symbol` over `window`, ascending by open time. */
-  fetchAggregates(symbol: string, window: DateRange): Promise<PolygonAggregate[]>;
+  /**
+   * Aggregates for `symbol` over `window` at `timeframe`, ascending by open
+   * time.
+   *
+   * `timeframe` is REQUIRED, not defaulted to `'1d'` (#664). A defaulted
+   * parameter is how this repo's dominant defect class — a mechanism nothing
+   * calls with a non-default value — gets introduced: every implementation and
+   * every fake would keep serving daily bars and typecheck. Required, the
+   * compiler enumerates every call site instead.
+   */
+  fetchAggregates(
+    symbol: string,
+    window: DateRange,
+    timeframe: string,
+  ): Promise<PolygonAggregate[]>;
 }
 
 interface Stage2BarRow {
@@ -138,13 +152,57 @@ function ensureParentDirectory(dbPath: string): void {
   mkdirSync(directory, { recursive: true });
 }
 
+/**
+ * How a store is opened. An OPTIONS OBJECT rather than a second positional
+ * string (#664): `dbPath` was already positional and `timeframe` is also a
+ * string, so a positional addition would let the two be swapped silently at a
+ * call site and still typecheck. Requiring the object also makes the compiler
+ * enumerate every construction, which is the point — a store whose timeframe
+ * defaulted to `'1d'` would be the exact "parameter nothing ever sets" defect
+ * this ticket exists to avoid.
+ */
+export interface Stage2HistoricalStoreOptions {
+  /** `'1d'`, `'1m'`, `'5m'`… — parsed by `timeframeToMs`, so garbage throws here. */
+  timeframe: string;
+  /** Scratch SQLite path. `':memory:'` is the test/fixture shape. */
+  dbPath?: string;
+}
+
 export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry {
   private readonly db: BetterSqlite3.Database;
+  /**
+   * The ONE timeframe this store instance ingests, stores and serves.
+   *
+   * Every read below is scoped by it (#664 item 5). The table is shared across
+   * timeframes — its PRIMARY KEY already carries `timeframe`, so a `'1m'` row
+   * and a `'1d'` row for the same instrument and open time are distinct rows
+   * and neither overwrites the other. What was missing was scoping on the READ
+   * side: `bars`, `barTimestamps`, `barTimestampsFor` and the
+   * "never ingested" diagnostic all ignored the column, so a file holding both
+   * resolutions would have served their UNION to a replay — silently, as a
+   * jagged series no assertion could catch.
+   *
+   * The alternative considered and rejected: a separate scratch FILE (or table)
+   * per timeframe. It gets the same isolation, but splits the coverage
+   * bookkeeping (`stage2_coverage` is already keyed by `(instrument,
+   * timeframe)`, so one file holds both cleanly), makes a daily-vs-intraday
+   * comparison a two-connection job, and buys nothing the composite index below
+   * does not already buy. Existing daily scratch files keep working untouched
+   * either way — their rows are already stamped `'1d'` — which is what makes
+   * this a reversible choice rather than a migration.
+   */
+  readonly timeframe: string;
 
   constructor(
     private readonly client: PolygonClient,
-    dbPath = ':memory:',
+    options: Stage2HistoricalStoreOptions,
   ) {
+    // Parsed, not merely stored: `closeTimeOf` would throw later, mid-ingest,
+    // after the network spend. `timeframeToMs` throws here on anything this
+    // repo cannot key bars on.
+    timeframeToMs(options.timeframe);
+    this.timeframe = options.timeframe;
+    const dbPath = options.dbPath ?? ':memory:';
     ensureParentDirectory(dbPath);
     this.db = new BetterSqlite3(dbPath);
     this.db.exec(`
@@ -181,6 +239,14 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
         requested_to TEXT NOT NULL,
         PRIMARY KEY (instrument, timeframe)
       );
+      -- #664. Every read here filters on (instrument, timeframe, close_time),
+      -- and the PRIMARY KEY is on OPEN time, so none of them could use it:
+      -- \`bars\` and both timeline queries were full table SCANs. Invisible at
+      -- ~500 daily rows per symbol; a cliff at minute resolution, where one
+      -- instrument-year is ~98k rows and ten years across four symbols is
+      -- ~4M. \`EXPLAIN QUERY PLAN\` before/after is in the PR body.
+      CREATE INDEX IF NOT EXISTS idx_stage2_bars_read
+        ON stage2_bars (instrument, timeframe, close_time);
     `);
   }
 
@@ -202,7 +268,7 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
         `SELECT requested_from, requested_to FROM stage2_coverage
           WHERE instrument = ? AND timeframe = ?`,
       )
-      .get(symbol, TIMEFRAME) as { requested_from: string; requested_to: string } | undefined;
+      .get(symbol, this.timeframe) as { requested_from: string; requested_to: string } | undefined;
     if (!requested) return undefined;
 
     const bars = this.db
@@ -210,7 +276,7 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
         `SELECT MIN(open_time) AS first, MAX(open_time) AS last
            FROM stage2_bars WHERE instrument = ? AND timeframe = ?`,
       )
-      .get(symbol, TIMEFRAME) as { first: string | null; last: string | null } | undefined;
+      .get(symbol, this.timeframe) as { first: string | null; last: string | null } | undefined;
 
     return {
       requestedFrom: fromStoredTimestamp(requested.requested_from),
@@ -238,7 +304,7 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
            requested_from = excluded.requested_from,
            requested_to = excluded.requested_to`,
       )
-      .run(symbol, TIMEFRAME, toStoredTimestamp(from), toStoredTimestamp(to));
+      .run(symbol, this.timeframe, toStoredTimestamp(from), toStoredTimestamp(to));
   }
 
   /**
@@ -277,7 +343,7 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
   async ingest(symbol: string, window: DateRange): Promise<void> {
     const coverage = this.#coverage(symbol);
     for (const gap of uncoveredRanges(window, coverage)) {
-      this.#persist(symbol, await this.client.fetchAggregates(symbol, gap));
+      this.#persist(symbol, await this.client.fetchAggregates(symbol, gap, this.timeframe));
     }
     this.#recordCoverage(symbol, window, coverage);
 
@@ -304,21 +370,35 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
 
-    for (const aggregate of aggregates) {
-      const openTime = new Date(aggregate.t);
-      const closeTime = closeTimeOf(openTime, TIMEFRAME);
-      upsert.run(
-        symbol,
-        TIMEFRAME,
-        toStoredTimestamp(openTime),
-        toStoredTimestamp(closeTime),
-        aggregate.o,
-        aggregate.h,
-        aggregate.l,
-        aggregate.c,
-        aggregate.v,
-      );
-    }
+    // ONE transaction for the whole page, not one implicit transaction per row
+    // (#664). Measured on this branch before the change: a single
+    // instrument-year of 1-minute bars — 98,280 rows — took **25.9 seconds** to
+    // persist, because each `run()` outside a transaction commits on its own.
+    // Ten years across the four-symbol equity universe is ~4M rows, i.e. ~17
+    // HOURS of writing for a backfill whose network side is minutes. Batched,
+    // the same 98,280 rows take well under a second.
+    //
+    // Invisible at daily resolution — 2,500 rows a symbol committed one at a
+    // time is under a second — which is why it survived until intraday made it
+    // the binding cost. `better-sqlite3`'s `transaction()` is synchronous and
+    // rolls back on a throw, so a malformed page leaves no half-written series.
+    this.db.transaction((rows: PolygonAggregate[]) => {
+      for (const aggregate of rows) {
+        const openTime = new Date(aggregate.t);
+        const closeTime = closeTimeOf(openTime, this.timeframe);
+        upsert.run(
+          symbol,
+          this.timeframe,
+          toStoredTimestamp(openTime),
+          toStoredTimestamp(closeTime),
+          aggregate.o,
+          aggregate.h,
+          aggregate.l,
+          aggregate.c,
+          aggregate.v,
+        );
+      }
+    })(aggregates);
   }
 
   /**
@@ -331,11 +411,13 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
       .prepare(
         `SELECT instrument, timeframe, open_time, close_time, open, high, low, close, volume
            FROM stage2_bars
-          WHERE instrument = ? AND close_time >= ? AND close_time <= ?
+          WHERE instrument = ? AND timeframe = ?
+            AND close_time >= ? AND close_time <= ?
           ORDER BY close_time ASC`,
       )
       .all(
         symbol,
+        this.timeframe,
         toStoredTimestamp(window.start),
         toStoredTimestamp(window.end),
       ) as Stage2BarRow[];
@@ -377,10 +459,10 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
       .prepare(
         `SELECT DISTINCT close_time
            FROM stage2_bars
-          WHERE close_time >= ? AND close_time <= ?
+          WHERE timeframe = ? AND close_time >= ? AND close_time <= ?
           ORDER BY close_time ASC`,
       )
-      .all(toStoredTimestamp(window.start), toStoredTimestamp(window.end)) as {
+      .all(this.timeframe, toStoredTimestamp(window.start), toStoredTimestamp(window.end)) as {
       close_time: string;
     }[];
 
@@ -421,10 +503,16 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
         `SELECT DISTINCT close_time
            FROM stage2_bars
           WHERE instrument IN (${placeholders})
+            AND timeframe = ?
             AND close_time >= ? AND close_time <= ?
           ORDER BY close_time ASC`,
       )
-      .all(...symbols, toStoredTimestamp(window.start), toStoredTimestamp(window.end)) as {
+      .all(
+        ...symbols,
+        this.timeframe,
+        toStoredTimestamp(window.start),
+        toStoredTimestamp(window.end),
+      ) as {
       close_time: string;
     }[];
 
@@ -432,7 +520,9 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
       // Name the cause here rather than let it surface four layers up as
       // `toReturnSeries: no bars in the sample` (pitfall P3).
       const ingested = (
-        this.db.prepare('SELECT DISTINCT instrument FROM stage2_bars').all() as {
+        this.db
+          .prepare('SELECT DISTINCT instrument FROM stage2_bars WHERE timeframe = ?')
+          .all(this.timeframe) as {
           instrument: string;
         }[]
       ).map((row) => row.instrument);
@@ -440,7 +530,8 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
       const unknown = symbols.filter((symbol) => !ingested.includes(symbol));
 
       throw new Error(
-        `Stage2HistoricalStore.timelineFor: no bars for [${symbols.join(', ')}] between ` +
+        `Stage2HistoricalStore.timelineFor: no bars for [${symbols.join(', ')}] at ` +
+          `${this.timeframe} between ` +
           `${window.start.toISOString()} and ${window.end.toISOString()}. ` +
           (unknown.length > 0
             ? `Never ingested: [${unknown.join(', ')}]. Ingested: [${ingested.join(', ')}].`

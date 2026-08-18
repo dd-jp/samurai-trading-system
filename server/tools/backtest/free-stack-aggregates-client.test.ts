@@ -1,5 +1,9 @@
 import { TokenBucket } from '../../shared/index.js';
-import { FreeStackAggregatesClient, isCryptoSymbol } from './free-stack-aggregates-client.js';
+import {
+  FreeStackAggregatesClient,
+  isCryptoSymbol,
+  maxAlpacaPagesFor,
+} from './free-stack-aggregates-client.js';
 import type { DateRange } from './universe.js';
 
 const FAKE_KEY = 'test-fake-alpaca-key';
@@ -67,7 +71,7 @@ describe('FreeStackAggregatesClient — crypto via Coinbase', () => {
       ]),
     );
 
-    const bars = await client(fetchImpl).fetchAggregates('BTC-USD', WINDOW);
+    const bars = await client(fetchImpl).fetchAggregates('BTC-USD', WINDOW, '1d');
 
     expect(bars.map((b) => b.c)).toEqual([100, 200, 300]);
     expect(bars.map((b) => b.t)).toEqual([1_704_067_200_000, 1_704_153_600_000, 1_704_240_000_000]);
@@ -87,7 +91,7 @@ describe('FreeStackAggregatesClient — crypto via Coinbase', () => {
       start: new Date('2024-01-01T00:00:00.000Z'),
       end: new Date('2026-01-01T00:00:00.000Z'),
     };
-    const bars = await client(fetchImpl).fetchAggregates('BTC-USD', wide);
+    const bars = await client(fetchImpl).fetchAggregates('BTC-USD', wide, '1d');
 
     expect(calls.length).toBeGreaterThan(1);
     expect(bars.map((b) => b.c)).toEqual([100, 200, 300]);
@@ -96,7 +100,9 @@ describe('FreeStackAggregatesClient — crypto via Coinbase', () => {
   it('throws naming Coinbase when the venue rejects the request', async () => {
     const { fetchImpl } = recordingFetch(() => jsonResponse({ message: 'nope' }, 429));
 
-    await expect(client(fetchImpl).fetchAggregates('BTC-USD', WINDOW)).rejects.toThrow(/Coinbase/);
+    await expect(client(fetchImpl).fetchAggregates('BTC-USD', WINDOW, '1d')).rejects.toThrow(
+      /Coinbase/,
+    );
   });
 
   it('rejects a malformed candle rather than coercing it', async () => {
@@ -104,7 +110,7 @@ describe('FreeStackAggregatesClient — crypto via Coinbase', () => {
       jsonResponse([[1_704_067_200, 'not-a-number', 1, 1, 1, 1]]),
     );
 
-    await expect(client(fetchImpl).fetchAggregates('BTC-USD', WINDOW)).rejects.toThrow(
+    await expect(client(fetchImpl).fetchAggregates('BTC-USD', WINDOW, '1d')).rejects.toThrow(
       /malformed candle/,
     );
   });
@@ -113,7 +119,7 @@ describe('FreeStackAggregatesClient — crypto via Coinbase', () => {
     const overCap = Array.from({ length: 301 }, (_, i) => candle(1_704_067_200 + i * 86_400, 100));
     const { fetchImpl } = recordingFetch(() => jsonResponse(overCap));
 
-    await expect(client(fetchImpl).fetchAggregates('BTC-USD', WINDOW)).rejects.toThrow(
+    await expect(client(fetchImpl).fetchAggregates('BTC-USD', WINDOW, '1d')).rejects.toThrow(
       /above its documented 300 cap/,
     );
   });
@@ -133,7 +139,7 @@ describe('FreeStackAggregatesClient — equities via Alpaca', () => {
           }),
     );
 
-    const bars = await client(fetchImpl).fetchAggregates('SPY', WINDOW);
+    const bars = await client(fetchImpl).fetchAggregates('SPY', WINDOW, '1d');
 
     expect(calls.length).toBe(2);
     expect(calls[1]).toContain('page_token=page-2');
@@ -162,7 +168,7 @@ describe('FreeStackAggregatesClient — equities via Alpaca', () => {
           }),
     );
 
-    const bars = await client(fetchImpl).fetchAggregates('SPY', WINDOW);
+    const bars = await client(fetchImpl).fetchAggregates('SPY', WINDOW, '1d');
 
     expect(bars.map((b) => b.c)).toEqual([1.5, 2.5]);
   });
@@ -170,13 +176,13 @@ describe('FreeStackAggregatesClient — equities via Alpaca', () => {
   it('returns an empty series when the venue serves no bars for the symbol', async () => {
     const { fetchImpl } = recordingFetch(() => jsonResponse({ bars: {} }));
 
-    await expect(client(fetchImpl).fetchAggregates('SPY', WINDOW)).resolves.toEqual([]);
+    await expect(client(fetchImpl).fetchAggregates('SPY', WINDOW, '1d')).resolves.toEqual([]);
   });
 
   it('throws naming Alpaca when the venue rejects the request', async () => {
     const { fetchImpl } = recordingFetch(() => jsonResponse({ message: 'forbidden' }, 403));
 
-    await expect(client(fetchImpl).fetchAggregates('SPY', WINDOW)).rejects.toThrow(/Alpaca/);
+    await expect(client(fetchImpl).fetchAggregates('SPY', WINDOW, '1d')).rejects.toThrow(/Alpaca/);
   });
 
   it('rejects a malformed bar rather than coercing it', async () => {
@@ -186,7 +192,9 @@ describe('FreeStackAggregatesClient — equities via Alpaca', () => {
       }),
     );
 
-    await expect(client(fetchImpl).fetchAggregates('SPY', WINDOW)).rejects.toThrow(/malformed bar/);
+    await expect(client(fetchImpl).fetchAggregates('SPY', WINDOW, '1d')).rejects.toThrow(
+      /malformed bar/,
+    );
   });
 
   it('sends credentials in headers, never in the URL', async () => {
@@ -198,7 +206,7 @@ describe('FreeStackAggregatesClient — equities via Alpaca', () => {
       return jsonResponse({ bars: { SPY: [] } });
     };
 
-    await client(fetchImpl).fetchAggregates('SPY', WINDOW);
+    await client(fetchImpl).fetchAggregates('SPY', WINDOW, '1d');
 
     expect(seen[0]?.headers).toMatchObject({
       'APCA-API-KEY-ID': FAKE_KEY,
@@ -216,8 +224,8 @@ describe('FreeStackAggregatesClient — routing', () => {
     );
 
     const c = client(fetchImpl);
-    await c.fetchAggregates('ETH-USD', WINDOW);
-    await c.fetchAggregates('SPY', WINDOW);
+    await c.fetchAggregates('ETH-USD', WINDOW, '1d');
+    await c.fetchAggregates('SPY', WINDOW, '1d');
 
     expect(new URL(calls[0] as string).host).toContain('coinbase');
     expect(new URL(calls[1] as string).host).toContain('alpaca');
@@ -231,10 +239,14 @@ describe('FreeStackAggregatesClient — routing', () => {
     // response the venue defines) is invisible in the bar count.
     const { fetchImpl, calls } = recordingFetch(() => jsonResponse([]));
 
-    await client(fetchImpl).fetchAggregates('BTC-USD', {
-      start: new Date('2024-01-01T00:00:00.000Z'),
-      end: new Date('2026-01-01T00:00:00.000Z'),
-    });
+    await client(fetchImpl).fetchAggregates(
+      'BTC-USD',
+      {
+        start: new Date('2024-01-01T00:00:00.000Z'),
+        end: new Date('2026-01-01T00:00:00.000Z'),
+      },
+      '1d',
+    );
 
     for (const url of calls) {
       const params = new URL(url).searchParams;
@@ -261,5 +273,83 @@ describe('FreeStackAggregatesClient — routing', () => {
           rateLimiter: unlimitedBucket(),
         }),
     ).toThrow(/ALPACA_API_KEY/);
+  });
+});
+
+/**
+ * #664. The client requested `timeframe: '1Day'` unconditionally; ADR-0014's
+ * intraday horizon needs the caller's resolution to reach the wire.
+ */
+describe('FreeStackAggregatesClient — intraday (#664)', () => {
+  it('asks Alpaca for the requested resolution, not always 1Day', async () => {
+    const { fetchImpl, calls } = recordingFetch(() => jsonResponse({ bars: { SPY: [] } }));
+
+    await client(fetchImpl).fetchAggregates('SPY', WINDOW, '1m');
+
+    const requested = new URL(calls[0] as string).searchParams.get('timeframe');
+    expect(requested).toBe('1Min');
+  });
+
+  it('still asks for 1Day when the caller asks for daily', async () => {
+    const { fetchImpl, calls } = recordingFetch(() => jsonResponse({ bars: { SPY: [] } }));
+
+    await client(fetchImpl).fetchAggregates('SPY', WINDOW, '1d');
+
+    expect(new URL(calls[0] as string).searchParams.get('timeframe')).toBe('1Day');
+  });
+
+  it('refuses an intraday crypto request rather than serving daily candles for it', async () => {
+    const { fetchImpl, calls } = recordingFetch(() => jsonResponse([]));
+
+    await expect(client(fetchImpl).fetchAggregates('BTC-USD', WINDOW, '1m')).rejects.toThrow(
+      /crypto \(BTC-USD\) is served at '1d' only/,
+    );
+    // And it refuses BEFORE spending a request.
+    expect(calls).toHaveLength(0);
+  });
+
+  it('sizes the page guard to the window and timeframe, not a fixed 200', () => {
+    const tenYears: DateRange = {
+      start: new Date('2016-01-04T00:00:00.000Z'),
+      end: new Date('2026-01-04T00:00:00.000Z'),
+    };
+
+    // Ten years of DAILY bars is one page; the floor governs.
+    expect(maxAlpacaPagesFor(tenYears, '1d')).toBe(200);
+
+    // Ten years of MINUTE bars is ~5.3M bars of elapsed time, ~526 pages at the
+    // 10,000-bar page limit — a fixed 200 would have thrown on a legitimate
+    // backfill, turning #656's measured 10.6 years of free 1-minute history
+    // into an error.
+    expect(maxAlpacaPagesFor(tenYears, '1m')).toBeGreaterThan(526);
+  });
+
+  it("paces every page through the shared bucket, at or under Alpaca's 200/min", async () => {
+    // The Basic plan allows 200 requests/minute. `acquire()` is awaited once per
+    // page on both legs, so a deep intraday backfill is paced by the same
+    // mechanism a daily one was — #664 item 4 wanted no second limiter.
+    let acquired = 0;
+    const bucket = {
+      acquire: async () => {
+        acquired++;
+      },
+    } as unknown as TokenBucket;
+
+    let page = 0;
+    const { fetchImpl } = recordingFetch(() => {
+      page++;
+      return jsonResponse(
+        page < 3 ? { bars: { SPY: [] }, next_page_token: `p${page}` } : { bars: { SPY: [] } },
+      );
+    });
+
+    await new FreeStackAggregatesClient({
+      alpacaKeyId: FAKE_KEY,
+      alpacaSecretKey: FAKE_SECRET,
+      fetchImpl,
+      rateLimiter: bucket,
+    }).fetchAggregates('SPY', WINDOW, '1m');
+
+    expect(acquired).toBe(3);
   });
 });

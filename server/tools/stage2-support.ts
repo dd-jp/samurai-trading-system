@@ -4,6 +4,11 @@
  * `run-stage2-cost-decomposition.ts`, each carrying its own copy of the #420
  * per-asset-class timeline rationale.
  */
+import {
+  AlwaysOpenCalendar,
+  type TradingCalendar,
+  UsEquityRegularHoursCalendar,
+} from '../providers/market-data-service/index.js';
 import { SimulatedClock } from '../shared/index.js';
 import type {
   CostModelImpl,
@@ -19,6 +24,23 @@ export interface Stage2ReplayContext {
   costModel: CostModelImpl;
   window: DateRange;
   capitalPerTrade: number;
+}
+
+/**
+ * Which venue calendar an asset class replays against (#664).
+ *
+ * The equity calendar's holiday and early-close tables are HAND-ENTERED and
+ * cover 2026-2027 only, so an intraday replay of an earlier half-day will trip
+ * `ReplayDriver`'s flat-by-close assertion rather than silently carrying
+ * overnight. That is the intended behaviour; #684 replaces both tables with
+ * Alpaca's own `GET /v2/calendar`.
+ *
+ * Crypto gets `AlwaysOpenCalendar`, whose `sessionEnd` is `null` — no flatten,
+ * no assertion, and therefore no new crypto behaviour, which is what ADR-0015's
+ * 2026-08-16 amendment (crypto out of scope) requires.
+ */
+export function calendarFor(asset_class: 'stocks' | 'crypto'): TradingCalendar {
+  return asset_class === 'stocks' ? new UsEquityRegularHoursCalendar() : new AlwaysOpenCalendar();
 }
 
 export function makeAssetClass(
@@ -45,6 +67,10 @@ export function makeAssetClass(
         clock: new SimulatedClock(ctx.window.start),
         universe: symbols.map((symbol) => ({ symbol, asset_class })),
         capitalPerTrade: ctx.capitalPerTrade,
+        // The store's own timeframe, not a literal (#664): the driver and the
+        // bars it replays cannot disagree if only one of them decides.
+        timeframe: ctx.store.timeframe,
+        sessionCalendar: calendarFor(asset_class),
       }),
   };
 }
